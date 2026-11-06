@@ -188,10 +188,15 @@
 	Check Spelling…	Kiểm tra chính tả…
 	Clear	Xóa
 	Clear Recent Files	Xóa tệp gần đây
+	Clear Recent File List	Xóa tệp gần đây
 	Clipboard	Bảng tạm
 	Close	Đóng
 	Close All	Đóng tất cả
 	Close Others	Đóng các tệp khác
+	New Document…	Tài liệu mới…
+	Open Document…	Mở…
+	Consolidate All to Here	Gom tất cả vào đây
+	Move to New Window	Di chuyển sang cửa sổ mới
 	Color Lookup Tables…	Bảng tra màu…
 	Color Settings…	Cài đặt màu…
 	Conditional Mode Change…	Đổi chế độ có điều kiện…
@@ -275,6 +280,7 @@
 	Place Embedded…	Đặt nhúng…
 	Place Linked…	Đặt liên kết…
 	Plug-ins…	Plug-in…
+	Plugins…	Plug-in…
 	Preferences	Tùy chọn
 	Preset Manager…	Quản lý thiết lập sẵn…
 	Presets	Thiết lập sẵn
@@ -373,6 +379,8 @@
 	Color Table…	Bảng màu…
 	Combine Shapes	Kết hợp hình
 	Convert to Embedded	Chuyển thành nhúng
+	Embed Linked	Nhúng mục liên kết
+	Embed All Linked	Nhúng tất cả mục liên kết
 	Convert to Layers	Chuyển thành lớp
 	Convert to Linked…	Chuyển thành liên kết…
 	Convert to Smart Object	Chuyển thành đối tượng thông minh
@@ -404,6 +412,7 @@
 	Entropy	Entropy
 	Equalize	Cân bằng histogram
 	Exclude Overlapping Shapes	Loại phần chồng hình
+	Subtract Shapes at Overlap	Loại phần chồng hình
 	Export Contents…	Xuất nội dung…
 	Exposure…	Phơi sáng…
 	Fill Content	Nội dung tô
@@ -438,6 +447,7 @@
 	Insert Blank Frame	Chèn khung trống
 	Interpret Footage…	Diễn giải footage…
 	Intersect Shape Areas	Giao vùng hình
+	Unite Shapes at Overlap	Giao vùng hình
 	Invert	Đảo màu
 	Invert…	Đảo màu…
 	Kurtosis	Kurtosis
@@ -733,10 +743,10 @@
 	Grid	Lưới
 	Guides	Đường căn
 	HDV 1080/DVCPRO HD 720 (1.33)	HDV 1080/DVCPRO HD 720 (1.33)
-	Internet Standard RGB	RGB chuẩn Internet
+	Internet Standard RGB (sRGB)	RGB chuẩn Internet (sRGB)
 	Layer Edges	Cạnh lớp
 	Layers	Các lớp
-	Legacy Macintosh RGB	RGB Macintosh cũ
+	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh cũ (Gamma 1.8)
 	Lock Guides	Khóa đường căn
 	Lock Slices	Khóa lát cắt
 	Mesh	Lưới
@@ -766,7 +776,7 @@
 	Standard Screen Mode	Chế độ màn hình chuẩn
 	Target Path	Đường dẫn đích
 	Working Black Plate	Bản Black làm việc
-	Working CMY Plate	Bản CMY làm việc
+	Working CMY Plates	Bản CMY làm việc
 	Working CMYK	CMYK làm việc
 	Working Cyan Plate	Bản Cyan làm việc
 	Working Magenta Plate	Bản Magenta làm việc
@@ -813,7 +823,7 @@
 	Modifier Keys	Phím bổ trợ
 	Motion	Chuyển động
 	Navigator	Điều hướng
-	New Window for Document	Cửa sổ mới cho tài liệu
+	New Window	Cửa sổ mới cho tài liệu
 	New Workspace…	Không gian làm việc mới…
 	Next Theme	Chủ đề tiếp theo
 	Options	Thanh tùy chọn
@@ -1605,6 +1615,7 @@ cameraRaw	Shadows	Vùng tối
 	Picas	Pica
 	Pixels	Pixel
 	Plug-ins	Plug-in
+	Plugins	Plug-in
 	Png	PNG
 	Point size	Cỡ point
 	Points	Point
@@ -2614,6 +2625,7 @@ shape	Appearance	Diện mạo
 	(coming soon)	(sắp có)
 	Add beauty precomp from the AOVs	Thêm precomp beauty từ các AOV
 	Show in Explorer	Hiện trong Explorer
+	Reveal in Explorer	Hiện trong Explorer
 	Show in Folder	Hiện trong thư mục
 	Delete and Fill Selection	Xoá và tô vùng chọn
 	Transform Again on a Copy	Biến đổi lại trên một bản sao
@@ -2726,6 +2738,7 @@ shape	Appearance	Diện mạo
 	Smart Filters	Các bộ lọc thông minh
 	Soft	Mềm
 	Source: set	Nguồn: bộ
+	Source: {name}	Nguồn: {name}
 	Square, 12 x 12	Vuông, 12 x 12
 	Square, 5 x 5	Vuông, 5 x 5
 	Studio (Dark)	Studio (Tối)
@@ -2754,6 +2767,11 @@ shape	Appearance	Diện mạo
 	Show canvas dots	Hiện chấm vùng vẽ
 	Clip thumbnails to layer bounds	Cắt hình thu nhỏ theo biên của lớp
 	Clip Thumbnails to Layer Bounds	Cắt hình thu nhỏ theo biên của lớp
+	No Thumbnails	Không có hình thu nhỏ
+	Small Thumbnails	Hình thu nhỏ cỡ nhỏ
+	Medium Thumbnails	Hình thu nhỏ cỡ vừa
+	Large Thumbnails	Hình thu nhỏ cỡ lớn
+	Clip Thumbnails to Document Bounds	Cắt hình thu nhỏ theo biên của tài liệu
 	Color picker	Bộ chọn màu
 	Color space	Không gian màu
 	Column width	Độ rộng cột
@@ -3660,7 +3678,6 @@ cameraData	Lens	Ống kính
 	New Document With Mask	Tài liệu mới có mặt nạ
 	New Layer With Mask	Lớp mới có mặt nạ
 	Convert Point Tool	Công cụ Chuyển đổi điểm
-	Enable animations	Bật hiệu ứng chuyển động
 	Gloss Contour	Đường bao bóng
 	Cone - Inverted	Hình nón - Đảo ngược
 	Cove - Deep	Lõm - Sâu
@@ -3725,6 +3742,9 @@ curves	Smooth	Làm mượt
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} bước chưa có chức năng tương ứng trong PhotoCraft
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	Đã lưu {n} hành động vào {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Đã bỏ qua {n} bước không có chức năng tương ứng trong Photoshop
+@plural	{n} action file loaded|{n} action files loaded	Đã nạp {n} tệp hành động
+	{set} from {file} replaced the one from {earlier}	Bộ {set} từ {file} đã thay thế bộ từ {earlier}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	Không thể nạp {n} tệp: {errors}
 	File Naming	Đặt tên tệp
 	Starting serial	Số thứ tự bắt đầu
 	Insert Stop…	Chèn điểm dừng…
@@ -3741,6 +3761,8 @@ curves	Smooth	Làm mượt
 	Clear History	Xóa lịch sử
 	History Options…	Tùy chọn lịch sử…
 	Background (Default)	Nền (mặc định)
+	Background (default)	Nền (mặc định)
+	Transparent (default)	Trong suốt (mặc định)
 	Allow Non-Linear History	Cho phép lịch sử không tuyến tính
 	Make Layer Visibility Changes Undoable	Cho phép hoàn tác thay đổi hiển thị lớp
 	Presentation	Trình bày
@@ -3755,6 +3777,11 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+# History panel › History Options… (#2966)
+	Automatically Create First Snapshot	Tự động tạo ảnh chụp trạng thái đầu tiên
+	Automatically Create New Snapshot When Saving	Tự động tạo ảnh chụp trạng thái mới khi lưu
+	Show New Snapshot Dialog by Default	Mặc định hiện hộp thoại Ảnh chụp trạng thái mới
+	Memory usage percent	Tỷ lệ sử dụng bộ nhớ
 	Show Favorite Fonts	Hiển thị phông chữ yêu thích
 	No favorite fonts yet: click the star beside a font to add it.	Chưa có phông chữ yêu thích: nhấp vào ngôi sao bên cạnh phông chữ để thêm.
 	Favorite fonts	Phông chữ yêu thích
@@ -3798,6 +3825,7 @@ curves	Smooth	Làm mượt
 	Automatically Check for Updates	Tự động kiểm tra bản cập nhật
 	Paints from the History panel's source state	Vẽ từ trạng thái nguồn của bảng Lịch sử
 	Sets the source for the history brush	Đặt nguồn cho cọ lịch sử
+	The History Brush source was deleted: set a new source in the History panel	Nguồn của cọ lịch sử đã bị xóa: đặt nguồn mới trong bảng Lịch sử
 	Highlight Mode	Chế độ vùng sáng
 	Highlight Color	Màu vùng sáng
 	Highlight Opacity	Độ mờ vùng sáng
@@ -3817,6 +3845,7 @@ curves	Smooth	Làm mượt
 	Chisel Soft	Đục mềm
 	Open color-less EXR as ACEScg	Mở EXR không khai báo màu sắc dưới dạng ACEScg
 	Do not append "copy" to filename when saving a copy	Không thêm "copy" vào tên tệp khi lưu bản sao
+	Save Full-Size Composite in .pcraft Files	Lưu ảnh tổng hợp kích thước đầy đủ trong tệp .pcraft
 	Edit Selected Guides	Sửa đường căn đã chọn
 	Clear Selected Guides	Xóa đường căn đã chọn
 	Bicubic Automatic	Bicubic tự động
@@ -3883,6 +3912,7 @@ curves	Smooth	Làm mượt
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} được hệ thống dành riêng và không thể gán.
 	Low-Latency Drawing (vsync off, applies at next launch)	Vẽ độ trễ thấp (tắt vsync, áp dụng ở lần khởi động sau)
 	Reference point location	Vị trí điểm tham chiếu
+	Toggle reference point	Bật/tắt điểm tham chiếu
 	Free Transform is still being applied; try again when it has finished.	Biến đổi tự do vẫn đang được áp dụng; hãy thử lại khi hoàn tất.
 	The transform couldn't be applied.	Không thể áp dụng phép biến đổi.
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Các lớp cần {needed} bộ nhớ GPU; ngân sách chỉ dành cho chúng {budget}.
@@ -3894,6 +3924,7 @@ curves	Smooth	Làm mượt
 	This document's layers: {needed} of {budget} for layers	Các lớp của tài liệu này: {needed} trên {budget} dành cho lớp
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Các lớp của tài liệu này cần {needed} nhưng chỉ được dùng {budget}: vẽ lại toàn bộ tài liệu dùng CPU
 	GPU Memory (MB, 0 = Automatic)	Bộ nhớ GPU (MB, 0 = Tự động)
+	Scratch Size Limit (MB, 0 = No Limit)	Giới hạn dung lượng đĩa tạm (MB, 0 = Không giới hạn)
 	{path}: the path is not valid Unicode; save under another name.	{path}: đường dẫn không phải Unicode hợp lệ; hãy lưu với tên khác.
 	Replace	Thay thế
 	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
@@ -3995,6 +4026,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Giá trị số không hợp lệ. Cần một số nguyên từ {min}% đến {max}%. Đã chèn giá trị trước đó.
 	Clear Selection	Xóa vùng chọn
 	Color Aware	Nhận biết màu
@@ -4021,3 +4054,51 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Màu điểm dừng
 	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô
 	Edit Brush…	Chỉnh sửa cọ…
+
+# Action Stop message (#8386)
+	Message	Thông báo
+# Playback Options (#5212)
+	Playback Options…	Tùy chọn phát…
+	Playback Options	Tùy chọn phát
+	Accelerated	Tăng tốc
+	Step by Step	Từng bước
+	Pause For:	Tạm dừng trong:
+	Pause For	Tạm dừng trong
+	seconds	giây
+	Create a single history state	Tạo một trạng thái lịch sử duy nhất
+	Generator enabled	Đã bật bộ tạo
+	Move Up	Di chuyển lên
+	Move Down	Di chuyển xuống
+	Grid view	Chế độ xem lưới
+	List view	Chế độ xem danh sách
+	On your computer	Trên máy tính của bạn
+	New file	Tệp mới
+	Learn	Học hỏi
+	No recent files	Không có tệp gần đây
+	Website	Trang web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Khung hỗ trợ các phép biến đổi affine; chọn ảnh trong khung để biến đổi phối cảnh
+	A frame supports affine transforms; select its image to warp it	Khung hỗ trợ các phép biến đổi affine; chọn ảnh trong khung để làm cong
+	Convert to Frame…	Chuyển thành khung…
+	Create a new custom frame	Tạo khung tùy chỉnh mới
+	Create a new polygonal frame	Tạo khung đa giác mới
+	Create a new triangular frame	Tạo khung tam giác mới
+	Fit Content to Frame	Khớp nội dung với khung
+	Fit Frame to Content	Khớp khung với nội dung
+	Frame coordinates must be finite and within 600000 pixels	Tọa độ khung phải hữu hạn và nằm trong giới hạn 600000 pixel
+	Import Image…	Nhập ảnh…
+	Invalid frame transform	Phép biến đổi khung không hợp lệ
+	Invalid nested file drop	Thả tệp lồng nhau không hợp lệ
+	New Frame	Khung mới
+	Replace Image…	Thay ảnh…
+	The frame is locked	Khung đã bị khóa
+	The frame is unavailable	Khung không khả dụng
+
+# Channels panel menu (#11451)
+	Channel Options…	Tùy chọn kênh…
+	Specify Channels:	Chỉ định kênh:
+	Not enough grayscale documents for this mode.	Không đủ tài liệu thang xám cho chế độ này.
+	Pick a different document for each channel.	Chọn một tài liệu khác cho mỗi kênh.
+	A picked document is no longer open.	Một tài liệu đã chọn không còn mở.
+	A picked document is no longer a grayscale document of the same size.	Một tài liệu đã chọn không còn là tài liệu thang xám cùng kích thước.
