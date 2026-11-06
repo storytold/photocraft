@@ -45,7 +45,7 @@ mod selection;
 pub mod snap_ui;
 mod start_screen;
 mod strokes;
-mod tabs;
+pub(crate) mod tabs;
 mod textures;
 pub(super) mod tile_overlay;
 pub mod tool_cursor;
@@ -69,7 +69,7 @@ use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
 pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
-pub(crate) use drag::{angle_readout, draw_readout, draw_value_readout};
+pub(crate) use drag::{angle_readout, doc_box_corners, draw_readout, draw_value_readout};
 #[cfg(test)]
 pub(crate) use drag::{marquee_drag_ants, marquee_preview_px};
 #[cfg(test)]
@@ -604,7 +604,8 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", input.idx));
     let over_bars = input.ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
     let nav_hovered = input.response.hovered() || input.free_hover || over_bars;
-    // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
+    // Like Photoshop, a wheel notch moves the canvas the whole step in one frame, without a
+    // glide (`smooth` off; #5721, #9479).
     // General › Animated Zoom: the wheel zoom eases over the frames of a notch, or is one instant step.
     // Enhanced Controls › Enable Gestures off: two fingers on a touch screen neither zoom nor
     // turn the view (#204); the mouse and trackpad are unaffected.
@@ -616,7 +617,7 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
         app.session.prefs().general.animated_zoom,
         input.wheel_owner,
         nav_hovered,
-        app.session.prefs().interface.enable_animations,
+        false,
         touch_gestures,
     );
     if nav_hovered {
@@ -1370,6 +1371,20 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::slice_ui::draw_overlay(app, painter, xf);
     crate::frame_tool::draw_overlay(app, painter, xf);
     crate::frame_tool::task_bar(app, ui, xf);
+    // The Crop tool's contextual task bar under its frame (#10890), on the frame's own tile only:
+    // the other tiles would map the active document's frame with their own transform.
+    if app.session.active_index() == Some(idx) {
+        // Done asks for a fit of the cropped document (`commit_crop`): like a view menu row
+        // above, the stored camera wins over this frame's copy, or the write-back drops it.
+        let before = app.ui.views.get(idx).cloned();
+        crate::crop_task_bar::draw(app, ui, xf);
+        if let Some(now) = app.ui.views.get(idx)
+            && Some(now) != before.as_ref()
+        {
+            *view = now.clone();
+            ctx.request_repaint();
+        }
+    }
     crate::artboard_tool::draw_overlay(app, painter, xf);
     // Snap lines last: over the transform preview's pixels and the other overlays, which would
     // otherwise hide where the moving content lines up.
@@ -1425,6 +1440,9 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         // corner badge, as Photoshop's corner radius cursor.
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         crate::icons::cursor_badge(ctx, "scan", p);
+    } else if let Some(c) = response.hover_pos().and_then(|p| crate::shape_bounds_box::cursor(app, xf, xf.to_doc(p))) {
+        // Over a handle of the box round several selected shapes: its scale cursor.
+        ui.ctx().set_cursor_icon(c);
     } else if let Some((r, p, c)) =
         response.hover_pos().and_then(|p| transform_controls_rect(app, xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
     {
@@ -1879,7 +1897,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 app.session.prefs().general.animated_zoom,
                 wheel_owner,
                 hover_here,
-                app.session.prefs().interface.enable_animations,
+                false,
                 app.session.prefs().enhanced_controls.touch_gestures,
             )
             .is_some());

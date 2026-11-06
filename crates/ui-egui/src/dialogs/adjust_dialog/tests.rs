@@ -47,7 +47,7 @@ fn every_adjustment_with_an_editor_has_a_dialog() {
     for kind in adjust_editors::KINDS {
         assert!(has_dialog(&format!("image.adjustments.{kind}")), "{kind}");
     }
-    for id in ["image.adjustments.invert", "image.adjustments.selectiveColor", "image.adjustments.desaturate", "filter.blur.gaussianBlur"] {
+    for id in ["image.adjustments.invert", "image.adjustments.desaturate", "filter.blur.gaussianBlur"] {
         assert!(!has_dialog(id), "{id}");
     }
 }
@@ -219,6 +219,7 @@ fn sample_params(kind: &str) -> Value {
         "posterize" => json!({"levels": 3}),
         "threshold" => json!({"level": 90}),
         "gradientMap" => json!({"stops": [[0, "#200040"], [1, "#ffd080"]]}),
+        "selectiveColor" => json!({"method": "absolute", "blues": [10, 0, -20, 0]}),
         _ => json!({}),
     }
 }
@@ -966,4 +967,355 @@ fn captured_filter_mask_curves_stay_gray_after_selecting_native_channels() {
     let before = crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields);
     assert!(add_point_at(&mut app, &egui::Context::default(), 8.0, 8.0, false));
     assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields), before);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Selective Color: one editor for the dialog and the Properties panel. The Colors dropdown is
+// driven here through the dialog's `colors` field (what it writes, and what `ui.dialog.set`
+// sets), not by opening the list.
+
+const SELECTIVE: &str = "image.adjustments.selectiveColor";
+
+/// A red left half and a blue right half, so each colour range has pixels to change.
+fn selective_app() -> PhotocraftApp {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
+    s.execute("edit.fill", json!({"color": "#c03020"})).unwrap();
+    s.execute("select.rect", json!({"x": 32, "y": 0, "width": 32, "height": 48})).unwrap();
+    s.execute("edit.fill", json!({"color": "#2030c0"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    PhotocraftApp::new(s, crate::Services::default())
+}
+
+fn selective_dialog() -> (Harness<'static, PhotocraftApp>, u64) {
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(1200.0, 900.0))
+        .with_step_dt(1.0 / 60.0)
+        .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), selective_app());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), SELECTIVE).unwrap();
+    h.run_steps(3);
+    (h, id)
+}
+
+fn set_field(h: &mut Harness<'static, PhotocraftApp>, id: u64, key: &str, value: Value) {
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.into(), value);
+}
+
+/// What the Cyan, Magenta, Yellow and Black sliders show.
+fn slider_values(h: &Harness<'static, PhotocraftApp>) -> Vec<f64> {
+    h.query_all_by_role(egui::accesskit::Role::Slider).filter_map(|n| n.accesskit_node().numeric_value()).collect()
+}
+
+/// Press the `index`th slider in its middle and drag past its right (or left) end.
+fn drag_slider(h: &mut Harness<'static, PhotocraftApp>, index: usize, right: bool) {
+    let r = h.query_all_by_role(egui::accesskit::Role::Slider).nth(index).expect("slider").rect();
+    let from = r.center();
+    let to = egui::pos2(if right { r.right() + 40.0 } else { r.left() - 40.0 }, from.y);
+    h.hover_at(from);
+    h.run_steps(1);
+    h.drag_at(from);
+    h.run_steps(1);
+    for i in 1..=6 {
+        h.hover_at(from + (to - from) * (i as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+}
+
+fn pixel(app: &PhotocraftApp, x: usize, y: usize) -> [f32; 4] {
+    let st = app.session.active().unwrap();
+    photocraft_compose::render(&st.doc, st.doc.bounds()).px[y * 64 + x]
+}
+
+fn row_is_zero(v: &Value) -> bool {
+    v.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(|x| x.as_f64() == Some(0.0)))
+}
+
+/// The reported bug (#11463), through the real dropdown: choosing another colour shows that
+/// colour's own values instead of carrying the sliders over, and keeps the first colour's edit.
+#[test]
+fn selective_color_colors_dropdown_shows_each_colours_own_values() {
+    let (mut h, id) = selective_dialog();
+    set_field(&mut h, id, "reds", json!([30.0, 0.0, 0.0, 0.0]));
+    h.run_steps(3);
+    assert_eq!(slider_values(&h), [30.0, 0.0, 0.0, 0.0]);
+    let named = |n: &egui_kittest::Node<'_>| {
+        let a = n.accesskit_node();
+        a.value().as_deref() == Some("Reds") || a.label().as_deref() == Some("Reds")
+    };
+    let at = h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| named(n)).expect("the Colors dropdown").rect().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(3);
+    let blues = h.query_by_label("Blues").expect("the list opened on the press").rect().center();
+    for k in 1..=6 {
+        h.hover_at(at + (blues - at) * (k as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(blues);
+    h.run_steps(3);
+    assert_eq!(field(&h, id, "colors"), json!("blues"));
+    assert_eq!(slider_values(&h), [0.0; 4], "Blues shows its own row");
+    assert_eq!(field(&h, id, "reds"), json!([30.0, 0.0, 0.0, 0.0]), "Reds keeps its edit");
+}
+
+#[test]
+fn selective_color_dialog_edits_one_colour_at_a_time() {
+    let (mut h, id) = selective_dialog();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    assert_eq!(slider_values(&h), [0.0; 4]);
+    assert_eq!(field(&h, id, "colors"), Value::Null, "opens on Reds");
+    drag_slider(&mut h, 0, true);
+    let reds = field(&h, id, "reds");
+    let red_cyan = reds[0].as_f64().unwrap();
+    assert!(red_cyan > 0.0, "{reds}");
+    assert_eq!(slider_values(&h)[0], red_cyan);
+    // Another colour: its own row, still at 0; Reds keep theirs.
+    set_field(&mut h, id, "colors", json!("blues"));
+    h.run_steps(3);
+    assert_eq!(slider_values(&h), [0.0; 4], "the sliders show the Blues row");
+    assert_eq!(field(&h, id, "reds"), reds);
+    assert_eq!(field(&h, id, "colors"), json!("blues"), "the editor keeps the colour field");
+    drag_slider(&mut h, 0, false);
+    assert!(field(&h, id, "blues")[0].as_f64().unwrap() < 0.0);
+    assert_eq!(field(&h, id, "reds"), reds, "editing Blues leaves Reds alone");
+    // Back to Reds: intact.
+    set_field(&mut h, id, "colors", json!("reds"));
+    h.run_steps(3);
+    assert_eq!(slider_values(&h)[0], red_cyan);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing is committed before OK");
+}
+
+#[test]
+fn selective_color_dialog_ok_applies_every_colour_in_one_step() {
+    let (mut h, id) = selective_dialog();
+    let (before_red, before_blue) = (pixel(h.state(), 8, 8), pixel(h.state(), 56, 8));
+    let steps = h.state().session.active().unwrap().history.past_len();
+    set_field(&mut h, id, "method", json!("absolute"));
+    set_field(&mut h, id, "reds", json!([0.0, 0.0, 0.0, 60.0]));
+    set_field(&mut h, id, "blues", json!([0.0, 0.0, 0.0, 60.0]));
+    set_field(&mut h, id, "colors", json!("blues"));
+    h.run_steps(3);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let app = h.state();
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one history step");
+    let (cmd, params) = app.session.journal.last().unwrap();
+    assert_eq!(cmd, SELECTIVE);
+    for key in photocraft_engine::adjust_cmds::RANGES {
+        assert!(params[key].is_array(), "{key} in {params}");
+    }
+    assert_eq!(params["reds"][3].as_f64(), Some(60.0));
+    assert_eq!(params["blues"][3].as_f64(), Some(60.0));
+    assert_ne!(pixel(app, 8, 8), before_red, "Reds changed");
+    assert_ne!(pixel(app, 56, 8), before_blue, "Blues changed");
+}
+
+#[test]
+fn selective_color_dialog_cancel_leaves_the_document_untouched() {
+    let (mut h, id) = selective_dialog();
+    let before = h.state().session.active().unwrap().doc.clone();
+    drag_slider(&mut h, 0, true);
+    set_field(&mut h, id, "blues", json!([0.0, 0.0, 0.0, 60.0]));
+    h.run_steps(2);
+    h.state_mut().ui.close_dialog(id);
+    h.run_steps(2);
+    assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+}
+
+#[test]
+fn selective_color_reset_zeroes_every_colour_and_returns_to_reds() {
+    let (mut h, id) = selective_dialog();
+    set_field(&mut h, id, "reds", json!([10.0, 0.0, 0.0, 0.0]));
+    set_field(&mut h, id, "blues", json!([0.0, 20.0, 0.0, 0.0]));
+    set_field(&mut h, id, "method", json!("absolute"));
+    set_field(&mut h, id, "colors", json!("blues"));
+    h.run_steps(2);
+    // Alt turns Cancel into Reset; click the real button.
+    h.event(egui::Event::ModifiersChanged(egui::Modifiers::ALT));
+    h.run_steps(2);
+    let reset = h.get_by_label("Reset").rect();
+    let click = |pressed| egui::Event::PointerButton { pos: reset.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::ALT };
+    input(&mut h, egui::Modifiers::ALT, &[egui::Event::PointerMoved(reset.center()), click(true), click(false)]);
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "Reset keeps the dialog open");
+    assert_eq!(field(&h, id, "colors"), Value::Null, "back to Reds");
+    for key in photocraft_engine::adjust_cmds::RANGES {
+        assert!(row_is_zero(&field(&h, id, key)), "{key}: {}", field(&h, id, key));
+    }
+    assert_eq!(field(&h, id, "method"), json!("relative"));
+    assert_eq!(slider_values(&h), [0.0; 4]);
+}
+
+#[test]
+fn selective_color_ok_on_malformed_params_reports_and_commits_nothing() {
+    let cases = [
+        json!({"reds": "oops"}),
+        json!({"blues": [1, "x", 0, 0]}),
+        json!({"colors": "blues", "cyan": "not a number"}),
+        json!({"colors": "purples"}),
+        json!({"method": "sideways"}),
+    ];
+    for case in cases {
+        let (mut h, id) = selective_dialog();
+        let doc = h.state().session.active().unwrap().doc.clone();
+        let steps = h.state().session.active().unwrap().history.past_len();
+        let journal = h.state().session.journal.len();
+        for (k, v) in case.as_object().unwrap() {
+            set_field(&mut h, id, k, v.clone());
+        }
+        h.run_steps(3);
+        assert!(crate::dialogs::confirm(h.state_mut(), id).is_err(), "{case}: OK reports an error");
+        let app = h.state();
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps, "{case}: no history step");
+        assert_eq!(app.session.journal.len(), journal, "{case}: nothing journaled");
+        assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc), "{case}: document untouched");
+    }
+}
+
+fn click_radio(h: &mut Harness<'static, PhotocraftApp>, label: &str) {
+    h.get_by_role_and_label(egui::accesskit::Role::RadioButton, label).click();
+    h.run_steps(3);
+}
+
+#[test]
+fn selective_color_method_radios_set_the_method() {
+    let (mut h, id) = selective_dialog();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    click_radio(&mut h, "Absolute");
+    assert_eq!(field(&h, id, "method"), json!("absolute"));
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing is committed before OK");
+    click_radio(&mut h, "Relative");
+    assert_eq!(field(&h, id, "method"), json!("relative"));
+    click_radio(&mut h, "Absolute");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let app = h.state();
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    let (_, params) = app.session.journal.last().unwrap();
+    assert_eq!(params["method"], json!("absolute"));
+}
+
+/// The layer preview shows every colour's row (not just the one the sliders show) until the
+/// dialog closes, and never touches the committed document.
+#[test]
+fn selective_color_preview_shows_every_colour_until_cancel() {
+    let (mut h, id) = selective_dialog();
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let (before_red, before_blue) = (pixel(h.state(), 8, 8), pixel(h.state(), 56, 8));
+    set_field(&mut h, id, "method", json!("absolute"));
+    set_field(&mut h, id, "reds", json!([0.0, 0.0, 0.0, 60.0]));
+    set_field(&mut h, id, "blues", json!([0.0, 0.0, 0.0, 60.0]));
+    set_field(&mut h, id, "colors", json!("blues"));
+    h.run_steps(3);
+    let app = h.state_mut();
+    assert!(crate::adjust_preview::on_layer(app, 0), "previews through the layer");
+    let (shown, _) = crate::adjust_preview::display_doc(app, 0).expect("a preview document");
+    let shown = photocraft_compose::render(&shown, shown.bounds());
+    assert_ne!(shown.px[8 * 64 + 8], before_red, "Reds shown");
+    assert_ne!(shown.px[8 * 64 + 56], before_blue, "Blues shown");
+    assert_eq!(pixel(app, 8, 8), before_red, "the committed document is unchanged");
+    assert_eq!(pixel(app, 56, 8), before_blue);
+    assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    h.state_mut().ui.close_dialog(id);
+    h.run_steps(2);
+    let app = h.state_mut();
+    assert!(crate::adjust_preview::display_doc(app, 0).is_none(), "closing the dialog drops the preview");
+    assert!(std::sync::Arc::ptr_eq(&doc, &app.session.active().unwrap().doc));
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps);
+}
+
+#[test]
+fn selective_color_dialog_folds_the_single_colour_form_into_the_rows() {
+    let (mut h, id) = selective_dialog();
+    set_field(&mut h, id, "colors", json!("blues"));
+    set_field(&mut h, id, "cyan", json!(30));
+    h.run_steps(3);
+    for key in ["cyan", "magenta", "yellow", "black"] {
+        assert_eq!(field(&h, id, key), Value::Null, "{key} folded");
+    }
+    assert_eq!(field(&h, id, "blues")[0].as_f64(), Some(30.0));
+    assert_eq!(field(&h, id, "colors"), json!("blues"));
+    assert_eq!(slider_values(&h)[0], 30.0);
+    // A later slider edit is not overridden by the old scalars.
+    drag_slider(&mut h, 0, false);
+    assert!(field(&h, id, "blues")[0].as_f64().unwrap() < 30.0);
+}
+
+/// `relative` overrides `method` in the engine, so a dialog holding both would show one and apply
+/// the other. The editor keeps only `method`, and the edits made so far.
+#[test]
+fn selective_color_dialog_folds_relative_into_the_method() {
+    let (mut h, id) = selective_dialog();
+    set_field(&mut h, id, "reds", json!([10.0, 0.0, 0.0, 0.0]));
+    set_field(&mut h, id, "colors", json!("blues"));
+    set_field(&mut h, id, "method", json!("relative"));
+    set_field(&mut h, id, "relative", json!(false));
+    h.run_steps(3);
+    assert_eq!(field(&h, id, "relative"), Value::Null, "folded");
+    assert_eq!(field(&h, id, "method"), json!("absolute"));
+    assert_eq!(field(&h, id, "reds")[0].as_f64(), Some(10.0));
+    assert_eq!(field(&h, id, "colors"), json!("blues"));
+    // The Method button now decides what OK applies.
+    set_field(&mut h, id, "method", json!("relative"));
+    h.run_steps(2);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let (_, params) = h.state().session.journal.last().unwrap();
+    assert_eq!(params["method"], json!("relative"));
+    assert!(params.get("relative").is_none());
+}
+
+#[test]
+fn selective_color_open_last_restores_every_row_and_the_method() {
+    let mut app = selective_app();
+    let id = open(&mut app, SELECTIVE).unwrap();
+    let dialog = app.ui.dialog_mut(id).unwrap();
+    dialog.fields.insert("method".into(), json!("absolute"));
+    dialog.fields.insert("reds".into(), json!([10.0, -20.0, 30.0, 5.0]));
+    dialog.fields.insert("blues".into(), json!([-15.0, 0.0, 25.0, 0.0]));
+    dialog.fields.insert("colors".into(), json!("blues"));
+    let fields = dialog.fields.clone();
+    remember(&mut app, &fields);
+    app.ui.dialogs.clear();
+    let id = open_last(&mut app, SELECTIVE).unwrap();
+    let restored = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(restored["method"], json!("absolute"));
+    assert_eq!(restored["reds"], json!([10.0, -20.0, 30.0, 5.0]));
+    assert_eq!(restored["blues"], json!([-15.0, 0.0, 25.0, 0.0]));
+    assert!(!restored.contains_key("colors"), "reopens on Reds");
+}
+
+#[test]
+fn selective_color_open_last_reads_an_old_single_colour_pref() {
+    let mut app = selective_app();
+    app.session.prefs.edit(|prefs| prefs.dialogs.insert(SELECTIVE.into(), json!({"colors": "blues", "cyan": 30})));
+    let id = open_last(&mut app, SELECTIVE).unwrap();
+    let restored = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(restored["blues"][0].as_f64(), Some(30.0));
+    assert!(!restored.contains_key("cyan"));
+}
+
+#[test]
+fn selective_color_editor_survives_malformed_params() {
+    let (mut h, id) = selective_dialog();
+    for colors in [json!(3), json!("purples"), json!(null), json!(["reds"])] {
+        set_field(&mut h, id, "colors", colors);
+        h.run_steps(2);
+        assert_eq!(slider_values(&h), [0.0; 4]);
+    }
+    set_field(&mut h, id, "cyan", json!("not a number"));
+    h.run_steps(2);
+    set_field(&mut h, id, "cyan", Value::Null);
+    set_field(&mut h, id, "reds", json!("oops"));
+    h.run_steps(2);
+    set_field(&mut h, id, "blues", json!([1, "x"]));
+    set_field(&mut h, id, "colors", json!("blues"));
+    h.run_steps(2);
+    assert_eq!(slider_values(&h), [1.0, 0.0, 0.0, 0.0], "a malformed row reads as zeros where it is not numbers");
+    drag_slider(&mut h, 1, true);
+    let row = field(&h, id, "blues");
+    assert!(row.as_array().is_some_and(|a| a.len() == 4 && a.iter().all(Value::is_number)), "rebuilt as four numbers: {row}");
+    assert!(row[1].as_f64().unwrap() > 0.0);
 }
