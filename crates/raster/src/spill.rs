@@ -522,9 +522,18 @@ impl Manager {
         let Some(dir) = c.dir.clone() else { return false };
         if used < self.space_limit.load(Ordering::Relaxed) {
             // Ask in the background: this can be any thread, the UI's too. The answer moves the limit.
-            self.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
             drop(c);
-            let _ = start_query(&dir, false);
+            let query = start_query(&dir, false);
+            let c = self.config();
+            // A rejected request must remain due. Don't overwrite a new folder's state or an
+            // answer that arrived before this lock was reacquired.
+            if c.dir.as_deref() == Some(dir.as_path()) && !query.as_ref().is_some_and(|(done, _)| done.finished()) {
+                if query.is_some() {
+                    self.next_space_check.store(used.saturating_add(SPACE_CHECK_EVERY), Ordering::Relaxed);
+                } else {
+                    self.space_unmeasured.store(true, Ordering::Relaxed);
+                }
+            }
             return true;
         }
         if c.paused.is_none() {
@@ -1303,6 +1312,39 @@ mod tests {
             }
         }
         assert_eq!(started, MAX_QUERIES);
+        // Exercise the real growth path while every query slot is occupied. A separate manager
+        // keeps this check independent of other tests' process-wide scratch configuration.
+        let file = ScratchFile::create(&base).unwrap();
+        let manager = Manager {
+            failed: AtomicUsize::new(0),
+            read_errors: AtomicU64::new(0),
+            resident: AtomicUsize::new(0),
+            live: AtomicUsize::new(0),
+            budget: AtomicUsize::new(1),
+            paused: AtomicBool::new(false),
+            epoch: AtomicU64::new(0),
+            space_limit: AtomicU64::new(u64::MAX),
+            next_space_check: AtomicU64::new(0),
+            recovering: AtomicBool::new(false),
+            space_unmeasured: AtomicBool::new(false),
+            registry: Mutex::new(Registry { cells: Vec::new(), hand: 0 }),
+            config: Mutex::new(Config {
+                dir: Some(base.join("growth")),
+                file: None,
+                last_error: None,
+                budget: 1,
+                paused: None,
+                backoff: RETRY_FIRST,
+                size_cap: None,
+                room: None,
+            }),
+            evictions: AtomicU64::new(0),
+            reloads: AtomicU64::new(0),
+            written: AtomicU64::new(0),
+        };
+        let allowed = manager.has_room(&file);
+        let next_check = manager.next_space_check.load(Ordering::Relaxed);
+        let unmeasured = manager.space_unmeasured.load(Ordering::Relaxed);
         *CAPPED_GATE.0.lock().unwrap_or_else(PoisonError::into_inner) = true;
         CAPPED_GATE.1.notify_all();
         let start = Instant::now();
@@ -1311,6 +1353,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         set_query_hook_for_tests(None);
+        assert!(allowed, "the last measured growth limit still applies");
+        assert_eq!(next_check, 0, "a rejected growth query must stay due");
+        assert!(unmeasured, "a rejected growth query must not report the old measurement as current");
+        drop(file);
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
