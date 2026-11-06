@@ -979,7 +979,6 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     if is_psd_input(name, bytes) {
         return Route::NamedPsd;
     }
-<<<<<<< HEAD
     Route::Flat
 }
 
@@ -988,16 +987,8 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
     // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
     // raster signature wins over a misleading `.pdf` suffix.
-    if pdf_import::is_pdf(bytes)
-        || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none())
-    {
-        return pdf_import::import(name, bytes, opts);
-=======
-    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
-    // raster signature wins over a misleading `.pdf` suffix.
     if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none()) {
         return pdf_import::import(name, bytes, opts, ctl);
->>>>>>> 806c53fd2 (PDF: address CodeRabbit review (cancellation, budgets, labels, export edges))
     }
     match route(name, bytes) {
         Route::Pcraft => {

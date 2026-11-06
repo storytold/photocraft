@@ -62,7 +62,8 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     }
     // The aggregate budget: the rendered pages and the document's raster tiles both hold pixels.
     let page_pixels = sizes.iter().map(|(w, h)| (w * dpi / 72.0).round().max(1.0) * (h * dpi / 72.0).round().max(1.0)).sum::<f64>();
-    let estimate = (page_pixels * 4.0 * 2.0) as u64;
+    // The RGBA bitmap, the f32 conversion buffer (16 bytes/px) and the document tiles.
+    let estimate = (page_pixels * 24.0) as u64;
     if opts.flat_max_pixel_bytes > 0 && estimate > opts.flat_max_pixel_bytes {
         return Err(IoError::Unsupported(format!(
             "PDF import needs about {} MB of pixel memory; the limit is {} MB (lower the import DPI)",
@@ -91,6 +92,15 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         let bitmap =
             page.render_with_config(&PdfRenderConfig::new().set_target_width(target_width)).map_err(|e| IoError::Unsupported(format!("PDF render: {e}")))?;
         let (width, height) = (bitmap.width().max(0) as u32, bitmap.height().max(0) as u32);
+        // The rounded target width can render a taller bitmap than the pre-check predicted.
+        if f64::from(width) * f64::from(height) > MAX_PAGE_PIXELS {
+            return Err(IoError::Unsupported(format!(
+                "PDF page {} rendered larger than the {MAX_PAGE_PIXELS} px budget ({} x {}); lower the import DPI",
+                index + 1,
+                width,
+                height
+            )));
+        }
         // The page's pixels go straight into the document-wide layer surface: no full-strip
         // canvas and no PNG round-trip, so the peak is the page bitmap plus its tiles.
         let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));

@@ -142,7 +142,8 @@ fn print_pdf_pages(pages: &[PrintPage], vectors: &[String], selection_font: &sel
     let icc = first.image.icc.as_ref();
     let icc_obj = icc.map(|_| font_obj + 1);
     let selection_base = font_obj + if icc.is_some() { 2 } else { 1 };
-    let labels_obj = selections_on.then_some(selection_base + 1);
+    let selection_objects = selection_font.objects(selection_base);
+    let labels_obj = selections_on.then_some((selection_base + selection_objects.len()) as u32);
     obj(&mut out, format!("<< /Type /Catalog /Pages 2 0 R{} >>", labels_obj.map(|o| format!(" /PageLabels {o} 0 R")).unwrap_or_default()).as_bytes());
     let kids = (0..n).map(|i| format!("{} 0 R", 3 + i * 3)).collect::<Vec<_>>().join(" ");
     obj(&mut out, format!("<< /Type /Pages /Kids [{kids}] /Count {n} >>").as_bytes());
@@ -213,8 +214,8 @@ fn print_pdf_pages(pages: &[PrintPage], vectors: &[String], selection_font: &sel
         body.extend_from_slice(b"\nendstream");
         obj(&mut out, &body);
     }
-    for body in selection_font.objects(selection_base) {
-        obj(&mut out, &body);
+    for body in &selection_objects {
+        obj(&mut out, body);
     }
     if labels_obj.is_some() {
         let nums = pages
