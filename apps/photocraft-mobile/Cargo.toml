@@ -1,0 +1,41 @@
+[package]
+name = "photocraft-mobile"
+description = "PhotoCraft on iPadOS/iOS and Android: the shared app behind a thin native shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+# staticlib: linked into the Swift shell (iOS). cdylib: loaded by the Kotlin NativeActivity (Android).
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Not the workspace table: the workspace forbids unsafe_code, and the two exported entry symbols
+# (`#[unsafe(no_mangle)]`) are the one thing a native shell needs. Everything else stays denied.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+cognitive_complexity = "deny"
+wildcard_imports = "deny"
+
+[dependencies]
+photocraft-engine = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-ui-egui = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, features = ["wgpu", "accesskit"] }
+log = { workspace = true }
+thiserror = { workspace = true }
+# Blocks on wgpu's async adapter/device setup once at start (already in Cargo.lock).
+pollster = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# eframe doesn't choose an activity backend; the Kotlin shell subclasses NativeActivity.
+winit = { version = "=0.30.13", default-features = false, features = ["android-native-activity"] }
+android_logger = "0.15"
