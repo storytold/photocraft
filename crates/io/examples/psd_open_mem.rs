@@ -2,16 +2,23 @@
 //! `/usr/bin/time -l` for the peak memory. `--read` reads the whole file first and imports the
 //! bytes, as opens did before `import_file` (to compare).
 //!
+//! `--preview` only reads the merged-image preview the open card shows (`psd_preview`).
 //! `--save <out.psd>` then saves the document as PSD and reopens it, checking that its embedded
 //! smart-object files (`lnk2`, left in the source by the open) came through unchanged.
 //!
 //! `cargo run --release -p photocraft-io --example psd_open_mem -- <file.psd> [--read] [--save <out.psd>]`
 
 fn main() {
-    let Some(path) = std::env::args().nth(1).filter(|a| a != "--read") else {
+    let Some(path) = std::env::args().nth(1).filter(|a| !a.starts_with("--")) else {
         eprintln!("usage: psd_open_mem <file.psd>");
         std::process::exit(2);
     };
+    if std::env::args().any(|a| a == "--preview") {
+        let t = std::time::Instant::now();
+        let p = photocraft_io::psd_preview(std::path::Path::new(&path), 1024);
+        println!("{path}: preview {:?} in {:.3}s", p.map(|p| (p.width, p.height)), t.elapsed().as_secs_f64());
+        return;
+    }
     if std::env::args().any(|a| a == "--read") {
         read_then_import(&path);
         return;

@@ -759,6 +759,25 @@ fn import_psd(
     Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
 }
 
+pub use photocraft_psd::Preview as PsdPreview;
+
+/// A small picture of the PSD/PSB at `path` from its merged image (see
+/// [`PsdFile::merged_preview`]), reading only the file's structure and the rows it samples: for a
+/// multi-gigabyte file a few megabytes, so it can show while the file is still opening. `None`
+/// for other files, and PSDs without a merged image it can sample.
+#[cfg(any(unix, windows))]
+pub fn psd_preview(path: &std::path::Path, max_side: u32) -> Option<PsdPreview> {
+    let source = photocraft_psd::FileSource::open(path).ok()?;
+    let mut magic = [0u8; 4];
+    photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).ok()?;
+    if !is_psd(&magic) {
+        return None;
+    }
+    // Every global block of any size stays in the file: only the merged image is read.
+    let (file, _) = PsdFile::from_source_deferring(photocraft_psd::Source::new(source), |_, len| len >= 1 << 16, |_| Ok(false), |_| false).ok()?;
+    file.merged_preview(max_side).ok().flatten()
+}
+
 /// Global blocks [`import_file_for_open_with`] leaves in the file: embedded smart-object files of
 /// at least a megabyte, read when a smart object's contents are (editing them, saving). Only where
 /// a save that replaces the file leaves the open one readable (Unix rename semantics); on Windows
