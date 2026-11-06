@@ -363,3 +363,22 @@ fn scrolling_sideways_keeps_dragged_widths() {
     }
     assert!(scrolled, "the wheel never moved the table sideways");
 }
+
+#[test]
+fn about_tab_has_modest_discord_link_and_no_primary_button() {
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        |ui, app| {
+            crate::dialogs::show(app, ui.ctx());
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let mut fields = serde_json::Map::new();
+    fields.insert("tab".into(), serde_json::json!("about"));
+    h.state_mut().ui.open_dialog(crate::state::DialogKind::About, fields);
+    h.run_steps(6);
+
+    assert!(h.query_all_by_label("Join us on Discord").next().is_none(), "primary Discord button must not be present in About dialog");
+    assert!(h.query_all_by_label("Discord").next().is_some(), "Discord link should be present in link row");
+}
