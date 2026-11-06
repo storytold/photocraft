@@ -165,3 +165,18 @@ fn explicit_range_caret_uses_range_origin_across_seam() {
         }
     }
 }
+
+#[test]
+fn explicit_range_caret_chooses_nearest_endpoint_across_both_sides_of_gap() {
+    let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
+    for flip in [false, true] {
+        let shape = TextShape::Path { path: path.clone(), start: 390.0, end: Some(790.0), flip };
+        for left in [20.0, 40.0] {
+            let w = Warp::on_path_with_text_start(&shape, left).unwrap();
+            for (x, expected) in [(1.0, 380.0), (left - 1.0, left), (381.0, 380.0), (399.0, 380.0)] {
+                let p = w.apply(x, 0.0);
+                assert!((w.path_text_x_near_text(p.0, p.1, 380.0).unwrap() - expected).abs() < 1e-6);
+            }
+        }
+    }
+}

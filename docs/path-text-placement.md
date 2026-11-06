@@ -6,7 +6,7 @@ The on-canvas preview uses the native text renderer. Its cached document leaves 
 
 ## Data and automation
 
-`type.setPathPlacement` updates an existing path-text layer. Parameters are `layer` (optional, defaults to the active layer), `start` (optional pixels), `end` (optional pixels, or `null` for legacy placement), and `flip` (optional boolean). Omitted values are preserved. Position and full-layer locks prevent placement changes.
+`type.setPathPlacement` updates an existing path-text layer. Parameters are `layer` (optional, defaults to the active layer), `start` (optional pixels), `end` (optional pixels, or `null` for legacy placement), and `flip` (optional boolean). Omitted values are preserved, so a request can update only one property. `end: null` clears the end limit and restores legacy placement. An explicit end must be greater than or equal to start; invalid ordering is rejected. Position and full-layer locks prevent placement changes.
 
 Offsets are measured in the text layer's local space, along its current direction of travel. An explicit end is unwrapped: equal start/end means no capacity, and an end one path length after the start means a full closed lap. The renderer limits closed paths to one lap. Native `.pcraft` files preserve the range; older files without an end retain legacy placement until an actual edit.
 

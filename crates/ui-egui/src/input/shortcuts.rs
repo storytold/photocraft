@@ -764,6 +764,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if new_layer_without_dialog(app, ctx) {
         return true;
     }
+    if app.ui.type_path_drag.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        crate::type_path_placement::cancel(app);
+        return true;
+    }
     // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
     if crate::shortcut_dispatch::dispatch_pressed(app, ctx, focus, editing) {
         return true;
@@ -793,10 +797,6 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     }
     if app.ui.frame_tool.drag.is_some() && pressed(Key::Escape) {
         crate::frame_tool::cancel(app);
-        return true;
-    }
-    if app.ui.type_path_drag.is_some() && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
-        crate::type_path_placement::cancel(app);
         return true;
     }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).

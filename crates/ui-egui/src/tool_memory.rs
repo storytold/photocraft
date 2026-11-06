@@ -28,6 +28,9 @@ pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     if app.ui.tool == Tool::Frame && tool != Tool::Frame {
         crate::frame_tool::cancel(app);
     }
+    if app.ui.tool != tool {
+        crate::type_path_placement::cancel(app);
+    }
     app.ui.tool = tool;
 }
 

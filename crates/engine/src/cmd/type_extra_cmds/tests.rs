@@ -877,7 +877,7 @@ fn path_placement_updates_and_rejects_invalid_inputs() {
     s.execute("type.setPathPlacement", json!({"flip": true})).unwrap();
     assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, end: Some(50.0), .. }));
     let before = text(&s, id).shape.clone();
-    for params in [json!({"end": 29}), json!({"start": 51}), json!({"end": 1e100}), json!({"end": "bad"})] {
+    for params in [json!({"end": 29}), json!({"start": 51}), json!({"end": 1e100}), json!({"end": "bad"}), json!({"start": -1}), json!({"end": 191})] {
         assert!(s.execute("type.setPathPlacement", params).is_err());
         assert_eq!(text(&s, id).shape, before);
     }
@@ -885,8 +885,50 @@ fn path_placement_updates_and_rejects_invalid_inputs() {
     let mut layer = text(&s, id).clone();
     set_type_path(&mut layer, &path).unwrap();
     assert!(matches!(layer.shape, TextShape::Path { end: Some(50.0), .. }));
+    s.execute("type.setPathPlacement", json!({"start": 0, "end": 190})).unwrap();
     s.execute("type.setPathPlacement", json!({"end": null})).unwrap();
     assert!(matches!(text(&s, id).shape, TextShape::Path { end: None, .. }));
     s.execute("layer.setProps", json!({"layer": id.0, "locked": true})).unwrap();
     assert!(s.execute("type.setPathPlacement", json!({"layer": id.0, "flip": true})).is_err());
+}
+
+#[test]
+fn path_placement_availability_and_legacy_ranges() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    let line = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+    with_text(&mut s, &json!({}), "area", |t, _| {
+        t.shape = TextShape::Area { path: Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])]) };
+        Ok(())
+    })
+    .unwrap();
+    assert!(!s.is_enabled("type.setPathPlacement"));
+    assert!(s.is_enabled("type.detachFromPath"));
+    assert!(s.execute("type.setPathPlacement", json!({"start": 0})).is_err());
+    s.execute("type.detachFromPath", json!({})).unwrap();
+    with_text(&mut s, &json!({}), "path", |t, _| {
+        t.shape = TextShape::Path { path: line.clone(), start: -5.0, end: Some(10.0), flip: false };
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.is_enabled("type.setPathPlacement"));
+    s.execute("type.setPathPlacement", json!({"end": null})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: -5.0, end: None, .. }));
+    with_text(&mut s, &json!({}), "degenerate", |t, _| {
+        t.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 0.0)]), start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    let before = text(&s, id).shape.clone();
+    assert!(s.execute("type.setPathPlacement", json!({"end": 0, "flip": true})).is_err());
+    assert_eq!(text(&s, id).shape, before);
+    with_text(&mut s, &json!({}), "closed", |t, _| {
+        let mut path = line.clone();
+        path.closed = true;
+        t.shape = TextShape::Path { path, start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.setPathPlacement", json!({"start": 190, "end": 210})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 190.0, end: Some(210.0), .. }));
 }

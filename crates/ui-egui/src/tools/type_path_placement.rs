@@ -1,6 +1,9 @@
 //! Placement markers for the active layer's type path.
 use crate::{PhotocraftApp, canvas::ViewXform, state::Tool};
-use std::{collections::VecDeque, sync::Arc};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Weak},
+};
 
 use egui::{Pos2, Stroke, Vec2};
 use photocraft_doc::{Document, LayerContent, TextLayer, text::TextShape};
@@ -19,7 +22,11 @@ pub(crate) fn active_text(app: &PhotocraftApp) -> Option<&TextLayer> {
     if st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::VectorMask {
         return None;
     }
-    let layer = st.doc.layer(st.active_layer?)?;
+    let id = st.active_layer?;
+    if !st.doc.shown_at(&st.doc.path_of(id)?) {
+        return None;
+    }
+    let layer = st.doc.layer(id)?;
     match &layer.content {
         LayerContent::Text(text) if matches!(text.shape, TextShape::Path { .. }) => Some(text),
         _ => None,
@@ -142,21 +149,25 @@ fn overflows(app: &PhotocraftApp, ctx: &egui::Context, text: &TextLayer) -> bool
     let Some(st) = app.session.active() else { return false };
     let TextShape::Path { start, end, flip, .. } = &text.shape else { return false };
     let key = (st.revision, start.to_bits(), end.map(f32::to_bits), *flip);
+    let source = Arc::downgrade(&st.doc);
     let id = egui::Id::unique(("path-text-overflow", st.doc.id.0, st.active_layer));
-    if let Some((_, value)) = ctx.data(|data| data.get_temp::<((u64, u32, Option<u32>, bool), bool)>(id)).filter(|(cached, _)| *cached == key) {
+    if let Some((_, _, value)) = ctx
+        .data(|data| data.get_temp::<((u64, u32, Option<u32>, bool), Weak<Document>, bool)>(id))
+        .filter(|(cached, doc, _)| *cached == key && doc.ptr_eq(&source))
+    {
         return value;
     }
     let mut engine = photocraft_text::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let layout = engine.layout(text, st.doc.resolution_dpi);
     let value = photocraft_text::render::path_overflows(&layout, &text.shape);
-    ctx.data_mut(|data| data.insert_temp(id, (key, value)));
+    ctx.data_mut(|data| data.insert_temp(id, (key, source, value)));
     value
 }
 
 pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(text) = active_text(app) else { return };
     let mut preview = text.clone();
-    if let Some(drag) = app.ui.type_path_drag.as_ref().filter(|d| d.valid(app)) {
+    if let Some(drag) = app.ui.type_path_drag.as_ref().filter(|d| d.valid(app) && (d.proposed != d.original || d.flipped)) {
         let (range, side) = drag.placement();
         if let TextShape::Path { start, end, flip, .. } = &mut preview.shape {
             *start = range[0] as f32;
@@ -255,6 +266,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
 #[derive(Clone, Debug)]
 pub struct Drag {
     document: photocraft_doc::DocId,
+    source: Weak<Document>,
     layer: photocraft_doc::LayerId,
     revision: u64,
     tool: Tool,
@@ -271,14 +283,15 @@ pub struct Drag {
     flipped: bool,
     initial_side: f64,
     transform: photocraft_doc::Affine,
-    zoom: f64,
+    xf: ViewXform,
     preview: Option<Preview>,
 }
 
 // Geometry is fixed by the source document revision; cached preview pixels are derived state.
 impl PartialEq for Drag {
     fn eq(&self, other: &Self) -> bool {
-        (self.document, self.layer, self.revision, self.tool) == (other.document, other.layer, other.revision, other.tool)
+        self.source.ptr_eq(&other.source)
+            && (self.document, self.layer, self.revision, self.tool) == (other.document, other.layer, other.revision, other.tool)
             && self.inverse == other.inverse
             && self.closed == other.closed
             && self.endpoint == other.endpoint
@@ -291,7 +304,12 @@ impl PartialEq for Drag {
             && self.flipped == other.flipped
             && self.initial_side == other.initial_side
             && self.transform == other.transform
-            && self.zoom == other.zoom
+            && self.xf.rect == other.xf.rect
+            && self.xf.zoom == other.xf.zoom
+            && self.xf.center == other.xf.center
+            && self.xf.flip == other.xf.flip
+            && self.xf.rotation == other.xf.rotation
+            && self.xf.aspect == other.xf.aspect
     }
 }
 
@@ -299,7 +317,12 @@ impl Drag {
     fn valid(&self, app: &PhotocraftApp) -> bool {
         active_text(app).is_some()
             && app.ui.tool == self.tool
-            && app.session.active().is_some_and(|st| st.doc.id == self.document && st.active_layer == Some(self.layer) && st.revision == self.revision)
+            && app.session.active().is_some_and(|st| {
+                st.doc.id == self.document
+                    && self.source.ptr_eq(&Arc::downgrade(&st.doc))
+                    && st.active_layer == Some(self.layer)
+                    && st.revision == self.revision
+            })
     }
 
     fn placement(&self) -> ([f64; 2], bool) {
@@ -320,8 +343,12 @@ impl Drag {
         let length = self.geometry.length();
         if let Some(((px, py), (tx, ty))) = self.geometry.sample(arc) {
             let a = self.transform.apply(Point::new(px, py));
-            let b = self.transform.apply(Point::new(px - ty, py + tx));
-            let screen_distance = distance * (b.x - a.x).hypot(b.y - a.y) * self.zoom;
+            let b = self.transform.apply(Point::new(px + tx, py + ty));
+            let c = self.transform.apply(Point::new(px - ty, py + tx));
+            let a = self.xf.to_screen(a.x as f32, a.y as f32);
+            let b = self.xf.to_screen(b.x as f32, b.y as f32) - a;
+            let c = self.xf.to_screen(c.x as f32, c.y as f32) - a;
+            let screen_distance = if b.length() > 1e-6 { distance * f64::from((b.x * c.y - b.y * c.x).abs() / b.length()) } else { 0.0 };
             if screen_distance.abs() > 4.0 {
                 self.flipped = screen_distance.signum() != self.initial_side;
             }
@@ -332,6 +359,9 @@ impl Drag {
         }
         self.delta += delta;
         self.previous = arc;
+        if self.delta == 0.0 && self.proposed == self.original {
+            return;
+        }
         let [start, end] = self.original;
         self.proposed = if self.endpoint == Some(0) {
             [(start + self.delta).clamp(if self.closed { end - length } else { 0.0 }, end), end]
@@ -360,15 +390,39 @@ fn moved_open_range([start, end]: [f64; 2], delta: f64, alignment: f64, length: 
     }
 }
 
+/// Discard a capture when its original document or tool is no longer active.
+pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
+    if app.ui.type_path_drag.as_ref().is_some_and(|drag| !drag.valid(app)) {
+        cancel(app);
+    }
+}
+
+pub(crate) fn cancel_missing_release(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if ctx.input(|input| !input.focused || !input.pointer.primary_down()) {
+        cancel(app);
+    }
+}
+
 pub(crate) fn cancel(app: &mut PhotocraftApp) -> bool {
     app.ui.type_path_drag.take().is_some()
 }
 
+#[cfg(test)]
 pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) -> bool {
+    pointer_with_view(app, event, None)
+}
+
+pub(crate) fn pointer_with_view(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent, view: Option<&ViewXform>) -> bool {
     use crate::canvas::ToolEvent;
+    if matches!(event, ToolEvent::Down { .. }) {
+        cancel(app);
+    }
     if let Some(mut drag) = app.ui.type_path_drag.take() {
         if !drag.valid(app) {
             return true;
+        }
+        if let Some(xf) = view {
+            drag.xf = *xf;
         }
         match event {
             ToolEvent::Move { x, y, .. } => {
@@ -403,8 +457,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
     let Some(geometry) = PathGeometry::new(path, *flip) else { return false };
     let Some(inverse) = text.transform.inverse() else { return false };
     let Some(original) = effective_range(&text, &geometry) else { return false };
-    let zoom = f64::from(app.point_zoom().max(0.01));
-    let Some(xf) = ViewXform::active(app) else { return false };
+    let Some(xf) = view.copied().or_else(|| ViewXform::active(app)) else { return false };
     let p = xf.to_screen(x as f32, y as f32);
     let best = markers(&text, &xf).and_then(|ends| marker_hit(ends, p));
     let active_layer = app.session.active().and_then(|st| st.active_layer);
@@ -424,6 +477,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
     let Some((previous, distance)) = geometry.project(point.x, point.y) else { return false };
     app.ui.type_path_drag = Some(Drag {
         document: st.doc.id,
+        source: Arc::downgrade(&st.doc),
         layer,
         revision: st.revision,
         tool: app.ui.tool,
@@ -440,7 +494,7 @@ pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) 
         flipped: false,
         initial_side: if distance.abs() > 1e-6 { distance.signum() } else { -1.0 },
         transform: text.transform,
-        zoom,
+        xf,
         preview: None,
     });
     true
@@ -467,14 +521,61 @@ mod tests {
     }
 
     #[test]
+    fn missing_release_cleanup_preserves_held_capture_and_cancels_lost_release() {
+        let mut app = app(Tool::PathSelection);
+        let ctx = egui::Context::default();
+        let pos = egui::pos2(1000.0, 1000.0);
+        ctx.begin_pass(egui::RawInput {
+            focused: true,
+            events: vec![
+                egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+                egui::Event::PointerGone,
+            ],
+            ..Default::default()
+        });
+        down(&mut app, 40.0, 100.0);
+        cancel_missing_release(&mut app, &ctx);
+        assert!(app.ui.type_path_drag.is_some());
+        let _ = ctx.end_pass();
+        ctx.begin_pass(egui::RawInput {
+            focused: true,
+            events: vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
+            ..Default::default()
+        });
+        let revision = app.session.active().unwrap().revision;
+        cancel_missing_release(&mut app, &ctx);
+        assert!(app.ui.type_path_drag.is_none());
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        down(&mut app, 40.0, 100.0);
+        assert!(app.ui.type_path_drag.is_some());
+        let _ = ctx.end_pass();
+        ctx.begin_pass(egui::RawInput { focused: false, ..Default::default() });
+        cancel_missing_release(&mut app, &ctx);
+        assert!(app.ui.type_path_drag.is_none());
+        let _ = ctx.end_pass();
+    }
+
+    #[test]
+    fn selecting_another_tool_cancels_capture_before_switching_back() {
+        let mut app = app(Tool::PathSelection);
+        down(&mut app, 40.0, 100.0);
+        assert!(app.ui.type_path_drag.is_some());
+        crate::tool_memory::select(&mut app, Tool::Move);
+        crate::tool_memory::select(&mut app, Tool::PathSelection);
+        assert!(app.ui.type_path_drag.is_none());
+    }
+
+    #[test]
     fn attaching_type_selects_its_path_and_preserves_the_source() {
         let mut app = app(Tool::PathSelection);
         assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
         assert!(active_text(&app).is_some());
         let source = app.session.active().unwrap().doc.work_path.clone();
         app.ui.selected_path = Some("work".into());
+        app.session.active_mut().unwrap().channel_view.target = photocraft_engine::channel_cmds::ChannelTarget::VectorMask;
         assert!(active_text(&app).is_none());
         app.run("type.attachToPath", json!({"start":20})).unwrap();
+        assert_eq!(app.session.active().unwrap().channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Composite);
         assert_eq!(app.ui.selected_path.as_deref(), Some("layer"));
         assert!(active_text(&app).is_some());
         assert_eq!(app.session.active().unwrap().doc.work_path, source);
@@ -542,6 +643,20 @@ mod tests {
     }
 
     #[test]
+    fn hidden_active_layer_rejects_placement() {
+        let mut app = app(Tool::PathSelection);
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("hide", |doc, _| {
+                doc.layer_mut(id).unwrap().visible = false;
+                Ok(())
+            })
+            .unwrap();
+        assert!(active_text(&app).is_none());
+        assert!(!pointer(&mut app, ToolEvent::Down { x: 40.0, y: 90.0, pressure: 1.0 }));
+    }
+
+    #[test]
     fn legacy_click_and_release_preserves_model_and_history() {
         let mut app = app(Tool::PathSelection);
         app.run("type.setPathPlacement", json!({"end":null})).unwrap();
@@ -580,6 +695,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn explicit_view_routes_marker_gesture() {
+        let mut app = app(Tool::DirectSelection);
+        let mut xf = ViewXform::active(&app).unwrap();
+        xf.zoom = 2.0;
+        xf.rotation = 37.0;
+        xf.aspect = 1.5;
+        let (point, tangent) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
+        let from = xf.to_doc(marker_tip(point, tangent, 0));
+        assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
+        let to = [from[0] + 10.0, from[1]];
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: to[0], y: to[1], pressure: 1.0 }, Some(&xf)));
+        assert!(pointer_with_view(&mut app, ToolEvent::Up { x: to[0], y: to[1] }, Some(&xf)));
+        let (start, end, flip) = placement(&app);
+        assert!((start - 30.0).abs() < 0.01);
+        assert_eq!((end, flip), (Some(100.0), false));
+    }
+
+    #[test]
+    fn shear_flip_uses_perpendicular_screen_distance() {
+        let mut app = app(Tool::PathSelection);
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("shear text", |doc, _| {
+                let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+                text.transform = photocraft_doc::Affine { m: [1.0, 0.0, 10.0, 1.0, 0.0, 0.0] };
+                Ok(())
+            })
+            .unwrap();
+        let xf = ViewXform::active(&app).unwrap();
+        let (point, tangent) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
+        let from = xf.to_doc(marker_tip(point, tangent, 0));
+        assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
+        // Local (40, 103) has a transformed normal displacement over 30 pixels,
+        // but is only 3 pixels from the transformed baseline.
+        let near = Point::new(40.0 + 10.0 * 103.0, 103.0);
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: near.x, y: near.y, pressure: 1.0 }, Some(&xf)));
+        assert!(!app.ui.type_path_drag.as_ref().unwrap().flipped);
+        let far = Point::new(40.0 + 10.0 * 105.0, 105.0);
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: far.x, y: far.y, pressure: 1.0 }, Some(&xf)));
+        assert!(app.ui.type_path_drag.as_ref().unwrap().flipped);
+        assert!(pointer_with_view(&mut app, ToolEvent::Up { x: far.x, y: far.y }, Some(&xf)));
+        assert!(placement(&app).2);
     }
 
     #[test]
@@ -760,5 +922,52 @@ mod tests {
                 assert_eq!(steps(&app), n);
             }
         }
+    }
+    #[test]
+    fn replacing_snapshot_with_same_id_and_revision_cancels_capture() {
+        let mut app = app(Tool::PathSelection);
+        let before = shape(&app);
+        let count = steps(&app);
+        down(&mut app, 40.0, 90.0);
+        move_to(&mut app, 50.0, 90.0);
+        let st = app.session.active_mut().unwrap();
+        let id = st.doc.id;
+        let revision = st.revision;
+        let original = st.doc.clone();
+        st.doc = Arc::new((*original).clone());
+        assert_eq!(st.doc.id, id);
+        assert_eq!(st.revision, revision);
+        assert!(!Arc::ptr_eq(&st.doc, &original));
+        cancel_stale(&mut app);
+        assert!(app.ui.type_path_drag.is_none());
+        assert!(!pointer(&mut app, ToolEvent::Up { x: 50.0, y: 90.0 }));
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), count);
+    }
+
+    #[test]
+    fn closed_range_over_one_lap_click_preserves_range_and_history() {
+        let mut app = app(Tool::PathSelection);
+        let st = app.session.active_mut().unwrap();
+        let id = st.active_layer.unwrap();
+        let layer = Arc::make_mut(&mut st.doc).layer_mut(id).unwrap();
+        let LayerContent::Text(text) = &mut layer.content else { panic!("expected text") };
+        text.shape = TextShape::Path {
+            path: photocraft_doc::vector::Subpath::polygon(&[(20.0, 20.0), (180.0, 20.0), (180.0, 180.0), (20.0, 180.0)]),
+            start: 20.0,
+            end: Some(700.0),
+            flip: false,
+        };
+        let before = shape(&app);
+        let count = steps(&app);
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let point = xf.to_doc(tip);
+        down(&mut app, f64::from(point[0]), f64::from(point[1]));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
+        up(&mut app, f64::from(point[0]), f64::from(point[1]));
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), count);
     }
 }

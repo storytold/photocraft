@@ -333,7 +333,8 @@ impl Para<'_> {
     }
 
     /// Where the line starts along its extent: box and area lines at their box or span edge,
-    /// point lines around the anchor.
+    /// point and legacy unbounded path lines around the anchor. Explicit path ranges
+    /// align center/right lines within their available span instead of around that anchor.
     fn line_start(&self, f: &LineFrame, offset: f32, adv: f32, line_kern: f32) -> f32 {
         if !self.env.wraps {
             let span = self.env.path_range.unwrap_or(0.0);
@@ -414,7 +415,8 @@ impl Para<'_> {
         let mut kern_px = self.kerning(optical, &slots);
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
-        let dx = self.line_start(f, m.offset, adv, line_kern);
+        let growth = if self.env.path_range.is_some() { slots.iter().map(|s| s.growth).sum::<f32>() - trailing_growth } else { 0.0 };
+        let dx = self.line_start(f, m.offset, adv, line_kern + growth);
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };

@@ -109,7 +109,13 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
     Some((armed, mods))
 }
 
-fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, armed: bool) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
+fn filter_event_before_tool(
+    app: &mut PhotocraftApp,
+    ev: ToolEvent,
+    mods: egui::Modifiers,
+    armed: bool,
+    xf: Option<&super::ViewXform>,
+) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
     // The Move tool's marquee selecting layers takes its moves and release unsnapped (move_box.rs).
@@ -167,7 +173,7 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
         return None;
     }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
-    if crate::type_path_placement::pointer(app, raw) {
+    if crate::type_path_placement::pointer_with_view(app, raw, xf) {
         return None;
     }
     if crate::direct_select::pointer(app, ev, mods) {
@@ -340,11 +346,15 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
 
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    tool_event_with_view(app, ev, mods, None);
+}
+
+pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, xf: Option<&super::ViewXform>) {
     if consumes_cancelled_vector_event(app, ev) {
         return;
     }
     let Some((armed, mods)) = preflight_tool_event(app, ev, mods) else { return };
-    let Some((raw, ev, mods)) = filter_event_before_tool(app, ev, mods, armed) else { return };
+    let Some((raw, ev, mods)) = filter_event_before_tool(app, ev, mods, armed, xf) else { return };
     let tool = event_tool(app, mods);
     if handle_eyedropper_event(app, tool, ev, mods) {
         return;

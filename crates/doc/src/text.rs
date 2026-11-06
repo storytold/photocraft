@@ -243,8 +243,11 @@ pub enum TextShape {
     Path {
         path: super::vector::Subpath,
         start: f32,
-        /// Unwrapped arc-length end in the current travel direction. None preserves legacy clipping;
-        /// start is empty and start plus the path length is a full closed lap.
+        /// Unwrapped arc-length end offset in text-space pixels, measured in the current
+        /// travel direction (`flip` reverses that direction). It may exceed the path length
+        /// on closed paths: for a 100 px loop, start 80 and end 120 cross the seam by 20 px.
+        /// End equal to start is empty; start plus the path length permits one full lap.
+        /// `None` preserves legacy unbounded clipping and alignment around the start anchor.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         end: Option<f32>,
         flip: bool,

@@ -217,6 +217,7 @@ impl PhotocraftApp {
         let active = self.session.active().and_then(|state| state.active_layer).map(|layer| layer.0);
         if attached.is_some() && attached == active {
             // New path text becomes the editable target; its source work path stays intact.
+            let _ = self.session.execute("channel.target.composite", json!({}));
             self.ui.selected_path = Some("layer".into());
             self.ui.vector_mask_target = false;
             self.ui.mask_target = false;
@@ -315,6 +316,7 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
+        crate::type_path_placement::cancel_stale(self);
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.

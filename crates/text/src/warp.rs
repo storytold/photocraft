@@ -128,6 +128,8 @@ impl Warp {
             let mut nearest = offset;
             if frame.closed && offset > upper && lower + frame.length() - offset < offset - upper {
                 nearest -= frame.length();
+            } else if frame.closed && offset < lower && offset + frame.length() - upper < lower - offset {
+                nearest += frame.length();
             }
             return Some(nearest.clamp(lower, upper));
         }
@@ -138,6 +140,16 @@ impl Warp {
             }
         }
         Some(offset)
+    }
+
+    /// Clip a decoration interval to an explicit path range.
+    pub(crate) fn clip_decoration(&self, x0: f64, x1: f64) -> Option<(f64, f64)> {
+        let Kind::Path(frame) = &self.0 else { return Some((x0, x1)) };
+        let Some(span) = frame.range_length else { return Some((x0, x1)) };
+        let lower = if frame.closed { 0.0 } else { (-frame.start).max(0.0) };
+        let upper = if frame.closed { span.min(frame.length()) } else { span.min(frame.length() - frame.start) };
+        let (a, b) = (x0.max(lower), x1.min(upper));
+        (a < b).then_some((a, b))
     }
 
     /// Longest segment (text-space px) worth sending through [`Warp::apply`] unsplit.
@@ -371,6 +383,20 @@ mod tests {
     fn warp(style: &str, value: f32) -> Warp {
         let w = TextWarp { style: psd_style(style).unwrap().into(), value, horizontal_distortion: 0.0, vertical_distortion: 0.0, horizontal: true };
         Warp::new(&w, [0.0, -40.0, 200.0, 10.0]).unwrap()
+    }
+
+    #[test]
+    fn decoration_ranges_clip_at_closed_seam_and_one_lap() {
+        let path = Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
+        for flip in [false, true] {
+            let warp = Warp(Kind::Path(PathFrame::new(&path, 35.0, Some(45.0), flip).unwrap()));
+            assert_eq!(warp.clip_decoration(-2.0, 20.0), Some((0.0, 10.0)));
+            assert_eq!(warp.clip_decoration(11.0, 20.0), None);
+            let lap = Warp(Kind::Path(PathFrame::new(&path, 35.0, Some(135.0), flip).unwrap()));
+            assert_eq!(lap.clip_decoration(0.0, 100.0), Some((0.0, 40.0)));
+            let legacy = Warp(Kind::Path(PathFrame::new(&path, 35.0, None, flip).unwrap()));
+            assert_eq!(legacy.clip_decoration(-2.0, 100.0), Some((-2.0, 100.0)));
+        }
     }
 
     #[test]

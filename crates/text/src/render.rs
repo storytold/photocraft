@@ -251,8 +251,9 @@ fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only: 
     for d in decorations {
         match warp {
             Some(w) => {
+                let Some((x0, x1)) = w.clip_decoration(d.x0 as f64, d.x1 as f64) else { continue };
                 let mut ws = WarpSink { inner: &mut *sink, warp: w, post: *transform };
-                rect_to(&mut ws, &Xform::IDENTITY, d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64);
+                rect_to(&mut ws, &Xform::IDENTITY, x0, d.y0 as f64, x1, d.y1 as f64);
             }
             None => rect_to(sink, transform, d.x0 as f64, d.y0 as f64, d.x1 as f64, d.y1 as f64),
         }
@@ -611,6 +612,35 @@ mod tests {
     use super::{MAX_PIXELS, fits_raster_budget, rect_from_bounds, zeroed};
     use photocraft_color::SampleType;
     use photocraft_geom::Rect;
+
+    #[test]
+    fn path_decorations_respect_explicit_range() {
+        use super::{Bounds, DecorationRect, TextLayout, Warp, Xform, draw};
+        use photocraft_doc::text::TextShape;
+        use photocraft_doc::vector::Subpath;
+
+        let path = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+        // Underline and strikethrough occupy separate bands but share the draw path.
+        for y in [2.0, -4.0] {
+            let layout = TextLayout { decorations: vec![DecorationRect { x0: 0.0, y0: y, x1: 40.0, y1: y + 1.0, style: 0 }], ..Default::default() };
+            for flip in [false, true] {
+                for (end, expected) in [(Some(30.0), Some((20.0, 30.0))), (Some(20.0), None), (None, Some((20.0, 60.0)))] {
+                    let shape = TextShape::Path { path: path.clone(), start: 20.0, end, flip };
+                    let warp = Warp::on_path(&shape).unwrap();
+                    let mut bounds = Bounds::default();
+                    draw(&layout, &Xform::IDENTITY, &mut bounds, None, Some(&warp));
+                    match (bounds.rect, expected) {
+                        (None, None) => {}
+                        (Some(r), Some((a, b))) => {
+                            let (a, b) = if flip { (100.0 - b, 100.0 - a) } else { (a, b) };
+                            assert!((r[0] - a).abs() < 1e-6 && (r[2] - b).abs() < 1e-6, "{r:?}");
+                        }
+                        other => panic!("unexpected bounds: {other:?}"),
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn bounds_are_clipped_without_overflow_and_oversized_rectangles_rejected() {

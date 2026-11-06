@@ -378,6 +378,8 @@ struct Env<'a> {
     /// Box and area text wrap, align within their lines and hide what doesn't fit.
     wraps: bool,
     box_rect: (f32, f32, f32, f32),
+    /// Available explicit path span in text-space pixels, capped by the curve's capacity.
+    /// `None` keeps legacy alignment around the start anchor (an alignment span of zero).
     path_range: Option<f32>,
     area: Option<crate::area::AreaShape>,
 }

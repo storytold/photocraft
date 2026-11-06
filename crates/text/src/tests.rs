@@ -3685,7 +3685,7 @@ fn path_range_alignment_uses_measured_advance() {
                         Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)])
                     };
                     let start = if closed { 390.0 } else { 20.0 };
-                    let mut t = point("Alignment", 20.0);
+                    let mut t = styled("Alignment   ", CharStyle { font_family: "Inter".into(), size_pt: 20.0, horizontal_scale: 1.5, ..Default::default() });
                     t.shape = TextShape::Path { path, start, end: Some(start + span), flip };
                     let t = with_para(t, ParagraphStyle { align, ..Default::default() });
                     let l = e.layout(&t, 72.0);
@@ -3715,5 +3715,37 @@ fn path_overflow_matches_visible_glyph_clipping() {
         text.text.clear();
         let layout = engine.layout(&text, 72.0);
         assert!(!crate::render::path_overflows(&layout, &text.shape));
+    }
+}
+
+#[test]
+fn path_decoration_draw_bounds_respect_explicit_ranges() {
+    use crate::layout::DecorationRect;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let layout = |x0, x1| crate::TextLayout {
+        decorations: vec![DecorationRect { x0, x1, y0: 2.0, y1: 3.0, style: 0 }, DecorationRect { x0, x1, y0: -4.0, y1: -3.0, style: 0 }],
+        ..Default::default()
+    };
+    for flip in [false, true] {
+        for closed in [false, true] {
+            let path = if closed {
+                Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+            } else {
+                Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)])
+            };
+            let start = if closed { 390.0 } else { 20.0 };
+            let shape = |end| TextShape::Path { path: path.clone(), start, end, flip };
+            let bounds = |l: &crate::TextLayout, end| {
+                let warp = crate::warp::Warp::on_path(&shape(end)).unwrap();
+                crate::render::ink_rect_warped(l, &Affine::IDENTITY, Some(&warp))
+            };
+            let clipped = bounds(&layout(-10.0, 40.0), Some(start + 20.0));
+            assert_eq!(clipped, bounds(&layout(0.0, 20.0), Some(start + 20.0)));
+            assert_ne!(clipped, bounds(&layout(0.0, 40.0), None));
+            assert_eq!(bounds(&layout(-10.0, 40.0), Some(start)), photocraft_geom::Rect::EMPTY);
+            assert_eq!(bounds(&layout(0.0, 40.0), None), bounds(&layout(0.0, 40.0), Some(start + 40.0)));
+        }
     }
 }

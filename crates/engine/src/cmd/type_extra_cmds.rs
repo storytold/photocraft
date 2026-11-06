@@ -458,6 +458,13 @@ fn is_path_text(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+fn is_path_placement_text(s: &Session) -> std::result::Result<(), String> {
+    match active_text(s)?.shape {
+        TextShape::Path { .. } => Ok(()),
+        _ => Err("the type layer is not on a path".into()),
+    }
+}
+
 fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |msg: &str| EngineError::BadParams { cmd: "type.setPathPlacement".into(), msg: msg.into() };
     if !p.is_object() {
@@ -488,12 +495,27 @@ fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("the type layer's position is locked".into()));
     }
     with_text(s, p, "Set Path Placement", |t, _| {
-        let TextShape::Path { start: current_start, end: current_end, flip: current_flip, .. } = &mut t.shape else {
+        let TextShape::Path { path, start: current_start, end: current_end, flip: current_flip } = &mut t.shape else {
             return Err(EngineError::Other("the type layer is not path text".into()));
         };
         let new_end = end.unwrap_or(*current_end);
         if new_end.is_some_and(|end| end < start.unwrap_or(*current_start)) {
             return Err(bad("end must not be before start"));
+        }
+        if let Some(end) = new_end {
+            let start = start.unwrap_or(*current_start);
+            if !start.is_finite() || !end.is_finite() {
+                return Err(bad("range must be finite"));
+            }
+            if !path.closed {
+                let length = photocraft_text::warp::PathGeometry::new(path, false)
+                    .map(|geometry| geometry.length())
+                    .filter(|length| length.is_finite() && *length > 0.0)
+                    .ok_or_else(|| bad("path must have a finite nonzero length"))?;
+                if start < 0.0 || f64::from(end) > length {
+                    return Err(bad("range must lie on the path"));
+                }
+            }
         }
         *current_end = new_end;
         if let Some(start) = start {
@@ -1031,8 +1053,8 @@ pub fn specs() -> Vec<CommandSpec> {
             "type.setPathPlacement",
             "Set Path Placement",
             &[],
-            r##"{"layer":id?,"start":finite f32 pixels?,"end":finite f32 pixels|null?,"flip":bool?}"##,
-            is_path_text,
+            r##"{"layer":id? (default active Type layer),"start":finite f32 arc-length pixels?,"end":finite f32 arc-length pixels|null?,"flip":bool?}. Updates existing path text; omitted values are preserved. Offsets are text-space pixels in the current travel direction. end:null clears the limit and restores legacy placement; an explicit end must be at least start. Position-locked and fully locked layers are rejected."##,
+            is_path_placement_text,
             set_path_placement
         ),
         spec!("type.detachFromPath", "Release Type from Path", &[], LP, is_path_text, detach_from_path),
