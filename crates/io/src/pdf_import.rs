@@ -103,6 +103,8 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
             budget >> 20
         )));
     }
+    let mut object_budget = ObjectBudget::default();
+    let mut object_warnings: Vec<String> = Vec::new();
     let mut doc = Document::new(name, Size::new(doc_width as u32, doc_height as u32), ColorMode::Rgb, SampleType::U8);
     doc.resolution_dpi = dpi as f32;
     let mut x = 0u32;
@@ -155,14 +157,18 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         let mut children = vec![layer];
         if opts.pdf_text || opts.pdf_vectors {
             let frame = PageFrame { geometry: *geometry, dpi, x, rgba: &rgba, width, height };
-            children.extend(object_layers(&page, opts, &frame, ctl)?);
+            let (layers, truncated) = object_layers(&page, opts, &frame, ctl, &mut object_budget)?;
+            children.extend(layers);
+            if truncated {
+                object_warnings.push(format!("PDF page {}: editable text/vector layers omitted at the import limit (the raster page is kept)", page_index + 1));
+            }
         }
         let group = Group { children, expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
         doc.layers.push(Layer::new(format!("Page {}", page_index + 1), LayerContent::Group(group)));
         x += width + GAP;
         ctl.progress((index + 1) as f32 / count as f32);
     }
-    let mut warnings = Vec::new();
+    let mut warnings = object_warnings;
     if first > 1 || last < total || count < page_count {
         let shown_last = first + count - 1;
         let reason = if count < page_count { " (the page limit is 16)" } else { "" };
@@ -171,6 +177,39 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
 }
 
+/// Document-wide bound on editable objects. Text layers and path knots are allocated outside the
+/// pixel-memory estimate, so a pathological PDF could otherwise exhaust memory.
+const MAX_OBJECT_LAYERS: usize = 20_000;
+const MAX_PATH_KNOTS: usize = 1_000_000;
+
+/// Tracks the editable objects created so far, document-wide.
+#[derive(Default)]
+struct ObjectBudget {
+    layers: usize,
+    knots: usize,
+}
+
+impl ObjectBudget {
+    /// Claims one editable layer; false once the document-wide limit is reached.
+    fn claim_layer(&mut self) -> bool {
+        if self.layers >= MAX_OBJECT_LAYERS {
+            false
+        } else {
+            self.layers += 1;
+            true
+        }
+    }
+
+    /// Claims `count` path knots; false if that would pass the document-wide limit.
+    fn claim_knots(&mut self, count: usize) -> bool {
+        if self.knots.saturating_add(count) > MAX_PATH_KNOTS {
+            false
+        } else {
+            self.knots += count;
+            true
+        }
+    }
+}
 /// A page's visible area and rotation, in PDF points.
 #[derive(Clone, Copy)]
 struct PageGeometry {
@@ -198,7 +237,9 @@ fn page_geometry(page: &pdfium_render::prelude::PdfPage, page_number: usize) -> 
         return Err(IoError::Unsupported(format!("PDF page {page_number} has no area")));
     }
     let rotation = page.rotation().map(|r| r.as_degrees() as u16).unwrap_or(0);
-    let (origin_x, origin_y, crop_w, crop_h) = match page.boundaries().crop().or_else(|_| page.boundaries().media()) {
+    // The page's effective box, as PDFium renders it: the bounding box (media box clipped to the
+    // crop box), not the raw crop box, which may extend past the media box.
+    let (origin_x, origin_y, crop_w, crop_h) = match page.boundaries().bounding().or_else(|_| page.boundaries().crop()).or_else(|_| page.boundaries().media()) {
         Ok(boundary) => {
             let r = boundary.bounds;
             (f64::from(r.left().value), f64::from(r.bottom().value), f64::from(r.right().value - r.left().value), f64::from(r.top().value - r.bottom().value))
@@ -335,12 +376,23 @@ impl PageFrame<'_> {
 
 /// Editable text and shape layers for one rendered page, in document pixels.
 #[cfg(not(target_arch = "wasm32"))]
-fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, frame: &PageFrame, ctl: &Interrupt) -> Result<Vec<Layer>, IoError> {
+fn object_layers(
+    page: &pdfium_render::prelude::PdfPage,
+    opts: &ImportOptions,
+    frame: &PageFrame,
+    ctl: &Interrupt,
+    budget: &mut ObjectBudget,
+) -> Result<(Vec<Layer>, bool), IoError> {
     use pdfium_render::prelude::*;
 
     let objects = page.objects();
     let mut layers = Vec::new();
-    for object in objects.iter() {
+    let mut truncated = false;
+    'objects: for object in objects.iter() {
+        if budget.layers >= MAX_OBJECT_LAYERS {
+            truncated = true;
+            break;
+        }
         if ctl.check().is_err() {
             return Err(IoError::Cancelled);
         }
@@ -372,6 +424,10 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                 if !text.is_visible() {
                     layer.visible = false;
                 }
+                if !budget.claim_layer() {
+                    truncated = true;
+                    break 'objects;
+                }
                 layers.push(layer);
             }
             PdfPageObject::Path(path) if opts.pdf_vectors => {
@@ -396,10 +452,18 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                                 subpaths.push(Subpath { closed, knots: std::mem::take(&mut knots), op: PathOp::Combine });
                                 closed = false;
                             }
+                            if !budget.claim_knots(1) {
+                                truncated = true;
+                                break 'objects;
+                            }
                             let (px, py) = point();
                             knots.push(Knot::corner(px, py));
                         }
                         PdfPathSegmentType::LineTo => {
+                            if !budget.claim_knots(1) {
+                                truncated = true;
+                                break 'objects;
+                            }
                             let (px, py) = point();
                             knots.push(Knot::corner(px, py));
                         }
@@ -411,6 +475,10 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                                 let ((c1x, c1y), (c2x, c2y), (ex, ey)) = (bezier[0], bezier[1], bezier[2]);
                                 if let Some(prev) = knots.last_mut() {
                                     prev.out_ctrl = Point::new(c1x, c1y);
+                                }
+                                if !budget.claim_knots(1) {
+                                    truncated = true;
+                                    break 'objects;
                                 }
                                 knots.push(Knot::smooth(Point::new(ex, ey), Point::new(c2x, c2y), Point::new(ex, ey)));
                                 bezier.clear();
@@ -431,6 +499,10 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                     continue;
                 }
                 let stroke = stroked.then(|| ShapeStroke { paint: Fill::Solid(Color::BLACK), width: 1.0, ..Default::default() });
+                if !budget.claim_layer() {
+                    truncated = true;
+                    break 'objects;
+                }
                 layers.push(Layer::new(
                     "Path",
                     LayerContent::Shape(ShapeLayer {
@@ -444,7 +516,7 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
             _ => {}
         }
     }
-    Ok(layers)
+    Ok((layers, truncated))
 }
 
 /// The highest DPI not above `requested` that keeps every page and the artboard strip within
@@ -503,7 +575,7 @@ fn bind() -> Result<pdfium_render::prelude::Pdfium, IoError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{PageFrame, PageGeometry};
+    use super::{MAX_OBJECT_LAYERS, MAX_PATH_KNOTS, ObjectBudget, PageFrame, PageGeometry};
 
     fn geometry(rotation: u16) -> PageGeometry {
         PageGeometry { width_pt: 595.0, height_pt: 842.0, origin_x: 0.0, origin_y: 0.0, crop_w: 595.0, crop_h: 842.0, rotation }
@@ -522,6 +594,18 @@ mod tests {
         assert_eq!(frame(300.0, 2480).to_doc(60.0, 420.0), (2730.0, 1758.0));
     }
 
+    #[test]
+    fn object_budget_stops_at_its_limits() {
+        let mut budget = ObjectBudget::default();
+        for _ in 0..MAX_OBJECT_LAYERS {
+            assert!(budget.claim_layer());
+        }
+        assert!(!budget.claim_layer());
+        let mut knots = ObjectBudget::default();
+        assert!(knots.claim_knots(MAX_PATH_KNOTS));
+        assert!(!knots.claim_knots(1));
+        assert!(!knots.claim_knots(usize::MAX));
+    }
     #[test]
     fn crop_box_offsets_and_rotations_map_like_the_raster() {
         // A 200 x 100 pt crop box at (10, 20), displayed rotated 90 degrees clockwise: 100 x 200.

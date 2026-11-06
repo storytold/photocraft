@@ -51,12 +51,15 @@ fn three_page_pdf() -> Vec<u8> {
         "Font" => dictionary! { "F1" => font_id },
     });
     let pages = [
-        ("1 0 0 rg BT /F1 48 Tf 20 50 Td (Red) Tj ET", [0.0f32, 0.0, PAGE_W as f32, PAGE_H as f32], None),
-        ("0 0 1 rg q 2 0 0 2 10 5 cm 10 10 20 10 re f Q 0 1 0 rg BT /F1 48 Tf 20 20 Td (Green) Tj ET", [0.0, 0.0, PAGE_W as f32, PAGE_H as f32], None),
-        ("0 0 1 rg 20 30 40 40 re f 0 0.5 0 rg BT /F1 24 Tf 40 60 Td (Rot) Tj ET", [10.0, 20.0, 210.0, 120.0], Some(90i64)),
+        ("1 0 0 rg BT /F1 48 Tf 20 50 Td (Red) Tj ET", [0.0f32, 0.0, PAGE_W as f32, PAGE_H as f32], None, None),
+        ("0 0 1 rg q 2 0 0 2 10 5 cm 10 10 20 10 re f Q 0 1 0 rg BT /F1 48 Tf 20 20 Td (Green) Tj ET", [0.0, 0.0, PAGE_W as f32, PAGE_H as f32], None, None),
+        ("0 0 1 rg 20 30 40 40 re f 0 0.5 0 rg BT /F1 24 Tf 40 60 Td (Rot) Tj ET", [10.0, 20.0, 210.0, 120.0], Some(90i64), None),
+        // A CropBox larger than the MediaBox: the rendered page and the mapping use the
+        // intersection, so the rectangle must not be offset by the crop box's negative origin.
+        ("0 0.5 0 rg 20 30 40 40 re f", [0.0, 0.0, PAGE_W as f32, PAGE_H as f32], None, Some([-50.0f32, -50.0, 250.0, 150.0])),
     ];
     let mut kids = Vec::new();
-    for (content, [left, bottom, right, top], rotate) in pages {
+    for (content, [left, bottom, right, top], rotate, crop) in pages {
         let content_id = pdf.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
         let mut page = dictionary! {
             "Type" => "Page",
@@ -67,6 +70,9 @@ fn three_page_pdf() -> Vec<u8> {
         };
         if let Some(rotate) = rotate {
             page.set("Rotate", rotate);
+        }
+        if let Some([left, bottom, right, top]) = crop {
+            page.set("CropBox", Object::Array(vec![Object::Real(left), Object::Real(bottom), Object::Real(right), Object::Real(top)]));
         }
         let page_id = pdf.add_object(page);
         kids.push(Object::Reference(page_id));
@@ -139,6 +145,22 @@ fn check(document: &Document, dpi: f32) {
     assert!(m[0].abs() < 0.01 && (m[1] - 1.0).abs() < 0.01 && (m[2] + 1.0).abs() < 0.01 && m[3].abs() < 0.01, "page 3 text rotation is {m:?}");
     assert!(m[4] > page_three_x, "page 3 text x misses the page offset: {} <= {page_three_x}", m[4]);
     assert!(text.color.c[1] > 0.3 && text.color.c[0] < 0.2 && text.color.c[2] < 0.2, "page 3 text should be green, got {:?}", text.color.c);
+
+    // Page 4: a CropBox (-50, -50, 250, 150) around a 200 x 100 MediaBox must not offset the rect.
+    let shape = shape_layer(page_children(document, 4));
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for knot in shape.path.subpaths.iter().flat_map(|subpath| &subpath.knots) {
+        min_x = min_x.min(knot.anchor.x);
+        max_x = max_x.max(knot.anchor.x);
+        min_y = min_y.min(knot.anchor.y);
+        max_y = max_y.max(knot.anchor.y);
+    }
+    // Page 3 is rotated 90 degrees, so it is 100 pt wide on the strip, not 200.
+    let page_four_x = 2.0 * (PAGE_W * scale).round() + (100.0 * scale).round() + 3.0 * GAP;
+    assert!((min_x - (page_four_x + 20.0 * scale)).abs() < 3.0, "oversized-crop path min x is {min_x}, page 4 starts at {page_four_x} ({dpi} dpi)");
+    assert!((max_x - (page_four_x + 60.0 * scale)).abs() < 3.0, "oversized-crop path max x is {max_x} ({dpi} dpi)");
+    assert!((min_y - 30.0 * scale).abs() < 3.0, "oversized-crop path min y is {min_y} ({dpi} dpi)");
+    assert!((max_y - 70.0 * scale).abs() < 3.0, "oversized-crop path max y is {max_y} ({dpi} dpi)");
 }
 
 fn page_children(document: &Document, page: usize) -> &[Layer] {
