@@ -40,7 +40,6 @@ pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let links = [(tl!("PhotoCraft website"), APP_PAGE), (tl!("Discord"), DISCORD), (tl!("GitHub"), GITHUB), (tl!("ArtCraft"), ARTCRAFT_WEBSITE)];
     let font = egui::FontId::proportional(12.5);
     let sep = "  ·  ";
-    let link_color = if t.dark() { egui::Color32::from_rgb(138, 196, 255) } else { t.accent };
     let mut clicked: Option<&str> = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
@@ -48,7 +47,7 @@ pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             if i > 0 {
                 ui.label(egui::RichText::new(sep).font(font.clone()).color(t.text_faint));
             }
-            if ui.link(egui::RichText::new(*label).font(font.clone()).color(link_color)).on_hover_text(*url).clicked() {
+            if ui.link(egui::RichText::new(*label).font(font.clone()).color(t.accent)).on_hover_text(*url).clicked() {
                 clicked = Some(url);
             }
         }
