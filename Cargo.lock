@@ -5538,6 +5538,7 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "windows",
  "wintab",
+ "wintab-sys",
  "x11rb",
 ]
 
