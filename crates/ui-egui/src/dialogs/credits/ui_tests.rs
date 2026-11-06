@@ -366,7 +366,17 @@ fn scrolling_sideways_keeps_dragged_widths() {
 
 #[test]
 fn about_tab_has_modest_discord_link_and_no_primary_button() {
-    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    use std::sync::{Arc, Mutex};
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let rec = opened.clone();
+    let services = crate::Services {
+        open_url: Some(Box::new(move |u: &str| {
+            rec.lock().unwrap().push(u.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
     let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
         |ui, app| {
             crate::dialogs::show(app, ui.ctx());
@@ -380,5 +390,8 @@ fn about_tab_has_modest_discord_link_and_no_primary_button() {
     h.run_steps(6);
 
     assert!(h.query_all_by_label("Join us on Discord").next().is_none(), "primary Discord button must not be present in About dialog");
-    assert!(h.query_all_by_label("Discord").next().is_some(), "Discord link should be present in link row");
+    let discord = h.query_all_by_label("Discord").next().expect("Discord link should be present in link row");
+    discord.click();
+    h.run_steps(1);
+    assert_eq!(opened.lock().unwrap().last().map(String::as_str), Some(crate::links::DISCORD));
 }
