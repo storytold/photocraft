@@ -74,7 +74,7 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
 /// as Photoshop's does. `eraseToHistory` (the Eraser's Erase to History option) paints such a layer
 /// with that layer's own pixels (its opacity not applied) from a state holding a single layer,
 /// Background or not, or past its path with a shape's solid colour, else white, and refuses it
-/// from any other state: observed in Photoshop 2026, where a state with a second layer, even an
+/// from any other state: observed in Photoshop 27.11.0, where a state with a second layer, even an
 /// empty one, gives an error.
 pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &str) -> Result<Surface> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
