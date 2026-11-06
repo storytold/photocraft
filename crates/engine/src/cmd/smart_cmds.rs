@@ -70,6 +70,8 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
+    #[cfg(test)]
+    DECODES.with(|d| d.set(d.get() + 1));
     if photocraft_io::svg::is_svg(bytes) {
         // This API has no warning channel. Stack/source caches and contents edits must not
         // turn a partial SVG import into silently complete smart-object contents.
@@ -78,6 +80,12 @@ pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
             .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
     }
     crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Files decoded by [`decode_source`] on this thread.
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 fn base_name(path: &str) -> String {
