@@ -2,8 +2,8 @@
 //! A selection, masks or smart objects are explicitly rejected rather than silently processed
 //! as image patches. Plain photographic raster layers (including Background) are supported.
 
-use photocraft_algo::global_perspective::{Guide, Options, Solution, solve};
-use photocraft_algo::transform::{Interp, warp_surface};
+use photocraft_algo::global_perspective::{Guide, MAX_OUTPUT_PIXELS, Options, Solution, solve};
+use photocraft_algo::transform::{Homography, Interp, warp_rendered_output_size, warp_surface};
 use photocraft_doc::{LayerContent, LayerId};
 use photocraft_geom::Rect;
 use serde::Deserialize;
@@ -65,6 +65,16 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
     validate_target(s, id).map(|_| ())
 }
 
+/// Price exactly the renderer's post-Bicubic-reduction output rectangle before allocating tiles.
+/// The solver's original-domain budget remains a separate geometry check.
+fn validate_render_budget(bounds: Rect, h: &Homography, interp: Interp) -> Result<()> {
+    let (width, height) = warp_rendered_output_size(bounds, h, interp).ok_or_else(|| bad("invalid global perspective render bounds"))?;
+    if width.saturating_mul(height) > MAX_OUTPUT_PIXELS as u64 {
+        return Err(bad("global rectification output exceeds the 64-megapixel safety budget"));
+    }
+    Ok(())
+}
+
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("guides").and_then(Value::as_array).is_some_and(|a| a.len() > photocraft_algo::global_perspective::MAX_GUIDES) {
         return Err(bad("too many guides (maximum 128)"));
@@ -79,6 +89,11 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let solution: Solution = solve(&params.guides, bounds, &params.options).map_err(bad)?;
     let doc_id = st.doc.id.0;
     let h = solution.homography();
+    // solveOnly must report the same pixel-budget eligibility as a real render.
+    // Check the post-reduction bounds before warp_surface can allocate destination tiles.
+    if !h.is_identity() {
+        validate_render_budget(bounds, &h, params.interpolation)?;
+    }
     if params.solve_only || h.is_identity() {
         return Ok(json!({"document":doc_id,"layer":id.0,"changed":false,"solved":true,"scope":"wholeRasterLayer","solution":solution}));
     }
@@ -137,6 +152,24 @@ mod tests {
     fn params() -> Value {
         json!({"guides":[{"id":1,"corners":[[25,20],[100,16],[109,105],[21,110]]}]})
     }
+
+    /// The original-domain solver budget admits exactly 8192² pixels, but
+    /// Bicubic's outward-rounded half-size source has an 8194² render footprint.
+    /// Validate this geometry without ever allocating a 64-megapixel raster.
+    #[test]
+    fn bicubic_downscale_budget_matches_actual_renderer_geometry() {
+        let bounds = Rect::new(1, 1, 8191, 32761);
+        let h = Homography([1.0, 0.0, 0.0, 0.0, 0.25, 12285.75, 0.0, 0.0, 1.0]);
+        assert_eq!(photocraft_algo::transform::warp_output_size(bounds, &h), Some((8192, 8192)));
+        assert_eq!(warp_rendered_output_size(bounds, &h, Interp::Bicubic), Some((8194, 8194)));
+        assert_eq!(8192_u64 * 8192_u64, MAX_OUTPUT_PIXELS as u64);
+        assert_eq!(8194_u64 * 8194_u64 - MAX_OUTPUT_PIXELS as u64, 32_772);
+        assert!(validate_render_budget(bounds, &h, Interp::Bicubic).is_err());
+        // Bilinear does not pre-reduce, so its actual footprint stays within budget.
+        assert!(validate_render_budget(bounds, &h, Interp::Bilinear).is_ok());
+        assert!(validate_render_budget(Rect::new(0, 0, 160, 140), &h, Interp::Bicubic).is_ok());
+    }
+
     #[test]
     fn headless_global_command_is_registered_with_product_wording() {
         let spec = crate::commands::command_specs().iter().find(|c| c.id == COMMAND).unwrap();

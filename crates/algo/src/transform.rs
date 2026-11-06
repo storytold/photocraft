@@ -237,6 +237,31 @@ pub fn warp_output_bounds(src_rect: Rect, h: &Homography) -> Option<Rect> {
     corner_bounds(&warp_corners(src_rect, h)?)
 }
 
+/// The exact Bicubic pre-reduction geometry used by the renderer and its output budget.
+/// Outward rounding of an offset source rectangle can add destination rows/columns.
+fn bicubic_reduction(src_rect: Rect, h: &Homography, interp: Interp, cx: f64, cy: f64) -> Option<(f64, Rect, Homography)> {
+    let scale = h.local_scale(cx, cy);
+    if interp != Interp::Bicubic || !(scale < 0.999 && scale > 0.0) {
+        return None;
+    }
+    let f = scale.max(1.0 / 64.0);
+    let reduced_rect = crate::resample::scaled_rect(src_rect, f, f);
+    let reduced_h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
+    Some((f, reduced_rect, reduced_h))
+}
+
+/// The allocation-sized rectangle that `warp_surface` will render with this interpolation.
+/// Unlike `warp_output_size`, this accounts for Bicubic pre-reduction and its outward-rounded
+/// source bounds. This is a pure geometric estimate and allocates no source or destination pixels.
+pub fn warp_rendered_output_size(src_rect: Rect, h: &Homography, interp: Interp) -> Option<(u64, u64)> {
+    let cx = (f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0;
+    let cy = (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0;
+    match bicubic_reduction(src_rect, h, interp, cx, cy) {
+        Some((_, reduced_rect, reduced_h)) => warp_output_size(reduced_rect, &reduced_h),
+        None => warp_output_size(src_rect, h),
+    }
+}
+
 /// Unclipped output dimensions, including the same filter support as [`warp_output_bounds`].
 /// Position does not affect the price, so translating a small layer far away stays cheap.
 /// Unrepresentable or non-finite dimensions saturate at `u64::MAX`, allowing a caller to refuse
@@ -323,18 +348,14 @@ fn warp(
         Some((c, inv)) => inv.apply((c.x0 as f64 + c.x1 as f64) / 2.0, (c.y0 as f64 + c.y1 as f64) / 2.0),
         None => ((f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0, (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0),
     };
-    let scale = h.local_scale(cx, cy);
     let reduced;
-    // Photoshop reduces with its Bicubic widened by 1 / scale (as Image Size does), so the source is
-    // brought down by the whole local scale first and the warp samples it at about 1:1; a plain
-    // 4×4 kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image).
-    // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
-    if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
-        let f = scale.max(1.0 / 64.0);
+    // Photoshop reduces with Bicubic widened by 1 / scale. Share the exact rounded
+    // pre-reduction bounds with the allocation-budget estimate; Bilinear is not pre-reduced.
+    if let Some((f, reduced_rect, reduced_h)) = bicubic_reduction(src_rect, &h, interp, cx, cy) {
         reduced = resize_surface(src, f, f, Resample::Bicubic);
         src = &reduced;
-        h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
-        src_rect = crate::resample::scaled_rect(src_rect, f, f);
+        h = reduced_h;
+        src_rect = reduced_rect;
     }
     let Some(inv) = h.inverse() else { return Ok(out) };
     // Destination bounds: the warped corners (plus a pixel for filter support).
