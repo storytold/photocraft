@@ -66,6 +66,7 @@ fn packbits_block_scan_preserves_scalar_packets() {
         packbits::encode(src, &mut actual);
         assert_eq!(&actual[1..], expected, "source {src:?}");
         assert_eq!(packbits::encoded_len(src), expected.len());
+        assert!(expected.len() <= src.len() + src.len().div_ceil(128));
     };
     for n in 0..=10 {
         for mut bits in 0..3usize.pow(n) {
@@ -426,11 +427,36 @@ fn zip_garbage_errors() {
 }
 
 #[test]
-fn reserved_zip_output_matches_the_growing_writer() {
+fn zip_output_matches_the_growing_writer() {
     for bytes in [Vec::new(), vec![0; 131072], (0..131072).map(|i| (i * 31 + i / 173) as u8).collect()] {
         let mut old = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         old.write_all(&bytes).unwrap();
         assert_eq!(zip_compress(&bytes), old.finish().unwrap());
+    }
+}
+
+#[test]
+fn compressible_zip_does_not_retain_a_raw_sized_allocation() {
+    let raw = vec![0; 1 << 20];
+    let packed = zip_compress(&raw);
+    assert!(packed.len() < 1 << 14);
+    assert!(packed.capacity() < 1 << 16);
+    assert_eq!(zip_decompress(&packed, raw.len()).unwrap(), raw);
+}
+
+#[test]
+fn rle_failed_hint_and_incremental_growth_preserve_bytes() {
+    for version in [Version::Psd, Version::Psb] {
+        for width in [0, 1, 127, 128, 129, 1000] {
+            let l = layout(1, width, 9, 8, version);
+            for fill in [false, true] {
+                let bytes: Vec<_> = (0..l.decoded_len().unwrap()).map(|i| if fill { 0 } else { (i * 13 + i / 17) as u8 }).collect();
+                let expected = encode_planes(Compression::Rle, &bytes, &l).unwrap();
+                for hint in [usize::MAX, 0, l.rows().unwrap() * l.count_size()] {
+                    assert_eq!(encode_rle_chunk(&bytes, &l, 0..l.rows().unwrap(), hint).unwrap(), expected);
+                }
+            }
+        }
     }
 }
 
