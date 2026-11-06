@@ -57,7 +57,10 @@ pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
     let opened = h.open_with_approval(file, a.approve_high_memory)?;
-    let mut doc = h.inspect(None)?;
+    let mut doc = match (a.detail, h.session.active()) {
+        (true, Some(st)) => photocraft_engine::inspect::document_detail(st),
+        _ => h.inspect(None)?,
+    };
     let mut warnings = opened["warnings"].as_array().cloned().unwrap_or_default();
     if let Some(st) = h.session.active() {
         warnings.extend(missing_font_warnings(&st.doc).into_iter().map(Value::String));
@@ -117,7 +120,15 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
             continue;
         }
         let r = h.command_run(&id, params).map_err(|source| CliError::Command { id: id.clone(), source })?;
-        if let Some(message) = photocraft_engine::actions_cmds::nested_failure(&id, &r) {
+        // A direct Batch reports per-file errors and continues, as in Scripts, unless it was
+        // cancelled, ran out of script steps or couldn't write its error log; failed action or
+        // script calls still stop the command list before export.
+        let failure = if id == "file.automate.batch" {
+            photocraft_engine::actions_cmds::batch_stop(&r)
+        } else {
+            photocraft_engine::actions_cmds::nested_failure(&id, &r)
+        };
+        if let Some(message) = failure {
             return Err(CliError::NestedFailure { id, message });
         }
         let new_warnings: Vec<String> =
