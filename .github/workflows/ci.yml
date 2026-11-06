@@ -354,9 +354,6 @@ jobs:
     needs: platforms
     if: needs.platforms.outputs.web == 'true'
     runs-on: ubuntu-latest
-    env:
-      # Match release.yml so PR results reflect what would actually ship.
-      TRUNK_VERSION: 0.21.14
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -369,11 +366,14 @@ jobs:
           key: ci-web
           save-if: ${{ github.ref == 'refs/heads/main' }}
           cache-on-failure: true
+      # Match the trunk version release.yml ships so PR results reflect what would release.
+      # install-action verifies the download against checksums in its pinned manifest.
       - name: Install trunk
-        run: |
-          curl --proto '=https' -fsSL "https://github.com/trunk-rs/trunk/releases/download/v${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz -C "$HOME/.cargo/bin" trunk
-          trunk --version
+        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283 # v2.87.29
+        with:
+          tool: trunk@0.21.14
+      - name: Show trunk version
+        run: trunk --version
       # package.sh runs Trunk's release builds, validates relative URLs, cuts the wasm into
       # parts, checks the 24 MiB per-file limit and exercises the packaging step release.yml uses.
       - name: Build and verify browser release
