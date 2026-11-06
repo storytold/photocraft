@@ -911,10 +911,14 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
             crate::canvas_tool_menu::open_pasteboard(app, ctx, tool, [p.x, p.y]);
         }
     }
+    // A Magnetic Lasso border being drawn: no menu over it, and the border stays live, as in
+    // Photoshop (#11689).
+    let magnetic_drawing = tool == Tool::MagneticLasso && app.ui.magnetic.active();
     if right_click
         && !lasso_retracted
         && !transforming
         && !guide_menu
+        && !magnetic_drawing
         && !crate::layer_pick_ui::is_gesture(tool, mods)
         && let Some(p) = right_at
     {
