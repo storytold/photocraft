@@ -668,9 +668,9 @@ impl LiveStroke {
         })
     }
 
-    /// Everything the stroke has touched so far.
+    /// Everything the stroke has touched so far, the first dab a press shows included.
     pub fn bounds(&self) -> Rect {
-        let bounds = self.renderer.bounds();
+        let bounds = self.renderer.bounds().union(&self.first_dab);
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
     }
 

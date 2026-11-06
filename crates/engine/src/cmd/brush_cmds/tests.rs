@@ -1295,6 +1295,8 @@ fn a_press_too_short_to_paint_shows_its_first_dab_and_commits_exactly_that() {
         let p = json!({"points": [[60.0, 50.0, 1.0]], "brush": {"size": 30, "hardness": 0.5, "smoothing": {"amount": amount}}, "target": "pixels"});
         let mut live = LiveStroke::begin(&s, &p).unwrap();
         assert!(live.renderer.bounds().is_empty() && !live.first_dab.is_empty(), "{what}: only the first dab is shown");
+        // The canvas refreshes what `bounds` covers when the stroke starts, so it covers the dab.
+        assert_eq!(live.bounds().union(&live.first_dab), live.bounds(), "{what}: the dab is in the stroke's bounds");
         let layer = s.active().unwrap().active_layer.unwrap();
         let shown = live.doc.layer(layer).unwrap().surface().unwrap().clone();
         assert!(shown.rgba(60, 50)[3] > 0.5, "{what}: the press paints at once");
