@@ -110,7 +110,8 @@ fn the_camera_raw_window_opens_hidden_and_the_main_window_shows_it() {
     let window = egui::ViewportId::from_hash_of("camera-raw-window");
     // How many times the main window's frame tells the Camera Raw window to show.
     let frame = |app: &mut PhotocraftApp| {
-        let out = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx()));
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx()));
+        out.textures_delta.clear();
         out.viewport_output.get(&window).map_or(0, |o| o.commands.iter().filter(|c| matches!(c, egui::ViewportCommand::Visible(true))).count())
     };
     for round in 0..2 {
