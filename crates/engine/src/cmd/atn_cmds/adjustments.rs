@@ -372,11 +372,15 @@ fn gradient_map_to(p: &Value) -> Option<Descriptor> {
         .iter()
         .map(|st| {
             let a = st.as_array()?;
+            let location = a.first()?.as_f64()? * 4096.0;
+            if !location.is_finite() || !(0.0..=4096.0).contains(&location) || location.fract() != 0.0 {
+                return None;
+            }
             Some(D::Descriptor(
                 desc("Clrt")
                     .with("Clr ", D::Descriptor(color_desc(a.get(1)?.as_str()?)?))
                     .with("Type", enm("Clry", "UsrS"))
-                    .with("Lctn", long((a.first()?.as_f64()? * 4096.0).round()))
+                    .with("Lctn", long(location))
                     .with("Mdpn", long(50.0)),
             ))
         })

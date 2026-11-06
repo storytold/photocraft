@@ -600,6 +600,31 @@ fn a_selective_color_step_in_the_scalar_form_keeps_its_values() {
     assert_eq!(range(&nulled, "reds"), [35.0, 0.0, 0.0, 0.0], "{nulled}");
 }
 
+/// ATN locations have 4096 steps; a legacy Gradient Map stop between them must not move
+/// silently when Save Actions writes either adjustment event (#11509).
+#[test]
+fn gradient_map_stop_locations_must_fit_the_atn_grid() {
+    for id in ["image.adjustments.gradientMap", "layer.newAdjustmentLayer.gradientMap"] {
+        let mut s = Session::new();
+        s.actions.list.push(Action::new("A", vec![(id.into(), json!({"stops": [[0, "#000000"], [0.3, "#808080"], [1, "#ffffff"]]}))]));
+        let before = s.actions.list[0].steps.clone();
+
+        let error = s.execute("actions.save", json!({"action": "A"})).unwrap_err().to_string();
+        assert!(error.contains(id), "{id}: {error}");
+        assert_eq!(s.actions.list[0].steps, before, "{id}");
+        let skipped = s.execute("actions.save", json!({"action": "A", "skipUnsupported": true})).unwrap();
+        assert_eq!(skipped["skipped"], json!([{"action": "A", "step": 0, "id": id}]), "{id}");
+        assert_eq!(s.actions.list[0].steps, before, "{id}");
+
+        s.actions.list[0].steps[0].1["stops"][1][0] = json!(0.300048828125);
+        let saved = s.execute("actions.save", json!({"action": "A"})).unwrap();
+        assert_eq!(saved["skipped"], json!([]), "{id}");
+        let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+        let imported = import(&bytes).unwrap();
+        assert_eq!(imported.actions[0].steps[0].1["stops"][1][0], json!(0.300048828125), "{id}");
+    }
+}
+
 /// A setting Photoshop's event has no field for is dropped by export, and the step then plays back
 /// as a different edit: Crystallize's `seed` (#7668), Radial Blur's centre, Minimum's and
 /// Maximum's `preserve`. Such a step is refused, as one with no equivalent event already is. So is
