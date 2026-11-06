@@ -920,13 +920,15 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
             if cycle_shift {
                 group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
             }
-            // Edit › Toolbar hides tools from the key too, or it picks one the toolbar no longer shows.
-            // A letter with every tool hidden keeps answering: that is the only way left to reach them.
-            let hidden: Vec<Tool> = app.session.prefs().toolbar.hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
-            let letter_hidden = Tool::ALL.iter().all(|x| x.key() != t.key() || hidden.contains(x));
-            let shown: Vec<Tool> = group.iter().copied().filter(|x| !hidden.contains(x)).collect();
-            let group = if letter_hidden { group } else { shown };
-            // The letter's visible tools all have shortcuts of their own: nothing here to pick.
+            // Tools hidden in Edit › Toolbar keep their letter, as in Photoshop, unless "Disable Shortcuts
+            // for Hidden Toolbar Extras" is ticked: then the key and its ⇧ cycle skip them.
+            let toolbar = &app.session.prefs().toolbar;
+            if toolbar.disable_hidden_shortcuts {
+                let hidden: Vec<Tool> = toolbar.hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
+                group.retain(|x| !hidden.contains(x));
+            }
+            // Nothing left to pick: every tool of the letter is hidden (Photoshop then ignores the key
+            // too), or the visible ones have shortcuts of their own.
             if group.is_empty() {
                 return true;
             }

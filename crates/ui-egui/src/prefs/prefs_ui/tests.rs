@@ -1769,6 +1769,26 @@ fn apply_rejects_missing_and_non_preferences_dialogs() {
     assert_eq!(app.session.prefs().to_json(), before);
 }
 
+/// Edit › Toolbar's "Disable Shortcuts for Hidden Toolbar Extras": off when the dialog opens on
+/// defaults, saved by OK, and saving the tab keeps the toolbar order it doesn't show.
+#[test]
+fn toolbar_dialog_saves_disable_hidden_shortcuts() {
+    let (mut app, _) = app_with_store();
+    let ctx = egui::Context::default();
+    app.session.edit_prefs(|p| p.toolbar.order = vec!["Move".into(), "Lasso".into()]);
+    let id = crate::menus::invoke(&mut app, &ctx, "edit.toolbar", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields["toolbarDisableShortcuts"], json!(false));
+    fields.insert("toolbarHidden".into(), json!(["Lasso"]));
+    fields.insert("toolbarDisableShortcuts".into(), json!(true));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let toolbar = &app.session.prefs().toolbar;
+    assert!(toolbar.disable_hidden_shortcuts);
+    assert_eq!(toolbar.hidden, ["Lasso"]);
+    assert_eq!(toolbar.order, ["Move", "Lasso"], "the dialog doesn't drop the order");
+    assert_eq!(app.session.prefs().to_json()["toolbar"]["disableHiddenShortcuts"], json!(true));
+}
+
 #[test]
 fn shortcut_dialog_moves_shortcuts_and_shell_dispatch_follows() {
     let (mut app, _) = app_with_store();
