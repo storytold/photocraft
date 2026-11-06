@@ -897,6 +897,9 @@ mod dropdown_press_tests;
 mod marquee_tests;
 
 #[cfg(test)]
+mod single_line_marquee_move_tests;
+
+#[cfg(test)]
 mod guide_cursor_tests;
 
 #[cfg(test)]
