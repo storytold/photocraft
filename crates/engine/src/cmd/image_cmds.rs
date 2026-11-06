@@ -263,6 +263,8 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let dpi = p.get("resolution").and_then(Value::as_f64).map(|v| v as f32);
     let scale_styles = p.get("scaleStyles").and_then(Value::as_bool).unwrap_or(true);
     if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
+        // Before the sampler map or the document change: a resize that doesn't fit would trap on the web (#10024).
+        crate::memory_gate::ensure(&format!("resize the image to {nw} x {nh} px"), crate::memory_gate::image_size_need(&d.doc, nw, nh))?;
         // Color Sampler points scale with the pixels (same map `transform_geometry` applies).
         let (sx, sy) = (f64::from(nw) / f64::from(ow.max(1)), f64::from(nh) / f64::from(oh.max(1)));
         s.set_sampler_map(photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
@@ -437,6 +439,30 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
             *s = crop_surface(s, r);
         }
     });
+}
+
+/// The document's only artboard, when it covers exactly the canvas. The Crop tool frames that
+/// board, so its straight crop fits the board to the new canvas, as the reference application's
+/// Crop tool resizes the artboard to the frame. Several boards, or one that covers only part of
+/// the canvas, keep their own layout.
+fn canvas_artboard(doc: &Document) -> Option<LayerId> {
+    match doc.artboards().as_slice() {
+        [(id, _, board)] if board.rect == doc.bounds() => Some(*id),
+        _ => None,
+    }
+}
+
+/// Fits the board [`canvas_artboard`] found before the crop to the new canvas. A new size drops
+/// the size preset it was made from, which no longer describes it; a frame of the board's own size
+/// keeps it, as Artboard Options does.
+fn fit_canvas_artboard(doc: &mut Document, id: Option<LayerId>) {
+    let bounds = doc.bounds();
+    if let Some(board) = id.and_then(|id| doc.layer_mut(id)).and_then(|l| l.artboard_mut()) {
+        if board.rect.width() != bounds.width() || board.rect.height() != bounds.height() {
+            board.preset.clear();
+        }
+        board.rect = bounds;
+    }
 }
 
 /// Crops the document to `r` (in current document coordinates).
@@ -685,12 +711,17 @@ fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value>
     }
     s.set_sampler_map(target.sampler_map(r));
     let extension = s.tools.background;
+    // Only the Crop tool's frame (an explicit rectangle) resizes a canvas-sized artboard; a
+    // selection crop leaves boards as they are.
+    let tool_frame = explicit.is_some();
     s.edit("Crop", |doc, active| {
         let original = doc.size;
+        let board = if tool_frame { canvas_artboard(doc) } else { None };
         if unlock {
             unlock_background_for_crop(doc);
         }
         crop_doc(doc, "image.crop", r, delete, extension)?;
+        fit_canvas_artboard(doc, board);
         // A straight crop fills all of the area past the old canvas, pixels an earlier Delete Cropped
         // Pixels off crop hid there included, as Photoshop does; only a turned frame keeps them (#8060).
         if content_aware {
@@ -864,6 +895,8 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
     } else {
         coverage
     };
+    // The canvas board, found before the turn, fits the frame as in a straight crop.
+    let board = s.active().and_then(|d| canvas_artboard(&d.doc));
     crate::analysis_cmds::compound(s, "Crop", |s| {
         // Pixels the crop deletes needn't be turned first: keeping only what lands in the frame
         // makes the rotation cost the frame's size, not the canvas's (a small turned crop of a
@@ -899,6 +932,7 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
         let extension = s.tools.background;
         s.edit("Crop", |doc, active| {
             crop_doc(doc, CMD, target, delete, extension)?;
+            fit_canvas_artboard(doc, board);
             if content_aware {
                 crate::crop_fill::fill_uncovered(doc, *active, &coverage)?;
             }
