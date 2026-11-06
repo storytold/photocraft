@@ -19,10 +19,11 @@
 //!   a `chmod 444` file while Windows refuses; now every platform refuses, as Photoshop does, and
 //!   the user saves a copy with Save As.
 //! - **Desktop portal (Flatpak):** a sandboxed app is handed save targets under the document
-//!   portal's mount (`/run/user/<uid>/doc/…`), which serves the file but not a temporary file
-//!   beside it renamed over it. The save is refused before anything is written, saying to grant
-//!   PhotoCraft access to the folder or save to a local one, instead of failing silently and
-//!   leaving temporary files behind (#11185).
+//!   portal's mount (`/run/user/<uid>/doc/…`). The save is not refused up front — the portal
+//!   can serve a temporary file renamed over the document, and portal saves that work must
+//!   keep working. When a save there does fail, the temporary file is cleaned up and the
+//!   error names the portal and the remedy (grant direct access, or save to a local folder)
+//!   instead of a bare OS error (#11185).
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
@@ -313,19 +314,7 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write_tmp: &
         Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
         _ => PathBuf::from("."),
     };
-    // Before `create_dir_all`: nothing is created on the portal's mount (#11185).
-    if is_document_portal_path(&target) {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "cannot save {}: the folder is served by the desktop document portal (Flatpak sandbox), where an atomic save cannot complete \
-                 (the temporary file beside the document cannot be created and renamed over it); grant PhotoCraft direct access to the folder \
-                 (for example in Flatseal) or save to a local folder instead; {UNCHANGED}",
-                path.display()
-            ),
-        ));
-    }
-    std::fs::create_dir_all(&dir).map_err(|e| context(e, format!("cannot create the folder {}", dir.display())))?;
+    std::fs::create_dir_all(&dir).map_err(|e| context(e, format!("cannot create the folder {}{}", dir.display(), portal_clause(&target))))?;
     if fs.is_readonly(&target) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("cannot save {}: the file is read-only; {UNCHANGED}", path.display())));
     }
@@ -433,8 +422,9 @@ fn unconfirmed_error(e: io::Error, path: &Path) -> io::Error {
     context(
         e,
         format!(
-            "{} was written, but the folder could not be flushed to disk, so the save may not survive a power loss or crash; save again or to another folder",
-            path.display()
+            "{} was written, but the folder could not be flushed to disk, so the save may not survive a power loss or crash; save again or to another folder{}",
+            path.display(),
+            portal_clause(path)
         ),
     )
 }
@@ -467,6 +457,23 @@ fn sleep_ms(_ms: u64) {}
 /// mount sits at the filesystem root, so the components must be `run`, `user`, any one name
 /// (the uid), `doc` from the root — the same names nested in a local folder are a local
 /// folder (#11185).
+/// The clause a failed save to a document-portal folder adds to its error (#11185): the
+/// portal serves the file itself but may not serve the temporary file an atomic save
+/// creates beside it and renames over it, so the failure names its likely cause and its
+/// remedy instead of surfacing as a bare OS error. Empty for any other folder. The save
+/// itself is never refused up front: portal saves that work today keep working, and only
+/// an actual failure carries the clause.
+fn portal_clause(path: &Path) -> String {
+    if is_document_portal_path(path) {
+        "; the folder is served by the desktop document portal (Flatpak sandbox), which serves the file but may not serve \
+         the temporary file an atomic save creates beside it and renames over it — grant PhotoCraft direct access to the folder \
+         (for example in Flatseal) or save to a local folder instead"
+            .to_string()
+    } else {
+        String::new()
+    }
+}
+
 fn is_document_portal_path(path: &Path) -> bool {
     let is = |c: Option<Component<'_>>, name: &str| matches!(c, Some(Component::Normal(s)) if s == name);
     let mut c = path.components();
@@ -530,28 +537,32 @@ const UNCHANGED: &str = "the original file was not changed";
 pub(crate) fn publication_error(error: io::Error, path: &Path) -> io::Error {
     io::Error::new(
         error.kind(),
-        format!("wrote {}, but could not confirm the save is durable; it may not survive a power loss or crash: {error}", path.display()),
+        format!(
+            "wrote {}, but could not confirm the save is durable; it may not survive a power loss or crash{}: {error}",
+            path.display(),
+            portal_clause(path)
+        ),
     )
 }
 
 fn write_error(e: io::Error, path: &Path, dir: &Path) -> io::Error {
     let msg = match e.kind() {
         io::ErrorKind::PermissionDenied | io::ErrorKind::ReadOnlyFilesystem => {
-            format!("cannot save {}: the folder {} is not writable ({e}); {UNCHANGED}", path.display(), dir.display())
+            format!("cannot save {}: the folder {} is not writable ({e}){}; {UNCHANGED}", path.display(), dir.display(), portal_clause(path))
         }
-        io::ErrorKind::StorageFull => format!("cannot save {}: the disk is full ({e}); {UNCHANGED}", path.display()),
-        _ => format!("cannot save {}: {e}; {UNCHANGED}", path.display()),
+        io::ErrorKind::StorageFull => format!("cannot save {}: the disk is full ({e}){}; {UNCHANGED}", path.display(), portal_clause(path)),
+        _ => format!("cannot save {}: {e}{}; {UNCHANGED}", path.display(), portal_clause(path)),
     };
     io::Error::new(e.kind(), msg)
 }
 
 fn rename_error(e: io::Error, path: &Path) -> io::Error {
     let msg = if is_cross_device(&e) {
-        format!("cannot save {}: the temporary file is on a different volume than the destination ({e}); {UNCHANGED}", path.display())
+        format!("cannot save {}: the temporary file is on a different volume than the destination ({e}){}; {UNCHANGED}", path.display(), portal_clause(path))
     } else if e.kind() == io::ErrorKind::PermissionDenied {
-        format!("cannot save {}: the file is locked or read-only ({e}); {UNCHANGED}", path.display())
+        format!("cannot save {}: the file is locked or read-only ({e}){}; {UNCHANGED}", path.display(), portal_clause(path))
     } else {
-        format!("cannot save {}: {e}; {UNCHANGED}", path.display())
+        format!("cannot save {}: {e}{}; {UNCHANGED}", path.display(), portal_clause(path))
     };
     io::Error::new(e.kind(), msg)
 }

@@ -430,30 +430,46 @@ fn recognizes_document_portal_paths() {
     assert!(!is_document_portal_path(Path::new("doc/file.psd")));
 }
 
-/// #11185: a save under the document portal is refused before anything is written or created,
-/// with an error that names the portal, instead of failing silently and leaving temporary files.
+/// #11185: a failed save to a document-portal folder names the portal and the remedy in
+/// its error, at whichever step failed; a failure anywhere else does not.
 #[test]
-fn document_portal_target_is_refused_before_anything_is_created() {
-    let root = Path::new("/run/user/424242");
-    let p = root.join("doc/deadbeef/file.psd");
-    // Every level of the portal path the refusal is responsible for: the
-    // per-user root, the `doc` mount under it, and the target folder.
-    let levels = [root.to_path_buf(), root.join("doc"), p.parent().unwrap().to_path_buf()];
-    let existed: Vec<bool> = levels.iter().map(|d| d.exists()).collect();
-    let listings: Vec<Option<Vec<std::ffi::OsString>>> = levels.iter().map(|d| entry_names(d)).collect();
-    let e = atomic_write(&p, b"new").unwrap_err();
-    assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
-    assert!(e.to_string().contains("file.psd") && e.to_string().contains("document portal") && e.to_string().contains("not changed"), "{e}");
-    let e = atomic_write_stream(&p, &mut |w| w.write_all(b"new")).unwrap_err();
+fn portal_failures_carry_the_portal_clause() {
+    let portal = Path::new("/run/user/1000/doc/9f3abc/file.psd");
+    let local = Path::new("/home/user/Documents/file.psd");
+    let e = rename_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), portal);
+    assert!(e.to_string().contains("document portal") && e.to_string().contains("Flatseal"), "{e}");
+    let e = rename_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), local);
+    assert!(!e.to_string().contains("document portal"), "{e}");
+    let e = write_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), portal, portal.parent().unwrap());
     assert!(e.to_string().contains("document portal"), "{e}");
-    for (dir, was) in levels.iter().zip(&existed) {
-        assert_eq!(dir.exists(), *was, "no folder is created on the portal's mount: {}", dir.display());
-    }
-    for (dir, before) in levels.iter().zip(&listings) {
-        if let (Some(before), Some(after)) = (before, entry_names(dir)) {
-            assert_eq!(after, *before, "no entry is written under the portal's mount: {}", dir.display());
-        }
-    }
+    let e = write_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), local, local.parent().unwrap());
+    assert!(!e.to_string().contains("document portal"), "{e}");
+}
+
+/// #11185 on Linux, where `$XDG_RUNTIME_DIR` is the test user's own `/run/user/<uid>`:
+/// a portal save the file system allows is NOT refused — the bytes land and no
+/// temporary file remains — and one whose rename fails carries the portal clause,
+/// keeps the original, and still cleans its temporary file up. (Other platforms
+/// have no `/run/user` to save into; the clause itself is covered everywhere by
+/// `portal_failures_carry_the_portal_clause`.)
+#[cfg(target_os = "linux")]
+#[test]
+fn document_portal_saves_run_and_failed_ones_name_the_portal() {
+    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else { return };
+    let dir = PathBuf::from(runtime).join("doc").join(format!("pc-atomic-portal-{}", std::process::id()));
+    let p = dir.join("file.psd");
+    let run = (|| {
+        atomic_write(&p, b"new").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        assert_no_temp(&dir);
+        let fs = Faulty { fail_rename: Some(io::ErrorKind::PermissionDenied), ..Default::default() };
+        let e = atomic_write_with(&fs, NO_RETRY, &p, b"newer").unwrap_err();
+        assert!(e.to_string().contains("document portal"), "{e}");
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        assert_no_temp(&dir);
+    });
+    run();
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[cfg(unix)]
