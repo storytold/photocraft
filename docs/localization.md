@@ -51,6 +51,10 @@ keys. `complete_menus` remains false while generated/dynamic long-tail labels ar
 review. This does not include every engine error or status message: those remain English, as do
 automation command IDs and user-provided document, layer and preset names.
 
+UI search and access-key comparisons use locale-aware dotted/dotless I rules for Azerbaijani
+and Turkish. English command aliases remain searchable using English casing. See the
+[Azerbaijani case-conversion audit](localization-az.md#ui-case-conversion-audit-2026-11-06).
+
 ## Switch without restarting
 
 Open **Edit > Preferences > Interface > Language** and choose a language. The Preferences

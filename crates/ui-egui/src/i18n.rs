@@ -20,6 +20,7 @@
 //! - [`trn`]: plural-aware (`{n}` is filled in). [`fmt`]: fill `{name}` placeholders after [`tr`];
 //!   translators may reorder placeholders freely.
 
+mod casing;
 mod catalog;
 mod system;
 

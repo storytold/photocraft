@@ -439,7 +439,14 @@ fn drop_taken_text(ctx: &Context) {
         ctx.data_mut(|d| d.remove_temp::<(char, u64)>(taken_key_id()));
         return;
     }
-    let same = |t: &str| t.chars().eq(c.to_lowercase()) || t.chars().eq(c.to_uppercase());
+    let same = |t: &str| {
+        if c == 'I' && matches!(crate::i18n::current().code(), "az" | "tr") {
+            // The consumed logical I key may emit either Turkic letter on the active keyboard.
+            matches!(t, "I" | "i" | "İ" | "ı")
+        } else {
+            t.chars().eq(c.to_lowercase()) || t.chars().eq(c.to_uppercase())
+        }
+    };
     let found = ctx.input_mut(|i| {
         let at = i.events.iter().position(|e| matches!(e, egui::Event::Text(t) if same(t)));
         at.map(|at| i.events.remove(at)).is_some()
@@ -557,6 +564,23 @@ fn on_pasteboard(app: &crate::PhotocraftApp, ctx: &Context, pos: egui::Pos2) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A menu mnemonic consumes the text emitted by the same logical key on Turkic keyboards.
+    #[test]
+    fn azerbaijani_menu_i_key_does_not_leak_dotless_text_into_zoom() {
+        let az = crate::i18n::Lang::from_code("az").unwrap();
+        crate::i18n::with_language(az, || {
+            for text in ["I", "i", "İ", "ı"] {
+                let ctx = Context::default();
+                ctx.begin_pass(egui::RawInput { events: vec![egui::Event::Text(text.into())], ..Default::default() });
+                let pass = ctx.cumulative_pass_nr();
+                ctx.data_mut(|d| d.insert_temp(taken_key_id(), ('I', pass)));
+                drop_taken_text(&ctx);
+                assert!(!ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_)))));
+                ctx.end_pass().textures_delta.clear();
+            }
+        });
+    }
 
     #[test]
     fn enter_reads_one_separator_and_the_number_before_a_second_one() {
