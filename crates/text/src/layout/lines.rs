@@ -106,6 +106,21 @@ struct LineCtx<'a> {
     line_index: usize,
 }
 
+/// ASCII spaces moving from one vertical soft-wrapped column to the next.
+#[derive(Default)]
+pub(super) struct CarriedSpaces {
+    advance: f32,
+    start: usize,
+    previous_line: usize,
+    clusters: std::ops::Range<usize>,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Cluster candidates inspected by carry scans on this thread.
+    pub(crate) static CARRY_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The horizontal extent of one glyph run on the line.
 struct RunSpan {
     x0: f32,
@@ -310,8 +325,8 @@ impl Para<'_> {
     /// the box edge as if the line were left-aligned (alignment then moves the whole line).
     /// Returns the tab width and horizontal-scale growth in the line's trailing whitespace, which
     /// is outside its extent.
-    fn apply_tab_stops(&self, slots: &[KernSlot], kern_px: &mut [f32], line_index: usize) -> (f32, f32) {
-        let mut pos = self.indent_start + if line_index == 0 { self.first_indent } else { 0.0 };
+    fn apply_tab_stops(&self, slots: &[KernSlot], kern_px: &mut [f32], line_index: usize, leading_spaces: f32) -> (f32, f32) {
+        let mut pos = self.indent_start + leading_spaces + if line_index == 0 { self.first_indent } else { 0.0 };
         let mut trailing_tabs = 0.0f32;
         let mut trailing_growth = 0.0f32;
         // Whether every slot after `j` is blank, from one reverse scan rather than one per slot.
@@ -330,6 +345,29 @@ impl Para<'_> {
             pos += s.advance + kern_px.get(j).copied().unwrap_or(0.0);
         }
         (trailing_tabs, trailing_growth)
+    }
+
+    /// Paragraph-text offset of the first ASCII space to carry out of `line`.
+    fn vertical_space_start(&self, line: &Line<'_>) -> Option<usize> {
+        if !self.env.vertical || !matches!(line.break_reason(), parley::BreakReason::Regular | parley::BreakReason::Emergency) {
+            return None;
+        }
+        let lr = line.text_range();
+        let range = self.map_offset(lr.start)..self.map_offset(lr.end).min(self.content_end);
+        let text = self.env.text.get(range.clone())?;
+        let content_end = text.trim_end_matches(' ').len();
+        if content_end == text.len() {
+            return None;
+        }
+        // Keep one line-break separator directly after a non-CJK word character.
+        let separator = text[..content_end].chars().next_back().is_some_and(|c| c.is_alphanumeric() && crate::cjk::classify(c).is_none());
+        Some(range.start + content_end + usize::from(separator) - self.start + self.prefix.len())
+    }
+
+    /// The carried advance as line breaking saw it, including horizontal scale.
+    pub(super) fn shaped_vertical_space_carry(&self, line: &Line<'_>) -> f32 {
+        let Some(start) = self.vertical_space_start(line) else { return 0.0 };
+        collect_kern_slots(line, self).iter().filter(|s| s.start >= start).map(|s| s.advance).sum()
     }
 
     /// Where the line starts along its extent: box and area lines at their box or span edge,
@@ -405,21 +443,44 @@ impl Para<'_> {
     }
 
     /// Appends one line's clusters, glyphs, decorations and `LineInfo` to `out`.
-    pub(super) fn place_line(&self, optical: &mut crate::optical::Cache, out: &mut TextLayout, line: &Line<'_>, f: &LineFrame, leading_spaces: f32) -> f32 {
+    pub(super) fn place_line(
+        &self,
+        optical: &mut crate::optical::Cache,
+        out: &mut TextLayout,
+        line: &Line<'_>,
+        f: &LineFrame,
+        carried: CarriedSpaces,
+    ) -> CarriedSpaces {
         let env = self.env;
         let m = *line.metrics();
-        let adv = m.advance - m.trailing_whitespace + leading_spaces;
+        let adv = m.advance - m.trailing_whitespace + carried.advance;
         let slots = collect_kern_slots(line, self);
         let mut kern_px = self.kerning(optical, &slots);
-        let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
+        let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index, carried.advance);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
         let align = match self.ps.align {
             TextAlign::Center | TextAlign::JustifyCenter => 0.5,
             TextAlign::Right | TextAlign::JustifyRight => 1.0,
             _ => 0.0,
         };
-        let dx = self.line_start(f, m.offset, adv, line_kern) + leading_spaces * (1.0 - align);
-        let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
+        let final_justified = f.last && matches!(self.ps.align, TextAlign::JustifyCenter | TextAlign::JustifyRight);
+        let dx = self.line_start(f, m.offset, adv, line_kern) + if final_justified { carried.advance } else { carried.advance * (1.0 - align) };
+        let x0 = dx + m.offset - carried.advance;
+        let line_index = out.lines.len();
+        if carried.advance > 0.0 {
+            let mut x = x0;
+            if let Some(clusters) = out.clusters.get_mut(carried.clusters.clone()) {
+                for c in clusters.iter_mut().filter(|c| c.line == carried.previous_line && c.range.start >= carried.start) {
+                    c.line = line_index;
+                    c.x = x;
+                    x += c.advance;
+                }
+            }
+            if let Some(previous) = out.lines.get_mut(carried.previous_line) {
+                previous.range.end = carried.start;
+            }
+        }
+        let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };
         for item in line.items() {
@@ -438,9 +499,12 @@ impl Para<'_> {
             rotate_to_text_space(&mut out.glyphs[g0..], &state.vinfo, f.baseline);
         }
         let lr = line.text_range();
-        let x0 = dx + m.offset - leading_spaces;
+        let mut range = self.map_offset(lr.start)..self.map_offset(lr.end).min(self.content_end);
+        if carried.advance > 0.0 {
+            range.start = carried.start;
+        }
         out.lines.push(LineInfo {
-            range: self.map_offset(lr.start)..self.map_offset(lr.end).min(self.content_end),
+            range,
             baseline: f.baseline,
             x0,
             x1: x0 + adv + state.extra - trailing_tabs - trailing_growth,
@@ -448,20 +512,16 @@ impl Para<'_> {
             descent: f.descent,
             paragraph: self.index,
         });
-        if !env.vertical || !matches!(line.break_reason(), parley::BreakReason::Regular | parley::BreakReason::Emergency) {
-            return 0.0;
+        let Some(start) = self.vertical_space_start(line) else { return CarriedSpaces::default() };
+        let start = self.map_offset(start);
+        let current = &out.clusters[c0..];
+        #[cfg(test)]
+        CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + current.len()));
+        let advance = current.iter().filter(|c| c.line == line_index && c.range.start >= start).map(|c| c.advance).sum();
+        if advance == 0.0 {
+            return CarriedSpaces::default();
         }
-        let Some(current) = out.lines.last() else { return 0.0 };
-        let Some(text) = env.text.get(current.range.clone()) else { return 0.0 };
-        let content_end = text.trim_end_matches(' ').len();
-        if content_end == text.len() {
-            return 0.0;
-        }
-        // Carry trailing ASCII spaces into the next vertical column, except one
-        // line-break separator directly after a non-CJK word character.
-        let separator = text[..content_end].chars().next_back().is_some_and(|c| c.is_alphanumeric() && crate::cjk::classify(c).is_none());
-        let start = current.range.start + content_end + usize::from(separator);
-        out.clusters.iter().filter(|c| c.line == lc.line_index && c.range.start >= start).map(|c| c.advance).sum()
+        CarriedSpaces { advance, start, previous_line: line_index, clusters: c0..out.clusters.len() }
     }
 
     /// Emits one glyph run of the line: its face, clusters (once per shaping run), glyphs and

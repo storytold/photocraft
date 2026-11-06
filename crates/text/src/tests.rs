@@ -340,7 +340,8 @@ fn soft_wrap_leading_ascii_space_advance(mut t: TextLayer, expected_start: usize
     assert_eq!(line_index(&after, at + spaces), before_line, "{:?}", after.lines);
     assert!(
         (after_x - before_x - space_advance).abs() < 1e-3,
-        "before {before_x}, after {after_x}, carried spaces {space_advance}, lines {:?}, clusters {:?}",
+        "text {:?}, before {before_x}, after {after_x}, carried spaces {space_advance}, lines {:?}, clusters {:?}",
+        t.text,
         after.lines,
         after.clusters
     );
@@ -376,6 +377,86 @@ fn vertical_soft_wrap_ascii_space_carry_policy() {
 
     let first = "担当：山田 太郎 佐藤 次郎A ";
     soft_wrap_leading_ascii_space_advance(vertical_soft_wrap_text(first), first.len(), 3, 3);
+}
+
+fn vertical_soft_wrap_with_spaces(spaces: usize, rest: &str) -> (TextLayer, usize) {
+    let first = "担当：山田 太郎 佐藤 次郎君";
+    let mut t = vertical_soft_wrap_text(first);
+    t.text = format!("{first}{}{rest}", " ".repeat(spaces));
+    (t, first.len())
+}
+
+#[test]
+fn vertical_soft_wrap_carried_spaces_move_caret_and_hit_testing() {
+    let (t, boundary) = vertical_soft_wrap_with_spaces(2, "鈴木一郎 田中花子");
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    assert_eq!(l.lines[0].range.end, boundary, "{:?}", l.lines);
+    assert_eq!(l.lines[1].range.start, boundary, "{:?}", l.lines);
+    let spaces: Vec<_> = l.clusters.iter().filter(|c| (boundary..boundary + 2).contains(&c.range.start)).collect();
+    assert_eq!(spaces.len(), 2);
+    assert!(spaces.iter().all(|c| c.line == 1), "{spaces:?}");
+    assert!((spaces[0].x - l.lines[1].x0).abs() < 1e-3, "{spaces:?}");
+    assert!((spaces[1].x - spaces[0].x - spaces[0].advance).abs() < 1e-3, "{spaces:?}");
+    assert_eq!(l.caret(boundary).0, spaces[0].x);
+    assert_eq!(l.hit_test_line(spaces[0].x, l.lines[1].baseline), boundary);
+    assert_eq!(l.hit_test_line(spaces[1].x, l.lines[1].baseline), boundary + 1);
+}
+
+#[test]
+fn vertical_soft_wrap_carried_spaces_reach_tab_stops() {
+    let (t, boundary) = vertical_soft_wrap_with_spaces(2, "鈴木\t田中花子");
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 2, "{:?}", l.lines);
+    let after_tab = boundary + 2 + "鈴木\t".len();
+    let x = cluster_x(&l, after_tab);
+    assert!((x - 108.0).abs() < 0.05, "after tab at {x}, expected the 108 px stop: {:?}", l.clusters);
+}
+
+#[test]
+fn vertical_soft_wrap_final_justification_counts_carry_once() {
+    let mut e = TextEngine::new();
+    for align in [TextAlign::JustifyCenter, TextAlign::JustifyRight] {
+        let (t, _) = vertical_soft_wrap_with_spaces(2, "鈴木一郎 田中花子");
+        let l = e.layout(&with_para(t, ParagraphStyle { align, ..Default::default() }), 72.0);
+        let last = l.lines.last().unwrap();
+        let aligned = match align {
+            TextAlign::JustifyCenter => (last.x0 + last.x1 - 480.0).abs() < 0.05,
+            TextAlign::JustifyRight => (last.x1 - 480.0).abs() < 0.05,
+            _ => false,
+        };
+        assert!(aligned, "{align:?}: {last:?}");
+    }
+}
+
+#[test]
+fn vertical_soft_wrap_carry_participates_in_line_breaking() {
+    let (t, _) = vertical_soft_wrap_with_spaces(2, &"鈴".repeat(13));
+    let mut area = t.clone();
+    area.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (280.0, 0.0), (280.0, 480.0), (0.0, 480.0)]) };
+    let mut e = TextEngine::new();
+    for t in [t, area] {
+        let l = e.layout(&t, 72.0);
+        assert_eq!(l.lines.len(), 3, "{:?}", l.lines);
+        assert!(l.lines.iter().all(|line| line.x1 <= 480.0 + 0.05), "{:?}", l.lines);
+        assert_eq!(l.lines.last().unwrap().range.end, t.text.len());
+    }
+}
+
+#[test]
+fn vertical_soft_wrap_carry_scans_only_current_lines() {
+    let mut t = vertical_soft_wrap_text("");
+    t.text = "君鈴  ".repeat(12);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 2000.0, height: 100.0 };
+    let mut e = TextEngine::new();
+    crate::layout::CARRY_SCANNED.with(|scanned| scanned.set(0));
+    let l = e.layout(&t, 72.0);
+    let scanned = crate::layout::CARRY_SCANNED.with(|scanned| scanned.get());
+    assert!(l.lines.len() > 4, "{:?}", l.lines);
+    assert!(scanned > 0, "the fixture must exercise carry scans: {:?}", l.lines.iter().map(|line| &t.text[line.range.clone()]).collect::<Vec<_>>());
+    assert!(scanned <= l.clusters.len(), "scanned {scanned} candidates for {} clusters", l.clusters.len());
 }
 
 /// #5565: paragraph text breaks at its horizontally scaled width. At 60% it breaks like 100%

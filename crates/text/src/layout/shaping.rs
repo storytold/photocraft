@@ -403,7 +403,51 @@ impl<'a> Para<'a> {
         let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
         let from = self.area_origin(m, flow);
         let first_px = self.first_style().size_pt * env.k;
-        break_area(layout, a, from, m, (self.indent_start, self.indent_end), first_px, self.break_scale, &self.area_budget)
+        break_area(layout, a, from, m, (self.indent_start, self.indent_end), first_px, self.break_scale, &[], &self.area_budget)
+    }
+
+    /// Re-breaks with the carried-space advance removed from each receiving line's capacity.
+    fn break_lines_with_carries(&self, layout: &mut Layout<RunBrush>, flow: &Flow, carries: &[f32]) -> (Vec<Slot>, bool) {
+        let env = self.env;
+        let Some(a) = &env.area else {
+            let max_advance = self.avail.map_or(f32::MAX, |a| a / self.break_scale);
+            let mut br = layout.break_lines();
+            br.state_mut().set_layout_max_advance(f32::INFINITY);
+            let mut line = 0usize;
+            while !br.is_done() {
+                let leading = carries.get(line.saturating_sub(1)).copied().unwrap_or(0.0) / self.break_scale;
+                br.state_mut().set_line_max_advance((max_advance - leading).max(1.0 / self.break_scale));
+                if br.break_next().is_none() {
+                    break;
+                }
+                br.set_prior_line_width(max_advance);
+                line += 1;
+            }
+            br.finish();
+            return (Vec::new(), false);
+        };
+        layout.break_all_lines(None);
+        let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
+        let from = self.area_origin(m, flow);
+        let first_px = self.first_style().size_pt * env.k;
+        break_area(layout, a, from, m, (self.indent_start, self.indent_end), first_px, self.break_scale, carries, &self.area_budget)
+    }
+
+    /// Settles columns whose carried spaces otherwise push their content past the box or area span.
+    fn settle_vertical_carries(&self, layout: &mut Layout<RunBrush>, flow: &Flow, mut slots: Vec<Slot>, mut full: bool) -> (Vec<Slot>, bool) {
+        for _ in 0..4 {
+            let carries: Vec<f32> = layout.lines().map(|line| self.shaped_vertical_space_carry(&line)).collect();
+            let overflow = layout.lines().enumerate().any(|(i, line)| {
+                let Some(avail) = slots.get(i).map(|s| s.width).or(self.avail) else { return false };
+                let m = line.metrics();
+                (m.advance - m.trailing_whitespace) * self.break_scale + i.checked_sub(1).and_then(|p| carries.get(p)).copied().unwrap_or(0.0) > avail + 0.5
+            });
+            if !overflow {
+                break;
+            }
+            (slots, full) = self.break_lines_with_carries(layout, flow, &carries);
+        }
+        (slots, full)
     }
 
     /// The widths of the tabs on the broken lines of `layout`.
@@ -434,6 +478,9 @@ impl<'a> Para<'a> {
             layout = settled;
             slots = settled_slots;
             full = settled_full;
+        }
+        if self.env.vertical && self.env.wraps {
+            (slots, full) = self.settle_vertical_carries(&mut layout, flow, slots, full);
         }
         (layout, slots, full)
     }
