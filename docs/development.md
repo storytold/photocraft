@@ -866,9 +866,12 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
   opened without Photoshop layers.
 
 Headless RPC and MCP report approval-required memory errors with byte counts (`required`,
-`softLimit`, `hardLimit`, and `availableRam` when known). A hard-budget refusal reports
+`softLimit`, `hardLimit`, and `availableRam` when known); here `availableRam` means available
+physical RAM. A hard-budget refusal reports
 `required` and `hardLimit`, plus `available` and `availableRam` when measured free memory set the
-limit (the typed `free_memory` field); there is never a soft limit, because no approval can raise
+limit (the typed `free_memory` field). Both fields then contain the smaller of available RAM and
+commit headroom (or the one measurement available), so `availableRam` can represent commit
+headroom rather than physical RAM. There is never a soft limit, because no approval can raise
 that ceiling. A limit set by the caller, the platform cap, or an unknown capacity carries no
 free-memory figure. This holds for `doc.open` and `doc.place` and for the MCP `doc_open` and
 `doc_place` tools, including a refusal from `file.openAs`/`file.placeEmbedded` reached through a
