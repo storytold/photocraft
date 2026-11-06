@@ -717,6 +717,8 @@ fn temp_owner_reads_both_name_forms_and_nothing_else() {
     assert_eq!(temp_owner("doc.pcraft.42-7.pcsave.tmp"), Some(42));
     assert_eq!(temp_owner(".doc.pcraft.42-7.pcsave.tmp"), Some(42), "the dot-prefixed form older versions wrote");
     assert_eq!(temp_owner(".hidden.psd.42-0.pcsave.tmp"), Some(42), "a dot file's own temp file");
+    assert_eq!(temp_owner("doc.42-18446744073709551615.pcsave.tmp"), Some(42), "the largest counter");
+    assert_eq!(temp_owner("doc.0-0.pcsave.tmp"), Some(0), "a lone zero is a number temp_name writes");
     for other in [
         "doc.pcraft",
         "doc.pcraft.42-7.tmp",
@@ -726,6 +728,12 @@ fn temp_owner_reads_both_name_forms_and_nothing_else() {
         "doc.+42-7.pcsave.tmp",
         "doc.42-.pcsave.tmp",
         "doc.42-x.pcsave.tmp",
+        "doc.42-18446744073709551616.pcsave.tmp",
+        "doc.4294967296-7.pcsave.tmp",
+        "doc.42-07.pcsave.tmp",
+        "doc.42-00.pcsave.tmp",
+        "doc.042-7.pcsave.tmp",
+        "doc.00-7.pcsave.tmp",
         "doc.42.pcsave.tmp",
         "42-7.pcsave.tmp",
     ] {

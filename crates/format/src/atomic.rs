@@ -512,8 +512,11 @@ pub fn temp_owner(name: &str) -> Option<u32> {
     let (stem, ids) = rest.rsplit_once('.')?;
     let (pid, n) = ids.split_once('-')?;
     let stem = stem.strip_prefix('.').unwrap_or(stem);
-    let digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
-    if stem.is_empty() || !digits(pid) || !digits(n) {
+    // Only numbers `temp_name` writes: plain decimal digits with no leading zero (a lone "0" is
+    // fine), a `u32` pid and the `u64` counter it counts with. Any other name is someone else's
+    // file, and the sweep must not delete it.
+    let decimal = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) && (s == "0" || !s.starts_with('0'));
+    if stem.is_empty() || !decimal(pid) || !decimal(n) || n.parse::<u64>().is_err() {
         return None;
     }
     pid.parse().ok()
