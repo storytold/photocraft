@@ -45,12 +45,14 @@ mod channel_map;
 pub mod comps_map;
 pub mod doc_path;
 pub mod effects_map;
+pub mod export_estimate;
 #[cfg(any(unix, windows))]
 mod exr_native;
 pub mod exr_parts;
 mod flat;
 mod gradient_bake;
 pub mod guides_map;
+mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod duotone_map;
 mod kra;
@@ -73,6 +75,8 @@ mod psd_import;
 pub use psd_budget::{DEFAULT_PSD_IMPORT_PIXEL_BYTES, PsdMemoryEstimate, estimate as estimate_psd_memory};
 pub mod psd_thumbnail;
 pub mod raw;
+pub mod renderer;
+pub use renderer::{BandRenderer, CpuRenderer, RenderBand, RenderError};
 pub mod slices_map;
 pub mod smart_map;
 pub mod svg;
@@ -84,6 +88,7 @@ pub mod vector_preview;
 mod xcf;
 pub mod xml;
 
+pub use export_estimate::estimate_export_bytes;
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};
@@ -91,9 +96,14 @@ use photocraft_psd::{PsdError, PsdFile};
 
 pub use adjust_map::ADJUSTMENT_KEYS;
 pub use flat::{
-    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
+    DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, document_to_image_with_renderer, export_flat, export_flat_with_renderer,
+    export_png_streamed_with_renderer, export_preview_png_with_renderer, file_encoding, import_gif_frames, import_tiff_page, import_tiff_page_with_options,
     import_webp_frames, tga_alpha_channel_to_transparency, tga_default_bits,
 };
+pub use png_steps::PngImport;
+// Re-exported for the `flat_open_bench` example, which times the tile-building phase of a flat open.
+#[doc(hidden)]
+pub use flat::image_to_document;
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
 
@@ -116,8 +126,12 @@ pub enum IoError {
     #[error("PSD: {0}")]
     Psd(#[from] PsdError),
     /// The conservative PSD pixel-storage and workspace estimate exceeded its allowance.
-    #[error("PSD import needs an estimated {required} bytes of pixel memory; limit is {limit} bytes")]
-    PsdImportBudget { required: u64, limit: u64 },
+    ///
+    /// `free_memory` is the free memory measured when it set the limit (see
+    /// [`memory::MemoryBudget::measured_free`]); `None` when a caller or attempt allowance, the
+    /// platform cap or an unknown capacity set it.
+    #[error("PSD import needs an estimated {required} bytes of pixel memory; limit is {limit} bytes{advice}", advice = crate::memory::low_memory_advice(.free_memory))]
+    PsdImportBudget { required: u64, limit: u64, free_memory: Option<u64> },
     /// PSD pixel-storage estimate exceeds the automatic soft limit, but is within the hard limit.
     /// Explicit approval is required to proceed.
     #[error(
@@ -156,6 +170,19 @@ pub enum IoError {
     /// A background import or save was cancelled ([`import_with`], [`export_with`]).
     #[error("cancelled")]
     Cancelled,
+    /// A band renderer failed to produce pixels.
+    #[error("renderer error: {0}")]
+    Render(RenderError),
+}
+
+impl From<RenderError> for IoError {
+    fn from(e: RenderError) -> Self {
+        match e {
+            RenderError::Cancelled => IoError::Cancelled,
+            RenderError::Sink(io) => *io,
+            other => IoError::Render(other),
+        }
+    }
 }
 
 /// Result of [`import`].
@@ -377,6 +404,9 @@ pub struct ExportOptions {
     /// transparency. `None`, the default, keeps it unless the document has alpha or spot
     /// channels, which are then written as with it off.
     pub tiff_transparency: Option<bool>,
+    /// Protect RGB 24-bit Targa alpha and flat TIFF composite transparency during in-place
+    /// Batch saves. Other encoder losses retain their existing policies and warnings.
+    pub preserve_alpha: bool,
     /// Which part of the document's XMP packet and free-form text a flat export embeds.
     /// PSD/PSB always keep XMP; `.pcraft` keeps both. Everything by default, as Save As does;
     /// Export As offers None.
@@ -413,6 +443,7 @@ impl Default for ExportOptions {
             force_psb: false,
             tiff_layers: false,
             tiff_transparency: None,
+            preserve_alpha: false,
             xmp: XmpEmbed::All,
             tga_bits: None,
             image_previews: true,
@@ -468,6 +499,65 @@ fn is_psd_input(name: &str, bytes: &[u8]) -> bool {
     is_psd(bytes) || (PSD_EXTS.iter().any(|e| has_extension(name, e)) && photocraft_codecs::detect(bytes).is_none())
 }
 
+/// How an import bounds its pixel memory before decoding pixels, for a caller that must fit
+/// several imports into one memory budget.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportPreflight {
+    /// PSD/PSB: the import's own layer/mask/merged preflight, lowered by
+    /// [`ImportOptions::psd_max_pixel_bytes`].
+    Psd,
+    /// TIFF: a layered page uses [`ImportOptions::psd_max_pixel_bytes`]; a flat page is decoded
+    /// in bands, so the caller bounds its whole canvas from the page's header
+    /// ([`photocraft_codecs::tiff_info`]).
+    Tiff,
+    /// A flat raster decoded into one image, bounded by
+    /// [`ImportOptions::flat_max_pixel_bytes`].
+    Flat,
+    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw and `.pcraft` files: this build has
+    /// no header-only estimate of their pixel memory before decoding.
+    Unbounded,
+}
+
+/// Which [`ImportPreflight`] applies to importing `name` and `bytes`.
+///
+/// The order matches [`import_stages`]; keep the two in step.
+pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
+    if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
+        return ImportPreflight::Unbounded;
+    }
+    if is_psd(bytes) {
+        return ImportPreflight::Psd;
+    }
+    if affinity::is_affinity(bytes) || affinity::has_extension(name) {
+        return ImportPreflight::Unbounded;
+    }
+    if ora::is_ora(bytes) || has_extension(name, "ora") {
+        return ImportPreflight::Unbounded;
+    }
+    if kra::is_kra(bytes) || (kra::EXTENSIONS.iter().any(|e| has_extension(name, e)) && photocraft_codecs::detect(bytes).is_none()) {
+        return ImportPreflight::Unbounded;
+    }
+    if xcf::is_xcf(bytes) || (has_extension(name, "xcf") && photocraft_codecs::detect(bytes).is_none()) {
+        return ImportPreflight::Unbounded;
+    }
+    if xcf::is_gzipped_xcf(name, bytes) {
+        return ImportPreflight::Unbounded;
+    }
+    if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
+        return ImportPreflight::Unbounded;
+    }
+    if raw::is_raw(bytes) {
+        return ImportPreflight::Unbounded;
+    }
+    if is_svg_input(name, bytes) {
+        return ImportPreflight::Unbounded;
+    }
+    if is_psd_input(name, bytes) {
+        return ImportPreflight::Psd;
+    }
+    if photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff) { ImportPreflight::Tiff } else { ImportPreflight::Flat }
+}
+
 /// Imports a file. PSD/PSB, Affinity containers and camera raws are detected by magic; everything
 /// else is decoded with `photocraft-codecs`.
 pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
@@ -508,6 +598,9 @@ pub struct ImportOptions {
     /// lower the default cap; 0 uses the adaptive budget. Does not cover metadata or
     /// smart-filter caches.
     pub psd_max_pixel_bytes: u64,
+    /// Decoded-pixel allowance for a flat raster (the buffer a codec decodes into). May lower
+    /// the codec's default cap; 0 uses it. PSD/PSB and layered TIFF use `psd_max_pixel_bytes`.
+    pub flat_max_pixel_bytes: u64,
     /// Explicit one-shot authorization for imports that exceed the soft budget but fit within the hard budget.
     pub psd_high_memory_approved: bool,
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
@@ -521,6 +614,7 @@ impl Default for ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
             psd_max_pixel_bytes: 0,
+            flat_max_pixel_bytes: 0,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
         }
@@ -812,59 +906,97 @@ pub fn import_file(name: &str, path: &std::path::Path, opts: &ImportOptions, ctl
     import_file_for_open_with(name, path, opts, ctl).map(|(result, _)| result)
 }
 
-/// Dispatches format-specific importers and propagates a structured PSD damage
-/// flag alongside the ordinary best-effort import result.
-fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
+/// The importer a file goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Pcraft,
+    Psd,
+    Affinity,
+    Ora,
+    Kra,
+    Xcf,
+    GzippedXcf,
+    Pdn,
+    Raw,
+    Svg,
+    /// A `.psd`/`.psb`/`.psdt` with no raster signature.
+    NamedPsd,
+    /// A flat raster format, through the codecs.
+    Flat,
+}
+
+/// Which importer takes the file `name` holding `bytes`. The checks run in this order.
+pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
-        let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false });
+        return Route::Pcraft;
     }
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).
     if is_psd(bytes) {
-        return import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
+        return Route::Psd;
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
-        return affinity::import(name, bytes);
+        return Route::Affinity;
     }
     if ora::is_ora(bytes) || has_extension(name, "ora") {
-        return ora::import(name, bytes, ctl);
+        return Route::Ora;
     }
     // Krita files are ZIP containers. A recognized raster signature still wins over a
     // misleading .kra suffix (as with SVG imports).
     if kra::is_kra(bytes) || (kra::EXTENSIONS.iter().any(|e| has_extension(name, e)) && photocraft_codecs::detect(bytes).is_none()) {
-        return kra::import(name, bytes, ctl);
+        return Route::Kra;
     }
     // GIMP files are gzip or raw; as above, a recognized raster signature still wins over a
     // misleading .xcf suffix.
     if xcf::is_xcf(bytes) || (has_extension(name, "xcf") && photocraft_codecs::detect(bytes).is_none()) {
-        return xcf::import(name, bytes, ctl);
+        return Route::Xcf;
     }
     if xcf::is_gzipped_xcf(name, bytes) {
-        return xcf::import(name, &xcf::gunzip(bytes)?, ctl);
+        return Route::GzippedXcf;
     }
     if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
-        return pdn::import(name, bytes, ctl);
+        return Route::Pdn;
     }
     if raw::is_raw(bytes) {
-        return raw::import_raw_demosaic(name, bytes, opts.demosaic);
+        return Route::Raw;
     }
     if is_svg_input(name, bytes) {
-        return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
+        return Route::Svg;
     }
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.
     if is_psd_input(name, bytes) {
-        return import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover));
+        return Route::NamedPsd;
     }
-    flat::import_flat_with_options(name, bytes, opts, ctl)
+    Route::Flat
+}
+
+/// Dispatches format-specific importers and propagates a structured PSD damage
+/// flag alongside the ordinary best-effort import result.
+fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
+    match route(name, bytes) {
+        Route::Pcraft => {
+            let document = photocraft_format::load_from_bytes(bytes)?;
+            Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
+        }
+        Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
+        Route::Affinity => affinity::import(name, bytes),
+        Route::Ora => ora::import(name, bytes, ctl),
+        Route::Kra => kra::import(name, bytes, ctl),
+        Route::Xcf => xcf::import(name, bytes, ctl),
+        Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
+        Route::Pdn => pdn::import(name, bytes, ctl),
+        Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
+        Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
+        Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
+    }
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
 /// Valid plain SVG is recognized by its XML content; an otherwise unknown `.svg` is passed to the
 /// SVG parser for a useful malformed-file error, and `.svgz` disambiguates gzip streams.
-fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
+pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
     // Keep the SVG extension as a fallback for malformed files so the SVG parser can return an
     // actionable SVG error. A recognized raster signature still wins over a misleading `.svg`
     // suffix (for example, a WebP downloaded as Firefox_logo.svg).
@@ -908,7 +1040,18 @@ pub fn export(doc: &Document, name_or_ext: &str, opts: &ExportOptions) -> Result
 /// layered TIFF, in coarse steps for the other formats) and checks it between stages. A cancelled
 /// export fails with [`IoError::Cancelled`]; otherwise the bytes are exactly [`export`]'s.
 pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ExportResult, IoError> {
-    let r = checked_stages(doc, name_or_ext, opts, ctl)?;
+    export_with_renderer(doc, name_or_ext, opts, ctl, None)
+}
+
+/// [`export_with`] with an optional custom [`BandRenderer`] for flat formats.
+pub fn export_with_renderer(
+    doc: &Document,
+    name_or_ext: &str,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<ExportResult, IoError> {
+    let r = checked_stages(doc, name_or_ext, opts, ctl, renderer)?;
     let bytes = r.encoded.into_bytes()?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
@@ -921,22 +1064,42 @@ pub fn export_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl:
 /// [`export_with`] checks it) before this returns: the model holds the encoded channels, never a
 /// reference to the document's tiles. Reports progress up to `1.0` once the result is ready.
 pub fn encode_with(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<EncodedExport, IoError> {
-    let r = checked_stages(doc, name_or_ext, opts, ctl)?;
+    let r = checked_stages(doc, name_or_ext, opts, ctl, None)?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok(r)
 }
 
-/// [`export_stages`] refused when the document's scratch was, or became, unreadable while its
-/// pixels were read (previews included): their placeholders must never be saved.
-fn checked_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<EncodedExport, IoError> {
+/// [`export_stages_with_renderer`] refused when the document's scratch was, or became, unreadable
+/// while its pixels were read (previews included): their placeholders must never be saved.
+fn checked_stages(
+    doc: &Document,
+    name_or_ext: &str,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<EncodedExport, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
     photocraft_compose::discard_unreadable_pixel_caches();
     doc.scratch_health().map_err(IoError::Unsupported)?;
     let scratch_generation = photocraft_raster::spill::read_error_generation();
-    let r = export_stages(doc, name_or_ext, opts, ctl)?;
-    photocraft_raster::spill::check_since(scratch_generation).map_err(IoError::Unsupported)?;
-    doc.scratch_health().map_err(IoError::Unsupported)?;
+    let mut renderer = renderer;
+    // `as_deref_mut` would tie the trait object's lifetime to this function's; the closure shortens it.
+    #[allow(clippy::option_as_ref_deref)]
+    let r = export_stages_with_renderer(doc, name_or_ext, opts, ctl, renderer.as_mut().map(|r| -> &mut dyn BandRenderer { &mut **r }))?;
+    if let Err(e) = photocraft_raster::spill::check_since(scratch_generation)
+        .map_err(IoError::Unsupported)
+        .and_then(|()| doc.scratch_health().map_err(IoError::Unsupported))
+    {
+        // The provisional result is discarded: queue its renderer notes (fallback reasons, CPU-only
+        // formats) back on the renderer so the caller can still report them next to the error.
+        if let Some(renderer) = renderer {
+            for w in r.warnings.iter().filter(|w| w.starts_with("custom renderer") || w.contains("CPU compositor")) {
+                renderer.push_diagnostic(w.clone());
+            }
+        }
+        return Err(e);
+    }
     ctl.check().map_err(|_| IoError::Cancelled)?;
     Ok(r)
 }
@@ -960,7 +1123,13 @@ const PCRAFT_FULL_COMPOSITE_PIXELS: u64 = 1 << 26;
 /// before its bytes are assembled: about 2.7 s of 3.0 s for a 24 MP, 5-layer RGB/8 document.
 const PSD_MODEL_DONE: f32 = 0.9;
 
-fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &photocraft_raster::Interrupt) -> Result<EncodedExport, IoError> {
+fn export_stages_with_renderer(
+    doc: &Document,
+    name_or_ext: &str,
+    opts: &ExportOptions,
+    ctl: &photocraft_raster::Interrupt,
+    renderer: Option<&mut dyn BandRenderer>,
+) -> Result<EncodedExport, IoError> {
     let ext = extension(name_or_ext);
     if ext == "pdn" {
         return Err(IoError::Unsupported("PDN is import-only; save as .pcraft to preserve all layers and blend modes".into()));
@@ -977,10 +1146,20 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         ));
     }
     if ext == "ora" {
-        return ora::export(doc).map(EncodedExport::from);
+        let mut res = ora::export(doc)?;
+        if let Some(r) = renderer {
+            res.warnings.push("OpenRaster export uses CPU compositor; GPU rendering applies to flat formats".into());
+            res.warnings.extend(r.drain_diagnostics());
+        }
+        return Ok(res.into());
     }
     if ext == "pdf" {
-        return pdf::export(doc).map(EncodedExport::from);
+        let mut res = pdf::export(doc)?;
+        if let Some(r) = renderer {
+            res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
+            res.warnings.extend(r.drain_diagnostics());
+        }
+        return Ok(res.into());
     }
     if ext == photocraft_format::EXTENSION {
         let doc = named_for_file(doc, name_or_ext);
@@ -1035,13 +1214,22 @@ fn export_stages(doc: &Document, name_or_ext: &str, opts: &ExportOptions, ctl: &
         }
         // Never write a header the reader would refuse (e.g. a zero-sized canvas).
         file.header.validate()?;
+        if let Some(r) = renderer {
+            warnings.push("PSD/PSB layered export uses CPU compositor; GPU rendering applies to flat formats".into());
+            warnings.extend(r.drain_diagnostics());
+        }
         return Ok(EncodedExport { encoded: Encoded::Psd(Box::new(file)), warnings });
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
     if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
-        return tiff_layers::export_layered(doc, opts, ctl).map(EncodedExport::from);
+        let mut res = tiff_layers::export_layered(doc, opts, ctl)?;
+        if let Some(r) = renderer {
+            res.warnings.push("TIFF layered export uses CPU compositor; GPU rendering applies to flat formats".into());
+            res.warnings.extend(r.drain_diagnostics());
+        }
+        return Ok(res.into());
     }
-    flat::export_flat_with(doc, format, opts, ctl).map(EncodedExport::from)
+    flat::export_flat_with_renderer(doc, format, opts, ctl, renderer).map(EncodedExport::from)
 }
 
 /// The flattened document at its canvas size, in 8-bit RGBA like a `.pcraft` file's two previews,
@@ -1177,8 +1365,24 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ImportOptions, import, import_for_open, is_psd_input, is_svg_input};
+    use super::{ImportOptions, ImportPreflight, import, import_for_open, import_preflight, is_psd_input, is_svg_input};
     use photocraft_psd::{Compression, Version, testgen};
+
+    /// The callers that fit several imports into one budget choose their option from this
+    /// classification, so it has to follow the same dispatch as [`super::import`].
+    #[test]
+    fn import_preflight_classifies_each_dispatched_format() {
+        let png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+        assert_eq!(import_preflight("x.png", png), ImportPreflight::Flat);
+        assert_eq!(import_preflight("x.psd", b"8BPS\0\0"), ImportPreflight::Psd);
+        assert_eq!(import_preflight("x.tif", b"II*\0"), ImportPreflight::Tiff);
+        assert_eq!(import_preflight("x.ora", b"PK\x03\x04"), ImportPreflight::Unbounded);
+        assert_eq!(import_preflight("x.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), ImportPreflight::Unbounded);
+        assert_eq!(import_preflight("x.pcraft", b"PCF1"), ImportPreflight::Unbounded);
+        assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
+        // A Photoshop extension whose bytes are a readable flat image follows the image.
+        assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);
+    }
 
     /// Verifies a valid PSD remains editable after import.
     #[test]
@@ -1246,7 +1450,7 @@ mod tests {
             for (opts, what) in cases {
                 super::psd_gate::set_active_attempt_budget(ample);
                 match super::import_with_options_and_interrupt("nested.psd", &bytes, &opts, &ctl) {
-                    Err(super::IoError::PsdImportBudget { required: r, limit }) => {
+                    Err(super::IoError::PsdImportBudget { required: r, limit, .. }) => {
                         assert_eq!((r, limit), (required, required - 1), "{what} must refuse with its exact fields")
                     }
                     other => panic!("expected {what} to refuse, got {:?}", other.map(|_| ())),

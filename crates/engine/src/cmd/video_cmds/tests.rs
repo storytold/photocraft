@@ -29,6 +29,17 @@ fn new_blank_insert_duplicate_delete_frames() {
     assert!(s.active().unwrap().doc.timeline.as_ref().unwrap().duration >= frames(&s, id));
 }
 
+/// Check the shared growth limit without constructing a million-frame document.
+#[test]
+fn frame_growth_stops_at_the_limit_of_either_stack() {
+    let limit = crate::timeline_cmds::MAX_DURATION;
+    assert!(check_frame_growth(limit - 1, None).is_ok());
+    assert!(check_frame_growth(limit - 1, Some(limit - 1)).is_ok());
+    assert!(check_frame_growth(limit, None).is_err());
+    assert!(check_frame_growth(limit - 1, Some(limit)).is_err());
+    assert!(check_frame_growth(limit + 1, None).is_err());
+}
+
 #[test]
 fn rasterize_drops_the_stack() {
     let mut s = session();
@@ -202,9 +213,9 @@ fn tiff_page_errors_keep_memory_refusals_typed_and_other_context() {
         other => panic!("page 2 approval refusal lost its fields: {other:?}"),
     }
 
-    let hard = photocraft_io::IoError::PsdImportBudget { required: 9_000, limit: 8_000 };
+    let hard = photocraft_io::IoError::PsdImportBudget { required: 9_000, limit: 8_000, free_memory: None };
     match tiff_page_error(display, name, 2, hard) {
-        EngineError::PsdHardBudget { name: named, required, limit } => {
+        EngineError::PsdHardBudget { name: named, required, limit, .. } => {
             assert_eq!(named, name);
             assert_eq!((required, limit), (9_000, 8_000));
         }
@@ -233,7 +244,7 @@ fn video_frames_to_layers_keeps_a_layered_tiff_page_refusal_typed() {
     let _limit = super::limits::Scoped::psd_max_pixel_bytes(1);
     let err = s.execute("file.import.videoFramesToLayers", json!({"path": path})).unwrap_err();
     match err {
-        EngineError::PsdHardBudget { name, required, limit } => {
+        EngineError::PsdHardBudget { name, required, limit, .. } => {
             assert_eq!(name, path);
             assert_eq!(limit, 1);
             assert!(required > limit, "the page estimate must be past the caller's limit: {required} > {limit}");
@@ -284,7 +295,7 @@ fn video_frames_to_layers_uses_the_footage_limit_for_a_single_page_layered_tiff(
         let _limit = super::limits::Scoped::psd_max_pixel_bytes(1);
         let err = s.execute("file.import.videoFramesToLayers", json!({"path": path})).unwrap_err();
         match err {
-            EngineError::PsdHardBudget { name, required, limit } => {
+            EngineError::PsdHardBudget { name, required, limit, .. } => {
                 assert_eq!(name, path);
                 assert_eq!(limit, 1);
                 assert!(required > limit, "the page estimate must be past the caller's limit: {required} > {limit}");
