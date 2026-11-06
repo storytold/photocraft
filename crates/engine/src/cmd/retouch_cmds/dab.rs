@@ -1,8 +1,8 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
     BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect, Region, Result,
-    Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag, from_rgba_into,
-    has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
+    Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, UNCLIPPED, Value, alpha_index, apply_dab_stroke_clipped, bad, damage_json, dodge_burn, flag,
+    footprint_within, from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -207,6 +207,12 @@ impl DabTool {
     }
 
     /// How far around each dab the effect reads (Blur and Sharpen read a neighbourhood).
+    /// How far past a dab the tool reads (and its footprint reaches past the canvas).
+    #[cfg(test)]
+    pub(super) fn halo(&self) -> i32 {
+        self.neighborhood().halo()
+    }
+
     fn neighborhood(&self) -> DabNeighborhood {
         match self {
             Self::Focus { sigma, .. } => DabNeighborhood::Halo((sigma * 3.0).ceil() as i32 + 1),
@@ -266,7 +272,7 @@ impl DabTool {
 }
 
 /// Dodge, Burn, Sponge, Blur, Sharpen and Smudge: each dab edits a working copy in order
-/// (`apply_dab_stroke`). Blur, Sharpen and Smudge can sample all layers.
+/// (`apply_dab_stroke_clipped`, on the canvas). Blur, Sharpen and Smudge can sample all layers.
 pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, cmd)?;
     let (tool, label) = DabTool::parse(s, cmd, p, &stroke)?;
@@ -283,10 +289,17 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         let fmt = surf.format();
         let mut effect = tool.effect(fmt, stroke.brush.spacing);
         let mut sampler = all.then(|| AllLayers::new(pre, fmt));
-        Ok(apply_dab_stroke(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| match &mut sampler {
+        // Only the canvas changes, and only it (plus what the effect reads around a dab) is
+        // copied, so a brush far larger than the image costs what the image does (#5633). The
+        // copies (original, working, mixed back; Sample All Layers adds a composite and its
+        // render) are priced before they are made.
+        let what = format!("the {label} stroke");
+        let admit = |area: Rect| admit_dab_area(area, fmt.channels(), if all { 5 } else { 3 }, &what);
+        let (halo, canvas) = (tool.neighborhood().halo(), pre.bounds());
+        apply_dab_stroke_clipped(surf, &stroke, sel, lock, halo, canvas, admit, |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
             None => effect(work, fp),
-        }))
+        })
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
     if from_live {
@@ -295,13 +308,38 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     Ok(r)
 }
 
+/// The most pixels a sequential-dab stroke works on at once: 2³⁰, a 32,768 × 32,768 area. Clipped
+/// to the canvas, one dab stays far below it (a soft 5000 px tip covers about 75 megapixels), so
+/// only a stroke across a huge canvas reaches it. Tests use a far lower budget, so proving a
+/// refusal never comes near allocating the real one.
+#[cfg(not(test))]
+const DAB_BUDGET: u64 = 1 << 30;
+#[cfg(test)]
+const DAB_BUDGET: u64 = 1 << 20;
+
+/// Refuse a sequential-dab working area of `ch` channels over [`DAB_BUDGET`], or one the browser
+/// can't fit with `copies` `f32` buffers of it alive at once, before anything is allocated.
+fn admit_dab_area(area: Rect, ch: usize, copies: u64, what: &str) -> Result<()> {
+    let (w, h) = (u64::from(area.width()), u64::from(area.height()));
+    let px = w.saturating_mul(h);
+    if px > DAB_BUDGET {
+        return Err(crate::allocation::error(what, &format!("it would work on {w} x {h} px at once, more than the {DAB_BUDGET} px limit")));
+    }
+    let bytes = px.saturating_mul(ch as u64).saturating_mul(std::mem::size_of::<f32>() as u64).saturating_mul(copies);
+    crate::memory_gate::ensure(&format!("paint {what}"), bytes)?;
+    crate::allocation::checkpoint(what)
+}
+
+/// What a live sequential-dab stroke's errors call it.
+const LIVE_WHAT: &str = "a live stroke preview";
+
 /// Side of the tiles a live sequential-dab stroke keeps its working pixels in ([`WorkTiles`]).
 const WORK_TILE: i32 = 128;
 
 /// The working copy of a live sequential-dab stroke: the target's native channels as `f32`, in
 /// tiles copied from the pre-stroke surface the first time a dab writes to them. Unlike a
 /// `Surface`, it isn't rounded to the document's depth between dabs, so each dab sees what the
-/// commit's working copy (`apply_dab_stroke`) holds and the preview is the commit's pixels.
+/// commit's working copy (`apply_dab_stroke_clipped`) holds and the preview is the commit's pixels.
 struct WorkTiles {
     ch: usize,
     tiles: std::collections::HashMap<(i32, i32), Vec<f32>>,
@@ -324,10 +362,15 @@ impl WorkTiles {
         (y0..=y1).filter(move |_| !empty).flat_map(move |ty| (x0..=x1).map(move |tx| (tx, ty)))
     }
 
-    /// The working pixels of `r`: the pre-stroke pixels `pre` where no dab has written yet.
-    fn read(&self, pre: &Surface, r: Rect) -> Region {
-        let mut out = Region::new(r, self.ch);
+    /// The working pixels of `r`: the pre-stroke pixels `pre` where no dab has written yet. An
+    /// error rather than an abort when the allocator can't supply the copy.
+    fn read(&self, pre: &Surface, r: Rect) -> Result<Region> {
         let n = self.ch;
+        let len = (r.width() as usize)
+            .checked_mul(r.height() as usize)
+            .and_then(|px| px.checked_mul(n))
+            .ok_or_else(|| crate::allocation::error(LIVE_WHAT, "requested size overflowed"))?;
+        let mut out = Region { rect: r, ch: n, data: crate::allocation::filled(len, 0.0, LIVE_WHAT)? };
         let mut buf = Vec::new();
         for c in Self::coords(r) {
             let tr = Self::tile_rect(c);
@@ -348,7 +391,7 @@ impl WorkTiles {
                 }
             }
         }
-        out
+        Ok(out)
     }
 
     /// Store `region` as the working pixels of its rectangle.
@@ -372,10 +415,10 @@ impl WorkTiles {
 
 /// A Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke shown while it is drawn: each new dab
 /// runs the tool's effect on a working copy of the target, in order, and the changed area is
-/// mixed back over the original at the brush opacity, as `apply_dab_stroke` does on release.
-/// The working copy keeps full precision ([`WorkTiles`]), so the pixels are the commit's, and the
-/// commit takes them over ([`Session::offer_live_dab`]) instead of running every dab again.
-/// Sample All Layers isn't previewed (its composite spans the whole stroke).
+/// mixed back over the original at the brush opacity, as `apply_dab_stroke_clipped` does on
+/// release. The working copy keeps full precision ([`WorkTiles`]), so the pixels are the
+/// commit's, and the commit takes them over ([`Session::offer_live_dab`]) instead of running
+/// every dab again. Sample All Layers isn't previewed (its composite spans the whole stroke).
 pub struct LiveDab {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
@@ -388,6 +431,10 @@ pub struct LiveDab {
     done: usize,
     effect: DabEffect,
     neighborhood: DabNeighborhood,
+    /// Where the stroke changes pixels: the canvas for the tools whose commit is clipped to it
+    /// ([`Self::begin`]), [`UNCLIPPED`] for the ones whose commit isn't (Color Replacement,
+    /// Background Eraser, Impressionist), so each preview is its commit.
+    clip: Rect,
     pre_surf: Surface,
     colors: Option<crate::color_channels::ColorChannels>,
     work: WorkTiles,
@@ -426,13 +473,32 @@ impl LiveDab {
         let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
         let (neighborhood, spacing, brush) = (tool.neighborhood(), stroke.brush.spacing, Box::new(stroke.brush.clone()));
         let effect = tool.clone();
-        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, |pre| effect.effect(pre.format(), spacing))?;
+        // Clipped to the canvas, as `dab_cmd` commits it (#5633).
+        let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, canvas, |pre| effect.effect(pre.format(), spacing))?;
         live.tool = Some((tool, brush));
         Ok(live)
     }
 
+    /// [`Self::begin`] running `effect` at each dab in place of the tool's own, so a test can see
+    /// what the clipped stroke hands an effect.
+    #[cfg(test)]
+    pub(super) fn begin_with_effect(s: &Session, cmd: &str, p: &Value, effect: DabEffect) -> Result<Self> {
+        let (stroke, id) = parse_brush(s, p, cmd)?;
+        let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
+        let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
+        Self::with_neighborhood(s, cmd, p, stroke, id, tool.neighborhood(), canvas, |_| effect)
+    }
+
+    /// How many of the stroke's dabs the preview has run.
+    #[cfg(test)]
+    pub(super) fn dabs_done(&self) -> usize {
+        self.done
+    }
+
     /// Start a live stroke of `cmd` that runs `effect` (made from the target before the stroke)
-    /// at each dab of `stroke`, reading `halo` pixels around it. `p` gives the target.
+    /// at each dab of `stroke`, reading `halo` pixels around it. `p` gives the target. Not clipped,
+    /// like the commits of the tools that use it (`apply_dab_stroke`).
     pub(crate) fn with_effect(
         s: &Session,
         cmd: &str,
@@ -442,9 +508,10 @@ impl LiveDab {
         halo: i32,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
-        Self::with_neighborhood(s, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
+        Self::with_neighborhood(s, cmd, p, stroke, id, DabNeighborhood::Halo(halo), UNCLIPPED, effect)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn with_neighborhood(
         s: &Session,
         cmd: &str,
@@ -452,6 +519,7 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
+        clip: Rect,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
         let captured = crate::channel_cmds::inject_target(s, cmd, p.clone());
@@ -459,7 +527,7 @@ impl LiveDab {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let base = (st.doc.id, st.revision);
         let doc = (*st.doc).clone();
-        let mut live = Self::with_neighborhood_on(doc, cmd, p, stroke, id, neighborhood, effect)?;
+        let mut live = Self::with_neighborhood_on(doc, cmd, p, stroke, id, neighborhood, clip, effect)?;
         live.base = Some(base);
         live.colors = crate::color_channels::target(s, p)?;
         if let Some(colors) = live.colors {
@@ -480,9 +548,10 @@ impl LiveDab {
         halo: i32,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
-        Self::with_neighborhood_on(doc, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
+        Self::with_neighborhood_on(doc, cmd, p, stroke, id, DabNeighborhood::Halo(halo), UNCLIPPED, effect)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn with_neighborhood_on(
         mut doc: Document,
         cmd: &str,
@@ -490,6 +559,7 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
+        clip: Rect,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
         let colors = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&doc))?;
@@ -497,7 +567,7 @@ impl LiveDab {
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
         let effect = effect(&pre_surf);
-        // Generate the same dabs as `apply_dab_stroke` (zoom 1), without a StrokeRenderer:
+        // Generate the same dabs as `apply_dab_stroke_clipped` (zoom 1), without a StrokeRenderer:
         // its accumulated coverage isn't used here, and each effect rasterizes its own footprint.
         let ctx = photocraft_paint::BrushContext::new(&stroke.brush);
         let generator = photocraft_paint::dynamics::DabGenerator::new(&stroke.brush, 1.0);
@@ -511,6 +581,7 @@ impl LiveDab {
             done: 0,
             effect,
             neighborhood,
+            clip,
             work: WorkTiles::new(pre_surf.channels()),
             pre_surf,
             colors,
@@ -543,34 +614,53 @@ impl LiveDab {
     }
 
     /// Run this batch's primary dabs in order, rasterizing each footprint exactly once.
-    fn run_new_dabs(&mut self) -> Rect {
+    fn run_new_dabs(&mut self) -> Result<Rect> {
         let ctx = &self.ctx;
         let mut new = std::mem::take(&mut self.pending);
         // As in `apply_dab_stroke`, sequential effects consume only primary footprints. Keep
         // generating dual dabs so the generator's state advances just as it did in StrokeRenderer.
         self.dual_pending.clear();
+        let (clip, ch) = (self.clip, self.work.ch);
+        let ring = clip.inflate(self.neighborhood.halo());
         let mut dmg = Rect::EMPTY;
         for (k, d) in new.iter().enumerate() {
-            let r = ctx.dab_rect(d, false);
+            // As in `apply_dab_stroke_clipped`: a dab off the canvas does nothing, and each dab
+            // copies only its part of the canvas plus what its effect reads around it (#5633).
+            // Its footprint also covers its part of the halo ring past the canvas, which is kept
+            // here for later dabs to read, as the commit's working copy keeps it, but never shown.
+            // Smudge's region (its pickup square) can be narrower than that ring, and Smudge never
+            // picks up from the ring, so its footprint stops at the region.
+            let r = ctx.dab_rect(d, false).intersect(&clip);
             if r.is_empty() {
                 continue;
             }
-            let mut region = self.work.read(&self.pre_surf, self.neighborhood.read_rect(r, d));
-            (self.effect)(&mut region, &ctx.footprint(d, self.done.saturating_add(k)));
-            self.work.write(&self.pre_surf, &region.crop(r));
+            let read = self.neighborhood.read_rect(r, d);
+            admit_dab_area(read, ch, 2, LIVE_WHAT)?;
+            let mut region = self.work.read(&self.pre_surf, read)?;
+            let fp = footprint_within(ctx, d, self.done.saturating_add(k), ring.intersect(&read), clip);
+            (self.effect)(&mut region, &fp);
+            self.work.write(&self.pre_surf, &region.crop(fp.rect));
             dmg = dmg.union(&r);
         }
         self.done = self.done.saturating_add(new.len());
         new.clear();
         self.pending = new;
-        dmg
+        Ok(dmg)
     }
 
     /// Mix the working pixels of `r` back over the original into the shown document.
     fn show(&mut self, r: Rect, work: &Region) -> Result<()> {
+        let orig = Region { rect: r, ch: self.work.ch, data: crate::allocation::read_region(&self.pre_surf, r, LIVE_WHAT)? };
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
-        photocraft_paint::retouch::mix_back(surf, &Region::read(&self.pre_surf, r), work, r, self.opacity, self.sel.as_ref(), self.lock);
+        photocraft_paint::retouch::mix_back(surf, &orig, work, r, self.opacity, self.sel.as_ref(), self.lock);
         Ok(())
+    }
+
+    /// The working pixels of `r`, for [`Self::show`]: priced first, with the original and the
+    /// mixed result alongside.
+    fn work_for_show(&self, r: Rect) -> Result<Region> {
+        admit_dab_area(r, self.work.ch, 3, LIVE_WHAT)?;
+        self.work.read(&self.pre_surf, r)
     }
 
     /// Render more points; returns the rectangle that changed.
@@ -590,19 +680,36 @@ impl LiveDab {
         let pts: Vec<_> = pts.iter().map(|q| StrokePoint::new(q.x, q.y, q.pressure)).collect();
         self.points.extend_from_slice(&pts);
         self.generator.push(&pts, &mut self.pending, &mut self.dual_pending);
-        let dmg = self.run_new_dabs();
+        let shown = self.render_batch();
+        if shown.is_err() {
+            // The batch stopped part-way (a copy over the budget, or one the allocator couldn't
+            // supply): these pixels are no longer the command's, so its commit renders itself.
+            self.tool = None;
+        }
+        shown
+    }
+
+    /// Run the generated dabs and show them (with the finishing dabs, if previewed).
+    fn render_batch(&mut self) -> Result<Rect> {
+        let dmg = self.run_new_dabs()?;
         let ctx = &self.ctx;
+        let (clip, halo) = (self.clip, self.neighborhood.halo());
         // The finishing dabs, run on a scratch copy of the working pixels.
         let mut tail = None;
         if self.preview_tail {
             let mut generator = self.generator.clone();
             let (mut ds, mut dual) = (Vec::new(), Vec::new());
             generator.finish(&mut ds, &mut dual);
-            let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false)));
+            let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false).intersect(&clip)));
             if !r.is_empty() {
-                let mut region = self.work.read(&self.pre_surf, r.inflate(self.neighborhood.halo()));
+                let read = r.inflate(halo);
+                admit_dab_area(read, self.work.ch, 2, LIVE_WHAT)?;
+                let mut region = self.work.read(&self.pre_surf, read)?;
                 for (k, d) in ds.iter().enumerate() {
-                    (self.effect)(&mut region, &ctx.footprint(d, self.done.saturating_add(k)));
+                    if ctx.dab_rect(d, false).intersect(&clip).is_empty() {
+                        continue;
+                    }
+                    (self.effect)(&mut region, &footprint_within(ctx, d, self.done.saturating_add(k), clip.inflate(halo), clip));
                 }
                 tail = Some((r, region.crop(r)));
             }
@@ -616,7 +723,7 @@ impl LiveDab {
         }
         self.bounds = self.bounds.union(&dmg).union(&tail_rect);
         if !shown.is_empty() {
-            let work = self.work.read(&self.pre_surf, shown);
+            let work = self.work_for_show(shown)?;
             self.show(shown, &work)?;
         }
         if let Some((r, work)) = tail {
@@ -640,10 +747,10 @@ impl LiveDab {
             return Err(bad(&self.cmd, "the brush, tool options or layer changed during the stroke"));
         }
         self.generator.finish(&mut self.pending, &mut self.dual_pending);
-        let dmg = self.run_new_dabs();
+        let dmg = self.run_new_dabs()?;
         let shown = dmg.union(&self.tail);
         if !shown.is_empty() {
-            let work = self.work.read(&self.pre_surf, shown);
+            let work = self.work_for_show(shown)?;
             self.show(shown, &work)?;
         }
         self.bounds = self.bounds.union(&dmg);
