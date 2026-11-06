@@ -11,6 +11,7 @@
 
 use std::cell::RefCell;
 use std::ptr::NonNull;
+use std::rc::{Rc, Weak};
 
 use block2::RcBlock;
 use objc2::MainThreadMarker;
@@ -21,11 +22,43 @@ use objc2_app_kit::{NSEvent, NSEventMask};
 use crate::appkit::{RawEvent, State};
 use crate::{Error, Sample, Update, deliver};
 
+thread_local! {
+    static COALESCING: RefCell<Weak<CoalescingLease>> = const { RefCell::new(Weak::new()) };
+}
+
+/// AppKit's setting belongs to the application, not an individual monitor. Share a lease so
+/// dropping overlapping monitors in any order restores it only after the final monitor exits.
+struct CoalescingLease {
+    enabled: bool,
+}
+
+impl CoalescingLease {
+    fn acquire() -> Result<Rc<Self>, Error> {
+        COALESCING.with(|slot| {
+            let mut slot = slot.try_borrow_mut().map_err(|_| Error::Platform("mouse coalescing lease is already being updated".into()))?;
+            if let Some(lease) = slot.upgrade() {
+                return Ok(lease);
+            }
+            let lease = Rc::new(Self { enabled: NSEvent::isMouseCoalescingEnabled() });
+            // Preserve intermediate moves even while painting makes the UI busy.
+            NSEvent::setMouseCoalescingEnabled(false);
+            *slot = Rc::downgrade(&lease);
+            Ok(lease)
+        })
+    }
+}
+
+impl Drop for CoalescingLease {
+    fn drop(&mut self) {
+        NSEvent::setMouseCoalescingEnabled(self.enabled);
+    }
+}
+
 /// Keeps the monitor installed; dropping it removes the monitor. Main-thread only (not `Send`).
 pub struct Monitor {
     token: Retained<AnyObject>,
     _handler: RcBlock<dyn Fn(NonNull<NSEvent>) -> *mut NSEvent>,
-    coalescing_enabled: bool,
+    _coalescing: Rc<CoalescingLease>,
 }
 
 impl Monitor {
@@ -36,6 +69,8 @@ impl Monitor {
         if MainThreadMarker::new().is_none() {
             return Err(Error::NotMainThread);
         }
+        // A failed installation drops this lease too, restoring the setting if no monitor owns it.
+        let coalescing = CoalescingLease::acquire()?;
         let state = RefCell::new(State::default());
         let handler = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
             // SAFETY: AppKit calls a local monitor's handler with the event it is about to
@@ -59,11 +94,7 @@ impl Monitor {
         // in `Monitor` as well, although AppKit copies it.
         let token = unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(mask, &handler) };
         let token = token.ok_or_else(|| Error::Platform("addLocalMonitorForEventsMatchingMask returned nil".into()))?;
-        // Preserve actual mouse/pen positions even while painting makes the UI busy. Draining
-        // every winit event cannot recover intermediate moves AppKit already coalesced away.
-        let coalescing_enabled = NSEvent::isMouseCoalescingEnabled();
-        NSEvent::setMouseCoalescingEnabled(false);
-        Ok(Self { token, _handler: handler, coalescing_enabled })
+        Ok(Self { token, _handler: handler, _coalescing: coalescing })
     }
 }
 
@@ -72,7 +103,6 @@ impl Drop for Monitor {
         // SAFETY: `token` is exactly the object `addLocalMonitorForEventsMatchingMask:handler:`
         // returned, removed once (here). `Monitor` is not `Send`, so this runs on the main thread.
         unsafe { NSEvent::removeMonitor(&self.token) };
-        NSEvent::setMouseCoalescingEnabled(self.coalescing_enabled);
     }
 }
 

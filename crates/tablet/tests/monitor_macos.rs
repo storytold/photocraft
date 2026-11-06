@@ -57,6 +57,33 @@ fn main() {
     assert_eq!(NSEvent::isMouseCoalescingEnabled(), coalescing_before, "dropping the monitor restores AppKit's previous setting");
     app.sendEvent(&event(CGEventType::LeftMouseDragged, 0.5, (0.0, 0.0), CGEventMouseSubtype::TabletPoint));
     assert_eq!(seen.borrow().len(), 2, "the monitor is gone after drop");
+    // Coalescing belongs to the application, so overlapping monitors must share restoration.
+    // Exercise both drop orders and both possible original settings.
+    for initially_enabled in [true, false] {
+        for older_first in [true, false] {
+            NSEvent::setMouseCoalescingEnabled(initially_enabled);
+            let first = Monitor::install(|_| {}).expect("first monitor");
+            let second_seen = Rc::new(RefCell::new(0));
+            let second = {
+                let seen = second_seen.clone();
+                Monitor::install(move |_| *seen.borrow_mut() += 1).expect("overlapping monitor")
+            };
+            assert!(!NSEvent::isMouseCoalescingEnabled());
+            let remaining = if older_first {
+                drop(first);
+                app.sendEvent(&event(CGEventType::LeftMouseDragged, 0.5, (0.0, 0.0), CGEventMouseSubtype::TabletPoint));
+                assert_eq!(*second_seen.borrow(), 1, "the remaining monitor still receives events");
+                second
+            } else {
+                drop(second);
+                first
+            };
+            assert!(!NSEvent::isMouseCoalescingEnabled(), "coalescing stays disabled until the final monitor drops");
+            drop(remaining);
+            assert_eq!(NSEvent::isMouseCoalescingEnabled(), initially_enabled, "the final drop restores the original setting");
+        }
+    }
+    NSEvent::setMouseCoalescingEnabled(coalescing_before);
     println!("monitor_macos: ok");
 }
 
