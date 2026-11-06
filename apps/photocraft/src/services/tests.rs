@@ -985,7 +985,8 @@ fn psb_is_its_own_save_type() {
     assert_eq!(chosen(psb), PathBuf::from("/pics/art.psb"));
     let opened = Some("Untitled-1");
     assert_eq!(with_chosen_type(Path::new("/pics/art.psb"), opened, &psd.1), PathBuf::from("/pics/art.psb"), "a typed .psb stays");
-    // KDE adds the type's first extension after a typed one of its own: that one is taken back.
+    // KDE adds the type's first extension after a typed one of its own: that one is taken back,
+    // also from an `art.psb.psd` typed in full (the dialog's answer is the same string).
     assert_eq!(with_chosen_type(Path::new("/pics/art.psb.psd"), opened, &psd.1), PathBuf::from("/pics/art.psb"), "KDE's art.psb.psd");
     // A dot that's part of the name stays (.jpg isn't one of the PSD type's).
     assert_eq!(with_chosen_type(Path::new("/pics/scan.jpg.psd"), opened, &psd.1), PathBuf::from("/pics/scan.jpg.psd"));

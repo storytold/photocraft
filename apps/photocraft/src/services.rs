@@ -167,7 +167,10 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
 /// extension, as PolyMeilex/rfd#341 does. An extension the user typed that PhotoCraft saves
 /// (`art.png` with the PSD type untouched, the way to save a PNG before this) is theirs and stays,
 /// and so does one of the type's own. One PhotoCraft doesn't save (`scan.2024`)
-/// is part of the name, and the type's extension is added after it.
+/// is part of the name, and the type's extension is added after it. The exception: two of the
+/// type's own extensions (`art.psb.psd` under the PSD type) lose the last, since KDE's dialog adds
+/// it after a typed one; the returned name can't tell that from a typed `art.psb.psd`, which is
+/// rare, so that one is saved as `art.psb` too.
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn with_chosen_type(path: &Path, opened_with: Option<&str>, chosen: &[String]) -> PathBuf {
     let Some(first) = chosen.first() else { return path.to_path_buf() };
