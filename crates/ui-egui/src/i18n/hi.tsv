@@ -160,6 +160,8 @@
 	Layer Mask	लेयर मास्क
 	Hide All	सभी छिपाएँ
 	Reveal Selection	चयन दिखाएँ
+	Reveal in Finder	Finder में दिखाएँ
+	Reveal in Explorer	Explorer में दिखाएँ
 	Hide Selection	चयन छिपाएँ
 	From Transparency	पारदर्शिता से
 	Apply	लागू करें
@@ -350,6 +352,7 @@
 	Aligned	संरेखित
 	Fit in View	दृश्य में फ़िट करें
 	Camera Raw	Camera Raw
+	Camera Raw…	Camera Raw…
 cameraRaw	Amount	मात्रा
 	Amount	मात्रा
 cameraRaw	Aqua	एक्वा

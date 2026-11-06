@@ -21,8 +21,10 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for (size, label) in sizes() {
         let mut on = current == size;
         if crate::widgets::checkbox(ui, &mut on, label).clicked() {
-            app.ui.layers_panel_options.thumbnail_size = size;
-            super::layers_panel_ui::persist_options(app);
+            if current != size {
+                app.ui.layers_panel_options.thumbnail_size = size;
+                super::layers_panel_ui::persist_options(app);
+            }
             ui.close();
         }
     }
