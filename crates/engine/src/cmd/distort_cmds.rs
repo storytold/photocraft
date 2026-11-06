@@ -407,7 +407,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec {
             id: PUPPET_SMART,
             label: "Puppet Warp",
-            menu: &["Layer", "Smart Objects"],
+            menu: &[],
             shortcut: None,
             params: P,
             enabled: smart_layer,
@@ -427,7 +427,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec {
             id: PERSPECTIVE_SMART,
             label: "Perspective Warp",
-            menu: &["Layer", "Smart Objects"],
+            menu: &[],
             shortcut: None,
             params: Q,
             enabled: smart_layer,
