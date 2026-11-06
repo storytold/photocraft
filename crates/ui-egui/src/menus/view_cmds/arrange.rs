@@ -1,7 +1,7 @@
 use super::{LAYOUTS, PhotocraftApp, Value, json};
 
 /// View › Fit Layer(s) on Screen: zoom and centre on the selected layers' bounds.
-pub(super) fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
+pub(super) fn fit_layers(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
     let i = app.session.active_index().ok_or("no document")?;
     let st = app.session.active().ok_or("no document")?;
     let mut b = photocraft_geom::Rect::EMPTY;
@@ -14,10 +14,11 @@ pub(super) fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
         b = st.doc.bounds();
     }
     let size = [st.doc.size.width, st.doc.size.height];
-    let area = app.last_canvas_rect.size();
+    // A document floating in its own window fits that window's canvas, which may be smaller than
+    // the main window's and on a display with another scale.
+    let (area, ppp) = crate::canvas::tabs::floating_canvas(app, ctx, i).unwrap_or((app.last_canvas_rect.size(), app.canvas_ppp()));
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
     // The area is in egui points; the stored zoom is device pixels per document pixel.
-    let ppp = app.canvas_ppp();
     let points = ((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32);
     let v = &mut app.ui.views[i];
     v.zoom = crate::zoom_levels::clamp(points * ppp, size);
