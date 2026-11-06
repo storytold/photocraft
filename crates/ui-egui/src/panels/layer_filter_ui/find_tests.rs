@@ -62,10 +62,11 @@ fn find(h: &mut Harness<'_, PhotocraftApp>, params: serde_json::Value) -> serde_
 fn the_menu_item_shows_the_layers_panel_and_focuses_the_name_field() {
     let mut h = harness();
     h.state_mut().ui.panels.layers = false;
-    h.state_mut().ui.layer_filter_name = "old".into();
+    h.state_mut().ui.layer_filter_name = "oth".into();
     h.run_steps(4);
     let before = selected(&h);
     find(&mut h, json!({}));
+    assert_eq!(selected(&h), before, "Find Layers does not change the layer selection");
     assert!(h.state().ui.panels.layers, "the Layers panel is shown");
     assert_eq!(h.state().ui.layer_filter_by, FilterBy::Name);
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the caret is in the Name field");
@@ -74,18 +75,20 @@ fn the_menu_item_shows_the_layers_panel_and_focuses_the_name_field() {
     h.run_steps(4);
     assert_eq!(h.state().ui.layer_filter_name, "lin");
     assert_eq!(listed(&h), ["LinkB", "LinkA"]);
-    assert_eq!(selected(&h), before, "Find Layers does not change the layer selection");
+    assert_eq!(selected(&h), [], "the typed filter hides \"Other\", which is deselected (#10879); no match is selected");
 }
 
 #[test]
 fn a_name_param_sets_the_filter_text_without_changing_the_selection() {
     let mut h = harness();
-    let before = selected(&h);
+    let link_a = id(&h, "LinkA");
+    h.state_mut().session.execute("layer.select", json!({"layer": link_a.0})).unwrap();
+    h.run_steps(4);
     let reply = find(&mut h, json!({"name": "link"}));
     assert_eq!((h.state().ui.layer_filter_by, h.state().ui.layer_filter_name.as_str()), (FilterBy::Name, "link"));
     assert_eq!(reply["selected"], json!([id(&h, "LinkA").0, id(&h, "LinkB").0]), "the reply lists the matching layers");
     assert_eq!(listed(&h), ["LinkB", "LinkA"]);
-    assert_eq!(selected(&h), before);
+    assert_eq!(selected(&h), [link_a], "LinkA stays selected; LinkB, also listed, isn't selected");
     assert!(h.ctx.memory(|m| m.focused()).is_none(), "a script does not take the keyboard focus");
 }
 
@@ -151,11 +154,10 @@ fn engine_execute_sets_the_panel_filter_too() {
     // `engine.execute` runs engine commands through `PhotocraftApp::run`, not `menus::invoke`.
     let mut h = harness();
     h.state_mut().ui.layer_filter_by = FilterBy::Kind;
-    let before = selected(&h);
     h.state_mut().run("select.findLayers", json!({"name": "link"})).unwrap();
     h.run_steps(4);
     assert_eq!((h.state().ui.layer_filter_by, h.state().ui.layer_filter_name.as_str()), (FilterBy::Name, "link"));
     assert_eq!(listed(&h), ["LinkB", "LinkA"]);
-    assert_eq!(selected(&h), before);
+    assert_eq!(selected(&h), [], "the filter hides \"Other\" (#10879) and selects none of the matches");
     assert!(h.ctx.memory(|m| m.focused()).is_none(), "a script does not take the keyboard focus");
 }

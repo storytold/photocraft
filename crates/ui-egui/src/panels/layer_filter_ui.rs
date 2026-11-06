@@ -361,9 +361,9 @@ pub mod attribute;
 #[cfg(test)]
 mod attribute_tests;
 #[cfg(test)]
-mod selection_tests;
-#[cfg(test)]
 mod find_tests;
+#[cfg(test)]
+mod selection_tests;
 #[cfg(test)]
 mod tests;
 
