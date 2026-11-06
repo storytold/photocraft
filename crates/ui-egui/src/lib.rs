@@ -560,6 +560,8 @@ pub struct PhotocraftApp {
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
     /// Levels/Curves histogram cache: (document, adjustment layer, revision it is valid for).
     pub(crate) tone_hist: Option<(DocId, photocraft_doc::LayerId, u64, std::sync::Arc<tone::Histograms>)>,
+    /// The Levels/Curves histogram being counted off the UI thread ([`tone::histograms`]).
+    pub(crate) tone_hist_job: Option<tone::ToneJob>,
     /// Histogram panel: the document's histogram (`histogram_panel`).
     pub(crate) doc_hist: Option<histogram_panel::PanelHist>,
     /// Histogram panel: the histogram of the adjustment previewing on the canvas.

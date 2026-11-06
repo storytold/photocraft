@@ -450,13 +450,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
                     }
                 }
             };
-            Some(tone::histograms(app, source, adjust_editors::space_of(&values)))
+            tone::histograms(app, ui.ctx(), source, adjust_editors::space_of(&values))
         }
         _ => None,
     };
     let cx = EditorCx {
         mem: dialog_mem(&kind),
-        hist,
+        hist_stale: hist.as_ref().is_some_and(|h| h.stale),
+        hist: hist.map(|h| h.hist),
         gray,
         swatches: adjust_editors::swatches(app),
         gradients: adjust_editors::gradient_presets(app, &kind),

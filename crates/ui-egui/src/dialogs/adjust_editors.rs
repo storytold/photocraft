@@ -107,6 +107,9 @@ pub struct EditorCx {
     pub mem: egui::Id,
     /// Histograms in the adjustment's space ([`needs_histogram`] kinds).
     pub hist: Option<Arc<Histograms>>,
+    /// `hist` is the document's before its latest change, shown while its histograms are counted
+    /// again ([`crate::tone::histograms`]): Levels' Auto waits for them.
+    pub hist_stale: bool,
     /// Grayscale (or Duotone/Bitmap) document: one Gray channel.
     pub gray: bool,
     /// Current foreground and background colours (Gradient Map preset).
@@ -249,6 +252,7 @@ mod tests {
         let cx = |dynamic: bool| EditorCx {
             mem: egui::Id::NULL,
             hist: None,
+            hist_stale: false,
             gray: false,
             swatches: [[0.0; 3]; 2],
             gradients: Vec::new(),

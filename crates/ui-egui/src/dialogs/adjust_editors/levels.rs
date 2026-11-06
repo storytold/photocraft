@@ -68,7 +68,8 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ui.horizontal(|ui| {
         ch = editor_channel_picker(ui, cx.mem.with("levels-ch"), &channels);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
+            // Auto reads the histogram: not one of the document as it was before its last change.
+            auto = ui.add_enabled_ui(!cx.hist_stale, |ui| widgets::secondary_button(ui, tl!("Auto"), 0.0)).inner.clicked();
         });
     });
     let (chan, _, hist_i) = channels.get(ch).cloned().unwrap_or((ToneChannel { key: "", label: "" }, String::new(), 0));

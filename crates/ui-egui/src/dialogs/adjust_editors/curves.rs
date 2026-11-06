@@ -482,6 +482,7 @@ mod multi_channel_tests {
         EditorCx {
             mem: egui::Id::unique("subset-tone-test"),
             hist: None,
+            hist_stale: false,
             gray: false,
             swatches: [[0.0; 3], [1.0; 3]],
             gradients: Vec::new(),

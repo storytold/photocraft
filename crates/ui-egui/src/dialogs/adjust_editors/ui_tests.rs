@@ -594,6 +594,7 @@ fn gradient_map_stop_controls_fit_a_narrow_properties_panel_in_every_theme() {
                     let cx = EditorCx {
                         mem: egui::Id::unique("map-layout"),
                         hist: None,
+                        hist_stale: false,
                         gray: false,
                         swatches: [[0.0; 3], [1.0; 3]],
                         gradients: Vec::new(),
@@ -803,6 +804,7 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
             let cx = EditorCx {
                 mem: egui::Id::unique("precision"),
                 hist: None,
+                hist_stale: false,
                 gray: false,
                 swatches: [[0.0; 3], [1.0; 3]],
                 gradients: Vec::new(),
@@ -829,6 +831,7 @@ fn hue_saturation_bars_fill_the_panel_width() {
                 let cx = EditorCx {
                     mem: egui::Id::unique("hs"),
                     hist: None,
+                    hist_stale: false,
                     gray: false,
                     swatches: [[0.0; 3], [1.0; 3]],
                     gradients: Vec::new(),

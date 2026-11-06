@@ -175,6 +175,7 @@ impl PhotocraftApp {
             pending_after_prompt: None,
             after_transform_commit: None,
             tone_hist: None,
+            tone_hist_job: None,
             doc_hist: None,
             doc_hist_preview: None,
             hist_job: None,
