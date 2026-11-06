@@ -1516,3 +1516,20 @@ fn the_wheel_leaves_a_plain_dropdown_alone() {
     wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
     assert_eq!(*h.state(), 0);
 }
+
+#[test]
+fn brush_picker_footer_slider_stays_inside_the_dragged_height() {
+    use egui::vec2;
+    use egui_kittest::Harness;
+    let size = vec2(crate::brush_picker::DEFAULT_SIZE[0], crate::brush_picker::DEFAULT_SIZE[1]);
+    let mut h = Harness::builder().with_size(vec2(600.0, 700.0)).build_ui_state(
+        |ui, height: &mut f32| {
+            let mut brush = photocraft_engine::BrushSettings::default();
+            let mut list = crate::brush_picker::list_state();
+            *height = ui.scope(|ui| crate::brush_picker::body(ui, &mut brush, &[], None, &mut list, size)).response.rect.height();
+        },
+        0.0,
+    );
+    h.run();
+    assert!((*h.state() - size.y).abs() < 0.5, "picker {} tall for a {} drag", h.state(), size.y);
+}
