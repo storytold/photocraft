@@ -62,6 +62,7 @@ impl Default for ArtboardToolUi {
     fn default() -> Self {
         let (preset, width, height) = bar::DEFAULT_SIZE;
         Self {
+            adding: false,
             drag: None,
             preset: preset.to_string(),
             width,
