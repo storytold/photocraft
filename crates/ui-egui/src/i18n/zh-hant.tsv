@@ -3138,6 +3138,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	數值輸入無效。需要介於 {min}% 和 {max}% 之間的整數。已插入先前的值。
 	Clear Selection	清除選取範圍
 	Color Aware	顏色感知
@@ -3211,6 +3213,20 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	X	X
 	Y	Y
 
+# Channels panel menu (#11451)
+	New Channel…	新增色版…
+	Duplicate Channel	複製色版
+	Delete Channel	刪除色版
+	New Spot Channel…	新增特別色色版…
+	Merge Spot Channel	合併特別色色版
+	Channel Options…	色版選項…
+	Split Channels	分離色版
+	Merge Channels…	合併色版…
+	Specify Channels:	指定色版:
+	Not enough grayscale documents for this mode.	灰階文件不足，無法使用此模式。
+	Pick a different document for each channel.	請為每個色版選擇不同的文件。
+	A picked document is no longer open.	所選的一個文件已不再開啟。
+	A picked document is no longer a grayscale document of the same size.	所選的一個文件已不再是相同大小的灰階文件。
 # Move tool options bar (#11381)
 	Align top edges	對齊頂端
 	Align vertical centers	垂直置中對齊

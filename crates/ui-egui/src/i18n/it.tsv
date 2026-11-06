@@ -4613,6 +4613,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Valore numerico non valido. È richiesto un numero intero compreso tra {min}% e {max}%. È stato inserito il valore precedente.
 	Color Aware	In base al colore
 	Decontaminate Colors	Decontamina colori
@@ -4675,6 +4677,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	La cornice è bloccata
 	The frame is unavailable	La cornice non è disponibile
 
+# Channels panel menu (#11451)
+	Channel Options…	Opzioni canale…
+	Specify Channels:	Specifica canali:
+	Not enough grayscale documents for this mode.	Documenti in scala di grigio insufficienti per questo metodo.
+	Pick a different document for each channel.	Scegli un documento diverso per ogni canale.
+	A picked document is no longer open.	Uno dei documenti scelti non è più aperto.
+	A picked document is no longer a grayscale document of the same size.	Uno dei documenti scelti non è più un documento in scala di grigio delle stesse dimensioni.
 # Move tool options bar (#11381)
 	Align top edges	Allinea i bordi superiori
 	Align vertical centers	Allinea i centri verticali
