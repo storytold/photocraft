@@ -82,11 +82,21 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     // The aggregate budget: the document keeps every page's raster tiles, while one page at a
     // time is converted through the PDFium bitmap, its RGBA copy and the f32 buffer.
     let page_px = |w: f64, h: f64| (w * dpi / 72.0).round().max(1.0) * (h * dpi / 72.0).round().max(1.0);
-    let page_pixels = sizes.iter().map(|&(w, h)| page_px(w, h)).sum::<f64>();
     let max_page_pixels = sizes.iter().map(|&(w, h)| page_px(w, h)).fold(0.0_f64, f64::max);
-    // 4 bytes/px of retained RGBA tiles for every page, plus 24 bytes/px (bitmap, RGBA copy,
-    // f32 conversion buffer) for the page being converted.
-    let estimate = (page_pixels * 4.0 + max_page_pixels * 24.0) as u64;
+    // Retained backing: a page occupies whole 256 px tiles, including the ones its document X
+    // offset steps into. A 1 x 10,000 px page is 40 tiles (10 MiB), not 10,000 pixels.
+    const TILE: u64 = 256;
+    let mut retained: u64 = 0;
+    let mut page_x: u64 = 0;
+    for &(w, h) in &sizes {
+        let px = (w * dpi / 72.0).round().max(1.0) as u64;
+        let py = (h * dpi / 72.0).round().max(1.0) as u64;
+        let tiles_x = (page_x + px).div_ceil(TILE) - page_x / TILE;
+        retained = retained.saturating_add(tiles_x.saturating_mul(py.div_ceil(TILE)).saturating_mul(TILE * TILE * 4));
+        page_x += px + u64::from(GAP);
+    }
+    // Plus 24 bytes/px (bitmap, RGBA copy, f32 conversion buffer) for the page being converted.
+    let estimate = retained.saturating_add((max_page_pixels * 24.0) as u64);
     let budget = if opts.flat_max_pixel_bytes > 0 { opts.flat_max_pixel_bytes } else { DEFAULT_MAX_PIXEL_BYTES };
     if estimate > budget {
         return Err(IoError::Unsupported(format!(
@@ -189,6 +199,56 @@ impl PageFrame<'_> {
             Color::BLACK
         }
     }
+
+    /// The ink colour of the text in `bounds` (page points).
+    ///
+    /// The box holds both glyphs and the page behind them, so sampling one corner usually finds
+    /// background or an antialiased edge. Take the pixel farthest from the box's most common
+    /// colour instead: for dark text on a light page that is a glyph core, and for light text on a
+    /// dark page it is the glyph rather than the background.
+    fn text_color(&self, left: f32, top: f32, right: f32, bottom: f32) -> Color {
+        let x0 = (f64::from(left) * self.dpi / 72.0).floor().max(0.0) as u32;
+        let x1 = (f64::from(right) * self.dpi / 72.0).ceil().clamp(0.0, f64::from(self.width)) as u32;
+        // PDF's Y grows up; the rendered page's Y grows down.
+        let y0 = ((self.height_pt - f64::from(top)) * self.dpi / 72.0).floor().max(0.0) as u32;
+        let y1 = ((self.height_pt - f64::from(bottom)) * self.dpi / 72.0).ceil().clamp(0.0, f64::from(self.height)) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return Color::BLACK;
+        }
+        // At most ~4096 samples, so a page-sized text box stays cheap.
+        let step = ((f64::from(x1 - x0) * f64::from(y1 - y0) / 4096.0).sqrt().ceil() as u32).max(1);
+        let mut samples: Vec<[f32; 3]> = Vec::new();
+        let mut buckets: std::collections::HashMap<u32, (u32, [f32; 3])> = std::collections::HashMap::new();
+        let mut y = y0;
+        while y < y1 {
+            let mut x = x0;
+            while x < x1 {
+                let c = self.color_at(x, y);
+                let rgb = [c.c[0], c.c[1], c.c[2]];
+                let key = (rgb[0] * 31.0) as u32 * 1024 + (rgb[1] * 31.0) as u32 * 32 + (rgb[2] * 31.0) as u32;
+                let entry = buckets.entry(key).or_insert((0, [0.0; 3]));
+                entry.0 += 1;
+                for (sum, v) in entry.1.iter_mut().zip(rgb) {
+                    *sum += v;
+                }
+                samples.push(rgb);
+                x += step;
+            }
+            y += step;
+        }
+        let Some((_, (count, sum))) = buckets.iter().max_by_key(|(_, (count, _))| *count) else { return Color::BLACK };
+        let mode = [sum[0] / *count as f32, sum[1] / *count as f32, sum[2] / *count as f32];
+        let mut best = mode;
+        let mut best_distance = -1.0f32;
+        for rgb in samples {
+            let distance = (rgb[0] - mode[0]).powi(2) + (rgb[1] - mode[1]).powi(2) + (rgb[2] - mode[2]).powi(2);
+            if distance > best_distance {
+                best_distance = distance;
+                best = rgb;
+            }
+        }
+        Color::rgb(best[0], best[1], best[2])
+    }
 }
 
 /// Editable text and shape layers for one rendered page, in document pixels.
@@ -196,7 +256,6 @@ impl PageFrame<'_> {
 fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, frame: &PageFrame) -> Vec<Layer> {
     use pdfium_render::prelude::*;
 
-    let PageFrame { x, width: page_width, height: page_height, .. } = *frame;
     let objects = page.objects();
     let mut layers = Vec::new();
     for object in objects.iter() {
@@ -208,12 +267,9 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                 }
                 let Ok(bounds) = text.bounds() else { continue };
                 let (x_px, y_px) = frame.to_doc(bounds.left().value, bounds.top().value);
-                // The text layer's size is in points; the transform is in document pixels.
-                // The text object does not expose its fill colour; sample the rendered page at the
-                // text's top-left corner so the editable layer starts with the right colour.
-                let cx = ((x_px - f64::from(x)).max(0.0) as u32).min(page_width.saturating_sub(1));
-                let cy = (y_px.max(0.0) as u32).min(page_height.saturating_sub(1));
-                let color = frame.color_at(cx, cy);
+                // The text layer's size is in points; the transform is in document pixels. The
+                // text object does not expose its fill colour; sample the glyph ink from the page.
+                let color = frame.text_color(bounds.left().value, bounds.top().value, bounds.right().value, bounds.bottom().value);
                 let size_pt = f64::from(text.scaled_font_size().value).max(1.0);
                 let font = text.font();
                 let family = if font.family().is_empty() { font.name() } else { font.family() };
@@ -249,10 +305,6 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                 let mut bezier: Vec<(f64, f64)> = Vec::new();
                 for segment in path.segments().transform(matrix).iter() {
                     let point = || frame.to_doc(segment.x().value, segment.y().value);
-                    if segment.is_close() {
-                        closed = true;
-                        continue;
-                    }
                     match segment.segment_type() {
                         PdfPathSegmentType::MoveTo => {
                             if !knots.is_empty() {
@@ -280,6 +332,11 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                             }
                         }
                         PdfPathSegmentType::Unknown => {}
+                    }
+                    // A closing segment can also be the endpoint that closes a Bézier; process it
+                    // above before marking the subpath closed so its control points are consumed.
+                    if segment.is_close() {
+                        closed = true;
                     }
                 }
                 if !knots.is_empty() {
@@ -325,22 +382,35 @@ fn effective_dpi(requested: f64, sizes: &[(f64, f64)], gap: u32, max_page: f64, 
 }
 
 /// Loads the PDFium shared library from the executable's folder (`PDFIUM_DIR` overrides it).
+///
+/// pdfium-render keeps the bindings in a process-wide static: the first import initializes them
+/// and later `bind_to_library` calls fail with `PdfiumLibraryBindingsAlreadyInitialized`. Remember
+/// the outcome and reuse the initialized bindings, so opening a second PDF in one session works.
 #[cfg(not(target_arch = "wasm32"))]
 fn bind() -> Result<pdfium_render::prelude::Pdfium, IoError> {
     use pdfium_render::prelude::Pdfium;
 
-    let dir = std::env::var_os("PDFIUM_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)).unwrap_or_default());
-    let library = Pdfium::pdfium_platform_library_name_at_path(&dir);
-    let platform = Pdfium::pdfium_platform_library_name().to_string_lossy().into_owned();
-    let bindings = Pdfium::bind_to_library(&library).map_err(|e| {
-        IoError::Unsupported(format!(
-            "PDF import: cannot load PDFium from {} ({e}); put {platform} next to the executable or set PDFIUM_DIR",
-            library.display()
-        ))
-    })?;
-    Ok(Pdfium::new(bindings))
+    static INIT: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    let init = INIT.get_or_init(|| {
+        let dir = std::env::var_os("PDFIUM_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)).unwrap_or_default());
+        let library = Pdfium::pdfium_platform_library_name_at_path(&dir);
+        let platform = Pdfium::pdfium_platform_library_name().to_string_lossy().into_owned();
+        match Pdfium::bind_to_library(&library) {
+            Ok(bindings) => {
+                // Initializes the library inside pdfium-render's process-wide bindings.
+                drop(Pdfium::new(bindings));
+                Ok(())
+            }
+            Err(e) => Err(format!("PDF import: cannot load PDFium from {} ({e}); put {platform} next to the executable or set PDFIUM_DIR", library.display())),
+        }
+    });
+    match init {
+        // The bindings are already initialized; `default()` re-uses them.
+        Ok(()) => Ok(Pdfium::default()),
+        Err(message) => Err(IoError::Unsupported(message.clone())),
+    }
 }
 
 #[cfg(test)]
@@ -368,5 +438,18 @@ mod tests {
         assert_eq!(page.color_at(0, 0), photocraft_doc::Color::rgb(1.0, 1.0, 1.0));
         assert_eq!(page.color_at(1, 0), photocraft_doc::Color::BLACK);
         assert_eq!(page.color_at(2, 0), photocraft_doc::Color::BLACK);
+    }
+
+    #[test]
+    fn text_colour_samples_the_glyph_ink() {
+        // An 8 x 4 white page with one black glyph pixel at (2, 1).
+        let mut rgba = vec![255u8; 8 * 4 * 4];
+        let glyph = (8 + 2) * 4;
+        rgba[glyph..glyph + 3].fill(0);
+        let page = PageFrame { height_pt: 4.0, dpi: 72.0, x: 0, rgba: &rgba, width: 8, height: 4 };
+        // The whole page box contains the glyph: the ink wins over the white background.
+        assert_eq!(page.text_color(0.0, 4.0, 8.0, 0.0), photocraft_doc::Color::BLACK);
+        // A box that contains only background keeps the background colour.
+        assert_eq!(page.text_color(4.0, 4.0, 8.0, 2.0), photocraft_doc::Color::rgb(1.0, 1.0, 1.0));
     }
 }

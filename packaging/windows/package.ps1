@@ -57,17 +57,51 @@ if (-not $env:PHOTOCRAFT_BUILD_DATE) { $env:PHOTOCRAFT_BUILD_DATE = (Get-Date).T
 
 # PDF import loads PDFium at runtime. Stage the Windows build's DLL before cargo, so the app's
 # build script copies it beside the exe and both the MSI and the portable ZIP ship it.
+#
+# Pinned to a reviewed pdfium-binaries release: the archive is verified before extraction and a
+# cached DLL is verified before reuse, so a moved or compromised "latest" cannot be packaged.
+# Bump the release and both hashes together after re-checking the published build.
+$PdfiumRelease = 'chromium/8138'
+$PdfiumArchiveSha256 = @{
+  x64   = '8d48973e3eb472dda0f5f2435e595ac043f9f2219dd71883392f549445afa8a5'
+  x86   = '5c32d44711a73ed8ae86b85322078da8444fc696b9326527eed2d9fcd620fc84'
+  arm64 = '5e04abdb36ba9b4b5c8630123eaf042036f8a62abda6e5529708fee3d35fbf4f'
+}
+$PdfiumDllSha256 = @{
+  x64   = '71a3e63e6ab8f5746a0fc9de9bc3d0c0dc07eb60990dfd37d9db7fc891821943'
+  x86   = 'ee592bd01eaef454aada95ed483ceca1c4f6ce0f0b9568608f40c3861fbda035'
+  arm64 = '0b1b9a52b3297448cbe461ffbca1455603d85161d5e96090e1a89bd7c4a62a33'
+}
 $PdfiumDir = Join-Path $Root "target\pdfium\$Arch"
 $PdfiumDll = Join-Path $PdfiumDir 'pdfium.dll'
+
+function Get-Sha256([string] $Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
+
+if (Test-Path -LiteralPath $PdfiumDll) {
+  $actualDll = Get-Sha256 $PdfiumDll
+  if ($actualDll -ne $PdfiumDllSha256[$Arch]) {
+    Write-Warning "cached PDFium DLL is not the pinned $PdfiumRelease build ($actualDll); re-downloading"
+    Remove-Item -LiteralPath $PdfiumDll -Force
+  }
+}
 if (-not (Test-Path -LiteralPath $PdfiumDll)) {
+  $expectedArchive = $PdfiumArchiveSha256[$Arch]
+  if (-not $expectedArchive) { throw "no pinned PDFium checksum for $Arch" }
   $tgz = Join-Path $env:TEMP "pdfium-win-$Arch.tgz"
-  Invoke-Native "download PDFium ($Arch)" {
-    Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/latest/download/pdfium-win-$Arch.tgz" -OutFile $tgz
+  Invoke-Native "download PDFium ($Arch, $PdfiumRelease)" {
+    Remove-Item -LiteralPath $tgz -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -Uri "https://github.com/bblanchon/pdfium-binaries/releases/download/$PdfiumRelease/pdfium-win-$Arch.tgz" -OutFile $tgz
+    $actualArchive = Get-Sha256 $tgz
+    if ($actualArchive -ne $expectedArchive) { throw "PDFium $Arch archive checksum $actualArchive does not match the pinned $expectedArchive" }
     New-Item -ItemType Directory -Force -Path $PdfiumDir | Out-Null
-    tar -xzf $tgz -C $PdfiumDir
+    # A DLL left in bin\ by an earlier run must not be mistaken for this archive's extraction.
     $extracted = Join-Path $PdfiumDir 'bin\pdfium.dll'
+    Remove-Item -LiteralPath $extracted -Force -ErrorAction SilentlyContinue
+    tar -xzf $tgz -C $PdfiumDir
+    if ($LASTEXITCODE -ne 0) { throw "PDFium $Arch archive extraction failed with exit code $LASTEXITCODE" }
     if (-not (Test-Path -LiteralPath $extracted)) { throw 'PDFium archive had no bin/pdfium.dll' }
     Move-Item -Force $extracted $PdfiumDll
+    Remove-Item -LiteralPath $tgz -Force
   }
 }
 $env:PDFIUM_DLL = $PdfiumDll
