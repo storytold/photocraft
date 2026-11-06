@@ -546,6 +546,12 @@
 	Timeline	Tidslinje
 	Tool Presets	Værktøjsforudindstillinger
 	Tools	Værktøjer
+	Contextual Task Bar	Kontekstafhængig opgavelinje
+	Hide bar	Skjul linjen
+	Reset bar position	Nulstil linjens placering
+	Pin bar position	Fastgør linjens placering
+	Move bar	Flyt linjen
+	More options	Flere indstillinger
 	Libraries	Biblioteker
 	3D	3D
 	Toolbars	Værktøjslinjer
@@ -1218,6 +1224,7 @@
 	Path to Illustrator…	Sti til Illustrator…
 	Make Work Path	Opret arbejdssti
 	Make Selection	Opret markering
+	Make Shape	Opret form
 	Fill Path	Udfyld sti
 	Stroke Path	Lav kontur på sti
 	Clipping Path	Udklipningssti
@@ -2065,7 +2072,7 @@
 	Vertical Centers	Lodrette midtpunkter
 	Video Frames to Layers…	Videobilleder til lag…
 	WIA Support…	WIA-support…
-	Working CMY Plates	Arbejds-CMY-plade
+	Working CMY Plates	Arbejds-CMY-plader
 
 # tl! literals (third pass)
 	Absolute	Absolut
