@@ -2,7 +2,7 @@
 
 use serde_json::json;
 
-use super::{close_document_of, closes_document};
+use super::{close_document, close_documents, closes_document};
 use crate::PhotocraftApp;
 use crate::state::DocWindow;
 
@@ -26,7 +26,7 @@ fn closing_a_floating_documents_window_closes_the_document() {
     let (mut app, window) = app_with_floating();
     assert!(closes_document(&app, &window));
     let first = names(&app)[0].clone();
-    close_document_of(&mut app, &egui::Context::default(), &window);
+    close_document(&mut app, &egui::Context::default(), window.document);
     assert_eq!(app.session.documents().len(), 1, "the document is closed, not put back in a tab");
     assert!(!names(&app).contains(&first));
     app.sync_views();
@@ -39,12 +39,12 @@ fn unsaved_changes_ask_first_and_keep_the_window() {
     app.session.set_active(0);
     app.run("layer.new.layer", json!({})).unwrap();
     assert!(app.session.documents()[0].is_dirty());
-    close_document_of(&mut app, &egui::Context::default(), &window);
+    close_document(&mut app, &egui::Context::default(), window.document);
     assert!(app.discard.is_some(), "Save / Don't Save / Cancel is asked");
     assert_eq!(app.session.documents().len(), 2, "nothing is closed before the answer");
     assert!(app.ui.windows.iter().any(|w| w.id == window.id && w.open), "the window stays while the question is up");
     // A second click on the window's × while the question is up asks nothing new.
-    close_document_of(&mut app, &egui::Context::default(), &window);
+    close_document(&mut app, &egui::Context::default(), window.document);
     assert_eq!(app.session.documents().len(), 2);
 }
 
@@ -60,4 +60,30 @@ fn closing_a_second_view_only_closes_that_window() {
     assert!(!closes_document(&app, &floating), "another window still shows the document");
     app.ui.windows.retain(|w| w.id != other);
     assert!(closes_document(&app, &floating));
+}
+
+/// Two windows closed in the same frame (the taskbar's Close all windows): both documents close,
+/// each found by id although closing the first renumbers the second (CodeRabbit on #11665).
+#[test]
+fn every_window_closed_in_one_frame_closes_its_document() {
+    let (mut app, first) = app_with_floating();
+    let second = crate::view_cmds::float_window(&mut app, 1, 0, true);
+    assert!(app.ui.windows.iter().any(|w| w.id == second));
+    let ids: Vec<_> = app.session.documents().iter().map(|d| d.doc.id).collect();
+    assert_eq!(first.document, 0);
+    close_documents(&mut app, &egui::Context::default(), ids);
+    assert!(app.session.documents().is_empty(), "both documents are closed, not only the last request's");
+}
+
+/// When one of them asks about unsaved changes, the others wait with their windows open.
+#[test]
+fn closing_waits_while_unsaved_changes_are_asked_about() {
+    let (mut app, _) = app_with_floating();
+    let _second = crate::view_cmds::float_window(&mut app, 1, 0, true);
+    app.session.set_active(0);
+    app.run("layer.new.layer", json!({})).unwrap();
+    let ids: Vec<_> = app.session.documents().iter().map(|d| d.doc.id).collect();
+    close_documents(&mut app, &egui::Context::default(), ids);
+    assert!(app.discard.is_some(), "the unsaved document asks first");
+    assert_eq!(app.session.documents().len(), 2, "the other document waits: nothing closes unasked");
 }
