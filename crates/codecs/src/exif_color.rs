@@ -58,7 +58,7 @@ pub fn exif_color_space(exif: &[u8]) -> Option<u16> {
 
 /// Normalize EXIF colour-space declarations for an sRGB JPEG XL codestream.
 ///
-/// JXL export cannot embed an ICC profile and its default colour encoding is sRGB.
+/// Used when the selected JPEG XL path writes sRGB rather than the source ICC.
 /// Only the existing inline ColorSpace value and an existing Adobe RGB
 /// InteroperabilityIndex (R03 -> R98) are rewritten. All other EXIF bytes,
 /// including GPS, camera data and offsets, remain untouched. Unknown or
@@ -72,9 +72,7 @@ pub(crate) fn srgb_exif_metadata(exif: &[u8]) -> std::borrow::Cow<'_, [u8]> {
             return None;
         }
         let ptr = find(order, body, first, count, entry_bytes, TAG_EXIF_IFD)?;
-        if !matches!(order.u16(body, ptr.checked_add(2)?)?, TYPE_LONG | TYPE_IFD)
-            || order.u32(body, ptr.checked_add(4)?)? != 1
-        {
+        if !matches!(order.u16(body, ptr.checked_add(2)?)?, TYPE_LONG | TYPE_IFD) || order.u32(body, ptr.checked_add(4)?)? != 1 {
             return None;
         }
         let ifd = usize::try_from(order.u32(body, ptr.checked_add(8)?)?).ok()?;
@@ -110,36 +108,7 @@ pub(crate) fn srgb_exif_metadata(exif: &[u8]) -> std::borrow::Cow<'_, [u8]> {
             // ExifIFD 0xA005 points to an Interoperability IFD. R03 means
             // Adobe RGB, while R98 means sRGB. Rewrite an existing R03 only.
             if order.u16(body, e)? == 0xA005 && matches!(ty, TYPE_LONG | TYPE_IFD) {
-                let sub = usize::try_from(order.u32(body, e.checked_add(8)?)?).ok()?;
-                if sub < HEADER {
-                    continue;
-                }
-                let Some(n) = order.u16(body, sub) else { continue };
-                let Some(start) = sub.checked_add(2) else { continue };
-                let Some(end) = start.checked_add(usize::from(n).checked_mul(ENTRY)?) else { continue };
-                if end.checked_add(4)? > body.len() {
-                    continue;
-                }
-                for j in 0..usize::from(n) {
-                    let entry = start.checked_add(j.checked_mul(ENTRY)?)?;
-                    if order.u16(body, entry) != Some(1)
-                        || order.u16(body, entry.checked_add(2)?) != Some(2)
-                    {
-                        continue;
-                    }
-                    let length = usize::try_from(order.u32(body, entry.checked_add(4)?)?).ok()?;
-                    if length < 4 {
-                        continue;
-                    }
-                    let data_at = if length <= 4 {
-                        entry.checked_add(8)?
-                    } else {
-                        usize::try_from(order.u32(body, entry.checked_add(8)?)?).ok()?
-                    };
-                    if body.get(data_at..data_at.checked_add(3)?) == Some(b"R03".as_slice()) {
-                        edits.push((prefix.checked_add(data_at)?, b"R98".to_vec()));
-                    }
-                }
+                edits.extend(srgb_interoperability_edits(order, body, e, prefix)?);
             }
         }
         Some(edits)
@@ -155,6 +124,36 @@ pub(crate) fn srgb_exif_metadata(exif: &[u8]) -> std::borrow::Cow<'_, [u8]> {
         }
     }
     std::borrow::Cow::Owned(updated)
+}
+
+/// Locate only existing Adobe RGB interoperability values in a classic TIFF sub-IFD.
+fn srgb_interoperability_edits(order: Order, body: &[u8], e: usize, prefix: usize) -> Option<Vec<(usize, Vec<u8>)>> {
+    let mut edits = Vec::new();
+    let sub = usize::try_from(order.u32(body, e.checked_add(8)?)?).ok()?;
+    if sub < HEADER {
+        return Some(Vec::new());
+    }
+    let Some(n) = order.u16(body, sub) else { return Some(Vec::new()) };
+    let Some(start) = sub.checked_add(2) else { return Some(Vec::new()) };
+    let Some(end) = start.checked_add(usize::from(n).checked_mul(ENTRY)?) else { return Some(Vec::new()) };
+    if end.checked_add(4)? > body.len() {
+        return Some(Vec::new());
+    }
+    for j in 0..usize::from(n) {
+        let entry = start.checked_add(j.checked_mul(ENTRY)?)?;
+        if order.u16(body, entry) != Some(1) || order.u16(body, entry.checked_add(2)?) != Some(2) {
+            continue;
+        }
+        let length = usize::try_from(order.u32(body, entry.checked_add(4)?)?).ok()?;
+        if length < 4 {
+            continue;
+        }
+        let data_at = if length <= 4 { entry.checked_add(8)? } else { usize::try_from(order.u32(body, entry.checked_add(8)?)?).ok()? };
+        if body.get(data_at..data_at.checked_add(3)?) == Some(b"R03".as_slice()) {
+            edits.push((prefix.checked_add(data_at)?, b"R98".to_vec()));
+        }
+    }
+    Some(edits)
 }
 
 /// Offset of the first entry tagged `tag` in the IFD whose `count` entries start at `first`.
@@ -264,21 +263,14 @@ mod tests {
                 // Exif IFD: two entries (ColorSpace and pointer to interoperability IFD).
                 // Its IFD begins immediately after IFD0, at TIFF offset 26.
                 let interop_ifd = 26 + 2 + 2 * ENTRY + 4;
-                let mut input = exif(
-                    big,
-                    &[(TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff), (0xA005, TYPE_LONG, 1, interop_ifd as u32)],
-                );
+                let mut input = exif(big, &[(TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff), (0xA005, TYPE_LONG, 1, interop_ifd as u32)]);
                 assert_eq!(input.len(), interop_ifd);
                 input.extend(u16b(1));
                 // InteroperabilityIndex = tag 1, ASCII; R03 indicates Adobe RGB.
                 input.extend(u16b(1));
                 input.extend(u16b(2));
                 input.extend(u32b(if inline { 4 } else { 6 }));
-                let value_at = if inline {
-                    interop_ifd + 2 + 8
-                } else {
-                    interop_ifd + 2 + ENTRY + 4
-                };
+                let value_at = if inline { interop_ifd + 2 + 8 } else { interop_ifd + 2 + ENTRY + 4 };
                 if inline {
                     input.extend(b"R03\0");
                 } else {
