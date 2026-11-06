@@ -2275,7 +2275,11 @@ fn a_brush_stroke_whose_preview_failed_commits_the_seed_it_began_with() {
     let m = egui::Modifiers::NONE;
     tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, m);
     tool_event(&mut app, ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 }, m);
-    let want = super::strokes::brush_seed(&app, app.drag.as_ref().unwrap()).unwrap();
+    // The seed the live preview began with, not one recomputed the way the fallback does.
+    let want = match &app.live_stroke.as_ref().unwrap().stroke {
+        super::strokes::EngineStroke::Brush(stroke) => stroke.seed,
+        _ => panic!("expected a Brush preview"),
+    };
     app.live_stroke = None;
     tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 40.0 }, m);
     let got = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").and_then(|(_, p)| p.get("seed").cloned()).unwrap();
