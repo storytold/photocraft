@@ -52,7 +52,10 @@ resvg = { version = "0.45", default-features = false, features = ["text", "syste
 # The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
 ttf-parser = { version = "0.25", default-features = false }
 # PDF import (pdf_import.rs): PDFium renders the pages; the direct surfaces build the document.
-pdfium-render = "0.9"
+# Pinned exactly, like the WinTab wrappers in photocraft-tablet: PDFium is FFI-loaded at run time
+# and the DLL release is pinned separately in packaging/windows/package.ps1, so a lockfile refresh
+# must not move the wrapper under it. Bump deliberately and re-check both.
+pdfium-render = "=0.9.5"
 image = { workspace = true, features = ["png"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
