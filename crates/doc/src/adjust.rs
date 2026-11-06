@@ -169,6 +169,54 @@ impl HueRange {
         self.hue == 0.0 && self.saturation == 0.0 && self.lightness == 0.0
     }
 
+    /// Photoshop's "Sample a color" eyedropper (#9247): the range takes its default extent (fully
+    /// on for 30°, fading over 30° each side) centred on hue `deg`.
+    pub fn sample_hue(&mut self, deg: f32) {
+        if deg.is_finite() {
+            self.bounds = Self::canonical_bounds([deg - 45.0, deg - 15.0, deg + 15.0, deg + 45.0]);
+        }
+    }
+
+    /// Photoshop's "Add to sample" eyedropper: the nearer end of the fully-on span moves out to
+    /// hue `deg` (the way round that grows it least); both fades keep their widths. A hue already
+    /// fully in the range changes nothing.
+    pub fn add_hue(&mut self, deg: f32) {
+        let [a, b, c, d] = Self::canonical_bounds(self.bounds);
+        if !deg.is_finite() {
+            return;
+        }
+        let (fade_in, fade_out) = (b - a, d - c);
+        let span = c - b;
+        let rel = (deg - b).rem_euclid(360.0);
+        if rel <= span {
+            return;
+        }
+        let up = rel - span;
+        let down = (b - deg).rem_euclid(360.0);
+        // Keep the whole range, fades included, within one turn.
+        let room = (359.0 - fade_in - fade_out - span).max(0.0);
+        let (b, c) = if up <= down { (b, c + up.min(room)) } else { (b - down.min(room), c) };
+        self.bounds = Self::canonical_bounds([b - fade_in, b, c, c + fade_out]);
+    }
+
+    /// Photoshop's "Subtract from sample" eyedropper: for a hue `deg` inside the fully-on span,
+    /// the nearer end of the span moves in to 15° past it (never past the other end); both fades
+    /// keep their widths. A hue outside the span changes nothing.
+    pub fn subtract_hue(&mut self, deg: f32) {
+        let [a, b, c, d] = Self::canonical_bounds(self.bounds);
+        if !deg.is_finite() {
+            return;
+        }
+        let (fade_in, fade_out) = (b - a, d - c);
+        let span = c - b;
+        let rel = (deg - b).rem_euclid(360.0);
+        if rel > span {
+            return;
+        }
+        let (b, c) = if rel <= span - rel { ((b + rel + 15.0).min(c), c) } else { (b, (b + rel - 15.0).max(b)) };
+        self.bounds = Self::canonical_bounds([b - fade_in, b, c, c + fade_out]);
+    }
+
     /// How much a pixel of hue `deg` (degrees) belongs to this range, 0..=1.
     pub fn weight(&self, deg: f32) -> f32 {
         let [a, b, c, d] = self.bounds;
@@ -351,6 +399,72 @@ impl Adjustment {
 
 #[cfg(test)]
 mod tests {
+
+    /// #9247: Photoshop 2025's Hue/Saturation eyedroppers, measured on its Reds range: sample a
+    /// 210° blue, add a 38° orange, subtract the blue, then subtract the orange.
+    #[test]
+    fn hue_range_eyedroppers_follow_photoshop() {
+        let mut r = super::HueRange::neutral(0);
+        r.sample_hue(210.0);
+        assert_eq!(r.bounds, [165.0, 195.0, 225.0, 255.0]);
+        r.add_hue(38.0);
+        assert_eq!(r.bounds, [8.0, 38.0, 225.0, 255.0], "grows the shorter way, fades kept");
+        r.subtract_hue(210.0);
+        assert_eq!(r.bounds, [8.0, 38.0, 195.0, 225.0], "the nearer (upper) end moves to 15° short");
+        r.subtract_hue(38.0);
+        assert_eq!(r.bounds, [23.0, 53.0, 195.0, 225.0], "the nearer (lower) end moves to 15° past");
+        // Already inside (add) or outside (subtract): no change; never wider than a turn.
+        let before = r.bounds;
+        r.add_hue(100.0);
+        r.subtract_hue(300.0);
+        assert_eq!(r.bounds, before);
+        for deg in [0.0, 90.0, 180.0, 270.0, 359.0, 120.0, 240.0] {
+            r.add_hue(deg);
+        }
+        assert!(r.bounds[3] - r.bounds[0] <= 359.0 + 1e-3, "{:?}", r.bounds);
+        r.sample_hue(f32::NAN);
+        r.add_hue(f32::INFINITY);
+        assert!(r.bounds.iter().all(|v| v.is_finite()));
+    }
+
+    /// The eyedropper rules at their edges: the 0/360 seam, the one-turn limit on adding, and
+    /// subtracting at and between the span's ends. Expected bounds are worked out by hand from
+    /// the doc comments (and come back canonical: centre in -30..330).
+    #[test]
+    fn hue_range_eyedroppers_edge_cases() {
+        type Pick = fn(&mut super::HueRange, f32);
+        type Case = (&'static str, [f32; 4], Pick, f32, [f32; 4]);
+        let (sample, add, sub): (Pick, Pick, Pick) = (super::HueRange::sample_hue, super::HueRange::add_hue, super::HueRange::subtract_hue);
+        const REDS: [f32; 4] = [-45.0, -15.0, 15.0, 45.0];
+        // Fully on 30..280: 250° span plus two 30° fades leaves 49° of room in the turn.
+        const WIDE: [f32; 4] = [0.0, 30.0, 280.0, 310.0];
+        // Fully on 30..150, middle 90.
+        const MID: [f32; 4] = [0.0, 30.0, 150.0, 180.0];
+        let cases: [Case; 17] = [
+            ("sample 0", WIDE, sample, 0.0, REDS),
+            ("sample 359: 314..404 shifted down a turn", WIDE, sample, 359.0, [-46.0, -16.0, 14.0, 44.0]),
+            ("add 350 from above the seam: lower end moves down 15", [-25.0, 5.0, 35.0, 65.0], add, 350.0, [-40.0, -10.0, 35.0, 65.0]),
+            ("add 10 from below the seam: upper end moves up 15", [-65.0, -35.0, -5.0, 25.0], add, 10.0, [-65.0, -35.0, 10.0, 40.0]),
+            ("add 0 from below the seam: upper end lands on it", [-65.0, -35.0, -5.0, 25.0], add, 0.0, [-65.0, -35.0, 0.0, 30.0]),
+            ("add 340 to reds: 5 down beats 325 up", REDS, add, 340.0, [-50.0, -20.0, 15.0, 45.0]),
+            ("add 335, 55 up: capped at the 49 of room", WIDE, add, 335.0, [0.0, 30.0, 329.0, 359.0]),
+            ("add 340, 50 down: capped at the 49 of room", WIDE, add, 340.0, [-49.0, -19.0, 280.0, 310.0]),
+            ("add to a full turn (no room): no change", [0.0, 30.0, 329.0, 359.0], add, 345.0, [0.0, 30.0, 329.0, 359.0]),
+            ("subtract 80, nearer the lower end: it moves to 95", MID, sub, 80.0, [65.0, 95.0, 150.0, 180.0]),
+            ("subtract 100, nearer the upper end: it moves to 85", MID, sub, 100.0, [0.0, 30.0, 85.0, 115.0]),
+            ("subtract the exact middle 90: the lower end moves", MID, sub, 90.0, [75.0, 105.0, 150.0, 180.0]),
+            ("subtract the lower end 30", MID, sub, 30.0, [15.0, 45.0, 150.0, 180.0]),
+            ("subtract the upper end 150", MID, sub, 150.0, [0.0, 30.0, 135.0, 165.0]),
+            ("subtract 345 = the reds' lower end -15, across the seam", REDS, sub, 345.0, [-30.0, 0.0, 15.0, 45.0]),
+            ("subtract 32 near the lower end: never past the upper end", [0.0, 30.0, 40.0, 70.0], sub, 32.0, [10.0, 40.0, 40.0, 70.0]),
+            ("subtract 38 near the upper end: never past the lower end", [0.0, 30.0, 40.0, 70.0], sub, 38.0, [0.0, 30.0, 30.0, 60.0]),
+        ];
+        for (what, start, pick, deg, want) in cases {
+            let mut r = super::HueRange { bounds: start, ..super::HueRange::neutral(0) };
+            pick(&mut r, deg);
+            assert_eq!(r.bounds, want, "{what}");
+        }
+    }
     use super::*;
 
     #[test]
