@@ -43,7 +43,7 @@ commands:
   parity          Photoshop menu parity; rewrites docs/parity-checklist.md
   i18n-coverage   report UI translation coverage and the missing strings per registered language
                   (the last `ci` step; it never fails)
-  perf [--quick] [--update-baseline] [--threshold PCT] [--bench NAME]... [--skip-build] [--reuse]
+  perf [--quick] [--update-baseline] [--baseline PATH] [--advisory-budgets] [--threshold PCT] [--bench NAME]... [--cpu] [--skip-build] [--reuse]
                   run the release benches, merge them by scenario id into target/perf/results.json,
                   check perf/budgets.toml and perf/baseline.json (non-zero on a broken budget or regression)
   scorecard [--check]
