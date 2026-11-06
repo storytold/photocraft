@@ -28,6 +28,15 @@ pub fn active(app: &PhotocraftApp, shift: bool) -> bool {
     app.ui.tool_options.hand_scroll_all || shift
 }
 
+/// Store `scroll_all` under `id` while the Hand is dragging, and return the stored choice: a glide
+/// after the drag keeps the choice the drag made.
+pub fn glide_choice(ctx: &egui::Context, id: egui::Id, dragging: bool, scroll_all: bool) -> bool {
+    if dragging {
+        ctx.data_mut(|m| m.insert_temp(id, scroll_all));
+    }
+    ctx.data(|m| m.get_temp::<bool>(id)).unwrap_or(false)
+}
+
 /// Canvas geometry used to clamp a Hand drag when Overscroll is off.
 pub struct ClampGeometry {
     pub size: egui::Vec2,

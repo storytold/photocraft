@@ -2061,11 +2061,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let scroll_all = hand_pan && crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, ctx.input(|i| i.modifiers)).shift);
     let scroll_source = crate::scroll_all_windows::source(app, idx);
     // A glide keeps the drag's choice after Space, Shift or the button is let go.
-    let scroll_all_id = flick_id.with("scroll-all");
-    if hand_drag && !stroke_dismissal {
-        ctx.data_mut(|m| m.insert_temp(scroll_all_id, scroll_all));
-    }
-    let glide_scroll_all = ctx.data(|m| m.get_temp::<bool>(scroll_all_id)).unwrap_or(false);
+    let glide_scroll_all = crate::scroll_all_windows::glide_choice(&ctx, flick_id.with("scroll-all"), hand_drag && !stroke_dismissal, scroll_all);
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_drag && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
         if d.is_finite() {
