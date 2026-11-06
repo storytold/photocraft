@@ -45,6 +45,13 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits, keep_orientation: bool) -> R
     let sample = if info.sixteen_bit { SampleType::U16 } else { SampleType::U8 };
     let (w, h) = if keep_orientation { (info.coded_width, info.coded_height) } else { (info.width, info.height) };
     limits.check(w, h, layout, sample)?;
+    // The delegated decoder allocates the full coded image before applying any clean-aperture
+    // crop or orientation transform, so the coded dimensions must pass the limit policy even
+    // when the displayed (transformed) size is small. Checking only the transformed size let a
+    // tiny visible image hide a large coded allocation.
+    if !keep_orientation && (info.coded_width, info.coded_height) != (w, h) {
+        limits.check(info.coded_width, info.coded_height, layout, sample)?;
+    }
     let options = photocraft_heif::Options { max_pixels: limits.max_pixels, apply_transforms: !keep_orientation };
     let decoded = photocraft_heif::decode(bytes, &options).map_err(err)?;
     // The decoder re-reads the container; trust its output's shape, not the probe's.

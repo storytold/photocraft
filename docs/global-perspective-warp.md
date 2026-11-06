@@ -23,9 +23,11 @@ solveOnly returns diagnostics without document/history mutation.
 An effective warp commits once and supports Undo/Redo. Rejection is atomic.
 
 Tests: crates/algo/src/global_perspective.rs and
-crates/engine/src/global_perspective_cmds.rs.
+crates/engine/src/cmd/global_perspective_cmds.rs.
 
 Provenance: original full V3.2 source at SHA
 8946cc97cc3fb37ad967064d053c40c79879bfbb in PR #5651.
 Prior portable Windows acceptance applies only to that exact older source;
 this split branch requires its own build/tests/CI before integration.
+
+This advanced command is intentionally headless; it does not add a Photoshop-style menu command or a replacement for the existing multi-plane Perspective Warp UI. A single global transform applies to the entire raster layer.

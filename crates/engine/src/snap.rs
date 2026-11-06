@@ -132,6 +132,13 @@ impl SnapTargets {
                 if !l.visible || exclude.contains(&l.id) {
                     continue;
                 }
+                // An artboard is a group, but its edges and centre are the board's own.
+                if let Some(a) = l.artboard() {
+                    if let Some(r) = to_rect(a.rect) {
+                        t.add_rect(r, SnapKind::LayerEdge, SnapKind::LayerCenter);
+                    }
+                    continue;
+                }
                 if let Some(r) = target_rect_of(doc, l) {
                     t.add_rect(r, SnapKind::LayerEdge, SnapKind::LayerCenter);
                 }
@@ -388,5 +395,30 @@ mod tests {
                 .any(|t| matches!(t.kind, SnapKind::LayerEdge | SnapKind::LayerCenter) && [64.0, 66.0, 76.0, 86.0, 94.0, 124.0].contains(&t.pos))
         );
         assert_eq!(union([[0.0, 0.0, 1.0, 1.0], [2.0, -1.0, 3.0, 0.5]]), Some([0.0, -1.0, 3.0, 1.0]));
+    }
+
+    /// An artboard (a group) offers the board's own edges and centre, so other layers, boards and
+    /// tools can snap to it; the board being moved doesn't snap to itself.
+    #[test]
+    fn an_artboard_offers_its_own_edges() {
+        let mut doc = Document::with_background("s", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let mut board = Layer::group("Artboard 1", vec![]);
+        if let photocraft_doc::LayerContent::Group(g) = &mut board.content {
+            g.artboard =
+                Some(photocraft_doc::Artboard { rect: photocraft_geom::Rect::new(20, 10, 120, 90), background: Default::default(), preset: String::new() });
+        }
+        let id = doc.insert_above(None, board);
+        let opts = SnapOptions::default();
+        let t = SnapTargets::from_document(&doc, &opts, &[]);
+        let has = |ts: &[Target], kind: SnapKind, pos: f64| ts.iter().any(|t| t.kind == kind && t.pos == pos);
+        for x in [20.0, 120.0] {
+            assert!(has(&t.x, SnapKind::LayerEdge, x), "x = {x}");
+        }
+        for y in [10.0, 90.0] {
+            assert!(has(&t.y, SnapKind::LayerEdge, y), "y = {y}");
+        }
+        assert!(has(&t.x, SnapKind::LayerCenter, 70.0) && has(&t.y, SnapKind::LayerCenter, 50.0));
+        let t = SnapTargets::from_document(&doc, &opts, &[id]);
+        assert!(!has(&t.x, SnapKind::LayerEdge, 120.0) && !has(&t.x, SnapKind::LayerCenter, 70.0));
     }
 }

@@ -429,8 +429,14 @@ fn xmp_values(xmp: &str, key: &str) -> Vec<(usize, usize)> {
             continue;
         };
         let start = xmp.len() - value.len();
-        let Some(len) = value.find(close) else { continue };
+        // Advance past this value before searching for the next key. Without this, `from`
+        // only moved past the key text, so property-like text repeated inside an unrelated
+        // attribute re-ran this full-suffix `find(close)` for every occurrence, which is
+        // quadratic in the packet size. A missing close means the value is unterminated, so
+        // no later value can parse either; stop scanning in that case.
+        let Some(len) = value.find(close) else { break };
         out.push((start, start + len));
+        from = start + len + close.len_utf8();
     }
     out
 }
