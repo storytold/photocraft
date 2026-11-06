@@ -31,6 +31,7 @@ photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true }
 photocraft-codecs = { workspace = true }
 photocraft-doc = { workspace = true }
+photocraft-format = { workspace = true }
 photocraft-ui-egui = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true, features = ["wgpu", "accesskit"] }
