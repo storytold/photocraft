@@ -1920,6 +1920,18 @@ fn place_embedded_centres_fits_and_embeds() {
     }
 }
 
+/// A caller-chosen placement scale cannot ask for an image beyond the render limit.
+#[test]
+fn placing_refuses_a_scale_that_would_exceed_the_pixel_limit() {
+    let dir = tmp("place-huge-scale");
+    let small = png(&dir, "small.png", 200, 100, "#ff0000");
+    let mut s = session(100, 100, 8);
+    for scale in [1e9, 1e300, 1e308] {
+        assert!(matches!(s.execute("file.placeEmbedded", json!({"path": small, "scale": scale})), Err(EngineError::BadParams { .. })), "{scale}");
+    }
+    assert!(s.execute("file.placeEmbedded", json!({"path": small, "scale": 50})).is_ok());
+}
+
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
 /// lands as a plain pixel layer; a linked place is always a smart object and `"smartObject"` wins.
 #[test]

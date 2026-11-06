@@ -480,6 +480,11 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
         Some(c) if c.len() == 2 => (c[0].as_f64().unwrap_or(cw / 2.0), c[1].as_f64().unwrap_or(ch / 2.0)),
         _ => (cw / 2.0, ch / 2.0),
     };
+    // `scale` is the caller's: bound the resampled size before allocating it.
+    let scaled = w * scale * h * scale;
+    if scaled.is_nan() || scaled > photocraft_compose::MAX_RENDER_PIXELS as f64 {
+        return Err(EngineError::BadParams { cmd: "file.placeEmbedded".into(), msg: format!("scaling {w}×{h} by {scale} makes an image too large to place") });
+    }
     let (dx, dy) = ((center.0 - w * scale / 2.0).round(), (center.1 - h * scale / 2.0).round());
     // A frame's image renders through its smart object below, which refuses a placement past the
     // memory budget; resampling it to the frame's size first would allocate that surface twice.
