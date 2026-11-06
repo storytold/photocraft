@@ -287,6 +287,7 @@ pub use tools::crop_presets;
 pub use tools::crop_shield;
 pub use tools::crop_size;
 pub use tools::crop_straighten;
+pub use tools::crop_task_bar;
 pub use tools::crop_ui;
 pub use tools::direct_select;
 pub use tools::eraser_ui;
@@ -815,6 +816,8 @@ mod tool_shift_cycle_order_tests;
 mod tool_shortcut_tests;
 #[cfg(test)]
 mod toolbar_group_order_tests;
+#[cfg(test)]
+mod toolbar_more_slot_flyout_tests;
 
 #[cfg(test)]
 mod pixel_aspect_tests;
