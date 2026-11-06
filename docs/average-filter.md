@@ -160,6 +160,7 @@ $results = foreach ($selected in $false, $true) {
             $process = Start-Process -FilePath $exe -ArgumentList $arguments `
                 -PassThru -WindowStyle Hidden `
                 -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+            $null = $process.Handle # Retain the handle so ExitCode remains available after exit.
             $peak = 0L
             do {
                 $process.Refresh()
