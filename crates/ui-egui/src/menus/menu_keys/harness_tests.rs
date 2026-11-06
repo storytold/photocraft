@@ -704,3 +704,29 @@ fn a_menu_from_the_keyboard_gives_the_focus_back() {
     assert!(!is_open(&h.ctx));
     assert_eq!(h.ctx.memory(|m| m.focused()), Some(id), "the button has the focus again");
 }
+
+/// With nothing focused before, a menu opened and walked from the keyboard leaves nothing focused
+/// when it closes: a focus egui moved onto a menu title meanwhile (Tab, Up) isn't given "back".
+#[test]
+fn a_menu_from_the_keyboard_gives_no_focus_it_didnt_take() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, app| {
+            crate::menus::menu_bar(app, ui);
+            ui.add(egui::Button::new("Probe"));
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    assert_eq!(h.ctx.memory(|m| m.focused()), None);
+    // Tab and Up move egui's focus onto a menu title meanwhile, which stays on screen.
+    alt_key(&mut h, egui::Key::I);
+    for k in [egui::Key::Tab, egui::Key::ArrowUp] {
+        key(&mut h, k);
+    }
+    assert!(is_open(&h.ctx));
+    key(&mut h, egui::Key::Escape);
+    assert!(!is_open(&h.ctx));
+    h.run_steps(3);
+    assert_eq!(h.ctx.memory(|m| m.focused()), None, "nothing was focused before the menu");
+}
