@@ -257,3 +257,39 @@ fn the_overflow_button_is_pinned_to_the_right_end() {
         assert_eq!(a, b, "{theme:?}: the » button doesn't follow the last tab");
     }
 }
+
+/// #11612: with 2-up Vertical, a click on a dialog that floats over the other document's tile
+/// (Levels opens in the middle of the window) must not activate that document: the adjustment
+/// has to stay on the document the user chose.
+#[test]
+fn clicking_a_dialog_over_another_tile_keeps_the_active_document() {
+    let mut h = harness(2, ThemeKind::Pro);
+    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    h.run_steps(3);
+    let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).expect("tiled");
+    assert_eq!(cells.len(), 2);
+    // The user picks the right-hand document (the first tile is not the active one).
+    let right = cells[1].1.center();
+    h.event(egui::Event::PointerMoved(right));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: right, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().session.active_index(), Some(1));
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "image.adjustments.levels", json!({})).unwrap();
+    h.run_steps(3);
+    // Levels is centred on the window, so its left edge lies over the left tile.
+    let cancel = h.get_by_label("Cancel").rect();
+    let over_left = egui::pos2(cells[0].1.right() - 2.0, cancel.center().y);
+    assert!(cells[0].1.contains(over_left));
+    assert_ne!(ctx.layer_id_at(over_left).map(|l| l.order), Some(egui::Order::Background), "the dialog covers the left tile at {over_left:?}");
+    h.event(egui::Event::PointerMoved(over_left));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: over_left, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().session.active_index(), Some(1), "a press on the dialog must not activate the document under it");
+}

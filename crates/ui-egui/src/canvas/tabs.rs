@@ -115,7 +115,9 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let v = canvas_view(app, ui, d, cell, view, d == active_doc);
             if d != active_doc {
                 app.ui.views[d] = v;
-                if main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
+                // A press on a dialog or menu floating over the tile is not a click into it (#11612).
+                let press = ui.input(|i| i.pointer.primary_pressed().then(|| i.pointer.interact_pos()).flatten());
+                if main_focused && press.is_some_and(|p| cell.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background)) {
                     app.session.set_active(d);
                 }
             }
