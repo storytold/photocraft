@@ -1487,3 +1487,121 @@ fn printed_pdf_uses_winansi_for_labels_and_descriptions() {
     assert!(content.contains(r"(Price: \20020 \(proof\)) Tj"), "{content}");
     assert!(content.is_ascii(), "encoded bytes are escaped, never UTF-8 text operands");
 }
+
+/// #11655: the Print dialog's **Done** while an action records. `file.printSettings` stores the
+/// chosen settings as the working print settings — what Print opens with and Print One Copy
+/// repeats — without asking a printer or a driver, writing a file, or touching the document.
+#[test]
+fn recording_print_settings_stores_them_and_prints_nothing() {
+    let dir = tmp("record-settings");
+    let mut s = session("rgb", 8);
+    // A stand-in print server that counts its calls: nothing here may ask it.
+    let asked = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = asked.clone();
+    s.printer_source = Some(std::sync::Arc::new(move || {
+        counted.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Vec::new()
+    }));
+    let (revision, steps) = (s.active().unwrap().revision, s.active().unwrap().history.past_len());
+    let out = format!("{dir}/never-written.pdf");
+    let r = s
+        .execute(
+            "file.printSettings",
+            json!({"printer": "Refused", "copies": 3, "paper": "a5", "orientation": "landscape", "scale": 50,
+                   "cornerCropMarks": true, "colorHandling": "photocraftManages", "printerProfile": "coated-cmyk",
+                   "intent": "perceptual", "output": out, "send": true, "dryRun": false, "printable": [0.0, 0.0, 10.0, 10.0]}),
+        )
+        .unwrap();
+    assert_eq!(asked.load(std::sync::atomic::Ordering::Relaxed), 0, "recording settings asked a print server for its printers");
+    assert_eq!(r["sent"], false, "Done never sends a job");
+    assert_eq!(r["paper"], json!([595.28, 419.53]), "a5 turned to landscape");
+    assert_eq!((r["scale"].clone(), r["copies"].clone()), (json!(50.0), json!(3)));
+    let kept = r["settings"].clone();
+    assert_eq!(kept["printer"], json!("Refused"), "the printer the user chose travels with the settings");
+    assert_eq!((kept["paper"].clone(), kept["scale"].clone()), (json!("a5"), json!(50)));
+    for key in ["output", "send", "dryRun", "printable"] {
+        assert!(kept.get(key).is_none(), "{key} says how one job went out, not how the page looks: {kept}");
+    }
+    assert_eq!(last_print(&s), Some(kept.clone()), "Print opens with them again");
+    assert_eq!(s.prefs().dialogs.get(REMEMBERED), Some(&kept), "and they survive a relaunch, as a print's do");
+    let after = s.active().unwrap();
+    assert_eq!(after.revision, revision, "the document is unchanged");
+    assert_eq!(after.history.past_len(), steps, "Photoshop's Done adds no history step");
+    assert!(!std::path::Path::new(&out).exists(), "nothing was printed to a file");
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "no print file in {dir}");
+    // Print One Copy is what sends them, one copy, as the reporter's workflow does (#11655).
+    let one = s.execute("file.printOneCopy", json!({"dryRun": true})).unwrap();
+    assert_eq!((one["copies"].clone(), one["paper"].clone(), one["scale"].clone()), (json!(1), json!([595.28, 419.53]), json!(50.0)));
+}
+
+/// Params a hostile or stale step could carry are refused before anything is stored, so a recorded
+/// step cannot hold settings a later print would trip over (rule 9).
+#[test]
+fn recording_print_settings_refuses_hostile_params() {
+    let mut s = session("rgb", 8);
+    let before = json!({"paper": "a3"});
+    s.file_menu.last_print = Some(before.clone());
+    for p in [
+        json!({"paper": "napkin"}),
+        json!({"paper": [1e308, 792.0]}),
+        json!({"paper": ["wide", 792]}),
+        json!({"orientation": "sideways"}),
+        json!({"copies": 0}),
+        json!({"copies": 1000}),
+        json!({"copies": "three"}),
+        json!({"center": "yes"}),
+        json!({"emulsionDown": 1}),
+        json!({"printer": 7}),
+        json!({"printServer": []}),
+        json!({"printerSettings": "zz"}),
+        json!({"units": "furlongs"}),
+        json!({"colorHandling": "printer"}),
+        json!({"colorHandling": "separations"}),
+        json!({"colorHandling": "photocraftManages"}),
+        json!({"colorHandling": "photocraftManages", "printerProfile": ""}),
+        json!({"colorHandling": "photocraftManages", "printerProfile": "coated-cmyk", "intent": "vivid"}),
+        json!({"scale": 1e308}),
+        json!({"center": false, "top": 1e9}),
+    ] {
+        let e = s.execute("file.printSettings", p.clone()).unwrap_err();
+        assert!(matches!(e, EngineError::BadParams { .. }), "{p} gave {e}");
+        assert_eq!(s.file_menu.last_print, Some(before.clone()), "{p} stored something");
+    }
+    // Print is off with no document, and so is recording its settings.
+    let mut empty = Session::new();
+    assert!(empty.execute("file.printSettings", json!({"paper": "a4"})).is_err());
+    assert!(!empty.is_enabled("file.printSettings"));
+}
+
+/// What the reporter does: record, choose the settings, Done. One step holds them, and playing the
+/// action stores them again without printing.
+#[test]
+fn a_done_step_records_the_settings_and_replays_them() {
+    let mut s = session("rgb", 8);
+    s.execute("actions.record", json!({"name": "Print setup"})).unwrap();
+    let settings = json!({"paper": "a4", "scale": 150, "copies": 2, "registrationMarks": true, "printer": "Studio"});
+    s.execute("file.printSettings", settings.clone()).unwrap();
+    assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("file.printSettings"), "the run is journaled as it happened");
+    let stopped = s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(stopped["steps"], json!(1), "the settings are the one step: {stopped}");
+    let got = s.execute("actions.get", json!({"action": "Print setup"})).unwrap();
+    assert_eq!(got["steps"][0][0], json!("file.printSettings"));
+    let step = &got["steps"][0][1];
+    for (key, value) in settings.as_object().expect("object params") {
+        assert_eq!(&step[key], value, "the step carries {key}");
+    }
+    // Played back with the settings since forgotten: they come back, and nothing is printed.
+    s.file_menu.last_print = None;
+    s.prefs.edit(|prefs| {
+        prefs.dialogs.remove(REMEMBERED);
+    });
+    assert!(last_print(&s).is_none());
+    let steps = s.active().unwrap().history.past_len();
+    let played = s.execute("actions.play", json!({"action": "Print setup"})).unwrap();
+    assert_eq!(played["failed"], Value::Null, "{played}");
+    let stored = last_print(&s).expect("the step restored the settings");
+    for (key, value) in settings.as_object().expect("object params") {
+        assert_eq!(&stored[key], value, "playback restored {key}");
+    }
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "playback stores settings, it does not edit the document");
+}
