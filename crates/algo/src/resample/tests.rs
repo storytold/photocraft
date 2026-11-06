@@ -400,3 +400,37 @@ fn nearest_neighbor_reduction_does_not_average() {
         }
     }
 }
+
+/// #9212: a bicubic shrink of both axes stores the image between its passes with one axis at the
+/// old size, larger than the result; single-pass filters and growing axes store nothing larger.
+#[test]
+fn largest_resize_rect_counts_the_image_between_the_passes() {
+    let r = Rect::new(0, 0, 100, 80);
+    for f in [Resample::Bicubic, Resample::BicubicSharper, Resample::BicubicAutomatic, Resample::PreserveDetails] {
+        assert_eq!(largest_resize_rect(r, 0.5, 0.5, f), Rect::new(0, 0, 50, 80), "{f:?}");
+    }
+    // The axis with the smaller scale goes first.
+    assert_eq!(largest_resize_rect(r, 0.5, 0.25, Resample::Bicubic), Rect::new(0, 0, 100, 20));
+    for f in [Resample::Bilinear, Resample::Nearest, Resample::Lanczos] {
+        assert_eq!(largest_resize_rect(r, 0.5, 0.5, f), Rect::new(0, 0, 50, 40), "{f:?}");
+    }
+    for f in [Resample::Bicubic, Resample::BicubicAutomatic] {
+        assert_eq!(largest_resize_rect(r, 2.0, 3.0, f), Rect::new(0, 0, 200, 240), "{f:?} grows");
+        assert_eq!(largest_resize_rect(r, 0.5, 2.0, f), Rect::new(0, 0, 50, 160), "{f:?} shrinks x, grows y");
+    }
+}
+
+#[test]
+fn controlled_resize_matches_pixels_and_discards_cancelled_work() {
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let src = ramp(depth);
+        let expected = resize_surface(&src, 1.7, 0.6, Resample::Bicubic);
+        let actual = resize_surface_with_interrupt(&src, 1.7, 0.6, Resample::Bicubic, &photocraft_raster::Interrupt::NONE).unwrap();
+        let bounds = expected.content_bounds();
+        assert_eq!(expected.read_region(bounds), actual.read_region(bounds));
+        let cancelled = || true;
+        let progress = |_| {};
+        let ctl = photocraft_raster::Interrupt::new(&cancelled, &progress);
+        assert!(resize_surface_with_interrupt(&src, 1.7, 0.6, Resample::Bicubic, &ctl).is_err());
+    }
+}
