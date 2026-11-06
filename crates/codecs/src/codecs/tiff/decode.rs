@@ -662,7 +662,8 @@ fn prepared_warnings(p: &Prepared) -> Vec<DecodeWarning> {
 }
 
 /// Checks one directory and lays it out for decoding. `whole`: the image is decoded into one
-/// buffer, which `limits.max_alloc` bounds; otherwise only its size is checked here.
+/// buffer, which `limits.max_alloc` bounds; otherwise only its size is checked here. Chunk
+/// tables larger than `limits.max_alloc` are refused before the `tiff` crate reads them.
 fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prepared, CodecError> {
     // The values the `tiff` crate reads must exist: a count past the end of the file is
     // neither allocated nor read.
@@ -723,6 +724,17 @@ fn prepare(f: &File<'_>, dir: &Ifd, limits: &Limits, whole: bool) -> Result<Prep
     let all_samples = palette.is_none() && matches!(photometric, 2 | 5 | 8 | 9) && (alpha_at.is_some_and(|a| a > 0) || (!planar && unused));
     let patches = header_patches(f, dir, photometric_entry, invert || palette.is_some() || all_samples || lab, lab && !all_samples)?;
 
+    // Opening the directory reads both chunk tables, with the `tiff` crate's default limits
+    // (`with_limits` applies only once it is open), before anything below is charged: tables
+    // that alone are over `max_alloc` (as every band worker holds them, `DECODER_BYTES_PER_CHUNK`
+    // per chunk) are refused before they are read.
+    let table_bytes = expected.saturating_mul(DECODER_BYTES_PER_CHUNK);
+    if table_bytes > limits.max_alloc {
+        return Err(CodecError::LimitExceeded(format!(
+            "the strip or tile tables of a {w}x{h} image ({expected} chunks) need {table_bytes} bytes, exceeding max_alloc {}",
+            limits.max_alloc
+        )));
+    }
     let tl = {
         let mut l = tiff::decoder::Limits::default();
         l.decoding_buffer_size = limits.alloc_usize();

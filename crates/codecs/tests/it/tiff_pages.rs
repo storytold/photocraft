@@ -685,6 +685,25 @@ fn strip_scratch_counts_against_max_alloc() {
     assert_eq!(img.to_u16_samples().unwrap()[64 * 63], 63);
 }
 
+/// A page's strip tables are charged against `max_alloc` before the `tiff` crate reads them:
+/// it reads both tables in full while it opens the directory, under its own default limits.
+/// A 1x65536 gray page in one-row strips holds a 64 KiB image but 65536 strips, 1 MiB of
+/// tables as the decoder keeps them. Under a 512 KiB budget it used to open the decoder (and
+/// allocate those tables) before the band worker's budget refused it; it is now refused first.
+#[test]
+fn strip_tables_are_refused_before_the_decoder_opens() {
+    let h = 65_536u32;
+    let file = build(true, false, &[strips(1, h, 8, 1, 1, 1, &vec![7u8; h as usize])], &[0]).bytes;
+    match decode_with(&file, &with_max_alloc(512 << 10)) {
+        Err(CodecError::LimitExceeded(m)) => assert!(m.contains("tables") && m.contains("65536 chunks"), "{m}"),
+        other => panic!("tables over max_alloc must be refused: {:?}", other.map(|i| i.data().len())),
+    }
+    // With room for the image and one worker's tables it decodes.
+    let img = decode_with(&file, &with_max_alloc(4 << 20)).unwrap();
+    assert_eq!(img.dimensions(), (1, h));
+    assert!(img.data().iter().all(|&v| v == 7));
+}
+
 /// Room for one worker's scratch decodes every strip with that one worker, each in its place.
 #[test]
 fn a_tight_budget_decodes_its_strips_one_after_another() {
