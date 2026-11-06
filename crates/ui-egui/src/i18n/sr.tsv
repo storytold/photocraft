@@ -196,6 +196,7 @@
 	Right	Desno
 	Open Recent	Otvori nedavno
 	Clear Recent Files	Obriši spisak nedavnih datoteka
+	Clear Recent File List	Obriši spisak nedavnih datoteka
 	Remove from Recent	Ukloni iz nedavnih
 	Remove {name} from Recent	Ukloni {name} iz nedavnih
 	Close	Zatvori
@@ -204,6 +205,10 @@
 	Restore	Vrati
 	Close All	Zatvori sve
 	Close Others	Zatvori ostale
+	New Document…	Novi dokument…
+	Open Document…	Otvori…
+	Consolidate All to Here	Objedini sve ovde
+	Move to New Window	Premesti u novi prozor
 	Save	Sačuvaj
 	Save As…	Sačuvaj kao…
 	Save a Copy…	Sačuvaj kopiju…
@@ -255,6 +260,7 @@
 	Create Smart Object after Loading Layers	Napravi pametni objekat posle učitavanja slojeva
 	Reveal in Finder	Prikaži u Finderu
 	Show in Explorer	Prikaži u Exploreru
+	Reveal in Explorer	Prikaži u Exploreru
 	Show in Folder	Prikaži u fascikli
 	File Info…	Informacije o datoteci…
 	Print…	Štampaj…
@@ -339,6 +345,7 @@
 	Units & Rulers…	Jedinice i lenjiri…
 	Guides, Grid & Slices…	Vodilje, mreža i isečci…
 	Plug-ins…	Dodaci…
+	Plugins…	Dodaci…
 	Type…	Tekst…
 	Enhanced Controls…	Napredne kontrole…
 	Camera Raw…	Camera Raw…
@@ -487,6 +494,8 @@
 	Smart Object	Pametni objekat
 	Convert to Smart Object	Pretvori u pametni objekat
 	Convert to Embedded	Pretvori u ugrađeni
+	Embed Linked	Ugradi povezani
+	Embed All Linked	Ugradi sve povezane
 	Convert to Layers	Pretvori u slojeve
 	Convert to Linked…	Pretvori u povezani…
 	Edit Contents	Uredi sadržaj
@@ -738,6 +747,7 @@
 	Minimum…	Minimum…
 	Offset…	Pomak…
 	Plug-ins	Dodaci
+	Plugins	Dodaci
 	Proof Setup	Podešavanje probnog prikaza
 	Proof Colors	Probne boje
 	Gamut Warning	Upozorenje o gamutu
@@ -746,9 +756,9 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plate	Radna CMY ploča
-	Legacy Macintosh RGB	Stari Macintosh RGB
-	Internet Standard RGB	Internet standard RGB
+	Working CMY Plates	Radna CMY ploča
+	Legacy Macintosh RGB (Gamma 1.8)	Stari Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internet standard RGB (sRGB)
 	Monitor RGB	RGB monitora
 	Color Blindness — Protanopia-type	Daltonizam — tip protanopije
 	Color Blindness — Deuteranopia-type	Daltonizam — tip deuteranopije
@@ -840,7 +850,6 @@
 	Consolidate All to Tabs	Objedini sve u kartice
 	Float in Window	Odvoji u prozor
 	Float All in Windows	Odvoji sve u prozore
-	New Window for Document	Novi prozor za dokument
 	Workspace	Radni prostor
 	Essentials	Osnovno
 	Graphic and Web	Grafika i veb
@@ -1989,6 +1998,11 @@
 	Show canvas dots	Prikaži tačke na platnu
 	Clip thumbnails to layer bounds	Iseci sličice prema granicama sloja
 	Clip Thumbnails to Layer Bounds	Iseci sličice prema granicama sloja
+	No Thumbnails	Bez sličica
+	Small Thumbnails	Male sličice
+	Medium Thumbnails	Srednje sličice
+	Large Thumbnails	Velike sličice
+	Clip Thumbnails to Document Bounds	Iseci sličice prema granicama dokumenta
 	Canvas color	Boja platna
 	Canvas custom color	Prilagođena boja platna
 	Color picker	Birač boja

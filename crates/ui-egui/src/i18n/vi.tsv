@@ -188,10 +188,15 @@
 	Check Spelling…	Kiểm tra chính tả…
 	Clear	Xóa
 	Clear Recent Files	Xóa tệp gần đây
+	Clear Recent File List	Xóa tệp gần đây
 	Clipboard	Bảng tạm
 	Close	Đóng
 	Close All	Đóng tất cả
 	Close Others	Đóng các tệp khác
+	New Document…	Tài liệu mới…
+	Open Document…	Mở…
+	Consolidate All to Here	Gom tất cả vào đây
+	Move to New Window	Di chuyển sang cửa sổ mới
 	Color Lookup Tables…	Bảng tra màu…
 	Color Settings…	Cài đặt màu…
 	Conditional Mode Change…	Đổi chế độ có điều kiện…
@@ -275,6 +280,7 @@
 	Place Embedded…	Đặt nhúng…
 	Place Linked…	Đặt liên kết…
 	Plug-ins…	Plug-in…
+	Plugins…	Plug-in…
 	Preferences	Tùy chọn
 	Preset Manager…	Quản lý thiết lập sẵn…
 	Presets	Thiết lập sẵn
@@ -373,6 +379,8 @@
 	Color Table…	Bảng màu…
 	Combine Shapes	Kết hợp hình
 	Convert to Embedded	Chuyển thành nhúng
+	Embed Linked	Nhúng mục liên kết
+	Embed All Linked	Nhúng tất cả mục liên kết
 	Convert to Layers	Chuyển thành lớp
 	Convert to Linked…	Chuyển thành liên kết…
 	Convert to Smart Object	Chuyển thành đối tượng thông minh
@@ -404,6 +412,7 @@
 	Entropy	Entropy
 	Equalize	Cân bằng histogram
 	Exclude Overlapping Shapes	Loại phần chồng hình
+	Subtract Shapes at Overlap	Loại phần chồng hình
 	Export Contents…	Xuất nội dung…
 	Exposure…	Phơi sáng…
 	Fill Content	Nội dung tô
@@ -438,6 +447,7 @@
 	Insert Blank Frame	Chèn khung trống
 	Interpret Footage…	Diễn giải footage…
 	Intersect Shape Areas	Giao vùng hình
+	Unite Shapes at Overlap	Giao vùng hình
 	Invert	Đảo màu
 	Invert…	Đảo màu…
 	Kurtosis	Kurtosis
@@ -733,10 +743,10 @@
 	Grid	Lưới
 	Guides	Đường căn
 	HDV 1080/DVCPRO HD 720 (1.33)	HDV 1080/DVCPRO HD 720 (1.33)
-	Internet Standard RGB	RGB chuẩn Internet
+	Internet Standard RGB (sRGB)	RGB chuẩn Internet (sRGB)
 	Layer Edges	Cạnh lớp
 	Layers	Các lớp
-	Legacy Macintosh RGB	RGB Macintosh cũ
+	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh cũ (Gamma 1.8)
 	Lock Guides	Khóa đường căn
 	Lock Slices	Khóa lát cắt
 	Mesh	Lưới
@@ -766,7 +776,7 @@
 	Standard Screen Mode	Chế độ màn hình chuẩn
 	Target Path	Đường dẫn đích
 	Working Black Plate	Bản Black làm việc
-	Working CMY Plate	Bản CMY làm việc
+	Working CMY Plates	Bản CMY làm việc
 	Working CMYK	CMYK làm việc
 	Working Cyan Plate	Bản Cyan làm việc
 	Working Magenta Plate	Bản Magenta làm việc
@@ -813,7 +823,7 @@
 	Modifier Keys	Phím bổ trợ
 	Motion	Chuyển động
 	Navigator	Điều hướng
-	New Window for Document	Cửa sổ mới cho tài liệu
+	New Window	Cửa sổ mới cho tài liệu
 	New Workspace…	Không gian làm việc mới…
 	Next Theme	Chủ đề tiếp theo
 	Options	Thanh tùy chọn
@@ -1605,6 +1615,7 @@ cameraRaw	Shadows	Vùng tối
 	Picas	Pica
 	Pixels	Pixel
 	Plug-ins	Plug-in
+	Plugins	Plug-in
 	Png	PNG
 	Point size	Cỡ point
 	Points	Point
@@ -2614,6 +2625,7 @@ shape	Appearance	Diện mạo
 	(coming soon)	(sắp có)
 	Add beauty precomp from the AOVs	Thêm precomp beauty từ các AOV
 	Show in Explorer	Hiện trong Explorer
+	Reveal in Explorer	Hiện trong Explorer
 	Show in Folder	Hiện trong thư mục
 	Delete and Fill Selection	Xoá và tô vùng chọn
 	Transform Again on a Copy	Biến đổi lại trên một bản sao
@@ -2755,6 +2767,11 @@ shape	Appearance	Diện mạo
 	Show canvas dots	Hiện chấm vùng vẽ
 	Clip thumbnails to layer bounds	Cắt hình thu nhỏ theo biên của lớp
 	Clip Thumbnails to Layer Bounds	Cắt hình thu nhỏ theo biên của lớp
+	No Thumbnails	Không có hình thu nhỏ
+	Small Thumbnails	Hình thu nhỏ cỡ nhỏ
+	Medium Thumbnails	Hình thu nhỏ cỡ vừa
+	Large Thumbnails	Hình thu nhỏ cỡ lớn
+	Clip Thumbnails to Document Bounds	Cắt hình thu nhỏ theo biên của tài liệu
 	Color picker	Bộ chọn màu
 	Color space	Không gian màu
 	Column width	Độ rộng cột
@@ -3761,6 +3778,10 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+# History panel › History Options… (#2966)
+	Automatically Create First Snapshot	Tự động tạo ảnh chụp trạng thái đầu tiên
+	Automatically Create New Snapshot When Saving	Tự động tạo ảnh chụp trạng thái mới khi lưu
+	Show New Snapshot Dialog by Default	Mặc định hiện hộp thoại Ảnh chụp trạng thái mới
 	Memory usage percent	Tỷ lệ sử dụng bộ nhớ
 	Show Favorite Fonts	Hiển thị phông chữ yêu thích
 	No favorite fonts yet: click the star beside a font to add it.	Chưa có phông chữ yêu thích: nhấp vào ngôi sao bên cạnh phông chữ để thêm.

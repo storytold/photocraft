@@ -203,6 +203,7 @@
 	Right	Vpravo
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
+	Clear Recent File List	Vymazat nedávné soubory
 	Remove from Recent	Odebrat z nedávných
 	Remove {name} from Recent	Odebrat {name} z nedávných
 	Close	Zavřít
@@ -211,6 +212,10 @@
 	Restore	Obnovit
 	Close All	Zavřít vše
 	Close Others	Zavřít ostatní
+	New Document…	Nový dokument…
+	Open Document…	Otevřít…
+	Consolidate All to Here	Sloučit vše sem
+	Move to New Window	Přesunout do nového okna
 	Save	Uložit
 	Save As…	Uložit jako…
 	Save a Copy…	Uložit kopii…
@@ -262,6 +267,7 @@
 	Create Smart Object after Loading Layers	Po načtení vrstev vytvořit chytrý objekt
 	Reveal in Finder	Zobrazit ve Finderu
 	Show in Explorer	Zobrazit v Průzkumníkovi
+	Reveal in Explorer	Zobrazit v Průzkumníkovi
 	Show in Folder	Zobrazit ve složce
 	File Info…	Informace o souboru…
 	Print…	Tisk…
@@ -350,6 +356,7 @@
 	Units & Rulers…	Jednotky a pravítka…
 	Guides, Grid & Slices…	Vodítka, mřížka a řezy…
 	Plug-ins…	Zásuvné moduly…
+	Plugins…	Zásuvné moduly…
 	Type…	Text…
 	Enhanced Controls…	Rozšířené ovládání…
 	Camera Raw…	Camera Raw…
@@ -507,6 +514,8 @@
 	Smart Object	Chytrý objekt
 	Convert to Smart Object	Převést na chytrý objekt
 	Convert to Embedded	Převést na vložený
+	Embed Linked	Vložit propojené
+	Embed All Linked	Vložit všechna propojená
 	Convert to Layers	Převést na vrstvy
 	Convert to Linked…	Převést na propojený…
 	Edit Contents	Upravit obsah
@@ -764,6 +773,7 @@
 	Minimum…	Minimum…
 	Offset…	Posun…
 	Plug-ins	Zásuvné moduly
+	Plugins	Zásuvné moduly
 	Proof Setup	Nastavení nátisku
 	Proof Colors	Nátiskové barvy
 	Gamut Warning	Upozornění na gamut
@@ -772,9 +782,9 @@
 	Working Magenta Plate	Pracovní purpurový výtažek
 	Working Yellow Plate	Pracovní žlutý výtažek
 	Working Black Plate	Pracovní černý výtažek
-	Working CMY Plate	Pracovní výtažky CMY
-	Legacy Macintosh RGB	Starší Macintosh RGB
-	Internet Standard RGB	Internetový standard RGB
+	Working CMY Plates	Pracovní výtažky CMY
+	Legacy Macintosh RGB (Gamma 1.8)	Starší Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internetový standard RGB (sRGB)
 	Monitor RGB	RGB monitoru
 	Color Blindness — Protanopia-type	Barvoslepost — protanopie
 	Color Blindness — Deuteranopia-type	Barvoslepost — deuteranopie
@@ -866,7 +876,7 @@
 	Consolidate All to Tabs	Sloučit vše do záložek
 	Float in Window	Uvolnit do plovoucího okna
 	Float All in Windows	Uvolnit vše do plovoucích oken
-	New Window for Document	Nové okno dokumentu
+	New Window	Nové okno dokumentu
 	Workspace	Pracovní prostor
 	Essentials	Základy
 	Graphic and Web	Grafika a web
@@ -2041,6 +2051,11 @@
 	Show canvas dots	Zobrazit tečky plátna
 	Clip thumbnails to layer bounds	Oříznout miniatury na hranice vrstvy
 	Clip Thumbnails to Layer Bounds	Oříznout miniatury na hranice vrstvy
+	No Thumbnails	Bez miniatur
+	Small Thumbnails	Malé miniatury
+	Medium Thumbnails	Střední miniatury
+	Large Thumbnails	Velké miniatury
+	Clip Thumbnails to Document Bounds	Oříznout miniatury na hranice dokumentu
 	Canvas color	Barva plátna
 	Canvas custom color	Vlastní barva plátna
 	Color picker	Výběr barvy
@@ -3910,6 +3925,9 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+	Automatically Create First Snapshot	Automaticky vytvořit první snímek
+	Automatically Create New Snapshot When Saving	Automaticky vytvořit nový snímek při ukládání
+	Show New Snapshot Dialog by Default	Ve výchozím nastavení zobrazit dialog Nový snímek
 	Memory usage percent	Využití paměti (%)
 	Show Favorite Fonts	Zobrazit oblíbená písma
 	No favorite fonts yet: click the star beside a font to add it.	Zatím žádná oblíbená písma: přidejte písmo kliknutím na hvězdičku vedle něj.
