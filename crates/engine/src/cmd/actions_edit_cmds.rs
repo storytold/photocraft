@@ -171,9 +171,7 @@ pub(crate) fn assignment_slot(s: &Session, p: &Value, name: Option<&str>, cmd: &
         return set_slot(s, p, name, cmd);
     }
     let Some(name) = name else { return Ok(None) };
-    if s.actions.sets.iter().any(|set| set == name)
-        || s.actions.list.iter().any(|action| action.set_slot.is_none() && action.set.as_deref() == Some(name))
-    {
+    if s.actions.sets.iter().any(|set| set == name) || s.actions.list.iter().any(|action| action.set_slot.is_none() && action.set.as_deref() == Some(name)) {
         return Ok(None);
     }
     let mut matches = s.actions.set_rows.iter().enumerate().filter(|(_, caption)| caption.as_str() == name);
@@ -295,25 +293,18 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(c)) => c.clone(),
         _ => return Err(bad(cmd, format!("needs `if`, one of {}", CONDITIONS.join("|")))),
     };
-    let branch = |key: &str| -> Result<Option<String>> {
-        match p.get(key) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(n)) if !n.trim().is_empty() => Ok(Some(n.clone())),
-            Some(Value::String(_)) => Ok(None),
-            Some(_) => Err(bad(cmd, format!("`{key}` must be an action name or null"))),
-        }
-    };
-    let (then, otherwise) = (branch("then")?, branch("else")?);
+    let (then, otherwise) = (crate::actions_cmds::conditional_branch(p, "then")?, crate::actions_cmds::conditional_branch(p, "else")?);
     let holds = evaluate(s, &condition)?;
     let played = if holds { then } else { otherwise };
-    let mut out = json!({"if": condition, "holds": holds, "played": played});
-    if let Some(name) = played {
-        let r = s.execute("actions.play", json!({"action": name}))?;
+    let mut out = json!({"if": condition, "holds": holds, "played": played.as_ref().and_then(|p| p.get("action"))});
+    if let Some(params) = played {
+        let r = s.execute("actions.play", params)?;
         if let Some(f) = r.get("failed") {
             out["failed"] = f.clone();
         }
         out["ran"] = r.get("ran").cloned().unwrap_or(json!(0));
-        out["action"] = json!(name);
+        out["action"] = r["action"].clone();
+        out["played"] = r["action"].clone();
     }
     Ok(out)
 }

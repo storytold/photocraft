@@ -15,8 +15,12 @@ pub fn occurrence_key(id: &str) -> String {
     format!("{OCCURRENCE_PREFIX}{id}")
 }
 
+pub(crate) fn valid_action_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
 pub(crate) fn resolve_action_id(list: &[Action], id: &str) -> Option<usize> {
-    if id.len() != 32 || !id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)) {
+    if !valid_action_id(id) {
         return None;
     }
     let mut matches = list.iter().enumerate().filter(|(_, action)| action.action_id.as_deref() == Some(id));
@@ -38,6 +42,14 @@ pub(crate) fn invalidate_duplicate_ids(list: &mut [Action]) {
             action.action_id = Some(String::new());
         }
     }
+}
+
+/// Reacquire a paused row by the same identity its playback used.
+pub fn playback_row(list: &[Action], action: &Action) -> Option<usize> {
+    if let Some(id) = action.action_id.as_deref().filter(|id| valid_action_id(id)) {
+        return resolve_action_id(list, id);
+    }
+    list.iter().position(|other| other.name == action.name)
 }
 
 pub fn shortcut_row(list: &[Action], key: &str) -> Option<usize> {

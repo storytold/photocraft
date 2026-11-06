@@ -249,6 +249,33 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
     Some((n, shift, command))
 }
 
+/// ATN uses names for these calls. Only translate an ID when that name identifies
+/// the same exported row; an absent or ambiguous target is an unsupported step.
+fn export_targeted_items(id: &str, params: &Value, set: &str, actions: &[&Action]) -> Option<Vec<AtnItem>> {
+    let targets: &[(&str, &str)] = match id {
+        "actions.play" => &[("actionId", "action")],
+        "actions.conditional" => &[("thenActionId", "then"), ("elseActionId", "else")],
+        _ => &[],
+    };
+    if !targets.iter().any(|(key, _)| params.get(*key).is_some()) {
+        return export_items(id, params, set);
+    }
+    let mut params = params.clone();
+    for (key, name) in targets {
+        if let Some(id) = params.get(*key) {
+            let id = id.as_str().filter(|id| crate::actions_cmds::valid_action_id(id))?;
+            let mut matches = actions.iter().filter(|action| action.action_id.as_deref() == Some(id));
+            let action = matches.next()?;
+            if matches.next().is_some() || actions.iter().filter(|other| other.name == action.name).take(2).count() != 1 {
+                return None;
+            }
+            params[*name] = json!(action.name);
+        }
+    }
+    params["set"] = json!(set);
+    export_items(id, &params, set)
+}
+
 /// The `.atn` bytes of `actions` as the set `set`. `function_keys` gives each action's key
 /// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). Steps with no Photoshop equivalent are an error unless `skip_unsupported`.
 pub fn export(
@@ -274,7 +301,7 @@ pub(super) fn export_with_keys<'a>(
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
         for (i, (id, params)) in a.steps.iter().enumerate() {
-            let Some(items) = export_items(id, params, set) else {
+            let Some(items) = export_targeted_items(id, params, set, actions) else {
                 if skip_unsupported {
                     skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
                     continue;

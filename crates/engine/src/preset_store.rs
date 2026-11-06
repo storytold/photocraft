@@ -57,6 +57,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Session;
 
+mod actions;
 mod patterns;
 pub use patterns::{Loaded as LoadedPattern, MAX_PATTERN_BYTES, PATTERNS_FILE, PREVIEW_SIDE as PATTERN_PREVIEW_SIDE};
 
@@ -1149,7 +1150,7 @@ impl Session {
     /// built-in of the same name; presets created before the store finished loading win), hide
     /// deleted built-ins, then sync. Returns the load warnings.
     pub fn attach_preset_store(&mut self, opened: Opened) -> Vec<String> {
-        let Opened { store, presets, hidden_builtins, order, mut warnings, actions: disk, action_sets, action_set_rows, patterns } = opened;
+        let Opened { store, presets, hidden_builtins, order, mut warnings, actions: mut disk, action_sets, action_set_rows, patterns } = opened;
         let builtins = crate::pattern_cmds::builtin();
         for l in patterns {
             let id = l.pattern.id.clone();
@@ -1189,8 +1190,8 @@ impl Session {
         }
         self.preset_store = Some(store);
         self.actions.set_rows_revision = self.actions.set_rows_revision.wrapping_add(1);
-        // In-memory actions (created before the store finished loading) win on name. Disk-only
-        // names are appended. An empty session takes the disk list and does not rewrite it.
+        // An empty session takes the disk list without rewriting it. Otherwise, keep the
+        // in-memory first match while retaining disk rows that own shortcuts or recorded calls.
         if self.actions.list.is_empty() && self.actions.sets.is_empty() && self.actions.set_rows.is_empty() && self.actions.library_undo.is_none() {
             self.actions.list = disk;
             self.actions.sets = action_sets;
@@ -1200,6 +1201,7 @@ impl Session {
                 st.actions_rev = 1;
             }
         } else {
+            actions::pin_disk_targets(self, &mut disk, &mut warnings);
             let offset = self.actions.set_rows.len();
             self.actions.set_rows.extend(action_set_rows);
             for name in action_sets {
@@ -1208,15 +1210,15 @@ impl Session {
                 }
             }
             for mut action in disk {
-                if action.set_slot.is_some() || !self.actions.list.iter().any(|have| have.name == action.name) {
+                if action.set_slot.is_some() || action.action_id.is_some() || !self.actions.list.iter().any(|have| have.name == action.name) {
                     action.set_slot = action.set_slot.and_then(|slot| slot.checked_add(offset));
                     self.actions.list.push(action);
                 }
             }
+            crate::actions_cmds::invalidate_duplicate_ids(&mut self.actions.list);
             self.actions.library_undo = None;
             self.actions.rev = self.actions.rev.saturating_add(1).max(1);
         }
-        crate::actions_cmds::discard_ambiguous_shortcuts(self);
         self.brush_presets_changed();
         self.sync_preset_store();
         // A brush remembered from the previous run (or picked before the store loaded) may be

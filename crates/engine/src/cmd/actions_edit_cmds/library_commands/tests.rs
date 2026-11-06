@@ -194,6 +194,32 @@ fn atn_export_and_load_keep_function_keys_of_duplicate_rows_separate() {
     assert_eq!(crate::actions_cmds::action_shortcut(&loaded, 2), Some("F3"));
 }
 
+#[test]
+fn attachment_keeps_disk_batch_targets_and_does_not_resolve_foreign_ids() {
+    use crate::preset_store::{ACTIONS_FILE, PresetBackend};
+
+    let store = MemBackend::default();
+    let foreign_id = "a".repeat(32);
+    let file = json!({"version":1,"actions":[
+        {"name":"Target","set":"Saved"},
+        {"name":"Caller","steps":[
+            ["file.automate.batch",{"action":"Target","set":"Saved"}],
+            ["actions.play",{"action":0}],
+            ["actions.play",{"action":"Target","actionId":foreign_id}]
+        ]}
+    ]});
+    store.write(ACTIONS_FILE, file.to_string().as_bytes()).unwrap();
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some("Saved".into()), action_id: Some(foreign_id), ..Action::new("Target", Vec::new()) });
+    assert!(s.attach_preset_store(open(Box::new(store))).is_empty());
+    let list = &s.actions.list;
+    let calls = &list[2].steps;
+    assert_eq!(crate::file_cmds::batch_action(list, &calls[0].1).unwrap(), 1);
+    assert_eq!(crate::actions_cmds::resolve_play_target(list, &calls[1].1, "actions.play").unwrap(), 1);
+    assert!(crate::actions_cmds::resolve_play_target(list, &calls[2].1, "actions.play").is_err());
+    assert_eq!(crate::actions_cmds::resolve(list, &json!({"action":"Target"}), "actions.play").unwrap(), 0);
+}
+
 /// Imported calls follow a local physical folder before falling back to the first archive name.
 #[test]
 fn whole_replace_resolves_unqualified_calls_in_their_own_occurrence() {

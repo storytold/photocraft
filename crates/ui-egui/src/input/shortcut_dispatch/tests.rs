@@ -837,6 +837,46 @@ fn f3_dispatches_only_the_second_same_named_action_after_reorder_and_reopen() {
 }
 
 #[test]
+fn attachment_preserves_disk_keys_and_calls_without_changing_name_lookup() {
+    use photocraft_engine::preset_store::{ACTIONS_FILE, MemBackend, PresetBackend, open};
+
+    let store = MemBackend::default();
+    let file = json!({"version":1,"set_rows":["Saved"],"actions":[
+        {"name":"Target","set":"Saved","set_slot":0,"steps":[["layer.new.layer",{"name":"disk target"}]]},
+        {"name":"Disk caller","steps":[["actions.play",{"action":"Target"}]]},
+        {"name":"Disk conditional","steps":[["actions.conditional",{"if":"always","then":"Target"}]]}
+    ]});
+    store.write(ACTIONS_FILE, file.to_string().as_bytes()).unwrap();
+
+    let mut h = harness();
+    h.state_mut().session.load_prefs_json(r#"{"shortcuts":{"actions.play:Target":"F2"},"alternateShortcuts":{"actions.play:Target":["F3"]}}"#).unwrap();
+    h.state_mut().session.actions.list.push(actions_cmds::Action::new("Target", vec![("layer.new.layer".into(), json!({"name":"memory target"}))]));
+    assert!(h.state_mut().session.attach_preset_store(open(Box::new(store.clone()))).is_empty());
+    let disk_key = action_key(&h, 1);
+    assert_eq!(h.state().session.prefs().shortcuts[&disk_key], "F2");
+    assert_eq!(h.state().session.prefs().alternate_shortcuts[&disk_key], ["F3"]);
+
+    h.state_mut().run("actions.play", json!({"action":"Target"})).unwrap();
+    assert_eq!(active_name(&h), "memory target");
+    press(&mut h, "F2");
+    assert_eq!(active_name(&h), "disk target");
+    let saved = h.state().session.prefs_to_json();
+
+    let mut h = harness();
+    h.state_mut().session.load_prefs_json(&saved).unwrap();
+    assert!(h.state_mut().session.attach_preset_store(open(Box::new(store))).is_empty());
+    press(&mut h, "F3");
+    assert_eq!(active_name(&h), "disk target");
+    for caller in ["Disk caller", "Disk conditional"] {
+        h.state_mut().run("actions.play", json!({"action":"Target"})).unwrap();
+        assert_eq!(active_name(&h), "memory target");
+        let result = h.state_mut().run("actions.play", json!({"action":caller})).unwrap();
+        assert!(result.get("failed").is_none(), "{result}");
+        assert_eq!(active_name(&h), "disk target");
+    }
+}
+
+#[test]
 fn denied_shortcut_assignment_leaves_identity_and_bindings_unmodified() {
     let mut h = harness();
     h.state_mut().session.actions.list.push(actions_cmds::Action::new("Action", Vec::new()));

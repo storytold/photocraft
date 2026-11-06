@@ -610,6 +610,9 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
 
 pub(crate) fn batch_action(list: &[crate::actions_cmds::Action], p: &Value) -> Result<usize> {
     const CMD: &str = "file.automate.batch";
+    if p.get("actionId").is_some() {
+        return crate::actions_cmds::resolve_play_target(list, p, CMD);
+    }
     if let Some(set) = p.get("set").filter(|v| !v.is_null()) {
         let set = set.as_str().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "set must be a string".into() })?;
         let name =
@@ -694,7 +697,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             list
         }
     };
-    let mut called_name = None;
+    let mut called_target = None;
     let mut steps = if let Some(st) = p.get("steps") {
         parse_steps(st)?
     } else if let Some(act) = p.get("action").filter(|v| v.is_array()) {
@@ -703,15 +706,15 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         // The caller selects the source; calledActions supplies only its internal namespace.
         let index = batch_action(&s.actions.list, p)?;
         let (action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": index}))?;
-        called_name = Some(action.name.clone());
+        called_target = Some(crate::actions_cmds::PlaybackTarget::from(&action));
         action.enabled_steps().map(|(_, (id, params))| (id.clone(), params.clone())).collect()
     };
     let action_name = s
         .action_history
         .as_ref()
         .map(|group| group.name.clone())
-        .or_else(|| s.actions.playback_stack.first().cloned())
-        .or_else(|| called_name.clone())
+        .or_else(|| s.actions.playback_stack.first().map(|target| target.name.clone()))
+        .or_else(|| called_target.as_ref().map(|target| target.name.clone()))
         .or_else(|| p.get("action").and_then(Value::as_str).map(str::to_string))
         .or_else(|| p.get("action").and_then(|action| action.get("name")).and_then(Value::as_str).map(str::to_string))
         .unwrap_or_else(|| "Batch".into());
@@ -758,7 +761,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     // decoded and saved even with no steps) to the playback tree it is in and
     // hands the count on, so nested batches cannot multiply past the limit. A top-level named
     // action starts fresh; standalone explicit steps retain their existing behavior.
-    let named = called_name.is_some();
+    let named = called_target.is_some();
     let mut playback_steps = 0;
     if s.actions.playing > 0 || named {
         let spent = if s.actions.playing > 0 { s.actions.playback_steps } else { 0 };
@@ -772,7 +775,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut playback_stack = s.actions.playback_stack.clone();
-    playback_stack.extend(called_name);
+    playback_stack.extend(called_target);
     let actions = crate::actions_cmds::ActionState {
         list,
         playing: if named { s.actions.playing.saturating_add(1) } else { s.actions.playing },

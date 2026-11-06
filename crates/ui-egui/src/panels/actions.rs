@@ -326,11 +326,19 @@ fn end_at(c: Called, ran: &mut u64, failed: &mut Option<Value>, paused: &mut Opt
 /// A resumed playback goes on in the action this one called (`inner`, see [`play_owned`]) inside
 /// this one's playback frame, so its recursion checks still see this caller; the call was step
 /// `from - 1`. `None` when there is nothing to replay.
-fn replay_inner(app: &mut PhotocraftApp, caller: &str, from: usize, inner: &[(String, usize)]) -> Option<Called> {
-    let ((name, child_from), rest) = inner.split_first()?;
+fn resume_target(action: &Action, from: usize) -> Value {
+    let mut params = json!({"action": action.name, "from": from});
+    if let Some(id) = actions_cmds::PlaybackTarget::from(action).id {
+        params["actionId"] = json!(id);
+    }
+    params
+}
+
+fn replay_inner(app: &mut PhotocraftApp, caller: &str, from: usize, inner: &[(&Action, usize)]) -> Option<Called> {
+    let ((action, child_from), rest) = inner.split_first()?;
     let step = from.saturating_sub(1);
     let target = app.session.active().map(|d| d.doc.id);
-    Some(match play_owned(app, &json!({"action": name, "from": child_from}), None, rest) {
+    Some(match play_owned(app, &resume_target(action, *child_from), None, rest) {
         Ok(value) => called(app, caller, step, "actions.play", &value, target),
         Err(error) => Called::Failed(json!({"step": step, "id": "actions.play", "error": error})),
     })
@@ -352,28 +360,26 @@ fn nested_call(id: &str) -> Option<Player> {
 /// and Stop messages. The result is the engine command's, with the branch's `paused` or `stopped`.
 /// Malformed params go to the engine command, which refuses them with its own error.
 fn conditional(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
-    let branch = |key: &str| match p.get(key) {
-        None | Some(Value::Null) => Some(None),
-        Some(Value::String(n)) => Some(Some(n.clone()).filter(|n| !n.trim().is_empty())),
-        Some(_) => None,
-    };
-    let (Some(condition), Some(then), Some(otherwise)) = (p.get("if").and_then(Value::as_str), branch("then"), branch("else")) else {
+    let (Some(condition), Ok(then), Ok(otherwise)) =
+        (p.get("if").and_then(Value::as_str), actions_cmds::conditional_branch(p, "then"), actions_cmds::conditional_branch(p, "else"))
+    else {
         return app.session.execute("actions.conditional", p.clone()).map_err(|e| e.to_string());
     };
     let Ok(holds) = photocraft_engine::actions_edit_cmds::evaluate(&app.session, condition) else {
         return app.session.execute("actions.conditional", p.clone()).map_err(|e| e.to_string());
     };
     let played = if holds { then } else { otherwise };
-    let mut out = json!({"if": condition, "holds": holds, "played": played});
-    if let Some(name) = played {
-        let r = play(app, &json!({"action": name}))?;
+    let mut out = json!({"if": condition, "holds": holds, "played": played.as_ref().and_then(|p| p.get("action"))});
+    if let Some(params) = played {
+        let r = play(app, &params)?;
         for key in ["failed", "paused", "stopped"] {
             if let Some(v) = r.get(key) {
                 out[key] = v.clone();
             }
         }
         out["ran"] = r.get("ran").cloned().unwrap_or(json!(0));
-        out["action"] = json!(name);
+        out["action"] = r["action"].clone();
+        out["played"] = r["action"].clone();
     }
     Ok(out)
 }
@@ -401,7 +407,7 @@ fn stop_step(app: &mut PhotocraftApp, action: &Action, i: usize, p: &Value) -> C
 /// back, with that named call journaled, only when the whole call ends. `inner` are the called
 /// actions a resumed playback replays first, outermost first, each `(action, from)`: the first is
 /// the one this action's step before `from` called ([`resume`]).
-fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>, inner: &[(String, usize)]) -> Result<Value, String> {
+fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>, inner: &[(&Action, usize)]) -> Result<Value, String> {
     let (action, from) = match actions_cmds::playback_plan(&app.session, params) {
         Ok(plan) => plan,
         Err(e) => {
@@ -421,7 +427,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
     let owner = recording
         .map(|(_, idx)| {
             let into = app.session.actions.list.get(idx).map(|a| a.name.clone());
-            json!({"index": idx, "into": into, "action": action.name, "from": from})
+            json!({"index": idx, "into": into, "target": actions_cmds::recorded_target(&app.session, &action, from)})
         })
         .or(suspended);
     let mut ran = 0u64;
@@ -1064,14 +1070,11 @@ pub const RESUME: &str = "__resumeAction";
 /// Resume the recording a paused call suspended and journal that call, once.
 fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
     let Some(owner) = owner else { return };
-    let (Some(idx), Some(into), Some(name)) = (
-        owner.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()),
-        owner.get("into").and_then(Value::as_str),
-        owner.get("action").and_then(Value::as_str),
-    ) else {
+    let (Some(idx), Some(into), Some(params)) =
+        (owner.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()), owner.get("into").and_then(Value::as_str), owner.get("target"))
+    else {
         return;
     };
-    let from = owner.get("from").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).unwrap_or(0);
     // `suspended_guard` refuses what would move the recorded action, but another command may
     // still replace the list: the call goes to the action of that name, never to whatever now
     // sits at the old index, and is dropped if that action is gone.
@@ -1080,7 +1083,7 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
     if let Some(idx) = target
         && app.session.actions.recording.is_none()
     {
-        actions_cmds::restore_recording(&mut app.session, idx, name, from);
+        actions_cmds::restore_recording(&mut app.session, idx, params.clone());
     }
 }
 
@@ -1141,8 +1144,7 @@ pub(crate) struct PausedPlayback {
     record: Option<Value>,
     history: Option<actions_cmds::ActionHistoryContinuation>,
     /// The actions still to play after this one, as they were when Play started a whole set.
-    /// Actions have no id, so the whole action stands in for one: an action deleted and made again
-    /// under the same name, or edited, while the dialog is open no longer matches.
+    /// The whole action also guards against edits while the dialog is open.
     then: Vec<Action>,
     /// The steps that Play ran before this pause (earlier actions of the set, and this one's
     /// steps before the dialog), so the final count covers the whole Play.
@@ -1164,8 +1166,7 @@ pub(crate) struct PausedPlayback {
     /// whose own step runs on confirm.
     timed: bool,
     /// The paused action and each of its callers as they were when it paused, innermost first.
-    /// The continuation goes on by name, so an action edited, deleted or replaced by a new one of
-    /// the same name meanwhile ends it there instead of playing the new action's tail ([`resume`]).
+    /// The continuation checks these snapshots before resuming any remaining steps.
     played: Vec<Action>,
 }
 
@@ -1357,15 +1358,13 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     }
     let saved = app.session.authorize;
     let service = if app.automation_input { app.services.automation_authorize } else { None };
+    let list = &app.session.actions.list;
     let remaining = !paused.then.is_empty()
         || !paused.callers.is_empty()
-        || app
-            .session
-            .actions
-            .list
-            .iter()
-            .find(|action| action.name == paused.action)
-            .is_some_and(|action| action.enabled_steps().any(|(i, _)| i >= paused.from));
+        || paused.played.first().is_some_and(|action| {
+            let live = actions_cmds::playback_row(list, action).and_then(|row| list.get(row));
+            action.enabled_steps().any(|(i, _)| i >= paused.from) || live.is_some_and(|action| action.enabled_steps().any(|(i, _)| i >= paused.from))
+        });
     let gate =
         if remaining { continuation_gate(saved, service).and_then(|live| continuation_gate(paused.gate, live)) } else { Ok(saved.or(service).or(paused.gate)) };
     let gate = match gate {
@@ -1379,11 +1378,8 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
             return Err(error);
         }
     };
-    // The rest plays by name: refuse it when an action of the paused call changed meanwhile, so a
-    // new action of the same name never plays from the old one's step. With nothing left to play,
-    // the call simply ends. (Another document coming to the front fails `history.resume` above.)
-    let list = &app.session.actions.list;
-    if remaining && paused.played.iter().any(|a| list.iter().find(|b| b.name == a.name) != Some(a)) {
+    // Verify each live occurrence against the exact definition that paused.
+    if remaining && paused.played.iter().any(|a| actions_cmds::playback_row(list, a).and_then(|row| list.get(row)) != Some(a)) {
         let error = "the action changed while it was paused";
         actions_cmds::finish_pending_history(&mut app.session);
         restore_recording(app, owner.as_ref());
@@ -1394,11 +1390,12 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     }
     // The paused action goes on, then each action that called it, inside its callers' frames:
     // replay starts at the outermost, which replays the inner ones first.
-    let frames: Vec<(String, usize)> = paused.callers.iter().rev().cloned().chain(std::iter::once((paused.action.clone(), paused.from))).collect();
+    let positions = paused.callers.iter().rev().map(|(_, from)| *from).chain(std::iter::once(paused.from));
+    let frames: Vec<_> = paused.played.iter().rev().zip(positions).collect();
     let Some(((outer, outer_from), inner)) = frames.split_first() else {
         return Err("this dialog doesn't belong to a paused action".into());
     };
-    let params = json!({"action": outer, "from": outer_from});
+    let params = resume_target(outer, *outer_from);
     // A dialog's own step runs on its confirm; a paced wait's step already ran and was counted.
     let own = u64::from(!paused.timed);
     app.session.authorize = gate;
