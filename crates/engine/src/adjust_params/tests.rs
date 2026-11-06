@@ -415,6 +415,116 @@ fn layer_eyedropper_samples_below_the_curves_layer() {
     assert!(s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "white", "at": [1, 1]}})).is_err(), "Levels and Curves only");
 }
 
+/// #9266: Exposure's eyedroppers give Photoshop 2025's values (measured on 8-bit gray patches
+/// 64 and 200): black on 64 → offset −0.2510, white on 200 → exposure +0.3505, gray on 64 →
+/// exposure −0.4796; on an adjustment layer they sample below it, one history step each.
+#[test]
+fn exposure_eyedroppers_match_photoshop() {
+    let g = |v: f32| [v / 255.0; 3];
+    let get = |a: Adjustment| match a {
+        Adjustment::Exposure { exposure, offset, .. } => (exposure, offset),
+        other => panic!("{other:?}"),
+    };
+    let base = json!({});
+    let (_, o) = get(exposure_eyedropper(&base, CurvesEyedropper::Black, g(64.0), ColorMode::Rgb).unwrap());
+    assert!((o + 0.25098).abs() < 1e-4, "{o}");
+    let (e, _) = get(exposure_eyedropper(&base, CurvesEyedropper::White, g(200.0), ColorMode::Rgb).unwrap());
+    assert!((e - 0.35052).abs() < 1e-4, "{e}");
+    let (e, _) = get(exposure_eyedropper(&base, CurvesEyedropper::NeutralGray, g(64.0), ColorMode::Rgb).unwrap());
+    assert!((e + 0.47956).abs() < 1e-4, "{e}");
+    // The other settings stay; black on a black sample brings nothing up; Grayscale has no gray.
+    let (e, o) = get(exposure_eyedropper(&json!({"exposure": 1.0, "gamma": 1.5}), CurvesEyedropper::Black, g(64.0), ColorMode::Rgb).unwrap());
+    assert!(e == 1.0 && (o + 0.50).abs() < 1e-4, "offset clamps at −0.5: {o}");
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::White, [0.0; 3], ColorMode::Rgb).is_err());
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::NeutralGray, g(64.0), ColorMode::Grayscale).is_err());
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::White, [f32::NAN; 3], ColorMode::Rgb).is_err());
+    // On a layer, through `layer.setAdjustment`.
+    let mut s = crate::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"color": "#c8c8c8"})).unwrap();
+    s.execute("layer.newAdjustmentLayer.exposure", json!({})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.setAdjustment", json!({"eyedropper": {"point": "white", "at": [2, 2]}})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+    let e = match &s.active().unwrap().doc.layers.last().unwrap().content {
+        photocraft_doc::LayerContent::Adjustment(Adjustment::Exposure { exposure, .. }) => *exposure,
+        other => panic!("{other:?}"),
+    };
+    assert!((e - 0.35052).abs() < 1e-3, "{e}");
+}
+
+fn exposure_of(a: Adjustment) -> (f32, f32) {
+    match a {
+        Adjustment::Exposure { exposure, offset, .. } => (exposure, offset),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// #9288 review: a 32-bit sample above 1 keeps its value, so White on 2.0 takes it down a stop
+/// to white (the compositor applies Exposure to float samples unclipped).
+#[test]
+fn exposure_white_point_keeps_hdr_samples() {
+    let (e, _) = exposure_of(exposure_eyedropper(&json!({}), CurvesEyedropper::White, [2.0; 3], ColorMode::Rgb).unwrap());
+    assert!((e + 1.0).abs() < 1e-4, "{e}");
+}
+
+/// #9288 review: a dim but nonzero sample within Exposure's ±20 stops is picked, not refused
+/// as black (a 16-bit 1/65535 needs ~16 stops to white).
+#[test]
+fn exposure_eyedropper_accepts_dim_samples_within_range() {
+    let (e, _) = exposure_of(exposure_eyedropper(&json!({}), CurvesEyedropper::White, [1.0 / 65535.0; 3], ColorMode::Rgb).unwrap());
+    assert!((e - 65535f32.log2()).abs() < 1e-3, "{e}");
+    assert!(exposure_eyedropper(&json!({}), CurvesEyedropper::White, [0.0; 3], ColorMode::Rgb).is_err(), "black stays refused");
+}
+
+/// #9288 review: an Offset already past the target leaves no exposure that reaches it, so the
+/// pick is refused rather than reported as a −20-stop success.
+#[test]
+fn exposure_gray_point_refuses_an_offset_past_the_target() {
+    let base = json!({"offset": 0.3});
+    assert!(exposure_eyedropper(&base, CurvesEyedropper::NeutralGray, [64.0 / 255.0; 3], ColorMode::Rgb).is_err());
+    let (e, o) = exposure_of(exposure_eyedropper(&base, CurvesEyedropper::White, [0.35; 3], ColorMode::Rgb).unwrap());
+    assert!(o == 0.3 && (e - 1.0).abs() < 1e-4, "white is still reachable: {e}");
+}
+
+/// #9288 review: each picker against the values Photoshop 2025 (26.2) wrote to a default
+/// Exposure layer, read back from its descriptor, on 8-bit gray patches 64 and 200. Photoshop
+/// samples the patch as its 16-bit value (64 → 8224/32768, 200 → 25700/32768), which accounts
+/// for every residual against the 8-bit value used here (at most 2.2e-5), inside the tolerance.
+#[test]
+fn exposure_eyedroppers_give_the_measured_photoshop_values() {
+    // (picker, 8-bit gray patch, Photoshop's exposure, Photoshop's offset)
+    let measured = [
+        (CurvesEyedropper::Black, 64.0, 0.0, -0.2509766),
+        (CurvesEyedropper::White, 200.0, 0.3505193, 0.0),
+        (CurvesEyedropper::NeutralGray, 64.0, -0.4795556, 0.0),
+    ];
+    for (picker, patch, ps_exposure, ps_offset) in measured {
+        let (e, o) = exposure_of(exposure_eyedropper(&json!({}), picker, [patch / 255.0; 3], ColorMode::Rgb).unwrap());
+        assert!((e - ps_exposure).abs() < 1e-4, "{picker:?} on {patch}: exposure {e}, Photoshop {ps_exposure}");
+        assert!((o - ps_offset).abs() < 1e-4, "{picker:?} on {patch}: offset {o}, Photoshop {ps_offset}");
+    }
+}
+
+/// #9288 review: a black sample is refused by the gray picker as well as the white one (no
+/// exposure brings it up), and is not reported as an unchanged success.
+#[test]
+fn exposure_gray_point_refuses_a_black_sample() {
+    assert!(exposure_eyedropper(&json!({}), CurvesEyedropper::NeutralGray, [0.0; 3], ColorMode::Rgb).is_err());
+}
+
+/// #9288 review: no picker touches Gamma (Photoshop leaves it alone).
+#[test]
+fn exposure_eyedroppers_leave_gamma_alone() {
+    let base = json!({"gamma": 1.5});
+    for picker in [CurvesEyedropper::Black, CurvesEyedropper::NeutralGray, CurvesEyedropper::White] {
+        match exposure_eyedropper(&base, picker, [64.0 / 255.0; 3], ColorMode::Rgb).unwrap() {
+            Adjustment::Exposure { gamma, .. } => assert_eq!(gamma, 1.5, "{picker:?}"),
+            other => panic!("{other:?}"),
+        }
+    }
+}
+
 /// #3127: on a smart object the eyedropper param records the adjustment it resolved to as
 /// the smart filter, not the raw sample (which re-rendered as an identity).
 #[test]
