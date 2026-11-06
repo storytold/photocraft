@@ -1,7 +1,7 @@
 use super::filters::{smart, smart_mut};
 use super::placing::{contain_box, detach_psd, stretch_placement};
-use super::rendering::{refresh, refresh_or_fail, source_box, unapplied_filters};
-use super::source::{authorize_source, authorized_source_bytes, source_bytes, source_image};
+use super::rendering::{contents_digest, refresh, refresh_or_fail, source_box, unapplied_filters};
+use super::source::{authorize_source, authorized_source_bytes, source_bytes, source_image_keyed};
 use super::{
     Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
     decode_source, encode_source, json, layer_param, other,
@@ -131,23 +131,25 @@ pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, byt
 
 /// [`replace_contents_bytes`] with a [`Fit`].
 pub fn replace_contents_fit(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>, fit: Fit) -> Result<Value> {
-    let stretch = match fit {
-        Fit::Keep => {
-            decode_source(file_name, &bytes)?; // fail before touching the document
-            None
-        }
-        Fit::Stretch | Fit::Contain => {
-            let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-            // The old boxes first: without a stored size they decode the old contents.
-            let from = authored_boxes(s, doc, id)?;
-            // Decode now, failing before touching the document; the re-render finds the image in
-            // the source cache.
-            let b = source_image(file_name, &bytes, doc.pixel_format())?.bounds;
-            let to = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
-            Some(Stretch { to, from, contain: fit == Fit::Contain })
-        }
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    // The old boxes first: without a stored size they decode the old contents.
+    let from = match fit {
+        Fit::Keep => None,
+        Fit::Stretch | Fit::Contain => Some(authored_boxes(s, doc, id)?),
     };
-    set_shared_source_fit(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, stretch)
+    // Decode now, failing before touching the document. A raster file goes into the source cache
+    // under the key the re-render looks up (the digest of this very buffer, which every instance
+    // will hold), so it is decoded and hashed once; an SVG renders through its own vector path,
+    // so only its document is read here.
+    let bytes = Arc::new(bytes);
+    let b = if photocraft_io::svg::is_svg(&bytes) {
+        decode_source(file_name, &bytes)?.bounds()
+    } else {
+        source_image_keyed(file_name, &bytes, (contents_digest(&bytes), doc.pixel_format()))?.bounds
+    };
+    let to = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
+    let stretch = from.map(|from| Stretch { to, from, contain: fit == Fit::Contain });
+    set_shared_source_fit(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes }, stretch)
 }
 
 /// The box (source pixels) each instance of `id`'s contents was authored for: its `soLD` stored
