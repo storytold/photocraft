@@ -309,11 +309,10 @@ impl PhotocraftApp {
         let dock_right = !crate::direction::is_rtl();
         let toolbar_at_dock_edge = toolbar_right == dock_right;
         // The dock-edge layout drops the canvas from craft-ui's split, which is only safe while
-        // nothing else is docked beside it. During a dock drag, and whenever a panel already
-        // sits beside the canvas, keep the standard layout so craft-ui still offers the canvas
-        // as a drop target and those panels stay visible.
-        let dock_edge_layout =
-            toolbar_shown && docking && toolbar_at_dock_edge && !crate::panel_docking::drag_active(ui.ctx()) && crate::panel_docking::canvas_alone(self);
+        // nothing else is docked beside it. A panel already beside the canvas keeps the standard
+        // layout so it stays visible and dockable. The layout must not change once a drag starts:
+        // craft-ui records the areas on the press, and swapping the shape cancels the drag.
+        let dock_edge_layout = toolbar_shown && docking && toolbar_at_dock_edge && crate::panel_docking::canvas_alone(self);
         if dock_edge_layout {
             // Dock outermost, then its rail, then the toolbox, then the canvas: the toolbox sits
             // between the canvas and the dock, not outside the dock at the window edge.

@@ -760,8 +760,7 @@ mod tests {
         assert_eq!(value["toolbar_side"], "start");
         assert_eq!(serde_json::from_value::<Panels>(value).unwrap(), Panels::default());
 
-        let mut right = Panels::default();
-        right.toolbar_side = ToolbarSide::Right;
+        let right = Panels { toolbar_side: ToolbarSide::Right, ..Default::default() };
         let value = serde_json::to_value(&right).unwrap();
         assert_eq!(value["toolbar_side"], "right");
         assert_eq!(serde_json::from_value::<Panels>(value).unwrap(), right);
