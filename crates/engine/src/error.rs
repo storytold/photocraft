@@ -82,16 +82,17 @@ fn build_limit_scope(limit: BuildMemoryLimit) -> String {
     }
 }
 
-/// Exactly when spilling is on but gives an import no room: see `spill::scratch_capacity`.
+/// The current scratch configuration, not the admission-time cause of a refusal.
 fn scratch_room_unmeasured() -> bool {
     let stats = photocraft_raster::spill::stats();
     stats.free_space_unmeasured && stats.size_cap_bytes.is_none()
 }
 
-/// The hint that follows the scope when the scratch disk's free space can't be measured.
+/// Configuration guidance only: the refusal can instead be bound by a caller or build limit,
+/// or by memory that cannot spill. Current scratch stats cannot identify that cause.
 fn unmeasured_scratch_hint(unmeasured: bool) -> &'static str {
     if unmeasured {
-        ". The scratch disk's free space can't be measured, so it adds no room for this file: set a Scratch Size Limit in Preferences > Scratch Disks, or use a local disk"
+        ". Current scratch configuration: free space can't be measured and no Scratch Size Limit is set. To configure scratch capacity, set a Scratch Size Limit in Preferences > Scratch Disks, or use a disk whose free space can be measured. Scratch capacity cannot override caller or build limits, or replace memory that cannot spill to disk"
     } else {
         ""
     }
@@ -198,7 +199,18 @@ mod tests {
     fn unmeasured_scratch_hint_only_when_unmeasured() {
         assert_eq!(unmeasured_scratch_hint(false), "");
         let hint = unmeasured_scratch_hint(true);
-        assert!(hint.starts_with(". ") && hint.contains("Scratch Size Limit") && hint.contains("local disk"), "{hint}");
+        assert!(hint.starts_with(". Current scratch configuration:"), "{hint}");
+        assert!(hint.contains("Scratch Size Limit in Preferences > Scratch Disks") && hint.contains("disk whose free space can be measured"), "{hint}");
+    }
+
+    #[test]
+    fn scratch_configuration_hint_does_not_promise_to_raise_a_binding_limit() {
+        let hint = unmeasured_scratch_hint(true);
+        // A caller-bound refusal can carry the same live scratch state as a capacity refusal.
+        // The note must describe that state without attributing this file's refusal to it.
+        assert!(hint.contains("cannot override caller or build limits"), "{hint}");
+        assert!(hint.contains("memory that cannot spill to disk"), "{hint}");
+        assert!(!hint.contains("for this file") && !hint.contains("so it adds no room"), "{hint}");
     }
 
     #[test]
