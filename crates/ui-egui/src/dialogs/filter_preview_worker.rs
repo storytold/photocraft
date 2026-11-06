@@ -113,6 +113,109 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    mod issue_11560 {
+        use super::*;
+
+        fn request(app: &crate::PhotocraftApp, id: u64) -> FilterPreviewKey {
+            let st = app.session.active().unwrap();
+            let f = &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields;
+            FilterPreviewKey {
+                doc: st.doc.id,
+                revision: st.revision,
+                dialog: id,
+                active: st.active_layer,
+                target: st.channel_view.target,
+                command: f["__command"].as_str().unwrap().into(),
+                params: crate::filter_dialog::params_of(f),
+                k: 1,
+            }
+        }
+
+        fn lifetime(command: &str, on: bool, closed: bool, invalid_smart: bool, should_cancel: bool) {
+            let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width":64,"height":48})).unwrap();
+            let id = crate::filter_dialog::open(&mut app, command).unwrap();
+            let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+            f.insert("__preview".into(), json!(on));
+            if invalid_smart {
+                f.insert("__smartFilter".into(), json!({"guard":0}));
+            }
+            let request = request(&app, id);
+            if closed {
+                crate::dialogs::cancel(&mut app, id).unwrap();
+            }
+            let (send_job, receive_job) = std::sync::mpsc::channel();
+            let (release, wait) = std::sync::mpsc::channel::<()>();
+            app.filter_preview_worker
+                .start(request, Default::default(), move |job| {
+                    send_job.send(job.clone()).unwrap();
+                    let _ = wait.recv_timeout(std::time::Duration::from_secs(5));
+                    Computed { result: None, ms: 0.0 }
+                })
+                .unwrap();
+            let job = receive_job.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            discard_closed(&mut app);
+            let cancelled = job.cancelled();
+            // Always let the owned task finish before the policy assertion (including red).
+            release.send(()).unwrap();
+            assert!(finish(&mut app.filter_preview_worker).1.is_ok());
+            assert_eq!(cancelled, should_cancel, "command={command}, on={on}, closed={closed}, invalid_smart={invalid_smart}");
+            assert!(!app.filter_preview_worker.busy());
+        }
+
+        #[test]
+        fn unchecked_generic_mini_work_is_not_cancelled_by_logic_cleanup() {
+            lifetime("filter.sharpen.unsharpMask", false, false, false, false);
+            lifetime("filter.sharpen.smartSharpen", false, false, false, false);
+            lifetime("filter.blur.gaussianBlur", false, false, false, false);
+        }
+
+        #[test]
+        fn checked_non_mini_work_retains_its_canvas_demand() {
+            lifetime("image.rotation.arbitrary", true, false, false, false);
+        }
+
+        #[test]
+        fn unchecked_non_mini_work_is_cancelled() {
+            lifetime("image.rotation.arbitrary", false, false, false, true);
+        }
+
+        #[test]
+        fn closed_dialog_work_is_cancelled_even_when_it_used_to_own_a_mini() {
+            lifetime("filter.sharpen.unsharpMask", false, true, false, true);
+        }
+
+        #[test]
+        fn invalid_smart_target_work_is_cancelled_even_with_a_mini() {
+            lifetime("filter.sharpen.smartSharpen", false, false, true, true);
+        }
+
+        #[test]
+        fn completed_unchecked_mini_result_is_retained_but_closed_result_is_discarded() {
+            for closed in [false, true] {
+                let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.run("file.new", json!({"width":64,"height":48})).unwrap();
+                let id = crate::filter_dialog::open(&mut app, "filter.sharpen.unsharpMask").unwrap();
+                app.ui.dialog_mut(id).unwrap().fields.insert("__preview".into(), json!(false));
+                let request = request(&app, id);
+                if closed {
+                    crate::dialogs::cancel(&mut app, id).unwrap();
+                }
+                // A ready completion at the real worker channel boundary: no race with a
+                // thread's final send, and no preview producer can repair a mistaken discard.
+                let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                tx.send(Ok(Computed { result: None, ms: 0.0 })).unwrap();
+                app.filter_preview_worker.running = Some(Running { key: request, rx, job: JobCtx::new() });
+                discard_closed(&mut app);
+                let retained = app.filter_preview_worker.busy();
+                if retained {
+                    assert!(app.filter_preview_worker.poll().unwrap().1.is_ok());
+                }
+                assert_eq!(retained, !closed, "logic cleanup must leave off-state mini completions for the normal publisher");
+            }
+        }
+    }
+
     fn key(dialog: u64, revision: u64, colors: u32) -> FilterPreviewKey {
         FilterPreviewKey {
             doc: photocraft_doc::DocId(1),

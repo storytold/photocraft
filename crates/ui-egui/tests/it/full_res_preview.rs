@@ -200,3 +200,136 @@ fn adjustment_dialog_zoomed_out_skips_the_reduced_copy_when_low_res_is_off() {
     let full = mean(&row(&mut h));
     assert!((full - committed).abs() < 8.0, "off: the preview matches the committed view ({full} vs {committed})");
 }
+
+// #11560 uses actual production dialog input and offscreen mini pixels. Unlike the older
+// resolution characterizations above, absence of a renderer is a failure, never a skipped pass.
+mod issue_11560 {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn setup_sharpen(command: &str) -> (Harness, u64) {
+        let mut h = harness().expect("#11560 requires an offscreen renderer; unavailable is not qualified");
+        {
+            let app = h.state_mut();
+            app.background_jobs = false;
+            app.run("file.new", json!({"width":64,"height":48})).unwrap();
+            app.session
+                .edit("Midtone edge", |doc, active| {
+                    let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+                    for x in 0..64 {
+                        let v = 0.25 + x as f32 / 256.0 + if x >= 32 { 0.15 } else { 0.0 } + if x % 3 == 0 { 0.04 } else { 0.0 };
+                        s.fill_rect(Rect::new(x, 0, x + 1, 48), &[v, v, v, 1.0]);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+            app.sync_views();
+        }
+        let id = photocraft_ui_egui::filter_dialog::open(h.state_mut(), command).unwrap();
+        let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        f.insert("amount".into(), json!(180));
+        f.insert("radius".into(), json!(2));
+        f.insert("threshold".into(), json!(0));
+        f.insert("reduceNoise".into(), json!(0));
+        h.run_steps(5);
+        (h, id)
+    }
+
+    fn collect(shape: &egui::Shape, clip: egui::Rect, out: &mut Vec<egui::Rect>) {
+        match shape {
+            egui::Shape::Mesh(m) => {
+                let rect = m.vertices.iter().fold(egui::Rect::NOTHING, |r, v| r.union(egui::Rect::from_min_max(v.pos, v.pos)));
+                if (rect.width() - 64.0).abs() < 0.1 && (rect.height() - 48.0).abs() < 0.1 && clip.contains_rect(rect) {
+                    out.push(rect);
+                }
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, clip, out)),
+            _ => {}
+        }
+    }
+
+    fn mini(h: &Harness) -> egui::Rect {
+        let checkbox = h.get_by_label("Preview").rect();
+        let mut images = Vec::new();
+        for s in &h.output().shapes {
+            collect(&s.shape, s.clip_rect, &mut images);
+        }
+        let candidates: Vec<_> = images.into_iter().filter(|r| r.center().y > checkbox.bottom() && r.center().y < checkbox.bottom() + 180.0).collect();
+        assert_eq!(candidates.len(), 1, "one visible 100% mini image below the actual Preview checkbox, not a canvas or icon");
+        candidates[0]
+    }
+
+    fn pixels(h: &mut Harness, rect: egui::Rect) -> Vec<[u8; 4]> {
+        let image = h.render().expect("actual offscreen renderer");
+        // Avoid the frame/checker border and take the complete interior sharpening row.
+        // Stay away from the pointer at the image centre during the comparison gesture.
+        let y = (rect.top() + 5.0).floor() as u32;
+        ((rect.left() + 2.0).ceil() as u32..(rect.right() - 2.0).floor() as u32).map(|x| image.get_pixel(x, y).0).collect()
+    }
+
+    fn button(h: &mut Harness, at: egui::Pos2, pressed: bool) {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    }
+
+    fn checkbox_hold_release(command: &str) {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let (mut h, id) = setup_sharpen(command);
+        let before = h.state().session.active().unwrap().doc.clone();
+        let revision = h.state().session.active().unwrap().revision;
+        let history = h.state().session.active().unwrap().history.past_len();
+        let rect = mini(&h);
+        let filtered = pixels(&mut h, rect);
+        let mut engine = photocraft_engine::Session::new();
+        engine.color.settings = h.state().session.color.settings.clone();
+        engine.add_document(before.as_ref().clone(), None);
+        if let Some(active) = h.state().session.active().unwrap().active_layer {
+            engine.select_layer(active).unwrap();
+        }
+        engine.execute(command, json!({"amount":180,"radius":2,"threshold":0,"reduceNoise":0})).unwrap();
+        let expected = engine.active().unwrap().doc.clone();
+        assert_ne!(photocraft_compose::flatten(&expected).px, photocraft_compose::flatten(&before).px, "nonzero real sharpening oracle");
+        let at = rect.center();
+        let mut original = None;
+        for on in [true, false, true] {
+            if h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["__preview"] != json!(on) {
+                h.get_by_label("Preview").click();
+                h.run_steps(5);
+            }
+            assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["__preview"], json!(on), "actual checkbox input reached production");
+            let rect = mini(&h);
+            assert_eq!(pixels(&mut h, rect), filtered, "{command}: unchecked canvas must not turn the mini original");
+            h.hover_at(at);
+            h.run_steps(1);
+            button(&mut h, at, true);
+            let held = pixels(&mut h, rect);
+            assert_ne!(held, filtered, "actual mini press shows visibly different original pixels");
+            if let Some(ref first) = original {
+                assert_eq!(&held, first);
+            } else {
+                original = Some(held.clone());
+            }
+            h.run_steps(3);
+            assert_eq!(pixels(&mut h, rect), held, "held comparison survives idle frames");
+            button(&mut h, at, false);
+            assert_eq!(pixels(&mut h, rect), filtered, "real release restores filtered pixels with either checkbox state");
+            assert_eq!(h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["__preview"], json!(on));
+        }
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+        assert_eq!(h.state().session.active().unwrap().revision, revision);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+        photocraft_ui_egui::dialogs::cancel(h.state_mut(), id).unwrap();
+        h.run_steps(3);
+        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
+    }
+
+    #[test]
+    fn unsharp_checkbox_and_mini_hold_release_render_actual_pixels() {
+        checkbox_hold_release("filter.sharpen.unsharpMask");
+    }
+
+    #[test]
+    fn smart_sharpen_checkbox_and_mini_hold_release_render_actual_pixels() {
+        checkbox_hold_release("filter.sharpen.smartSharpen");
+    }
+}
