@@ -872,6 +872,7 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.new.layerFromBackground",
             "layer.layerStyle.blendingOptions",
             "layer.smartFilter.blendingOptions",
+            "path.set",
         ],
         from: set_from,
         to: set_to,

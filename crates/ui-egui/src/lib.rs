@@ -716,6 +716,8 @@ pub struct PhotocraftApp {
     pub(crate) prompt_order: std::collections::VecDeque<open_prompt::PromptKind>,
     /// A brush or gradient file waiting on the group-name prompt (see `preset_group_prompt`).
     pub(crate) held_preset_import: Option<preset_group_prompt::Held>,
+    pub(crate) held_record_again: Option<actions::record_again::Held>,
+    pub(crate) held_insert_menu: Option<actions::menu_item::Held>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).

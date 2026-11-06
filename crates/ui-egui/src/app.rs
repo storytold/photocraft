@@ -206,6 +206,8 @@ impl PhotocraftApp {
             held_memory_prompts: Default::default(),
             prompt_order: Default::default(),
             held_preset_import: None,
+            held_record_again: None,
+            held_insert_menu: None,
             allow_close: false,
             stylus: Default::default(),
             control_click: Default::default(),

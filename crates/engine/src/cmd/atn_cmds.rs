@@ -32,6 +32,7 @@ mod descriptors;
 mod events;
 mod fields;
 mod files;
+mod menu_item;
 
 mod steps_artboard;
 mod steps_batch;
@@ -48,6 +49,7 @@ mod steps_layer;
 mod steps_layer_style;
 mod steps_lookup;
 mod steps_make;
+mod steps_path;
 mod steps_type_path;
 
 mod steps_other;
@@ -73,6 +75,8 @@ use events::{EVENTS, event_and_descriptor, event_for};
 #[cfg(test)]
 use fields::Mapped;
 use files::{load, save};
+pub use menu_item::{MENU_ITEM, menu_item_command, menu_item_commands, menu_item_needs_settings};
+pub(crate) use convert::UniqueNames;
 #[cfg(test)]
 use steps_doc::crop_from;
 pub(crate) use steps_gallery::RECORDED_EVENT;
@@ -145,6 +149,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"message":str,"allowContinue":bool=false} (Photoshop's Insert Stop: a step that shows the message; headless playback continues when allowContinue is set and otherwise stops the action with the message)"##,
             enabled: always,
             run: stop_message,
+            journal: true,
+        },
+        CommandSpec {
+            id: MENU_ITEM,
+            label: "Menu Item",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"id":menu command,"eventKind":"name"|"code"="name"} (a descriptor-free Image Size or unambiguous mapped filter menu event; desktop playback asks for settings when needed, headless playback only runs stateless menu items)"##,
+            enabled: always,
+            run: menu_item::run,
             journal: true,
         },
         CommandSpec {

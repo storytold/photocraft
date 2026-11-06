@@ -913,6 +913,11 @@ pub struct PendingPsdPreflight {
 }
 
 impl Session {
+    /// A recording mode change must not reclassify a painting job that is still in flight.
+    pub(crate) fn tool_stroke_job_running(&self) -> bool {
+        self.jobs.running.iter().any(|job| crate::actions_cmds::tool_stroke(&job.command))
+    }
+
     /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
     /// can cancel them: a live preview whose parameters changed stops its stale computation
     /// (`Err(Cancelled)`, the document unchanged) instead of finishing it. `None` restores the
@@ -1627,7 +1632,8 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
-                job.recorded_by = self.actions.recording.map(|_| self.actions.take);
+                job.recorded_by =
+                    self.actions.recording.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id)).map(|_| self.actions.take);
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;
