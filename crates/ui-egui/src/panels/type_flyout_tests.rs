@@ -293,8 +293,8 @@ fn red_eye_is_in_the_j_flyout() {
     let j = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).find(|slot| slot.contains(&Tool::SpotHealing)).expect("J group");
     assert!(j.contains(&Tool::RedEye), "{j:?}");
     assert_eq!(j.last(), Some(&Tool::RedEye));
-    // Remove leads the flyout, so the slot shows it until another J tool is picked.
-    assert_eq!(j.first(), Some(&Tool::Remove));
+    // Spot Healing Brush leads the flyout, so the slot shows it until another J tool is picked.
+    assert_eq!(j.first(), Some(&Tool::SpotHealing));
 }
 
 #[test]
@@ -348,8 +348,8 @@ fn long_press_brush_selects_color_replacement() {
     frame(&mut app, &ctx, 0.1, vec![]);
     let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Brush)).unwrap();
     let slot = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).nth(index).copied().unwrap();
-    // Photoshop's Brush group, Color Replacement after the Mixer Brush.
-    assert_eq!(slot, &[Tool::Brush, Tool::Pencil, Tool::MixerBrush, Tool::ColorReplacement]);
+    // Photoshop's Brush group, Color Replacement before the Mixer Brush.
+    assert_eq!(slot, &[Tool::Brush, Tool::Pencil, Tool::ColorReplacement, Tool::MixerBrush]);
     let bx = if Tokens::get(&ctx).pro { 30.0 } else { 36.0 };
     let mut buttons: Vec<Rect> = ctx.viewport(|v| {
         v.prev_pass
@@ -369,8 +369,8 @@ fn long_press_brush_selects_color_replacement() {
     frame(&mut app, &ctx, 1.45, vec![]);
     let key = egui::Id::unique(("tool-slot", index));
     let menu = ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
-    // The last of the four 26-point rows.
-    let row = egui::pos2(menu.left() + 65.0, menu.bottom() - 20.0);
+    // The third of the four 26-point rows.
+    let row = egui::pos2(menu.left() + 65.0, menu.bottom() - 46.0);
     frame(&mut app, &ctx, 2.0, vec![egui::Event::PointerMoved(row), pointer(row, true)]);
     frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
     assert_eq!(app.ui.tool, Tool::ColorReplacement);
