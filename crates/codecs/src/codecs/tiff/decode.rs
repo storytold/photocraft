@@ -926,11 +926,18 @@ const TAG_JPEG_TABLES: u16 = 347;
 /// The Predictor tag (1 none, 2 horizontal differencing, 3 floating point).
 const TAG_PREDICTOR: u16 = 317;
 
+/// Steps [`jpeg_sof`] may take per strip or tile beyond the file's length: room to read again
+/// the few header segments of strips or tiles that share one stream (a sparse file pointing its
+/// blank tiles at one tile).
+const JPEG_HEADER_STEPS_PER_CHUNK: u64 = 64;
+
 /// What the `tiff` crate holds for one chunk of directory `dir` beyond its output: a JPEG
-/// chunk's decoder ([`jpeg_working_bytes`]) and a row of the declared tile width for the
-/// floating-point predictor ([`predictor_row_bytes`]). `offsets` and `sizes` are the chunk
+/// chunk's decoder ([`jpeg_working_bytes`]) and a row of the declared strip or tile width for
+/// the floating-point predictor ([`predictor_row_bytes`]). `offsets` and `sizes` are the chunk
 /// tables (`count` entries each), `chunk` the strip or tile size and `samples` the samples per
-/// pixel a chunk holds.
+/// pixel a chunk holds. The JPEG headers are read within the file's length plus
+/// [`JPEG_HEADER_STEPS_PER_CHUNK`] steps per chunk, so chunks that overlap cannot make that
+/// read longer than the file suggests.
 fn chunk_codec_bytes(
     f: &File<'_>,
     dir: &Ifd,
@@ -947,82 +954,103 @@ fn chunk_codec_bytes(
             f.b.get(at..end)
         };
         let chunks = (0..count).map(|i| f.uint(offsets, i).zip(f.uint(sizes, i)).and_then(|(at, n)| in_file(at, n)));
-        jpeg_working_bytes(f.tag_bytes(dir, TAG_JPEG_TABLES), chunks, chunk)?
+        let steps = (f.b.len() as u64).saturating_add(count.saturating_mul(JPEG_HEADER_STEPS_PER_CHUNK));
+        jpeg_working_bytes(f.tag_bytes(dir, TAG_JPEG_TABLES), chunks, chunk, steps)?
     } else {
         0
     };
-    let tiled = dir.get(ifd::TAG_TILE_OFFSETS).is_some();
-    let row = predictor_row_bytes(tiled, f.tag_uint(dir, TAG_PREDICTOR).unwrap_or(1), chunk.0, samples, bits);
+    let row = predictor_row_bytes(f.tag_uint(dir, TAG_PREDICTOR).unwrap_or(1), chunk.0, samples, bits);
     Ok(jpeg.saturating_add(row))
 }
 
-/// Bytes the `tiff` crate holds for one row of a tile as the file declares it, which the
-/// floating-point predictor decodes each row into: a hostile TileWidth makes it far wider than
-/// the image. Zero for strips (a strip row is an image row) and for other predictors.
-fn predictor_row_bytes(tiled: bool, predictor: u64, tile_width: u64, samples: u64, bits: u64) -> u64 {
-    if !tiled || predictor != 3 {
+/// Bytes the `tiff` crate holds for one row of a strip or tile as the file declares it
+/// (`chunk_width` pixels of `samples` samples), which the floating-point predictor decodes each
+/// row into when a chunk row holds more than the row it returns: a tile clipped at the image's
+/// edge, a hostile TileWidth far wider than the image, or a strip with samples it does not
+/// return. Charged for every floating-point-predicted chunk, also one that decodes in place
+/// without that row (one row is a small overcount); zero for other predictors.
+fn predictor_row_bytes(predictor: u64, chunk_width: u64, samples: u64, bits: u64) -> u64 {
+    if predictor != 3 {
         return 0;
     }
-    tile_width.saturating_mul(samples).saturating_mul(bits).div_ceil(8)
+    chunk_width.saturating_mul(samples).saturating_mul(bits).div_ceil(8)
 }
 
 /// The most zune-jpeg holds while the `tiff` crate decodes one of `chunks` (each JPEG strip or
 /// tile in the file, `None` when it is not in the file): the compressed stream with `tables`
-/// in front, the decoded frame its SOF marker declares, and that frame's DCT coefficients
-/// (16 bits per sample, padded to whole MCUs), which progressive and multi-scan streams hold
-/// whole. A frame larger than its `chunk` size (width, height) is refused, as libtiff does:
-/// the decoder would allocate it in full however small the TIFF chunk is.
-fn jpeg_working_bytes<'b>(tables: Option<&[u8]>, chunks: impl Iterator<Item = Option<&'b [u8]>>, chunk: (u64, u64)) -> Result<u64, CodecError> {
-    let table_sof = tables.and_then(jpeg_sof);
+/// in front, which the `tiff` crate copies whole whether or not it holds a frame, and the
+/// decoded frame its SOF marker declares with that frame's DCT coefficients (16 bits per
+/// sample, padded to whole MCUs), which progressive and multi-scan streams hold whole. A frame
+/// larger than its `chunk` size (width, height) is refused, as libtiff does: the decoder would
+/// allocate it in full however small the TIFF chunk is. Reading the headers takes at most
+/// `steps` steps in all ([`jpeg_sof`]), or the image is refused.
+fn jpeg_working_bytes<'b>(tables: Option<&[u8]>, chunks: impl Iterator<Item = Option<&'b [u8]>>, chunk: (u64, u64), mut steps: u64) -> Result<u64, CodecError> {
+    let table_sof = match tables {
+        Some(t) => jpeg_sof(t, &mut steps)?,
+        None => None,
+    };
     let table_len = tables.map_or(0, |t| t.len() as u64);
     let mut most = 0u64;
     for data in chunks.flatten() {
-        let Some((w, h, components)) = table_sof.or_else(|| jpeg_sof(data)) else { continue };
-        if w > chunk.0 || h > chunk.1 {
-            return Err(CodecError::InvalidImage(format!("a {w}x{h} JPEG frame in a {}x{} strip or tile", chunk.0, chunk.1)));
+        let mut need = (data.len() as u64).saturating_add(table_len);
+        let sof = if table_sof.is_some() { table_sof } else { jpeg_sof(data, &mut steps)? };
+        if let Some((w, h, components)) = sof {
+            if w > chunk.0 || h > chunk.1 {
+                return Err(CodecError::InvalidImage(format!("a {w}x{h} JPEG frame in a {}x{} strip or tile", chunk.0, chunk.1)));
+            }
+            let pad = |v: u64| v.div_ceil(32).saturating_mul(32);
+            let frame = w.saturating_mul(h).saturating_mul(components);
+            let coefficients = pad(w).saturating_mul(pad(h)).saturating_mul(components).saturating_mul(2);
+            need = need.saturating_add(frame).saturating_add(coefficients);
         }
-        let pad = |v: u64| v.div_ceil(32).saturating_mul(32);
-        let frame = w.saturating_mul(h).saturating_mul(components);
-        let coefficients = pad(w).saturating_mul(pad(h)).saturating_mul(components).saturating_mul(2);
-        let stream = (data.len() as u64).saturating_add(table_len);
-        most = most.max(stream.saturating_add(frame).saturating_add(coefficients));
+        most = most.max(need);
     }
     Ok(most)
 }
 
 /// The width, height and component count of the first SOF marker in JPEG stream `s`, or `None`
 /// when the stream reaches its first scan (or its end) without one. Bytes between segments are
-/// skipped, as zune-jpeg skips them.
-fn jpeg_sof(s: &[u8]) -> Option<(u64, u64, u64)> {
+/// skipped, as zune-jpeg skips them. Each byte stepped over (a stray byte, a fill byte or a
+/// marker) takes one of `steps` and a segment's body is jumped over, so the walk never takes
+/// more steps than `s` has bytes. Running out of `steps` is an error, which bounds the walk
+/// over strips or tiles that overlap.
+fn jpeg_sof(s: &[u8], steps: &mut u64) -> Result<Option<(u64, u64, u64)>, CodecError> {
+    let mut step = || -> Result<(), CodecError> {
+        *steps = steps
+            .checked_sub(1)
+            .ok_or_else(|| CodecError::InvalidImage("the JPEG headers of the strips or tiles are longer than the file (they overlap)".into()))?;
+        Ok(())
+    };
     let mut i = if s.starts_with(&[0xFF, 0xD8]) { 2 } else { 0 };
     loop {
-        while *s.get(i)? != 0xFF {
+        while s.get(i).is_some_and(|&b| b != 0xFF) {
+            step()?;
             i += 1;
         }
-        while *s.get(i)? == 0xFF {
+        while s.get(i) == Some(&0xFF) {
+            step()?;
             i += 1;
         }
-        let marker = *s.get(i)?;
+        let Some(&marker) = s.get(i) else { return Ok(None) };
+        step()?;
         i += 1;
         match marker {
             // Markers without a length: SOI, TEM and the restart markers.
             0xD8 | 0x01 | 0xD0..=0xD7 => continue,
             // End of image, or start of scan: no frame header follows.
-            0xD9 | 0xDA => return None,
+            0xD9 | 0xDA => return Ok(None),
             _ => {}
         }
         let byte = |k: usize| s.get(i.checked_add(k)?).copied().map(u64::from);
+        let pair = |k: usize| Some((byte(k)? << 8) | byte(k.checked_add(1)?)?);
         // SOF0-SOF15, without DHT (C4), JPG (C8) and DAC (CC).
         if (0xC0..=0xCF).contains(&marker) && !matches!(marker, 0xC4 | 0xC8 | 0xCC) {
-            let h = (byte(3)? << 8) | byte(4)?;
-            let w = (byte(5)? << 8) | byte(6)?;
-            return Some((w, h, byte(7)?));
+            return Ok(pair(3).zip(pair(5)).zip(byte(7)).map(|((h, w), components)| (w, h, components)));
         }
-        let len = (byte(0)? << 8) | byte(1)?;
-        if len < 2 {
-            return None;
-        }
-        i = i.checked_add(usize::try_from(len).ok()?)?;
+        let Some(next) = pair(0).filter(|&len| len >= 2).and_then(|len| i.checked_add(usize::try_from(len).ok()?)) else {
+            return Ok(None);
+        };
+        i = next;
     }
 }
 
@@ -1073,22 +1101,27 @@ mod tests {
         s
     }
 
+    /// [`jpeg_sof`] with no step limit.
+    fn sof(s: &[u8]) -> Option<(u64, u64, u64)> {
+        jpeg_sof(s, &mut u64::MAX).unwrap()
+    }
+
     /// The SOF walk finds the frame size past other segments and stray bytes, skips DHT, and
     /// gives up at the scan, at the end or on a malformed length, never reading out of bounds.
     #[test]
     fn jpeg_sof_reads_the_frame_header() {
-        assert_eq!(jpeg_sof(&jpeg_with_sof(640, 480, 3)), Some((640, 480, 3)));
+        assert_eq!(sof(&jpeg_with_sof(640, 480, 3)), Some((640, 480, 3)));
         // Without SOI (a chunk after JPEGTables) and with a DHT (C4) segment first.
         let mut s = vec![0xFF, 0xC4, 0x00, 0x03, 0x00];
         s.extend_from_slice(&jpeg_with_sof(16, 8, 1)[2..]);
-        assert_eq!(jpeg_sof(&s), Some((16, 8, 1)));
-        assert_eq!(jpeg_sof(&[0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x02]), None, "a scan before any frame header");
-        assert_eq!(jpeg_sof(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x01]), None, "a segment length below two");
-        assert_eq!(jpeg_sof(&[0xFF, 0xD8, 0xFF, 0xC0, 0x00]), None, "a cut-off frame header");
-        assert_eq!(jpeg_sof(&[]), None);
+        assert_eq!(sof(&s), Some((16, 8, 1)));
+        assert_eq!(sof(&[0xFF, 0xD8, 0xFF, 0xDA, 0x00, 0x02]), None, "a scan before any frame header");
+        assert_eq!(sof(&[0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x01]), None, "a segment length below two");
+        assert_eq!(sof(&[0xFF, 0xD8, 0xFF, 0xC0, 0x00]), None, "a cut-off frame header");
+        assert_eq!(sof(&[]), None);
         let full = jpeg_with_sof(640, 480, 3);
         for cut in 0..full.len() {
-            let _ = jpeg_sof(&full[..cut]);
+            let _ = sof(&full[..cut]);
         }
     }
 
@@ -1100,27 +1133,55 @@ mod tests {
         let small = jpeg_with_sof(64, 64, 3);
         let frame = 64 * 64 * 3;
         let coefficients = 64 * 64 * 3 * 2;
-        let got = jpeg_working_bytes(None, [Some(small.as_slice()), None].into_iter(), (64, 64)).unwrap();
+        let got = jpeg_working_bytes(None, [Some(small.as_slice()), None].into_iter(), (64, 64), u64::MAX).unwrap();
         assert_eq!(got, small.len() as u64 + frame + coefficients);
         let tables = [0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x03, 0x00, 0xFF, 0xD9];
-        let with_tables = jpeg_working_bytes(Some(&tables), [Some(small.as_slice())].into_iter(), (64, 64)).unwrap();
+        let with_tables = jpeg_working_bytes(Some(&tables), [Some(small.as_slice())].into_iter(), (64, 64), u64::MAX).unwrap();
         assert_eq!(with_tables, got + tables.len() as u64);
         // A 16384x16384 frame (zune-jpeg's default cap) in a 64x64 tile.
         let huge = jpeg_with_sof(16384, 16384, 3);
-        let refused = jpeg_working_bytes(None, [Some(small.as_slice()), Some(huge.as_slice())].into_iter(), (64, 64));
+        let refused = jpeg_working_bytes(None, [Some(small.as_slice()), Some(huge.as_slice())].into_iter(), (64, 64), u64::MAX);
         assert!(matches!(refused, Err(CodecError::InvalidImage(_))), "{refused:?}");
-        let no_frame = jpeg_working_bytes(None, [Some(&[0u8, 1, 2][..])].into_iter(), (64, 64)).unwrap();
-        assert_eq!(no_frame, 0, "no frame header: nothing is decoded");
+        let no_frame = jpeg_working_bytes(None, [Some(&[0u8, 1, 2][..])].into_iter(), (64, 64), u64::MAX).unwrap();
+        assert_eq!(no_frame, 3, "no frame header: only the copied stream");
     }
 
-    /// The floating-point predictor's row is charged at the declared tile width, so a hostile
-    /// TileWidth cannot ask for it unbudgeted; strips and other predictors hold no such row.
+    /// The header walk takes one step per byte it steps over, never more than the stream has,
+    /// and stops with an error when its budget runs out: strips or tiles that overlap (here
+    /// many over one run of zeros) cannot make it read more than the file plus a few steps per
+    /// chunk, while chunks that don't overlap fit in the file's length.
+    #[test]
+    fn jpeg_header_walk_is_bounded_by_its_step_budget() {
+        // SOI is skipped; then a fill byte and APP0, two stray bytes, two fill bytes and SOF0.
+        let s = jpeg_with_sof(640, 480, 3);
+        let mut steps = 7;
+        assert_eq!(jpeg_sof(&s, &mut steps).unwrap(), Some((640, 480, 3)));
+        assert_eq!(steps, 0);
+        assert!(matches!(jpeg_sof(&s, &mut 6), Err(CodecError::InvalidImage(_))));
+        let zeros = vec![0u8; 4096];
+        let mut steps = 4096;
+        assert_eq!(jpeg_sof(&zeros, &mut steps).unwrap(), None);
+        assert_eq!(steps, 0, "one step per byte, none past the end");
+        // 1000 chunks over the same 4096 bytes, budgeted as for a 4096-byte file: refused.
+        let budget = 4096 + 1000 * JPEG_HEADER_STEPS_PER_CHUNK;
+        let overlapping = jpeg_working_bytes(None, std::iter::repeat_n(Some(zeros.as_slice()), 1000), (64, 64), budget);
+        assert!(matches!(overlapping, Err(CodecError::InvalidImage(_))), "{overlapping:?}");
+        // 1000 separate chunks fit in the length of the file that holds them.
+        let file_len = 1000 * s.len() as u64;
+        let separate = jpeg_working_bytes(None, std::iter::repeat_n(Some(s.as_slice()), 1000), (640, 480), file_len);
+        assert!(separate.is_ok(), "{separate:?}");
+    }
+
+    /// The floating-point predictor's row is charged at the declared strip or tile width, so a
+    /// hostile TileWidth cannot ask for it unbudgeted, and a strip with samples the `tiff` crate
+    /// does not return is charged its row too; other predictors hold no such row.
     #[test]
     fn the_floating_point_predictor_row_is_charged_at_the_declared_tile_width() {
-        assert_eq!(predictor_row_bytes(true, 3, 256, 3, 32), 256 * 3 * 4);
-        assert_eq!(predictor_row_bytes(true, 3, 0xFFFF_FFFF, 3, 64), 0xFFFF_FFFF * 3 * 8, "a 64x64 page with TileWidth 0xFFFFFFFF");
-        assert_eq!(predictor_row_bytes(false, 3, 0xFFFF_FFFF, 3, 64), 0, "strip rows are image rows");
-        assert_eq!(predictor_row_bytes(true, 2, 0xFFFF_FFFF, 3, 64), 0);
-        assert_eq!(predictor_row_bytes(true, 3, u64::MAX, u64::MAX, 64), u64::MAX.div_ceil(8), "saturates");
+        assert_eq!(predictor_row_bytes(3, 256, 3, 32), 256 * 3 * 4);
+        assert_eq!(predictor_row_bytes(3, 0xFFFF_FFFF, 3, 64), 0xFFFF_FFFF * 3 * 8, "a 64x64 page with TileWidth 0xFFFFFFFF");
+        assert_eq!(predictor_row_bytes(3, 1024, 4, 32), 1024 * 4 * 4, "a strip row, every sample the file holds");
+        assert_eq!(predictor_row_bytes(2, 0xFFFF_FFFF, 3, 64), 0);
+        assert_eq!(predictor_row_bytes(1, 0xFFFF_FFFF, 3, 64), 0);
+        assert_eq!(predictor_row_bytes(3, u64::MAX, u64::MAX, 64), u64::MAX.div_ceil(8), "saturates");
     }
 }

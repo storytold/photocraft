@@ -717,3 +717,32 @@ fn a_float_predictor_row_of_a_hostile_tile_width_is_refused() {
     let r = decode_with(&file, &with_max_alloc(1 << 30));
     assert!(matches!(r, Err(CodecError::LimitExceeded(_))), "{:?}", r.map(|i| i.data().len()));
 }
+
+/// The JPEG headers of every tile are read before the decode. 65536 JPEG tiles that all span
+/// the same 512 KiB without a 0xFF (the file's own offset and byte-count tables) made that read
+/// step through about 34 billion bytes; it is now bounded by the file's length (plus a few steps
+/// per tile), and the page is refused at once.
+#[test]
+fn overlapping_jpeg_tiles_without_markers_are_refused_quickly() {
+    let (w, h, tile) = (4096u32, 4096u32, 16u32);
+    let n = ((w / tile) * (h / tile)) as usize;
+    let mut entries = base(w, h, 8, 1, 1);
+    entries.retain(|e| e.0 != 259);
+    // The tables are the first thing after the header, at 8: every tile spans both of them
+    // (LONG offsets of 8 and counts of 8n, neither holding a 0xFF byte).
+    let offsets = vec![8u64; n];
+    let counts = vec![8 * n as u64; n];
+    let d = Dir { entries, chunks: Vec::new(), tiled: true }
+        .tag(259, SHORT, &[7])
+        .tag(322, LONG, &[u64::from(tile)])
+        .tag(323, LONG, &[u64::from(tile)])
+        .tag(324, LONG, &offsets)
+        .tag(325, LONG, &counts);
+    let file = build(true, false, &[d], &[0]).bytes;
+    assert!(file.len() > 8 + 8 * n, "the tables are in the file");
+    assert!(!file[8..8 + 8 * n].contains(&0xFF), "no marker in the tiles");
+    let started = std::time::Instant::now();
+    let r = decode(&file);
+    assert!(matches!(r, Err(CodecError::InvalidImage(_))), "{:?}", r.map(|i| i.data().len()));
+    assert!(started.elapsed() < std::time::Duration::from_secs(30), "took {:?}", started.elapsed());
+}
