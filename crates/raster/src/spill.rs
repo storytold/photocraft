@@ -895,11 +895,10 @@ mod tests {
     fn available_to_caller_reads_the_temp_volume() {
         let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
         let temp = without_verbatim_disk_prefix(&temp).unwrap_or(temp);
-        let root = temp.ancestors().last().unwrap();
         let mut temp_volume_total = 0;
         winsafe::GetDiskFreeSpaceEx(Some(temp.to_str().unwrap()), None, Some(&mut temp_volume_total), None).unwrap();
         assert!(temp_volume_total > 0);
-        assert!(available_to_caller(root).unwrap() <= temp_volume_total);
+        assert!(available_to_caller(&temp).unwrap() <= temp_volume_total);
     }
 
     #[test]
