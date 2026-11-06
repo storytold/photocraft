@@ -107,8 +107,14 @@ pub struct Nav {
     /// The keys moved the highlight, and the pointer hasn't moved since.
     keyboard: bool,
     /// The widget that had the focus when the keys took the menu (it is surrendered meanwhile):
-    /// it gets the focus back when the menus close, unless something else took it.
+    /// it gets the focus back when the menus close, unless something else took it. Set once,
+    /// from [`Self::before`], when the keys take the menu: a focus egui moves onto a menu widget
+    /// meanwhile (Tab) isn't one to give back.
     refocus: Option<Id>,
+    /// [`Self::refocus`] is set for the menus open now.
+    refocus_set: bool,
+    /// The focus as the last frame without the keys on the menus left it.
+    before: Option<Id>,
     /// Help's search field has text this frame.
     pub(crate) search_text: bool,
     /// The text field with the keyboard, as of the last frame.
@@ -146,6 +152,8 @@ impl Nav {
                 keyboard: nav.keyboard && top.is_some(),
                 refocus: refocus.filter(|_| top.is_some()),
                 field: nav.field,
+                refocus_set: nav.refocus_set && top.is_some(),
+                before: nav.before,
                 ..Default::default()
             };
             if let Some(id) = refocus.filter(|_| top.is_none() && ctx.memory(|m| m.focused()).is_none()) {
@@ -153,11 +161,20 @@ impl Nav {
             }
         }
         // egui moves the focus with the arrow keys too, along the menu titles and into a submenu
-        // beside the menu: gray rows, and a gray title one step behind the open menu. The first
-        // focus taken (from outside the menus) is given back when they close.
-        if let Some(focus) = ctx.memory(|m| m.focused()).filter(|_| nav.keyboard && !ctx.text_edit_focused()) {
-            nav.refocus.get_or_insert(focus);
-            ctx.memory_mut(|m| m.surrender_focus(focus));
+        // beside the menu: gray rows, and a gray title one step behind the open menu. The focus
+        // from before the keys took the menus is given back when they close, not one egui moved
+        // onto a menu widget meanwhile.
+        let focused = ctx.memory(|m| m.focused());
+        if nav.keyboard && !ctx.text_edit_focused() {
+            if !nav.refocus_set {
+                nav.refocus = nav.before;
+                nav.refocus_set = true;
+            }
+            if let Some(focus) = focused {
+                ctx.memory_mut(|m| m.surrender_focus(focus));
+            }
+        } else {
+            nav.before = focused;
         }
         nav
     }
