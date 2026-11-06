@@ -952,15 +952,83 @@ fn flat_contour_outer_glow_is_a_solid_band_with_one_soft_pixel() {
     }
     assert!((at(&m, 15) - 0.5).abs() < 0.05, "precise, the soft outer pixel: {}", at(&m, 15));
     assert!(at(&m, 14) == 0.0 && at(&m, 0) == 0.0, "precise, beyond the reach: {} {}", at(&m, 14), at(&m, 0));
-    // Softer, size 4: the tent reaches the 3.5 px pixel (x 16) with coverage 1/64, which a Linear
-    // contour paints at 1/32 and the flat one at the reach's √(2v)·4 ≈ 0.71.
+    // Precise, pixel-aligned edge: the pixels out from it are 1..5 px (centre to centre) from the
+    // shape and the reach ends at the 5 px one's centre, so the band is solid through Size (x 16,
+    // 4 px out, 1.0) and the next pixel (x 15) is beyond it. Point-sampled, as the measured Linear
+    // falloff is: an area-averaged falloff would leave x 15 half covered (the reach ends 4.5 px
+    // past the shape's edge, half-way across it), not 0.84.
     let shape = square_20_40();
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Precise, 4.0, &FLAT), false, (0, 0));
+    for x in 16..20 {
+        assert!(at(&m, x) > 0.999, "precise aligned, solid band at x {x}: {}", at(&m, x));
+    }
+    assert!(at(&m, 15) == 0.0, "precise aligned, beyond the reach: {}", at(&m, 15));
+    // Softer, size 4: the tent's last tap (1/64, at x 16) is above what one opaque pixel gives one
+    // pixel inside its reach (t[3]·t[0] ≈ 0.0137), so a straight edge is solid through its reach.
     let m = glow_map(&shape, &contour_glow(GlowTechnique::Softer, 4.0, &FLAT), false, (0, 0));
-    for x in 17..20 {
+    for x in 16..20 {
         assert!(at(&m, x) > 0.999, "softer, solid band at x {x}: {}", at(&m, x));
     }
-    assert!(at(&m, 16) > 0.5 && at(&m, 16) < 0.95, "softer, the soft outer pixel: {}", at(&m, 16));
     assert!(at(&m, 15) == 0.0 && at(&m, 0) == 0.0, "softer, beyond the reach: {} {}", at(&m, 15), at(&m, 0));
+    // Softer, size 2: the last tap (1/16, at x 18) is below that (0.25·0.375), so the outermost
+    // pixel is soft: 383 table steps to full, 0.0625 · 4095 / 383 ≈ 0.668.
+    let m = glow_map(&shape, &contour_glow(GlowTechnique::Softer, 2.0, &FLAT), false, (0, 0));
+    assert!(at(&m, 19) > 0.999, "softer size 2, solid band: {}", at(&m, 19));
+    assert!((at(&m, 18) - 0.668).abs() < 0.01, "softer size 2, the soft outer pixel: {}", at(&m, 18));
+    assert!(at(&m, 17) == 0.0, "softer size 2, beyond the reach: {}", at(&m, 17));
+}
+
+/// #11361 review: a feature narrow in both axes has far less Softer coverage at a given distance
+/// than a straight edge. Read through the straight edge's tail (`e = w·√(2v)`), a single pixel's
+/// flat-contour glow was dimmed 2 px inside its reach at size 4 (0.94, 0.66, then 0.33 at the
+/// last pixel) and from about 5 px inside at size 10. The edge now reaches full strength at the
+/// coverage a single opaque pixel gives one pixel inside its reach, so along its row and column
+/// only the outermost pixel is soft.
+#[test]
+fn softer_flat_contour_keeps_a_single_pixel_solid_inside_its_reach() {
+    let n = 60;
+    let mut shape = Map::new(n, n, 0.0);
+    shape.v[30 * n + 30] = 1.0;
+    // (size, reach R in pixels, the outermost pixel's value t[R]·t[0] / knee).
+    // Size 4: t = [7/32, 3/16, 1/8, 1/16, 1/64], knee floor(4095·t[3]·t[0]) = 55 steps.
+    // Size 10: box [.05, .1 ×9, .05], t[0] = .095, t[9] = .01, t[10] = .0025, knee 3 steps.
+    for (size, reach, last) in [(4.0f32, 4usize, 0.2545f32), (10.0, 10, 0.3243)] {
+        let m = glow_map(&shape, &contour_glow(GlowTechnique::Softer, size, &FLAT), false, (0, 0));
+        for d in 0..reach {
+            for (x, y) in [(30 + d, 30), (30 - d, 30), (30, 30 + d), (30, 30 - d)] {
+                let v = m.v[y * n + x];
+                assert!(v > 0.999, "size {size}: ({x}, {y}), {d} px out, paints {v}");
+            }
+        }
+        let v = m.v[30 * n + 30 + reach];
+        assert!((v - last).abs() < 0.01, "size {size}: the outermost pixel paints {v}, not {last}");
+        assert_eq!(m.v[30 * n + 31 + reach], 0.0, "size {size}: beyond the reach");
+    }
+}
+
+/// #11361 review: the table is linear from entry 0 up to a knee on a table entry, so the GPU's and
+/// CPU's linear interpolation paint the model's value at any coverage, the first step
+/// `(0, 1/4095]` included (a large Softer glow's outermost pixel has coverage there).
+#[test]
+fn flat_contour_glow_table_is_linear_up_to_a_knee_on_an_entry() {
+    for t in [GlowTechnique::Precise, GlowTechnique::Softer] {
+        for size in [1.0f32, 2.0, 4.0, 7.5, 10.0, 60.0, 512.0] {
+            let Some(f) = glow_paint_lut(&contour_glow(t, size, &FLAT), false) else { panic!("a flat contour has a table") };
+            assert_eq!(f[0], 0.0);
+            let steps = 1.0 / f[1];
+            assert!(steps >= 1.0 && (steps - steps.round()).abs() < 1e-3, "{t:?} size {size}: the knee at {steps} steps");
+            for (k, v) in f.iter().enumerate() {
+                let want = (k as f32 / steps.round()).min(1.0);
+                assert!((v - want).abs() < 1e-5, "{t:?} size {size}: entry {k} is {v}, not {want}");
+            }
+            // Between entries (here inside the first step) the interpolation is the model.
+            for frac in [0.1f32, 0.5, 0.9] {
+                let v = frac / 4095.0;
+                let want = (frac / steps.round()).min(1.0);
+                assert!((lut_at(&f, v) - want).abs() < 1e-5, "{t:?} size {size}: coverage {v}");
+            }
+        }
+    }
 }
 
 /// #11361's regression guard: the reach cap never paints below what the Linear contour does, so
