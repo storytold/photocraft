@@ -19,6 +19,25 @@ fn hindi_tags_resolve() {
 }
 
 #[test]
+fn hindi_takes_the_singular_for_zero_and_one() {
+    let forms: Vec<usize> = [0, 1, 2, 5].into_iter().map(HI().0.plural).collect();
+    assert_eq!(forms, [0, 0, 1, 1]);
+}
+
+/// The layer Color menu, Layer › New › Layer and the Layers panel name each label color in
+/// Hindi, each with its own name.
+#[test]
+fn hindi_names_every_layer_color_label() {
+    let mut seen = std::collections::HashSet::new();
+    for color in photocraft_doc::LabelColor::ALL {
+        let name = tr_ctx(HI(), "layerLabel", color.label());
+        assert_ne!(name, color.label(), "{color:?} shows in English");
+        assert!(seen.insert(name), "{color:?}: {name} also names another color");
+    }
+    assert_ne!(tr(HI(), "No Color"), "No Color", "the shape fill and stroke pickers");
+}
+
+#[test]
 fn indonesian_tags_resolve() {
     for tag in ["id", "id-ID", "id_ID", "id_ID.UTF-8"] {
         assert_eq!(lang_from_tag(tag), Some(ID()), "{tag}");
