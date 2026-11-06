@@ -755,6 +755,9 @@ pub struct Cursors {
     pub show_crosshair_in_brush_tip: bool,
     pub show_only_crosshair_while_painting: bool,
     pub other: OtherCursor,
+    /// Opt-in: the Paint Bucket's standard cursor adds a Gradient-style crosshair at its fill
+    /// target (#7994). Off, it is Photoshop's plain bucket, pouring corner on the target.
+    pub paint_bucket_crosshair: bool,
     /// Brush preview (HUD) colour.
     pub brush_preview_color: String,
 }
@@ -766,6 +769,7 @@ impl Default for Cursors {
             show_crosshair_in_brush_tip: false,
             show_only_crosshair_while_painting: false,
             other: OtherCursor::Standard,
+            paint_bucket_crosshair: false,
             brush_preview_color: "#ff0000".into(),
         }
     }

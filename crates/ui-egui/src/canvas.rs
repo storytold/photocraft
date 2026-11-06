@@ -62,7 +62,7 @@ pub mod zoom_window_fit;
 
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
-pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
+pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, plain_paint_bucket_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
@@ -1589,12 +1589,15 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 pipette_cursor(ui.ctx(), p)
             }
         }
-        // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
+        // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968). The
+        // bucket with its own target crosshair (#7994) is opt-in: Photoshop's has none.
         Tool::PaintBucket => {
             if precise_other_cursor(app) {
                 egui::CursorIcon::Crosshair
-            } else {
+            } else if app.session.prefs().cursors.paint_bucket_crosshair {
                 paint_bucket_cursor(app, painter, p)
+            } else {
+                plain_paint_bucket_cursor(ui.ctx(), p)
             }
         }
         // Over the first anchor, the close-path pointer (#4596), before the pens' own cursors.

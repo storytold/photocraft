@@ -1006,15 +1006,45 @@ fn eyedropper_and_alt_sampling_show_a_pipette() {
     assert_eq!(precise(&mut h), (egui::CursorIcon::Crosshair, desktop));
 }
 
-/// The bucket and fill target share one pointer bitmap or one painted image, and Precise Other Cursors hides both.
-#[test]
-fn paint_bucket_shows_a_bucket_cursor() {
-    fn cursor_area_visible(h: &Harness<'static, PhotocraftApp>, id: &str) -> bool {
-        let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(id));
-        h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer))
-    }
+fn cursor_area_visible(h: &Harness<'static, PhotocraftApp>, id: &str) -> bool {
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(id));
+    h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer))
+}
 
+/// By default the Paint Bucket is Photoshop's plain bucket (#3968): no crosshair, the pouring
+/// corner on the filled pixel. Precise Other Cursors shows the crosshair instead.
+#[test]
+fn paint_bucket_shows_a_plain_bucket_cursor_by_default() {
     let mut h = harness();
+    assert!(!h.state().session.prefs().cursors.paint_bucket_crosshair, "the target crosshair is opt-in");
+    let p = h.state().last_canvas_rect.center();
+    h.state_mut().ui.tool = crate::state::Tool::PaintBucket;
+    h.hover_at(p);
+    h.run_steps(2);
+
+    let output = h.output();
+    assert_eq!(output.platform_output.cursor_icon, egui::CursorIcon::None, "the bucket replaces the pointer");
+    assert!(output.platform_output.cursor_image.is_none(), "no unified bucket + crosshair bitmap");
+    assert!(cursor_area_visible(&h, "pc-icon-cursor"), "the bucket icon is painted at the pointer");
+    assert!(!cursor_area_visible(&h, "pc-tool-cursor"), "no unified bucket image");
+    let area = h.ctx.memory(|memory| memory.area_rect(egui::Id::unique("pc-icon-cursor"))).expect("the bucket icon area");
+    let corner = area.min + egui::vec2(2.0, 12.0) / 24.0 * 22.0;
+    // egui snaps the Area to whole pixels, so the corner lands within half a pixel.
+    assert!((corner - p).length() <= 0.5, "the pouring corner {corner:?} is the fill target {p:?}");
+
+    h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
+    h.run_steps(2);
+    let precise = h.output();
+    assert_eq!(precise.platform_output.cursor_icon, egui::CursorIcon::Crosshair, "Precise keeps the crosshair");
+    assert!(!cursor_area_visible(&h, "pc-icon-cursor"), "Precise omits the bucket artwork");
+}
+
+/// With `cursors.paintBucketCrosshair` on (#7994), the bucket and fill target share one pointer
+/// bitmap or one painted image, and Precise Other Cursors hides both.
+#[test]
+fn paint_bucket_crosshair_preference_shows_the_unified_cursor() {
+    let mut h = harness();
+    h.state_mut().run("prefs.set", json!({"values": {"cursors.paintBucketCrosshair": true}})).unwrap();
     let p = h.state().last_canvas_rect.center();
     h.state_mut().ui.tool = crate::state::Tool::PaintBucket;
     h.hover_at(p);
