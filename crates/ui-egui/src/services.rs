@@ -400,6 +400,37 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// A menu item the host app adds ([`HostMenu`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostMenuItem {
+    /// Its id: one PhotoCraft doesn't have, so only [`HostMenu::run`] runs it.
+    pub id: String,
+    /// Its label, shown as it is.
+    pub label: String,
+    /// The id of the item it follows; it joins that item's submenu (left out when there is none).
+    pub after: String,
+}
+
+/// Whether a [`HostMenu`] item can run now.
+pub type HostEnabledFn = Box<dyn Fn(&crate::PhotocraftApp, &str) -> bool>;
+
+/// [`HostMenu::run`]: `Some` with the outcome when the host ran the command, `None` to let
+/// PhotoCraft run it.
+pub type HostRunFn = Box<dyn FnMut(&mut crate::PhotocraftApp, &egui::Context, &str, &Value) -> Option<Result<Value, String>>>;
+
+/// What the host app brings to the menus: items of its own (a tablet shell's File › Share…), and
+/// the first say over every command run through [`crate::menus::invoke`] (menus, shortcuts, the
+/// command palette), so it can run one its own way (Edit › Paste reading a clipboard that answers
+/// later). A command the host runs from `run` through `invoke` is PhotoCraft's own.
+pub struct HostMenu {
+    /// The items, each after the item it names.
+    pub items: Vec<HostMenuItem>,
+    /// Whether one of [`Self::items`] can run now.
+    pub enabled: HostEnabledFn,
+    /// Runs a command first: every one of [`Self::items`], and any other it takes over.
+    pub run: HostRunFn,
+}
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -546,4 +577,6 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// Menu items and command handling the host app adds (a tablet shell's Photos and share sheet).
+    pub host_menu: Option<HostMenu>,
 }

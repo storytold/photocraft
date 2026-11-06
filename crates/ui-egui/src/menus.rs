@@ -7,6 +7,7 @@ use crate::state::DialogKind;
 
 mod bar;
 pub mod enable_rules;
+mod host_menu;
 mod invoke;
 mod items;
 pub mod menu_keys;
