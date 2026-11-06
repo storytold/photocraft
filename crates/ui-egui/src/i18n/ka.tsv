@@ -117,7 +117,7 @@
 	Print One Copy	ერთი ასლის დაბეჭდვა
 	Exit	გასვლა
 	Undo	დაბრუნება
-	Redo	ხელახლა შესრულება
+	Redo	გამეორება
 	Toggle Last State	ბოლო მდგომარეობის გადართვა
 	Fade…	მილევა…
 	Cut	ამოჭრა
@@ -4478,17 +4478,8 @@ layerLabel	Magenta	მეწამული
 	Kept {name}: written by another application	{name} შენარჩუნებულია: ჩაწერილია სხვა აპლიკაციის მიერ
 	Shadow Tint	ჩრდილების ტონირება
 	Check for Updates…	განახლებების შემოწმება…
-	PhotoCraft Updates	PhotoCraft-ის განახლებები
-	Checking for updates…	განახლებების შემოწმება…
 	Open the release page to choose an installer for your system.	გახსენით გამოშვების გვერდი და აირჩიეთ თქვენი სისტემის ინსტალატორი.
-	Open Download Page	ჩამოტვირთვის გვერდის გახსნა
-	PhotoCraft is up to date.	PhotoCraft განახლებულია.
-	Could not check for updates.	განახლებების შემოწმება ვერ მოხერხდა.
-	Updates have not been checked yet.	განახლებები ჯერ არ შემოწმებულა.
-	Check Again	ხელახლა შემოწმება
 	Automatically Check for Updates	განახლებების ავტომატური შემოწმება
-	Installed version: {version}	დაინსტალირებული ვერსია: {version}
-	PhotoCraft {version} is available.	ხელმისაწვდომია PhotoCraft {version}.
 	Import Styles…	სტილების იმპორტი…
 	Export Selected Styles…	მონიშნული სტილების ექსპორტი…
 	Export Styles…	სტილების ექსპორტი…
@@ -4585,12 +4576,10 @@ layerLabel	Magenta	მეწამული
 	Drawn on the CPU: {reason}. Click for System Info.	დახატულია CPU-ზე: {reason}. დაწკაპეთ სისტემის ინფორმაციის სანახავად.
 	Level:	დონე:
 	Percentile:	პროცენტილი:
-	Release Notes	გამოშვების შენიშვნები
 	Show Channels in Color	არხების ფერად ჩვენება
 	Show Statistics	სტატისტიკის ჩვენება
 	Source:	წყარო:
 	Uncached Refresh	განახლება ქეშის გარეშე
-	Update and Restart	განახლება და გადატვირთვა
 	Convert to Shape…	ფიგურად გარდაქმნა…
 	Delete Hidden Layers	დამალული შრეების წაშლა
 	Fit Layer on Screen	შრის ეკრანში ჩატევა
@@ -4638,14 +4627,11 @@ cameraRaw	Tone Histogram	ტონების ჰისტოგრამა
 cameraRaw	Vignetting	ვინიეტირება
 cameraRaw	White Balance: As Shot	თეთრის ბალანსი: როგორც გადაღებულია
 	No matching fonts	შესაბამისი შრიფტები არ არის
-	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	არასწორი რიცხვითი მნიშვნელობა. საჭიროა მთელი რიცხვი {min}%-დან {max}%-მდე. ჩასმულია წინა მნიშვნელობა.
-	Recently Used Colors	ბოლოს გამოყენებული ფერები
-	Shapes can't use patterns yet	ფიგურებს პატერნების გამოყენება ჯერ არ შეუძლიათ
-	Stop Color	გადასვლის წერტილის ფერი
-	{set} from {file} replaced the one from {earlier}	{file}-დან {set}-მა ჩაანაცვლა {earlier}-დან ჩატვირთული
+
+# Sync 2026-11-03: Load Actions summary, SVG Smart Objects, zoom field, Shape Fill/Stroke popover
 @plural	{n} action file loaded|{n} action files loaded	ჩატვირთულია მოქმედებების ფაილი: {n}
+	{set} from {file} replaced the one from {earlier}	{file}-დან {set}-მა ჩაანაცვლა {earlier}-დან ჩატვირთული
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	ვერ ჩაიტვირთა ფაილი: {n} — {errors}
-smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS შიგთავსი SVG-ის სახით დარედაქტირდება. შენახვა ჩაანაცვლებს ჩაშენებულ წყაროს; ფორმატისთვის დამახასიათებელი შესაძლებლობები შეიძლება შეიცვალოს.
 smartSvg	Choose executable…	შესრულებადი ფაილის არჩევა…
 smartSvg	Choose the application used to edit this SVG:	აირჩიეთ აპლიკაცია, რომლითაც ეს SVG დარედაქტირდება:
 smartSvg	Edit SVG Smart Object	SVG ჭკვიანი ობიექტის რედაქტირება
@@ -4655,9 +4641,59 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG-რე
 smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	შეინახეთ გახსნილ SVG ფაილში. ყოველი შენახული ცვლილება PhotoCraft-ში ერთ დაბრუნების ნაბიჯად იქცევა.
 smartSvg	Stop syncing this Smart Object	ამ ჭკვიანი ობიექტის სინქრონიზაციის შეწყვეტა
 smartSvg	Updates wait while another document or an editing dialog is active.	განახლება დაელოდება, სანამ სხვა დოკუმენტი ან რედაქტირების დიალოგი აქტიურია.
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS შიგთავსი SVG-ის სახით დარედაქტირდება. შენახვა ჩაანაცვლებს ჩაშენებულ წყაროს; ფორმატისთვის დამახასიათებელი შესაძლებლობები შეიძლება შეიცვალოს.
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	არასწორი რიცხვითი მნიშვნელობა. საჭიროა მთელი რიცხვი {min}%-დან {max}%-მდე. ჩასმულია წინა მნიშვნელობა.
+	Recently Used Colors	ბოლოს გამოყენებული ფერები
+	Stop Color	გადასვლის წერტილის ფერი
+	Shapes can't use patterns yet	ფიგურებს პატერნების გამოყენება ჯერ არ შეუძლიათ
 	Memory usage percent	მეხსიერების გამოყენება (%)
 	Save Full-Size Composite in .pcraft Files	სრული ზომის გაერთიანებული გამოსახულების შენახვა .pcraft ფაილებში
 	Scratch Size Limit (MB, 0 = No Limit)	დროებითი დისკის ზომის ლიმიტი (მბ, 0 = ლიმიტის გარეშე)
+# Sync 2026-11-07: strings added upstream
+	Clear Recent File List	ბოლოს გახსნილი ფაილების სიის გასუფთავება
+	New Document…	ახალი დოკუმენტი…
+	Open Document…	დოკუმენტის გახსნა…
+	Consolidate All to Here	ყველას აქ გაერთიანება
+	Move to New Window	ახალ ფანჯარაში გადატანა
+	Reveal in Explorer	Explorer-ში ჩვენება
+	Plugins…	პლაგინები…
+	Embed Linked	დაკავშირებულის ჩაშენება
+	Embed All Linked	ყველა დაკავშირებულის ჩაშენება
+	Plugins	პლაგინები
+	Working CMY Plates	სამუშაო CMY ფირფიტები
+	Legacy Macintosh RGB (Gamma 1.8)	მოძველებული Macintosh RGB (გამა 1.8)
+	Internet Standard RGB (sRGB)	ინტერნეტის სტანდარტული RGB (sRGB)
+	Contextual Task Bar	კონტექსტური ამოცანების ზოლი
+	Hide bar	ზოლის დამალვა
+	Reset bar position	ზოლის პოზიციის ჩამოყრა
+	Pin bar position	ზოლის პოზიციის ჩამაგრება
+	Move bar	ზოლის გადაადგილება
+	More options	მეტი პარამეტრი
+	Source: {name}	წყარო: {name}
+	No Thumbnails	ესკიზების გარეშე
+	Small Thumbnails	პატარა ესკიზები
+	Medium Thumbnails	საშუალო ესკიზები
+	Large Thumbnails	დიდი ესკიზები
+	Clip Thumbnails to Document Bounds	ესკიზების დოკუმენტის საზღვრებით მოჭრა
+	Make Shape	ფიგურის შექმნა
+	Background (default)	ფონი (ნაგულისხმევი)
+	Transparent (default)	გამჭვირვალე (ნაგულისხმევი)
+	The History Brush source was deleted: set a new source in the History panel	ისტორიის ფუნჯის წყარო წაიშალა: მიუთითეთ ახალი წყარო ისტორიის პანელში
+	The GPU compositor is still being prepared	GPU-კომპოზიტორი ჯერ კიდევ მზადდება
+	Message	შეტყობინება
+	Playback Options…	შესრულების პარამეტრები…
+	Playback Options	შესრულების პარამეტრები
+	Accelerated	დაჩქარებული
+	Step by Step	ნაბიჯ-ნაბიჯ
+	Pause For:	პაუზა:
+	Pause For	პაუზა
+	seconds	წამი
+	Create a single history state	ისტორიის ერთი მდგომარეობის შექმნა
+	Generator enabled	გენერატორი ჩართულია
+	On your computer	თქვენს კომპიუტერზე
+	New file	ახალი ფაილი
+	Learn	სწავლა
+	Website	ვებსაიტი
 	A frame supports affine transforms; select its image for perspective transforms	ჩარჩო აფინურ გარდაქმნებს უჭერს მხარს; პერსპექტიული გარდაქმნისთვის მონიშნეთ მისი გამოსახულება
 	A frame supports affine transforms; select its image to warp it	ჩარჩო აფინურ გარდაქმნებს უჭერს მხარს; დეფორმაციისთვის მონიშნეთ მისი გამოსახულება
 	Convert to Frame…	ჩარჩოდ გარდაქმნა…
@@ -4667,28 +4703,16 @@ smartSvg	Updates wait while another document or an editing dialog is active.	გ
 	Fit Content to Frame	შიგთავსის ჩარჩოზე მორგება
 	Fit Frame to Content	ჩარჩოს შიგთავსზე მორგება
 	Frame coordinates must be finite and within 600000 pixels	ჩარჩოს კოორდინატები სასრული უნდა იყოს და 600000 პიქსელს არ უნდა აღემატებოდეს
-	Generator enabled	გენერატორი ჩართულია
 	Import Image…	გამოსახულების იმპორტი…
 	Invalid frame transform	ჩარჩოს არასწორი გარდაქმნა
-	Invalid nested file drop	ჩადგმული ფაილის არასწორი ჩაგდება
-	Learn	სწავლა
+	Invalid nested file drop	ფაილის ჩადგმული ჩაგდება არასწორია
 	New Frame	ახალი ჩარჩო
-	New file	ახალი ფაილი
-	On your computer	თქვენს კომპიუტერზე
 	Replace Image…	გამოსახულების ჩანაცვლება…
-	Source: {name}	წყარო: {name}
-	The History Brush source was deleted: set a new source in the History panel	ისტორიის ფუნჯის წყარო წაიშალა: დააყენეთ ახალი წყარო ისტორიის პანელში
 	The frame is locked	ჩარჩო ჩაკეტილია
 	The frame is unavailable	ჩარჩო მიუწვდომელია
-	Website	ვებსაიტი
-	Accelerated	დაჩქარებული
-	Background (default)	ფონი (ნაგულისხმევი)
-	Create a single history state	ისტორიის ერთი მდგომარეობის შექმნა
-	Message	შეტყობინება
-	Pause For	პაუზით
-	Pause For:	პაუზით:
-	Playback Options	შესრულების პარამეტრები
-	Playback Options…	შესრულების პარამეტრები…
-	Step by Step	ნაბიჯ-ნაბიჯ
-	Transparent (default)	გამჭვირვალე (ნაგულისხმევი)
-	seconds	წამი
+	Channel Options…	არხის პარამეტრები…
+	Specify Channels:	არხების მითითება:
+	Not enough grayscale documents for this mode.	ამ რეჟიმისთვის ნაცრისფერი ტონების დოკუმენტები საკმარისი არ არის.
+	Pick a different document for each channel.	თითოეული არხისთვის სხვა დოკუმენტი აირჩიეთ.
+	A picked document is no longer open.	ერთ-ერთი არჩეული დოკუმენტი აღარ არის გახსნილი.
+	A picked document is no longer a grayscale document of the same size.	ერთ-ერთი არჩეული დოკუმენტი აღარ არის იმავე ზომის ნაცრისფერი ტონების დოკუმენტი.
