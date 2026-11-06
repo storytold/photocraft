@@ -205,6 +205,60 @@ fn color_lookup_picker_cycles_luts_with_the_mouse_wheel() {
     assert!(h.state().live_adjust.is_none(), "the completed wheel gesture is committed");
 }
 
+/// The Color Lookup layer's name.
+fn name_of(h: &Harness<'_, PhotocraftApp>) -> String {
+    match layer(h).1 {
+        Adjustment::ColorLookup { name, .. } => name,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The text of the file the Color Lookup layer embeds.
+fn source_of(h: &Harness<'_, PhotocraftApp>) -> String {
+    match layer(h).1 {
+        Adjustment::ColorLookup { source: Some(source), .. } => String::from_utf8(source.bytes.to_vec()).unwrap(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The stepped file's path and text the preview keeps (`app.lut_text`).
+fn text_of(h: &Harness<'_, PhotocraftApp>) -> Option<(String, String)> {
+    h.state().lut_text.as_ref().map(|(p, t)| (p.clone(), t.to_string()))
+}
+
+/// Whether the live preview is of `key`: a built-in id or a folder file's path.
+fn previewed(h: &Harness<'_, PhotocraftApp>, key: &str) -> bool {
+    h.state().live_adjust.as_ref().is_some_and(|(_, p)| p.get("file").or(p.get("lut")).and_then(serde_json::Value::as_str) == Some(key))
+}
+
+/// What the canvas shows: the previewed look, or the committed one.
+fn shown_name(h: &mut Harness<'_, PhotocraftApp>) -> String {
+    let id = layer(h).0;
+    let doc = crate::canvas::display_doc(h.state_mut(), 0).0;
+    match &doc.layer(id).unwrap().content {
+        LayerContent::Adjustment(Adjustment::ColorLookup { name, .. }) => name.clone(),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The combo box nearest the "3D LUT File" label at `label`.
+fn color_lookup_picker<'h>(h: &'h Harness<'_, PhotocraftApp>, label: Rect) -> egui_kittest::Node<'h> {
+    let away = |n: &egui_kittest::Node<'_>| n.rect().center().distance(label.center());
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).min_by(|a, b| away(a).total_cmp(&away(b))).expect("Color Lookup picker")
+}
+
+/// Frames until every label in `labels` is on screen: the LUT folder scan runs on a worker thread.
+fn wait_for_labels(h: &mut Harness<'_, PhotocraftApp>, labels: &[&str]) -> bool {
+    for _ in 0..500 {
+        if labels.iter().all(|l| h.query_by_label(l).is_some()) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.run_steps(1);
+    }
+    false
+}
+
 /// #11341: the arrow keys and the wheel step from the last built-in (Cross Process) into the LUT
 /// folder's files and back, previewing and then committing them like the built-ins, instead of
 /// stopping at Cross Process.
@@ -214,54 +268,32 @@ fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
     let cube = "LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
     let path = tmp.path().join("film.cube");
     std::fs::write(&path, cube).unwrap();
+    // Distinct tables, so a preview or commit of the wrong file shows in the text it carries.
+    let grain_cube = cube.replace(
+        "1 1 1
+",
+        "0.5 0.5 0.5
+",
+    );
+    assert_ne!(grain_cube, cube);
     let grain = tmp.path().join("grain.cube");
-    std::fs::write(&grain, cube).unwrap();
+    std::fs::write(&grain, &grain_cube).unwrap();
+    // Not UTF-8: a step onto it keeps no text and goes by path, which reports the file.
+    let bad = tmp.path().join("zbad.cube");
+    std::fs::write(&bad, [0xff_u8, 0xfe, 0x00, 0x80]).unwrap();
     let mut h = app_harness("colorLookup", "rgb", 8);
     h.state_mut().run("prefs.set", json!({"path": "fileHandling.lutFolder", "value": tmp.path().to_str().unwrap()})).unwrap();
     let (id, _) = layer(&h);
     h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "lut": "crossProcess"})).unwrap();
     let steps = h.state().session.active().unwrap().history.past_len();
-    let name_of = |h: &Harness<'_, PhotocraftApp>| match layer(h).1 {
-        Adjustment::ColorLookup { name, .. } => name,
-        other => panic!("{other:?}"),
-    };
-    let previewed = |h: &Harness<'_, PhotocraftApp>, key: &str| {
-        h.state().live_adjust.as_ref().is_some_and(|(_, p)| p.get("file").or(p.get("lut")).and_then(serde_json::Value::as_str) == Some(key))
-    };
-    // What the canvas shows: the previewed look, or the committed one.
-    let shown_name = |h: &mut Harness<'_, PhotocraftApp>| {
-        let id = layer(h).0;
-        let doc = crate::canvas::display_doc(h.state_mut(), 0).0;
-        match &doc.layer(id).unwrap().content {
-            LayerContent::Adjustment(Adjustment::ColorLookup { name, .. }) => name.clone(),
-            other => panic!("{other:?}"),
-        }
-    };
     let label = label_rect(&h, "3D LUT File").expect("Color Lookup file label");
-    let picker = |h: &Harness<'_, PhotocraftApp>| {
-        h.query_all_by_role(egui::accesskit::Role::ComboBox)
-            .min_by(|a, b| a.rect().center().distance(label.center()).total_cmp(&b.rect().center().distance(label.center())))
-            .expect("Color Lookup picker")
-            .rect()
-            .center()
-    };
+    let picker = |h: &Harness<'_, PhotocraftApp>| color_lookup_picker(h, label).rect().center();
     let at = picker(&h);
     h.hover_at(at);
     h.run_steps(1);
-    h.query_all_by_role(egui::accesskit::Role::ComboBox)
-        .min_by(|a, b| a.rect().center().distance(label.center()).total_cmp(&b.rect().center().distance(label.center())))
-        .expect("Color Lookup picker")
-        .click();
+    color_lookup_picker(&h, label).click();
     h.run_steps(1);
-    // The folder scan runs on a worker thread: frames until its files are listed in the open popup.
-    for _ in 0..500 {
-        if h.query_by_label("film.cube").is_some() && h.query_by_label("grain.cube").is_some() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        h.run_steps(1);
-    }
-    assert!(h.query_by_label("film.cube").is_some() && h.query_by_label("grain.cube").is_some(), "the folder's files are listed after the built-ins");
+    assert!(wait_for_labels(&mut h, &["film.cube", "grain.cube"]), "the folder's files are listed after the built-ins");
     let (file, second) = (path.to_str().unwrap(), grain.to_str().unwrap());
     // Down from the last built-in: the folder's first file, previewed and shown; down again before
     // the rest: the second, stepped from the preview, not from the committed Cross Process.
@@ -304,6 +336,44 @@ fn color_lookup_picker_steps_into_the_lut_folder_and_back() {
     assert_eq!(shown_name(&mut h), "film.cube", "the canvas shows the wheel's folder file");
     h.run_steps(4);
     assert_eq!(name_of(&h), "film.cube");
+    committed_folder_file_steps(&mut h, [cube, &grain_cube], [&path, &grain, &bad]);
+}
+
+/// Steps from committed folder files (the broken case in #11341): the stepped file's text is read
+/// at the step and is what commits, even when the file changes meanwhile; a file that isn't text
+/// is previewed by path and not applied. `texts` are film's and grain's, `paths` film, grain, bad.
+fn committed_folder_file_steps(h: &mut Harness<'_, PhotocraftApp>, texts: [&str; 2], paths: [&std::path::Path; 3]) {
+    let ([cube, grain_cube], [path, grain, bad]) = (texts, paths);
+    let (file, second) = (path.to_str().unwrap(), grain.to_str().unwrap());
+    assert_eq!(source_of(h), cube, "the committed folder file carries its own table");
+    // From a committed folder file (the broken case): down steps on to the next file, whose text
+    // is read at the step; the file changing before the rest commits does not change the commit.
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    assert!(previewed(h, second), "ArrowDown from a committed folder file previews the next: {:?}", h.state().live_adjust);
+    assert_eq!(text_of(h), Some((second.to_owned(), grain_cube.to_owned())), "the step read the stepped file");
+    std::fs::write(grain, cube).unwrap();
+    h.run_steps(4);
+    assert_eq!(name_of(h), "grain.cube");
+    assert_eq!(source_of(h), grain_cube, "the commit is the text read at the step, not the file as it is now");
+    std::fs::write(grain, grain_cube).unwrap();
+    // Up from a committed folder file: the previous file.
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(1);
+    assert!(previewed(h, file), "ArrowUp from a committed folder file previews the previous: {:?}", h.state().live_adjust);
+    h.run_steps(4);
+    assert_eq!((name_of(h).as_str(), source_of(h)), ("film.cube", cube.to_owned()));
+    // Down twice more: grain, committed, then the file that isn't text, previewed by path with no
+    // text kept; its commit reports the file and leaves the layer as it was.
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(5);
+    assert_eq!((name_of(h).as_str(), source_of(h)), ("grain.cube", grain_cube.to_owned()));
+    h.key_press(egui::Key::ArrowDown);
+    h.run_steps(1);
+    assert!(previewed(h, bad.to_str().unwrap()), "{:?}", h.state().live_adjust);
+    assert_eq!(text_of(h), None, "a file that isn't UTF-8 keeps no text");
+    h.run_steps(4);
+    assert_eq!((name_of(h).as_str(), source_of(h)), ("grain.cube", grain_cube.to_owned()), "the unreadable file is not applied");
 }
 
 fn curve_of(a: &Adjustment) -> Vec<[f32; 2]> {

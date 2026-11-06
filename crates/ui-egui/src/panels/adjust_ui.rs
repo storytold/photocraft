@@ -180,10 +180,25 @@ fn lookup_params(key: &str) -> Value {
 /// `layer.setAdjustment` by path, which reports it.
 fn preview_params(app: &mut PhotocraftApp, key: &str) -> Value {
     app.lut_text = key.strip_prefix(FOLDER_LUT).and_then(|path| {
-        let text = std::fs::read(path).ok().and_then(|bytes| String::from_utf8(bytes).ok())?;
+        let text = read_lut_text(path)?;
         Some((path.to_owned(), std::sync::Arc::from(text)))
     });
     lookup_params(key)
+}
+
+/// The largest LUT file a step reads: the engine's folder listing skips anything bigger
+/// (`adjust_cmds::MAX_FOLDER_LUT_BYTES`), and a 129^3 `.cube` (the parser's largest) is about 60 MB.
+const MAX_STEP_LUT_BYTES: u64 = 64 << 20;
+
+/// The UTF-8 text of the LUT file at `path`, when it is a regular file of at most
+/// [`MAX_STEP_LUT_BYTES`]: a folder entry swapped for a directory, a device or a huge file since
+/// the scan is left to `layer.setAdjustment` by path rather than read on the UI thread.
+fn read_lut_text(path: &str) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_STEP_LUT_BYTES {
+        return None;
+    }
+    String::from_utf8(std::fs::read(path).ok()?).ok()
 }
 
 pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
@@ -232,7 +247,7 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
                 // The wheel and the arrow keys preview the LUT folder's files like the built-ins
                 // (#11341): skipping them left the step at the last built-in, the choice falling
                 // back. A folder file is read here, once per step, and kept for the preview and
-                // its commit (`preview_params`, `app.lut_texts`).
+                // its commit (`preview_params`, `app.lut_text`).
                 if sel != "load" && sel != "custom" {
                     let p = preview_params(app, &sel);
                     app.live_adjust = Some((id, p));
