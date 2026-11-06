@@ -34,7 +34,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, PoisonError};
@@ -70,7 +70,7 @@ pub struct PhotoCraftMobile {
     suspended: Shared<Suspended>,
     /// The shell.
     platform: Platform,
-    /// The paste waiting for the shell to read the clipboard.
+    /// The pastes waiting for the shell to read the clipboard.
     pastes: Shared<Pastes>,
     /// The paste the clipboard this frame brought answers, run before the app's own logic.
     answered: Option<(String, Value)>,
@@ -106,11 +106,12 @@ fn reads_clipboard(id: &str) -> bool {
     matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard")
 }
 
-/// A paste the user asked for (Edit › Paste, Paste in Place, New from Clipboard), waiting for the
-/// shell to read the clipboard: the command and its parameters.
+/// The pastes the user asked for (Edit › Paste, Paste in Place, New from Clipboard), waiting for
+/// the shell to read the clipboard: each command and its parameters, oldest first. The shell
+/// answers every request with one read, in order, so each answer runs the oldest.
 #[derive(Clone, Debug, Default, PartialEq)]
 struct Pastes {
-    asked: Option<(String, Value)>,
+    asked: VecDeque<(String, Value)>,
 }
 
 impl Pastes {
@@ -118,14 +119,14 @@ impl Pastes {
     /// now), `false` when it must wait for the shell to read it.
     fn run(&mut self, id: &str, params: &Value, pasted: bool) -> bool {
         if !pasted {
-            self.asked = Some((id.to_string(), params.clone()));
+            self.asked.push_back((id.to_string(), params.clone()));
         }
         pasted
     }
 
     /// A frame begins: the paste the clipboard it brought answers.
     fn answered(&mut self, pasted: bool) -> Option<(String, Value)> {
-        if pasted { self.asked.take() } else { None }
+        if pasted { self.asked.pop_front() } else { None }
     }
 }
 
@@ -966,6 +967,18 @@ mod tests {
         assert_eq!(p.answered(true), None, "answered once");
         assert!(p.run("edit.paste", &json!({}), true), "the clipboard is here");
         assert_eq!(p, Pastes::default());
+    }
+
+    /// Two pastes asked for before the shell answers the first each run, in order, with the
+    /// clipboard read for them: the second doesn't replace the first.
+    #[test]
+    fn pastes_asked_before_the_first_answer_each_run_in_order() {
+        let mut p = Pastes::default();
+        assert!(!p.run("edit.paste", &json!({}), false));
+        assert!(!p.run("edit.pasteSpecial.pasteInPlace", &json!({"n": 2}), false));
+        assert_eq!(p.answered(true), Some(("edit.paste".into(), json!({}))));
+        assert_eq!(p.answered(true), Some(("edit.pasteSpecial.pasteInPlace".into(), json!({"n": 2}))));
+        assert_eq!(p.answered(true), None);
     }
 
     /// A paste of PhotoCraft's own copy hands back exactly what Copy mirrored to the clipboard,
