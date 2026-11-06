@@ -135,6 +135,76 @@ fn convert(s: &mut Session) -> u64 {
 }
 
 #[test]
+fn performance_prefs_hold_the_smart_object_cache_budgets() {
+    let mut s = Session::new();
+    let perf = |s: &Session| (s.prefs().performance.smart_source_cache_mb, s.prefs().performance.smart_stage_cache_mb);
+    let defaults = ((SOURCE_CACHE_BYTES >> 20) as u32, (STAGE_CACHE_BYTES >> 20) as u32);
+    assert_eq!(perf(&s), defaults, "the budgets the caches had");
+    assert_eq!(s.execute("prefs.get", json!({"path": "performance.smartSourceCacheMb"})).unwrap(), json!(defaults.0));
+    // Set to the defaults: the budgets are process-wide, and other tests run alongside.
+    s.execute("prefs.set", json!({"path": "performance.smartSourceCacheMb", "value": defaults.0})).unwrap();
+    s.execute("prefs.set", json!({"path": "performance.smartStageCacheMb", "value": defaults.1})).unwrap();
+    for bad in [json!(-1), json!(65537)] {
+        assert!(s.execute("prefs.set", json!({"path": "performance.smartStageCacheMb", "value": bad})).is_err(), "{bad}");
+    }
+    assert_eq!(perf(&s), defaults);
+}
+
+#[test]
+fn with_no_cache_budgets_one_replace_decodes_and_places_each_file_once() {
+    // A render server keeps nothing between commands (both budgets 0). Within one Replace
+    // Contents, the new file is still decoded once for every instance, copies at one place share
+    // their placement, and a smart filter mask (which mixes the placed and the filtered result)
+    // doesn't place the contents a second time.
+    let _sources = source::SourceBudgetOverride::new(0);
+    let _stages = super::stack_cache::BudgetOverride::new(0);
+    let design = Document::with_background(
+        "d",
+        Size::new(90, 60),
+        photocraft_color::ColorMode::Rgb,
+        photocraft_color::SampleType::U8,
+        photocraft_color::Color::rgba(0.2, 0.7, 0.4, 1.0),
+    );
+    let png = photocraft_io::export(&design, "png", &Default::default()).unwrap().bytes;
+    let placed = || PLACEMENTS.with(std::cell::Cell::get);
+    let decoded = || DECODES.with(std::cell::Cell::get);
+    let copied = |at: f64| {
+        let mut s = session(8);
+        paint(&mut s);
+        let id = LayerId(convert(&mut s));
+        s.execute("layer.duplicate", json!({"layer": id.0})).unwrap();
+        s.edit("move the copy", |doc, _| {
+            let copy = doc.walk().into_iter().find(|(_, _, l)| l.id != id && matches!(l.content, LayerContent::Smart(_))).map(|(_, _, l)| l.id).unwrap();
+            smart_mut(doc, copy)?.transform.m[4] += at;
+            Ok(())
+        })
+        .unwrap();
+        (s, id)
+    };
+    // The check made before the edit decodes the file; the re-render decodes it once more.
+    let (mut s, id) = copied(0.0);
+    let (p, d) = (placed(), decoded());
+    replace_contents_bytes(&mut s, id, "d.png", png.clone()).unwrap();
+    assert_eq!((placed() - p, decoded() - d), (1, 2), "two copies at one place");
+    let (mut s, id) = copied(3.0);
+    let (p, d) = (placed(), decoded());
+    replace_contents_bytes(&mut s, id, "d.png", png.clone()).unwrap();
+    assert_eq!((placed() - p, decoded() - d), (2, 2), "two copies at two places");
+    let mut s = session(8);
+    paint(&mut s);
+    let id = LayerId(convert(&mut s));
+    s.execute("filter.blur.gaussianBlur", json!({"layer": id.0, "radius": 2})).unwrap();
+    s.edit("filter mask", |doc, _| {
+        smart_mut(doc, id)?.filter_mask = Some(photocraft_doc::LayerMask::reveal_all());
+        Ok(())
+    })
+    .unwrap();
+    let p = placed();
+    replace_contents_bytes(&mut s, id, "d.png", png).unwrap();
+    assert_eq!(placed() - p, 1, "a filter-masked smart object");
+}
+
+#[test]
 fn conversion_is_pixel_identical_at_every_depth() {
     for depth in DEPTHS {
         let mut s = session(depth);

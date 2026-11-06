@@ -62,3 +62,24 @@ fn bad_smart_filter_edits_fail_at_once_with_start() {
     assert!(matches!(r, Err(EngineError::BadParams { .. })), "{r:?}");
     assert_eq!(active_smart(&s), before);
 }
+
+fn tiny_stage(v: f32) -> Stage {
+    let fmt = PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8, true);
+    let mut surface = Surface::new(fmt);
+    surface.fill_rect(Rect::new(0, 0, 4, 4), &[v, v, v, 1.0]);
+    Stage { surface, extent: Rect::new(0, 0, 4, 4) }
+}
+
+#[test]
+fn the_stage_cache_keeps_nothing_at_budget_zero() {
+    // A render server sets the budget to 0: each design is rendered once, so its stages would
+    // only pile up.
+    let mut c = Vec::new();
+    super::super::stack_cache::insert(&mut c, [1; 32], &tiny_stage(0.5), 0);
+    assert!(c.is_empty());
+    super::super::stack_cache::insert(&mut c, [1; 32], &tiny_stage(0.5), 1 << 20);
+    super::super::stack_cache::insert(&mut c, [2; 32], &tiny_stage(0.7), 1 << 20);
+    assert_eq!(c.len(), 2);
+    super::super::stack_cache::trim(&mut c, 0);
+    assert!(c.is_empty(), "lowering the budget drops what is over it");
+}

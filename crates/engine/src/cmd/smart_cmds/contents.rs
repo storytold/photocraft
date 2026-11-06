@@ -36,6 +36,10 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
         let mut warnings = std::collections::BTreeSet::new();
+        // The instances all render the new contents: decode them once, and let instances at one
+        // place share their placement, whatever the cache budgets keep between commands.
+        let _sources = super::source::reuse_sources();
+        let _stages = super::stack_cache::reuse_stages();
         for &instance in &changed {
             smart_mut(doc, instance)?.source = new.clone();
             if !keep_psd {
