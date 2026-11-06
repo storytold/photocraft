@@ -437,6 +437,19 @@ fn rejects_bogus_sizes_and_pixel_formats() {
     let mut tight = header(64, 64, DDPF_RGB, &[0; 4], 32, [0xff, 0xff00, 0xff_0000, 0]);
     tight.extend(vec![0; 64 * 64 * 4]);
     assert!(matches!(decode_as_with(Format::Dds, &tight, &opts), Err(CodecError::LimitExceeded(_))));
+
+    // The whole mip chain charges max_alloc: 4×4 DXT1 decodes 64+16+4 = 84 bytes of levels,
+    // none of them over 80 alone.
+    let mut chain = compressed(4, 4, b"DXT1");
+    chain[8..12].copy_from_slice(&(0x1007u32 | 0x2_0000).to_le_bytes()); // DDSD_MIPMAPCOUNT
+    chain[28..32].copy_from_slice(&3u32.to_le_bytes());
+    chain.extend(bc1_block(RED, RED, [0; 4]));
+    chain.extend(bc1_block(BLUE, BLUE, [0; 4]));
+    chain.extend(bc1_block(GREEN, GREEN, [0; 4]));
+    let chain_opts = DecodeOptions { limits: Limits { max_alloc: 80, ..Default::default() }, ..Default::default() };
+    assert!(matches!(photocraft_codecs::decode_dds_levels(&chain, &chain_opts), Err(CodecError::LimitExceeded(_))));
+    let chain_opts = DecodeOptions { limits: Limits { max_alloc: 84, ..Default::default() }, ..Default::default() };
+    assert_eq!(photocraft_codecs::decode_dds_levels(&chain, &chain_opts).unwrap().len(), 3);
     assert!(decode_as(Format::Dds, &compressed(0, 4, b"DXT1")).is_err(), "zero width");
 
     let mut bad_size = compressed(4, 4, b"DXT1");

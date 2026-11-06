@@ -511,9 +511,10 @@ fn flip_dds_image(img: &mut Image) {
 /// holds no data and opens neither channel nor transparency. With a mip chain, only the top
 /// level's alpha becomes the channel.
 fn import_dds(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_raster::Interrupt) -> Result<ImportResult, IoError> {
+    let decode = codecs::DecodeOptions { limits: decode_limits(opts), ..Default::default() };
     let levels = if opts.dds.mips_as_layers {
         // A cancelled job stops between mip levels instead of decoding the whole chain.
-        match codecs::decode_dds_levels_with_cancel(bytes, &codecs::DecodeOptions::default(), &|| ctl.cancelled()) {
+        match codecs::decode_dds_levels_with_cancel(bytes, &decode, &|| ctl.cancelled()) {
             Ok(levels) => levels,
             Err(e) => {
                 ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -521,7 +522,7 @@ fn import_dds(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &photocraft_r
             }
         }
     } else {
-        vec![codecs::decode_as(Format::Dds, bytes)?]
+        vec![codecs::decode_as_with(Format::Dds, bytes, &decode)?]
     };
     import_dds_levels(name, levels, bytes, opts, ctl)
 }

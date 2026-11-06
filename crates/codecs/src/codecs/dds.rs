@@ -274,11 +274,19 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
 pub(crate) fn decode_levels(b: &[u8], limits: &Limits, cancel: &dyn Fn() -> bool) -> Result<Vec<Image>, CodecError> {
     let p = parse(b)?;
     let mut levels = Vec::with_capacity(p.mip_count() as usize);
+    // The chain as a whole charges max_alloc: a mip chain cannot hold more than the limit
+    // however small each level is on its own.
+    let mut charged = 0u64;
     for i in 0..p.mip_count() {
         if cancel() {
             return Err(bad("DDS import cancelled"));
         }
-        levels.push(level_image(&p, i, limits)?);
+        let img = level_image(&p, i, limits)?;
+        charged = charged.saturating_add(img.data().len() as u64);
+        if charged > limits.max_alloc {
+            return Err(CodecError::LimitExceeded(format!("{charged} bytes exceed max_alloc {}", limits.max_alloc)));
+        }
+        levels.push(img);
     }
     Ok(levels)
 }
