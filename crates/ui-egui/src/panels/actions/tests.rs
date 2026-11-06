@@ -1,5 +1,80 @@
 use super::*;
 
+/// The real confirmation route keeps its library revision and shares Edit Undo with the keyboard.
+#[test]
+fn library_dialog_cancel_stale_and_undo_leave_document_history_untouched() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":8,"height":8})).unwrap();
+    app.run("actions.newSet", json!({"name":"Keep"})).unwrap();
+    let history = app.session.active().unwrap().history.past_len();
+    let clear = |app: &mut PhotocraftApp| library::open(app, library::Kind::Clear).unwrap()["dialog"].as_u64().unwrap();
+    let id = clear(&mut app);
+    crate::dialogs::cancel(&mut app, id).unwrap();
+    assert_eq!(app.session.actions.sets, ["Keep"]);
+    let id = clear(&mut app);
+    app.run("actions.newSet", json!({"name":"Newer"})).unwrap();
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert_eq!(app.session.actions.sets, ["Keep", "Newer"]);
+    let id = clear(&mut app);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(app.session.actions.sets.is_empty());
+    let ctx = egui::Context::default();
+    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.actions.sets, ["Keep", "Newer"]);
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn repeated_factory_rows_select_and_play_independently() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for _ in 0..2 {
+        app.run("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
+    }
+    let rows: Vec<_> = app
+        .session
+        .actions
+        .list
+        .iter()
+        .map(|a| Row {
+            name: a.name.clone(),
+            steps: Vec::new(),
+            disabled: Default::default(),
+            dialogs: Default::default(),
+            set: a.set.clone(),
+            set_slot: a.set_slot,
+            color: String::new(),
+        })
+        .collect();
+    let displayed = display_order(&rows, &[], &app.session.actions.set_rows);
+    assert!(matches!(&displayed[0], PanelRow::Set(Folder { slot: Some(0), .. }, 2)));
+    assert!(matches!(&displayed[3], PanelRow::Set(Folder { slot: Some(1), .. }, 2)));
+    app.ui.actions.selected_set = Some("PhotoCraft Basics".into());
+    app.ui.actions.selected_set_slot = Some(1);
+    assert_eq!(playback_targets(&app), [2, 3]);
+    assert_eq!(new_action_set(&app).unwrap().slot, Some(1));
+}
+
+#[test]
+fn replace_picker_holds_validated_bytes_until_confirmed() {
+    use crate::file_dialog::{FileDialogAnswer, fake};
+    let bytes = action_set_bytes("Replacement", "Invert");
+    let (service, _) = fake(vec![Some(FileDialogAnswer::Contents("replacement.atn".into(), bytes))]);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(service), ..Default::default() });
+    app.run("actions.newSet", json!({"name":"Original"})).unwrap();
+    library::open(&mut app, library::Kind::Replace).unwrap();
+    let ctx = egui::Context::default();
+    app.poll_file_dialog(&ctx, None);
+    app.poll_file_dialog(&ctx, None);
+    let dialog = app.ui.dialogs.iter().find(|dialog| library::owns(&dialog.fields)).unwrap();
+    let id = dialog.id;
+    assert!(!dialog.fields.contains_key("data"));
+    assert_eq!(app.session.actions.sets, ["Original"]);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(app.session.actions.set_rows, ["Replacement"]);
+    assert!(app.session.actions.sets.is_empty());
+    assert_eq!(app.session.actions.list[0].name, "Invert");
+}
+
 /// A small valid Photoshop set, generated without external action files.
 fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {
     use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
@@ -1080,7 +1155,7 @@ fn set_folders_group_actions_and_collapse() {
     assert!(h.get_by_label("Also loose").rect().top() < folder.top());
     assert!(h.get_by_label("Sharpen").rect().top() > folder.top());
     assert!(h.get_by_label("Soften").rect().top() > h.get_by_label("Sharpen").rect().top());
-    assert_eq!(display_order(&[]), Vec::<usize>::new());
+    assert!(display_order(&[], &[], &[]).is_empty());
     // Clicking the folder's triangle collapses it; its actions disappear and the state is remembered.
     click_set_triangle(&mut h, "Retouch");
     assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"]);

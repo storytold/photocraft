@@ -237,7 +237,7 @@ fn read_item(r: &mut Reader<'_>, legacy: bool) -> Result<AtnItem> {
 }
 
 /// Read an action and its steps using the file's descriptor dialect.
-fn read_action(r: &mut Reader<'_>, legacy: bool) -> Result<AtnAction> {
+fn read_action(r: &mut Reader<'_>, legacy: bool, remaining: Option<&mut usize>) -> Result<AtnAction> {
     let function_key = r.u16()?;
     let shift = r.u8()? != 0;
     let command = r.u8()? != 0;
@@ -249,6 +249,9 @@ fn read_action(r: &mut Reader<'_>, legacy: bool) -> Result<AtnAction> {
     r.check_count(u64::from(n), 20)?;
     if n as usize > MAX_ITEMS {
         return Err(PsdError::LimitExceeded("too many steps in one action"));
+    }
+    if let Some(remaining) = remaining {
+        *remaining = remaining.checked_sub(n as usize).ok_or(PsdError::LimitExceeded("too many steps in the Actions archive"))?;
     }
     let mut items = Vec::with_capacity((n as usize).min(1024));
     for _ in 0..n {
@@ -269,20 +272,61 @@ pub fn parse(data: &[u8]) -> Result<AtnFile> {
 pub fn parse_with_encoding(data: &[u8], encoding: Option<&str>) -> Result<AtnFile> {
     let forced = encoding.map(codepage::resolve_label).transpose()?;
     let mut f = parse_layout(data)?;
+    apply_encoding(&mut f, forced);
+    Ok(f)
+}
+
+/// Parse the complete archive for whole-library replacement. Version 16 sets may follow one
+/// another after the version word. Reject an invalid suffix instead of replacing from a prefix.
+pub fn parse_sets_with_encoding(data: &[u8], encoding: Option<&str>) -> Result<Vec<AtnFile>> {
+    let forced = encoding.map(codepage::resolve_label).transpose()?;
+    let mut r = Reader::new(data);
+    let legacy = read_version(&mut r)? == 12;
+    let mut remaining = (MAX_ACTIONS, MAX_ITEMS);
+    let mut sets = Vec::new();
+    loop {
+        if sets.len() >= 1024 {
+            return Err(PsdError::LimitExceeded("too many sets in the Actions archive"));
+        }
+        let mut file = read_set(&mut r, legacy, Some(&mut remaining))?;
+        apply_encoding(&mut file, forced);
+        sets.push(file);
+        if r.is_empty() {
+            return Ok(sets);
+        }
+        if legacy {
+            return Err(PsdError::invalid("trailing data after the legacy Actions set"));
+        }
+    }
+}
+
+fn apply_encoding(f: &mut AtnFile, forced: Option<&'static encoding_rs::Encoding>) {
     let mut warnings = Vec::new();
-    let enc = forced.or_else(|| name_encoding(&f, &mut warnings));
+    let enc = forced.or_else(|| name_encoding(f, &mut warnings));
     f.warnings.extend(warnings);
     f.encoding = enc.map(|e| e.name().to_owned());
-    Ok(f)
 }
 
 fn parse_layout(data: &[u8]) -> Result<AtnFile> {
     let mut r = Reader::new(data);
+    let version = read_version(&mut r)?;
+    let mut file = read_set(&mut r, version == 12, None)?;
+    if !r.is_empty() {
+        file.warnings.push(format!("{} trailing bytes ignored", r.remaining()));
+    }
+    Ok(file)
+}
+
+fn read_version(r: &mut Reader<'_>) -> Result<u32> {
     let version = r.u32()?;
     if !matches!(version, 12 | VERSION) {
         return Err(PsdError::Unsupported(format!("actions file version {version} (supported versions: 12 and 16)")));
     }
-    let name = UnicodeString::read(&mut r)?;
+    Ok(version)
+}
+
+fn read_set(r: &mut Reader<'_>, legacy: bool, mut remaining: Option<&mut (usize, usize)>) -> Result<AtnFile> {
+    let name = UnicodeString::read(r)?;
     let expanded = r.u8()? != 0;
     let n = r.u32()?;
     // Each action needs at least its key, modifiers, colour, an empty name, the flag and a count.
@@ -290,15 +334,14 @@ fn parse_layout(data: &[u8]) -> Result<AtnFile> {
     if n as usize > MAX_ACTIONS {
         return Err(PsdError::LimitExceeded("too many actions in one set"));
     }
+    if let Some(remaining) = remaining.as_deref_mut() {
+        remaining.0 = remaining.0.checked_sub(n as usize).ok_or(PsdError::LimitExceeded("too many actions in the Actions archive"))?;
+    }
     let mut actions = Vec::with_capacity((n as usize).min(256));
     for _ in 0..n {
-        actions.push(read_action(&mut r, version == 12)?);
+        actions.push(read_action(r, legacy, remaining.as_deref_mut().map(|budget| &mut budget.1))?);
     }
-    let mut warnings = Vec::new();
-    if !r.is_empty() {
-        warnings.push(format!("{} trailing bytes ignored", r.remaining()));
-    }
-    Ok(AtnFile { name, expanded, actions, warnings, encoding: None })
+    Ok(AtnFile { name, expanded, actions, warnings: Vec::new(), encoding: None })
 }
 
 /// The encoding of `f`'s 8-bit names that are not ASCII or UTF-8, or `None` if no name shown

@@ -13,6 +13,11 @@ use crate::actions_cmds::{flush_recording, not_playing, pending_steps, resolve};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
+mod library_commands;
+pub(crate) use library_commands::enabled as library_change_enabled;
+pub use library_commands::{LibraryUndo, undo_library_label};
+pub(crate) use library_commands::{check_library_size, confirmed_idle, publish_library};
+
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
@@ -120,12 +125,15 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let idx = resolve(&s.actions.list, p, cmd)?;
     let set = match p.get("set") {
         None | Some(Value::Null) => None,
+        Some(Value::String(n)) if p.get("setSlot").and_then(Value::as_u64).is_some() => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(Value::String(_)) => return Err(bad(cmd, "`set` is empty; pass null to take the action out of its set")),
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
     };
+    let slot = set_slot(s, p, set.as_deref(), cmd)?;
     let action = &mut s.actions.list[idx];
     action.set = set;
+    action.set_slot = slot;
     let result = json!({"action": action.name, "set": action.set});
     s.actions.touch();
     Ok(result)
@@ -135,7 +143,24 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
 /// then the empty ones New Set made.
 pub fn set_names(s: &Session) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
-    s.actions.list.iter().filter_map(|a| a.set.as_ref()).chain(&s.actions.sets).filter(|set| seen.insert(set.as_str())).cloned().collect()
+    s.actions
+        .list
+        .iter()
+        .filter_map(|a| a.set.as_ref())
+        .chain(&s.actions.sets)
+        .chain(&s.actions.set_rows)
+        .filter(|set| seen.insert(set.as_str()))
+        .cloned()
+        .collect()
+}
+
+/// An explicit folder is selected by both its current slot and caption.
+pub(crate) fn set_slot(s: &Session, p: &Value, name: Option<&str>, cmd: &str) -> Result<Option<usize>> {
+    let Some(slot) = index(p, "setSlot", cmd)? else { return Ok(None) };
+    if s.actions.set_rows.get(slot).map(String::as_str) != name || name.is_none() {
+        return Err(bad(cmd, "the selected Actions folder changed"));
+    }
+    Ok(Some(slot))
 }
 
 /// New Set…: an empty set folder, named `name` or "Set N" (the first number no set has), that New
@@ -278,6 +303,36 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
+            id: "actions.clearAll",
+            label: "Clear All Actions",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"confirm":true} → {cleared}. Removes the Actions library, including empty folders. Undo with actions.undoLibrary."#,
+            enabled: library_commands::enabled,
+            run: library_commands::clear,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.reset",
+            label: "Reset Actions…",
+            menu: &[],
+            shortcut: None,
+            params: r#"{"confirm":true,"mode":"replace"|"append"} → {set,slot,actions,appended}. Restores the original PhotoCraft Basics set."#,
+            enabled: library_commands::enabled,
+            run: library_commands::reset,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.undoLibrary",
+            label: "Undo Actions Library Change",
+            menu: &[],
+            shortcut: None,
+            params: "{} → {undone}. Restores the latest Clear All, Reset or Replace without editing document History.",
+            enabled: library_commands::undo_enabled,
+            run: library_commands::undo,
+            journal: false,
+        },
+        CommandSpec {
             id: "actions.insert",
             label: "Insert Step",
             menu: &[],
@@ -312,7 +367,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Move to Set",
             menu: &[],
             shortcut: None,
-            params: r##"{"action":name|index, "set":name|null} → {action, set}. The set folder the Actions panel shows the action under (what Load Actions fills and Save Actions writes); null takes it out of any set."##,
+            params: r##"{"action":name|index, "set":name|null, "setSlot":index?} → {action, set}. Move the action into a set or an explicit folder occurrence. Null takes it out of any set."##,
             enabled: always,
             run: assign_set,
             journal: false,
@@ -322,7 +377,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "New Set",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str? (default "Set N")} → {set}. An empty set folder in the Actions panel, as Photoshop's New Set… makes; New Action records into the selected set (actions.record's `set`). Save Actions… (actions.save's `set`) writes it even while empty; it is remembered between sessions once it holds an action."##,
+            params: r##"{"name":str? (default "Set N")} → {set}. An empty set folder in the Actions panel. New Action records into it and Save Actions… writes it even while empty."##,
             enabled: always,
             run: new_set,
             journal: false,

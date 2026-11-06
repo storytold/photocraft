@@ -15,6 +15,27 @@ use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
 use crate::icons;
 use crate::theme::Tokens;
 
+pub(crate) mod library;
+
+pub(crate) fn library_selection_changed(app: &mut PhotocraftApp) {
+    let ui = &mut app.ui.actions;
+    ui.selected = None;
+    ui.selected_step = None;
+    ui.selected_set = None;
+    ui.selected_set_slot = None;
+    ui.collapsed_set_slots.clear();
+    ui.expanded.clear();
+    ui.renaming = None;
+    ui.reveal_recording = None;
+}
+
+pub(crate) fn library_slots_changed(app: &mut PhotocraftApp) {
+    if app.ui.actions.selected_set_slot.take().is_some() {
+        app.ui.actions.selected_set = None;
+    }
+    app.ui.actions.collapsed_set_slots.clear();
+}
+
 /// Which row is selected and which rows are expanded. The action list itself is
 /// [`photocraft_engine::Session::actions`].
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -33,6 +54,10 @@ pub struct ActionsUi {
     #[serde(skip)]
     pub selected_set: Option<String>,
     #[serde(skip)]
+    selected_set_slot: Option<usize>,
+    #[serde(skip)]
+    collapsed_set_slots: Vec<usize>,
+    #[serde(skip)]
     reveal_recording: Option<(usize, usize)>,
     /// The action whose name is being edited in place (double-click on its name).
     #[serde(skip)]
@@ -46,6 +71,7 @@ impl ActionsUi {
         self.selected = Some(action);
         self.selected_step = step;
         self.selected_set = None;
+        self.selected_set_slot = None;
     }
 }
 
@@ -96,13 +122,23 @@ fn selected_set(app: &PhotocraftApp) -> Option<&str> {
         return None;
     }
     let set = app.ui.actions.selected_set.as_deref()?;
+    if let Some(slot) = app.ui.actions.selected_set_slot {
+        return (app.session.actions.set_rows.get(slot).map(String::as_str) == Some(set)).then_some(set);
+    }
     photocraft_engine::actions_edit_cmds::set_names(&app.session).iter().any(|n| n == set).then_some(set)
 }
 
 /// The actions of the selected set, in list order (empty when no set is selected, or it is empty).
 fn selected_set_actions(app: &PhotocraftApp) -> Vec<usize> {
     let Some(set) = selected_set(app) else { return Vec::new() };
-    app.session.actions.list.iter().enumerate().filter(|(_, a)| a.set.as_deref() == Some(set)).map(|(i, _)| i).collect()
+    app.session
+        .actions
+        .list
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.set.as_deref() == Some(set) && a.set_slot == app.ui.actions.selected_set_slot)
+        .map(|(i, _)| i)
+        .collect()
 }
 
 /// What Play plays: the selected action; with a set folder selected, every action of that set in
@@ -562,10 +598,10 @@ pub(crate) fn run_view(app: &mut PhotocraftApp, id: &str, params: Value) -> Resu
 }
 
 /// The set New Action records into: the selected action's, else the selected set folder's.
-fn new_action_set(app: &PhotocraftApp) -> Option<String> {
+fn new_action_set(app: &PhotocraftApp) -> Option<Folder> {
     match app.ui.actions.selected.and_then(|i| app.session.actions.list.get(i)) {
-        Some(action) => action.set.clone(),
-        None => app.ui.actions.selected_set.clone().filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set)),
+        Some(action) => action.set.clone().map(|name| Folder { name, slot: action.set_slot }),
+        None => selected_set(app).map(|set| Folder { name: set.into(), slot: app.ui.actions.selected_set_slot }),
     }
 }
 
@@ -577,7 +613,7 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     // new action like New Action does, in the selected set.
     let params = match app.ui.actions.selected {
         Some(i) if append => json!({"action": i}),
-        _ => new_action_set(app).map_or(json!({}), |set| json!({"set": set})),
+        _ => new_action_set(app).map_or(json!({}), |set| json!({"set": set.name, "setSlot": set.slot})),
     };
     let Ok(v) = app.run("actions.record", params) else { return };
     let Some(i) = v.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) else { return };
@@ -589,6 +625,9 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     // Its set too, in case its folder is collapsed.
     if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
         app.ui.actions.collapsed_sets.retain(|c| c != set);
+    }
+    if let Some(slot) = app.session.actions.list.get(i).and_then(|a| a.set_slot) {
+        app.ui.actions.collapsed_set_slots.retain(|&value| value != slot);
     }
 }
 
@@ -824,12 +863,10 @@ fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 /// Save Actions…: the selected action's set (every action of it), else the selected set folder,
 /// or every action when none came from a set, as a `.atn` file Photoshop loads.
-fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, String> {
-    let selected_set = app.ui.actions.selected.is_none().then(|| app.ui.actions.selected_set.clone()).flatten();
-    let selected_set = selected_set.filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
-    let set = set.or(selected_set).or_else(|| selected_action(app).and_then(|a| a.set.clone()));
+fn save_dialog(app: &mut PhotocraftApp, set: Option<Folder>) -> Result<Value, String> {
+    let set = set.or_else(|| new_action_set(app)).or_else(|| selected_action(app).and_then(|a| a.set.clone().map(|name| Folder { name, slot: a.set_slot })));
     let params = match &set {
-        Some(set) => json!({"set": set, "skipUnsupported": true}),
+        Some(set) => json!({"set": set.name, "setSlot": set.slot, "skipUnsupported": true}),
         None => json!({"skipUnsupported": true}),
     };
     let r = app.run("actions.save", params)?;
@@ -906,6 +943,7 @@ pub fn new_set_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Valu
 pub fn new_set_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
     let r = app.run("actions.newSet", json!({"name": fields.get("name").cloned().unwrap_or(Value::Null)}))?;
     app.ui.actions.selected_set = r["set"].as_str().map(str::to_string);
+    app.ui.actions.selected_set_slot = None;
     app.ui.actions.selected = None;
     app.ui.actions.selected_step = None;
     Ok(r)
@@ -1040,7 +1078,9 @@ fn suspended(app: &PhotocraftApp) -> bool {
 /// action could go away or change place). The engine checks these against `recording`, which
 /// is `None` then.
 pub(crate) fn suspended_guard(app: &PhotocraftApp, id: &str) -> Result<(), String> {
-    if matches!(id, "actions.record" | "actions.delete" | "actions.move") && suspended(app) {
+    if matches!(id, "actions.record" | "actions.delete" | "actions.move" | "actions.clearAll" | "actions.reset" | "actions.replace" | "actions.undoLibrary")
+        && suspended(app)
+    {
         return Err(tl!("Confirm or cancel the open action step dialog first").into());
     }
     Ok(())
@@ -1409,6 +1449,7 @@ pub fn stopped(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>)
 pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut act: Option<&str> = None;
     let recording = app.session.actions.recording.is_some();
+    let library_idle = library::idle(app, "actions.reset").is_ok();
     let any = !app.session.actions.list.is_empty();
     let selected = app.ui.actions.selected.is_some_and(|i| i < app.session.actions.list.len());
     let can_delete = selected && (!recording || app.ui.actions.selected_step.is_some());
@@ -1441,8 +1482,17 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         act = Some("playbackOptions");
     }
     ui.separator();
-    if ui.button(tl!("Load Actions…")).clicked() {
+    if ui.add_enabled(library_idle, egui::Button::new(tl!("Clear All Actions"))).clicked() {
+        act = Some("clearAll");
+    }
+    if ui.add_enabled(library_idle, egui::Button::new(tl!("Reset Actions…"))).clicked() {
+        act = Some("reset");
+    }
+    if ui.add_enabled(library_idle, egui::Button::new(tl!("Load Actions…"))).clicked() {
         act = Some("load");
+    }
+    if ui.add_enabled(library_idle, egui::Button::new(tl!("Replace Actions…"))).clicked() {
+        act = Some("replace");
     }
     // A selected set folder saves even when empty, as Photoshop saves an empty set.
     let set_selected = app.ui.actions.selected_set.as_ref().is_some_and(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
@@ -1475,6 +1525,9 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok(Value::Null)
         }
         "load" => load_dialog(app),
+        "clearAll" => library::open(app, library::Kind::Clear),
+        "reset" => library::open(app, library::Kind::Reset),
+        "replace" => library::open(app, library::Kind::Replace),
         "newSet" => new_set_dialog(app),
         "stop" => insert_stop_dialog(app),
         "playbackOptions" => playback::open_dialog(app),
@@ -1530,9 +1583,11 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
         app.ui.actions.select(to, None);
         // Dropped among another set's actions: the action joins that set (the row above wins).
         let list = &app.session.actions.list;
-        let neighbour = to.checked_sub(1).and_then(|j| list.get(j)).or_else(|| list.get(to + 1)).and_then(|a| a.set.clone());
-        if list.get(to).is_some_and(|a| a.set != neighbour) {
-            let _ = app.run("actions.assignSet", json!({"action": to, "set": neighbour}));
+        let neighbour = to.checked_sub(1).and_then(|j| list.get(j)).or_else(|| list.get(to + 1));
+        let set = neighbour.and_then(|a| a.set.clone());
+        let slot = neighbour.and_then(|a| a.set_slot);
+        if list.get(to).is_some_and(|a| a.set != set || a.set_slot != slot) {
+            let _ = app.run("actions.assignSet", json!({"action": to, "set": set, "setSlot": slot}));
         }
     }
 }
@@ -1600,23 +1655,53 @@ struct Row {
     disabled: std::collections::BTreeSet<usize>,
     dialogs: std::collections::BTreeSet<usize>,
     set: Option<String>,
+    set_slot: Option<usize>,
     color: String,
 }
 
-/// The panel's order: actions outside any set first, then each set folder (in order of first
-/// appearance) with its actions. Indices are into the engine's flat list.
-fn display_order(rows: &[Row]) -> Vec<usize> {
-    let mut order: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| r.set.is_none()).map(|(i, _)| i).collect();
-    let mut sets: Vec<&str> = Vec::new();
-    for r in rows {
-        if let Some(set) = r.set.as_deref()
-            && !sets.contains(&set)
-        {
-            sets.push(set);
-        }
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct Folder {
+    name: String,
+    slot: Option<usize>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum PanelRow {
+    Action(usize),
+    Set(Folder, usize),
+}
+
+/// Keep implicit folders in their established order and explicit occurrences in archive order.
+fn display_order(rows: &[Row], empty: &[String], explicit: &[String]) -> Vec<PanelRow> {
+    let mut order = Vec::new();
+    let mut folders = std::collections::HashMap::<Folder, Vec<usize>>::new();
+    let mut implicit = Vec::new();
+    for (index, row) in rows.iter().enumerate() {
+        let Some(name) = &row.set else {
+            order.push(PanelRow::Action(index));
+            continue;
+        };
+        let slot = row.set_slot.filter(|&slot| explicit.get(slot) == Some(name));
+        let folder = Folder { name: name.clone(), slot };
+        let entries = folders.entry(folder.clone()).or_insert_with(|| {
+            if slot.is_none() {
+                implicit.push(folder);
+            }
+            Vec::new()
+        });
+        entries.push(index);
     }
-    for set in sets {
-        order.extend(rows.iter().enumerate().filter(|(_, r)| r.set.as_deref() == Some(set)).map(|(i, _)| i));
+    for name in empty {
+        let folder = Folder { name: name.clone(), slot: None };
+        folders.entry(folder.clone()).or_insert_with(|| {
+            implicit.push(folder);
+            Vec::new()
+        });
+    }
+    for folder in implicit.into_iter().chain(explicit.iter().enumerate().map(|(slot, name)| Folder { name: name.clone(), slot: Some(slot) })) {
+        let entries = folders.remove(&folder).unwrap_or_default();
+        order.push(PanelRow::Set(folder, entries.len()));
+        order.extend(entries.into_iter().map(PanelRow::Action));
     }
     order
 }
@@ -1668,25 +1753,6 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
         }
     });
     SetHeaderResult { toggled, picked, save }
-}
-
-/// The sets New Set made that hold no action yet: empty folder rows after the rest. Returns the
-/// set whose row was clicked (whether it toggles, whether it selects) and the set whose Save Set…
-/// was chosen.
-fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> (Option<(String, bool, bool)>, Option<String>) {
-    let (mut clicked, mut save) = (None, None);
-    for set in app.session.actions.sets.iter().filter(|set| !rows.iter().any(|r| r.set.as_ref() == Some(*set))) {
-        let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_ref() == Some(set);
-        let collapsed = app.ui.actions.collapsed_sets.contains(set);
-        let result = draw_set_header(ui, set, 0, collapsed, selected, t);
-        if result.toggled || result.picked {
-            clicked = Some((set.clone(), result.toggled, result.picked));
-        }
-        if result.save {
-            save = Some(set.clone());
-        }
-    }
-    (clicked, save)
 }
 
 fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, name: &str, swatch: &str) {
@@ -1746,6 +1812,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             disabled: a.disabled.clone(),
             dialogs: a.dialogs.clone(),
             set: a.set.clone(),
+            set_slot: a.set_slot,
             color: a.color.clone(),
         })
         .collect();
@@ -1767,8 +1834,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut renamed = None;
     let mut toggled = None;
     let mut dialog_toggled = None;
-    let mut set_toggled: Option<(String, bool, bool)> = None;
-    let mut save_set: Option<String> = None;
+    let mut set_toggled: Option<(Folder, bool, bool)> = None;
+    let mut save_set: Option<Folder> = None;
     let max_h = (ui.available_height() - 38.0).max(0.0);
     let mut play_idx: Option<Vec<usize>> = None;
     let mut moved = None;
@@ -1786,26 +1853,29 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.label(egui::RichText::new(tl!("Record ● a sequence of edits, then play ▶ it on any document.")).color(t.text_faint).size(11.5));
         }
         scroll_actions_during_drag(ui);
-        let mut shown_set: Option<&str> = None;
-        for i in display_order(&rows) {
-            let Row { name, steps, disabled, dialogs, set, color: swatch } = &rows[i];
-            // A set folder row before the first of its actions; collapsed folders hide them.
-            if let Some(set) = set.as_deref()
-                && shown_set != Some(set)
-            {
-                shown_set = Some(set);
-                let collapsed = app.ui.actions.collapsed_sets.iter().any(|c| c == set);
-                let count = rows.iter().filter(|r| r.set.as_deref() == Some(set)).count() as u64;
-                let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_deref() == Some(set);
-                let result = draw_set_header(ui, set, count, collapsed, selected, &t);
-                if result.toggled || result.picked {
-                    set_toggled = Some((set.to_string(), result.toggled, result.picked));
+        let mut collapsed = false;
+        for row in display_order(&rows, &app.session.actions.sets, &app.session.actions.set_rows) {
+            let i = match row {
+                PanelRow::Action(index) => index,
+                PanelRow::Set(folder, count) => {
+                    collapsed = folder
+                        .slot
+                        .map_or_else(|| app.ui.actions.collapsed_sets.contains(&folder.name), |slot| app.ui.actions.collapsed_set_slots.contains(&slot));
+                    let selected = app.ui.actions.selected.is_none()
+                        && app.ui.actions.selected_set.as_ref() == Some(&folder.name)
+                        && app.ui.actions.selected_set_slot == folder.slot;
+                    let result = ui.push_id(&folder, |ui| draw_set_header(ui, &folder.name, count as u64, collapsed, selected, &t)).inner;
+                    if result.toggled || result.picked {
+                        set_toggled = Some((folder.clone(), result.toggled, result.picked));
+                    }
+                    if result.save {
+                        save_set = Some(folder);
+                    }
+                    continue;
                 }
-                if result.save {
-                    save_set = Some(set.to_string());
-                }
-            }
-            if set.as_deref().is_some_and(|set| app.ui.actions.collapsed_sets.iter().any(|c| c == set)) {
+            };
+            let Row { name, steps, disabled, dialogs, set, color: swatch, .. } = &rows[i];
+            if set.is_some() && collapsed {
                 continue;
             }
             let indent = if set.is_some() { 14.0 } else { 0.0 };
@@ -1900,9 +1970,6 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 dialog_toggled = dialog_toggled.or(events.dialog_toggled);
             }
         }
-        let (empty_toggled, empty_save) = draw_empty_sets(app, ui, &rows, &t);
-        set_toggled = set_toggled.take().or(empty_toggled);
-        save_set = save_set.take().or(empty_save);
     });
     if let Some((action, step)) = toggled {
         let _ = app.run("actions.toggle", json!({"action": action, "step": step}));
@@ -1915,15 +1982,21 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if pick {
             app.ui.actions.selected = None;
             app.ui.actions.selected_step = None;
-            app.ui.actions.selected_set = Some(set.clone());
+            app.ui.actions.selected_set = Some(set.name.clone());
+            app.ui.actions.selected_set_slot = set.slot;
         }
         // The disclosure triangle collapses or expands the set and leaves the selection alone.
         if toggle {
-            match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
-                Some(i) => {
-                    app.ui.actions.collapsed_sets.remove(i);
+            if let Some(slot) = set.slot {
+                if let Some(index) = app.ui.actions.collapsed_set_slots.iter().position(|&value| value == slot) {
+                    app.ui.actions.collapsed_set_slots.remove(index);
+                } else {
+                    app.ui.actions.collapsed_set_slots.push(slot);
                 }
-                None => app.ui.actions.collapsed_sets.push(set),
+            } else if let Some(index) = app.ui.actions.collapsed_sets.iter().position(|name| *name == set.name) {
+                app.ui.actions.collapsed_sets.remove(index);
+            } else {
+                app.ui.actions.collapsed_sets.push(set.name);
             }
         }
     }

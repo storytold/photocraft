@@ -16,6 +16,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
         return true;
     }
+    if id == "edit.undo" && photocraft_engine::actions_edit_cmds::undo_library_label(&app.session).is_some() {
+        return true;
+    }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
     if crate::enable_rules::disabled(app, id) {
         return false;

@@ -51,6 +51,9 @@ pub struct Action {
     /// filled by Load Actions (`actions.load`) and written by Save Actions (`actions.save`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<String>,
+    /// Index of an explicit folder occurrence in the Actions library.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set_slot: Option<usize>,
     /// Button Mode colour. Empty is none; otherwise one of [`BUTTON_COLORS`].
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
@@ -61,7 +64,7 @@ pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "b
 
 impl Action {
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new() }
+        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, set_slot: None, color: String::new() }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -80,16 +83,20 @@ impl Action {
     }
 }
 
-/// On-disk form of [`ActionState::list`] (`actions.json` in the preset store).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// On-disk Actions library (`actions.json` in the preset store).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ActionsFile {
     pub version: u32,
     pub actions: Vec<Action>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub set_rows: Vec<String>,
 }
 
 pub const MAX_PLAYBACK_STEPS: u64 = 100_000;
 
-/// Actions list and the recording / playback flags. Only `list` is persisted.
+/// Actions definitions and the live recording/playback flags.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ActionState {
@@ -112,12 +119,15 @@ pub struct ActionState {
     /// Steps run by the current top-level script and everything it calls.
     #[serde(skip)]
     pub script_steps: u64,
-    /// Sets made with New Set (`actions.newSet`), or loaded from an `.atn` with no actions, that
-    /// hold no action yet: the Actions panel shows them as empty folders. Save Actions… writes one
-    /// to an `.atn` as Photoshop does, but the preset store keeps sets through their actions, so
-    /// an empty one isn't remembered past the session.
+    /// Named folders made with New Set or loaded without actions through Load Actions.
     #[serde(skip)]
     pub sets: Vec<String>,
+    /// Ordered folder occurrences from whole-library commands, including empty and same-name rows.
+    #[serde(skip)]
+    pub set_rows: Vec<String>,
+    /// The latest destructive panel edit, separate from document History.
+    #[serde(skip)]
+    pub library_undo: Option<Box<crate::actions_edit_cmds::LibraryUndo>>,
     /// Bumped whenever `list` changes, so the preset store can skip unchanged writes.
     #[serde(skip)]
     pub rev: u64,
@@ -199,6 +209,7 @@ pub fn playback_params(s: &Session, id: &str, p: &Value) -> Result<Value> {
 
 impl ActionState {
     pub(crate) fn touch(&mut self) {
+        self.library_undo = None;
         self.rev = self.rev.saturating_add(1);
     }
 }
@@ -480,9 +491,24 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
 }
 
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
-    let actions: Vec<Value> = s.actions.list.iter().map(|a| json!({"name": a.name, "steps": a.steps.len(), "set": a.set})).collect();
+    let actions: Vec<Value> = s
+        .actions
+        .list
+        .iter()
+        .map(|a| {
+            let mut action = json!({"name": a.name, "steps": a.steps.len(), "set": a.set});
+            if let Some(slot) = a.set_slot {
+                action["setSlot"] = json!(slot);
+            }
+            action
+        })
+        .collect();
     let recording = s.actions.recording.and_then(|(_, i)| s.actions.list.get(i).map(|a| a.name.clone()));
-    Ok(json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording}))
+    let mut result = json!({"actions": actions, "sets": crate::actions_edit_cmds::set_names(s), "recording": recording});
+    if !s.actions.set_rows.is_empty() {
+        result["setRows"] = json!(s.actions.set_rows);
+    }
+    Ok(result)
 }
 
 fn get(s: &mut Session, p: &Value) -> Result<Value> {
@@ -498,6 +524,9 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad("actions.record", "already recording; stop first"));
     }
     let idx = if p.get("action").is_some() {
+        if p.get("setSlot").is_some_and(|slot| !slot.is_null()) {
+            return Err(bad("actions.record", "setSlot is only for a new action"));
+        }
         resolve(&s.actions.list, p, "actions.record")?
     } else {
         let name = match p.get("name") {
@@ -523,7 +552,8 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
             Some(_) => return Err(bad("actions.record", "\"set\" must be a set name or null")),
         };
-        s.actions.list.push(Action { set, ..Action::new(name, Vec::new()) });
+        let set_slot = crate::actions_edit_cmds::set_slot(s, p, set.as_deref(), "actions.record")?;
+        s.actions.list.push(Action { set, set_slot, ..Action::new(name, Vec::new()) });
         s.actions.touch();
         s.actions.list.len() - 1
     };
@@ -1114,7 +1144,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Record Action",
             menu: &[],
             shortcut: None,
-            params: r##"{"name":str? (new action, default "Action N"),"set":name? (the set it goes in, as New Action records into the selected set)} or {"action":name|index} (append) → {action, index}"##,
+            params: r##"{"name":str? (new action, default "Action N"),"set":name?,"setSlot":index? (folder occurrence from actions.list)} or {"action":name|index} (append) → {action, index}"##,
             enabled: always,
             run: record,
             journal: false,
