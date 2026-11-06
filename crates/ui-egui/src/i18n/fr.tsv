@@ -4600,3 +4600,11 @@ shape	Appearance	Apparence
 	Replace Image…	Remplacer l’image…
 	The frame is locked	Le cadre est verrouillé
 	The frame is unavailable	Le cadre n’est pas disponible
+
+# Channels panel menu (#11451)
+	Channel Options…	Options de canal…
+	Specify Channels:	Indiquer les canaux :
+	Not enough grayscale documents for this mode.	Pas assez de documents en niveaux de gris pour ce mode.
+	Pick a different document for each channel.	Choisissez un document différent pour chaque canal.
+	A picked document is no longer open.	Un des documents choisis n'est plus ouvert.
+	A picked document is no longer a grayscale document of the same size.	Un des documents choisis n'est plus un document en niveaux de gris de même taille.

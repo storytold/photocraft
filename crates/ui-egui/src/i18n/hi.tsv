@@ -645,3 +645,18 @@ cameraRaw	Yellow	पीला
 	Pause For	इतने समय रुकें
 	seconds	सेकंड
 	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Channels panel menu (#11451)
+	New Channel…	नया चैनल…
+	Duplicate Channel	चैनल को डुप्लीकेट करें
+	Delete Channel	चैनल हटाएँ
+	New Spot Channel…	नया स्पॉट चैनल…
+	Merge Spot Channel	स्पॉट चैनल मर्ज करें
+	Channel Options…	चैनल विकल्प…
+	Split Channels	चैनल्स विभाजित करें
+	Merge Channels…	चैनल्स मर्ज करें…
+	Specify Channels:	चैनल्स निर्दिष्ट करें:
+	Not enough grayscale documents for this mode.	इस मोड के लिए पर्याप्त ग्रेस्केल डॉक्यूमेंट नहीं हैं।
+	Pick a different document for each channel.	हर चैनल के लिए अलग डॉक्यूमेंट चुनें।
+	A picked document is no longer open.	चुना गया एक डॉक्यूमेंट अब खुला नहीं है।
+	A picked document is no longer a grayscale document of the same size.	चुना गया एक डॉक्यूमेंट अब उसी आकार का ग्रेस्केल डॉक्यूमेंट नहीं है।
