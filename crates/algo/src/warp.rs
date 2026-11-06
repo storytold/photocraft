@@ -173,6 +173,13 @@ fn cut_list(inner: &[f64]) -> Vec<f64> {
     c
 }
 
+/// The [`START_CELLS`] spans a patch span (`[from, to]`) starts as.
+fn start_cells(w: &[f64]) -> Vec<[f64; 2]> {
+    let (a, b) = (w.first().copied().unwrap_or(0.0), w.last().copied().unwrap_or(0.0));
+    let at = |k: usize| a + (b - a) * k as f64 / START_CELLS as f64;
+    (0..START_CELLS).map(|k| [at(k), at(k + 1)]).collect()
+}
+
 /// The leaf cells of the adaptive tessellation, in row order (top to bottom, then left to right).
 fn tessellate(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64], sw: f64, sh: f64) -> Vec<Cell> {
     let gap = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
@@ -182,9 +189,8 @@ fn tessellate(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64],
     };
     let (us, vs) = (cut_list(cuts_u), cut_list(cuts_v));
     let mut queue: std::collections::VecDeque<Cell> = std::collections::VecDeque::new();
-    let steps = |w: &[f64]| (0..START_CELLS).map(move |k| [w[0] + (w[1] - w[0]) * k as f64 / START_CELLS as f64, w[0] + (w[1] - w[0]) * (k + 1) as f64 / START_CELLS as f64]);
-    for v in vs.windows(2).flat_map(steps) {
-        for u in us.windows(2).flat_map(steps) {
+    for v in vs.windows(2).flat_map(start_cells) {
+        for u in us.windows(2).flat_map(start_cells) {
             queue.push_back([u[0], u[1], v[0], v[1]]);
         }
     }
