@@ -102,6 +102,41 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint], "the selection doesn't change");
 }
 
+/// Only the frontmost layer under the click counts: where a grouped layer (not measured, so the
+/// box stays open there) covers a top-level layer's pixels, the click doesn't commit through the
+/// covered layer.
+#[test]
+fn a_click_on_a_grouped_layer_covering_another_layer_keeps_the_box_open() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
+    app.sync_views();
+    app.ui.extras.rulers = false;
+    app.ui.extras.snap = false;
+    // "Paint" has a red block at x 20..60, y 20..60; "Other" a blue one at x 120..160, y 120..160,
+    // covered by a green one on "Cover", which then goes into a group.
+    let mut ids = Vec::new();
+    for (name, at, color) in [("Paint", 20, "#ff0000"), ("Other", 120, "#0000ff"), ("Cover", 120, "#00ff00")] {
+        let id = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.select", json!({"layer": id})).unwrap();
+        app.run("select.rect", json!({"x": at, "y": at, "width": 40, "height": 40})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        ids.push(id);
+    }
+    app.run("layer.groupLayers", json!({})).unwrap();
+    let doc = &app.session.active().unwrap().doc;
+    assert!(doc.layers.iter().all(|l| l.id.0 != ids[2]), "Cover is grouped");
+    assert!(doc.layers.iter().any(|l| l.id.0 == ids[1]), "Other is top-level");
+    app.run("layer.select", json!({"layer": ids[0]})).unwrap();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
+    let before = steps(&app);
+    click(&mut app, [140.0, 140.0]);
+    assert!(app.ui.transform.is_some(), "the box stays open");
+    assert_eq!(steps(&app), before);
+}
+
 /// The press decides where a click lands: one on the image that jitters past the canvas edge
 /// before the release keeps the box open, one on the pasteboard that jitters onto the image commits.
 #[test]
