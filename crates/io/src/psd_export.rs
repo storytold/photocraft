@@ -221,7 +221,7 @@ impl Ex<'_> {
         // encoded a band of rows at a time instead (#5333).
         let dense = u64::from(r.width()).saturating_mul(u64::from(r.height())).saturating_mul(s.format().bytes_per_pixel() as u64);
         if dense > banded::banded_from() {
-            return (to_psd_rect(r), self.banded_channels(&s, r), warnings);
+            return (to_psd_rect(r), self.banded_channels(&s, r, include_alpha), warnings);
         }
         let mut invert = vec![self.cmyk; self.cc];
         invert.push(false);

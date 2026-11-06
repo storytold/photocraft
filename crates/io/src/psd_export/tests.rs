@@ -887,6 +887,55 @@ fn export_banded(doc: &Document, options: &PsdExportOptions, banded: Option<usiz
     out
 }
 
+/// Direct band gathering preserves the old ZIP stream, including each input boundary.
+#[test]
+fn banded_zip_matches_interleaved_input_and_omits_background_alpha() {
+    use photocraft_psd::compression::{PlaneLayout, predict};
+    use std::io::Write as _;
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for background in [false, true] {
+            let mut doc = banding_document(mode, SampleType::F32, 23, 19);
+            if background {
+                let bounds = doc.bounds();
+                let layer = &mut doc.layers[0];
+                layer.surface_mut().unwrap().fill_rect(bounds, &vec![1.0; mode.color_channels() + 1]);
+                layer.locks.transparency = true;
+                layer.locks.position = true;
+            }
+            let s = doc.layers[0].surface().unwrap();
+            let r = s.content_bounds();
+            for force_psb in [false, true] {
+                for rows in [1, 7] {
+                    let (file, warnings) = export_banded(&doc, &PsdExportOptions { force_psb, ..Default::default() }, Some(rows));
+                    assert!(warnings.is_empty(), "{warnings:?}");
+                    let mut invert = vec![mode == ColorMode::Cmyk; mode.color_channels()];
+                    invert.push(false);
+                    let channels = &file.layers()[0].channels;
+                    assert_eq!(channels.len(), mode.color_channels() + usize::from(!background));
+                    let band_rows =
+                        ((rows * doc.size.width as usize * s.format().bytes_per_pixel() + 3) / (r.width() as usize * s.format().bytes_per_pixel())).max(1);
+                    for channel in channels {
+                        let k = if channel.id == -1 { mode.color_channels() } else { channel.id as usize };
+                        let mut zip = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                        for top in (r.y0..r.y1).step_by(band_rows) {
+                            let bottom = (top + band_rows as i32).min(r.y1);
+                            let bytes = s.to_interleaved(photocraft_geom::Rect::new(r.x0, top, r.x1, bottom));
+                            let mut planes = crate::pixels::deinterleave(&bytes, s.channels(), SampleType::F32, &invert);
+                            predict(
+                                &mut planes[k],
+                                &PlaneLayout { planes: 1, width: r.width() as usize, height: (bottom - top) as usize, depth: 32, version: file.header.version },
+                            )
+                            .unwrap();
+                            zip.write_all(&planes[k]).unwrap();
+                        }
+                        assert_eq!(channel.encoded().unwrap().as_ref(), zip.finish().unwrap(), "{mode:?} background {background} channel {k}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// #5333: a layer saved band by band (here every layer, in bands of a few rows) writes the bytes
 /// of one gathered whole (ZIP with prediction, 32-bit, the same pixels); RGB, CMYK and Lab; PSD, PSB and a PSD
 /// promoted to PSB; in memory and staged on the scratch disk (then also streamed).

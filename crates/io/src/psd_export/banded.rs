@@ -1,9 +1,8 @@
 //! Layers too large to gather at once, saved band by band (#5333).
 //!
-//! A layer record is one dense rectangle, gathered interleaved and split into channel planes,
-//! so a layer's save held about twice its dense size; past [`BANDED_FROM`] that was refused and the
-//! layer saved without its pixels. Now such a layer is gathered, split and encoded a band of
-//! rows at a time. RLE rows pack independently (the row-count table is kept and written ahead of
+//! A layer record is one dense rectangle. Past [`BANDED_FROM`] its required channel planes are
+//! gathered directly from tiles and encoded a band of rows at a time. RLE rows pack independently
+//! (the row-count table is kept and written ahead of
 //! the packed rows) and raw rows join, so those channels are the bytes the whole-layer encoder
 //! writes. ZIP with prediction (32-bit) predicts per row and feeds one zlib stream: the same
 //! pixels, but not always the same bytes, as zlib packs input it is given in parts differently.
@@ -21,13 +20,11 @@ use photocraft_raster::Surface;
 
 use super::Ex;
 use super::stage::Parts;
-use crate::pixels::{deinterleave, psd_depth};
+use crate::pixels::{psd_depth, surface_planes};
 
-/// Dense bytes of one layer (as gathered) from which it is saved band by band. Below it a layer
-/// is gathered whole, which is faster: the peak is about twice this.
+/// Dense source bytes of one layer from which its planes are gathered band by band.
 pub(super) const BANDED_FROM: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
-/// Interleaved bytes gathered per band. A band's planes and encoded parts are alive with it, so a
-/// banded layer's save holds about three times this.
+/// Source-byte budget determining each band's height, retained for ZIP byte compatibility.
 const BAND_BYTES: usize = 64 << 20;
 
 #[cfg(test)]
@@ -63,27 +60,29 @@ struct Channel {
 }
 
 impl Ex<'_> {
-    /// The channels of `s` over `r` (non-empty), alpha first, encoded band by band.
-    pub(super) fn banded_channels(&self, s: &Surface, r: photocraft_geom::Rect) -> Vec<ChannelData> {
+    /// The channels of `s` over nonempty `r`, encoded band by band with optional alpha first.
+    pub(super) fn banded_channels(&self, s: &Surface, r: photocraft_geom::Rect, include_alpha: bool) -> Vec<ChannelData> {
         // RLE fails only on a row too long for its count (not within PSD/PSB limits); then the
         // layer is written raw, as a channel encoded whole falls back to.
-        match self.banded_pass(s, r, self.compression()) {
+        match self.banded_pass(s, r, self.compression(), include_alpha) {
             Ok(channels) => channels,
             // Cancelled: the caller sees the interrupt and discards the whole model, so don't
             // encode the layer again.
             Err(_) if self.ctl.cancelled() => self.empty_channels(),
-            Err(_) => self.banded_pass(s, r, Compression::Raw).unwrap_or_else(|_| self.empty_channels()),
+            Err(_) => self.banded_pass(s, r, Compression::Raw, include_alpha).unwrap_or_else(|_| self.empty_channels()),
         }
     }
 
-    fn banded_pass(&self, s: &Surface, r: photocraft_geom::Rect, compression: Compression) -> photocraft_psd::Result<Vec<ChannelData>> {
+    fn banded_pass(&self, s: &Surface, r: photocraft_geom::Rect, compression: Compression, include_alpha: bool) -> photocraft_psd::Result<Vec<ChannelData>> {
         let (w, h) = (r.width() as usize, r.height() as usize);
         let bpp = s.format().bytes_per_pixel();
+        // Keep the original band heights: changing ZIP input boundaries can change its bytes.
         let band_rows = (band_bytes() / (w * bpp).max(1)).max(1);
         let depth = psd_depth(self.fmt.sample);
         let count = if self.version.is_psb() { 4 } else { 2 };
         let head = if compression == Compression::Rle { h.checked_mul(count).ok_or(PsdError::LimitExceeded("row count overflow"))? } else { 0 };
         let mut channels: Vec<Channel> = (0..=self.cc)
+            .skip(usize::from(!include_alpha))
             .map(|k| Channel {
                 id: k as i16 - 1,
                 table: Vec::with_capacity(head),
@@ -98,23 +97,18 @@ impl Ex<'_> {
         for y in (0..h).step_by(band_rows) {
             check()?;
             let rows = band_rows.min(h - y);
-            let top = r.y0 + y as i32;
-            let pieces = crate::pixels::par_map(crate::pixels::bands(rows), |b| {
-                s.to_interleaved(photocraft_geom::Rect::new(r.x0, top + b.start as i32, r.x1, top + b.end as i32))
-            });
-            let mut bytes = Vec::with_capacity(w * rows * bpp);
-            for piece in pieces {
-                bytes.extend_from_slice(&piece);
-            }
-            if self.fmt.mode == photocraft_color::ColorMode::Lab && self.fmt.sample == photocraft_color::SampleType::U16 {
-                crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, false);
-            }
-            let mut planes: Vec<Option<Vec<u8>>> = deinterleave(&bytes, self.cc + 1, self.fmt.sample, &invert).into_iter().map(Some).collect();
-            drop(bytes);
+            let band = photocraft_geom::Rect::new(r.x0, r.y0.saturating_add_unsigned(y as u32), r.x1, r.y0.saturating_add_unsigned((y + rows) as u32));
+            let lab16 = self.fmt.mode == photocraft_color::ColorMode::Lab && self.fmt.sample == photocraft_color::SampleType::U16;
+            let mut planes: Vec<_> = surface_planes(s, band, self.cc + usize::from(include_alpha), &invert, lab16).into_iter().map(Some).collect();
             let layout = PlaneLayout { planes: 1, width: w, height: rows, depth, version: self.version };
-            // Alpha (planes[cc]) is channel 0, then the colour channels; each on its own thread.
-            let work: Vec<(&mut Channel, Vec<u8>)> =
-                channels.iter_mut().enumerate().map(|(k, c)| (c, planes[if k == 0 { self.cc } else { k - 1 }].take().unwrap_or_default())).collect();
+            // Alpha (planes[cc]), when needed, precedes the colour channels.
+            let work: Vec<(&mut Channel, Vec<u8>)> = channels
+                .iter_mut()
+                .map(|c| {
+                    let k = if c.id == -1 { self.cc } else { c.id as usize };
+                    (c, planes[k].take().unwrap_or_default())
+                })
+                .collect();
             let done = crate::pixels::par_map(work, |(c, mut plane)| -> photocraft_psd::Result<()> {
                 check()?;
                 match compression {
@@ -131,8 +125,12 @@ impl Ex<'_> {
                         let out = std::mem::take(zip.get_mut());
                         c.parts.push(out);
                     }
-                    _ => c.parts.push(plane),
+                    _ => {
+                        c.parts.push(plane);
+                        return Ok(());
+                    }
                 }
+                photocraft_raster::scratch::give(plane);
                 Ok(())
             });
             done.into_iter().collect::<photocraft_psd::Result<()>>()?;
