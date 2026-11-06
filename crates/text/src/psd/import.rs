@@ -1,5 +1,8 @@
 use super::build::engine_antialias;
-use super::*;
+use super::{
+    Affine, AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Kerning, Orientation, ParagraphRun, ParagraphStyle, Point, TextAlign,
+    TextLayer, TextRun, TextShape, TextWarp, TySh, dnum, ed, engine_data, enum_value, guess_from_postscript, parse_tysh,
+};
 
 /// Parses the document's `Txt2` block (Photoshop's text engine data for all type layers).
 pub fn parse_txt2(data: &[u8]) -> Option<E> {
@@ -29,19 +32,32 @@ pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
     }) else {
         return;
     };
-    let Some(model) = txt2.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.get(index)).and_then(|o| o.get("0")) else {
-        return;
+    // The numbered object, else the older Photoshop's at `/DocumentObjects /TextObjects` (named
+    // keys: run lengths under `Length`, the style under `RunData /StyleSheet /Features`, the
+    // auto-kern mode under `AutoKern`).
+    let numbered = txt2
+        .path(&["1", "1"])
+        .and_then(E::as_array)
+        .and_then(|a| a.get(index))
+        .and_then(|o| o.get("0"))
+        .and_then(|model| Some((model.get("0").and_then(E::as_str)?, model.path(&["6", "0"]).and_then(E::as_array)?)));
+    let legacy = || {
+        let model = txt2.path(&["DocumentObjects", "TextObjects"]).and_then(E::as_array).and_then(|a| a.get(index))?.get("Model")?;
+        Some((model.get("Text").and_then(E::as_str)?, model.path(&["StyleRun", "RunArray"]).and_then(E::as_array)?))
     };
-    let Some(text) = model.get("0").and_then(E::as_str) else {
-        return;
+    let (text, style_runs, is_numbered) = match numbered {
+        Some((text, runs)) => (text, runs, true),
+        None => {
+            let Some((text, runs)) = legacy() else { return };
+            (text, runs, false)
+        }
     };
     if text.strip_suffix('\r').unwrap_or(text).replace('\r', "\n") != layer.text {
         return;
     }
-    let Some(style_runs) = model.path(&["6", "0"]).and_then(E::as_array) else {
-        return;
-    };
-    let styles: Vec<(f64, Option<&E>)> = style_runs.iter().map(|r| (r.get("1").and_then(E::as_f64).unwrap_or(0.0), r.path(&["0", "0", "6"]))).collect();
+    let (len_key, style_path, kern_key): (&str, &[&str], &str) =
+        if is_numbered { ("1", &["0", "0", "6"], "11") } else { ("Length", &["RunData", "StyleSheet", "Features"], "AutoKern") };
+    let styles: Vec<(f64, Option<&E>)> = style_runs.iter().map(|r| (r.get(len_key).and_then(E::as_f64).unwrap_or(0.0), r.path(style_path))).collect();
     let lens = utf16_to_byte_lengths(text, &styles.iter().map(|m| m.0).collect::<Vec<_>>());
     // Txt2 style per byte segment, then split the model runs at segment boundaries.
     let mut segs: Vec<(usize, Option<&E>)> = lens.into_iter().zip(styles.iter().map(|m| m.1)).collect();
@@ -62,13 +78,13 @@ pub fn apply_txt2(layer: &mut TextLayer, tysh: &[u8], txt2: &E) {
             let txt2_style = segs.get(si).and_then(|s| s.1).filter(|_| at < seg_end);
             // Txt2 has the exact mode (EngineData's reading also marks neighbours of manual
             // kerns manual, like Photoshop's legacy reader).
-            match txt2_style.and_then(|st| st.get("11")).and_then(E::as_i64) {
+            match txt2_style.and_then(|st| st.get(kern_key)).and_then(E::as_i64) {
                 Some(0) => style.kerning = Kerning::Off,
                 Some(1) => style.kerning = Kerning::Metrics,
                 Some(2) => style.kerning = Kerning::Optical,
                 _ => {}
             }
-            if let Some(st) = txt2_style {
+            if let Some(st) = txt2_style.filter(|_| is_numbered) {
                 add_txt2_features(&mut style, st);
             }
             let len = piece_end - at;
@@ -487,15 +503,18 @@ fn apply_engine_data(layer: &mut TextLayer, e: &E, txt: Option<&str>, k: f32) {
         .map(|a| a.iter().filter_map(|x| x.get("StyleSheet")).take(max_sruns).collect())
         .unwrap_or_default();
     // The paragraph run each character run starts in (UTF-16 offsets).
+    // Each paragraph run's end, once: a scan from the first paragraph for every character run was
+    // quadratic in the file's run counts. A negative or NaN length ends nothing (it never did).
+    let para_ends: Vec<f64> = plens16
+        .iter()
+        .scan(0.0, |end, n| {
+            *end += n.max(0.0);
+            Some(*end)
+        })
+        .collect();
     let para_of = |at: f64| -> Option<usize> {
-        let mut end = 0.0;
-        for (i, n) in plens16.iter().enumerate() {
-            end += n;
-            if at < end {
-                return Some(i);
-            }
-        }
-        plens16.len().checked_sub(1)
+        let i = para_ends.partition_point(|&end| end <= at);
+        if i < para_ends.len() { Some(i) } else { plens16.len().checked_sub(1) }
     };
     let mut at16 = 0.0;
     let bases: Vec<[Option<&E>; 3]> = ssheets
@@ -587,6 +606,9 @@ pub(crate) fn char_style(base: &[Option<&E>], d: &E, fonts: &[String], k: f32) -
         Some(2) => FontBaseline::Subscript,
         _ => FontBaseline::Normal,
     };
+    // Vertical type's roman text: 2 rotated along the column, 1 upright (#9470). A run without
+    // its own value takes the style sheet's, which Photoshop writes as 2.
+    s.rotate_roman = g("BaselineDirection").and_then(E::as_i64) == Some(2);
     if let Some(c) = g("FillColor") {
         // Positions matter (alpha, then the channels): a non-finite entry voids the colour.
         let v: Vec<f64> = c.get("Values").and_then(E::as_array).map(|a| a.iter().filter_map(E::as_f64).collect()).unwrap_or_default();
