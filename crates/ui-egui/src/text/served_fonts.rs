@@ -116,17 +116,25 @@ pub fn install(app: &mut PhotocraftApp, ctx: &egui::Context, delivered: Vec<(Str
 /// then its layers may have been edited (a PSD layer re-rendered) or deleted (#6087).
 fn pick(session: &photocraft_engine::Session, families: &[String], layers: &mut Vec<TypeLayerRef>) {
     for st in session.documents() {
-        // While it still is the open document, the engine refreshes it with it.
-        let first = st.snapshots.iter().find(|s| s.id == 0 && !Arc::ptr_eq(&s.doc, &st.doc)).map(|s| &s.doc);
+        let first = st.snapshots.iter().find(|s| s.id == 0).map(|s| &s.doc);
+        // While it still is the open document, a layer picked there is picked in the snapshot too
+        // (without checking it twice): a busy document is refreshed later, and by then a finished
+        // job can have moved the open document on.
+        let shared = first.is_some_and(|f| Arc::ptr_eq(f, &st.doc));
+        let first = first.filter(|_| !shared);
         for (doc, first_snapshot) in std::iter::once((&st.doc, false)).chain(first.map(|d| (d, true))) {
             for (_, _, l) in doc.walk() {
-                let key = TypeLayerRef { doc: st.doc.id, layer: l.id, first_snapshot };
                 if let LayerContent::Text(t) = &l.content
                     && redraws_for(t, families)
                     && crate::type_tool::shows_own_layout(doc, t)
-                    && !layers.contains(&key)
                 {
-                    layers.push(key);
+                    let also = (shared && !first_snapshot).then_some(true);
+                    for first_snapshot in std::iter::once(first_snapshot).chain(also) {
+                        let key = TypeLayerRef { doc: st.doc.id, layer: l.id, first_snapshot };
+                        if !layers.contains(&key) {
+                            layers.push(key);
+                        }
+                    }
                 }
             }
         }
@@ -166,7 +174,7 @@ mod tests {
 
     /// #6087: the first History snapshot is picked on its own, so a type layer deleted since the
     /// document opened still gets the font there, and one still shared with the open document is
-    /// picked once.
+    /// picked in both without being checked twice.
     #[test]
     fn the_first_snapshot_is_picked_on_its_own() {
         use photocraft_doc::LayerId;
@@ -185,7 +193,7 @@ mod tests {
             layers.retain(|l| l.doc == doc_id);
             layers
         };
-        assert_eq!(picked(&s), [key(false)], "the snapshot still is the open document");
+        assert_eq!(picked(&s), [key(false), key(true)], "the snapshot still is the open document");
         s.execute("layer.new.layer", json!({})).unwrap();
         assert_eq!(picked(&s), [key(false), key(true)]);
         s.execute("layer.delete", json!({"layer": id.0})).unwrap();

@@ -79,7 +79,17 @@ impl Session {
             {
                 first.doc = Arc::new(doc);
             }
-            let Some(doc) = refresh_text_layers(&st.doc, &ids(false)) else { continue };
+            // While shared, a layer picked in the snapshot is a layer of the open document too
+            // (a document busy when its font arrived can be back at the snapshot by the retry).
+            let mut open = ids(false);
+            if first_is_doc {
+                for id in ids(true) {
+                    if !open.contains(&id) {
+                        open.push(id);
+                    }
+                }
+            }
+            let Some(doc) = refresh_text_layers(&st.doc, &open) else { continue };
             let doc = Arc::new(doc);
             if first_is_doc && let Some(first) = st.snapshots.iter_mut().find(|s| s.id == 0) {
                 first.doc = doc.clone();
