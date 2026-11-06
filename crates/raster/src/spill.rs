@@ -25,8 +25,10 @@
 //!
 //! No lock is held across a call into the scratch folder. Opening and measuring it run on a
 //! short-lived query thread, at most one per folder and question; callers wait a bounded time
-//! for the answer, and a late answer still applies if that folder is still the configured one. Status reads the UI makes every frame stay fast whatever the folder does.
+//! for the answer, and a late answer still applies if that folder is still the configured one.
+//! Status reads the UI makes every frame stay fast whatever the folder does.
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard, Weak};
@@ -321,6 +323,9 @@ impl QueryDone {
 }
 
 static QUERIES: Mutex<Vec<Query>> = Mutex::new(Vec::new());
+/// Query threads alive, counted until they finish, including closing any file they opened;
+/// `QUERIES` only dedupes questions.
+static QUERY_THREADS: AtomicUsize = AtomicUsize::new(0);
 static QUERY_HOOK: RwLock<Option<fn(&Path)>> = RwLock::new(None);
 
 static M: Manager = Manager {
@@ -397,8 +402,9 @@ impl Manager {
     }
 
     /// Apply a finished folder query. `file` is the scratch file a `prepare` query opened (or the
-    /// error), `space` what the volume reported. Discarded if the folder changed meanwhile.
-    fn settle(&self, dir: &Path, prepare: bool, file: Option<std::io::Result<ScratchFile>>, space: Option<(u64, u64)>, done: &QueryDone) {
+    /// error), `sampled_used` the scratch bytes in use just before the volume was asked, `space`
+    /// what the volume reported. Discarded if the folder changed meanwhile.
+    fn settle(&self, dir: &Path, prepare: bool, file: Option<std::io::Result<ScratchFile>>, sampled_used: u64, space: Option<(u64, u64)>, done: &QueryDone) {
         // Declared before the guard so a rejected file closes after the lock is released.
         let mut _spare: Option<ScratchFile> = None;
         let mut c = self.config();
@@ -417,7 +423,7 @@ impl Manager {
             Some(Err(_)) | None => {}
         }
         let used = c.file.as_ref().map_or(0, |f| f.used());
-        apply_space(&mut c, used, space);
+        apply_space(&mut c, sampled_used, space);
         if !prepare {
             return;
         }
@@ -616,7 +622,7 @@ fn start_query(dir: &Path, prepare: bool) -> Option<(Arc<QueryDone>, Instant)> {
     if let Some(q) = queries.iter().find(|q| q.prepare == prepare && q.dir.as_path() == dir) {
         return Some((q.done.clone(), q.deadline));
     }
-    if queries.len() >= MAX_QUERIES {
+    if QUERY_THREADS.load(Ordering::Acquire) >= MAX_QUERIES {
         return None;
     }
     let now = Instant::now();
@@ -624,8 +630,10 @@ fn start_query(dir: &Path, prepare: bool) -> Option<(Arc<QueryDone>, Instant)> {
     let done = Arc::new(QueryDone::default());
     queries.push(Query { dir: dir.to_path_buf(), prepare, deadline, done: done.clone() });
     let (job_dir, job_done) = (dir.to_path_buf(), done.clone());
+    QUERY_THREADS.fetch_add(1, Ordering::AcqRel);
     let spawned = std::thread::Builder::new().name("pc-scratch-query".into()).spawn(move || run_query(job_dir, prepare, job_done));
     if spawned.is_err() {
+        QUERY_THREADS.fetch_sub(1, Ordering::AcqRel);
         queries.pop();
         return None;
     }
@@ -645,12 +653,19 @@ fn run_query(dir: PathBuf, prepare: bool, done: Arc<QueryDone>) {
     if let Some(hook) = hook {
         hook(&dir);
     }
-    let open = prepare && M.config().file.is_none();
+    // Before measuring: writes made during the query come off the free space and must not be
+    // counted again on top of it. Another folder's file says nothing about this one.
+    let (open, used) = {
+        let c = M.config();
+        let current = c.file.as_ref().filter(|f| f.path().parent() == Some(dir.as_path()));
+        (prepare && current.is_none(), current.map_or(0, |f| f.used()))
+    };
     let file = open.then(|| std::fs::create_dir_all(&dir).and_then(|()| ScratchFile::create(&dir)));
     let space = free_space(&dir);
     // Forget it first: a caller that joined it can rely on the answer, and a later caller asks anew.
     QUERIES.lock().unwrap_or_else(PoisonError::into_inner).retain(|q| !Arc::ptr_eq(&q.done, &done));
-    M.settle(&dir, prepare, file, space, &done);
+    M.settle(&dir, prepare, file, used, space, &done);
+    QUERY_THREADS.fetch_sub(1, Ordering::AcqRel);
 }
 
 /// Whether a query about `dir` is past its wait without an answer.
@@ -661,21 +676,42 @@ fn query_overdue(dir: Option<&Path>) -> bool {
     queries.iter().any(|q| q.dir.as_path() == dir && now >= q.deadline)
 }
 
-/// Closing a scratch file can flush to its folder, which a dead mount blocks, and leaving a dead
-/// folder is how a user recovers: close the old file on its own thread and wait only so long.
-fn close_off_thread(file: Option<Arc<ScratchFile>>) {
-    let Some(file) = file else { return };
-    // Tiles still using it keep it open; it closes with the last of them.
-    if Arc::strong_count(&file) > 1 {
-        return;
+/// Scratch files on their way out, oldest first.
+struct Retired {
+    files: VecDeque<(Arc<ScratchFile>, Arc<QueryDone>)>,
+    closing: bool,
+}
+
+static RETIRED: Mutex<Retired> = Mutex::new(Retired { files: VecDeque::new(), closing: false });
+
+/// Let go of a scratch file off this thread: the last reference closes it, which can flush to its
+/// folder, and a dead mount blocks that, while leaving a dead folder is how a user recovers. One
+/// closer thread however many folders are left, so stuck closes can't pile up threads. The returned
+/// handle finishes when this reference is gone.
+fn retire(file: Arc<ScratchFile>) -> Arc<QueryDone> {
+    let done = Arc::new(QueryDone::default());
+    let mut retired = RETIRED.lock().unwrap_or_else(PoisonError::into_inner);
+    retired.files.push_back((file, done.clone()));
+    if !retired.closing {
+        // If no thread can start, the file waits in the queue for the next one rather than closing here.
+        retired.closing = std::thread::Builder::new().name("pc-scratch-close".into()).spawn(close_retired).is_ok();
     }
-    let (tx, rx) = std::sync::mpsc::channel();
-    let spawned = std::thread::Builder::new().name("pc-scratch-close".into()).spawn(move || {
+    done
+}
+
+fn close_retired() {
+    loop {
+        let next = {
+            let mut retired = RETIRED.lock().unwrap_or_else(PoisonError::into_inner);
+            let next = retired.files.pop_front();
+            if next.is_none() {
+                retired.closing = false;
+            }
+            next
+        };
+        let Some((file, done)) = next else { return };
         drop(file);
-        let _ = tx.send(());
-    });
-    if spawned.is_ok() {
-        let _ = rx.recv_timeout(QUERY_WAIT);
+        done.finish();
     }
 }
 
@@ -736,21 +772,40 @@ fn disk_free_space(dir: &str) -> Option<(u64, u64)> {
 /// use its available figure. A listed disk counts as this volume when the mount point's own
 /// `statvfs` gives the same numbers (APFS volumes in one container share them, and firmlinks give
 /// `/Users` and `/` different device ids, so ids can't be compared); a change between the two
-/// readings just keeps the `statvfs` figure. Never fails.
+/// readings just keeps the `statvfs` figure. sysinfo asks every mounted volume for its properties,
+/// so an unrelated dead mount must not hold up this measurement: the lookup runs on a helper thread
+/// that is waited for at most [`PURGEABLE_WAIT`]. Never fails.
 #[cfg(target_os = "macos")]
 fn with_purgeable_space(dir: &Path, available: u64, total: u64) -> u64 {
-    sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage())
-        .ok()
-        .and_then(|disks| {
+    static LISTING: AtomicBool = AtomicBool::new(false);
+    // A listing already running may be stuck on some mount: don't start another.
+    if LISTING.swap(true, Ordering::AcqRel) {
+        return available;
+    }
+    let dir = dir.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("pc-scratch-disks".into()).spawn(move || {
+        let found: Option<u64> = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage()).ok().and_then(|disks| {
             disks
                 .iter()
                 .filter(|d| dir.starts_with(d.mount_point()))
                 .max_by_key(|d| d.mount_point().as_os_str().len())
                 .filter(|d| volume_space(d.mount_point()) == Some((available, total)))
                 .map(|d| d.available_space())
-        })
-        .unwrap_or(available)
+        });
+        LISTING.store(false, Ordering::Release);
+        let _ = tx.send(found);
+    });
+    if spawned.is_err() {
+        LISTING.store(false, Ordering::Release);
+        return available;
+    }
+    rx.recv_timeout(PURGEABLE_WAIT).ok().flatten().unwrap_or(available)
 }
+
+/// How long a measurement waits for the mounted-volume listing before using the `statvfs` figure.
+#[cfg(target_os = "macos")]
+const PURGEABLE_WAIT: Duration = Duration::from_millis(500);
 
 #[cfg(all(any(unix, windows), not(target_os = "macos")))]
 fn with_purgeable_space(_dir: &Path, available: u64, _total: u64) -> u64 {
@@ -870,9 +925,14 @@ pub fn configure(dir: Option<&Path>, budget_bytes: usize) -> Result<(), String> 
     M.paused.store(false, Ordering::Release);
     M.next_space_check.store(0, Ordering::Relaxed);
     drop(c);
-    close_off_thread(old);
+    let start = Instant::now();
+    let closing = old.map(retire);
     if let Some(dir) = &dir {
         M.prepare(dir);
+    }
+    // One wait for the whole change: closing the old file gets what the new folder left over.
+    if let Some(closing) = closing {
+        closing.wait_until(start.checked_add(QUERY_WAIT).unwrap_or(start));
     }
     let c = M.config();
     if c.dir != dir {
@@ -967,8 +1027,9 @@ pub fn scratch_capacity() -> Option<u64> {
     let dir = M.config().dir.clone()?;
     M.measure(&dir);
     let c = M.config();
-    // A slow query must not describe a directory configured meanwhile.
-    if c.dir.as_deref() != Some(dir.as_path()) {
+    // A slow query must not describe a directory configured meanwhile, and a sweep can also have
+    // paused spilling meanwhile.
+    if c.dir.as_deref() != Some(dir.as_path()) || c.paused.is_some() {
         return None;
     }
     let used = c.file.as_ref().map_or(0, |f| f.used());
@@ -1052,6 +1113,12 @@ pub fn scratch_handle_for_tests() -> Option<std::fs::File> {
 #[doc(hidden)]
 pub fn set_query_hook_for_tests(hook: Option<fn(&Path)>) {
     *QUERY_HOOK.write().unwrap_or_else(PoisonError::into_inner) = hook;
+}
+
+/// Query threads still alive, so a test can wait until a stalled query has fully settled.
+#[doc(hidden)]
+pub fn query_threads_for_tests() -> usize {
+    QUERY_THREADS.load(Ordering::Acquire)
 }
 
 /// Evict down to the budget now, on this thread (tests, and before a measurement).
@@ -1235,7 +1302,7 @@ mod tests {
         *CAPPED_GATE.0.lock().unwrap_or_else(PoisonError::into_inner) = true;
         CAPPED_GATE.1.notify_all();
         let start = Instant::now();
-        while !QUERIES.lock().unwrap_or_else(PoisonError::into_inner).is_empty() {
+        while query_threads_for_tests() != 0 {
             assert!(start.elapsed() < Duration::from_secs(30), "queries never finished");
             std::thread::sleep(Duration::from_millis(10));
         }

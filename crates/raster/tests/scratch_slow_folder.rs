@@ -63,11 +63,14 @@ fn prompt<T>(what: &str, f: impl FnOnce() -> T) -> T {
     out
 }
 
-/// Run `f` and require that it returns within a few query waits.
+/// A query's 2 s wait plus a scheduling allowance.
+const QUERY_DEADLINE: Duration = Duration::from_secs(6);
+
+/// Run `f` and require that it returns within [`QUERY_DEADLINE`].
 fn bounded<T>(what: &str, f: impl FnOnce() -> T) -> T {
     let start = Instant::now();
     let out = f();
-    assert!(start.elapsed() < Duration::from_secs(15), "{what} took {:?}", start.elapsed());
+    assert!(start.elapsed() < QUERY_DEADLINE, "{what} took {:?}", start.elapsed());
     out
 }
 
@@ -115,6 +118,7 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     // B. Configuring a folder that never answers: status reads stay prompt meanwhile (they
     //    blocked on the config lock before), and configure gives up after its wait.
     arm();
+    let began = Instant::now();
     let configuring = {
         let hung1 = hung1.clone();
         std::thread::spawn(move || spill::configure(Some(&hung1), 1 << 20))
@@ -125,7 +129,8 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
     prompt("stats", spill::stats);
     prompt("free_space_unmeasured", spill::free_space_unmeasured);
     prompt("paused", spill::paused);
-    let result = bounded("configure of a hung folder", || configuring.join().unwrap());
+    let result = configuring.join().unwrap();
+    assert!(began.elapsed() < QUERY_DEADLINE, "configure of a hung folder took {:?}", began.elapsed());
     assert!(result.as_ref().err().is_some_and(|e| e.contains("not responding")), "{result:?}");
     assert!(spill::paused() && !spill::enabled());
     assert_eq!(spill::stats().dir.as_deref(), Some(hung1.as_path()));
@@ -144,7 +149,7 @@ fn a_folder_that_stops_answering_never_freezes_the_app() {
 
     // E. The stuck query's late answer is about a folder that is no longer current: discarded.
     release();
-    std::thread::sleep(Duration::from_millis(300));
+    poll_until("the stuck query to settle", || spill::query_threads_for_tests() == 0);
     let st = spill::stats();
     assert_eq!(st.dir.as_deref(), Some(good2.as_path()), "{st:?}");
     assert!(spill::enabled() && !spill::paused() && st.last_error.is_none(), "{st:?}");

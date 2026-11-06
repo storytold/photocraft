@@ -63,7 +63,11 @@ thread until the mount answers and no second one starts; a late answer applies i
 still the current one and is discarded otherwise. The free-space check every 64 MB of growth never
 waits, and with an engine session tile allocation leaves retries to its supervisor. The wait is on
 the calling thread: changing Scratch Disks preferences or checking room for an import may wait up
-to those 2 s once for a newly hung folder. Limit: reading or writing tile pixels already spilled
+to those 2 s once for a newly hung folder. A whole folder change waits at most 2 s in total, the new
+folder first, with closing the old scratch file getting what is left; old files close on one
+background thread. On macOS the purgeable-space lookup asks every mounted volume, so it runs
+separately for at most 0.5 s, and an unrelated dead mount only loses the purgeable figure, never
+the folder's own numbers. Limit: reading or writing tile pixels already spilled
 to a hung folder still blocks the thread doing it; only opening and measuring are bounded.
 A failed read retains its backing extent and blocks editing, saving and exporting of the
 document that holds the tile until it is readable again; other open documents keep working.

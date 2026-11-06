@@ -23,6 +23,8 @@ fn scratch_capacity_follows_spilling_the_size_limit_and_pauses() {
         assert!(room < u64::MAX / 2, "the reserve and margin are applied: {room}");
     }
 
+    let measurable = spill::scratch_capacity().is_some();
+
     // A folder that stops answering is flagged and clears once it answers again. Windows keeps the
     // open scratch file's folder, so this part needs a folder that can be removed.
     if std::fs::remove_dir_all(&dir).is_ok() {
@@ -33,6 +35,9 @@ fn scratch_capacity_follows_spilling_the_size_limit_and_pauses() {
         let unknown = spill::scratch_capacity().is_none();
         assert_eq!(spill::free_space_unmeasured(), unknown);
         assert_eq!(spill::stats().free_space_unmeasured, unknown);
+        if measurable {
+            assert!(!unknown, "the folder answers again: its room must be known again");
+        }
     }
 
     // The Scratch Size Limit bounds it, less the 1/64 margin, whatever the volume has free.
