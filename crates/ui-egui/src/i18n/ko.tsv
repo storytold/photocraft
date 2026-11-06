@@ -166,6 +166,7 @@
 	Right	오른쪽
 	Open Recent	최근 파일 열기
 	Clear Recent Files	최근 파일 목록 지우기
+	Clear Recent File List	최근 파일 목록 지우기
 	Remove from Recent	최근 항목에서 제거
 	Remove {name} from Recent	최근 항목에서 {name} 제거
 	Close	닫기
@@ -174,6 +175,10 @@
 	Restore	이전 크기로 복원
 	Close All	모두 닫기
 	Close Others	다른 문서 닫기
+	New Document…	새 문서…
+	Open Document…	열기…
+	Consolidate All to Here	모두 여기로 통합
+	Move to New Window	새 창으로 이동
 	Save	저장
 	Save As…	다른 이름으로 저장…
 	Save a Copy…	사본 저장…
@@ -226,6 +231,7 @@
 	Create Smart Object after Loading Layers	레이어를 불러온 후 스마트 오브젝트 만들기
 	Reveal in Finder	Finder에서 보기
 	Show in Explorer	파일 탐색기에서 보기
+	Reveal in Explorer	파일 탐색기에서 보기
 	Show in Folder	폴더에서 보기
 	File Info…	파일 정보…
 	Print…	인쇄…
@@ -314,6 +320,7 @@
 	Units & Rulers…	단위 및 눈금자…
 	Guides, Grid & Slices…	안내선, 격자 및 분할 영역…
 	Plug-ins…	플러그인…
+	Plugins…	플러그인…
 	Type…	문자…
 	Enhanced Controls…	고급 컨트롤…
 	Camera Raw…	Camera Raw…
@@ -464,6 +471,8 @@
 	Smart Object	스마트 오브젝트
 	Convert to Smart Object	스마트 오브젝트로 변환
 	Convert to Embedded	포함된 오브젝트로 변환
+	Embed Linked	연결된 항목 포함
+	Embed All Linked	모든 연결된 항목 포함
 	Convert to Layers	레이어로 변환
 	Convert to Linked…	연결된 오브젝트로 변환…
 	Edit Contents	내용 편집
@@ -537,7 +546,9 @@
 	Unite Shapes	모양 합치기
 	Subtract Front Shape	앞쪽 모양 빼기
 	Intersect Shape Areas	모양 영역 교차
+	Unite Shapes at Overlap	모양 영역 교차
 	Exclude Overlapping Shapes	겹치는 모양 제외
+	Subtract Shapes at Overlap	겹치는 모양 제외
 	Merge Shape Components	모양 구성 요소 병합
 	Path operations	패스 작업
 	Align	정렬
@@ -721,6 +732,7 @@
 	Minimum…	최소값…
 	Offset…	오프셋…
 	Plug-ins	플러그인
+	Plugins	플러그인
 	Proof Setup	교정 설정
 	Proof Colors	교정 색상
 	Gamut Warning	색상 범위 경고
@@ -729,9 +741,9 @@
 	Working Magenta Plate	작업용 마젠타 판
 	Working Yellow Plate	작업용 노랑 판
 	Working Black Plate	작업용 검정 판
-	Working CMY Plate	작업용 CMY 판
-	Legacy Macintosh RGB	기존 Macintosh RGB
-	Internet Standard RGB	인터넷 표준 RGB
+	Working CMY Plates	작업용 CMY 판
+	Legacy Macintosh RGB (Gamma 1.8)	기존 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	인터넷 표준 RGB (sRGB)
 	Monitor RGB	모니터 RGB
 	Color Blindness — Protanopia-type	색각 이상 — 적색맹
 	Color Blindness — Deuteranopia-type	색각 이상 — 녹색맹
@@ -813,7 +825,7 @@
 	Consolidate All to Tabs	모두 탭으로 통합
 	Float in Window	별도 창으로 띄우기
 	Float All in Windows	모두 별도 창으로 띄우기
-	New Window for Document	문서의 새 창
+	New Window	문서의 새 창
 	Workspace	작업 영역
 	Essentials	필수
 	Graphic and Web	그래픽 및 웹
@@ -1999,6 +2011,11 @@
 	Show canvas dots	캔버스 점 표시
 	Clip thumbnails to layer bounds	썸네일을 레이어 경계로 자르기
 	Clip Thumbnails to Layer Bounds	썸네일을 레이어 경계로 자르기
+	No Thumbnails	썸네일 없음
+	Small Thumbnails	작은 썸네일
+	Medium Thumbnails	중간 썸네일
+	Large Thumbnails	큰 썸네일
+	Clip Thumbnails to Document Bounds	썸네일을 문서 경계로 자르기
 	Canvas color	캔버스 색상
 	Canvas custom color	캔버스 사용자 정의 색상
 	Color picker	색상 피커
@@ -3499,6 +3516,9 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+	Automatically Create First Snapshot	첫 번째 스냅샷 자동 만들기
+	Automatically Create New Snapshot When Saving	저장할 때 새 스냅샷 자동 만들기
+	Show New Snapshot Dialog by Default	기본적으로 새 스냅샷 대화 상자 표시
 	Memory usage percent	메모리 사용 비율(%)
 	Show Favorite Fonts	즐겨찾는 글꼴 표시
 	No favorite fonts yet: click the star beside a font to add it.	아직 즐겨찾는 글꼴이 없습니다. 글꼴 옆의 별을 클릭하여 추가하세요.

@@ -171,6 +171,7 @@
 	Right	Droite
 	Open Recent	Ouvrir un fichier récent
 	Clear Recent Files	Effacer la liste des fichiers récents
+	Clear Recent File List	Effacer la liste des fichiers récents
 	Remove from Recent	Retirer des fichiers récents
 	Remove {name} from Recent	Retirer {name} des fichiers récents
 	Close	Fermer
@@ -179,6 +180,10 @@
 	Restore	Restaurer
 	Close All	Tout fermer
 	Close Others	Fermer les autres
+	New Document…	Nouveau document…
+	Open Document…	Ouvrir…
+	Consolidate All to Here	Tout regrouper ici
+	Move to New Window	Déplacer vers une nouvelle fenêtre
 	Save	Enregistrer
 	Save As…	Enregistrer sous…
 	Save a Copy…	Enregistrer une copie…
@@ -231,6 +236,7 @@
 	Create Smart Object after Loading Layers	Créer un objet intelligent après le chargement des calques
 	Reveal in Finder	Afficher dans le Finder
 	Show in Explorer	Afficher dans l'Explorateur
+	Reveal in Explorer	Afficher dans l'Explorateur
 	Show in Folder	Afficher dans le dossier
 	File Info…	Informations sur le fichier…
 	Print…	Imprimer…
@@ -317,6 +323,7 @@
 	Units & Rulers…	Unités et règles…
 	Guides, Grid & Slices…	Repères, grille et tranches…
 	Plug-ins…	Extensions…
+	Plugins…	Extensions…
 	Type…	Texte…
 	Enhanced Controls…	Commandes avancées…
 	Camera Raw…	Camera Raw…
@@ -466,6 +473,8 @@
 	Smart Object	Objet intelligent
 	Convert to Smart Object	Convertir en objet intelligent
 	Convert to Embedded	Convertir en objet incorporé
+	Embed Linked	Incorporer le lié
+	Embed All Linked	Incorporer tous les liés
 	Convert to Layers	Convertir en calques
 	Convert to Linked…	Convertir en objet lié…
 	Edit Contents	Modifier le contenu
@@ -718,6 +727,7 @@
 	Minimum…	Minimum…
 	Offset…	Décalage…
 	Plug-ins	Extensions
+	Plugins	Extensions
 	Proof Setup	Configuration d'épreuve
 	Proof Colors	Couleurs d'épreuve
 	Gamut Warning	Alerte de gamut
@@ -726,9 +736,9 @@
 	Working Magenta Plate	Plaque magenta de travail
 	Working Yellow Plate	Plaque jaune de travail
 	Working Black Plate	Plaque noire de travail
-	Working CMY Plate	Plaque CMJ de travail
-	Legacy Macintosh RGB	RVB Macintosh (ancien)
-	Internet Standard RGB	RVB standard d'Internet
+	Working CMY Plates	Plaque CMJ de travail
+	Legacy Macintosh RGB (Gamma 1.8)	RVB Macintosh (ancien) (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RVB standard d'Internet (sRGB)
 	Monitor RGB	RVB du moniteur
 	Color Blindness — Protanopia-type	Daltonisme — type protanopie
 	Color Blindness — Deuteranopia-type	Daltonisme — type deutéranopie
@@ -820,7 +830,6 @@
 	Consolidate All to Tabs	Tout regrouper dans des onglets
 	Float in Window	Flottante dans une fenêtre
 	Float All in Windows	Toutes flottantes dans des fenêtres
-	New Window for Document	Nouvelle fenêtre pour le document
 	Workspace	Espace de travail
 	Essentials	Essentiel
 	Graphic and Web	Graphisme et Web
@@ -1979,6 +1988,11 @@
 	Show canvas dots	Afficher les points du canevas
 	Clip thumbnails to layer bounds	Rogner les vignettes aux limites du calque
 	Clip Thumbnails to Layer Bounds	Rogner les vignettes aux limites du calque
+	No Thumbnails	Aucune vignette
+	Small Thumbnails	Petites vignettes
+	Medium Thumbnails	Vignettes moyennes
+	Large Thumbnails	Grandes vignettes
+	Clip Thumbnails to Document Bounds	Rogner les vignettes aux limites du document
 	Canvas color	Couleur du canevas
 	Canvas custom color	Couleur personnalisée du canevas
 	Color picker	Sélecteur de couleurs
