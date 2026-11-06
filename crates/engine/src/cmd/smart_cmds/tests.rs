@@ -1443,3 +1443,40 @@ fn vector_scale_counts_the_placed_size_stretch() {
     assert_eq!(vector_scale(&sm, Some(b)), 1.0, "stretch (0.25, 0.5) on scale 2 tops out at 1");
     assert_eq!(vector_scale(&sm, None), 2.0, "unknown bounds keep the transform's own scale");
 }
+
+/// `replace` makes `params` the filter's whole settings, so a key the edit left out stops
+/// applying; without it the params merge, as partial edits rely on. Either way it is one undo.
+#[test]
+fn set_params_replace_drops_the_keys_it_leaves_out() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    s.execute("image.adjustments.channelMixer", json!({"monochrome": true, "gray": [30, 30, 40, 0]})).unwrap();
+    let params = |s: &Session| active_smart(s).smart_filters[0].params.clone();
+
+    s.execute("layer.smartFilter.setParams", json!({"params": {"monochrome": false}})).unwrap();
+    assert_eq!(params(&s), json!({"monochrome": false, "gray": [30, 30, 40, 0]}), "merged by default");
+
+    let edit = json!({"monochrome": false, "red": [70, 30, 0, 0]});
+    s.execute("layer.smartFilter.setParams", json!({"params": edit, "replace": true})).unwrap();
+    assert_eq!(params(&s), edit, "replaced");
+
+    s.undo();
+    assert_eq!(params(&s), json!({"monochrome": false, "gray": [30, 30, 40, 0]}));
+}
+
+/// `replace` also holds for Shape Blur, whose settings otherwise merge before its shape resolves.
+#[test]
+fn set_params_replace_drops_a_shape_blur_radius_it_leaves_out() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    s.execute("filter.blur.shapeBlur", json!({"radius": 5, "shape": "circle"})).unwrap();
+    let params = |s: &Session| active_smart(s).smart_filters[0].params.clone();
+
+    s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}})).unwrap();
+    assert_eq!(params(&s)["radius"], json!(5), "merged by default");
+
+    s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}, "replace": true})).unwrap();
+    assert!(params(&s).get("radius").is_none(), "replaced: {}", params(&s));
+}
