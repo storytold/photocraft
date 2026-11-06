@@ -4006,6 +4006,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Giá trị số không hợp lệ. Cần một số nguyên từ {min}% đến {max}%. Đã chèn giá trị trước đó.
 	Clear Selection	Xóa vùng chọn
 	Color Aware	Nhận biết màu
@@ -4072,5 +4074,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Thay ảnh…
 	The frame is locked	Khung đã bị khóa
 	The frame is unavailable	Khung không khả dụng
+
+# Channels panel menu (#11451)
+	Channel Options…	Tùy chọn kênh…
+	Specify Channels:	Chỉ định kênh:
+	Not enough grayscale documents for this mode.	Không đủ tài liệu thang xám cho chế độ này.
+	Pick a different document for each channel.	Chọn một tài liệu khác cho mỗi kênh.
+	A picked document is no longer open.	Một tài liệu đã chọn không còn mở.
+	A picked document is no longer a grayscale document of the same size.	Một tài liệu đã chọn không còn là tài liệu thang xám cùng kích thước.
 	Automation read folder	Thư mục đọc cho tự động hóa
 	Automation write folder	Thư mục ghi cho tự động hóa

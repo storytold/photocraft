@@ -3529,6 +3529,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ungültige Zahleneingabe. Es ist eine ganze Zahl zwischen {min}% und {max}% erforderlich. Der vorherige Wert wurde eingesetzt.
 	Clear Selection	Auswahl löschen
 	Color Aware	Farbbezogen
@@ -3597,5 +3599,20 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	Der Rahmen ist nicht verfügbar
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	Neuer Kanal…
+	Duplicate Channel	Kanal duplizieren
+	Delete Channel	Kanal löschen
+	New Spot Channel…	Neuer Schmuckfarbenkanal…
+	Merge Spot Channel	Schmuckfarbenkanal zusammenfügen
+	Channel Options…	Kanaloptionen…
+	Split Channels	Kanäle teilen
+	Merge Channels…	Kanäle zusammenfügen…
+	Specify Channels:	Kanäle angeben:
+	Not enough grayscale documents for this mode.	Nicht genug Graustufen-Dokumente für diesen Modus.
+	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
+	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
+	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.
 	Automation read folder	Leseordner für Automatisierung
 	Automation write folder	Schreibordner für Automatisierung
