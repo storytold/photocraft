@@ -777,9 +777,12 @@ pub fn scratch_capacity() -> Option<u64> {
     };
     let space = free_space(&dir);
     // A slow query must not overwrite the status of a directory configured meanwhile.
-    if M.config().dir.as_deref() == Some(dir.as_path()) {
+    // The guard is a named local: as a temporary in the `if` condition it would drop before the store.
+    let c = M.config();
+    if c.dir.as_deref() == Some(dir.as_path()) {
         M.space_unmeasured.store(space.is_none(), Ordering::Relaxed);
     }
+    drop(c);
     let room = space.map(|(available, total)| available.saturating_sub(RESERVE_MIN.max(total / 20)));
     let room = match (room, cap) {
         (Some(room), Some(cap)) => room.min(cap.saturating_sub(used)),
