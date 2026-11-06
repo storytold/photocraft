@@ -86,6 +86,45 @@ fn closing_the_camera_raw_window_cancels() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
 
+/// Camera Raw's own window is built hidden and shown once, by the main window, after the second
+/// main-window frame that drew it, so it never waits on frames of its own; it opens hidden again
+/// the next time.
+#[test]
+fn the_camera_raw_window_opens_hidden_and_the_main_window_shows_it() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+    ctx.set_embed_viewports(false);
+    // Stands in for the desktop backend: records how each window is built and draws it in a
+    // frame of its own, as eframe does.
+    let built = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = std::rc::Rc::clone(&built);
+    egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+        seen.borrow_mut().push(viewport.builder.visible);
+        let mut input = egui::RawInput { viewport_id: viewport.ids.this, ..Default::default() };
+        input.viewports.insert(viewport.ids.this, egui::ViewportInfo::default());
+        ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui)).textures_delta.clear();
+    });
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+    // How many times the main window's frame tells the Camera Raw window to show.
+    let frame = |app: &mut PhotocraftApp| {
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| show(app, ui.ctx()));
+        out.viewport_output.get(&window).map_or(0, |o| o.commands.iter().filter(|c| matches!(c, egui::ViewportCommand::Visible(true))).count())
+    };
+    for round in 0..2 {
+        open(&mut app, &ctx).unwrap();
+        assert_eq!(frame(&mut app), 0, "still hidden after the first frame (round {round})");
+        assert_eq!(frame(&mut app), 1, "shown after the second (round {round})");
+        assert_eq!(frame(&mut app), 0, "shown only once (round {round})");
+        app.camera_raw = None;
+        assert_eq!(frame(&mut app), 0, "closed (round {round})");
+    }
+    assert_eq!(built.borrow().len(), 6, "the window is drawn in each frame while the dialog is open");
+    assert!(built.borrow().iter().all(|visible| *visible == Some(false)), "and always built hidden");
+}
+
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
 fn worker_app() -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

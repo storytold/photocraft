@@ -195,9 +195,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    let shown_id = egui::Id::unique("camera-raw-window-frames");
+    let reveal_id = egui::Id::unique("camera-raw-window-reveal");
     let Some(d) = app.camera_raw.as_ref() else {
-        ctx.data_mut(|m| m.remove::<u8>(shown_id));
+        ctx.data_mut(|m| m.remove::<Reveal>(reveal_id));
         return;
     };
     // Where the platform has no extra windows (the web build), draw over the main window.
@@ -226,25 +226,49 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         pos.y = pos.y.max(outer.top());
         builder = builder.with_position(pos);
     }
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
     let mut close = false;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
+    ctx.show_viewport_immediate(window, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
-        // The window opens hidden and shows once its second frame is painted, so it doesn't flash
-        // black, then grey, then white while the OS window and the first frame come up.
-        let frames = ui.ctx().data_mut(|m| *m.get_temp_mut_or_default::<u8>(shown_id));
-        if frames < 2 {
-            ui.ctx().data_mut(|m| m.insert_temp(shown_id, frames + 1));
-            if frames == 1 {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(true));
-            }
-            ui.ctx().request_repaint();
-        }
     });
+    // The window opens hidden and is shown once its content has been drawn twice, so it doesn't
+    // flash black, then grey, then white while the OS window and its first frame come up. An
+    // immediate viewport is drawn inside the main window's frame, so this counts the main
+    // window's frames and shows the window from here: it never waits on frames the hidden window
+    // itself might not get (Wayland sends an unmapped surface no frame callbacks), so the dialog
+    // can't stay hidden behind a dimmed main window that takes no input.
+    if ctx.data_mut(|m| m.get_temp_mut_or_default::<Reveal>(reveal_id).step()) {
+        ctx.send_viewport_cmd_to(window, egui::ViewportCommand::Visible(true));
+    }
+    if !ctx.data(|m| m.get_temp::<Reveal>(reveal_id).is_some_and(|r| r.shown)) {
+        ctx.request_repaint();
+    }
     if close && app.camera_raw.is_some() {
         cancel(app);
+    }
+}
+
+/// When the hidden Camera Raw window is shown (see `show`).
+#[derive(Clone, Copy, Debug, Default)]
+struct Reveal {
+    /// Main-window frames that drew the window's content since it opened.
+    frames: u8,
+    /// Whether the window has been shown.
+    shown: bool,
+}
+
+impl Reveal {
+    /// Record one main-window frame that drew the window. True exactly once, after the second.
+    fn step(&mut self) -> bool {
+        if self.shown {
+            return false;
+        }
+        self.frames = self.frames.saturating_add(1);
+        self.shown = self.frames >= 2;
+        self.shown
     }
 }
 
@@ -565,7 +589,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
 
 #[cfg(test)]
 mod window_size_tests {
-    use super::{window_min_size, window_size};
+    use super::{Reveal, window_min_size, window_size};
+
+    /// The hidden window is shown after the second main-window frame that drew it, and only once.
+    #[test]
+    fn the_window_is_revealed_once_after_two_frames() {
+        let mut reveal = Reveal::default();
+        assert!(!reveal.step(), "the first frame");
+        assert!(reveal.step(), "the second frame shows it");
+        assert!(!reveal.step() && !reveal.step(), "shown only once");
+    }
     use egui::vec2;
 
     /// A 1536×864 laptop screen gets a window that fits it; big screens stop at 1360×900 and small
