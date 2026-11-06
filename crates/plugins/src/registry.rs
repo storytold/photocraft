@@ -128,7 +128,7 @@ pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
     files.sort();
     files.truncate(1000);
     let mut report = FolderReport::default();
-    for f in files {
+    for f in &files {
         match load_file(&f, Limits::default()) {
             Ok(p) => report.loaded.push(install(p).id().to_string()),
             Err(e) => report.failed.push((f.display().to_string(), e.to_string())),
@@ -140,8 +140,12 @@ pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
             .source()
             .and_then(|s| std::path::Path::new(s).parent())
             .is_some_and(|parent| parent == dir || (canonical_dir.is_some() && parent.canonicalize().ok().as_deref() == canonical_dir.as_deref()));
-        if from_dir && !report.loaded.iter().any(|id| id == p.id()) && remove(p.id()) {
-            report.removed.push(p.id().to_string());
+        if from_dir && !report.loaded.iter().any(|id| id == p.id()) {
+            let was_scanned = p.source().is_some_and(|src| files.iter().any(|f| f == std::path::Path::new(src)));
+            let still_exists = p.source().is_some_and(|src| std::path::Path::new(src).is_file());
+            if (was_scanned || !still_exists) && remove(p.id()) {
+                report.removed.push(p.id().to_string());
+            }
         }
     }
     Ok(report)

@@ -385,13 +385,18 @@ fn large_folder_responsiveness_and_explicit_preference() {
 
     // When enabled, folder stamp and poll complete quickly (< 500ms) even with 1,200 files
     s.execute("prefs.set", json!({"path": "plugIns.useAdditionalPluginsFolder", "value": true})).unwrap();
+    assert!(s.poll_plugin_folder().is_none(), "already synchronized on sync_prefs during prefs.set");
+    assert!(registry::get("test.large.first").is_some());
+    assert!(registry::get("test.large.last").is_some());
+
+    // Modifying a plug-in in a large folder triggers a reload and remains under 500ms
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(dir.join("a_first.wasm"), wat_plugin("test.large.first", r#"{"reload":1}"#, GREY)).unwrap();
     let start = std::time::Instant::now();
     let r = s.poll_plugin_folder();
     let elapsed = start.elapsed();
-    assert!(elapsed < std::time::Duration::from_millis(500), "poll took {:?}", elapsed);
-    assert!(r.is_none(), "already synchronized on sync_prefs during prefs.set");
-    assert!(registry::get("test.large.first").is_some());
-    assert!(registry::get("test.large.last").is_some());
+    assert!(elapsed < std::time::Duration::from_millis(500), "reload poll took {:?}", elapsed);
+    assert!(r.is_some(), "poll should detect modified wasm module");
 
     registry::remove("test.large.first");
     registry::remove("test.large.last");
