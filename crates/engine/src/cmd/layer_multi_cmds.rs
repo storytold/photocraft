@@ -158,7 +158,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.lockLayers",
             "Lock Layers…",
             &["Layer"],
-            None,
+            Some("Cmd+/"),
             r##"{"transparency":bool?,"pixels":bool?,"position":bool?,"artboard":bool?,"all":bool?} (none given: toggle lock all)"##,
             has_layer,
             lock_layers

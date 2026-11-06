@@ -1,8 +1,8 @@
 use super::METHODS;
 use super::inspect::inspect;
 use super::params::{
-    BUTTONS, KEY_MODIFIERS, MAX_CLICKS, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice, input_modifiers, input_number,
-    input_object, merged_object, modifiers_from, num_field, ok, screen_point, uint_field, whole_object,
+    BUTTONS, KEY_MODIFIERS, MAX_CLICKS, MAX_SCREEN_POINT, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice,
+    input_modifiers, input_number, input_object, merged_object, modifiers_from, num_field, ok, screen_point, uint_field, whole_object,
 };
 use super::{ControlRequest, DialogKind, Outcome, PhotocraftApp, SHELL_DIALOG, Tool, ToolEvent, Value, json, run_waiting, tool_event, wrap};
 use photocraft_engine::jobs::{CancelReport, JobId};
@@ -605,6 +605,19 @@ fn crop_fill_param(p: &Value) -> std::result::Result<Option<bool>, String> {
 
 // -- panels: Histogram, masks targets, docking, Color panel --
 
+/// The `panels` patch with its `task_bar` merged into the bar's current place, so `{"at": [x, y]}`
+/// keeps a pin and `{"pinned": true}` keeps a dragged position (#10890).
+fn panels_patch(app: &PhotocraftApp, patch: Option<&Value>) -> std::result::Result<Option<Value>, String> {
+    let Some(mut patch) = patch.cloned() else { return Ok(None) };
+    if let Some(obj) = patch.as_object_mut()
+        && let Some(bar) = obj.get("task_bar")
+    {
+        let merged = merged_object(&app.ui.panels.task_bar, Some(bar), "panels.task_bar")?;
+        obj.insert("task_bar".into(), serde_json::to_value(merged).map_err(|e| e.to_string())?);
+    }
+    Ok(Some(patch))
+}
+
 struct PanelSet {
     histogram_panel: Option<crate::histogram_panel::HistogramPanelState>,
     histogram_range: Option<Option<[u8; 2]>>,
@@ -629,7 +642,7 @@ impl PanelSet {
             histogram_panel: merged_object(&app.ui.histogram_panel, p.get("histogramPanel"), "histogramPanel")?,
             histogram_range: histogram_range_param(p)?,
             histogram_refresh: bool_field(p, "histogramRefresh")?,
-            panels: merged_object(&app.ui.panels, p.get("panels"), "panels")?,
+            panels: merged_object(&app.ui.panels, panels_patch(app, p.get("panels"))?.as_ref(), "panels")?,
             mask_target: bool_field(p, "maskTarget")?,
             updates_open: bool_field(p, "updatesOpen")?,
             vector_mask_target: bool_field(p, "vectorMaskTarget")?,
@@ -1155,8 +1168,9 @@ fn click(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value, click: bool) -
     let parsed = (|| -> std::result::Result<_, String> {
         let p = input_object(p, None, fields)?;
         // Screen coordinates in points (as reported by ui.inspect window size).
-        let x = input_number(&p, "x", "x", None)?.unwrap_or(0.0) as f32;
-        let y = input_number(&p, "y", "y", None)?.unwrap_or(0.0) as f32;
+        let range = Some((-MAX_SCREEN_POINT, MAX_SCREEN_POINT));
+        let x = input_number(&p, "x", "x", range)?.unwrap_or(0.0) as f32;
+        let y = input_number(&p, "y", "y", range)?.unwrap_or(0.0) as f32;
         let button = match input_choice(&p, "button", "button", &BUTTONS)?.unwrap_or("left") {
             "right" | "secondary" => egui::PointerButton::Secondary,
             "middle" => egui::PointerButton::Middle,

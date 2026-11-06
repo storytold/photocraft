@@ -462,6 +462,9 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
     let metadata = s(f, "metadata");
     ExportSettings {
         jpeg_quality: (fmt == "jpg").then_some(quality),
+        // Photoshop's 1-7 Export As presets measured 4:2:0 at 1-4 and 4:4:4 at 5-7.
+        // An exact mapping to 1-100 is unestablished; reuse PhotoCraft's Save for Web cutoff.
+        jpeg_chroma_subsampling: fmt == "jpg" && quality <= 50,
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
         xmp_all: metadata == "all",
