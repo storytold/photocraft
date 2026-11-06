@@ -178,15 +178,16 @@ pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
 }
 
 pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
-    if let Some(hit) = SCOPE.with(|s| s.borrow().as_ref().and_then(|v| v.iter().find(|(k, _)| k == key).map(|(_, img)| img.clone()))) {
-        return Some(hit);
-    }
+    // The shared cache first, so a hit refreshes its recency there too; then the open scope's.
     let mut c = cache();
-    let i = c.iter().position(|e| e.key == *key)?;
-    let e = c.remove(i);
-    let img = e.image.clone();
-    c.push(e);
-    Some(img)
+    if let Some(i) = c.iter().position(|e| e.key == *key) {
+        let e = c.remove(i);
+        let img = e.image.clone();
+        c.push(e);
+        return Some(img);
+    }
+    drop(c);
+    SCOPE.with(|s| s.borrow().as_ref().and_then(|v| v.iter().find(|(k, _)| k == key).map(|(_, img)| img.clone())))
 }
 
 pub(super) fn cache_put(key: CacheKey, image: SourceImage) {
@@ -485,6 +486,7 @@ mod tests {
         assert_eq!(block_size(300_000), (4096, 256));
     }
 
+    /// Trimming keeps the newest entries within the budget; 0 keeps none.
     #[test]
     fn trimming_to_a_budget_drops_the_oldest_entries() {
         let fmt = PixelFormat::RGBA8;

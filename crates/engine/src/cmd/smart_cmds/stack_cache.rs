@@ -133,15 +133,16 @@ pub(super) fn reuse_stages() -> StageScope {
 }
 
 pub(super) fn get(key: &StageKey) -> Option<Stage> {
-    if let Some(hit) = SCOPE.with(|s| s.borrow().as_ref().and_then(|v| v.iter().find(|(k, _)| k == key).map(|(_, st)| st.clone()))) {
-        return Some(hit);
-    }
+    // The shared cache first, so a hit refreshes its recency there too; then the open scope's.
     let mut c = STAGES.lock().unwrap_or_else(PoisonError::into_inner);
-    let i = c.iter().position(|e| e.key == *key)?;
-    let e = c.remove(i);
-    let stage = e.stage.clone();
-    c.push(e);
-    Some(stage)
+    if let Some(i) = c.iter().position(|e| e.key == *key) {
+        let e = c.remove(i);
+        let stage = e.stage.clone();
+        c.push(e);
+        return Some(stage);
+    }
+    drop(c);
+    SCOPE.with(|s| s.borrow().as_ref().and_then(|v| v.iter().find(|(k, _)| k == key).map(|(_, st)| st.clone())))
 }
 
 pub(super) fn put(key: StageKey, stage: &Stage) {
@@ -154,13 +155,14 @@ pub(super) fn put(key: StageKey, stage: &Stage) {
     insert(&mut STAGES.lock().unwrap_or_else(PoisonError::into_inner), key, stage, budget());
 }
 
-/// Adds `stage` as the most recent entry of `c` unless it alone is over `budget`, then trims.
+/// Adds `stage` as the most recent entry of `c` unless it alone is over `budget`, then trims. An
+/// older stage under the same key goes either way, so it is never served instead of this one.
 pub(super) fn insert(c: &mut Vec<Entry>, key: StageKey, stage: &Stage, budget: usize) {
     let bytes = surface_bytes(&stage.surface);
+    c.retain(|e| e.key != key);
     if bytes > budget {
         return;
     }
-    c.retain(|e| e.key != key);
     c.push(Entry { key, stage: stage.clone(), bytes });
     trim(c, budget);
 }

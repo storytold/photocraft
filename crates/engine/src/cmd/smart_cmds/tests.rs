@@ -134,22 +134,29 @@ fn convert(s: &mut Session) -> u64 {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
 }
 
+/// The two budgets start at the caches' built-in ones and take 0 to 65536 MB.
 #[test]
 fn performance_prefs_hold_the_smart_object_cache_budgets() {
-    let mut s = Session::new();
-    let perf = |s: &Session| (s.prefs().performance.smart_source_cache_mb, s.prefs().performance.smart_stage_cache_mb);
     let defaults = ((SOURCE_CACHE_BYTES >> 20) as u32, (STAGE_CACHE_BYTES >> 20) as u32);
-    assert_eq!(perf(&s), defaults, "the budgets the caches had");
-    assert_eq!(s.execute("prefs.get", json!({"path": "performance.smartSourceCacheMb"})).unwrap(), json!(defaults.0));
-    // Set to the defaults: the budgets are process-wide, and other tests run alongside.
-    s.execute("prefs.set", json!({"path": "performance.smartSourceCacheMb", "value": defaults.0})).unwrap();
-    s.execute("prefs.set", json!({"path": "performance.smartStageCacheMb", "value": defaults.1})).unwrap();
-    for bad in [json!(-1), json!(65537)] {
-        assert!(s.execute("prefs.set", json!({"path": "performance.smartStageCacheMb", "value": bad})).is_err(), "{bad}");
+    let s = Session::new();
+    assert_eq!((s.prefs().performance.smart_source_cache_mb, s.prefs().performance.smart_stage_cache_mb), defaults);
+    assert_eq!(s.prefs().get("performance.smartSourceCacheMb"), Some(json!(defaults.0)));
+    // A local `Preferences`: setting a session's would change the process-wide budgets that tests
+    // running alongside use.
+    let mut p = crate::prefs::Preferences::default();
+    for path in ["performance.smartSourceCacheMb", "performance.smartStageCacheMb"] {
+        for ok in [0, 65536] {
+            p.set(path, json!(ok)).unwrap_or_else(|e| panic!("{path} {ok}: {e}"));
+            assert_eq!(p.get(path), Some(json!(ok)), "{path}");
+        }
+        for bad in [json!(-1), json!(65537)] {
+            assert!(p.set(path, bad.clone()).is_err(), "{path} {bad}");
+        }
     }
-    assert_eq!(perf(&s), defaults);
 }
 
+/// At budget 0 nothing is kept between commands, yet one Replace Contents still decodes and places
+/// each file once.
 #[test]
 fn with_no_cache_budgets_one_replace_decodes_and_places_each_file_once() {
     // A render server keeps nothing between commands (both budgets 0). Within one Replace
