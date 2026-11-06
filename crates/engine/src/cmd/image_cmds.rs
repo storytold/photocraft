@@ -264,6 +264,8 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let dpi = p.get("resolution").and_then(Value::as_f64).map(|v| v as f32);
     let scale_styles = p.get("scaleStyles").and_then(Value::as_bool).unwrap_or(true);
     if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
+        // Before the sampler map or the document change: a resize that doesn't fit would trap on the web (#10024).
+        crate::memory_gate::ensure(&format!("resize the image to {nw} x {nh} px"), crate::memory_gate::image_size_need(&d.doc, nw, nh))?;
         // Color Sampler points scale with the pixels (same map `transform_geometry` applies).
         let (sx, sy) = (f64::from(nw) / f64::from(ow.max(1)), f64::from(nh) / f64::from(oh.max(1)));
         s.set_sampler_map(photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
@@ -511,6 +513,30 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
     });
 }
 
+/// The document's only artboard, when it covers exactly the canvas. The Crop tool frames that
+/// board, so its straight crop fits the board to the new canvas, as the reference application's
+/// Crop tool resizes the artboard to the frame. Several boards, or one that covers only part of
+/// the canvas, keep their own layout.
+fn canvas_artboard(doc: &Document) -> Option<LayerId> {
+    match doc.artboards().as_slice() {
+        [(id, _, board)] if board.rect == doc.bounds() => Some(*id),
+        _ => None,
+    }
+}
+
+/// Fits the board [`canvas_artboard`] found before the crop to the new canvas. A new size drops
+/// the size preset it was made from, which no longer describes it; a frame of the board's own size
+/// keeps it, as Artboard Options does.
+fn fit_canvas_artboard(doc: &mut Document, id: Option<LayerId>) {
+    let bounds = doc.bounds();
+    if let Some(board) = id.and_then(|id| doc.layer_mut(id)).and_then(|l| l.artboard_mut()) {
+        if board.rect.width() != bounds.width() || board.rect.height() != bounds.height() {
+            board.preset.clear();
+        }
+        board.rect = bounds;
+    }
+}
+
 /// Crops the document to `r` (in current document coordinates).
 /// A frame that extends past the canvas fills the Background's new area with `extension` (the
 /// background colour, as Photoshop's Crop tool does); other layers get transparent pixels there.
@@ -686,6 +712,26 @@ const MAX_CROP_SIDE: i32 = 300_000;
 
 /// Image → Crop (to the selection bounds).
 fn crop(s: &mut Session, p: &Value) -> Result<Value> {
+    crop_with(s, p, false)
+}
+
+/// Image › Reveal All's crop: as `image.crop` with Delete Cropped Pixels off, but the Background
+/// stays a Background and an extension takes the background colour (Reveal All keeps its own
+/// behaviour; only the Crop tool's was measured, #10867).
+pub(crate) fn crop_keeping_background(s: &mut Session, p: &Value) -> Result<Value> {
+    crop_with(s, p, true)
+}
+
+/// A Delete Cropped Pixels off crop turns the Background into a normal layer ("Layer 0", as Layer ›
+/// New › Layer from Background names it), as in Photoshop: it keeps the pixels past the canvas,
+/// and an extension is transparent on every layer (#10867).
+fn unlock_background_for_crop(doc: &mut Document) {
+    if let Some(bg) = doc.background_mut() {
+        crate::extra_cmds::unlock_background(bg);
+    }
+}
+
+fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value> {
     let delete = p.get("deleteCroppedPixels").and_then(Value::as_bool).unwrap_or(true);
     // The Crop tool's Fill: Content-Aware Fill of what the crop uncovers (#3823).
     let content_aware = match p.get("contentAware") {
@@ -693,6 +739,8 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(v) => return Err(bad("image.crop", format!("`contentAware` must be true or false, not {v}"))),
     };
+    // Content-Aware Fill with Delete off wasn't measured: it keeps filling the Background (#10867).
+    let unlock = !delete && !content_aware && !keep_background;
     // Values beyond i32 would wrap through the narrowing casts into a rectangle unrelated to
     // the numbers passed; reject them (see `commands::int_i32`).
     let explicit = match (
@@ -724,7 +772,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(a) = crop_angle(p)? {
         let rect = explicit.ok_or_else(|| bad("image.crop", "an `angle` needs an explicit `x`, `y`, `width` and `height`"))?;
-        return rotated_crop(s, rect, a, delete, content_aware, &target);
+        return rotated_crop(s, rect, a, delete, content_aware, unlock, &target);
     }
     // An explicit rectangle (the Crop tool) may extend past the canvas; a selection crop is clamped.
     let r = explicit
@@ -735,9 +783,17 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.set_sampler_map(target.sampler_map(r));
     let extension = s.tools.background;
+    // Only the Crop tool's frame (an explicit rectangle) resizes a canvas-sized artboard; a
+    // selection crop leaves boards as they are.
+    let tool_frame = explicit.is_some();
     s.edit("Crop", |doc, active| {
         let original = doc.size;
+        let board = if tool_frame { canvas_artboard(doc) } else { None };
+        if unlock {
+            unlock_background_for_crop(doc);
+        }
         crop_doc(doc, "image.crop", r, delete, extension)?;
+        fit_canvas_artboard(doc, board);
         // A straight crop fills all of the area past the old canvas, pixels an earlier Delete Cropped
         // Pixels off crop hid there included, as Photoshop does; only a turned frame keeps them (#8060).
         if content_aware {
@@ -868,8 +924,10 @@ fn crop_angle(p: &Value) -> Result<Option<f64>> {
 /// background colour, other layers keep transparency there and every pixel of theirs), which makes
 /// the frame upright, then cropped to it (`deleteCroppedPixels` as for an unrotated crop), all in
 /// one undo step. With `content_aware`, the corners the rotation uncovers (and any area past the
-/// rotated image) are then filled from their surroundings, in the same step (#3823).
-fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_aware: bool, crop_target: &CropTarget) -> Result<Value> {
+/// rotated image) are then filled from their surroundings, in the same step (#3823). With `unlock`
+/// the Background becomes a normal layer before the turn, so it turns like the others, keeping its
+/// overhang and leaving the uncovered corners transparent (#10867).
+fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_aware: bool, unlock: bool, crop_target: &CropTarget) -> Result<Value> {
     const CMD: &str = "image.crop";
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
     let (w, h) = (f64::from(r.width()), f64::from(r.height()));
@@ -909,6 +967,8 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
     } else {
         coverage
     };
+    // The canvas board, found before the turn, fits the frame as in a straight crop.
+    let board = s.active().and_then(|d| canvas_artboard(&d.doc));
     crate::analysis_cmds::compound(s, "Crop", |s| {
         // Pixels the crop deletes needn't be turned first: keeping only what lands in the frame
         // makes the rotation cost the frame's size, not the canvas's (a small turned crop of a
@@ -932,12 +992,19 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
                 Ok(())
             })?;
         }
+        if unlock {
+            s.edit("Crop", |doc, _| {
+                unlock_background_for_crop(doc);
+                Ok(())
+            })?;
+        }
         crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
         s.set_sampler_map(crop_target.sampler_map(target));
         let extension = s.tools.background;
         s.edit("Crop", |doc, active| {
             crop_doc(doc, CMD, target, delete, extension)?;
+            fit_canvas_artboard(doc, board);
             if content_aware {
                 crate::crop_fill::fill_uncovered(doc, *active, &coverage)?;
             }
@@ -1113,7 +1180,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
             has_doc,
             crop
         ),
