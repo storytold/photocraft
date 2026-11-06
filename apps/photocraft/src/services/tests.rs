@@ -406,6 +406,22 @@ fn the_windows_save_dialog_gets_a_bare_name_so_the_type_picks_the_extension() {
     assert_eq!(dialog_file_name("", true), None);
 }
 
+/// Linux's bare-name and selected-type steps must keep the timestamp before replacement checks.
+#[test]
+fn linux_quick_export_picker_keeps_the_prepared_timestamp() {
+    for stem in ["photo", "写真.edit_2"] {
+        for ext in ["png", "jpg", "gif", "webp", "exr"] {
+            let suggested = format!("{stem}_20261106-120000-007.{ext}");
+            let shown = dialog_file_name(&suggested, true).unwrap();
+            assert!(shown.contains("_20261106-120000-007"), "the portal must not receive the unsuffixed base: {shown}");
+            let filters = save_filters(&suggested);
+            let checked = with_chosen_type(Path::new(&shown), Some(&suggested), &filters[0].1);
+            assert_eq!(checked, Path::new(&suggested), "the replacement check must use the prepared name");
+            assert_ne!(checked, Path::new(&format!("{stem}.{ext}")));
+        }
+    }
+}
+
 /// A name in another letter case reaches the same file where the file system ignores case
 /// (Windows, and macOS by default), and only there. Two files with the same contents are two.
 #[test]
