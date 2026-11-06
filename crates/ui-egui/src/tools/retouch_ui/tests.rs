@@ -504,13 +504,14 @@ fn a_patch_drag_is_dropped_when_another_document_is_active() {
     }
 }
 
-/// A document closed and reopened with the same ID and revision mid-drag is another document: the
-/// drag is dropped and its release neither lassos nor patches the reopened one. An ordinary edit
-/// keeps the drag (#11024 review).
+/// A document closed and reopened with the same ID mid-drag is another document, whether it comes
+/// back at the same revision or is edited past it: the drag is dropped and its release neither
+/// lassos nor patches the reopened one. An ordinary edit keeps the drag (#11024 review).
 #[test]
 fn a_patch_drag_is_dropped_when_its_document_is_reopened_with_the_same_id() {
     for tool in [Tool::Patch, Tool::ContentAwareMove] {
-        for reopen in [false, true] {
+        // (reopened, revisions the reopened document is edited past the pressed one)
+        for (reopen, edits) in [(false, 0), (true, 0), (true, 1)] {
             let mut app = app();
             app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
             app.ui.tool = tool;
@@ -519,17 +520,17 @@ fn a_patch_drag_is_dropped_when_its_document_is_reopened_with_the_same_id() {
             if reopen {
                 let closed = app.session.close(0).unwrap();
                 app.session.add_document((*closed.doc).clone(), None);
-                app.session.active_mut().unwrap().revision = closed.revision;
+                app.session.active_mut().unwrap().revision = closed.revision + edits;
                 assert_eq!(app.session.active().unwrap().doc.id, closed.doc.id, "a reopened document may keep its ID");
             } else {
                 app.run("layer.new.layer", json!({})).unwrap();
             }
             app.sync_views();
-            assert_eq!(app.drag.is_some(), !reopen, "{tool:?}: reopened {reopen}");
+            assert_eq!(app.drag.is_some(), !reopen, "{tool:?}: reopened {reopen}, edited {edits}");
             tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
             let sel = app.session.active().unwrap().doc.selection.clone().unwrap();
             let lassoed = sel.content_bounds() != photocraft_geom::Rect::new(10, 20, 26, 40);
-            assert_eq!(lassoed, !reopen, "{tool:?}: reopened {reopen}: {:?}", sel.content_bounds());
+            assert_eq!(lassoed, !reopen, "{tool:?}: reopened {reopen}, edited {edits}: {:?}", sel.content_bounds());
         }
     }
 }
