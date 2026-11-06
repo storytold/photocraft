@@ -645,6 +645,7 @@ impl PhotocraftMcp {
         }
     }
 
+    /// Fetch a live screenshot and enforce the preview bound before returning PNG data.
     async fn screenshot(&self, b: &BridgeClient, max_side: Option<u32>) -> Result<CallToolResult, McpError> {
         if max_side.is_some_and(|side| side > MAX_PREVIEW_SIDE) {
             return Ok(fail(format!("automation preview side exceeds {MAX_PREVIEW_SIDE} pixels")));
@@ -671,6 +672,7 @@ impl PhotocraftMcp {
     }
 }
 
+/// Run PNG decoding and resizing off the async worker, retaining untouched bytes.
 async fn downscale_screenshot(bytes: Vec<u8>, max_side: u32) -> Result<Vec<u8>, AutomationError> {
     screenshot_blocking(SCREENSHOT_DOWNSCALE_LIMIT.clone(), move || Ok(downscale_png(&bytes, max_side)?.unwrap_or(bytes))).await?
 }
@@ -1360,6 +1362,7 @@ mod tests {
         assert!(downscale_png(&png, 1024).is_err());
     }
 
+    /// Verify no-resize byte preservation, resized dimensions, and decode errors.
     #[tokio::test(flavor = "current_thread")]
     async fn bridge_screenshot_blocking_downscale_preserves_bytes_and_errors() {
         let image = photocraft_codecs::Image::from_u8(64, 32, photocraft_codecs::ChannelLayout::Rgba, vec![128; 64 * 32 * 4]).unwrap();
@@ -1372,12 +1375,14 @@ mod tests {
         assert!(downscale_screenshot(b"not a png".to_vec(), 32).await.is_err());
     }
 
+    /// A panic in blocking work must become an automation error.
     #[tokio::test(flavor = "current_thread")]
     async fn screenshot_blocking_reports_panics_as_errors() {
         let error = screenshot_blocking::<()>(Arc::new(Semaphore::new(1)), || panic!("downscale panic")).await.unwrap_err();
         assert!(matches!(error, AutomationError::Other(message) if message.contains("screenshot downscale task failed")));
     }
 
+    /// A third screenshot job must wait while both shared permits are held.
     #[tokio::test(flavor = "multi_thread")]
     async fn screenshot_downscale_limit_starts_only_two_jobs() {
         let limit = SCREENSHOT_DOWNSCALE_LIMIT.clone();
@@ -1421,6 +1426,7 @@ mod tests {
         }
     }
 
+    /// Cancelling the request must not release a permit held by blocking work.
     #[tokio::test(flavor = "multi_thread")]
     async fn screenshot_downscale_permit_survives_request_cancellation() {
         let limit = Arc::new(Semaphore::new(1));

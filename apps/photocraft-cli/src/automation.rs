@@ -68,6 +68,7 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     }
 }
 
+/// Serve stdio MCP through either the live app bridge or a headless engine.
 pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     let server = match &a.bridge {
         Some(addr) => {
@@ -95,6 +96,7 @@ pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     Ok(rt.block_on(server.serve_stdio())?)
 }
 
+/// Use one async worker for idle stdio MCP unless Tokio's worker override is set.
 fn mcp_runtime() -> Result<tokio::runtime::Runtime> {
     let mut rt_builder = tokio::runtime::Builder::new_multi_thread();
     // A stdio MCP server is usually idle. Keep one async worker by default; image work runs on
@@ -110,6 +112,7 @@ mod tests {
     use super::mcp_runtime;
     use std::time::{Duration, Instant};
 
+    /// Check the default and explicit worker counts in separate processes.
     #[test]
     fn mcp_stdio_defaults_to_one_worker_and_honors_override() {
         if let Ok(expected) = std::env::var("PHOTOCRAFT_MCP_TEST_EXPECTED_WORKERS") {

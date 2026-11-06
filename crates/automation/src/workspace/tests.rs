@@ -929,6 +929,7 @@ fn relative_configured_root_accepts_resolved_absolute_paths() {
 }
 
 #[cfg(unix)]
+/// Trusted absolute roots may have names forbidden in relative request paths.
 #[test]
 fn trusted_root_names_are_not_validated_as_relative_request_names() {
     let (inside, outside, _) = roots("trusted-root-names");

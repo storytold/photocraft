@@ -46,6 +46,7 @@ pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, dep
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
 }
 
+/// Write supported document modes, ending layer progress before merged-image export.
 fn export_supported_document(
     doc: &Document,
     opts: &PsdExportOptions,
