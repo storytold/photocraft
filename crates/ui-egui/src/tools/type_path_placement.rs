@@ -116,7 +116,8 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
     }
     let st = app.session.active()?;
     let layer = st.active_layer?;
-    if (st.doc.effective_locks(layer).all || st.doc.effective_locks(layer).position) || !st.doc.layer(layer)?.visible {
+    let path = st.doc.path_of(layer)?;
+    if (st.doc.locks_at(&path).all || st.doc.locks_at(&path).position) || !st.doc.shown_at(&path) {
         return None;
     }
     let text = active_text(app)?;
@@ -549,7 +550,15 @@ mod tests {
         down(&mut app, 40.0, 100.0);
         assert!(app.ui.type_path_drag.is_some());
         let _ = ctx.end_pass();
+        ctx.begin_pass(egui::RawInput {
+            focused: true,
+            events: vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+            ..Default::default()
+        });
+        assert!(ctx.input(|i| i.pointer.primary_down()));
+        let _ = ctx.end_pass();
         ctx.begin_pass(egui::RawInput { focused: false, ..Default::default() });
+        assert!(ctx.input(|i| i.pointer.primary_down()), "primary button must be held during focus loss");
         cancel_missing_release(&mut app, &ctx);
         assert!(app.ui.type_path_drag.is_none());
         let _ = ctx.end_pass();
@@ -777,17 +786,23 @@ mod tests {
         let (doc, revision) = (st.doc.id, st.revision);
         down(&mut app, 40.0, 90.0);
         move_to(&mut app, 50.0, 90.0);
-        let (_, first) = display_doc(&mut app, 0).unwrap();
+        let (first_doc, first) = display_doc(&mut app, 0).unwrap();
         move_to(&mut app, 60.0, 90.0);
-        let (_, second) = display_doc(&mut app, 0).unwrap();
-        let history = app.type_path_damage.as_ref().unwrap();
-        let original = history.original_area;
-        let first_area = history.areas[0].1;
-        let second_area = history.areas[1].1;
-        assert_eq!(damage(&app, doc, revision, 0, first), Some(original.union(&first_area)));
-        assert_eq!(damage(&app, doc, revision, first, second), Some(first_area.union(&second_area)));
+        let (second_doc, second) = display_doc(&mut app, 0).unwrap();
+        let layer_id = app.session.active().unwrap().active_layer.unwrap();
+        let original_bounds = app.session.active().unwrap().doc.layer(layer_id).unwrap().surface().map_or(Rect::EMPTY, |s| s.tile_bounds());
+        assert!(!original_bounds.is_empty(), "original rendered text surface bounds must be non-empty");
+
+        let first_bounds = first_doc.layer(layer_id).unwrap().surface().map_or(Rect::EMPTY, |s| s.tile_bounds());
+        assert!(!first_bounds.is_empty(), "first preview rendered text surface bounds must be non-empty");
+
+        let second_bounds = second_doc.layer(layer_id).unwrap().surface().map_or(Rect::EMPTY, |s| s.tile_bounds());
+        assert!(!second_bounds.is_empty(), "second preview rendered text surface bounds must be non-empty");
+
+        assert_eq!(damage(&app, doc, revision, 0, first), Some(original_bounds.union(&first_bounds)));
+        assert_eq!(damage(&app, doc, revision, first, second), Some(first_bounds.union(&second_bounds)));
         assert!(cancel(&mut app));
-        assert_eq!(damage(&app, doc, revision, second, 0), Some(second_area.union(&original)));
+        assert_eq!(damage(&app, doc, revision, second, 0), Some(second_bounds.union(&original_bounds)));
         assert_eq!(damage(&app, doc, revision + 1, second, 0), None);
     }
 
@@ -999,5 +1014,106 @@ mod tests {
         let end = end.expect("explicit end");
         assert!((end - 169.71).abs() < 1.0, "end should stay on branch: {end}");
         assert!(!flip);
+    }
+
+    #[test]
+    fn hidden_ancestor_excludes_markers_and_capture() {
+        use photocraft_doc::LayerId;
+        let mut app = app(Tool::PathSelection);
+        let text_id = app.session.active().unwrap().active_layer.unwrap();
+        let group_id = LayerId(app.run("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+        app.run("layer.select", json!({"layer": text_id.0, "mode": "replace"})).unwrap();
+        assert_eq!(app.session.active().unwrap().active_layer, Some(text_id));
+        assert!(active_text(&app).is_some());
+
+        app.session
+            .edit("hide group", |doc, _| {
+                doc.layer_mut(group_id).unwrap().visible = false;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(active_text(&app).is_none());
+        let xf = ViewXform::active(&app).unwrap();
+        assert!(cursor(&mut app, &xf, egui::pos2(40.0, 90.0)).is_none());
+        assert!(!pointer(&mut app, ToolEvent::Down { x: 40.0, y: 90.0, pressure: 1.0 }));
+        assert!(app.ui.type_path_drag.is_none());
+    }
+
+    #[test]
+    fn overflow_cache_invalidates_on_replacement_arc_with_same_id_and_revision() {
+        let mut app = app(Tool::PathSelection);
+        let ctx = egui::Context::default();
+        let text = active_text(&app).unwrap().clone();
+        let initial = overflows(&app, &ctx, &text);
+        assert!(!initial, "short text should not overflow range [20, 100]");
+
+        // 1. Replacement Arc with same docid/revision but different text content:
+        let st = app.session.active_mut().unwrap();
+        let doc_id = st.doc.id;
+        let revision = st.revision;
+        let original_arc = st.doc.clone();
+        let mut modified = (*original_arc).clone();
+        let layer_id = st.active_layer.unwrap();
+        let LayerContent::Text(t) = &mut modified.layer_mut(layer_id).unwrap().content else { panic!("expected text") };
+        t.text = "A very long sentence on a path that is guaranteed to overflow the assigned span".into();
+        st.doc = Arc::new(modified);
+        assert_eq!(st.doc.id, doc_id);
+        assert_eq!(st.revision, revision);
+        assert!(!Arc::ptr_eq(&st.doc, &original_arc));
+
+        let new_text = active_text(&app).unwrap().clone();
+        let updated = overflows(&app, &ctx, &new_text);
+        assert!(updated, "overflow cache must invalidate on replacement Arc with different text content");
+
+        // 2. Replacement Arc with same docid/revision but different range content:
+        let st = app.session.active_mut().unwrap();
+        let prev_arc = st.doc.clone();
+        let mut modified = (*prev_arc).clone();
+        let LayerContent::Text(t) = &mut modified.layer_mut(layer_id).unwrap().content else { panic!("expected text") };
+        t.text = "ABC".into();
+        let TextShape::Path { end, .. } = &mut t.shape else { panic!("expected path") };
+        *end = Some(21.0);
+        st.doc = Arc::new(modified);
+        assert_eq!(st.doc.id, doc_id);
+        assert_eq!(st.revision, revision);
+        assert!(!Arc::ptr_eq(&st.doc, &prev_arc));
+
+        let tiny_range_text = active_text(&app).unwrap().clone();
+        let tiny_overflow = overflows(&app, &ctx, &tiny_range_text);
+        assert!(tiny_overflow, "overflow cache must invalidate on replacement Arc with tiny range");
+
+        // 3. Expanding range on replacement Arc so it no longer overflows:
+        let st = app.session.active_mut().unwrap();
+        let prev_arc = st.doc.clone();
+        let mut modified = (*prev_arc).clone();
+        let LayerContent::Text(t) = &mut modified.layer_mut(layer_id).unwrap().content else { panic!("expected text") };
+        let TextShape::Path { end, .. } = &mut t.shape else { panic!("expected path") };
+        *end = Some(180.0);
+        st.doc = Arc::new(modified);
+        assert_eq!(st.doc.id, doc_id);
+        assert_eq!(st.revision, revision);
+
+        let wide_range_text = active_text(&app).unwrap().clone();
+        let wide_overflow = overflows(&app, &ctx, &wide_range_text);
+        assert!(!wide_overflow, "overflow cache must invalidate on replacement Arc with expanded range");
+    }
+
+    #[test]
+    fn ordinary_offcanvas_up_commits_once() {
+        let mut app = app(Tool::PathSelection);
+        let before = shape(&app);
+        let n = steps(&app);
+        down(&mut app, 40.0, 90.0);
+        assert!(app.ui.type_path_drag.is_some());
+        move_to(&mut app, 500.0, 500.0);
+        up(&mut app, 500.0, 500.0);
+        assert!(app.ui.type_path_drag.is_none(), "drag ended on release");
+        assert_eq!(steps(&app), n + 1, "exactly one commit step");
+        assert_ne!(shape(&app), before, "placement was modified");
+        assert!(!pointer(&mut app, ToolEvent::Up { x: 500.0, y: 500.0 }));
+        assert_eq!(steps(&app), n + 1);
+        assert!(app.session.undo());
+        assert_eq!(shape(&app), before);
     }
 }
