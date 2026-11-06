@@ -45,7 +45,7 @@ Dispatch order matches `dialogs::show` in `dialogs.rs` (check earlier rows befor
 | Match | Module | Role |
 |---|---|---|
 | `__guideLayout` | `guide_layout_ui.rs` | View › New Guide Layout… |
-| `__newGuide` | `new_guide_ui.rs` | New Guide / Edit Selected Guides; position with a unit dropdown |
+| `__newGuide` | `new_guide_ui.rs` | New Guide / Edit Selected Guides; typed positions and guide colours |
 | `__fill` | `fill_ui.rs` | Edit › Fill… |
 | `__patternFill` | `pattern_fill_ui.rs` | Pattern Fill layer / New Fill Layer › Pattern… |
 | `__stroke` | `stroke_ui.rs` | Edit › Stroke… |
@@ -75,12 +75,11 @@ actions with their marker already set.
 
 ### Shared private keys
 
-New Guide and Edit Selected Guides open in the ruler unit and offer Pixels, Millimeters, Inches,
-Centimeters, Points, Picas and Percent beside Position. Selecting a unit converts the draft using
-the active document's resolution without moving the guide. Bare numbers use the selected unit
-(`__unit`, a suffix such as `px`, `mm` or `in`); a typed suffix overrides it. Decimal commas are
-accepted. Percent uses width for vertical guides and height for horizontal guides. OK dispatches
-the existing guide command; Cancel discards the draft.
+New Guide and Edit Selected Guides keep the Position field in the Tab/Shift+Tab order and select
+its text on focus. Typed unit suffixes use the existing engine parser; bare numbers use the ruler
+unit. An untouched edit preserves the guide's exact pixel position behind its rounded readout,
+including when changing only its colour. Once Position is edited, the typed value is intentional,
+even if it matches that original readout. Confirming an unchanged guide preserves Redo.
 
 | Key | Meaning |
 |---|---|
@@ -225,7 +224,7 @@ Same hub entry as standalone pickers; `color_picker_ui::confirm` branches on ext
 
 | Date | Change |
 |---|---|
-| 2026-10-27 | New Guide / Edit Selected Guides: visible position unit dropdown and resolution-aware conversion |
+| 2026-11-06 | New Guide / Edit Selected Guides: Position Tab focus and exact edit-position handling |
 | 2026-10-11 | Initial doc from dialog codebase audit |
 | 2026-10-11 | Document all `DialogKind` values and `Command` routing markers |
 | 2026-10-11 | Alt+Cancel → Reset hub (`dialog_alt_reset`); opt-in markers |
