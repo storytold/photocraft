@@ -236,6 +236,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
                 let before = app.session.active().map(|st| st.selected_layers());
+                let active_before = app.session.active().and_then(|st| st.active_layer);
                 // A locked layer under the pointer (the Background) can't move. Photoshop draws
                 // the layer marquee instead of reporting the lock (#4058). Probe without
                 // selecting so a locked hit doesn't become the selection first.
@@ -262,6 +263,12 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 if picked.is_ok_and(|v| v["layer"].is_null()) && crate::move_box::empty_at(app, [x, y]) {
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return true;
+                }
+                // Remember a pick that changed the active layer, so the Layers panel's reveal can
+                // honour Expand layer group on click (layer_reveal.rs).
+                let active_after = app.session.active().and_then(|st| st.active_layer);
+                if active_after != active_before {
+                    app.move_pick = active_after;
                 }
                 // Snapping (and the drag's box) started before the pick: point it at what moves.
                 if app.session.active().map(|st| st.selected_layers()) != before {

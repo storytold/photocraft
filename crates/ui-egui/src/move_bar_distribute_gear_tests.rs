@@ -281,9 +281,79 @@ fn expand_layer_group_on_click_switches_the_opening_of_closed_parent_groups() {
         let ctx = egui::Context::default();
         // The first frame only records the active layer; then a canvas click picks the inner one.
         assert_eq!(crate::layer_reveal::track(&mut app, &ctx), None);
-        app.session.execute("layer.select", json!({"layer": inner.0})).unwrap();
+        // The Move tool picks the layer under the pointer (Auto-Select targets layers, not groups).
+        app.ui.tool_options.move_target = "layer".into();
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Down { x: 12.0, y: 12.0, pressure: 1.0 }, egui::Modifiers::default());
+        crate::canvas::tool_event(&mut app, crate::canvas::ToolEvent::Up { x: 12.0, y: 12.0 }, egui::Modifiers::default());
         // The row is still revealed (scrolled to) either way.
         assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
         assert_eq!(expanded(&app, group), on, "Expand layer group on click = {on}");
     }
+}
+
+/// A 64x64 document: `inner` painted at (8..24)^2 inside a closed group, the Background-less
+/// group selected, `tool` current and the gear option set to `on`. The reveal has seen the frame.
+fn closed_group_doc(tool: Tool, on: bool) -> (PhotocraftApp, LayerId, LayerId, egui::Context) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let inner = paint(&mut app, Rect::new(8, 8, 24, 24));
+    app.session.execute("layer.groupLayers", json!({})).unwrap();
+    let group = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, l)| l.is_group()).map(|(_, _, l)| l.id).unwrap();
+    app.session.execute("layer.setExpanded", json!({"layer": group.0, "expanded": false})).unwrap();
+    app.session.execute("layer.select", json!({"layer": group.0})).unwrap();
+    app.sync_views();
+    app.ui.tool = tool;
+    app.ui.tool_options.move_expand_group_on_click = on;
+    app.ui.tool_options.move_target = "layer".into();
+    let ctx = egui::Context::default();
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), None);
+    (app, inner, group, ctx)
+}
+
+/// A press and release at (12, 12) with Ctrl/Cmd held (a temporary Move from another tool).
+fn ctrl_click(app: &mut PhotocraftApp) {
+    use crate::canvas::{ToolEvent, tool_event};
+    let mods = egui::Modifiers { command: true, ctrl: true, ..Default::default() };
+    tool_event(app, ToolEvent::Down { x: 12.0, y: 12.0, pressure: 1.0 }, mods);
+    tool_event(app, ToolEvent::Up { x: 12.0, y: 12.0 }, mods);
+}
+
+#[test]
+fn expand_layer_group_on_click_off_keeps_the_group_closed_for_a_ctrl_click_from_another_tool() {
+    // Auto-Select off, so the Ctrl-click is the Move way of picking from the Brush.
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
+    app.ui.tool_options.move_auto_select = false;
+    ctrl_click(&mut app);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(inner), "the Ctrl-click picked the layer");
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner), "the row still scrolls into view");
+    assert!(!expanded(&app, group), "the group stays closed");
+}
+
+#[test]
+fn expand_layer_group_on_click_on_opens_the_group_for_a_ctrl_click_from_another_tool() {
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, true);
+    app.ui.tool_options.move_auto_select = false;
+    ctrl_click(&mut app);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(inner));
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(expanded(&app, group), "the group opens");
+}
+
+#[test]
+fn expand_layer_group_on_click_off_keeps_the_group_closed_for_a_move_tool_click() {
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Move, false);
+    use crate::canvas::{ToolEvent, tool_event};
+    tool_event(&mut app, ToolEvent::Down { x: 12.0, y: 12.0, pressure: 1.0 }, egui::Modifiers::default());
+    tool_event(&mut app, ToolEvent::Up { x: 12.0, y: 12.0 }, egui::Modifiers::default());
+    assert_eq!(app.session.active().unwrap().active_layer, Some(inner));
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(!expanded(&app, group));
+}
+
+#[test]
+fn expand_layer_group_on_click_off_still_opens_the_group_for_other_active_layer_changes() {
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
+    app.run("layer.select", json!({"layer": inner.0})).unwrap();
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(expanded(&app, group), "a command that changes the active layer reveals it");
 }
