@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use photocraft_algo::resample::{Resample, translate_surface};
+use photocraft_algo::resample::{Resample, resize_surface, translate_surface};
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, SmartObject, SmartSource};
 use photocraft_geom::Rect;
@@ -25,6 +25,7 @@ mod export;
 mod info;
 mod open;
 mod paths;
+mod place_steps;
 mod processing;
 mod raw_open;
 mod save;
@@ -47,7 +48,7 @@ pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
-pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, prepare_place, tag_exr_colorspace};
+pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 use paths::is_file;
 #[cfg(test)]
@@ -57,6 +58,7 @@ pub use paths::{
     template_name, untitled_name,
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
+pub(crate) use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;
 pub(crate) use save::{SaveOpts, encode, save_doc};
