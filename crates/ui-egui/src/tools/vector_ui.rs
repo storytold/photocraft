@@ -30,7 +30,7 @@ pub(crate) use curvature::curvature_anchor_at;
 pub use curvature::{curvature_down, curvature_move, curvature_toggle, curvature_up};
 #[cfg(test)]
 use options::{corner_radii_patch, solid_paint};
-pub(crate) use options::{enabled_stroke_width, paint_gesture};
+pub(crate) use options::{draws_path, enabled_stroke_width, paint_gesture};
 pub use options::{options_bar, shape_properties};
 pub use overlay::draw_overlay;
 pub(crate) use overlay::selected_saved_path_index;
