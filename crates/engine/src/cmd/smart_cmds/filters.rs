@@ -185,7 +185,9 @@ pub(super) fn set_filter_params(s: &mut Session, p: &Value) -> Result<Value> {
         let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
         let sm = smart(doc, layer_param(s, p)?)?;
         let f = sm.smart_filters.get(filter_index(CMD, p, sm)?).ok_or_else(|| bad(CMD, "no smart filter at this index"))?;
-        let shape_params = if f.command == "filter.blur.shapeBlur" { Some(edited_shape_params(s, &f.params, &new)?) } else { None };
+        let nothing = json!({});
+        let previous = if replace { &nothing } else { &f.params };
+        let shape_params = if f.command == "filter.blur.shapeBlur" { Some(edited_shape_params(s, previous, &new)?) } else { None };
         (f.command == DISPLACE, shape_params)
     };
     let new_map = if displace && new_map_asked {

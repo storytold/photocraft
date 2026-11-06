@@ -199,6 +199,7 @@ fn adjustment_filter(mode: &str, command: &str, params: serde_json::Value) -> (P
     (app, id)
 }
 
+/// The smart object on layer `id`.
 fn recorded(app: &PhotocraftApp, id: u64) -> photocraft_doc::SmartObject {
     match &app.session.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().content {
         photocraft_doc::LayerContent::Smart(sm) => sm.clone(),
@@ -263,4 +264,35 @@ fn a_lab_curves_smart_filter_keeps_a_lightness_edit() {
     let photocraft_doc::Adjustment::Curves { per_channel, .. } = read(&sm.smart_filters[0].params) else { panic!("Curves params") };
     let photocraft_doc::Adjustment::Curves { per_channel: wanted, .. } = read(&json!({"lightness": edited})) else { panic!("Curves params") };
     assert_eq!(per_channel[0], wanted[0], "the edited Lightness renders");
+    assert!(sm.smart_filters[0].params.get("points").is_none(), "the removed alias is not stored");
+}
+
+/// Emptying a text field removes its key from the Color Lookup dialog, which draws from the
+/// command's schema. A stored `data` would be read over the `lut` chosen instead.
+#[test]
+fn a_color_lookup_smart_filter_with_its_data_cleared_uses_the_chosen_lut() {
+    let mut cube = String::from("LUT_3D_SIZE 2\n");
+    for b in 0..2 {
+        for g in 0..2 {
+            for r in 0..2 {
+                cube.push_str(&format!("{} {} {}\n", 1 - r, 1 - g, 1 - b));
+            }
+        }
+    }
+    let (app, id) = adjustment_filter("rgb", "image.adjustments.colorLookup", json!({"data": cube, "fileName": "invert.cube"}));
+    let (mut h, dialog) = edit_first_filter(app, id);
+    let fields = &mut h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
+    assert_eq!(fields.get("data"), Some(&json!(cube)), "opens on the recorded settings");
+    fields.insert("data".into(), json!(""));
+    fields.insert("lut".into(), json!("warm"));
+    h.run_steps(2);
+    let fields = &h.state_mut().ui.dialog_mut(dialog).unwrap().fields;
+    assert!(!fields.contains_key("data"), "the dialog removed the emptied field");
+    crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
+
+    let sm = recorded(h.state(), id);
+    assert_eq!(sm.smart_filters.len(), 1, "no filter was stacked");
+    let params = &sm.smart_filters[0].params;
+    assert!(params.get("data").is_none(), "the removed data is not stored: {params}");
+    assert_eq!(params.get("lut"), Some(&json!("warm")));
 }
