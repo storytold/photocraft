@@ -346,6 +346,12 @@ fn doc_save_png_compression_reaches_the_encoder() {
     }
     // Stored deflate is far larger than any compressed level.
     assert!(saved[1..].iter().all(|(_, b)| b.len() < saved[0].1.len()), "{:?}", saved.iter().map(|(n, b)| (n, b.len())).collect::<Vec<_>>());
+    // Without `pngCompression`, or with null, the encoder's default level is used.
+    for (file, params) in [("omitted.png", json!({"path": "omitted.png"})), ("null.png", json!({"path": "null.png", "pngCompression": null}))] {
+        h.handle("doc.save", params).unwrap();
+        let default = &saved.iter().find(|(n, _)| *n == "default").unwrap().1;
+        assert!(std::fs::read(base.join(file)).unwrap() == *default, "{file}: not the default level's file");
+    }
     for level in [json!("turbo"), json!(9), json!(true)] {
         let refused = h.handle("doc.save", json!({"path": "x.png", "pngCompression": level})).unwrap_err().to_string();
         assert!(refused.contains("pngCompression"), "{level}: {refused}");
