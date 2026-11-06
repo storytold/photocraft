@@ -4420,6 +4420,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Érvénytelen számbevitel. {min}% és {max}% közötti egész szám szükséges. Az előző érték lett beillesztve.
 	Color Aware	Színalapú
 	Decontaminate Colors	Színek fertőtlenítése
@@ -4483,6 +4485,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	A keret zárolva van
 	The frame is unavailable	A keret nem érhető el
 
+# Channels panel menu (#11451)
+	Channel Options…	Csatornabeállítások…
+	Specify Channels:	Csatornák megadása:
+	Not enough grayscale documents for this mode.	Nincs elég szürkeárnyalatos dokumentum ehhez a módhoz.
+	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
+	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
+	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
 # Artboard tool options bar (#11385)
 	Distribute Widths	Szélességek elosztása
 	Distribute Heights	Magasságok elosztása

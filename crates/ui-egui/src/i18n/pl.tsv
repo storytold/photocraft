@@ -4117,6 +4117,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Nieprawidłowa wartość liczbowa. Wymagana jest liczba całkowita od {min}% do {max}%. Wstawiono poprzednią wartość.
 	Clear Selection	Wyczyść zaznaczenie
 	Color Aware	Według kolorów
@@ -4184,6 +4186,20 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	Ramka jest zablokowana
 	The frame is unavailable	Ramka jest niedostępna
 
+# Channels panel menu (#11451)
+	New Channel…	Nowy kanał…
+	Duplicate Channel	Duplikuj kanał
+	Delete Channel	Usuń kanał
+	New Spot Channel…	Nowy kanał kolorów dodatkowych…
+	Merge Spot Channel	Scal kanał kolorów dodatkowych
+	Channel Options…	Opcje kanału…
+	Split Channels	Podziel kanały
+	Merge Channels…	Scal kanały…
+	Specify Channels:	Określ kanały:
+	Not enough grayscale documents for this mode.	Za mało dokumentów w skali szarości dla tego trybu.
+	Pick a different document for each channel.	Wybierz inny dokument dla każdego kanału.
+	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
+	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.
 # Artboard tool options bar (#11385)
 	Distribute Widths	Rozmieść szerokości równomiernie
 	Distribute Heights	Rozmieść wysokości równomiernie

@@ -4578,6 +4578,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Neispravan numerički unos. Potreban je ceo broj između {min}% i {max}%. Umetnuta je prethodna vrednost.
 	Color Aware	Prema boji
 	Decontaminate Colors	Dekontaminiraj boje
@@ -4642,6 +4644,13 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	Оквир је закључан
 	The frame is unavailable	Оквир није доступан
 
+# Channels panel menu (#11451)
+	Channel Options…	Opcije kanala…
+	Specify Channels:	Odredi kanale:
+	Not enough grayscale documents for this mode.	Nema dovoljno dokumenata u nijansama sive za ovaj režim.
+	Pick a different document for each channel.	Izaberite drugi dokument za svaki kanal.
+	A picked document is no longer open.	Jedan izabrani dokument više nije otvoren.
+	A picked document is no longer a grayscale document of the same size.	Jedan izabrani dokument više nije dokument u nijansama sive iste veličine.
 # Artboard tool options bar (#11385)
 	Distribute Widths	Raspodeli širine
 	Distribute Heights	Raspodeli visine
