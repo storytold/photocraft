@@ -381,13 +381,18 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     // went down on this canvas, under no popup or widget over it, and a stroke in progress owns
     // the barrel. Shadows the HUD-gesture press above, adding `long_touched` so pen taps (which
     // never press the barrel) open the picker too.
-    let right_press = (response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) || response.long_touched())
-        && response
-            .ctx
-            .data(|d| d.get_temp::<Option<Pos2>>(right_pressed_id(response)))
-            .flatten()
-            .or_else(|| response.long_touched().then_some(response.interact_pointer_pos()).flatten());
-    let right_open = right_press.is_some() && app.drag.is_none() && !resize_gesture && !resizing && !layer_menu && !erase && !crate::color_hud::is_open(&app.ui);
+    let right_press_frame = response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) || response.long_touched();
+    let right_press = right_press_frame
+        .then(|| {
+            response
+                .ctx
+                .data(|d| d.get_temp::<Option<Pos2>>(right_pressed_id(response)))
+                .flatten()
+                .or_else(|| response.long_touched().then_some(response.interact_pointer_pos()).flatten())
+        })
+        .flatten();
+    let right_open =
+        right_press.is_some() && app.drag.is_none() && !resize_gesture && !resizing && !layer_menu && !erase && !crate::color_hud::is_open(&app.ui);
     if right_open
         && right_click_picker(tool)
         && let Some(p) = right_press
