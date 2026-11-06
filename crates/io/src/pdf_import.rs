@@ -577,10 +577,12 @@ fn bind() -> Result<pdfium_render::prelude::Pdfium, IoError> {
 mod tests {
     use super::{MAX_OBJECT_LAYERS, MAX_PATH_KNOTS, ObjectBudget, PageFrame, PageGeometry};
 
+    /// A 595 x 842 pt page with no offset, rotated by `rotation` degrees.
     fn geometry(rotation: u16) -> PageGeometry {
         PageGeometry { width_pt: 595.0, height_pt: 842.0, origin_x: 0.0, origin_y: 0.0, crop_w: 595.0, crop_h: 842.0, rotation }
     }
 
+    /// A full-page frame at `dpi`, starting at document x `x`.
     fn frame(dpi: f64, x: u32) -> PageFrame<'static> {
         PageFrame { geometry: geometry(0), dpi, x, rgba: &[], width: 595, height: 842 }
     }

@@ -14,6 +14,7 @@ const PAGE_W: f64 = 200.0;
 const PAGE_H: f64 = 100.0;
 const GAP: f64 = 80.0;
 
+/// Imports the four-page fixture at 72 and 300 DPI and checks every layer it produces.
 #[test]
 fn imports_text_and_a_transformed_path_on_two_pages() {
     let pdf = three_page_pdf();
@@ -93,6 +94,7 @@ fn three_page_pdf() -> Vec<u8> {
     bytes
 }
 
+/// Asserts the imported text and path layers at one DPI against the fixture geometry.
 fn check(document: &Document, dpi: f32) {
     let scale = f64::from(dpi) / 72.0;
     let page_two_x = (PAGE_W * scale).round() + GAP;
@@ -163,6 +165,7 @@ fn check(document: &Document, dpi: f32) {
     assert!((max_y - 70.0 * scale).abs() < 3.0, "oversized-crop path max y is {max_y} ({dpi} dpi)");
 }
 
+/// The layer children of the imported `Page N` group.
 fn page_children(document: &Document, page: usize) -> &[Layer] {
     let name = format!("Page {page}");
     let layer = document.layers.iter().find(|layer| layer.name == name).unwrap_or_else(|| panic!("no {name} layer"));
@@ -172,6 +175,7 @@ fn page_children(document: &Document, page: usize) -> &[Layer] {
     }
 }
 
+/// The first text layer among `children`.
 fn text_layer(children: &[Layer]) -> &TextLayer {
     children
         .iter()
@@ -182,6 +186,7 @@ fn text_layer(children: &[Layer]) -> &TextLayer {
         .expect("a text layer")
 }
 
+/// The first shape layer among `children`.
 fn shape_layer(children: &[Layer]) -> &ShapeLayer {
     children
         .iter()
@@ -192,10 +197,12 @@ fn shape_layer(children: &[Layer]) -> &ShapeLayer {
         .expect("a shape layer")
 }
 
+/// Asserts `color` is the fixture's red ink.
 fn assert_red(color: &Color, what: &str) {
     assert!(color.c[0] > 0.8 && color.c[1] < 0.2 && color.c[2] < 0.2, "{what} should be red, got {:?}", color.c);
 }
 
+/// Asserts `color` is the fixture's green ink.
 fn assert_green(color: &Color, what: &str) {
     assert!(color.c[1] > 0.8 && color.c[0] < 0.2 && color.c[2] < 0.2, "{what} should be green, got {:?}", color.c);
 }
