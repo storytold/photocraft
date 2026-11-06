@@ -804,10 +804,8 @@ fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
         _ => {
             ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
             ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
-            ui.add_space(12.0);
-            ui.vertical_centered(|ui| {
-                crate::links::link_row(app, ui);
-            });
+            ui.add_space(14.0);
+            crate::links::link_row(app, ui);
             ui.add_space(10.0);
             ui.weak("egui · wgpu · photocraft-engine");
         }
