@@ -334,7 +334,7 @@ const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 fn rdf_insertion(xmp: &str) -> Option<(usize, Option<&str>)> {
     // roxmltree does not take a byte order mark ahead of the prolog; offsets below are into `xmp`.
     let bom = xmp.strip_prefix('\u{feff}').map_or(0, |_| '\u{feff}'.len_utf8());
-    let body = &xmp[bom..];
+    let body = xmp.get(bom..)?;
     let doc = crate::xml::parse(body, roxmltree::ParsingOptions::default()).ok()?;
     let rdf = doc.descendants().find(|n| n.is_element() && n.tag_name().namespace() == Some(RDF_NS) && n.tag_name().name() == "RDF")?;
     let range = rdf.range();
@@ -343,7 +343,7 @@ fn rdf_insertion(xmp: &str) -> Option<(usize, Option<&str>)> {
         // `<r:RDF …/>`: the qualified name follows the `<`, up to whitespace or the `/`.
         let name = open.get(1..)?;
         let end = name.find(|c: char| c.is_whitespace() || c == '/').unwrap_or(name.len());
-        return Some((bom + range.end - 2, Some(&name[..end])));
+        return Some((bom + range.end - 2, Some(name.get(..end)?)));
     }
     // The end tag is the last thing in the element's own range.
     Some((bom + range.start + text.rfind("</")?, None))
@@ -399,13 +399,19 @@ fn plates_xmp(doc_xmp: Option<&str>, plates: &[SpotPlate]) -> String {
     d.push_str("    </rdf:Seq>\n   </pcsp:plates>\n  </rdf:Description>\n");
     // Into the document's packet when it has one, inside its RDF element; else a packet of its
     // own. A packet that does not parse or has no RDF element has nowhere for the description to
-    // go and is kept as it is rather than replaced.
+    // go and is kept as it is rather than replaced; so is one whose insertion offset falls off a
+    // char boundary, which the parser never yields but a document-supplied packet must not panic.
     if let Some(xmp) = doc_xmp {
         let Some((at, self_closing)) = rdf_insertion(xmp) else {
             return xmp.to_owned();
         };
+        // A self-closing element's tail skips its `/>`.
+        let tail_at = if self_closing.is_some() { at + 2 } else { at };
+        let (Some(head), Some(tail)) = (xmp.get(..at), xmp.get(tail_at..)) else {
+            return xmp.to_owned();
+        };
         let mut out = String::with_capacity(xmp.len() + d.len() + 16);
-        out.push_str(&xmp[..at]);
+        out.push_str(head);
         match self_closing {
             // `<r:RDF …/>` becomes `<r:RDF …>` + the description + `</r:RDF>`.
             Some(name) => {
@@ -414,13 +420,10 @@ fn plates_xmp(doc_xmp: Option<&str>, plates: &[SpotPlate]) -> String {
                 out.push_str(" </");
                 out.push_str(name);
                 out.push('>');
-                out.push_str(&xmp[at + 2..]);
             }
-            None => {
-                out.push_str(&d);
-                out.push_str(&xmp[at..]);
-            }
+            None => out.push_str(&d),
         }
+        out.push_str(tail);
         return out;
     }
     format!(
