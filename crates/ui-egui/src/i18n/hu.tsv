@@ -267,6 +267,7 @@
 	Place Linked…	Kapcsolt elem elhelyezése…
 	Place Scale Marker…	Méretarány-jelölő elhelyezése…
 	Plug-ins…	Bővítmények…
+	Plugins…	Bővítmények…
 	Posterize…	Poszterizálás…
 	Preferences	Beállítások
 	Preset Manager…	Előbeállítás-kezelő…
@@ -694,7 +695,7 @@
 	Info	Információ
 	Install Plug-in	Bővítmény telepítése
 	Install Plug-in…	Bővítmény telepítése…
-	Internet Standard RGB	Internetes szabványos RGB
+	Internet Standard RGB (sRGB)	Internetes szabványos RGB (sRGB)
 	Inverse	Megfordítás
 	Iris Blur…	Íriszelmosás…
 	Join the ArtCraft Discord	Csatlakozás a Discord csatornához
@@ -711,7 +712,7 @@
 	Layer From Background…	Réteg a háttérből…
 	Layers	Rétegek
 	Layers to Files	Rétegek fájlokba
-	Legacy Macintosh RGB	Régi Macintosh RGB
+	Legacy Macintosh RGB (Gamma 1.8)	Régi Macintosh RGB (Gamma 1.8)
 	Lens Blur…	Objektívelmosás…
 	Lens Flare…	Lencsecsillanás…
 	Light gray	Világosszürke
@@ -759,7 +760,6 @@
 	New Type Layer	Új szövegréteg
 	New Video Layer	Új videoréteg
 	New Window	Új ablak
-	New Window for Document	Új ablak a dokumentumhoz
 	New Workspace…	Új munkaterület…
 	Next Appearance Mode	Következő megjelenési mód
 	Next Document	Következő dokumentum
@@ -934,7 +934,7 @@
 	Windows LCD	Windows LCD
 	Wind…	Szél…
 	Working Black Plate	Fekete munkalemez
-	Working CMY Plate	CMY munkalemezek
+	Working CMY Plates	CMY munkalemezek
 	Working CMYK	Munka-CMYK
 	Working Cyan Plate	Cián munkalemez
 	Working Magenta Plate	Magenta munkalemez
@@ -2975,7 +2975,7 @@ cameraRaw	Yellow	Sárga
 	Pixels/Centimeter	Pixel/centiméter
 	Pixels/Inch	Pixel/hüvelyk
 	Place Embedded	Beágyazott elhelyezése
-	Place Linked	Csatolt elem elhelyezése
+	Place Linked	Kapcsolt elem elhelyezése
 	Png	PNG
 	Points	Pont
 	Portrait	Álló
@@ -3232,7 +3232,7 @@ cameraRaw	Yellow	Sárga
 	Contract	Szűkítés
 	Control port	Vezérlőport
 	Convert Point Tool	Pontátalakító
-	Convert to Linked	Átalakítás csatolt elemmé
+	Convert to Linked	Átalakítás kapcsolt elemmé
 	Convert to Profile	Átalakítás profilra
 	Convert to srgb	Átalakítás sRGB-re
 	Copyright Status	Szerzői jogi állapot
@@ -3305,7 +3305,6 @@ cameraRaw	Yellow	Sárga
 	Ellipse Tool	Ellipszis
 	Elliptical Marquee Tool	Ellipszis-kijelölés
 	Enable	Bekapcsolás
-	Enable animations	Animációk engedélyezése
 	Enable flick panning	Lendítéses pásztázás engedélyezése
 	Enable floating document window docking	Lebegő dokumentumablakok dokkolásának engedélyezése
 	Enable narrow options bar	Keskeny beállítósáv engedélyezése

@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex, Weak};
 
 use photocraft_cms::{Builtin, ColorSpace, GamutCheck, Intent, Lut3d, Profile, SampleKind, Transform};
 use photocraft_color::{Color, ColorMode, PixelFormat, SampleType};
-use photocraft_doc::{DocId, Document, Duotone, Effect, Fill, FxPaint, Layer, LayerContent};
+use photocraft_doc::{DocId, Document, Duotone, Effect, Fill, FxPaint, Layer, LayerContent, TextStyles};
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
@@ -763,6 +763,26 @@ fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
     }
 }
 
+/// Applies `cc` to every colour a type style sets (character styles, paragraph styles and Basic
+/// Paragraph), so type converted with its document still matches its styles instead of showing
+/// a local override.
+fn convert_style_colors(st: &mut TextStyles, cc: &mut dyn FnMut(&mut Color)) {
+    let sets = st
+        .character
+        .iter_mut()
+        .map(|c| &mut c.attrs)
+        .chain(st.paragraph.iter_mut().chain([&mut st.basic]).flat_map(|p| [&mut p.para_attrs, &mut p.char_attrs]));
+    for attrs in sets {
+        for v in attrs.values_mut().filter(|v| v.is_object()) {
+            let Ok(mut c) = serde_json::from_value::<Color>(v.clone()) else { continue };
+            cc(&mut c);
+            if let Ok(n) = serde_json::to_value(c) {
+                *v = n;
+            }
+        }
+    }
+}
+
 fn paint_colors(p: &mut FxPaint, cc: &mut dyn FnMut(&mut Color)) {
     match p {
         FxPaint::Color(c) => cc(c),
@@ -793,6 +813,7 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
         convert_layer_colors(l, &mut |c| convert_color(c, from_mode, to_mode, &t));
         // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
+    convert_style_colors(&mut doc.text_styles, &mut |c| convert_color(c, from_mode, to_mode, &t));
     doc.mode = to_mode;
     doc.icc_profile = Some(dst.to_bytes());
     // Leaving Indexed / Duotone: the palette and inks no longer apply.
@@ -819,6 +840,12 @@ fn ink_duotone(doc: &mut Document) {
             }
         });
     }
+    convert_style_colors(&mut doc.text_styles, &mut |c| {
+        if matches!(c.mode, ColorMode::Grayscale | ColorMode::Duotone) {
+            let [r, g, b] = d.render(c.c[0]);
+            *c = Color::rgba(r, g, b, c.alpha);
+        }
+    });
     doc.mode = ColorMode::Rgb;
     doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
 }

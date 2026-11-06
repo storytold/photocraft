@@ -100,6 +100,11 @@ choice!(
     /// pointer (Photoshop), or erase with the current brush while dragging (Krita, Paint).
     RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
 );
+choice!(
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    TabletInput { WindowsInk = "windowsInk", WinTab = "winTab" } default WindowsInk
+);
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);
 choice!(CheckerColors { Light = "light", Medium = "medium", Dark = "dark", Red = "red", Orange = "orange", Green = "green", Blue = "blue", Purple = "purple", Custom = "custom" } default Light);
@@ -287,9 +292,6 @@ pub struct Interface {
     /// objects in a large document stay visible (Photoshop's Clip Thumbnails to Layer Bounds; #4281).
     pub clip_thumbnails_to_layer_bounds: bool,
     pub show_tooltips: bool,
-    /// Menus, popups and collapsing sections fade and slide, and scroll areas glide to a new
-    /// position. Off, everything changes at once (a reduced-motion mode; #1218, #3273).
-    pub enable_animations: bool,
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
@@ -330,7 +332,6 @@ impl Default for Interface {
             show_menu_colors: true,
             clip_thumbnails_to_layer_bounds: false,
             show_tooltips: true,
-            enable_animations: true,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
             show_file_name_in_title: true,
@@ -396,6 +397,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    pub tablet_input: TabletInput,
     /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
     /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
     pub pressure_curve: Vec<[f32; 2]>,
@@ -423,6 +427,7 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            tablet_input: TabletInput::WindowsInk,
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,
@@ -1119,21 +1124,36 @@ impl Actions {
     }
 }
 
-/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either).
-/// Photoshop's snapshot options come with #3634.
+/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either),
+/// in the dialog's order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryOptions {
+    /// Automatically Create First Snapshot: a new or opened document starts with a snapshot of
+    /// itself, named after it (the History panel's top row).
+    pub automatically_create_first_snapshot: bool,
+    /// Automatically Create New Snapshot When Saving: every save of the document (not a copy)
+    /// adds a snapshot named with the time of the save.
+    pub automatically_create_new_snapshot_when_saving: bool,
     /// Allow Non-Linear History: editing after selecting an earlier state keeps the later
     /// states (the new step is appended at the end), and deleting a state deletes only it.
     pub allow_non_linear_history: bool,
+    /// Show New Snapshot Dialog by Default: a plain click on the History panel's camera button
+    /// opens New Snapshot (otherwise only ⌥-click does).
+    pub show_new_snapshot_dialog_by_default: bool,
     /// Make Layer Visibility Changes Undoable: showing or hiding a layer is a history state.
     pub make_layer_visibility_changes_undoable: bool,
 }
 
 impl Default for HistoryOptions {
     fn default() -> Self {
-        Self { allow_non_linear_history: false, make_layer_visibility_changes_undoable: true }
+        Self {
+            automatically_create_first_snapshot: true,
+            automatically_create_new_snapshot_when_saving: false,
+            allow_non_linear_history: false,
+            show_new_snapshot_dialog_by_default: false,
+            make_layer_visibility_changes_undoable: true,
+        }
     }
 }
 
