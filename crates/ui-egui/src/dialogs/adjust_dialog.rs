@@ -456,8 +456,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     };
     let cx = EditorCx {
         mem: dialog_mem(&kind),
-        hist_stale: hist.as_ref().is_some_and(|h| h.stale),
-        hist: hist.map(|h| h.hist),
+        hist,
         gray,
         swatches: adjust_editors::swatches(app),
         gradients: adjust_editors::gradient_presets(app, &kind),

@@ -344,8 +344,8 @@ what an agent can't finish alone.
 ### G2. Interactive performance
 - **Measured progress (2026-11-05, #11559 partial):** the histograms of the Levels, Curves and
   other tone editors (Properties and Image › Adjustments) are counted off the UI thread, as the
-  Histogram panel's are; the editor shows the last ones counted until they land, and Levels' Auto
-  waits for them. Before, they were counted on the UI thread whenever the pixels changed. On a
+  Histogram panel's are; the editor shows the last ones counted, faded, until they land (empty and
+  faded before the first), and Levels' Auto waits for them. Before, they were counted on the UI thread whenever the pixels changed. On a
   styled 6000 × 4000 document with a Curves layer selected (M3 Pro, release, one run each, App Nap
   off), selecting the layer went from a 724 ms frame to 26 ms and hiding or showing a layer from
   170–214 ms to 41–68 ms (the canvas refresh); the histograms land 185–241 ms after the change.

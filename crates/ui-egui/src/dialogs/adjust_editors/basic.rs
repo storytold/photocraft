@@ -76,7 +76,7 @@ pub(super) fn threshold(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit
     let p = ui.painter_at(hr.expand(1.0));
     p.rect_filled(hr, 0.0, t.field);
     if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, hr, &h[0], Color32::from_gray(if t.pro { 150 } else { 110 }));
+        tone::draw_histogram(&p, hr, &h.hist[0], h.tint(Color32::from_gray(if t.pro { 150 } else { 110 })));
     }
     let level = num(v, "level", 128.0);
     let x = hr.left() + level / 255.0 * hr.width();

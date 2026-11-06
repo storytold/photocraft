@@ -111,8 +111,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
     let hist = needs_histogram(kind).then(|| tone::histograms(app, ui.ctx(), HistSource::BelowLayer(id), space_of(&values))).flatten();
     let cx = EditorCx {
         mem: layer_mem(id),
-        hist_stale: hist.as_ref().is_some_and(|h| h.stale),
-        hist: hist.map(|h| h.hist),
+        hist,
         gray,
         swatches: swatches(app),
         gradients: gradient_presets(app, kind),

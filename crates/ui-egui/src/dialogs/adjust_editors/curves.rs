@@ -354,7 +354,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let p = ui.painter_at(full.expand(2.0));
     p.rect_filled(graph, 0.0, t.field);
     if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, graph, &h[hist_i], Color32::from_gray(if t.pro { 88 } else { 190 }).gamma_multiply(0.75));
+        tone::draw_histogram(&p, graph, &h.hist[hist_i], h.tint(Color32::from_gray(if t.pro { 88 } else { 190 }).gamma_multiply(0.75)));
     }
     for i in 1..4 {
         let f = i as f32 / 4.0;
@@ -482,7 +482,6 @@ mod multi_channel_tests {
         EditorCx {
             mem: egui::Id::unique("subset-tone-test"),
             hist: None,
-            hist_stale: false,
             gray: false,
             swatches: [[0.0; 3], [1.0; 3]],
             gradients: Vec::new(),
@@ -562,7 +561,7 @@ mod multi_channel_tests {
                     assert_eq!(hist[2], [0; 256]);
                     assert_eq!(hist[3].iter().sum::<u32>(), 32 * 24);
                     assert_ne!(hist[1], hist[3]);
-                    cx.hist = Some(hist.clone());
+                    cx.hist = Some(tone::ToneHistograms::fresh(hist.clone()));
                     for (choice, (channel, _, histogram)) in editor_channels(&cx, space).into_iter().enumerate() {
                         assert!(hist[histogram].iter().any(|n| *n > 0));
                         let mut values = base.clone();
