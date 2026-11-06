@@ -17,6 +17,9 @@ fn has_layer(s: &Session) -> std::result::Result<(), String> {
     s.active().and_then(|d| d.active_layer).map(|_| ()).ok_or_else(|| "no active layer".into())
 }
 
+/// The History step name of a shape-tool bounding box scale (`edit.transform` `stepName`).
+pub const TRANSFORM_PATH: &str = "Transform Path";
+
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "edit.transform".into(), msg: msg.into() }
 }
@@ -605,10 +608,13 @@ pub fn split_selected(surf: &Surface, sel: &Surface) -> Result<(Surface, Surface
         let k = sel.sample_channel(x, y, 0);
         // The selection lifts its share of a pixel's coverage, up to all of it, as Move does
         // (`float_cmds::cut_piece`, #7655): a layer's own transparency loaded as the selection
-        // lifts it whole and leaves no ghost behind (#5595). An opaque pixel splits as k and 1 − k.
+        // lifts it whole and leaves no ghost behind (#5595), and so does the selection a move
+        // leaves, the moved pixels' alpha, with no a × (1 − a) of a soft edge behind (#10461).
+        // An opaque pixel splits as k and 1 − k.
         let a = l[n - 1];
-        l[n - 1] = a.min(k);
-        r[n - 1] = (a - k).max(0.0);
+        let lifted = a.min(k.max(0.0));
+        l[n - 1] = lifted;
+        r[n - 1] = (a - lifted).max(0.0);
         // Likewise an unselected pixel leaves nothing in the lifted surface, so its bounds are the
         // selected pixels' (what a stretch repeats at the edge, #3773).
         if l[n - 1] <= 0.0 {
@@ -847,6 +853,13 @@ fn with_panel_target(s: &Session, p: &Value) -> Value {
 }
 
 fn transform(s: &mut Session, p: &Value) -> Result<Value> {
+    // The shape tools' bounding box scales live shapes with this command and names the step as
+    // the reference does. Passed in, not renamed after: the edit may land later as a job.
+    let step_name = match p.get("stepName") {
+        None | Some(Value::Null) => "Free Transform",
+        Some(Value::String(n)) if n == TRANSFORM_PATH => TRANSFORM_PATH,
+        Some(_) => return Err(bad("`stepName` must be \"Transform Path\"")),
+    };
     let p = &with_panel_target(s, p);
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let many = layers_param(&st.doc, p)?;
@@ -933,7 +946,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     // on a worker with progress, and can be cancelled.
     crate::jobs::edit_job(
         s,
-        "Free Transform",
+        step_name,
         move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, lone, &h, affine, interp, ctl)),
         move |()| json!({"rect": rect, "layers": layers}),
     )
@@ -1019,7 +1032,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,

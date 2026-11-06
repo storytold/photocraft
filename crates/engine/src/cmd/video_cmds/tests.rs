@@ -29,6 +29,17 @@ fn new_blank_insert_duplicate_delete_frames() {
     assert!(s.active().unwrap().doc.timeline.as_ref().unwrap().duration >= frames(&s, id));
 }
 
+/// Check the shared growth limit without constructing a million-frame document.
+#[test]
+fn frame_growth_stops_at_the_limit_of_either_stack() {
+    let limit = crate::timeline_cmds::MAX_DURATION;
+    assert!(check_frame_growth(limit - 1, None).is_ok());
+    assert!(check_frame_growth(limit - 1, Some(limit - 1)).is_ok());
+    assert!(check_frame_growth(limit, None).is_err());
+    assert!(check_frame_growth(limit - 1, Some(limit)).is_err());
+    assert!(check_frame_growth(limit + 1, None).is_err());
+}
+
 #[test]
 fn rasterize_drops_the_stack() {
     let mut s = session();
