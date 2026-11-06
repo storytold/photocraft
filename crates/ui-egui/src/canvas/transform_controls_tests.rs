@@ -332,7 +332,9 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
         assert!(transform_controls_hit(r, p), "same region must start a transform");
     }
     assert_eq!(transform_controls_cursor(r, r.center()), Some(egui::CursorIcon::Default), "interior stays Move");
-    assert_eq!(transform_controls_cursor(r, pos2(r.center().x, r.top() - 30.0)), Some(egui::CursorIcon::None));
+    let far = pos2(r.center().x, r.top() - 30.0);
+    assert_eq!(transform_controls_cursor(r, far), Some(egui::CursorIcon::None));
+    assert!(!transform_controls_hit(r, far), "far hover must not consume a Move press");
     // The rotate arrow points into the nearest edge or corner. Handles and the interior have none.
     let into = |p: Pos2| transform_controls_turn(r, p);
     assert_eq!(into(pos2(r.left() + r.width() * 0.25, r.top() - 12.0)), Some(vec2(0.0, 16.0)), "top edge");
@@ -351,10 +353,11 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
 }
 
 #[test]
-fn transform_control_hit_keeps_move_interior_free_and_rotates_outside() {
+fn transform_control_hit_resizes_or_rotates_within_the_press_zones() {
     let r = Rect::from_min_max(pos2(20.0, 30.0), pos2(100.0, 70.0));
     assert!(transform_controls_hit(r, r.left_top()));
     assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
     assert!(!transform_controls_hit(r, r.center()));
-    assert!(transform_controls_hit(r, pos2(60.0, 4.0)));
+    assert!(transform_controls_hit(r, pos2(60.0, 12.0)), "the 18-point rotation band still starts a transform");
+    assert!(!transform_controls_hit(r, pos2(60.0, 11.0)), "beyond the band a press stays with Move");
 }

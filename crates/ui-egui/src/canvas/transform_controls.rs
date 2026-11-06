@@ -108,10 +108,18 @@ pub(super) fn transform_controls_turn(r: Rect, p: Pos2) -> Option<Vec2> {
     Some(vec2(k[0] as f32, k[1] as f32) * 16.0)
 }
 
-/// A visible handle starts scaling; any point outside the box starts rotation.
-/// The interior stays the normal Move-tool drag target.
+/// Resize from the shared handle zones and keep Move's existing rotation press band.
+/// Outside presses beyond that band still reach the Move tool, even where hover paints a turn arc.
 pub(super) fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
-    p.is_finite() && !matches!(controls_zone(r, p), crate::transform_tool::Hit::Inside | crate::transform_tool::Hit::Pivot)
+    if !p.is_finite() {
+        return false;
+    }
+    use crate::transform_tool::Hit;
+    match controls_zone(r, p) {
+        Hit::Corner(_) | Hit::Edge(_) => true,
+        Hit::Outside => r.expand(18.0).contains(p) && !r.expand(5.0).contains(p),
+        Hit::Inside | Hit::Pivot => false,
+    }
 }
 
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed: on

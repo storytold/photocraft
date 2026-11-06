@@ -2,6 +2,9 @@ use super::*;
 use crate::state::{ContentAwareOptions, TransformMode, TransformSession};
 use crate::transform_tool::{Hit, cursor, hit, rotate_cursor_dir};
 use egui::{CursorIcon, Modifiers, pos2};
+use egui_kittest::Harness;
+use photocraft_doc::LayerId;
+use serde_json::json;
 
 const QUAD: [[f64; 2]; 4] = [[100.0, 100.0], [500.0, 100.0], [500.0, 300.0], [100.0, 300.0]];
 
@@ -88,6 +91,16 @@ fn small_boxes_keep_their_painted_mid_edge_handles() {
                 assert_eq!(hit(&t, a, 12.0 / zoom), Hit::Corner(i));
             }
         }
+    }
+}
+
+#[test]
+fn a_midpoint_outside_the_corner_zone_cannot_steal_its_press() {
+    for zoom in [1.0, 2.0] {
+        let quad = [[0.0, 0.0], [20.0, 0.0], [20.0, 20.0], [0.0, 20.0]].map(|p| p.map(|v| v / zoom));
+        let tol = 12.0 / zoom;
+        assert_eq!(TransformSession::box_hit(&quad, [7.0 / zoom, -1.0 / zoom], tol), Hit::Corner(0));
+        assert_eq!(TransformSession::box_hit(&quad, [9.0 / zoom, 0.0], tol), Hit::Edge(0));
     }
 }
 
@@ -249,13 +262,21 @@ fn outside_reference_point_owns_the_pointer_only_when_shown() {
 
 /// Compare unopened controls with an active session at identical points, including a free interior.
 #[test]
-fn unopened_move_controls_share_the_open_sessions_zones_and_cursors() {
+fn unopened_move_controls_share_hover_but_keep_the_move_press_band() {
     let app = app(QUAD, 1.0);
     let r = Rect::from_min_max(pos2(100.0, 100.0), pos2(500.0, 300.0));
-    for p in [pos2(100.0, 100.0), pos2(180.0, 95.0), pos2(505.0, 150.0), pos2(180.0, 101.0), pos2(620.0, 200.0), pos2(-20.0, -20.0)] {
+    for (p, starts_transform) in [
+        (pos2(100.0, 100.0), true),
+        (pos2(180.0, 95.0), true),
+        (pos2(505.0, 150.0), true),
+        (pos2(518.0, 150.0), true),
+        (pos2(180.0, 101.0), false),
+        (pos2(620.0, 200.0), false),
+        (pos2(-20.0, -20.0), false),
+    ] {
         let d = [f64::from(p.x), f64::from(p.y)];
         assert_eq!(transform_controls_cursor(r, p), cursor(&app, &view(1.0), d, Modifiers::NONE), "{p:?}");
-        assert_eq!(transform_controls_hit(r, p), hit(app.ui.transform.as_ref().unwrap(), d, 12.0) != Hit::Inside);
+        assert_eq!(transform_controls_hit(r, p), starts_transform, "{p:?}");
         match (transform_controls_turn(r, p), rotate_cursor_dir(&app, d)) {
             (None, None) => {}
             (Some(a), Some(b)) => near(Some([f64::from(a.x) / 16.0, f64::from(a.y) / 16.0]), b),
@@ -264,6 +285,93 @@ fn unopened_move_controls_share_the_open_sessions_zones_and_cursors() {
     }
     assert_eq!(transform_controls_cursor(r, r.center()), Some(CursorIcon::Default));
     assert!(!transform_controls_hit(r, r.center()), "inside remains an ordinary Move drag");
+}
+
+fn move_controls_fixture() -> (Harness<'static, PhotocraftApp>, [LayerId; 2]) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300, "background": "transparent"})).unwrap();
+    let layers = [[60, 60, 80, 60], [230, 150, 40, 40]].map(|rect| {
+        app.run("shape.create", json!({"kind": "rect", "rect": rect, "fill": "#ff0000"})).unwrap();
+        app.session.active().unwrap().active_layer.unwrap()
+    });
+    app.run("layer.select", json!({"layer": layers[0].0, "mode": "replace"})).unwrap();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_show_transform = true;
+    app.ui.tool_options.move_auto_select = true;
+    app.ui.tool_options.move_target = "layer".into();
+    app.ui.extras.snap = false;
+    let mut h = Harness::builder().with_size(vec2(1000.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    (h, layers)
+}
+
+fn move_pointer(h: &mut Harness<'static, PhotocraftApp>, control: bool, kind: &str, [x, y]: [f32; 2]) {
+    if control {
+        use crate::control::{ControlRequest, Outcome};
+        let (request, _) = ControlRequest::new("ui.pointer", json!({"events": [{"kind": kind, "x": x, "y": y}]}));
+        let ctx = h.ctx.clone();
+        let Outcome::Done(reply) = crate::control::handle(h.state_mut(), &ctx, &request) else { panic!("expected pointer reply") };
+        assert_eq!(reply["ok"], true, "{reply}");
+    } else {
+        let xf = ViewXform::active(h.state()).unwrap();
+        let pos = xf.to_screen(x, y);
+        assert!(xf.rect.contains(pos));
+        h.hover_at(pos);
+        if kind != "move" {
+            h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: kind == "down", modifiers: Modifiers::NONE });
+        }
+        h.run_steps(2);
+    }
+}
+
+#[test]
+fn move_controls_allow_auto_select_on_another_layer_outside_the_press_band() {
+    for control in [false, true] {
+        let (mut h, layers) = move_controls_fixture();
+        let at = [250.0, 170.0];
+        let xf = ViewXform::active(h.state()).unwrap();
+        let frame = transform_controls_rect(h.state(), &xf).expect("the first layer has visible transform controls");
+        assert!(!frame.expand(18.0).contains(xf.to_screen(at[0], at[1])));
+        assert_eq!(h.state().session.active().unwrap().selected_layers(), vec![layers[0]]);
+        let before = h.state().session.active().unwrap().doc.clone();
+        move_pointer(&mut h, control, "down", at);
+        move_pointer(&mut h, control, "up", at);
+        let state = h.state().session.active().unwrap();
+        assert!(h.state().ui.transform.is_none(), "control={control}: Auto-Select does not start Free Transform");
+        assert_eq!(state.selected_layers(), vec![layers[1]], "control={control}");
+        assert_eq!(state.doc, before);
+    }
+}
+
+#[test]
+fn move_controls_allow_a_layer_marquee_from_empty_canvas_outside_the_press_band() {
+    for control in [false, true] {
+        let (mut h, layers) = move_controls_fixture();
+        let start = [190.0, 125.0];
+        let end = [285.0, 210.0];
+        let xf = ViewXform::active(h.state()).unwrap();
+        let frame = transform_controls_rect(h.state(), &xf).expect("the first layer has visible transform controls");
+        assert!(!frame.expand(18.0).contains(xf.to_screen(start[0], start[1])));
+        assert_eq!(h.state().session.active().unwrap().selected_layers(), vec![layers[0]]);
+        let before = h.state().session.active().unwrap().doc.clone();
+        move_pointer(&mut h, control, "down", start);
+        move_pointer(&mut h, control, "move", end);
+        assert!(h.state().layer_box.is_some(), "control={control}: the empty-canvas drag starts a layer marquee");
+        move_pointer(&mut h, control, "up", end);
+        let state = h.state().session.active().unwrap();
+        assert!(h.state().ui.transform.is_none(), "control={control}: the marquee does not start Free Transform");
+        assert!(h.state().layer_box.is_none(), "the marquee ends on release");
+        assert_eq!(state.selected_layers(), vec![layers[1]], "control={control}");
+        assert_eq!(state.doc, before);
+    }
 }
 
 /// A press away from midpoint handles must scale an anchored preview without creating a history edit.

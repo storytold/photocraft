@@ -38,14 +38,17 @@ impl TransformSession {
         if let Some((i, corner_distance)) =
             quad.iter().enumerate().map(|(i, &q)| (i, distance(q))).filter(|(_, d)| *d <= corner_radius).min_by(|a, b| a.1.total_cmp(&b.1))
         {
-            // Corners beat edge bands, but overlapping painted handles on small boxes keep
-            // their nearest-handle priority. Otherwise a 16pt box's edge center is a corner.
+            // Preserve nearest-handle priority only when the midpoint itself falls in the
+            // corner zone. A separate midpoint must not take over a nearby corner press.
             let painted_edge = (0..4)
                 .filter_map(|k| {
                     edge_distance(k)?;
                     let (a, b) = (quad[k], quad[(k + 1) % 4]);
-                    let d = distance([(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]);
-                    (d < corner_distance).then_some((k, d))
+                    let midpoint = [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0];
+                    let corner = quad[i];
+                    let d = distance(midpoint);
+                    let overlaps_corner = (midpoint[0] - corner[0]).hypot(midpoint[1] - corner[1]) <= corner_radius;
+                    (overlaps_corner && d < corner_distance).then_some((k, d))
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             return painted_edge.map_or(Hit::Corner(i), |(k, _)| Hit::Edge(k));

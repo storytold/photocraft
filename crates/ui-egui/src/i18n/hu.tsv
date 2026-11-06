@@ -4484,3 +4484,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Kép cseréje…
 	The frame is locked	A keret zárolva van
 	The frame is unavailable	A keret nem érhető el
+
+# Channels panel menu (#11451)
+	Channel Options…	Csatornabeállítások…
+	Specify Channels:	Csatornák megadása:
+	Not enough grayscale documents for this mode.	Nincs elég szürkeárnyalatos dokumentum ehhez a módhoz.
+	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
+	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
+	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
