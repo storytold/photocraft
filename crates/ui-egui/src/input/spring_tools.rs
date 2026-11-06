@@ -77,9 +77,11 @@ pub fn pressed(app: &mut PhotocraftApp, letter: char, before: Tool, plain: bool,
         }
         return;
     }
-    // The current group's own key cycles it (or keeps it), as a tap always has.
+    // The current group's own key cycles it (or keeps it), as a tap always has. The group is the
+    // tools sharing `before`'s key in effect, which Edit › Keyboard Shortcuts may have changed.
     let tool = app.ui.tool;
-    app.ui.spring = (before.key() != letter).then(|| Spring { previous: before, tool, keys: vec![letter], since: now, used: false, released: false });
+    let own_group = key_of(letter).is_some_and(|k| crate::tool_shortcuts::plain_key(app, before) == Some(k));
+    app.ui.spring = (!own_group).then(|| Spring { previous: before, tool, keys: vec![letter], since: now, used: false, released: false });
 }
 
 /// The canvas was pressed: a held letter's tool becomes temporary.

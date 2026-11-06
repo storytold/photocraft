@@ -241,8 +241,21 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         return false;
     }
     const TEXT_OWNED: [&str; 6] = ["edit.copy", "edit.cut", "edit.paste", "edit.copyMerged", "select.all", "edit.pasteSpecial.pasteInPlace"];
-    let table: Vec<(String, KeyboardShortcut)> =
-        bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
+    // A tool's main plain key is left to the tool keys (`shortcuts::select_tool_by_key`), which
+    // cycle every tool sharing it. They run only when no text field or inline type has the keys;
+    // there the key (an F-key a field lets through) stays a plain shortcut. A plain alternate
+    // (#3665) is no group key, so it stays a shortcut everywhere.
+    let tool_keys_run = focus != Focus::Text && !editing;
+    let group_key = |id: &str, sc: &KeyboardShortcut| {
+        tool_keys_run
+            && sc.modifiers.is_none()
+            && crate::tool_shortcuts::tool(id).is_some_and(|t| crate::tool_shortcuts::plain_key(app, t) == Some(sc.logical_key))
+    };
+    let table: Vec<(String, KeyboardShortcut)> = bindings(app)
+        .into_iter()
+        .filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str())))
+        .filter(|(id, sc)| !group_key(id, sc))
+        .collect();
     let command = |e: &egui::Event| match e {
         egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
             let by_position = physical_key
