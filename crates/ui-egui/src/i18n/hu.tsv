@@ -105,7 +105,7 @@
 @plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} színminta importálva. Forrás: {file}
 @plural	Played {n} step|Played {n} steps	{n} lépés lejátszva
 @plural	Saved for Web: {n} file|Saved for Web: {n} files	Mentés webre: {n} fájl
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} csatolt intelligens objektum frissítve (a lemezen módosult)
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} kapcsolt intelligens objektum módosult a lemezen (frissült)
 @plural	{n} item|{n} items	{n} elem
 @plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	A rétegkompozícióban rögzített rétegek közül {n} törlődött. Frissítse a rétegkompozíciót, vagy törölje a figyelmeztetést.
 @plural	{n} Layer|{n} Layers	{n} réteg
@@ -121,7 +121,7 @@
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{n} stílus importálva. Forrás: {file}
 @plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} stílus exportálva. Cél: {file}
 @id	file.close	Bezárás
-@id	layer.layerMask.apply	Alkalmazás
+@id	layer.layerMask.apply	Érvényesítés
 @id	edit.clear	Kiürítés
 	16 Bits/Channel	16 bit/csatorna
 	180°	180°
@@ -133,8 +133,8 @@
 	Again	Ismétlés
 	AI Integrations…	MI-integrációk…
 	Analysis	Elemzés
-	Apply Data Set…	Adatkészlet használata…
-	Apply Image…	Kép használata…
+	Apply Data Set…	Adatkészlet érvényesítése…
+	Apply Image…	Kép érvényesítése…
 	Arbitrary…	Tetszőleges…
 	Artboards to Files…	Rajztáblák fájlokba…
 	Artboards to PDF…	Rajztáblák PDF-be…
@@ -164,6 +164,10 @@
 	Clipboard	Vágólap
 	Close All	Összes bezárása
 	Close Others	Többi bezárása
+	New Document…	Új dokumentum…
+	Open Document…	Megnyitás…
+	Consolidate All to Here	Összes csoportosítása ide
+	Move to New Window	Áthelyezés új ablakba
 	Color Balance…	Színegyensúly…
 	Color Lookup Tables…	Színleképezési táblák…
 	Color Lookup…	Színleképezés…
@@ -260,7 +264,7 @@
 	Photo Filter…	Fotószűrő…
 	Photomerge…	Fotóegyesítés…
 	Place Embedded…	Beágyazott elhelyezése…
-	Place Linked…	Csatolt elhelyezése…
+	Place Linked…	Kapcsolt elem elhelyezése…
 	Place Scale Marker…	Méretarány-jelölő elhelyezése…
 	Plug-ins…	Bővítmények…
 	Posterize…	Poszterizálás…
@@ -328,7 +332,7 @@
 	WIA Support…	WIA-támogatás…
 	Workspace…	Munkaterület…
 	Align	Igazítás
-	Apply	Alkalmaz
+	Apply	Érvényesítés
 	Arrange	Elrendezés
 	Artboard from Group…	Rajztábla csoportból…
 	Artboard from Layers…	Rajztábla rétegekből…
@@ -348,8 +352,10 @@
 	Combine Shapes	Alakzatok kombinálása
 	Contract…	Szűkítés…
 	Convert to Embedded	Átalakítás beágyazottá
+	Embed Linked	Kapcsolt elem beágyazása
+	Embed All Linked	Összes kapcsolt elem beágyazása
 	Convert to Layers	Átalakítás rétegekké
-	Convert to Linked…	Átalakítás csatolttá…
+	Convert to Linked…	Átalakítás kapcsolt elemmé…
 	Convert to Smart Object	Átalakítás intelligens objektummá
 	Copy Layer Style	Rétegstílus másolása
 	Create Clipping Mask	Vágómaszk létrehozása
@@ -516,8 +522,8 @@
 	Anamorphic 2:1 (2)	Anamorfikus 2:1 (2)
 	Anti-Alias	Élsimítás
 	Appearance	Megjelenés
-	Apply Data Set	Adatkészlet használata
-	Apply Layer Mask	Rétegmaszk használata
+	Apply Data Set	Adatkészlet érvényesítése
+	Apply Layer Mask	Rétegmaszk érvényesítése
 	Add Mask to Selection	Maszk hozzáadása a kijelöléshez
 	Subtract Mask from Selection	Maszk kivonása a kijelölésből
 	Intersect Mask with Selection	Maszk metszése a kijelöléssel
@@ -556,6 +562,7 @@
 	Clear Canvas Guides	Vászon-segédvonalak törlése
 	Clear Guides	Segédvonalak törlése
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
+	Clear Recent File List	Legutóbbi fájlok listájának törlése
 	Clear Selected Artboard Guides	Kijelölt rajztábla segédvonalainak törlése
 	Clear Slices	Szeletek törlése
 	Clipping Mask	Vágómaszk
@@ -570,7 +577,7 @@
 	Color Lookup Tables	Színleképezési táblák
 	Color Picker (Custom Canvas Color)	Színválasztó (egyéni vászonszín)
 	Color to Alpha…	Szín átalakítása átlátszóvá…
-	Consolidate All to Tabs	Összes lapfülre
+	Consolidate All to Tabs	Összes csoportosítása lapként
 	Contextual Alternates	Környezetfüggő változatok
 	Convert for Smart Filters	Átalakítás intelligens szűrőkhöz
 	Convert to Paragraph Text	Átalakítás bekezdésszöveggé
@@ -614,7 +621,7 @@
 	Discretionary Ligatures	Választható ligatúrák
 	Displace…	Elmozdítás…
 	Dock Panel	Panel dokkolása
-	Document Bounds	Dokumentum határai
+	Document Bounds	Dokumentumhatárok
 	Duotone…	Kéttónusú…
 	Duplicate Layers…	Rétegek kettőzése…
 	Dust & Scratches…	Por és karcolások…
@@ -797,6 +804,7 @@
 	Pixel Grid	Pixelrács
 	Pixelate	Pixelesítés
 	Plug-ins	Bővítmények
+	Plugins	Bővítmények
 	Pointillize…	Pontozás…
 	Polar Coordinates…	Polárkoordináták…
 	Preferences…	Beállítások…
@@ -860,6 +868,7 @@
 	Show All	Összes megjelenítése
 	Show Extras Options…	Segédelemek beállításai…
 	Show in Explorer	Megjelenítés az Intézőben
+	Reveal in Explorer	Megjelenítés az Intézőben
 	Show in Folder	Megjelenítés mappában
 	Show menu colors	Menüszínek megjelenítése
 	Show/Hide All Panels	Összes panel megjelenítése/elrejtése
@@ -969,8 +978,8 @@
 	Angle:	Szög:
 	Anti-alias	Élsimítás
 	Anti-aliasing method	Élsimítási mód
-	Apply Per Tip	Alkalmazás hegyenként
-	Apply the pen's tilt and rotation to the tip shape	A toll dőlését és elforgatását alkalmazza a hegy alakjára
+	Apply Per Tip	Érvényesítés hegyenként
+	Apply the pen's tilt and rotation to the tip shape	A toll dőlését és elforgatását érvényesíti a hegy alakjára
 	Artboard	Rajztábla
 	Artboard Background Color	Rajztábla háttérszíne
 	Artboard from Group	Rajztábla csoportból
@@ -1037,7 +1046,7 @@
 	Clear Selection	Kijelölés törlése
 	Click a red pupil to neutralize it	Kattintson egy vörös pupillára a semlegesítéséhez
 	Click to add a point, right-click to remove	Kattintson a pont hozzáadásához, jobb kattintással pedig távolítsa el
-	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kattintson az alkalmazáshoz, {key}+kattintással törölje a felülbírálásokat, dupla kattintással nyissa meg a stílusbeállításokat
+	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kattintson az érvényesítéshez, {key}+kattintással törölje a felülbírálásokat, dupla kattintással nyissa meg a stílusbeállításokat
 	Click to edit the gradient	Kattintson a színátmenet szerkesztéséhez
 	Click to sample the foreground colour  ·  {key}-click for background	Kattintás: mintavétel az előtérszínhez  ·  {key}+kattintás: a háttérszínhez
 	Clone source set at {x}, {y}	Klónozási forrás beállítva: {x}, {y}
@@ -1370,7 +1379,7 @@
 	Search fonts	Betűtípusok keresése
 	Select a type layer or click into text to insert glyphs	Glifák beszúrásához jelöljön ki egy szövegréteget, vagy kattintson a szövegbe
 	Select a type layer to edit its character and paragraph settings.	Jelöljön ki egy szövegréteget a karakter- és bekezdésbeállítások szerkesztéséhez.
-	Select text to apply a character style	Karakterstílus alkalmazásához jelöljön ki szöveget
+	Select text to apply a character style	Karakterstílus érvényesítéséhez jelöljön ki szöveget
 	Select the crop presets to delete	Jelölje ki a törlendő körbevágási előbeállításokat
 	Select the crop presets to delete:	Jelölje ki a törlendő körbevágási előbeállításokat:
 	Semi Bold	Középkövér
@@ -1519,11 +1528,11 @@ fontWeight	Thin	Hajszálvékony
 	Angle	Szög
 	Anti-aliased	Élsimítás
 	Appearance (Layer Style)	Megjelenés (rétegstílus)
-	Apply Image	Kép használata
-	Apply Mask	Maszk használata
-	Apply next selected layer comp	Következő kijelölt rétegkompozíció használata
-	Apply previous selected layer comp	Előző kijelölt rétegkompozíció használata
-	Apply {option}: {state}	Alkalmazás – {option}: {state}
+	Apply Image	Kép érvényesítése
+	Apply Mask	Maszk érvényesítése
+	Apply next selected layer comp	Következő kijelölt rétegkompozíció érvényesítése
+	Apply previous selected layer comp	Előző kijelölt rétegkompozíció érvényesítése
+	Apply {option}: {state}	Érvényesítés – {option}: {state}
 	Bevel & Emboss	Fazetta és domborítás
 	Black & White	Fekete-fehér
 	Blend Clipped Layers as Group	Vágott rétegek keverése csoportként
@@ -2966,7 +2975,7 @@ cameraRaw	Yellow	Sárga
 	Pixels/Centimeter	Pixel/centiméter
 	Pixels/Inch	Pixel/hüvelyk
 	Place Embedded	Beágyazott elhelyezése
-	Place Linked	Csatolt elhelyezése
+	Place Linked	Csatolt elem elhelyezése
 	Png	PNG
 	Points	Pont
 	Portrait	Álló
@@ -3134,9 +3143,9 @@ cameraRaw	Yellow	Sárga
 	Anchor:	Rögzítési pont:
 	Animated zoom	Animált nagyítás
 	Anisotropic	Anizotróp
-	Apply At Canvas Bounds	Alkalmazás a vászon szélén is
-	Apply auto tone	Automatikus tónus használata
-	Apply Layer Comp	Rétegkompozíció használata
+	Apply At Canvas Bounds	Érvényesítés a vászonhatárokon
+	Apply auto tone	Automatikus tónus érvényesítése
+	Apply Layer Comp	Rétegkompozíció érvényesítése
 	Arc	Ív
 	Arch	Boltív
 	Area	Terület
@@ -3223,7 +3232,7 @@ cameraRaw	Yellow	Sárga
 	Contract	Szűkítés
 	Control port	Vezérlőport
 	Convert Point Tool	Pontátalakító
-	Convert to Linked	Átalakítás csatolttá
+	Convert to Linked	Átalakítás csatolt elemmé
 	Convert to Profile	Átalakítás profilra
 	Convert to srgb	Átalakítás sRGB-re
 	Copyright Status	Szerzői jogi állapot
@@ -3634,8 +3643,13 @@ cameraRaw	Yellow	Sárga
 	shortcut	billentyűparancs
 	Shortcut	Billentyűparancs
 	Show canvas dots	Vászonpontok megjelenítése
-	Clip thumbnails to layer bounds	Bélyegképek levágása a réteg határaira
-	Clip Thumbnails to Layer Bounds	Bélyegképek levágása a réteg határaira
+	Clip thumbnails to layer bounds	Bélyegképek vágása a réteghatárokra
+	Clip Thumbnails to Layer Bounds	Bélyegképek vágása a réteghatárokra
+	No Thumbnails	Nincs bélyegkép
+	Small Thumbnails	Kis bélyegképek
+	Medium Thumbnails	Közepes bélyegképek
+	Large Thumbnails	Nagy bélyegképek
+	Clip Thumbnails to Document Bounds	Bélyegképek vágása a dokumentumhatárokra
 	Show channels in color	Csatornák megjelenítése színesen
 	Show crosshair in brush tip	Szálkereszt az ecsethegyben
 	Show extension panels	Bővítménypanelek megjelenítése
@@ -3773,7 +3787,7 @@ cameraRaw	Yellow	Sárga
 	Alternates for Current Selection	Változatok a jelenlegi kijelöléshez
 	Aperture	Rekesznyílás
 	Apple RGB	Apple RGB
-	Apply to All	Alkalmaz mindre
+	Apply to All	Minden érvényesítése
 	Are you sure you want to quit?	Biztosan ki szeretne lépni?
 	Are you sure?	Biztos benne?
 	Arrangement	Elrendezés
@@ -3812,7 +3826,7 @@ cameraRaw	Yellow	Sárga
 	Click the first point or press ↵ to close · Esc cancels	Lezáráshoz kattintson az első pontra, vagy nyomja meg a(z) ↵ billentyűt · Esc: megszakítás
 	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	Kattintással pontot adhat hozzá · eltávolítás: lehúzás, ⌘/Ctrl-kattintás vagy Delete
 	Click to add text	Kattintson a szöveg hozzáadásához
-	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Kattintás: alkalmazás, ⌥-kattintás: felülbírálások törlése, dupla kattintás: stílusbeállítások
+	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Kattintás: Érvényesítés, ⌥-kattintás: felülbírálások törlése, dupla kattintás: stílusbeállítások
 	Click to zoom in  ·  ⌥-click to zoom out	Kattintás: nagyítás  ·  ⌥-kattintás: kicsinyítés
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Kattintás: sarok · Húzás: sima · Kattintás az első pontra: lezárás · {key}: befejezés · Esc: megszakítás
 	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	Kattintás: sarok · Húzás: sima · Kattintás az első pontra: lezárás · ↩: befejezés · Esc: megszakítás
@@ -4093,10 +4107,10 @@ cameraRaw	Yellow	Sárga
 	{zoom}%	{zoom}%
 	↑↓ navigate   ↵ run   esc close	↑↓ léptetés   ↵ futtatás   esc bezárás
 	Amount:	Mérték:
-	Apply Vanishing Point ({key})	Enyészpont használata ({key})
-	Apply the removal ({key})	Eltávolítás használata ({key})
+	Apply Vanishing Point ({key})	Enyészpont érvényesítése ({key})
+	Apply the removal ({key})	Eltávolítás érvényesítése ({key})
 	Alt-click a plane to set the clone source	Alt-kattintás egy síkra a klónforrás beállításához
-	Too many clone strokes: apply Vanishing Point first	Túl sok klónvonás: először alkalmazza az Enyészpontot
+	Too many clone strokes: apply Vanishing Point first	Túl sok klónvonás: először érvényesítse az enyészpontot
 	Drag to draw the curve · {key}-click draws a straight line	Húzással rajzold meg a görbét · {key}+kattintás: egyenes vonal
 	Draw to modify the curve	Rajzoljon a görbe módosításához
 	Edit points to modify the curve	Szerkeszd a pontokat a görbe módosításához
@@ -4261,7 +4275,7 @@ cameraRaw	Yellow	Sárga
 	Bicubic Automatic	Automatikus bikubikus
 	Bicubic Smoother	Simább bikubikus
 	Bicubic Sharper	Élesebb bikubikus
-	Pasting from other apps is unavailable	A beillesztés más alkalmazásokból nem érhető el
+	Pasting from other apps is unavailable	Más alkalmazásokból nem lehet végrehajtani a beillesztést
 	PhotoCraft can't reach the system clipboard in this session. On Wayland, a Flatpak sandbox hides the protocol that images from other apps are read through.	A PhotoCraft ebben a munkamenetben nem fér hozzá a rendszer vágólapjához. Waylanden a Flatpak homokozó elrejti azt a protokollt, amelyen keresztül más alkalmazások képei olvashatók.
 	To paste from other apps, start PhotoCraft under XWayland: `{command}`	Ha más alkalmazásokból szeretne beilleszteni, indítsa a PhotoCraftot XWayland alatt: `{command}`
 	Nothing to paste: PhotoCraft can't read the system clipboard here	Nincs mit beilleszteni: a PhotoCraft itt nem tudja olvasni a rendszer vágólapját
