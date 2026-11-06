@@ -54,7 +54,7 @@ fn tool_keys_skip_tools_hidden_from_the_toolbar() {
         assert_eq!(app.ui.tool, tool);
     }
     // Shift+key cycles the visible tools only, wrapping past the hidden one.
-    app.ui.tool = Tool::ColorReplacement;
+    app.ui.tool = Tool::MixerBrush;
     press_key(&mut app, &ctx, Key::B, Modifiers::SHIFT);
     assert_eq!(app.ui.tool, Tool::Pencil);
     app.ui.tool = Tool::PaintBucket;
