@@ -1680,7 +1680,6 @@ cameraRaw	Yellow	पीला
 	Delete and Fill Selection	हटाएँ और चयन भरें
 	Delete brush	ब्रश हटाएँ
 	Delete Brush	ब्रश हटाएँ
-	Delete Channel	चैनल हटाएँ
 	Delete Contour	कंटूर हटाएँ
 	Delete count group	काउंट समूह हटाएँ
 	Delete Crop Preset…	क्रॉप प्रीसेट हटाएँ…
@@ -1850,7 +1849,6 @@ cameraRaw	Yellow	पीला
 	Duotone	डुओटोन
 	Duotone…	डुओटोन…
 	Duplicate	डुप्लीकेट करें
-	Duplicate Channel	चैनल डुप्लीकेट करें
 	Duplicate Frame	फ़्रेम डुप्लीकेट करें
 	Duplicate Layer	लेयर डुप्लीकेट करें
 	Duplicate Layer Comp	लेयर कॉम्प डुप्लीकेट करें
@@ -2842,11 +2840,9 @@ cameraRaw	Yellow	पीला
 	Memory usage percent	मेमोरी उपयोग (%)
 	Menus	मेनू
 	Menus…	मेनू…
-	Merge Channels…	चैनल्स मर्ज करें…
 	Merge Group	समूह मर्ज करें
 	Merge Layers	लेयर्स मर्ज करें
 	Merge Shape Components	शेप के घटक मर्ज करें
-	Merge Spot Channel	स्पॉट चैनल मर्ज करें
 	Merge to HDR Pro	HDR Pro में मर्ज करें
 	Merge to HDR Pro…	HDR Pro में मर्ज करें…
 	Merged Layers	मर्ज की गई लेयर्स
@@ -2960,7 +2956,6 @@ cameraRaw	Yellow	पीला
 	New Brush Preset…	नया ब्रश प्रीसेट…
 	New Channel	नया चैनल
 	New channel only	केवल नया चैनल
-	New Channel…	नया चैनल…
 	New Crop Preset…	नया क्रॉप प्रीसेट…
 	New document	नया दस्तावेज़
 	New document…	नया दस्तावेज़…
@@ -2988,7 +2983,6 @@ cameraRaw	Yellow	पीला
 	New Smart Object via Copy	कॉपी द्वारा नया स्मार्ट ऑब्जेक्ट
 	New Snapshot	नया स्नैपशॉट
 	New Snapshot…	नया स्नैपशॉट…
-	New Spot Channel…	नया स्पॉट चैनल…
 	New Style…	नई स्टाइल…
 	New Swatch Group…	नया स्वॉच समूह…
 	New Swatch…	नया स्वॉच…
@@ -4086,7 +4080,6 @@ cameraRaw	Yellow	पीला
 	Spin Blur	स्पिन ब्लर
 	Spin Blur…	स्पिन ब्लर…
 	Split at Playhead	प्लेहेड पर विभाजित करें
-	Split Channels	चैनल्स विभाजित करें
 	Split Toning	स्प्लिट टोनिंग
 	Split Warp Crosswise	वार्प को दोनों दिशाओं में विभाजित करें
 	Split Warp Horizontally	वार्प को क्षैतिज रूप से विभाजित करें
@@ -4740,3 +4733,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Dropped files weren't placed: their document was closed.	छोड़ी गई फ़ाइलें नहीं रखी गईं: उनका दस्तावेज़ बंद कर दिया गया।
 	A file is still being placed; try again when it has finished.	एक फ़ाइल अभी रखी जा रही है; उसके पूरा होने पर फिर से प्रयास करें।
 	Cancelled placing {name}	{name} रखना रद्द किया गया
+
+# Channels panel menu (#11451)
+	New Channel…	नया चैनल…
+	Duplicate Channel	चैनल को डुप्लीकेट करें
+	Delete Channel	चैनल हटाएँ
+	New Spot Channel…	नया स्पॉट चैनल…
+	Merge Spot Channel	स्पॉट चैनल मर्ज करें
+	Channel Options…	चैनल विकल्प…
+	Split Channels	चैनल्स विभाजित करें
+	Merge Channels…	चैनल्स मर्ज करें…
+	Specify Channels:	चैनल्स निर्दिष्ट करें:
+	Not enough grayscale documents for this mode.	इस मोड के लिए पर्याप्त ग्रेस्केल डॉक्यूमेंट नहीं हैं।
+	Pick a different document for each channel.	हर चैनल के लिए अलग डॉक्यूमेंट चुनें।
+	A picked document is no longer open.	चुना गया एक डॉक्यूमेंट अब खुला नहीं है।
+	A picked document is no longer a grayscale document of the same size.	चुना गया एक डॉक्यूमेंट अब उसी आकार का ग्रेस्केल डॉक्यूमेंट नहीं है।

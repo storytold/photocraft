@@ -4278,3 +4278,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Замінити зображення…
 	The frame is locked	Рамку заблоковано
 	The frame is unavailable	Рамка недоступна
+
+# Channels panel menu (#11451)
+	New Channel…	Новий канал…
+	Duplicate Channel	Дублювати канал
+	Delete Channel	Видалити канал
+	New Spot Channel…	Новий канал плашкового кольору…
+	Merge Spot Channel	Об'єднати канал плашкового кольору
+	Channel Options…	Параметри каналу…
+	Split Channels	Розділити канали
+	Merge Channels…	Об'єднати канали…
+	Specify Channels:	Вказати канали:
+	Not enough grayscale documents for this mode.	Недостатньо документів у градаціях сірого для цього режиму.
+	Pick a different document for each channel.	Виберіть окремий документ для кожного каналу.
+	A picked document is no longer open.	Один із вибраних документів більше не відкрито.
+	A picked document is no longer a grayscale document of the same size.	Один із вибраних документів більше не є документом у градаціях сірого того самого розміру.

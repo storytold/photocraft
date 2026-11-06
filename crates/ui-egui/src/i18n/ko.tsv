@@ -3790,3 +3790,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	프레임을 사용할 수 없습니다
 	X	X
 	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	새 채널…
+	Duplicate Channel	채널 복제
+	Delete Channel	채널 삭제
+	New Spot Channel…	새 별색 채널…
+	Merge Spot Channel	별색 채널 병합
+	Channel Options…	채널 옵션…
+	Split Channels	채널 분할
+	Merge Channels…	채널 병합…
+	Specify Channels:	채널 지정:
+	Not enough grayscale documents for this mode.	이 모드에 필요한 회색 음영 문서가 부족합니다.
+	Pick a different document for each channel.	채널마다 다른 문서를 선택하십시오.
+	A picked document is no longer open.	선택한 문서 중 하나가 더 이상 열려 있지 않습니다.
+	A picked document is no longer a grayscale document of the same size.	선택한 문서 중 하나가 더 이상 같은 크기의 회색 음영 문서가 아닙니다.
