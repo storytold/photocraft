@@ -187,6 +187,21 @@ pub fn set_custom_background(app: &mut PhotocraftApp, color: &str) -> Result<Val
     Ok(json!({"color": color}))
 }
 
+/// [`set_custom_background`] for OK in the picker. `unchanged` (the result is the colour the picker
+/// opened with, after any Only Web Colors snap) leaves every selected board alone, with no command
+/// and no history step: only the tool option for the next board follows. Otherwise boards that
+/// already have the picked RGB are skipped one by one ([`set_background`]).
+pub fn set_custom_background_from_picker(app: &mut PhotocraftApp, color: &str, unchanged: bool) -> Result<Value, String> {
+    if !unchanged {
+        return set_custom_background(app, color);
+    }
+    crate::color_picker_ui::parse_hex(color).ok_or("not a colour")?;
+    let o = &mut app.ui.artboard_tool;
+    o.background = "custom".to_string();
+    o.background_color = color.to_string();
+    Ok(json!({"color": color}))
+}
+
 /// Run Align panel entry `index` of group `group` on the selected boards. None for an entry that
 /// has no command yet.
 pub fn run_align(app: &mut PhotocraftApp, group: usize, index: usize) -> Option<Result<Value, String>> {

@@ -281,6 +281,75 @@ fn last_label(app: &PhotocraftApp) -> Option<String> {
     app.session.active().unwrap().history.entries().last().cloned()
 }
 
+/// Two selected boards with different custom colours; the first board's colour is the swatch's.
+fn two_coloured_boards(app: &mut PhotocraftApp) -> (u64, u64) {
+    let (a, b) = two_boards(app);
+    app.run("layer.artboard.set", json!({"layer": a, "background": "custom", "color": "#336699"})).unwrap();
+    app.run("layer.artboard.set", json!({"layer": b, "background": "custom", "color": "#cc3300"})).unwrap();
+    (a, b)
+}
+
+/// Open the Color Picker from the swatch (as the bar does) and OK it with `color`, or as opened.
+fn pick_from_swatch(app: &mut PhotocraftApp, color: Option<&str>) {
+    let hex = bar::shown_background(app).1;
+    let id = crate::color_picker_ui::open_for_target(app, "artboardBackground", "Color Picker (Color)", crate::color_picker_ui::parse_hex(&hex).unwrap());
+    let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    if let Some(c) = color {
+        fields.insert("color".into(), json!(c));
+    }
+    crate::color_picker_ui::confirm(app, &fields).unwrap();
+}
+
+fn colours(app: &PhotocraftApp) -> Vec<ArtboardBackground> {
+    boards(app).iter().map(|b| b.2).collect()
+}
+
+#[test]
+fn an_unchanged_ok_with_boards_of_different_colours_leaves_every_board_alone() {
+    let mut app = app();
+    two_coloured_boards(&mut app);
+    let before = (steps(&app), colours(&app));
+    pick_from_swatch(&mut app, None);
+    assert_eq!((steps(&app), colours(&app)), before, "no history step, both colours bit-exact");
+    assert_eq!((app.ui.artboard_tool.background.as_str(), app.ui.artboard_tool.background_color.as_str()), ("custom", "#336699"));
+}
+
+#[test]
+fn a_changed_ok_with_boards_of_different_colours_recolours_both_in_one_step() {
+    let mut app = app();
+    two_coloured_boards(&mut app);
+    let steps0 = steps(&app);
+    pick_from_swatch(&mut app, Some("#00ff00"));
+    assert_eq!(steps(&app), steps0 + 1);
+    assert_eq!(last_label(&app).as_deref(), Some("Edit Artboards"));
+    let green = |c: &ArtboardBackground| matches!(c, ArtboardBackground::Custom(c) if c.to_rgba8()[..3] == [0, 255, 0]);
+    assert!(colours(&app).iter().all(green));
+}
+
+#[test]
+fn an_unchanged_ok_with_only_web_colors_leaves_the_boards_alone() {
+    let mut app = app();
+    app.ui.color_panel.web_only = true;
+    let (a, _) = two_boards(&mut app);
+    app.run("layer.artboard.set", json!({"layer": a, "background": "custom", "color": [0.2, 0.4, 0.61, 1.0]})).unwrap();
+    let before = (steps(&app), colours(&app));
+    pick_from_swatch(&mut app, None);
+    assert_eq!((steps(&app), colours(&app)), before, "no history step, colours bit-exact");
+}
+
+#[test]
+fn a_colour_some_boards_already_have_recolours_only_the_others() {
+    let mut app = app();
+    let (_, b) = two_coloured_boards(&mut app);
+    let b_before = colours(&app)[1];
+    let steps0 = steps(&app);
+    pick_from_swatch(&mut app, Some("#cc3300"));
+    assert_eq!(steps(&app), steps0 + 1);
+    assert_eq!(last_label(&app).as_deref(), Some("Edit Artboard"), "the label follows the one board that changed");
+    assert_eq!(colours(&app)[1], b_before, "board {b} keeps its own value");
+    assert!(matches!(colours(&app)[0], ArtboardBackground::Custom(c) if c.to_rgba8()[..3] == [0xcc, 0x33, 0x00]));
+}
+
 #[test]
 fn with_a_board_selected_the_bar_shows_its_background() {
     let mut app = app();
