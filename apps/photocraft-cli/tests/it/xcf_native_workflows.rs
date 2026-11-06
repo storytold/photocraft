@@ -372,6 +372,50 @@ fn batch_xcf_native_defaults_reject_colliding_output_stems() {
 }
 
 #[test]
+/// Default native XCF output cannot replace, or be replaced by, an ordinary native batch result.
+fn batch_xcf_native_defaults_protect_mixed_output_collisions_in_both_orders() {
+    let xcf = layered_xcf();
+    let mut native_doc = photocraft_io::import("source.xcf", &xcf).unwrap().document;
+    native_doc.layers[0].surface_mut().unwrap().write_pixel(0, 0, &[0., 1., 0., 1.]);
+    let native = photocraft_format::save_to_bytes(&native_doc, &Default::default()).unwrap();
+    for xcf_first in [false, true] {
+        let files = RouteFiles::new();
+        let input = files.0.join("input");
+        let subfolder = input.join("sub");
+        std::fs::create_dir_all(&subfolder).unwrap();
+        // Recursive batches process the root's file before the subfolder, independently of
+        // extension ordering, so both directions of the mixed collision are exercised.
+        let first = input.join(if xcf_first { "same.xcf" } else { "same.pcraft" });
+        let later = subfolder.join(if xcf_first { "same.pcraft" } else { "same.xcf" });
+        let (first_bytes, later_bytes) = if xcf_first { (&xcf, &native) } else { (&native, &xcf) };
+        std::fs::write(&first, first_bytes).unwrap();
+        std::fs::write(&later, later_bytes).unwrap();
+        let actions = files.path("actions.json");
+        std::fs::write(&actions, b"[]").unwrap();
+        let output = files.0.join("output");
+        let (code, stdout, err) = call(vec![
+            "batch".into(),
+            "--recursive".into(),
+            "--actions".into(),
+            actions,
+            "--in".into(),
+            input.to_string_lossy().into_owned(),
+            "--out".into(),
+            output.to_string_lossy().into_owned(),
+        ]);
+        assert_eq!(code, 1, "xcf_first={xcf_first}: {stdout}{err}");
+        assert!(stdout.contains("1 succeeded, 1 failed"), "{stdout}{err}");
+        assert!(err.contains("already holds the result") && err.contains("same output name"), "{err}");
+        assert_eq!(std::fs::read_dir(&output).unwrap().count(), 1);
+        let saved = photocraft_format::load_path(&output.join("same.pcraft")).unwrap();
+        let expected = if xcf_first { vec![128. / 255., 64. / 255., 32. / 255., 1.] } else { vec![0., 1., 0., 1.] };
+        assert_eq!(saved.layers[0].surface().unwrap().read_region(saved.bounds()), expected);
+        assert_eq!(&std::fs::read(&first).unwrap(), first_bytes);
+        assert_eq!(&std::fs::read(&later).unwrap(), later_bytes);
+    }
+}
+
+#[test]
 /// Reject every cross-input target before saving, for implicit XCF output and explicit native output, including aliases outside the input folder.
 fn batch_preflight_preserves_other_selected_inputs() {
     for xcf in [true, false] {
