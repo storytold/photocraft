@@ -44,6 +44,12 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     view.zoom_transition = None;
     view.display_camera = None;
     view.fit_pending = offset > 0 || view.fit_pending;
+    // A window that owns the document (no tab) shares the document's stored view, so the view
+    // commands, the zoom field and the Navigator, which all act on it, move this window
+    // (`canvas::extra_windows`).
+    if floating && let Some(stored) = app.ui.views.get_mut(doc) {
+        *stored = view.clone();
+    }
     app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating, focused: false, position: None });
     wid
 }

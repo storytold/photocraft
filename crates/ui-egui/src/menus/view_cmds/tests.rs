@@ -1297,3 +1297,30 @@ fn grabbing_the_border_inside_the_active_document_drags_it_without_painting() {
     assert!((shown[0].1.max.x - to.x).abs() < 2.0, "the left cell ends at the border: {:?}, pointer at {}", shown[0].1, to.x);
     assert!((shown[1].1.min.x - to.x).abs() < 2.0, "and the right one starts there: {:?}", shown[1].1);
 }
+
+/// One frame of the documents' own windows (embedded in the main one, as egui does without a
+/// window system).
+fn draw_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    ctx.run_ui(egui::RawInput::default(), |ui| crate::canvas::extra_windows(app, ui.ctx())).textures_delta.clear();
+}
+
+/// View › Zoom In and Fit on Screen act on the document's stored view; a document that floats in
+/// a window of its own (no tab) shows that view, so they zoom its window (CodeRabbit on #11664).
+#[test]
+fn view_commands_zoom_a_document_floating_in_its_own_window() {
+    let (mut app, ctx) = app_with(1);
+    menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    draw_windows(&mut app, &ctx);
+    menu(&mut app, &ctx, "view.actualPixels", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    let window_zoom = |app: &PhotocraftApp| app.ui.windows.iter().find(|w| w.document == 0).unwrap().view.zoom;
+    assert_eq!(window_zoom(&app), app.ui.views[0].zoom, "the window shows the document's view");
+    let before = window_zoom(&app);
+    menu(&mut app, &ctx, "view.zoomIn", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    assert!(window_zoom(&app) > before, "View › Zoom In zooms the floating window: {before} -> {}", window_zoom(&app));
+    let zoomed = window_zoom(&app);
+    menu(&mut app, &ctx, "view.zoomOut", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    assert!(window_zoom(&app) < zoomed, "and View › Zoom Out zooms it out");
+}
