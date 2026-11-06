@@ -3199,6 +3199,8 @@ curves	Smooth	Jevn ut
 	Step {step} is waiting for its dialog	Trinn {step} venter på dialogen sin
 @plural	{n} action|{n} actions	{n} handling|{n} handlinger
 	Background (Default)	Bakgrunn (standard)
+	Background (default)	Bakgrunn (standard)
+	Transparent (default)	Gjennomsiktig (standard)
 	Content-Aware Fill	Innholdsbasert fyll
 # Batch / Image Processor
 	Include All Subfolders	Ta med alle undermapper
@@ -4860,3 +4862,14 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 @plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Fargetilpasning ble hoppet over for {n} variasjon.|Fargetilpasning ble hoppet over for {n} variasjoner.
 @plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Lager {n} variasjon på denne datamaskinen med {connection}.|Lager {n} variasjoner på denne datamaskinen med {connection}.
 @plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Lager {n} variasjon: {n} forespørsel til {connection}.|Lager {n} variasjoner: {n} separate forespørsler til {connection}.
+# Action Stop message (#8386)
+	Message	Melding
+# Playback Options (#5212)
+	Playback Options…	Avspillingsalternativer…
+	Playback Options	Avspillingsalternativer
+	Accelerated	Akselerert
+	Step by Step	Trinn for trinn
+	Pause For:	Pause i:
+	Pause For	Pause i
+	seconds	sekunder
+	Create a single history state	Opprett én historikktilstand

@@ -2,7 +2,7 @@
 
 use std::io::{Seek, Write};
 
-use crate::compression::{Compression, MAX_DECODED_BYTES, decode_planes, rle_widening, validate_planes};
+use crate::compression::{Compression, MAX_DECODED_BYTES, decode_planes, rle_widening_len, validate_planes};
 use crate::error::{PsdError, Result};
 use crate::header::{ColorMode, Header, Version};
 use crate::image_data::ImageData;
@@ -10,6 +10,9 @@ use crate::io::{Reader, Sink, WriteExt};
 use crate::layer::{LayerInfo, LayerRecord};
 use crate::resources::{self, ImageResource, ResourceData, ids};
 use crate::tagged::{TaggedBlock, read_blocks_with, uses_long_length, write_blocks_to};
+
+/// The name the reference editor gives the merged transparency among the alpha channel names.
+const TRANSPARENCY_NAME: &str = "Transparency";
 
 /// Where the layer info was stored in the file.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -382,10 +385,9 @@ impl PsdFile {
             o.put_u16(self.image_data.compression.as_u16());
             Ok(())
         })?;
-        let merged = self.image_data.encoded()?;
         match self.merged_widened_rows(widen)? {
-            0 => out.put(&merged),
-            rows => out.put_widened_rle(&merged, rows),
+            0 => out.put_encoded(&self.image_data.data, self.image_data.stored.as_ref()),
+            rows => out.put_widened_encoded(&self.image_data.data, self.image_data.stored.as_ref(), rows),
         }
     }
 
@@ -415,13 +417,13 @@ impl PsdFile {
             for c in &layer.channels {
                 match layer.widened_rows(c, true)? {
                     0 => {}
-                    rows => n = n.saturating_add(rle_widening(&c.encoded()?, rows)?),
+                    rows => n = n.saturating_add(rle_widening_len(c.encoded_len(), rows)?),
                 }
             }
         }
         match self.merged_widened_rows(true)? {
             0 => Ok(n),
-            rows => Ok(n.saturating_add(rle_widening(&self.image_data.encoded()?, rows)?)),
+            rows => Ok(n.saturating_add(rle_widening_len(self.image_data.encoded_len(), rows)?)),
         }
     }
 
@@ -464,7 +466,7 @@ impl PsdFile {
         }
         let merged = match self.merged_widened_rows(widen)? {
             0 => 0,
-            rows => rle_widening(&self.image_data.encoded()?, rows)?,
+            rows => rle_widening_len(self.image_data.encoded_len(), rows)?,
         };
         Ok(n.saturating_add(2).saturating_add(self.image_data.encoded_len()).saturating_add(merged))
     }
@@ -562,6 +564,11 @@ impl PsdFile {
     /// the merged transparency "Transparency" and lists it first among the alpha channel names,
     /// and some of its 16-bit PSBs carry no other mark (#4654): when the layers sit in a global
     /// `Lr16`/`Lr32` block, that name with one name per extra channel marks it too.
+    ///
+    /// A file without layer records has one when it is marked, or unless its alpha channel names
+    /// account for every extra channel without "Transparency" among them: a flat file from the
+    /// reference editor lists only its alpha and spot channels there (psd-tools
+    /// cmyk-alpha-spot.psd), while writers of plain RGBA files name nothing.
     pub fn merged_has_alpha(&self) -> bool {
         let Some(color) = self.header.color_mode.color_channels() else {
             return false;
@@ -575,14 +582,23 @@ impl PsdFile {
                 let in_block = matches!(self.layer_info_placement, LayerInfoPlacement::GlobalBlock { .. });
                 li.merged_alpha || marked || (in_block && self.names_merged_transparency(self.header.channels - color))
             }
-            None => true,
+            None => {
+                let names = self.alpha_channel_names();
+                marked || names.len() != usize::from(self.header.channels - color) || names.first().is_some_and(|n| n == TRANSPARENCY_NAME)
+            }
         }
     }
 
-    /// `true` when the alpha channel names (resource 1045, else 1006) hold exactly `extra` names
-    /// and the first is "Transparency", Photoshop's name for the merged transparency.
+    /// `true` when the alpha channel names hold exactly `extra` names and the first is
+    /// "Transparency", the reference editor's name for the merged transparency.
     fn names_merged_transparency(&self, extra: u16) -> bool {
-        const NAME: &str = "Transparency";
+        let names = self.alpha_channel_names();
+        names.len() == usize::from(extra) && names.first().is_some_and(|n| n == TRANSPARENCY_NAME)
+    }
+
+    /// The alpha channel names: the Unicode names (resource 1045), else the Pascal names (1006)
+    /// older writers and psd-tools store alone, decoded as MacRoman. Empty when the file names no channel.
+    pub fn alpha_channel_names(&self) -> Vec<String> {
         let mut names = Vec::new();
         if let Some(r) = self.resource(1045) {
             let mut at = 0usize;
@@ -598,11 +614,11 @@ impl PsdFile {
             let mut at = 0usize;
             while let Some(&len) = r.data.get(at) {
                 let Some(name) = r.data.get(at + 1..at + 1 + usize::from(len)) else { break };
-                names.push(String::from_utf8_lossy(name).into_owned());
+                names.push(crate::codepage::decode(name, encoding_rs::MACINTOSH));
                 at += 1 + usize::from(len);
             }
         }
-        names.len() == usize::from(extra) && names.first().is_some_and(|n| n == NAME)
+        names
     }
 
     /// Checks structural invariants that the writer relies on.
@@ -717,6 +733,77 @@ mod write_tests {
                 assert!(streamed(&lazy, stage) == bytes, "{} source-backed, stage {stage}", case.name);
             }
         }
+    }
+
+    /// Channel data and a merged image still in their source (an imported file's, or what an
+    /// exporter spilled to scratch) are copied through in short reads, never read whole.
+    #[test]
+    fn source_backed_data_is_copied_in_short_reads() {
+        struct Reads(Vec<u8>, std::sync::Mutex<usize>);
+        impl crate::source::ReadAt for Reads {
+            fn len(&self) -> u64 {
+                self.0.len() as u64
+            }
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+                let mut most = self.1.lock().unwrap();
+                *most = (*most).max(buf.len());
+                self.0.as_slice().read_at(offset, buf)
+            }
+        }
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        file.image_data = ImageData::new(Compression::Raw, vec![5; 300]);
+        let info = file.layer_info.as_mut().unwrap();
+        info.layers[0].channels[0] = crate::layer::ChannelData::new(0, Some(Compression::Raw), vec![6; 301]);
+        let bytes = file.to_bytes().unwrap();
+        let source = std::sync::Arc::new(Reads(bytes.clone(), std::sync::Mutex::new(0)));
+        let lazy = PsdFile::from_source(crate::Source::from_arc(source.clone())).unwrap();
+        *source.1.lock().unwrap() = 0;
+        let mut w = std::io::Cursor::new(Vec::new());
+        lazy.write_to(&mut w).unwrap();
+        assert!(w.into_inner() == bytes);
+        assert!(*source.1.lock().unwrap() <= 7, "read {} bytes at once", source.1.lock().unwrap());
+    }
+
+    /// #5333: RLE data still in its source widens to PSB in short reads too, the count table and
+    /// then the packed rows, one consecutive pass, never the whole merged image or channel at once.
+    #[test]
+    fn source_backed_rle_widens_in_short_reads() {
+        struct Reads(Vec<u8>, std::sync::Mutex<(usize, Vec<(u64, usize)>)>);
+        impl crate::source::ReadAt for Reads {
+            fn len(&self) -> u64 {
+                self.0.len() as u64
+            }
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+                let mut seen = self.1.lock().unwrap();
+                seen.0 = seen.0.max(buf.len());
+                seen.1.push((offset, buf.len()));
+                self.0.as_slice().read_at(offset, buf)
+            }
+        }
+        let file = testgen::small(Version::Psd, Compression::Rle);
+        assert_eq!(file.image_data.compression, Compression::Rle);
+        let bytes = file.to_bytes().unwrap();
+        let mut promoted = file.clone();
+        promoted.promote_to_psb().unwrap();
+        let want = promoted.to_bytes().unwrap();
+        let source = std::sync::Arc::new(Reads(bytes, std::sync::Mutex::new((0, Vec::new()))));
+        let mut lazy = PsdFile::from_source(crate::Source::from_arc(source.clone())).unwrap();
+        assert!(lazy.image_data.stored.is_some(), "the merged image stays in the source");
+        lazy.promote_to_psb().unwrap();
+        *source.1.lock().unwrap() = (0, Vec::new());
+        let mut w = std::io::Cursor::new(Vec::new());
+        lazy.write_to(&mut w).unwrap();
+        assert!(w.into_inner() == want);
+        let seen = source.1.lock().unwrap();
+        assert!(seen.0 <= 7, "read {} bytes at once", seen.0);
+        let merged = lazy.image_data.stored.as_ref().unwrap();
+        let reads: Vec<_> = seen.1.iter().filter(|(at, _)| (merged.offset..merged.offset + merged.len).contains(at)).collect();
+        let mut next = merged.offset;
+        for &&(at, n) in &reads {
+            assert_eq!(at, next, "the merged image is read in one consecutive pass");
+            next += n as u64;
+        }
+        assert_eq!(next, merged.offset + merged.len);
     }
 
     /// #6607: pixel data goes to the stream as it is, never through a staging copy, so a save
@@ -992,6 +1079,56 @@ mod write_tests {
                 assert!(matches!(parsed.layer_info_placement, LayerInfoPlacement::GlobalBlock { key: k, .. } if k == key));
             }
         }
+    }
+
+    /// Without layer records, the extra channels hold a merged transparency unless the alpha
+    /// channel names (1045, else 1006) name each of them and none first as "Transparency".
+    #[test]
+    fn a_flat_file_names_its_extra_channels() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        file.layer_info = None;
+        file.header.channels = 5;
+        file.resources.retain(|r| r.id != 1045 && r.id != 1006);
+        assert!(file.merged_has_alpha(), "nothing named: a plain RGBA file");
+        let pascal = |names: &[&str]| names.iter().flat_map(|n| std::iter::once(n.len() as u8).chain(n.bytes())).collect::<Vec<u8>>();
+        let unicode = |names: &[&str]| {
+            names
+                .iter()
+                .flat_map(|n| (n.encode_utf16().count() as u32).to_be_bytes().into_iter().chain(n.encode_utf16().flat_map(u16::to_be_bytes)))
+                .collect::<Vec<u8>>()
+        };
+        for (names, transparency) in
+            [(&["Spot", "Alpha 1"][..], false), (&["Transparency", "Alpha 1"][..], true), (&["Alpha 1"][..], true), (&["A", "B", "C"][..], true)]
+        {
+            let mut p = file.clone();
+            p.resources.push(ImageResource::new(1006, pascal(names)));
+            assert_eq!(p.merged_has_alpha(), transparency, "1006 {names:?}");
+            assert_eq!(p.alpha_channel_names(), names, "1006");
+            let mut u = file.clone();
+            u.resources.push(ImageResource::new(1045, unicode(names)));
+            assert_eq!(u.merged_has_alpha(), transparency, "1045 {names:?}");
+            assert_eq!(u.alpha_channel_names(), names, "1045");
+        }
+        // A merged-transparency marker wins over a complete list of names.
+        let mut marked = file.clone();
+        marked.resources.push(ImageResource::new(1006, pascal(&["Spot", "Alpha 1"])));
+        marked.global_blocks.push(TaggedBlock::new(*b"Mt32", Vec::new()));
+        assert!(marked.merged_has_alpha());
+        // Truncated names stop at the damage.
+        let mut cut = file.clone();
+        cut.resources.push(ImageResource::new(1006, vec![9, b'a']));
+        assert!(cut.alpha_channel_names().is_empty());
+        assert!(cut.merged_has_alpha());
+    }
+
+    #[test]
+    fn pascal_channel_names_use_mac_roman_and_unicode_takes_precedence() {
+        let mut file = testgen::small(Version::Psd, Compression::Raw);
+        file.resources.retain(|r| !matches!(r.id, 1006 | 1045));
+        file.resources.push(ImageResource::new(1006, b"\x04caf\x8e\x03x".to_vec()));
+        assert_eq!(file.alpha_channel_names(), ["café"]);
+        file.resources.push(ImageResource::new(1045, vec![0, 0, 0, 1, 0, b'Z']));
+        assert_eq!(file.alpha_channel_names(), ["Z"]);
     }
 
     /// A positive layer count plus a merged-transparency marker still makes the first extra

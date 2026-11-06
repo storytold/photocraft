@@ -1912,6 +1912,7 @@
 	Soften	Lembutkan
 	Source	Sumber
 	Source: set	Sumber: sudah diatur
+	Source: {name}	Sumber: {name}
 	Sponge Tool	Alat Sponge
 	Spot Healing Brush Tool	Alat Spot Healing Brush
 	Spread	Sebar
@@ -3293,6 +3294,8 @@ curves	Smooth	Haluskan
 	Step {step} is waiting for its dialog	Langkah {step} menunggu dialognya
 @plural	{n} action|{n} actions	{n} tindakan
 	Background (Default)	Background (Default)
+	Background (default)	Background (Default)
+	Transparent (default)	Transparan (bawaan)
 	Content-Aware Fill	Isi Content-Aware
 	Include All Subfolders	Sertakan semua subfolder
 	Auto Add/Delete	Tambah/Hapus Otomatis
@@ -3346,6 +3349,7 @@ curves	Smooth	Haluskan
 	Automatically Check for Updates	Periksa Pembaruan Secara Otomatis
 	Paints from the History panel's source state	Melukis dari status sumber panel Riwayat
 	Sets the source for the history brush	Menetapkan sumber untuk kuas riwayat
+	The History Brush source was deleted: set a new source in the History panel	Sumber kuas riwayat telah dihapus: atur sumber baru di panel Riwayat
 	Highlight Mode	Mode Sorotan
 	Highlight Color	Warna Sorotan
 	Highlight Opacity	Opasitas Sorotan
@@ -3515,6 +3519,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entri numerik tidak valid. Diperlukan bilangan bulat antara {min}% dan {max}%. Nilai sebelumnya telah disisipkan.
 	Clear Selection	Hapus Seleksi
 	Color Aware	Berbasis Warna
@@ -3632,3 +3638,43 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 @plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Pencocokan warna dilewati untuk {n} variasi.
 @plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Membuat {n} variasi di komputer ini, dengan {connection}.
 @plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Membuat {n} variasi: {n} permintaan terpisah ke {connection}.
+# Action Stop message (#8386)
+	Message	Pesan
+# Playback Options (#5212)
+	Playback Options…	Opsi pemutaran…
+	Playback Options	Opsi pemutaran
+	Accelerated	Dipercepat
+	Step by Step	Langkah demi langkah
+	Pause For:	Jeda selama:
+	Pause For	Jeda selama
+	seconds	detik
+	Create a single history state	Buat satu status riwayat
+	Generator enabled	Generator aktif
+	Move Up	Pindah ke atas
+	Move Down	Pindah ke bawah
+	Grid view	Tampilan kisi
+	List view	Tampilan daftar
+	On your computer	Di komputer Anda
+	New file	File baru
+	Learn	Pelajari
+	No recent files	Tidak ada file terbaru
+	Website	Situs web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Bingkai mendukung transformasi afin; pilih gambarnya untuk transformasi perspektif
+	A frame supports affine transforms; select its image to warp it	Bingkai mendukung transformasi afin; pilih gambarnya untuk dilengkungkan
+	Convert to Frame…	Konversi ke Bingkai…
+	Create a new custom frame	Buat bingkai kustom baru
+	Create a new polygonal frame	Buat bingkai poligon baru
+	Create a new triangular frame	Buat bingkai segitiga baru
+	Fit Content to Frame	Sesuaikan Konten ke Bingkai
+	Fit Frame to Content	Sesuaikan Bingkai ke Konten
+	Frame coordinates must be finite and within 600000 pixels	Koordinat bingkai harus berhingga dan berada dalam batas 600000 piksel
+	Import Image…	Impor Gambar…
+	Invalid frame transform	Transformasi bingkai tidak valid
+	Invalid nested file drop	Penjatuhan berkas bersarang tidak valid
+	New Frame	Bingkai Baru
+	Replace Image…	Ganti Gambar…
+	The frame is locked	Bingkai terkunci
+	The frame is unavailable	Bingkai tidak tersedia
+	Frame	Bingkai

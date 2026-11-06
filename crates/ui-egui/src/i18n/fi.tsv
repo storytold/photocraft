@@ -3200,6 +3200,8 @@ curves	Smooth	Tasoita
 	Step {step} is waiting for its dialog	Vaihe {step} odottaa valintaikkunaansa
 @plural	{n} action|{n} actions	{n} toiminto|{n} toimintoa
 	Background (Default)	Tausta (oletus)
+	Background (default)	Tausta (oletus)
+	Transparent (default)	Läpinäkyvä (oletus)
 	Content-Aware Fill	Sisältötietoinen täyttö
 # Batch / Image Processor
 	Include All Subfolders	Sisällytä kaikki alikansiot
@@ -4861,3 +4863,14 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 @plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Värien sovitus ohitettiin {n} muunnelmalle.|Värien sovitus ohitettiin {n} muunnelmalle.
 @plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Tekee {n} muunnelman tällä tietokoneella, palvelulla {connection}.|Tekee {n} muunnelmaa tällä tietokoneella, palvelulla {connection}.
 @plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Tekee {n} muunnelman: {n} pyyntö palveluun {connection}.|Tekee {n} muunnelmaa: {n} erillistä pyyntöä palveluun {connection}.
+# Action Stop message (#8386)
+	Message	Viesti
+# Playback Options (#5212)
+	Playback Options…	Toistoasetukset…
+	Playback Options	Toistoasetukset
+	Accelerated	Kiihdytetty
+	Step by Step	Vaihe kerrallaan
+	Pause For:	Tauko:
+	Pause For	Tauko
+	seconds	sekuntia
+	Create a single history state	Luo yksi historiatila

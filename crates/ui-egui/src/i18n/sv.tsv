@@ -3197,6 +3197,8 @@ curves	Smooth	Jämna ut
 	Step {step} is waiting for its dialog	Steg {step} väntar på sin dialogruta
 @plural	{n} action|{n} actions	{n} åtgärd|{n} åtgärder
 	Background (Default)	Bakgrund (standard)
+	Background (default)	Bakgrund (standard)
+	Transparent (default)	Genomskinlig (standard)
 	Content-Aware Fill	Innehållsmedveten fyllning
 # Batch / Image Processor
 	Include All Subfolders	Ta med alla undermappar
@@ -4858,3 +4860,14 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 @plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Färganpassningen hoppades över för {n} variation.|Färganpassningen hoppades över för {n} variationer.
 @plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Gör {n} variation på den här datorn, med {connection}.|Gör {n} variationer på den här datorn, med {connection}.
 @plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Gör {n} variation: {n} begäran till {connection}.|Gör {n} variationer: {n} separata begäranden till {connection}.
+# Action Stop message (#8386)
+	Message	Meddelande
+# Playback Options (#5212)
+	Playback Options…	Uppspelningsalternativ…
+	Playback Options	Uppspelningsalternativ
+	Accelerated	Accelererad
+	Step by Step	Steg för steg
+	Pause For:	Paus i:
+	Pause For	Paus i
+	seconds	sekunder
+	Create a single history state	Skapa ett enda historikläge
