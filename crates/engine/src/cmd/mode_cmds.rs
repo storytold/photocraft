@@ -186,7 +186,7 @@ fn with_released_movement_locks<R>(l: &mut Layer, f: impl FnOnce(&mut Layer) -> 
 /// The flattened image as straight RGBA (over white when `opaque`).
 fn composite(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
     let buf = photocraft_compose::flatten(doc);
-    if opaque { buf.over_background([1.0, 1.0, 1.0]).px } else { buf.px }
+    if opaque { buf.over_background([1.0, 1.0, 1.0]).into_px() } else { buf.into_px() }
 }
 
 /// Replace the document's layers by one 8-bit layer holding `px` in `mode`'s storage format.
@@ -566,7 +566,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Bitmap", |doc, active| {
         if (nw, nh) != (doc.size.width, doc.size.height) {
-            crate::image_cmds::resample_doc(doc, nw, nh, photocraft_algo::resample::Resample::Bicubic);
+            crate::image_cmds::resample_doc(doc, CMD, nw, nh, photocraft_algo::resample::Resample::Bicubic)?;
         }
         doc.resolution_dpi = dpi;
         let w = doc.size.width as usize;
