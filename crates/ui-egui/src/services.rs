@@ -431,6 +431,11 @@ pub struct Services {
     /// cancel and which reports nothing back), so a save through it names the document but
     /// leaves its changes unsaved and the leave-page guard armed (#4962).
     pub write_unconfirmed: bool,
+    /// File › Save writes a flat file (PNG, JPEG…) back without asking while it keeps the whole
+    /// document: a single plain layer in a format PhotoCraft writes. The desktop asks for the
+    /// name first, its own file suggested; where there is no such dialog to confirm (iPadOS and
+    /// Android, whose exporter can only make a new file), it goes back where it came from.
+    pub save_flat_in_place: bool,
     /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
     /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.
     pub save_file: Option<SaveFileFn>,

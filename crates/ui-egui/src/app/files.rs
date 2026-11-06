@@ -448,12 +448,7 @@ impl PhotocraftApp {
             // DDS or JPEG answer writes the same way, without asking.
             let choices = FormatChoices::from_step(params, id)?;
             let st = self.session.active().ok_or("no document")?;
-            let flat_own = |p: &str| {
-                !photocraft_engine::file_cmds::saves_in_place(p)
-                    && plain_raster(&st.doc).is_some()
-                    && photocraft_engine::file_cmds::extension(p).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
-            };
-            let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
+            let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_file_keeps(&st.doc, p)).ok_or(
                 "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
             )?;
             return self.save_in_place(path, choices);
@@ -805,6 +800,14 @@ impl PhotocraftApp {
             generation: self.session.active_generation(),
         })
     }
+}
+
+/// Whether the flat file at `path` keeps the whole of `doc`: a single plain layer, in a flat format
+/// PhotoCraft writes. A layered file is [`photocraft_engine::file_cmds::holds_at`]'s question.
+pub(crate) fn flat_file_keeps(doc: &photocraft_doc::Document, path: &str) -> bool {
+    !photocraft_engine::file_cmds::saves_in_place(path)
+        && plain_raster(doc).is_some()
+        && photocraft_engine::file_cmds::extension(path).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
 }
 
 /// The New Document dialog's key in the preferences' `dialogs` map.

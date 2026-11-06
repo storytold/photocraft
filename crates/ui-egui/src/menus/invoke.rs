@@ -267,6 +267,13 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                             crate::disk_change_prompt::intercept(app, doc, &path, false, crate::FormatChoices::default())
                                 .unwrap_or_else(|| app.save_in_place(path, crate::FormatChoices::default()))
                         }
+                        // A flat file that keeps the document, where no save dialog could
+                        // confirm it (`Services::save_flat_in_place`): written back as is.
+                        Some((false, path, d)) if app.services.save_flat_in_place && crate::app::flat_file_keeps(&d.doc, &path) => {
+                            let doc = d.doc.id;
+                            crate::disk_change_prompt::intercept(app, doc, &path, false, crate::FormatChoices::default())
+                                .unwrap_or_else(|| app.save_in_place(path, choices))
+                        }
                         Some((false, path, d)) if photocraft_engine::file_cmds::saves_in_place(&path) => {
                             // Its own file is layered but can't hold what the document has now.
                             let losses = photocraft_engine::file_cmds::losses_at(&d.doc, &path);
