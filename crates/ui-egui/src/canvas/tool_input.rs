@@ -250,7 +250,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 // A locked layer under the pointer (the Background) can't move. Photoshop draws
                 // the layer marquee instead of reporting the lock (#4058). Probe without
                 // selecting so a locked hit doesn't become the selection first.
-                let probe = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "select": false}));
+                let probe = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "select": false, "move": true}));
                 let locked_hit = probe.as_ref().ok().and_then(|v| v["layer"].as_u64()).is_some_and(|id| {
                     app.session.active().is_some_and(|st| {
                         let id = photocraft_doc::LayerId(id);
@@ -262,16 +262,16 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                     if locked_hit {
                         // A click still selects the locked layer, as in Photoshop; a drag's
                         // marquee then replaces that selection on release.
-                        let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
+                        let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode, "move": true}));
                     }
-                    crate::move_box::begin(app, [x, y], mods.shift);
+                    crate::move_box::begin(app, [x, y], mods.shift, locked_hit);
                     return true;
                 }
                 let picked = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
                 // No pixels there at all (an empty spot, or off the canvas): drag a marquee that
                 // selects the layers it touches instead (move_box.rs).
                 if picked.is_ok_and(|v| v["layer"].is_null()) && crate::move_box::empty_at(app, [x, y]) {
-                    crate::move_box::begin(app, [x, y], mods.shift);
+                    crate::move_box::begin(app, [x, y], mods.shift, false);
                     return true;
                 }
                 // Snapping (and the drag's box) started before the pick: point it at what moves.
