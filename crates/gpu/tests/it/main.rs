@@ -9,7 +9,26 @@ static GPU_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// that happens can crash in libvulkan.
 pub(crate) fn instance() -> wgpu::Instance {
     static KEPT: std::sync::OnceLock<wgpu::Instance> = std::sync::OnceLock::new();
-    KEPT.get_or_init(|| wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())).clone()
+    KEPT.get_or_init(|| {
+        INSTANCES_MADE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env())
+    })
+    .clone()
+}
+
+/// How many instances [`instance`] has made: one for the whole run.
+static INSTANCES_MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// [`instance`] makes its instance once, however many tests and threads ask for it: a fresh one
+/// per test could crash in libvulkan while another goes away.
+#[test]
+fn the_instance_is_made_once() {
+    let threads: Vec<_> = (0..4).map(|_| std::thread::spawn(|| drop(instance()))).collect();
+    for t in threads {
+        assert!(t.join().is_ok());
+    }
+    drop(instance());
+    assert_eq!(INSTANCES_MADE.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 mod bounded_readback;
