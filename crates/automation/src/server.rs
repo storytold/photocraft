@@ -1501,8 +1501,10 @@ mod tests {
         .unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
+        // Stay within the bounded working-set admission even on a many-core CI host.
+        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 50}), &mut waiter, (0, 1));
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), waited).await;
+        assert!(result.is_err(), "the blur ended before it was dropped: {result:?}");
         let t = std::time::Instant::now();
         loop {
             let (running, cancelled) =
@@ -1539,7 +1541,7 @@ mod tests {
         });
         is_locked.recv().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
+        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 50}), &mut waiter, (0, 1));
         assert!(tokio::time::timeout(std::time::Duration::from_millis(50), waited).await.is_err(), "the start waits for the lock");
         holder.join().unwrap();
         let t = std::time::Instant::now();
