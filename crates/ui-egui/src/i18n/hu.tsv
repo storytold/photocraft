@@ -3,24 +3,24 @@
 #   context  empty                a plain UI string; `source` is the English text in the code
 #            @id                  a command id (e.g. file.saveAs): wins over the English text for
 #                                 that menu item, so one id can read differently from its twin
-#            @plural              `source` is "one|other" (English forms); the translation lists the
-#                                 language's forms separated by "|" (see `plural` in i18n/mod.rs)
+#            @plural              `source` is one|other (English forms); the translation lists the
+#                                 language's forms separated by | (see `plural` in i18n/mod.rs)
 #            anything else        a disambiguating context passed to `tr_ctx`
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
 #   Hungarian style: use formal address (magázás) in user-facing text.
 #   Follow the current file as glossary and established catalog choices; keep terminology
 #   and phrasing coherent and consistent across contexts. Translate intent naturally, not word for
-#   word. Omit standalone "please", but retain natural conventional phrasing (e.g. "Please wait…" →
-#   "Kis türelmet…").
+#   word. Omit standalone 'please', but retain natural conventional phrasing (e.g. 'Please wait…' →
+#   'Kis türelmet…').
 #
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Hungarian image-editing vocabulary (réteg, maszk, kijelölés ...). No proprietary localisation
 # resource, string table or product UI was consulted or copied; add entries the same way.
 # Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
-# letters; the trailing "…" of dialog commands is kept. Plural rule: a count is followed by the
+# letters; the trailing '…' of dialog commands is kept. Plural rule: a count is followed by the
 # singular noun in Hungarian, so every @plural entry has a single form.
-# Use „” instead of '' and "" in the hunagrian translation.
+# Use „” (Hungarian quotation marks) instead of straight quotes in the Hungarian translation.
 
 # Plural messages and command id overrides
 # Custom paper dimensions in Print Settings.
@@ -828,11 +828,11 @@
 	Replace All Missing Fonts	Összes hiányzó betűtípus cseréje
 	Report an Issue	Hiba bejelentése
 	Report an Issue…	Hiba bejelentése…
-	Reset All	Összes alaphelyzetbe
-	Reset All Tools	Összes eszköz alaphelyzetbe
-	Reset Tool	Eszköz alaphelyzetbe
-	Reset View	Nézet alaphelyzetbe
-	Reset Workspace	Munkaterület alaphelyzetbe
+	Reset All	Összes visszaállítása
+	Reset All Tools	Összes eszköz visszaállítása
+	Reset Tool	Eszköz visszaállítása
+	Reset View	Nézet visszaállítása
+	Reset Workspace	Munkaterület visszaállítása
 	Resolve Missing Fonts	Hiányzó betűtípusok kezelése
 	Resolve Missing Fonts…	Hiányzó betűtípusok kezelése…
 	Ripple…	Fodrozódás…
@@ -1339,10 +1339,10 @@
 	Rename Brush…	Ecset átnevezése…
 	Rename Group	Csoport átnevezése
 	Rename Group…	Csoport átnevezése…
-	Reset	Visszaállít
+	Reset	Visszaállítás
 	Reset Alignment	Igazítás visszaállítása
 	Reset all tools to their default settings?	Visszaállítja az összes eszközt az alapértelmezett beállításokra?
-	Reset the brush to the defaults	Ecset visszaállítása az alapértékekre
+	Reset the brush to the defaults	Ecset visszaállítása az alapértelmezésre
 	Restore original size	Eredeti méret helyreállítása
 	Right align text	Szöveg jobbra igazítása
 	Right click with painting tools	Jobb kattintás festőeszközökkel
@@ -1710,7 +1710,7 @@ fontWeight	Thin	Hajszálvékony
 	Reflected	Tükrözött
 	Rename Channel…	Csatorna átnevezése…
 	Reorder Layer	Réteg átrendezése
-	Reset to Default	Visszaállítás alapértelmezettre
+	Reset to Default	Visszaállítás alapértelmezésre
 	Restore Original Edge	Eredeti él helyreállítása
 	Reverse	Megfordítás
 	RGB:	RGB:
@@ -1907,7 +1907,7 @@ layerLabel	Magenta	Bíbor
 	Importing {what} from {file}…	{what} importálása. Forrás: {file}…
 	Intersect with	Metszet ezzel
 	Intersect with selection  ({key})	Metszet a kijelöléssel  ({key})
-	Invalid panel layout; restored the default dock	Érvénytelen panelelrendezés; az alapértelmezett dokkolás helyreállítva
+	Invalid panel layout; restored the default dock	Érvénytelen panelelrendezés; az alapértelmezett dokkolás helyre lett állítva
 	Join the ArtCraft Discord ({url})	Csatlakozás a Discord csatornához ({url})
 	Keyboard Shortcuts	Billentyűparancsok
 	Kind	Fajta
@@ -1963,7 +1963,7 @@ layerLabel	Magenta	Bíbor
 	Rename…	Átnevezés…
 	Replace Swatches…	Színminták cseréje…
 	Reset Swatches	Színminták visszaállítása
-	Reset Transform	Alakítás visszaállítása
+	Reset Transform	Átalakítás visszaállítása
 	Resize panel window	Panelablak átméretezése
 	Resize panels	Panelek átméretezése
 	Sample Size	Mintaméret
@@ -2133,7 +2133,7 @@ navigator	Zoom	Nagyítás mértéke
 	Deep Emerald	Mély smaragd
 	Deep Red	Mélyvörös
 	Deep Yellow	Mélysárga
-	Default	Alapértelmezett
+	Default	Alapértelmezés
 	Default Leaves	Alapértelmezett levelek
 	Definition	Határozottság
 	Delete count group	Számlálócsoport törlése
@@ -2399,7 +2399,7 @@ navigator	Zoom	Nagyítás mértéke
 	Remove Planes	Síkok eltávolítása
 	Remove stop	Átmenetpont eltávolítása
 	Replace Color	Színcsere
-	Reset to defaults	Alapértékek visszaállítása
+	Reset to defaults	Alapértelmezések visszaállítása
 	Restore All	Összes helyreállítása
 	Resume	Folytatás
 	Reticulation	Retikuláció
@@ -2717,7 +2717,7 @@ cameraRaw	Yellow	Sárga
 	Advanced	Speciális
 	Adwaita dark	Adwaita sötét
 	All	Mind
-	All shortcuts reset to PhotoCraft defaults.	Minden billentyűparancs visszaállt a PhotoCraft alapértékére.
+	All shortcuts reset to PhotoCraft defaults.	Minden billentyűparancs visszaállítása a PhotoCraft szerinti alapértelmezésre.
 	All Slices	Összes szelet
 	All User Slices	Összes felhasználói szelet
 	Always create smart objects when placing	Elhelyezéskor mindig intelligens objektum létrehozása
@@ -2812,7 +2812,7 @@ cameraRaw	Yellow	Sárga
 	Default PhotoCraft Size	Alapértelmezett PhotoCraft-méret
 	Default printer	Alapértelmezett nyomtató
 	Default restored.	Alapértelmezés helyreállítva.
-	Defaults	Alapértékek
+	Defaults	Alapértelmezések
 	Delete	Törlés
 	Delete Shortcut	Billentyűparancs törlése
 	Add Shortcut	Billentyűparancs hozzáadása
@@ -2830,7 +2830,7 @@ cameraRaw	Yellow	Sárga
 	Document	Dokumentum
 	Don't Import	Importálás nélkül
 	Don't Save	Mentés nélkül
-	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Az importálás visszavonható a Szerkesztés › Billentyűparancsok › Összes visszaállítása alapértékre paranccsal.
+	Edit › Keyboard Shortcuts › Reset All to Defaults undoes an import.	Az importálás visszavonható a Szerkesztés › Billentyűparancsok › Összes visszaállítása alapértelmezésre paranccsal.
 	Embed Color Profile	Színprofil beágyazása
 	Embedded Profile Mismatch	Eltérő beágyazott profil
 	Emulsion Down	Emulziós oldal lefelé
@@ -2978,7 +2978,7 @@ cameraRaw	Yellow	Sárga
 	PostScript (72 points/inch)	PostScript (72 pont/hüvelyk)
 	Preferences can't be saved	A beállítások nem menthetők
 	Preferences saved	Beállítások mentve
-	Preferences were reset: {error}	A beállítások alaphelyzetbe álltak: {error}
+	Preferences were reset: {error}	A beállítások vissza lettek állítva: {error}
 	Preset	Előbeállítás
 	PRESET DETAILS	AZ ELŐBEÁLLÍTÁS RÉSZLETEI
 	Preset Manager	Előbeállítás-kezelő
@@ -3011,12 +3011,12 @@ cameraRaw	Yellow	Sárga
 	Rename	Átnevezés
 	Render Video	Videó megjelenítése
 	Rendering Mode	Megjelenítési mód
-	Reset All to Defaults	Összes visszaállítása alapértékre
+	Reset All to Defaults	Összes visszaállítása alapértelmezésre
 	Reset Section	Szakasz visszaállítása
 	Resize image during place	Kép átméretezése elhelyezéskor
 	Resolution	Felbontás
 	Resolution: {dpi} pixels/inch	Felbontás: {dpi} pixel/hüvelyk
-	Restore Defaults	Alapértékek helyreállítása
+	Restore Defaults	Alapértelmezések helyreállítása
 	Restrictive (Web)	Korlátozott (web)
 	Result	Eredmény
 	Retry	Újrapróbál
@@ -3110,7 +3110,7 @@ cameraRaw	Yellow	Sárga
 	Working	Munkaszíntér
 	Y	Y
 	Yes	Igen
-	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	A(z) {set} billentyűparancs-készlet itt is használatban van; {n} billentyűparancs eltér az alapértelmezettől. A Szerkesztés › Billentyűparancsok alatt megtekintheti őket; az Összes visszaállítása alapértékre paranccsal ez visszavonható.
+	Your keyboard shortcut set {set} is in use here: {n} shortcuts differ from the defaults. Edit › Keyboard Shortcuts shows them; Reset All to Defaults undoes this.	A(z) {set} billentyűparancs-készlet itt is használatban van; {n} billentyűparancs eltér az alapértelmezéstől. A Szerkesztés › Billentyűparancsok alatt megtekintheti őket; az Összes alapértelmezés visszaállítása paranccsal ez visszavonható.
 	{n} commands are not in PhotoCraft.	{n} parancs nem érhető el a PhotoCraftban.
 	{shortcut} assigned.	Billentyűparancs hozzárendelve: {shortcut}
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	A billentyűparancs már foglalt: {shortcut}. Jelenlegi parancs: {commands}. Az OK gombra kattintva onnan törlődik.
@@ -4009,7 +4009,7 @@ cameraRaw	Yellow	Sárga
 	Reference point location	Viszonyítási pont helye
 	Rendering…	Megjelenítés…
 	Report a Bug	Hiba bejelentése
-	Reset GPU Backend	GPU-háttérrendszer alaphelyzetbe állítása
+	Reset GPU Backend	GPU-háttérprogram visszaállítása
 	Restart	Újraindítás
 	Restart Required	Újraindítás szükséges
 	Restore last viewed comp	Utoljára megtekintett rétegkompozíció helyreállítása
@@ -4032,7 +4032,7 @@ cameraRaw	Yellow	Sárga
 	Select Folder…	Mappa kiválasztása…
 	Select Plane	Sík kijelölése
 	Select Similar Colors	Hasonló színek kijelölése
-	Set New Snapshot as Default	Új pillanatkép beállítása alapértelmezettként
+	Set New Snapshot as Default	Új pillanatkép beállítása alapértelmezésként
 	Set Start Timecode…	Kezdő időkód beállítása…
 	Show Guides  (⌘;)	Segédvonalak megjelenítése  (⌘;)
 	Show New Snapshot Dialog by Default	Új pillanatkép ablakának megjelenítése alapértelmezés szerint
