@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-11-05 · **Last updated:** 2026-11-05 · **Change:** patch (PDF review follow-ups: shared page-job buffers, loaded projection isolation, Render source-limit policy and optional Private metadata fallback; maintained importer #11414 remains the dependency; no parity floor changed) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-11-06 · **Last updated:** 2026-11-06 · **Change:** patch (PDF image extraction uses bounded conversion bands; indirect dialog cancellation releases PDF state; preservation size errors explain Render recovery; maintained importer #11414 remains the dependency; no parity floor changed) · **Target:** Adobe Photoshop 2026
 
 **PSD Filter Gallery (#8940, 2026-10-23):** Halftone Pattern maps its size, contrast and dot/circle/line pattern as editable settings on import and export, with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`: `ScrD`/`ScrC`/`ScrL`). PSD/PSB round trips pass at 8/16/32 bits. This does not claim pixel equivalence for the existing renderer. Unknown or malformed settings remain verbatim on import.
 
@@ -156,6 +156,7 @@ The optional `Private` entry may be absent even when the application dictionary 
 Auto renders that page, while Layers requires actual editing data. A present malformed
 entry still errors. The 512 MiB source-file cap applies to Auto/Layers preservation, not
 explicit Render; the renderer retains its own decoded-resource limits.
+Oversized preservation inputs report explicit Render as the page-appearance recovery path.
 
 Recovered layers use the PSD memory-admission policy, including decoded pattern charges,
 caller limits, high-memory approval and a capacity recheck after acquiring the decoder gate.
@@ -163,6 +164,9 @@ Approving a queued import retains its selected PDF page and layer options. These
 not remove the ordinary PDF raster import limitations tracked by #11466 and #11467.
 Selected background pages and their approval retries share the dialog's immutable source
 allocation rather than retaining one whole PDF copy per page.
+Guide-layout cancellation also releases PDF source state for indirectly removed dialogs.
+Extracted-image conversion reuses a 256-row floating-point scratch buffer for native Gray/RGB
+and alpha, rather than holding a full-image floating-point copy.
 
 Smart objects retain their page/image, layer choice, crop, resolution, colour mode, depth,
 anti-aliasing and explicit pixel size across native saves, cache regeneration, source updates
@@ -184,6 +188,7 @@ The original reference entry retains its source date and historical totals; curr
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | patch | PDF review follow-up: bounded extracted-image conversion with channel/tail coverage, actionable preservation-limit errors, and indirect dialog cleanup without discarding unrelated imports. |
 | 2026-11-05 | patch | PDF review follow-ups: shared page-job source allocation, mixed loaded projection isolation with native-editor history preserved, Render source-cap exemption and absent optional Private fallback. |
 | 2026-11-05 | minor | Photoshop layer recovery rebased onto #11414, the maintained successor to #6990; accessible fields, terminal thumbnail failures, ordered page opens and renderer safeguards retained. |
 | 2026-11-02 | minor | Actions Shear (`Shr `) loads, plays and saves the measured curve points and edge mode; unsafe subranges and unrepresentable forms remain kept steps (#10605). |

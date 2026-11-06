@@ -239,7 +239,10 @@ fn composite_icc_profile(composite: &HayroStream<'_>) -> Result<Option<Vec<u8>>,
 /// huge PDF. Call before loading; Render retains its own resource guards.
 pub(crate) fn validate_pdf_size_len(len: usize, mode: photocraft_doc::PdfImportMode) -> Result<(), LayeredPdfError> {
     if mode != photocraft_doc::PdfImportMode::Render && len > MAX_PDF_BYTES {
-        return Err(LayeredPdfError::pdf(format!("PDF is larger than the {} MiB import limit", MAX_PDF_BYTES >> 20)));
+        return Err(LayeredPdfError::pdf(format!(
+            "PDF is larger than the {} MiB limit for preserved Photoshop layers; choose PDF render mode to open its page appearance",
+            MAX_PDF_BYTES >> 20
+        )));
     }
     Ok(())
 }

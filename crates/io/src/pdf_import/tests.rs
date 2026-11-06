@@ -1,5 +1,6 @@
 use std::io::Write as _;
 
+use hayro::hayro_interpret::RgbData;
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_raster::Interrupt;
 
@@ -400,6 +401,83 @@ fn a_page_that_is_one_image_opens_as_that_image() {
     let two = image_pdf(400.0, 300.0, &[(100, 50, false, "200 0 0 100 20 150"), (64, 64, true, "64 0 0 64 300 50")], "");
     assert_eq!(open(&two, at72(CropTo::MediaBox)).document.layers[0].name, "Layer 1");
     assert!(opens_as_image(&bytes, None) && !opens_as_image(&two, None) && !opens_as_image(&with_rect, None));
+}
+
+/// Builds a decoded placement without involving PDF decoding, preserving caller-supplied malformed buffers.
+fn decoded_image((width, height): (u32, u32), gray: bool, color: Vec<u8>, alpha: Option<LumaData>) -> Placed {
+    let data = if gray {
+        ImageData::Luma(LumaData { width, height, data: color, interpolate: false, scale_factors: (1.0, 1.0) })
+    } else {
+        ImageData::Rgb(RgbData { width, height, data: color, interpolate: false, scale_factors: (1.0, 1.0) })
+    };
+    Placed { transform: Affine::scale(2.0), size: (width, height), decoded: Some((data, alpha)) }
+}
+
+/// Preserves native luma/RGB and straight alpha across two full conversion bands and a partial tail.
+#[test]
+fn native_image_bands_preserve_channels_and_alpha() {
+    let (w, h) = (3, BAND_ROWS * 2 + 3);
+    let count = (w * h) as usize;
+    for gray in [true, false] {
+        let n = if gray { 1 } else { 3 };
+        let color: Vec<u8> = (0..count * n).map(|i| ((i * 37 + i / (w as usize * n) * 13) % 256) as u8).collect();
+        for masked in [false, true] {
+            let alpha = masked.then(|| LumaData {
+                width: w,
+                height: h,
+                data: (0..count).map(|i| ((i * 19 + 11) % 256) as u8).collect(),
+                interpolate: false,
+                scale_factors: (1.0, 1.0),
+            });
+            let placed = decoded_image((w, h), gray, color.clone(), alpha);
+            let doc = image_document("bands", &placed).expect("native image");
+            assert_eq!((doc.size.width, doc.size.height, doc.depth, doc.resolution_dpi), (w, h, SampleType::U8, 36.0));
+            assert_eq!(doc.mode, if gray { ColorMode::Grayscale } else { ColorMode::Rgb });
+            assert_eq!(doc.layers.len(), 1);
+            let layer = &doc.layers[0];
+            assert_eq!(layer.name, "Background");
+            assert!(layer.locks.transparency && layer.locks.position);
+            let surface = layer.surface().unwrap();
+            for y in 0..h {
+                for x in 0..w {
+                    let i = (y * w + x) as usize;
+                    let got = surface.pixel(x as i32, y as i32);
+                    let expected_alpha = if masked { ((i * 19 + 11) % 256) as u8 } else { 255 };
+                    let want = color[i * n..(i + 1) * n].iter().copied().chain(std::iter::once(expected_alpha));
+                    assert_eq!(got.len(), n + 1);
+                    for (actual, expected) in got.iter().zip(want) {
+                        assert!((actual - f32::from(expected) / 255.0).abs() < 0.5 / 255.0, "gray={gray}, masked={masked}, ({x}, {y}): {got:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Rejects invalid native dimensions and short color data, while ignoring mismatched or short alpha masks.
+#[test]
+fn native_image_bands_validate_buffers_and_dimensions() {
+    let size = (2, BAND_ROWS + 1);
+    let count = (size.0 * size.1) as usize;
+    for gray in [true, false] {
+        let n = if gray { 1 } else { 3 };
+        assert!(image_document("short", &decoded_image(size, gray, vec![128; count * n - 1], None)).is_none());
+        for size in [(0, 1), (1, 0), (MAX_SIDE + 1, 1), (1, MAX_SIDE + 1), (MAX_SIDE, MAX_SIDE)] {
+            assert!(image_document("size", &decoded_image(size, gray, Vec::new(), None)).is_none());
+        }
+        let mut expected = vec![128.0 / 255.0; n];
+        expected.push(1.0);
+        for (width, height, len) in [(size.0, size.1, count - 1), (1, size.1, count), (size.0, size.1 - 1, count)] {
+            let alpha = LumaData { width, height, data: vec![0; len], interpolate: false, scale_factors: (1.0, 1.0) };
+            let doc = image_document("mask", &decoded_image(size, gray, vec![128; count * n], Some(alpha))).unwrap();
+            let surface = doc.layers[0].surface().unwrap();
+            for y in [0, BAND_ROWS - 1, BAND_ROWS] {
+                for x in 0..2 {
+                    assert_eq!(surface.pixel(x, y as i32), expected);
+                }
+            }
+        }
+    }
 }
 
 /// Enumerates and extracts embedded images with stable indices, native dimensions, and fitted thumbnails.

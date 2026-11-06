@@ -2089,7 +2089,8 @@ fn image_only(name: &str, page: &Page) -> Result<Option<Document>, IoError> {
 /// A placed, decoded image as Photoshop opens it: its own pixels on a locked `Background`
 /// layer, Grayscale or RGB as the image is, 8 bits, at the resolution its placed width implies
 /// (rotation and uneven scaling in the matrix are ignored, as Photoshop ignores them). `None`
-/// when it wasn't decoded or is absurd.
+/// when it wasn't decoded or is absurd. Conversion reuses at most [`BAND_ROWS`] rows of
+/// normalized color and alpha samples, never a whole-image float copy.
 fn image_document(name: &str, placed: &Placed) -> Option<Document> {
     let (data, alpha) = placed.decoded.as_ref()?;
     let (w, h) = (data.width(), data.height());
@@ -2104,24 +2105,34 @@ fn image_document(name: &str, placed: &Placed) -> Option<Document> {
         ImageData::Luma(l) => (ColorMode::Grayscale, 1, &l.data),
         ImageData::Rgb(r) => (ColorMode::Rgb, 3, &r.data),
     };
-    let count = (w as usize).saturating_mul(h as usize);
-    if color.len() < count.saturating_mul(n) {
+    let count = (w as usize).checked_mul(h as usize)?;
+    if color.len() < count.checked_mul(n)? {
         return None;
     }
     let alpha = alpha.as_ref().filter(|a| a.width == w && a.height == h && a.data.len() >= count);
     let mut doc = Document::new(name, Size::new(w, h), mode, SampleType::U8);
     doc.resolution_dpi = ppi.clamp(MIN_RESOLUTION, MAX_RESOLUTION);
     let fmt = doc.pixel_format();
-    let mut px = Vec::with_capacity(count.saturating_mul(n + 1));
-    for (i, p) in color.chunks_exact(n).take(count).enumerate() {
-        px.extend(p.iter().map(|&v| f32::from(v) / 255.0));
-        px.push(alpha.and_then(|a| a.data.get(i)).map_or(1.0, |&a| f32::from(a) / 255.0));
-    }
     let mut layer = Layer::raster("Background", fmt);
     layer.locks.transparency = true;
     layer.locks.position = true;
     if let Some(s) = layer.surface_mut() {
-        s.write_region(doc.bounds(), &px);
+        let capacity = (w as usize).checked_mul(BAND_ROWS.min(h) as usize)?.checked_mul(n + 1)?;
+        let mut px = Vec::with_capacity(capacity);
+        let mut y = 0;
+        while y < h {
+            let rows = BAND_ROWS.min(h - y);
+            let start = (y as usize).checked_mul(w as usize)?;
+            let end = start.checked_add((rows as usize).checked_mul(w as usize)?)?;
+            let band = color.get(start.checked_mul(n)?..end.checked_mul(n)?)?;
+            px.clear();
+            for (i, p) in (start..end).zip(band.chunks_exact(n)) {
+                px.extend(p.iter().map(|&v| f32::from(v) / 255.0));
+                px.push(alpha.and_then(|a| a.data.get(i)).map_or(1.0, |&a| f32::from(a) / 255.0));
+            }
+            s.write_region(photocraft_geom::Rect::from_xywh(0, i32::try_from(y).ok()?, w, rows), &px);
+            y += rows;
+        }
     }
     doc.layers.push(layer);
     Some(doc)

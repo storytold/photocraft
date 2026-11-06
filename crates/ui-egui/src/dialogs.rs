@@ -1088,7 +1088,8 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     }
 }
 
-/// Cancel a dialog and its dependent Layer Style picker, without applying edits.
+/// Cancel a dialog and its dependent pickers or guide-layout children without applying edits,
+/// releasing the PDF files held by any closed import dialogs.
 pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     let closed = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     crate::guide_edit::cancel(app, id);
@@ -1112,6 +1113,9 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     app.ui.dialogs.retain(|d| !pickers.contains(&d.id));
     crate::actions::stopped(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
+        // Automation can associate a PDF dialog too: release its file before removing the dialog.
+        let dialogs = &app.ui.dialogs;
+        app.pdf_import.retain(|st| !dialogs.iter().any(|child| child.id == st.dialog && child.fields.get("__dialog").and_then(Value::as_u64) == Some(id)));
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }
     // Cancel on a profile prompt opens neither its file nor the ones still to come.

@@ -226,6 +226,56 @@ fn cancel_opens_nothing_and_lets_the_file_go() {
     assert!(app.pdf_import.is_empty() && dialog(&app).is_none());
 }
 
+/// Cancelling a guide layout releases PDF sources associated through control while another import
+/// keeps its source and remains usable.
+#[test]
+fn cancelling_guide_layout_releases_associated_pdf_without_discarding_another() {
+    /// Execute a real control request and require an immediate successful reply.
+    fn call(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+        use crate::control::{ControlRequest, Outcome, handle};
+
+        let (request, _) = ControlRequest::new(method, params);
+        let Outcome::Done(reply) = handle(app, ctx, &request) else { panic!("expected immediate {method}") };
+        assert_eq!(reply["ok"], true, "{method}: {reply}");
+        reply
+    }
+
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let layout = call(&mut app, &ctx, "ui.dialog.open", json!({"kind": "command", "command": "view.newGuideLayout"}))["result"]["dialog"]
+        .as_u64()
+        .expect("guide layout dialog");
+    app.open_bytes("associated.pdf", &three_pages()).expect("open associated PDF");
+    let associated = dialog(&app).expect("associated PDF dialog").id;
+    app.open_bytes("unrelated.pdf", &pdf(&[(60.0, 40.0, "0 0 1 rg 0 0 60 40 re f")])).expect("open unrelated PDF");
+    let unrelated = app.pdf_import.iter().find(|st| st.dialog != associated).expect("unrelated PDF state").dialog;
+    let associated_bytes = Arc::clone(&app.pdf_import.iter().find(|st| st.dialog == associated).unwrap().bytes);
+    let unrelated_bytes = Arc::clone(&app.pdf_import.iter().find(|st| st.dialog == unrelated).unwrap().bytes);
+    let released = Arc::downgrade(&associated_bytes);
+    assert_eq!(Arc::strong_count(&associated_bytes), 2);
+    assert_eq!(Arc::strong_count(&unrelated_bytes), 2);
+
+    call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": associated, "field": "__dialog", "value": layout}));
+    call(&mut app, &ctx, "ui.dialog.cancel", json!({"dialog": layout}));
+
+    assert!(app.session.documents().is_empty(), "cancellation opens nothing");
+    assert!(!app.ui.dialogs.iter().any(|d| d.id == layout || d.id == associated), "the associated dialog still closes with its parent");
+    assert_eq!(Arc::strong_count(&associated_bytes), 1, "the app must release the removed dialog's PDF bytes");
+    drop(associated_bytes);
+    assert!(released.upgrade().is_none(), "the associated PDF allocation is released");
+    assert_eq!(app.pdf_import.iter().map(|st| st.dialog).collect::<Vec<_>>(), [unrelated]);
+    assert_eq!(dialog(&app).expect("unrelated dialog remains").id, unrelated);
+    assert_eq!(Arc::strong_count(&unrelated_bytes), 2, "the unrelated PDF remains held");
+
+    call(&mut app, &ctx, "ui.dialog.set", json!({"dialog": unrelated, "field": "resolution", "value": 72}));
+    call(&mut app, &ctx, "ui.dialog.confirm", json!({"dialog": unrelated}));
+    let opened = app.session.active().expect("unrelated PDF imported");
+    assert_eq!((opened.doc.size.width, opened.doc.size.height), (60, 40));
+    assert_eq!(opened.doc.layers[0].surface().unwrap().pixel(5, 5), [0.0, 0.0, 1.0, 1.0]);
+    assert!(app.pdf_import.is_empty() && dialog(&app).is_none());
+    assert_eq!(Arc::strong_count(&unrelated_bytes), 1);
+}
+
 /// Two PDFs opened together (Open with both selected, a drop, the command line) each keep their
 /// own file behind their own dialog: OK on either opens that file, Cancel on one leaves the other.
 #[test]
