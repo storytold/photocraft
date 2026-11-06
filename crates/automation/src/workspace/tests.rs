@@ -755,6 +755,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.clippingPath.set"
             | "path.rename"
             | "path.stroke"
+            | "path.toShape"
             | "type.attachToPath"
             | "type.fillPath"
             | "type.detachFromPath"
