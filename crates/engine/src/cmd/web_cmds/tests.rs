@@ -1396,6 +1396,37 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
     }
 }
 
+/// Keep the picker-selected name across formats without restamping or replacing earlier exports.
+#[test]
+fn prepared_timestamp_quick_export_keeps_picker_name_and_publishes_exclusively() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = session(8);
+    s.execute("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
+    for ext in ["png", "jpg", "gif", "webp", "exr"] {
+        let path = dir.path().join(format!("photo_20261106-120000-007.{ext}"));
+        let first = s.execute("file.export.quickExport", json!({"path": path, "preparedPath": true})).unwrap();
+        assert_eq!(first["path"], path.to_str().unwrap());
+        let bytes = std::fs::read(&path).unwrap();
+        let second = s.execute("file.export.quickExport", json!({"path": path, "preparedPath": true})).unwrap();
+        assert_eq!(second["path"], dir.path().join(format!("photo_20261106-120000-007_1.{ext}")).to_str().unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+/// Reject malformed or inapplicable prepared paths before any output is written.
+#[test]
+fn prepared_quick_export_requires_timestamp_naming_and_an_explicit_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("photo.png");
+    let mut s = session(8);
+    assert!(s.execute("file.export.quickExport", json!({"path": path, "preparedPath": true})).is_err());
+    s.execute("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
+    for params in [json!({"preparedPath": true}), json!({"path": "", "preparedPath": true}), json!({"path": path, "preparedPath": "yes"})] {
+        assert!(s.execute("file.export.quickExport", params).is_err());
+    }
+    assert!(!path.exists());
+}
+
 /// Export every supported format to distinct paths while preserving the source and earlier outputs.
 #[test]
 fn timestamp_quick_export_preserves_source_and_all_formats() {

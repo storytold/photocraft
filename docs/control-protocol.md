@@ -790,7 +790,11 @@ Assign **Select Layer Under Cursor** in Keyboard Shortcuts to choose the topmost
 `file.export.exportPreferences {"quickExportNaming":"timestamp"}`. Resetting Export restores Default.
 Timestamp appends local `YYYYMMDD-HHMMSS-SSS` before the extension. Desktop document Quick Export
 uses exclusive publication and adds `_1`, `_2`, etc. on collisions; its result's `path` is the
-actual output. An explicit `path` is a naming base in Timestamp mode. Default retains existing
+actual output. An explicit `path` is a naming base in Timestamp mode. A native save picker offers
+the timestamped name before checking replacement. It passes `preparedPath: true` with its selected
+`path` to avoid adding a second timestamp; edits to that suggested name are honoured. This flag
+requires Timestamp naming and an explicit nonempty path, and still uses exclusive publication.
+Default retains existing
 replacement and source-file confirmation behaviour. Browser Quick Export passes the timestamped
 PNG name to the existing download service; the browser chooses the final filename on disk.
 Layer Quick Export and other save/export commands do not use this setting.

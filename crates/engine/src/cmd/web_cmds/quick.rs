@@ -55,6 +55,17 @@ pub fn quick_export_target_is_own_file(s: &Session) -> bool {
 pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.quickExport";
     let prefs = s.prefs().export.clone();
+    let prepared_path = match p.get("preparedPath") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err(bad(cmd, "`preparedPath` must be a boolean")),
+    };
+    // A prepared picker name must never turn Default's replacing writer into an implicit override.
+    if prepared_path
+        && (prefs.quick_export_naming != crate::prefs::QuickExportNaming::Timestamp || p.get("path").and_then(Value::as_str).is_none_or(str::is_empty))
+    {
+        return Err(bad(cmd, "`preparedPath` requires Timestamp naming and an explicit `path`"));
+    }
     let fmt = quick_export_ext(s);
     let path = match p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()) {
         Some(v) => v.to_string(),
@@ -84,7 +95,7 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         // light; the web/sRGB pipeline would instead clamp HDR and negative values.
         let opts = photocraft_io::ExportOptions { xmp: photocraft_io::XmpEmbed::None, ..Default::default() };
         let out = photocraft_io::export(&doc, "exr", &opts).map_err(other)?;
-        let path = write_quick_export(&path, &out.bytes, prefs.quick_export_naming)?;
+        let path = write_quick_export(&path, &out.bytes, prefs.quick_export_naming, prepared_path)?;
         crate::automate_cmds::fire_event(s, "export");
         return Ok(json!({"path": path, "format": fmt, "bytes": out.bytes.len(), "warnings": out.warnings}));
     }
@@ -118,7 +129,7 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
             let (wdoc, _, _) = web_document(&doc, &json!({}), &WebSettings { convert_to_srgb: prefs.convert_to_srgb, ..Default::default() })?;
             let quality = if prefs.webp_lossless { None } else { Some((f64::from(prefs.webp_quality.clamp(1, 100)) - 1.0) * 12.0 / 99.0) };
             let (bytes, warnings) = crate::file_cmds::encode(&wdoc, &path, quality)?;
-            let path = write_quick_export(&path, &bytes, prefs.quick_export_naming)?;
+            let path = write_quick_export(&path, &bytes, prefs.quick_export_naming, prepared_path)?;
             crate::automate_cmds::fire_event(s, "export");
             return Ok(json!({"path": path, "format": fmt, "warnings": warnings}));
         }
@@ -143,23 +154,26 @@ pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
         wdoc.resolution_dpi,
         false,
     )?;
-    let path = write_quick_export(&path, &opt.bytes, prefs.quick_export_naming)?;
+    let path = write_quick_export(&path, &opt.bytes, prefs.quick_export_naming, prepared_path)?;
     crate::automate_cmds::fire_event(s, "export");
     Ok(json!({"path": path, "format": fmt, "bytes": opt.bytes.len(), "warnings": web_warnings(&st, exif, wdoc.resolution_dpi)}))
 }
 
-/// Default keeps replacement semantics; Timestamp publishes exclusively and reports its real path.
-fn write_quick_export(path: &str, bytes: &[u8], naming: crate::prefs::QuickExportNaming) -> Result<String> {
+/// Publish Timestamp names exclusively, preserving a picker's prepared name without restamping.
+fn write_quick_export(path: &str, bytes: &[u8], naming: crate::prefs::QuickExportNaming, prepared_path: bool) -> Result<String> {
     if naming == crate::prefs::QuickExportNaming::Default {
         write_file(path, bytes)?;
         return Ok(path.into());
     }
     #[cfg(not(target_arch = "wasm32"))]
-    let target = crate::quick_export_naming::timestamped_path(std::path::Path::new(path))?;
+    let target = if prepared_path { std::path::PathBuf::from(path) } else { crate::quick_export_naming::timestamped_path(std::path::Path::new(path))? };
     #[cfg(not(target_arch = "wasm32"))]
     let target = photocraft_format::atomic::write_unique(&target, bytes).map_err(other)?;
     #[cfg(target_arch = "wasm32")]
-    return Err(other("Quick Export filesystem writing is unavailable on the web"));
+    {
+        let _ = prepared_path;
+        return Err(other("Quick Export filesystem writing is unavailable on the web"));
+    }
     #[cfg(not(target_arch = "wasm32"))]
     target.into_os_string().into_string().map_err(|_| other("Quick Export path is not valid Unicode"))
 }

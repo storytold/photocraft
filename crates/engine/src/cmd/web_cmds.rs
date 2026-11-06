@@ -98,7 +98,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Quick Export",
             &[],
             None,
-            r##"{"path":str? (required unless Export Preferences › Location is "sameFolder" and the document is saved)} → {path, format, bytes, warnings}"##,
+            r##"{"path":str? (required unless Export Preferences › Location is "sameFolder" and the document is saved),"preparedPath":bool? (Timestamp only: a picker has already prepared the explicit filename; still published exclusively)} → {path, format, bytes, warnings}"##,
             native_doc,
             quick_export
         ),

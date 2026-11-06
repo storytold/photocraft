@@ -1058,7 +1058,10 @@ Empty names and final separators, `.` or `..` components are rejected before fil
 
 Preferences missing the field select Default. Older builds following the current Serde convention
 ignore this unknown field and may discard it when saving settings; a newer build then uses Default.
-The Ask picker retains its existing confirmation machinery; an existing base filename may
-therefore still prompt, but Timestamp publication never replaces it.
+The Ask picker receives a timestamped suggestion before its replacement checks, so accepting
+that suggestion does not ask to replace the unsuffixed source. The engine's `preparedPath: true`
+option publishes the selected name exclusively without appending another timestamp. User edits
+to the suggestion are honoured; explicitly selecting an existing file can still trigger the
+native picker's confirmation, but publication never replaces it.
 The browser retains its PNG Quick Export service and lets the browser manage filesystem collisions.
 Its final download name may differ from the name PhotoCraft requested.

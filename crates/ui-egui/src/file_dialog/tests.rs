@@ -11,14 +11,24 @@ fn timestamp_quick_export_ask_and_same_folder_preserve_original() {
     std::fs::write(&own, b"original").unwrap();
     let (mut app, open, _) = app();
     app.session.active_mut().unwrap().path = Some(own.clone());
+    std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "photo.png".into();
     app.run("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
     let ctx = egui::Context::default();
     menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
     app.poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::SaveTo(own.clone())));
+    let suggested = match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        request => panic!("expected save request, got {request:?}"),
+    };
+    let selected = Path::new(&suggested);
+    assert_eq!(selected.parent(), Some(dir.path()));
+    assert!(selected.file_name().unwrap().to_str().unwrap().starts_with("photo_"));
+    assert!(!selected.exists(), "the native picker must not check replacement of the original");
+    answer(&open, Some(FileDialogAnswer::SaveTo(suggested.clone())));
     app.poll_file_dialog(&ctx, None);
     assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert!(app.ui.status.contains("photo_"));
+    assert!(app.ui.status.contains(&suggested));
+    assert!(selected.exists(), "the engine must write the picker name without a second timestamp");
     app.run("prefs.set", json!({"path": "export.quickExportLocation", "value": "sameFolder"})).unwrap();
     menus::invoke(&mut app, &ctx, "file.export.quickExportAsPng", Value::Null).unwrap();
     assert!(open.borrow().is_empty());
