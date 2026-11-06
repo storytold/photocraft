@@ -271,10 +271,8 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
 
     let mut result = describe(&registry::install(plugin));
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(path) = written {
-        if let Value::Object(ref mut map) = result {
-            map.insert("written".into(), json!(path));
-        }
+    if let (Some(path), Value::Object(map)) = (written, &mut result) {
+        map.insert("written".into(), json!(path));
     }
     Ok(result)
 }
