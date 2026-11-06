@@ -1107,7 +1107,9 @@ document, then reading the steps back. This is the form PhotoCraft's recorder sh
 today it drops the active layer's id when that layer is the only one selected and the command does not
 name a source layer (`layer.new.frame`, `select.loadSelection`, `type.createSelection` and
 `edit.checkSpelling` keep it), and names every other layer it keeps by name when the name is unique, so
-playback acts on that named layer and fails if it is absent (`crates/engine/src/actions_record.rs`).
+playback acts on that named layer and fails if it is absent (`crates/engine/src/actions_record.rs`). A
+Layers-panel move of several layers, or of a layer that is not the selected one, keeps its layer ids
+(`crates/engine/src/cmd/layer_multi_cmds/moves.rs`), so it replays only on the same document.
 
 | User action | Recorded step |
 |---|---|
