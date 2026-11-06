@@ -19,6 +19,43 @@ fn png_file(dir: &std::path::Path, name: &str, w: u32, h: u32, rgb: [f32; 3]) ->
     path.to_str().unwrap().to_string()
 }
 
+/// A PNG of `w × h` in four coloured quadrants (red, green / blue, white), written to `dir/name`:
+/// artwork that shows if a placement flips or shifts it.
+fn quadrants_file(dir: &std::path::Path, name: &str, w: u32, h: u32) -> String {
+    let mut doc = Document::new("q", Size::new(w, h), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut l = Layer::raster("q", doc.pixel_format());
+    let px: Vec<f32> = (0..h)
+        .flat_map(|y| {
+            (0..w).flat_map(move |x| match (2 * x < w, 2 * y < h) {
+                (true, true) => [1.0, 0.0, 0.0, 1.0],
+                (false, true) => [0.0, 1.0, 0.0, 1.0],
+                (true, false) => [0.0, 0.0, 1.0, 1.0],
+                (false, false) => [1.0, 1.0, 1.0, 1.0],
+            })
+        })
+        .collect();
+    l.surface_mut().unwrap().write_region(Rect::new(0, 0, w as i32, h as i32), &px);
+    doc.layers = vec![l];
+    let path = dir.join(name);
+    std::fs::write(&path, photocraft_io::export(&doc, "png", &Default::default()).unwrap().bytes).unwrap();
+    path.to_str().unwrap().to_string()
+}
+
+/// The share of pixels opaque in both renders whose colours match (within 0.25 per channel).
+fn colours_agree(a: &Surface, b: &Surface) -> f32 {
+    let r = a.content_bounds().union(&b.content_bounds());
+    let (pa, pb) = (a.read_region(r), b.read_region(r));
+    let n = a.format().channels();
+    let (mut both, mut same) = (0usize, 0usize);
+    for (p, q) in pa.chunks_exact(n).zip(pb.chunks_exact(n)) {
+        if p[n - 1] > 0.99 && q[n - 1] > 0.99 {
+            both += 1;
+            same += usize::from(p[..n - 1].iter().zip(&q[..n - 1]).all(|(x, y)| (x - y).abs() < 0.25));
+        }
+    }
+    same as f32 / both.max(1) as f32
+}
+
 /// A scratch directory for test `tag`, created if missing.
 fn tmp_dir(tag: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("pcraft-fit-{tag}-{}", std::process::id()));
@@ -83,7 +120,7 @@ fn near(a: Rect, b: Rect, tol: i32) -> bool {
 }
 
 /// Renders the same placement twice: once from a full-size file (`fit` keep), once from a
-/// smaller file with `fit: "stretch"`. Both must cover the same pixels.
+/// smaller file with `fit: "stretch"`. Both must cover the same pixels, the same way round.
 fn full_vs_stretched(tag: &str, setup: impl Fn(&mut SmartObject, [f64; 4])) {
     full_vs_stretched_from(tag, |w, h| (w.div_ceil(2), h.div_ceil(2)), setup);
 }
@@ -95,14 +132,17 @@ fn full_vs_stretched_from(tag: &str, size: impl Fn(u32, u32) -> (u32, u32), setu
     let b = old_box(&full, id);
     let (w, h) = ((b[2] - b[0]) as u32, (b[3] - b[1]) as u32);
     set_placement(&mut full, id, |sm| setup(sm, b));
-    replace(&mut full, id, &png_file(&dir, "full.png", w, h, [1.0, 0.0, 0.0]), None);
+    replace(&mut full, id, &quadrants_file(&dir, "full.png", w, h), None);
     let (mut small, id2) = smart_session();
     set_placement(&mut small, id2, |sm| setup(sm, b));
     let (sw, sh) = size(w, h);
-    replace(&mut small, id2, &png_file(&dir, "small.png", sw, sh, [1.0, 0.0, 0.0]), Some("stretch"));
+    replace(&mut small, id2, &quadrants_file(&dir, "small.png", sw, sh), Some("stretch"));
     let (a, c) = (rendered(&full, id), rendered(&small, id2));
     assert!(near(a.content_bounds(), c.content_bounds(), 1), "{tag}: {:?} vs {:?}", a.content_bounds(), c.content_bounds());
     assert!(alpha_diff(&a, &c) < 0.03, "{tag}: alpha diff {}", alpha_diff(&a, &c));
+    // The artwork lands the same way round: only the quadrant edges, resampled, may differ.
+    let agree = colours_agree(&a, &c);
+    assert!(agree > 0.7, "{tag}: colours agree on {agree}");
     std::fs::remove_dir_all(&dir).ok();
 }
 
@@ -136,6 +176,26 @@ fn stretch_fills_the_old_box_through_a_warp_over_a_wider_box() {
 #[test]
 fn stretch_fills_the_old_box_through_a_preset_warp() {
     full_vs_stretched("preset", |sm, b| sm.warp = Some(Warp::preset(photocraft_geom::warp::WarpStyle::Arc, 30.0, b)));
+}
+
+/// A preset warp over a box narrower than the contents extrapolates past it. Stretching keeps
+/// that: the custom mesh it becomes covers the old contents, so new contents map, everywhere, to
+/// where the old warp took the matching old pixels (a mesh over the preset's own box would clamp).
+#[test]
+fn stretch_keeps_a_preset_warps_extrapolation_past_its_box() {
+    use photocraft_geom::warp::WarpStyle;
+    let (old, new) = ([0.0, 0.0, 100.0, 60.0], [0.0, 0.0, 50.0, 40.0]);
+    let preset = Warp::preset(WarpStyle::Arc, 40.0, [20.0, 10.0, 80.0, 50.0]);
+    let mut sm = SmartObject::new(SmartSource::Embedded { file_name: "x.png".into(), bytes: Arc::new(Vec::new()) }, Affine::IDENTITY, None);
+    sm.warp = Some(preset.clone());
+    super::super::placing::stretch_placement(&mut sm, old, new);
+    let w = sm.warp.unwrap();
+    let (kx, ky) = (2.0, 1.5);
+    for (x, y) in [(0.0, 0.0), (49.0, 39.0), (2.0, 30.0), (25.0, 20.0), (48.0, 3.0)] {
+        let (a, b) = w.map(x, y);
+        let (c, d) = preset.map(kx * x, ky * y);
+        assert!((a - c).abs() < 1e-6 && (b - d).abs() < 1e-6, "({x}, {y}): {:?} vs {:?}", (a, b), (c, d));
+    }
 }
 
 #[test]
