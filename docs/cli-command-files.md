@@ -40,3 +40,7 @@ Limits are 8 MiB per script, 4096 lines, 256 KiB per line, 64 levels of params,
 The server's request/response budgets also apply. File access remains subject to
 the control server's automation roots and command policy; see
 [the control protocol](control-protocol.md).
+
+Captured subtrees must also fit the params nesting limit at their insertion point.
+Library callers must invoke synchronous remote runs from a dedicated thread outside
+a Tokio runtime; an existing runtime returns a diagnostic rather than nesting one.

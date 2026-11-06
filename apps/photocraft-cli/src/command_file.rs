@@ -52,6 +52,27 @@ fn reference(text: &str) -> Result<Option<(&str, &str)>, String> {
     Ok(Some((name, pointer)))
 }
 
+/// Captures are JSON data, not templates: check their depth without interpreting dollar strings.
+fn check_capture_depth(value: &Value, depth: usize) -> Result<(), String> {
+    if depth > MAX_DEPTH {
+        return Err(format!("params exceed nesting limit {MAX_DEPTH}"));
+    }
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                check_capture_depth(value, depth + 1)?;
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values() {
+                check_capture_depth(value, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// Walk both during preflight and execution, preserving the referenced JSON type.
 fn template(value: &Value, captures: &HashMap<String, Value>, resolve: bool, depth: usize, budget: &mut usize) -> Result<Value, String> {
     if depth > MAX_DEPTH {
@@ -63,6 +84,7 @@ fn template(value: &Value, captures: &HashMap<String, Value>, resolve: bool, dep
                 let captured = captures.get(name).ok_or_else(|| format!("undefined or forward capture ${name}"))?;
                 if resolve {
                     let found = captured.pointer(pointer).ok_or_else(|| format!("JSON pointer does not exist in capture ${name}"))?;
+                    check_capture_depth(found, depth)?;
                     // Account before cloning, including repeatedly substituted large captures.
                     let size = serde_json::to_vec(found).map_err(|_| "cannot encode capture")?.len();
                     *budget = budget.checked_sub(size).ok_or("resolved params exceed 8 MiB budget")?;
@@ -139,6 +161,11 @@ fn load(path: &Path) -> Result<Vec<Step>, String> {
 }
 
 pub(super) fn run(args: &RunArgs, out: &mut dyn Write) -> Result<(), String> {
+    // This synchronous entrypoint borrows a writer; reject async hosts before creating or
+    // dropping a nested runtime, either of which could panic in that context.
+    if tokio::runtime::Handle::try_current().is_ok() {
+        return Err("remote command files cannot run inside a Tokio runtime; call the synchronous CLI from a dedicated thread without a Tokio runtime".into());
+    }
     let port = args.control.filter(|port| *port != 0).ok_or("--control must be a port from 1 to 65535")?;
     let path = args.file.as_deref().ok_or("remote run needs exactly one <script.jsonl>")?;
     let steps = load(path)?;
@@ -185,6 +212,16 @@ mod tests {
     fn substituted_values_are_budgeted_before_cloning() {
         let captures = HashMap::from([("big".to_owned(), json!("long result"))]);
         assert!(template(&json!({"x":"$big"}), &captures, true, 0, &mut 2).is_err());
+    }
+
+    #[test]
+    fn captured_subtrees_obey_the_insertion_depth() {
+        for value in [json!({"literal": "$customer"}), json!(["$customer"])] {
+            let captures = HashMap::from([("saved".to_owned(), value.clone())]);
+            let mut budget = MAX_BYTES;
+            assert_eq!(template(&json!("$saved"), &captures, true, MAX_DEPTH - 1, &mut budget).unwrap(), value);
+            assert!(template(&json!("$saved"), &captures, true, MAX_DEPTH, &mut budget).is_err());
+        }
     }
 
     #[test]

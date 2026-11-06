@@ -244,3 +244,38 @@ fn remote_mode_ignores_unused_gpu_environment_and_accepts_token_file_alias() {
         assert!(!error.contains("PHOTOCRAFT_GPU"), "{error}");
     }
 }
+
+#[test]
+fn library_remote_run_returns_an_error_in_an_async_host() {
+    let fixture = Fixture::new(r#"{"command":"first"}"#);
+    let args: Vec<_> = fixture.command(1, "--control-token-file").get_args().map(std::ffi::OsStr::to_os_string).collect();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    runtime.block_on(async {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(photocraft_cli::run(args, &mut out, &mut err), 1);
+        assert!(String::from_utf8(err).unwrap().contains("Tokio runtime"));
+        assert!(out.is_empty());
+    });
+}
+
+#[test]
+fn an_overdeep_capture_stops_before_the_next_command() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        let mut reader = auth(&listener);
+        let request = read(&mut reader);
+        reply(&mut reader, &request, json!({"value": 7}));
+        let mut line = String::new();
+        assert_eq!(reader.read_line(&mut line).unwrap(), 0, "an overdeep second command must not be dispatched");
+    });
+    let mut params = json!("$saved");
+    for _ in 0..64 {
+        params = json!({"nested": params});
+    }
+    let script = format!("{}\n{}\n", json!({"command":"first", "saveAs":"saved"}), json!({"command":"next", "params":params}));
+    let output = Fixture::new(&script).run(port);
+    server.join().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("script line 2: params exceed nesting limit 64"));
+}
