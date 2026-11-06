@@ -12,6 +12,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
+use crate::document_preset_cmds::MAX_RESOLUTION;
 use crate::{EngineError, Result, Session};
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
@@ -236,15 +237,27 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         pw = pw.or(Some(ow as f64 * pc / 100.0));
         ph = ph.or(Some(oh as f64 * pc / 100.0));
     }
+    // The document range File › New and the dialog's field allow; outside it, refuse rather than
+    // clamp (#9260: 1e39 became inf as f32, then silently 10000 ppi). The document's own
+    // resolution always passes: an imported file may have one outside the range, and the dialog
+    // sends it back unchanged (exactly: a value that only rounds to it as f32 is refused).
+    let own_dpi = f64::from(d.doc.resolution_dpi);
+    let dpi = match p.get("resolution") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let r = v.as_f64().filter(|&r| r.is_finite() && ((1.0..=MAX_RESOLUTION).contains(&r) || r == own_dpi));
+            Some(r.ok_or_else(|| bad("image.imageSize", format!("`resolution` = {v} must be a number of pixels per inch from 1 to {MAX_RESOLUTION}")))?)
+        }
+    };
     // `keepPrintSize`: only the resolution given, the pixels follow it (Photoshop's Image Size
-    // with Resample on, as an action records it).
+    // with Resample on, as an action records it). An unchanged resolution keeps the pixels.
     if p.get("keepPrintSize").and_then(Value::as_bool) == Some(true)
         && pw.is_none()
         && ph.is_none()
-        && let Some(r) = p.get("resolution").and_then(Value::as_f64)
+        && let Some(r) = dpi
+        && r != own_dpi
     {
-        let r = r.clamp(1.0, 10_000.0);
-        let old = f64::from(d.doc.resolution_dpi).max(1.0);
+        let old = own_dpi.max(1.0);
         pw = Some(ow as f64 * r / old);
         ph = Some(oh as f64 * r / old);
     }
@@ -261,7 +274,6 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
         check_resample_budget("image.imageSize", &d.doc, nw, nh, ", or turn Resample off to change only the resolution")?;
     }
-    let dpi = p.get("resolution").and_then(Value::as_f64).map(|v| v as f32);
     let scale_styles = p.get("scaleStyles").and_then(Value::as_bool).unwrap_or(true);
     if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
         // Before the sampler map or the document change: a resize that doesn't fit would trap on the web (#10024).
@@ -273,7 +285,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Image Size", |doc, _| {
         if let Some(r) = dpi {
             // Type keeps its pixel size; resampling below then scales it with the pixels.
-            crate::canvas_geom::set_resolution(doc, r.clamp(1.0, 10_000.0));
+            crate::canvas_geom::set_resolution(doc, r as f32);
         }
         let filter = match resample {
             Method::None => return Ok(()),

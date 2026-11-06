@@ -234,6 +234,48 @@ fn resolution_only_change() {
     assert_eq!(r, json!({"width": 40, "height": 20}));
 }
 
+/// #9260: a resolution outside the document range (1..=30000 ppi, as File › New and the
+/// dialog's field) is refused and leaves the document as it was, instead of being clamped;
+/// one inside it, also above 10000, is set as given.
+#[test]
+fn image_size_refuses_a_resolution_out_of_range() {
+    for extra in [json!({"resample": "none"}), json!({"resample": "bicubic"}), json!({"resample": "bicubic", "keepPrintSize": true})] {
+        for r in [json!(1e39), json!(-5), json!(0), json!(0.5), json!(30_001), json!("300")] {
+            let mut s = session();
+            let (size, dpi, past) = (doc(&s).size, doc(&s).resolution_dpi, s.active().unwrap().history.past_len());
+            let mut p = extra.clone();
+            p["resolution"] = r;
+            assert!(s.execute("image.imageSize", p.clone()).is_err(), "{p}");
+            assert_eq!((doc(&s).size, doc(&s).resolution_dpi, s.active().unwrap().history.past_len()), (size, dpi, past), "{p}: nothing changed");
+        }
+    }
+    let mut s = session();
+    s.execute("image.imageSize", json!({"resolution": 20_000, "resample": "none"})).unwrap();
+    assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(40, 20), 20_000.0));
+    s.execute("image.imageSize", json!({"resolution": null, "resample": "none"})).unwrap();
+    assert_eq!(doc(&s).resolution_dpi, 20_000.0, "null leaves the resolution as it is");
+    // An imported document's own resolution outside the range (a PNG pHYs of 1 px/m is
+    // 0.0254 ppi) still resizes: the Image Size dialog sends it back unchanged on OK.
+    for own in [0.0254_f32, 40_000.0] {
+        let mut s = session();
+        s.edit("ppi", |doc, _| {
+            doc.resolution_dpi = own;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.imageSize", json!({"width": 80, "height": 40, "resolution": f64::from(own), "resample": "bicubic"})).unwrap();
+        assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(80, 40), own), "{own}");
+        assert!(s.execute("image.imageSize", json!({"resolution": 0.03, "resample": "none"})).is_err(), "{own}: another value is still checked");
+        // Only the exact value: one that merely rounds to it as f32 is refused.
+        let near = if own < 1.0 { f64::from(own) * (1.0 + 1e-9) } else { f64::from(own) + 0.001 };
+        assert_eq!(near as f32, own);
+        assert!(s.execute("image.imageSize", json!({"resolution": near, "resample": "none"})).is_err(), "{own}: {near}");
+        // keepPrintSize with the unchanged resolution keeps the pixels.
+        s.execute("image.imageSize", json!({"resolution": f64::from(own), "resample": "bicubic", "keepPrintSize": true})).unwrap();
+        assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(80, 40), own), "{own}: keepPrintSize");
+    }
+}
+
 /// Type keeps its pixel size across a resolution change: resampled 2x at twice the ppi it is
 /// twice as tall (not 4x), with Resample off it stays, and a later re-render doesn't jump.
 #[test]
