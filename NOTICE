@@ -14,7 +14,7 @@ list (author, source, license) is in ATTRIBUTION.md.
 
 Inter font (assets/fonts/Inter-*.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-Inter.txt.
 JetBrains Mono font (assets/fonts/JetBrainsMono-Regular.ttf) — SIL Open Font License 1.1. See assets/fonts/OFL-JetBrainsMono.txt.
-Lucide icons (assets/icons/*.svg, except slice-knife.svg) — ISC; icons derived from Feather also MIT. See assets/icons/LICENSE-lucide.txt.
+Lucide icons (assets/icons/*.svg, except the original glyphs listed in ATTRIBUTION.md) — ISC; icons derived from Feather also MIT. See assets/icons/LICENSE-lucide.txt.
 SCOWL English word list (assets/dict/en_US-scowl-50.txt.gz) — SCOWL license. See assets/dict/LICENSE-SCOWL.txt.
 libfacedetection face detection weights and network (crates/algo/data/libfacedetection.bin, crates/algo/src/faces/cnn.rs) — BSD-3-Clause, Copyright (c) 2015-2019, Shiqi Yu, all rights reserved. See crates/algo/data/LICENSE-libfacedetection.txt.
 
@@ -55,7 +55,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 The egui-icons font subset is embedded from epaint_default_fonts by crates/ui-egui/build.rs
-and registered in the native and web fallback stacks by crates/ui-egui/src/egui_fonts.rs.
+and registered in the native and web fallback stacks by crates/ui-egui/src/text/egui_fonts.rs.
 It is a subset of emoji-icon-font by John Slegers; the same upstream MIT license applies.
 Source: https://github.com/storytold/egui/tree/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts
 Original: https://github.com/jslegers/emoji-icon-font

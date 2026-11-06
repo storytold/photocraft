@@ -1,6 +1,6 @@
 ---
 title: Export an image
-description: Export a PNG, JPG, WebP, TIFF or TGA from PhotoCraft with a preview, a size estimate and a scale.
+description: Export a PNG, JPG, WebP, TIFF, TGA, ICO or JPEG XL from PhotoCraft with a preview, a size estimate and a scale.
 order: 50
 verified: 0.8.2
 ---
@@ -10,13 +10,13 @@ Choose **File › Export › Export As…**, set the format, and click **Export*
 ## Export with settings
 
 1. Choose **File › Export › Export As…**.
-2. Under **File Settings**, pick a **Format**: **PNG**, **JPG**, **WebP**, **TIFF** or **TGA**.
+2. Under **File Settings**, pick a **Format**: **PNG**, **JPG**, **WebP**, **TIFF**, **TGA**, **ICO** or **JPEG XL**.
 3. Set the options for that format:
    - **JPG** and lossy **WebP** have a **Quality** slider from 1 to 100.
    - **WebP** also has a **Lossless** checkbox.
    - **TGA** has **Resolution**: **Auto**, **24 bits/pixel** or **32 bits/pixel**.
    - **Transparency** keeps transparent areas. JPG has no transparency, so this checkbox is not shown for JPG and the image is flattened.
-   - **Metadata** is **None** or **All**.
+   - **Metadata** is **None**, **EXIF** or **All**.
 4. Under **Image Size**, set **Scale** in percent. The size in pixels shows below it.
 5. Check the preview on the right. The line under it shows the format and the estimated file size.
 6. Click **Export**, then choose a name and a place for the file.

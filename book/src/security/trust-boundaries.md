@@ -37,7 +37,7 @@ TRUSTED INTERNAL STATE
 | Raster bytes to image | `crates/codecs` | dimensions, pixels, decoded allocation, format-specific limits |
 | `.pcraft` to document | `crates/format` | archive bounds, decompressed totals, hashes, schema/version validation |
 | JSON to command | `crates/automation`, `crates/engine` | request budget, method/capability, parameter type/range, enabled state |
-| Path to filesystem effect | `crates/automation/src/files.rs`, app services | authorized root/handle, link policy, create/replace semantics |
+| Path to filesystem effect | `crates/automation/src/workspace.rs`, app services | authorized root/handle, link policy, create/replace semantics |
 | Document to GPU work | `crates/gpu`, UI planner | texture limits, buffer sizes, supported-plan validation |
 
 Authentication and filesystem read/write capabilities are implemented at these boundaries.

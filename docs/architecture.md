@@ -7,15 +7,15 @@
 What exists on `main` today. The numbered sections below are the original design plan of
 2026-09-30; where the code differs, this summary wins.
 
-- **Workspace:** 25 library crates under `crates/`, 4 apps (`photocraft` desktop, `photocraft-cli`,
+- **Workspace:** 26 library crates under `crates/`, 4 apps (`photocraft` desktop, `photocraft-cli`,
   `photocraft-web`, `photocraft-web-boot`), `xtask`, an example plug-in and 5 fuzz crates; ~539,000 lines of Rust in
   ~1,310 files; ~8,040 `#[test]` functions (ui-egui 2,809, engine 1,796, algo 572, io 539,
   codecs 426, psd 341), counted 2026-10-13. Crate map and layers: [`AGENTS.md`](../AGENTS.md) §2 and
   `xtask/src/layers.rs` (enforced by `cargo xtask layers`).
 - **UI toolkit:** decided: egui/eframe on wgpu (no webview, no JavaScript). The same Rust builds
   to WebAssembly for the browser (trunk + wasm-bindgen).
-- **Engine:** ~700 commands registered in `crates/engine` (`CommandSpec` in `commands.rs`); the
-  UI, CLI, JSON control channel and MCP server all dispatch by command id. 628 Photoshop menu items
+- **Engine:** ~990 commands registered in `crates/engine` (`CommandSpec` in `cmd.rs`); the
+  UI, CLI, JSON control channel and MCP server all dispatch by command id. 660 Photoshop menu items
   map to them (`crates/ui-egui/src/menu_catalog.rs`).
 - **Rendering:** CPU compositor (`compose`, the oracle) and wgpu compositor (`gpu`, ≤ 1/255 of the
   CPU); colour through our own ICC engine (`cms`), GPU display conversion through matrix/shaper stages or a 3D LUT fallback.
@@ -24,7 +24,7 @@ What exists on `main` today. The numbered sections below are the original design
   Coverage: [`file-format-parity.md`](file-format-parity.md).
 - **Not built (yet) from the plan:** the `ml` crate (no ML runtime; see gap G15), plug-in ABI v2.
 - **Deviations from the plan below:** `photocraft-tablet` is the one crate allowed `unsafe`
-  (AppKit pen events); `affinity`, `heif` and `raw` crates were added; the phased roadmap in §15
+  (AppKit pen events); `affinity`, `heif`, `ipp` and `raw` crates were added; the phased roadmap in §15
   is superseded by [`roadmap.md`](roadmap.md).
 
 ---
@@ -155,7 +155,7 @@ photocraft/
 └─ plan/                       this directory
 ```
 
-**What exists today.** This layout is the target design. Built so far: `geom`, `cms`, `color`, `raster`, `psd`, `codecs`, `doc`, `ops`, `algo`, `paint`, `text`, `vector`, `compose`, `gpu`, `format`, `raw`, `io`, `plugins`, `engine`, `ui-egui`, `automation`, `testkit`, and the three apps. Not yet split out: `viewport` and `tools` live inside `ui-egui` and `engine`; `platform` services are function hooks injected by each app (`ui_egui::Services`); `adobe-assets` and `ml` are not started.
+**What exists today.** This layout is the target design. Built so far: `geom`, `cms`, `color`, `raster`, `psd`, `codecs`, `heif`, `affinity`, `ipp`, `tablet`, `doc`, `ops`, `algo`, `paint`, `text`, `vector`, `compose`, `gpu`, `format`, `raw`, `io`, `plugins`, `engine`, `ui-egui`, `automation`, `testkit`, and the four apps. Not yet split out: `viewport` and `tools` live inside `ui-egui` and `engine`; `platform` services are function hooks injected by each app (`ui_egui::Services`); `adobe-assets` and `ml` are not started.
 
 **Crate granularity:** start with the crates above. Split `algo` into `-adjust`, `-filters`, `-select`, `-inpaint` and `-warp` once any module passes about 10k lines, or once compile times hurt. Its internal module boundaries should already follow those lines.
 
@@ -181,8 +181,8 @@ photocraft/
 1. A crate may depend only on crates in **lower** layers. No cycles and no sideways dependencies, except where listed.
 2. **Nothing below L6 may depend on any UI toolkit, winit, or a `platform` implementation.** Platform services reach the engine through traits defined in `engine` (or in `platform`'s trait-only core), and are injected at startup.
 3. **`photocraft-psd` depends on no workspace crate.** The doc ⇄ PSD mapping lives in `io`. This keeps the PSD crate publishable and reusable by other projects. The same holds for every standalone crate, with one documented exception: `codecs` → `heif` (both standalone and publishable; `STANDALONE_EXCEPTIONS` in `xtask/src/layers.rs`).
-4. **wasm gate:** every crate in L0–L5 (except feature-gated native backends) must build for `wasm32-unknown-unknown`. CI runs `cargo build -p photocraft-engine --target wasm32-unknown-unknown --no-default-features --features web`.
-5. `gpu` is optional for `engine`. Engine features are `gpu` (default on) and `cpu-only`, and `cpu-only` builds are what the headless CLI and CI tests use.
+4. **wasm gate:** every crate in L0–L5 (except feature-gated native backends) must build for `wasm32-unknown-unknown`. CI runs `cargo xtask wasm`, a `cargo check --target wasm32-unknown-unknown` of every L0–L5 and standalone crate plus `ui-egui`.
+5. `gpu` is optional for `engine`: `engine` does not depend on it. `ui-egui` uses it, and `automation` only behind its `gpu` feature (on through `photocraft-cli`'s default `gpu` feature).
 6. **C dependencies** (optional LibRaw, pdfium) only behind features, only in `codecs`, `raw` or `io`, and never on by default for the web target.
 
 ---

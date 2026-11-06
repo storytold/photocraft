@@ -68,9 +68,11 @@ Layer<'_>::rgba8() -> Result<RgbaImage>; user_mask() -> Option<Result<GrayImage>
 TaggedBlock { signature /* 8BIM | 8B64 */, key, data, padding: Option<Vec<u8>> }
 TaggedBlock::parsed() -> Option<Result<BlockData>>
 BlockData::{UnicodeName, SectionDivider, LayerId, NameSource, BlendClippedAsGroup,
-            BlendInteriorElements, Knockout, Protection, SheetColor, FillOpacity, MetadataSetting}
+            BlendInteriorElements, Knockout, TransparencyShapes, LayerMaskHidesEffects,
+            VectorMaskHidesEffects, Protection, SheetColor, FillOpacity, MetadataSetting}
 constructors: unicode_name, section_divider, layer_id, name_source, blend_clipped_as_group,
-              blend_interior_elements, knockout, protection, sheet_color, fill_opacity
+              blend_interior_elements, knockout, transparency_shapes, layer_mask_hides_effects,
+              vector_mask_hides_effects, protection, sheet_color, fill_opacity
 TaggedBlock::check_structure() -> Result<()>   // strict inner re-parse of PlLd, SoLd, SoLE, lnk2/3/D, lfx2
 tagged::uses_long_length(version, key)   // PSB 8-byte length keys (the spec's 13 + lnk3, lnkE, pths, extd, extn, FELS, cinf, artd)
 LayerInfo::unpadded_len(version), LayerInfo::pad_to(version, 4)   // Photoshop pads the layer info to 4
@@ -114,14 +116,14 @@ testgen::{all_cases, merged_only, layered, small, sample_descriptor, pattern_pla
 | Tagged blocks (raw passthrough) | ✓ | ✓ | – | keeps `8BIM` / `8B64` and exact padding |
 | PSB 8-byte-length keys | ✓ | ✓ | – | LMsk Lr16 Lr32 Layr Mt16 Mt32 Mtrn Alph FMsk lnk2 FEid FXid PxSD |
 | Lr16 / Lr32 / Layr layer info | ✓ | ✓ | ✓ | lifted into `layer_info`; re-inserted at its original position |
-| luni lsct lsdk lyid lnsr clbl infx knko lspf lclr iOpa shmd | ✓ | ✓ | ✓ | `TaggedBlock::parsed()` |
+| luni lsct lsdk lyid lnsr clbl infx knko tsly lmgm vmgm lspf lclr iOpa shmd | ✓ | ✓ | ✓ | `TaggedBlock::parsed()` |
 | Layer XMP (`shmd` › `cust` › `layerXMP`) | ✓ | ✓ | ✓ | `metadata::layer_xmp` / `take_layer_xmp` / `put_layer_xmp`, laid out as Photoshop 2026 writes it |
 | ActionDescriptor (all OSTypes) | ✓ | ✓ | ✓ | including references, `ObAr` (best effort), `UnFl`, `Pth `, version-16 wrapper |
 | Layer tree (groups) | ✓ | ✓ | ✓ | open/closed folders plus bounding dividers; tolerant of malformed nesting |
 | RGBA8 extraction | ✓ | – | – | RGB / gray / CMYK layers; merged image also supports indexed / bitmap / duotone |
 | Builder | – | ✓ | – | RGB / gray / CMYK at 8/16 bit, masks, groups, blend modes, opacity, fill, visibility, clipping |
 | Patterns | ✓ | ✓ | ✓ | `Patt` / `Pat2` / `Pat3`, `.pat`, and `.abr` embedded patterns; non-empty tiles allow in-bounds channel subrectangles, decoded size is capped and PackBits expansion is input-bounded |
-| Actions (`.atn`) | ✓ | ✓ | ✓ | `atn::parse` / `atn::write`: version-16 sets (Photoshop 6+): actions with function key, modifiers and colour; steps with event code or string name, panel name, enabled/dialog flags and their descriptor. Exact round trip; version-12 (Photoshop 5) files are rejected as unsupported |
+| Actions (`.atn`) | ✓ | ✓ | ✓ | `atn::parse` / `atn::write`: version-16 sets (Photoshop 6+): actions with function key, modifiers and colour; steps with event code or string name, panel name, enabled/dialog flags and their descriptor. Exact round trip for version-16 files; version-12 (Photoshop 5) files are read too and written back as version 16 |
 
 Pattern channel subrectangles are padded with zeroes to the tile rectangle. All channel
 metadata is checked before any plane is decoded, against one `PatternBudget` shared by every
@@ -136,9 +138,9 @@ allocations for padded channels return an error on failure.
 * Layer effects: `lfx2`, `lrFX`, `lmfx`. The descriptors inside can be parsed on demand with `VersionedDescriptor::from_bytes(&block.data[4..])`.
 * Type layers: `TySh`, `tySh`, and the EngineData inside them.
 * Smart objects: `SoLd`, `PlLd`, `SoLE`, `lnk2`, `lnkD`, `lnk3`.
-* Vector masks and shapes: `vmsk`, `vsms`, `vogk`, `vscg`.
-* Adjustment and fill layers: `curv`, `levl`, `hue2`, `SoCo`, `GdFl`, `PtFl`, …, plus `Patt`, `Txt2`, `FMsk`, 3D and video blocks.
-* Global layer mask info (raw, with accessors), thumbnails (raw), slices, guides, paths, and every other resource id.
+* Shapes: `vogk`, `vscg` (vector masks, `vmsk` / `vsms`, are typed by `path`).
+* Adjustment and fill layers: `curv`, `levl`, `hue2`, `SoCo`, `GdFl`, `PtFl`, …, plus `Txt2`, `FMsk`, 3D and video blocks.
+* Global layer mask info (raw, with accessors), thumbnails (raw), guides, and every other resource id except paths (`path`) and slices (`slices`).
 
 ## Testing
 
@@ -154,7 +156,7 @@ allocations for padded channels return an error on failure.
 * Builder → `rgba8` correctness.
 * Unknown blend modes and unknown blocks pass through unchanged.
 
-`tests/it/corpus.rs` walks `corpus/psd/**/*.{psd,psb}` at the workspace root when that directory exists. For each file it asserts that parsing succeeds and the file round-trips byte for byte, and it prints a result per file. Without the directory it skips silently.
+`tests/it/corpus.rs` (feature `corpus`, run with `cargo xtask test-corpus`) walks `corpus/psd/**/*.{psd,psb}` and `corpus/psd-tools/**/*.{psd,psb}` at the workspace root. For each file it asserts that parsing succeeds and the file round-trips byte for byte, and it prints a result per file. A missing corpus directory fails the test.
 
 A `cargo-fuzz` skeleton lives in `fuzz/`. It is its own workspace and is excluded from photocraft's. Run it with `cargo +nightly fuzz run parse` (or `descriptor`) from `crates/psd`.
 

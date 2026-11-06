@@ -1,9 +1,9 @@
 # GPU stack prefix reuse
 
 Design for #209, particularly the opacity, fill, blend-mode and visibility scenarios P2–P5.
-The current compositor caches input pages and effect maps, but executes the complete pass list
+Before this design the compositor cached input pages and effect maps, but executed the complete pass list
 over every damaged chunk. This proposal adds reusable lower-stack composites without changing
-the blend equations, colour conversion or damage policy.
+the blend equations, colour conversion or damage policy. It is implemented in `crates/gpu/src/prefix.rs` (#1169).
 
 ## Safe boundaries
 

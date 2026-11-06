@@ -40,7 +40,7 @@ The first build downloads Rust dependencies and Trunk's Wasm tools and can take 
 minutes. Subsequent builds reuse Cargo caches. The builder supports Linux amd64 and arm64;
 the default Rust version is the stable release CI used when the `Dockerfile` was last updated
 (CI and releases always use the latest stable), and Trunk is pinned to the release workflow's
-`TRUNK_VERSION`. `RUST_VERSION`, `TRUNK_VERSION`, and `NGINX_VERSION` can be overridden with
+Trunk version. `RUST_VERSION`, `TRUNK_VERSION`, and `NGINX_VERSION` can be overridden with
 `--build-arg`. To stamp the About dialog with the commit and date instead of "dev build", pass
 `--build-arg PHOTOCRAFT_BUILD_SHA=$(git rev-parse HEAD) --build-arg PHOTOCRAFT_BUILD_DATE=$(date -u +%F)`.
 The web build does not embed the optional `craft-fonts` checkout.
@@ -171,7 +171,9 @@ it is picked or a document's text needs it, so starting the app costs one small 
    Lobster | Regular | fonts/lobster/Lobster-Regular.ttf | Latn,Cyrl | OFL-1.1 | fonts/lobster/OFL.txt
    ```
 
-   The app reads the first three fields; the others are optional here. `family` must be the font's
+   The app needs the first three fields; the others are optional here. It also reads `scripts` (the
+   first family listed for a script the bundled fonts lack becomes that script's fallback) and
+   `sha256` (checked as the fetch's Subresource Integrity). `family` must be the font's
    own family name (the typographic family in its `name` table, else the family), which is what the
    font menu shows once the file is in. The path is relative to the site root and can't leave it
    (no `..`, no `/` at the start, no other host). A variable font is one line: the style menu offers

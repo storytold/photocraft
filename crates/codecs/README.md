@@ -1,7 +1,7 @@
 # photocraft-codecs
 
 Codecs for flat raster image formats, written in pure Rust. The crate is standalone: it depends on no other
-workspace crate and defines its own `Image` type. It also builds for `wasm32-unknown-unknown` and
+workspace crate (except the optional `photocraft-heif`, behind the `heif` feature) and defines its own `Image` type. It also builds for `wasm32-unknown-unknown` and
 does no I/O: decoders take `&[u8]` and encoders return `Vec<u8>`.
 
 It follows the "Avoiding GIMP's hole" rules in `docs/architecture.md` §1.1:
@@ -33,9 +33,9 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | Format | Read | Write | Depths (native) | Layouts (native) | Alpha | ICC | EXIF | XMP | DPI | Text | Lossy write | Backend |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | PNG | yes | yes | U8, U16 | Gray, GrayA, RGB, RGBA | yes | yes (iCCP) | yes (eXIf) | yes (iTXt `XML:com.adobe.xmp`) | yes (pHYs) | yes (tEXt/zTXt/iTXt) | no | `png` |
-| JPEG | yes | yes | U8 | Gray, RGB, CMYK | no | yes (multi-segment APP2) | yes (APP1) | yes (APP1) | yes (JFIF) | no | yes | `zune-jpeg` / `jpeg-encoder` |
-| TIFF | yes | yes | U8, U16, F32 | all six (CMYK, CMYK+A included) | yes | yes (tag 34675) | no | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
-| WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | no | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
+| JPEG | yes | yes | U8 | Gray, RGB, CMYK | no | yes (multi-segment APP2) | yes (APP1) | yes (APP1) | yes (JFIF) | no | yes | `zune-jpeg` (`craft-jpeg` for 12-bit and arithmetic-coded files) / `jpeg-encoder` |
+| TIFF | yes | yes | U8, U16, F32 | all six (CMYK, CMYK+A included), plus Lab and LabA | yes | yes (tag 34675) | yes (Exif and GPS IFDs) | yes (tag 700) | yes | yes (Description, Make, Model, Software, DateTime, Artist, Copyright) | no | `tiff` |
+| WebP | yes | yes | U8 | RGB, RGBA | yes | yes | yes | yes | yes (in EXIF) | no | yes (VP8, when `webp_lossless` is off) | `image-webp` / built-in VP8 |
 | GIF | yes | yes | U8 | RGBA | 1-bit | no | no | no | no | no | yes (256-colour palette) | `image` |
 | BMP | yes | yes | U8 | RGB, RGBA | yes | no | no | no | no | no | no | `image` |
 | TGA | yes | yes | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | no | `image` (read) / built in (RLE write, one scanline per packet) |
@@ -50,6 +50,8 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | DPX | yes | yes | U8, U16 (10/12-bit code values read and written exactly through U16) | Gray, RGB, RGBA | yes | no | no | no | no | DPX header fields only (creator, project, copyright, creation time, transfer, colorimetric, frame position, frame rate, time code) | no | built in |
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
+| PCX | yes | **no** | U8 | RGB | no | no | no | no | no | no | n/a | built in |
+| XPM | yes | **no** | U8 | RGBA | yes | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
 | HEIF/HEIC | with feature `heif` | **no** | U8, U16 (10/12-bit decodes to U16) | RGB, RGBA | yes (auxiliary alpha) | yes (`colr` prof) | yes | yes | no | no | n/a | `heic-rs` |
@@ -195,8 +197,9 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   way, composited onto its canvas, with its duration in milliseconds and the file's ICC profile.
   The video-layer commands use both (`photocraft_io::import_gif_frames`,
   `photocraft_io::import_webp_frames`).
-* **EXIF in TIFF** is stored as a sub-IFD rather than a blob, so it is not preserved yet.
-  `caps.exif = false` for TIFF, and a warning is raised.
+* **EXIF in TIFF** is stored as Exif and GPS sub-IFDs rather than a blob. Reading builds
+  `Metadata::exif` from the file's own directories, and writing copies the block's directories
+  back into the file, so `caps.exif = true` for TIFF.
 * **Orientation** (EXIF tag 274 in JPEG, PNG `eXIf` and WebP; the decoded page's tag in TIFF and
   BigTIFF) is applied on
   decode, like Photoshop: the pixels come back upright and the EXIF/XMP orientation is rewritten
@@ -218,7 +221,8 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   RATIONAL values in place, ResolutionUnit set to 2, an entry that can't be rewritten removed
   from IFD0 without moving any other data. IFD1 (the thumbnail's) is left as it is.
 * **JPEG**
-  * 8-bit only. Neither decoder backend supports 12-bit.
+  * Written at 8 bits only. 12-bit baseline and extended files decode to U16 through `craft-jpeg`;
+    12-bit progressive and lossless files return `Unsupported`.
   * A file cut off inside its image data decodes leniently (a baseline JPEG's missing rows come
     out grey) but never silently: the image carries `DecodeWarning::Truncated`. A file that ends
     before any scan data is an error.
@@ -296,7 +300,7 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 `DecodeOptions { limits: Limits { max_width, max_height, max_pixels, max_alloc }, .. }` guards
 decoding. Header dimensions are checked before the pixel buffer is allocated, and the budget is
 also passed to the underlying decoders. A violation returns `CodecError::LimitExceeded`. The
-defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
+defaults are 262144 px per side, 2^30 pixels and 8 GiB (1 GiB on 32-bit targets such as wasm).
 PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
 

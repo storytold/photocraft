@@ -93,7 +93,7 @@ job went) and `pdf` (the page's path, only when `output` named one).
   printer listing with state and default, the default printer and its absence, `Print-Job`
   with the document and the job id, chunked and content-length replies, HTTP and IPP error
   statuses, broken replies.
-- `crates/engine/src/print_cmds/tests.rs`: printer resolution (requested, default, only one,
+- `crates/engine/src/cmd/print_cmds/tests.rs`: printer resolution (requested, default, only one,
   several without a default, unknown, none); a complete `file.print` against a fake CUPS
   (printer URI, copies, job name, document format, the PDF itself) and `file.printers`;
   `lp` taking the job when it is on the path; the IPP route when it is not (a child process

@@ -56,7 +56,7 @@ appends from doubling capacity; only its populated length and blur scratch shrin
 Prepared geometry uses 36 bytes per pin per active tile. Source reads, tile sizes,
 Rayon dispatch, selection mixing and cancellation services remain unchanged.
 
-`tests_iris_reference.rs` freezes the base kernel. Differential tests require
+`crates/algo/src/gallery/tests/reference.rs` freezes the base kernel. Differential tests require
 exact finite f32 bits (including signed zero), with matching NaN classifications.
 They exercise 1–6 channels, RGB/Gray/CMYK/Lab, alpha/no alpha, U8/U16/F32, negative
 and HDR samples, extreme HDR cancellation, rotated/translated/anisotropic pins,

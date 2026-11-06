@@ -70,7 +70,8 @@ build's generator-version stamp while still comparing all document payloads exac
 
 This change addresses Windows/NTFS publication. The existing Unix flush-error policy is
 handled separately by [#5420](https://github.com/storytold/photocraft/pull/5420). Preview
-replacement/deletion ordering on failed directory saves remains tracked by
-[#7548](https://github.com/storytold/photocraft/issues/7548) and
-[#7549](https://github.com/storytold/photocraft/issues/7549). VM tests do not establish
+replacement ordering on failed directory saves remains tracked by
+[#7548](https://github.com/storytold/photocraft/issues/7548); the deletion case,
+[#7549](https://github.com/storytold/photocraft/issues/7549), was closed by
+[#7580](https://github.com/storytold/photocraft/pull/7580). VM tests do not establish
 physical-controller or firmware-cache behavior, or guarantees on other filesystems.

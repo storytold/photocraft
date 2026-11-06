@@ -10,8 +10,8 @@ confirms when OK is enabled. Automation drives the same `fields` map as the UI (
 | Piece | Location | Role |
 |---|---|---|
 | Frame, routing, OK/Cancel/Esc, stacking | `crates/ui-egui/src/dialogs.rs` | Single hub for every `UiState::dialogs` entry |
-| Alt+Cancel → Reset (opt-in) | `crates/ui-egui/src/dialog_alt_reset.rs` | Relabels Cancel while Alt is held; dispatches per-marker `reset` |
-| Tab-through-fields | `crates/ui-egui/src/field_tab.rs` | Photoshop-style Tab / ⇧Tab (tests in same file) |
+| Alt+Cancel → Reset (opt-in) | `crates/ui-egui/src/dialogs/dialog_alt_reset.rs` | Relabels Cancel while Alt is held; dispatches per-marker `reset` |
+| Tab-through-fields | `crates/ui-egui/src/widgets/field_tab.rs` | Photoshop-style Tab / ⇧Tab (tests in same file) |
 | State | `crates/ui-egui/src/state.rs` | `Dialog`, `DialogKind`, `open_dialog` |
 | Button row | `crates/ui-egui/src/widgets.rs` | `dialog_buttons`, `focus_first_field`; `number_edit` registers for Tab |
 | Menu / command entry | `dialogs::open_command_dialog`, `menus.rs` | Picks a dedicated module, schema dialog, or bare confirm |
@@ -22,7 +22,7 @@ confirms when OK is enabled. Automation drives the same `fields` map as the UI (
 
 **Routing.** Non-command kinds use `DialogKind` alone. `DialogKind::Command` bodies are chosen by
 marker keys on `fields` (`owns()` or `contains_key("__export")`, etc.); **first match in
-`dialogs::show` wins**, so new markers must not collide with an earlier arm. `show`, `confirm`, and
+`dialogs::command_body` (then `command_body_more`) wins**, so new markers must not collide with an earlier arm. `command_body`, `confirm`, and
 `cancel` share the same dispatch table—wire all three when adding a dialog.
 
 **Field contract.** `Dialog.fields` is a JSON map: command parameters agents read and write, plus
@@ -40,7 +40,7 @@ private keys prefixed with `__`. Never use `__` for user-facing or engine params
 
 ### Command routing (`DialogKind::Command`)
 
-Dispatch order matches `dialogs::show` in `dialogs.rs` (check earlier rows before adding a marker).
+The main markers, in the dispatch order of `command_body` / `command_body_more` in `dialogs.rs` (check the full list there before adding a marker).
 
 | Match | Module | Role |
 |---|---|---|
@@ -67,7 +67,7 @@ Dispatch order matches `dialogs::show` in `dialogs.rs` (check earlier rows befor
 | `__form` | `view_cmds.rs` | Simple param grids (e.g. slice options, many Image › Apply Image-style commands) |
 | (none of the above) | — | **Bare confirm**: title + OK/Cancel only; OK runs `__command` with fields via generic `confirm` |
 
-**Menu shortcut.** `dialogs::open_command_dialog` opens guide layout, stroke, and color range
+**Menu shortcut.** `dialogs::open_command_dialog` opens guide layout, stroke, new group, and color range
 directly; then tries `adjust_dialog::open`, then `filter_dialog::open`; otherwise a bare confirm
 with `__command` + `__label`. Other dedicated modules are opened from `menus.rs`, tools, or panel
 actions with their marker already set.
@@ -140,7 +140,7 @@ Same hub entry as standalone pickers; `color_picker_ui::confirm` branches on ext
 ### Architecture and commands
 
 1. **Thin UI, engine command on OK.** Run `app.run` or a dedicated `*_ui::confirm`; one history step unless the command itself batches.
-2. **Register in the hub.** Add `owns()` (or a stable marker), `body()`, `open()` if needed, and matching arms in `dialogs::show`, `confirm`, and `cancel` (and `open_command_dialog` when menu-driven).
+2. **Register in the hub.** Add `owns()` (or a stable marker), `body()`, `open()` if needed, and matching arms in `dialogs::command_body`, `confirm`, and `cancel` (and `open_command_dialog` when menu-driven).
 3. **Extend existing paths first.** Filters → `filter_dialog`; adjustments → `adjust_dialog`; simple param grids → `__form`; avoid a second modal stack unless product needs Camera Raw–level UX.
 4. **`fields` is the automation contract.** Anything agents must drive lives in named fields, not only in local egui state.
 5. **Remember last-used values** after successful OK where Photoshop does (`filter_dialog::remember`, prefs `dialogs["…"]`, module-specific helpers).
@@ -202,7 +202,7 @@ Same hub entry as standalone pickers; `color_picker_ui::confirm` branches on ext
 3. `body(app, ui, &mut fields)`—mutate `fields` only; use shared widgets.
 4. `confirm` / `cancel` arms in `dialogs.rs` (or delegate to module `confirm`).
 5. Tab: register every text/number field; use `value_field` / `number_edit` where possible.
-6. **Alt+Reset (optional):** implement `reset` on the module and add an arm in `dialog_alt_reset` (same dispatch order as `dialogs::show`). Snapshot open values under a `__*Orig` key when Reset should restore “as opened” rather than factory defaults.
+6. **Alt+Reset (optional):** implement `reset` on the module and add an arm in `dialog_alt_reset` (same dispatch order as `dialogs::command_body`). Snapshot open values under a `__*Orig` key when Reset should restore “as opened” rather than factory defaults.
 7. Tests: at least open + confirm or Tab sequence if non-trivial; if Alt+Reset is supported, assert Reset restores fields and leaves the dialog open.
 8. If menu-visible: command already in engine; menu id opens dialog via existing menu wiring.
 
@@ -210,7 +210,7 @@ Same hub entry as standalone pickers; `color_picker_ui::confirm` branches on ext
 
 - **Tab registration** for plain `TextEdit` is manual; generic `__form` string fields may not join `field_tab` unless wired.
 - **“Dialog module”** is any UI routed from `dialogs::show`, not only files named `*dialog*`.
-- **Numeric field parity** (units in expressions, scrubby labels) is tracked in [`ui-parity.md`](ui-parity.md) (Navigation / numeric fields), not duplicated here.
+- **Numeric field parity** (units in expressions, scrubby labels) is tracked in [`ui-parity.md`](ui-parity.md) (Snapping, guides, rulers, precision / numeric fields), not duplicated here.
 
 ## Revision history
 
