@@ -33,7 +33,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context, url: &str) -> Value {
     json!({"url": url})
 }
 
-/// "PhotoCraft website · Discord · GitHub · ArtCraft" as links, centred. Clicks route through [`open`] (the
+/// "PhotoCraft website · Discord · GitHub · ArtCraft" as left-aligned links. Clicks route through [`open`] (the
 /// platform browser service) rather than `ui.hyperlink_to`, which uses the unreliable `ctx.open_url`.
 pub fn link_row(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
