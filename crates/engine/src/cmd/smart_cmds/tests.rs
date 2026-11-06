@@ -686,19 +686,20 @@ fn export_replace_and_linked_contents() {
     std::fs::write(&png, photocraft_io::export(&png_doc, "png", &Default::default()).unwrap().bytes).unwrap();
     let r = s.execute("layer.smartObjects.replaceContents", json!({"path": png.to_str().unwrap()})).unwrap();
     let sm = active_smart(&s);
-    // #11529: the new contents fit the frame the layer had (46 × 33 px at -6, 5) instead of
+    // #11529: the new contents fill the frame the layer had (46 × 33 px at -6, 5) instead of
     // keeping the 1:1 placement, which drew a 4 × 4 px square in its top-left corner. Photoshop
-    // scales the replacement into the frame, so this expectation changed with the bug.
-    assert_eq!(sm.transform.m, [8.25, 0.0, 0.0, 8.25, 0.5, 5.0], "scaled up to the frame's height and centred in its width");
+    // fills the frame and the frame is the object's, so this expectation changed with the bug:
+    // per-axis here, a square having another shape than the frame, and the warning says so.
+    assert_eq!(sm.transform.m, [11.5, 0.0, 0.0, 8.25, -6.0, 5.0], "scaled onto the frame on both axes");
     let doc = s.active().unwrap().doc.clone();
     let [x0, y0, x1, y1] = source_box(&doc, &sm).unwrap();
     let p = placement(&sm);
     let (a, b) = (p.apply(x0, y0), p.apply(x1, y1));
-    assert_eq!((a.0, a.1, b.0, b.1), (0.5, 5.0, 33.5, 38.0), "the replacement fills the 46 × 33 px frame it replaces, centred, and never leaves it");
+    assert_eq!((a.0, a.1, b.0, b.1), (-6.0, 5.0, 40.0, 38.0), "the replacement fills the 46 × 33 px frame it replaces, corner for corner");
     assert_eq!(
         r["warnings"],
-        json!(["layer \"Layer 1\": the new contents are 4 × 4 px and the frame was made for 46 × 33 px, so they are fitted inside it and don't fill it"]),
-        "a shape the frame can't hold is reported: {r}"
+        json!(["layer \"Layer 1\": the new contents are 4 × 4 px and the frame they replace is 46 × 33 px, so they are stretched to fill the frame"]),
+        "a shape the frame doesn't share is reported: {r}"
     );
     assert!(s.execute("layer.smartObjects.replaceContents", json!({})).is_err());
     // Linked: write out, edit the file, update.

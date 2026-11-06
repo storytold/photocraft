@@ -221,7 +221,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.replaceContents",
             "Replace Contents…",
             SO,
-            r##"{"layer":id?,"path":str} → {layer,instances,warnings} — the new contents are fitted into every instance's existing frame, whose position, rotation and size are kept (as Photoshop's Replace Contents): a file of another pixel size doesn't change the object's box. warnings report an instance whose frame couldn't be measured (its transform was kept), art whose shape leaves part of the frame empty, and a smart filter that isn't applied"##,
+            r##"{"layer":id?,"path":str} → {layer,instances,warnings} — the new contents fill every instance’s existing frame: its position, rotation and size are kept (as Photoshop’s Replace Contents), so a file of another pixel size doesn’t change the object’s box, a repeated Replace Contents fills that same frame again, and a warp of the contents follows them into their new source space. warnings report an instance whose frame couldn’t be measured (its transform was kept), contents of another shape being stretched to fill the frame, and a smart filter that isn’t applied"##,
             has_smart,
             replace_contents
         ),

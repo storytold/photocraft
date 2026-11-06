@@ -57,8 +57,8 @@ fn replacing_contents_reports_the_filters_it_cannot_apply() {
     let (mut s, id) = mockup();
     let r = smart_cmds::replace_contents_bytes(&mut s, id, "new.png", png()).unwrap();
     let warnings = r["warnings"].as_array().unwrap();
-    // #11529 adds a second, wanted warning here: the 8 × 8 px replacement doesn't fill the
-    // 40 × 30 px frame it is now fitted into. The filter report is what this test is about.
+    // #11529 adds a second, wanted warning here: the 8 × 8 px replacement has another shape than
+    // the 40 × 30 px frame it is now stretched to fill. The filter report is what this test is about.
     let sharpen: Vec<&str> = warnings.iter().filter_map(serde_json::Value::as_str).filter(|w| w.contains("Sharpen")).collect();
     assert_eq!(sharpen, ["the Sharpen smart filter is not supported, so it was not applied"], "{r}");
 }
