@@ -10,7 +10,8 @@
 //! - Dropdowns, sliders and the font list that the wheel steps follow the same rule
 //!   ([`hover_notches`]).
 //! - Each window keeps its own record (a panel floated into a window of its own has input of its
-//!   own); [`FieldWheel`] starts every window's pass with [`begin_frame`].
+//!   own), and its own fractions of a notch; [`FieldWheel`] starts every window's pass with
+//!   [`begin_frame`].
 
 use egui::{Context, Event, Id, MouseWheelUnit, Rect, Ui, Vec2};
 
@@ -137,11 +138,13 @@ pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
     crate::widgets::count_notches(ui, field.with("wheel-acc"), &wheel_of(&events), 10.0)
 }
 
-/// Wheel notches for another control the wheel steps while the pointer is over it (a dropdown,
-/// a slider, the font list), `id` naming it and `rect` its area, a notch with Shift counting
-/// `shift_notches`: the same rule as a value field without focus, so a panel being scrolled keeps
-/// scrolling when the control passes under the pointer (#11353). Unlike a value field, it takes
-/// the wheel with any modifier (Photoshop's dialog sliders step one a notch with Ctrl or Alt).
+/// Wheel notches for another control the wheel steps while the pointer is over it (a dropdown
+/// and its open list, a slider, the font field), `id` naming it and `rect` its area, a notch with
+/// Shift counting `shift_notches`: the same rule as a value field without focus, so a panel being
+/// scrolled keeps scrolling when the control passes under the pointer (#11353). Ask every frame
+/// the control is shown, the pointer over it or not, as [`notches`] is: a gesture that wheels on
+/// off the control is the view's from then on. Unlike a value field, it takes the wheel with any
+/// modifier (Photoshop's dialog sliders step one a notch with Ctrl or Alt).
 pub fn hover_notches(ui: &Ui, id: Id, rect: Rect, shift_notches: f32) -> f32 {
     let events = hovered_events(ui, id, rect, |e| matches!(e, Event::MouseWheel { .. }));
     crate::widgets::count_notches(ui, id.with("wheel-acc"), &wheel_of(&events), shift_notches)
@@ -372,9 +375,95 @@ mod tests {
         }
     }
 
+    /// A gesture that steps a dropdown or slider, then wheels on with the pointer off it, is the
+    /// panel's from then on: coming back over the control in the same gesture doesn't step it
+    /// again, as for a value field.
+    #[test]
+    fn a_gesture_that_wheels_off_a_dropdown_or_slider_does_not_step_it_on_coming_back() {
+        for role in [Role::ComboBox, Role::Slider] {
+            let mut h = controls_harness();
+            // Room to step up from.
+            h.state_mut().0 = 3;
+            h.run();
+            let over = h.get_by_role(role).rect().center();
+            h.hover_at(over);
+            h.run_steps(1);
+            // Up, so the panel (already at the top) doesn't move the controls.
+            let up = || egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: vec2(0.0, 1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            };
+            h.event(up());
+            h.run_steps(1);
+            let once = if role == Role::ComboBox { (2, 50.0) } else { (3, 51.0) };
+            assert_eq!((h.state().0, h.state().1), once, "{role:?}: the start of the gesture steps it");
+            h.hover_at(h.get_by_role(Role::Slider).rect().center() + vec2(0.0, 40.0));
+            h.event(up());
+            h.run_steps(1);
+            h.hover_at(over);
+            h.event(up());
+            h.run_steps(4);
+            assert_eq!((h.state().0, h.state().1), once, "{role:?} was stepped once, by the start of the gesture");
+        }
+    }
+
+    /// The list of `harness`'s open dropdown (`None` while closed).
+    fn open_list<S>(h: &Harness<'static, S>) -> Option<egui::Rect> {
+        h.ctx.memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)))
+    }
+
+    /// An open dropdown list stays open as the panel scrolls, carried along with its button, so a
+    /// gesture scrolling the panel can bring the pointer over it: that doesn't step it either.
+    #[test]
+    fn a_gesture_that_starts_over_the_panel_does_not_step_an_open_dropdown_list() {
+        let mut h = controls_harness();
+        h.get_by_role(Role::ComboBox).click();
+        h.run_steps(4);
+        let Some(list) = open_list(&h) else { panic!("the list is open") };
+        // Beside the list, over the panel.
+        h.hover_at(egui::pos2(list.right() + 20.0, list.center().y));
+        h.run_steps(1);
+        let down = || egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -12.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
+        h.event(down());
+        h.run_steps(1);
+        assert!(h.state().2 > 0.0, "the panel scrolled");
+        // Still the same gesture as the pointer moves onto the list, a few notches' worth.
+        for _ in 0..6 {
+            let Some(list) = open_list(&h) else { panic!("the list stays open as the panel scrolls") };
+            h.hover_at(list.center());
+            h.event(down());
+            h.run_steps(1);
+        }
+        assert_eq!(h.state().0, 1, "the open list under the pointer is not stepped");
+        // A gesture that starts over the list still steps it.
+        h.run_steps(20);
+        let Some(list) = open_list(&h) else { panic!("the list is open") };
+        h.hover_at(list.center());
+        h.run_steps(1);
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
+        assert_eq!(h.state().0, 2, "a gesture over the list steps it");
+    }
+
     /// One pass of window `viewport` (an egui viewport: the main window, or a panel floated into
     /// a window of its own) at `time`, with [`super::FieldWheel`] installed as the app does: a
-    /// wheel dropdown over a large filler. The dropdown's rect.
+    /// wheel dropdown over a large filler. The dropdown keeps its id from one window to another,
+    /// as a panel's widgets do when it is floated. The dropdown's rect.
     fn window_pass(ctx: &egui::Context, viewport: egui::ViewportId, time: f64, events: Vec<egui::Event>, selected: &mut usize) -> egui::Rect {
         const MODES: [(usize, &str); 4] = [(0, "Normal"), (1, "Dissolve"), (2, "Darken"), (3, "Multiply")];
         let input = egui::RawInput {
@@ -387,12 +476,45 @@ mod tests {
         };
         let mut rect = egui::Rect::NOTHING;
         let mut out = ctx.run_ui(input, |ui| {
-            crate::widgets::dropdown_wheel_hovered(ui, "blend-mode", "Blend Mode", selected, &MODES, 120.0);
-            rect = ui.min_rect();
+            ui.scope_builder(egui::UiBuilder::new().scope_id(egui::Id::unique("panel-body")), |ui| {
+                crate::widgets::dropdown_wheel_hovered(ui, "blend-mode", "Blend Mode", selected, &MODES, 120.0);
+                rect = ui.min_rect();
+            });
             ui.allocate_space(vec2(200.0, 1000.0));
         });
         out.textures_delta.clear();
         rect
+    }
+
+    /// Half a notch left over in one window doesn't add up with half a notch in another: a panel
+    /// floated into a window of its own takes no step from the wheel of the window it left.
+    #[test]
+    fn a_half_notch_stays_in_its_window() {
+        let ctx = egui::Context::default();
+        ctx.add_plugin(super::FieldWheel);
+        let floated = egui::ViewportId::from_hash_of("floated-panel");
+        let mut selected = 1;
+        let half = || egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -0.5),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        };
+        // Half a notch over the dropdown in the main window.
+        let over = window_pass(&ctx, egui::ViewportId::ROOT, 0.0, Vec::new(), &mut selected).center();
+        window_pass(&ctx, egui::ViewportId::ROOT, 0.01, vec![egui::Event::PointerMoved(over), half()], &mut selected);
+        window_pass(&ctx, egui::ViewportId::ROOT, 0.02, Vec::new(), &mut selected);
+        assert_eq!(selected, 1, "half a notch");
+        // The panel, floated, gets half a notch in its own window.
+        let over = window_pass(&ctx, floated, 1.0, Vec::new(), &mut selected).center();
+        window_pass(&ctx, floated, 1.01, vec![egui::Event::PointerMoved(over), half()], &mut selected);
+        window_pass(&ctx, floated, 1.02, Vec::new(), &mut selected);
+        assert_eq!(selected, 1, "two halves in two windows are no notch");
+        // Another half in the same window makes a whole one.
+        window_pass(&ctx, floated, 2.0, vec![half()], &mut selected);
+        window_pass(&ctx, floated, 2.01, Vec::new(), &mut selected);
+        assert_eq!(selected, 2);
     }
 
     /// #11353: a panel floated into a window of its own has input of its own. A gesture there
