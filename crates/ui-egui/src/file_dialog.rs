@@ -145,9 +145,9 @@ impl PhotocraftApp {
     ///
     /// A bare file name (export dialogs, an untitled document) starts in the folder the active
     /// document was last saved or exported to through a dialog, else beside the document
-    /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered for
-    /// the document the dialog was asked for. With Preferences ▸ File Handling › Save As to
-    /// Original Folder off, a bare name starts in the folder last saved or exported to for any
+    /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered, once
+    /// the write succeeded, for the document the dialog was asked for. With Preferences ▸ File
+    /// Handling › Save As to Original Folder off, a bare name starts in the folder last saved or exported to for any
     /// document instead, else beside the document (#9656).
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
         self.pick_save_for(suggested, false, then)
@@ -183,17 +183,18 @@ impl PhotocraftApp {
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
+                // Remember the folder only once the write was accepted: a failed or refused
+                // export must not move where the next dialog starts (#9656).
+                let done = then(app, path.clone())?;
                 // The web answers a download name, which has no folder to remember.
-                if let Some(doc) = doc
-                    && let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty())
-                {
-                    app.save_dirs.insert(doc, dir.to_path_buf());
-                }
                 if let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()) {
+                    if let Some(doc) = doc {
+                        app.save_dirs.insert(doc, dir.to_path_buf());
+                    }
                     let dir = dir.to_string_lossy().into_owned();
                     app.session.prefs.edit(|p| p.file_handling.last_save_folder = dir);
                 }
-                then(app, path)
+                Ok(done)
             }
             _ => Err(UNEXPECTED.into()),
         })?;
@@ -203,10 +204,12 @@ impl PhotocraftApp {
         Ok(asked)
     }
 
-    /// The folder the last save or export dialog was answered with, for any document, when
-    /// Preferences ▸ File Handling › Save As to Original Folder is off (#9656).
+    /// The folder the last save or export succeeded in, for any document, when Preferences ▸ File
+    /// Handling › Save As to Original Folder is off (#9656). None when nothing is remembered or the
+    /// folder is gone (deleted, renamed, a drive unplugged), so callers fall back to beside the
+    /// document.
     pub(crate) fn last_save_dir(&self) -> Option<std::path::PathBuf> {
-        Some(self.session.prefs().file_handling.last_save_folder.as_str()).filter(|d| !d.is_empty()).map(std::path::PathBuf::from)
+        Some(self.session.prefs().file_handling.last_save_folder.as_str()).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).filter(|d| d.is_dir())
     }
 
     /// Whether a save to `path` replaces a file the save dialog didn't ask about: the dialog

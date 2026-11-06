@@ -975,13 +975,15 @@ fn the_last_save_folder_survives_a_restart() {
     let ctx = egui::Context::default();
     tick(&mut app, &ctx);
     app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false}})).unwrap();
-    app.session.prefs.edit(|p| p.file_handling.last_save_folder = "/exports".into());
+    let tmp = tempfile::tempdir().unwrap();
+    let exports = tmp.path().to_string_lossy().into_owned();
+    app.session.prefs.edit(|p| p.file_handling.last_save_folder = exports.clone());
     tick(&mut app, &ctx);
     let saved = store.lock().unwrap().clone().unwrap();
     let (mut app2, _) = app_with_saved(Some(saved));
     tick(&mut app2, &ctx);
-    assert_eq!(app2.session.prefs().file_handling.last_save_folder, "/exports");
-    assert_eq!(app2.last_save_dir(), Some(std::path::PathBuf::from("/exports")));
+    assert_eq!(app2.session.prefs().file_handling.last_save_folder, exports);
+    assert_eq!(app2.last_save_dir(), Some(std::path::PathBuf::from(&exports)));
 }
 
 #[test]

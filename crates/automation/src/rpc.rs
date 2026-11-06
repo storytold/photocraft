@@ -17,7 +17,7 @@
 //!   `doc.importDataSets {path, delimiter?, index?}` (#3216: the same treatment for the export
 //!   and CSV half of #2810), `doc.save {path?, format?, quality?, index?}`, `doc.inspect {index?}`,
 //!   `doc.render {index?, maxSide?, path?}` (writes a PNG to `path`, else
-//!   returns it base64-encoded), `doc.select {index}`, `doc.close {index?}`
+//!   returns it base64-encoded; adds `warnings` when a renderer fell back), `doc.select {index}`, `doc.close {index?}`
 //! - `batch {steps: [{command, params?, wait?} | {method, params?}], stopOnError?}`
 //! - `methods`: this list.
 
@@ -174,6 +174,12 @@ impl Headless {
                 };
                 opts.encode.dpx_bits = photocraft_engine::file_cmds::dpx_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
                 opts.encode.dds = photocraft_engine::file_cmds::dds_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?.unwrap_or_default();
+                if let Some(c) = photocraft_engine::file_cmds::tiff_compression_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
+                    opts.encode.tiff_compression = c;
+                }
+                let tiff_bool = |key| photocraft_engine::file_cmds::tiff_bool_param(&p, key, "doc.save").map_err(|e| bad(e.to_string()));
+                opts.tiff_transparency = tiff_bool("tiffTransparency")?;
+                opts.encode.tiff_pyramid = tiff_bool("tiffPyramid")?.unwrap_or(false);
                 match p.get("quality") {
                     None | Some(Value::Null) => {}
                     Some(v) => {
@@ -215,16 +221,24 @@ impl Headless {
                     }
                 };
                 let png = self.render_png(index_of(&p)?, max)?;
-                match str_of(&p, "path") {
+                // A GPU to CPU fallback is reported with this reply, not on the next save.
+                let warnings = self.drain_diagnostics();
+                let mut reply = match str_of(&p, "path") {
                     Some(path) => {
                         self.write_render(&PathBuf::from(path), &png)?;
-                        Ok(json!({"path": path, "bytes": png.len()}))
+                        json!({"path": path, "bytes": png.len()})
                     }
-                    None => Ok(json!({
+                    None => json!({
                         "mime": "image/png",
                         "base64": base64::engine::general_purpose::STANDARD.encode(&png),
-                    })),
+                    }),
+                };
+                if !warnings.is_empty()
+                    && let Some(object) = reply.as_object_mut()
+                {
+                    object.insert("warnings".into(), json!(warnings));
                 }
+                Ok(reply)
             }
             "doc.select" => {
                 let i = index_of(&p)?.ok_or_else(|| bad("doc.select needs `index`"))?;
@@ -308,6 +322,13 @@ pub fn respond(h: &Mutex<Headless>, line: &str) -> Value {
     // poisoned lock is safe to keep using, the same as the MCP server does.
     let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.lock().unwrap_or_else(PoisonError::into_inner).handle(method, params)))
         .unwrap_or_else(|_| Err(AutomationError::Other(format!("internal error: `{method}` panicked"))));
+    // A renderer whose diagnostics panic must not lose the reply either.
+    let diagnostics =
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| h.lock().unwrap_or_else(PoisonError::into_inner).drain_diagnostics())).unwrap_or_default();
+    for diagnostic in diagnostics {
+        // A broken stderr pipe must not panic the server before it writes the reply.
+        let _ = writeln!(std::io::stderr(), "warning: {diagnostic}");
+    }
     match r {
         Ok(v) => json!({"id": id, "ok": true, "result": v}),
         Err(e) => {

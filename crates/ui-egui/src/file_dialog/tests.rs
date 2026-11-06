@@ -322,6 +322,39 @@ fn menu_place_starts_transform_for_each_chosen_image() {
     }
 }
 
+/// #10031: File › Place decodes in the background; Free Transform starts when the layer lands, and
+/// a second place is refused while the first runs.
+#[test]
+fn menu_place_runs_in_the_background_and_starts_transform_when_it_lands() {
+    let (mut app, open, _) = app();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "source.png", &Default::default()).unwrap().bytes;
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    let layers = app.session.active().unwrap().doc.layer_count();
+    menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("drawing.png".into(), bytes.clone())));
+    app.poll_file_dialog(&ctx, None);
+    let place = app.jobs.place.clone().expect("being placed");
+    assert_eq!(place.name, "drawing.png");
+    assert!(app.ui.transform.is_none(), "Free Transform waits for the layer");
+    assert_eq!(app.session.active().unwrap().doc.layer_count(), layers);
+    // Another place is refused while this one runs, and the first one stays tracked.
+    assert!(crate::jobs_ui::start_place_bytes(&mut app, "other.png", bytes, None, &serde_json::json!({})).is_err());
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.job), Some(place.job));
+    let t = std::time::Instant::now();
+    while app.jobs.place.is_some() {
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "the place did not finish");
+        crate::jobs_ui::tick(&mut app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer_count(), layers + 1);
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "drawing");
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
 #[test]
 fn cancelled_or_invalid_menu_place_does_not_start_transform() {
     for command in ["file.placeEmbedded", "file.placeLinked"] {
@@ -744,6 +777,10 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
 fn save_as_starts_in_the_document_folder_unless_original_folder_is_off() {
     let (mut app, open, _) = app();
     let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let exports = tmp.path().join("exports");
+    std::fs::create_dir(&exports).unwrap();
+    let exports = exports.to_string_lossy().into_owned();
     app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
     let suggested = |open: &Open| match &open.borrow()[0].0 {
         FileDialogRequest::Save { suggested } => suggested.clone(),
@@ -759,17 +796,17 @@ fn save_as_starts_in_the_document_folder_unless_original_folder_is_off() {
     };
     // The default: Save As offers the document's own path, and nothing is remembered across documents.
     assert!(app.session.prefs().file_handling.save_as_to_original_folder);
-    assert_eq!(ask(&mut app, &open, "file.saveAs", Some(&joined("/exports", "design.psd"))), joined("/clients/a", "design.psd"));
-    assert_eq!(app.session.prefs().file_handling.last_save_folder, Path::new("/exports").to_string_lossy());
+    assert_eq!(ask(&mut app, &open, "file.saveAs", Some(&joined(&exports, "design.psd"))), joined("/clients/a", "design.psd"));
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, exports.as_str());
     app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
     assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined("/clients/a", "design.psd"));
     // Off: the name stays, the folder is the one last saved to.
     app.run("prefs.set", json!({"path": "fileHandling.saveAsToOriginalFolder", "value": false})).unwrap();
-    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined("/exports", "design.psd"));
+    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined(&exports, "design.psd"));
     // A bare export name follows the same rule, for a document that was never saved there.
     app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
-    assert_eq!(suggested(&open), joined("/exports", "result.png"));
+    assert_eq!(suggested(&open), joined(&exports, "result.png"));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
     // Nothing remembered yet: fall back to the document's folder.
@@ -778,6 +815,75 @@ fn save_as_starts_in_the_document_folder_unless_original_folder_is_off() {
     app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert_eq!(suggested(&open), joined("/clients/a", "result.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// #9656 review: the remembered folder moves only when the write was accepted. Save As into a
+/// folder, a later export into another one that fails, then reopening the dialog: it still starts
+/// in the first folder.
+#[test]
+fn a_failed_export_does_not_move_the_remembered_save_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let (good, other) = (tmp.path().join("good"), tmp.path().join("other"));
+    std::fs::create_dir(&good).unwrap();
+    std::fs::create_dir(&other).unwrap();
+    let (good, other) = (good.to_string_lossy().into_owned(), other.to_string_lossy().into_owned());
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false}})).unwrap();
+    let suggested = |open: &Open| match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        other => panic!("save dialog expected, got {other:?}"),
+    };
+    let doc = app.session.active().unwrap().doc.id;
+    // A successful export remembers its folder.
+    app.pick_save("a.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo(joined(&good, "a.png"))));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, good);
+    // A failed one does not, for the preference or for the document.
+    app.pick_save("b.png", |_, _| Err("disk full".into())).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined(&good, "b.png"));
+    answer(&open, Some(FileDialogAnswer::SaveTo(joined(&other, "b.png"))));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, good);
+    assert_eq!(app.save_dirs.get(&doc).map(|p| p.to_string_lossy().into_owned()), Some(good.clone()));
+    // Reopening starts where the last good save went.
+    app.pick_save("c.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined(&good, "c.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// #9656 review: a remembered folder that no longer exists is not offered; the dialog starts
+/// beside the document instead.
+#[test]
+fn a_vanished_save_folder_falls_back_to_beside_the_document() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let tmp = tempfile::tempdir().unwrap();
+    let gone = tmp.path().join("gone");
+    std::fs::create_dir(&gone).unwrap();
+    let gone = gone.to_string_lossy().into_owned();
+    app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": gone}})).unwrap();
+    assert_eq!(app.last_save_dir(), Some(std::path::PathBuf::from(&gone)));
+    std::fs::remove_dir(&gone).unwrap();
+    assert_eq!(app.last_save_dir(), None);
+    for (id, expected) in [("file.saveAs", joined("/clients/a", "design.psd"))] {
+        menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == expected), "{id}");
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+    }
+    app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == joined("/clients/a", "result.png")));
     answer(&open, None);
     app.poll_file_dialog(&ctx, None);
 }
@@ -800,8 +906,10 @@ fn plain_save_keeps_the_documents_file_when_original_folder_is_off() {
     let (mut app, open, _) = jpeg_app(None, false);
     app.opened_from(path);
     app.run("image.adjustments.invert", json!({})).unwrap();
-    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": "/exports"}})).unwrap();
-    for (id, expected) in [("file.save", path.to_string()), ("file.saveAs", joined("/exports", "My image.jpg"))] {
+    let tmp = tempfile::tempdir().unwrap();
+    let exports = tmp.path().to_string_lossy().into_owned();
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": exports}})).unwrap();
+    for (id, expected) in [("file.save", path.to_string()), ("file.saveAs", joined(&exports, "My image.jpg"))] {
         menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
         app.poll_file_dialog(&ctx, None);
         assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == expected), "{id}");
@@ -818,7 +926,9 @@ fn plain_save_keeps_a_relative_document_path_when_original_folder_is_off() {
     let (mut app, open, _) = jpeg_app(None, false);
     app.opened_from("design.jpg");
     app.run("image.adjustments.invert", json!({})).unwrap();
-    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": "/exports"}})).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let exports = tmp.path().to_string_lossy().into_owned();
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": exports}})).unwrap();
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if suggested == "design.jpg"));
