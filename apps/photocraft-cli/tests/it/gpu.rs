@@ -153,7 +153,7 @@ fn convert_and_run_honor_gpu_flag_and_preserve_stdout_protocol() {
     // run --gpu output on stdout is clean JSON
     let o =
         bin().args(["run", "--gpu", "--new", r#"{"width":32,"height":32}"#, "--cmd", "layer.new.layer", "--out", out_png.to_str().unwrap()]).output().unwrap();
-    assert!(o.status.success(), "stderr: {}", String::from_utf8_lossy(&o.stderr));
+    assert!(o.status.success(), "status: {}; stderr: {}", o.status, String::from_utf8_lossy(&o.stderr));
     assert!(out_png.is_file());
     let stdout = String::from_utf8_lossy(&o.stdout);
     for line in stdout.lines() {

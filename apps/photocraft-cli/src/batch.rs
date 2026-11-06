@@ -201,14 +201,25 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     let mut failures = Vec::new();
     let policy = crate::gpu::GpuPolicy::from_args(&a.gpu).map_err(CliError::Other)?;
     let mut renderer = policy.create_renderer();
+    let protect_native_xcf = format.is_none() && inputs.iter().any(|input| xcf_stem(Path::new(&input.path)).is_some());
+    let mut written_outputs = photocraft_engine::file_cmds::OutputClaims::default();
+    let mut native_xcf_outputs = photocraft_engine::file_cmds::OutputClaims::default();
     for (input, (target, ext)) in inputs.iter().zip(&outputs) {
         let input = Path::new(&input.path);
+        let native_xcf = format.is_none() && xcf_stem(input).is_some();
+        let target_text = target.to_string_lossy();
         // The selected format encodes the bytes, whatever extension `--naming` gives the file.
         // Without --format, XCF is saved natively and other import-only formats as PSD,
         // matching the format `--naming`'s {ext} plans.
         let mut h = Headless::trusted_local();
         h.set_renderer(renderer.take());
         let r = (|| -> Result<Vec<String>> {
+            // XCF transports collapse to one native stem by default. Reject a collision when
+            // either result is native XCF; ordinary/explicit-format pairs keep replacement policy.
+            if protect_native_xcf {
+                let claimed = if native_xcf { &written_outputs } else { &native_xcf_outputs };
+                claimed.check(&target_text).map_err(CliError::BatchOption)?;
+            }
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -248,6 +259,12 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
         match r {
             Ok(ws) => {
                 ok += 1;
+                if protect_native_xcf {
+                    written_outputs.record(&target_text, &input.to_string_lossy());
+                }
+                if native_xcf {
+                    native_xcf_outputs.record(&target_text, &input.to_string_lossy());
+                }
                 let _ = writeln!(out, "ok    {} -> {}", input.display(), target.display());
                 // Each file's own export warnings (e.g. transparency composited over white) are
                 // reported for that file, even when an earlier file had the same warning.
