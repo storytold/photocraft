@@ -49,7 +49,6 @@ use hue_saturation::hue_saturation;
 use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
 use levels::levels;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
-pub(crate) use selective_color::clear_folded_params;
 use selective_color::selective_color;
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
 
