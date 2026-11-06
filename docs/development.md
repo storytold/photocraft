@@ -822,7 +822,10 @@ physical RAM (excluding swap) and, where measurable, system commit headroom:
   modification time (a different file with both preserved is not distinguished there). The
   `file.approveMemory` permission is one-shot and is not journaled or recorded in an action. A
   refusal above the hard ceiling is the typed `PsdHardBudget` error (name, required, limit), not
-  a string, and it releases the queued source.
+  a string, and it releases the queued source. Its message says where the limit comes from:
+  the computer's memory on 64-bit desktop; the web build names its fixed cap; on 32-bit desktop the
+  limit may be either, so the message mentions the 2 GiB cap and that the 64-bit build may open the file.
+  Those two also link the releases page. Sizes appear in GiB or MiB next to the exact bytes.
 - A layered TIFF (Photoshop layer data in tags 37724/34377) is admitted by the same policy
   before its composite is decoded. The page's tags are read into the PSD model first, without
   pixels; then that model's layer/workspace estimate, the decoded composite and its
@@ -963,23 +966,27 @@ cargo xtask psd-write-oracle xtask/psd-write-oracle/starter.json corpus/photosho
 ```
 
 The output directory must not exist. It contains `report.json`, `manifest.json`, a
-candidate PSD per successful export, and CLI stdout/stderr for diagnosis. A failed
-case does not prevent the other cases from running, but the command exits nonzero.
+candidate PSD per successful export, a `base.psd` copy of the hashed base bytes, and
+CLI stdout/stderr for diagnosis. The CLI runs on that copy, so it never opens the corpus.
+A failed case does not prevent the other cases from running, but the command exits nonzero.
+Once an export succeeded, a failing case keeps its candidate in the manifest, with an
+`exported file: ...` error if reopening or checking it failed.
 The manifest records the checkout revision, whether tracked files were modified, the
 CLI binary hash, recipe hash, corpus revision and candidate hashes (revision and
 dirty state are `unknown` outside a git checkout). The checkout
 revision does not establish where a supplied binary was built; use a binary built from
 that revision and preserve the CI run's provenance. Missing fonts and other warnings
-are recorded. The runner never overwrites its input PSDs.
+are recorded. The runner never overwrites or opens its input PSDs beyond hashing them.
 
-Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has a unique `id`, a relative `base` PSD path,
+Recipes are versioned JSON (`version` must be `1`; any other value is rejected). Unknown keys anywhere in a recipe are an error, so a typo never passes as "nothing to check". A case has an `id` that is unique ignoring letter case (it names the case's output directory), a relative `base` PSD path,
 its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
 An optional list of `commands` contains a `command` id and `params`; the runner
 supplies the resolved `layer` id. Targets that match zero or multiple layers fail.
-Only `type.*` and `layer.layerStyle.*` commands are accepted. Checks use JSON pointers
+Only `type.*` and `layer.layerStyle.*` commands are accepted, except `layer.layerStyle.contours.*`,
+which edit the contour library rather than the document and can read or write any file. Checks use JSON pointers
 relative to the inspected layer: `unchanged` requires a present, equal value before
 and after; `equals` checks the exported value; `changed_to` requires the exported
-value to match and differ from the base. Every edited case needs a `changed_to` check.
+value to match and differ from the base. Numbers compare by exact value, so `17` equals `17.0`. Every edited case needs a `changed_to` check.
 Every check is run and reported (not only the first failure), each result naming the layer and the property path. See the starter recipes for examples. Regenerate hashes when deliberately changing
 the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
 

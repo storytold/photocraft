@@ -246,7 +246,7 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 }
 
 /// Root of the dialog editor's view state in egui memory.
-fn dialog_mem(kind: &str) -> egui::Id {
+pub(crate) fn dialog_mem(kind: &str) -> egui::Id {
     egui::Id::unique(("adjust-dialog", kind))
 }
 
