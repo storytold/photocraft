@@ -166,6 +166,11 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::corner_radius::pointer(app, raw, mods) {
         return None;
     }
+    // The box round several selected shape layers: its handles scale them (Path Selection and the
+    // shape tools).
+    if crate::shape_bounds_box::pointer(app, raw, mods) {
+        return None;
+    }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
@@ -282,7 +287,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
             // With a selection: cut the selected pixels (⌥ copies them) and drag them as a floating
             // piece, from anywhere, as a marquee ⌘-drag does.
             if crate::move_ui::moves_selected_pixels_with(app, tool) {
-                if crate::move_ui::float_selected(app, mods.alt, 0.0, 0.0) {
+                if crate::move_ui::float_selected_for_drag(app, mods.alt) {
                     let mut d = Drag::new(tool, [x, y], vec![[x, y, pressure as f64]], mods, false);
                     d.sel_move = Some(true);
                     app.drag = Some(d);
@@ -521,6 +526,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let tool = crate::retouch_ui::alt_flipped(tool, mods.alt);
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
+            drag.capture_selection_at_press(app);
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();

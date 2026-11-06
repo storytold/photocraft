@@ -81,6 +81,13 @@ fn queue_takes_drop(queued: usize, bytes: usize, incoming: usize) -> bool {
     queued < MAX_QUEUED_DROPS && bytes.saturating_add(incoming) <= MAX_QUEUED_DROP_BYTES
 }
 
+/// Whether the shell's place inbox, holding `files` files of `bytes` bytes together, takes one more
+/// of `incoming` bytes: the limits of the drop queue it is drained into, so browser reads that
+/// finish between two frames can't hold more than the queue itself would.
+pub fn place_inbox_takes(files: usize, bytes: usize, incoming: usize) -> bool {
+    queue_takes_drop(files, bytes, incoming)
+}
+
 /// `warnings` from an import, plus one for each font family the active document's type uses that
 /// isn't installed (#4559): Photoshop warns about missing fonts as a file opens, and the CLI and
 /// automation already report them; the type would otherwise silently render in a fallback face.
@@ -385,8 +392,9 @@ impl PhotocraftApp {
 
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
-    /// With background jobs on, a file is placed by a job: the next one waits until that job has
-    /// landed and its Free Transform has been applied (see `jobs_ui::finish_place`).
+    /// With background jobs on (or a session that steps its jobs, as on the web), a file is placed
+    /// by a job: the next one waits until that job has landed and its Free Transform has been
+    /// applied (see `jobs_ui::finish_place`).
     ///
     /// Each file goes into the document it was dropped on, never into whichever one is active now:
     /// files dropped on a document in another tab wait until it is back in view, and are discarded
@@ -502,8 +510,10 @@ impl PhotocraftApp {
         self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
     }
 
+    /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
+    /// places run in the background, else synchronously.
     fn place_bytes_with(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: &serde_json::Value) -> Result<serde_json::Value, String> {
-        let r = if self.background_jobs {
+        let r = if crate::jobs_ui::place_in_background(self) {
             crate::jobs_ui::start_place_bytes(self, name, bytes, linked, params)
         } else {
             photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, params).map_err(|e| e.to_string())

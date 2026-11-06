@@ -514,8 +514,9 @@ fn png_result(png: &[u8], note: String) -> CallToolResult {
 }
 
 /// Adds the typed byte counts of a memory refusal to an error object: an approval request keeps
-/// its soft limit, hard limit and (when known) capacity; a hard refusal keeps only its required
-/// and hard amounts, because no approval can raise that ceiling.
+/// its soft limit, hard limit and (when known) capacity; a hard refusal keeps its required and
+/// hard amounts, because no approval can raise that ceiling, and adds the free memory when
+/// measured memory set the limit.
 fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
     let Some(obj) = obj.as_object_mut() else { return };
     match err {
@@ -531,11 +532,15 @@ fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
                 obj.insert("availableRam".into(), json!(avail));
             }
         }
-        AutomationError::Import(photocraft_io::IoError::PsdImportBudget { required, limit })
-        | AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required, limit, .. }) => {
+        AutomationError::Import(photocraft_io::IoError::PsdImportBudget { required, limit, free_memory })
+        | AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required, limit, free_memory, .. }) => {
             obj.insert("required".into(), json!(required));
             obj.insert("hard".into(), json!(limit));
             obj.insert("hardLimit".into(), json!(limit));
+            if let Some(free) = free_memory {
+                obj.insert("available".into(), json!(free));
+                obj.insert("availableRam".into(), json!(free));
+            }
         }
         _ => {}
     }
@@ -1614,7 +1619,12 @@ mod tests {
             assert!(serde_json::from_value::<PlaceParams>(json!({"path": "file.psd", "approve_high_memory": invalid})).is_err(), "{invalid}");
         }
 
-        let err = AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { name: "huge.psd".into(), required: 9_000, limit: 8_000 });
+        let err = AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget {
+            name: "huge.psd".into(),
+            required: 9_000,
+            limit: 8_000,
+            free_memory: None,
+        });
         let res = to_result(Err(err)).unwrap();
         assert_eq!(res.is_error, Some(true));
         let text = &res.content.first().and_then(|c| c.as_text()).unwrap().text;
@@ -1625,6 +1635,21 @@ mod tests {
         for absent in ["soft", "softLimit", "available", "availableRam"] {
             assert!(v.get(absent).is_none(), "a hard refusal has no {absent}: {v}");
         }
+
+        // With measured free memory behind the limit, the refusal reports it too.
+        let err = AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget {
+            name: "huge.psd".into(),
+            required: 9_000,
+            limit: 8_000,
+            free_memory: Some(10_000),
+        });
+        let res = to_result(Err(err)).unwrap();
+        let text = &res.content.first().and_then(|c| c.as_text()).unwrap().text;
+        let v: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(v["hardLimit"], 8_000);
+        assert_eq!(v["available"], 10_000);
+        assert_eq!(v["availableRam"], 10_000);
+        assert!(v.get("soft").is_none(), "a hard refusal has no soft limit: {v}");
     }
 
     /// The MCP server applies finished jobs before every tool call too (#503).

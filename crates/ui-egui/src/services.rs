@@ -79,6 +79,9 @@ pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Re
 pub struct ExportSettings {
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
+    /// JPEG chroma sampling: `true` is 4:2:0, `false` keeps full 4:4:4 colour detail.
+    /// Export As keeps full chroma above quality 50 so saturated text and graphics stay sharp.
+    pub jpeg_chroma_subsampling: bool,
     /// JPEG Options › Format Options: baseline, baseline optimized or progressive.
     pub jpeg_format: photocraft_codecs::JpegFormat,
     /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
@@ -133,6 +136,7 @@ impl Default for ExportSettings {
     fn default() -> Self {
         ExportSettings {
             jpeg_quality: None,
+            jpeg_chroma_subsampling: true,
             jpeg_format: photocraft_codecs::JpegFormat::Baseline,
             webp_lossless: true,
             webp_quality: None,
@@ -163,6 +167,7 @@ impl ExportSettings {
         if let Some(q) = self.jpeg_quality {
             opts.encode.jpeg_quality = q;
         }
+        opts.encode.jpeg_chroma_subsampling = self.jpeg_chroma_subsampling;
         opts.encode.jpeg_format = self.jpeg_format;
         opts.encode.webp_lossless = self.webp_lossless;
         if let Some(q) = self.webp_quality {
@@ -400,6 +405,10 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
+/// whether the app window is focused (to re-assert WinTab overlap priority on activation).
+pub type TabletPollFn = Box<dyn FnMut(bool)>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -522,6 +531,8 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// WinTab packet poll (Windows with Windows Ink disabled; see `photocraft_tablet::wintab`).
+    pub tablet_poll: Option<TabletPollFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.

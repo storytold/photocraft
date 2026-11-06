@@ -218,7 +218,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::CurvaturePen => reset!(vector_mode, pen_path_op, pixel_align_stroke),
         Tool::FreeformPen => reset!(vector_mode, pen_path_op, curve_fit, pixel_align_stroke),
         Tool::Line => reset!(
-            vector_mode,
+            shape_mode,
             shape_fill,
             pixel_align_stroke,
             stroke_width,
@@ -236,7 +236,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         ),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::CustomShape => {
             reset!(
-                vector_mode,
+                shape_mode,
                 shape_fill,
                 pixel_align_stroke,
                 stroke_width,
