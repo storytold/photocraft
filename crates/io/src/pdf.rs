@@ -325,7 +325,14 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
             }
             let image = PrintImage { width: aw, height: ah, channels: device, data, icc: icc.clone() };
             let (pw, ph) = (f64::from(aw) * 72.0 / dpi, f64::from(ah) * 72.0 / dpi);
-            pages.push(PrintPage { paper: (pw, ph), image, rect: (0.0, 0.0, pw, ph), marks: Marks::default(), description: None, label: Some((*name).to_string()) });
+            pages.push(PrintPage {
+                paper: (pw, ph),
+                image,
+                rect: (0.0, 0.0, pw, ph),
+                marks: Marks::default(),
+                description: None,
+                label: Some((*name).to_string()),
+            });
         }
         if pages.is_empty() {
             return Err(IoError::Unsupported("PDF: the document's artboards have no area".into()));

@@ -38,18 +38,46 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<ImportRe
     if count == 0 {
         return Err(IoError::Unsupported("PDF has no pages".into()));
     }
+    // A page can be arbitrarily large; cap both the per-page raster and the artboard strip so a
+    // hostile PDF cannot request a huge allocation. A poster at 300 dpi is far below these.
+    const MAX_PAGE_PIXELS: f64 = 100_000_000.0;
+    const MAX_UNION_PIXELS: u64 = 200_000_000;
     // Render first, so a malformed later page fails before any document is built.
     let mut rendered = Vec::with_capacity(count);
+    let mut union_width = 0u64;
+    let mut union_height = 0u64;
     for index in 0..count {
         let page = document.pages().get(index as i32).map_err(|e| IoError::Unsupported(format!("PDF: {e}")))?;
         let width_pt = f64::from(page.width().value);
-        // A page can be arbitrarily large; cap the raster so a hostile PDF cannot request a huge
-        // allocation. 20,000 px is far above a poster at 300 dpi.
-        let target_width = (width_pt * f64::from(dpi) / 72.0).round().clamp(1.0, 20_000.0) as i32;
-        let config = PdfRenderConfig::new().set_target_width(target_width);
+        let height_pt = f64::from(page.height().value);
+        if width_pt <= 0.0 || height_pt <= 0.0 {
+            return Err(IoError::Unsupported(format!("PDF page {} has no area", index + 1)));
+        }
+        let mut target_width = (width_pt * f64::from(dpi) / 72.0).round().clamp(1.0, 20_000.0);
+        // The rendered height follows the page aspect; scale both dimensions down together when
+        // the per-page pixel budget is exceeded.
+        let target_height = target_width * height_pt / width_pt;
+        let area = target_width * target_height;
+        if area > MAX_PAGE_PIXELS {
+            let scale = (MAX_PAGE_PIXELS / area).sqrt();
+            target_width = (target_width * scale).max(1.0);
+        }
+        let config = PdfRenderConfig::new().set_target_width(target_width as i32);
         let bitmap = page.render_with_config(&config).map_err(|e| IoError::Unsupported(format!("PDF render: {e}")))?;
         let (width, height) = (bitmap.width().max(0) as u32, bitmap.height().max(0) as u32);
+        // Stop before the strip exceeds the union budget; the pages rendered so far stay.
+        let next_width = union_width + u64::from(width) + if rendered.is_empty() { 0 } else { u64::from(GAP) };
+        let next_height = union_height.max(u64::from(height));
+        if next_width.saturating_mul(next_height) > MAX_UNION_PIXELS {
+            break;
+        }
+        union_width = next_width;
+        union_height = next_height;
         rendered.push((width, height, bitmap.as_rgba_bytes()));
+    }
+    let count = rendered.len();
+    if count == 0 {
+        return Err(IoError::Unsupported("PDF pages are too large to import; reduce the DPI".into()));
     }
     let doc_width = rendered.iter().map(|(w, _, _)| *w).sum::<u32>() + GAP * (count as u32 - 1);
     let doc_height = rendered.iter().map(|(_, h, _)| *h).max().unwrap_or(1);
@@ -59,8 +87,8 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<ImportRe
         // Reuse the well-tested flat importer: the page is composited into the union canvas at its
         // artboard position, encoded as PNG, and decoded into a document-wide raster layer.
         let mut canvas = image::RgbaImage::new(doc_width, doc_height);
-        let page = image::RgbaImage::from_raw(width, height, rgba)
-            .ok_or_else(|| IoError::Unsupported("PDF: the rendered bitmap does not match its buffer".into()))?;
+        let page =
+            image::RgbaImage::from_raw(width, height, rgba).ok_or_else(|| IoError::Unsupported("PDF: the rendered bitmap does not match its buffer".into()))?;
         image::imageops::overlay(&mut canvas, &page, i64::from(x), 0);
         let mut png = Vec::new();
         image::codecs::png::PngEncoder::new(&mut png)
@@ -85,7 +113,8 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<ImportRe
     doc.name = name.to_string();
     let mut warnings = Vec::new();
     if total > count {
-        warnings.push(format!("PDF has {total} pages; imported the first {count} (the limit is {MAX_PAGES})"));
+        let reason = if total > MAX_PAGES { "the page limit is 16" } else { "the rest would make the import canvas too large" };
+        warnings.push(format!("PDF has {total} pages; imported the first {count} ({reason})"));
     }
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
 }
@@ -95,12 +124,9 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<ImportRe
 fn bind() -> Result<pdfium_render::prelude::Pdfium, IoError> {
     use pdfium_render::prelude::Pdfium;
 
-    let dir = std::env::var_os("PDFIUM_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| {
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
-            .unwrap_or_default()
-    });
+    let dir = std::env::var_os("PDFIUM_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::current_exe().ok().and_then(|exe| exe.parent().map(std::path::Path::to_path_buf)).unwrap_or_default());
     let library = Pdfium::pdfium_platform_library_name_at_path(&dir);
     let bindings = Pdfium::bind_to_library(&library).map_err(|e| {
         IoError::Unsupported(format!(

@@ -2547,12 +2547,7 @@ fn layers_to_files_exports_group_children_as_loose_files() {
         let child = |name: &str| photocraft_doc::Layer::new(name, photocraft_doc::LayerContent::Raster(photocraft_doc::Surface::new(fmt)));
         let sub = photocraft_doc::Layer::new(
             "sub",
-            photocraft_doc::LayerContent::Group(photocraft_doc::Group {
-                children: vec![child("c")],
-                expanded: true,
-                artboard: None,
-                frame_stroke: None,
-            }),
+            photocraft_doc::LayerContent::Group(photocraft_doc::Group { children: vec![child("c")], expanded: true, artboard: None, frame_stroke: None }),
         );
         doc.layers.push(photocraft_doc::Layer::new(
             "expanded",
@@ -2571,12 +2566,7 @@ fn layers_to_files_exports_group_children_as_loose_files() {
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "loose", "groups": "layers"})).unwrap();
     assert_eq!(
         files(&r),
-        vec![
-            join(&dir, "loose_0000_c.png"),
-            join(&dir, "loose_0001_b.png"),
-            join(&dir, "loose_0002_a.png"),
-            join(&dir, "loose_0003_Background.png")
-        ]
+        vec![join(&dir, "loose_0000_c.png"), join(&dir, "loose_0001_b.png"), join(&dir, "loose_0002_a.png"), join(&dir, "loose_0003_Background.png")]
     );
     assert!(files(&r).iter().all(|f| std::path::Path::new(f).is_file()));
 
@@ -2601,12 +2591,7 @@ fn layers_to_files_exports_group_children_as_loose_files() {
     let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "all", "groups": "layers", "visibleOnly": false})).unwrap();
     assert_eq!(
         files(&r),
-        vec![
-            join(&dir, "all_0000_c.png"),
-            join(&dir, "all_0001_b.png"),
-            join(&dir, "all_0002_a.png"),
-            join(&dir, "all_0003_Background.png")
-        ]
+        vec![join(&dir, "all_0000_c.png"), join(&dir, "all_0001_b.png"), join(&dir, "all_0002_a.png"), join(&dir, "all_0003_Background.png")]
     );
 
     // An unknown mode is rejected instead of silently merging.
