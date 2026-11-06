@@ -10,7 +10,7 @@ use photocraft_geom::Size;
 
 pub const PSD_KEY: [u8; 4] = *b"pcVP";
 const HEADER: &[u8; 8] = b"PCVP\0\0\0\x01";
-const MAX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PIXELS: u64 = 24_000_000;
 const PREFIX: usize = 44;
 
