@@ -31,6 +31,13 @@ impl PhotocraftApp {
             }
             self.sync_mask_targets();
         }
+        // Find Layers sets the Layers panel's Name filter however it runs: the menu, the shortcut,
+        // `engine.execute` or an action step (#10884).
+        if id == "select.findLayers"
+            && let Ok(reply) = &result
+        {
+            crate::layer_filter_ui::find::apply(self, reply);
+        }
         result
     }
 

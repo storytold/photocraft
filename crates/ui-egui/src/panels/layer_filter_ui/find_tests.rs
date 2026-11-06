@@ -145,3 +145,17 @@ fn the_menu_item_shows_a_layers_panel_closed_in_the_docking_layout() {
     h.run_steps(4);
     assert_eq!(h.state().ui.layer_filter_name, "other", "the Name field has the focus with its text selected");
 }
+
+#[test]
+fn engine_execute_sets_the_panel_filter_too() {
+    // `engine.execute` runs engine commands through `PhotocraftApp::run`, not `menus::invoke`.
+    let mut h = harness();
+    h.state_mut().ui.layer_filter_by = FilterBy::Kind;
+    let before = selected(&h);
+    h.state_mut().run("select.findLayers", json!({"name": "link"})).unwrap();
+    h.run_steps(4);
+    assert_eq!((h.state().ui.layer_filter_by, h.state().ui.layer_filter_name.as_str()), (FilterBy::Name, "link"));
+    assert_eq!(listed(&h), ["LinkB", "LinkA"]);
+    assert_eq!(selected(&h), before);
+    assert!(h.ctx.memory(|m| m.focused()).is_none(), "a script does not take the keyboard focus");
+}

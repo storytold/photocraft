@@ -594,6 +594,11 @@ fn find_layers_by_name() {
     assert_eq!(s.active().unwrap().selected_layers(), [a], "the selection is unchanged");
     let r = s.execute("select.findLayers", json!({"name": "nothing"})).unwrap();
     assert_eq!(r["selected"], json!([]), "no match lists nothing and is no error");
+    let all: Vec<u64> = doc(&s).walk().into_iter().map(|(_, _, l)| l.id.0).collect();
+    for blank in ["", "  "] {
+        let r = s.execute("select.findLayers", json!({"name": blank})).unwrap();
+        assert_eq!(r["selected"], json!(all), "a blank name filters nothing, as in the panel: {blank:?}");
+    }
     let r = s.execute("select.findLayers", json!({})).unwrap();
     assert_eq!((&r["selected"], &r["layerFilter"]), (&json!([]), &json!({"by": "name"})), "without a name it only switches to Name");
     assert_eq!(s.active().unwrap().selected_layers(), [a]);

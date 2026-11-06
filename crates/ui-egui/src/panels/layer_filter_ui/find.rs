@@ -19,11 +19,8 @@ fn focus_flag() -> egui::Id {
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Result<Value, String> {
     let given = params.get("name").is_some_and(|n| !n.is_null());
     let params = if given { params } else { json!({"name": app.ui.layer_filter_name}) };
+    // `run` applies the reply's Name filter ([`apply`]).
     let reply = app.run("select.findLayers", params)?;
-    app.ui.layer_filter_by = FilterBy::Name;
-    if let Some(name) = reply["layerFilter"]["name"].as_str() {
-        app.ui.layer_filter_name = name.to_string();
-    }
     if !given {
         // The panel docking layout (when on) shows the Layers panel itself, else the dock group.
         if app.ui.docking.is_some() {
@@ -37,6 +34,15 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Re
         ctx.data_mut(|d| d.insert_temp(focus_flag(), true));
     }
     Ok(reply)
+}
+
+/// Apply the Name filter in a `select.findLayers` reply to the Layers panel: switch to Name and set
+/// the text when the reply has one. [`PhotocraftApp::run`] calls it after every Find Layers.
+pub(crate) fn apply(app: &mut PhotocraftApp, reply: &Value) {
+    app.ui.layer_filter_by = FilterBy::Name;
+    if let Some(name) = reply["layerFilter"]["name"].as_str() {
+        app.ui.layer_filter_name = name.to_string();
+    }
 }
 
 /// The Name filter's text field, taking the focus with its text selected after [`invoke`]. The

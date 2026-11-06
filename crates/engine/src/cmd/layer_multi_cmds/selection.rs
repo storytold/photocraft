@@ -337,14 +337,15 @@ pub(super) fn select_all_layers(s: &mut Session) -> Result<Value> {
 /// Select › Find Layers (#10884): as in Photoshop it filters the Layers panel by Name and leaves the
 /// layer selection alone. The reply's `layerFilter` is the Name filter the app applies (`name` only
 /// when one is given) and `selected` lists the layers it matches: part of the name, trimmed and
-/// ignoring case, as the panel matches (none without a name).
+/// ignoring case, as the panel matches: every layer for a blank name, which the panel doesn't filter
+/// by (none without a name).
 pub(super) fn find_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
         Some(v) => Some(v.as_str().ok_or_else(|| bad("select.findLayers", "`name` must be a string"))?),
     };
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let needle = name.map(|n| n.trim().to_lowercase()).filter(|n| !n.is_empty());
+    let needle = name.map(|n| n.trim().to_lowercase());
     let ids: Vec<u64> = match &needle {
         Some(n) => d.doc.walk().into_iter().filter(|(_, _, l)| l.name.to_lowercase().contains(n.as_str())).map(|(_, _, l)| l.id.0).collect(),
         None => Vec::new(),
