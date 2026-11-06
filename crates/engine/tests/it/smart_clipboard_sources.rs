@@ -1,4 +1,5 @@
-//! Clipboard copies carry only the linked smart-object records their layers reference.
+//! Clipboard and cross-document copies carry only the linked smart-object records their layers
+//! reference.
 use photocraft_doc::{Document, LayerContent, LayerId, SmartSource};
 use photocraft_engine::{Session, smart_cmds::source_bytes};
 use photocraft_geom::Rect;
@@ -396,4 +397,73 @@ fn ambiguous_invalid_utf8_ids_do_not_replace_the_clipboard() {
     assert!(error.to_string().contains("invalid UTF-8"), "{error}");
     assert_eq!(s.active().unwrap().doc, before_doc);
     assert_eq!(s.clipboard.as_ref().unwrap().layers, before_clip.layers);
+}
+
+/// #9715: Duplicate Layer to another open document or to a new one carries a PSD-embedded
+/// smart object's file, so it still opens, saves to PSD/PSB and reopens with its contents.
+#[test]
+fn layer_copies_to_other_documents_keep_psd_embedded_sources() {
+    for depth in [8, 16, 32] {
+        for to_new in [false, true] {
+            let (mut s, original) = source_session(fixture(depth));
+            let expected = bytes(&s.active().unwrap().doc, original);
+            if !to_new {
+                s.execute("file.new", json!({"width": 8, "height": 6, "depth": depth})).unwrap();
+                s.set_active(0);
+            }
+            let r = if to_new {
+                s.execute("layer.duplicate", json!({"document": "new"})).unwrap()
+            } else {
+                s.execute("layer.copyToDocument", json!({"document": 1})).unwrap()
+            };
+            assert_eq!(s.active_index(), Some(1));
+            let copy = LayerId(r["layers"][0].as_u64().unwrap());
+            assert_eq!(hash(&bytes(&s.active().unwrap().doc, copy)), hash(&expected), "depth {depth}, new {to_new}");
+            for format in ["pcraft", "psd", "psb"] {
+                let back = roundtrip(&s.active().unwrap().doc, format);
+                let (mut reopened, id) = source_session(back);
+                assert_eq!(hash(&bytes(&reopened.active().unwrap().doc, id)), hash(&expected), "depth {depth}, new {to_new}, {format}");
+                reopened.execute("layer.smartObjects.editContents", json!({"layer": id.0})).unwrap();
+                assert_eq!(photocraft_compose::flatten(&reopened.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0], "depth {depth}, new {to_new}, {format}");
+            }
+        }
+    }
+}
+
+/// #9715: only the copied layers' records follow them, a repeated copy doesn't append the same
+/// file again, and Undo removes the records with the layers.
+#[test]
+fn layer_copies_to_other_documents_scope_and_share_linked_records() {
+    let mut doc = fixture(8);
+    let (_, _, block) = doc.metadata.psd_global_blocks.iter_mut().find(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).unwrap();
+    let selected_record = block.clone();
+    let mut combined = block.to_vec();
+    combined.extend(photocraft_io::linked::encode_linked_file(&photocraft_io::linked::LinkedFile {
+        uuid: "unselected-private-source".into(),
+        file_name: "private.psb".into(),
+        bytes: vec![7; 16],
+    }));
+    *block = Arc::new(combined);
+    for to_new in [false, true] {
+        let (mut s, _) = source_session(doc.clone());
+        if to_new {
+            s.execute("layer.duplicate", json!({"document": "new"})).unwrap();
+        } else {
+            s.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
+            let empty = s.active().unwrap().doc.clone();
+            s.set_active(0);
+            s.execute("layer.copyToDocument", json!({"document": 1})).unwrap();
+            let once = s.active().unwrap().doc.clone();
+            s.set_active(0);
+            s.execute("layer.copyToDocument", json!({"document": 1})).unwrap();
+            assert_eq!(s.active().unwrap().doc.metadata.psd_global_blocks, once.metadata.psd_global_blocks, "a second copy reuses the record");
+            assert!(s.undo() && s.undo());
+            assert_eq!(s.active().unwrap().doc, empty, "Undo takes the records away with the layers");
+            assert!(s.redo());
+        }
+        let linked: Vec<_> =
+            s.active().unwrap().doc.metadata.psd_global_blocks.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD" | b"lnkE")).collect();
+        assert_eq!(linked.len(), 1, "new {to_new}");
+        assert_eq!(hash(&linked[0].2), hash(&selected_record), "new {to_new}: the unselected file stays behind");
+    }
 }
