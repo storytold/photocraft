@@ -378,7 +378,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error),"eraseToHistory":bool=false (a layer missing from the source state paints that state's visible image, as the Eraser's Erase to History does, instead of an error),"pencil":bool=false and "block":bool=false with "zoom" (with eraseToHistory: the hard aliased tip or the square, as paint.pencil's)"#
+                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error),"eraseToHistory":bool=false (a layer missing from a source state that holds a single layer paints that state's image, as the Eraser's Erase to History does, instead of an error),"pencil":bool=false and "block":bool=false with "zoom" (with eraseToHistory: the hard aliased tip or the square, as paint.pencil's)"#
             ),
             enabled: has_pixel_layer,
             run: history_brush,

@@ -696,6 +696,41 @@ fn erase_to_history_paints_the_source_states_visible_image_at_every_depth() {
 }
 
 #[test]
+fn erase_to_history_paints_a_new_layer_from_a_single_layer_state_background_or_not() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+    let red = rgba(&s, 20, 10);
+    assert!(red[3] > 0.99);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 1, "eraseToHistory": true})).unwrap();
+    assert_eq!(rgba(&s, 20, 10), red);
+}
+
+#[test]
+fn erase_to_history_refuses_a_new_layer_from_a_state_holding_two_layers() {
+    let mut s = session(40, 20, 8, "rgb");
+    let picture = rgba(&s, 20, 10);
+    s.execute("layer.new.layer", json!({})).unwrap(); // State 1: the Background and an empty layer.
+    s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap(); // State 2.
+    let red = rgba(&s, 20, 10);
+    s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "erase": true})).unwrap();
+    assert!(rgba(&s, 20, 10)[3] < 0.01);
+    // A layer the source state does hold paints back as it was, whatever else the state holds.
+    let stroke = |state: u64| json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": state, "eraseToHistory": true});
+    s.execute("paint.historyBrush", stroke(2)).unwrap();
+    assert_eq!(rgba(&s, 20, 10), red);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    // A second layer in the source state, empty or not, leaves no corresponding layer.
+    for state in [1, 2] {
+        assert!(s.execute("paint.historyBrush", stroke(state)).is_err(), "state {state}");
+        assert!(rgba(&s, 20, 10)[3] < 0.01, "state {state}");
+    }
+    s.execute("paint.historyBrush", stroke(0)).unwrap();
+    assert_eq!(rgba(&s, 20, 10), picture);
+}
+
+#[test]
 fn history_brush_errors_when_layer_is_new() {
     let mut s = session(20, 20, 8, "rgb");
     s.execute("layer.new.layer", json!({})).unwrap();
