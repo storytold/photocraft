@@ -506,7 +506,7 @@ fn paint_canvas(
         }
     }
     // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
-    if let Some(tex) = crate::channel_view::ensure(app, ctx, idx) {
+    if let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output) {
         // Rendered from the live preview, so over the area the preview is shown in.
         let a = shown_area;
         if view.rotation.abs() > 0.05 {
@@ -1699,9 +1699,14 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
         painter.set(layer_edges, egui::Shape::rect_stroke(xf.doc_rect(b), 0, Stroke::new(1.0, LAYER_EDGES), egui::StrokeKind::Outside));
     }
     // A tool drag held past the canvas edge scrolls the view toward the pointer (#4183); the
-    // drag's next move then extends into what scrolled in.
+    // drag's next move then extends into what scrolled in. The crop tools keep their own drags:
+    // they scroll only while the press is the canvas's own (not a panel slider or a scrollbar held
+    // while a stale crop drag lingers) and the crop tool has it (not a temporary Zoom, which
+    // freezes the drag).
+    let crop_drag =
+        response.is_pointer_button_down_on() && tool == app.ui.tool && (crate::crop_ui::autoscrolls(app) || crate::perspective_crop_ui::dragging(app));
     if primary
-        && app.drag.is_some()
+        && (app.drag.is_some() || crop_drag)
         && tool != Tool::Hand
         && !middle
         && let Some(p) = ui.input(|i| i.pointer.primary_down().then(|| i.pointer.latest_pos()).flatten())
@@ -1962,6 +1967,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     crate::crop_straighten::set_held(app, !ctx.text_edit_focused() && ui.input(|i| i.modifiers.command));
     // A tab switched this frame drops the other document's pending crop (#1918).
     crate::crop_ui::cancel_stale(app);
+    // A tool picked mid-drag ends the crop gesture before the frame sees the switch, which would
+    // otherwise drop the untouched default frame under the box being drawn (#9223). The Hand and
+    // Zoom never reach `tool_event`, so this is the one place that sees every tool.
+    crate::crop_ui::end_drag_on_leave(app);
     crate::crop_ui::ensure_frame(app);
     let mut drawing = crate::crop_ui::active(app);
     if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
@@ -2220,12 +2229,12 @@ mod rotation_preview_isolation_tests {
             .unwrap();
         let before = app.session.active().unwrap().doc.clone();
         let ctx = egui::Context::default();
-        let texture = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+        let texture = crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
         ctx.tex_manager().write().take_delta().clear();
         let dialog = crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
         app.ui.dialogs.last_mut().unwrap().fields.insert("radius".into(), json!(2.0));
         ensure_filter_preview(&mut app, 0, &ctx).unwrap();
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("filter preview must update channel overlay")[0].image;
         let st = app.session.active().unwrap();
@@ -2235,16 +2244,16 @@ mod rotation_preview_isolation_tests {
         delta.clear();
         assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
         app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(false));
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("Preview off restores channel")[0].image;
         assert_eq!(image.pixels, original);
         delta.clear();
         app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(true));
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         ctx.tex_manager().write().take_delta().clear();
         crate::dialogs::cancel(&mut app, dialog).unwrap();
-        crate::channel_view::ensure(&mut app, &ctx, 0);
+        crate::channel_view::ensure(&mut app, &ctx, 0, None);
         let mut delta = ctx.tex_manager().write().take_delta();
         let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("Cancel restores channel")[0].image;
         assert_eq!(image.pixels, original);
@@ -2382,11 +2391,11 @@ mod rotation_preview_isolation_tests {
                 view.set_color_visible(2, false);
             }
             let ctx = egui::Context::default();
-            let texture = crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+            let texture = crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
             ctx.tex_manager().write().take_delta().clear();
             let dialog = crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
             app.ui.dialogs.last_mut().unwrap().fields.insert("radius".into(), json!(2.0));
-            crate::channel_view::ensure(&mut app, &ctx, 0).unwrap();
+            crate::channel_view::ensure(&mut app, &ctx, 0, None).unwrap();
             let mut delta = ctx.tex_manager().write().take_delta();
             let egui::ImageData::Color(image) = &delta.set.get(&texture).expect("preview must refresh overlay")[0].image;
             crate::dialogs::confirm(&mut app, dialog).unwrap();

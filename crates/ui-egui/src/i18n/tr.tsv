@@ -4299,3 +4299,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Görüntüyü Değiştir…
 	The frame is locked	Çerçeve kilitli
 	The frame is unavailable	Çerçeve kullanılamıyor
+
+# Channels panel menu (#11451)
+	New Channel…	Yeni Kanal…
+	Duplicate Channel	Kanalı Çoğalt
+	Delete Channel	Kanalı Sil
+	New Spot Channel…	Yeni Spot Kanal…
+	Merge Spot Channel	Spot Kanalı Birleştir
+	Channel Options…	Kanal Seçenekleri…
+	Split Channels	Kanalları Ayır
+	Merge Channels…	Kanalları Birleştir…
+	Specify Channels:	Kanalları Belirt:
+	Not enough grayscale documents for this mode.	Bu mod için yeterli gri tonlamalı belge yok.
+	Pick a different document for each channel.	Her kanal için farklı bir belge seçin.
+	A picked document is no longer open.	Seçilen belgelerden biri artık açık değil.
+	A picked document is no longer a grayscale document of the same size.	Seçilen belgelerden biri artık aynı boyutta gri tonlamalı bir belge değil.
