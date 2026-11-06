@@ -95,6 +95,9 @@ pub fn embedded_file_name(meta: &Metadata, uuid: &str) -> Option<String> {
 /// Header window first read of each item of a deferred block (grown when a header is longer).
 const HEADER_WINDOW: u64 = 64 << 10;
 
+/// The most of an item [`try_blob_item`] reads looking for its header.
+const MAX_HEADER_WINDOW: u64 = 4 << 20;
+
 /// The embedded (`liFD`) item `uuid` of a linked-layer block held as a [`Blob`]: its uuid, file
 /// name, and where its file bytes are in the block (offset, length). A deferred block is walked
 /// by reading each item's length and header only, so finding one file reads kilobytes, not the
@@ -138,7 +141,9 @@ fn try_blob_item(b: &Blob, uuid: &str) -> Result<Option<(String, String, u64, u6
                     }
                     break;
                 }
-                None if window < len => window = window.saturating_mul(4).min(len),
+                // An item header is a few kilobytes (plus its open descriptor): past
+                // `MAX_HEADER_WINDOW` it is damaged, not cut short, so the file is not read.
+                None if window < len.min(MAX_HEADER_WINDOW) => window = window.saturating_mul(4).min(len).min(MAX_HEADER_WINDOW),
                 None => break,
             }
         }
@@ -159,12 +164,15 @@ pub fn embedded_payload_in_globals<'a>(
     uuid: &str,
     max: u64,
 ) -> Result<Option<NamedPayload<'a>>, photocraft_doc::BlobError> {
-    let in_memory = globals.iter().filter(|(_, _, d)| d.is_in_memory());
-    if let Some((name, bytes)) = embedded_payload_in_blocks(in_memory.map(|(_, key, data)| (key, data.resident())), uuid) {
-        return Ok(Some((name, std::borrow::Cow::Borrowed(bytes))));
-    }
-    for (_, _, d) in globals.iter().filter(|(_, k, d)| !d.is_in_memory() && matches!(k, b"lnk2" | b"lnk3" | b"lnkD")) {
-        if let Some((_, name, at, n)) = try_blob_item(d, uuid)? {
+    // In block order, so the first record for `uuid` wins wherever its block is.
+    for (_, key, d) in globals {
+        if d.is_in_memory() {
+            if let Some((name, bytes)) = embedded_payload_in_blocks([(key, d.resident())], uuid) {
+                return Ok(Some((name, std::borrow::Cow::Borrowed(bytes))));
+            }
+        } else if matches!(key, b"lnk2" | b"lnk3" | b"lnkD")
+            && let Some((_, name, at, n)) = try_blob_item(d, uuid)?
+        {
             if n > max {
                 return Ok(None);
             }
@@ -180,10 +188,22 @@ pub const MAX_DEFERRED_PAYLOAD: u64 = 16 << 20;
 
 /// The embedded file for smart-object `uuid` in the given global blocks (in memory or deferred).
 pub fn find_in_globals(globals: &[photocraft_doc::PsdGlobalBlock], uuid: &str) -> Option<LinkedFile> {
-    globals.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")).find_map(|(_, _, d)| {
-        let (uuid, file_name, at, n) = blob_item(d, uuid)?;
-        Some(LinkedFile { uuid, file_name, bytes: d.read_part(at, n).ok()?.into_owned() })
-    })
+    try_find_in_globals(globals, uuid).ok().flatten()
+}
+
+/// [`find_in_globals`] that tells a failed read of the opened file (`Err`) from a missing file.
+pub fn try_find_in_globals(globals: &[photocraft_doc::PsdGlobalBlock], uuid: &str) -> Result<Option<LinkedFile>, photocraft_doc::BlobError> {
+    for (_, _, d) in globals.iter().filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD")) {
+        if let Some((uuid, file_name, at, n)) = try_blob_item(d, uuid)? {
+            return Ok(Some(LinkedFile { uuid, file_name, bytes: d.read_part(at, n)?.into_owned() }));
+        }
+    }
+    Ok(None)
+}
+
+/// [`find_linked_file`] that tells a failed read of the opened file (`Err`) from a missing file.
+pub fn try_find_linked_file(meta: &Metadata, uuid: &str) -> Result<Option<LinkedFile>, photocraft_doc::BlobError> {
+    try_find_in_globals(&meta.psd_global_blocks, uuid)
 }
 
 /// The size of embedded file `uuid` among the given global blocks, when it is there and readable

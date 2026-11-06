@@ -42,6 +42,14 @@ fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, 
 /// The actual path is stored in the document, not in the command's params. Recheck it before
 /// reading, reusing embedded PSD bytes rather than parsing their global blocks a second time.
 pub(super) fn authorized_source_bytes(s: &Session, cmd: &str, meta: &Metadata, src: &SmartSource) -> Result<Option<(String, Arc<Vec<u8>>)>> {
+    // A PSD-embedded file left in the opened file that can't be read is an error, not a missing
+    // file to look for on disk.
+    if let SmartSource::Linked { path } = src
+        && let Some(f) = photocraft_io::linked::try_find_linked_file(meta, path)
+            .map_err(|e| crate::EngineError::Other(format!("could not read the smart object's embedded file: {e}")))?
+    {
+        return Ok(Some((f.file_name, Arc::new(f.bytes))));
+    }
     if let Some(source) = embedded_source_bytes(meta, src) {
         return Ok(Some(source));
     }

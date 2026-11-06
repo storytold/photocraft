@@ -56,6 +56,13 @@ impl PartialEq for TaggedBlock {
         if self.signature != other.signature || self.key != other.key || self.padding != other.padding || self.encoded_data_len() != other.encoded_data_len() {
             return false;
         }
+        // The same bytes of the same source (a clone): equal without reading them, even when
+        // the source can no longer be read.
+        if let (Some(a), Some(b)) = (&self.stored, &other.stored)
+            && a.same_range(b)
+        {
+            return true;
+        }
         match (self.encoded(), other.encoded()) {
             (Ok(a), Ok(b)) => a == b,
             _ => false,
@@ -414,7 +421,7 @@ impl TaggedBlock {
     pub(crate) fn encoded_len_aligned(&self, version: Version, alignment: usize) -> usize {
         let l = if uses_long_length(version, &self.key) { 8 } else { 4 };
         let n = usize::try_from(self.encoded_data_len()).unwrap_or(usize::MAX);
-        let p = self.padding.as_ref().map_or(Self::default_padding(n, alignment), Vec::len);
+        let p = self.padding.as_ref().map_or(Self::default_padding((self.encoded_data_len() % alignment as u64) as usize, alignment), Vec::len);
         (8 + l + p).saturating_add(n)
     }
 }
@@ -574,7 +581,8 @@ pub(crate) fn write_blocks_to<W: std::io::Write + std::io::Seek + ?Sized>(
         out.put_encoded(&b.data, b.stored.as_ref())?;
         match &b.padding {
             Some(p) => out.put(p)?,
-            None => out.zeros(TaggedBlock::default_padding(usize::try_from(b.encoded_data_len()).unwrap_or(usize::MAX), alignment))?,
+            // From the length's remainder: a PSB block can be longer than a 32-bit `usize`.
+            None => out.zeros(TaggedBlock::default_padding((b.encoded_data_len() % alignment as u64) as usize, alignment))?,
         }
     }
     Ok(())
