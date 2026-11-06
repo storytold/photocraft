@@ -30,7 +30,7 @@ use crate::commands::{CommandSpec, blend_from_str};
 use crate::{EngineError, Result, Session};
 
 /// Keys PSD uses for a shape layer's vector data; dropped when a shape is rasterized.
-const SHAPE_BLOCKS: [&[u8; 4]; 8] = [b"vmsk", b"vsms", b"vogk", b"vstk", b"vscg", b"SoCo", b"GdFl", b"PtFl"];
+pub(crate) const SHAPE_BLOCKS: [&[u8; 4]; 8] = [b"vmsk", b"vsms", b"vogk", b"vstk", b"vscg", b"SoCo", b"GdFl", b"PtFl"];
 
 pub(crate) fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -315,13 +315,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "subtract",
             "Subtract Front Shape"
         )),
-        spec!("layer.combineShapes.intersectShapeAreas", "Intersect Shape Areas", [], COMBINE_PARAMS, has_layer, |s, p| combine_shapes(
+        spec!("layer.combineShapes.intersectShapeAreas", "Unite Shapes at Overlap", [], COMBINE_PARAMS, has_layer, |s, p| combine_shapes(
             s,
             p,
             "intersect",
             "Intersect Shape Areas"
         )),
-        spec!("layer.combineShapes.excludeOverlappingShapes", "Exclude Overlapping Shapes", [], COMBINE_PARAMS, has_layer, |s, p| {
+        spec!("layer.combineShapes.excludeOverlappingShapes", "Subtract Shapes at Overlap", [], COMBINE_PARAMS, has_layer, |s, p| {
             combine_shapes(s, p, "exclude", "Exclude Overlapping Shapes")
         }),
         spec!(

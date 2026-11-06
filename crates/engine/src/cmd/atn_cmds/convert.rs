@@ -75,7 +75,12 @@ fn convert_action(file: &AtnFile, a: &AtnAction, set: &str, unsupported: &mut Ve
             (None, _) => Mapped::Unsupported { harmless: false },
         };
         let (new_steps, enabled) = match mapped {
-            Mapped::Steps(s) => (s, item.enabled),
+            Mapped::Steps(mut s) => {
+                super::steps_gallery::remember_event(item, &mut s);
+                super::steps_stack::remember_item(item, &mut s);
+                super::steps_video::remember(item, &mut s);
+                (s, item.enabled)
+            }
             Mapped::Unsupported { harmless } => {
                 let label = file.item_label(item);
                 unsupported.push(Unsupported { action: name.clone(), step: i, event: item.event.id(), name: label.clone() });
@@ -151,12 +156,20 @@ pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem
         return Some(AtnItem { event, dictionary: jstr(params, "name").unwrap_or("").as_bytes().to_vec(), descriptor, ..Default::default() });
     }
     let mut params = params.clone();
-    if (id == "actions.play" || id == "actions.conditional") && params.get("set").is_none() {
+    if (id == "actions.play" || id == "actions.conditional") && params.get("set").is_none_or(Value::is_null) {
         params["set"] = json!(set);
     }
     let (e, descriptor) = event_and_descriptor(id, &params)?;
+    // A Filter Gallery effect loaded from its own event saves back as that event (#10592).
+    if e.code == "GEfc"
+        && let Some((event, name)) = super::steps_gallery::recorded_event(id, &params)
+    {
+        return Some(AtnItem { event, dictionary: name, descriptor: Some(descriptor), ..Default::default() });
+    }
     let event = if e.code.is_empty() { AtnEvent::name(e.name) } else { AtnEvent::Code(e.code.as_bytes().try_into().ok()?) };
-    Some(AtnItem { event, dictionary: e.label.as_bytes().to_vec(), descriptor: Some(descriptor), ..Default::default() })
+    let omit_descriptor = super::steps_stack::without_descriptor(id, &params) || super::steps_video::omitted(id, &params);
+    let descriptor = (!omit_descriptor).then_some(descriptor);
+    Some(AtnItem { event, dictionary: e.label.as_bytes().to_vec(), descriptor, ..Default::default() })
 }
 
 /// Photoshop applies only the rename when a Set mixes it with opacity or blend mode (#8304).

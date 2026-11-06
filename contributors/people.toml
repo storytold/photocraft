@@ -104,7 +104,9 @@ display_name = "Ran Geerts"
 sync_github_name = false
 
 [people.vangel76]
-sync_github_name = true
+real_name = "Valentin Klein"
+display_name = "vangel76"
+sync_github_name = false
 
 [people.FinnNk]
 sync_github_name = true
@@ -291,6 +293,10 @@ sync_github_name = true
 [people.dylanmtaylor]
 sync_github_name = true
 
+[people.Yuki-init]
+display_name = "DC@yuki.himejima"
+sync_github_name = false
+
 [people.sn-o-w]
 real_name = "Cristian Silaghi"
 sync_github_name = false
@@ -302,3 +308,7 @@ sync_github_name = true
 real_name = "Simone Recchia"
 display_name = "Simone Recchia"
 sync_github_name = false
+
+[people.davidvhk]
+real_name = "David Vanhoucke"
+sync_github_name = true
