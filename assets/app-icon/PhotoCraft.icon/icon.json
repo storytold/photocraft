@@ -1,0 +1,34 @@
+{
+  "fill" : {
+    "automatic-gradient" : "display-p3:0.26660,0.47461,0.92920,1.00000"
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "image-name" : "fox-1024.png",
+          "name" : "fox-1024"
+        },
+        {
+          "hidden" : false,
+          "image-name" : "fox-paper-1024.png",
+          "name" : "fox-paper-1024"
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.5
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.3
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}

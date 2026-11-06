@@ -22,6 +22,9 @@ targets:
     platform: iOS
     sources:
       - path: PhotoCraftApp.swift
+      # The Liquid Glass app icon (Icon Composer), with the other icon files.
+      - path: ../../../assets/app-icon/PhotoCraft.icon
+        buildPhase: resources
       - path: ../../../../../craft-mobile/swift/CraftKit/Sources
         group: CraftKit
     settings:
@@ -32,6 +35,7 @@ targets:
         GENERATE_INFOPLIST_FILE: NO
         PRODUCT_BUNDLE_IDENTIFIER: dev.craft.photocraft
         PRODUCT_NAME: PhotoCraft
+        ASSETCATALOG_COMPILER_APPICON_NAME: PhotoCraft
         TARGETED_DEVICE_FAMILY: "2"
         SWIFT_VERSION: "6.0"
         SWIFT_OBJC_BRIDGING_HEADER: $(CRAFT_MOBILE_DIR)/swift/CraftKit/include/CraftMobile.h

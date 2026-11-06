@@ -44,3 +44,4 @@ details and tests the `.ico` sizes and the WiX icon references.
 
 Replace `photocraft.svg` (and `photocraft-small.svg`), then run `packaging/icons.sh`. It needs
 `resvg`, plus `iconutil` on macOS; the `.ico` is packed by `cargo xtask ico`.
+- `PhotoCraft.icon`: the iPadOS Liquid Glass icon (Icon Composer), from the same artwork: the fox (paper and ink) as layers over the PhotoCraft blue. Used by `apps/photocraft-mobile/ios/project.yml`.
