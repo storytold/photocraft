@@ -33,6 +33,7 @@ pub enum ToolbarSide {
 }
 
 impl ToolbarSide {
+    /// Resolves `Start` against the interface direction; physical sides are returned unchanged.
     pub fn resolve(self) -> Self {
         match self {
             Self::Start if crate::direction::is_rtl() => Self::Right,
@@ -41,6 +42,7 @@ impl ToolbarSide {
         }
     }
 
+    /// The opposite physical side.
     pub fn other(self) -> Self {
         match self.resolve() {
             Self::Right => Self::Left,
@@ -753,6 +755,7 @@ mod tests {
     use super::*;
 
     #[test]
+    /// `toolbar_side` defaults to `Start`, serializes as a string and reads old prefs without it.
     fn toolbar_side_defaults_to_start_and_round_trips() {
         assert_eq!(ToolbarSide::default(), ToolbarSide::Start);
         assert_eq!(Panels::default().toolbar_side, ToolbarSide::Start);

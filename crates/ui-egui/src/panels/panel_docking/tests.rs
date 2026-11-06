@@ -932,6 +932,7 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
 
+/// The dock-edge layout is only chosen for a horizontal root split with the canvas alone.
 #[test]
 fn the_dock_edge_layout_only_applies_with_the_canvas_alone() {
     let tabs = |panel: &str| Node::Tabs { panels: vec![panel.to_owned()], active: 0 };
@@ -964,6 +965,7 @@ fn the_dock_edge_layout_only_applies_with_the_canvas_alone() {
     assert!(!canvas_alone_layout(&vertical), "{vertical:?}");
 }
 
+/// The toolbar lands on the requested physical side in every interface theme.
 #[test]
 fn the_toolbar_side_toggle_works_in_every_interface_theme() {
     use crate::state::ToolbarSide;

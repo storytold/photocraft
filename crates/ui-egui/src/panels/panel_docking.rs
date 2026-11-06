@@ -565,6 +565,7 @@ pub(crate) fn show_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 struct DockOnlyGuard(bool);
 
 impl Drop for DockOnlyGuard {
+    /// Restores the flag value `show_dock` found before it set it.
     fn drop(&mut self) {
         DOCK_ONLY.with(|flag| flag.set(self.0));
     }
@@ -592,6 +593,8 @@ pub(crate) fn canvas_alone(app: &PhotocraftApp) -> bool {
     }
 }
 
+/// True when the layout is the canvas-beside-dock shape: a horizontal root split whose first
+/// child holds only the canvas.
 fn canvas_alone_layout(layout: &Layout<String>) -> bool {
     match &layout.root {
         Some(Node::Split { axis: SplitAxis::Horizontal, first, .. }) => {
