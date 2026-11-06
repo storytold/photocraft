@@ -822,3 +822,34 @@ fn a_menu_from_the_keyboard_gives_no_focus_it_didnt_take() {
     h.run_steps(3);
     assert_eq!(h.ctx.memory(|m| m.focused()), None, "nothing was focused before the menu");
 }
+
+/// Two Alt+letters in one frame (a fast typist, a slow frame): neither letter is typed into the
+/// focused field. Only the first one's text was taken out.
+#[test]
+fn two_alt_letters_in_one_frame_type_nothing() {
+    let field = egui::Id::unique("a text field");
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        move |ui, (app, text): &mut (PhotocraftApp, String)| {
+            crate::menus::menu_bar(app, ui);
+            let label = ui.label("Name");
+            ui.add(egui::TextEdit::singleline(text).id(field)).labelled_by(label.id);
+        },
+        (app(), "some text".to_string()),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.ctx.memory_mut(|m| m.request_focus(field));
+    h.run_steps(3);
+    let alt = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+    h.input_mut().events.extend([
+        egui::Event::ModifiersChanged(egui::Modifiers::ALT),
+        alt(egui::Key::F),
+        egui::Event::Text("f".into()),
+        alt(egui::Key::E),
+        egui::Event::Text("e".into()),
+        egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+    ]);
+    h.run_steps(3);
+    assert!(is_open(&h.ctx), "a menu opened");
+    assert_eq!(h.state().1, "some text", "neither letter is typed into the field");
+}
