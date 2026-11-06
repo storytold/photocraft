@@ -47,7 +47,8 @@ pub fn place_source(
             let (u, v) = w.map(x, y);
             (a * u + c * v + e, b * u + d * v + f)
         };
-        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bilinear));
+        let (cu, cv) = patch_cuts(w, src_rect);
+        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear));
     }
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
@@ -69,7 +70,8 @@ pub fn place_source_projective(
             let (u, v) = w.map(x, y);
             h.apply(u, v)
         };
-        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bilinear));
+        let (cu, cv) = patch_cuts(w, src_rect);
+        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear));
     }
     crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
 }
@@ -118,6 +120,172 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
         }
     }
     triangles(src, src_rect, &verts, &tris, interp, ctl)
+}
+
+/// How far (destination px) a cell's straight edges and middle may stray from the warped surface
+/// before the cell is split, in [`warp_patches_surface`].
+const FLAT_TOL: f64 = 0.5;
+/// Most cells one [`warp_patches_surface`] tessellation makes; past it, cells stay as they are.
+const MAX_LEAVES: usize = 1 << 18;
+/// Cells narrower than this (source px) aren't split further.
+const MIN_CELL: f64 = 0.5;
+
+/// A cell of the source rectangle in normalised coordinates: `[u0, u1, v0, v1]`.
+type Cell = [f64; 4];
+/// Mesh vertices as `(destination, source)` and triangles of vertex indices.
+type TriMesh = (Vec<([f64; 2], [f64; 2])>, Vec<[usize; 3]>);
+
+/// Warps `src` through a smart object's warp, `f`, as the reference application draws one: the
+/// surface is cut into cells, each drawn as two flat triangles (split along the diagonal from the
+/// top-left corner), and a cell is halved, along an axis or both, until its edges and its middle
+/// stray at most [`FLAT_TOL`] from the surface. So cells are small where the warp bends hard and
+/// large where it is flat, and the picture keeps the slight facets of that tessellation, which
+/// cells of a few pixels everywhere ([`warp_mesh_surface`]) smoothed away. `cuts_u`/`cuts_v` are
+/// the patch borders inside the rectangle (normalised, `0..1`): the cells start from them.
+/// Where a cell meets two smaller ones, the point between them is put on the bigger cell's edge,
+/// so no crack opens.
+pub fn warp_patches_surface(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), cuts_u: &[f64], cuts_v: &[f64], interp: Interp) -> Surface {
+    if src_rect.is_empty() {
+        let fmt = src.format();
+        return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
+    }
+    let (x0, y0) = (f64::from(src_rect.x0), f64::from(src_rect.y0));
+    let (sw, sh) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
+    let at = |u: f64, v: f64| {
+        let (x, y) = f(x0 + sw * u, y0 + sh * v);
+        [x, y]
+    };
+    let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh);
+    let (verts, tris) = cell_triangles(&at, &leaves, [x0, y0, sw, sh]);
+    triangles(src, src_rect, &verts, &tris, interp, &Interrupt::NONE)
+}
+
+/// The sorted, deduplicated cuts of `0..1` from `inner` (values outside or non-finite dropped).
+fn cut_list(inner: &[f64]) -> Vec<f64> {
+    let mut c = vec![0.0, 1.0];
+    c.extend(inner.iter().copied().filter(|t| t.is_finite() && *t > 0.0 && *t < 1.0));
+    c.sort_by(f64::total_cmp);
+    c.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
+    c
+}
+
+/// The leaf cells of the adaptive tessellation, in row order (top to bottom, then left to right).
+fn tessellate(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64], sw: f64, sh: f64) -> Vec<Cell> {
+    let gap = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
+        let d = (p[0] - (a[0] + b[0]) / 2.0).hypot(p[1] - (a[1] + b[1]) / 2.0);
+        // A non-finite surface can't be judged: leave the cell as it is.
+        if d.is_finite() { d } else { 0.0 }
+    };
+    let (us, vs) = (cut_list(cuts_u), cut_list(cuts_v));
+    let mut queue: std::collections::VecDeque<Cell> = std::collections::VecDeque::new();
+    for v in vs.windows(2) {
+        for u in us.windows(2) {
+            queue.push_back([u[0], u[1], v[0], v[1]]);
+        }
+    }
+    let mut leaves = Vec::new();
+    // Breadth first, so a cell budget running out leaves the whole surface equally fine.
+    while let Some(c) = queue.pop_front() {
+        let [u0, u1, v0, v1] = c;
+        let (um, vm) = ((u0 + u1) / 2.0, (v0 + v1) / 2.0);
+        let (p00, p10, p01, p11) = (at(u0, v0), at(u1, v0), at(u0, v1), at(u1, v1));
+        let eu = gap(at(um, v0), p00, p10).max(gap(at(um, v1), p01, p11));
+        let ev = gap(at(u0, vm), p00, p01).max(gap(at(u1, vm), p10, p11));
+        let mid = [(p00[0] + p10[0] + p01[0] + p11[0]) / 4.0, (p00[1] + p10[1] + p01[1] + p11[1]) / 4.0];
+        let ec = gap(at(um, vm), mid, mid);
+        let room = leaves.len() + queue.len() + 3 < MAX_LEAVES;
+        let split_u = room && (eu > FLAT_TOL || ec > FLAT_TOL) && (u1 - u0) * sw > MIN_CELL;
+        let split_v = room && (ev > FLAT_TOL || ec > FLAT_TOL) && (v1 - v0) * sh > MIN_CELL;
+        if !split_u && !split_v {
+            leaves.push(c);
+            continue;
+        }
+        let su: &[[f64; 2]] = if split_u { &[[u0, um], [um, u1]] } else { &[[u0, u1]] };
+        let sv: &[[f64; 2]] = if split_v { &[[v0, vm], [vm, v1]] } else { &[[v0, v1]] };
+        for v in sv {
+            for u in su {
+                queue.push_back([u[0], u[1], v[0], v[1]]);
+            }
+        }
+    }
+    leaves.sort_by(|a, b| a[2].total_cmp(&b[2]).then(a[0].total_cmp(&b[0])));
+    leaves
+}
+
+/// The vertices (`(destination, source)`, as [`warp_triangles`] takes them) and triangles of
+/// `leaves`. `rect` is the source rectangle as `[x0, y0, width, height]`. A corner lying inside
+/// a bigger cell's edge is moved onto that straight edge.
+fn cell_triangles(at: &dyn Fn(f64, f64) -> [f64; 2], leaves: &[Cell], rect: [f64; 4]) -> TriMesh {
+    use std::collections::HashMap;
+    let mut index: HashMap<(u64, u64), usize> = HashMap::new();
+    let mut uv: Vec<[f64; 2]> = Vec::new();
+    let mut corners = Vec::with_capacity(leaves.len());
+    for &[u0, u1, v0, v1] in leaves {
+        let mut id = |u: f64, v: f64| {
+            *index.entry((u.to_bits(), v.to_bits())).or_insert_with(|| {
+                uv.push([u, v]);
+                uv.len() - 1
+            })
+        };
+        corners.push([id(u0, v0), id(u1, v0), id(u0, v1), id(u1, v1)]);
+    }
+    let mut pos: Vec<[f64; 2]> = uv.iter().map(|p| at(p[0], p[1])).collect();
+    // Vertices along each vertical line (by u) and horizontal line (by v), sorted along it.
+    let mut on_u: HashMap<u64, Vec<(f64, usize)>> = HashMap::new();
+    let mut on_v: HashMap<u64, Vec<(f64, usize)>> = HashMap::new();
+    for (i, p) in uv.iter().enumerate() {
+        on_u.entry(p[0].to_bits()).or_default().push((p[1], i));
+        on_v.entry(p[1].to_bits()).or_default().push((p[0], i));
+    }
+    for line in on_u.values_mut().chain(on_v.values_mut()) {
+        line.sort_by(|a, b| a.0.total_cmp(&b.0));
+    }
+    // Biggest cells first, so an edge's own ends are already where they belong.
+    let mut order: Vec<usize> = (0..leaves.len()).collect();
+    let size = |c: &Cell| (c[1] - c[0]).max(c[3] - c[2]);
+    order.sort_by(|&a, &b| size(&leaves[b]).total_cmp(&size(&leaves[a])));
+    for k in order {
+        let ([u0, u1, v0, v1], [c00, c10, c01, c11]) = (leaves[k], corners[k]);
+        let edges = [
+            (on_v.get(&v0.to_bits()), u0, u1, c00, c10),
+            (on_v.get(&v1.to_bits()), u0, u1, c01, c11),
+            (on_u.get(&u0.to_bits()), v0, v1, c00, c01),
+            (on_u.get(&u1.to_bits()), v0, v1, c10, c11),
+        ];
+        for (line, lo, hi, a, b) in edges {
+            let Some(line) = line else { continue };
+            let start = line.partition_point(|p| p.0 <= lo);
+            for &(t, i) in line.iter().skip(start).take_while(|p| p.0 < hi) {
+                let s = (t - lo) / (hi - lo);
+                let (pa, pb) = (pos[a], pos[b]);
+                if let Some(p) = pos.get_mut(i) {
+                    *p = [pa[0] + (pb[0] - pa[0]) * s, pa[1] + (pb[1] - pa[1]) * s];
+                }
+            }
+        }
+    }
+    let [x0, y0, sw, sh] = rect;
+    let verts = uv.iter().zip(&pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();
+    let tris = corners.iter().flat_map(|&[c00, c10, c01, c11]| [[c00, c10, c11], [c00, c11, c01]]).collect();
+    (verts, tris)
+}
+
+/// The patch borders of `warp` inside `src_rect`, normalised to it (`(u cuts, v cuts)`), for
+/// [`warp_patches_surface`]: a preset is one patch; a custom or cylinder mesh has its own.
+pub fn patch_cuts(warp: &photocraft_geom::warp::Warp, src_rect: Rect) -> (Vec<f64>, Vec<f64>) {
+    use photocraft_geom::warp::WarpStyle;
+    let Some(m) = warp.mesh.as_ref().filter(|_| matches!(warp.style, WarpStyle::Custom | WarpStyle::Cylinder)) else {
+        return (Vec::new(), Vec::new());
+    };
+    let b = warp.bounds;
+    let (x0, y0) = (f64::from(src_rect.x0), f64::from(src_rect.y0));
+    let (sw, sh) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
+    if sw <= 0.0 || sh <= 0.0 {
+        return (Vec::new(), Vec::new());
+    }
+    let u = m.us.iter().map(|s| (b[0] + s * (b[2] - b[0]) - x0) / sw).collect();
+    let v = m.vs.iter().map(|t| (b[1] + t * (b[3] - b[1]) - y0) / sh).collect();
+    (u, v)
 }
 
 /// Probe lines per axis [`mapped_lengths`] follows through the map.
