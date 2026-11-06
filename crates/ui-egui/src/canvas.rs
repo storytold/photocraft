@@ -1311,12 +1311,15 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::transform_tool::draw_content(app, painter, xf);
     // So are Puppet Warp's, Perspective Warp's and Vanishing Point's warped pixels (#7781).
     crate::distort_ui::draw_content(app, painter, xf);
-    if app.ui.extras.grid && app.ui.view.extras {
+    // The grid and guides are under a full-window workspace as well, so they aren't drawn.
+    let covered = canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT;
+    if app.ui.extras.grid && app.ui.view.extras && !covered {
         crate::rulers::draw_grid(app, painter, xf, doc);
     }
-    if app.ui.view.shows(app.ui.view.show.canvas_guides)
-        || crate::guide_layout_ui::preview(app, doc).is_some()
-        || crate::new_guide_ui::edit_preview(app, doc).is_some()
+    if !covered
+        && (app.ui.view.shows(app.ui.view.show.canvas_guides)
+            || crate::guide_layout_ui::preview(app, doc).is_some()
+            || crate::new_guide_ui::edit_preview(app, doc).is_some())
     {
         crate::rulers::draw_guides(app, painter, xf, doc);
     }
@@ -1945,12 +1948,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // A full-window workspace (Liquify, Select and Mask, Content-Aware Fill, Filter Gallery,
     // Adaptive Wide Angle) covers the canvas completely: its document is neither refreshed on
     // the GPU nor drawn while one is open, so the workspace's frames don't pay for a hidden image.
-    let painted = if crop_camera {
-        None
-    } else if canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT {
-        // Only the main window is covered: a floating document window keeps its image. No
-        // marching ants either: the selection is under the workspace too.
+    // Only the main window is covered: a floating document window keeps its image.
+    let covered = canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT;
+    let painted = if covered {
+        // Nothing to defer for the Crop tool's camera either, and no marching ants: the
+        // selection is under the workspace too.
         Some((false, painter.add(egui::Shape::Noop), img_rect, Vec::new()))
+    } else if crop_camera {
+        None
     } else {
         Some(paint_canvas(app, ui, &display_view, xf, &paint_input))
     };
