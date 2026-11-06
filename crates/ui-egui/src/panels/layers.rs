@@ -4,7 +4,9 @@ use super::layer_drag::{
 };
 use super::layer_row::{RowSel, layer_row};
 use super::options_bar::{LAYER_PCT_W, body_text_width, pct_action, scrub_pct_label};
-use super::{BlendMode, Layer, LayerId, MaskKind, PhotocraftApp, Rect, Sense, Tokens, Value, empty, icons, json, label, pos2, theme, vec2, widgets};
+use super::{
+    BlendMode, Layer, LayerId, MaskKind, PhotocraftApp, Rect, Sense, Tokens, Value, empty, icons, json, label, pos2, starts_blend_group, theme, vec2, widgets,
+};
 
 // ----------------------------------------------------------------------------- layers
 
@@ -58,7 +60,7 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
         let (blend_width, show_opacity_label) = opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
         let mut m = BlendMode::Normal;
         let options = blend_options(false, m);
-        widgets::dropdown_wheel_hovered(ui, "blend", tl!("Blend Mode"), &mut m, &options, blend_width);
+        widgets::dropdown_wheel_grouped(ui, "blend", tl!("Blend Mode"), &mut m, &options, blend_width, |m| starts_blend_group(*m));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut o = 100.0;
             widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
@@ -154,7 +156,9 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let (blend_width, show_opacity_label) =
                     opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
                 let (chosen, hovered) =
-                    widgets::dropdown_wheel_hovered(ui, "blend", tl!("Blend Mode"), &mut m, &blend_options(all_groups, l.blend), blend_width);
+                    widgets::dropdown_wheel_grouped(ui, "blend", tl!("Blend Mode"), &mut m, &blend_options(all_groups, l.blend), blend_width, |m| {
+                        starts_blend_group(*m)
+                    });
                 // One step per choice: a click, an arrow key or each wheel notch (#1747).
                 for m in &chosen {
                     let mut p = targets.clone();
