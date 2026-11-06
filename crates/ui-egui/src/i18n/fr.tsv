@@ -3289,6 +3289,8 @@ curves	Smooth	Lisser
 	Step {step} is waiting for its dialog	L’étape {step} attend sa boîte de dialogue
 @plural	{n} action|{n} actions	{n} action|{n} actions
 	Background (Default)	Arrière-plan (par défaut)
+	Background (default)	Arrière-plan (par défaut)
+	Transparent (default)	Transparent (par défaut)
 	Content-Aware Fill	Remplissage d'après le contenu
 	Include All Subfolders	Inclure tous les sous-dossiers
 	Auto Add/Delete	Ajout/suppr. auto
@@ -4535,6 +4537,8 @@ shape	Appearance	Apparence
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entrée numérique non valide. Un entier compris entre {min}% et {max}% est requis. La valeur précédente a été insérée.
 	Color Aware	Selon la couleur
 	Decontaminate Colors	Décontaminer les couleurs
@@ -4558,3 +4562,49 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+
+# Action Stop message (#8386)
+	Message	Message
+# Playback Options (#5212)
+	Playback Options…	Options d'exécution…
+	Playback Options	Options d'exécution
+	Accelerated	Accélérée
+	Step by Step	Pas à pas
+	Pause For:	Pause de :
+	Pause For	Pause de
+	seconds	secondes
+	Create a single history state	Créer un seul état d'historique
+	Generator enabled	Générateur activé
+	Move Up	Déplacer vers le haut
+	Move Down	Déplacer vers le bas
+	Hidden	Masqué
+	On your computer	Sur votre ordinateur
+	New file	Nouveau fichier
+	Learn	Apprendre
+	Website	Site web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Un cadre accepte les transformations affines ; sélectionnez son image pour les transformations de perspective
+	A frame supports affine transforms; select its image to warp it	Un cadre accepte les transformations affines ; sélectionnez son image pour la déformer
+	Convert to Frame…	Convertir en cadre…
+	Create a new custom frame	Créer un cadre personnalisé
+	Create a new polygonal frame	Créer un cadre polygonal
+	Create a new triangular frame	Créer un cadre triangulaire
+	Fit Content to Frame	Adapter le contenu au cadre
+	Fit Frame to Content	Adapter le cadre au contenu
+	Frame coordinates must be finite and within 600000 pixels	Les coordonnées du cadre doivent être finies et comprises dans une limite de 600000 pixels
+	Import Image…	Importer une image…
+	Invalid frame transform	Transformation du cadre non valide
+	Invalid nested file drop	Dépôt de fichier imbriqué non valide
+	New Frame	Nouveau cadre
+	Replace Image…	Remplacer l’image…
+	The frame is locked	Le cadre est verrouillé
+	The frame is unavailable	Le cadre n’est pas disponible
+
+# Channels panel menu (#11451)
+	Channel Options…	Options de canal…
+	Specify Channels:	Indiquer les canaux :
+	Not enough grayscale documents for this mode.	Pas assez de documents en niveaux de gris pour ce mode.
+	Pick a different document for each channel.	Choisissez un document différent pour chaque canal.
+	A picked document is no longer open.	Un des documents choisis n'est plus ouvert.
+	A picked document is no longer a grayscale document of the same size.	Un des documents choisis n'est plus un document en niveaux de gris de même taille.

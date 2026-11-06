@@ -4196,6 +4196,8 @@ navigator	Zoom	Zoom
 	Step {step} is waiting for its dialog	El paso {step} está esperando su cuadro de diálogo
 @plural	{n} action|{n} actions	{n} acción|{n} acciones
 	Background (Default)	Fondo (predeterminado)
+	Background (default)	Fondo (predeterminado)
+	Transparent (default)	Transparente (predeterminado)
 	Include All Subfolders	Incluir todas las subcarpetas
 	Auto Add/Delete	Añadir/eliminar automáticamente
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	No actives también Imagen especular en Ajustes de impresión: las dos inversiones se anulan.
@@ -4409,6 +4411,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entrada numérica no válida. Se requiere un número entero entre {min}% y {max}%. Se ha insertado el valor anterior.
 	Color Aware	Según color
 	Decontaminate Colors	Descontaminar colores
@@ -4434,3 +4438,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Color de la parada
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
+
+# Action Stop message (#8386)
+	Message	Mensaje
+# Playback Options (#5212)
+	Playback Options…	Opciones de reproducción…
+	Playback Options	Opciones de reproducción
+	Accelerated	Acelerada
+	Step by Step	Paso a paso
+	Pause For:	Pausa de:
+	Pause For	Pausa de
+	seconds	segundos
+	Create a single history state	Crear un solo estado de historia
+	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el trazado de trabajo
+	Generator enabled	Generador activado
+	This Layer:	Esta capa:
+	Move Up	Mover arriba
+	Move Down	Mover abajo
+	On your computer	En su ordenador
+	New file	Nuevo archivo
+	Learn	Aprender
+	Website	Sitio web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Un marco admite transformaciones afines; seleccione su imagen para transformaciones de perspectiva
+	A frame supports affine transforms; select its image to warp it	Un marco admite transformaciones afines; seleccione su imagen para deformarla
+	Convert to Frame…	Convertir en marco…
+	Create a new custom frame	Crear un nuevo marco personalizado
+	Create a new polygonal frame	Crear un nuevo marco poligonal
+	Create a new triangular frame	Crear un nuevo marco triangular
+	Fit Content to Frame	Ajustar contenido al marco
+	Fit Frame to Content	Ajustar marco al contenido
+	Frame coordinates must be finite and within 600000 pixels	Las coordenadas del marco deben ser finitas y estar dentro de 600000 píxeles
+	Import Image…	Importar imagen…
+	Invalid frame transform	Transformación de marco no válida
+	Invalid nested file drop	Soltado de archivo anidado no válido
+	New Frame	Nuevo marco
+	Replace Image…	Reemplazar imagen…
+	The frame is locked	El marco está bloqueado
+	The frame is unavailable	El marco no está disponible
+
+# Channels panel menu (#11451)
+	Channel Options…	Opciones de canal…
+	Specify Channels:	Especificar canales:
+	Not enough grayscale documents for this mode.	No hay suficientes documentos en escala de grises para este modo.
+	Pick a different document for each channel.	Elija un documento distinto para cada canal.
+	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
+	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.

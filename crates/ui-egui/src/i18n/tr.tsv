@@ -3376,6 +3376,8 @@ cameraRaw	Color	Renk
 	Condensed	Dar
 	Conditional Mode Change	Koşullu Mod Değişikliği
 	Background (Default)	Arka plan (varsayılan)
+	Background (default)	Arka plan (varsayılan)
+	Transparent (default)	Saydam (varsayılan)
 	Content-Aware Fill	İçeriğe Duyarlı Dolgu
 	Convert Frames > Video Layers	Kareleri Dönüştür > Video Katmanları
 	Convert to Linked	Bağlantılıya Dönüştür
@@ -4227,6 +4229,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Geçersiz sayısal giriş. {min}% ile {max}% arasında bir tam sayı gerekiyor. Önceki değer eklendi.
 	Color Aware	Renge Duyarlı
 	Decontaminate Colors	Renkleri Arındır
@@ -4256,3 +4260,57 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+
+# Action Stop message (#8386)
+	Message	İleti
+# Playback Options (#5212)
+	Playback Options…	Oynatma Seçenekleri…
+	Playback Options	Oynatma Seçenekleri
+	Accelerated	Hızlandırılmış
+	Step by Step	Adım adım
+	Pause For:	Şu kadar duraklat:
+	Pause For	Şu kadar duraklat
+	seconds	saniye
+	Create a single history state	Tek bir geçmiş durumu oluştur
+	Generator enabled	Oluşturucu etkin
+	Move Up	Yukarı taşı
+	Move Down	Aşağı taşı
+	Grid view	Izgara görünümü
+	List view	Liste görünümü
+	On your computer	Bilgisayarınızda
+	New file	Yeni dosya
+	Learn	Öğrenin
+	Website	Web sitesi
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Çerçeve afin dönüşümleri destekler; perspektif dönüşümleri için içindeki görüntüyü seçin
+	A frame supports affine transforms; select its image to warp it	Çerçeve afin dönüşümleri destekler; çarpıtmak için içindeki görüntüyü seçin
+	Convert to Frame…	Çerçeveye Dönüştür…
+	Create a new custom frame	Yeni özel çerçeve oluştur
+	Create a new polygonal frame	Yeni çokgen çerçeve oluştur
+	Create a new triangular frame	Yeni üçgen çerçeve oluştur
+	Fit Content to Frame	İçeriği Çerçeveye Sığdır
+	Fit Frame to Content	Çerçeveyi İçeriğe Sığdır
+	Frame coordinates must be finite and within 600000 pixels	Çerçeve koordinatları sonlu olmalı ve 600000 piksel sınırları içinde kalmalıdır
+	Import Image…	Görüntü İçe Aktar…
+	Invalid frame transform	Geçersiz çerçeve dönüşümü
+	Invalid nested file drop	Geçersiz iç içe dosya bırakma
+	New Frame	Yeni Çerçeve
+	Replace Image…	Görüntüyü Değiştir…
+	The frame is locked	Çerçeve kilitli
+	The frame is unavailable	Çerçeve kullanılamıyor
+
+# Channels panel menu (#11451)
+	New Channel…	Yeni Kanal…
+	Duplicate Channel	Kanalı Çoğalt
+	Delete Channel	Kanalı Sil
+	New Spot Channel…	Yeni Spot Kanal…
+	Merge Spot Channel	Spot Kanalı Birleştir
+	Channel Options…	Kanal Seçenekleri…
+	Split Channels	Kanalları Ayır
+	Merge Channels…	Kanalları Birleştir…
+	Specify Channels:	Kanalları Belirt:
+	Not enough grayscale documents for this mode.	Bu mod için yeterli gri tonlamalı belge yok.
+	Pick a different document for each channel.	Her kanal için farklı bir belge seçin.
+	A picked document is no longer open.	Seçilen belgelerden biri artık açık değil.
+	A picked document is no longer a grayscale document of the same size.	Seçilen belgelerden biri artık aynı boyutta gri tonlamalı bir belge değil.

@@ -3210,6 +3210,8 @@ cameraRaw	Yellow	Sárga
 	Constrain proportions	Arányok megtartása
 	Constraints	Megkötések
 	Background (Default)	Háttér (alapértelmezett)
+	Background (default)	Háttér (alapértelmezett)
+	Transparent (default)	Átlátszó (alapértelmezett)
 	Content-Aware Fill	Tartalomérzékeny kitöltés
 	Content-Aware Move Tool	Tartalomérzékeny mozgatás
 	Contract	Szűkítés
@@ -4418,6 +4420,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Érvénytelen számbevitel. {min}% és {max}% közötti egész szám szükséges. Az előző érték lett beillesztve.
 	Color Aware	Színalapú
 	Decontaminate Colors	Színek fertőtlenítése
@@ -4442,3 +4446,49 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Action Stop message (#8386)
+	Message	Üzenet
+# Playback Options (#5212)
+	Playback Options…	Lejátszási beállítások…
+	Playback Options	Lejátszási beállítások
+	Accelerated	Gyorsított
+	Step by Step	Lépésenként
+	Pause For:	Szünet ennyi ideig:
+	Pause For	Szünet ennyi ideig
+	seconds	másodperc
+	Create a single history state	Egyetlen előzményállapot létrehozása
+	This Layer:	Ez a réteg:
+	Generator enabled	Generátor bekapcsolva
+	Move Up	Mozgatás felfelé
+	Move Down	Mozgatás lefelé
+	On your computer	A számítógépen
+	New file	Új fájl
+	Learn	Tanulás
+	Website	Weboldal
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	A keret affin transzformációkat támogat; perspektivikus transzformációhoz válassza ki a képét
+	A frame supports affine transforms; select its image to warp it	A keret affin transzformációkat támogat; a hajlításhoz válassza ki a képét
+	Convert to Frame…	Átalakítás keretté…
+	Create a new custom frame	Új egyéni keret létrehozása
+	Create a new polygonal frame	Új sokszögű keret létrehozása
+	Create a new triangular frame	Új háromszögű keret létrehozása
+	Fit Content to Frame	Tartalom igazítása a kerethez
+	Fit Frame to Content	Keret igazítása a tartalomhoz
+	Frame coordinates must be finite and within 600000 pixels	A keret koordinátáinak végesnek és 600000 képponton belülinek kell lenniük
+	Import Image…	Kép importálása…
+	Invalid frame transform	Érvénytelen kerettranszformáció
+	Invalid nested file drop	Érvénytelen beágyazott fájlejtés
+	New Frame	Új keret
+	Replace Image…	Kép cseréje…
+	The frame is locked	A keret zárolva van
+	The frame is unavailable	A keret nem érhető el
+
+# Channels panel menu (#11451)
+	Channel Options…	Csatornabeállítások…
+	Specify Channels:	Csatornák megadása:
+	Not enough grayscale documents for this mode.	Nincs elég szürkeárnyalatos dokumentum ehhez a módhoz.
+	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
+	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
+	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.

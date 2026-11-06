@@ -3298,6 +3298,8 @@ curves	Smooth	Glätten
 	Step {step} is waiting for its dialog	Schritt {step} wartet auf seinen Dialog
 @plural	{n} action|{n} actions	{n} Aktion|{n} Aktionen
 	Background (Default)	Hintergrund (Standard)
+	Background (default)	Hintergrund (Standard)
+	Transparent (default)	Transparent (Standard)
 	Content-Aware Fill	Inhaltsbasiert füllen
 	Include All Subfolders	Alle Unterordner einschließen
 	Auto Add/Delete	Autom. hinzuf./löschen
@@ -3416,6 +3418,7 @@ curves	Smooth	Glätten
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} ist vom System reserviert und kann nicht zugewiesen werden.
 	Low-Latency Drawing (vsync off, applies at next launch)	Zeichnen mit geringer Latenz (ohne VSync, gilt ab dem nächsten Start)
 	Reference point location	Position des Referenzpunkts
+	Toggle reference point	Referenzpunkt ein-/ausblenden
 	Free Transform is still being applied; try again when it has finished.	Frei transformieren wird noch angewendet; versuchen Sie es erneut, wenn es fertig ist.
 	The transform couldn't be applied.	Die Transformation konnte nicht angewendet werden.
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Die Ebenen brauchen {needed} GPU-Speicher; das Budget lässt ihnen {budget}.
@@ -3526,6 +3529,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ungültige Zahleneingabe. Es ist eine ganze Zahl zwischen {min}% und {max}% erforderlich. Der vorherige Wert wurde eingesetzt.
 	Clear Selection	Auswahl löschen
 	Color Aware	Farbbezogen
@@ -3553,3 +3558,59 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+
+# Action Stop message (#8386)
+	Message	Meldung
+# Playback Options (#5212)
+	Playback Options…	Wiedergabeoptionen…
+	Playback Options	Wiedergabeoptionen
+	Accelerated	Beschleunigt
+	Step by Step	Schrittweise
+	Pause For:	Pause für:
+	Pause For	Pause für
+	seconds	Sekunden
+	Create a single history state	Einen einzigen Protokollobjekt-Status erstellen
+	Generator enabled	Generator aktiviert
+	This Layer:	Diese Ebene:
+	Move Up	Nach oben
+	Move Down	Nach unten
+	On your computer	Auf Ihrem Computer
+	New file	Neue Datei
+	Learn	Lernen
+	No recent files	Keine zuletzt verwendeten Dateien
+	Website	Website
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Ein Rahmen unterstützt affine Transformationen; für perspektivische Transformationen sein Bild auswählen
+	A frame supports affine transforms; select its image to warp it	Ein Rahmen unterstützt affine Transformationen; zum Verformen sein Bild auswählen
+	Convert to Frame…	In Rahmen konvertieren…
+	Create a new custom frame	Neuen benutzerdefinierten Rahmen erstellen
+	Create a new polygonal frame	Neuen polygonalen Rahmen erstellen
+	Create a new triangular frame	Neuen dreieckigen Rahmen erstellen
+	Fit Content to Frame	Inhalt an Rahmen anpassen
+	Fit Frame to Content	Rahmen an Inhalt anpassen
+	Frame coordinates must be finite and within 600000 pixels	Rahmenkoordinaten müssen endlich sein und innerhalb von 600000 Pixeln liegen
+	Import Image…	Bild importieren…
+	Invalid frame transform	Ungültige Rahmentransformation
+	Invalid nested file drop	Ungültiges verschachteltes Ablegen einer Datei
+	New Frame	Neuer Rahmen
+	Replace Image…	Bild ersetzen…
+	The frame is locked	Der Rahmen ist gesperrt
+	The frame is unavailable	Der Rahmen ist nicht verfügbar
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	Neuer Kanal…
+	Duplicate Channel	Kanal duplizieren
+	Delete Channel	Kanal löschen
+	New Spot Channel…	Neuer Schmuckfarbenkanal…
+	Merge Spot Channel	Schmuckfarbenkanal zusammenfügen
+	Channel Options…	Kanaloptionen…
+	Split Channels	Kanäle teilen
+	Merge Channels…	Kanäle zusammenfügen…
+	Specify Channels:	Kanäle angeben:
+	Not enough grayscale documents for this mode.	Nicht genug Graustufen-Dokumente für diesen Modus.
+	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
+	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
+	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.

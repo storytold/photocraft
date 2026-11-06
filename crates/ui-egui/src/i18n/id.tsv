@@ -3294,6 +3294,8 @@ curves	Smooth	Haluskan
 	Step {step} is waiting for its dialog	Langkah {step} menunggu dialognya
 @plural	{n} action|{n} actions	{n} tindakan
 	Background (Default)	Background (Default)
+	Background (default)	Background (Default)
+	Transparent (default)	Transparan (bawaan)
 	Content-Aware Fill	Isi Content-Aware
 	Include All Subfolders	Sertakan semua subfolder
 	Auto Add/Delete	Tambah/Hapus Otomatis
@@ -3517,6 +3519,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entri numerik tidak valid. Diperlukan bilangan bulat antara {min}% dan {max}%. Nilai sebelumnya telah disisipkan.
 	Clear Selection	Hapus Seleksi
 	Color Aware	Berbasis Warna
@@ -3545,3 +3549,59 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+
+# Action Stop message (#8386)
+	Message	Pesan
+# Playback Options (#5212)
+	Playback Options…	Opsi pemutaran…
+	Playback Options	Opsi pemutaran
+	Accelerated	Dipercepat
+	Step by Step	Langkah demi langkah
+	Pause For:	Jeda selama:
+	Pause For	Jeda selama
+	seconds	detik
+	Create a single history state	Buat satu status riwayat
+	Generator enabled	Generator aktif
+	Move Up	Pindah ke atas
+	Move Down	Pindah ke bawah
+	Grid view	Tampilan kisi
+	List view	Tampilan daftar
+	On your computer	Di komputer Anda
+	New file	File baru
+	Learn	Pelajari
+	No recent files	Tidak ada file terbaru
+	Website	Situs web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Bingkai mendukung transformasi afin; pilih gambarnya untuk transformasi perspektif
+	A frame supports affine transforms; select its image to warp it	Bingkai mendukung transformasi afin; pilih gambarnya untuk dilengkungkan
+	Convert to Frame…	Konversi ke Bingkai…
+	Create a new custom frame	Buat bingkai kustom baru
+	Create a new polygonal frame	Buat bingkai poligon baru
+	Create a new triangular frame	Buat bingkai segitiga baru
+	Fit Content to Frame	Sesuaikan Konten ke Bingkai
+	Fit Frame to Content	Sesuaikan Bingkai ke Konten
+	Frame coordinates must be finite and within 600000 pixels	Koordinat bingkai harus berhingga dan berada dalam batas 600000 piksel
+	Import Image…	Impor Gambar…
+	Invalid frame transform	Transformasi bingkai tidak valid
+	Invalid nested file drop	Penjatuhan berkas bersarang tidak valid
+	New Frame	Bingkai Baru
+	Replace Image…	Ganti Gambar…
+	The frame is locked	Bingkai terkunci
+	The frame is unavailable	Bingkai tidak tersedia
+	Frame	Bingkai
+
+# Channels panel menu (#11451)
+	New Channel…	Channel Baru…
+	Duplicate Channel	Duplikat Channel
+	Delete Channel	Hapus Channel
+	New Spot Channel…	Spot Channel Baru…
+	Merge Spot Channel	Gabungkan Spot Channel
+	Channel Options…	Opsi Channel…
+	Split Channels	Pisahkan Channel
+	Merge Channels…	Gabungkan Channel…
+	Specify Channels:	Tentukan Channel:
+	Not enough grayscale documents for this mode.	Dokumen grayscale tidak cukup untuk mode ini.
+	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
+	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
+	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
