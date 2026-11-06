@@ -248,6 +248,7 @@ fn from_rgba_into_matches_from_rgba() {
     }
 }
 
+/// Compare reusable sample conversion with allocating helpers across formats and scopes.
 #[test]
 fn reused_conversion_matches_allocating_pixels() {
     let modes = [

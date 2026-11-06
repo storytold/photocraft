@@ -64,6 +64,7 @@ fn document_to_psd_sized_with_patterns(
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit, patterns)
 }
 
+/// Export a supported document with prepared layers, resources and merged channels.
 fn export_supported_document(
     doc: &Document,
     opts: &PsdExportOptions,
@@ -334,6 +335,7 @@ struct MergedExport<'a> {
     real_merged: bool,
 }
 
+/// Prepare the header and merged image, transferring raw plane ownership to the output.
 fn prepare_merged_planes<'a>(
     doc: &'a Document,
     ex: &mut Ex<'_>,
@@ -370,6 +372,7 @@ fn prepare_merged_planes<'a>(
     MergedExport { header, image_data, extra, has_alpha, quick_mask_id, real_merged }
 }
 
+/// Append saved alpha and Quick Mask planes within the PSD channel limit.
 fn append_extra_channels<'a>(
     doc: &'a Document,
     ex: &mut Ex<'_>,
@@ -543,6 +546,7 @@ mod pattern_failure_tests {
 mod tests {
     use super::*;
 
+    /// Verify owned raw merged planes produce the borrowed encoder's bytes.
     #[test]
     fn raw_merged_planes_match_the_borrowed_encoder() {
         for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {

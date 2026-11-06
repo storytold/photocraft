@@ -148,6 +148,7 @@ pub(crate) fn surface_planes(surface: &Surface, r: Rect, channels: usize, invert
     surface_planes_white(surface, r, channels, invert, lab16, None)
 }
 
+/// Allocate PSD planes and optionally whiten colours where stored alpha is nonpositive.
 pub(crate) fn surface_planes_white(surface: &Surface, r: Rect, channels: usize, invert: &[bool], lab16: bool, white: Option<&[u8]>) -> Vec<Vec<u8>> {
     let fmt = surface.format();
     let len = r.width() as usize * r.height() as usize * fmt.sample.bytes();
@@ -161,6 +162,7 @@ pub(crate) fn surface_planes_into(surface: &Surface, r: Rect, invert: &[bool], l
     surface_planes_into_white(surface, r, invert, lab16, planes, None);
 }
 
+/// Gather tile rows into disjoint plane slices, optionally whitening transparent colours.
 fn surface_planes_into_white(surface: &Surface, r: Rect, invert: &[bool], lab16: bool, planes: &mut [&mut [u8]], white: Option<&[u8]>) {
     if r.is_empty() {
         return;
@@ -465,6 +467,7 @@ mod tests {
         }
     }
 
+    /// Verify nested work uses the caller's pool and preserves input order.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn nested_mapping_stays_on_the_callers_pool_and_in_order() {
@@ -475,6 +478,7 @@ mod tests {
         assert!(got.iter().all(|(_, worker)| matches!(worker, Some(0 | 1))));
     }
 
+    /// Compare direct plane gathering with interleaved staging across formats and sparse bounds.
     #[test]
     fn tiled_export_planes_match_previous_staging_paths() {
         use photocraft_color::{ColorMode, PixelFormat};
@@ -510,6 +514,7 @@ mod tests {
         }
     }
 
+    /// Compare pattern and filter-cache payloads with their staged export oracles.
     #[test]
     fn pattern_and_filter_cache_planes_match_staged_export() {
         use photocraft_color::{ColorMode, PixelFormat};

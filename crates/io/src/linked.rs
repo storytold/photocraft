@@ -288,6 +288,7 @@ pub fn encode_linked_file(f: &LinkedFile) -> Vec<u8> {
     out
 }
 
+/// Append a length-prefixed linked-file frame with padding relative to its own start.
 pub(crate) fn append_linked_file(f: &LinkedFile, out: &mut Vec<u8>) {
     let start = out.len();
     out.extend_from_slice(&0u64.to_be_bytes());
@@ -468,6 +469,7 @@ pub(crate) fn copy_item(data: &[u8], uuid: &str, new_uuid: &str) -> Option<Vec<u
 mod tests {
     use super::*;
 
+    /// Verify appended linked-file frames match staged bytes at unaligned offsets.
     #[test]
     fn appended_linked_files_match_staged_bytes_at_any_offset() {
         for len in [0, 1, 2, 3, 8193] {
@@ -483,6 +485,7 @@ mod tests {
         }
     }
 
+    /// Build a linked-file frame with the previous staged serializer as a byte oracle.
     fn staged_linked_file(f: &LinkedFile) -> Vec<u8> {
         let mut item = Vec::new();
         item.extend_from_slice(b"liFD");

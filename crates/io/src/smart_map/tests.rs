@@ -1,5 +1,6 @@
 use super::*;
 
+/// Compare owned filter-mask encoding with borrowed compression at every depth.
 #[test]
 fn owned_filter_masks_match_borrowed_compression_at_every_depth() {
     let bounds = GeomRect::new(-3, -2, 7, 5);

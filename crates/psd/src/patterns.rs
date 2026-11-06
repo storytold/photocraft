@@ -415,6 +415,7 @@ fn zeroed_pattern_plane(len: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// Append one validated pattern, backpatching lengths in its final output buffer.
 fn write_pattern(p: &PsdPattern, out: &mut Vec<u8>) -> Result<()> {
     if !matches!(p.depth, 1 | 8 | 16 | 32) {
         return Err(PsdError::Unsupported(format!("pattern depth {}", p.depth)));

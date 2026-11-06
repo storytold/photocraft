@@ -18,6 +18,7 @@ pub(super) fn merged_planes(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte
 /// Use the compositor's default band budget natively; keep browser working buffers smaller.
 const MERGED_BAND_PIXELS: u64 = if cfg!(target_arch = "wasm32") { photocraft_compose::BAND_PIXELS / 8 } else { photocraft_compose::BAND_PIXELS };
 
+/// Allocate merged planes with spare capacity for the document's saved channels.
 fn plane_buffer(doc: &Document, plane: usize, channels: usize) -> Vec<u8> {
     let extra = doc.channels.len().saturating_add(usize::from(doc.quick_mask.is_some())).min(56 - channels);
     let mut out = photocraft_raster::scratch::take_cap(plane * (channels + extra));
@@ -229,6 +230,7 @@ mod tests {
     use photocraft_doc::{Layer, LayerContent};
     use photocraft_raster::Surface;
 
+    /// Verify reserved saved-channel capacity avoids moving completed merged planes.
     #[test]
     fn saved_channels_fit_without_moving_the_merged_planes() {
         let mut doc = Document::new("extra", photocraft_geom::Size::new(13, 7), ColorMode::Cmyk, SampleType::F32);
@@ -241,6 +243,7 @@ mod tests {
         assert_eq!(bytes.as_ptr(), ptr);
     }
 
+    /// Render merged planes with the previous staged conversion as a byte oracle.
     fn previous_merged_planes(doc: &Document, fmt: &PixelFormat, cmyk: bool, matte: bool) -> (Vec<u8>, bool, bool) {
         if cmyk {
             let mut planes = vec![Vec::new(); 5];
