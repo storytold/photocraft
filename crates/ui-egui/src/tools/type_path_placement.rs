@@ -617,6 +617,60 @@ mod tests {
     }
 
     #[test]
+    fn body_drag_moves_range_once_and_undoes() {
+        for tool in [Tool::PathSelection, Tool::DirectSelection] {
+            let mut app = app(tool);
+            let before = shape(&app);
+            let n = steps(&app);
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            let (layout, _, _) = crate::type_tool::layout(&mut app, id).unwrap();
+            let cluster = layout.clusters.last().unwrap();
+            let line = &layout.lines[cluster.line];
+            let text = active_text(&app).unwrap();
+            let warp = photocraft_text::warp::Warp::on_path(&text.shape).unwrap();
+            let (x, y) = warp.apply(f64::from(cluster.x + cluster.advance / 2.0), f64::from(line.baseline - line.ascent * 0.4));
+            let point = text.transform.apply(Point::new(x, y));
+            let xf = ViewXform::active(&app).unwrap();
+            assert!(marker_hit(markers(text, &xf).unwrap(), xf.to_screen(point.x as f32, point.y as f32)).is_none());
+            down(&mut app, point.x, point.y);
+            assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, None);
+            move_to(&mut app, point.x + 10.0, point.y);
+            up(&mut app, point.x + 10.0, point.y);
+            assert_eq!(placement(&app), (30.0, Some(110.0), false));
+            let TextShape::Path { path: old, .. } = &before else { panic!("expected path") };
+            let TextShape::Path { path: new, .. } = shape(&app) else { panic!("expected path") };
+            assert_eq!(*old, new);
+            assert_eq!(steps(&app), n + 1);
+            assert!(app.session.undo());
+            assert_eq!(shape(&app), before);
+        }
+    }
+
+    #[test]
+    fn position_lock_rejects_marker_and_command() {
+        for tool in [Tool::PathSelection, Tool::DirectSelection] {
+            let mut app = app(tool);
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("lock position", |doc, _| {
+                    doc.layer_mut(id).unwrap().locks.position = true;
+                    Ok(())
+                })
+                .unwrap();
+            let before = shape(&app);
+            let n = steps(&app);
+            let xf = ViewXform::active(&app).unwrap();
+            let (point, tangent) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
+            let screen = marker_tip(point, tangent, 0);
+            let doc = xf.to_doc(screen);
+            assert!(!pointer(&mut app, ToolEvent::Down { x: doc[0], y: doc[1], pressure: 1.0 }));
+            assert!(app.session.execute("type.setPathPlacement", json!({"start":30})).is_err());
+            assert_eq!(shape(&app), before);
+            assert_eq!(steps(&app), n);
+        }
+    }
+
+    #[test]
     fn crossing_the_path_flips_and_remaps_the_interval() {
         for tool in [Tool::PathSelection, Tool::DirectSelection] {
             let mut app = app(tool);
