@@ -56,6 +56,22 @@ fn extreme_selection_scales_are_refused_without_losing_the_selection() {
 /// raising it lets a refused transform through.
 #[test]
 fn memory_usage_is_what_a_transform_may_take() {
+    #[cfg(not(target_arch = "wasm32"))]
+    if std::env::var_os("PHOTOCRAFT_TEST_ISOLATED_TRANSFORM_BUDGET").is_none() {
+        // Memory Usage updates a process-global transform budget. Other tests in this
+        // consolidated binary load preferences concurrently, so run these unchanged real
+        // 1 MB / 2 MB admission checks alone rather than race their preference writes.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "transform_budget_unclamped::memory_usage_is_what_a_transform_may_take", "--nocapture", "--test-threads=1"])
+            .env("PHOTOCRAFT_TEST_ISOLATED_TRANSFORM_BUDGET", "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "isolated transform admission failed:\n{stdout}\n{stderr}");
+        assert!(stdout.contains("1 passed"), "the exact isolated budget regression must run: {stdout}\n{stderr}");
+        return;
+    }
     let mut session = painted();
     // The 1 x 8 px column stretched 40000 times about its centre: 40003 x 10 px of 8-bit RGBA, 1.6 MB.
     let stretch = json!({"scaleX": 4e6, "interpolation": "nearest"});

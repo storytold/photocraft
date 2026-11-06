@@ -173,6 +173,7 @@ pub(super) fn start(
         approve_high_memory,
         approved_estimate,
         expected_fingerprint,
+        false,
     )
 }
 
@@ -229,12 +230,13 @@ pub(crate) fn command(s: &mut Session, params: &Value) -> Result<Value> {
         Some(Value::Bool(value)) => *value,
         _ => return Err(EngineError::Other("file.open: approveHighMemory must be boolean".into())),
     };
-    let started = run_with_approval(s, request, false, approve_high_memory, None, None);
+    let background = s.jobs.spawn;
+    let started = run_with_approval(s, request, background, approve_high_memory, None, None, true);
     // Successful installation consumes the held identity in `run`'s apply step.
     // Failed authorization, decoding or cancellation keeps the capability retryable.
     match started? {
         Started::Done(value) => Ok(value),
-        Started::Job(_) => Err(EngineError::Other("file.open: unexpected nested background job".into())),
+        Started::Job(id) => Ok(json!({"job":id.0})),
     }
 }
 
@@ -258,7 +260,7 @@ impl Session {
 /// Decode before installation or hold bounded encoded bytes for a required choice; cancellation and failure publish no
 /// partial document.
 fn run(s: &mut Session, request: Request, background: bool) -> Result<Started> {
-    run_with_approval(s, request, background, false, None, None)
+    run_with_approval(s, request, background, false, None, None, false)
 }
 
 fn run_with_approval(
@@ -268,6 +270,7 @@ fn run_with_approval(
     approve_high_memory: bool,
     approved_estimate: Option<u64>,
     expected_fingerprint: Option<super::SourceFingerprint>,
+    in_command: bool,
 ) -> Result<Started> {
     let Request { name, source, path, interactive, order, held } = request;
     let label = format!("Opening {name}");
@@ -449,7 +452,13 @@ fn run_with_approval(
         }
         Ok(value)
     };
-    s.start_job_with_spawn(OPEN_JOB, job_params, &label, false, background, work, apply)
+    if in_command {
+        // Session::dispatch owns this command's execution mode and pending job metadata.
+        // Leave its pending worker for dispatch to register instead of consuming it here.
+        super::run(s, &label, false, work, apply).map(Started::Done)
+    } else {
+        s.start_job_with_spawn(OPEN_JOB, job_params, &label, false, background, work, apply)
+    }
 }
 
 #[cfg(test)]
@@ -467,6 +476,29 @@ mod tests {
         ));
         assert!(session.documents().is_empty());
         assert!(session.pending_preflights.is_empty());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn registered_open_obeys_dispatch_worker_policy_and_installs_only_when_polled() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("worker-native.pcraft");
+        std::fs::write(&path, native_source().as_slice()).unwrap();
+        let mut session = Session::new();
+        session.color.settings.ask_on_missing = false;
+        let params = json!({"path":path.to_str().unwrap()});
+        let Started::Job(id) = session.start("file.open", params.clone()).unwrap() else { panic!("registered open must inherit background dispatch") };
+        assert!(session.documents().is_empty(), "the worker cannot publish a document before polling");
+        let running = session.jobs.running.iter().find(|job| job.id == id).unwrap();
+        assert_eq!(running.command, "file.open");
+        assert_eq!(running.params, params, "outer dispatch owns the original command metadata");
+        let opened = session.wait_job(id).unwrap();
+        assert!(opened.get("document").is_some(), "{opened}");
+        assert_eq!(session.documents().len(), 1);
+        let photocraft_doc::LayerContent::Smart(smart) = &session.active().unwrap().doc.layers[0].content else {
+            panic!("native Smart Filter must remain editable")
+        };
+        assert!(smart.cache.is_some(), "worker preparation must finish before installation");
     }
 
     /// Author an embedded native Smart Filter whose absent cache requires real preparation.
@@ -874,7 +906,12 @@ mod tests {
         let mut identities = Vec::new();
         let mut sources = Vec::new();
         let source_len = source().len();
-        for index in 0..=MAX_HELD {
+        // Upstream admits at most 16 background jobs, including completed ready payloads.
+        // Start with one admitted choice so 16 ready workers still cross the independent
+        // held-choice boundary by exactly one when their results are polled together.
+        let existing = hold(&mut s);
+        sources.push(Arc::downgrade(&s.jobs.historical_xcf[0].bytes));
+        for index in 0..MAX_HELD {
             let bytes = source();
             sources.push(Arc::downgrade(&bytes));
             let Started::Job(id) = s.start_open_for_user_with_path(&format!("queued-{index}.xcf"), OpenSource::Bytes(bytes), None).unwrap() else {
@@ -883,13 +920,20 @@ mod tests {
             identities.push(id);
         }
         historical_workers_finished_without_poll(&s);
-        assert_eq!(s.jobs.running.len(), MAX_HELD + 1);
-        assert!(s.jobs.historical_xcf.is_empty(), "worker completion alone does not admit a held choice");
+        assert_eq!(s.jobs.running.len(), MAX_HELD);
+        assert_eq!(s.jobs.historical_xcf.len(), 1, "worker completion alone does not admit a held choice");
+        assert_eq!(s.jobs.historical_xcf[0].id, existing);
+        let extra = source();
+        let extra_weak = Arc::downgrade(&extra);
+        let refused = s.start_open_for_user_with_path("worker-cap.xcf", OpenSource::Bytes(extra), None).unwrap_err();
+        assert!(refused.to_string().contains("too many background jobs"), "{refused}");
+        assert!(extra_weak.upgrade().is_none(), "background admission rejection releases the attempted source");
+        assert_eq!(s.jobs.running.len(), MAX_HELD, "ready payloads still count against upstream worker admission");
         assert!(sources.iter().all(|bytes| bytes.strong_count() == 1), "each ready payload alone owns its distinct encoded source");
         assert!(Arc::ptr_eq(&original, &s.active().unwrap().doc));
         let events = s.poll_jobs();
-        assert_eq!(events.len(), MAX_HELD + 1);
-        assert_eq!(events.iter().filter(|event| matches!(event.outcome, JobOutcome::Done(_))).count(), MAX_HELD);
+        assert_eq!(events.len(), MAX_HELD);
+        assert_eq!(events.iter().filter(|event| matches!(event.outcome, JobOutcome::Done(_))).count(), MAX_HELD - 1);
         let failed: Vec<_> = events
             .iter()
             .filter_map(|event| match &event.outcome {
@@ -901,6 +945,7 @@ mod tests {
         assert_eq!(failed[0].0, *identities.last().unwrap());
         assert!(failed[0].1.contains("too many historical XCF sources"));
         assert_eq!(s.jobs.historical_xcf.len(), MAX_HELD);
+        assert!(s.jobs.historical_xcf.iter().any(|held| held.id == existing), "polling retains the previously admitted choice");
         assert_eq!(s.jobs.historical_xcf.iter().map(|held| held.bytes.len()).sum::<usize>(), MAX_HELD * source_len);
         assert!(sources.iter().take(MAX_HELD).all(|bytes| bytes.strong_count() == 1));
         assert!(sources.last().unwrap().upgrade().is_none(), "capacity rejection releases its ready source payload");
