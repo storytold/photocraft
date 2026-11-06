@@ -6446,6 +6446,11 @@ fn gradient_fill_steps_export_and_import_back() {
     let mut expected = json!({"angle": 45, "stops": [[0, "#ff0000"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]], "midpoints": []});
     normalise(&mut expected);
     assert_eq!((steps[0].0.as_str(), without_hidden(&steps[0].1)), ("layer.newFillLayer.gradient", expected));
+    // Stops replace `from` and `to` when it plays, so a Make with all three exports its stops.
+    let p = json!({"from": "#ff0000", "to": "#0000ff", "stops": [[0, "#00ff00"], [1, "#ffffff"]], "transparency": [[0, 100], [1, 100]]});
+    let item = export_item("layer.newFillLayer.gradient", &p, "S").unwrap();
+    let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("did not import") };
+    assert_eq!(steps[0].1["stops"], json!([[0.0, "#00ff00"], [1.0, "#ffffff"]]));
     // What the event cannot hold is refused: a Set without its transparency, toolbox colours,
     // dragged handles, a path, a midpoint off a whole percent.
     for (id, p) in [
@@ -6497,6 +6502,14 @@ fn gradient_fills_the_command_cannot_play_stay_photoshop_steps() {
     ] {
         let imp = import(&atn::write(&one_action(vec![gradient_set(t)])).unwrap()).unwrap();
         assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    }
+    // A Make whose new layer also gets a name, opacity, mode or clipping: the command plays none
+    // of them, so the step stays as recorded.
+    for (key, v) in [("Nm  ", text("Sky")), ("Opct", pct(50.0)), ("Md  ", enm("BlnM", "Mltp")), ("Grup", D::Boolean(true))] {
+        let using = desc("contentLayer").with("Type", D::Descriptor(base.clone())).with(key, v);
+        let make = item("Mk  ", "Make", Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(using))));
+        let imp = import(&atn::write(&one_action(vec![make])).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP, "{key}");
     }
 }
 
