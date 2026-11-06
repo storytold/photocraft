@@ -18,6 +18,11 @@ use super::{Env, FORCED_LINE_BREAK, Flow, LRM, RLM, RunBrush, Slot, VClass};
 use crate::fonts::FontDb;
 use crate::layout::DEFAULT_TAB_STOP_PT;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static CARRY_SETTLE_PASSES: Cell<usize> = const { Cell::new(0) };
+}
+
 /// The character styles of `runs`, with families resolved (PostScript names from PSDs, unknown
 /// families) and drawn the way they are laid out.
 pub(super) fn resolve_run_styles(fonts: &mut FontDb, runs: &[photocraft_doc::text::TextRun]) -> Vec<CharStyle> {
@@ -403,7 +408,18 @@ impl<'a> Para<'a> {
         let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
         let from = self.area_origin(m, flow);
         let first_px = self.first_style().size_pt * env.k;
-        break_area(layout, a, from, m, (self.indent_start, self.indent_end), first_px, self.break_scale, &[], &self.area_budget)
+        break_area(
+            layout,
+            a,
+            from,
+            m,
+            (self.indent_start, self.indent_end),
+            first_px,
+            self.break_scale,
+            &[],
+            self.alignment() == Alignment::Justify,
+            &self.area_budget,
+        )
     }
 
     /// Re-breaks with the carried-space advance removed from each receiving line's capacity.
@@ -411,16 +427,21 @@ impl<'a> Para<'a> {
         let env = self.env;
         let Some(a) = &env.area else {
             let max_advance = self.avail.map_or(f32::MAX, |a| a / self.break_scale);
+            // A justified line spreads its spaces over the width left after the carry, so it
+            // ends at the box edge; centred and right lines keep the whole width, which
+            // `place_line` offsets by the carry.
+            let justify = self.alignment() == Alignment::Justify;
             let mut br = layout.break_lines();
             br.state_mut().set_layout_max_advance(f32::INFINITY);
             let mut line = 0usize;
             while !br.is_done() {
-                let leading = carries.get(line.saturating_sub(1)).copied().unwrap_or(0.0) / self.break_scale;
-                br.state_mut().set_line_max_advance((max_advance - leading).max(1.0 / self.break_scale));
+                let leading = line.checked_sub(1).and_then(|p| carries.get(p)).copied().unwrap_or(0.0) / self.break_scale;
+                let width = (max_advance - leading).max(1.0 / self.break_scale);
+                br.state_mut().set_line_max_advance(width);
                 if br.break_next().is_none() {
                     break;
                 }
-                br.set_prior_line_width(max_advance);
+                br.set_prior_line_width(if justify { width } else { max_advance });
                 line += 1;
             }
             br.finish();
@@ -430,13 +451,37 @@ impl<'a> Para<'a> {
         let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
         let from = self.area_origin(m, flow);
         let first_px = self.first_style().size_pt * env.k;
-        break_area(layout, a, from, m, (self.indent_start, self.indent_end), first_px, self.break_scale, carries, &self.area_budget)
+        break_area(
+            layout,
+            a,
+            from,
+            m,
+            (self.indent_start, self.indent_end),
+            first_px,
+            self.break_scale,
+            carries,
+            self.alignment() == Alignment::Justify,
+            &self.area_budget,
+        )
     }
 
     /// Settles columns whose carried spaces otherwise push their content past the box or area span.
     fn settle_vertical_carries(&self, layout: &mut Layout<RunBrush>, flow: &Flow, mut slots: Vec<Slot>, mut full: bool) -> (Vec<Slot>, bool) {
-        for _ in 0..4 {
+        // Adopting a carry into a column's width can move its break onto a space run, creating a
+        // carry for the next column, so a chain settles one column further per pass. A chain is
+        // at most one carry per line: bound the passes by the line count, following it up when
+        // re-breaks add lines, and stop once the carries stop changing.
+        let mut passes = 0usize;
+        let mut max_passes = layout.lines().count();
+        let mut settled: Vec<f32> = Vec::new();
+        while passes < max_passes {
+            #[cfg(test)]
+            CARRY_SETTLE_PASSES.with(|count| count.set(count.get() + 1));
+            passes += 1;
             let carries: Vec<f32> = layout.lines().map(|line| self.shaped_vertical_space_carry(&line)).collect();
+            if carries == settled {
+                break;
+            }
             let overflow = layout.lines().enumerate().any(|(i, line)| {
                 let Some(avail) = slots.get(i).map(|s| s.width).or(self.avail) else { return false };
                 let m = line.metrics();
@@ -445,7 +490,9 @@ impl<'a> Para<'a> {
             if !overflow {
                 break;
             }
+            settled = carries.clone();
             (slots, full) = self.break_lines_with_carries(layout, flow, &carries);
+            max_passes = max_passes.max(layout.lines().count());
         }
         (slots, full)
     }

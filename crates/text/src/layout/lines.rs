@@ -118,7 +118,8 @@ pub(super) struct CarriedSpaces {
 
 #[cfg(test)]
 thread_local! {
-    /// Cluster candidates inspected by carry scans on this thread.
+    /// Cluster candidates inspected by carry scans on this thread: one shaped scan of each line
+    /// per settle pass, plus the scan while placing the line.
     pub(crate) static CARRY_SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
@@ -368,7 +369,10 @@ impl Para<'_> {
     /// The carried advance as line breaking saw it, including horizontal scale.
     pub(super) fn shaped_vertical_space_carry(&self, line: &Line<'_>) -> f32 {
         let Some(start) = self.vertical_space_start(line) else { return 0.0 };
-        collect_kern_slots(line, self).iter().filter(|s| s.start >= start).map(|s| s.advance).sum()
+        let slots = collect_kern_slots(line, self);
+        #[cfg(test)]
+        CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + slots.len()));
+        slots.iter().filter(|s| s.start >= start).map(|s| s.advance).sum()
     }
 
     /// Where the line starts along its extent: box and area lines at their box or span edge,

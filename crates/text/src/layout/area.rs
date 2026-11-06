@@ -96,6 +96,7 @@ pub(super) fn break_area(
     min_width: f32,
     scale: f32,
     leading: &[f32],
+    justify: bool,
     budget: &std::cell::Cell<usize>,
 ) -> (Vec<Slot>, bool) {
     let inset = indents.0 + indents.1;
@@ -104,7 +105,7 @@ pub(super) fn break_area(
     let mut shape_rows = AreaRows { area, m, min_width, next: area.bounds[1], rows: Vec::new(), done: false };
     let mut needs: Vec<Need> = Vec::new();
     loop {
-        let (slots, overflow) = break_area_pass(layout, &mut rows, inset, scale, leading, &needs);
+        let (slots, overflow) = break_area_pass(layout, &mut rows, inset, scale, leading, justify, &needs);
         budget.set(budget.get().saturating_sub(1));
         // Each line's text start and scaled width without its trailing whitespace.
         let lines: Vec<(usize, f32)> = layout
@@ -152,7 +153,15 @@ pub(super) fn break_area(
 
 /// One pass of [`break_area`]: each line in the next span, skipping spans too narrow for a
 /// line in `needs` when a later span holds it.
-fn break_area_pass(layout: &mut Layout<RunBrush>, rows: &mut AreaRows<'_>, inset: f32, scale: f32, leading: &[f32], needs: &[Need]) -> (Vec<Slot>, bool) {
+fn break_area_pass(
+    layout: &mut Layout<RunBrush>,
+    rows: &mut AreaRows<'_>,
+    inset: f32,
+    scale: f32,
+    leading: &[f32],
+    justify: bool,
+    needs: &[Need],
+) -> (Vec<Slot>, bool) {
     #[cfg(test)]
     AREA_PASSES.with(|c| c.set(c.get() + 1));
     let mut slots: Vec<Slot> = Vec::new();
@@ -182,12 +191,14 @@ fn break_area_pass(layout: &mut Layout<RunBrush>, rows: &mut AreaRows<'_>, inset
             continue;
         }
         let leading = slots.len().checked_sub(1).and_then(|p| leading.get(p)).copied().unwrap_or(0.0);
-        br.state_mut().set_line_max_advance((width - leading).max(1.0) / scale);
+        let line_width = (width - leading).max(1.0) / scale;
+        br.state_mut().set_line_max_advance(line_width);
         if br.break_next().is_none() {
             break;
         }
-        // Parley aligns each line within the width it was broken at.
-        br.set_prior_line_width(width / scale);
+        // Parley aligns each line within the width it was broken at; a justified line fills what
+        // remains after the carry, centred and right lines the whole span.
+        br.set_prior_line_width(if justify { line_width } else { width / scale });
         slots.push(Slot { baseline, x: x0, width, row, span });
         span += 1;
     }

@@ -474,8 +474,78 @@ fn vertical_soft_wrap_carry_participates_in_line_breaking() {
     }
 }
 
+/// A carry adopted into a column's width can move that column's break onto a space run, creating
+/// a carry for the next column, one column further per settle pass. A chain of eight such columns
+/// must still settle: every column ends inside the box.
 #[test]
-fn vertical_soft_wrap_carry_scans_only_current_lines() {
+fn vertical_soft_wrap_settles_carry_chains_past_four_columns() {
+    let mut t = vertical_soft_wrap_text("");
+    t.text = "鈴".repeat(13) + "  " + &format!("{}  ", "鈴".repeat(12)).repeat(7);
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 600.0, height: 495.0 };
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    assert_eq!(l.lines.len(), 8, "{:?}", l.lines);
+    assert!(l.lines.iter().all(|line| line.x1 <= 495.0 + 0.05), "{:?}", l.lines);
+    assert_eq!(l.lines.last().unwrap().range.end, t.text.len());
+}
+
+/// A non-finite carry never equals itself, and a later oversized carry keeps overflowing. The
+/// settle loop must still stop after the largest line count it observed, six for this fixture.
+#[test]
+fn vertical_soft_wrap_settle_passes_are_bounded_by_the_largest_line_count() {
+    let first = "鈴".repeat(13);
+    let nan_spaces = "  ";
+    let middle = "鈴".repeat(12);
+    let huge_space = " ";
+    let last = "鈴";
+    let mut t = vertical_soft_wrap_text("");
+    t.text = first.clone() + nan_spaces + &middle + huge_space + last;
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 1000.0, height: 495.0 };
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: first.len(), style: style.clone() },
+        TextRun { len: nan_spaces.len(), style: CharStyle { tracking: f32::NAN, ..style.clone() } },
+        TextRun { len: middle.len(), style: style.clone() },
+        TextRun { len: huge_space.len(), style: CharStyle { tracking: 20_000.0, ..style.clone() } },
+        TextRun { len: last.len(), style },
+    ];
+    let mut e = TextEngine::new();
+    crate::layout::CARRY_SETTLE_PASSES.with(|count| count.set(0));
+    let l = e.layout(&t, 72.0);
+    let passes = crate::layout::CARRY_SETTLE_PASSES.with(|count| count.get());
+    assert_eq!(passes, 6, "{passes} settle passes for lines {:?}", l.lines);
+}
+
+/// A justified column that receives carried spaces spreads its own spaces over what remains of
+/// the width, so the carried space plus the justified content ends at the far edge of the box
+/// instead of past it. Justification must not move the breaks.
+#[test]
+fn vertical_soft_wrap_justified_columns_end_at_the_box_edge() {
+    let text = "担当：山田 太郎 佐藤 次郎君".to_string() + " " + "鈴鈴 鈴鈴 鈴鈴 鈴鈴 鈴鈴 鈴鈴" + &"鈴".repeat(24);
+    let mut e = TextEngine::new();
+    let breaks = |l: &crate::TextLayout| l.lines.iter().map(|ln| ln.range.clone()).collect::<Vec<_>>();
+    let mut left = vertical_soft_wrap_text("");
+    left.text = text.clone();
+    let left = with_para(left, ParagraphStyle { align: TextAlign::JustifyLeft, ..Default::default() });
+    let mut area = left.clone();
+    area.shape = TextShape::Area { path: area_poly(&[(0.0, 0.0), (600.0, 0.0), (600.0, 480.0), (0.0, 480.0)]) };
+    for t in [left, area] {
+        let l = e.layout(&t, 72.0);
+        assert_eq!(l.lines.len(), 4, "{:?}", l.lines);
+        // The carried space plus the justified content of the receiving column reaches the far
+        // edge exactly; a full-width justification lands past it by the carried space.
+        let ink_end = l.clusters.iter().filter(|c| c.line == 1).map(|c| c.x + c.advance).fold(f32::MIN, f32::max);
+        assert!((ink_end - 480.0).abs() < 0.1, "receiving column ends at {ink_end}: {:?}", l.lines);
+        let mut plain = t.clone();
+        plain.paragraphs = vec![ParagraphRun { len: text.len(), style: ParagraphStyle { align: TextAlign::Left, ..Default::default() } }];
+        assert_eq!(breaks(&l), breaks(&e.layout(&plain, 72.0)), "justification must not change the breaks");
+    }
+}
+
+/// Every carry scan walks one line's own clusters: one shaped scan in the settle pass and one
+/// while placing the line. A paragraph that needs no re-break inspects each cluster at most twice.
+#[test]
+fn vertical_soft_wrap_single_pass_scans_each_cluster_at_most_twice() {
     let mut t = vertical_soft_wrap_text("");
     t.text = "君鈴  ".repeat(12);
     t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 2000.0, height: 100.0 };
@@ -485,7 +555,7 @@ fn vertical_soft_wrap_carry_scans_only_current_lines() {
     let scanned = crate::layout::CARRY_SCANNED.with(|scanned| scanned.get());
     assert!(l.lines.len() > 4, "{:?}", l.lines);
     assert!(scanned > 0, "the fixture must exercise carry scans: {:?}", l.lines.iter().map(|line| &t.text[line.range.clone()]).collect::<Vec<_>>());
-    assert!(scanned <= l.clusters.len(), "scanned {scanned} candidates for {} clusters", l.clusters.len());
+    assert!(scanned <= 2 * l.clusters.len(), "scanned {scanned} candidates for {} clusters", l.clusters.len());
 }
 
 /// #5565: paragraph text breaks at its horizontally scaled width. At 60% it breaks like 100%
