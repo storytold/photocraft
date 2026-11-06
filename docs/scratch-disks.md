@@ -54,9 +54,21 @@ total is zero, as with some FUSE and WebDAV mounts) counts as unknown: the free-
 doesn't apply, imports earn a scratch allowance only up to the Scratch Size Limit, and
 Preferences → Scratch Disks and the hard-limit refusal say so, with the hint to set a limit or
 use a local disk; `spill::stats` exposes it as `freeSpaceUnmeasured`. With neither free space nor
-a size limit known, imports get no scratch allowance. The query runs on the thread that checks
-room, as creating the scratch file does, so a dead hard-mounted network folder can block it the
-same way its scratch I/O would.
+a size limit known, imports get no scratch allowance. Opening and measuring the folder happen
+off every lock, on a short-lived thread (at most one per folder and question, 16 overall), and
+callers wait up to 2 s for the answer. A query that doesn't answer in time counts as unknown
+(warned as above) and, when the scratch file couldn't be opened, pauses spilling with "not
+responding" and retries later. A system call can't be cancelled, so a stuck query keeps its
+thread until the mount answers and no second one starts; a late answer applies if that folder is
+still the current one and is discarded otherwise. The free-space check every 64 MB of growth never
+waits, and with an engine session tile allocation leaves retries to its supervisor. The wait is on
+the calling thread: changing Scratch Disks preferences or checking room for an import may wait up
+to those 2 s once for a newly hung folder. A whole folder change waits at most 2 s in total, the new
+folder first, with closing the old scratch file getting what is left; old files close on at most
+four background threads, so one stuck close doesn't hold up the others. On macOS the purgeable-space lookup asks every mounted volume, so it runs
+separately for at most 0.5 s, and an unrelated dead mount only loses the purgeable figure, never
+the folder's own numbers. Limit: reading or writing tile pixels already spilled
+to a hung folder still blocks the thread doing it; only opening and measuring are bounded.
 A failed read retains its backing extent and blocks editing, saving and exporting of the
 document that holds the tile until it is readable again; other open documents keep working.
 Each commit checks the health of its own document (before and after an edit, the document a
