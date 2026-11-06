@@ -975,6 +975,8 @@ mod pen_path_ownership_tests;
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
+mod layer_thumbnail_menu_tests;
+#[cfg(test)]
 mod layers_empty_area_menu_tests;
 #[cfg(test)]
 mod preferences_submenu_tests;

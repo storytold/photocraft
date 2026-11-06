@@ -1009,6 +1009,10 @@
 	Add Mask to Selection	添加蒙版到选区
 	Subtract Mask from Selection	从选区中减去蒙版
 	Intersect Mask with Selection	蒙版与选区交叉
+	Select Pixels	选择像素
+	Add Pixels to Selection	添加像素到选区
+	Subtract Pixels from Selection	从选区中减去像素
+	Intersect Pixels with Selection	像素与选区交叉
 	Apply Per Tip	应用于每个笔尖
 	Apply next selected layer comp	应用下一个选中的图层复合
 	Apply previous selected layer comp	应用上一个选中的图层复合

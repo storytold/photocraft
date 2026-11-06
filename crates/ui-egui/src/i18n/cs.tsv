@@ -1018,6 +1018,10 @@
 	Add Mask to Selection	Přidat masku do výběru
 	Subtract Mask from Selection	Odečíst masku od výběru
 	Intersect Mask with Selection	Průnik masky s výběrem
+	Select Pixels	Vybrat pixely
+	Add Pixels to Selection	Přidat pixely do výběru
+	Subtract Pixels from Selection	Odečíst pixely od výběru
+	Intersect Pixels with Selection	Průnik pixelů s výběrem
 	Apply Per Tip	Použít pro každý hrot
 	Apply next selected layer comp	Použít další vybranou kompozici vrstev
 	Apply previous selected layer comp	Použít předchozí vybranou kompozici vrstev

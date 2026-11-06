@@ -949,6 +949,10 @@
 	Add Mask to Selection	Dodaj masku selekciji
 	Subtract Mask from Selection	Oduzmi masku od selekcije
 	Intersect Mask with Selection	Presek maske i selekcije
+	Select Pixels	Izaberi piksele
+	Add Pixels to Selection	Dodaj piksele selekciji
+	Subtract Pixels from Selection	Oduzmi piksele od selekcije
+	Intersect Pixels with Selection	Presek piksela i selekcije
 	Add Stop	Dodaj tačku
 	Add a layer style	Dodaj stil sloja
 	Move effect up	Pomeri efekat nagore

@@ -979,6 +979,10 @@
 	Add Mask to Selection	선택 영역에 마스크 추가
 	Subtract Mask from Selection	선택 영역에서 마스크 빼기
 	Intersect Mask with Selection	마스크와 선택 영역 교차
+	Select Pixels	픽셀 선택
+	Add Pixels to Selection	선택 영역에 픽셀 추가
+	Subtract Pixels from Selection	선택 영역에서 픽셀 빼기
+	Intersect Pixels with Selection	픽셀과 선택 영역 교차
 	Apply Per Tip	끝당 적용
 	Apply next selected layer comp	선택한 다음 레이어 구성 요소 적용
 	Apply previous selected layer comp	선택한 이전 레이어 구성 요소 적용

@@ -977,6 +977,10 @@
 	Add Mask to Selection	Maske zur Auswahl hinzufügen
 	Subtract Mask from Selection	Maske von Auswahl subtrahieren
 	Intersect Mask with Selection	Schnittmenge von Maske und Auswahl
+	Select Pixels	Pixel auswählen
+	Add Pixels to Selection	Pixel zur Auswahl hinzufügen
+	Subtract Pixels from Selection	Pixel von Auswahl subtrahieren
+	Intersect Pixels with Selection	Schnittmenge von Pixeln und Auswahl
 	Apply Per Tip	Pro Pinselspitze anwenden
 	Apply next selected layer comp	Nächste ausgewählte Ebenenkomposition anwenden
 	Apply previous selected layer comp	Vorherige ausgewählte Ebenenkomposition anwenden

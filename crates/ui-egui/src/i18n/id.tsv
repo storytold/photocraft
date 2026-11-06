@@ -978,6 +978,10 @@
 	Add Mask to Selection	Tambahkan Mask ke Seleksi
 	Subtract Mask from Selection	Kurangi Mask dari Seleksi
 	Intersect Mask with Selection	Iriskan Mask dengan Seleksi
+	Select Pixels	Pilih Piksel
+	Add Pixels to Selection	Tambahkan Piksel ke Seleksi
+	Subtract Pixels from Selection	Kurangi Piksel dari Seleksi
+	Intersect Pixels with Selection	Iriskan Piksel dengan Seleksi
 	Apply Per Tip	Terapkan Per Ujung
 	Apply next selected layer comp	Terapkan layer comp terpilih berikutnya
 	Apply previous selected layer comp	Terapkan layer comp terpilih sebelumnya

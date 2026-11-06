@@ -930,6 +930,10 @@
 	Add Mask to Selection	Masker aan selectie toevoegen
 	Subtract Mask from Selection	Masker van selectie aftrekken
 	Intersect Mask with Selection	Masker met selectie laten snijden
+	Select Pixels	Pixels selecteren
+	Add Pixels to Selection	Pixels aan selectie toevoegen
+	Subtract Pixels from Selection	Pixels van selectie aftrekken
+	Intersect Pixels with Selection	Pixels met selectie laten snijden
 	Apply Per Tip	Per punt toepassen
 	Apply next selected layer comp	Volgende geselecteerde laagcompositie toepassen
 	Apply previous selected layer comp	Vorige geselecteerde laagcompositie toepassen

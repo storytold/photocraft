@@ -231,6 +231,10 @@
 	Add Mask to Selection	Legg maske til utvalget
 	Subtract Mask from Selection	Trekk maske fra utvalget
 	Intersect Mask with Selection	Snitt av maske og utvalg
+	Select Pixels	Velg piksler
+	Add Pixels to Selection	Legg piksler til utvalget
+	Subtract Pixels from Selection	Trekk piksler fra utvalget
+	Intersect Pixels with Selection	Snitt av piksler og utvalg
 	Link Layer Mask	Koble lagmaske
 	Unlink Layer Mask	Koble fra lagmaske
 	Vector Mask	Vektormaske

@@ -391,6 +391,10 @@
 	Add Mask to Selection	Додати маску до виділення
 	Subtract Mask from Selection	Відняти маску від виділення
 	Intersect Mask with Selection	Перетнути маску з виділенням
+	Select Pixels	Виділити пікселі
+	Add Pixels to Selection	Додати пікселі до виділення
+	Subtract Pixels from Selection	Відняти пікселі від виділення
+	Intersect Pixels with Selection	Перетнути пікселі з виділенням
 	Link Layer Mask	Зв'язати маску шару
 	Unlink Layer Mask	Відв'язати маску шару
 	Vector Mask	Векторна маска

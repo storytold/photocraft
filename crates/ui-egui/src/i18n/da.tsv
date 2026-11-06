@@ -231,6 +231,10 @@
 	Add Mask to Selection	Tilføj maske til markering
 	Subtract Mask from Selection	Træk maske fra markering
 	Intersect Mask with Selection	Skær maske med markering
+	Select Pixels	Markér pixels
+	Add Pixels to Selection	Tilføj pixels til markering
+	Subtract Pixels from Selection	Træk pixels fra markering
+	Intersect Pixels with Selection	Skær pixels med markering
 	Link Layer Mask	Sammenkæd lagmaske
 	Unlink Layer Mask	Fjern sammenkædning af lagmaske
 	Vector Mask	Vektormaske

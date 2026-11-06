@@ -567,16 +567,24 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
     }
 }
 
-/// The visibility icon has its own color menu, and the layer-mask thumbnail its mask menu (#4575).
+/// The visibility icon has its own color menu, the layer-mask thumbnail its mask menu (#4575) and the
+/// layer thumbnail the Select Pixels entries above the layer menu (#11680).
 fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>, eye_resp: &egui::Response, actions: &mut Vec<(String, Value)>) {
     let (l, resp, masks, row) = (rc.l, rc.resp, rc.masks, rc.row);
     let (ctx, selected) = (&ui.ctx().clone(), row.selected);
     // The visibility icon has its own color menu, and the layer-mask thumbnail its mask menu
     // (#4575); elsewhere use the full layer menu.
     let on_mask_id = ui.scope_id().with(("mask-menu", l.id.0));
+    let on_thumb_id = ui.scope_id().with(("thumbnail-menu", l.id.0));
     if resp.secondary_clicked() {
         let on_mask = resp.interact_pointer_pos().and_then(|p| masks.hit(p)) == Some(crate::mask_thumbs_ui::MaskKind::Pixel);
         ctx.data_mut(|d| d.insert_temp(on_mask_id, on_mask));
+        // The layer's own thumbnail (not a mask's, not a frame's outline) adds Select Pixels entries (#11680).
+        let on_thumb = !on_mask
+            && rc.ts > 0.0
+            && l.frame.is_none()
+            && resp.interact_pointer_pos().is_some_and(|p| masks.hit(p).is_none() && rc.thumb.expand(2.0).contains(p));
+        ctx.data_mut(|d| d.insert_temp(on_thumb_id, on_thumb));
     }
     if !eye_resp.secondary_clicked() && !eye_resp.context_menu_opened() {
         resp.context_menu(|ui| {
@@ -584,6 +592,10 @@ fn row_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, rc: &RowCtx<'_>,
             if ui.ctx().data(|d| d.get_temp::<bool>(on_mask_id)).unwrap_or(false) {
                 crate::layer_menu_ui::show_mask(app, ui, l, actions);
                 return;
+            }
+            // On the layer thumbnail the layer menu opens under the Select Pixels entries (#11680).
+            if ui.ctx().data(|d| d.get_temp::<bool>(on_thumb_id)).unwrap_or(false) {
+                crate::layer_menu_ui::thumbnail_entries(ui, l, rc.doc.is_background(l.id), actions);
             }
             // Right-clicking inside a multi-selection keeps it and acts on every selected layer.
             let on_set = row.multi && selected;

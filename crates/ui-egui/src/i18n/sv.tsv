@@ -229,6 +229,10 @@
 	Add Mask to Selection	Lägg till mask i markeringen
 	Subtract Mask from Selection	Subtrahera mask från markering
 	Intersect Mask with Selection	Skär mask med markering
+	Select Pixels	Markera pixlar
+	Add Pixels to Selection	Lägg till pixlar i markeringen
+	Subtract Pixels from Selection	Subtrahera pixlar från markering
+	Intersect Pixels with Selection	Skär pixlar med markering
 	Link Layer Mask	Länka lagermask
 	Unlink Layer Mask	Ta bort länk till lagermask
 	Vector Mask	Vektormask

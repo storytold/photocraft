@@ -816,6 +816,10 @@
 	Add Mask to Selection	Dodaj masku u odabir
 	Subtract Mask from Selection	Oduzmi masku od odabira
 	Intersect Mask with Selection	Presijeci masku s odabirom
+	Select Pixels	Odaberi piksele
+	Add Pixels to Selection	Dodaj piksele u odabir
+	Subtract Pixels from Selection	Oduzmi piksele od odabira
+	Intersect Pixels with Selection	Presijeci piksele s odabirom
 	Add Stop	Dodaj tačku
 	Add a layer style	Dodaj stil sloja
 	Add a mask  (from the selection; {key} inverts)	Dodaj masku  (iz odabira; {key} obrće)

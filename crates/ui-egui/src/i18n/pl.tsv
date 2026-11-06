@@ -998,6 +998,10 @@
 	Add Mask to Selection	Dodaj maskę do zaznaczenia
 	Subtract Mask from Selection	Odejmij maskę od zaznaczenia
 	Intersect Mask with Selection	Część wspólna maski i zaznaczenia
+	Select Pixels	Zaznacz piksele
+	Add Pixels to Selection	Dodaj piksele do zaznaczenia
+	Subtract Pixels from Selection	Odejmij piksele od zaznaczenia
+	Intersect Pixels with Selection	Część wspólna pikseli i zaznaczenia
 	Apply Per Tip	Zastosuj dla każdego odcisku
 	Apply next selected layer comp	Zastosuj następną zaznaczoną kompozycję warstw
 	Apply previous selected layer comp	Zastosuj poprzednią zaznaczoną kompozycję warstw
