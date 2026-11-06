@@ -90,7 +90,7 @@ mod tools;
 use app::layer_thumb_frame;
 use app::read_dropped;
 pub(crate) use app::{adjustment_layer_active, remember_new_document};
-pub use app::surface_fingerprint;
+pub use app::{flat_file_keeps, surface_fingerprint};
 use canvas::ants;
 pub use canvas::artboard_ui;
 pub(crate) use canvas::background_redraw;

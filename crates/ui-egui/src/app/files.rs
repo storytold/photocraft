@@ -804,7 +804,7 @@ impl PhotocraftApp {
 
 /// Whether the flat file at `path` keeps the whole of `doc`: a single plain layer, in a flat format
 /// PhotoCraft writes. A layered file is [`photocraft_engine::file_cmds::holds_at`]'s question.
-pub(crate) fn flat_file_keeps(doc: &photocraft_doc::Document, path: &str) -> bool {
+pub fn flat_file_keeps(doc: &photocraft_doc::Document, path: &str) -> bool {
     !photocraft_engine::file_cmds::saves_in_place(path)
         && plain_raster(doc).is_some()
         && photocraft_engine::file_cmds::extension(path).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
@@ -931,5 +931,22 @@ mod tests {
         assert!(!app.ui.status_error);
         assert!(app.ui.status.contains("image assets: 2 in"), "{}", app.ui.status);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod flat_file_keeps_tests {
+    use photocraft_doc::{Color, ColorMode, Document, Layer, SampleType, Size};
+
+    /// A host app asks it too (which file a share or a copy should be): one plain layer keeps a
+    /// flat file PhotoCraft writes; two layers, or a layered format, are other questions.
+    #[test]
+    fn a_plain_layer_keeps_a_flat_file_and_two_layers_dont() {
+        let mut doc = Document::with_background("a", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        assert!(crate::flat_file_keeps(&doc, "inplace://0123/a.png"));
+        assert!(!crate::flat_file_keeps(&doc, "a.psd"), "a layered file is `holds_at`'s question");
+        assert!(!crate::flat_file_keeps(&doc, "a.unknown"));
+        doc.layers.push(Layer::group("G", vec![]));
+        assert!(!crate::flat_file_keeps(&doc, "a.png"));
     }
 }

@@ -14,7 +14,7 @@ mod commands;
 mod control;
 mod files;
 pub(crate) use files::ensure_memory_to_save;
-pub(crate) use files::flat_file_keeps;
+pub use files::flat_file_keeps;
 mod frame;
 mod gpu;
 mod ime;
