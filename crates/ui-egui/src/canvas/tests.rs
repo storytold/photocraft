@@ -1427,6 +1427,7 @@ fn start_screen_buttons_stay_inside_a_narrow_canvas() {
                 assert!(r.left() >= 0.0 && r.right() <= width, "`{label}` is clipped in a {width}-point-wide canvas: {r:?}");
             }
         }
+        assert!(h.query_all_by_label_contains("Discord").next().is_none(), "primary Discord button must not be present on start screen");
     }
 }
 
