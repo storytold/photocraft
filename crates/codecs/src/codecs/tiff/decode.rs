@@ -1103,7 +1103,8 @@ mod tests {
 
     /// [`jpeg_sof`] with no step limit.
     fn sof(s: &[u8]) -> Option<(u64, u64, u64)> {
-        jpeg_sof(s, &mut u64::MAX).unwrap()
+        let mut steps = u64::MAX;
+        jpeg_sof(s, &mut steps).unwrap()
     }
 
     /// The SOF walk finds the frame size past other segments and stray bytes, skips DHT, and
@@ -1157,7 +1158,8 @@ mod tests {
         let mut steps = 7;
         assert_eq!(jpeg_sof(&s, &mut steps).unwrap(), Some((640, 480, 3)));
         assert_eq!(steps, 0);
-        assert!(matches!(jpeg_sof(&s, &mut 6), Err(CodecError::InvalidImage(_))));
+        let mut too_few = 6;
+        assert!(matches!(jpeg_sof(&s, &mut too_few), Err(CodecError::InvalidImage(_))));
         let zeros = vec![0u8; 4096];
         let mut steps = 4096;
         assert_eq!(jpeg_sof(&zeros, &mut steps).unwrap(), None);
