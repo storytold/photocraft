@@ -35,8 +35,12 @@ mod issue_11560 {
         let f = &mut app.ui.dialog_mut(id).unwrap().fields;
         f.insert("amount".into(), json!(amount));
         f.insert("radius".into(), json!(2.0));
-        f.insert("threshold".into(), json!(0));
-        f.insert("reduceNoise".into(), json!(0));
+        let detail = match f["__command"].as_str().unwrap() {
+            "filter.sharpen.unsharpMask" => "threshold",
+            "filter.sharpen.smartSharpen" => "reduceNoise",
+            _ => panic!("unexpected sharpening fixture command"),
+        };
+        f.insert(detail.into(), json!(0));
         f.insert("__preview".into(), json!(on));
     }
 

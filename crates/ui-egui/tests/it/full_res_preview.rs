@@ -229,8 +229,12 @@ mod issue_11560 {
         let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
         f.insert("amount".into(), json!(180));
         f.insert("radius".into(), json!(2));
-        f.insert("threshold".into(), json!(0));
-        f.insert("reduceNoise".into(), json!(0));
+        let detail = match command {
+            "filter.sharpen.unsharpMask" => "threshold",
+            "filter.sharpen.smartSharpen" => "reduceNoise",
+            _ => panic!("unexpected sharpening fixture command"),
+        };
+        f.insert(detail.into(), json!(0));
         h.run_steps(5);
         (h, id)
     }
@@ -286,7 +290,12 @@ mod issue_11560 {
         if let Some(active) = h.state().session.active().unwrap().active_layer {
             engine.select_layer(active).unwrap();
         }
-        engine.execute(command, json!({"amount":180,"radius":2,"threshold":0,"reduceNoise":0})).unwrap();
+        let params = match command {
+            "filter.sharpen.unsharpMask" => json!({"amount":180,"radius":2,"threshold":0}),
+            "filter.sharpen.smartSharpen" => json!({"amount":180,"radius":2,"reduceNoise":0}),
+            _ => panic!("unexpected sharpening fixture command"),
+        };
+        engine.execute(command, params).unwrap();
         let expected = engine.active().unwrap().doc.clone();
         assert_ne!(photocraft_compose::flatten(&expected).px, photocraft_compose::flatten(&before).px, "nonzero real sharpening oracle");
         let at = rect.center();
