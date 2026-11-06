@@ -337,7 +337,8 @@ what an agent can't finish alone.
   copies without its mask and styles (UI-217-23; fill and adjustment layers copy whole, #2344); tool-specific context menus beyond brushes, selections, Pen and
   Crop
   ([context-menu-parity.md](context-menu-parity.md)); Libraries, Comments, Contextual Task Bar
-  panels. Panels and tab groups float into their own OS windows (2026-10-25) and the Soft Dark and
+  panels. Panels and tab groups float into their own OS windows on the desktop (2026-10-25; not on native
+  Wayland or the web, where they stay in the app window, nor the Studio Properties card), and the Soft Dark and
   Soft Light themes landed (UI-217-11, #2661).
 - **Estimate:** 150–250 h.
 

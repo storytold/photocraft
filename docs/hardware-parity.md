@@ -46,7 +46,7 @@ tablets (Wacom, XP-Pen, Huion) on each OS and an HDR display to verify.
 | HDR / EDR output for 32-bit and HDR images | yes ("Precise Color Management for HDR Display") | no; 8-bit sRGB-encoded canvas texture | missing |
 | High-DPI, physical 100% | yes | yes (#1943) | done |
 | Multiple monitors: documents in separate OS windows | yes | yes (`extra_windows`) | done |
-| Panels in separate OS windows | yes | yes, floating panels open in their own OS windows (09c395469, `window.panel.float`) | done |
+| Panels in separate OS windows | yes | yes on the desktop (09c395469, `window.panel.float`), except native Wayland, where floating panels stay in the main window; the web keeps them in the page | partial |
 
 ## Input devices
 

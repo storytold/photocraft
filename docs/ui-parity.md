@@ -235,7 +235,7 @@ Character, Paragraph, Brushes; the rest open as in-app floating windows.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | Character and Paragraph controls without a type target | done | #5556; persistent Type tool defaults feed new point, box and mask text; existing text still edits in its selected scope (`type_tool.rs`, `type_tool/tests.rs`) |
-| Panel groups float and tear off into OS windows | done | floating panels open in their own OS windows (09c395469, 2026-10-25); `window.panel.float`, `dock/tests.rs` `a_panel_window_the_os_moves_is_saved_once_it_keeps_still` |
+| Panel groups float and tear off into OS windows | partial | floating panels open in their own OS windows on the desktop (09c395469, 2026-10-25; `window.panel.float`, `dock/tests.rs` `a_panel_window_the_os_moves_is_saved_once_it_keeps_still`), except on native Wayland and on the web, where they stay in the app window, and the Studio themes' Properties card, which stays over the canvas |
 | Drag panels to reorder and regroup | partial | #2272, #2305 |
 | Docked resize pushes the neighbour | partial | #2573 |
 | Color panel modes from its panel menu (Hue Cube, Brightness Cube, Color Wheel, Grayscale/RGB/HSB/CMYK/Lab/Web Color sliders), colour ramp (RGB/CMYK Spectrum, Grayscale Ramp, Current Colors, Make Ramp Web Safe; Shift-click cycles, Alt-click picks the other colour), Copy Color as HTML / Hex Code; the out-of-gamut ⚠ with the nearest printable colour under the chips (sliders always; the cubes when the field is at least 53 pt tall); the same in every theme | done | `color_panel_ui.rs`, `color_panel_tests.rs`; UI-217-17, #2569, #6000, #8672 |
