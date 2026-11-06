@@ -181,13 +181,13 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
     let mut app = app_with_canvas();
     let names = vec!["photo.png".to_string(), "brushes.abr".to_string()];
     // No pointer known: nothing is placed.
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false]);
+    assert_eq!(app.dropped_destinations(&ctx, &names), [DropDest::Open, DropDest::Open]);
     let at = Rc::new(std::cell::Cell::new(egui::pos2(400.0, 300.0)));
     let reported = at.clone();
     app.services.cursor_pos = Some(Box::new(move |_: &egui::Context| Some(reported.get())));
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [true, false]);
+    assert_eq!(app.dropped_destinations(&ctx, &names), [DropDest::Canvas, DropDest::Open]);
     at.set(egui::pos2(20.0, 20.0));
-    assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false], "off the canvas: opened");
+    assert_eq!(app.dropped_destinations(&ctx, &names), [DropDest::Open, DropDest::Open], "off the canvas: opened");
     let layers = layer_count(&app);
     let doc = app.session.active().unwrap().doc.id;
     app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3))));
@@ -937,6 +937,107 @@ fn inline_drops_stay_with_their_document_when_the_tab_changes() {
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
 }
 
+/// An app whose Layers panel showed three layers last frame: rows 100..120, 120..140 and 140..160
+/// (top to bottom) at x 800..1000, with a 4px gap above the middle one.
+fn app_with_layers_list() -> (PhotocraftApp, Vec<photocraft_doc::LayerId>) {
+    let mut app = app_with_canvas();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let st = app.session.active().unwrap();
+    let top_down: Vec<_> = st.doc.layers.iter().rev().map(|l| l.id).collect();
+    let rows = [(100.0, 120.0), (124.0, 140.0), (140.0, 160.0)];
+    let slots = rows
+        .iter()
+        .zip(&top_down)
+        .enumerate()
+        .map(|(i, (&(y0, y1), &id))| {
+            let y0 = if i == 0 { y0 } else { rows[i - 1].1 };
+            (egui::Rect::from_min_max(egui::pos2(800.0, y0), egui::pos2(1000.0, y1)), id)
+        })
+        .collect();
+    let list = egui::Rect::from_min_max(egui::pos2(800.0, 100.0), egui::pos2(1000.0, 400.0));
+    app.drop_layers = Some(crate::file_open::DropLayers { doc: st.doc.id, frame: 0, list, slots });
+    (app, top_down)
+}
+
+/// A file dropped on a Layers row (or the gap above it) goes directly above that row, not above the
+/// selected layer; over the empty space under the list it goes below the last row.
+#[test]
+fn a_drop_on_the_layers_list_targets_the_row_under_the_pointer() {
+    let ctx = egui::Context::default();
+    let (app, rows) = app_with_layers_list();
+    let at = |y| Some(egui::pos2(900.0, y));
+    let over = |app: &PhotocraftApp, y| app.layers_drop_at(&ctx, at(y).unwrap());
+    assert_eq!(over(&app, 110.0), Some(Some(RowSlot::Above(rows[0]))));
+    assert_eq!(over(&app, 130.0), Some(Some(RowSlot::Above(rows[1]))));
+    assert_eq!(over(&app, 122.0), Some(Some(RowSlot::Above(rows[1]))), "the gap belongs to the row below it");
+    assert_eq!(over(&app, 300.0), Some(Some(RowSlot::Below(rows[2]))), "empty space: below the last row");
+    assert_eq!(over(&app, 50.0), None, "outside the list");
+    assert_eq!(app.drop_layers.as_ref().map(|l| l.slots.len()), Some(3));
+}
+
+/// Several files dropped on one row are placed in the order they were dropped (each above the one
+/// before), the first above the row, and the active layer plays no part.
+#[test]
+fn files_dropped_on_a_layers_row_keep_their_order_and_ignore_the_active_layer() {
+    let ctx = egui::Context::default();
+    let (mut app, rows) = app_with_layers_list();
+    // The selected layer is the top one; the drop is on the bottom row.
+    let (target, bottom) = (rows[0], rows[2]);
+    assert_eq!(app.session.active().unwrap().active_layer, Some(target));
+    let before = layer_count(&app);
+    let files = vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))];
+    app.open_dropped(&ctx, files, Some(egui::pos2(900.0, 150.0)));
+    for _ in 0..2 {
+        app.place_next_dropped(&ctx);
+        crate::transform_tool::commit(&mut app);
+    }
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layers.len(), before + 2);
+    // Top to bottom.
+    let order: Vec<(photocraft_doc::LayerId, &str)> = st.doc.layers.iter().rev().map(|l| (l.id, l.name.as_str())).collect();
+    let at = |f: &dyn Fn(&(photocraft_doc::LayerId, &str)) -> bool| order.iter().position(f).unwrap();
+    let (top, second, first, row) = (at(&|l| l.0 == target), at(&|l| l.1 == "second"), at(&|l| l.1 == "first"), at(&|l| l.0 == bottom));
+    assert!(top < second && second < first && first < row, "dropped order, both just above the row: {order:?}");
+}
+
+/// A first file that fails to land doesn't lose the row: the next one goes where it would have.
+#[test]
+fn a_failed_first_file_leaves_the_layers_row_to_the_next() {
+    let ctx = egui::Context::default();
+    let (mut app, rows) = app_with_layers_list();
+    let bottom = rows[2];
+    let files = vec![dropped("bad.png", Ok(b"bad".to_vec())), dropped("good.png", Ok(png_bytes(4, 4)))];
+    app.open_dropped(&ctx, files, Some(egui::pos2(900.0, 150.0)));
+    app.place_next_dropped(&ctx);
+    crate::transform_tool::commit(&mut app);
+    let st = app.session.active().unwrap();
+    let names: Vec<(photocraft_doc::LayerId, &str)> = st.doc.layers.iter().rev().map(|l| (l.id, l.name.as_str())).collect();
+    let good = names.iter().position(|l| l.1 == "good").expect("the good file landed");
+    assert_eq!(names.get(good + 1).map(|l| l.0), Some(bottom), "directly above the row, not the active layer: {names:?}");
+}
+
+/// Over the empty space under the list a file goes below the last row, and the files after it above
+/// the one before.
+#[test]
+fn files_dropped_under_the_last_layers_row_go_below_it_in_order() {
+    let ctx = egui::Context::default();
+    let (mut app, rows) = app_with_layers_list();
+    let files = vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))];
+    app.open_dropped(&ctx, files, Some(egui::pos2(900.0, 300.0)));
+    for _ in 0..2 {
+        app.place_next_dropped(&ctx);
+        crate::transform_tool::commit(&mut app);
+    }
+    let st = app.session.active().unwrap();
+    let order: Vec<(photocraft_doc::LayerId, &str)> = st.doc.layers.iter().rev().map(|l| (l.id, l.name.as_str())).collect();
+    let at = |f: &dyn Fn(&(photocraft_doc::LayerId, &str)) -> bool| order.iter().position(f).unwrap();
+    let (row, second, first) = (at(&|l| l.0 == rows[2]), at(&|l| l.1 == "second"), at(&|l| l.1 == "first"));
+    assert!(row < second && second < first, "below the last row, dropped order: {order:?}");
+    assert!(first + 1 == order.len() || order.get(first + 1).is_none(), "nothing under them");
+}
+
 /// A web drop goes to the document it was dropped on, even when the tab changes before the shell
 /// has read the files.
 #[test]
@@ -947,11 +1048,11 @@ fn web_drops_go_to_the_document_they_were_dropped_on() {
     let inbox: crate::PlaceInbox = Default::default();
     app.services.place_inbox = Some(inbox.clone());
     app.services.cursor_pos = Some(Box::new(|_: &egui::Context| Some(egui::pos2(400.0, 300.0))));
-    assert_eq!(app.dropped_on_canvas(&ctx, &["photo.png".to_string()]), [true]);
+    assert_eq!(app.dropped_destinations(&ctx, &["photo.png".to_string()]), [DropDest::Canvas]);
     let target = app.session.active().map(|st| st.doc.id).unwrap();
     app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
     let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
-    inbox.lock().unwrap().push((target, "photo.png".into(), png_bytes(4, 3)));
+    inbox.lock().unwrap().push((target, "photo.png".into(), png_bytes(4, 3), None));
     app.queue_web_places();
     app.place_next_dropped(&ctx);
     assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps), "nothing placed in B");
@@ -974,7 +1075,7 @@ fn overlapping_web_drop_deliveries_keep_each_target() {
     let inbox: crate::PlaceInbox = Default::default();
     app.services.place_inbox = Some(inbox.clone());
     // B's read finishes before A's, although A was dropped first.
-    inbox.lock().unwrap().extend([(b, "b.png".into(), png_bytes(3, 2)), (a, "a.png".into(), png_bytes(4, 3))]);
+    inbox.lock().unwrap().extend([(b, "b.png".into(), png_bytes(3, 2), None), (a, "a.png".into(), png_bytes(4, 3), None)]);
     app.queue_web_places();
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), b_layers + 1);
