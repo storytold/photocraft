@@ -753,6 +753,142 @@ fn open_runs_as_a_job_and_cancel_adds_nothing() {
     assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Failed(_)));
 }
 
+#[test]
+fn cancelled_batch_job_returns_its_partial_result() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| {
+                while !ctx.cancelled() {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(json!({"files": ["done.png"], "skipped": ["later.png"], "cancelled": true}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    assert!(s.cancel_job(id));
+    let event = wait_event(&mut s, id);
+    let JobOutcome::Done(result) = &event.outcome else { panic!("batch result was discarded: {:?}", event.outcome) };
+    assert_eq!(result["files"], json!(["done.png"]));
+    assert_eq!(result["skipped"], json!(["later.png"]));
+    assert_eq!(result["cancelled"], true);
+    let info = s.jobs_with_recent().into_iter().find(|info| info.id == id).unwrap();
+    assert_eq!(info.state, "cancelled");
+    assert_eq!(info.result.unwrap()["files"], json!(["done.png"]));
+    assert!(matches!(s.wait_job(id), Err(EngineError::Cancelled)));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn programmatic_cancel_wakes_a_batch_waiting_for_the_desktop_decision() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| {
+                while !ctx.batch_take_interrupt() {
+                    ctx.check()?;
+                    std::thread::yield_now();
+                }
+                let continued = ctx.batch_wait_for_decision();
+                Ok(json!({"continued": continued, "files": [], "cancelled": ctx.cancelled()}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    assert!(s.request_batch_interrupt_job(id));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.batch_interrupt_waiting(id) && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(s.batch_interrupt_waiting(id));
+    assert!(s.cancel_job(id), "jobs.cancel remains direct and wakes the worker");
+    let JobOutcome::Done(result) = wait_event(&mut s, id).outcome else { panic!("batch partial result was lost") };
+    assert_eq!(result["continued"], false);
+    assert_eq!(result["cancelled"], true);
+}
+
+#[test]
+fn accepted_batch_cancellation_after_result_snapshot_is_reported() {
+    let mut s = Session::new();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (resume_tx, resume_rx) = std::sync::mpsc::channel();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            move |ctx| {
+                let cancelled = ctx.cancelled();
+                ready_tx.send(()).unwrap();
+                resume_rx.recv().unwrap();
+                Ok(json!({"files": ["done.png"], "cancelled": cancelled}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    ready_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert!(s.cancel_job(id));
+    resume_tx.send(()).unwrap();
+    let event = wait_event(&mut s, id);
+    let JobOutcome::Done(result) = event.outcome else { panic!("batch result was discarded") };
+    assert_eq!(result["cancelled"], true);
+    assert_eq!(result["files"], json!(["done.png"]));
+    let info = s.jobs_with_recent().into_iter().find(|info| info.id == id).unwrap();
+    assert_eq!(info.state, "cancelled");
+}
+
+#[test]
+fn cancel_all_counts_an_accepted_batch_cancellation() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            |ctx| {
+                while !ctx.cancelled() {
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Ok(json!({"files": [], "cancelled": true}))
+            },
+            |_, result| Ok(result),
+        )
+        .unwrap());
+    assert_eq!(s.execute("jobs.cancel", json!({})).unwrap()["cancelled"], 1);
+    assert_eq!(s.execute("jobs.cancel", json!({})).unwrap()["cancelled"], 0, "a repeated request is not a new cancellation");
+    assert_eq!(s.execute("jobs.cancel", json!({"job": id.0})).unwrap()["cancelled"], 0, "a repeated batch request is not a print error");
+    assert!(matches!(wait_event(&mut s, id).outcome, JobOutcome::Done(_)));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_finished_batch_worker_rejects_late_cancellation() {
+    let mut s = Session::new();
+    let id = job(s
+        .start_job("file.automate.batch", json!({}), "Batch", false, |_| Ok(json!({"files": ["done.png"], "cancelled": false})), |_, result| Ok(result))
+        .unwrap());
+    let started = Instant::now();
+    while !s.jobs.running.iter().any(|running| running.id == id && running.handle.as_ref().is_some_and(|handle| handle.is_finished())) {
+        assert!(started.elapsed() < Duration::from_secs(10), "batch worker did not finish");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert!(!s.cancel_job(id), "a result already sent cannot be cancelled");
+    let JobOutcome::Done(result) = wait_event(&mut s, id).outcome else { panic!("completed batch result was lost") };
+    assert_eq!(result["files"], json!(["done.png"]));
+    assert_eq!(result["cancelled"], false);
+}
+
 /// A flat scanline EXR opened from a path goes through the band decoder in the open job and
 /// arrives as the same 32-bit document the whole-file decoder makes; cancelling adds nothing.
 #[cfg(any(unix, windows))]
@@ -1023,6 +1159,78 @@ fn every_job_terminal_path_drops_a_live_commit_stroke() {
         }
         assert!(s.live_commit.is_none(), "terminal path {outcome} retained the preview");
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn background_admission_counts_cancelled_workers_until_they_finish() {
+    // Dropping the senders releases every worker even if an assertion unwinds.
+    let mut gates = Vec::new();
+    let mut s = Session::new();
+    let mut ids = Vec::new();
+    for _ in 0..MAX_BACKGROUND_JOBS {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        gates.push(tx);
+        ids.push(job(s
+            .start_job(
+                "test.gated",
+                json!({}),
+                "gated",
+                false,
+                move |_| {
+                    let _ = rx.recv();
+                    Ok(())
+                },
+                |_, ()| Ok(Value::Null),
+            )
+            .unwrap()));
+    }
+    let rejected = s.start_job("test.extra", json!({}), "extra", false, |_| -> Result<()> { panic!("over-limit worker ran") }, |_, ()| Ok(Value::Null));
+    assert!(rejected.unwrap_err().to_string().contains("too many background jobs"));
+    for id in ids {
+        assert!(s.cancel_job(id));
+    }
+    assert!(s.jobs.running.is_empty());
+    assert_eq!(s.jobs.draining.len(), MAX_BACKGROUND_JOBS);
+    let rejected =
+        s.start_job("test.extra", json!({}), "extra", false, |_| -> Result<()> { panic!("draining workers bypassed the cap") }, |_, ()| Ok(Value::Null));
+    assert!(rejected.unwrap_err().to_string().contains("too many background jobs"));
+    drop(gates);
+    s.join_cancelled_jobs();
+    let id = job(s.start_job("test.resumed", json!({}), "resumed", false, |_| Ok(()), |_, ()| Ok(json!("resumed"))).unwrap());
+    assert_eq!(s.wait_job(id).unwrap(), json!("resumed"));
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn reaping_finished_workers_preserves_the_release_request() {
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let mut draining = vec![
+        Draining { handle: std::thread::spawn(|| {}), doc: None, release: true },
+        Draining {
+            handle: std::thread::spawn(move || {
+                let _ = rx.recv();
+            }),
+            doc: None,
+            release: true,
+        },
+    ];
+    let start = Instant::now();
+    while !draining[0].handle.is_finished() {
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+    assert!(reap_draining(&mut draining));
+    assert_eq!(draining.len(), 1);
+    assert!(!reap_draining(&mut draining), "a running worker must retain its release request");
+    drop(tx);
+    let start = Instant::now();
+    while !draining[0].handle.is_finished() {
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+    assert!(reap_draining(&mut draining));
+    assert!(draining.is_empty());
 }
 
 #[cfg(unix)]
