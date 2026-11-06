@@ -287,7 +287,8 @@ pub(super) fn approve_memory(s: &mut Session, p: &Value) -> Result<Value> {
     // does not keep the tile share), and the import re-checks the exact split before decoding.
     let budget = photocraft_io::memory::resolve_budget_with_scratch(photocraft_io::memory::MemorySnapshot::current(), None, u64::MAX);
     if preflight.required > budget.hard_limit {
-        return Err(EngineError::PsdHardBudget { name: preflight.name, required: preflight.required, limit: budget.hard_limit });
+        let free_memory = budget.refusal_free_memory(preflight.required);
+        return Err(EngineError::PsdHardBudget { name: preflight.name, required: preflight.required, limit: budget.hard_limit, free_memory });
     }
     let started = s.start_open_approved_with_background(
         &preflight.name,
@@ -329,40 +330,40 @@ fn place_input(s: &mut Session, input: PlaceInput) -> Result<Value> {
 }
 
 /// The file a place reads.
-enum PlaceFile {
+pub(super) enum PlaceFile {
     /// Its contents, already read (a dropped or picked file with no path, a script's bytes).
-    Bytes(Vec<u8>),
-    /// Its path, read by [`prepare_place`]: on the job's worker when the place runs in the
+    Bytes(Arc<Vec<u8>>),
+    /// Its path, read by [`PlaceSteps`]: on the job's worker when the place runs in the
     /// background, so a large file doesn't hold up the window while it is read.
     Path(String),
 }
 
-/// Everything a place reads from the session, taken up front so [`prepare_place`] can run on a
+/// Everything a place reads from the session, taken up front so [`PlaceSteps`] can run on a
 /// worker that never sees the [`Session`].
 pub(crate) struct PlaceInput {
-    name: String,
-    file: PlaceFile,
-    linked: Option<String>,
-    params: Value,
-    canvas: (f64, f64),
-    fmt: PixelFormat,
-    opts: photocraft_io::ImportOptions,
+    pub(super) name: String,
+    pub(super) file: PlaceFile,
+    pub(super) linked: Option<String>,
+    pub(super) params: Value,
+    pub(super) canvas: (f64, f64),
+    pub(super) fmt: PixelFormat,
+    pub(super) opts: photocraft_io::ImportOptions,
     /// Preferences ▸ General ▸ Resize Image During Place, unless the params say otherwise.
-    fit: bool,
+    pub(super) fit: bool,
     /// Preferences ▸ General ▸ Always Create Smart Objects When Placing, unless the params say
     /// otherwise. A linked place is always a smart object.
-    smart: bool,
+    pub(super) smart: bool,
     /// The document as the job sees it, for rendering a vector source at its placement scale. A
     /// path isn't read yet, so whether it is a vector source is decided once it is.
-    doc: Option<Arc<Document>>,
+    pub(super) doc: Option<Arc<Document>>,
     /// The frame the image goes into: the active layer's, `"frame"` in the params, or none
     /// (`"frame": false`). Its image renders through a smart object.
-    frame: Option<(LayerId, photocraft_doc::Frame)>,
+    pub(super) frame: Option<(LayerId, photocraft_doc::Frame)>,
 }
 
 impl PlaceInput {
     pub(crate) fn new(s: &Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Self> {
-        Self::with_file(s, name, PlaceFile::Bytes(bytes), linked, p)
+        Self::with_file(s, name, PlaceFile::Bytes(Arc::new(bytes)), linked, p)
     }
 
     fn with_file(s: &Session, name: &str, file: PlaceFile, linked: Option<String>, p: &Value) -> Result<Self> {
@@ -430,15 +431,15 @@ impl PlaceInput {
 
 /// A place decoded, flattened and fitted, ready to be inserted by [`apply_place`].
 pub(crate) struct Prepared {
-    content: LayerContent,
-    layer_name: String,
+    pub(crate) content: LayerContent,
+    pub(crate) layer_name: String,
     /// The history step's name.
-    label: &'static str,
-    scale: f64,
-    bounds: [f64; 4],
-    smart: bool,
+    pub(crate) label: &'static str,
+    pub(crate) scale: f64,
+    pub(crate) bounds: [f64; 4],
+    pub(crate) smart: bool,
     /// The frame the layer fills, if any (it becomes the frame's content instead of a new layer).
-    frame: Option<LayerId>,
+    pub(crate) frame: Option<LayerId>,
 }
 
 /// The heavy part of a place: read (a path), decode, flatten, resize and translate (and render a
@@ -452,7 +453,7 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
             ctx.progress(0.0, "Reading");
             let bytes = read_file(&path)?;
             ctx.check()?;
-            bytes
+            Arc::new(bytes)
         }
     };
     // Refuse before decoding if the operation cannot fit.
@@ -524,7 +525,7 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
     let content = if smart {
         let source = match linked {
             Some(path) => SmartSource::Linked { path },
-            None => SmartSource::Embedded { file_name: file_name(&name), bytes: Arc::new(bytes) },
+            None => SmartSource::Embedded { file_name: file_name(&name), bytes: Arc::new((*bytes).clone()) },
         };
         let mut so = SmartObject::new(source, placement, px);
         // A vector source (SVG) and a frame's image render at their placement scale instead of as

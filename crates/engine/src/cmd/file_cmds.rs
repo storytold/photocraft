@@ -25,6 +25,7 @@ mod export;
 mod info;
 mod open;
 mod paths;
+pub mod place_steps;
 mod processing;
 mod raw_open;
 mod save;
@@ -48,6 +49,7 @@ use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, prepare_place, tag_exr_colorspace};
+pub use place_steps::PlaceSteps;
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 use paths::is_file;
 #[cfg(test)]

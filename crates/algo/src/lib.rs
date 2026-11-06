@@ -69,6 +69,7 @@ pub mod remove;
 mod render;
 pub mod render2;
 pub mod resample;
+pub use resample::{resize_surface_in_canvas, resize_surface_in_canvas_with_interrupt};
 pub mod retouch;
 pub mod scancrop;
 pub mod seam;
