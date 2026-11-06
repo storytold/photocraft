@@ -811,9 +811,9 @@ mod tool_shift_cycle_order_tests;
 #[cfg(test)]
 mod tool_shortcut_tests;
 #[cfg(test)]
-mod toolbar_more_slot_flyout_tests;
-#[cfg(test)]
 mod toolbar_group_order_tests;
+#[cfg(test)]
+mod toolbar_more_slot_flyout_tests;
 
 #[cfg(test)]
 mod pixel_aspect_tests;
