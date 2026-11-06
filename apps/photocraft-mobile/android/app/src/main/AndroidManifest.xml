@@ -43,6 +43,16 @@
                 <data android:pathPattern=".*\\.pcraft" />
                 <data android:pathPattern=".*\\..*\\.pcraft" />
             </intent-filter>
+            <!-- Open with, for a file whose provider knows neither its type nor shows its name in
+                 the URI (content://…/document/1234), so the patterns above can't match: a
+                 PhotoCraft document has no type Android knows. Opened by its display name; what
+                 PhotoCraft can't read is reported, as from File › Open. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:scheme="content" />
+                <data android:mimeType="application/octet-stream" />
+            </intent-filter>
             <!-- Share to PhotoCraft. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
