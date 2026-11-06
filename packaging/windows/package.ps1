@@ -74,9 +74,17 @@ $PdfiumDllSha256 = @{
 }
 $PdfiumDir = Join-Path $Root "target\pdfium\$Arch"
 $PdfiumDll = Join-Path $PdfiumDir 'pdfium.dll'
+$PdfiumLicense = Join-Path $PdfiumDir 'LICENSE'
+$PdfiumLicenses = Join-Path $PdfiumDir 'licenses'
+$PdfiumTag = Join-Path $PdfiumDir 'release.txt'
 
 function Get-Sha256([string] $Path) { (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() }
 
+# A cache from another pinned release (or missing its licence set) is discarded whole.
+$cachedRelease = if (Test-Path -LiteralPath $PdfiumTag) { (Get-Content -Raw -LiteralPath $PdfiumTag).Trim() } else { '' }
+if ($cachedRelease -ne $PdfiumRelease) {
+  Remove-Item -LiteralPath $PdfiumDir -Recurse -Force -ErrorAction SilentlyContinue
+}
 if (Test-Path -LiteralPath $PdfiumDll) {
   $actualDll = Get-Sha256 $PdfiumDll
   if ($actualDll -ne $PdfiumDllSha256[$Arch]) {
@@ -84,7 +92,7 @@ if (Test-Path -LiteralPath $PdfiumDll) {
     Remove-Item -LiteralPath $PdfiumDll -Force
   }
 }
-if (-not (Test-Path -LiteralPath $PdfiumDll)) {
+if (-not ((Test-Path -LiteralPath $PdfiumDll) -and (Test-Path -LiteralPath $PdfiumLicense) -and (Test-Path -LiteralPath $PdfiumLicenses))) {
   $expectedArchive = $PdfiumArchiveSha256[$Arch]
   if (-not $expectedArchive) { throw "no pinned PDFium checksum for $Arch" }
   $tgz = Join-Path $env:TEMP "pdfium-win-$Arch.tgz"
@@ -101,10 +109,22 @@ if (-not (Test-Path -LiteralPath $PdfiumDll)) {
     if ($LASTEXITCODE -ne 0) { throw "PDFium $Arch archive extraction failed with exit code $LASTEXITCODE" }
     if (-not (Test-Path -LiteralPath $extracted)) { throw 'PDFium archive had no bin/pdfium.dll' }
     Move-Item -Force $extracted $PdfiumDll
+    Set-Content -LiteralPath $PdfiumTag -Value $PdfiumRelease -NoNewline
+    if ((Get-Sha256 $PdfiumDll) -ne $PdfiumDllSha256[$Arch]) { throw "extracted PDFium $Arch DLL checksum does not match the pinned build" }
     Remove-Item -LiteralPath $tgz -Force
   }
 }
 $env:PDFIUM_DLL = $PdfiumDll
+
+# PDFium's BSD licence and the licences of the libraries bundled into its DLL ship beside it. They
+# are staged flat with a `pdfium-` prefix, so both the MSI's INSTALLFOLDER and the portable root
+# carry them whether the DLL came from this download or the cache.
+function Stage-PdfiumLicences([string] $Dest) {
+  Copy-Item -LiteralPath $PdfiumLicense -Destination (Join-Path $Dest 'pdfium-LICENSE.txt') -Force
+  Get-ChildItem -LiteralPath $PdfiumLicenses -File | ForEach-Object {
+    Copy-Item -LiteralPath $_.FullName -Destination (Join-Path $Dest ("pdfium-license-" + $_.Name)) -Force
+  }
+}
 
 Write-Output "PhotoCraft $Version for Windows $Arch ($Target)"
 
@@ -141,6 +161,7 @@ Remove-Item -Recurse -Force $Stage -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe') $Stage
 Copy-Item -LiteralPath $PdfiumDll -Destination $Stage
+Stage-PdfiumLicences $Stage
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe')
 
@@ -224,6 +245,7 @@ Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
 Copy-Item -LiteralPath $PdfiumDll -Destination $Portable
+Stage-PdfiumLicences $Portable
 foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUTION.md') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }

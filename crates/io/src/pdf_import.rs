@@ -60,19 +60,17 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     }
     let page_count = last - first + 1;
     let count = page_count.min(MAX_PAGES);
-    // The page sizes in points first: the effective DPI must fit the budgets, and capping the
-    // raster must not change the page's physical size.
-    let mut sizes = Vec::with_capacity(count);
+    // The page geometry first: the effective DPI must fit the budgets, capping the raster must
+    // not change the page's physical size, and editable objects are mapped through the same page
+    // box and rotation the raster uses.
+    let mut geoms = Vec::with_capacity(count);
     for index in 0..count {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let page_index = first - 1 + index;
         let page = document.pages().get(page_index as i32).map_err(|e| IoError::Unsupported(format!("PDF: {e}")))?;
-        let (w, h) = (f64::from(page.width().value), f64::from(page.height().value));
-        if w <= 0.0 || h <= 0.0 {
-            return Err(IoError::Unsupported(format!("PDF page {} has no area", page_index + 1)));
-        }
-        sizes.push((w, h));
+        geoms.push(page_geometry(&page, page_index + 1)?);
     }
+    let sizes: Vec<(f64, f64)> = geoms.iter().map(|g| (g.width_pt, g.height_pt)).collect();
     let dpi = effective_dpi(requested, &sizes, GAP, MAX_PAGE_PIXELS, MAX_UNION_PIXELS);
     let doc_width = sizes.iter().map(|(w, _)| (w * dpi / 72.0).round() as u64).sum::<u64>() + u64::from(GAP) * (count as u64 - 1);
     let doc_height = sizes.iter().map(|(_, h)| (h * dpi / 72.0).round() as u64).max().unwrap_or(1);
@@ -108,7 +106,8 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     let mut doc = Document::new(name, Size::new(doc_width as u32, doc_height as u32), ColorMode::Rgb, SampleType::U8);
     doc.resolution_dpi = dpi as f32;
     let mut x = 0u32;
-    for (index, (w_pt, h_pt)) in sizes.iter().enumerate() {
+    for (index, geometry) in geoms.iter().enumerate() {
+        let (w_pt, h_pt) = (geometry.width_pt, geometry.height_pt);
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let page_index = first - 1 + index;
         let target_width = (w_pt * dpi / 72.0).round().max(1.0) as i32;
@@ -155,7 +154,8 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
         let mut children = vec![layer];
         if opts.pdf_text || opts.pdf_vectors {
-            children.extend(object_layers(&page, opts, &PageFrame { height_pt: *h_pt, dpi, x, rgba: &rgba, width, height }));
+            let frame = PageFrame { geometry: *geometry, dpi, x, rgba: &rgba, width, height };
+            children.extend(object_layers(&page, opts, &frame, ctl)?);
         }
         let group = Group { children, expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
         doc.layers.push(Layer::new(format!("Page {}", page_index + 1), LayerContent::Group(group)));
@@ -171,9 +171,54 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })
 }
 
-/// One rendered page's frame: its point height, DPI, document x, and the RGBA pixels.
-struct PageFrame<'a> {
+/// A page's visible area and rotation, in PDF points.
+#[derive(Clone, Copy)]
+struct PageGeometry {
+    /// Displayed size (rotation applied): the size the raster is rendered into.
+    width_pt: f64,
     height_pt: f64,
+    /// The crop box origin in unrotated PDF user space.
+    origin_x: f64,
+    origin_y: f64,
+    /// The crop box size in unrotated PDF user space.
+    crop_w: f64,
+    crop_h: f64,
+    /// Clockwise rotation the renderer applies: 0, 90, 180 or 270.
+    rotation: u16,
+}
+
+/// The page's visible box and rotation. PDF page objects stay in unrotated user space, while the
+/// raster is rendered through the crop box and the page's `/Rotate`, so editable layers must use
+/// the same transform.
+#[cfg(not(target_arch = "wasm32"))]
+fn page_geometry(page: &pdfium_render::prelude::PdfPage, page_number: usize) -> Result<PageGeometry, IoError> {
+    let width_pt = f64::from(page.width().value);
+    let height_pt = f64::from(page.height().value);
+    if width_pt <= 0.0 || height_pt <= 0.0 {
+        return Err(IoError::Unsupported(format!("PDF page {page_number} has no area")));
+    }
+    let rotation = page.rotation().map(|r| r.as_degrees() as u16).unwrap_or(0);
+    let (origin_x, origin_y, crop_w, crop_h) = match page.boundaries().crop().or_else(|_| page.boundaries().media()) {
+        Ok(boundary) => {
+            let r = boundary.bounds;
+            (f64::from(r.left().value), f64::from(r.bottom().value), f64::from(r.right().value - r.left().value), f64::from(r.top().value - r.bottom().value))
+        }
+        Err(_) => (0.0, 0.0, width_pt, height_pt),
+    };
+    // A malformed box falls back to the displayed size; 90 and 270 swap the axes.
+    let (crop_w, crop_h) = if crop_w > 0.0 && crop_h > 0.0 {
+        (crop_w, crop_h)
+    } else if rotation == 90 || rotation == 270 {
+        (height_pt, width_pt)
+    } else {
+        (width_pt, height_pt)
+    };
+    Ok(PageGeometry { width_pt, height_pt, origin_x, origin_y, crop_w, crop_h, rotation })
+}
+
+/// One rendered page's frame: its geometry, DPI, document x, and the RGBA pixels.
+struct PageFrame<'a> {
+    geometry: PageGeometry,
     dpi: f64,
     x: u32,
     rgba: &'a [u8],
@@ -182,12 +227,38 @@ struct PageFrame<'a> {
 }
 
 impl PageFrame<'_> {
-    /// Maps a point in PDF page space (points, origin bottom-left) to document pixels: the Y flip
-    /// and the page's X offset both belong to this mapping.
+    /// Maps a point in PDF page space to the page's own pixels: crop box, rotation and scale.
+    fn to_page_px(&self, x_pt: f32, y_pt: f32) -> (f64, f64) {
+        let g = &self.geometry;
+        let u = f64::from(x_pt) - g.origin_x;
+        let v = f64::from(y_pt) - g.origin_y;
+        let (dx, dy) = match g.rotation {
+            90 => (v, u),
+            180 => (g.crop_w - u, v),
+            270 => (g.crop_h - v, g.crop_w - u),
+            _ => (u, g.crop_h - v),
+        };
+        let scale = self.dpi / 72.0;
+        (dx * scale, dy * scale)
+    }
+
+    /// Maps a point in PDF page space to document pixels: the page's own pixels plus its X offset.
     fn to_doc(&self, x_pt: f32, y_pt: f32) -> (f64, f64) {
-        let x_px = f64::from(x_pt) * self.dpi / 72.0 + f64::from(self.x);
-        let y_px = (self.height_pt - f64::from(y_pt)) * self.dpi / 72.0;
-        (x_px.round(), y_px.round())
+        let (px, py) = self.to_page_px(x_pt, y_pt);
+        ((px + f64::from(self.x)).round(), py.round())
+    }
+
+    /// The text layer's transform at document pixel (`x`, `y`): the page rotation turns the text
+    /// layout too, so rotated pages get rotated editable text rather than upright text at a
+    /// rotated position.
+    fn text_transform(&self, x: f64, y: f64) -> Affine {
+        let (a, b, c, d) = match self.geometry.rotation {
+            90 => (0.0, 1.0, -1.0, 0.0),
+            180 => (-1.0, 0.0, 0.0, -1.0),
+            270 => (0.0, -1.0, 1.0, 0.0),
+            _ => (1.0, 0.0, 0.0, 1.0),
+        };
+        Affine { m: [a, b, c, d, x, y] }
     }
 
     /// The rendered page's colour at local pixel (`x`, `y`), or black outside it.
@@ -207,22 +278,33 @@ impl PageFrame<'_> {
     /// colour instead: for dark text on a light page that is a glyph core, and for light text on a
     /// dark page it is the glyph rather than the background.
     fn text_color(&self, left: f32, top: f32, right: f32, bottom: f32) -> Color {
-        let x0 = (f64::from(left) * self.dpi / 72.0).floor().max(0.0) as u32;
-        let x1 = (f64::from(right) * self.dpi / 72.0).ceil().clamp(0.0, f64::from(self.width)) as u32;
-        // PDF's Y grows up; the rendered page's Y grows down.
-        let y0 = ((self.height_pt - f64::from(top)) * self.dpi / 72.0).floor().max(0.0) as u32;
-        let y1 = ((self.height_pt - f64::from(bottom)) * self.dpi / 72.0).ceil().clamp(0.0, f64::from(self.height)) as u32;
+        // The box's four corners through the same rotation-aware mapping as the glyphs.
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for (x, y) in [(left, bottom), (left, top), (right, top), (right, bottom)] {
+            let (px, py) = self.to_page_px(x, y);
+            x0 = x0.min(px);
+            x1 = x1.max(px);
+            y0 = y0.min(py);
+            y1 = y1.max(py);
+        }
+        let x0 = x0.floor().max(0.0) as u32;
+        let x1 = x1.ceil().clamp(0.0, f64::from(self.width)) as u32;
+        let y0 = y0.floor().max(0.0) as u32;
+        let y1 = y1.ceil().clamp(0.0, f64::from(self.height)) as u32;
         if x1 <= x0 || y1 <= y0 {
             return Color::BLACK;
         }
-        // At most ~4096 samples, so a page-sized text box stays cheap.
+        // At most 4096 samples, so a page-sized text box stays cheap.
         let step = ((f64::from(x1 - x0) * f64::from(y1 - y0) / 4096.0).sqrt().ceil() as u32).max(1);
         let mut samples: Vec<[f32; 3]> = Vec::new();
         let mut buckets: std::collections::HashMap<u32, (u32, [f32; 3])> = std::collections::HashMap::new();
         let mut y = y0;
-        while y < y1 {
+        'rows: while y < y1 {
             let mut x = x0;
             while x < x1 {
+                if samples.len() >= 4096 {
+                    break 'rows;
+                }
                 let c = self.color_at(x, y);
                 let rgb = [c.c[0], c.c[1], c.c[2]];
                 let key = (rgb[0] * 31.0) as u32 * 1024 + (rgb[1] * 31.0) as u32 * 32 + (rgb[2] * 31.0) as u32;
@@ -253,12 +335,15 @@ impl PageFrame<'_> {
 
 /// Editable text and shape layers for one rendered page, in document pixels.
 #[cfg(not(target_arch = "wasm32"))]
-fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, frame: &PageFrame) -> Vec<Layer> {
+fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, frame: &PageFrame, ctl: &Interrupt) -> Result<Vec<Layer>, IoError> {
     use pdfium_render::prelude::*;
 
     let objects = page.objects();
     let mut layers = Vec::new();
     for object in objects.iter() {
+        if ctl.check().is_err() {
+            return Err(IoError::Cancelled);
+        }
         match object {
             PdfPageObject::Text(text) if opts.pdf_text => {
                 let content = text.text();
@@ -280,7 +365,7 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                         font_family: family,
                         size_pt: size_pt as f32,
                         color,
-                        transform: Affine::translate(x_px, y_px),
+                        transform: frame.text_transform(x_px, y_px),
                         ..Default::default()
                     }),
                 );
@@ -359,7 +444,7 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
             _ => {}
         }
     }
-    layers
+    Ok(layers)
 }
 
 /// The highest DPI not above `requested` that keeps every page and the artboard strip within
@@ -403,7 +488,10 @@ fn bind() -> Result<pdfium_render::prelude::Pdfium, IoError> {
                 drop(Pdfium::new(bindings));
                 Ok(())
             }
-            Err(e) => Err(format!("PDF import: cannot load PDFium from {} ({e}); put {platform} next to the executable or set PDFIUM_DIR", library.display())),
+            Err(e) => Err(format!(
+                "PDF import: cannot load PDFium from {} ({e}); put {platform} next to the executable or set PDFIUM_DIR, then restart the application",
+                library.display()
+            )),
         }
     });
     match init {
@@ -415,10 +503,14 @@ fn bind() -> Result<pdfium_render::prelude::Pdfium, IoError> {
 
 #[cfg(test)]
 mod tests {
-    use super::PageFrame;
+    use super::{PageFrame, PageGeometry};
+
+    fn geometry(rotation: u16) -> PageGeometry {
+        PageGeometry { width_pt: 595.0, height_pt: 842.0, origin_x: 0.0, origin_y: 0.0, crop_w: 595.0, crop_h: 842.0, rotation }
+    }
 
     fn frame(dpi: f64, x: u32) -> PageFrame<'static> {
-        PageFrame { height_pt: 842.0, dpi, x, rgba: &[], width: 595, height: 842 }
+        PageFrame { geometry: geometry(0), dpi, x, rgba: &[], width: 595, height: 842 }
     }
 
     #[test]
@@ -431,10 +523,40 @@ mod tests {
     }
 
     #[test]
+    fn crop_box_offsets_and_rotations_map_like_the_raster() {
+        // A 200 x 100 pt crop box at (10, 20), displayed rotated 90 degrees clockwise: 100 x 200.
+        let rotated = |rotation| PageFrame {
+            geometry: PageGeometry { width_pt: 100.0, height_pt: 200.0, origin_x: 10.0, origin_y: 20.0, crop_w: 200.0, crop_h: 100.0, rotation },
+            dpi: 72.0,
+            x: 0,
+            rgba: &[],
+            width: 100,
+            height: 200,
+        };
+        // At 72 dpi the rectangle (20, 30)..(60, 70) lands at (10, 10)..(50, 50).
+        assert_eq!(rotated(90).to_doc(20.0, 30.0), (10.0, 10.0));
+        assert_eq!(rotated(90).to_doc(60.0, 70.0), (50.0, 50.0));
+        // 180 mirrors X; 270 swaps the axes back.
+        assert_eq!(rotated(180).to_doc(20.0, 30.0), (190.0, 10.0));
+        assert_eq!(rotated(270).to_doc(20.0, 30.0), (90.0, 190.0));
+        // The page's document X offset is added after the page-space mapping.
+        let mut offset = rotated(90);
+        offset.x = 500;
+        assert_eq!(offset.to_doc(20.0, 30.0), (510.0, 10.0));
+    }
+
+    #[test]
     fn samples_the_rendered_page() {
         // Two pixels: white then black.
         let rgba = [255u8, 255, 255, 255, 0, 0, 0, 255];
-        let page = PageFrame { height_pt: 842.0, dpi: 72.0, x: 0, rgba: &rgba, width: 2, height: 1 };
+        let page = PageFrame {
+            geometry: PageGeometry { width_pt: 2.0, height_pt: 1.0, origin_x: 0.0, origin_y: 0.0, crop_w: 2.0, crop_h: 1.0, rotation: 0 },
+            dpi: 72.0,
+            x: 0,
+            rgba: &rgba,
+            width: 2,
+            height: 1,
+        };
         assert_eq!(page.color_at(0, 0), photocraft_doc::Color::rgb(1.0, 1.0, 1.0));
         assert_eq!(page.color_at(1, 0), photocraft_doc::Color::BLACK);
         assert_eq!(page.color_at(2, 0), photocraft_doc::Color::BLACK);
@@ -446,7 +568,14 @@ mod tests {
         let mut rgba = vec![255u8; 8 * 4 * 4];
         let glyph = (8 + 2) * 4;
         rgba[glyph..glyph + 3].fill(0);
-        let page = PageFrame { height_pt: 4.0, dpi: 72.0, x: 0, rgba: &rgba, width: 8, height: 4 };
+        let page = PageFrame {
+            geometry: PageGeometry { width_pt: 8.0, height_pt: 4.0, origin_x: 0.0, origin_y: 0.0, crop_w: 8.0, crop_h: 4.0, rotation: 0 },
+            dpi: 72.0,
+            x: 0,
+            rgba: &rgba,
+            width: 8,
+            height: 4,
+        };
         // The whole page box contains the glyph: the ink wins over the white background.
         assert_eq!(page.text_color(0.0, 4.0, 8.0, 0.0), photocraft_doc::Color::BLACK);
         // A box that contains only background keeps the background colour.

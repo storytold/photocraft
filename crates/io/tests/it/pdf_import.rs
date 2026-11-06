@@ -16,24 +16,30 @@ const GAP: f64 = 80.0;
 
 #[test]
 fn imports_text_and_a_transformed_path_on_two_pages() {
-    let pdf = two_page_pdf();
+    let pdf = three_page_pdf();
     for dpi in [72.0f32, 300.0] {
         let options = ImportOptions { pdf_dpi: dpi, ..Default::default() };
         let result = match import_with_options_and_interrupt("fixture.pdf", &pdf, &options, &photocraft_raster::Interrupt::NONE) {
             Ok(result) => result,
             Err(IoError::Unsupported(message)) if message.contains("cannot load PDFium") => {
                 eprintln!("SKIPPED the PDF import end-to-end test: PDFium is unavailable ({message})");
+                // The Windows integration leg provisions PDFium and sets this: there a missing
+                // library must fail rather than let the runner report an unreached pass.
+                assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_PDFIUM").is_none(), "PDFium is required for this test but could not load: {message}");
                 return;
             }
             Err(error) => panic!("PDF import failed at {dpi} dpi: {error}"),
         };
         check(&result.document, dpi);
+        eprintln!("PDF import executed at {dpi} dpi: {} page groups, layer checks passed", result.document.layers.len());
     }
 }
 
 /// Page 1: red 48 pt text at (20, 50). Page 2: a 20 x 10 pt rectangle scaled 2x and moved by
-/// (10, 5) — corners (30, 25)..(70, 45) — plus green 48 pt text at (20, 20).
-fn two_page_pdf() -> Vec<u8> {
+/// (10, 5) - corners (30, 25)..(70, 45) - plus green 48 pt text at (20, 20). Page 3: a crop box
+/// offset to (10, 20, 210, 120) and rotated 90 degrees clockwise, with a 40 x 40 pt rectangle at
+/// (20, 30)..(60, 70) that renders at (10, 10)..(50, 50) on a 100 x 200 page.
+fn three_page_pdf() -> Vec<u8> {
     let mut pdf = PdfDocument::with_version("1.5");
     let pages_id = pdf.new_object_id();
     let font_id = pdf.add_object(dictionary! {
@@ -44,17 +50,25 @@ fn two_page_pdf() -> Vec<u8> {
     let resources = pdf.add_object(dictionary! {
         "Font" => dictionary! { "F1" => font_id },
     });
-    let contents = ["1 0 0 rg BT /F1 48 Tf 20 50 Td (Red) Tj ET", "0 0 1 rg q 2 0 0 2 10 5 cm 10 10 20 10 re f Q 0 1 0 rg BT /F1 48 Tf 20 20 Td (Green) Tj ET"];
+    let pages = [
+        ("1 0 0 rg BT /F1 48 Tf 20 50 Td (Red) Tj ET", [0.0f32, 0.0, PAGE_W as f32, PAGE_H as f32], None),
+        ("0 0 1 rg q 2 0 0 2 10 5 cm 10 10 20 10 re f Q 0 1 0 rg BT /F1 48 Tf 20 20 Td (Green) Tj ET", [0.0, 0.0, PAGE_W as f32, PAGE_H as f32], None),
+        ("0 0 1 rg 20 30 40 40 re f 0 0.5 0 rg BT /F1 24 Tf 40 60 Td (Rot) Tj ET", [10.0, 20.0, 210.0, 120.0], Some(90i64)),
+    ];
     let mut kids = Vec::new();
-    for content in contents {
+    for (content, [left, bottom, right, top], rotate) in pages {
         let content_id = pdf.add_object(Stream::new(dictionary! {}, content.as_bytes().to_vec()));
-        let page_id = pdf.add_object(dictionary! {
+        let mut page = dictionary! {
             "Type" => "Page",
             "Parent" => pages_id,
-            "MediaBox" => Object::Array(vec![0.into(), 0.into(), Object::Real(PAGE_W as f32), Object::Real(PAGE_H as f32)]),
+            "MediaBox" => Object::Array(vec![Object::Real(left), Object::Real(bottom), Object::Real(right), Object::Real(top)]),
             "Contents" => content_id,
             "Resources" => resources,
-        });
+        };
+        if let Some(rotate) = rotate {
+            page.set("Rotate", rotate);
+        }
+        let page_id = pdf.add_object(page);
         kids.push(Object::Reference(page_id));
     }
     let count = kids.len() as i64;
@@ -103,6 +117,28 @@ fn check(document: &Document, dpi: f32) {
     let text = text_layer(page_children(document, 2));
     assert_green(&text.color, "page 2 text");
     assert!(text.transform.m[4] > page_two_x + 10.0 * scale, "page 2 text x misses the page offset: {} <= {page_two_x}", text.transform.m[4]);
+
+    // Page 3: the crop box (10, 20, 210, 120) and /Rotate 90 put the rectangle at (10..50, 10..50).
+    let shape = shape_layer(page_children(document, 3));
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for knot in shape.path.subpaths.iter().flat_map(|subpath| &subpath.knots) {
+        min_x = min_x.min(knot.anchor.x);
+        max_x = max_x.max(knot.anchor.x);
+        min_y = min_y.min(knot.anchor.y);
+        max_y = max_y.max(knot.anchor.y);
+    }
+    let page_three_x = 2.0 * (PAGE_W * scale).round() + 2.0 * GAP;
+    assert!((min_x - (page_three_x + 10.0 * scale)).abs() < 3.0, "rotated path min x is {min_x}, page 3 starts at {page_three_x} ({dpi} dpi)");
+    assert!((max_x - (page_three_x + 50.0 * scale)).abs() < 3.0, "rotated path max x is {max_x} ({dpi} dpi)");
+    assert!((min_y - 10.0 * scale).abs() < 3.0, "rotated path min y is {min_y} ({dpi} dpi)");
+    assert!((max_y - 50.0 * scale).abs() < 3.0, "rotated path max y is {max_y} ({dpi} dpi)");
+
+    // Rotated text: the layer's transform carries the 90 degree turn, not just its position.
+    let text = text_layer(page_children(document, 3));
+    let m = text.transform.m;
+    assert!(m[0].abs() < 0.01 && (m[1] - 1.0).abs() < 0.01 && (m[2] + 1.0).abs() < 0.01 && m[3].abs() < 0.01, "page 3 text rotation is {m:?}");
+    assert!(m[4] > page_three_x, "page 3 text x misses the page offset: {} <= {page_three_x}", m[4]);
+    assert!(text.color.c[1] > 0.3 && text.color.c[0] < 0.2 && text.color.c[2] < 0.2, "page 3 text should be green, got {:?}", text.color.c);
 }
 
 fn page_children(document: &Document, page: usize) -> &[Layer] {
