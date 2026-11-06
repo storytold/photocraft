@@ -9,7 +9,8 @@
 //!
 //! The file holds no secret. A crashed (or, on macOS, quit) app can leave it behind; nothing then
 //! listens on its port ([`probe`]), and the app's next launch replaces it or removes it
-//! ([`remove_stale_connection`]).
+//! ([`remove_stale_connection`]). Until then another program could take that port, so a client
+//! checks that [`Connection::pid`] is still running before it sends the token.
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
@@ -69,7 +70,9 @@ pub fn write_connection(dir: &Path, c: &Connection) -> Result<(), AutomationErro
 }
 
 /// The connection published in `dir`, if any. A file from another version or one that doesn't
-/// parse counts as none: the app rewrites it when it next starts listening.
+/// parse (invalid UTF-8 included) counts as none: the app rewrites it when it next starts
+/// listening. Anything but a regular file (a FIFO would block the read) is an error, and left
+/// alone.
 pub fn read_connection(dir: &Path) -> Result<Option<Connection>, AutomationError> {
     let path = dir.join(CONNECTION_FILE);
     let meta = match std::fs::metadata(&path) {
@@ -77,15 +80,18 @@ pub fn read_connection(dir: &Path) -> Result<Option<Connection>, AutomationError
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(io_error(&path, e)),
     };
+    if !meta.is_file() {
+        return Err(io_error(&path, "not a regular file"));
+    }
     if meta.len() > MAX_CONNECTION_BYTES {
         return Err(io_error(&path, format!("larger than {MAX_CONNECTION_BYTES} bytes")));
     }
-    let text = match std::fs::read_to_string(&path) {
-        Ok(s) => s,
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(io_error(&path, e)),
     };
-    Ok(serde_json::from_str::<Connection>(&text).ok().filter(|c| c.version == CONNECTION_VERSION && c.port != 0))
+    Ok(serde_json::from_slice::<Connection>(&bytes).ok().filter(|c| c.version == CONNECTION_VERSION && c.port != 0))
 }
 
 /// Remove the connection file in `dir` if process `pid` wrote it (another instance may have
@@ -157,12 +163,22 @@ mod tests {
     fn other_versions_garbage_and_port_zero_read_as_none() {
         let dir = temp();
         assert_eq!(read_connection(&dir).unwrap(), None, "no file");
-        for text in
-            ["{not json", r#"{"version":2,"pid":1,"port":7878,"tokenFile":"t","app":"x"}"#, r#"{"version":1,"pid":1,"port":0,"tokenFile":"t","app":"x"}"#]
-        {
+        for text in [
+            &b"{not json"[..],
+            br#"{"version":2,"pid":1,"port":7878,"tokenFile":"t","app":"x"}"#,
+            br#"{"version":1,"pid":1,"port":0,"tokenFile":"t","app":"x"}"#,
+            b"\xff\xfe not utf-8",
+        ] {
             std::fs::write(dir.join(CONNECTION_FILE), text).unwrap();
-            assert_eq!(read_connection(&dir).unwrap(), None, "{text}");
+            assert_eq!(read_connection(&dir).unwrap(), None, "{}", String::from_utf8_lossy(text));
         }
+        std::fs::remove_file(dir.join(CONNECTION_FILE)).unwrap();
+        // Not a regular file: an error (and `remove_stale_connection` leaves it), never a read
+        // that could block on a FIFO.
+        std::fs::create_dir(dir.join(CONNECTION_FILE)).unwrap();
+        assert!(read_connection(&dir).is_err());
+        remove_stale_connection(&dir);
+        assert!(dir.join(CONNECTION_FILE).is_dir());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -192,9 +208,11 @@ mod tests {
         write_connection(&dir, &Connection { pid: 1, ..Connection::new(closed, dir.join(TOKEN_FILE)) }).unwrap();
         remove_stale_connection(&dir);
         assert!(!dir.join(CONNECTION_FILE).exists(), "nothing listens on {closed}");
-        std::fs::write(dir.join(CONNECTION_FILE), "{not json").unwrap();
-        remove_stale_connection(&dir);
-        assert!(!dir.join(CONNECTION_FILE).exists(), "an unreadable file is not a connection");
+        for text in [&b"{not json"[..], b"\xff\xfe not utf-8"] {
+            std::fs::write(dir.join(CONNECTION_FILE), text).unwrap();
+            remove_stale_connection(&dir);
+            assert!(!dir.join(CONNECTION_FILE).exists(), "an unreadable file is not a connection");
+        }
         remove_stale_connection(&dir);
         let _ = std::fs::remove_dir_all(&dir);
     }

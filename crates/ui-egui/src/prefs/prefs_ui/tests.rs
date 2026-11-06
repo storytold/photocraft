@@ -1710,7 +1710,7 @@ fn integrations_explain_next_launch() {
     h.get_by_label("Allow agent control");
     // The label and the text field it names.
     for folder in ["Automation read folder", "Automation write folder"] {
-        assert!(h.query_all_by_label(folder).count() >= 1, "{folder}");
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, folder);
     }
     assert_eq!(h.query_all_by_label("Applies at next launch.").count(), 4, "one notice under each row");
 }
