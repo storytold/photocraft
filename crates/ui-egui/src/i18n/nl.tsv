@@ -4322,3 +4322,18 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Afbeelding vervangen…
 	The frame is locked	Het kader is vergrendeld
 	The frame is unavailable	Het kader is niet beschikbaar
+
+# Channels panel menu (#11451)
+	New Channel…	Nieuw kanaal…
+	Duplicate Channel	Kanaal dupliceren
+	Delete Channel	Kanaal verwijderen
+	New Spot Channel…	Nieuw steunkleurkanaal…
+	Merge Spot Channel	Steunkleurkanaal samenvoegen
+	Channel Options…	Kanaalopties…
+	Split Channels	Kanalen splitsen
+	Merge Channels…	Kanalen samenvoegen…
+	Specify Channels:	Kanalen opgeven:
+	Not enough grayscale documents for this mode.	Niet genoeg grijswaardendocumenten voor deze modus.
+	Pick a different document for each channel.	Kies voor elk kanaal een ander document.
+	A picked document is no longer open.	Een gekozen document is niet meer geopend.
+	A picked document is no longer a grayscale document of the same size.	Een gekozen document is geen grijswaardendocument van hetzelfde formaat meer.
