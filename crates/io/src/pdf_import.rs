@@ -36,6 +36,9 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     /// Per-page and per-artboard-strip pixel budgets; a poster at 300 dpi is far below these.
     const MAX_PAGE_PIXELS: f64 = 100_000_000.0;
     const MAX_UNION_PIXELS: u64 = 200_000_000;
+    /// The default pixel-memory budget when the caller sets none: a zero
+    /// [`ImportOptions::flat_max_pixel_bytes`] still bounds the import.
+    const DEFAULT_MAX_PIXEL_BYTES: u64 = 2 << 30;
 
     let requested = if opts.pdf_dpi.is_finite() && opts.pdf_dpi > 0.0 { f64::from(opts.pdf_dpi) } else { 300.0 };
     let pdfium = bind()?;
@@ -76,15 +79,20 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     if doc_width == 0 || doc_height == 0 {
         return Err(IoError::Unsupported("PDF pages have no area".into()));
     }
-    // The aggregate budget: the rendered pages and the document's raster tiles both hold pixels.
-    let page_pixels = sizes.iter().map(|(w, h)| (w * dpi / 72.0).round().max(1.0) * (h * dpi / 72.0).round().max(1.0)).sum::<f64>();
-    // The RGBA bitmap, the f32 conversion buffer (16 bytes/px) and the document tiles.
-    let estimate = (page_pixels * 24.0) as u64;
-    if opts.flat_max_pixel_bytes > 0 && estimate > opts.flat_max_pixel_bytes {
+    // The aggregate budget: the document keeps every page's raster tiles, while one page at a
+    // time is converted through the PDFium bitmap, its RGBA copy and the f32 buffer.
+    let page_px = |w: f64, h: f64| (w * dpi / 72.0).round().max(1.0) * (h * dpi / 72.0).round().max(1.0);
+    let page_pixels = sizes.iter().map(|&(w, h)| page_px(w, h)).sum::<f64>();
+    let max_page_pixels = sizes.iter().map(|&(w, h)| page_px(w, h)).fold(0.0_f64, f64::max);
+    // 4 bytes/px of retained RGBA tiles for every page, plus 24 bytes/px (bitmap, RGBA copy,
+    // f32 conversion buffer) for the page being converted.
+    let estimate = (page_pixels * 4.0 + max_page_pixels * 24.0) as u64;
+    let budget = if opts.flat_max_pixel_bytes > 0 { opts.flat_max_pixel_bytes } else { DEFAULT_MAX_PIXEL_BYTES };
+    if estimate > budget {
         return Err(IoError::Unsupported(format!(
             "PDF import needs about {} MB of pixel memory; the limit is {} MB (lower the import DPI)",
             estimate >> 20,
-            opts.flat_max_pixel_bytes >> 20
+            budget >> 20
         )));
     }
     let mut doc = Document::new(name, Size::new(doc_width as u32, doc_height as u32), ColorMode::Rgb, SampleType::U8);
@@ -122,7 +130,10 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         // canvas and no PNG round-trip, so the peak is the page bitmap plus its tiles.
         let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
         let rgba = bitmap.as_rgba_bytes();
-        let mut data = Vec::with_capacity(rgba.len());
+        let mut data = Vec::new();
+        if data.try_reserve_exact(rgba.len()).is_err() {
+            return Err(IoError::Unsupported(format!("PDF page {} needs more memory than is available", page_index + 1)));
+        }
         for chunk in rgba.as_chunks::<4>().0 {
             for &v in &chunk[..3] {
                 data.push(f32::from(v) / 255.0);
@@ -134,7 +145,7 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
         let mut children = vec![layer];
         if opts.pdf_text || opts.pdf_vectors {
-            children.extend(object_layers(&page, opts, &PageFrame { height_pt: *h_pt, dpi, x, rgba: &bitmap.as_rgba_bytes(), width, height }));
+            children.extend(object_layers(&page, opts, &PageFrame { height_pt: *h_pt, dpi, x, rgba: &rgba, width, height }));
         }
         let group = Group { children, expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
         doc.layers.push(Layer::new(format!("Page {}", page_index + 1), LayerContent::Group(group)));
@@ -212,12 +223,21 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                 layers.push(layer);
             }
             PdfPageObject::Path(path) if opts.pdf_vectors => {
+                // PDFium reports the segments in object space; the object's matrix places them on
+                // the page. Without it, scaled or rotated paths land in the wrong place.
+                let matrix = path.matrix().unwrap_or(PdfMatrix::IDENTITY);
+                // The fill and stroke modes are exposed; the colours and dash pattern are not.
+                let filled = !matches!(path.fill_mode(), Ok(PdfPathFillMode::None));
+                let stroked = path.is_stroked().unwrap_or(false);
+                if !filled && !stroked {
+                    continue;
+                }
                 let mut subpaths: Vec<Subpath> = Vec::new();
                 let mut knots: Vec<Knot> = Vec::new();
                 let mut closed = false;
                 let mut bezier: Vec<(f64, f64)> = Vec::new();
-                for segment in path.segments().iter() {
-                    let point = || (to_x(segment.x().value).round(), (height_pt - to_x(segment.y().value)).round());
+                for segment in path.segments().transform(matrix).iter() {
+                    let point = || (to_x(segment.x().value).round(), (height_px - to_x(segment.y().value)).round());
                     if segment.is_close() {
                         closed = true;
                         continue;
@@ -257,10 +277,15 @@ fn object_layers(page: &pdfium_render::prelude::PdfPage, opts: &ImportOptions, f
                 if subpaths.is_empty() {
                     continue;
                 }
-                let stroke = path.is_stroked().unwrap_or(false).then(|| ShapeStroke { paint: Fill::Solid(Color::BLACK), width: 1.0, ..Default::default() });
+                let stroke = stroked.then(|| ShapeStroke { paint: Fill::Solid(Color::BLACK), width: 1.0, ..Default::default() });
                 layers.push(Layer::new(
                     "Path",
-                    LayerContent::Shape(ShapeLayer { path: Path::new(subpaths), fill: Some(Fill::Solid(Color::BLACK)), stroke, ..Default::default() }),
+                    LayerContent::Shape(ShapeLayer {
+                        path: Path::new(subpaths),
+                        fill: filled.then_some(Fill::Solid(Color::BLACK)),
+                        stroke,
+                        ..Default::default()
+                    }),
                 ));
             }
             _ => {}
