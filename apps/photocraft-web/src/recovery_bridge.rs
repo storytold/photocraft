@@ -25,6 +25,9 @@ use crate::preset_bridge::Batch;
 pub const MAX_SNAPSHOT_BYTES: usize = 256 << 20;
 /// Most entries read back at launch.
 pub const MAX_ENTRIES: usize = 64;
+/// Guidance for a full store, including records from earlier sessions.
+pub const TOTAL_LIMIT_MSG: &str =
+    "the browser's recovery storage is full; data from earlier sessions may be using space; save or close open documents, or enable Recover on launch and restart to review earlier recovery data";
 const SIDECAR_MAX: usize = 1 << 20;
 
 fn bundle_name(key: &str) -> String {
@@ -336,6 +339,21 @@ mod tests {
         assert!(recover_on_launch(Some("not json")));
         assert!(recover_on_launch(Some(r#"{"fileHandling":{"autosave":true}}"#)));
         assert!(!recover_on_launch(Some(r#"{"fileHandling":{"recoverOnLaunch":false}}"#)));
+    }
+
+    #[test]
+    fn total_limit_guidance_reaches_the_user_when_old_sessions_are_not_claimed() {
+        assert!(!recover_on_launch(Some(r#"{"fileHandling":{"recoverOnLaunch":false}}"#)));
+        let old = Recovery::new("old".into()).snapshot(&doc("Previous"), 1, None, 1).unwrap();
+        let current = Recovery::new("current".into());
+        let batch = current.snapshot(&doc("Current"), 1, None, 2).unwrap();
+        let stored = old.iter().filter_map(|(name, bytes)| bytes.as_ref().map(|b| (name.clone(), b.len() as u64)));
+        let cap = old.values().flatten().map(|b| b.len() as u64).sum();
+        assert!(!crate::preset_bridge::fits_total(stored, &batch, cap));
+        current.finish(3, 9, Err(TOTAL_LIMIT_MSG.into()));
+        let result = current.take_completed().remove(0).2.unwrap_err();
+        assert!(result.contains("enable Recover on launch and restart"));
+        assert!(result.contains("data from earlier sessions may be using space"));
     }
 
     #[test]

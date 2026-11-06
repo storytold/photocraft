@@ -20,8 +20,6 @@ const DATABASE: &str = "photocraft.recovery";
 /// Most recovery data kept at once, across documents and tabs. Enforced inside the write
 /// transaction (`indexed_presets::write_capped`), against what is actually stored.
 const MAX_TOTAL_BYTES: u64 = 768 << 20;
-/// Shown as "Autosave failed" when the total cap stops a write.
-const TOTAL_LIMIT_MSG: &str = "the browser's recovery storage limit is reached; save or close a document";
 const PREFS_KEY: &str = "photocraft.preferences";
 /// All the per-record reads together may not hold up startup longer than this, whatever the count.
 const SCAN_MS: f64 = 15_000.0;
@@ -163,7 +161,7 @@ pub fn services(db: Option<IdbDatabase>, recovery: Recovery) -> Services {
             wasm_bindgen_futures::spawn_local(async move {
                 // A quota error lands here, and the UI shows it as "Autosave failed".
                 // The total cap is enforced inside the transaction, against what every tab stored.
-                let result = write_capped(&db, &batch, Some((MAX_TOTAL_BYTES, TOTAL_LIMIT_MSG))).await;
+                let result = write_capped(&db, &batch, Some((MAX_TOTAL_BYTES, crate::recovery_bridge::TOTAL_LIMIT_MSG))).await;
                 done.finish(id, revision, result);
             });
             Ok(())
