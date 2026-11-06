@@ -594,7 +594,9 @@ pub(crate) fn canvas_alone(app: &PhotocraftApp) -> bool {
 
 fn canvas_alone_layout(layout: &Layout<String>) -> bool {
     match &layout.root {
-        Some(Node::Split { first, .. }) => matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.len() == 1 && panels[0] == CANVAS),
+        Some(Node::Split { axis: SplitAxis::Horizontal, first, .. }) => {
+            matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.len() == 1 && panels[0] == CANVAS)
+        }
         _ => false,
     }
 }

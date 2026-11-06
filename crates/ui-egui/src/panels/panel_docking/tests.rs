@@ -950,6 +950,18 @@ fn the_dock_edge_layout_only_applies_with_the_canvas_alone() {
         Node::Split { axis: SplitAxis::Horizontal, size: SplitSize::FixedFirst(400.0), first: Box::new(tabs("layers")), second: Box::new(tabs(CANVAS)) };
     let layout = Layout { root: Some(aside(beside)), floating: Vec::new() };
     assert!(!canvas_alone_layout(&layout), "{layout:?}");
+
+    // A vertical root split with the canvas above another panel is not the canvas-beside-dock shape.
+    let vertical = Layout {
+        root: Some(Node::Split {
+            axis: SplitAxis::Vertical,
+            size: SplitSize::FixedSecond(280.0),
+            first: Box::new(tabs(CANVAS)),
+            second: Box::new(tabs("color")),
+        }),
+        floating: Vec::new(),
+    };
+    assert!(!canvas_alone_layout(&vertical), "{vertical:?}");
 }
 
 #[test]
