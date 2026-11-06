@@ -1935,6 +1935,7 @@
 	Soften	Zmiękcz
 	Source	Źródło
 	Source: set	Źródło: ustawione
+	Source: {name}	Źródło: {name}
 	Sponge Tool	Narzędzie Gąbka
 	Spot Healing Brush Tool	Narzędzie Punktowy pędzel korygujący
 	Spread	Rozszerzenie
@@ -3898,6 +3899,8 @@ curves	Smooth	Wygładź
 	Step {step} is waiting for its dialog	Krok {step} czeka na swoje okno dialogowe
 @plural	{n} action|{n} actions	{n} operacja|{n} operacje|{n} operacji
 	Background (Default)	Tło (domyślne)
+	Background (default)	Tło (domyślne)
+	Transparent (default)	Przezroczyste (domyślne)
 	Include All Subfolders	Uwzględnij wszystkie podfoldery
 	Auto Add/Delete	Automatyczne dodawanie/usuwanie
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nie włączaj też odbicia lustrzanego w ustawieniach druku: oba odbicia wzajemnie się znoszą.
@@ -3950,6 +3953,7 @@ curves	Smooth	Wygładź
 	Automatically Check for Updates	Automatycznie sprawdzaj aktualizacje
 	Paints from the History panel's source state	Maluje ze stanu źródłowego panelu Historia
 	Sets the source for the history brush	Ustawia źródło dla pędzla historii
+	The History Brush source was deleted: set a new source in the History panel	Źródło pędzla historii zostało usunięte: ustaw nowe źródło w panelu Historia
 	Highlight Mode	Tryb świateł
 	Highlight Color	Kolor świateł
 	Highlight Opacity	Krycie świateł
@@ -4113,6 +4117,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Nieprawidłowa wartość liczbowa. Wymagana jest liczba całkowita od {min}% do {max}%. Wstawiono poprzednią wartość.
 	Clear Selection	Wyczyść zaznaczenie
 	Color Aware	Według kolorów
@@ -4140,109 +4146,57 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków
 	Edit Brush…	Edytuj pędzel…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	Akcja została zapisana, ale nie udało się zapisać preferencji potwierdzania: {error}
-	Add a brief description for this action…	Dodaj krótki opis tej akcji…
-	Allow Tool Recording	Zezwalaj na nagrywanie narzędzi
-	Answer the open Actions editor question first	Najpierw odpowiedz na otwarte pytanie w edytorze akcji
-	Apply to background	Zastosuj do tła
-	Apply to subject	Zastosuj do obiektu
-	Back	Wstecz
-	Black and white	Czarno-białe
-	Cancel and continue editing	Anuluj i kontynuuj edycję
-	Choose color	Wybierz kolor
-	Choose icon	Wybierz ikonę
-	Choose icon and color	Wybierz ikonę i kolor
-	Classic Actions	Klasyczne akcje
-	Clear All Actions	Wyczyść wszystkie akcje
-	Clear search	Wyczyść wyszukiwanie
-	Click action	Kliknięcie
-	Close the open Actions editor first	Najpierw zamknij otwarty edytor akcji
-	Collapse all	Zwiń wszystko
-	Colour lookup tables	Tablice przekształcania kolorów
-	Confirm or cancel the open action dialog first	Najpierw zatwierdź lub anuluj otwarte okno dialogowe akcji
-	Control	Ctrl
-	Default icon	Domyślna ikona
-	Delete Action	Usuń akcję
-	Delete action	Usuń akcję
-	Delete group	Usuń grupę
-	Delete step	Usuń krok
-	Delete the action "{name}"?	Usunąć akcję „{name}”?
-	Delete the group "{name}"?	Usunąć grupę „{name}”?
-	Discard	Odrzuć
-	Download	Pobierz
-	Duplicate Action	Powiel akcję
-	Duplicate action	Powiel akcję
-	Duplicate group	Powiel grupę
-	Duplicate step	Powiel krok
-	Edit Action	Edytuj akcję
-	Edit action	Edytuj akcję
-	Edit step settings	Edytuj ustawienia kroku
-	Enable step	Włącz krok
-	Expand all	Rozwiń wszystko
-	Export Action…	Eksportuj akcję…
-	Finish or cancel action playback and the pending step first	Najpierw zakończ lub anuluj odtwarzanie akcji i oczekujący krok
-	Finishing step…	Kończenie kroku…
-	Generated layer effects	Wygenerowane efekty warstwy
-	Generated styles	Wygenerowane style
-	Grey	Szary
-	Harmonize layers	Harmonizuj warstwy
-	Hue and saturation	Barwa i nasycenie
-	Import Actions…	Importuj akcje…
-	Import actions or create a new action to get started.	Zaimportuj akcje lub utwórz nową akcję, aby rozpocząć.
-	Insert Action	Wstaw akcję
-	Insert Conditional	Wstaw warunek
-	Insert Menu Item	Wstaw element menu
-	Insert Path	Wstaw ścieżkę
-	Insert Stop	Wstaw zatrzymanie
-	Insert…	Wstaw…
-	Keyboard shortcut	Skrót klawiaturowy
-	Lavender	Lawendowy
-	Layer effects	Efekty warstwy
-	Light blue	Jasnoniebieski
-	List size	Rozmiar listy
-	Magic wand	Różdżka
-	Merge layers	Scal warstwy
-	Move step down	Przesuń krok w dół
-	Move step up	Przesuń krok w górę
-	New group	Nowa grupa
-	No steps yet	Brak kroków
-	Object selection	Zaznaczanie obiektów
-	On	Wł.
-	Play Action	Odtwórz akcję
-	Play Actions	Odtwórz akcje
-	Play action	Odtwórz akcję
-	Play from selected step	Odtwórz od wybranego kroku
+# Action Stop message (#8386)
+	Message	Komunikat
+# Playback Options (#5212)
 	Playback Options…	Opcje odtwarzania…
-	Play…	Odtwórz…
-	Preview on hover	Podgląd po najechaniu
-	Record	Nagrywaj
-	Recording	Nagrywanie
-	Remove background	Usuń tło
-	Save Action	Zapisz akcję
-	Search actions	Szukaj akcji
-	Select an existing action step to play	Wybierz istniejący krok akcji do odtworzenia
-	Select subject	Zaznacz obiekt główny
-	Show grid	Pokaż siatkę
-	Show step settings	Pokaż ustawienia kroku
-	Smart removal	Inteligentne usuwanie
-	Sort & View options	Opcje sortowania i widoku
-	Start recording to build your action	Rozpocznij nagrywanie, aby utworzyć akcję
-	Steps	Kroki
-	Stored action step	Zapisany krok akcji
-	Stored settings	Zapisane ustawienia
-	Teal	Morski
-	Text	Tekst
-	Text colour	Kolor tekstu
-	The draft steps changed. Cancel this dialog and reopen the step.	Kroki wersji roboczej uległy zmianie. Anuluj to okno dialogowe i ponownie otwórz krok.
-	The dragged action changed; drag it again	Przeciągana akcja uległa zmianie; przeciągnij ją ponownie
-	The editor response does not belong to this draft	Odpowiedź edytora nie należy do tej wersji roboczej
-	There are unsaved changes. Do you want to save or discard them?	Istnieją niezapisane zmiany. Zapisać je czy odrzucić?
-	This editor page is closed	Ta strona edytora jest zamknięta
-	This step dialog belongs to another editor	To okno dialogowe kroku należy do innego edytora
-	Wait for the current action step to finish	Poczekaj na zakończenie bieżącego kroku akcji
-	You haven't created any actions	Nie utworzono jeszcze żadnych akcji
-	Yours	Twoje
+	Playback Options	Opcje odtwarzania
+	Accelerated	Przyspieszone
+	Step by Step	Krok po kroku
+	Pause For:	Wstrzymaj na:
+	Pause For	Wstrzymaj na
+	seconds	s
+	Create a single history state	Utwórz jeden stan historii
+	Generator enabled	Generator włączony
+	Move Up	Przesuń w górę
+	Move Down	Przesuń w dół
+	Grid view	Widok siatki
+	List view	Widok listy
+	On your computer	Na tym komputerze
+	New file	Nowy plik
+	Learn	Nauka
+	No recent files	Brak ostatnich plików
+	Website	Strona internetowa
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	Akcje bez grupy
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Ramka obsługuje przekształcenia afiniczne; do przekształceń perspektywicznych wybierz jej obraz
+	A frame supports affine transforms; select its image to warp it	Ramka obsługuje przekształcenia afiniczne; aby ją wypaczyć, wybierz obraz
+	Convert to Frame…	Konwertuj na ramkę…
+	Create a new custom frame	Utwórz nową ramkę niestandardową
+	Create a new polygonal frame	Utwórz nową ramkę wielokątną
+	Create a new triangular frame	Utwórz nową ramkę trójkątną
+	Fit Content to Frame	Dopasuj zawartość do ramki
+	Fit Frame to Content	Dopasuj ramkę do zawartości
+	Frame coordinates must be finite and within 600000 pixels	Współrzędne ramki muszą być skończone i mieścić się w granicach 600000 pikseli
+	Import Image…	Importuj obraz…
+	Invalid frame transform	Nieprawidłowe przekształcenie ramki
+	Invalid nested file drop	Nieprawidłowe zagnieżdżone upuszczenie pliku
+	New Frame	Nowa ramka
+	Replace Image…	Zastąp obraz…
+	The frame is locked	Ramka jest zablokowana
+	The frame is unavailable	Ramka jest niedostępna
+
+# Channels panel menu (#11451)
+	New Channel…	Nowy kanał…
+	Duplicate Channel	Duplikuj kanał
+	Delete Channel	Usuń kanał
+	New Spot Channel…	Nowy kanał kolorów dodatkowych…
+	Merge Spot Channel	Scal kanał kolorów dodatkowych
+	Channel Options…	Opcje kanału…
+	Split Channels	Podziel kanały
+	Merge Channels…	Scal kanały…
+	Specify Channels:	Określ kanały:
+	Not enough grayscale documents for this mode.	Za mało dokumentów w skali szarości dla tego trybu.
+	Pick a different document for each channel.	Wybierz inny dokument dla każdego kanału.
+	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
+	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.

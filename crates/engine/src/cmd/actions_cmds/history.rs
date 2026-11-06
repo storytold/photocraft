@@ -322,14 +322,6 @@ pub fn suspend_history(s: &mut Session) -> Option<ActionHistoryContinuation> {
     Some(ActionHistoryContinuation::capture(s))
 }
 
-/// Bind an owned streamed playback between engine calls without detaching an active nested call.
-pub fn suspend_idle_history(s: &mut Session) -> Option<ActionHistoryContinuation> {
-    if s.actions.playing != 0 {
-        return None;
-    }
-    Some(ActionHistoryContinuation::capture(s))
-}
-
 /// End a dialog scope if its command or continuation fails before playback starts.
 pub fn finish_pending_history(s: &mut Session) {
     if s.actions.playing == 0 {

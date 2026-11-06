@@ -214,38 +214,6 @@ pub struct Tokens {
 }
 
 impl Tokens {
-    /// Coloured Actions thumbnails use a white glyph on the chosen colour.
-    pub const ACTION_THUMBNAIL_GLYPH: Color32 = Color32::WHITE;
-
-    /// Swatch selection marks choose the greater WCAG contrast against the supplied fill.
-    /// Action glyphs use ACTION_THUMBNAIL_GLYPH instead.
-    pub fn action_thumbnail_ink(fill: Color32) -> Color32 {
-        let linear = |channel: u8| {
-            let value = f32::from(channel) / 255.0;
-            if value <= 0.04045 { value / 12.92 } else { ((value + 0.055) / 1.055).powf(2.4) }
-        };
-        let luminance = 0.2126 * linear(fill.r()) + 0.7152 * linear(fill.g()) + 0.0722 * linear(fill.b());
-        if (luminance + 0.05) / 0.05 >= 1.05 / (luminance + 0.05) { Color32::BLACK } else { Color32::WHITE }
-    }
-
-    /// Semantic Actions thumbnail palette in ATN colour-index order. These are application
-    /// colours, independent of stored metadata; uncoloured/unknown values use the card tokens.
-    pub fn action_swatches(&self) -> [Color32; 12] {
-        [
-            self.card,
-            Color32::from_rgb(196, 64, 64),
-            Color32::from_rgb(204, 120, 40),
-            Color32::from_rgb(196, 176, 48),
-            Color32::from_rgb(56, 140, 72),
-            Color32::from_rgb(64, 158, 216),
-            Color32::from_rgb(152, 120, 192),
-            self.text_dim,
-            Color32::from_rgb(40, 152, 152),
-            Color32::from_rgb(48, 104, 176),
-            Color32::from_rgb(192, 64, 144),
-            Color32::from_rgb(120, 72, 168),
-        ]
-    }
     /// Tool outlines need contrast on arbitrary document pixels, independently of UI theme.
     pub(crate) fn cursor_outline() -> [Color32; 2] {
         [Color32::from_black_alpha(160), Color32::from_white_alpha(235)]

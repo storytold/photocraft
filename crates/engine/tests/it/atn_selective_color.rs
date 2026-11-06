@@ -139,7 +139,7 @@ fn malformed_selective_color_params_cannot_be_silently_exported() {
     ] {
         for id in COMMANDS {
             let action = Action::new("Invalid", vec![(id.into(), params.clone())]);
-            crate::atn_export::fallback("Regression", &action);
+            assert!(atn_cmds::export("Regression", &[&action], &[], false).is_err(), "strict export accepted {id} {params}");
             let (_, skipped) = atn_cmds::export("Regression", &[&action], &[], true).unwrap();
             assert_eq!(skipped.len(), 1, "skipUnsupported must report {id} {params}");
         }

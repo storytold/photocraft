@@ -194,9 +194,8 @@ fn malformed_unknown_and_unrepresentable_descriptors_stay_whole() {
     }
 }
 
-/// Unsupported options cannot become an approximate Photoshop event: keep native JSON or explicitly omit the step.
 #[test]
-fn unsupported_native_targets_and_damaged_origins_use_exact_native_fallback() {
+fn unsupported_native_targets_and_damaged_origins_are_refused() {
     let loaded = imported(fixture("Lnr ", "Gcls", false));
     for (key, value) in [
         ("target", json!("mask")),
@@ -212,7 +211,9 @@ fn unsupported_native_targets_and_damaged_origins_use_exact_native_fallback() {
     ] {
         let mut action = loaded.actions[0].clone();
         action.steps[0].1[key] = value;
-        crate::atn_export::fallback("S", &action);
+        assert!(atn_cmds::export("S", &[&action], &[], false).is_err(), "{key}");
+        let (_, skipped) = atn_cmds::export("S", &[&action], &[], true).unwrap();
+        assert_eq!(skipped.len(), 1, "{key}");
     }
 }
 

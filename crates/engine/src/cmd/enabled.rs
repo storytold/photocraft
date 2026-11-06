@@ -88,9 +88,6 @@ pub(crate) fn is_mask_target(p: &Value) -> bool {
 }
 
 pub(super) fn can_undo(s: &Session) -> std::result::Result<(), String> {
-    if crate::actions_edit_cmds::reset_undo_available(s) {
-        return Ok(());
-    }
     s.active().filter(|d| d.history.can_undo()).map(|_| ()).ok_or_else(|| "nothing to undo".into())
 }
 

@@ -309,7 +309,7 @@ fn enum_values_map_exactly_and_unknown_descriptors_stay_kept() {
 
 /// Native defaults stay native; seeds, frozen colors, targets and lossy values are not discarded.
 #[test]
-fn exports_materialize_defaults_and_preserve_unrepresentable_native_settings() {
+fn exports_materialize_native_defaults_and_reject_unrepresentable_settings() {
     for fixture in fixtures() {
         let item = export_item(fixture.id, &json!({}), "Group D").unwrap();
         let mut expected = fixture.default.clone();
@@ -337,13 +337,7 @@ fn exports_materialize_defaults_and_preserve_unrepresentable_native_settings() {
             params[key] = value;
             let mut s = Session::new();
             s.actions.list.push(Action::new("A", vec![(fixture.id.into(), params)]));
-            let saved = saved_items(&mut s);
-            assert_eq!(saved[0].event, AtnEvent::name("photocraftCommand"), "{}/{key}", fixture.id);
-            let (bytes, skipped) = export("S", &[&s.actions.list[0]], &[], false).unwrap();
-            assert!(skipped.is_empty());
-            assert_eq!(import(&bytes).unwrap().actions[0].steps, s.actions.list[0].steps);
-            let (_, skipped) = export("S", &[&s.actions.list[0]], &[], true).unwrap();
-            assert_eq!(skipped.len(), 1, "{}/{key}", fixture.id);
+            assert!(s.execute("actions.save", json!({"action":"A"})).is_err(), "{}/{key}", fixture.id);
         }
         let mut params = fixture.defaults.clone();
         params["target"] = json!("pixels");

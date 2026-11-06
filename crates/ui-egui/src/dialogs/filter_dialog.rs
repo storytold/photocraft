@@ -1112,11 +1112,11 @@ pub(crate) fn needs_displace_map(command: &str, params: &Value) -> bool {
 /// browser the picker gives contents, not a path the filter can read: the map has to be opened
 /// as a document and picked as Map Document there. It displaces the document that asked, even
 /// when another one was activated while the picker was open.
-pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, dialog: u64, command: String, fields: Map<String, Value>) -> Result<Value, String> {
+pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, command: String, fields: Map<String, Value>) -> Result<Value, String> {
     use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
     let doc = app.active_doc_id()?;
     let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
-    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None, max_bytes: None, max_contents_bytes: None }, move |app, answer| {
+    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions: None }, move |app, answer| {
         let path = match answer {
             FileDialogAnswer::Paths(paths) => paths.into_iter().next().ok_or("no displacement map was chosen")?,
             FileDialogAnswer::Unavailable(e) => return Err(e),
@@ -1127,16 +1127,14 @@ pub(crate) fn ask_displace_map(app: &mut PhotocraftApp, dialog: u64, command: St
         };
         let mut fields = fields;
         fields.insert("mapPath".into(), json!(path));
-        crate::actions::with_step_gate_at(app, &fields, None, Some(doc), |app| {
-            app.refocus(doc)?;
-            let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
-            let result = crate::actions::run_dialog_command(app, dialog, &fields, &cmd, params);
-            if result.is_ok() {
-                remember(app, &cmd, &fields);
-                crate::actions::resume(app, &fields)?;
-            }
-            result
-        })
+        app.refocus(doc)?;
+        let (cmd, params) = crate::smart_ui::confirm_command(app, &fields, command, params_of(&fields))?;
+        let result = crate::actions::run_step_dialog(app, &fields, &cmd, params);
+        if result.is_ok() {
+            remember(app, &cmd, &fields);
+            let _ = crate::actions::resume(app, &fields);
+        }
+        result
     })
 }
 

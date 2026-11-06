@@ -125,7 +125,7 @@ fn native_default_is_written_explicitly_and_keeps_its_behavior() {
     }
 }
 
-/// Absent settings retain menu intent; present empty or malformed descriptors stay unsupported.
+/// Only an absent descriptor is menu intent. Empty or invalid descriptors remain kept steps.
 #[test]
 fn malformed_or_empty_steps_are_kept_without_becoming_resizes() {
     for event in ["ImgS", "imageSize"] {
@@ -143,25 +143,20 @@ fn malformed_or_empty_steps_are_kept_without_becoming_resizes() {
             let original = atn::parse(&source).unwrap();
             let mut s = Session::new();
             let loaded = load(&mut s, &source);
+            let (step, params) = &s.actions.list[0].steps[0];
             if original.actions[0].items[0].descriptor.is_none() {
                 assert_eq!(loaded["unsupported"], json!([]));
-                let kind = if event == "ImgS" { "code" } else { "name" };
-                assert_eq!(
-                    s.actions.list[0].steps,
-                    vec![(
-                        atn_cmds::MENU_ITEM.into(),
-                        json!({"id":"image.imageSize","eventKind":kind,
-                    "_atnEvent":{"event":event,"eventKind":kind,"name":"Image Size","dictionary":photocraft_engine::paint::tile::b64_encode(b"Image Size")}})
-                    )]
-                );
+                assert_eq!(step, atn_cmds::MENU_ITEM);
+                assert_eq!(params["id"], "image.imageSize");
+                assert_eq!(params["eventKind"], if event == "ImgS" { "code" } else { "name" });
             } else {
-                assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{event}: {:?}", original.actions[0].items[0].descriptor);
-                assert_eq!(s.actions.list[0].steps.len(), 1);
-                assert_eq!(s.actions.list[0].steps[0].0, atn_cmds::PHOTOSHOP_STEP);
+                assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1);
+                assert_eq!(step, atn_cmds::PHOTOSHOP_STEP);
             }
             let saved = atn::parse(&save(&mut s)).unwrap();
             assert_eq!(saved.actions[0].items[0].descriptor, original.actions[0].items[0].descriptor);
             assert_eq!(saved.actions[0].items[0].event, original.actions[0].items[0].event);
+            assert_eq!(saved.actions[0].items[0].dictionary, original.actions[0].items[0].dictionary);
         }
     }
 }

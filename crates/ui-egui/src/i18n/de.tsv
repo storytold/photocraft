@@ -1923,6 +1923,7 @@
 	Soften	Erweichen
 	Source	Quelle
 	Source: set	Quelle: gesetzt
+	Source: {name}	Quelle: {name}
 	Sponge Tool	Schwamm-Werkzeug
 	Spot Healing Brush Tool	Punktkorrektur-Pinsel-Werkzeug
 	Spread	Spreizung
@@ -3297,6 +3298,8 @@ curves	Smooth	Glätten
 	Step {step} is waiting for its dialog	Schritt {step} wartet auf seinen Dialog
 @plural	{n} action|{n} actions	{n} Aktion|{n} Aktionen
 	Background (Default)	Hintergrund (Standard)
+	Background (default)	Hintergrund (Standard)
+	Transparent (default)	Transparent (Standard)
 	Content-Aware Fill	Inhaltsbasiert füllen
 	Include All Subfolders	Alle Unterordner einschließen
 	Auto Add/Delete	Autom. hinzuf./löschen
@@ -3350,6 +3353,7 @@ curves	Smooth	Glätten
 	Automatically Check for Updates	Automatisch nach Updates suchen
 	Paints from the History panel's source state	Malt aus dem Quellzustand des Protokollbedienfelds
 	Sets the source for the history brush	Legt die Quelle für den Protokollpinsel fest
+	The History Brush source was deleted: set a new source in the History panel	Die Quelle des Protokollpinsels wurde gelöscht: Legen Sie eine neue Quelle im Protokollbedienfeld fest
 	Highlight Mode	Lichtermodus
 	Highlight Color	Lichterfarbe
 	Highlight Opacity	Lichterdeckkraft
@@ -3414,6 +3418,7 @@ curves	Smooth	Glätten
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} ist vom System reserviert und kann nicht zugewiesen werden.
 	Low-Latency Drawing (vsync off, applies at next launch)	Zeichnen mit geringer Latenz (ohne VSync, gilt ab dem nächsten Start)
 	Reference point location	Position des Referenzpunkts
+	Toggle reference point	Referenzpunkt ein-/ausblenden
 	Free Transform is still being applied; try again when it has finished.	Frei transformieren wird noch angewendet; versuchen Sie es erneut, wenn es fertig ist.
 	The transform couldn't be applied.	Die Transformation konnte nicht angewendet werden.
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Die Ebenen brauchen {needed} GPU-Speicher; das Budget lässt ihnen {budget}.
@@ -3524,6 +3529,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ungültige Zahleneingabe. Es ist eine ganze Zahl zwischen {min}% und {max}% erforderlich. Der vorherige Wert wurde eingesetzt.
 	Clear Selection	Auswahl löschen
 	Color Aware	Farbbezogen
@@ -3552,109 +3559,58 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	Die Aktion wurde gespeichert, die Bestätigungseinstellung konnte jedoch nicht gespeichert werden: {error}
-	Add a brief description for this action…	Fügen Sie eine kurze Beschreibung dieser Aktion hinzu…
-	Allow Tool Recording	Werkzeugaufzeichnung zulassen
-	Answer the open Actions editor question first	Beantworten Sie zuerst die offene Frage im Aktionseditor
-	Apply to background	Auf Hintergrund anwenden
-	Apply to subject	Auf Motiv anwenden
-	Back	Zurück
-	Black and white	Schwarzweiß
-	Cancel and continue editing	Abbrechen und weiter bearbeiten
-	Choose color	Farbe wählen
-	Choose icon	Symbol wählen
-	Choose icon and color	Symbol und Farbe wählen
-	Classic Actions	Klassische Aktionen
-	Clear All Actions	Alle Aktionen löschen
-	Clear search	Suche löschen
-	Click action	Klickaktion
-	Close the open Actions editor first	Schließen Sie zuerst den geöffneten Aktionseditor
-	Collapse all	Alle einklappen
-	Colour lookup tables	Farbzuordnungstabellen
-	Confirm or cancel the open action dialog first	Bestätigen Sie zuerst den geöffneten Aktionsdialog oder brechen Sie ihn ab
-	Control	Ctrl
-	Default icon	Standardsymbol
-	Delete Action	Aktion löschen
-	Delete action	Aktion löschen
-	Delete group	Gruppe löschen
-	Delete step	Schritt löschen
-	Delete the action "{name}"?	Aktion „{name}“ löschen?
-	Delete the group "{name}"?	Gruppe „{name}“ löschen?
-	Discard	Verwerfen
-	Download	Herunterladen
-	Duplicate Action	Aktion duplizieren
-	Duplicate action	Aktion duplizieren
-	Duplicate group	Gruppe duplizieren
-	Duplicate step	Schritt duplizieren
-	Edit Action	Aktion bearbeiten
-	Edit action	Aktion bearbeiten
-	Edit step settings	Schritteinstellungen bearbeiten
-	Enable step	Schritt aktivieren
-	Expand all	Alle ausklappen
-	Export Action…	Aktion exportieren…
-	Finish or cancel action playback and the pending step first	Schließen Sie zuerst die Aktionswiedergabe und den ausstehenden Schritt ab oder brechen Sie beides ab
-	Finishing step…	Schritt wird abgeschlossen…
-	Generated layer effects	Erzeugte Ebeneneffekte
-	Generated styles	Erzeugte Stile
-	Grey	Grau
-	Harmonize layers	Ebenen harmonisieren
-	Hue and saturation	Farbton und Sättigung
-	Import Actions…	Aktionen importieren…
-	Import actions or create a new action to get started.	Importieren Sie Aktionen oder erstellen Sie eine neue Aktion, um zu beginnen.
-	Insert Action	Aktion einfügen
-	Insert Conditional	Bedingung einfügen
-	Insert Menu Item	Menüeintrag einfügen
-	Insert Path	Pfad einfügen
-	Insert Stop	Stopp einfügen
-	Insert…	Einfügen…
-	Keyboard shortcut	Tastenkombination
-	Lavender	Lavendel
-	Layer effects	Ebeneneffekte
-	Light blue	Hellblau
-	List size	Listengröße
-	Magic wand	Zauberstab
-	Merge layers	Ebenen zusammenfügen
-	Move step down	Schritt nach unten verschieben
-	Move step up	Schritt nach oben verschieben
-	New group	Neue Gruppe
-	No steps yet	Noch keine Schritte
-	Object selection	Objektauswahl
-	On	Ein
-	Play Action	Aktion wiedergeben
-	Play Actions	Aktionen wiedergeben
-	Play action	Aktion wiedergeben
-	Play from selected step	Ab ausgewähltem Schritt wiedergeben
+# Action Stop message (#8386)
+	Message	Meldung
+# Playback Options (#5212)
 	Playback Options…	Wiedergabeoptionen…
-	Play…	Wiedergeben…
-	Preview on hover	Vorschau beim Darüberfahren
-	Record	Aufzeichnen
-	Recording	Aufzeichnung
-	Remove background	Hintergrund entfernen
-	Save Action	Aktion speichern
-	Search actions	Aktionen suchen
-	Select an existing action step to play	Wählen Sie einen vorhandenen Aktionsschritt zur Wiedergabe
-	Select subject	Motiv auswählen
-	Show grid	Raster einblenden
-	Show step settings	Schritteinstellungen anzeigen
-	Smart removal	Intelligentes Entfernen
-	Sort & View options	Sortier- und Ansichtsoptionen
-	Start recording to build your action	Starten Sie die Aufzeichnung, um Ihre Aktion zu erstellen
-	Steps	Schritte
-	Stored action step	Gespeicherter Aktionsschritt
-	Stored settings	Gespeicherte Einstellungen
-	Teal	Blaugrün
-	Text	Text
-	Text colour	Textfarbe
-	The draft steps changed. Cancel this dialog and reopen the step.	Die Entwurfsschritte wurden geändert. Brechen Sie diesen Dialog ab und öffnen Sie den Schritt erneut.
-	The dragged action changed; drag it again	Die gezogene Aktion wurde geändert; ziehen Sie sie erneut
-	The editor response does not belong to this draft	Die Antwort des Editors gehört nicht zu diesem Entwurf
-	There are unsaved changes. Do you want to save or discard them?	Es gibt ungespeicherte Änderungen. Möchten Sie sie speichern oder verwerfen?
-	This editor page is closed	Diese Editorseite ist geschlossen
-	This step dialog belongs to another editor	Dieser Schrittdialog gehört zu einem anderen Editor
-	Wait for the current action step to finish	Warten Sie, bis der aktuelle Aktionsschritt abgeschlossen ist
-	You haven't created any actions	Sie haben noch keine Aktionen erstellt
-	Yours	Eigene
+	Playback Options	Wiedergabeoptionen
+	Accelerated	Beschleunigt
+	Step by Step	Schrittweise
+	Pause For:	Pause für:
+	Pause For	Pause für
+	seconds	Sekunden
+	Create a single history state	Einen einzigen Protokollobjekt-Status erstellen
+	Generator enabled	Generator aktiviert
+	This Layer:	Diese Ebene:
+	Move Up	Nach oben
+	Move Down	Nach unten
+	On your computer	Auf Ihrem Computer
+	New file	Neue Datei
+	Learn	Lernen
+	No recent files	Keine zuletzt verwendeten Dateien
+	Website	Website
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	Nicht gruppierte Aktionen
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Ein Rahmen unterstützt affine Transformationen; für perspektivische Transformationen sein Bild auswählen
+	A frame supports affine transforms; select its image to warp it	Ein Rahmen unterstützt affine Transformationen; zum Verformen sein Bild auswählen
+	Convert to Frame…	In Rahmen konvertieren…
+	Create a new custom frame	Neuen benutzerdefinierten Rahmen erstellen
+	Create a new polygonal frame	Neuen polygonalen Rahmen erstellen
+	Create a new triangular frame	Neuen dreieckigen Rahmen erstellen
+	Fit Content to Frame	Inhalt an Rahmen anpassen
+	Fit Frame to Content	Rahmen an Inhalt anpassen
+	Frame coordinates must be finite and within 600000 pixels	Rahmenkoordinaten müssen endlich sein und innerhalb von 600000 Pixeln liegen
+	Import Image…	Bild importieren…
+	Invalid frame transform	Ungültige Rahmentransformation
+	Invalid nested file drop	Ungültiges verschachteltes Ablegen einer Datei
+	New Frame	Neuer Rahmen
+	Replace Image…	Bild ersetzen…
+	The frame is locked	Der Rahmen ist gesperrt
+	The frame is unavailable	Der Rahmen ist nicht verfügbar
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	Neuer Kanal…
+	Duplicate Channel	Kanal duplizieren
+	Delete Channel	Kanal löschen
+	New Spot Channel…	Neuer Schmuckfarbenkanal…
+	Merge Spot Channel	Schmuckfarbenkanal zusammenfügen
+	Channel Options…	Kanaloptionen…
+	Split Channels	Kanäle teilen
+	Merge Channels…	Kanäle zusammenfügen…
+	Specify Channels:	Kanäle angeben:
+	Not enough grayscale documents for this mode.	Nicht genug Graustufen-Dokumente für diesen Modus.
+	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
+	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
+	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.

@@ -17,13 +17,7 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
-        let discarded = (id == "actions.editor.discard").then(|| params.get("draft").and_then(Value::as_u64)).flatten();
         let result = self.run_command(id, params);
-        if result.is_ok()
-            && let Some(draft) = discarded
-        {
-            actions::discarded(self, draft);
-        }
         if gate.is_some() {
             self.session.authorize = None;
         }
@@ -69,16 +63,22 @@ impl PhotocraftApp {
             self.session.precheck(id, &params).map_err(|e| e.to_string())?;
             transform_tool::commit(self);
             if transform_tool::committing(self).is_some() {
-                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                // A click stays a click: it runs when the commit lands (#9974). Only a click in the
+                // committing document, one at a time: a script, a control request or an action step
+                // needs its answer now, and a click in another tab wasn't meant for this one.
+                let committing_here = self.transform_preview.as_ref().is_some_and(|pv| self.session.active().is_some_and(|st| st.doc.id == pv.doc.id));
+                let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1;
+                if !click || !committing_here || self.after_transform_commit.is_some() {
+                    return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                }
+                self.after_transform_commit = Some((id.to_string(), params));
+                return Ok(Value::Null);
             }
             if self.ui.transform.is_some() {
                 return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
             }
         }
         actions::suspended_guard(self, id)?;
-        if let Some(result) = actions::layout_command(self, id) {
-            return result;
-        }
         if let Some(result) = panel_docking::command(self, id, &params) {
             return result;
         }
@@ -355,6 +355,7 @@ impl PhotocraftApp {
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
+        self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
         // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
         self.streams.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;

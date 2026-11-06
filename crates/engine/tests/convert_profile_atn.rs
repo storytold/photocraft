@@ -1,8 +1,5 @@
 //! Recorded-shaped Convert to Profile flags survive ATN load, save and native playback.
 
-#[path = "support/atn_export.rs"]
-mod atn_export;
-
 use std::sync::Arc;
 
 use photocraft_cms::Builtin;
@@ -224,7 +221,7 @@ fn defaults_are_explicit_false_and_assign_profile_is_unchanged() {
 
 /// Unrepresented radio values and malformed booleans remain complete kept Photoshop steps.
 #[test]
-fn unsupported_values_are_preserved_and_invalid_native_values_use_native_events() {
+fn unsupported_values_are_preserved_and_invalid_native_values_refuse_export() {
     let mut descriptors = Vec::new();
     for value in [D::Integer(3), D::Integer(4), D::Integer(2), D::Integer(999), D::Boolean(true), D::Double(2.0)] {
         descriptors.push(descriptor().with("sdwM", value));
@@ -249,11 +246,11 @@ fn unsupported_values_are_preserved_and_invalid_native_values_use_native_events(
             let mut params = json!({"profile": "srgb"});
             params[key] = value;
             let action = Action::new("Invalid", vec![("edit.convertToProfile".into(), params)]);
-            crate::atn_export::fallback("Profile", &action);
+            assert!(atn_cmds::export("Profile", &[&action], &[], false).is_err());
         }
     }
     let action = Action::new("Invalid radio null", vec![("edit.convertToProfile".into(), json!({"profile": "srgb", "sdwM": null}))]);
-    crate::atn_export::fallback("Profile", &action);
+    assert!(atn_cmds::export("Profile", &[&action], &[], false).is_err());
 }
 
 /// A step recorded by the reference application (`sdwM` -1, dither on) maps and saves back as recorded.

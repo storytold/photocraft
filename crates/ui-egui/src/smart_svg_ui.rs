@@ -226,8 +226,6 @@ fn choose_program(app: &mut PhotocraftApp) -> Result<Value, String> {
             multiple: false,
             initial_dir: None,
             extensions: if cfg!(windows) { Some(vec!["exe".into()]) } else { None },
-            max_bytes: None,
-            max_contents_bytes: None,
         },
         move |app, answer| {
             let crate::file_dialog::FileDialogAnswer::Paths(paths) = answer else { return Err("Choose a local editor executable".into()) };

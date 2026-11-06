@@ -38,7 +38,7 @@
 //! The pattern library (imported `.pat` and defined patterns, not the built-ins) lives there too:
 //! `patterns.json` plus one `.pat` file per pattern, see [`patterns`].
 //!
-//! The Actions library (`actions.atn`, see [`crate::actions_cmds`]) lives in the same directory.
+//! The Actions list (`actions.json`, see [`crate::actions_cmds`]) lives in the same directory.
 //! A missing file is an empty list. A corrupt or oversized file is skipped with a warning.
 //! Headless sessions have no store, so their actions stay in memory.
 //!
@@ -74,11 +74,8 @@ pub const MAX_GROUP_BYTES: u64 = 16 << 20;
 pub const MAX_TIP_BYTES: u64 = 64 << 20;
 /// Largest index file read.
 pub const MAX_INDEX_BYTES: u64 = 4 << 20;
-/// The sole durable Actions library.
-pub const ACTIONS_FILE: &str = "actions.atn";
-/// Read only as migration input, never written by normal synchronization.
-pub const LEGACY_ACTIONS_FILE: &str = "actions.json";
-pub const MIGRATED_ACTIONS_FILE: &str = "actions.json.migrated";
+/// The Actions list (`actions.json`).
+pub const ACTIONS_FILE: &str = "actions.json";
 /// Largest Actions file read or written.
 pub const MAX_ACTIONS_BYTES: u64 = 16 << 20;
 /// The user's pattern library (`.pat`).
@@ -100,14 +97,6 @@ const GROUP_FORMAT: &str = "photocraft-brush-group";
 const TIP_MAGIC: &[u8; 6] = b"PCTIP1";
 const TIP_HEADER: usize = 6 + 1 + 4 + 4;
 
-/// Native completion, asynchronous staging, and post-publication retirement are distinct states.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ActionsMigration {
-    Stored,
-    Staged,
-    PublishedRetirementPending(String),
-}
-
 /// Where the store's files live. File names are relative (`name.pcbrushes`, `tips/x.pctip`).
 pub trait PresetBackend: Send {
     /// Every file in the store with its size in bytes (the top level plus [`TIPS_DIR`]).
@@ -119,12 +108,6 @@ pub trait PresetBackend: Send {
     fn write(&self, name: &str, bytes: &[u8]) -> Result<(), String>;
     /// Delete a file; deleting a missing file succeeds.
     fn remove(&self, name: &str) -> Result<(), String>;
-    /// Publish ATN without replacing an existing file, then retain the exact legacy input as backup.
-    /// `published` means ATN was already read and validated; it must still match `atn`.
-    /// A browser implementation stages the three names together and acknowledges its transaction.
-    fn migrate_actions(&self, _legacy: &[u8], _atn: &[u8], _published: bool) -> Result<ActionsMigration, String> {
-        Err("this preset backend cannot safely migrate Actions".into())
-    }
 }
 
 /// Store file names are generated (`[A-Za-z0-9 _.-]`, optionally under `tips/`); anything else
@@ -165,41 +148,10 @@ impl PresetBackend for MemBackend {
         self.lock()?.insert(name.to_string(), bytes.to_vec());
         Ok(())
     }
-    fn migrate_actions(&self, legacy: &[u8], atn: &[u8], published: bool) -> Result<ActionsMigration, String> {
-        let mut files = self.lock()?;
-        check_migration(&files, legacy, atn, published)?;
-        files.insert(ACTIONS_FILE.into(), atn.to_vec());
-        if files.contains_key(MIGRATED_ACTIONS_FILE) {
-            return Ok(ActionsMigration::PublishedRetirementPending("legacy backup already exists; both original and backup were retained".into()));
-        }
-        files.insert(MIGRATED_ACTIONS_FILE.into(), legacy.to_vec());
-        files.remove(LEGACY_ACTIONS_FILE);
-        Ok(ActionsMigration::Stored)
-    }
     fn remove(&self, name: &str) -> Result<(), String> {
         self.lock()?.remove(name);
         Ok(())
     }
-}
-
-fn check_migration(files: &std::collections::BTreeMap<String, Vec<u8>>, legacy: &[u8], atn: &[u8], published: bool) -> Result<(), String> {
-    if legacy.len() as u64 > MAX_ACTIONS_BYTES || atn.len() as u64 > MAX_ACTIONS_BYTES {
-        return Err("Actions migration exceeds file limit".into());
-    }
-    if files.get(LEGACY_ACTIONS_FILE).map(Vec::as_slice) != Some(legacy) {
-        return Err("legacy Actions input changed before migration".into());
-    }
-    match files.get(ACTIONS_FILE) {
-        Some(bytes) if published && bytes == atn => {}
-        None if !published => {}
-        _ => return Err("Actions ATN changed before migration".into()),
-    }
-    let total = files.values().try_fold(0u64, |total, value| total.checked_add(value.len() as u64)).ok_or("store size overflow")?;
-    let extra = if published { 0 } else { atn.len() as u64 };
-    if total.checked_add(extra).is_none_or(|total| total > MAX_STORE_BYTES) {
-        return Err("preset store is full".into());
-    }
-    Ok(())
 }
 
 /// A store directory on disk (desktop).
@@ -271,48 +223,6 @@ impl PresetBackend for DirBackend {
         let dir = path.parent().ok_or_else(|| format!("{name}: no parent directory"))?;
         std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         photocraft_format::atomic_write(&path, bytes).map_err(|e| format!("{name}: {e}"))
-    }
-    fn migrate_actions(&self, legacy: &[u8], atn: &[u8], published: bool) -> Result<ActionsMigration, String> {
-        use photocraft_format::atomic::{AtomicFs, RealFs};
-        if legacy.len() as u64 > MAX_ACTIONS_BYTES || atn.len() as u64 > MAX_ACTIONS_BYTES {
-            return Err("Actions migration exceeds file limit".into());
-        }
-        if self.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES)? != legacy {
-            return Err("legacy Actions input changed before migration".into());
-        }
-        let total = self.list()?.iter().try_fold(0u64, |total, (_, size)| total.checked_add(*size)).ok_or("store size overflow")?;
-        if total.checked_add(if published { 0 } else { atn.len() as u64 }).is_none_or(|total| total > MAX_STORE_BYTES) {
-            return Err("preset store is full".into());
-        }
-        if published {
-            if self.read(ACTIONS_FILE, MAX_ACTIONS_BYTES)? != atn {
-                return Err("Actions ATN changed before legacy retirement".into());
-            }
-            // A previous process may have published ATN but failed its directory flush.
-            if let Err(error) = RealFs.sync_dir(&self.root) {
-                return Ok(ActionsMigration::PublishedRetirementPending(error.to_string()));
-            }
-        } else {
-            std::fs::create_dir_all(&self.root).map_err(|error| error.to_string())?;
-            if let Err(error) = photocraft_format::write_noreplace(&self.path(ACTIONS_FILE)?, atn) {
-                return if error.published { Ok(ActionsMigration::PublishedRetirementPending(error.to_string())) } else { Err(error.to_string()) };
-            }
-        }
-        // Recheck the exact source after publication. Never delete or overwrite either legacy name.
-        let retirement = (|| -> Result<(), String> {
-            if self.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES)? != legacy {
-                return Err("legacy Actions input changed after ATN publication".into());
-            }
-            photocraft_format::rename_noreplace(&self.path(LEGACY_ACTIONS_FILE)?, &self.path(MIGRATED_ACTIONS_FILE)?).map_err(|error| error.to_string())?;
-            if self.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES)? != legacy {
-                return Err("legacy renamed, but retained bytes changed; all copies preserved for recovery".into());
-            }
-            RealFs.sync_dir(&self.root).map_err(|error| format!("legacy renamed; directory durability unconfirmed: {error}"))
-        })();
-        Ok(match retirement {
-            Ok(()) => ActionsMigration::Stored,
-            Err(error) => ActionsMigration::PublishedRetirementPending(error),
-        })
     }
     fn remove(&self, name: &str) -> Result<(), String> {
         match std::fs::remove_file(self.path(name)?) {
@@ -654,8 +564,7 @@ pub struct PresetStore {
     index: Option<IndexFile>,
     /// [`crate::actions_cmds::ActionState::rev`] last written (or loaded).
     actions_rev: u64,
-    actions_keys: Vec<(String, String)>,
-    /// An existing library failed to load or migrate; preserve it on disk.
+    /// `actions.json` exists but failed to load: left on disk untouched, so it is never written.
     actions_skipped: bool,
     /// The pattern files and index (`patterns.json`).
     patterns: patterns::PatternFiles,
@@ -678,40 +587,10 @@ pub struct Opened {
     pub order: Vec<String>,
     /// Files that were skipped (corrupt, oversized, missing tips).
     pub warnings: Vec<String>,
-    /// Complete typed Actions load, including physical rows and protected failures.
-    pub actions: LoadedActions,
+    /// Recorded actions (`actions.json`). Empty when the file is missing or unreadable.
+    pub actions: Vec<crate::actions_cmds::Action>,
     /// Imported and defined patterns (`patterns.json`), in library order; large ones as previews.
     pub patterns: Vec<patterns::Loaded>,
-}
-
-/// Missing, complete and unreadable inputs must not collapse into the same empty list.
-#[derive(Clone, Debug)]
-pub enum LoadedActions {
-    Missing,
-    Loaded(crate::actions_cmds::ActionState),
-    Migrated(crate::actions_cmds::ActionState),
-    MigrationBlocked(crate::actions_cmds::ActionState),
-    Failed,
-}
-impl LoadedActions {
-    fn writable(&self) -> bool {
-        matches!(self, Self::Missing | Self::Loaded(_) | Self::Migrated(_))
-    }
-    fn into_state(self) -> Option<crate::actions_cmds::ActionState> {
-        match self {
-            Self::Loaded(state) | Self::Migrated(state) | Self::MigrationBlocked(state) => Some(state),
-            _ => None,
-        }
-    }
-}
-impl std::ops::Deref for LoadedActions {
-    type Target = [crate::actions_cmds::Action];
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Loaded(state) | Self::Migrated(state) | Self::MigrationBlocked(state) => &state.list,
-            _ => &[],
-        }
-    }
 }
 
 /// Load a store (any thread; the desktop app does this in the background at start).
@@ -785,8 +664,9 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
     }
     let (tiles, regenerated) = load_tiles(backend.as_ref(), &wanted, &tip_sizes, &info, &mut warnings);
 
-    let actions = load_actions(backend.as_ref(), &mut warnings);
-    let actions_skipped = !actions.writable();
+    let loaded_actions = load_actions(backend.as_ref(), &mut warnings);
+    let actions_skipped = loaded_actions.is_none();
+    let actions = loaded_actions.unwrap_or_default();
     let (patterns, pattern_files) = patterns::load(backend.as_ref(), &mut warnings);
     let mut store = PresetStore {
         backend,
@@ -796,7 +676,6 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
         tips: HashMap::new(),
         index: None,
         actions_rev: 0,
-        actions_keys: Vec::new(),
         actions_skipped,
         patterns: pattern_files,
         warnings: Vec::new(),
@@ -860,82 +739,27 @@ pub fn open(backend: Box<dyn PresetBackend>) -> Opened {
     Opened { store, presets, hidden_builtins, order, warnings, actions, patterns }
 }
 
-/// Prefer ATN unconditionally. Only absence admits the one-time legacy JSON reader.
-fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> LoadedActions {
-    use crate::actions_cmds::{ActionState, library};
-    #[derive(serde::Deserialize)]
-    struct LegacyActionsFile {
-        version: u32,
-        actions: Vec<crate::actions_cmds::Action>,
-    }
-    let fail = |warnings: &mut Vec<String>, name: &str, error: String| {
-        warnings.push(format!("actions: {name} skipped: {error}"));
-        LoadedActions::Failed
+/// `actions.json`: a missing file is an empty list. Anything else unreadable is a warning.
+/// The saved actions; `None` when `actions.json` exists but could not be loaded.
+fn load_actions(backend: &dyn PresetBackend, warnings: &mut Vec<String>) -> Option<Vec<crate::actions_cmds::Action>> {
+    let bytes = match backend.read(ACTIONS_FILE, MAX_ACTIONS_BYTES) {
+        Ok(b) => b,
+        Err(e) if missing_file(&e) => return Some(Vec::new()),
+        Err(e) => {
+            warnings.push(format!("actions: {ACTIONS_FILE} skipped: {e}"));
+            return None;
+        }
     };
-    match backend.read(ACTIONS_FILE, MAX_ACTIONS_BYTES) {
-        Ok(bytes) => {
-            let state = match library::decode(&bytes) {
-                Ok(state) => state,
-                Err(error) => return fail(warnings, ACTIONS_FILE, error),
-            };
-            if let Some(origin) = &state.library.legacy {
-                match backend.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES) {
-                    Ok(legacy) if origin.matches(&legacy) => match backend.migrate_actions(&legacy, &bytes, true) {
-                        Ok(ActionsMigration::PublishedRetirementPending(error)) | Err(error) => {
-                            warnings.push(format!("actions: ATN loaded; legacy retirement pending: {error}"))
-                        }
-                        _ => {}
-                    },
-                    Ok(_) => warnings.push("actions: ATN loaded; differing legacy JSON retained unchanged".into()),
-                    Err(error) if missing_file(&error) => match backend.read(MIGRATED_ACTIONS_FILE, MAX_ACTIONS_BYTES) {
-                        Ok(backup) if origin.matches(&backup) => {}
-                        Ok(_) => warnings.push("actions: ATN loaded; retained legacy backup does not match its origin".into()),
-                        Err(error) => warnings.push(format!("actions: ATN loaded; legacy recovery copy unavailable: {error}")),
-                    },
-                    Err(error) => warnings.push(format!("actions: ATN loaded; legacy retirement pending: {error}")),
-                }
-            }
-            LoadedActions::Loaded(state)
+    match serde_json::from_slice::<crate::actions_cmds::ActionsFile>(&bytes) {
+        Ok(file) if file.version == 1 => Some(file.actions),
+        Ok(file) => {
+            warnings.push(format!("actions: {ACTIONS_FILE} skipped: unsupported version {}", file.version));
+            None
         }
-        Err(error) if missing_file(&error) => {
-            let legacy = match backend.read(LEGACY_ACTIONS_FILE, MAX_ACTIONS_BYTES) {
-                Ok(bytes) => bytes,
-                Err(error) if missing_file(&error) => return LoadedActions::Missing,
-                Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error),
-            };
-            let file: LegacyActionsFile = match serde_json::from_slice(&legacy) {
-                Ok(file) => file,
-                Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error.to_string()),
-            };
-            if file.version != 1 {
-                return fail(warnings, LEGACY_ACTIONS_FILE, format!("unsupported version {}", file.version));
-            }
-            let mut state = ActionState { list: file.actions, ..Default::default() };
-            state.library.legacy = match library::LegacyOrigin::new(&legacy) {
-                Ok(origin) => Some(origin),
-                Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error),
-            };
-            let bytes = match library::encode(&state, &[]) {
-                Ok(bytes) => bytes,
-                Err(error) => return fail(warnings, LEGACY_ACTIONS_FILE, error),
-            };
-            match backend.migrate_actions(&legacy, &bytes, false) {
-                Ok(status) => {
-                    if let ActionsMigration::PublishedRetirementPending(error) = status {
-                        warnings.push(format!("actions: ATN published; legacy retirement pending: {error}"));
-                    }
-                    match library::decode(&bytes) {
-                        Ok(state) => LoadedActions::Migrated(state),
-                        Err(error) => fail(warnings, ACTIONS_FILE, error),
-                    }
-                }
-                Err(error) => {
-                    warnings.push(format!("actions: legacy library loaded in memory; migration blocked: {error}"));
-                    LoadedActions::MigrationBlocked(state)
-                }
-            }
+        Err(e) => {
+            warnings.push(format!("actions: {ACTIONS_FILE} skipped: {e}"));
+            None
         }
-        Err(error) => fail(warnings, ACTIONS_FILE, error),
     }
 }
 
@@ -1267,59 +1091,37 @@ impl PresetStore {
         Ok(p)
     }
 
-    /// Persist the complete library, including physical empty rows and shortcut-only header edits.
-    pub fn sync_actions(&mut self, state: &crate::actions_cmds::ActionState, keys: &[(String, String)]) {
-        if self.actions_rev == state.rev && self.actions_keys == keys {
+    /// Write the Actions list when `rev` differs from the last load or write.
+    /// An oversized list is warned once and not retried. An I/O error is warned and retried
+    /// on the next command.
+    pub fn sync_actions(&mut self, list: &[crate::actions_cmds::Action], rev: u64) {
+        if self.actions_rev == rev {
             return;
         }
         if self.actions_skipped {
-            self.warnings.push("Couldn't save actions: the existing library could not be safely loaded or migrated, so it was left unchanged".into());
-            self.actions_rev = state.rev;
-            self.actions_keys = keys.to_vec();
+            self.warnings.push(format!("Couldn't save actions: {ACTIONS_FILE} could not be read, so it was left unchanged"));
+            self.actions_rev = rev;
             return;
         }
-        let bytes = match crate::actions_cmds::library::encode(state, keys) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                self.warnings.push(format!("Couldn't save actions: {error}"));
-                self.actions_rev = state.rev;
-                self.actions_keys = keys.to_vec();
+        let file = crate::actions_cmds::ActionsFile { version: 1, actions: list.to_vec() };
+        let bytes = match serde_json::to_vec_pretty(&file) {
+            Ok(b) => b,
+            Err(e) => {
+                self.warnings.push(format!("Couldn't save actions: {e}"));
+                self.actions_rev = rev;
                 return;
             }
         };
-        let total = self.backend.list().and_then(|files| {
-            files
-                .into_iter()
-                .filter(|(name, _)| name != ACTIONS_FILE)
-                .try_fold(bytes.len() as u64, |total, (_, size)| total.checked_add(size).ok_or_else(|| "store size overflow".to_string()))
-        });
-        match total {
-            Ok(total) if total <= MAX_STORE_BYTES => {}
-            Ok(_) => {
-                self.warnings.push("Couldn't save actions: preset store is full".into());
-                return;
-            }
-            Err(error) => {
-                self.warnings.push(format!("Couldn't save actions: {error}"));
-                return;
-            }
+        if bytes.len() as u64 > MAX_ACTIONS_BYTES {
+            self.warnings.push(format!("actions: the action list is too large to save ({} MB limit)", MAX_ACTIONS_BYTES >> 20));
+            self.actions_rev = rev;
+            return;
         }
         match self.backend.write(ACTIONS_FILE, &bytes) {
-            Ok(()) => {
-                self.actions_rev = state.rev;
-                self.actions_keys = keys.to_vec();
-            }
-            Err(error) => self.warnings.push(format!("Couldn't save actions: {error}")),
+            Ok(()) => self.actions_rev = rev,
+            Err(e) => self.warnings.push(format!("Couldn't save actions: {e}")),
         }
     }
-}
-
-fn action_shortcuts(prefs: &crate::prefs::Preferences) -> Vec<(String, String)> {
-    prefs
-        .shortcuts
-        .iter()
-        .filter_map(|(key, value)| key.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX).map(|name| (name.to_string(), value.clone())))
-        .collect()
 }
 
 fn builtin_names() -> &'static [String] {
@@ -1377,35 +1179,21 @@ impl Session {
             lib.sort_by_key(|p| pos.get(&p.name.to_lowercase()).copied().unwrap_or(usize::MAX));
         }
         self.preset_store = Some(store);
-        let migrating = matches!(disk, LoadedActions::Migrated(_) | LoadedActions::MigrationBlocked(_));
-        if let Some(disk) = disk.into_state() {
-            let keys: HashMap<_, _> = crate::actions_cmds::library::function_keys(&disk).into_iter().collect();
-            let names: HashSet<_> = disk.list.iter().map(|action| action.name.clone()).collect();
-            let pristine = self.actions.rev == 0 && self.actions.list.is_empty() && self.actions.sets.is_empty();
-            crate::actions_cmds::library::attach(&mut self.actions, disk);
-            if !migrating {
-                // An existing ATN owns its function-key headers. Stale preference bindings
-                // must not silently rewrite an untouched library on attachment.
-                for name in names {
-                    if self.actions.list.iter().filter(|action| action.name == name).count() == 1 {
-                        self.edit_prefs(|prefs| {
-                            let command = format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX);
-                            if let Some(key) = keys.get(&name) {
-                                prefs.shortcuts.insert(command, key.clone());
-                            } else if prefs.shortcuts.get(&command).is_some_and(|key| crate::atn_cmds::parse_function_key(key).is_some()) {
-                                prefs.shortcuts.remove(&command);
-                            }
-                        });
-                    }
+        // In-memory actions (created before the store finished loading) win on name. Disk-only
+        // names are appended. An empty session takes the disk list and does not rewrite it.
+        if self.actions.list.is_empty() {
+            self.actions.list = disk;
+            self.actions.rev = 1;
+            if let Some(st) = self.preset_store.as_mut() {
+                st.actions_rev = 1;
+            }
+        } else {
+            for action in disk {
+                if !self.actions.list.iter().any(|have| have.name == action.name) {
+                    self.actions.list.push(action);
                 }
             }
-            if pristine && !migrating {
-                let keys = action_shortcuts(self.prefs());
-                if let Some(store) = self.preset_store.as_mut() {
-                    store.actions_rev = self.actions.rev;
-                    store.actions_keys = keys;
-                }
-            }
+            self.actions.rev = self.actions.rev.saturating_add(1).max(1);
         }
         self.brush_presets_changed();
         self.sync_preset_store();
@@ -1423,7 +1211,7 @@ impl Session {
     /// Write pending brush preset, Actions and pattern changes to the attached store (no-op without one).
     pub fn sync_preset_store(&mut self) {
         let rev = self.tools.presets_rev;
-        let action_keys = action_shortcuts(self.prefs());
+        let actions_rev = self.actions.rev;
         if let Some(st) = self.preset_store.as_mut() {
             if st.synced_rev != Some(rev) {
                 st.sync(&mut self.tools.presets);
@@ -1434,7 +1222,7 @@ impl Session {
                     self.tools.brush_changed();
                 }
             }
-            st.sync_actions(&self.actions, &action_keys);
+            st.sync_actions(&self.actions.list, actions_rev);
             st.sync_patterns(&self.patterns);
         }
     }

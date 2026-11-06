@@ -37,10 +37,10 @@ fn b64(bytes: &[u8]) -> String {
 fn mapped_recording(event: &str, descriptor: Descriptor) -> Imported {
     import(&atn::write(&one_action(vec![item(event, event, Some(descriptor))])).unwrap()).unwrap()
 }
-/// Inspect the explicit Photoshop-only projection; default native fallback is checked separately.
+/// Save one real native action and parse its public output, rather than calling a private converter.
 fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
     let action = Action::new("A", vec![(id.into(), params.clone())]);
-    let bytes = export(set, &[&action], &[], true).ok()?.0;
+    let bytes = export(set, &[&action], &[], false).ok()?.0;
     atn::parse(&bytes).ok()?.actions.first()?.items.first().cloned()
 }
 
@@ -134,7 +134,6 @@ fn shear_point_budget_preserves_recordings_and_refuses_oversized_native_exports(
         assert_eq!(export_item("filter.distort.shear", &native, "S").is_some(), count == LIMIT);
         assert_eq!(native, before, "export never edits the caller's curve");
         if count > LIMIT {
-            crate::atn_export::fallback("S", &Action::new("A", vec![("filter.distort.shear".into(), native.clone())]));
             let metadata = json!({"points":[[0,0],[1,0]],"_atnShearPoints":grid});
             assert!(export_item("filter.distort.shear", &metadata, "S").is_none());
         }

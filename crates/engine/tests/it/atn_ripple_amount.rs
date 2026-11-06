@@ -27,9 +27,10 @@ fn pixels(s: &Session) -> Vec<[f32; 4]> {
     photocraft_compose::flatten(&s.active().unwrap().doc).into_px()
 }
 
-/// Fractions retain native settings and pixels without approximating the integer Photoshop event.
+/// Fractions are valid native edits, but the existing integer event cannot carry them.
 #[test]
-fn fractional_amounts_use_native_events_without_pixel_loss() {
+fn fractional_amounts_remain_native_and_are_refused_by_strict_export() {
+    let mut silently_exported = Vec::new();
     for depth in [8, 16, 32] {
         for size in ["small", "medium", "large"] {
             for amount in [81.4, -81.4, 0.5, -0.5, 998.9, -998.9] {
@@ -47,21 +48,23 @@ fn fractional_amounts_use_native_events_without_pixel_loss() {
                     rounded.execute(RIPPLE, json!({"amount": 81, "size": size})).unwrap();
                     assert_ne!(pixels(&direct), pixels(&rounded), "fixture must expose rounding: {depth}, {size}");
                 }
-                let (bytes, skipped) = atn_cmds::export("Ripple", &[&action], &[], false).unwrap();
-                assert!(skipped.is_empty());
-                let item = &atn::parse(&bytes).unwrap().actions[0].items[0];
-                assert_eq!(item.event, atn::AtnEvent::name("photocraftCommand"));
-                let imported = atn_cmds::import(&bytes).unwrap();
-                assert!(imported.unsupported.is_empty() && imported.warnings.is_empty());
-                assert_eq!(imported.actions[0].steps, action.steps, "native fallback retains exact fractions");
-                let mut replay = fixture(depth);
-                replay.actions.list = imported.actions;
-                replay.execute("actions.play", json!({"action":action.name})).unwrap();
-                assert_eq!(pixels(&replay), pixels(&direct), "native fallback must not round pixels");
-                crate::atn_export::fallback("Ripple", &action);
+                if let Ok((bytes, skipped)) = atn_cmds::export("Ripple", &[&action], &[], false) {
+                    let imported = atn_cmds::import(&bytes).unwrap();
+                    assert!(skipped.is_empty() && imported.unsupported.is_empty() && imported.warnings.is_empty());
+                    let exported = imported.actions[0].steps[0].1["amount"].clone();
+                    let mut replay = fixture(depth);
+                    replay.actions.list = imported.actions;
+                    replay.execute("actions.play", json!({"action": "Fractional Ripple"})).unwrap();
+                    let changed = pixels(&replay) != pixels(&direct);
+                    if amount == 81.4 {
+                        assert!(changed, "baseline must expose the reported pixel loss: {depth}, {size}");
+                    }
+                    silently_exported.push(format!("depth {depth}, {size}: {amount} -> {exported}, pixels changed: {changed}"));
+                }
             }
         }
     }
+    assert!(silently_exported.is_empty(), "strict export silently accepted fractional amounts:\n{}", silently_exported.join("\n"));
 }
 
 /// Whole amounts and omitted defaults still round-trip through binary ATN and actual pixels.
@@ -106,15 +109,11 @@ fn integer_amounts_sizes_and_defaults_preserve_playback() {
 /// Opt-in skipping reports precisely the lost edits, keeping the supported steps in order.
 #[test]
 fn skipping_fractional_amounts_reports_action_and_step() {
-    let action = Action::new(
-        "Mixed Ripple",
-        [json!(10), json!(81.4), json!(-20), json!(-0.5)].into_iter().map(|amount| (RIPPLE.into(), json!({"amount": amount, "size": "small"}))).collect(),
-    );
-    let items = crate::atn_export::preserved("Ripple", &action);
-    assert_eq!(items.len(), 4);
-    for index in [1, 3] {
-        assert_eq!(items[index].event, atn::AtnEvent::name("photocraftCommand"));
-    }
+    let action =
+        Action::new("Mixed Ripple", [10.0, 81.4, -20.0, -0.5].into_iter().map(|amount| (RIPPLE.into(), json!({"amount": amount, "size": "small"}))).collect());
+    let error = atn_cmds::export("Ripple", &[&action], &[], false).unwrap_err();
+    assert!(error.contains("step 2 of `Mixed Ripple`"), "{error}");
+    assert!(error.contains(RIPPLE) && error.contains("skipUnsupported"), "{error}");
     let (bytes, skipped) = atn_cmds::export("Ripple", &[&action], &[], true).unwrap();
     assert_eq!(
         skipped,
@@ -137,7 +136,7 @@ fn skipping_fractional_amounts_reports_action_and_step() {
 
 /// A dedicated Ripple mapping must retain the plain-event target restriction.
 #[test]
-fn non_pixel_targets_and_malformed_fields_use_native_events_or_are_skipped() {
+fn non_pixel_targets_and_malformed_fields_are_still_refused() {
     for params in [
         json!({"amount": 81, "target": "mask"}),
         json!({"amount": 81, "target": "quickMask"}),
@@ -151,7 +150,7 @@ fn non_pixel_targets_and_malformed_fields_use_native_events_or_are_skipped() {
         json!({"amount": 81, "size": "unknown"}),
     ] {
         let action = Action::new("Unsupported Ripple", vec![(RIPPLE.into(), params.clone())]);
-        crate::atn_export::fallback("Ripple", &action);
+        assert!(atn_cmds::export("Ripple", &[&action], &[], false).is_err(), "{params}");
         let (bytes, skipped) = atn_cmds::export("Ripple", &[&action], &[], true).unwrap();
         assert_eq!(skipped, vec![atn_cmds::Skipped { action: "Unsupported Ripple".into(), step: 0, id: RIPPLE.into() }]);
         assert!(atn_cmds::import(&bytes).unwrap().actions[0].steps.is_empty());

@@ -1,5 +1,8 @@
 //! One editor owns one original step; previews and confirmation retain its authority.
-use photocraft_engine::{actions_edit_cmds, doc::DocId};
+use photocraft_engine::{
+    actions_edit_cmds,
+    doc::{DocId, LayerId},
+};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -12,7 +15,7 @@ pub(crate) struct Held {
     dialog: u64,
     selection: Value,
     command: String,
-    document: Option<(DocId, u64)>,
+    document: Option<(DocId, u64, Option<LayerId>)>,
     gate: Option<super::Gate>,
     automated: bool,
 }
@@ -20,6 +23,11 @@ pub(crate) struct Held {
 /// The marker uses the existing protected route mechanism.
 pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
+}
+
+/// Whether this dialog id still owns a deferred panel operation.
+pub(crate) fn owns_dialog(app: &PhotocraftApp, dialog: u64) -> bool {
+    app.held_record_again.as_ref().is_some_and(|held| held.dialog == dialog)
 }
 
 /// Apply captured and current permissions to the actual operation and final settings.
@@ -36,7 +44,7 @@ fn unchanged(app: &PhotocraftApp, held: &Held) -> Result<(), String> {
     {
         return Err(tl!("The actions changed. Request Record Again again.").into());
     }
-    if app.session.active().map(|s| (s.doc.id, s.revision)) != held.document {
+    if app.session.active().map(|s| (s.doc.id, s.revision, s.active_layer)) != held.document {
         return Err(tl!("The document changed. Request Record Again again.").into());
     }
     Ok(())
@@ -56,7 +64,7 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
         dialog: 0,
         selection,
         command: target.command,
-        document: app.session.active().map(|s| (s.doc.id, s.revision)),
+        document: app.session.active().map(|s| (s.doc.id, s.revision, s.active_layer)),
         gate,
         automated: app.automation_input || gate.is_some(),
     };
@@ -65,14 +73,7 @@ pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     authorize(app, &held, &held.command, &target.params)?;
     let resolved = photocraft_engine::actions_cmds::playback_params(&app.session, &held.command, &target.params).map_err(|e| e.to_string())?;
     app.session.precheck(&held.command, &resolved).map_err(|e| e.to_string())?;
-    let dialog = if crate::sizing::is_sizing(&held.command) {
-        crate::sizing::open(app, &held.command).ok_or(tl!("No document."))?
-    } else if crate::filter_dialog::has_dialog(&held.command) || crate::adjust_dialog::has_dialog(&held.command) {
-        crate::dialogs::open_command_dialog(app, &held.command, &super::label_of(&held.command))
-    } else {
-        // Commands without a bespoke editor still use the existing command-schema form.
-        crate::filter_dialog::open(app, &held.command).ok_or(tl!("The step has no command editor."))?
-    };
+    let dialog = super::open_step_editor(app, &held.command)?;
     let fields = &mut app.ui.dialog_mut(dialog).ok_or(tl!("The step editor could not be opened."))?.fields;
     if let Some(params) = target.params.as_object() {
         fields.extend(params.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())));

@@ -173,10 +173,10 @@ fn non_text_and_no_document_playback_fail_without_edits() {
 
 /// Explicit native targets and corrupt wire metadata cannot export as the implicit measured form.
 #[test]
-fn native_export_preserves_explicit_targets_and_damaged_metadata_without_approximation() {
+fn native_export_refuses_explicit_targets_and_damaged_metadata() {
     for params in [json!({"layer":1}), json!({"layers":[1]}), json!({(SOURCE):"bad base64"}), json!({(SOURCE):Value::Null})] {
         let action = Action::new("Path", vec![(COMMAND.into(), params)]);
-        crate::atn_export::fallback("Paths", &action);
+        assert!(export("Paths", &[&action], &[], false).is_err());
     }
     let action = Action::new("Path", vec![(COMMAND.into(), json!({}))]);
     assert_eq!(saved(&action).descriptor.unwrap(), descriptor());

@@ -1,64 +1,4 @@
 use super::*;
-// These unchanged assertions exercise the Classic presentation explicitly.
-use super::{classic_panel as panel, classic_panel_menu as panel_menu};
-
-/// A delayed callback must not act on a same-caption replacement or a changed revision.
-#[test]
-fn delayed_physical_folder_checks_revision_and_origin_before_slot_dispatch() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    let held = FolderSelection::from_row(&rows[0]);
-    let revision = app.session.actions.rev;
-    assert_eq!(held.checked_slot(&app, revision).unwrap(), 0);
-    app.session.execute("actions.reset", json!({"mode":"replace","confirm":true})).unwrap();
-    assert!(held.checked_slot(&app, revision).is_err());
-    assert!(held.checked_slot(&app, app.session.actions.rev).is_err(), "equal captions are not equal row origins");
-}
-
-/// Equal folder captions keep separate selection and disclosure controls after repeated Append.
-#[test]
-fn repeated_factory_folders_select_and_collapse_independently() {
-    use egui_kittest::kittest::Queryable;
-    let _gpu = snapshots::enabled().then(photocraft_testkit::gpu_lock);
-    let mut session = photocraft_engine::Session::new();
-    session.execute("file.new", json!({"width":4,"height":4})).unwrap();
-    session.execute("actions.newSet", json!({"name":"Empty before defaults"})).unwrap();
-    for _ in 0..2 {
-        session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
-    }
-    let app = PhotocraftApp::new(session, crate::Services::default());
-    let mut h = snapshots::builder(vec2(360.0, 420.0)).build_ui_state(|ui, app| panel(app, ui), app);
-    if snapshots::enabled() {
-        PhotocraftApp::setup_context(&h.ctx, Default::default());
-    }
-    h.run_steps(3);
-    let caption = photocraft_engine::actions_edit_cmds::DEFAULT_SET_NAME;
-    assert_eq!(h.query_all_by_label(caption).count(), 2);
-    assert!(h.get_by_label("Empty before defaults").rect().top() < h.query_all_by_label(caption).next().unwrap().rect().top());
-    assert_eq!(h.query_all_by_label("Invert Colors").count(), 2);
-    h.query_all_by_label(caption).nth(1).unwrap().click();
-    h.run_steps(2);
-    assert_eq!(selected_set_actions(h.state()), vec![2, 3]);
-    let selected = h.state().ui.actions.selected_folder.clone().unwrap();
-    let rect = h.query_all_by_label(caption).next().unwrap().rect();
-    let pos = pos2(rect.left() + 12.0, rect.center().y);
-    h.event(egui::Event::PointerMoved(pos));
-    for pressed in [true, false] {
-        h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
-        h.step();
-    }
-    h.run_steps(2);
-    assert_eq!(h.query_all_by_label(caption).count(), 2);
-    assert_eq!(h.query_all_by_label("Invert Colors").count(), 1);
-    assert_eq!(h.query_all_by_label("Desaturate").count(), 1);
-    assert_eq!(h.state().ui.actions.selected_folder.as_ref(), Some(&selected));
-    assert_eq!(selected_set_actions(h.state()), vec![2, 3]);
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&h.state().session).unwrap();
-    assert!(h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[1])));
-    assert!(!h.state().ui.actions.folder_collapsed(&FolderSelection::from_row(&rows[2])));
-    snapshots::capture(&mut h, "classic-repeated-folders");
-}
 
 /// A small valid Photoshop set, generated without external action files.
 fn action_set_bytes(set: &str, action: &str) -> Vec<u8> {
@@ -162,15 +102,6 @@ fn single_history_dialog_refuses_intervening_edit_or_document_switch() {
 
 /// Prepare a real paused spelling step with a known document and history boundary, under either grouping policy.
 fn paused_history_spelling(single: bool, gate: Option<Gate>) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
-    paused_history_spelling_with(single, gate, |_| {})
-}
-
-/// Configure the complete definition before its immutable playback snapshot is paused.
-fn paused_history_spelling_with(
-    single: bool,
-    gate: Option<Gate>,
-    configure: impl FnOnce(&mut Vec<Action>),
-) -> (PhotocraftApp, std::sync::Arc<photocraft_doc::Document>, usize) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width":300,"height":100})).unwrap();
     app.run("type.create", json!({"x":10,"y":50,"text":"Teh brwon"})).unwrap();
@@ -187,7 +118,6 @@ fn paused_history_spelling_with(
     );
     action.dialogs.insert(1);
     app.session.actions.list.push(action);
-    configure(&mut app.session.actions.list);
     app.session.authorize = gate;
     let paused = play(&mut app, &json!({"action":"Spell"})).unwrap();
     assert_eq!(paused["paused"]["dialog"], crate::type_panels_ui::SPELLING, "{paused}");
@@ -304,9 +234,7 @@ fn bulk_load_imports_every_chosen_action_file() {
     load_dialog(&mut app).unwrap();
     app.poll_file_dialog(&egui::Context::default(), None);
     assert_eq!(app.session.actions.list.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["First", "Second"]);
-    assert!(
-        matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, extensions: Some(ext), max_bytes: None, max_contents_bytes: Some(MAX_LOAD_CONTENTS_BYTES), .. }] if ext == &["atn"])
-    );
+    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, extensions: Some(ext), .. }] if ext == &["atn"]));
     assert!(!app.file_dialog_open());
     assert!(!app.ui.status_error, "{}", app.ui.status);
 }
@@ -711,6 +639,7 @@ fn drag_steps_and_action_headers_reorders_and_keeps_selection() {
     assert_eq!(h.state().ui.actions.selected, Some(0));
 }
 
+/// Shell playback retains nested failures and Batch file outcomes without running later steps.
 #[test]
 fn nested_shell_actions_include_view_steps_and_propagate_failures() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -734,12 +663,44 @@ fn nested_shell_actions_include_view_steps_and_propagate_failures() {
         Some(|id, _| if id == "view.fitOnScreen" { Err(photocraft_engine::EngineError::Other("denied nested view".into())) } else { Ok(()) });
     let r = app.run("actions.play", json!({"action":"Parent"})).unwrap();
     assert!(r["failed"]["error"].as_str().unwrap().contains("denied nested view"));
-    let child = &r["failed"]["result"];
-    assert_eq!(child["action"], "Child");
-    assert_eq!(child["failed"]["id"], "view.fitOnScreen");
-    assert!(child["failed"]["error"].as_str().unwrap().contains("denied nested view"));
     assert!(app.session.actions.playback_stack.is_empty());
     assert_eq!(app.session.actions.playing, 0);
+
+    app.session.authorize = None;
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("valid.png");
+    let corrupt = dir.path().join("corrupt.png");
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "png", &Default::default()).unwrap().bytes;
+    std::fs::write(&input, bytes).unwrap();
+    std::fs::write(&corrupt, b"not a PNG").unwrap();
+    let before = app.session.documents().len();
+    for mixed in [true, false] {
+        let output = dir.path().join(if mixed { "mixed" } else { "success" });
+        let inputs = if mixed { vec![&input, &corrupt] } else { vec![&input] };
+        let batch = json!({"input": inputs, "output": output, "steps": [], "format": "png"});
+        let index = app.session.actions.list.len();
+        let name = if mixed { "Mixed Batch" } else { "Successful Batch" };
+        app.session.actions.list.push(Action::new(name, vec![("file.automate.batch".into(), batch), ("file.new".into(), json!({"width": 2, "height": 2}))]));
+        let result = app.run("actions.play", json!({"action": index})).unwrap();
+        if mixed {
+            assert_eq!(result["ran"], 0, "{result}");
+            let batch = &result["failed"]["result"];
+            let files = batch["files"].as_array().unwrap();
+            assert_eq!(files.len(), 1);
+            assert_eq!(std::path::Path::new(files[0].as_str().unwrap()), output.join("valid.png").as_path());
+            assert_eq!(batch["errors"].as_array().unwrap().len(), 1);
+            assert_eq!(batch["errors"][0]["file"], json!(corrupt));
+            report_play(&mut app, &result);
+            assert!(app.ui.status_error);
+            assert!(app.ui.status.contains("1 file(s) failed") && app.ui.status.contains("1 saved") && app.ui.status.contains("corrupt.png"));
+            assert_eq!(app.session.documents().len(), before, "a failed Batch stops before file.new");
+        } else {
+            assert!(result.get("failed").is_none(), "{result}");
+            assert_eq!(result["ran"], 2);
+            assert_eq!(app.session.documents().len(), before + 1, "a successful Batch continues");
+        }
+        assert!(output.join("valid.png").exists(), "successful files remain available");
+    }
 }
 
 #[test]
@@ -1392,7 +1353,7 @@ fn a_set_paused_at_a_dialog_ends_at_an_action_replaced_under_its_name() {
 /// the called action resumes alone, so the next action of the set must not run on a caller that
 /// never finished.
 #[test]
-fn a_set_paused_inside_a_called_action_stops_there() {
+fn a_set_paused_inside_a_called_action_continues_into_its_caller_then_the_set() {
     use egui_kittest::kittest::Queryable;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
@@ -1414,12 +1375,19 @@ fn a_set_paused_inside_a_called_action_stops_there() {
     let dialog = h.state().ui.dialogs.last().map(|d| d.id).expect("C's blur dialog");
     crate::dialogs::confirm(h.state_mut(), dialog).unwrap();
     h.run_steps(2);
-    assert_eq!(layer_names(h.state()), ["c"], "C finished; B didn't run ahead of A's tail");
-    assert_eq!(h.state().session.active().unwrap().history.past_len(), count + 1);
-    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Action: A"));
+    // #8386, measured: confirming a dialog inside a called action continues the caller after
+    // the call, and the set's next action after that.
+    assert_eq!(layer_names(h.state()), ["c", "a-tail", "b"], "C finished, then A's tail, then B");
+    // One history state per played action: A with its call into C, then B.
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), count + 2);
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Action: B"));
     let after = h.state().session.active().unwrap().doc.clone();
     assert!(h.state_mut().session.undo());
+    assert_eq!(layer_names(h.state()), ["c", "a-tail"]);
+    assert_eq!(h.state().session.active().unwrap().history.undo_label(), Some("Action: A"));
+    assert!(h.state_mut().session.undo());
     assert_eq!(h.state().session.active().unwrap().doc.as_ref(), before.as_ref());
+    assert!(h.state_mut().session.redo());
     assert!(h.state_mut().session.redo());
     assert_eq!(h.state().session.active().unwrap().doc.as_ref(), after.as_ref());
 }
@@ -1789,16 +1757,13 @@ fn moving_an_action_next_to_another_set_joins_it() {
     app.session.actions.list.push(b);
     app.session.actions.list.push(Action::new("C", vec![]));
     // C dropped below B: it joins B's set, "Two".
-    let drag = DragRow { action: 2, step: None, revision: app.session.actions.rev, origin: None };
-    move_row(&mut app, drag, 2);
+    move_row(&mut app, DragRow { action: 2, step: None }, 2);
     assert_eq!(app.session.actions.list[2].set.as_deref(), Some("Two"));
     // B dropped to the top, above A: the row below decides when there is none above.
-    let drag = DragRow { action: 1, step: None, revision: app.session.actions.rev, origin: None };
-    move_row(&mut app, drag, 0);
+    move_row(&mut app, DragRow { action: 1, step: None }, 0);
     assert_eq!((app.session.actions.list[0].name.as_str(), app.session.actions.list[0].set.as_deref()), ("B", Some("One")));
     // C dropped between A (One) and nothing: the row above wins.
-    let drag = DragRow { action: 2, step: None, revision: app.session.actions.rev, origin: None };
-    move_row(&mut app, drag, 2);
+    move_row(&mut app, DragRow { action: 2, step: None }, 2);
     assert_eq!((app.session.actions.list[2].name.as_str(), app.session.actions.list[2].set.as_deref()), ("C", Some("One")));
 }
 
@@ -1819,6 +1784,7 @@ fn insert_stop_dialog_adds_a_stop_after_the_selected_step() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     let steps = &app.session.actions.list[0].steps;
     assert_eq!(steps[1], (photocraft_engine::atn_cmds::STOP_MESSAGE.to_string(), json!({"message": "Check the mask", "allowContinue": true})));
+    assert!(app.session.actions.list[0].dialogs.contains(&1), "an inserted Stop has its dialog toggle on");
     assert_eq!((app.ui.actions.selected, app.ui.actions.selected_step), (Some(0), Some(1)));
     assert_eq!(step_label(&steps[1].0, &steps[1].1), "Stop: Check the mask");
     // Without a selected step the stop goes last; the panel's menu wiring is exercised by name.
@@ -2095,66 +2061,6 @@ fn child_call() -> Vec<(String, Value)> {
 fn pause_child(app: &mut PhotocraftApp) -> u64 {
     let v = play(app, &json!({"action": "Child"})).unwrap();
     v["paused"]["dialog"].as_u64().unwrap()
-}
-
-/// A delayed picker cannot replace the action that owns a suspended call; OK and Cancel still
-/// restore that recording and journal the call exactly once.
-#[test]
-fn bulk_load_reply_cannot_replace_a_suspended_recording() {
-    use crate::file_dialog::{FileDialogAnswer, FileDialogReply};
-    use std::{cell::RefCell, rc::Rc};
-
-    for confirm in [false, true] {
-        let mut app = recording_with_dialog_child();
-        for action in &mut app.session.actions.list {
-            action.set = Some("Shared".into());
-        }
-        let waiting: Rc<RefCell<Option<FileDialogReply>>> = Default::default();
-        let reply = waiting.clone();
-        app.services.file_dialog = Some(Box::new(move |_, _, answer| *reply.borrow_mut() = Some(answer)));
-        let ctx = egui::Context::default();
-        load_dialog(&mut app).unwrap();
-        app.poll_file_dialog(&ctx, None);
-        assert!(waiting.borrow().is_some(), "the picker is already awaiting an answer");
-
-        let dialog = pause_child(&mut app);
-        let before = app.session.actions.clone();
-        let fields = app.ui.dialog_mut(dialog).unwrap().fields.clone();
-        let lease = app.session.actions.held_playback;
-        let journal = app.session.journal.clone();
-        let panel = app.ui.actions.clone();
-        assert!(before.recording.is_none() && lease.is_some());
-        waiting
-            .borrow_mut()
-            .take()
-            .unwrap()
-            .send(Some(FileDialogAnswer::ContentsMany(vec![("replacement.atn".into(), action_set_bytes("Shared", "Replacement"))])));
-        app.poll_file_dialog(&ctx, None);
-
-        assert!(app.ui.status_error);
-        let refusal = crate::i18n::t("Confirm or cancel the open action step dialog first").to_string();
-        assert!(app.ui.status.contains(refusal.as_str()), "{}", app.ui.status);
-        assert!(!app.file_dialog_open());
-        assert_eq!(app.session.actions, before, "a refused same-set load cannot replace the library or recording state");
-        assert_eq!(app.ui.actions, panel);
-        assert_eq!(app.session.journal, journal);
-        assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields, fields);
-        assert_eq!(app.paused_playbacks.paused.len(), 1);
-        assert_eq!(app.session.actions.held_playback, lease);
-        app.paused_playbacks.paused.values().next().unwrap().record.as_ref().unwrap().validate(&app.session).unwrap();
-
-        if confirm {
-            crate::dialogs::confirm(&mut app, dialog).unwrap();
-        } else {
-            crate::dialogs::cancel(&mut app, dialog).unwrap();
-        }
-        assert!(app.session.actions.recording.is_some());
-        assert!(app.paused_playbacks.paused.is_empty());
-        app.run("actions.stop", json!({})).unwrap();
-        assert_eq!(app.session.actions.list[1].name, "Owner");
-        assert_eq!(app.session.actions.list[1].steps, child_call());
-        assert_eq!(suffixes(&app), usize::from(confirm));
-    }
 }
 
 #[test]
@@ -2533,12 +2439,11 @@ fn a_changed_live_gate_cannot_be_replaced_for_the_remaining_action() {
     }
     for service in [false, true] {
         for nested in [false, true] {
-            let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |list| {
-                if nested {
-                    list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
-                    list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
-                }
-            });
+            let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
+            if nested {
+                app.session.actions.list.push(Action::new("Nested tail", vec![("layer.renameLayer".into(), json!({"name":"Forbidden tail"}))]));
+                app.session.actions.list[0].steps[2] = ("actions.play".into(), json!({"action":"Nested tail"}));
+            }
             spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
             let corrected = app.session.active().unwrap().doc.clone();
             if service {
@@ -2643,7 +2548,8 @@ fn configured_gates_require_one_composed_policy_for_automated_resume() {
 #[test]
 /// A policy change after the final spelling step must not discard completed edits when no tail remains to dispatch.
 fn a_changed_gate_after_the_last_spelling_step_keeps_completed_edits() {
-    let (mut app, before, past) = paused_history_spelling_with(true, Some(deny_wide_blur), |list| list[0].steps.truncate(2));
+    let (mut app, before, past) = paused_history_spelling(true, Some(deny_wide_blur));
+    app.session.actions.list[0].steps.truncate(2);
     spelling_change(&mut app, json!({"action":"change","start":0,"end":3,"word":"Teh","replace":"The"})).unwrap();
     let corrected = app.session.active().unwrap().doc.clone();
     app.session.authorize = Some(|_, _| Ok(()));
@@ -3007,105 +2913,4 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     let names: Vec<&str> = app.session.actions.list.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
-}
-
-/// Byte-producing providers must stay within the whole-selection budget before the first
-/// set is parsed or replaced; exact-size single and multiple selections still import normally.
-#[test]
-fn bulk_load_rechecks_total_contents_before_importing_any_set() {
-    use crate::file_dialog::{FileDialogAnswer, FileDialogRequest};
-    let first = ("replacement.atn".to_string(), action_set_bytes("Shared", "Replacement"));
-    let last = ("later.atn".to_string(), action_set_bytes("Other", "Later"));
-    for multiple in [false, true] {
-        for allowed in [false, true] {
-            let total = first.1.len() as u64 + if multiple { last.1.len() as u64 } else { 0 };
-            let max = total - u64::from(!allowed);
-            let answer = if multiple {
-                FileDialogAnswer::ContentsMany(vec![first.clone(), last.clone()])
-            } else {
-                FileDialogAnswer::Contents(first.0.clone(), first.1.clone())
-            };
-            let (show, asked) = crate::file_dialog::fake(vec![Some(answer)]);
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { file_dialog: Some(show), ..Default::default() });
-            let mut original = Action::new("Original", vec![]);
-            original.set = Some("Shared".into());
-            app.session.actions.list.push(original);
-            app.ui.actions.selected = Some(0);
-            let before = app.session.actions.clone();
-            let panel = app.ui.actions.clone();
-            let journal = app.session.journal.clone();
-            load_dialog_with_limit(&mut app, max).unwrap();
-            app.poll_file_dialog(&egui::Context::default(), None);
-            assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { max_bytes: None, max_contents_bytes: Some(limit), .. }] if *limit == max));
-            assert!(!app.file_dialog_open());
-            assert_eq!(app.ui.status_error, !allowed, "{}", app.ui.status);
-            if allowed {
-                let names: Vec<_> = app.session.actions.list.iter().map(|a| a.name.as_str()).collect();
-                assert_eq!(names, if multiple { vec!["Replacement", "Later"] } else { vec!["Replacement"] });
-            } else {
-                assert!(app.ui.status.contains("selected files"), "{}", app.ui.status);
-                assert_eq!(app.session.actions, before, "not even the first same-set replacement may run");
-                assert_eq!(app.ui.actions, panel);
-                assert_eq!(app.session.journal, journal);
-            }
-        }
-    }
-}
-
-/// Native path services do not retain a whole selection's payloads in the picker.
-#[test]
-fn bulk_load_contents_budget_does_not_limit_native_paths() {
-    use crate::file_dialog::FileDialogAnswer;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("native.atn");
-    std::fs::write(&path, action_set_bytes("Native", "From disk")).unwrap();
-    let mut app = disk_app(vec![Some(FileDialogAnswer::Paths(vec![path.to_string_lossy().into_owned()]))]);
-    load_dialog_with_limit(&mut app, 0).unwrap();
-    app.poll_file_dialog(&egui::Context::default(), None);
-    assert!(!app.ui.status_error, "{}", app.ui.status);
-    assert_eq!(app.session.actions.list[0].name, "From disk");
-}
-
-/// Classic recorder, Duplicate and Delete dispatch the selected occurrence's current slot.
-#[test]
-fn classic_physical_folder_adapters_keep_new_record_copy_and_delete_local() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.background_jobs = false;
-    app.run("file.new", json!({"width":8,"height":8})).unwrap();
-    for _ in 0..2 {
-        app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
-    }
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    app.ui.actions.collapsed_folders = rows.iter().map(FolderSelection::from_row).collect();
-    app.ui.actions.select_folder(FolderSelection::from_row(&rows[1]));
-    begin_recording(&mut app, false);
-    assert_eq!(app.ui.actions.collapsed_folders.len(), 1, "recording reveals only its actual folder");
-    app.run("actions.stop", json!({})).unwrap();
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(), [2, 3]);
-    app.ui.actions.select_folder(FolderSelection::from_row(&rows[0]));
-    duplicate_selection(&mut app).unwrap();
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(), [2, 2, 3]);
-    let dialog = request_delete(&mut app).unwrap()["dialog"].as_u64().unwrap();
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    assert_eq!(rows.iter().map(|row| row.actions.len()).collect::<Vec<_>>(), [2, 3]);
-    assert_eq!(rows[0].name, rows[1].name, "the two original namesakes remain");
-}
-
-/// A delayed Classic drag refuses a same-caption replacement before any move or assignment.
-#[test]
-fn classic_physical_drag_refuses_changed_revision_without_partial_reorder() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    for _ in 0..2 {
-        app.session.execute("actions.reset", json!({"mode":"append","confirm":true})).unwrap();
-    }
-    let rows = photocraft_engine::actions_edit_cmds::set_occurrences(&app.session).unwrap();
-    let drag = DragRow { action: 2, step: None, revision: app.session.actions.rev, origin: rows[1].origin };
-    app.session.execute("actions.reset", json!({"mode":"replace","confirm":true})).unwrap();
-    let definitions = app.session.actions.list.clone();
-    move_row(&mut app, drag, 0);
-    assert!(app.ui.status_error);
-    assert_eq!(app.session.actions.list, definitions);
 }

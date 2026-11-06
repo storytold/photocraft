@@ -59,7 +59,7 @@ fn expanded_properties_keep_flags_and_original_skip_indices() {
 }
 
 #[test]
-fn unrepresentable_compound_properties_stay_native_or_skip_the_whole_source_step() {
+fn invalid_compound_properties_fail_or_skip_the_whole_source_step() {
     let action = Action::new(
         "Atomic",
         vec![
@@ -68,12 +68,8 @@ fn unrepresentable_compound_properties_stay_native_or_skip_the_whole_source_step
             ("select.inverse".into(), json!({})),
         ],
     );
-    let (bytes, skipped) = export("Set", &[&action], &[], false).unwrap();
-    assert!(skipped.is_empty());
-    let file = atn::parse(&bytes).unwrap();
-    assert_eq!(file.actions[0].items.len(), 3, "the compound native step stays atomic");
-    assert_eq!(file.actions[0].items[1].event, AtnEvent::name("photocraftCommand"));
-    assert_eq!(import(&bytes).unwrap().actions[0].steps, action.steps);
+    let error = export("Set", &[&action], &[], false).unwrap_err();
+    assert!(error.contains("step 2"), "{error}");
     let (bytes, skipped) = export("Set", &[&action], &[], true).unwrap();
     assert_eq!(skipped, [Skipped { action: "Atomic".into(), step: 1, id: "layer.setProps".into() }]);
     let file = atn::parse(&bytes).unwrap();

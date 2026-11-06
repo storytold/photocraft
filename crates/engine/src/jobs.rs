@@ -34,6 +34,8 @@ use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
 
+const MAX_BACKGROUND_JOBS: usize = 16;
+
 type Authorization = fn(&str, &Value) -> Result<()>;
 
 thread_local! {
@@ -549,6 +551,17 @@ struct Draining {
     release: bool,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn reap_draining(draining: &mut Vec<Draining>) -> bool {
+    let mut release = false;
+    draining.retain(|d| {
+        let done = d.handle.is_finished();
+        release |= done && d.release;
+        !done
+    });
+    release
+}
+
 /// The session's job table (see the module docs).
 #[derive(Default)]
 pub struct Jobs {
@@ -678,6 +691,16 @@ pub fn run<T: Send + 'static>(
     if s.jobs.pending.is_some() {
         return Err(EngineError::Other(format!("`{label}` started a second background job in one command")));
     }
+    #[cfg(not(target_arch = "wasm32"))]
+    s.reap_draining_jobs();
+    let admitted = s.jobs.running.len();
+    #[cfg(not(target_arch = "wasm32"))]
+    let admitted = admitted.saturating_add(s.jobs.draining.len());
+    if admitted >= MAX_BACKGROUND_JOBS {
+        return Err(EngineError::Other(format!(
+            "too many background jobs ({MAX_BACKGROUND_JOBS}); wait for a running or cancelling job to finish before starting another"
+        )));
+    }
     let (doc, snapshot, layers) = match (lock_document, s.active()) {
         (true, Some(st)) => (Some(st.doc.id), Some(Arc::downgrade(&st.doc)), Some(LayerSelection::of(st))),
         (true, None) => return Err(EngineError::NoDocument),
@@ -692,7 +715,7 @@ pub fn run<T: Send + 'static>(
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
-    s.jobs.next += 1;
+    s.jobs.next = s.jobs.next.checked_add(1).ok_or_else(|| EngineError::Other("background job identifier space exhausted".into()))?;
     let id = JobId(s.jobs.next);
     #[cfg(not(target_arch = "wasm32"))]
     let handle = {
@@ -890,6 +913,11 @@ pub struct PendingPsdPreflight {
 }
 
 impl Session {
+    /// A recording mode change must not reclassify a painting job that is still in flight.
+    pub(crate) fn tool_stroke_job_running(&self) -> bool {
+        self.jobs.running.iter().any(|job| crate::actions_cmds::tool_stroke(&job.command))
+    }
+
     /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
     /// can cancel them: a live preview whose parameters changed stops its stale computation
     /// (`Err(Cancelled)`, the document unchanged) instead of finishing it. `None` restores the
@@ -1059,6 +1087,22 @@ impl Session {
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
         self.start_open_inner(name, source, true, false, None, None, background)
+    }
+
+    /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
+    /// to that path) for bytes that have no path to read: decode, flatten and fit on a worker, then
+    /// insert the layer as one undo step when [`Session::poll_jobs`] applies it. `name` names the
+    /// layer and the file; `params` are the command's (`scale`, `center`, `fit`, `smartObject`).
+    /// The job's result is the command's: `{layer, frame, scale, bounds, smartObject}`. The active
+    /// document is locked meanwhile, so this is refused while another job runs on it. Runs inline
+    /// on wasm.
+    pub fn start_place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: Value) -> Result<Started> {
+        let input = crate::file_cmds::PlaceInput::new(self, name, bytes, linked, &params)?;
+        let (command, label) = (input.command(), input.job_label());
+        if let Some(conflict) = self.job_conflict(command, true) {
+            return Err(EngineError::Other(conflict));
+        }
+        self.start_job(command, json!({"name": name}), &label, true, move |ctx| crate::file_cmds::prepare_place(input, ctx), crate::file_cmds::apply_place)
     }
 
     /// Decodes a file in a job and optionally holds damaged PSD content for
@@ -1292,18 +1336,15 @@ impl Session {
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut release = false;
-            self.jobs.draining.retain(|d| {
-                let done = d.handle.is_finished();
-                release |= done && d.release;
-                !done
-            });
-            if release {
-                photocraft_raster::scratch::release();
-            }
-        }
+        self.reap_draining_jobs();
         std::mem::take(&mut self.jobs.events)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn reap_draining_jobs(&mut self) {
+        if reap_draining(&mut self.jobs.draining) {
+            photocraft_raster::scratch::release();
+        }
     }
 
     /// Block until job `id` ends, apply it, and return its result (the control channel's and
@@ -1407,11 +1448,6 @@ impl Session {
         !self.jobs.running.is_empty()
     }
 
-    /// A recorded step must finish before its owning editor can save or leave.
-    pub fn has_recording_job(&self) -> bool {
-        self.jobs.running.iter().any(|job| job.recorded_by == Some(self.actions.take))
-    }
-
     /// Running job `id`.
     pub fn job(&self, id: JobId) -> Option<JobInfo> {
         self.jobs.running.iter().find(|r| r.id == id).map(Running::info)
@@ -1487,6 +1523,7 @@ impl Session {
         if !(params.is_object() || params.is_null()) {
             return Err(EngineError::BadParams { cmd: id.to_string(), msg: "params must be a JSON object".into() });
         }
+        let params = crate::file_cmds::batch_open_params(self, id, &params).unwrap_or(params);
         // Untrusted sessions gate every command, including the ones a command runs on its own
         // behalf (`file.automate.conditionalModeChange` runs `image.mode.*`), before any side
         // effect.
@@ -1519,8 +1556,6 @@ impl Session {
         }
         crate::param_check::check(spec, &params)?;
         crate::filters::validate_params(id, &params)?;
-        // A paused action owns its capture before preparatory document effects too.
-        crate::actions_cmds::playback::admit(self, id)?;
         // A floating selection drops before any other command (Undo puts it back instead).
         if let Some(v) = crate::float_cmds::before_command(self, id)? {
             return Ok(Started::Done(v));
@@ -1553,12 +1588,12 @@ impl Session {
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
-        let pre_selected = if self.actions.recording_active() { self.active().map(|st| st.selected_layers()) } else { None };
+        let pre_selected = if self.actions.recording.is_some() { self.active().map(|st| st.selected_layers()) } else { None };
         let mut record_before = crate::actions_record::Before::capture(self);
         // A replayable command is recorded as one step, so recording pauses while it runs: an
         // action it plays (a script step) must not flush the steps it ran so far into the action
         // being recorded, nor move the recording mark past the entries it is about to replace.
-        let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.take_recording() } else { None };
+        let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
         let before = self.active().map(|st| st.doc.clone());
         let docs_before: Vec<_> = self.docs.iter().map(|st| st.doc.id).collect();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
@@ -1568,7 +1603,9 @@ impl Session {
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
         self.live_commit = None;
-        self.actions.restore_capture(recording);
+        if self.actions.recording.is_none() {
+            self.actions.recording = recording;
+        }
         self.jobs.spawn = false;
         self.coalesce_request = None;
         self.color_restrict = None;
@@ -1578,6 +1615,13 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
+        // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
+        // replays where that shape is not installed. The run resolved it already, so it can't fail.
+        let mut params = params;
+        if r.is_ok() {
+            let _ = crate::filters_ext::resolve_shape_path(self, id, &mut params);
+        }
         let out = match (r, pending) {
             (Err(e), Some(job)) => {
                 job.ctx.cancel();
@@ -1589,7 +1633,7 @@ impl Session {
                 job.params = params;
                 job.journal = spec.journal;
                 job.recorded_by =
-                    (self.actions.recording_active() && crate::actions_cmds::recording_accepts(self, id, &job.params)).then_some(self.actions.take);
+                    self.actions.recording.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id)).map(|_| self.actions.take);
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;
@@ -1682,7 +1726,7 @@ impl Session {
         }
         let typed = crate::actions_record::typed_layer(self, id, &params);
         let params = match id {
-            _ if !self.actions.recording_active() => params,
+            _ if self.actions.recording.is_none() => params,
             "layer.duplicate" => crate::artboard_cmds::recorded_duplicate(self, crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected)),
             "layerComp.apply" => crate::comps_cmds::recorded_apply(self, params),
             "edit.checkSpelling" if crate::type_spell_cmds::records(&params) => crate::type_spell_cmds::recorded_step(&params),
@@ -1748,7 +1792,7 @@ impl Session {
         } = job;
         // A recording started after the job (#7289) keeps what it has so far, and the job's step
         // goes into the journal past its start, so that recording doesn't get it.
-        let foreign = self.actions.recording_active() && *recorded_by != Some(self.actions.take);
+        let foreign = self.actions.recording.is_some() && *recorded_by != Some(self.actions.take);
         if foreign {
             crate::actions_cmds::flush_recording(self)?;
         }
@@ -1790,13 +1834,15 @@ impl Session {
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
-        let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.take_recording() } else { None };
+        let recording = if *journal && crate::actions_cmds::replayable(command) { self.actions.recording.take() } else { None };
         let r = match apply {
             Some(f) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(self, payload)))
                 .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label}` failed with an internal error (logged); the document is unchanged")))),
             None => Err(EngineError::Other("internal error: job applied twice".into())),
         };
-        self.actions.restore_capture(recording);
+        if self.actions.recording.is_none() {
+            self.actions.recording = recording;
+        }
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;
@@ -1805,8 +1851,8 @@ impl Session {
         // to that document instead, when the user switched tabs mid-job.
         if r.is_ok() {
             self.after_command(command, params.clone(), *journal, Some(nested_from), pre_selected.as_deref(), before);
-            if foreign {
-                self.actions.advance_recording(self.journal.len());
+            if foreign && let Some((start, _)) = self.actions.recording.as_mut() {
+                *start = self.journal.len();
             }
         }
         // Give the user back the layers they selected while the job ran, unless the job chose a

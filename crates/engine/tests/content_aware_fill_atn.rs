@@ -1,8 +1,5 @@
 //! #10694: Content-Aware Fill options survive ATN load, save and playback.
 
-#[path = "support/atn_export.rs"]
-mod atn_export;
-
 use photocraft_doc::{LayerId, Rect};
 use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
 use photocraft_psd::{
@@ -161,7 +158,7 @@ fn absent_and_null_native_flags_keep_defaults_and_export_no_rotation() {
             let mut params = json!({"contents": "contentAware"});
             params[param] = value;
             let action = Action::new("Invalid", vec![("edit.fill".into(), params)]);
-            crate::atn_export::fallback("CAF", &action);
+            assert!(atn_cmds::export("CAF", &[&action], &[], false).is_err());
         }
     }
 }

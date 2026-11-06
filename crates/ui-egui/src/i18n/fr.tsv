@@ -1904,6 +1904,7 @@
 	Soften	Adoucir
 	Source	Source
 	Source: set	Source : définie
+	Source: {name}	Source : {name}
 	Sponge Tool	Outil Éponge
 	Spot Healing Brush Tool	Outil Correcteur localisé
 	Spread	Grossissement
@@ -3288,6 +3289,8 @@ curves	Smooth	Lisser
 	Step {step} is waiting for its dialog	L’étape {step} attend sa boîte de dialogue
 @plural	{n} action|{n} actions	{n} action|{n} actions
 	Background (Default)	Arrière-plan (par défaut)
+	Background (default)	Arrière-plan (par défaut)
+	Transparent (default)	Transparent (par défaut)
 	Content-Aware Fill	Remplissage d'après le contenu
 	Include All Subfolders	Inclure tous les sous-dossiers
 	Auto Add/Delete	Ajout/suppr. auto
@@ -3341,6 +3344,7 @@ curves	Smooth	Lisser
 	Automatically Check for Updates	Rechercher automatiquement des mises à jour
 	Paints from the History panel's source state	Peint à partir de l'état source du panneau Historique
 	Sets the source for the history brush	Définit la source du pinceau d'historique
+	The History Brush source was deleted: set a new source in the History panel	La source du pinceau d'historique a été supprimée : définissez une nouvelle source dans le panneau Historique
 	Highlight Mode	Mode des tons clairs
 	Highlight Color	Couleur des tons clairs
 	Highlight Opacity	Opacité des tons clairs
@@ -4533,6 +4537,8 @@ shape	Appearance	Apparence
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entrée numérique non valide. Un entier compris entre {min}% et {max}% est requis. La valeur précédente a été insérée.
 	Color Aware	Selon la couleur
 	Decontaminate Colors	Décontaminer les couleurs
@@ -4557,107 +4563,48 @@ shape	Appearance	Apparence
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	L’action a été enregistrée, mais la préférence de confirmation n’a pas pu être enregistrée : {error}
-	Add a brief description for this action…	Ajoutez une brève description de cette action…
-	Allow Tool Recording	Autoriser l’enregistrement des outils
-	Answer the open Actions editor question first	Répondez d’abord à la question ouverte dans l’éditeur d’actions
-	Apply to background	Appliquer à l’arrière-plan
-	Apply to subject	Appliquer au sujet
-	Black and white	Noir et blanc
-	Cancel and continue editing	Annuler et continuer la modification
-	Choose color	Choisir une couleur
-	Choose icon	Choisir une icône
-	Choose icon and color	Choisir une icône et une couleur
-	Classic Actions	Actions classiques
-	Clear All Actions	Effacer toutes les actions
-	Clear search	Effacer la recherche
-	Click action	Action de clic
-	Close the open Actions editor first	Fermez d’abord l’éditeur d’actions ouvert
-	Collapse all	Tout réduire
-	Colour lookup tables	Tables de correspondance des couleurs
-	Confirm or cancel the open action dialog first	Confirmez ou annulez d’abord la boîte de dialogue d’action ouverte
-	Control	Ctrl
-	Default icon	Icône par défaut
-	Delete Action	Supprimer l’action
-	Delete action	Supprimer l’action
-	Delete group	Supprimer le groupe
-	Delete step	Supprimer l’étape
-	Delete the action "{name}"?	Supprimer l’action « {name} » ?
-	Delete the group "{name}"?	Supprimer le groupe « {name} » ?
-	Discard	Abandonner
-	Download	Télécharger
-	Duplicate Action	Dupliquer l’action
-	Duplicate action	Dupliquer l’action
-	Duplicate group	Dupliquer le groupe
-	Duplicate step	Dupliquer l’étape
-	Edit Action	Modifier l’action
-	Edit action	Modifier l’action
-	Edit step settings	Modifier les paramètres de l’étape
-	Enable step	Activer l’étape
-	Expand all	Tout développer
-	Export Action…	Exporter l’action…
-	Finish or cancel action playback and the pending step first	Terminez ou annulez d’abord la lecture de l’action et l’étape en attente
-	Finishing step…	Fin de l’étape…
-	Generated layer effects	Effets de calque générés
-	Generated styles	Styles générés
-	Grey	Gris
-	Harmonize layers	Harmoniser les calques
-	Hue and saturation	Teinte et saturation
-	Import Actions…	Importer des actions…
-	Import actions or create a new action to get started.	Importez des actions ou créez-en une pour commencer.
-	Insert Action	Insérer une action
-	Insert Conditional	Insérer une condition
-	Insert Menu Item	Insérer un élément de menu
-	Insert Path	Insérer un tracé
-	Insert Stop	Insérer un arrêt
-	Insert…	Insérer…
-	Keyboard shortcut	Raccourci clavier
-	Lavender	Lavande
-	Layer effects	Effets de calque
-	Light blue	Bleu clair
-	List size	Taille de la liste
-	Magic wand	Baguette magique
-	Merge layers	Fusionner les calques
-	Move step down	Descendre l’étape
-	Move step up	Monter l’étape
-	New group	Nouveau groupe
-	No steps yet	Aucune étape pour le moment
-	Object selection	Sélection d’objet
-	Play Action	Lire l’action
-	Play Actions	Lire les actions
-	Play action	Lire l’action
-	Play from selected step	Lire à partir de l’étape sélectionnée
-	Playback Options…	Options de lecture…
-	Play…	Lecture…
-	Preview on hover	Aperçu au survol
-	Record	Enregistrer
-	Recording	Enregistrement
-	Remove background	Supprimer l'arrière-plan
-	Save Action	Enregistrer l’action
-	Search actions	Rechercher des actions
-	Select an existing action step to play	Sélectionnez une étape d’action existante à lire
-	Select subject	Sélectionner le sujet
-	Show grid	Afficher la grille
-	Show step settings	Afficher les paramètres de l’étape
-	Smart removal	Suppression intelligente
-	Sort & View options	Options de tri et d’affichage
-	Start recording to build your action	Lancez l’enregistrement pour créer votre action
-	Steps	Étapes
-	Stored action step	Étape d’action enregistrée
-	Stored settings	Paramètres enregistrés
-	Teal	Bleu sarcelle
-	Text	Texte
-	Text colour	Couleur du texte
-	The draft steps changed. Cancel this dialog and reopen the step.	Les étapes du brouillon ont changé. Annulez cette boîte de dialogue et rouvrez l’étape.
-	The dragged action changed; drag it again	L’action déplacée a changé ; faites-la glisser à nouveau
-	The editor response does not belong to this draft	La réponse de l’éditeur n’appartient pas à ce brouillon
-	There are unsaved changes. Do you want to save or discard them?	Des modifications ne sont pas enregistrées. Voulez-vous les enregistrer ou les abandonner ?
-	This editor page is closed	Cette page de l’éditeur est fermée
-	This step dialog belongs to another editor	Cette boîte de dialogue d’étape appartient à un autre éditeur
-	Wait for the current action step to finish	Attendez la fin de l’étape d’action en cours
-	You haven't created any actions	Vous n’avez créé aucune action
-	Yours	Vos actions
+# Action Stop message (#8386)
+	Message	Message
+# Playback Options (#5212)
+	Playback Options…	Options d'exécution…
+	Playback Options	Options d'exécution
+	Accelerated	Accélérée
+	Step by Step	Pas à pas
+	Pause For:	Pause de :
+	Pause For	Pause de
+	seconds	secondes
+	Create a single history state	Créer un seul état d'historique
+	Generator enabled	Générateur activé
+	Move Up	Déplacer vers le haut
+	Move Down	Déplacer vers le bas
+	Hidden	Masqué
+	On your computer	Sur votre ordinateur
+	New file	Nouveau fichier
+	Learn	Apprendre
+	Website	Site web
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	Actions non groupées
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Un cadre accepte les transformations affines ; sélectionnez son image pour les transformations de perspective
+	A frame supports affine transforms; select its image to warp it	Un cadre accepte les transformations affines ; sélectionnez son image pour la déformer
+	Convert to Frame…	Convertir en cadre…
+	Create a new custom frame	Créer un cadre personnalisé
+	Create a new polygonal frame	Créer un cadre polygonal
+	Create a new triangular frame	Créer un cadre triangulaire
+	Fit Content to Frame	Adapter le contenu au cadre
+	Fit Frame to Content	Adapter le cadre au contenu
+	Frame coordinates must be finite and within 600000 pixels	Les coordonnées du cadre doivent être finies et comprises dans une limite de 600000 pixels
+	Import Image…	Importer une image…
+	Invalid frame transform	Transformation du cadre non valide
+	Invalid nested file drop	Dépôt de fichier imbriqué non valide
+	New Frame	Nouveau cadre
+	Replace Image…	Remplacer l’image…
+	The frame is locked	Le cadre est verrouillé
+	The frame is unavailable	Le cadre n’est pas disponible
+
+# Channels panel menu (#11451)
+	Channel Options…	Options de canal…
+	Specify Channels:	Indiquer les canaux :
+	Not enough grayscale documents for this mode.	Pas assez de documents en niveaux de gris pour ce mode.
+	Pick a different document for each channel.	Choisissez un document différent pour chaque canal.
+	A picked document is no longer open.	Un des documents choisis n'est plus ouvert.
+	A picked document is no longer a grayscale document of the same size.	Un des documents choisis n'est plus un document en niveaux de gris de même taille.

@@ -1,8 +1,5 @@
 //! Paste Layer Style applies group eligibility consistently and preserves the ATN flag.
 
-#[path = "support/atn_export.rs"]
-mod atn_export;
-
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{BlendRange, Document, Effect, Layer, LayerId};
 use photocraft_engine::{Session, actions_cmds::Action, atn_cmds, layer_multi_cmds};
@@ -264,6 +261,6 @@ fn atn_defaults_are_explicit_and_unsupported_fields_remain_whole_steps() {
         let mut params = json!({});
         params[key] = value;
         let action = Action::new("Invalid", vec![(CMD.into(), params)]);
-        crate::atn_export::fallback("Style", &action);
+        assert!(atn_cmds::export("Style", &[&action], &[], false).is_err());
     }
 }

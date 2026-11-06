@@ -51,10 +51,9 @@ fn action(items: Vec<AtnItem>) -> Action {
     loaded.actions.into_iter().next().unwrap()
 }
 
-/// Inspect only the Photoshop mapping; unrepresentable native settings are tested as fallback.
 fn exported(id: &str, params: Value) -> Option<AtnItem> {
     let a = Action::new("A", vec![(id.into(), params)]);
-    let bytes = export("S", &[&a], &[], true).ok()?.0;
+    let bytes = export("S", &[&a], &[], false).ok()?.0;
     atn::parse(&bytes).ok()?.actions.into_iter().next()?.items.into_iter().next()
 }
 
@@ -291,8 +290,6 @@ fn layer_style_native_exports_are_strict_and_make_defaults_explicit() {
         assert!(exported(id, p).is_none());
     }
     assert!(exported(CREATE, json!({"scale":100})).is_none());
-    // Default export preserves native settings that the optional Photoshop mapping cannot carry.
-    crate::atn_export::fallback("S", &Action::new("A", vec![(SCALE.into(), json!({"scale":1.5}))]));
 }
 
 /// Malformed style references remain whole and cannot fall through to ordinary blank-layer creation.

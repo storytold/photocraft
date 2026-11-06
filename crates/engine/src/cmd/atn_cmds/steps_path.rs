@@ -6,7 +6,7 @@ use photocraft_doc::{FillRule, Knot, Path, PathOp, Subpath};
 use photocraft_geom::Point;
 
 pub(super) const SOURCE: &str = "_atnInsertPathDescriptor";
-// The native path validator admits at most4096 knots/subpaths. Larger wire
+// The native path validator admits at most 4096 knots/subpaths. Larger wire
 // records remain complete kept steps rather than secondary geometry allocations.
 const MAX_PARTS: usize = 4096;
 const MAX_SOURCE_BYTES: usize = 4 * 1024 * 1024;

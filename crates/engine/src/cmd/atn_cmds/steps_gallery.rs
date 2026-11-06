@@ -592,13 +592,13 @@ fn effect_command(event: &AtnEvent) -> Option<&'static str> {
     GALLERY.iter().find(|(c, _, _)| *c == code).map(|(_, cmd, _)| *cmd)
 }
 
-/// The hidden param an imported effect or menu step carries to retain its original event and
-/// panel name bytes. Playback strips it
+/// The hidden param a step loaded from an effect's own event carries, so it saves back as that
+/// event (and panel name) rather than as a `GEfc` Filter Gallery step. Playback strips it
 /// (`actions_cmds::playback_params`), so the command, the journal and smart filters never see it.
 pub(crate) const RECORDED_EVENT: &str = "_atnEvent";
 
-/// Remember an effect's own event or descriptor-free menu event, including its raw panel name.
-/// A recorded `GEfc` step carries nothing and saves as `GEfc`, as does a native gallery step.
+/// Remember the event of a step loaded from an effect's own event (`AccE`, `accentedEdges`).
+/// A `GEfc` step carries nothing and saves as `GEfc`, as does a step made in PhotoCraft.
 pub(super) fn remember_event(item: &AtnItem, steps: &mut [(String, Value)]) {
     let [(id, Value::Object(p))] = steps else { return };
     let menu = id == super::MENU_ITEM

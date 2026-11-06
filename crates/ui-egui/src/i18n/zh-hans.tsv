@@ -1973,6 +1973,7 @@
 	Soften	柔化
 	Source	源
 	Source: set	源：已设置
+	Source: {name}	源：{name}
 	Sponge Tool	海绵工具
 	Spot Healing Brush Tool	污点修复画笔工具
 	Spread	扩展
@@ -2938,6 +2939,8 @@ curves	Smooth	平滑
 	Step {step} is waiting for its dialog	步骤 {step} 正在等待其对话框
 @plural	{n} action|{n} actions	{n} 个动作
 	Background (Default)	背景（默认）
+	Background (default)	背景（默认）
+	Transparent (default)	透明（默认）
 	Content-Aware Fill	内容识别填充
 	Include All Subfolders	包含所有子文件夹
 	Auto Add/Delete	自动添加/删除
@@ -2991,6 +2994,7 @@ curves	Smooth	平滑
 	Automatically Check for Updates	自动检查更新
 	Paints from the History panel's source state	从历史记录面板的源状态绘画
 	Sets the source for the history brush	设置历史记录画笔的源
+	The History Brush source was deleted: set a new source in the History panel	历史记录画笔的源已被删除：请在“历史记录”面板中设置新的源
 	Highlight Mode	高光模式
 	Highlight Color	高光颜色
 	Highlight Opacity	高光不透明度
@@ -3059,6 +3063,7 @@ curves	Smooth	平滑
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} 由系统保留，无法指定。
 	Low-Latency Drawing (vsync off, applies at next launch)	低延迟绘画（关闭垂直同步，下次启动时生效）
 	Reference point location	参考点位置
+	Toggle reference point	切换参考点
 	Free Transform is still being applied; try again when it has finished.	自由变换仍在应用中；请在完成后重试。
 	The transform couldn't be applied.	无法应用变换。
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	其图层需要 {needed} GPU 内存；预算只留给它们 {budget}。
@@ -3177,6 +3182,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	数值输入无效。需要介于 {min}% 和 {max}% 之间的整数。已插入先前的值。
 	Clear Selection	清除选区
 	Color Aware	颜色识别
@@ -3206,109 +3213,61 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	动作已保存，但无法保存确认偏好设置：{error}
-	Add a brief description for this action…	为此动作添加简短描述…
-	Allow Tool Recording	允许录制工具操作
-	Answer the open Actions editor question first	请先回答动作编辑器中打开的问题
-	Apply to background	应用于背景
-	Apply to subject	应用于主体
-	Back	返回
-	Black and white	黑白
-	Cancel and continue editing	取消并继续编辑
-	Choose color	选择颜色
-	Choose icon	选择图标
-	Choose icon and color	选择图标和颜色
-	Classic Actions	经典动作
-	Clear All Actions	清除所有动作
-	Clear search	清除搜索
-	Click action	点击操作
-	Close the open Actions editor first	请先关闭已打开的动作编辑器
-	Collapse all	全部折叠
-	Colour lookup tables	颜色查找表
-	Confirm or cancel the open action dialog first	请先确认或取消已打开的动作对话框
-	Control	Ctrl
-	Default icon	默认图标
-	Delete Action	删除动作
-	Delete action	删除动作
-	Delete group	删除组
-	Delete step	删除步骤
-	Delete the action "{name}"?	删除动作“{name}”？
-	Delete the group "{name}"?	删除组“{name}”？
-	Discard	放弃
-	Download	下载
-	Duplicate Action	复制动作
-	Duplicate action	复制动作
-	Duplicate group	复制组
-	Duplicate step	复制步骤
-	Edit Action	编辑动作
-	Edit action	编辑动作
-	Edit step settings	编辑步骤设置
-	Enable step	启用步骤
-	Expand all	全部展开
-	Export Action…	导出动作…
-	Finish or cancel action playback and the pending step first	请先完成或取消动作播放及待处理步骤
-	Finishing step…	正在完成步骤…
-	Generated layer effects	生成的图层效果
-	Generated styles	生成的样式
-	Grey	灰色
-	Harmonize layers	协调图层
-	Hue and saturation	色相与饱和度
-	Import Actions…	导入动作…
-	Import actions or create a new action to get started.	导入动作或创建新动作，即可开始使用。
-	Insert Action	插入动作
-	Insert Conditional	插入条件
-	Insert Menu Item	插入菜单项
-	Insert Path	插入路径
-	Insert Stop	插入停止
-	Insert…	插入…
-	Keyboard shortcut	键盘快捷键
-	Lavender	薰衣草色
-	Layer effects	图层效果
-	Light blue	浅蓝色
-	List size	列表大小
-	Magic wand	魔棒
-	Merge layers	合并图层
-	Move step down	下移步骤
-	Move step up	上移步骤
-	New group	新建组
-	No steps yet	尚无步骤
-	Object selection	对象选择
-	On	开启
-	Play Action	播放动作
-	Play Actions	播放动作
-	Play action	播放动作
-	Play from selected step	从所选步骤播放
-	Playback Options…	播放选项…
-	Play…	播放…
-	Preview on hover	悬停时预览
-	Record	录制
-	Recording	正在录制
-	Remove background	移除背景
-	Save Action	保存动作
-	Search actions	搜索动作
-	Select an existing action step to play	选择要播放的现有动作步骤
-	Select subject	选择主体
-	Show grid	显示网格
-	Show step settings	显示步骤设置
-	Smart removal	智能移除
-	Sort & View options	排序与视图选项
-	Start recording to build your action	开始录制以创建动作
-	Steps	步骤
-	Stored action step	已保存的动作步骤
-	Stored settings	已保存的设置
-	Teal	青绿色
-	Text	文本
-	Text colour	文本颜色
-	The draft steps changed. Cancel this dialog and reopen the step.	草稿步骤已更改。请取消此对话框并重新打开该步骤。
-	The dragged action changed; drag it again	拖动的动作已更改；请重新拖动
-	The editor response does not belong to this draft	编辑器响应不属于此草稿
-	There are unsaved changes. Do you want to save or discard them?	有未保存的更改。要保存还是放弃？
-	This editor page is closed	此编辑器页面已关闭
-	This step dialog belongs to another editor	此步骤对话框属于另一个编辑器
-	Wait for the current action step to finish	请等待当前动作步骤完成
-	You haven't created any actions	您尚未创建任何动作
-	Yours	我的动作
+# Action Stop message (#8386)
+	Message	信息
+# Playback Options (#5212)
+	Playback Options…	回放选项…
+	Playback Options	回放选项
+	Accelerated	加速
+	Step by Step	逐步
+	Pause For:	暂停：
+	Pause For	暂停
+	seconds	秒
+	Create a single history state	创建单个历史记录状态
+	Drag to move the active shape's path or the Work Path	拖动以移动当前形状的路径或工作路径
+	Generator enabled	启用生成器
+	Move Up	上移
+	Move Down	下移
+	Grid view	网格视图
+	List view	列表视图
+	On your computer	在您的计算机上
+	New file	新建文件
+	Learn	学习
+	No recent files	没有最近使用的文件
+	Website	网站
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	未分组动作
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	框架支持仿射变换；要进行透视变换，请选择框架中的图像
+	A frame supports affine transforms; select its image to warp it	框架支持仿射变换；要进行变形，请选择框架中的图像
+	Convert to Frame…	转换为框架…
+	Create a new custom frame	创建新的自定义框架
+	Create a new polygonal frame	创建新的多边形框架
+	Create a new triangular frame	创建新的三角形框架
+	Fit Content to Frame	使内容适合框架
+	Fit Frame to Content	使框架适合内容
+	Frame coordinates must be finite and within 600000 pixels	框架坐标必须为有限值，且在 600000 像素范围内
+	Import Image…	导入图像…
+	Invalid frame transform	无效的框架变换
+	Invalid nested file drop	无效的嵌套文件拖放
+	New Frame	新建框架
+	Replace Image…	替换图像…
+	The frame is locked	框架已锁定
+	The frame is unavailable	框架不可用
+	Frame	框架
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	新建通道…
+	Duplicate Channel	复制通道
+	Delete Channel	删除通道
+	New Spot Channel…	新建专色通道…
+	Merge Spot Channel	合并专色通道
+	Channel Options…	通道选项…
+	Split Channels	分离通道
+	Merge Channels…	合并通道…
+	Specify Channels:	指定通道:
+	Not enough grayscale documents for this mode.	灰度文档不足，无法使用此模式。
+	Pick a different document for each channel.	请为每个通道选择不同的文档。
+	A picked document is no longer open.	所选的一个文档已不再打开。
+	A picked document is no longer a grayscale document of the same size.	所选的一个文档已不再是同样大小的灰度文档。

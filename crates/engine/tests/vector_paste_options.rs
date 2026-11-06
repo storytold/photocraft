@@ -1,8 +1,5 @@
 //! Explicit Paste modes preserve source kind instead of silently using the ordinary raster route.
 
-#[path = "support/atn_export.rs"]
-mod atn_export;
-
 use photocraft_engine::Session;
 use serde_json::json;
 
@@ -338,7 +335,7 @@ fn atn_unknown_forms_are_kept_and_legacy_omission_stays_legacy() {
         json!({"as":"pixels","inPlace":false}),
     ] {
         let action = Action::new("Bad", vec![("edit.paste".into(), p)]);
-        crate::atn_export::fallback("Vector", &action);
+        assert!(atn_cmds::export("Vector", &[&action], &[], false).is_err());
     }
 }
 

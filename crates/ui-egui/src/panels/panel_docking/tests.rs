@@ -744,32 +744,63 @@ fn floated_color_panel_menu_picks_the_mode() {
     assert_eq!(h.state().ui.color_panel.mode, crate::state::ColorPanelMode::RgbSliders);
 }
 
-/// Docked Actions menus expose each layout's import/export commands.
 #[test]
 fn actions_panel_menu_includes_load_and_save_actions() {
-    use crate::state::ActionsLayout;
-    for (layout, load, save) in [(ActionsLayout::Classic, "Load Actions…", "Save Actions…"), (ActionsLayout::Modern, "Import Actions…", "Export Action…")]
-    {
-        let mut app = self::app();
-        app.ui.actions_layout = layout;
-        let mut ready = false;
-        let mut menu = Harness::builder().build_ui_state(
-            move |ui, app: &mut PhotocraftApp| {
-                if !ready {
-                    PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
-                    ready = true;
-                }
-                panel_menu(app, ui, "actions");
-            },
-            app,
-        );
-        menu.run_steps(2);
-        assert!(menu.query_all_by_label(load).count() > 0);
-        assert!(menu.query_all_by_label(save).count() > 0);
-        if layout == ActionsLayout::Classic {
-            assert!(menu.query_all_by_label("New Action…").count() > 0);
-        }
+    let mut ready = false;
+    let mut menu = Harness::builder().build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            panel_menu(app, ui, "actions");
+        },
+        self::app(),
+    );
+    menu.run_steps(2);
+    assert!(menu.query_all_by_label("Load Actions…").count() > 0);
+    assert!(menu.query_all_by_label("Save Actions…").count() > 0);
+    assert!(menu.query_all_by_label("New Action…").count() > 0);
+}
+
+/// The Channels panel menu (☰) has the channel items, not only the rows' context menu (#11451):
+/// New Spot Channel… and New Channel… open their dialogs, and OK in New Channel adds a channel.
+#[test]
+fn channels_panel_menu_opens_new_spot_and_adds_a_channel() {
+    use egui_kittest::kittest::NodeT;
+    let mut app = self::app();
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    let mut ready = false;
+    let mut menu = Harness::builder().with_size(vec2(260.0, 420.0)).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+            }
+            panel_menu(app, ui, "channels");
+        },
+        app,
+    );
+    menu.run_steps(2);
+    let disabled = |menu: &Harness<'static, PhotocraftApp>, label: &str| menu.get_by_label(label).accesskit_node().is_disabled();
+    // The composite is targeted: nothing to duplicate, delete or give options to.
+    for label in ["Duplicate Channel", "Delete Channel", "Merge Spot Channel", "Channel Options…"] {
+        assert!(disabled(&menu, label), "{label} waits for a targeted channel");
     }
+    menu.get_by_label("New Spot Channel…").click();
+    menu.run_steps(2);
+    let dialogs = &menu.state().ui.dialogs;
+    assert!(dialogs.iter().any(|d| crate::channel_options_ui::owns_new_spot(&d.fields)), "New Spot Channel… opens its dialog");
+    menu.state_mut().ui.dialogs.clear();
+    menu.get_by_label("New Channel…").click();
+    menu.run_steps(2);
+    assert!(menu.state().session.active().unwrap().doc.channels.is_empty(), "New Channel… asks first");
+    let dialog = menu.state().ui.dialogs.last().expect("the New Channel dialog");
+    assert_eq!(dialog.fields["__label"], json!("New Channel…"));
+    let id = dialog.id;
+    crate::dialogs::confirm(menu.state_mut(), id).unwrap();
+    assert_eq!(menu.state().session.active().unwrap().doc.channels.len(), 1, "OK adds an alpha channel");
+    assert!(!menu.state().ui.status_error, "{}", menu.state().ui.status);
 }
 
 #[test]

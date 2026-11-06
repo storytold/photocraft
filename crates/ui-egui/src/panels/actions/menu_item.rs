@@ -18,6 +18,11 @@ pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
 }
 
+/// Whether this dialog id still owns a deferred panel operation.
+pub(crate) fn owns_dialog(app: &PhotocraftApp, dialog: u64) -> bool {
+    app.held_insert_menu.as_ref().is_some_and(|held| held.dialog == dialog)
+}
+
 /// Open without recording a step or sampling the selected command's current settings.
 pub(super) fn open(app: &mut PhotocraftApp) -> Result<Value, String> {
     if app.held_insert_menu.is_some() {
@@ -55,6 +60,7 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
         return Err(tl!("The action or insertion command changed. Request Insert Menu Item again.").into());
     }
     let mut params = held.target;
+    let action = params["action"].as_u64().and_then(|index| usize::try_from(index).ok());
     params["id"] = fields.get("id").cloned().unwrap_or(Value::Null);
     super::authorize_owned(app, COMMAND, &params, held.gate, held.automated)?;
     let saved = app.session.authorize;
@@ -67,6 +73,8 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, dialog: u64, fields: &Map<String,
     let result = app.run(COMMAND, params);
     app.session.authorize = saved;
     let result = result?;
+    app.ui.actions.selected = action;
+    app.ui.actions.selected_set = None;
     app.ui.actions.selected_step = result.get("step").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
     Ok(result)
 }

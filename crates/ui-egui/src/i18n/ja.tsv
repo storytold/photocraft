@@ -1949,6 +1949,7 @@
 	Soften	ぼかし
 	Source	ソース
 	Source: set	ソース: 設定済み
+	Source: {name}	ソース: {name}
 	Sponge Tool	スポンジツール
 	Spot Healing Brush Tool	スポット修復ブラシツール
 	Spread	スプレッド
@@ -3900,6 +3901,8 @@ curves	Smooth	スムーズ
 	Step {step} is waiting for its dialog	ステップ {step} はダイアログを待っています
 @plural	{n} action|{n} actions	アクション {n} 個
 	Background (Default)	背景（既定）
+	Background (default)	背景（既定）
+	Transparent (default)	透明（既定）
 	Include All Subfolders	すべてのサブフォルダーを含める
 	Forward Warp	前方ワープ
 	Twirl Clockwise	時計回りに渦巻き
@@ -4009,6 +4012,7 @@ curves	Smooth	スムーズ
 	Automatically Check for Updates	アップデートを自動的に確認
 	Paints from the History panel's source state	ヒストリーパネルのソース状態からペイントします
 	Sets the source for the history brush	ヒストリーブラシのソースを設定します
+	The History Brush source was deleted: set a new source in the History panel	ヒストリーブラシのソースが削除されました: ヒストリーパネルで新しいソースを設定してください
 	Highlight Mode	ハイライトモード
 	Highlight Color	ハイライトカラー
 	Highlight Opacity	ハイライト不透明度
@@ -4171,6 +4175,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	無効な数値です。{min}% から {max}% までの整数が必要です。以前の値が挿入されました。
 	Clear Selection	選択範囲をクリア
 	Color Aware	カラー認識
@@ -4198,109 +4204,52 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	アクションは保存されましたが、確認の設定を保存できませんでした: {error}
-	Add a brief description for this action…	このアクションの簡単な説明を追加…
-	Allow Tool Recording	ツール操作の記録を許可
-	Answer the open Actions editor question first	まずアクションエディターで開いている質問に回答してください
-	Apply to background	背景に適用
-	Apply to subject	被写体に適用
-	Back	戻る
-	Black and white	白黒
-	Cancel and continue editing	キャンセルして編集を続ける
-	Choose color	色を選択
-	Choose icon	アイコンを選択
-	Choose icon and color	アイコンと色を選択
-	Classic Actions	クラシックアクション
-	Clear All Actions	すべてのアクションを消去
-	Clear search	検索をクリア
-	Click action	クリック操作
-	Close the open Actions editor first	まず開いているアクションエディターを閉じてください
-	Collapse all	すべて折りたたむ
-	Colour lookup tables	カラールックアップテーブル
-	Confirm or cancel the open action dialog first	まず開いているアクションのダイアログを確定またはキャンセルしてください
-	Control	Ctrl
-	Default icon	既定のアイコン
-	Delete Action	アクションを削除
-	Delete action	アクションを削除
-	Delete group	グループを削除
-	Delete step	ステップを削除
-	Delete the action "{name}"?	アクション「{name}」を削除しますか？
-	Delete the group "{name}"?	グループ「{name}」を削除しますか？
-	Discard	破棄
-	Download	ダウンロード
-	Duplicate Action	アクションを複製
-	Duplicate action	アクションを複製
-	Duplicate group	グループを複製
-	Duplicate step	ステップを複製
-	Edit Action	アクションを編集
-	Edit action	アクションを編集
-	Edit step settings	ステップの設定を編集
-	Enable step	ステップを有効にする
-	Expand all	すべて展開
-	Export Action…	アクションを書き出し…
-	Finish or cancel action playback and the pending step first	まずアクションの再生と保留中のステップを完了またはキャンセルしてください
-	Finishing step…	ステップを完了中…
-	Generated layer effects	生成されたレイヤー効果
-	Generated styles	生成されたスタイル
-	Grey	グレー
-	Harmonize layers	レイヤーを調和
-	Hue and saturation	色相と彩度
-	Import Actions…	アクションを読み込み…
-	Import actions or create a new action to get started.	アクションを読み込むか、新しいアクションを作成して始めましょう。
-	Insert Action	アクションを挿入
-	Insert Conditional	条件を挿入
-	Insert Menu Item	メニュー項目を挿入
-	Insert Path	パスを挿入
-	Insert Stop	ストップを挿入
-	Insert…	挿入…
-	Keyboard shortcut	キーボードショートカット
-	Lavender	ラベンダー
-	Layer effects	レイヤー効果
-	Light blue	ライトブルー
-	List size	リストのサイズ
-	Magic wand	自動選択
-	Merge layers	レイヤーを結合
-	Move step down	ステップを下に移動
-	Move step up	ステップを上に移動
-	New group	新規グループ
-	No steps yet	まだステップがありません
-	Object selection	オブジェクト選択
-	On	オン
-	Play Action	アクションを再生
-	Play Actions	アクションを再生
-	Play action	アクションを再生
-	Play from selected step	選択したステップから再生
+# Action Stop message (#8386)
+	Message	メッセージ
+# Playback Options (#5212)
 	Playback Options…	再生オプション…
-	Play…	再生…
-	Preview on hover	ホバー時にプレビュー
-	Record	記録
-	Recording	記録中
-	Remove background	背景を削除
-	Save Action	アクションを保存
-	Search actions	アクションを検索
-	Select an existing action step to play	再生する既存のアクションステップを選択してください
-	Select subject	被写体を選択
-	Show grid	グリッドを表示
-	Show step settings	ステップの設定を表示
-	Smart removal	スマート削除
-	Sort & View options	並べ替えと表示のオプション
-	Start recording to build your action	記録を開始してアクションを作成しましょう
-	Steps	ステップ
-	Stored action step	保存済みのアクションステップ
-	Stored settings	保存済みの設定
-	Teal	青緑
-	Text	テキスト
-	Text colour	文字色
-	The draft steps changed. Cancel this dialog and reopen the step.	下書きのステップが変更されました。このダイアログをキャンセルし、ステップを開き直してください。
-	The dragged action changed; drag it again	ドラッグしたアクションが変更されました。もう一度ドラッグしてください
-	The editor response does not belong to this draft	エディターの応答はこの下書きに属していません
-	There are unsaved changes. Do you want to save or discard them?	未保存の変更があります。保存しますか、破棄しますか？
-	This editor page is closed	このエディターページは閉じられています
-	This step dialog belongs to another editor	このステップのダイアログは別のエディターに属しています
-	Wait for the current action step to finish	現在のアクションステップが完了するまでお待ちください
-	You haven't created any actions	まだアクションを作成していません
-	Yours	マイアクション
+	Playback Options	再生オプション
+	Accelerated	高速
+	Step by Step	ステップ単位
+	Pause For:	一時停止：
+	Pause For	一時停止
+	seconds	秒
+	Create a single history state	単一のヒストリー状態を作成
+	Drag to move the active shape's path or the Work Path	ドラッグして、アクティブなシェイプのパスまたは作業用パスを移動
+	Generator enabled	自動生成を有効にする
+	This Layer:	現在のレイヤー:
+	Move Up	上へ移動
+	Move Down	下へ移動
+	Grid view	グリッド表示
+	List view	リスト表示
+	On your computer	このコンピューター上
+	New file	新規ファイル
+	Learn	学ぶ
+	No recent files	最近使ったファイルはありません
+	Website	Web サイト
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	未分類のアクション
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	フレームはアフィン変換に対応しています。遠近法変換を行うにはフレーム内の画像を選択してください
+	A frame supports affine transforms; select its image to warp it	フレームはアフィン変換に対応しています。ワープするにはフレーム内の画像を選択してください
+	Convert to Frame…	フレームに変換…
+	Create a new custom frame	新しいカスタムフレームを作成
+	Create a new polygonal frame	新しい多角形フレームを作成
+	Create a new triangular frame	新しい三角形フレームを作成
+	Fit Content to Frame	内容をフレームに合わせる
+	Fit Frame to Content	フレームを内容に合わせる
+	Frame coordinates must be finite and within 600000 pixels	フレームの座標は有限値で、600000 ピクセル以内である必要があります
+	Import Image…	画像を読み込み…
+	Invalid frame transform	フレームの変形が無効です
+	Invalid nested file drop	入れ子のファイルドロップは無効です
+	New Frame	新規フレーム
+	Replace Image…	画像を置き換え…
+	The frame is locked	フレームはロックされています
+	The frame is unavailable	フレームを利用できません
+
+# Channels panel menu (#11451)
+	Channel Options…	チャンネルオプション…
+	Specify Channels:	チャンネルを指定:
+	Not enough grayscale documents for this mode.	このモードに必要なグレースケールのドキュメントが足りません。
+	Pick a different document for each channel.	チャンネルごとに別のドキュメントを選択してください。
+	A picked document is no longer open.	選択したドキュメントの一つが開かれていません。
+	A picked document is no longer a grayscale document of the same size.	選択したドキュメントの一つが、同じサイズのグレースケールのドキュメントではなくなりました。

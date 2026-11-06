@@ -9,8 +9,6 @@
 pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("layer.selectUnderCursor", "Select Layer Under Cursor", &[], None),
     ("ui.symmetryTransform", "Transform Symmetry", &[], None),
-    ("actions.layout.modern", "Actions", &[], None),
-    ("actions.layout.classic", "Classic Actions", &[], None),
     // Right-click the options bar's tool icon (#2825); `tool.resetAll` asks first.
     ("tool.reset", "Reset Tool", &[], None),
     ("tool.resetAll", "Reset All Tools", &[], None),

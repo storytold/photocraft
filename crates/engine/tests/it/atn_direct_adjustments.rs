@@ -323,7 +323,7 @@ fn unsupported_gradient_settings_and_wire_forms_remain_kept() {
 
 /// Invalid recorded boxes stay preserved, and edited or unrepresentable native settings cannot save lossily.
 #[test]
-fn invalid_replace_descriptors_stay_kept_and_lossy_exports_use_native_events() {
+fn invalid_replace_descriptors_and_lossy_exports_are_refused() {
     let mut model = replace();
     model.items[6].1 = D::Integer(1);
     let mut inverted = replace();
@@ -339,10 +339,10 @@ fn invalid_replace_descriptors_stay_kept_and_lossy_exports_use_native_events() {
     }
     let mut s = load(*b"GrMp", gradient(), "image.adjustments.gradientMap");
     s.actions.list[0].steps[0].1["stops"][0][1][0] = json!(0.2);
-    crate::atn_export::fallback("Direct adjustments", &s.actions.list[0]);
+    assert!(atn_cmds::export("Direct adjustments", &[&s.actions.list[0]], &[], false).is_err(), "stale color metadata must not fall through to GdMp");
     for p in [json!({"color":"#ff0000"}), json!({"labMinimum":[40,0,0],"labMaximum":[60,0,0],"hue":0.5})] {
         let a = photocraft_engine::actions_cmds::Action::new("Native", vec![("image.adjustments.replaceColor".into(), p)]);
-        crate::atn_export::fallback("Direct adjustments", &a);
+        assert!(atn_cmds::export("Direct adjustments", &[&a], &[], false).is_err());
     }
 }
 

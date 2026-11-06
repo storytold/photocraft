@@ -1181,6 +1181,7 @@
 	History Brush	Előzményecset
 	Paints from the History panel's source state	Az Előzmények panel forrásállapotából fest
 	Sets the source for the history brush	Beállítja az előzményecset forrását
+	The History Brush source was deleted: set a new source in the History panel	Az előzményecset forrása törölve lett: állítson be új forrást az Előzmények panelen
 	Horizontal scale	Vízszintes méretarány
 	Horizontal type	Vízszintes szöveg
 	Hue Jitter	Színárnyalat ingadozása
@@ -1979,6 +1980,7 @@ layerLabel	Magenta	Bíbor
 	Size:	Méret:
 	Source: not set ({key}-click with Clone Stamp)	Forrás: nincs beállítva ({key}+kattintás a klónozó bélyegzővel)
 	Source: set	Forrás: beállítva
+	Source: {name}	Forrás: {name}
 	Style	Stílus
 	Subtract from selection  ({key})	Kivonás a kijelölésből  ({key})
 	Swap colours (X)	Színek cseréje (X)
@@ -3208,6 +3210,8 @@ cameraRaw	Yellow	Sárga
 	Constrain proportions	Arányok megtartása
 	Constraints	Megkötések
 	Background (Default)	Háttér (alapértelmezett)
+	Background (default)	Háttér (alapértelmezett)
+	Transparent (default)	Átlátszó (alapértelmezett)
 	Content-Aware Fill	Tartalomérzékeny kitöltés
 	Content-Aware Move Tool	Tartalomérzékeny mozgatás
 	Contract	Szűkítés
@@ -4416,6 +4420,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Érvénytelen számbevitel. {min}% és {max}% közötti egész szám szükséges. Az előző érték lett beillesztve.
 	Color Aware	Színalapú
 	Decontaminate Colors	Színek fertőtlenítése
@@ -4441,107 +4447,48 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	A művelet mentve, de a megerősítési beállítást nem sikerült menteni: {error}
-	Add a brief description for this action…	Adja meg a művelet rövid leírását…
-	Allow Tool Recording	Eszközrögzítés engedélyezése
-	Answer the open Actions editor question first	Először válaszoljon a műveletszerkesztő nyitott kérdésére
-	Apply to background	Alkalmazás a háttérre
-	Apply to subject	Alkalmazás a témára
-	Black and white	Fekete-fehér
-	Cancel and continue editing	Mégse és a szerkesztés folytatása
-	Choose color	Szín kiválasztása
-	Choose icon	Ikon kiválasztása
-	Choose icon and color	Ikon és szín kiválasztása
-	Classic Actions	Klasszikus műveletsorok
-	Clear All Actions	Összes művelet törlése
-	Clear search	Keresés törlése
-	Click action	Kattintási művelet
-	Close the open Actions editor first	Először zárja be a nyitott műveletszerkesztőt
-	Collapse all	Összes összecsukása
-	Colour lookup tables	Színkeresési táblázatok
-	Confirm or cancel the open action dialog first	Először erősítse meg vagy szakítsa meg a nyitott műveletpárbeszédet
-	Control	Ctrl
-	Default icon	Alapértelmezett ikon
-	Delete Action	Művelet törlése
-	Delete action	Művelet törlése
-	Delete group	Csoport törlése
-	Delete step	Lépés törlése
-	Delete the action "{name}"?	Törli a(z) „{name}” műveletet?
-	Delete the group "{name}"?	Törli a(z) „{name}” csoportot?
-	Discard	Elvetés
-	Download	Letöltés
-	Duplicate Action	Művelet megkettőzése
-	Duplicate action	Művelet megkettőzése
-	Duplicate group	Csoport megkettőzése
-	Duplicate step	Lépés megkettőzése
-	Edit Action	Művelet szerkesztése
-	Edit action	Művelet szerkesztése
-	Edit step settings	Lépésbeállítások szerkesztése
-	Enable step	Lépés engedélyezése
-	Expand all	Összes kibontása
-	Export Action…	Művelet exportálása…
-	Finish or cancel action playback and the pending step first	Először fejezze be vagy szakítsa meg a művelet lejátszását és a függőben lévő lépést
-	Finishing step…	Lépés befejezése…
-	Generated layer effects	Létrehozott réteghatások
-	Generated styles	Létrehozott stílusok
-	Grey	Szürke
-	Harmonize layers	Rétegek összehangolása
-	Hue and saturation	Színezet és telítettség
-	Import Actions…	Műveletek importálása…
-	Import actions or create a new action to get started.	A kezdéshez importáljon műveleteket, vagy hozzon létre új műveletet.
-	Insert Action	Művelet beszúrása
-	Insert Conditional	Feltétel beszúrása
-	Insert Menu Item	Menüelem beszúrása
-	Insert Path	Görbe beszúrása
-	Insert Stop	Leállítás beszúrása
-	Insert…	Beszúrás…
-	Keyboard shortcut	Billentyűparancs
-	Lavender	Levendula
-	Layer effects	Réteghatások
-	Light blue	Világoskék
-	List size	Lista mérete
-	Magic wand	Varázspálca
-	Merge layers	Rétegek egyesítése
-	Move step down	Lépés mozgatása lefelé
-	Move step up	Lépés mozgatása felfelé
-	New group	Új csoport
-	No steps yet	Még nincsenek lépések
-	Object selection	Objektumkijelölés
-	Play Action	Művelet lejátszása
-	Play Actions	Műveletek lejátszása
-	Play action	Művelet lejátszása
-	Play from selected step	Lejátszás a kijelölt lépéstől
+# Action Stop message (#8386)
+	Message	Üzenet
+# Playback Options (#5212)
 	Playback Options…	Lejátszási beállítások…
-	Play…	Lejátszás…
-	Preview on hover	Előnézet rámutatáskor
-	Record	Rögzítés
-	Recording	Rögzítés folyamatban
-	Remove background	Háttér eltávolítása
-	Save Action	Művelet mentése
-	Search actions	Műveletek keresése
-	Select an existing action step to play	Válasszon egy meglévő műveletlépést a lejátszáshoz
-	Select subject	Fő téma kijelölése
-	Show grid	Rács megjelenítése
-	Show step settings	Lépésbeállítások megjelenítése
-	Smart removal	Intelligens eltávolítás
-	Sort & View options	Rendezési és nézetbeállítások
-	Start recording to build your action	Indítsa el a rögzítést a művelet létrehozásához
-	Steps	Lépések
-	Stored action step	Tárolt műveletlépés
-	Stored settings	Tárolt beállítások
-	Teal	Kékeszöld
-	Text	Szöveg
-	Text colour	Szövegszín
-	The draft steps changed. Cancel this dialog and reopen the step.	A piszkozat lépései megváltoztak. Szakítsa meg ezt a párbeszédet, és nyissa meg újra a lépést.
-	The dragged action changed; drag it again	A húzott művelet megváltozott; húzza újra
-	The editor response does not belong to this draft	A szerkesztő válasza nem ehhez a piszkozathoz tartozik
-	There are unsaved changes. Do you want to save or discard them?	Nem mentett módosítások vannak. Menti vagy elveti őket?
-	This editor page is closed	Ez a szerkesztőoldal be van zárva
-	This step dialog belongs to another editor	Ez a lépéspárbeszéd egy másik szerkesztőhöz tartozik
-	Wait for the current action step to finish	Várja meg az aktuális műveletlépés befejezését
-	You haven't created any actions	Még nem hozott létre műveletet
-	Yours	Saját
+	Playback Options	Lejátszási beállítások
+	Accelerated	Gyorsított
+	Step by Step	Lépésenként
+	Pause For:	Szünet ennyi ideig:
+	Pause For	Szünet ennyi ideig
+	seconds	másodperc
+	Create a single history state	Egyetlen előzményállapot létrehozása
+	This Layer:	Ez a réteg:
+	Generator enabled	Generátor bekapcsolva
+	Move Up	Mozgatás felfelé
+	Move Down	Mozgatás lefelé
+	On your computer	A számítógépen
+	New file	Új fájl
+	Learn	Tanulás
+	Website	Weboldal
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	Nem csoportosított műveletsorok
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	A keret affin transzformációkat támogat; perspektivikus transzformációhoz válassza ki a képét
+	A frame supports affine transforms; select its image to warp it	A keret affin transzformációkat támogat; a hajlításhoz válassza ki a képét
+	Convert to Frame…	Átalakítás keretté…
+	Create a new custom frame	Új egyéni keret létrehozása
+	Create a new polygonal frame	Új sokszögű keret létrehozása
+	Create a new triangular frame	Új háromszögű keret létrehozása
+	Fit Content to Frame	Tartalom igazítása a kerethez
+	Fit Frame to Content	Keret igazítása a tartalomhoz
+	Frame coordinates must be finite and within 600000 pixels	A keret koordinátáinak végesnek és 600000 képponton belülinek kell lenniük
+	Import Image…	Kép importálása…
+	Invalid frame transform	Érvénytelen kerettranszformáció
+	Invalid nested file drop	Érvénytelen beágyazott fájlejtés
+	New Frame	Új keret
+	Replace Image…	Kép cseréje…
+	The frame is locked	A keret zárolva van
+	The frame is unavailable	A keret nem érhető el
+
+# Channels panel menu (#11451)
+	Channel Options…	Csatornabeállítások…
+	Specify Channels:	Csatornák megadása:
+	Not enough grayscale documents for this mode.	Nincs elég szürkeárnyalatos dokumentum ehhez a módhoz.
+	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
+	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
+	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.

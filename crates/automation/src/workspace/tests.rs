@@ -481,7 +481,6 @@ fn apply_data_set_is_judged_by_the_values_it_applies() {
     assert!(!visible(&headless));
 }
 
-/// Path-reading commands are refused before access; inline data keeps its precedence.
 #[test]
 fn automation_rejects_ambient_path_commands_and_preferences() {
     for (id, params) in [
@@ -495,7 +494,6 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"path": "/outside/set.aco"})),
         ("swatches.export", serde_json::json!({"path": "/outside/set.ase"})),
         ("actions.load", serde_json::json!({"path": "/outside/set.atn"})),
-        ("actions.replace", serde_json::json!({"path": "/outside/set.atn", "confirm": true})),
         ("actions.save", serde_json::json!({"path": "/outside/set.atn"})),
         ("style.presets.importAsl", serde_json::json!({"path": "/outside/set.asl"})),
         ("style.presets.exportAsl", serde_json::json!({"path": "/outside/set.asl"})),
@@ -513,8 +511,6 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ("swatches.import", serde_json::json!({"data": "QUJD"})),
         ("swatches.export", serde_json::json!({"format": "ase"})),
         ("actions.load", serde_json::json!({"data": "QUJD"})),
-        ("actions.replace", serde_json::json!({"data": "QUJD", "confirm": true})),
-        ("actions.replace", serde_json::json!({"data": "QUJD", "path": "/outside/unused.atn", "confirm": true})),
         ("actions.save", serde_json::json!({"set": "S"})),
         ("style.presets.importAsl", serde_json::json!({"data": "QUJD"})),
         ("style.presets.exportAsl", serde_json::json!({"group": "Basics"})),
@@ -576,33 +572,16 @@ fn registry_filesystem_path_params_are_classified() {
     assert!(unclassified.is_empty(), "filesystem path parameters in the command registry need an automation policy: {unclassified:?}");
 }
 
-/// Insert Path's `name` resolves a document vector path, even when the name resembles a file;
-/// filesystem-bearing Actions commands still require the existing automation policy.
+/// Shape Blur uses inline vector geometry without granting a headless caller filesystem access.
 #[test]
-fn insert_path_captures_document_geometry_without_filesystem_authority() {
-    let spec = photocraft_engine::command_specs().iter().find(|spec| spec.id == "actions.insertPath").unwrap();
-    assert!(!documents_filesystem_path_params(spec.id, spec.params));
-    for id in ["actions.load", "actions.save"] {
-        let spec = photocraft_engine::command_specs().iter().find(|spec| spec.id == id).unwrap();
-        assert!(documents_filesystem_path_params(spec.id, spec.params));
-        assert!(authorize_engine_command(id, &serde_json::json!({"path":"/outside/never-read.atn"})).is_err());
-        assert!(authorize_desktop_engine_command(id, &serde_json::json!({"path":"/outside/never-read.atn"})).is_err());
-    }
-    let mut headless = crate::Headless::new(); // No filesystem capability is granted.
-    headless.command_run("file.new", serde_json::json!({"width":8,"height":6})).unwrap();
-    headless.session.actions.list.push(photocraft_engine::actions_cmds::Action::new("Capture", vec![]));
-    let name = "/outside/document-curve";
-    let path = serde_json::json!({"fillRule":"evenodd","subpaths":[{"closed":false,"knots":[{"anchor":[1.0,2.0],"out":[3.0,4.0]},{"anchor":[6.0,5.0],"in":[4.0,3.0]}]}]});
-    headless.command_run("path.set", serde_json::json!({"name":name,"path":path})).unwrap();
-    let expected = headless.command_run("path.info", serde_json::json!({"name":name})).unwrap()["path"].clone();
-    let revision = headless.session.active().unwrap().revision;
-    headless.command_run("actions.insertPath", serde_json::json!({"action":"Capture","name":name})).unwrap();
-    assert_eq!(headless.session.active().unwrap().revision, revision);
-    assert_eq!(headless.session.actions.list[0].steps, vec![("path.set".into(), serde_json::json!({"name":"work","path":expected}))]);
-    let played = headless.command_run("actions.play", serde_json::json!({"action":"Capture"})).unwrap();
-    assert_eq!(played["ran"], 1);
-    assert!(played.get("failed").is_none());
-    assert_eq!(headless.command_run("path.info", serde_json::json!({"name":"work"})).unwrap()["path"], expected);
+fn shape_blur_accepts_inline_geometry_and_rejects_filesystem_strings() {
+    let mut headless = crate::headless::Headless::new();
+    headless.command_run("file.new", serde_json::json!({"width":8,"height":8})).unwrap();
+    headless
+        .command_run("filter.blur.shapeBlur", serde_json::json!({"radius":5,"shapePath":{"subpaths":[{"knots":[[0,0],[1,0],[1,1],[0,1]],"closed":true}]}}))
+        .unwrap();
+    let error = headless.command_run("filter.blur.shapeBlur", serde_json::json!({"radius":5,"shapePath":"/outside/shape.svg"})).unwrap_err();
+    assert!(error.to_string().contains("nonempty vector path"), "{error}");
 }
 
 #[test]
@@ -731,6 +710,7 @@ fn svg_update_keeps_inline_and_builtin_smart_filters_working() {
     }
 }
 
+/// Distinguish filesystem parameters from descriptions of inline vector paths.
 fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
     // These commands return settings or installed-profile paths; they do not accept a host
     // filesystem path as an automation input.
@@ -740,7 +720,8 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
     // These registry descriptions refer to document vector paths, not host files.
     if matches!(
         id,
-        "filter.blurGallery.pathBlur"
+        "filter.blur.shapeBlur"
+            | "filter.blurGallery.pathBlur"
             | "filter.render.flame"
             | "shape.create"
             | "shape.edit"
@@ -781,6 +762,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.combineShapes.intersectShapeAreas"
             | "layer.combineShapes.excludeOverlappingShapes"
             | "layer.combineShapes.mergeShapeComponents"
+            | "layer.new.frame"
     ) || id.starts_with("layer.newFillLayer.")
         || id.starts_with("layer.newAdjustmentLayer.")
     {
@@ -1087,4 +1069,65 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     assert!(workspace.read(&target.to_string_lossy()).is_err(), "not under the read root");
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
+}
+
+#[test]
+fn csh_import_requires_inline_data_in_automation() {
+    let id = "shape.presets.importCsh";
+    for path in ["/outside/set.csh", "set.csh", "../set.csh", ""] {
+        let params = serde_json::json!({"path": path});
+        assert!(authorize_engine_command(id, &params).is_err(), "{path}");
+        assert!(authorize_desktop_engine_command(id, &params).is_err(), "{path}");
+    }
+    // The importer gives inline data precedence, even when a path is also supplied.
+    for params in [serde_json::json!({"data": "QUJD"}), serde_json::json!({"data": "QUJD", "path": "/outside/set.csh"})] {
+        assert!(authorize_engine_command(id, &params).is_ok());
+        assert!(authorize_desktop_engine_command(id, &params).is_ok());
+    }
+    let mut headless = crate::headless::Headless::new();
+    let error = headless.command_run(id, serde_json::json!({"path": "/outside/set.csh"})).unwrap_err();
+    assert!(error.to_string().contains("uses ambient filesystem paths and is disabled"), "{error}");
+}
+
+/// A one-shape CSH set (version 2) named `name`, with a single open one-knot subpath.
+fn one_shape_csh(name: &str) -> Vec<u8> {
+    use photocraft_psd::path::{PathData, PsdKnot, PsdSubpath};
+    let mut bytes = b"cush".to_vec();
+    bytes.extend_from_slice(&2u32.to_be_bytes());
+    bytes.extend_from_slice(&1u32.to_be_bytes());
+    let units: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
+    bytes.extend_from_slice(&(units.len() as u32).to_be_bytes());
+    for unit in units {
+        bytes.extend_from_slice(&unit.to_be_bytes());
+    }
+    while !bytes.len().is_multiple_of(4) {
+        bytes.push(0);
+    }
+    bytes.extend_from_slice(&1u32.to_be_bytes());
+    let mut body = vec![2, b'i', b'd'];
+    for bound in [0i32, 0, 100, 100] {
+        body.extend_from_slice(&bound.to_be_bytes());
+    }
+    let knot = PsdKnot { linked: true, pre: (0.25, 0.25), anchor: (0.5, 0.5), post: (0.75, 0.75) };
+    body.extend_from_slice(&PathData::from_subpaths(&[PsdSubpath { closed: false, operation: 0, knots: vec![knot] }], false).to_bytes());
+    while !body.len().is_multiple_of(4) {
+        body.push(0);
+    }
+    bytes.extend_from_slice(&(body.len() as u32).to_be_bytes());
+    bytes.extend_from_slice(&body);
+    bytes
+}
+
+/// The headless import itself reads inline `data` before `path`: a valid set imports even when
+/// the path beside it cannot be read (and would be refused as an ambient path on its own).
+#[test]
+fn csh_import_with_inline_data_ignores_an_unreadable_path() {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.encode(one_shape_csh("Inline"));
+    let mut headless = crate::headless::Headless::new();
+    let params = serde_json::json!({"data": data, "path": "/outside/missing-set.csh", "group": "Inline Set"});
+    let result = headless.command_run("shape.presets.importCsh", params).unwrap();
+    assert_eq!(result["count"], 1, "{result}");
+    assert_eq!(result["names"], serde_json::json!(["Inline"]), "{result}");
+    assert_eq!(result["group"], "Inline Set", "{result}");
 }

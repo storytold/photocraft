@@ -1,33 +1,26 @@
 //! The crate's integration tests, linked into one test binary.
 
-mod actions_clear_all;
 mod actions_duplicate;
 mod actions_panel_menu;
 mod actions_record_again;
-mod actions_replace;
-#[path = "../support/atn_export.rs"]
-mod atn_export;
-
-mod action_metadata;
-mod actions_editor_draft;
-mod actions_group_delete;
-mod actions_owned_preview;
 mod actions_single_history;
 mod affinity;
 mod artboard_export_names;
-mod atn_action_colors;
-mod atn_call_scopes;
+mod atn_adjustment_make_props;
+mod atn_calculations;
 mod atn_classic_gradient;
+mod atn_color_lookup;
 mod atn_content_aware_fill;
 mod atn_crystallize_cell_size;
+mod atn_dialog_filters;
 mod atn_direct_adjustments;
 mod atn_layer_style;
-mod atn_menu_item;
-mod atn_native_admission;
 mod atn_newer_events;
 mod atn_reference_forms;
+mod atn_review_regressions;
 mod atn_ripple_amount;
 mod atn_selective_color;
+mod atn_shape_blur;
 mod atn_shear;
 mod atn_stroke_width;
 mod atn_type_path;
@@ -37,6 +30,7 @@ mod background_layer_consistency;
 mod brush_smoothing;
 mod camera_raw_exposure_clamp;
 mod camera_raw_noise_clamp;
+mod canvas_artboard_crop;
 mod clipping_semantics;
 mod close_document;
 mod command_lookup;

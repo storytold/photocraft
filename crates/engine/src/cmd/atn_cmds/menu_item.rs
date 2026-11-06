@@ -9,7 +9,12 @@ fn menu_event(id: &str) -> Option<&'static Event> {
     if id != "image.imageSize" && !id.starts_with("filter.") {
         return None;
     }
-    EVENTS.iter().find(|e| e.ids.len() == 1 && e.ids.first().copied() == Some(id) && crate::commands::find(id).is_some())
+    EVENTS.iter().find(|e| {
+        e.ids == [id]
+            && !e.name.is_empty()
+            && event_for(&AtnEvent::name(e.name)).is_some_and(|mapped| mapped.code == e.code && mapped.ids == e.ids)
+            && crate::commands::find(id).is_some()
+    })
 }
 
 /// Menu choices use existing event mappings rather than inventing event names from command ids.
@@ -37,8 +42,11 @@ pub fn menu_item_command(p: &Value) -> Result<&str> {
     }
     let id = p.get("id").and_then(Value::as_str).ok_or_else(|| bad(MENU_ITEM, "select a menu command"))?;
     let event = menu_event(id).ok_or_else(|| bad(MENU_ITEM, "the command has no unambiguous supported menu event"))?;
-    if p.get("eventKind").and_then(Value::as_str) == Some("code") && event.code.len() != 4 {
-        return Err(bad(MENU_ITEM, "this menu event has only a string name"));
+    if p.get("eventKind").and_then(Value::as_str) == Some("code") {
+        let code = event.code.as_bytes().try_into().ok().map(AtnEvent::Code);
+        if !code.as_ref().and_then(event_for).is_some_and(|mapped| mapped.name == event.name && mapped.ids == event.ids) {
+            return Err(bad(MENU_ITEM, "this menu event has no unambiguous four-character code"));
+        }
     }
     Ok(id)
 }
@@ -47,7 +55,10 @@ pub fn menu_item_command(p: &Value) -> Result<&str> {
 pub(super) fn from_event(event: &AtnEvent) -> Option<Value> {
     let mapped = event_for(event)?;
     let id = *mapped.ids.first()?;
-    menu_event(id)?;
+    let canonical = menu_event(id)?;
+    if canonical.name != mapped.name || canonical.code != mapped.code {
+        return None;
+    }
     let kind = match event {
         AtnEvent::Code(code) if mapped.code.as_bytes() == code => "code",
         AtnEvent::Name(name) if mapped.name.as_bytes() == name => "name",

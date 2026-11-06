@@ -1,27 +1,11 @@
-use super::convert::{export_groups, import_with_encoding};
-use super::sidecar;
+use super::convert::{UniqueNames, export, import_with_encoding};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
-/// Validate and normalize an external archive before committing actions, physical rows and shortcuts.
+/// Load a set and retarget its own action references once, preserving foreign qualifications
+/// even when the caller changes the imported set's name or action names collide.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
-    import_actions(s, p, false)
-}
-
-/// Whole-library replacement retains the canonical importer and requires explicit consent.
-pub(super) fn replace(s: &mut Session, p: &Value) -> Result<Value> {
-    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
-        return Err(bad("actions.replace", "replacing all actions requires `confirm`: true"));
-    }
-    if p.get("replace").is_some() {
-        return Err(bad("actions.replace", "use `confirm`: true; `replace` belongs to actions.load's same-set mode"));
-    }
-    import_actions(s, p, true)
-}
-
-/// Prepare a complete canonical definition before either import mode publishes anything.
-fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
-    let cmd = if whole { "actions.replace" } else { "actions.load" };
-    if s.actions.recording_active() || s.actions.playing > 0 || s.actions.held_playback.is_some() {
+    let cmd = "actions.load";
+    if s.actions.recording.is_some() || s.actions.playing > 0 {
         return Err(bad(cmd, "stop recording or playing before loading actions"));
     }
     let encoding = match p.get("encoding") {
@@ -32,27 +16,11 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
     };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, cmd, ".atn file")?;
     let mut imp = import_with_encoding(&bytes, encoding).map_err(|e| bad(cmd, e))?;
-    // Legacy imports still use the existing conversion route. Version16 additionally keeps
-    // raw occurrences; normalization of the external import remains a deliberate edit.
-    let provenance = crate::actions_cmds::library::decode(&bytes).ok();
-    if let Some(raw) = &provenance {
-        for (action, original) in imp.actions.iter_mut().zip(&raw.list) {
-            crate::actions_cmds::library::bind_import(action, original);
-        }
-        for (index, set) in imp.sets.iter_mut().enumerate() {
-            set.metadata = sidecar::empty_source(raw, index);
-        }
-    }
+    let original_set = imp.set.clone();
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
-            if imp.sets.len() != 1 {
-                return Err(bad(cmd, "set override requires exactly one real set"));
-            }
             imp.set = n.trim().to_string();
-            if let Some(set) = imp.sets.first_mut() {
-                set.name = imp.set.clone();
-            }
             for a in &mut imp.actions {
                 a.set = Some(imp.set.clone());
             }
@@ -64,113 +32,68 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(_) => return Err(bad(cmd, "`replace` must be true or false")),
     };
-    let targets: std::collections::HashSet<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
-    let keep = |action: &&Action| !whole && (!replace || !targets.contains(super::logical_set_name(action.set.as_deref())));
-    let retained = s.actions.list.iter().filter(keep).count();
-    if retained.checked_add(imp.actions.len()).is_none_or(|count| count > super::atn::MAX_TOTAL_ACTIONS) {
-        return Err(bad(cmd, "combined action library exceeds the action limit"));
+    if replace {
+        s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
     }
-    let mut total_steps = 0usize;
-    for action in s.actions.list.iter().filter(keep).chain(imp.actions.iter()) {
-        total_steps = total_steps
-            .checked_add(action.steps.len())
-            .filter(|count| *count <= super::atn::MAX_TOTAL_ITEMS)
-            .ok_or_else(|| bad(cmd, "combined action library exceeds the step limit"))?;
+    let mut taken = UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
+    let mut names = Vec::with_capacity(imp.actions.len());
+    // The file's name of each action that had to be renamed, and its new name.
+    let mut renamed: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut steps = 0usize;
+    let mut added = Vec::with_capacity(imp.actions.len());
+    for mut a in imp.actions {
+        let name = taken.claim(&a.name);
+        if name != a.name {
+            renamed.entry(a.name.clone()).or_insert_with(|| name.clone());
+        }
+        a.name = name.clone();
+        steps = steps.saturating_add(a.steps.len());
+        names.push(name);
+        added.push(a);
     }
-    let old_groups = sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?;
-    let retained_groups: Vec<_> = old_groups.iter().filter(|(name, _)| !whole && (!replace || !targets.contains(*name))).collect();
-    let sidecar_needed = imp.sets.iter().any(|set| set.metadata.is_some())
-        || retained_groups.iter().any(|(_, selection)| {
-            selection.source.is_some()
-                || selection.actions.iter().any(|action| action.atn_metadata.is_some() || !action.description.is_empty() || !action.icon.is_empty())
-        });
-    let overhead = usize::from(sidecar_needed);
-    if retained_groups.len().checked_add(imp.sets.len()).and_then(|count| count.checked_add(overhead)).is_none_or(|count| count > super::atn::MAX_SETS) {
-        return Err(bad(cmd, "combined action library exceeds the set limit"));
-    }
-    if retained.checked_add(imp.actions.len()).and_then(|count| count.checked_add(overhead)).is_none_or(|count| count > super::atn::MAX_TOTAL_ACTIONS)
-        || total_steps.checked_add(overhead).is_none_or(|count| count > super::atn::MAX_TOTAL_ITEMS)
-    {
-        return Err(bad(cmd, "combined action library leaves no space for its metadata sidecar"));
-    }
-    drop(retained_groups);
-    drop(old_groups);
-    let previous_rows: std::collections::HashSet<String> = s.actions.sets.iter().filter(|name| !whole && targets.contains(*name)).cloned().collect();
-    let old_rows = s.actions.sets.iter().filter(|name| !whole && (!replace || !targets.contains(*name))).count();
-    let new_rows = if provenance.is_some() || imp.sets.iter().any(|set| set.metadata.is_some()) {
-        imp.sets.len()
-    } else {
-        imp.sets
-            .iter()
-            .filter(|set| set.actions.is_empty() || previous_rows.contains(&set.name))
-            .map(|set| set.name.as_str())
-            .collect::<std::collections::HashSet<_>>()
-            .len()
-    };
-    if old_rows.checked_add(new_rows).is_none_or(|count| count > super::atn::MAX_SETS) {
-        return Err(bad(cmd, "too many action set rows"));
-    }
-    let names =
-        super::normalize_import(&mut imp, s.actions.list.iter().filter(keep).map(|action| action.name.clone()), true).map_err(|error| bad(cmd, error))?;
-    let keys = imp.function_keys.clone();
-    let steps: usize = imp.actions.iter().map(|action| action.steps.len()).sum();
-    let added = imp.actions;
-    let set_names: Vec<String> = imp.sets.iter().map(|set| set.name.clone()).collect();
-    let mut proposed = if whole {
-        // Replacement owns incoming archive provenance, not the discarded wrapper or notes.
-        let mut fresh = crate::actions_cmds::ActionState::default();
-        fresh.library.legacy = s.actions.library.legacy.clone();
-        fresh
-    } else {
-        crate::actions_cmds::library::definition_copy(&s.actions)
-    };
-    if !whole && replace {
-        proposed.list.retain(|action| !targets.contains(super::logical_set_name(action.set.as_deref())));
-        sidecar::retire_sets(&mut proposed, &targets);
-    }
-    proposed.list.extend(added);
-    for (index, set) in imp.sets.into_iter().enumerate() {
-        if provenance.is_some() || set.metadata.is_some() {
-            let slot = proposed.sets.len();
-            sidecar::install_row(&mut proposed, &set.name, set.metadata);
-            if let Some(raw) = &provenance {
-                crate::actions_cmds::library::import_row(&mut proposed, raw, index, slot);
+    // Play, Conditional and Batch steps call actions by name: follow the renames in the actions just
+    // loaded, each target looked up once by the name the file gave it.
+    for a in &mut added {
+        for (id, params) in &mut a.steps {
+            // A qualified Batch reference belongs to the file's original set, not to a
+            // foreign set which happens to have the destination override's name.
+            if id == "file.automate.batch" && params.get("set").and_then(Value::as_str) == Some(original_set.as_str()) {
+                params["set"] = json!(imp.set);
+            } else if id == "file.automate.batch" && params.get("set").is_some_and(|set| !set.is_null()) {
+                continue;
             }
-        } else if (set.actions.is_empty() || previous_rows.contains(&set.name)) && !proposed.sets.contains(&set.name) {
-            sidecar::install_row(&mut proposed, &set.name, None);
+            let keys: &[&str] = match id.as_str() {
+                "actions.play" => &["action"],
+                "actions.conditional" => &["then", "else"],
+                "file.automate.batch" => &["action"],
+                _ => &[],
+            };
+            for key in keys {
+                if let Some(to) = params.get(*key).and_then(Value::as_str).and_then(|n| renamed.get(n)) {
+                    params[*key] = json!(to);
+                }
+            }
         }
     }
-    let mut shortcuts = s.prefs().shortcuts.clone();
-    let mut alternate = s.prefs().alternate_shortcuts.clone();
-    if whole {
-        let removed_keys: std::collections::HashSet<_> =
-            s.actions.list.iter().map(|action| format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, action.name)).collect();
-        shortcuts.retain(|key, _| !removed_keys.contains(key));
-        alternate.retain(|key, _| !removed_keys.contains(key));
+    s.actions.list.extend(added);
+    // A set saved with no actions (Photoshop saves an empty set) is an empty folder, like one New
+    // Set made.
+    if !s.actions.list.iter().any(|a| a.set.as_deref() == Some(imp.set.as_str())) && !s.actions.sets.contains(&imp.set) {
+        s.actions.sets.push(imp.set.clone());
     }
-    for (name, key) in &keys {
-        shortcuts.retain(|id, value| !(id.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && value == key));
-        shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
+    let keys: Vec<(String, String)> = imp.function_keys.into_iter().map(|(n, k)| (renamed.get(&n).cloned().unwrap_or(n), k)).collect();
+    if !keys.is_empty() {
+        s.edit_prefs(|prefs| {
+            for (name, key) in &keys {
+                // A function key belongs to one action.
+                prefs.shortcuts.retain(|k, v| !(k.starts_with(crate::actions_cmds::PLAY_SHORTCUT_PREFIX) && v == key));
+                prefs.shortcuts.insert(format!("{}{name}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX), key.clone());
+            }
+        });
     }
-    if whole {
-        crate::actions_cmds::library::check_definition(&proposed, &shortcuts).map_err(|error| bad(cmd, error))?;
-    } else {
-        // Load may collect archives with different notes for separate export, as before.
-        // Preserve checked physical bindings without requiring a combined durable archive.
-        crate::actions_cmds::library::placement::validate(&proposed).map_err(|error| bad(cmd, error))?;
-    }
-    s.actions.list = proposed.list;
-    s.actions.sets = proposed.sets;
-    s.actions.library = proposed.library;
-    s.actions.atn_set_rows = proposed.atn_set_rows;
-    s.edit_prefs(|prefs| {
-        prefs.shortcuts = shortcuts;
-        prefs.alternate_shortcuts = alternate;
-    });
     s.actions.touch();
     Ok(json!({
         "set": imp.set,
-        "sets": set_names,
         "actions": names,
         "steps": steps,
         "unsupported": imp.unsupported,
@@ -180,11 +103,8 @@ fn import_actions(s: &mut Session, p: &Value, whole: bool) -> Result<Value> {
     }))
 }
 
-/// Encode the selected action or library while retaining its physical source and metadata.
 pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.save";
-    let physical = crate::actions_cmds::library::RowBinding::requested(&s.actions, p, crate::actions_cmds::library::placement::SelectorUse::Folder)
-        .map_err(|error| bad(cmd, error))?;
     crate::actions_cmds::flush_recording(s)?;
     let skip = match p.get("skipUnsupported") {
         None | Some(Value::Null) => false,
@@ -194,75 +114,34 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
     let set_param = match p.get("set") {
         None | Some(Value::Null) => None,
         // A set is found by its exact name, as `actions.record` finds it: one loaded from a
-        // Photoshop file or a legacy library may have surrounding spaces. Others are trimmed.
+        // Photoshop file or an older actions.json may have surrounding spaces. Others are trimmed.
         Some(Value::String(n)) if crate::actions_edit_cmds::set_names(s).contains(n) => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
-    let physical_slot = physical.as_ref().map(|binding| binding.slot(&s.actions)).transpose().map_err(|error| bad(cmd, error))?;
-    let mut groups = if let Some(slot) = physical_slot {
-        let name = s.actions.sets.get(slot).ok_or_else(|| bad(cmd, "the action folder no longer exists"))?;
-        if set_param.as_ref().is_some_and(|selected| selected != name) {
-            return Err(bad(cmd, "the physical folder name changed"));
-        }
-        let origin = s.actions.library.rows.get(slot).and_then(Option::as_ref).map(|row| row.key());
-        if origin.is_none() && s.actions.sets.iter().filter(|caption| *caption == name).count() != 1 {
-            return Err(bad(cmd, "the physical folder has no unambiguous canonical origin"));
-        }
-        let selected: Vec<_> = sidecar::library_groups(&s.actions)
-            .map_err(|error| bad(cmd, error))?
-            .into_iter()
-            .filter(|(caption, selection)| *caption == name && selection.raw.as_ref().map(|row| row.key()) == origin)
-            .map(|(caption, selection)| (caption.to_string(), selection))
-            .collect();
-        if selected.is_empty() {
-            return Err(bad(cmd, "the physical action folder is unavailable"));
-        }
-        selected
-    } else if p.get("action").is_some() {
+    let (set, actions): (String, Vec<&Action>) = if p.get("action").is_some() {
         let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
         let a = &s.actions.list[idx];
-        vec![(
-            set_param.clone().unwrap_or_else(|| super::logical_set_name(a.set.as_deref()).to_string()),
-            sidecar::selection(&s.actions, a).map_err(|error| bad(cmd, error))?,
-        )]
-    } else if let Some(set) = &set_param {
-        let groups = sidecar::groups(&s.actions, Some(set)).map_err(|error| bad(cmd, error))?;
-        if groups.is_empty() {
+        (set_param.or_else(|| a.set.clone()).unwrap_or_else(|| a.name.clone()), vec![a])
+    } else if let Some(set) = set_param {
+        let list: Vec<&Action> = s.actions.list.iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
+        // An empty set New Set made is written with no actions, as Photoshop saves one.
+        if list.is_empty() && !s.actions.sets.contains(&set) {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }
-        groups.into_iter().map(|(name, selection)| (name.to_string(), selection)).collect()
+        (set, list)
     } else {
-        if s.actions.list.is_empty() && s.actions.sets.is_empty() {
+        if s.actions.list.is_empty() {
             return Err(bad(cmd, "there are no actions to save"));
         }
-        sidecar::groups(&s.actions, None).map_err(|error| bad(cmd, error))?.into_iter().map(|(name, selection)| (name.to_string(), selection)).collect()
+        (DEFAULT_SET.to_string(), s.actions.list.iter().collect())
     };
-    // Preserve the old default single-set output name; a multi-set Save keeps each real group.
-    if p.get("action").is_none()
-        && set_param.is_none()
-        && physical_slot.is_none()
-        && groups.len() == 1
-        && let Some((name, _)) = groups.first_mut()
-        && name != super::UNGROUPED_SET
-    {
-        *name = DEFAULT_SET.to_string();
-    }
-    let names: Vec<String> = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.name.clone()).collect();
-    let set_names: Vec<String> = groups.iter().map(|(name, _)| name.clone()).collect();
-    let set = set_param.or_else(|| set_names.first().cloned()).unwrap_or_else(|| DEFAULT_SET.to_string());
+    let names: Vec<String> = actions.iter().map(|a| a.name.clone()).collect();
     let keys: Vec<(String, String)> =
         s.prefs().shortcuts.iter().filter_map(|(k, v)| k.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX).map(|n| (n.to_string(), v.clone()))).collect();
-    let steps: usize = groups.iter().flat_map(|(_, selection)| &selection.actions).map(|action| action.steps.len()).sum();
-    let borrowed: Vec<_> = groups
-        .iter()
-        .map(|(name, selection)| {
-            (name.as_str(), sidecar::Selection { actions: selection.actions.clone(), source: selection.source.clone(), raw: selection.raw.clone() })
-        })
-        .collect();
-    let (bytes, skipped) = export_groups(&borrowed, &keys, skip).map_err(|error| bad(cmd, error))?;
-    let steps = steps.saturating_sub(skipped.len());
-    let mut out = json!({"set": set, "sets": set_names, "actions": names, "steps": steps, "bytes": bytes.len(), "skipped": skipped});
+    let (bytes, skipped) = export(&set, &actions, &keys, skip).map_err(|e| bad(cmd, e))?;
+    let steps: usize = actions.iter().map(|a| a.steps.len()).sum::<usize>().saturating_sub(skipped.len());
+    let mut out = json!({"set": set, "actions": names, "steps": steps, "bytes": bytes.len(), "skipped": skipped});
     match p.get("path") {
         None | Some(Value::Null) => {
             out["data"] = json!(photocraft_paint::tile::b64_encode(&bytes));

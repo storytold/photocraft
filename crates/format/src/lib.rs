@@ -32,7 +32,6 @@ mod convert;
 mod finite;
 pub mod manifest;
 mod migrate;
-mod noreplace;
 pub mod read;
 mod store;
 pub mod zip;
@@ -48,8 +47,7 @@ pub use autosave::RecoveryStore;
 pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, recover};
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
-pub use noreplace::{PublishNewError, rename_noreplace, write_noreplace};
-pub use read::read_file;
+pub use read::{read_file, read_file_limited};
 pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats, read_entry};
 
 /// File extension of the native format.

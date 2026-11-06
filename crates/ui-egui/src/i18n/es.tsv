@@ -1896,6 +1896,7 @@
 	Soften	Suavizar
 	Source	Origen
 	Source: set	Origen: establecido
+	Source: {name}	Origen: {name}
 	Sponge Tool	Herramienta Esponja
 	Spot Healing Brush Tool	Herramienta Pincel corrector puntual
 	Spread	Extensión
@@ -4195,6 +4196,8 @@ navigator	Zoom	Zoom
 	Step {step} is waiting for its dialog	El paso {step} está esperando su cuadro de diálogo
 @plural	{n} action|{n} actions	{n} acción|{n} acciones
 	Background (Default)	Fondo (predeterminado)
+	Background (default)	Fondo (predeterminado)
+	Transparent (default)	Transparente (predeterminado)
 	Include All Subfolders	Incluir todas las subcarpetas
 	Auto Add/Delete	Añadir/eliminar automáticamente
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	No actives también Imagen especular en Ajustes de impresión: las dos inversiones se anulan.
@@ -4247,6 +4250,7 @@ navigator	Zoom	Zoom
 	Automatically Check for Updates	Buscar actualizaciones automáticamente
 	Paints from the History panel's source state	Pinta a partir del estado de origen del panel Historia
 	Sets the source for the history brush	Establece el origen del pincel de historia
+	The History Brush source was deleted: set a new source in the History panel	Se eliminó el origen del pincel de historia: establece un nuevo origen en el panel Historia
 	Highlight Mode	Modo de luces
 	Highlight Color	Color de luces
 	Highlight Opacity	Opacidad de luces
@@ -4407,6 +4411,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entrada numérica no válida. Se requiere un número entero entre {min}% y {max}%. Se ha insertado el valor anterior.
 	Color Aware	Según color
 	Decontaminate Colors	Descontaminar colores
@@ -4433,107 +4439,49 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	La acción se guardó, pero no se pudo guardar la preferencia de confirmación: {error}
-	Add a brief description for this action…	Añade una breve descripción de esta acción…
-	Allow Tool Recording	Permitir la grabación de herramientas
-	Answer the open Actions editor question first	Responde primero a la pregunta abierta en el editor de acciones
-	Apply to background	Aplicar al fondo
-	Apply to subject	Aplicar al sujeto
-	Black and white	Blanco y negro
-	Cancel and continue editing	Cancelar y seguir editando
-	Choose color	Elegir color
-	Choose icon	Elegir icono
-	Choose icon and color	Elegir icono y color
-	Classic Actions	Acciones clásicas
-	Clear All Actions	Borrar todas las acciones
-	Clear search	Borrar búsqueda
-	Click action	Acción de clic
-	Close the open Actions editor first	Cierra primero el editor de acciones abierto
-	Collapse all	Contraer todo
-	Colour lookup tables	Tablas de consulta de color
-	Confirm or cancel the open action dialog first	Confirma o cancela primero el cuadro de diálogo de acción abierto
-	Control	Ctrl
-	Default icon	Icono predeterminado
-	Delete Action	Eliminar acción
-	Delete action	Eliminar acción
-	Delete group	Eliminar grupo
-	Delete step	Eliminar paso
-	Delete the action "{name}"?	¿Eliminar la acción «{name}»?
-	Delete the group "{name}"?	¿Eliminar el grupo «{name}»?
-	Discard	Descartar
-	Download	Descargar
-	Duplicate Action	Duplicar acción
-	Duplicate action	Duplicar acción
-	Duplicate group	Duplicar grupo
-	Duplicate step	Duplicar paso
-	Edit Action	Editar acción
-	Edit action	Editar acción
-	Edit step settings	Editar ajustes del paso
-	Enable step	Activar paso
-	Expand all	Expandir todo
-	Export Action…	Exportar acción…
-	Finish or cancel action playback and the pending step first	Finaliza o cancela primero la reproducción de la acción y el paso pendiente
-	Finishing step…	Finalizando paso…
-	Generated layer effects	Efectos de capa generados
-	Generated styles	Estilos generados
-	Grey	Gris
-	Harmonize layers	Armonizar capas
-	Hue and saturation	Tono y saturación
-	Import Actions…	Importar acciones…
-	Import actions or create a new action to get started.	Importa acciones o crea una nueva para empezar.
-	Insert Action	Insertar acción
-	Insert Conditional	Insertar condición
-	Insert Menu Item	Insertar elemento de menú
-	Insert Path	Insertar trazado
-	Insert Stop	Insertar detención
-	Insert…	Insertar…
-	Keyboard shortcut	Atajo de teclado
-	Lavender	Lavanda
-	Layer effects	Efectos de capa
-	Light blue	Azul claro
-	List size	Tamaño de lista
-	Magic wand	Varita mágica
-	Merge layers	Combinar capas
-	Move step down	Mover paso abajo
-	Move step up	Mover paso arriba
-	New group	Nuevo grupo
-	No steps yet	Aún no hay pasos
-	Object selection	Selección de objetos
-	Play Action	Reproducir acción
-	Play Actions	Reproducir acciones
-	Play action	Reproducir acción
-	Play from selected step	Reproducir desde el paso seleccionado
+# Action Stop message (#8386)
+	Message	Mensaje
+# Playback Options (#5212)
 	Playback Options…	Opciones de reproducción…
-	Play…	Reproducir…
-	Preview on hover	Vista previa al pasar el cursor
-	Record	Grabar
-	Recording	Grabando
-	Remove background	Quitar el fondo
-	Save Action	Guardar acción
-	Search actions	Buscar acciones
-	Select an existing action step to play	Selecciona un paso de acción existente para reproducirlo
-	Select subject	Seleccionar sujeto
-	Show grid	Mostrar cuadrícula
-	Show step settings	Mostrar ajustes del paso
-	Smart removal	Eliminación inteligente
-	Sort & View options	Opciones de orden y vista
-	Start recording to build your action	Inicia la grabación para crear tu acción
-	Steps	Pasos
-	Stored action step	Paso de acción guardado
-	Stored settings	Ajustes guardados
-	Teal	Verde azulado
-	Text	Texto
-	Text colour	Color del texto
-	The draft steps changed. Cancel this dialog and reopen the step.	Los pasos del borrador han cambiado. Cancela este cuadro de diálogo y vuelve a abrir el paso.
-	The dragged action changed; drag it again	La acción arrastrada ha cambiado; vuelve a arrastrarla
-	The editor response does not belong to this draft	La respuesta del editor no pertenece a este borrador
-	There are unsaved changes. Do you want to save or discard them?	Hay cambios sin guardar. ¿Quieres guardarlos o descartarlos?
-	This editor page is closed	Esta página del editor está cerrada
-	This step dialog belongs to another editor	Este cuadro de diálogo de paso pertenece a otro editor
-	Wait for the current action step to finish	Espera a que termine el paso de acción actual
-	You haven't created any actions	No has creado ninguna acción
-	Yours	Tus acciones
+	Playback Options	Opciones de reproducción
+	Accelerated	Acelerada
+	Step by Step	Paso a paso
+	Pause For:	Pausa de:
+	Pause For	Pausa de
+	seconds	segundos
+	Create a single history state	Crear un solo estado de historia
+	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el trazado de trabajo
+	Generator enabled	Generador activado
+	This Layer:	Esta capa:
+	Move Up	Mover arriba
+	Move Down	Mover abajo
+	On your computer	En su ordenador
+	New file	Nuevo archivo
+	Learn	Aprender
+	Website	Sitio web
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	Acciones sin agrupar
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Un marco admite transformaciones afines; seleccione su imagen para transformaciones de perspectiva
+	A frame supports affine transforms; select its image to warp it	Un marco admite transformaciones afines; seleccione su imagen para deformarla
+	Convert to Frame…	Convertir en marco…
+	Create a new custom frame	Crear un nuevo marco personalizado
+	Create a new polygonal frame	Crear un nuevo marco poligonal
+	Create a new triangular frame	Crear un nuevo marco triangular
+	Fit Content to Frame	Ajustar contenido al marco
+	Fit Frame to Content	Ajustar marco al contenido
+	Frame coordinates must be finite and within 600000 pixels	Las coordenadas del marco deben ser finitas y estar dentro de 600000 píxeles
+	Import Image…	Importar imagen…
+	Invalid frame transform	Transformación de marco no válida
+	Invalid nested file drop	Soltado de archivo anidado no válido
+	New Frame	Nuevo marco
+	Replace Image…	Reemplazar imagen…
+	The frame is locked	El marco está bloqueado
+	The frame is unavailable	El marco no está disponible
+
+# Channels panel menu (#11451)
+	Channel Options…	Opciones de canal…
+	Specify Channels:	Especificar canales:
+	Not enough grayscale documents for this mode.	No hay suficientes documentos en escala de grises para este modo.
+	Pick a different document for each channel.	Elija un documento distinto para cada canal.
+	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
+	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.

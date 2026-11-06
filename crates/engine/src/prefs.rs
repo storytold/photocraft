@@ -1085,16 +1085,37 @@ impl Default for Integrations {
     }
 }
 
+choice!(
+    /// Playback Options › Performance: how fast a person's Play runs an action's steps.
+    PlaybackPerformance { Accelerated = "accelerated", StepByStep = "step", Pause = "pause" } default Accelerated
+);
+
 /// Actions panel Playback Options. These are saved independently of an action library.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Actions {
     pub create_single_history_state: bool,
+    /// Accelerated, Step by Step or Pause For. Agents and headless playback always run at once.
+    pub performance: PlaybackPerformance,
+    /// Pause For's whole seconds between steps, 1 to 60 (the dialog keeps it while another mode
+    /// is chosen, as the reference application does).
+    pub pause_seconds: u8,
 }
 
 impl Default for Actions {
     fn default() -> Self {
-        Self { create_single_history_state: true }
+        Self { create_single_history_state: true, performance: PlaybackPerformance::Accelerated, pause_seconds: 1 }
+    }
+}
+
+impl Actions {
+    /// Shortest and longest Pause For, in seconds.
+    pub const PAUSE_SECONDS: std::ops::RangeInclusive<u8> = 1..=60;
+
+    /// Pause For's seconds, within [`Self::PAUSE_SECONDS`] also when a hand-edited file holds
+    /// another number.
+    pub fn pause_seconds(&self) -> u8 {
+        self.pause_seconds.clamp(*Self::PAUSE_SECONDS.start(), *Self::PAUSE_SECONDS.end())
     }
 }
 
@@ -1231,9 +1252,6 @@ pub struct Preferences {
     /// The Color panel's options (what it shows, its ramp, Web colors, which chip it edits),
     /// kept across restarts as Photoshop keeps them. JSON owned by the shell.
     pub color_panel: Value,
-    /// Actions panel layout and row size, owned and validated by the desktop shell.
-    /// Null in older settings; live editor and playback state are never stored here.
-    pub actions_panel: Value,
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,

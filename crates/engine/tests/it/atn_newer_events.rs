@@ -208,7 +208,7 @@ fn atn_link_events_keep_descriptors_and_replay_the_requested_operation() {
 }
 
 #[test]
-fn unsupported_link_descriptors_are_kept_and_ambiguous_native_steps_are_preserved() {
+fn unsupported_link_descriptors_are_kept_and_ambiguous_exports_are_refused() {
     for event in ["linkSelectedLayers", "unlinkSelectedLayers"] {
         for descriptor in [
             Descriptor::new("null").with("null", D::Reference(vec![])),
@@ -229,7 +229,7 @@ fn unsupported_link_descriptors_are_kept_and_ambiguous_native_steps_are_preserve
     // `{}` is the measured Link Layers toggle and exports (main's Group F mapping).
     for params in [json!({"linked": null}), json!({"linked": true, "layer": "Layer 0"}), json!({"linked": false, "layers": [1, 2]})] {
         let action = Action::new("A", vec![("layer.linkLayers".into(), params)]);
-        crate::atn_export::fallback("Links", &action);
+        assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
 
@@ -309,7 +309,7 @@ fn bare_link_events_keep_their_operation_and_empty_keys() {
 }
 
 #[test]
-fn target_events_keep_unknown_targets_and_preserve_native_options() {
+fn target_events_keep_unknown_targets_and_refuse_native_options() {
     for &(event, id) in TARGET_EVENTS {
         for descriptor in [
             Descriptor::new(event).with("null", D::Integer(1)),
@@ -325,12 +325,12 @@ fn target_events_keep_unknown_targets_and_preserve_native_options() {
         }
         for p in [json!({"layer": 1}), json!({"on": true}), json!({"_atnNoTarget": false}), json!({"_atnNoTarget": "true"})] {
             let action = Action::new("A", vec![(id.into(), p)]);
-            crate::atn_export::fallback("Links", &action);
+            assert!(atn_cmds::export("Links", &[&action], &[], false).is_err(), "{event}");
         }
     }
     for linked in [false, true] {
         let action = Action::new("A", vec![("layer.linkLayers".into(), json!({"linked": linked, "_atnNoTarget": false}))]);
-        crate::atn_export::fallback("Links", &action);
+        assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
 
@@ -590,7 +590,7 @@ fn artboard_fractional_colors_survive_import_save_and_playback() {
         assert_eq!(saved_item(&mut s).descriptor, Some(d));
         let (id, mut changed) = s.actions.list[0].steps[0].clone();
         changed["color"][0] = 0.5.into();
-        crate::atn_export::fallback("Links", &Action::new("Changed", vec![(id, changed)]));
+        assert!(atn_cmds::export("Links", &[&Action::new("Changed", vec![(id, changed)])], &[], false).is_err());
         let before = s.active().unwrap().doc.clone();
         play(&mut s);
         let pixel = photocraft_compose::render(&s.active().unwrap().doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0];
@@ -625,7 +625,7 @@ fn artboard_unmeasured_types_and_extra_settings_stay_whole() {
     }
     for p in [json!({"layer":1}), json!({"preset":7}), json!({"guideIDs":[7.5]}), json!({"changeBackground":false})] {
         let action = Action::new("A", vec![("layer.new.artboardFromGroup".into(), p)]);
-        crate::atn_export::fallback("Links", &action);
+        assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
 
@@ -640,7 +640,7 @@ fn artboard_omitted_type_defaults_to_white_and_invalid_native_settings_are_atomi
     assert_eq!(saved_item(&mut s).descriptor, Some(d));
     let mut changed = s.actions.list[0].steps[0].1.clone();
     changed["background"] = "black".into();
-    crate::atn_export::fallback("Links", &Action::new("A", vec![("layer.new.artboardFromGroup".into(), changed)]));
+    assert!(atn_cmds::export("Links", &[&Action::new("A", vec![("layer.new.artboardFromGroup".into(), changed)])], &[], false).is_err());
     play(&mut s);
     assert_eq!(photocraft_compose::render(&s.active().unwrap().doc, photocraft_doc::Rect::new(3, 3, 4, 4)).px[0], [1.0; 4]);
     assert!(s.undo());
@@ -714,7 +714,7 @@ fn artboard_background_edit_roundtrips_without_replaying_recorded_geometry() {
 
 /// Unmeasured geometry modes remain whole; edited native resize options cannot be silently omitted.
 #[test]
-fn artboard_edit_keeps_unmeasured_modes_and_preserves_native_export_settings() {
+fn artboard_edit_refuses_unmeasured_modes_and_lossy_native_exports() {
     let mut s = artboard_fixture();
     for d in [artboard_edit_descriptor(1, 4), artboard_edit_descriptor(5, 8), artboard_edit_descriptor(1, 8).with("extra", D::Integer(1))] {
         let before = s.active().unwrap().doc.clone();
@@ -731,7 +731,7 @@ fn artboard_edit_keeps_unmeasured_modes_and_preserves_native_export_settings() {
     for (key, value) in [("rect", json!([0, 0, 100, 100])), ("preset", json!("iPhone 14")), ("changeSizes", json!(4)), ("changeBackground", json!(0))] {
         let mut edited = params.clone();
         edited[key] = value;
-        crate::atn_export::fallback("Links", &Action::new("A", vec![("layer.artboard.set".into(), edited)]));
+        assert!(atn_cmds::export("Links", &[&Action::new("A", vec![("layer.artboard.set".into(), edited)])], &[], false).is_err());
     }
 }
 
@@ -959,7 +959,7 @@ fn make_type_shape_keeps_wrong_references_and_preserves_fill_mappings() {
         assert_eq!(s.actions.list[0].steps[0].0, id);
     }
     let action = Action::new("A", vec![("type.convertToShape".into(), json!({"layer": 1}))]);
-    crate::atn_export::fallback("Links", &action);
+    assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
 }
 
 fn radius_descriptor(radius: f64) -> Descriptor {
@@ -1015,7 +1015,7 @@ fn shape_blur_radius_boundaries_keep_their_value_without_running_large_kernels()
 }
 
 #[test]
-fn shape_blur_keeps_custom_assets_and_invalid_radius_forms_whole() {
+fn shape_blur_keeps_unrepresented_assets_and_invalid_radius_forms_whole() {
     let custom = Descriptor::new("customShape").with("Nm  ", D::Text(UnicodeString::new_nul("Star"))).with("Idnt", D::Text(UnicodeString::new_nul("asset-id")));
     for descriptor in [
         radius_descriptor(4.0),
@@ -1023,7 +1023,8 @@ fn shape_blur_keeps_custom_assets_and_invalid_radius_forms_whole() {
         radius_descriptor(f64::NAN),
         radius_descriptor(f64::INFINITY),
         Descriptor::new("shapeBlur").with("Rds ", D::UnitFloat { unit: *b"#Prc", value: 10.0 }),
-        radius_descriptor(10.0).with("customShape", D::Descriptor(custom)).with("keyOriginType", D::Integer(9)),
+        // Origin 9 is supported by ID; other origin forms must remain whole.
+        radius_descriptor(10.0).with("customShape", D::Descriptor(custom)).with("keyOriginType", D::Integer(8)),
         radius_descriptor(10.0).with("extra", D::Boolean(true)),
     ] {
         let mut s = Session::new();
@@ -1032,7 +1033,7 @@ fn shape_blur_keeps_custom_assets_and_invalid_radius_forms_whole() {
     }
     for p in [json!({"radius": 0}), json!({"radius": 1001}), json!({"radius": null}), json!({"radius": 10, "shape": "circle"}), json!({"target": "mask"})] {
         let action = Action::new("A", vec![("filter.blur.shapeBlur".into(), p)]);
-        crate::atn_export::fallback("Links", &action);
+        assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
     }
 }
 
@@ -1185,11 +1186,11 @@ fn smart_paths_keep_missing_unusable_and_unrepresented_descriptors_whole() {
 }
 
 #[test]
-fn smart_path_exports_preserve_native_params_without_photoshop_substitution() {
+fn smart_path_exports_refuse_unrepresentable_native_params() {
     for &(_, id) in SMART_PATHS {
         for params in [json!({}), json!({"path": ""}), json!({"path": "a\0b"}), json!({"path": 3}), json!({"path": "/tmp/a.png", "layer": 1})] {
             let action = Action::new("A", vec![(id.into(), params)]);
-            crate::atn_export::fallback("Links", &action);
+            assert!(atn_cmds::export("Links", &[&action], &[], false).is_err());
         }
     }
 }

@@ -1355,6 +1355,7 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Щелчок: выбрать узел · Перетаскивание: переместить узел, маркер или сегмент · {shift}-щелчок: добавить · {alt}-щелчок: весь подконтур
 	Draw with the Pen tool (P) or make a work path from a selection.	Нарисуйте пером (P) или создайте рабочий контур из выделения.
 	Source: not set ({key}-click with Clone Stamp)	Источник: не задан ({key}-клик штампом)
+	Source: {name}	Источник: {name}
 	Clone source {n} ({key}-click with Clone Stamp to set)	Источник клонирования {n} ({key}-клик штампом, чтобы задать)
 	{key}-click to set the source	{key}-клик, чтобы задать источник
 	Option-click to define a source point to clone from	Option-клик, чтобы задать точку источника клонирования
@@ -3245,6 +3246,8 @@ curves	Smooth	Сгладить
 	Step {step} is waiting for its dialog	Шаг {step} ожидает своего диалога
 @plural	{n} action|{n} actions	{n} операция|{n} операции|{n} операций
 	Background (Default)	Фон (по умолчанию)
+	Background (default)	Фон (по умолчанию)
+	Transparent (default)	Прозрачный (по умолчанию)
 	Content-Aware Fill	Заливка с учётом содержимого
 	Include All Subfolders	Включить все вложенные папки
 	Auto Add/Delete	Автодобавление/удаление
@@ -3267,6 +3270,7 @@ curves	Smooth	Сгладить
 	Shadow Tint	Оттенок теней
 	Paints from the History panel's source state	Рисует из исходного состояния панели «История»
 	Sets the source for the history brush	Задаёт источник для кисти истории
+	The History Brush source was deleted: set a new source in the History panel	Источник кисти истории был удалён: задайте новый источник на панели «История»
 	Select Inverse	Инвертировать выделение
 	Pro (Light)	Pro (светлая)
 	Pro (Light Gray)	Pro (светло-серая)
@@ -4694,6 +4698,8 @@ shape	Appearance	Оформление
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Недопустимое числовое значение. Требуется целое число от {min}% до {max}%. Вставлено предыдущее значение.
 	Color Aware	С учетом цвета
 	Decontaminate Colors	Очистить цвета
@@ -4718,107 +4724,49 @@ shape	Appearance	Оформление
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	Операция сохранена, но настройку подтверждения сохранить не удалось: {error}
-	Add a brief description for this action…	Добавьте краткое описание этой операции…
-	Allow Tool Recording	Разрешить запись инструментов
-	Answer the open Actions editor question first	Сначала ответьте на открытый вопрос в редакторе операций
-	Apply to background	Применить к фону
-	Apply to subject	Применить к объекту
-	Black and white	Чёрно-белое
-	Cancel and continue editing	Отменить и продолжить редактирование
-	Choose color	Выбрать цвет
-	Choose icon	Выбрать значок
-	Choose icon and color	Выбрать значок и цвет
-	Classic Actions	Классические операции
-	Clear All Actions	Очистить все операции
-	Clear search	Очистить поиск
-	Click action	Щелчок
-	Close the open Actions editor first	Сначала закройте открытый редактор операций
-	Collapse all	Свернуть всё
-	Colour lookup tables	Таблицы преобразования цветов
-	Confirm or cancel the open action dialog first	Сначала подтвердите или отмените открытый диалог операции
-	Control	Ctrl
-	Default icon	Значок по умолчанию
-	Delete Action	Удалить операцию
-	Delete action	Удалить операцию
-	Delete group	Удалить группу
-	Delete step	Удалить шаг
-	Delete the action "{name}"?	Удалить операцию «{name}»?
-	Delete the group "{name}"?	Удалить группу «{name}»?
-	Discard	Отбросить
-	Download	Скачать
-	Duplicate Action	Дублировать операцию
-	Duplicate action	Дублировать операцию
-	Duplicate group	Дублировать группу
-	Duplicate step	Дублировать шаг
-	Edit Action	Изменить операцию
-	Edit action	Изменить операцию
-	Edit step settings	Изменить настройки шага
-	Enable step	Включить шаг
-	Expand all	Развернуть всё
-	Export Action…	Экспортировать операцию…
-	Finish or cancel action playback and the pending step first	Сначала завершите или отмените воспроизведение операции и ожидающий шаг
-	Finishing step…	Завершение шага…
-	Generated layer effects	Сгенерированные эффекты слоя
-	Generated styles	Сгенерированные стили
-	Grey	Серый
-	Harmonize layers	Согласовать слои
-	Hue and saturation	Цветовой тон и насыщенность
-	Import Actions…	Импортировать операции…
-	Import actions or create a new action to get started.	Импортируйте операции или создайте новую, чтобы начать.
-	Insert Action	Вставить операцию
-	Insert Conditional	Вставить условие
-	Insert Menu Item	Вставить пункт меню
-	Insert Path	Вставить контур
-	Insert Stop	Вставить остановку
-	Insert…	Вставить…
-	Keyboard shortcut	Сочетание клавиш
-	Lavender	Лавандовый
-	Layer effects	Эффекты слоя
-	Light blue	Светло-синий
-	List size	Размер списка
-	Magic wand	Волшебная палочка
-	Merge layers	Объединить слои
-	Move step down	Переместить шаг вниз
-	Move step up	Переместить шаг вверх
-	New group	Новая группа
-	No steps yet	Шагов пока нет
-	Object selection	Выделение объекта
-	Play Action	Воспроизвести операцию
-	Play Actions	Воспроизвести операции
-	Play action	Воспроизвести операцию
-	Play from selected step	Воспроизвести с выбранного шага
+# Action Stop message (#8386)
+	Message	Сообщение
+# Playback Options (#5212)
 	Playback Options…	Параметры воспроизведения…
-	Play…	Воспроизвести…
-	Preview on hover	Предпросмотр при наведении
-	Record	Записать
-	Recording	Запись
-	Remove background	Удалить фон
-	Save Action	Сохранить операцию
-	Search actions	Поиск операций
-	Select an existing action step to play	Выберите существующий шаг операции для воспроизведения
-	Select subject	Выбрать объект
-	Show grid	Показать сетку
-	Show step settings	Показать настройки шага
-	Smart removal	Умное удаление
-	Sort & View options	Параметры сортировки и вида
-	Start recording to build your action	Начните запись, чтобы создать операцию
-	Steps	Шаги
-	Stored action step	Сохранённый шаг операции
-	Stored settings	Сохранённые настройки
-	Teal	Сине-зелёный
-	Text	Текст
-	Text colour	Цвет текста
-	The draft steps changed. Cancel this dialog and reopen the step.	Шаги черновика изменились. Отмените этот диалог и снова откройте шаг.
-	The dragged action changed; drag it again	Перетаскиваемая операция изменилась; перетащите её снова
-	The editor response does not belong to this draft	Ответ редактора не относится к этому черновику
-	There are unsaved changes. Do you want to save or discard them?	Есть несохранённые изменения. Сохранить их или отбросить?
-	This editor page is closed	Эта страница редактора закрыта
-	This step dialog belongs to another editor	Этот диалог шага относится к другому редактору
-	Wait for the current action step to finish	Дождитесь завершения текущего шага операции
-	You haven't created any actions	Вы ещё не создали ни одной операции
-	Yours	Ваши
+	Playback Options	Параметры воспроизведения
+	Accelerated	Ускоренное
+	Step by Step	Пошаговое
+	Pause For:	Пауза на:
+	Pause For	Пауза на
+	seconds	с
+	Create a single history state	Создавать одно состояние истории
+	Drag to move the active shape's path or the Work Path	Перетащите, чтобы переместить контур активной фигуры или рабочий контур
+	Generator enabled	Генератор включён
+	Hidden	Скрыто
+	Move Up	Переместить вверх
+	Move Down	Переместить вниз
+	On your computer	На вашем компьютере
+	New file	Новый файл
+	Learn	Обучение
+	Website	Сайт
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	Несгруппированные операции
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Рамка поддерживает аффинные преобразования; для перспективных преобразований выберите её изображение
+	A frame supports affine transforms; select its image to warp it	Рамка поддерживает аффинные преобразования; для деформации выберите её изображение
+	Convert to Frame…	Преобразовать в рамку…
+	Create a new custom frame	Создать новую произвольную рамку
+	Create a new polygonal frame	Создать новую многоугольную рамку
+	Create a new triangular frame	Создать новую треугольную рамку
+	Fit Content to Frame	Подогнать содержимое под рамку
+	Fit Frame to Content	Подогнать рамку под содержимое
+	Frame coordinates must be finite and within 600000 pixels	Координаты рамки должны быть конечными и находиться в пределах 600000 пикселей
+	Import Image…	Импортировать изображение…
+	Invalid frame transform	Недопустимое преобразование рамки
+	Invalid nested file drop	Недопустимое вложенное перетаскивание файла
+	New Frame	Новая рамка
+	Replace Image…	Заменить изображение…
+	The frame is locked	Рамка заблокирована
+	The frame is unavailable	Рамка недоступна
+
+# Channels panel menu (#11451)
+	Channel Options…	Параметры канала…
+	Specify Channels:	Указать каналы:
+	Not enough grayscale documents for this mode.	Недостаточно документов в градациях серого для этого режима.
+	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
+	A picked document is no longer open.	Один из выбранных документов больше не открыт.
+	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.

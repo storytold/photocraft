@@ -1943,6 +1943,7 @@
 	Soften	柔化
 	Source	來源
 	Source: set	來源：已設定
+	Source: {name}	來源：{name}
 	Sponge Tool	海綿工具
 	Spot Healing Brush Tool	污點修復筆刷工具
 	Spread	展開
@@ -2899,6 +2900,8 @@ curves	Smooth	平滑
 	Step {step} is waiting for its dialog	步驟 {step} 正在等待其對話框
 @plural	{n} action|{n} actions	{n} 個動作
 	Background (Default)	背景（預設）
+	Background (default)	背景（預設）
+	Transparent (default)	透明（預設）
 	Content-Aware Fill	內容感知填滿
 	Include All Subfolders	包含所有子資料夾
 	Auto Add/Delete	自動增加/刪除
@@ -2952,6 +2955,7 @@ curves	Smooth	平滑
 	Automatically Check for Updates	自動檢查更新
 	Paints from the History panel's source state	從步驟記錄面板的來源狀態繪畫
 	Sets the source for the history brush	設定步驟記錄筆刷的來源
+	The History Brush source was deleted: set a new source in the History panel	步驟記錄筆刷的來源已刪除：請在步驟記錄面板中設定新的來源
 	Highlight Mode	亮部模式
 	Highlight Color	亮部顏色
 	Highlight Opacity	亮部不透明度
@@ -3020,6 +3024,7 @@ curves	Smooth	平滑
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} 由系統保留，無法指定。
 	Low-Latency Drawing (vsync off, applies at next launch)	低延遲繪圖（關閉垂直同步，下次啟動時生效）
 	Reference point location	參考點位置
+	Toggle reference point	切換參考點
 	Free Transform is still being applied; try again when it has finished.	任意變形仍在套用中；請在完成後再試一次。
 	The transform couldn't be applied.	無法套用變形。
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	其圖層需要 {needed} GPU 記憶體；預算只留給它們 {budget}。
@@ -3133,6 +3138,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	數值輸入無效。需要介於 {min}% 和 {max}% 之間的整數。已插入先前的值。
 	Clear Selection	清除選取範圍
 	Color Aware	顏色感知
@@ -3162,109 +3169,61 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	動作已儲存，但無法儲存確認偏好設定：{error}
-	Add a brief description for this action…	為此動作新增簡短說明…
-	Allow Tool Recording	允許錄製工具操作
-	Answer the open Actions editor question first	請先回答動作編輯器中開啟的問題
-	Apply to background	套用至背景
-	Apply to subject	套用至主體
-	Back	返回
-	Black and white	黑白
-	Cancel and continue editing	取消並繼續編輯
-	Choose color	選擇顏色
-	Choose icon	選擇圖示
-	Choose icon and color	選擇圖示與色彩
-	Classic Actions	傳統動作
-	Clear All Actions	清除所有動作
-	Clear search	清除搜尋
-	Click action	點擊操作
-	Close the open Actions editor first	請先關閉已開啟的動作編輯器
-	Collapse all	全部摺疊
-	Colour lookup tables	色彩查詢表
-	Confirm or cancel the open action dialog first	請先確認或取消已開啟的動作對話框
-	Control	Ctrl
-	Default icon	預設圖示
-	Delete Action	刪除動作
-	Delete action	刪除動作
-	Delete group	刪除群組
-	Delete step	刪除步驟
-	Delete the action "{name}"?	刪除動作「{name}」？
-	Delete the group "{name}"?	刪除群組「{name}」？
-	Discard	捨棄
-	Download	下載
-	Duplicate Action	複製動作
-	Duplicate action	複製動作
-	Duplicate group	複製群組
-	Duplicate step	複製步驟
-	Edit Action	編輯動作
-	Edit action	編輯動作
-	Edit step settings	編輯步驟設定
-	Enable step	啟用步驟
-	Expand all	全部展開
-	Export Action…	匯出動作…
-	Finish or cancel action playback and the pending step first	請先完成或取消動作播放及待處理步驟
-	Finishing step…	正在完成步驟…
-	Generated layer effects	產生的圖層效果
-	Generated styles	產生的樣式
-	Grey	灰色
-	Harmonize layers	協調圖層
-	Hue and saturation	色相與飽和度
-	Import Actions…	匯入動作…
-	Import actions or create a new action to get started.	匯入動作或建立新動作，即可開始使用。
-	Insert Action	插入動作
-	Insert Conditional	插入條件
-	Insert Menu Item	插入選單項目
-	Insert Path	插入路徑
-	Insert Stop	插入停止
-	Insert…	插入…
-	Keyboard shortcut	鍵盤快速鍵
-	Lavender	薰衣草色
-	Layer effects	圖層效果
-	Light blue	淺藍色
-	List size	清單大小
-	Magic wand	魔術棒
-	Merge layers	合併圖層
-	Move step down	下移步驟
-	Move step up	上移步驟
-	New group	新增群組
-	No steps yet	尚無步驟
-	Object selection	物件選取
-	On	開
-	Play Action	播放動作
-	Play Actions	播放動作
-	Play action	播放動作
-	Play from selected step	從所選步驟播放
-	Playback Options…	播放選項…
-	Play…	播放…
-	Preview on hover	暫留時預覽
-	Record	錄製
-	Recording	正在錄製
-	Remove background	移除背景
-	Save Action	儲存動作
-	Search actions	搜尋動作
-	Select an existing action step to play	選取要播放的現有動作步驟
-	Select subject	選取主體
-	Show grid	顯示格點
-	Show step settings	顯示步驟設定
-	Smart removal	智慧移除
-	Sort & View options	排序與檢視選項
-	Start recording to build your action	開始錄製以建立動作
-	Steps	步驟
-	Stored action step	已儲存的動作步驟
-	Stored settings	已儲存的設定
-	Teal	藍綠色
-	Text	文字
-	Text colour	文字顏色
-	The draft steps changed. Cancel this dialog and reopen the step.	草稿步驟已變更。請取消此對話框並重新開啟該步驟。
-	The dragged action changed; drag it again	拖曳的動作已變更；請重新拖曳
-	The editor response does not belong to this draft	編輯器回應不屬於此草稿
-	There are unsaved changes. Do you want to save or discard them?	有未儲存的變更。要儲存還是捨棄？
-	This editor page is closed	此編輯器頁面已關閉
-	This step dialog belongs to another editor	此步驟對話框屬於另一個編輯器
-	Wait for the current action step to finish	請等候目前的動作步驟完成
-	You haven't created any actions	您尚未建立任何動作
-	Yours	我的動作
+# Action Stop message (#8386)
+	Message	訊息
+# Playback Options (#5212)
+	Playback Options…	回放選項…
+	Playback Options	回放選項
+	Accelerated	加速
+	Step by Step	逐步
+	Pause For:	暫停：
+	Pause For	暫停
+	seconds	秒
+	Create a single history state	建立單一步驟記錄狀態
+	Drag to move the active shape's path or the Work Path	拖曳以移動作用中形狀的路徑或工作路徑
+	Generator enabled	啟用 Generator
+	Move Up	上移
+	Move Down	下移
+	Grid view	格線檢視
+	List view	清單檢視
+	On your computer	在您的電腦上
+	New file	新增檔案
+	Learn	學習
+	No recent files	沒有最近使用的檔案
+	Website	網站
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	未分組動作
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	框架支援仿射變形；若要進行透視變形，請選取框架中的影像
+	A frame supports affine transforms; select its image to warp it	框架支援仿射變形；若要進行彎曲變形，請選取框架中的影像
+	Convert to Frame…	轉換為框架…
+	Create a new custom frame	建立新的自訂框架
+	Create a new polygonal frame	建立新的多邊形框架
+	Create a new triangular frame	建立新的三角形框架
+	Fit Content to Frame	使內容符合框架
+	Fit Frame to Content	使框架符合內容
+	Frame coordinates must be finite and within 600000 pixels	框架座標必須為有限值，且在 600000 像素範圍內
+	Import Image…	讀入影像…
+	Invalid frame transform	無效的框架變形
+	Invalid nested file drop	無效的巢狀檔案拖放
+	New Frame	新增框架
+	Replace Image…	取代影像…
+	The frame is locked	框架已鎖定
+	The frame is unavailable	框架無法使用
+	Frame	框架
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	新增色版…
+	Duplicate Channel	複製色版
+	Delete Channel	刪除色版
+	New Spot Channel…	新增特別色色版…
+	Merge Spot Channel	合併特別色色版
+	Channel Options…	色版選項…
+	Split Channels	分離色版
+	Merge Channels…	合併色版…
+	Specify Channels:	指定色版:
+	Not enough grayscale documents for this mode.	灰階文件不足，無法使用此模式。
+	Pick a different document for each channel.	請為每個色版選擇不同的文件。
+	A picked document is no longer open.	所選的一個文件已不再開啟。
+	A picked document is no longer a grayscale document of the same size.	所選的一個文件已不再是相同大小的灰階文件。

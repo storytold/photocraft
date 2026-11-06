@@ -3199,6 +3199,8 @@ curves	Smooth	Udjævn
 	Step {step} is waiting for its dialog	Trin {step} venter på sin dialog
 @plural	{n} action|{n} actions	{n} handling|{n} handlinger
 	Background (Default)	Baggrund (standard)
+	Background (default)	Baggrund (standard)
+	Transparent (default)	Gennemsigtig (standard)
 	Content-Aware Fill	Indholdsbevidst udfyldning
 # Batch / Image Processor
 	Include All Subfolders	Medtag alle undermapper
@@ -4774,107 +4776,22 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	Handlingen blev gemt, men bekræftelsesindstillingen kunne ikke gemmes: {error}
-	Add a brief description for this action…	Tilføj en kort beskrivelse af denne handling…
-	Allow Tool Recording	Tillad optagelse af værktøjer
-	Answer the open Actions editor question first	Besvar først det åbne spørgsmål i handlingseditoren
-	Apply to background	Anvend på baggrunden
-	Apply to subject	Anvend på motivet
-	Black and white	Sort-hvid
-	Cancel and continue editing	Annuller og fortsæt redigeringen
-	Choose color	Vælg farve
-	Choose icon	Vælg ikon
-	Choose icon and color	Vælg ikon og farve
-	Classic Actions	Klassiske handlinger
-	Clear All Actions	Ryd alle handlinger
-	Clear search	Ryd søgningen
-	Click action	Klikhandling
-	Close the open Actions editor first	Luk først den åbne handlingseditor
-	Collapse all	Fold alle sammen
-	Colour lookup tables	Farveopslagstabeller
-	Confirm or cancel the open action dialog first	Bekræft eller annuller først den åbne handlingsdialog
-	Control	Ctrl
-	Default icon	Standardikon
-	Delete Action	Slet handling
-	Delete action	Slet handling
-	Delete group	Slet gruppe
-	Delete step	Slet trin
-	Delete the action "{name}"?	Slet handlingen »{name}«?
-	Delete the group "{name}"?	Slet gruppen »{name}«?
-	Discard	Kassér
-	Download	Hent
-	Duplicate Action	Dupliker handling
-	Duplicate action	Dupliker handling
-	Duplicate group	Dupliker gruppe
-	Duplicate step	Dupliker trin
-	Edit Action	Rediger handling
-	Edit action	Rediger handling
-	Edit step settings	Rediger trinindstillinger
-	Enable step	Aktivér trin
-	Expand all	Udvid alle
-	Export Action…	Eksportér handling…
-	Finish or cancel action playback and the pending step first	Afslut eller annuller først afspilningen af handlingen og det afventende trin
-	Finishing step…	Afslutter trin…
-	Generated layer effects	Genererede lageffekter
-	Generated styles	Genererede stilarter
-	Grey	Grå
-	Harmonize layers	Harmoniser lag
-	Hue and saturation	Farvetone og mætning
-	Import Actions…	Importér handlinger…
-	Import actions or create a new action to get started.	Importér handlinger, eller opret en ny handling for at komme i gang.
-	Insert Action	Indsæt handling
-	Insert Conditional	Indsæt betingelse
-	Insert Menu Item	Indsæt menupunkt
-	Insert Path	Indsæt kurve
-	Insert Stop	Indsæt stop
-	Insert…	Indsæt…
-	Keyboard shortcut	Tastaturgenvej
-	Lavender	Lavendel
-	Layer effects	Lageffekter
-	Light blue	Lyseblå
-	List size	Listestørrelse
-	Magic wand	Tryllestav
-	Merge layers	Flet lag
-	Move step down	Flyt trin ned
-	Move step up	Flyt trin op
-	New group	Ny gruppe
-	No steps yet	Ingen trin endnu
-	Object selection	Objektmarkering
-	Play Action	Afspil handling
-	Play Actions	Afspil handlinger
-	Play action	Afspil handling
-	Play from selected step	Afspil fra det valgte trin
+# Action Stop message (#8386)
+	Message	Meddelelse
+# Playback Options (#5212)
 	Playback Options…	Afspilningsindstillinger…
-	Play…	Afspil…
-	Preview on hover	Forhåndsvis ved at holde markøren over
-	Record	Optag
-	Recording	Optager
-	Remove background	Fjern baggrund
-	Save Action	Gem handling
-	Search actions	Søg efter handlinger
-	Select an existing action step to play	Vælg et eksisterende handlingstrin, der skal afspilles
-	Select subject	Markér motiv
-	Show grid	Vis gitter
-	Show step settings	Vis trinindstillinger
-	Smart removal	Intelligent fjernelse
-	Sort & View options	Sorterings- og visningsindstillinger
-	Start recording to build your action	Start optagelsen for at oprette din handling
-	Steps	Trin
-	Stored action step	Gemt handlingstrin
-	Stored settings	Gemte indstillinger
-	Teal	Blågrøn
-	Text	Tekst
-	Text colour	Tekstfarve
-	The draft steps changed. Cancel this dialog and reopen the step.	Kladdens trin er ændret. Annuller denne dialog, og åbn trinnet igen.
-	The dragged action changed; drag it again	Den trukne handling er ændret; træk den igen
-	The editor response does not belong to this draft	Editorens svar hører ikke til denne kladde
-	There are unsaved changes. Do you want to save or discard them?	Der er ændringer, som ikke er gemt. Vil du gemme eller kassere dem?
-	This editor page is closed	Denne editorside er lukket
-	This step dialog belongs to another editor	Denne trindialog hører til en anden editor
-	Wait for the current action step to finish	Vent, til det aktuelle handlingstrin er færdigt
-	You haven't created any actions	Du har ikke oprettet nogen handlinger
-	Yours	Dine
+	Playback Options	Afspilningsindstillinger
+	Accelerated	Accelereret
+	Step by Step	Trin for trin
+	Pause For:	Pause i:
+	Pause For	Pause i
+	seconds	sekunder
+	Create a single history state	Opret én historiktilstand
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	Ikke-grupperede handlinger
+# Channels panel menu (#11451)
+	Channel Options…	Kanalindstillinger…
+	Specify Channels:	Angiv kanaler:
+	Not enough grayscale documents for this mode.	Der er ikke nok dokumenter i gråtoner til denne tilstand.
+	Pick a different document for each channel.	Vælg et andet dokument til hver kanal.
+	A picked document is no longer open.	Et af de valgte dokumenter er ikke længere åbent.
+	A picked document is no longer a grayscale document of the same size.	Et af de valgte dokumenter er ikke længere et dokument i gråtoner i samme størrelse.

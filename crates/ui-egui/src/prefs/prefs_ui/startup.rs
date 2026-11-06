@@ -49,7 +49,6 @@ pub fn load(app: &mut PhotocraftApp) {
     sync_rulers(app);
     crate::tool_memory::restore(app);
     crate::view_cmds::restore(app);
-    crate::actions::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     let loaded = app.session.prefs_value();

@@ -322,6 +322,39 @@ fn menu_place_starts_transform_for_each_chosen_image() {
     }
 }
 
+/// #10031: File › Place decodes in the background; Free Transform starts when the layer lands, and
+/// a second place is refused while the first runs.
+#[test]
+fn menu_place_runs_in_the_background_and_starts_transform_when_it_lands() {
+    let (mut app, open, _) = app();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let bytes = photocraft_io::export(&app.session.active().unwrap().doc, "source.png", &Default::default()).unwrap().bytes;
+    app.background_jobs = true;
+    let ctx = egui::Context::default();
+    let layers = app.session.active().unwrap().doc.layer_count();
+    menus::invoke(&mut app, &ctx, "file.placeEmbedded", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Contents("drawing.png".into(), bytes.clone())));
+    app.poll_file_dialog(&ctx, None);
+    let place = app.jobs.place.clone().expect("being placed");
+    assert_eq!(place.name, "drawing.png");
+    assert!(app.ui.transform.is_none(), "Free Transform waits for the layer");
+    assert_eq!(app.session.active().unwrap().doc.layer_count(), layers);
+    // Another place is refused while this one runs, and the first one stays tracked.
+    assert!(crate::jobs_ui::start_place_bytes(&mut app, "other.png", bytes, None, &serde_json::json!({})).is_err());
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.job), Some(place.job));
+    let t = std::time::Instant::now();
+    while app.jobs.place.is_some() {
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "the place did not finish");
+        crate::jobs_ui::tick(&mut app, &ctx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer_count(), layers + 1);
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "drawing");
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
 #[test]
 fn cancelled_or_invalid_menu_place_does_not_start_transform() {
     for command in ["file.placeEmbedded", "file.placeLinked"] {
@@ -378,7 +411,7 @@ fn open_starts_in_the_last_used_folder() {
     menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     assert!(
-        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: None, max_bytes: None, max_contents_bytes: None }, _)] if dir == "/pics"),
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir), extensions: None }, _)] if dir == "/pics"),
         "{:?}",
         open.borrow().first().map(|(r, _)| r.clone())
     );
@@ -1483,51 +1516,4 @@ fn import_variable_data_sets_menu_asks_for_a_csv_and_imports_it() {
     answer(&open, Some(FileDialogAnswer::Contents("sets.csv".into(), b"headline\nHello\nWorld\n".to_vec())));
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.active().map(|d| d.doc.variables.data_sets.len()), Some(2));
-}
-
-/// A tiny caller cap rejects picked paths and existing byte payloads before their callback runs.
-#[test]
-fn picked_file_limit_refuses_before_callback_and_keeps_other_callers_unchanged() {
-    let dir = tempfile::tempdir().unwrap();
-    let exact = dir.path().join("exact.atn");
-    let over = dir.path().join("over.atn");
-    std::fs::write(&exact, b"1234").unwrap();
-    std::fs::write(&over, b"12345").unwrap();
-    for (chosen, max, allowed) in [
-        (FileDialogAnswer::Paths(vec![exact.to_str().unwrap().into()]), Some(4), true),
-        (FileDialogAnswer::Paths(vec![over.to_str().unwrap().into()]), Some(4), false),
-        (FileDialogAnswer::Contents("exact.atn".into(), b"1234".to_vec()), Some(4), true),
-        (FileDialogAnswer::Contents("over.atn".into(), b"12345".to_vec()), Some(4), false),
-        (FileDialogAnswer::ContentsMany(vec![("over.atn".into(), b"12345".to_vec())]), Some(4), false),
-        (FileDialogAnswer::Paths(vec![over.to_str().unwrap().into()]), None, true),
-        (FileDialogAnswer::Contents("over.atn".into(), b"12345".to_vec()), None, true),
-    ] {
-        let (mut app, open, _) = app();
-        let ctx = egui::Context::default();
-        let called = Rc::new(std::cell::Cell::new(false));
-        let callback = called.clone();
-        let then = move |_: &mut PhotocraftApp, _: String, bytes: Vec<u8>| {
-            callback.set(true);
-            Ok(json!({"bytes":bytes.len()}))
-        };
-        if let Some(max) = max {
-            app.pick_file_bytes_with_limit(&["atn"], Some(max), then).unwrap();
-        } else {
-            app.pick_file_bytes_filtered(&["atn"], then).unwrap();
-        }
-        app.poll_file_dialog(&ctx, None);
-        assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { max_bytes, max_contents_bytes: None, .. }, _)] if *max_bytes == max));
-        let bounded_path = max.is_some() && matches!(chosen, FileDialogAnswer::Paths(_));
-        answer(&open, Some(chosen));
-        app.poll_file_dialog(&ctx, None);
-        assert_eq!(called.get(), allowed);
-        if !allowed {
-            assert!(app.ui.status_error);
-            assert!(app.ui.status.contains("larger"), "{}", app.ui.status);
-            if bounded_path {
-                let limited = photocraft_format::read::read_file_limited(&over, 4).unwrap_err().to_string();
-                assert!(app.ui.status.contains(&limited), "{}", app.ui.status);
-            }
-        }
-    }
 }

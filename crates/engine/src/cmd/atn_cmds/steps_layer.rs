@@ -453,30 +453,13 @@ pub(super) fn apply_comp_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", reference))
 }
 
-/// Preserve the named physical set carried beside an Actn reference.
-pub(super) fn action_set(reference: &[ReferenceItem]) -> Option<String> {
-    reference.iter().find_map(|item| match item {
-        ReferenceItem::Name { class, name } if class.class_id.is("ASet") => Some(clip_name(&name.to_string_lossy())),
-        _ => None,
-    })
-}
-
-/// Decode the named action and its set together so later name normalization cannot misbind a call.
 pub(super) fn play_from(d: &Descriptor) -> Mapped {
-    let Some(reference) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
-    match target(reference) {
-        Target::Name(name) => {
-            let mut params = json!({"action": clip_name(&name)});
-            if let Some(set) = action_set(reference) {
-                params["set"] = json!(set);
-            }
-            step("actions.play", params)
-        }
+    match get_ref(d, "null").map(target) {
+        Some(Target::Name(n)) => step("actions.play", json!({"action": clip_name(&n)})),
         _ => Mapped::Unsupported { harmless: false },
     }
 }
 
-/// Write a complete named action reference; partial playback cannot be represented by this event.
 pub(super) fn play_to(_: &str, p: &Value) -> Option<Descriptor> {
     let name = jstr(p, "action")?;
     // The Play Action descriptor written here carries no starting step, so a call from a later step is not a whole call.

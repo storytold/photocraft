@@ -3281,6 +3281,8 @@ curves	Smooth	تنعيم
 	Step {step} is waiting for its dialog	الخطوة {step} بانتظار مربع الحوار الخاص بها
 @plural	{n} action|{n} actions	{n} إجراء|{n} إجراء|{n} إجراءان|{n} إجراءات|{n} إجراءً|{n} إجراء
 	Background (Default)	الخلفية (الافتراضية)
+	Background (default)	الخلفية (الافتراضية)
+	Transparent (default)	شفاف (افتراضي)
 	Content-Aware Fill	تعبئة مراعية للمحتوى
 # Batch / Image Processor
 	Include All Subfolders	تضمين كل المجلدات الفرعية
@@ -3412,6 +3414,7 @@ curves	Smooth	تنعيم
 	Low-Latency Drawing (vsync off, applies at next launch)	رسم بزمن استجابة منخفض (إيقاف vsync، يسري عند التشغيل التالي)
 # Free Transform: a new layer while the box is open (#5859)
 	Reference point location	موقع النقطة المرجعية
+	Toggle reference point	إظهار/إخفاء النقطة المرجعية
 	Free Transform is still being applied; try again when it has finished.	لا يزال التحويل الحر قيد التطبيق؛ حاول مرة أخرى عند انتهائه.
 	The transform couldn't be applied.	تعذر تطبيق التحويل.
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
@@ -3550,109 +3553,29 @@ curves	Smooth	تنعيم
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
 
-# Actions list and editor (10945/10946)
-	Action saved, but confirmation preference could not be saved: {error}	تم حفظ الإجراء، لكن تعذر حفظ تفضيل التأكيد: {error}
-	Add a brief description for this action…	أضف وصفًا موجزًا لهذا الإجراء…
-	Allow Tool Recording	السماح بتسجيل الأدوات
-	Answer the open Actions editor question first	أجب أولًا عن السؤال المفتوح في محرر الإجراءات
-	Apply to background	تطبيق على الخلفية
-	Apply to subject	تطبيق على الموضوع
-	Back	رجوع
-	Black and white	أبيض وأسود
-	Cancel and continue editing	إلغاء ومتابعة التحرير
-	Choose color	اختيار اللون
-	Choose icon	اختيار الأيقونة
-	Choose icon and color	اختيار الأيقونة واللون
-	Classic Actions	الإجراءات الكلاسيكية
-	Clear All Actions	مسح جميع الإجراءات
-	Clear search	مسح البحث
-	Click action	إجراء نقر
-	Close the open Actions editor first	أغلق أولًا محرر الإجراءات المفتوح
-	Collapse all	طي الكل
-	Colour lookup tables	جداول تحويل الألوان
-	Confirm or cancel the open action dialog first	أكد أو ألغِ أولًا مربع حوار الإجراء المفتوح
-	Control	Ctrl
-	Default icon	الأيقونة الافتراضية
-	Delete Action	حذف الإجراء
-	Delete action	حذف الإجراء
-	Delete group	حذف المجموعة
-	Delete step	حذف الخطوة
-	Delete the action "{name}"?	حذف الإجراء «{name}»؟
-	Delete the group "{name}"?	حذف المجموعة «{name}»؟
-	Discard	تجاهل
-	Download	تنزيل
-	Duplicate Action	تكرار الإجراء
-	Duplicate action	تكرار الإجراء
-	Duplicate group	تكرار المجموعة
-	Duplicate step	تكرار الخطوة
-	Edit Action	تحرير الإجراء
-	Edit action	تحرير الإجراء
-	Edit step settings	تحرير إعدادات الخطوة
-	Enable step	تمكين الخطوة
-	Expand all	توسيع الكل
-	Export Action…	تصدير الإجراء…
-	Finish or cancel action playback and the pending step first	أكمل أو ألغِ أولًا تشغيل الإجراء والخطوة المعلقة
-	Finishing step…	جارٍ إنهاء الخطوة…
-	Generated layer effects	تأثيرات طبقة مولدة
-	Generated styles	أنماط مولدة
-	Grey	رمادي
-	Harmonize layers	مواءمة الطبقات
-	Hue and saturation	تدرج اللون والتشبع
-	Import Actions…	استيراد إجراءات…
-	Import actions or create a new action to get started.	استورد إجراءات أو أنشئ إجراءً جديدًا للبدء.
-	Insert Action	إدراج إجراء
-	Insert Conditional	إدراج شرط
-	Insert Menu Item	إدراج عنصر قائمة
-	Insert Path	إدراج مسار
-	Insert Stop	إدراج نقطة توقف
-	Insert…	إدراج…
-	Keyboard shortcut	اختصار لوحة المفاتيح
-	Lavender	لون الخزامى
-	Layer effects	تأثيرات الطبقة
-	Light blue	أزرق فاتح
-	List size	حجم القائمة
-	Magic wand	العصا السحرية
-	Merge layers	دمج الطبقات
-	Move step down	نقل الخطوة لأسفل
-	Move step up	نقل الخطوة لأعلى
-	New group	مجموعة جديدة
-	No steps yet	لا توجد خطوات بعد
-	Object selection	تحديد الكائن
-	On	تشغيل
-	Play Action	تشغيل الإجراء
-	Play Actions	تشغيل الإجراءات
-	Play action	تشغيل الإجراء
-	Play from selected step	تشغيل من الخطوة المحددة
+# Action Stop message (#8386)
+	Message	رسالة
+# Playback Options (#5212)
 	Playback Options…	خيارات التشغيل…
-	Play…	تشغيل…
-	Preview on hover	معاينة عند التحويم
-	Record	تسجيل
-	Recording	جارٍ التسجيل
-	Remove background	إزالة الخلفية
-	Save Action	حفظ الإجراء
-	Search actions	البحث في الإجراءات
-	Select an existing action step to play	حدد خطوة إجراء موجودة لتشغيلها
-	Select subject	تحديد الموضوع
-	Show grid	إظهار الشبكة
-	Show step settings	عرض إعدادات الخطوة
-	Smart removal	إزالة ذكية
-	Sort & View options	خيارات الفرز والعرض
-	Start recording to build your action	ابدأ التسجيل لإنشاء إجرائك
-	Steps	الخطوات
-	Stored action step	خطوة إجراء محفوظة
-	Stored settings	إعدادات محفوظة
-	Teal	أزرق مخضر
-	Text	نص
-	Text colour	لون النص
-	The draft steps changed. Cancel this dialog and reopen the step.	تغيرت خطوات المسودة. ألغِ مربع الحوار هذا وأعد فتح الخطوة.
-	The dragged action changed; drag it again	تغير الإجراء المسحوب؛ اسحبه مرة أخرى
-	The editor response does not belong to this draft	استجابة المحرر لا تنتمي إلى هذه المسودة
-	There are unsaved changes. Do you want to save or discard them?	توجد تغييرات غير محفوظة. هل تريد حفظها أم تجاهلها؟
-	This editor page is closed	صفحة المحرر هذه مغلقة
-	This step dialog belongs to another editor	مربع حوار الخطوة هذا ينتمي إلى محرر آخر
-	Wait for the current action step to finish	انتظر حتى تنتهي خطوة الإجراء الحالية
-	You haven't created any actions	لم تنشئ أي إجراءات بعد
-	Yours	إجراءاتك
+	Playback Options	خيارات التشغيل
+	Accelerated	مُسرَّع
+	Step by Step	خطوة بخطوة
+	Pause For:	إيقاف مؤقت لمدة:
+	Pause For	إيقاف مؤقت لمدة
+	seconds	ثانية
+	Create a single history state	إنشاء حالة سجل واحدة
 
-# Actions reserved category caption (10945/10946)
-	Ungrouped Actions	إجراءات غير مجمعة
+# Channels panel menu (#11451)
+	New Channel…	قناة جديدة…
+	Duplicate Channel	تكرار القناة
+	Delete Channel	حذف القناة
+	New Spot Channel…	قناة لون موضعي جديدة…
+	Merge Spot Channel	دمج قناة اللون الموضعي
+	Channel Options…	خيارات القناة…
+	Split Channels	تقسيم القنوات
+	Merge Channels…	دمج القنوات…
+	Specify Channels:	تحديد القنوات:
+	Not enough grayscale documents for this mode.	لا توجد مستندات كافية بتدرج الرمادي لهذا الوضع.
+	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
+	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
+	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.
