@@ -363,7 +363,13 @@ impl OrientSteps {
         if turns && (!matches!(bpp, 1..=6 | 8 | 10 | 12 | 16 | 20) || w == 0 || h == 0) {
             return Err(CodecError::InvalidImage(format!("cannot orient {layout:?} {sample:?} {w}x{h}")));
         }
-        let out = if turns { alloc_zeroed(img.data().len())? } else { Vec::new() };
+        // Reserve without touching: `step` grows the buffer a band at a time, so no slice
+        // zero-fills the whole output.
+        let mut out = Vec::new();
+        if turns {
+            let n = img.data().len();
+            out.try_reserve_exact(n).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {n} bytes to orient the image")))?;
+        }
         Ok(Self { src: img, o, bpp, ow, oh, out, done: 0 })
     }
 
@@ -385,6 +391,9 @@ impl OrientSteps {
             let row_bytes = self.ow.checked_mul(self.bpp).ok_or_else(|| CodecError::InvalidImage("image too large".into()))?;
             let at = self.done.saturating_mul(row_bytes);
             let end = at.saturating_add(rows.saturating_mul(row_bytes));
+            if self.out.len() < end {
+                self.out.resize(end, 0);
+            }
             let dst = self.out.get_mut(at..end).ok_or_else(|| CodecError::InvalidImage("the oriented rows are out of range".into()))?;
             orient_band(self.src.data(), dst, self.bpp, self.o, (w, h), self.ow, self.done);
             self.done += rows;
