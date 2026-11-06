@@ -1422,22 +1422,43 @@ mod tests {
         assert_eq!(docs, 0, "the step after the budget ran out did not run");
     }
 
+    /// A cancellation-aware worker stays pending until cancelled without depending on a
+    /// filter's memory admission or machine speed. Startup and drop use the production waiter.
+    fn cancellation_test_job(h: &mut Headless, started: Option<tokio::sync::oneshot::Sender<()>>) -> Result<photocraft_engine::jobs::Started, AutomationError> {
+        Ok(h.session.start_job(
+            "test.waitedCancellation",
+            json!({}),
+            "Wait for cancellation",
+            true,
+            move |ctx| {
+                if let Some(started) = started {
+                    let _ = started.send(());
+                }
+                loop {
+                    ctx.check()?;
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            },
+            |_, ()| Ok(Value::Null),
+        )?)
+    }
+
     /// rmcp may drop a cancelled request's future without polling it again; its job must still
     /// stop and leave the document unchanged (#8129).
     #[tokio::test(flavor = "multi_thread")]
     async fn dropping_a_waited_command_cancels_its_job() {
         let mcp = PhotocraftMcp::headless();
-        mcp.headless_op(|h| {
-            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
-            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap().unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        let document = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
+        let (started, running) = tokio::sync::oneshot::channel();
+        let mut waited = Box::pin(mcp.headless_wait_with_start(true, move |h| cancellation_test_job(h, Some(started)), &mut waiter, (0, 1)));
+        tokio::select! {
+            outcome = &mut waited => panic!("the cancellation worker ended before it was dropped: {outcome:?}"),
+            started = tokio::time::timeout(std::time::Duration::from_secs(5), running) => started.expect("worker starts").expect("worker signals startup"),
+        }
+        drop(waited);
         let t = std::time::Instant::now();
         loop {
             let (running, cancelled) =
@@ -1450,6 +1471,9 @@ mod tests {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+        let after = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&document, &after), "cancellation must retain the exact document snapshot");
+        assert_eq!(*document, *after);
     }
 
     /// Dropped while its start still waits for the session lock (held here as a long synchronous
@@ -1457,14 +1481,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn a_wait_dropped_before_its_job_starts_cancels_the_job() {
         let mcp = PhotocraftMcp::headless();
-        mcp.headless_op(|h| {
-            h.command_run("file.new", json!({"width": 6000, "height": 6000}))?;
-            h.command_run("filter.noise.addNoise", json!({"amount": 50}))
-        })
-        .await
-        .unwrap()
-        .unwrap();
+        mcp.headless_op(|h| h.command_run("file.new", json!({"width": 8, "height": 8}))).await.unwrap().unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
+        let document = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
         let Backend::Headless(session) = &*mcp.backend else { panic!("headless") };
         let (session, (locked, is_locked)) = (session.clone(), std::sync::mpsc::channel());
         let holder = std::thread::spawn(move || {
@@ -1474,7 +1493,7 @@ mod tests {
         });
         is_locked.recv().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
+        let waited = mcp.headless_wait_with_start(true, |h| cancellation_test_job(h, None), &mut waiter, (0, 1));
         assert!(tokio::time::timeout(std::time::Duration::from_millis(50), waited).await.is_err(), "the start waits for the lock");
         holder.join().unwrap();
         let t = std::time::Instant::now();
@@ -1489,6 +1508,9 @@ mod tests {
         let cancelled = mcp.headless_op(|h| Ok(h.session.jobs_with_recent().iter().any(|j| j.state == "cancelled"))).await.unwrap().unwrap();
         assert!(cancelled, "the job ended without being cancelled");
         assert_eq!(mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap(), before);
+        let after = mcp.headless_op(|h| Ok(h.session.active().unwrap().doc.clone())).await.unwrap().unwrap();
+        assert!(Arc::ptr_eq(&document, &after), "cancellation must retain the exact document snapshot");
+        assert_eq!(*document, *after);
     }
 
     /// Cancellation notifications only cancel the token: the handler remains alive while
