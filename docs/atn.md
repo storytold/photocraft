@@ -90,6 +90,7 @@ row; the action still adds only one Undo entry.
 | `Btch` | batch | Batch (supported folder and naming forms) | `file.automate.batch` |
 | (string ID only) | shapeBlur | Shape Blur (custom shape by installed ID) | `filter.blur.shapeBlur` |
 | (string ID only) | cafWorkspace | Content-Aware Fill | `edit.contentAwareFill` |
+| (string ID only) | perspectiveWarpTransform | Perspective Warp (indexed layout and warp planes) | `edit.perspectiveWarp` |
 | `Cntc` | contract | Contract | `select.modify.contract` |
 | `CnvM` | convertMode | Convert Mode | `image.mode.rgb`, `image.mode.grayscale`, `image.mode.cmyk`, `image.mode.lab`, `image.mode.multichannel`, `image.mode.bits8`, `image.mode.bits16`, `image.mode.bits32`, `image.mode.bitmap` |
 | (string ID only) | convertToProfile | Convert to Profile | `edit.convertToProfile` |
@@ -213,6 +214,8 @@ row; the action still adds only one Undo entry.
 | (string ID only) | ungroupLayersEvent | Ungroup Layers | `layer.ungroupLayers` |
 | `UnsM` | unsharpMask | Unsharp Mask | `filter.sharpen.unsharpMask` |
 | (string ID only) | updatePlacedLayer | Update Smart Objects | `layer.smartObjects.updateModifiedContent` |
+| (string ID only) | applyImageStackPluginRenderer | Smart Object Stack Mode | `layer.smartObjects.stackMode.*` (eleven measured modes) |
+| (string ID only) | imageStackConvertSmartObject | Stack Mode: None | `layer.smartObjects.stackMode.none` |
 | (string ID only) | vibrance | Vibrance | `image.adjustments.vibrance` |
 | `Wave` | wave | Wave | `filter.distort.wave` |
 | `ZgZg` | zigZag | ZigZag | `filter.distort.zigZag` |
@@ -227,6 +230,9 @@ row; the action still adds only one Undo entry.
 | (string ID only) | placedLayerUpdateAllModified | Update All Modified Content | `layer.smartObjects.updateAllModifiedContent` |
 | (string ID only) | rasterizeAll | Rasterize All Layers | `layer.rasterize.allLayers` |
 | (string ID only) | addBlankVideoLayer | New Blank Video Layer | `layer.videoLayers.newBlankVideoLayer` |
+| (string ID only) | insertBlankFrame | Insert Blank Frame | `layer.videoLayers.insertBlankFrame` |
+| (string ID only) | duplicateFrame | Duplicate Frame | `layer.videoLayers.duplicateFrame` |
+| (string ID only) | deleteFrame | Delete Frame | `layer.videoLayers.deleteFrame` |
 | (string ID only) | isolateLayers | Isolate Layers | `select.isolateLayers` |
 | (string ID only) | textLoadDefaultTypeStyles | Load Default Type Styles | `type.loadDefaultTypeStyles` |
 | (string ID only) | textSaveDefaultTypeStyles | Save Default Type Styles | `type.saveDefaultTypeStyles` |
@@ -278,6 +284,19 @@ identity, and is omitted on save under the normalization rule below. Undecodable
 paths or extra keys keep the entire step. File access happens at playback; a
 missing or unusable file reports the native command's error.
 
+Stack Mode uses the active Smart Object. For `applyImageStackPluginRenderer`,
+the measured `imageStackPlugin` class selects the mode; the localized `Nm  `
+label is preserved on save. Stack Mode: None uses
+`imageStackConvertSmartObject` with no settings. Save preserves whether an
+imported None step had an empty descriptor or no descriptor. Unknown classes,
+extra settings and unrecognized descriptor forms stay as kept steps. Native
+steps with explicit layer targets cannot be exported to these forms.
+
+Insert Blank Frame, Duplicate Frame and Delete Frame use the active video layer
+and current playhead. They take no settings. Extra keys or unrecognized
+descriptor metadata stay as kept steps. Save retains whether the recorded item
+had an empty descriptor or no descriptor.
+
 Convert Type to Shape retains Make's `contentLayer` class reference and `Usng`
 target `textLayer` reference; it does not export a separate `convertToShape`
 event. Other Make mappings, including Solid Color and Pattern fills, are unchanged.
@@ -294,6 +313,24 @@ inherited group state, and remains unavailable for Indexed Color documents.
 The separate `CropPhotos0001` helper remains a complete kept Photoshop step.
 Playback stops at that enabled helper before subsequent duplicate/crop steps can
 run. This covers the parent event, not complete recordings with generated helpers.
+
+### Perspective Warp recordings
+
+`perspectiveWarpTransform` maps Layout and Warp to one `edit.perspectiveWarp`
+step. It warps a raster layer in place or adds a Perspective Warp Smart Filter to
+a Smart Object. The active layer, a named layer or the Background can be the
+recorded target.
+
+The recorded fields are `null` (layer target), `Md  ` (`perspectiveWarpMode`:
+`warp`), `referenceRect` (pixel rectangle), `vertices`, `warpedVertices` (document
+pixel points), and `quads` (four indices per plane). Unchanged steps save the
+original descriptor, including its reference rectangle, vertex order and shared
+indices. Playback uses the recorded document-pixel coordinates. A native export
+requires an explicit reference rectangle and representable planes.
+
+Unsupported targets, modes, units, degenerate quads and meshes with different
+corner sharing stay kept steps. Export refuses a changed recorded mesh if the
+stored descriptor no longer describes it.
 
 ### Content-Aware Fill recordings
 
@@ -944,7 +981,6 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 | New Group with a colour | `Usng` (`Clr ` label), `layerSectionStart`, `layerSectionEnd`, top-level `Nm  ` | |
 | Shear (`Shr `) | `ShrP` list of `Pnt ` (`Hrzn`, `Vrtc` doubles), `UndA` (`WrpA` wrap around, `RptE` repeat edge pixels), `ShrS` long, `ShrE` long | The dialog writes whole numbers: `Hrzn` -64..63 (dragging past the grid clamps), `Vrtc` 1..128 with the first point at 1 and the last at 128; dragging a point out of the grid deletes it. `ShrS` is 0 and `ShrE` the last point's index (count - 1). Script runs take any value unclamped and crashed on far-off `ShrE`/`ShrS` or a first `Vrtc` below 1. |
 | Gradient tool, default mode | two steps: Make (`null` = class `contentLayer`, `Usng` = `Type` gradient layer object) then Set (`null` = `contentLayer` target, `T   ` = the same object plus `Algn` false) | The object: `Dthr`, `gradientsInterpolationMethod`, `Angl` angle, `Type`, `Scl ` percent, `Ofst` (`Hrzn`, `Vrtc` percent), `Grad`. The new tool makes a gradient fill layer; Make holds the first click, Set the finished drag. |
-| Perspective Warp (`perspectiveWarpTransform`) | `null` = layer target, `Md  ` (`perspectiveWarpMode`: `warp`), `referenceRect` rectangle in pixels, `vertices` list of points in pixels (the layout quad), `warpedVertices` (the same points after warping), `quads` list of `indices` (4 vertex indexes each) | Layout and warp are one step. |
 | Print (`print`) then Print One Copy (`printOneCopy`) | `print`: `null` = reference `printOutput` property of the target document; `printOutput` (`PstS`, `Inte`, `printSixteenBit`, `printerName` text, `printProofSetup`), `printViewProofSetup`, `printOutputOptions` (caption, marks, `Bckg` colour, `BrdT`, `Bld `, `Rslt`, `vectorData`, `PgPs`, `Left`, `Top `, `Scl `, crop rectangle), `osSpecificPrintInfo` raw data, `Cptn` text. `printOneCopy` has no keys. | Pressing Print in the dialog records both steps. |
 | Create Droplet (`CrtD`) | `In  ` alias: the droplet file; `Fldr` bool (include subfolders); `Usng` reference to the action; then the Batch keys below (destination, file naming, error log) when set | The same settings as Batch, with the droplet file instead of a source folder. |
 | Sky Replacement (`skyReplacement`) | `shiftEdge` double, `borderSmoothness` long (fade edge, default 50), `Brgh` long, `temperature` long, `harmonizationOpacity` long (35), `foregroundLightingOpacity` long, `lightingMode` blend mode (`Mltp`), `edgeLightingOpacity` long (70), `skyReplacementOutput` (`skyReplacementOutputToNewSheets` new layers, …), `Idnt` text (the sky preset's id), `Nm  ` text (its name), `File` alias (the sky image) | Scale and Flip are **not** in the step: with 150 % and Flip on, the returned keys were the same. `foregroundLightingOpacity` is computed from the sky (44 and 29 for two skies). Without a chosen sky the dialog returns no keys. |
