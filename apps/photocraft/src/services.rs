@@ -545,8 +545,37 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
 /// start an INCR transfer that arboard abandons, leaving the owner waiting and the following
 /// image read unable to start (#10231), so the caller skips that request unless the target list
 /// says files may be there.
+///
+/// x11rb's X11 reply waits are blocking, so the probe runs on its own thread; the paste waits
+/// at most 250 ms for an answer and leaves a stuck X server to that thread.
 #[cfg(target_os = "linux")]
 fn x11_clipboard_has_uri_list() -> Option<bool> {
+    use std::time::{Duration, Instant};
+    let deadline = Instant::now() + Duration::from_millis(250);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::Builder::new()
+        .name("x11-clipboard-targets".into())
+        .spawn(move || {
+            let _ = sender.send(x11_clipboard_has_uri_list_blocking(deadline));
+        })
+        .ok()?;
+    let result = receiver.recv_timeout(deadline.saturating_duration_since(Instant::now())).ok().flatten();
+    log::debug!("X11 clipboard target probe: text/uri-list = {result:?}");
+    result
+}
+
+/// The target list reply mapping: only a complete 32-bit atom list says what the clipboard
+/// offers. A truncated list or a reply of another type leaves the answer unknown.
+#[cfg(target_os = "linux")]
+fn x11_target_list_offers_uri_list(reply_type: u32, format: u8, bytes_after: u32, atoms: impl IntoIterator<Item = u32>, uri_list: u32) -> Option<bool> {
+    if bytes_after != 0 || reply_type != u32::from(x11rb::protocol::xproto::AtomEnum::ATOM) || format != 32 {
+        return None;
+    }
+    Some(atoms.into_iter().any(|atom| atom == uri_list))
+}
+
+#[cfg(target_os = "linux")]
+fn x11_clipboard_has_uri_list_blocking(deadline: std::time::Instant) -> Option<bool> {
     use std::time::{Duration, Instant};
     use x11rb::connection::Connection as _;
     use x11rb::protocol::Event;
@@ -586,7 +615,6 @@ fn x11_clipboard_has_uri_list() -> Option<bool> {
     conn.flush().ok()?;
     // The paste is waiting on this, so give a slow owner a moment and fall back to the old
     // file-list-first read rather than delaying it for long.
-    let deadline = Instant::now() + Duration::from_millis(250);
     while Instant::now() < deadline {
         let Some(event) = conn.poll_for_event().ok()? else {
             std::thread::sleep(Duration::from_millis(2));
@@ -600,10 +628,9 @@ fn x11_clipboard_has_uri_list() -> Option<bool> {
             return None;
         }
         let reply = conn.get_property(true, window, event.property, AtomEnum::ATOM, 0, 1024).ok()?.reply().ok()?;
-        if reply.type_ != u32::from(AtomEnum::ATOM) || reply.format != 32 {
-            return None;
-        }
-        return Some(reply.value32()?.any(|atom| atom == uri_list));
+        let (reply_type, format, bytes_after) = (reply.type_, reply.format, reply.bytes_after);
+        let atoms = reply.value32()?;
+        return x11_target_list_offers_uri_list(reply_type, format, bytes_after, atoms, uri_list);
     }
     None
 }

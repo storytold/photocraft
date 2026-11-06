@@ -912,6 +912,20 @@ fn an_image_only_target_list_never_asks_for_files() {
     assert_eq!(paths, Ok(Some(vec![PathBuf::from("a.png")])));
 }
 
+/// #10231: a complete X11 `TARGETS` reply without `text/uri-list` must read as an image-only
+/// clipboard, not as an unknown target list; a truncated or malformed reply stays unknown.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_x11_target_list_reply_maps_only_a_complete_atom_list() {
+    let atom_type = u32::from(x11rb::protocol::xproto::AtomEnum::ATOM);
+    let uri_list = 9;
+    assert_eq!(x11_target_list_offers_uri_list(atom_type, 32, 0, [1, 2], uri_list), Some(false));
+    assert_eq!(x11_target_list_offers_uri_list(atom_type, 32, 0, [1, uri_list], uri_list), Some(true));
+    assert_eq!(x11_target_list_offers_uri_list(atom_type, 32, 4, [1, uri_list], uri_list), None, "a truncated list is unknown");
+    assert_eq!(x11_target_list_offers_uri_list(3, 32, 0, [uri_list], uri_list), None, "not an atom list");
+    assert_eq!(x11_target_list_offers_uri_list(atom_type, 8, 0, [uri_list], uri_list), None, "not a 32-bit list");
+}
+
 /// #10231: xclip answers a request for a format it doesn't offer (the copied-file list) with
 /// the image's own type, which arboard reports as an unknown error. The paste still reads the
 /// image instead of stopping at the missing file list.
