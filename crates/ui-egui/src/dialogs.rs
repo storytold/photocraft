@@ -1133,7 +1133,6 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::stack_dialog::owns(&d.fields) => crate::stack_dialog::confirm(app, &d.fields),
         _ if crate::tool_reset::owns(&d.fields) => crate::tool_reset::confirm(app),
         _ if crate::crop_presets::owns(&d.fields) => crate::crop_presets::confirm(app, &d.fields),
-        _ if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         _ => confirm_command_more(app, d),
     }
 }
@@ -1141,6 +1140,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 /// The rest of the command dialogs: files, colour, preferences and export, then any other command.
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
+        _ if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::analysis_ui::owns_clear_notes(&d.fields) => crate::analysis_ui::confirm_clear_notes(app, &d.fields),
