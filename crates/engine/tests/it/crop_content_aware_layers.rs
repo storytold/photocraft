@@ -108,6 +108,16 @@ fn unchanged(d: &Document, plain: &Document, ids: &[LayerId]) {
     }
 }
 
+/// Every pixel of `id` inside `area` (the old canvas) is the plain crop's.
+fn covered_as_plain(d: &Document, plain: &Document, id: LayerId, area: Rect) {
+    let (got, want) = (d.layer(id).unwrap().surface().unwrap(), plain.layer(id).unwrap().surface().unwrap());
+    for y in (area.y0..area.y1).step_by(7) {
+        for x in (area.x0..area.x1).step_by(7) {
+            assert_eq!(got.rgba(x, y), want.rgba(x, y), "layer {id:?} at ({x},{y}) differs from the plain crop");
+        }
+    }
+}
+
 fn named_one_step(s: &Session, past: usize, name: &str) {
     let st = s.active().unwrap();
     assert_eq!(st.history.past_len(), past + 1);
@@ -158,6 +168,9 @@ fn measured_straight_rows_fill_background_and_only_the_active_raster() {
         let bounds = if row == 1 { Rect::new(600, 0, 900, 500) } else { Rect::new(0, 0, 900, 500) };
         assert_eq!(d.layer(active).unwrap().surface().unwrap().content_bounds(), bounds);
         pixel(d, active, 850, if row == 1 { 400 } else { 125 }, if row == 1 { BLUE } else { GREEN });
+        // The fill adds pixels only where the crop uncovered the canvas: the active layer's own
+        // pixels inside the old canvas are the plain crop's.
+        covered_as_plain(d, &plain, active, Rect::new(0, 0, 800, 500));
         unchanged(d, &plain, &untouched);
         named_one_step(&s, past, "Content-aware Crop");
         undo_redo(&mut s, &before);

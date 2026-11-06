@@ -223,7 +223,15 @@ fn escape_or_a_tool_change_cancels_a_handle_drag() {
     let (mut app, a, b) = app_with_two_shapes(Tool::PathSelection);
     let steps = app.session.active().unwrap().history.past_len();
     press_and_drag(&mut app);
-    crate::shape_bounds_box::cancel(&mut app);
+    // Through the shortcut handler, as the key arrives in the app.
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput {
+        events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: NONE }],
+        ..Default::default()
+    });
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert!(app.ui.shape_box.is_none());
     release_changes_nothing(&mut app, a, b, steps, "Esc");
     // The next press works again.
     drag(&mut app, [723.0, 451.0], [623.0, 391.0]);
