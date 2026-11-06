@@ -293,3 +293,28 @@ fn clicking_a_dialog_over_another_tile_keeps_the_active_document() {
     }
     assert_eq!(h.state().session.active_index(), Some(1), "a press on the dialog must not activate the document under it");
 }
+
+/// #11612: the same holds for the single canvas: with a floating document active, a press on a
+/// dialog lying over the docked canvas must not activate the docked document.
+#[test]
+fn clicking_a_dialog_over_the_docked_canvas_keeps_the_floating_document_active() {
+    let mut h = harness(2, ThemeKind::Pro);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    h.run_steps(3);
+    assert_eq!(h.state().session.active_index(), Some(0), "the floated document is active");
+    crate::menus::invoke(h.state_mut(), &ctx, "image.adjustments.levels", json!({})).unwrap();
+    h.run_steps(3);
+    let canvas = h.state().last_canvas_rect;
+    let cancel = h.get_by_label("Cancel").rect();
+    let on_dialog = egui::pos2(cancel.left() + 4.0, cancel.center().y);
+    assert!(canvas.contains(on_dialog), "the dialog covers the docked canvas at {on_dialog:?} ({canvas:?})");
+    assert_ne!(ctx.layer_id_at(on_dialog).map(|l| l.order), Some(egui::Order::Background));
+    h.event(egui::Event::PointerMoved(on_dialog));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: on_dialog, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().session.active_index(), Some(0), "a press on the dialog must not activate the docked document under it");
+}
