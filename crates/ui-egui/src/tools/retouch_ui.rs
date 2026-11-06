@@ -326,10 +326,10 @@ pub fn patch_replaces_selection(app: &PhotocraftApp) -> bool {
 
 /// A Patch or Content-Aware Move drag belongs to the document it was pressed on: once another one
 /// is active it is dropped, so it neither hides that document's selection nor lassos or patches it
-/// on release, and its own document shows its selection again (#11024).
+/// on release, and its own document shows its selection again (#11024). A document reopened with
+/// the same ID is another one too.
 pub fn cancel_stale(app: &mut PhotocraftApp) {
-    let active = app.session.active().map(|st| st.doc.id);
-    if app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Patch | Tool::ContentAwareMove) && d.document.is_some_and(|doc| Some(doc) != active)) {
+    if app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Patch | Tool::ContentAwareMove) && d.document.as_ref().is_some_and(|doc| !doc.is_active(app))) {
         app.drag = None;
     }
 }

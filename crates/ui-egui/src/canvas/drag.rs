@@ -42,7 +42,7 @@ pub struct Drag {
     /// the first move (#11389). `true` until recorded, which keeps that rule for drags that don't.
     pub selection_at_press: bool,
     /// The document a press on the canvas started the drag on (`retouch_ui::cancel_stale`).
-    pub document: Option<photocraft_doc::DocId>,
+    pub document: Option<DragDocument>,
 }
 
 impl Drag {
@@ -383,6 +383,30 @@ pub(crate) fn draw_readout<const N: usize>(ctx: &egui::Context, id: &str, cursor
                 });
         },
     );
+}
+
+/// The document a drag was pressed on. A reopened document can keep its ID (and revision), so the
+/// snapshot tells it apart; an ordinary edit replaces the snapshot but advances the revision, which
+/// keeps the drag on it (the rule `sync_views` applies to the Paths selection).
+#[derive(Clone, Debug)]
+pub struct DragDocument {
+    id: photocraft_doc::DocId,
+    revision: u64,
+    snapshot: std::sync::Weak<Document>,
+}
+
+impl DragDocument {
+    pub fn capture(app: &PhotocraftApp) -> Option<Self> {
+        let st = app.session.active()?;
+        Some(Self { id: st.doc.id, revision: st.revision, snapshot: std::sync::Arc::downgrade(&st.doc) })
+    }
+
+    /// The document is still the active one.
+    pub fn is_active(&self, app: &PhotocraftApp) -> bool {
+        app.session.active().is_some_and(|st| {
+            st.doc.id == self.id && (st.revision > self.revision || self.snapshot.ptr_eq(&std::sync::Arc::downgrade(&st.doc)))
+        })
+    }
 }
 
 /// The document, revision and target a vector drag started on.
