@@ -4767,3 +4767,9 @@ cameraRaw	Show Vectorscope	แสดงเวคเตอร์สโคป
 cameraRaw	Tone Histogram	โทนฮิสโตแกรม
 cameraRaw	Vignetting	วิกเนต
 cameraRaw	White Balance: As Shot	สมดุลแสงขาว: เท่าที่ถูกถ่าย
+
+# Strings main added after this catalog was written (integration batch 20).
+	Background (default)	พื้นหลัง (ค่าเริ่มต้น)
+	Transparent (default)	โปร่งใส (ค่าเริ่มต้น)
+	The path was kept as the Work Path	เก็บเส้นทางไว้เป็นเส้นทางการทำงานแล้ว
+	The path was discarded	ทิ้งเส้นทางแล้ว

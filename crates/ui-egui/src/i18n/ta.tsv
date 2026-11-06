@@ -4267,3 +4267,9 @@ navigator	Zoom	பெரிதாக்கல்
 	Right-to-left paragraph direction	வலமிருந்து இடமாக பத்தித் திசை
 	Not rendered: this adjustment ({key}) is kept as imported.	ரெண்டர் செய்யப்படவில்லை: இந்தச் சரிசெய்தல் ({key}) இறக்குமதி செய்தபடியே வைக்கப்பட்டுள்ளது.
 	Print preview image	அச்சு முன்னோட்டப் படம்
+
+# Strings main added after this catalog was written (integration batch 20).
+	Background (default)	பின்னணி (இயல்புநிலை)
+	Transparent (default)	ஒளிஊடுருவும் (இயல்புநிலை)
+	The path was kept as the Work Path	பாதை பணிப் பாதையாக வைக்கப்பட்டது
+	The path was discarded	பாதை நிராகரிக்கப்பட்டது

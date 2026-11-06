@@ -4612,3 +4612,7 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Working CMY Plates	İşçi CMY kanalları
 	Legacy Macintosh RGB (Gamma 1.8)	Köhnə Macintosh RGB (Qamma 1.8)
 	Internet Standard RGB (sRGB)	İnternet standartı RGB (sRGB)
+
+# Strings main added after this catalog was written (integration batch 20).
+	Background (default)	Fon (defolt)
+	Transparent (default)	Şəffaf (defolt)
