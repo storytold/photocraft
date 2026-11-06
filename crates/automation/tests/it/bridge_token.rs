@@ -65,6 +65,7 @@ async fn call_impostor(addr: &str, listener: TcpListener, kind: Impostor) -> (Ve
     (lines, error)
 }
 
+/// Fail if any line a listener received contains the control token.
 fn assert_token_withheld(lines: &[String]) {
     for line in lines {
         assert!(!line.contains(CONTROL_TOKEN), "the control token reached a listener that is not the app: {line}");

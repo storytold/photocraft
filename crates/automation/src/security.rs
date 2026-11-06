@@ -188,6 +188,7 @@ pub struct ServerHandshake {
 }
 
 impl ServerHandshake {
+    /// A handshake for a freshly accepted connection: no challenge issued yet.
     pub fn new() -> Self {
         Self::default()
     }
@@ -419,10 +420,12 @@ mod tests {
         (reply, step == AuthStep::Authenticated)
     }
 
+    /// An `auth.challenge` frame carrying `client_nonce`.
     fn challenge_line(client_nonce: &str) -> String {
         json!({"id": 1, "method": CHALLENGE_METHOD, "params": {"clientNonce": client_nonce}}).to_string()
     }
 
+    /// An `auth` frame carrying the client's challenge `proof`.
     fn proof_line(proof: &str) -> String {
         json!({"id": 2, "method": AUTH_METHOD, "params": {"proof": proof}}).to_string()
     }
@@ -454,6 +457,8 @@ mod tests {
         assert_eq!(reply["result"]["authenticated"], true);
     }
 
+    /// NV-6: after a challenge, a wrong, missing or token-shaped proof, the token itself, a second
+    /// challenge and a control method are all refused, and a malformed nonce gets no challenge.
     #[test]
     fn challenge_authentication_refuses_a_wrong_or_missing_proof() {
         let token = generate_token().unwrap();
@@ -573,6 +578,8 @@ mod tests {
         assert!(authenticated, "{reply}");
     }
 
+    /// A repeat `auth` or `auth.challenge` on an authenticated connection is answered "already
+    /// authenticated"; any other frame is left to the dispatcher.
     #[test]
     fn repeat_auth_on_an_authenticated_connection_says_so() {
         let line = json!({"id": 3, "method": AUTH_METHOD, "params": {"token": "anything"}}).to_string();
