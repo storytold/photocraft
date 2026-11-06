@@ -42,17 +42,27 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32
     }
 }
 
+/// Side of the cells in which Dodge and Burn remember, per touched pixel, the coverage applied so
+/// far and the original pixel (copied from the working pixels the first time a dab reaches it).
+/// Dense cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
+/// large brushes over ten times slower.
+const TONE_CELL: i32 = 64;
+
+/// The [`TONE_CELL`] cells, on the layer's grid, that `area` overlaps.
+fn tone_cells(area: Rect) -> u64 {
+    if area.is_empty() {
+        return 0;
+    }
+    let span = |a: i32, b: i32| u64::try_from(i64::from((b - 1).div_euclid(TONE_CELL)) - i64::from(a.div_euclid(TONE_CELL)) + 1).unwrap_or(0);
+    span(area.x0, area.x1).saturating_mul(span(area.y0, area.y1))
+}
+
 /// Dodge and Burn: a stroke tones each pixel once, from its original colour, mixed in by the
 /// stroke's coverage there (`toned` is the full-exposure colour). Dabs build up coverage as in a
 /// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
 fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
-    /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
-    /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
-    /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
-    /// large brushes over ten times slower.
-    const CELL: i32 = 64;
     struct Cell {
         cov: Vec<f32>,
         orig: Vec<f32>,
@@ -66,14 +76,14 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
             return;
         }
         let mut enc = [0.0f32; 8];
-        for cy in r.y0.div_euclid(CELL)..=(r.y1 - 1).div_euclid(CELL) {
-            for cx in r.x0.div_euclid(CELL)..=(r.x1 - 1).div_euclid(CELL) {
-                let cr = Rect::new(cx * CELL, cy * CELL, cx * CELL + CELL, cy * CELL + CELL);
+        for cy in r.y0.div_euclid(TONE_CELL)..=(r.y1 - 1).div_euclid(TONE_CELL) {
+            for cx in r.x0.div_euclid(TONE_CELL)..=(r.x1 - 1).div_euclid(TONE_CELL) {
+                let cr = Rect::new(cx * TONE_CELL, cy * TONE_CELL, cx * TONE_CELL + TONE_CELL, cy * TONE_CELL + TONE_CELL);
                 let part = r.intersect(&cr);
                 if part.is_empty() {
                     continue;
                 }
-                let len = (CELL * CELL) as usize;
+                let len = (TONE_CELL * TONE_CELL) as usize;
                 // Coverage -1: not touched yet, so `orig` isn't filled in for that pixel.
                 let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] });
                 for y in part.y0..part.y1 {
@@ -82,7 +92,7 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                         if k <= 0.0 {
                             continue;
                         }
-                        let i = ((y - cr.y0) * CELL + (x - cr.x0)) as usize;
+                        let i = ((y - cr.y0) * TONE_CELL + (x - cr.x0)) as usize;
                         let (Some(prev), Some(src)) = (cell.cov.get_mut(i), cell.orig.get_mut(i * n..i * n + n)) else { continue };
                         if *prev < 0.0 {
                             // First touch: the working pixel is still the original.
@@ -207,6 +217,23 @@ impl DabTool {
     }
 
     /// How far around each dab the effect reads (Blur and Sharpen read a neighbourhood).
+    /// Bytes the tool's effect keeps for the whole stroke beside the working copies of `area` (`ch`
+    /// channels): Dodge and Burn's [`TONE_CELL`] cells, a coverage value and the original pixel for
+    /// each pixel of every cell the area overlaps ([`tone_stroke`]), and Smudge's carried colour
+    /// over its whole pickup square. The other tools keep nothing.
+    fn retained_bytes(&self, area: Rect, ch: usize) -> u64 {
+        let f32s = |n: u64| n.saturating_mul(std::mem::size_of::<f32>() as u64);
+        let ch = ch as u64;
+        match self {
+            Self::Tone { .. } => f32s(tone_cells(area).saturating_mul((TONE_CELL * TONE_CELL) as u64).saturating_mul(ch + 1)),
+            Self::Smudge { max_size, .. } => {
+                let side = u64::try_from(Smudge::sampling_radius(*max_size)).map_or(0, |r| 2 * r + 1);
+                f32s(side.saturating_mul(side).saturating_mul(ch))
+            }
+            Self::Sponge { .. } | Self::Focus { .. } => 0,
+        }
+    }
+
     /// How far past a dab the tool reads (and its footprint reaches past the canvas).
     #[cfg(test)]
     pub(super) fn halo(&self) -> i32 {
@@ -292,9 +319,11 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         // Only the canvas changes, and only it (plus what the effect reads around a dab) is
         // copied, so a brush far larger than the image costs what the image does (#5633). The
         // copies (original, working, mixed back; Sample All Layers adds a composite and its
-        // render) are priced before they are made.
+        // render) and what the effect keeps for the whole stroke (Dodge and Burn's tone cells,
+        // Smudge's carry) are priced before they are made.
         let what = format!("the {label} stroke");
-        let admit = |area: Rect| admit_dab_area(area, fmt.channels(), if all { 5 } else { 3 }, &what);
+        let ch = fmt.channels();
+        let admit = |area: Rect| admit_dab_area(area, ch, if all { 5 } else { 3 }, tool.retained_bytes(area, ch), &what);
         let (halo, canvas) = (tool.neighborhood().halo(), pre.bounds());
         apply_dab_stroke_clipped(surf, &stroke, sel, lock, halo, canvas, admit, |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
@@ -318,20 +347,32 @@ const DAB_BUDGET: u64 = 1 << 30;
 const DAB_BUDGET: u64 = 1 << 20;
 
 /// Refuse a sequential-dab working area of `ch` channels over [`DAB_BUDGET`], or one the browser
-/// can't fit with `copies` `f32` buffers of it alive at once, before anything is allocated.
-fn admit_dab_area(area: Rect, ch: usize, copies: u64, what: &str) -> Result<()> {
+/// can't fit, before anything is allocated: `copies` `f32` buffers of it alive at once, plus the
+/// `retained` bytes the effect keeps for the whole stroke ([`DabTool::retained_bytes`]).
+fn admit_dab_area(area: Rect, ch: usize, copies: u64, retained: u64, what: &str) -> Result<()> {
+    admit_dab_area_with(area, ch, copies, retained, what, crate::memory_gate::ensure)
+}
+
+/// [`admit_dab_area`] against the memory check `gate`. `gate` is a parameter so tests can refuse
+/// at a fixed limit without the memory gate's process-wide simulation.
+fn admit_dab_area_with(area: Rect, ch: usize, copies: u64, retained: u64, what: &str, gate: impl FnOnce(&str, u64) -> Result<()>) -> Result<()> {
     let (w, h) = (u64::from(area.width()), u64::from(area.height()));
     let px = w.saturating_mul(h);
     if px > DAB_BUDGET {
         return Err(crate::allocation::error(what, &format!("it would work on {w} x {h} px at once, more than the {DAB_BUDGET} px limit")));
     }
     let bytes = px.saturating_mul(ch as u64).saturating_mul(std::mem::size_of::<f32>() as u64).saturating_mul(copies);
-    crate::memory_gate::ensure(&format!("paint {what}"), bytes)?;
+    gate(&format!("paint {what}"), bytes.saturating_add(retained))?;
     crate::allocation::checkpoint(what)
 }
 
 /// What a live sequential-dab stroke's errors call it.
 const LIVE_WHAT: &str = "a live stroke preview";
+
+/// What a live stroke's memory checks add beyond each dab's copies: nothing. They run dab by dab,
+/// so they may count only what each dab newly allocates; what the stroke keeps across dabs (its
+/// working tiles, Dodge and Burn's tone cells, Smudge's carry) builds up as it goes, untracked.
+const LIVE_RETAINED: u64 = 0;
 
 /// Side of the tiles a live sequential-dab stroke keeps its working pixels in ([`WorkTiles`]).
 const WORK_TILE: i32 = 128;
@@ -635,7 +676,7 @@ impl LiveDab {
                 continue;
             }
             let read = self.neighborhood.read_rect(r, d);
-            admit_dab_area(read, ch, 2, LIVE_WHAT)?;
+            admit_dab_area(read, ch, 2, LIVE_RETAINED, LIVE_WHAT)?;
             let mut region = self.work.read(&self.pre_surf, read)?;
             let fp = footprint_within(ctx, d, self.done.saturating_add(k), ring.intersect(&read), clip);
             (self.effect)(&mut region, &fp);
@@ -659,7 +700,7 @@ impl LiveDab {
     /// The working pixels of `r`, for [`Self::show`]: priced first, with the original and the
     /// mixed result alongside.
     fn work_for_show(&self, r: Rect) -> Result<Region> {
-        admit_dab_area(r, self.work.ch, 3, LIVE_WHAT)?;
+        admit_dab_area(r, self.work.ch, 3, LIVE_RETAINED, LIVE_WHAT)?;
         self.work.read(&self.pre_surf, r)
     }
 
@@ -703,7 +744,7 @@ impl LiveDab {
             let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false).intersect(&clip)));
             if !r.is_empty() {
                 let read = r.inflate(halo);
-                admit_dab_area(read, self.work.ch, 2, LIVE_WHAT)?;
+                admit_dab_area(read, self.work.ch, 2, LIVE_RETAINED, LIVE_WHAT)?;
                 let mut region = self.work.read(&self.pre_surf, read)?;
                 for (k, d) in ds.iter().enumerate() {
                     if ctx.dab_rect(d, false).intersect(&clip).is_empty() {
@@ -769,5 +810,46 @@ impl LiveDab {
             surface,
             bounds: self.bounds,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A memory check that admits up to `limit` bytes.
+    fn up_to(limit: u64) -> impl FnOnce(&str, u64) -> Result<()> {
+        move |what, need| if need <= limit { Ok(()) } else { Err(EngineError::Other(format!("{what}: {need} bytes, {limit} available"))) }
+    }
+
+    #[test]
+    fn dab_admission_counts_what_the_effect_keeps_for_the_stroke() {
+        // A 290 × 190 px RGBA working area, at the commit's 3 copies. Dodge and Burn also keep the
+        // 5 × 4 tone cells it overlaps (64 px squares on the layer's grid, a coverage value and the
+        // original pixel per pixel); a 200 px Smudge keeps its 205 px pickup square's carry. With
+        // memory for exactly the copies, the estimate before counted neither, and both fit; now
+        // they are refused, and admitted once the memory covers them too.
+        let (area, ch) = (Rect::new(10, 10, 300, 200), 4);
+        let copies: u64 = 290 * 190 * 4 * 4 * 3;
+        let dodge = DabTool::Tone { burn: false, range: ToneRange::Midtones, exposure: 0.5, protect: true };
+        let smudge = DabTool::Smudge { strength: 0.5, finger: None, max_size: 200.0 };
+        assert_eq!(dodge.retained_bytes(area, ch), 5 * 4 * (64 * 64) * (4 + 1) * 4);
+        assert_eq!(smudge.retained_bytes(area, ch), 205 * 205 * 4 * 4);
+        for tool in [&dodge, &smudge] {
+            let retained = tool.retained_bytes(area, ch);
+            assert!(admit_dab_area_with(area, ch, 3, 0, "t", up_to(copies)).is_ok(), "{tool:?}: the copies alone fit");
+            assert!(admit_dab_area_with(area, ch, 3, retained, "t", up_to(copies)).is_err(), "{tool:?}: refused");
+            assert!(admit_dab_area_with(area, ch, 3, retained, "t", up_to(copies + retained)).is_ok(), "{tool:?}: fits");
+        }
+        // Sponge, Blur and Sharpen keep nothing beyond the copies.
+        for tool in [DabTool::Sponge { saturate: true, vibrance: false }, DabTool::Focus { sharpen: false, strength: 0.5, protect: false, sigma: 2.0 }] {
+            assert_eq!(tool.retained_bytes(area, ch), 0, "{tool:?}");
+        }
+        // Cells are whole and on the layer's grid: 2 px across a cell edge keep two of them, a pixel
+        // left of and above the origin keeps the cell there, and no area keeps none.
+        let cell = (64 * 64) * (4 + 1) * 4;
+        assert_eq!(dodge.retained_bytes(Rect::new(63, 0, 65, 1), ch), 2 * cell);
+        assert_eq!(dodge.retained_bytes(Rect::new(-1, -1, 0, 0), ch), cell);
+        assert_eq!(dodge.retained_bytes(Rect::EMPTY, ch), 0);
     }
 }
