@@ -21,6 +21,7 @@ use crate::layout::DEFAULT_TAB_STOP_PT;
 #[cfg(test)]
 thread_local! {
     pub(crate) static CARRY_SETTLE_PASSES: Cell<usize> = const { Cell::new(0) };
+    pub(crate) static CARRY_SETTLE_FORCE_NONCONVERGING: Cell<bool> = const { Cell::new(false) };
 }
 
 /// The character styles of `runs`, with families resolved (PostScript names from PSDs, unknown
@@ -451,6 +452,8 @@ impl<'a> Para<'a> {
         let m = area_metrics(layout, env.styles, &self.ps, env.k, self.first_style(), env.vertical);
         let from = self.area_origin(m, flow);
         let first_px = self.first_style().size_pt * env.k;
+        // Earlier roman and tab plans must not leave this re-break without a pass budget.
+        let budget = Cell::new(MAX_AREA_PASSES);
         break_area(
             layout,
             a,
@@ -461,7 +464,7 @@ impl<'a> Para<'a> {
             self.break_scale,
             carries,
             self.alignment() == Alignment::Justify,
-            &self.area_budget,
+            &budget,
         )
     }
 
@@ -479,7 +482,10 @@ impl<'a> Para<'a> {
             CARRY_SETTLE_PASSES.with(|count| count.set(count.get() + 1));
             passes += 1;
             let carries: Vec<f32> = layout.lines().map(|line| self.shaped_vertical_space_carry(&line)).collect();
-            if carries == settled {
+            let converged = carries == settled;
+            #[cfg(test)]
+            let converged = converged && !CARRY_SETTLE_FORCE_NONCONVERGING.with(Cell::get);
+            if converged {
                 break;
             }
             let overflow = layout.lines().enumerate().any(|(i, line)| {
@@ -487,6 +493,8 @@ impl<'a> Para<'a> {
                 let m = line.metrics();
                 (m.advance - m.trailing_whitespace) * self.break_scale + i.checked_sub(1).and_then(|p| carries.get(p)).copied().unwrap_or(0.0) > avail + 0.5
             });
+            #[cfg(test)]
+            let overflow = overflow || CARRY_SETTLE_FORCE_NONCONVERGING.with(Cell::get);
             if !overflow {
                 break;
             }

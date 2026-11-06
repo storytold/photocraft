@@ -372,7 +372,8 @@ impl Para<'_> {
         let slots = collect_kern_slots(line, self);
         #[cfg(test)]
         CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + slots.len()));
-        slots.iter().filter(|s| s.start >= start).map(|s| s.advance).sum()
+        let advance = slots.iter().filter(|s| s.start >= start).map(|s| s.advance).sum::<f32>();
+        if advance.is_finite() { advance } else { 0.0 }
     }
 
     /// Where the line starts along its extent: box and area lines at their box or span edge,
@@ -522,7 +523,8 @@ impl Para<'_> {
         let current = &out.clusters[c0..];
         #[cfg(test)]
         CARRY_SCANNED.with(|scanned| scanned.set(scanned.get() + current.len()));
-        let advance = current.iter().filter(|c| c.line == line_index && c.range.start >= start).map(|c| c.advance).sum();
+        let advance = current.iter().filter(|c| c.line == line_index && c.range.start >= start).map(|c| c.advance).sum::<f32>();
+        let advance = if advance.is_finite() { advance } else { 0.0 };
         CarriedSpaces { present: true, advance, start, previous_line: line_index, clusters: c0..out.clusters.len() }
     }
 

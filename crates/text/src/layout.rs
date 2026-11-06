@@ -40,7 +40,7 @@ pub use navigate::{byte_index, char_index, hit_char, line_edge, line_index, line
 use paragraphs::next_tab_stop;
 pub use paragraphs::{DEFAULT_TAB_STOP_PT, split_paragraphs};
 #[cfg(test)]
-pub(crate) use shaping::CARRY_SETTLE_PASSES;
+pub(crate) use shaping::{CARRY_SETTLE_FORCE_NONCONVERGING, CARRY_SETTLE_PASSES};
 use shaping::{Para, resolve_run_styles, running_starts, small_caps_modes};
 use style::SmallCapsMode;
 #[cfg(test)]

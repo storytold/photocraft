@@ -489,31 +489,88 @@ fn vertical_soft_wrap_settles_carry_chains_past_four_columns() {
     assert_eq!(l.lines.last().unwrap().range.end, t.text.len());
 }
 
-/// A non-finite carry never equals itself, and a later oversized carry keeps overflowing. The
-/// settle loop must still stop after the largest line count it observed, six for this fixture.
 #[test]
-fn vertical_soft_wrap_settle_passes_are_bounded_by_the_largest_line_count() {
+fn vertical_soft_wrap_non_finite_carry_does_not_clamp_the_receiving_width() {
     let first = "鈴".repeat(13);
-    let nan_spaces = "  ";
     let middle = "鈴".repeat(12);
-    let huge_space = " ";
-    let last = "鈴";
     let mut t = vertical_soft_wrap_text("");
-    t.text = first.clone() + nan_spaces + &middle + huge_space + last;
+    t.text = first.clone() + "  " + &middle + " " + "鈴";
     t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 1000.0, height: 495.0 };
     let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
     t.runs = vec![
         TextRun { len: first.len(), style: style.clone() },
-        TextRun { len: nan_spaces.len(), style: CharStyle { tracking: f32::NAN, ..style.clone() } },
+        TextRun { len: 2, style: CharStyle { tracking: f32::NAN, ..style.clone() } },
+        TextRun { len: middle.len(), style: style.clone() },
+        TextRun { len: 1, style: CharStyle { tracking: 20_000.0, ..style.clone() } },
+        TextRun { len: "鈴".len(), style },
+    ];
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    let middle_start = first.len() + 2;
+    let middle_end = middle_start + middle.len();
+    let receiving = l.lines.iter().find(|line| line.range.contains(&middle_start)).expect("the receiving column");
+    assert!(receiving.range.end >= middle_end, "the receiving column used the minimum width: {receiving:?}, all lines {:?}", l.lines);
+    assert!(receiving.x0.is_finite() && receiving.x1.is_finite(), "non-finite receiving column: {receiving:?}");
+}
+
+/// Carry settling must keep the complete area layout after roman and tab passes consume the
+/// paragraph's shared area budget.
+#[test]
+fn vertical_area_carry_chain_survives_an_exhausted_shared_budget() {
+    use photocraft_doc::vector::{Path, Subpath};
+
+    let block = format!("Tabs\t{}    ", "鈴".repeat(7));
+    let mut t = vertical_soft_wrap_text("");
+    t.text = block.repeat(27);
+    t.shape = TextShape::Area {
+        path: Path::new(vec![
+            Subpath::polygon(&[(0.0, 0.0), (1350.0, 0.0), (1350.0, 80.0), (0.0, 80.0)]),
+            Subpath::polygon(&[(0.0, 100.0), (1350.0, 100.0), (1350.0, 540.0), (0.0, 540.0)]),
+        ]),
+    };
+    crate::layout::AREA_PASSES.with(|count| count.set(0));
+    crate::layout::CARRY_SETTLE_PASSES.with(|count| count.set(0));
+    let mut e = TextEngine::new();
+    let l = e.layout(&t, 72.0);
+    let area_passes = crate::layout::AREA_PASSES.with(|count| count.get());
+    let carry_passes = crate::layout::CARRY_SETTLE_PASSES.with(|count| count.get());
+    assert!(area_passes > 32, "carry re-breaking must continue after the shared budget, got {area_passes}");
+    assert!(carry_passes >= 2, "the fixture must exercise a carry re-break");
+    assert_eq!(
+        l.lines.last().map(|line| line.range.end),
+        Some(t.text.len()),
+        "trailing area text was hidden after {area_passes} area and {carry_passes} carry passes: {:?}",
+        l.lines
+    );
+}
+
+/// Even when convergence and overflow exits are disabled, the settle loop stops after the
+/// largest line count it observed, three for this fixture.
+#[test]
+fn vertical_soft_wrap_settle_passes_are_bounded_by_the_largest_line_count() {
+    let first = "鈴".repeat(13);
+    let spaces = "  ";
+    let middle = "鈴".repeat(12);
+    let huge_space = " ";
+    let last = "鈴";
+    let mut t = vertical_soft_wrap_text("");
+    t.text = first.clone() + spaces + &middle + huge_space + last;
+    t.shape = TextShape::Box { x: 0.0, y: 0.0, width: 1000.0, height: 495.0 };
+    let style = CharStyle { font_family: "Shippori Mincho".into(), size_pt: 36.0, ..Default::default() };
+    t.runs = vec![
+        TextRun { len: first.len(), style: style.clone() },
+        TextRun { len: spaces.len(), style: style.clone() },
         TextRun { len: middle.len(), style: style.clone() },
         TextRun { len: huge_space.len(), style: CharStyle { tracking: 20_000.0, ..style.clone() } },
         TextRun { len: last.len(), style },
     ];
     let mut e = TextEngine::new();
     crate::layout::CARRY_SETTLE_PASSES.with(|count| count.set(0));
+    crate::layout::CARRY_SETTLE_FORCE_NONCONVERGING.with(|force| force.set(true));
     let l = e.layout(&t, 72.0);
+    crate::layout::CARRY_SETTLE_FORCE_NONCONVERGING.with(|force| force.set(false));
     let passes = crate::layout::CARRY_SETTLE_PASSES.with(|count| count.get());
-    assert_eq!(passes, 6, "{passes} settle passes for lines {:?}", l.lines);
+    assert_eq!(passes, 3, "{passes} settle passes for lines {:?}", l.lines);
 }
 
 /// A justified column that receives carried spaces spreads its own spaces over what remains of
