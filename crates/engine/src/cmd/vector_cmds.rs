@@ -315,13 +315,13 @@ pub fn specs() -> Vec<CommandSpec> {
             "subtract",
             "Subtract Front Shape"
         )),
-        spec!("layer.combineShapes.intersectShapeAreas", "Intersect Shape Areas", [], COMBINE_PARAMS, has_layer, |s, p| combine_shapes(
+        spec!("layer.combineShapes.intersectShapeAreas", "Unite Shapes at Overlap", [], COMBINE_PARAMS, has_layer, |s, p| combine_shapes(
             s,
             p,
             "intersect",
             "Intersect Shape Areas"
         )),
-        spec!("layer.combineShapes.excludeOverlappingShapes", "Exclude Overlapping Shapes", [], COMBINE_PARAMS, has_layer, |s, p| {
+        spec!("layer.combineShapes.excludeOverlappingShapes", "Subtract Shapes at Overlap", [], COMBINE_PARAMS, has_layer, |s, p| {
             combine_shapes(s, p, "exclude", "Exclude Overlapping Shapes")
         }),
         spec!(

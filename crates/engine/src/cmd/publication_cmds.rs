@@ -114,7 +114,7 @@ fn export_publication(s: &mut Session, p: &Value) -> Result<Value> {
             if f64::from(nw) > f64::from(ow) * 1.5 {
                 warnings.push(format!("enlarged {:.1}× ({ow} → {nw} px): fine detail is interpolated, not added", f64::from(nw) / f64::from(ow)));
             }
-            crate::image_cmds::resample_doc(&mut doc, nw, nh, if up { Resample::PreserveDetails } else { Resample::BicubicSharper });
+            crate::image_cmds::resample_doc(&mut doc, CMD, nw, nh, if up { Resample::PreserveDetails } else { Resample::BicubicSharper })?;
         }
     }
     doc.resolution_dpi = dpi as f32;

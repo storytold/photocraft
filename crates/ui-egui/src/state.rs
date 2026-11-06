@@ -344,6 +344,9 @@ pub struct UiState {
     /// Panel edges the Cut Out tool snaps to (found when a drag starts).
     #[serde(skip)]
     pub cut_out_edges: Option<crate::cutout_ui::PanelEdges>,
+    /// The bounding box of several selected shape layers, a handle being dragged.
+    #[serde(skip)]
+    pub shape_box: Option<crate::shape_bounds_box::Drag>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
@@ -604,6 +607,7 @@ impl Default for UiState {
             corner_radius: None,
             arrow_drag: None,
             cut_out_edges: None,
+            shape_box: None,
             selected_path: None,
             hidden_work_path: None,
             panels: Panels::default(),
@@ -751,10 +755,10 @@ mod tests {
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));
-        assert_eq!(Tool::DeleteAnchorPoint.key(), 'P');
+        assert_eq!(Tool::DeleteAnchorPoint.key(), ' ');
         assert_eq!(Tool::from_name("convertPoint"), Some(Tool::ConvertPoint));
         assert_eq!(Tool::from_name("Convert Point Tool"), Some(Tool::ConvertPoint));
-        assert_eq!(Tool::ConvertPoint.key(), 'P', "it shares the Pen's key");
+        assert_eq!(Tool::ConvertPoint.key(), ' ', "P never reaches it");
         assert!(!Tool::ConvertPoint.is_brushlike());
         assert_eq!(Tool::from_name("Remove Tool"), Some(Tool::Remove));
         assert_eq!(Tool::Remove.key(), 'J');

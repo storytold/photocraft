@@ -95,6 +95,7 @@
 	Right	Sağ
 	Open Recent	Son Kullanılanları Aç
 	Clear Recent Files	Son Dosyaları Temizle
+	Clear Recent File List	Son Dosyaları Temizle
 	Remove from Recent	Son Kullanılanlardan Kaldır
 	Remove {name} from Recent	{name} öğesini Son Kullanılanlardan kaldır
 	Close	Kapat
@@ -103,6 +104,10 @@
 	Restore	Geri yükle
 	Close All	Tümünü Kapat
 	Close Others	Diğerlerini Kapat
+	New Document…	Yeni Belge…
+	Open Document…	Aç…
+	Consolidate All to Here	Tümünü Buraya Birleştir
+	Move to New Window	Yeni Pencereye Taşı
 	Save	Kaydet
 	Save As…	Farklı Kaydet…
 	Save a Copy…	Bir Kopyasını Kaydet…
@@ -154,6 +159,7 @@
 	Create Smart Object after Loading Layers	Katmanları Yükledikten Sonra Akıllı Nesne Oluştur
 	Reveal in Finder	Finder'da Göster
 	Show in Explorer	Explorer'da Göster
+	Reveal in Explorer	Explorer'da Göster
 	Show in Folder	Klasörde Göster
 	File Info…	Dosya Bilgileri…
 	Print…	Yazdır…
@@ -242,6 +248,7 @@
 	Units & Rulers…	Birimler ve Cetveller…
 	Guides, Grid & Slices…	Kılavuzlar, Izgaralar ve Dilimler…
 	Plug-ins…	Eklentiler…
+	Plugins…	Eklentiler…
 	Type…	Metin…
 	Enhanced Controls…	Gelişmiş Kontroller…
 	Camera Raw…	Camera Raw…
@@ -397,6 +404,8 @@
 	Smart Object	Akıllı Nesne
 	Convert to Smart Object	Akıllı Nesneye Dönüştür
 	Convert to Embedded	Gömülüye Dönüştür
+	Embed Linked	Bağlantılıyı Göm
+	Embed All Linked	Tüm Bağlantılıları Göm
 	Convert to Layers	Katmanlara Dönüştür
 	Convert to Linked…	Bağlantılıya Dönüştür…
 	Edit Contents	İçeriği Düzenle
@@ -469,7 +478,9 @@
 	Unite Shapes	Şekil Alanlarını Birleştir
 	Subtract Front Shape	Ön Şekli Çıkar
 	Intersect Shape Areas	Şekil Alanlarını Kesiştir
+	Unite Shapes at Overlap	Şekil Alanlarını Kesiştir
 	Exclude Overlapping Shapes	Çakışan Şekilleri Hariç Tut
+	Subtract Shapes at Overlap	Çakışan Şekilleri Hariç Tut
 	Merge Shape Components	Şekil Bileşenlerini Birleştir
 	Path operations	Yol işlemleri
 	Align	Hizala
@@ -652,6 +663,7 @@
 	Minimum…	Minimum…
 	Offset…	Kaydırma…
 	Plug-ins	Eklentiler
+	Plugins	Eklentiler
 	Proof Setup	Prova Kurulumu
 	Proof Colors	Prova Renkleri
 	Gamut Warning	Gamut Uyarısı
@@ -660,9 +672,9 @@
 	Working Magenta Plate	Çalışma Macenta Plakası
 	Working Yellow Plate	Çalışma Sarı Plakası
 	Working Black Plate	Çalışma Siyah Plakası
-	Working CMY Plate	Çalışma CMY Plakası
-	Legacy Macintosh RGB	Eski Macintosh RGB
-	Internet Standard RGB	İnternet Standardı RGB
+	Working CMY Plates	Çalışma CMY Plakası
+	Legacy Macintosh RGB (Gamma 1.8)	Eski Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	İnternet Standardı RGB (sRGB)
 	Monitor RGB	Monitör RGB
 	Color Blindness — Protanopia-type	Renk Körlüğü — Protanopi tipi
 	Color Blindness — Deuteranopia-type	Renk Körlüğü — Döteranopi tipi
@@ -744,7 +756,6 @@
 	Consolidate All to Tabs	Tümünü Sekmelerde Birleştir
 	Float in Window	Pencerede Yüzdür
 	Float All in Windows	Tümünü Pencerelerde Yüzdür
-	New Window for Document	Belge için Yeni Pencere
 	Workspace	Çalışma alanı
 	Essentials	Temel Öğeler
 	Graphic and Web	Grafik ve Web
@@ -1901,6 +1912,11 @@
 	Show canvas dots	Tuval noktalarını göster
 	Clip thumbnails to layer bounds	Küçük resimleri katman sınırlarına kırp
 	Clip Thumbnails to Layer Bounds	Küçük resimleri katman sınırlarına kırp
+	No Thumbnails	Küçük Resim Yok
+	Small Thumbnails	Küçük Boyutlu Küçük Resimler
+	Medium Thumbnails	Orta Boyutlu Küçük Resimler
+	Large Thumbnails	Büyük Boyutlu Küçük Resimler
+	Clip Thumbnails to Document Bounds	Küçük resimleri belge sınırlarına kırp
 	Canvas color	Tuval rengi
 	Canvas custom color	Tuval özel rengi
 	Color picker	Renk seçici

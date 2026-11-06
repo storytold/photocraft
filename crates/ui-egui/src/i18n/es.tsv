@@ -139,6 +139,7 @@
 	Right	Derecha
 	Open Recent	Abrir recientes
 	Clear Recent Files	Vaciar archivos recientes
+	Clear Recent File List	Vaciar archivos recientes
 	Remove from Recent	Quitar de recientes
 	Remove {name} from Recent	Quitar {name} de recientes
 	Close	Cerrar
@@ -147,6 +148,10 @@
 	Restore	Restaurar
 	Close All	Cerrar todo
 	Close Others	Cerrar otros
+	New Document…	Documento nuevo…
+	Open Document…	Abrir…
+	Consolidate All to Here	Consolidar todo aquí
+	Move to New Window	Mover a una nueva ventana
 	Save	Guardar
 	Save As…	Guardar como…
 	Save a Copy…	Guardar una copia…
@@ -199,6 +204,7 @@
 	Create Smart Object after Loading Layers	Crear objeto inteligente tras cargar las capas
 	Reveal in Finder	Mostrar en Finder
 	Show in Explorer	Mostrar en el Explorador
+	Reveal in Explorer	Mostrar en el Explorador
 	Show in Folder	Mostrar en la carpeta
 	File Info…	Información del archivo…
 	Print…	Imprimir…
@@ -287,6 +293,7 @@
 	Units & Rulers…	Unidades y reglas…
 	Guides, Grid & Slices…	Guías, cuadrícula y sectores…
 	Plug-ins…	Plugins…
+	Plugins…	Plugins…
 	Type…	Texto…
 	Enhanced Controls…	Controles mejorados…
 	Camera Raw…	Camera Raw…
@@ -444,6 +451,8 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Convertir en objeto inteligente
 	Convert to Embedded	Convertir en incrustado
+	Embed Linked	Incrustar vinculado
+	Embed All Linked	Incrustar todos los vinculados
 	Convert to Layers	Convertir en capas
 	Convert to Linked…	Convertir en vinculado…
 	Edit Contents	Editar contenido
@@ -702,6 +711,7 @@
 	Minimum…	Mínimo…
 	Offset…	Desplazamiento…
 	Plug-ins	Plugins
+	Plugins	Plugins
 	Proof Setup	Ajuste de prueba
 	Proof Colors	Colores de prueba
 	Gamut Warning	Advertencia de gama
@@ -710,9 +720,9 @@
 	Working Magenta Plate	Placa magenta de trabajo
 	Working Yellow Plate	Placa amarilla de trabajo
 	Working Black Plate	Placa negra de trabajo
-	Working CMY Plate	Placa CMY de trabajo
-	Legacy Macintosh RGB	RGB heredado de Macintosh
-	Internet Standard RGB	RGB estándar de Internet
+	Working CMY Plates	Placa CMY de trabajo
+	Legacy Macintosh RGB (Gamma 1.8)	RGB heredado de Macintosh (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB estándar de Internet (sRGB)
 	Monitor RGB	RGB del monitor
 	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
 	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
@@ -804,7 +814,6 @@
 	Consolidate All to Tabs	Consolidar todo en pestañas
 	Float in Window	Hacer flotante en ventana
 	Float All in Windows	Hacer flotantes todas en ventanas
-	New Window for Document	Nueva ventana para el documento
 	Workspace	Espacio de trabajo
 	Essentials	Esenciales
 	Graphic and Web	Gráficos y web
@@ -1973,6 +1982,11 @@
 	Show canvas dots	Mostrar puntos del lienzo
 	Clip thumbnails to layer bounds	Recortar miniaturas a los límites de la capa
 	Clip Thumbnails to Layer Bounds	Recortar miniaturas a los límites de la capa
+	No Thumbnails	Sin miniaturas
+	Small Thumbnails	Miniaturas pequeñas
+	Medium Thumbnails	Miniaturas medianas
+	Large Thumbnails	Miniaturas grandes
+	Clip Thumbnails to Document Bounds	Recortar miniaturas a los límites del documento
 	Canvas color	Color del lienzo
 	Canvas custom color	Color personalizado del lienzo
 	Color picker	Selector de color
