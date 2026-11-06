@@ -346,6 +346,25 @@ fn txt2_extras_survive_an_unedited_resave() {
     assert!(!saved.warnings.iter().any(|w| w.contains("Txt2")), "nothing is lost, so nothing is said: {:?}", saved.warnings);
 }
 
+/// `tysh` with the superscript, subscript and small-caps sizes taken out of its EngineData (as an
+/// older PhotoCraft wrote a type layer it made), and then `also` applied to the EngineData.
+fn without_document_sizes(tysh: &[u8], also: impl FnOnce(&mut E)) -> Vec<u8> {
+    use photocraft_psd::descriptor::Value as D;
+    let mut t = photocraft_text::psd::parse_tysh(tysh).unwrap();
+    let mut e = photocraft_text::psd::engine_data(&t.text).unwrap();
+    for key in ["ResourceDict", "DocumentResources"] {
+        if let Some(E::Dict(items)) = e.get_mut(key) {
+            items.retain(|(k, _)| !["SuperscriptSize", "SuperscriptPosition", "SubscriptSize", "SubscriptPosition", "SmallCapSize"].contains(&k.as_str()));
+        }
+    }
+    also(&mut e);
+    let item = t.text.items.iter_mut().find(|(k, _)| k.is("EngineData")).unwrap();
+    item.1 = D::RawData(photocraft_text::engine_data::write(&e));
+    let out = photocraft_text::psd::write_tysh(&t);
+    assert!(!out.windows(15).any(|w| w == b"SuperscriptSize"));
+    out
+}
+
 /// An unedited save writes the file's `Txt2` back byte for byte; once a type layer is edited or
 /// added the block is dropped and every type layer gets generated `TySh` data, as in a new
 /// document. Photoshop refused a file that mixed its own `Txt2` with `TySh` written here
@@ -388,18 +407,27 @@ fn edited_type_drops_the_files_txt2() {
     assert!(txt2.is_none(), "an edited type layer drops the file's Txt2");
     assert_eq!(texts, ["AX"]);
 
-    // A layer an older PhotoCraft wrote beside the file's Txt2: its data lacks the superscript
-    // sizes Photoshop always writes. The file is mixed already, so even an unedited save fixes it.
+    // A layer an older PhotoCraft made from scratch beside the file's Txt2: what the builder
+    // writes, less the superscript sizes Photoshop needs. The file is mixed already, so even an
+    // unedited save fixes it.
     let mut old = kept.clone();
-    let mut patched = old.psd_raw.as_deref().unwrap().clone();
-    let found: Vec<usize> = patched.windows(15).enumerate().filter(|(_, w)| *w == b"SuperscriptSize").map(|(i, _)| i).collect();
-    assert!(!found.is_empty());
-    for at in found {
-        patched[at + 14] = b'X';
-    }
-    old.psd_raw = Some(std::sync::Arc::new(patched));
+    old.psd_raw = Some(std::sync::Arc::new(without_document_sizes(old.psd_raw.as_deref().unwrap(), |_| {})));
+    assert!(photocraft_text::psd::made_here_without_document_sizes(old.psd_raw.as_deref().unwrap(), 72.0));
     let (txt2, texts) = save(vec![old]);
     assert!(txt2.is_none(), "a file mixed by an older save drops its Txt2");
+    assert_eq!(texts, ["AV"]);
+
+    // A Photoshop type layer that lacks the same keys (as an older Photoshop might write it) is
+    // not taken for one: Photoshop writes more than the builder does, here a key of its own.
+    let mut photoshop = kept.clone();
+    photoshop.psd_raw = Some(std::sync::Arc::new(without_document_sizes(photoshop.psd_raw.as_deref().unwrap(), |e| {
+        if let Some(E::Dict(items)) = e.get_mut("DocumentResources") {
+            items.push(("KinsokuSet".into(), E::Array(vec![])));
+        }
+    })));
+    assert!(!photocraft_text::psd::made_here_without_document_sizes(photoshop.psd_raw.as_deref().unwrap(), 72.0));
+    let (txt2, texts) = save(vec![photoshop]);
+    assert_eq!(txt2.as_deref(), Some(&prev[..]), "an unedited file lacking the sizes keeps its Txt2 byte for byte");
     assert_eq!(texts, ["AV"]);
 
     let mut fresh = layer("Hi", &[(2, Kerning::Metrics, 0.0)]);

@@ -470,8 +470,10 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
         // no longer match it, a merged block beside regenerated `TySh` data makes Photoshop fail
         // to open the file ("program error", REQUIRE 903 per type layer), so the text is written
         // the way a new document's is: generated `TySh` for every type layer, no inherited `Txt2`.
-        // A file an older PhotoCraft saved that way is mixed already: its generated `TySh` data
-        // lacks the superscript sizes Photoshop writes in every type layer.
+        // A file an older PhotoCraft saved that way is mixed already: a type layer it made from
+        // scratch is exactly what the builder writes, without the superscript sizes Photoshop
+        // needs (see `made_here_without_document_sizes`). A Photoshop type layer never matches,
+        // so an unedited Photoshop file keeps its `Txt2` even if it lacks those keys.
         if let Some((_, _, prev)) = doc.metadata.psd_global_blocks.iter().find(|(_, key, _)| key == b"Txt2") {
             let text_layers: Vec<(i32, &photocraft_doc::TextLayer)> = walk
                 .iter()
@@ -480,7 +482,8 @@ fn index_layer_ids_and_text(doc: &Document, ex: &mut Ex<'_>) {
                     _ => None,
                 })
                 .collect();
-            let mixed = text_layers.iter().any(|(_, t)| t.psd_raw.as_deref().is_some_and(|d| !d.windows(15).any(|w| w == b"SuperscriptSize")));
+            let mixed =
+                text_layers.iter().any(|(_, t)| t.psd_raw.as_deref().is_some_and(|d| photocraft_text::psd::made_here_without_document_sizes(d, ex.dpi)));
             ex.regen_text = !text_layers.is_empty() && (mixed || photocraft_text::psd::build_txt2_at(&text_layers, Some(prev), ex.dpi) != prev[..]);
             // Every type layer is rewritten, the untouched ones too: numbered afresh for the native
             // block written in place of the file's (no empty slots for objects that are gone), and

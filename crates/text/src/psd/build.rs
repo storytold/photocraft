@@ -1116,6 +1116,52 @@ pub(super) fn engine_antialias(n: f64) -> Option<AntiAlias> {
     })
 }
 
+/// The EngineData resource dictionaries (`ResourceDict`, `DocumentResources`) without the
+/// [`DOCUMENT_SIZES`] keys.
+fn without_document_sizes(mut e: E) -> E {
+    for key in ["ResourceDict", "DocumentResources"] {
+        if let Some(E::Dict(items)) = e.get_mut(key) {
+            items.retain(|(k, _)| !DOCUMENT_SIZES.iter().any(|(size, _)| k == size));
+        }
+    }
+    e
+}
+
+/// Whether `tysh` is a type layer an older PhotoCraft made from scratch (Photoshop can't open
+/// such a layer beside a `Txt2` block): its EngineData lacks every [`DOCUMENT_SIZES`] key and is
+/// exactly what this builder writes for the layer read back from it, less those keys. A type
+/// layer Photoshop wrote never matches (Photoshop writes more than this builder does), so an
+/// unedited Photoshop file is never taken for one, even from a version that left the keys out.
+pub fn made_here_without_document_sizes(tysh: &[u8], dpi: f32) -> bool {
+    let Some(file) = parse_tysh(tysh).and_then(|t| engine_data(&t.text)) else { return false };
+    let has_size =
+        |e: &E| ["ResourceDict", "DocumentResources"].iter().any(|k| e.get(k).is_some_and(|rd| DOCUMENT_SIZES.iter().any(|(s, _)| rd.get(s).is_some())));
+    if has_size(&file) {
+        return false;
+    }
+    let Some(mut layer) = super::text_layer_from_tysh(tysh, dpi) else { return false };
+    layer.psd_raw = None;
+    same_engine_data(&without_document_sizes(build_engine_data(&layer, None, dpi)), &file)
+}
+
+/// EngineData trees equal key for key, in the same order, numbers within float rounding (a layer
+/// read back holds its sizes as `f32`).
+fn same_engine_data(a: &E, b: &E) -> bool {
+    let num = |v: &E| match v {
+        E::Real(x) => Some(*x),
+        E::Int(i) => Some(*i as f64),
+        _ => None,
+    };
+    match (a, b) {
+        (E::Dict(x), E::Dict(y)) => x.len() == y.len() && x.iter().zip(y).all(|((k, v), (k2, w))| k == k2 && same_engine_data(v, w)),
+        (E::Array(x), E::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(v, w)| same_engine_data(v, w)),
+        _ => match (num(a), num(b)) {
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-5 * x.abs().max(y.abs()).max(1.0),
+            _ => a == b,
+        },
+    }
+}
+
 /// Builds the `TySh` block for `layer`, patching its current `psd_raw` when present.
 /// `ink` is the layer's rendered bounds in text space (for `bounds`/`boundingBox`).
 pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8> {

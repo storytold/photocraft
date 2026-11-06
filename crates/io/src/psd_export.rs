@@ -425,6 +425,26 @@ impl Ex<'_> {
     /// overrides) plus regenerated adjustment/fill blocks. A preserved
     /// adjustment or fill block is reused verbatim while it still decodes to
     /// the layer's current parameters; otherwise it is regenerated.
+    /// The `TySh` data a type layer is written with.
+    fn text_tysh(&self, id: photocraft_doc::LayerId, t: &photocraft_doc::TextLayer) -> Option<std::sync::Arc<Vec<u8>>> {
+        // Text layers without PSD data (created here) get a generated TySh, and so does every
+        // type layer once the file's `Txt2` is not kept (`regen_text`).
+        let generated = (t.psd_raw.is_none() || self.regen_text).then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));
+        let src = if self.regen_text { generated.as_ref() } else { t.psd_raw.as_ref().or(generated.as_ref()) };
+        // Character/paragraph style sheets from the document's styles.
+        let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
+        // `TextIndex` names the layer's object in the document's `Txt2` (where the
+        // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
+        // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
+        // Duplicate or out-of-range file TextIndex values must be renumbered,
+        // however, even when no style sheet needed rebuilding: otherwise two
+        // layers may read the same Txt2 object and acquire the wrong kerning.
+        let idx = self.text_index.get(&id).copied().unwrap_or(0);
+        let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| src.filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
+        let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
+        fresh.or(styled).or_else(|| src.cloned())
+    }
+
     fn content_blocks(&mut self, l: &Layer) -> Vec<TaggedBlock> {
         let mut raw: Vec<([u8; 4], Vec<u8>)> = l.psd_blocks.iter().filter(|(k, _)| !REGENERATED.contains(&k)).map(|(k, d)| (*k, d.to_vec())).collect();
         // A stale multi-effects block would override the regenerated lfx2.
@@ -523,21 +543,7 @@ impl Ex<'_> {
                     self.warnings
                         .push(format!("layer \"{}\": area type is saved as paragraph text over its path's bounds (PSD area type is not written yet)", l.name));
                 }
-                // Text layers without PSD data (created here) get a generated TySh.
-                let generated = (t.psd_raw.is_none() || self.regen_text).then(|| std::sync::Arc::new(photocraft_text::psd::build_tysh(t, self.dpi, None)));
-                let src = if self.regen_text { generated.as_ref() } else { t.psd_raw.as_ref().or(generated.as_ref()) };
-                // Character/paragraph style sheets from the document's styles.
-                let styled = src.and_then(|d| crate::text_styles_map::export_tysh(d, t, &self.text_styles, self.dpi)).map(std::sync::Arc::new);
-                // `TextIndex` names the layer's object in the document's `Txt2` (where the
-                // auto-kern mode lives); left at 0, every type layer would claim object 0 (#1348).
-                // Keep an unchanged preserved TySh byte-for-byte (corpus_tysh_lossless).
-                // Duplicate or out-of-range file TextIndex values must be renumbered,
-                // however, even when no style sheet needed rebuilding: otherwise two
-                // layers may read the same Txt2 object and acquire the wrong kerning.
-                let idx = self.text_index.get(&l.id).copied().unwrap_or(0);
-                let rewrite = styled.as_ref().or(generated.as_ref()).or_else(|| src.filter(|d| photocraft_text::psd::text_index(d.as_slice()) != Some(idx)));
-                let fresh = rewrite.and_then(|d| photocraft_text::psd::set_text_index(d.as_slice(), idx)).map(std::sync::Arc::new);
-                set_principal(&mut raw, &[b"TySh"], fresh.as_ref().or(styled.as_ref().or(src)));
+                set_principal(&mut raw, &[b"TySh"], self.text_tysh(l.id, t).as_ref());
                 if !raw.iter().any(|(k, _)| k == b"TySh") {
                     self.warnings.push(format!("layer \"{}\": text layer written as pixels (no TySh data)", l.name));
                 }
