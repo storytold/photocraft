@@ -565,10 +565,10 @@ fn psd_export_warns_when_text_path_end_is_lost() {
     doc.layers.push(Layer::new("limited", LayerContent::Text(text)));
     let result = photocraft_io::export(&doc, "range.psd", &Default::default()).unwrap();
     assert!(result.warnings.iter().any(|w| w.contains("limited") && w.contains("text path end limit")), "{:?}", result.warnings);
-    if let LayerContent::Text(text) = &mut doc.layers[0].content {
-        if let TextShape::Path { end, .. } = &mut text.shape {
-            *end = None;
-        }
+    if let LayerContent::Text(text) = &mut doc.layers[0].content
+        && let TextShape::Path { end, .. } = &mut text.shape
+    {
+        *end = None;
     }
     let result = photocraft_io::export(&doc, "range.psd", &Default::default()).unwrap();
     assert!(!result.warnings.iter().any(|w| w.contains("text path end limit")), "{:?}", result.warnings);

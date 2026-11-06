@@ -119,7 +119,7 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
 }
 
 pub(crate) fn draw_cursor(ctx: &egui::Context, p: Pos2, right: bool) {
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("type-path-cursor")));
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("type-path-cursor")));
     let sign = if right { 1.0 } else { -1.0 };
     let segments = [
         (p + Vec2::new(0.0, -7.0), p + Vec2::new(0.0, 7.0)),
@@ -139,7 +139,7 @@ fn overflows(app: &PhotocraftApp, ctx: &egui::Context, text: &TextLayer) -> bool
     let Some(st) = app.session.active() else { return false };
     let TextShape::Path { start, end, flip, .. } = &text.shape else { return false };
     let key = (st.revision, start.to_bits(), end.map(f32::to_bits), *flip);
-    let id = egui::Id::new(("path-text-overflow", st.doc.id.0, st.active_layer));
+    let id = egui::Id::unique(("path-text-overflow", st.doc.id.0, st.active_layer));
     if let Some((_, value)) = ctx.data(|data| data.get_temp::<((u64, u32, Option<u32>, bool), bool)>(id)).filter(|(cached, _)| *cached == key) {
         return value;
     }
