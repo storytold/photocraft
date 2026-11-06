@@ -1811,10 +1811,10 @@ fn worst_row_grain(got: &Surface, want: &Surface, ch: usize) -> f32 {
     worst
 }
 
+/// #9156: the dither's noise was the same for every stroke, so each overlapping stroke rounded
+/// the same pixels up and the same pixels down, and the strokes built up a fixed grain.
 #[test]
 fn overlapping_8bit_soft_strokes_do_not_build_up_grain() {
-    // #9156: the dither's noise was the same for every stroke, so each overlapping stroke rounded
-    // the same pixels up and the same pixels down, and the strokes built up a fixed grain.
     let reference = overlapping_soft_strokes(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), 40);
     let eight = overlapping_soft_strokes(PixelFormat::RGBA8, 40);
     // Rounding each stroke independently leaves noise that levels off near 2 levels (RMS) and keeps
@@ -1825,9 +1825,9 @@ fn overlapping_8bit_soft_strokes_do_not_build_up_grain() {
     assert!(err < 0.6, "row averages are {err} levels off the float render");
 }
 
+/// The Eraser's soft strokes are dithered too (#9156), in the alpha they leave.
 #[test]
 fn overlapping_8bit_soft_erases_do_not_build_up_grain() {
-    // The Eraser's soft strokes are dithered too (#9156), in the alpha they leave.
     let erase = |fmt: PixelFormat| {
         let mut s = Surface::with_default(fmt, &[0.0, 0.0, 0.0, 1.0]);
         for seed in 1..=40 {

@@ -2247,10 +2247,10 @@ fn navigator_keeps_its_image_during_a_live_brush_stroke() {
     assert!(!navigator_waits_for_drag(&app, 0), "the navigator catches up on release");
 }
 
+/// #9156: the seed also picks the 8-bit dither, so repeated dabs on one spot that shared a
+/// seed rounded the same pixels up every time and built up a fixed grain.
 #[test]
 fn brush_strokes_started_on_one_spot_get_their_own_seeds() {
-    // #9156: the seed also picks the 8-bit dither, so repeated dabs on one spot that shared a
-    // seed rounded the same pixels up every time and built up a fixed grain.
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 80, "background": "white"})).unwrap();
     app.ui.tool = Tool::Brush;
@@ -2265,10 +2265,10 @@ fn brush_strokes_started_on_one_spot_get_their_own_seeds() {
     assert_ne!(seeds[0], seeds[1], "two strokes from (50, 40)");
 }
 
+/// A failed live preview is dropped (`feed_live_stroke`); the commit still takes the drag's seed
+/// rather than one hashed from the points, so the dither stays per stroke (#9156).
 #[test]
 fn a_brush_stroke_whose_preview_failed_commits_the_seed_it_began_with() {
-    // A failed live preview is dropped (`feed_live_stroke`); the commit still takes the drag's seed
-    // rather than one hashed from the points, so the dither stays per stroke (#9156).
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 200, "height": 80, "background": "white"})).unwrap();
     app.ui.tool = Tool::Brush;
