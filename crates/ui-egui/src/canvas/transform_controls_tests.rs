@@ -155,7 +155,7 @@ fn several_selected_layers_share_one_frame_that_transforms_them_all() {
     assert_eq!(transform_controls_layers(&app).len(), 2);
     assert_eq!(transform_controls_rect(&app, &xf), Some(both));
     let ctx = egui::Context::default();
-    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, both.right_bottom()));
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, both.right_bottom()), ControlsPress::Started);
     let t = app.ui.transform.as_ref().expect("the shared frame's handle starts Free Transform");
     assert_eq!(t.rect, [20.0, 30.0, 150.0, 150.0]);
     assert_eq!(t.layers, [a.0, b.0]);
@@ -176,7 +176,7 @@ fn move_transform_controls_start_free_transform_for_vector_shapes() {
     assert!(transform_controls_hit(r, r.right_bottom()));
 
     let ctx = egui::Context::default();
-    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), ControlsPress::Started);
     let t = app.ui.transform.as_ref().expect("control press starts Free Transform");
     assert_eq!(t.rect, [20.0, 30.0, 100.0, 70.0]);
 }
@@ -213,7 +213,7 @@ fn hiding_extras_hides_the_move_transform_controls() {
     assert!(transform_controls_rect(&app, &xf).is_none(), "no box with Extras hidden");
     assert_eq!(painted(&mut app), 0, "nothing is drawn");
     // Hidden handles don't act: a press on a corner doesn't start Free Transform.
-    assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, shown.right_bottom()));
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, shown.right_bottom()), ControlsPress::Missed);
     assert!(app.ui.transform.is_none());
     assert!(app.ui.tool_options.move_show_transform, "Show Transform Controls is unchanged");
     assert_eq!(app.session.active().unwrap().doc.layers, layer, "the layer is unchanged");
@@ -238,7 +238,7 @@ fn move_transform_controls_follow_floating_selected_pixels() {
     let r = transform_controls_rect(&app, &xf).unwrap();
     assert_eq!(r, Rect::from_min_max(pos2(200.0, 150.0), pos2(300.0, 210.0)));
     let ctx = egui::Context::default();
-    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), ControlsPress::Started);
     assert_eq!(app.ui.transform.as_ref().unwrap().rect, [200.0, 150.0, 300.0, 210.0]);
 }
 
@@ -259,7 +259,7 @@ fn move_transform_controls_frame_the_selection() {
     let r = transform_controls_rect(&app, &xf).unwrap();
     assert_eq!(r, Rect::from_min_max(pos2(60.0, 80.0), pos2(160.0, 200.0)));
     let ctx = egui::Context::default();
-    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), ControlsPress::Started);
     assert_eq!(app.ui.transform.as_ref().unwrap().rect, [60.0, 80.0, 160.0, 200.0]);
 }
 
@@ -299,7 +299,7 @@ fn free_transform_on_a_locked_layer_is_refused_up_front() {
     let xf =
         ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
     let r = transform_controls_rect(&app, &xf).unwrap();
-    assert!(!begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), ControlsPress::Missed);
     assert!(app.ui.transform.is_none());
     assert_eq!(errors(&app), [crate::transform_tool::LOCKED]);
 }
@@ -382,7 +382,7 @@ fn the_background_among_several_joins_the_frame_and_its_handles_refuse() {
     assert_eq!(r, Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), "the Background included");
     let before = app.session.active().unwrap().doc.clone();
     let ctx = egui::Context::default();
-    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), "the press is taken, not a move");
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), ControlsPress::Refused, "the press is taken, not a move");
     assert!(app.ui.transform.is_none(), "no box opens");
     let alerts: Vec<_> =
         app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str()).collect();
@@ -396,6 +396,6 @@ fn the_background_among_several_joins_the_frame_and_its_handles_refuse() {
     app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
     app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
     let r = transform_controls_rect(&app, &xf).unwrap();
-    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()), ControlsPress::Started);
     assert_eq!(app.ui.transform.as_ref().unwrap().layers, [a.0, b.0]);
 }

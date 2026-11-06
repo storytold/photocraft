@@ -47,15 +47,13 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
 impl PhotocraftApp {
     /// Control-channel presses use document coordinates, but the canvas owns the screen-sized
     /// handle and rotation hit areas. Start the same session before forwarding the press.
-    pub(crate) fn begin_move_transform_controls(&mut self, ctx: &egui::Context, x: f64, y: f64) {
+    pub(crate) fn begin_move_transform_controls(&mut self, ctx: &egui::Context, x: f64, y: f64) -> ControlsPress {
         if !crate::menus::modal_allows(self, "edit.freeTransform") {
-            return;
+            return ControlsPress::Missed;
         }
-        let Some(xf) = ViewXform::active(self) else { return };
+        let Some(xf) = ViewXform::active(self) else { return ControlsPress::Missed };
         let p = xf.to_screen(x as f32, y as f32);
-        if p.is_finite() && xf.rect.contains(p) {
-            begin_transform_controls_at(self, ctx, &xf, p);
-        }
+        if p.is_finite() && xf.rect.contains(p) { begin_transform_controls_at(self, ctx, &xf, p) } else { ControlsPress::Missed }
     }
 }
 
@@ -127,25 +125,36 @@ pub(super) fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
 /// that holds the Background among other layers (measured, #11101).
 pub(crate) const CONTROLS_LOCKED: &str = "Could not transform because the layer is locked.";
 
+/// What a press on the Move tool's transform controls did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ControlsPress {
+    /// Not on a control, or no session could start: the press is the Move tool's.
+    Missed,
+    /// A Free Transform session started; the press goes on to drive it.
+    Started,
+    /// Refused with the locked-layer alert: the press goes nowhere else (#11101).
+    Refused,
+}
+
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed: on
 /// every selected layer, as the frame shows them (#6501). With the Background among them the press
 /// shows the locked-layer alert and changes nothing (#11101).
-pub(super) fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> bool {
-    let Some(r) = transform_controls_rect(app, xf) else { return false };
+pub(super) fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> ControlsPress {
+    let Some(r) = transform_controls_rect(app, xf) else { return ControlsPress::Missed };
     if !transform_controls_hit(r, p) {
-        return false;
+        return ControlsPress::Missed;
     }
     let background = app.session.active().is_some_and(|st| photocraft_engine::transform_cmds::background_among(&st.doc, &st.selected_layers()).is_some());
     if background {
         let message = serde_json::json!({ "message": tl!(CONTROLS_LOCKED) });
         app.ui.open_dialog(crate::state::DialogKind::Error, message.as_object().cloned().unwrap_or_default());
-        return true;
+        return ControlsPress::Refused;
     }
     match crate::transform_tool::begin(app, ctx) {
-        Ok(()) => true,
+        Ok(()) => ControlsPress::Started,
         Err(e) => {
             app.ui.status = e;
-            false
+            ControlsPress::Missed
         }
     }
 }
