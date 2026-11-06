@@ -49,28 +49,12 @@ pub(crate) fn curve_fraction(v: f32, lo: f32, hi: f32, curve: Option<f32>) -> f3
     }
 }
 
-/// Wheel notches this frame while the pointer is over `resp` (Shift ×10). Wheel lines add up in
+/// Wheel notches this frame while the pointer is over `resp` (Shift ×10), for a wheel gesture
+/// that started over it (a panel scrolled past it keeps scrolling, #11353). Wheel lines add up in
 /// egui memory until they make whole notches (high-resolution wheels report fractions of one);
 /// smooth (point) deltas count `line_scroll_speed` points per notch, like the canvas wheel.
 fn wheel_notches(ui: &Ui, resp: &Response) -> f32 {
-    wheel_notches_of(ui, resp.id, resp.hovered(), 10.0)
-}
-
-/// [`wheel_notches`] of widget `id` while `hovered`, a notch with Shift counting `shift_notches`.
-pub(crate) fn wheel_notches_of(ui: &Ui, id: egui::Id, hovered: bool, shift_notches: f32) -> f32 {
-    if !hovered {
-        return 0.0;
-    }
-    let wheel: Vec<(egui::MouseWheelUnit, Vec2, bool)> = ui.input(|i| {
-        i.events
-            .iter()
-            .filter_map(|e| match e {
-                egui::Event::MouseWheel { unit, delta, modifiers, .. } => Some((*unit, *delta, modifiers.shift)),
-                _ => None,
-            })
-            .collect()
-    });
-    count_notches(ui, id.with("wheel-acc"), &wheel, shift_notches)
+    crate::field_wheel::hover_notches(ui, resp.id, resp.hovered(), 10.0)
 }
 
 /// Whole notches in `wheel` (unit, delta, Shift held), a notch with Shift counting

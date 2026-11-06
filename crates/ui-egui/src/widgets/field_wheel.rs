@@ -7,11 +7,21 @@
 //! - Over a field without focus, the wheel steps it too, but only a gesture that starts over it:
 //!   a panel being scrolled keeps scrolling when a field passes under the pointer. A gesture that
 //!   leaves the field is the view's from then on.
+//! - The same goes for every control the wheel steps under the pointer without focus: dropdowns,
+//!   sliders and the font family field ([`hover_notches`]). A panel scroll also keeps the wheel
+//!   across a short pause while the pointer rests ([`SCROLL_LATCH`]): a trackpad swipe that stops
+//!   and goes on, or the next swipe of a long scroll, doesn't land on the control the panel
+//!   brought under the pointer (#11353).
 
 use egui::{Context, Event, Id, MouseWheelUnit, Rect, Ui, Vec2};
 
 /// Wheel events this close together (seconds) are one gesture.
 pub(crate) const GESTURE_GAP: f64 = 0.3;
+
+/// A gesture that scrolls a panel (or the view) stays theirs across pauses up to this long
+/// (seconds) while the pointer doesn't move, as a browser's wheel transaction does (Firefox:
+/// 1.5 s, ended by moving the mouse). Moving the pointer ends it at once.
+const SCROLL_LATCH: f64 = 1.5;
 
 /// Who a wheel gesture belongs to.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -27,6 +37,19 @@ enum Owner {
 struct Gesture {
     last: f64,
     owner: Owner,
+    /// The pointer moved since the last wheel event: the [`SCROLL_LATCH`] is over.
+    moved: bool,
+}
+
+impl Gesture {
+    /// Whether wheel at `now` (with the pointer `moved` in the same frame) goes on with this
+    /// gesture rather than starting a new one.
+    fn goes_on(&self, now: f64, moved: bool) -> bool {
+        let gap = now - self.last;
+        // A gesture still `New` here started where no control took it: a panel or the view's.
+        let scrolling = matches!(self.owner, Owner::Elsewhere | Owner::New);
+        gap <= GESTURE_GAP || (scrolling && !self.moved && !moved && gap <= SCROLL_LATCH)
+    }
 }
 
 fn gesture_id() -> Id {
@@ -50,47 +73,87 @@ fn for_field(e: &Event) -> bool {
         if (delta.y != 0.0 || delta.x == 0.0 || modifiers.shift) && !modifiers.alt && !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd)
 }
 
+fn tracked_id() -> Id {
+    Id::unique("pc-field-wheel-tracked")
+}
+
 /// Before this frame's UI is laid out: hand the wheel to the focused value field, if any, and
 /// follow which gesture the wheel is in.
 pub fn begin_frame(ctx: &Context) {
     ctx.data_mut(|d| d.remove::<Vec<Event>>(taken_id()));
     // (the field's widget id, its slot id): focus is the widget's, a gesture the slot's.
     let focused = ctx.data(|d| d.get_temp::<(Id, Id)>(focused_id())).filter(|(id, _)| ctx.memory(|m| m.has_focus(*id)));
-    let (now, wheel) = ctx.input(|i| (i.time, i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }))));
-    if let Some((_, field)) = focused {
-        let (taken, view_wheel): (Vec<Event>, bool) = ctx.input_mut(|i| {
-            let (taken, rest) = std::mem::take(&mut i.events).into_iter().partition(for_field);
-            i.events = rest;
-            (taken, i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. })))
-        });
-        if wheel {
-            // The latest wheel is the view's when any of it was left to the view (Alt, Ctrl/Cmd).
-            let owner = if view_wheel { Owner::Elsewhere } else { Owner::Field(field) };
-            ctx.data_mut(|d| d.insert_temp(gesture_id(), Gesture { last: now, owner }));
+    let Some((_, field)) = focused else {
+        track(ctx);
+        return;
+    };
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(tracked_id(), pass));
+    let (now, wheel, moved) = frame_input(ctx);
+    if moved && !wheel {
+        mark_moved(ctx);
+    }
+    let (taken, view_wheel): (Vec<Event>, bool) = ctx.input_mut(|i| {
+        let (taken, rest) = std::mem::take(&mut i.events).into_iter().partition(for_field);
+        i.events = rest;
+        (taken, i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. })))
+    });
+    if wheel {
+        // The latest wheel is the view's when any of it was left to the view (Alt, Ctrl/Cmd).
+        let owner = if view_wheel { Owner::Elsewhere } else { Owner::Field(field) };
+        ctx.data_mut(|d| d.insert_temp(gesture_id(), Gesture { last: now, owner, moved: false }));
+    }
+    if !taken.is_empty() {
+        ctx.data_mut(|d| d.insert_temp(taken_id(), taken));
+    }
+    // egui spreads each notch over a few frames: the tail of the field's own notches scrolls
+    // nothing, while the view's keeps all of its own.
+    if ctx.data(|d| d.get_temp::<Gesture>(gesture_id())).is_some_and(|g| g.owner == Owner::Field(field)) {
+        ctx.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    }
+}
+
+/// This frame's time, whether it has wheel events and whether the pointer moved.
+fn frame_input(ctx: &Context) -> (f64, bool, bool) {
+    ctx.input(|i| {
+        let wheel = i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }));
+        (i.time, wheel, i.events.iter().any(|e| matches!(e, Event::PointerMoved(_))))
+    })
+}
+
+fn mark_moved(ctx: &Context) {
+    ctx.data_mut(|d| {
+        if let Some(g) = d.get_temp::<Gesture>(gesture_id()) {
+            d.insert_temp(gesture_id(), Gesture { moved: true, ..g });
         }
-        if !taken.is_empty() {
-            ctx.data_mut(|d| d.insert_temp(taken_id(), taken));
-        }
-        // egui spreads each notch over a few frames: the tail of the field's own notches scrolls
-        // nothing, while the view's keeps all of its own.
-        if ctx.data(|d| d.get_temp::<Gesture>(gesture_id())).is_some_and(|g| g.owner == Owner::Field(field)) {
-            ctx.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
-        }
+    });
+}
+
+/// Follow which gesture this frame's wheel is in, once a frame: from [`begin_frame`], or from the
+/// first control that asks where it wasn't called (a bare `Ui`, as in widget tests).
+fn track(ctx: &Context) {
+    let pass = ctx.cumulative_pass_nr();
+    if ctx.data(|d| d.get_temp::<u64>(tracked_id())) == Some(pass) {
         return;
     }
+    ctx.data_mut(|d| d.insert_temp(tracked_id(), pass));
+    let (now, wheel, moved) = frame_input(ctx);
     if !wheel {
+        if moved {
+            mark_moved(ctx);
+        }
         return;
     }
     let gesture = ctx.data(|d| d.get_temp::<Gesture>(gesture_id()));
     let owner = match gesture {
-        Some(g) if now - g.last <= GESTURE_GAP => match g.owner {
-            // No field took it when it started.
+        Some(g) if g.goes_on(now, moved) => match g.owner {
+            // No control took it when it started.
             Owner::New => Owner::Elsewhere,
             owner => owner,
         },
         _ => Owner::New,
     };
-    ctx.data_mut(|d| d.insert_temp(gesture_id(), Gesture { last: now, owner }));
+    ctx.data_mut(|d| d.insert_temp(gesture_id(), Gesture { last: now, owner, moved: false }));
 }
 
 /// Whether a wheel gesture stepping a value field is still running: its last notch came less than
@@ -110,38 +173,58 @@ pub fn set_focused(ctx: &Context, id: Id, field: Id) {
 /// Wheel notches for the value field `field` in `rect` this frame (up positive, Shift ×10):
 /// all of the wheel while it is `focused`, else a gesture that started with the pointer over it.
 pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
-    let events: Vec<Event> = if focused {
-        ui.data_mut(|d| d.remove_temp::<Vec<Event>>(taken_id())).unwrap_or_default()
-    } else {
-        if !ui.is_enabled() {
-            return 0.0;
-        }
-        let Some(mut g) = ui.data(|d| d.get_temp::<Gesture>(gesture_id())) else { return 0.0 };
-        let (events, wheel): (Vec<Event>, bool) =
-            ui.input(|i| (i.events.iter().filter(|e| for_field(e)).cloned().collect(), i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }))));
-        // Wheel the field doesn't take (a sideways swipe after a zero-delta start), or any wheel
-        // with the pointer off the field, hands the rest of the gesture to the view: coming back
-        // over the field in the same gesture doesn't step it.
-        if g.owner == Owner::Field(field) && wheel && (events.is_empty() || !ui.rect_contains_pointer(rect)) {
-            g.owner = Owner::Elsewhere;
+    if focused {
+        let events = ui.data_mut(|d| d.remove_temp::<Vec<Event>>(taken_id())).unwrap_or_default();
+        return count(ui, field, &events, 10.0);
+    }
+    hover_notches(ui, field, ui.rect_contains_pointer(rect), 10.0)
+}
+
+/// Wheel notches this frame for control `id` without keyboard focus, while the pointer is over it
+/// (`hovered`; up positive, a notch with Shift counting `shift_notches`): only a gesture that
+/// started over it, so a panel scrolled past it keeps scrolling (#11353). While the control has
+/// the gesture nothing under it scrolls, the smoothed tail included.
+pub(crate) fn hover_notches(ui: &Ui, id: Id, hovered: bool, shift_notches: f32) -> f32 {
+    let events = claim(ui, id, hovered);
+    count(ui, id, &events, shift_notches)
+}
+
+/// This frame's wheel events for control `id` (see [`hover_notches`]); none unless it has the
+/// gesture.
+fn claim(ui: &Ui, id: Id, hovered: bool) -> Vec<Event> {
+    if !ui.is_enabled() {
+        return Vec::new();
+    }
+    track(ui.ctx());
+    let Some(mut g) = ui.data(|d| d.get_temp::<Gesture>(gesture_id())) else { return Vec::new() };
+    let (events, wheel): (Vec<Event>, bool) =
+        ui.input(|i| (i.events.iter().filter(|e| for_field(e)).cloned().collect(), i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }))));
+    // Wheel the control doesn't take (a sideways swipe after a zero-delta start), or any wheel
+    // with the pointer off the control, hands the rest of the gesture to the view: coming back
+    // over the control in the same gesture doesn't step it.
+    if g.owner == Owner::Field(id) && wheel && (events.is_empty() || !hovered) {
+        g.owner = Owner::Elsewhere;
+        ui.data_mut(|d| d.insert_temp(gesture_id(), g));
+        return Vec::new();
+    }
+    if !hovered {
+        return Vec::new();
+    }
+    match g.owner {
+        Owner::New if !events.is_empty() => {
+            g.owner = Owner::Field(id);
             ui.data_mut(|d| d.insert_temp(gesture_id(), g));
-            return 0.0;
         }
-        if !ui.rect_contains_pointer(rect) {
-            return 0.0;
-        }
-        match g.owner {
-            Owner::New if !events.is_empty() => {
-                g.owner = Owner::Field(field);
-                ui.data_mut(|d| d.insert_temp(gesture_id(), g));
-            }
-            Owner::Field(id) if id == field => {}
-            _ => return 0.0,
-        }
-        // Nothing under the field scrolls with the wheel that steps it, smoothed tail included.
-        ui.ctx().input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
-        events
-    };
+        Owner::Field(owner) if owner == id => {}
+        _ => return Vec::new(),
+    }
+    // Nothing under the control scrolls with the wheel that steps it, smoothed tail included.
+    ui.ctx().input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    events
+}
+
+/// Whole notches in the wheel `events` a control takes, fractions kept under `id`.
+fn count(ui: &Ui, id: Id, events: &[Event], shift_notches: f32) -> f32 {
     let wheel: Vec<(MouseWheelUnit, Vec2, bool)> = events
         .iter()
         .filter_map(|e| match e {
@@ -149,8 +232,11 @@ pub fn notches(ui: &Ui, field: Id, focused: bool, rect: Rect) -> f32 {
             _ => None,
         })
         .collect();
-    crate::widgets::count_notches(ui, field.with("wheel-acc"), &wheel, 10.0)
+    crate::widgets::count_notches(ui, id.with("wheel-acc"), &wheel, shift_notches)
 }
+
+#[cfg(test)]
+mod scroll_latch_tests;
 
 #[cfg(test)]
 mod tests {
