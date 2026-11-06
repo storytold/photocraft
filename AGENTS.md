@@ -81,6 +81,7 @@ Priorities: important infrastructure first, then low-hanging parity, then the lo
    (menu wiring) is not a measure of behaviour. When your work moves a number or closes a gap,
    update the parity doc and gap entry it belongs to, with the date, and bump their status line
    and revision history.
+   **Change:** names only the latest change; older changes belong in the revision history table.
 1. **Check `docs/scorecard.md`** before picking work: each area's `missing` and `partial` rows,
    the performance scenarios that are over budget or not measurable yet, and the count of
    settings that do nothing. Its numbers are measured; prefer them to estimates.
