@@ -365,10 +365,17 @@ pub fn replaces_selection(app: &PhotocraftApp) -> bool {
     app.ui.magnetic.active() && app.ui.magnetic.mode == "replace"
 }
 
+/// The Magnetic Lasso is drawing a border on the document in front. A border left behind by a
+/// tool or document switch doesn't count, even before [`frame`] drops it: the control channel's
+/// events run no frame.
+pub fn drawing(app: &PhotocraftApp) -> bool {
+    let m = &app.ui.magnetic;
+    m.active() && app.ui.tool == Tool::MagneticLasso && app.session.active().map(|d| d.doc.id.0) == Some(m.doc)
+}
+
 /// Once a frame: a border left behind by a tool or document switch is dropped.
 pub fn frame(app: &mut PhotocraftApp) {
-    let m = &app.ui.magnetic;
-    if m.active() && (app.ui.tool != Tool::MagneticLasso || app.session.active().map(|d| d.doc.id.0) != Some(m.doc)) {
+    if app.ui.magnetic.active() && !drawing(app) {
         cancel(app);
     }
 }

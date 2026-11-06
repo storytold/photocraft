@@ -913,7 +913,7 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
     }
     // A Magnetic Lasso border being drawn: no menu over it, and the border stays live, as in
     // Photoshop (#11689).
-    let magnetic_drawing = tool == Tool::MagneticLasso && app.ui.magnetic.active();
+    let magnetic_drawing = crate::magnetic_lasso_ui::drawing(app);
     if right_click
         && !lasso_retracted
         && !transforming

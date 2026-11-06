@@ -78,6 +78,23 @@ fn agent_right_click_while_drawing_opens_no_menu_and_keeps_the_border() {
 }
 
 #[test]
+fn agent_right_click_on_another_document_still_opens_the_selection_menu() {
+    // A border left on the first document doesn't hold the menu back on the second: the agent's
+    // events run no frame, so nothing has dropped that border yet.
+    let mut app = app();
+    agent_click(&mut app, CORNERS[0], "left", false);
+    agent_click(&mut app, CORNERS[1], "left", true);
+    app.run("file.new", json!({"width": 400, "height": 300})).expect("second document");
+    app.sync_views();
+    assert!(app.ui.magnetic.active(), "the first document's border is still there");
+
+    agent_click(&mut app, INSIDE, "right", false);
+    let (_, menu) = inspect(&mut app);
+    let entries = menu["entries"].as_array().expect("the selection menu opened");
+    assert!(entries.iter().any(|e| e["id"] == "select.all"), "{menu}");
+}
+
+#[test]
 fn agent_right_click_without_a_border_still_opens_the_selection_menu() {
     let mut app = app();
     agent_click(&mut app, INSIDE, "right", false);

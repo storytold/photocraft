@@ -1437,7 +1437,7 @@ fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &
     let (x, y) = (s.x, s.y);
     let down = matches!(s.ev, ToolEvent::Down { .. });
     // A Magnetic Lasso border being drawn: no menu over it, as on the canvas (#11689).
-    if app.ui.tool == crate::state::Tool::MagneticLasso && app.ui.magnetic.active() {
+    if crate::magnetic_lasso_ui::drawing(app) {
         return true;
     }
     if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
