@@ -1,6 +1,7 @@
 //! Shared asset browsers and picker-panel implementations.
 
 pub(crate) mod asset_browser;
+pub(crate) mod asset_browser_dragging;
 pub(crate) mod asset_browser_groups;
 pub mod asset_browser_hierarchy;
 pub(crate) mod asset_browser_interaction;

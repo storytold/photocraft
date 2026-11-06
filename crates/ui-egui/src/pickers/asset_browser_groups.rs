@@ -1,10 +1,12 @@
-//! Shared root and nested group header presentation for asset browsers.
+//! Shared root and nested group header layout and presentation for asset browsers.
 //!
 //! The browser owns expansion state and hierarchy traversal; brush and preset consumers share
 //! this header's hit target and visual treatment while retaining their own group actions.
 
 use egui::{Align2, Rect, Sense, pos2, vec2};
 
+use crate::pickers::asset_browser_hierarchy::HierarchyGroup;
+use crate::pickers::picker_browser_projection::ItemView;
 use crate::pickers::picker_state::PresetUi;
 use crate::theme::Tokens;
 
@@ -13,6 +15,7 @@ const LIGHT_SURFACE_CONTRAST: f32 = 1.12;
 const DARK_TEXT_CONTRAST: f32 = 7.11;
 const LIGHT_TEXT_CONTRAST: f32 = 10.5;
 pub(crate) const ROW_INDENT: f32 = 20.0;
+pub(crate) const GROUP_HEADER_HEIGHT: f32 = 29.0;
 const TREE_LEFT_INSET: f32 = 1.0;
 
 /// Initial expansion policy for a browser group, with explicit user toggles overriding the default.
@@ -29,6 +32,27 @@ pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, co
     paint(ui, rect, open, name, depth, false, count);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, name));
     (rect, response)
+}
+
+/// Allocate and paint a nested-folder header, returning its hit and disclosure responses.
+pub(crate) fn nested_header(
+    ui: &mut egui::Ui,
+    group: &HierarchyGroup<'_, ItemView>,
+    open: bool,
+    group_depth: usize,
+    parent_depth: usize,
+) -> (Rect, egui::Response, egui::Response, usize) {
+    let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
+    let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
+    let row_depth = group_depth + 1 + parent_depth;
+    let response = ui.interact(inset_row_rect(rect, row_depth), allocated.id, Sense::click_and_drag());
+    let nested_header_rect = inset_row_rect(rect, row_depth);
+    let disclosure_rect =
+        Rect::from_min_max(nested_header_rect.min, pos2((nested_header_rect.left() + 18.0).min(nested_header_rect.right()), nested_header_rect.bottom()));
+    let disclosure = ui.interact(disclosure_rect, response.id.with("disclosure"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, group.path.last().map(String::as_str).unwrap_or("")));
+    paint(ui, rect, open, group.path.last().map(String::as_str).unwrap_or(""), row_depth, response.hovered(), Some(group.count));
+    (rect, response, disclosure, row_depth)
 }
 
 /// Paint a group header; nesting is conveyed by indentation rather than an accent bar.

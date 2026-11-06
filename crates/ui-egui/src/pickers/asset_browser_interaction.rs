@@ -1,14 +1,306 @@
 //! Shared hit testing and interaction semantics for asset browsers.
 //!
-//! This module owns the egui interaction contract only: consumers translate the resulting
-//! gestures and drag payloads into their own state changes or domain commands.
+//! This module owns pointer hit testing, low-level interaction semantics, inline rename, context
+//! menus, and drag-ghost capture/presentation. Hierarchy target arbitration and release resolution
+//! live in `asset_browser_dragging`.
 
-use egui::{Pos2, Rect};
+use std::collections::BTreeSet;
+
+use egui::{Pos2, Rect, pos2};
 
 use crate::PhotocraftApp;
+use crate::pickers::asset_browser::{BrowserAction, GroupView, ItemContextMenuArgs, ItemPaintState, ItemView, Painters};
 use crate::pickers::picker_browser_dragging::{DropHitRegion, PointerRegion};
+use crate::pickers::picker_browser_identity::PickerNodeIdentity;
 use crate::pickers::picker_browser_model::{ContainerId, HierarchyNode, PickerBrowserHierarchy, PickerId};
+use crate::pickers::picker_state::{ItemRenameState, PresetUi};
 use crate::theme::Tokens;
+
+/// Source identity for a floating drag preview.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum BrowserDragGhostSource {
+    Group(PickerId),
+    Item { group: usize, item: usize },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct BrowserDragGhost {
+    source: BrowserDragGhostSource,
+    origin: Rect,
+    grab_offset: egui::Vec2,
+    press_origin: Option<Pos2>,
+}
+
+/// Keep a dragged card/header pressed against the browser viewport edges while the pointer is inside it.
+pub(crate) fn browser_drag_ghost_rect(
+    ui: &egui::Ui,
+    panel: &str,
+    source: BrowserDragGhostSource,
+    response_dragged: bool,
+    source_rect: Rect,
+    picker_bounds: Rect,
+) -> Option<Rect> {
+    let ctx = ui.ctx();
+    let id = egui::Id::new(("preset-browser-drag-ghost", panel));
+    let has_panel_payload = egui::DragAndDrop::payload::<AssetDrag>(ctx).is_some_and(|payload| match payload.as_ref() {
+        AssetDrag::Preset { scope, .. } | AssetDrag::Group { scope, .. } | AssetDrag::CanonicalGroup { scope, .. } => scope == panel,
+    });
+    if !has_panel_payload {
+        ctx.data_mut(|data| data.remove::<BrowserDragGhost>(id));
+        return None;
+    }
+    if response_dragged && ctx.pointer_interact_pos().is_some() {
+        let press_origin = ctx.input(|input| input.pointer.press_origin());
+        let already_captured = ctx.data(|data| {
+            data.get_temp::<BrowserDragGhost>(id).is_some_and(|ghost| ghost.source == source && (press_origin.is_none() || ghost.press_origin == press_origin))
+        });
+        if !already_captured {
+            let grab_offset =
+                press_origin.filter(|origin| source_rect.contains(*origin)).map(|origin| origin - source_rect.min).unwrap_or_else(|| source_rect.size() * 0.5);
+            ctx.data_mut(|data| data.insert_temp(id, BrowserDragGhost { source: source.clone(), origin: source_rect, grab_offset, press_origin }));
+        }
+    }
+    let ghost = ctx.data(|data| data.get_temp::<BrowserDragGhost>(id))?;
+    if ghost.source != source {
+        return None;
+    }
+    Some(browser_drag_ghost_position(ctx.input(|input| input.pointer.hover_pos()), ghost.origin, ghost.grab_offset, picker_bounds))
+}
+
+pub(crate) fn browser_drag_ghost_position(pointer: Option<Pos2>, origin: Rect, grab_offset: egui::Vec2, picker_bounds: Rect) -> Rect {
+    let Some(pointer) = pointer else { return origin };
+    let pointer_rect = Rect::from_min_size(pointer - grab_offset, origin.size());
+    if picker_bounds.contains(pointer) { clamp_drag_ghost(pointer_rect, picker_bounds) } else { pointer_rect }
+}
+
+pub(crate) fn clamp_drag_ghost(rect: Rect, bounds: Rect) -> Rect {
+    let max_x = (bounds.right() - rect.width()).max(bounds.left());
+    let max_y = (bounds.bottom() - rect.height()).max(bounds.top());
+    let min = pos2(rect.left().clamp(bounds.left(), max_x), rect.top().clamp(bounds.top(), max_y));
+    Rect::from_min_size(min, rect.size())
+}
+
+/// Drag previews are collected during layout and painted together outside the scroll viewport.
+#[derive(Default)]
+pub(super) struct BrowserDragGhosts {
+    pub(super) groups: Vec<GroupDragGhost>,
+    pub(super) nested_groups: Vec<NestedGroupDragGhost>,
+    pub(super) items: Vec<ItemDragGhost>,
+}
+
+pub(super) struct GroupDragGhost {
+    pub(super) rect: Rect,
+    pub(super) group_index: usize,
+    pub(super) open: bool,
+    pub(super) depth: usize,
+}
+
+pub(super) struct NestedGroupDragGhost {
+    pub(super) rect: Rect,
+    pub(super) open: bool,
+    pub(super) name: String,
+    pub(super) depth: usize,
+    pub(super) count: usize,
+}
+
+pub(super) struct ItemDragGhost {
+    pub(super) rect: Rect,
+    pub(super) group_index: usize,
+    pub(super) item_index: usize,
+    pub(super) display_mode: crate::pickers::picker_state::PickerDisplayMode,
+    pub(super) selected: bool,
+}
+
+const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
+
+impl Painters<'_, '_> {
+    /// Paint drag previews outside the scroll viewport using the adapter's preview callbacks.
+    pub(super) fn paint_drag_ghosts(
+        &mut self,
+        ui: &egui::Ui,
+        panel: &str,
+        groups: &[GroupView],
+        app_window_clip: Rect,
+        ghosts: BrowserDragGhosts,
+        tokens: &Tokens,
+    ) {
+        for ghost in ghosts.groups {
+            let GroupDragGhost { rect: ghost_rect, group_index, open, depth } = ghost;
+            let Some(group) = groups.get(group_index) else { continue };
+            let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
+            let mut ghost_ui = egui::Ui::new(
+                ui.ctx().clone(),
+                egui::Id::new(("preset-group-drag-ui", panel)),
+                egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
+            );
+            ghost_ui.set_clip_rect(app_window_clip);
+            if self.has_group() {
+                self.group(&ghost_ui, ghost_rect, group, open, false, GROUP_DRAG_GHOST_OPACITY);
+            } else {
+                crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &group.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
+            }
+        }
+        for ghost in ghosts.nested_groups {
+            let NestedGroupDragGhost { rect: ghost_rect, open, name, depth, count } = ghost;
+            let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-group-drag", panel)));
+            let mut ghost_ui = egui::Ui::new(
+                ui.ctx().clone(),
+                egui::Id::new(("preset-group-drag-ui", panel)),
+                egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
+            );
+            ghost_ui.set_clip_rect(app_window_clip);
+            crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, ghost_rect, open, &name, depth, Some(count), GROUP_DRAG_GHOST_OPACITY);
+        }
+        for ghost in ghosts.items {
+            let ItemDragGhost { rect: ghost_rect, group_index, item_index, display_mode: ghost_mode, selected } = ghost;
+            let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::new(("preset-drag", panel)));
+            let mut ghost_ui = egui::Ui::new(
+                ui.ctx().clone(),
+                egui::Id::new(("preset-drag-ui", panel)),
+                egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)),
+            );
+            ghost_ui.set_clip_rect(app_window_clip);
+            ghost_ui.set_opacity(GROUP_DRAG_GHOST_OPACITY);
+            if ghost_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {
+                if let Some(item) = groups.get(group_index).and_then(|group| group.items.get(item_index)) {
+                    if selected {
+                        ghost_ui.painter().rect_filled(ghost_rect, egui::CornerRadius::ZERO, tokens.row_selected);
+                    }
+                    let label_rect = Rect::from_min_max(pos2(ghost_rect.left() + 8.0, ghost_rect.top()), ghost_rect.right_bottom());
+                    let mut label_ui = ghost_ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+                    label_ui.set_clip_rect(label_rect.intersect(app_window_clip));
+                    crate::widgets::elided_label(&mut label_ui, &item.name, label_rect.width());
+                }
+            } else if ghost_mode.uses_list_layout() {
+                if self.has_list_item() {
+                    self.list_item(&ghost_ui, ghost_rect, group_index, item_index, selected);
+                } else if let Some(item) = groups.get(group_index).and_then(|group| group.items.get(item_index)) {
+                    let thumb_size = (ghost_rect.height() - 2.0).max(0.0);
+                    let thumb_rect = Rect::from_min_size(ghost_rect.min + egui::vec2(1.0, 1.0), egui::vec2(thumb_size, thumb_size));
+                    self.item(&ghost_ui, thumb_rect, group_index, item_index, ItemPaintState::DragGhost);
+                    ghost_ui.painter().text(
+                        pos2(thumb_rect.right() + 8.0, ghost_rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        &item.name,
+                        egui::FontId::proportional(11.5),
+                        tokens.text,
+                    );
+                }
+            } else {
+                self.item(&ghost_ui, ghost_rect, group_index, item_index, ItemPaintState::DragGhost);
+            }
+            ghost_ui.painter().rect_stroke(ghost_rect, egui::CornerRadius::ZERO, egui::Stroke::new(2.0, tokens.accent), egui::StrokeKind::Middle);
+        }
+    }
+}
+
+/// Draw the browser's inline rename row and return the resulting generic actions.
+pub(crate) fn draw_rename_row(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, tokens: &Tokens) -> (f32, Vec<BrowserAction>) {
+    let row_top = ui.cursor().top();
+    advance_item_rename(state, panel);
+    let item_rename = state.item_renaming.clone().filter(|rename| rename.panel == panel);
+    let nested_group_rename = state.group_renaming.clone().filter(|rename| rename.panel == panel);
+    let has_rename_row = item_rename.is_some() || nested_group_rename.is_some() || state.renaming.as_ref().is_some_and(|r| r.0 == panel);
+    let mut actions = Vec::new();
+
+    if let Some(mut rename) = item_rename {
+        if state.renaming.as_ref().is_some_and(|r| r.0 == panel) {
+            state.renaming = None;
+        }
+        let mut text = rename.text.clone();
+        let done = inline_name_editor(ui, &mut text, tokens);
+        rename.text = text.clone();
+        state.item_renaming = Some(rename.clone());
+        if let Some(confirm) = done {
+            state.item_renaming = None;
+            if confirm && !text.trim().is_empty() {
+                actions.push(BrowserAction::RenameItem { group: rename.group, group_path: rename.group_path, key: rename.key, text: text.trim().to_owned() });
+            }
+        }
+    } else if let Some(mut rename) = nested_group_rename {
+        // The typed nested-group target is authoritative while this editor is active. Remove any stale
+        // legacy target for the same panel so it cannot reappear after commit or cancellation.
+        if state.renaming.as_ref().is_some_and(|r| r.0 == panel) {
+            state.renaming = None;
+        }
+        let mut text = rename.text.clone();
+        let done = inline_name_editor(ui, &mut text, tokens);
+        rename.text = text.clone();
+        state.group_renaming = Some(rename.clone());
+        if let Some(confirm) = done {
+            state.group_renaming = None;
+            if confirm && !text.trim().is_empty() {
+                actions.push(BrowserAction::RenameNestedGroup { group: rename.group, group_path: rename.group_path, text: text.trim().to_owned() });
+            }
+        }
+    } else if let Some((panel_name, key, mut text)) = state.renaming.clone().filter(|rename| rename.0 == panel) {
+        // Starting a regular item/group rename supersedes any pending nested-group target for this panel.
+        if state.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
+            state.group_renaming = None;
+        }
+        let done = inline_name_editor(ui, &mut text, tokens);
+        state.renaming = Some((panel_name, key.clone(), text.clone()));
+        if let Some(confirm) = done {
+            state.renaming = None;
+            if confirm && !text.trim().is_empty() {
+                let text = text.trim().to_owned();
+                match key.strip_prefix("group:") {
+                    Some(group) => actions.push(BrowserAction::RenameGroup(group.to_owned(), text)),
+                    None => actions.push(BrowserAction::Rename(key, text)),
+                }
+            }
+        }
+    }
+
+    let height = if has_rename_row { (ui.cursor().top() - row_top).max(0.0) } else { 0.0 };
+    (height, actions)
+}
+
+fn inline_name_editor(ui: &mut egui::Ui, text: &mut String, tokens: &Tokens) -> Option<bool> {
+    let mut done = None;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tl!("Name:")).color(tokens.text_dim).size(11.5));
+        let response = ui.add(egui::TextEdit::singleline(text).desired_width(ui.available_width() - 4.0));
+        if !response.has_focus() && !response.lost_focus() {
+            response.request_focus();
+        }
+        if response.lost_focus() {
+            done = Some(ui.input(|input| input.key_pressed(egui::Key::Enter)));
+        }
+    });
+    done
+}
+
+pub(crate) fn advance_item_rename(st: &mut PresetUi, panel: &str) {
+    if st.item_renaming.is_none()
+        && let Some(index) = st.item_rename_queue.iter().position(|rename| rename.panel == panel)
+    {
+        st.item_renaming = Some(st.item_rename_queue.remove(index));
+    }
+}
+
+/// Attach a context menu, using a nested submenu when the browser is inside a compact picker menu.
+pub(crate) fn draw_context_menu_target(ui: &mut egui::Ui, response: egui::Response, compact: bool, draw_menu: impl FnOnce(&mut egui::Ui)) {
+    if compact {
+        compact_context_menu_target(ui, response, draw_menu);
+    } else {
+        context_menu_target(response, draw_menu);
+    }
+}
+
+fn compact_context_menu_target(ui: &mut egui::Ui, response: egui::Response, menu: impl FnOnce(&mut egui::Ui)) {
+    // Compact pickers live inside an egui menu popup. A separate context popup is treated as
+    // outside that parent and dismisses it. Use the same nested-SubMenu mechanism as the gear.
+    let submenu_id = egui::containers::menu::SubMenu::id_from_widget_id(response.id);
+    // Do not set `open_item` before calling `SubMenu::show`: MenuState validates that item
+    // against the previous frame's visible submenu, so a newly requested submenu gets cleared.
+    // Showing it on the right-click frame lets SubMenu register itself normally and persist.
+    let right_clicked = response.secondary_clicked();
+    let open = egui::containers::menu::MenuState::from_ui(ui, |state, _| state.open_item == Some(submenu_id));
+    if right_clicked || open {
+        egui::containers::menu::SubMenu::new().show(ui, &response, menu);
+    }
+}
 
 /// Canvas drop bounds used by preset-browser adapters, excluding the ruler strips.
 pub(crate) fn canvas_drop_rect(app: &PhotocraftApp) -> Rect {
@@ -906,6 +1198,129 @@ pub(crate) fn draw_group_context_menu(ui: &mut egui::Ui, rename_label: &str, del
         Some(ContextMenuAction::Delete)
     } else {
         None
+    }
+}
+
+/// Resolve the context-menu target set. Right-clicking one of the selected cards acts on the whole
+/// selection; right-clicking an unselected card preserves the conventional single-card operation.
+pub(crate) fn item_context_targets(item: &ItemView, group: &GroupView, selected: &[(String, ItemView)]) -> Vec<(String, ItemView)> {
+    if selected
+        .iter()
+        .any(|(source_group, selected_item)| source_group == &group.name && selected_item.key == item.key && selected_item.group_path == item.group_path)
+    {
+        selected.to_vec()
+    } else {
+        vec![(group.name.clone(), item.clone())]
+    }
+}
+
+pub(crate) fn delete_item_actions(targets: &[(String, ItemView)]) -> Vec<BrowserAction> {
+    targets.iter().map(|(group, item)| BrowserAction::DeleteItem { group: group.clone(), group_path: item.group_path.clone(), key: item.key.clone() }).collect()
+}
+
+/// Projection data needed to expand a context-menu deletion to the active browser selection.
+pub(super) struct BrowserDeleteContext<'a> {
+    pub(super) selection_order: &'a [PickerId],
+    pub(super) hierarchy: &'a PickerBrowserHierarchy,
+    pub(super) identities: &'a std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+}
+
+/// Resolve selected nodes to independent domain deletions, omitting descendants covered by a selected group.
+pub(super) fn selected_delete_actions(selection: &BTreeSet<PickerId>, clicked: &PickerId, context: &BrowserDeleteContext<'_>) -> Option<Vec<BrowserAction>> {
+    if !selection.contains(clicked) {
+        return None;
+    }
+    let mut actions = Vec::new();
+    for id in context.selection_order.iter().filter(|id| selection.contains(*id)) {
+        let mut parent = context.hierarchy.parent_of(id);
+        let mut covered = false;
+        while let Some(ContainerId::Group(parent_id)) = parent {
+            if selection.contains(&parent_id) {
+                covered = true;
+                break;
+            }
+            parent = context.hierarchy.parent_of(&parent_id);
+        }
+        if covered {
+            continue;
+        }
+        match context.identities.get(id) {
+            Some(PickerNodeIdentity::Group(group)) => actions.push(BrowserAction::DeleteGroup(group.clone())),
+            Some(PickerNodeIdentity::Folder { group, path }) => {
+                actions.push(BrowserAction::DeleteNestedGroup { group: group.clone(), group_path: path.clone() })
+            }
+            Some(PickerNodeIdentity::Item { group, key }) => {
+                actions.push(BrowserAction::DeleteItem { group: group.clone(), group_path: Vec::new(), key: key.clone() })
+            }
+            Some(PickerNodeIdentity::FolderItem { group, path, key }) => {
+                actions.push(BrowserAction::DeleteItem { group: group.clone(), group_path: path.clone(), key: key.clone() });
+            }
+            None => {}
+        }
+    }
+    (!actions.is_empty()).then_some(actions)
+}
+
+pub(super) fn replace_selected_delete_actions(
+    events: &mut Vec<BrowserAction>,
+    start: usize,
+    state: &PresetUi,
+    panel: &str,
+    clicked: &PickerId,
+    context: &BrowserDeleteContext<'_>,
+) {
+    if !events.get(start..).is_some_and(|new_events| {
+        new_events
+            .iter()
+            .any(|action| matches!(action, BrowserAction::DeleteItem { .. } | BrowserAction::DeleteGroup(_) | BrowserAction::DeleteNestedGroup { .. }))
+    }) {
+        return;
+    }
+    let Some(selection) = state.browser_selection.get(panel) else { return };
+    if let Some(actions) = selected_delete_actions(selection, clicked, context) {
+        events.truncate(start);
+        events.extend(actions);
+    }
+}
+
+pub(crate) fn move_item_actions(targets: &[(String, ItemView)], destination: &str) -> Vec<BrowserAction> {
+    targets.iter().filter(|(group, _)| group != destination).map(|(_, item)| BrowserAction::Move(item.key.clone(), destination.to_owned())).collect()
+}
+
+pub(crate) fn begin_item_rename(state: &mut PresetUi, panel: &str, targets: &[(String, ItemView)]) {
+    let mut renames = targets.iter().map(|(group, item)| ItemRenameState {
+        panel: panel.to_owned(),
+        group: group.clone(),
+        group_path: item.group_path.clone(),
+        key: item.key.clone(),
+        text: item.name.clone(),
+    });
+    state.item_renaming = renames.next();
+    state.item_rename_queue = renames.collect();
+}
+
+/// Standard item-menu policy shared by preset panels and specialised adapters.
+pub(crate) fn standard_item_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, args: ItemContextMenuArgs<'_>, events: &mut Vec<BrowserAction>) {
+    let ItemContextMenuArgs { panel, item, group, group_names, selected_items } = args;
+    let targets = item_context_targets(item, group, selected_items);
+    let count = targets.len();
+    let delete_label = if count > 1 { format!("{} ({count})", tl!("Delete")) } else { tl!("Delete").to_string() };
+    let all_in_current_group = targets.iter().all(|(source_group, _)| source_group == &group.name);
+    match draw_item_context_menu(ui, tl!("Rename…"), &delete_label, Some((tl!("Move to"), group_names, if all_in_current_group { &group.name } else { "" })))
+    {
+        Some(ContextMenuAction::Rename) => begin_item_rename(state, panel, &targets),
+        Some(ContextMenuAction::Delete) => events.extend(delete_item_actions(&targets)),
+        Some(ContextMenuAction::MoveTo(destination)) => events.extend(move_item_actions(&targets, &destination)),
+        None => {}
+    }
+}
+
+/// Standard group-menu policy shared by preset panels and specialised adapters.
+pub(crate) fn standard_group_context_menu(ui: &mut egui::Ui, state: &mut PresetUi, panel: &str, group: &GroupView, events: &mut Vec<BrowserAction>) {
+    match draw_group_context_menu(ui, tl!("Rename Group…"), tl!("Delete Group")) {
+        Some(ContextMenuAction::Rename) => state.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone())),
+        Some(ContextMenuAction::Delete) => events.push(BrowserAction::DeleteGroup(group.name.clone())),
+        _ => {}
     }
 }
 
