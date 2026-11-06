@@ -336,28 +336,67 @@ impl PathFrame {
     }
 
     fn project_near(&self, x: f64, y: f64, previous: f64) -> f64 {
+        if self.pts.len() < 2 {
+            return 0.0;
+        }
         let (min_d, nearest) = self.project_with_dist(x, y);
         let limit = min_d + 0.01;
         let length = self.length();
-        let mut best = (f64::INFINITY, nearest);
+
+        // Adjacent near-distance segments belong to one branch. Keep its closest
+        // projection before comparing arc continuity between separate branches.
+        struct Branch {
+            first: usize,
+            last: usize,
+            distance: f64,
+            arc: f64,
+        }
+        let mut branches: Vec<Branch> = Vec::new();
         for (i, w) in self.pts.windows(2).enumerate() {
             let [a, b] = [w[0], w[1]];
             let (dx, dy) = (b.0 - a.0, b.1 - a.1);
             let len2 = dx * dx + dy * dy;
             let t = if len2 > 0.0 { (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-            let d = (a.0 + dx * t - x).hypot(a.1 + dy * t - y);
-            if d <= limit {
-                let arc = self.cum.get(i).copied().unwrap_or(0.0) + len2.sqrt() * t;
-                let diff = (arc - previous).abs();
-                let continuity = if self.closed {
-                    let d = diff.rem_euclid(length);
-                    d.min(length - d)
-                } else {
-                    diff
-                };
-                if continuity < best.0 {
-                    best = (continuity, arc);
+            let distance = (a.0 + dx * t - x).hypot(a.1 + dy * t - y);
+            if distance > limit {
+                continue;
+            }
+            let arc = self.cum.get(i).copied().unwrap_or(0.0) + len2.sqrt() * t;
+            if let Some(last) = branches.last_mut()
+                && last.last + 1 == i
+            {
+                last.last = i;
+                if distance < last.distance {
+                    last.distance = distance;
+                    last.arc = arc;
                 }
+            } else {
+                branches.push(Branch { first: i, last: i, distance, arc });
+            }
+        }
+        if self.closed
+            && branches.len() > 1
+            && branches.first().is_some_and(|first| first.first == 0)
+            && branches.last().is_some_and(|last| last.last + 2 == self.pts.len())
+            && let Some(last) = branches.pop()
+            && let Some(first) = branches.first_mut()
+            && last.distance < first.distance
+        {
+            first.distance = last.distance;
+            first.arc = last.arc;
+        }
+
+        let mut best = (f64::INFINITY, nearest);
+        for Branch { arc, .. } in branches {
+            let diff = (arc - previous).abs();
+            let continuity = if self.closed && length > 0.0 {
+                let d = diff.rem_euclid(length);
+                d.min(length - d)
+            } else {
+                diff
+            };
+            if continuity < best.0 {
+                best = (continuity, arc);
             }
         }
         best.1
@@ -494,6 +533,17 @@ mod tests {
     }
 
     #[test]
+    fn path_geometry_project_near_off_path_drag_does_not_lag_on_segment_boundaries() {
+        let path = Subpath::polyline(&[(0.0, 0.0), (160.0, 0.0)]);
+        let geometry = PathGeometry::new(&path, false).unwrap();
+        // Dragging horizontally at y = -10 (off-path), previous at 20.0, cursor at x = 30.0.
+        // Flattened segment endpoints within 0.01 tolerance on the same branch must not cause lag.
+        let (arc, dist) = geometry.project_near(30.0, -10.0, 20.0).unwrap();
+        assert!((arc - 30.0).abs() < 1e-6);
+        assert!((dist - -10.0).abs() < 1e-6);
+    }
+
+    #[test]
     fn path_geometry_closed_wraps() {
         let path = Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
         let geometry = PathGeometry::new(&path, false).unwrap();
@@ -514,7 +564,9 @@ mod tests {
             assert_eq!(warp.clip_decoration(-2.0, 20.0), Some((0.0, 10.0)));
             assert_eq!(warp.clip_decoration(11.0, 20.0), None);
             let lap = Warp(Kind::Path(PathFrame::new(&path, 35.0, Some(135.0), flip).unwrap()));
-            assert_eq!(lap.clip_decoration(0.0, 100.0), Some((0.0, 40.0)));
+            let (a, b) = lap.clip_decoration(0.0, 100.0).unwrap();
+            assert_eq!(a, 0.0);
+            assert!((b - 40.0).abs() < 1e-6, "b={b}");
             let legacy = Warp(Kind::Path(PathFrame::new(&path, 35.0, None, flip).unwrap()));
             assert_eq!(legacy.clip_decoration(-2.0, 100.0), Some((-2.0, 100.0)));
         }

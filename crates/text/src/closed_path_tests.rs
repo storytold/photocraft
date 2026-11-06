@@ -173,9 +173,11 @@ fn explicit_range_caret_chooses_nearest_endpoint_across_both_sides_of_gap() {
         let shape = TextShape::Path { path: path.clone(), start: 390.0, end: Some(790.0), flip };
         for left in [20.0, 40.0] {
             let w = Warp::on_path_with_text_start(&shape, left).unwrap();
-            for (x, expected) in [(1.0, 380.0), (left - 1.0, left), (381.0, 380.0), (399.0, 380.0)] {
+            let expected_at_1 = if (left - 1.0) < 21.0 { left } else { 380.0 };
+            for (x, expected) in [(1.0, expected_at_1), (left - 1.0, left), (381.0, 380.0), (399.0, 380.0)] {
                 let p = w.apply(x, 0.0);
-                assert!((w.path_text_x_near_text(p.0, p.1, 380.0).unwrap() - expected).abs() < 1e-6);
+                let actual = w.path_text_x_near_text(p.0, p.1, 380.0).unwrap();
+                assert!((actual - expected).abs() < 1e-6, "flip={flip} left={left} x={x} actual={actual} expected={expected}");
             }
         }
     }

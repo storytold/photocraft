@@ -537,7 +537,7 @@ mod tests {
         down(&mut app, 40.0, 100.0);
         cancel_missing_release(&mut app, &ctx);
         assert!(app.ui.type_path_drag.is_some());
-        let _ = ctx.end_pass();
+        ctx.end_pass().textures_delta.clear();
         ctx.begin_pass(egui::RawInput {
             focused: true,
             events: vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }],
@@ -549,19 +549,19 @@ mod tests {
         assert_eq!(app.session.active().unwrap().revision, revision);
         down(&mut app, 40.0, 100.0);
         assert!(app.ui.type_path_drag.is_some());
-        let _ = ctx.end_pass();
+        ctx.end_pass().textures_delta.clear();
         ctx.begin_pass(egui::RawInput {
             focused: true,
             events: vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
             ..Default::default()
         });
         assert!(ctx.input(|i| i.pointer.primary_down()));
-        let _ = ctx.end_pass();
+        ctx.end_pass().textures_delta.clear();
         ctx.begin_pass(egui::RawInput { focused: false, ..Default::default() });
         assert!(ctx.input(|i| i.pointer.primary_down()), "primary button must be held during focus loss");
         cancel_missing_release(&mut app, &ctx);
         assert!(app.ui.type_path_drag.is_none());
-        let _ = ctx.end_pass();
+        ctx.end_pass().textures_delta.clear();
     }
 
     #[test]
@@ -741,12 +741,26 @@ mod tests {
         let from = xf.to_doc(marker_tip(point, tangent, 0));
         assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
-        // Local (40, 103) has a transformed normal displacement over 30 pixels,
-        // but is only 3 pixels from the transformed baseline.
-        let near = Point::new(40.0 + 10.0 * 103.0, 103.0);
+        let text = active_text(&app).unwrap();
+        let TextShape::Path { path, flip: path_flip, .. } = &text.shape else { panic!("text") };
+        let geometry = PathGeometry::new(path, *path_flip).unwrap();
+        let transform = text.transform;
+        let arc = 40.0;
+        let ((px, py), (tx, ty)) = geometry.sample(arc).unwrap();
+        let normal = Point::new(-ty, tx);
+
+        // Same side as initial press (- normal): 5 screen pts stays un-flipped
+        let same_side = transform.apply(Point::new(px - normal.x * 5.0, py - normal.y * 5.0));
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: same_side.x, y: same_side.y, pressure: 1.0 }, Some(&xf)));
+        assert!(!app.ui.type_path_drag.as_ref().unwrap().flipped);
+
+        // Opposite side (+ normal), 3 screen points (below 4.0 threshold)
+        let near = transform.apply(Point::new(px + normal.x * 3.0, py + normal.y * 3.0));
         assert!(pointer_with_view(&mut app, ToolEvent::Move { x: near.x, y: near.y, pressure: 1.0 }, Some(&xf)));
         assert!(!app.ui.type_path_drag.as_ref().unwrap().flipped);
-        let far = Point::new(40.0 + 10.0 * 105.0, 105.0);
+
+        // Opposite side (+ normal), 5 screen points (above 4.0 threshold)
+        let far = transform.apply(Point::new(px + normal.x * 5.0, py + normal.y * 5.0));
         assert!(pointer_with_view(&mut app, ToolEvent::Move { x: far.x, y: far.y, pressure: 1.0 }, Some(&xf)));
         assert!(app.ui.type_path_drag.as_ref().unwrap().flipped);
         assert!(pointer_with_view(&mut app, ToolEvent::Up { x: far.x, y: far.y }, Some(&xf)));
