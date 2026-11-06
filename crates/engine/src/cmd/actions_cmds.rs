@@ -15,7 +15,7 @@
 //! step, because the outer `actions.play` id would otherwise hide a recorded `file.*` command from
 //! the top-level check.
 
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -125,6 +125,9 @@ pub struct ActionState {
     /// Ordered folder occurrences from whole-library commands, including empty and same-name rows.
     #[serde(skip)]
     pub set_rows: Vec<String>,
+    /// Changes when old physical folder positions may name different occurrences.
+    #[serde(skip)]
+    pub set_rows_revision: u64,
     /// The latest destructive panel edit, separate from document History.
     #[serde(skip)]
     pub library_undo: Option<Box<crate::actions_edit_cmds::LibraryUndo>>,
@@ -490,6 +493,7 @@ fn from_step(p: &Value, len: usize) -> Result<usize> {
     Ok(i)
 }
 
+/// List distinct captions and, when present, the ordered physical occurrences separately.
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     let actions: Vec<Value> = s
         .actions
@@ -552,7 +556,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
             Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
             Some(_) => return Err(bad("actions.record", "\"set\" must be a set name or null")),
         };
-        let set_slot = crate::actions_edit_cmds::set_slot(s, p, set.as_deref(), "actions.record")?;
+        let set_slot = crate::actions_edit_cmds::assignment_slot(s, p, set.as_deref(), "actions.record")?;
         s.actions.list.push(Action { set, set_slot, ..Action::new(name, Vec::new()) });
         s.actions.touch();
         s.actions.list.len() - 1
@@ -904,9 +908,10 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     s.actions.touch();
     // Its function key goes with it, or the next action given the same name would inherit it.
     let key = format!("{PLAY_SHORTCUT_PREFIX}{name}");
-    if s.prefs().shortcuts.contains_key(&key) {
+    if s.prefs().shortcuts.contains_key(&key) || s.prefs().alternate_shortcuts.contains_key(&key) {
         s.edit_prefs(|prefs| {
             prefs.shortcuts.remove(&key);
+            prefs.alternate_shortcuts.remove(&key);
         });
     }
     Ok(json!({"deleted": name}))
@@ -954,6 +959,35 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
 /// Prefix of the persisted shortcut override that plays a named action (`actions.play:<name>`).
 pub const PLAY_SHORTCUT_PREFIX: &str = "actions.play:";
 
+/// Names whose legacy shortcut key cannot select a particular physical occurrence.
+/// Legacy libraries without explicit slots keep their original first-match lookup.
+pub fn ambiguous_shortcut_names(list: &[Action]) -> HashSet<&str> {
+    if !list.iter().any(|action| action.set_slot.is_some()) {
+        return HashSet::new();
+    }
+    let mut seen = HashMap::new();
+    let mut ambiguous = HashSet::new();
+    for action in list {
+        let name = action.name.as_str();
+        let slotted = action.set_slot.is_some();
+        if seen.insert(name, slotted).is_some_and(|prior| prior || slotted) {
+            ambiguous.insert(name);
+        }
+    }
+    ambiguous
+}
+
+/// Clear bindings for ambiguous physical occurrences before they could be retargeted.
+pub(crate) fn discard_ambiguous_shortcuts(s: &mut Session) {
+    let ids: HashSet<_> = ambiguous_shortcut_names(&s.actions.list).into_iter().map(|name| format!("{PLAY_SHORTCUT_PREFIX}{name}")).collect();
+    if ids.iter().any(|id| s.prefs().shortcuts.contains_key(id) || s.prefs().alternate_shortcuts.contains_key(id)) {
+        s.edit_prefs(|prefs| {
+            prefs.shortcuts.retain(|id, _| !ids.contains(id));
+            prefs.alternate_shortcuts.retain(|id, _| !ids.contains(id));
+        });
+    }
+}
+
 /// Rename an action in place. Nested `actions.play` steps, named Batch steps and `actions.conditional` branches
 /// that call it by name, and its function-key binding, follow the new name so nothing silently
 /// stops working.
@@ -978,6 +1012,7 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     // rename only if it resolved to this action before it, so one reaching the other stays put.
     let before = s.actions.list.clone();
     let by_name = resolve(&before, &json!({"action": old}), "actions.rename").ok() == Some(idx);
+    let ambiguous_binding = ambiguous_shortcut_names(&before).contains(old.as_str());
     let calls = s.actions.list.iter_mut().flat_map(|a| a.steps.iter_mut()).chain(s.journal.iter_mut().skip(pending));
     for (id, params) in calls {
         let keys: &[&str] = match id.as_str() {
@@ -999,10 +1034,15 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.actions.touch();
     let (from, to) = (format!("{PLAY_SHORTCUT_PREFIX}{old}"), format!("{PLAY_SHORTCUT_PREFIX}{name}"));
-    if s.prefs().shortcuts.contains_key(&from) {
+    if s.prefs().shortcuts.contains_key(&from) || (ambiguous_binding && s.prefs().alternate_shortcuts.contains_key(&from)) {
         s.edit_prefs(|prefs| {
-            if let Some(key) = prefs.shortcuts.remove(&from) {
+            if let Some(key) = prefs.shortcuts.remove(&from)
+                && !ambiguous_binding
+            {
                 prefs.shortcuts.insert(to, key);
+            }
+            if ambiguous_binding {
+                prefs.alternate_shortcuts.remove(&from);
             }
         });
     }
@@ -1124,7 +1164,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "List Actions",
             menu: &[],
             shortcut: None,
-            params: "{} → {actions:[{name, steps:count, set:name|null}], sets:[name…] (every set in panel order, empty ones too), recording:name|null}",
+            params: "{} → {actions:[{name, steps:count, set:name|null, setSlot:index?}], sets:[name…] (distinct captions), setRows:[name…]? (ordered physical folders), recording:name|null}",
             enabled: always,
             run: list,
             journal: false,

@@ -68,8 +68,10 @@ impl Replacement {
                         _ => None,
                     }
                     .or_else(|| params.get("set").filter(|value| !value.is_null()));
+                    // An unqualified call in this archive first looks in its original folder.
+                    // Legacy callers outside this import still use their existing name lookup.
                     let renamed = match scope {
-                        None => first.get(name),
+                        None => action.set_slot.and_then(|slot| local.get(&(slot, name.to_string()))).or_else(|| first.get(name)),
                         Some(value) => value.as_str().and_then(|set| {
                             let row = action.set_slot.filter(|_| action.set.as_deref() == Some(set));
                             row.and_then(|slot| local.get(&(slot, name.to_string()))).or_else(|| scoped.get(&(set.to_string(), name.to_string())))

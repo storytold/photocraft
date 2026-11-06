@@ -23,6 +23,7 @@ pub(crate) fn library_selection_changed(app: &mut PhotocraftApp) {
     ui.selected_step = None;
     ui.selected_set = None;
     ui.selected_set_slot = None;
+    ui.slot_revision = app.session.actions.set_rows_revision;
     ui.collapsed_set_slots.clear();
     ui.expanded.clear();
     ui.renaming = None;
@@ -33,6 +34,7 @@ pub(crate) fn library_slots_changed(app: &mut PhotocraftApp) {
     if app.ui.actions.selected_set_slot.take().is_some() {
         app.ui.actions.selected_set = None;
     }
+    app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
     app.ui.actions.collapsed_set_slots.clear();
 }
 
@@ -55,6 +57,8 @@ pub struct ActionsUi {
     pub selected_set: Option<String>,
     #[serde(skip)]
     selected_set_slot: Option<usize>,
+    #[serde(skip)]
+    slot_revision: u64,
     #[serde(skip)]
     collapsed_set_slots: Vec<usize>,
     #[serde(skip)]
@@ -123,7 +127,9 @@ fn selected_set(app: &PhotocraftApp) -> Option<&str> {
     }
     let set = app.ui.actions.selected_set.as_deref()?;
     if let Some(slot) = app.ui.actions.selected_set_slot {
-        return (app.session.actions.set_rows.get(slot).map(String::as_str) == Some(set)).then_some(set);
+        return (app.ui.actions.slot_revision == app.session.actions.set_rows_revision
+            && app.session.actions.set_rows.get(slot).map(String::as_str) == Some(set))
+        .then_some(set);
     }
     photocraft_engine::actions_edit_cmds::set_names(&app.session).iter().any(|n| n == set).then_some(set)
 }
@@ -144,7 +150,8 @@ fn selected_set_actions(app: &PhotocraftApp) -> Vec<usize> {
 /// What Play plays: the selected action; with a set folder selected, every action of that set in
 /// order, as Photoshop plays a selected set (nothing for an empty set); else the first action.
 fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
-    if selected_set(app).is_some() {
+    // A stale physical selection must not play the first unrelated action before repaint.
+    if app.ui.actions.selected_set_slot.is_some() || selected_set(app).is_some() {
         return selected_set_actions(app);
     }
     playback_selection(app).into_iter().collect()
@@ -227,6 +234,9 @@ pub(crate) fn shortcut_id(name: &str) -> String {
 }
 
 pub(crate) fn assign_shortcut(app: &mut PhotocraftApp, name: &str, shortcut: &str) -> Result<Value, String> {
+    if actions_cmds::ambiguous_shortcut_names(&app.session.actions.list).contains(name) {
+        return Err(tl!("Rename the action before assigning it a shortcut.").into());
+    }
     let id = shortcut_id(name);
     let mut set = serde_json::Map::new();
     // A function key belongs to only one action. Ordinary menu bindings remain
@@ -1548,7 +1558,7 @@ struct DragRow {
 }
 
 /// Drops use an insertion line, converted to the final index expected by actions.move.
-fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) -> Option<(DragRow, usize)> {
+fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) -> Option<(DragRow, usize, usize)> {
     response.dnd_set_drag_payload(row);
     let source = response.dnd_hover_payload::<DragRow>()?;
     if source.step.is_some() != row.step.is_some() || (source.step.is_some() && source.action != row.action) {
@@ -1561,10 +1571,12 @@ fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) 
     let to = if from < slot { slot.saturating_sub(1) } else { slot };
     let y = if after { response.rect.bottom() } else { response.rect.top() };
     ui.painter().line_segment([pos2(response.rect.left() + 22.0, y), pos2(response.rect.right(), y)], Stroke::new(2.0, t.accent));
-    response.dnd_release_payload::<DragRow>().map(|source| (*source, to))
+    response.dnd_release_payload::<DragRow>().map(|source| (*source, to, row.action))
 }
 
-fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
+fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize, target: usize) {
+    let Some(target) = app.session.actions.list.get(target) else { return };
+    let (set, slot) = (target.set.clone(), target.set_slot);
     let mut params = json!({"action": source.action, "to": to});
     if let Some(step) = source.step {
         params["step"] = json!(step);
@@ -1581,12 +1593,8 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
             app.ui.actions.expanded.insert(to, expanded);
         }
         app.ui.actions.select(to, None);
-        // Dropped among another set's actions: the action joins that set (the row above wins).
-        let list = &app.session.actions.list;
-        let neighbour = to.checked_sub(1).and_then(|j| list.get(j)).or_else(|| list.get(to + 1));
-        let set = neighbour.and_then(|a| a.set.clone());
-        let slot = neighbour.and_then(|a| a.set_slot);
-        if list.get(to).is_some_and(|a| a.set != set || a.set_slot != slot) {
+        // The displayed target owns the drop even when raw list positions interleave folders.
+        if app.session.actions.list.get(to).is_some_and(|a| a.set != set || a.set_slot != slot) {
             let _ = app.run("actions.assignSet", json!({"action": to, "set": set, "setSlot": slot}));
         }
     }
@@ -1755,26 +1763,31 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, se
     SetHeaderResult { toggled, picked, save }
 }
 
-fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, name: &str, swatch: &str) {
+fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, name: &str, swatch: &str, ambiguous: bool) {
     egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.label(tl!("Keyboard Shortcuts"));
-        let current = app.session.prefs().shortcuts.get(&shortcut_id(name)).cloned().unwrap_or_default();
-        // Photoshop's Action Options: a function key, with Shift and Command (#7646).
-        let (key, mut shift, mut command) = photocraft_engine::atn_cmds::parse_function_key(&current).unwrap_or((0, false, false));
-        for number in std::iter::once(0).chain(1..=12) {
-            let label = if number == 0 { tl!("None").to_string() } else { format!("F{number}") };
-            if ui.selectable_label(key == number, label).clicked() {
-                let chosen = if number == 0 { String::new() } else { photocraft_engine::atn_cmds::function_key_name(number, shift, command) };
-                let _ = assign_shortcut(app, name, &chosen);
-                ui.close();
-            }
+        if ambiguous {
+            ui.label(tl!("Rename the action before assigning it a shortcut."));
         }
-        ui.add_enabled_ui(key > 0, |ui| {
-            let command_label = if cfg!(target_os = "macos") { tl!("Command") } else { tl!("Ctrl") };
-            let toggled = ui.checkbox(&mut shift, tl!("Shift")).changed() | ui.checkbox(&mut command, command_label).changed();
-            if toggled {
-                let _ = assign_shortcut(app, name, &photocraft_engine::atn_cmds::function_key_name(key, shift, command));
+        ui.add_enabled_ui(!ambiguous, |ui| {
+            let current = app.session.prefs().shortcuts.get(&shortcut_id(name)).cloned().unwrap_or_default();
+            // Photoshop's Action Options: a function key, with Shift and Command (#7646).
+            let (key, mut shift, mut command) = photocraft_engine::atn_cmds::parse_function_key(&current).unwrap_or((0, false, false));
+            for number in std::iter::once(0).chain(1..=12) {
+                let label = if number == 0 { tl!("None").to_string() } else { format!("F{number}") };
+                if ui.selectable_label(key == number, label).clicked() {
+                    let chosen = if number == 0 { String::new() } else { photocraft_engine::atn_cmds::function_key_name(number, shift, command) };
+                    let _ = assign_shortcut(app, name, &chosen);
+                    ui.close();
+                }
             }
+            ui.add_enabled_ui(key > 0, |ui| {
+                let command_label = if cfg!(target_os = "macos") { tl!("Command") } else { tl!("Ctrl") };
+                let toggled = ui.checkbox(&mut shift, tl!("Shift")).changed() | ui.checkbox(&mut command, command_label).changed();
+                if toggled {
+                    let _ = assign_shortcut(app, name, &photocraft_engine::atn_cmds::function_key_name(key, shift, command));
+                }
+            });
         });
         ui.separator();
         ui.menu_button(tl!("Color"), |ui| {
@@ -1798,8 +1811,13 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
 }
 
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision {
+        library_slots_changed(app);
+    }
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
+    let ambiguous: std::collections::HashSet<String> = actions_cmds::ambiguous_shortcut_names(&app.session.actions.list)
+        .into_iter().map(str::to_string).collect();
     let rows: Vec<Row> = app
         .session
         .actions
@@ -1929,7 +1947,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         .prefs()
                         .shortcuts
                         .get(&shortcut_id(name))
-                        .filter(|s| !s.is_empty())
+                        .filter(|s| !s.is_empty() && !ambiguous.contains(name.as_str()))
                         .map_or_else(|| step_count(nsteps, disabled.len()), |key| format!("{key} · {}", step_count(nsteps, disabled.len()))),
                     egui::FontId::proportional(11.0),
                     t.text_faint,
@@ -1953,7 +1971,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             // Clicks inside stay open, so Shift and Command can both be ticked; every item that
             // finishes closes the menu itself.
-            action_context_menu(app, &resp, i, name, swatch);
+            action_context_menu(app, &resp, i, name, swatch, ambiguous.contains(name.as_str()));
             if resp.double_clicked() && !button_mode {
                 // Photoshop renames in place when the name itself is double-clicked.
                 if resp.interact_pointer_pos().is_some_and(|p| name_rect.expand2(vec2(4.0, 13.0)).contains(p)) {
@@ -1984,6 +2002,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.actions.selected_step = None;
             app.ui.actions.selected_set = Some(set.name.clone());
             app.ui.actions.selected_set_slot = set.slot;
+            app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
         }
         // The disclosure triangle collapses or expands the set and leaves the selection alone.
         if toggle {
@@ -2010,8 +2029,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((index, name)) = renamed {
         rename_action(app, index, name);
     }
-    if let Some((source, to)) = moved {
-        move_row(app, source, to);
+    if let Some((source, to, target)) = moved {
+        move_row(app, source, to, target);
     }
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -2102,7 +2121,7 @@ struct StepRowsContext<'a> {
 
 #[derive(Default)]
 struct StepRowEvents {
-    moved: Option<(DragRow, usize)>,
+    moved: Option<(DragRow, usize, usize)>,
     toggled: Option<(usize, usize)>,
     dialog_toggled: Option<(usize, usize)>,
 }

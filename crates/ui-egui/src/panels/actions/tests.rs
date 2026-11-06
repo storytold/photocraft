@@ -19,6 +19,13 @@ fn library_dialog_cancel_stale_and_undo_leave_document_history_untouched() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert!(app.session.actions.sets.is_empty());
     let ctx = egui::Context::default();
+    assert_eq!(library::edit_undo_label(&app), Some("Undo Clear All Actions"));
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert!(library::edit_undo_label(&app).is_none());
+    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert!(app.session.actions.sets.is_empty(), "the newer document edit was undone first");
+    assert_eq!(library::edit_undo_label(&app), Some("Undo Clear All Actions"));
     crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
     assert_eq!(app.session.actions.sets, ["Keep", "Newer"]);
     assert_eq!(app.session.active().unwrap().history.past_len(), history);
@@ -50,8 +57,18 @@ fn repeated_factory_rows_select_and_play_independently() {
     assert!(matches!(&displayed[3], PanelRow::Set(Folder { slot: Some(1), .. }, 2)));
     app.ui.actions.selected_set = Some("PhotoCraft Basics".into());
     app.ui.actions.selected_set_slot = Some(1);
+    app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
     assert_eq!(playback_targets(&app), [2, 3]);
     assert_eq!(new_action_set(&app).unwrap().slot, Some(1));
+
+    // An older or manually edited preferences file can still contain a name-only key.
+    let id = shortcut_id("Invert Colors");
+    app.session.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(id.clone(), "F2".into());
+        prefs.alternate_shortcuts.insert(id.clone(), vec!["F3".into()]);
+    });
+    assert!(!crate::shortcut_dispatch::bindings(&app).iter().any(|(bound, _)| bound == &id));
+    assert!(assign_shortcut(&mut app, "Invert Colors", "F4").is_err());
 }
 
 #[test]
@@ -1832,13 +1849,13 @@ fn moving_an_action_next_to_another_set_joins_it() {
     app.session.actions.list.push(b);
     app.session.actions.list.push(Action::new("C", vec![]));
     // C dropped below B: it joins B's set, "Two".
-    move_row(&mut app, DragRow { action: 2, step: None }, 2);
+    move_row(&mut app, DragRow { action: 2, step: None }, 2, 1);
     assert_eq!(app.session.actions.list[2].set.as_deref(), Some("Two"));
     // B dropped to the top, above A: the row below decides when there is none above.
-    move_row(&mut app, DragRow { action: 1, step: None }, 0);
+    move_row(&mut app, DragRow { action: 1, step: None }, 0, 0);
     assert_eq!((app.session.actions.list[0].name.as_str(), app.session.actions.list[0].set.as_deref()), ("B", Some("One")));
-    // C dropped between A (One) and nothing: the row above wins.
-    move_row(&mut app, DragRow { action: 2, step: None }, 2);
+    // C dropped below the displayed A row: it joins A's set.
+    move_row(&mut app, DragRow { action: 2, step: None }, 2, 1);
     assert_eq!((app.session.actions.list[2].name.as_str(), app.session.actions.list[2].set.as_deref()), ("C", Some("One")));
 }
 
@@ -2988,4 +3005,81 @@ fn bulk_load_summary_counts_unsupported_steps_of_surviving_sets() {
     let names: Vec<&str> = app.session.actions.list.iter().map(|a| a.name.as_str()).collect();
     assert_eq!(names, ["A", "B"]);
     assert!(app.session.actions.list[0].steps.iter().any(|(id, _)| id == "actions.photoshopStep"));
+}
+
+/// Source-dependent policies can open the picker, refuse a path before reading it, and
+/// withdraw authorization between validating an allowed payload and confirming it.
+#[test]
+fn replace_picker_checks_selected_source_and_rechecks_payload_on_confirm() {
+    use crate::file_dialog::{FileDialogAnswer, fake};
+    use std::{cell::Cell, rc::Rc};
+    let (file_dialog, _) = fake(vec![
+        Some(FileDialogAnswer::Paths(vec!["blocked-actions.atn".into()])),
+        Some(FileDialogAnswer::Contents("replacement.atn".into(), action_set_bytes("Replacement", "Invert"))),
+    ]);
+    let permit_data = Rc::new(Cell::new(true));
+    let policy = Rc::clone(&permit_data);
+    let automation_command = Box::new(move |id: &str, p: &Value| -> Result<(), String> {
+        if id != "actions.replace" {
+            return Ok(());
+        }
+        if p.get("path").is_some() {
+            return Err("path denied by policy".into());
+        }
+        if p.get("data").is_some() && policy.get() {
+            Ok(())
+        } else {
+            Err("payload denied by policy".into())
+        }
+    });
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services {
+        file_dialog: Some(file_dialog), automation_command: Some(automation_command), ..Default::default()
+    });
+    app.run("actions.newSet", json!({"name":"Keep"})).unwrap();
+    let ctx = egui::Context::default();
+    for attempt in 0..2 {
+        app.automation_input = true;
+        assert!(library::open(&mut app, library::Kind::Replace).is_ok());
+        app.automation_input = false;
+        app.poll_file_dialog(&ctx, None);
+        app.poll_file_dialog(&ctx, None);
+        if attempt == 0 {
+            assert!(app.ui.status.contains("path denied by policy"), "{}", app.ui.status);
+            assert!(app.held_actions_library.is_none());
+        }
+    }
+    let dialog = app.ui.dialogs.iter().find(|dialog| library::owns(&dialog.fields)).unwrap().id;
+    permit_data.set(false);
+    assert!(crate::dialogs::confirm(&mut app, dialog).is_err());
+    assert_eq!(app.session.actions.sets, ["Keep"]);
+    assert!(app.session.actions.set_rows.is_empty());
+}
+
+/// A nested Load may compact slots without going through the app's top-level Load hook.
+#[test]
+fn stale_same_caption_selection_does_not_follow_a_compacted_slot() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.set_rows = vec!["Remove".into(), "Same".into(), "Same".into()];
+    app.ui.actions.selected_set = Some("Same".into());
+    app.ui.actions.selected_set_slot = Some(1);
+    assert_eq!(selected_set(&app), Some("Same"));
+    let archive = action_set_bytes("Remove", "Loaded");
+    app.session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&archive)})).unwrap();
+    assert_eq!(app.session.actions.set_rows[1], "Same");
+    assert!(selected_set(&app).is_none());
+    assert!(playback_targets(&app).is_empty());
+}
+
+/// An insertion line at the end of a displayed occurrence keeps that target's membership
+/// even when a different same-caption occurrence is immediately above it in the raw list.
+#[test]
+fn dragging_uses_the_displayed_folder_occurrence() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.set_rows = vec!["Same".into(), "Same".into()];
+    app.session.actions.list = [("A", 0), ("B", 1), ("C", 0)].into_iter().map(|(name, slot)| {
+        Action { set: Some("Same".into()), set_slot: Some(slot), ..Action::new(name, Vec::new()) }
+    }).collect();
+    move_row(&mut app, DragRow { action: 0, step: None }, 1, 2);
+    assert_eq!(app.session.actions.list[1].name, "A");
+    assert_eq!(app.session.actions.list[1].set_slot, Some(0));
 }

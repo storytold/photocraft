@@ -37,6 +37,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(bad(cmd, "`replace` must be true or false")),
     };
     if replace {
+        crate::actions_cmds::discard_ambiguous_shortcuts(s);
         s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
         let mut slots = Vec::with_capacity(s.actions.set_rows.len());
         let mut next = 0;
@@ -46,6 +47,9 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             next += usize::from(keep);
             keep
         });
+        if next != slots.len() {
+            s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
+        }
         for action in &mut s.actions.list {
             action.set_slot = action.set_slot.and_then(|slot| slots.get(slot).copied().flatten());
         }
@@ -158,8 +162,11 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         (DEFAULT_SET.to_string(), s.actions.list.iter().collect())
     };
     let names: Vec<String> = actions.iter().map(|a| a.name.clone()).collect();
-    let keys: Vec<(String, String)> =
-        s.prefs().shortcuts.iter().filter_map(|(k, v)| k.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX).map(|n| (n.to_string(), v.clone()))).collect();
+    let ambiguous = crate::actions_cmds::ambiguous_shortcut_names(&s.actions.list);
+    let keys: Vec<(String, String)> = s.prefs().shortcuts.iter().filter_map(|(k, v)| {
+        let name = k.strip_prefix(crate::actions_cmds::PLAY_SHORTCUT_PREFIX)?;
+        (!ambiguous.contains(name)).then(|| (name.to_string(), v.clone()))
+    }).collect();
     let (bytes, skipped) = export(&set, &actions, &keys, skip).map_err(|e| bad(cmd, e))?;
     let steps: usize = actions.iter().map(|a| a.steps.len()).sum::<usize>().saturating_sub(skipped.len());
     let mut out = json!({"set": set, "actions": names, "steps": steps, "bytes": bytes.len(), "skipped": skipped});

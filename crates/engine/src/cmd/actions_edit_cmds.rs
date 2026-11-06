@@ -126,11 +126,12 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     let set = match p.get("set") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) if p.get("setSlot").and_then(Value::as_u64).is_some() => Some(n.clone()),
+        Some(Value::String(n)) if n.trim() != n.as_str() && assignment_slot(s, p, Some(n.as_str()), cmd)?.is_some() => Some(n.clone()),
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(Value::String(_)) => return Err(bad(cmd, "`set` is empty; pass null to take the action out of its set")),
         Some(_) => return Err(bad(cmd, "`set` must be a name or null")),
     };
-    let slot = set_slot(s, p, set.as_deref(), cmd)?;
+    let slot = assignment_slot(s, p, set.as_deref(), cmd)?;
     let action = &mut s.actions.list[idx];
     action.set = set;
     action.set_slot = slot;
@@ -139,8 +140,8 @@ fn assign_set(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(result)
 }
 
-/// Every set name, in the Actions panel's order: the sets of the actions as they first appear,
-/// then the empty ones New Set made.
+/// Distinct set captions in panel order, including legacy empty sets.
+/// Use `actions.list`'s ordered `setRows` for physical folder occurrences.
 pub fn set_names(s: &Session) -> Vec<String> {
     let mut seen = std::collections::HashSet::new();
     s.actions
@@ -161,6 +162,23 @@ pub(crate) fn set_slot(s: &Session, p: &Value, name: Option<&str>, cmd: &str) ->
         return Err(bad(cmd, "the selected Actions folder changed"));
     }
     Ok(Some(slot))
+}
+
+/// Record or assign by caption alone only when it denotes one explicit occurrence.
+/// Explicit null and captions shared with a legacy set keep their name-only semantics.
+pub(crate) fn assignment_slot(s: &Session, p: &Value, name: Option<&str>, cmd: &str) -> Result<Option<usize>> {
+    if p.get("setSlot").is_some() {
+        return set_slot(s, p, name, cmd);
+    }
+    let Some(name) = name else { return Ok(None) };
+    if s.actions.sets.iter().any(|set| set == name)
+        || s.actions.list.iter().any(|action| action.set_slot.is_none() && action.set.as_deref() == Some(name))
+    {
+        return Ok(None);
+    }
+    let mut matches = s.actions.set_rows.iter().enumerate().filter(|(_, caption)| caption.as_str() == name);
+    let first = matches.next().map(|(slot, _)| slot);
+    Ok(if matches.next().is_none() { first } else { None })
 }
 
 /// New Set…: an empty set folder, named `name` or "Set N" (the first number no set has), that New

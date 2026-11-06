@@ -287,6 +287,13 @@ use path_ops::{selected_document_geometry, targeted_vector_mask_id};
 pub(crate) use pen::{finish_pen_if_left, freeform_finish_owned};
 use shapes::{fill_param, stroke_param};
 
+/// Whether Edit Undo currently belongs to a live Pen draft.
+pub(crate) fn pen_can_undo(app: &PhotocraftApp) -> bool {
+    app.ui.pen.as_ref().is_some_and(|pen| {
+        pen.owner.as_ref().is_some_and(|owner| owner.valid(app)) && (!pen.knots.is_empty() || pen.resumes.is_some())
+    })
+}
+
 /// Commit a valid source-owned draft on a tab switch; otherwise cancel with an actionable diagnostic.
 pub(crate) fn cancel_stale_pen(app: &mut PhotocraftApp) -> bool {
     let Some(pen) = app.ui.pen.as_ref() else { return false };

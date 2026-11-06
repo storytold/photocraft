@@ -755,7 +755,7 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     s.clipboard.is_some().hash(&mut h);
     // A running job greys the commands that would change its document.
     s.has_jobs().hash(&mut h);
-    photocraft_engine::actions_edit_cmds::undo_library_label(s).hash(&mut h);
+    (crate::actions::library::edit_undo_label(app), crate::vector_ui::pen_can_undo(app)).hash(&mut h);
     if let Some(d) = s.active() {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
     }

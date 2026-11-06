@@ -101,3 +101,73 @@ fn whole_replace_validates_the_tail_and_keeps_every_set_in_order() {
     s.execute("actions.undoLibrary", json!({})).unwrap();
     assert_eq!(s.actions.list, prior);
 }
+
+/// Caption-only edits infer just one physical row, while explicit null, duplicate captions,
+/// and captions shared with legacy sets retain the existing name-only behavior.
+#[test]
+fn recording_and_assignment_infer_only_unambiguous_folder_occurrences() {
+    let mut s = Session::new();
+    s.actions.set_rows = vec!["Exact ".into(), "Shared".into(), "Shared".into(), "Legacy".into()];
+    s.actions.sets.push("Legacy".into());
+    s.execute("actions.record", json!({"name":"Recorded","set":"Exact "})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].set_slot, Some(0));
+    for set in ["Shared", "Legacy"] {
+        s.execute("actions.assignSet", json!({"action":0,"set":set})).unwrap();
+        assert_eq!(s.actions.list[0].set_slot, None);
+    }
+    s.execute("actions.assignSet", json!({"action":0,"set":"Exact ","setSlot":null})).unwrap();
+    assert_eq!(s.actions.list[0].set_slot, None);
+    s.execute("actions.assignSet", json!({"action":0,"set":"Exact "})).unwrap();
+    assert_eq!(s.actions.list[0].set_slot, Some(0));
+}
+
+/// Repeated factory actions keep their display names. A name-only shortcut is removed
+/// when that name ceases to identify a physical row, and Undo restores the binding.
+#[test]
+fn repeated_reset_and_store_attachment_do_not_retarget_shortcuts() {
+    let mut s = Session::new();
+    let store = MemBackend::default();
+    s.attach_preset_store(open(Box::new(store.clone())));
+    s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
+    let shortcut = format!("{PLAY_SHORTCUT_PREFIX}Invert Colors");
+    s.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(shortcut.clone(), "F2".into());
+        prefs.alternate_shortcuts.insert(shortcut.clone(), vec!["F3".into()]);
+    });
+    s.execute("actions.reset", json!({"confirm":true,"mode":"append"})).unwrap();
+    assert!(!s.prefs().shortcuts.contains_key(&shortcut));
+    assert!(!s.prefs().alternate_shortcuts.contains_key(&shortcut));
+    assert_eq!(s.actions.list.iter().filter(|action| action.name == "Invert Colors").count(), 2);
+    s.execute("actions.undoLibrary", json!({})).unwrap();
+    assert_eq!(s.prefs().shortcuts[&shortcut], "F2");
+    assert_eq!(s.prefs().alternate_shortcuts[&shortcut], ["F3"]);
+    s.sync_preset_store();
+
+    let mut attached = Session::new();
+    attached.actions.list.push(Action::new("Invert Colors", Vec::new()));
+    attached.edit_prefs(|prefs| {
+        prefs.shortcuts.insert(shortcut.clone(), "F2".into());
+        prefs.alternate_shortcuts.insert(shortcut.clone(), vec!["F3".into()]);
+    });
+    attached.attach_preset_store(open(Box::new(store)));
+    assert_eq!(attached.actions.list.iter().filter(|action| action.name == "Invert Colors").count(), 2);
+    assert!(!attached.prefs().shortcuts.contains_key(&shortcut));
+    assert!(!attached.prefs().alternate_shortcuts.contains_key(&shortcut));
+    assert_eq!(attached.execute("actions.get", json!({"action":"Invert Colors"})).unwrap()["set"], serde_json::Value::Null);
+}
+
+/// Imported calls follow a local physical folder before falling back to the first archive name.
+#[test]
+fn whole_replace_resolves_unqualified_calls_in_their_own_occurrence() {
+    let mut s = Session::new();
+    let mut archive = set("Repeated", Some(("Child", 0)));
+    let child = Action::new("Child", Vec::new());
+    let parent = Action::new("Parent", vec![("actions.play".into(), json!({"action":"Child"}))]);
+    let (second, _) = crate::atn_cmds::export("Repeated", &[&child, &parent], &[], false).unwrap();
+    archive.extend_from_slice(&second[4..]);
+    s.execute("actions.replace", json!({"confirm":true,"data":photocraft_paint::tile::b64_encode(&archive)})).unwrap();
+    assert_eq!(s.actions.list[0].name, "Child");
+    assert_ne!(s.actions.list[1].name, "Child");
+    assert_eq!(s.actions.list[2].steps[0].1["action"], s.actions.list[1].name.as_str());
+}

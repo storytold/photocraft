@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX, not_playing};
+use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX, ambiguous_shortcut_names, not_playing};
 use crate::{Result, Session};
 
 use super::bad;
@@ -16,9 +16,11 @@ mod tests;
 type Shortcuts = BTreeMap<String, String>;
 type Alternates = BTreeMap<String, Vec<String>>;
 
+/// Snapshot of the definitions and shortcut bindings changed by one library edit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LibraryUndo {
     label: &'static str,
+    document_history: Vec<(photocraft_doc::DocId, u64, bool)>,
     list: Vec<Action>,
     sets: Vec<String>,
     rows: Vec<String>,
@@ -86,7 +88,8 @@ pub(crate) fn check_library_size(list: &[Action], sets: &[String], rows: &[Strin
         .map_err(|error| bad(cmd, error.to_string()))
 }
 
-/// Replace only library data. Append uses None to leave both binding maps in place.
+/// Replace library definitions and remember both shortcut maps for the one-step undo.
+/// Append retains unambiguous shortcuts and drops names that no longer identify one action.
 pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<String>, rows: Vec<String>, new_shortcuts: Option<Shortcuts>, label: &'static str) {
     let shortcuts = action_bindings(&s.prefs().shortcuts);
     let alternates = action_bindings(&s.prefs().alternate_shortcuts);
@@ -95,10 +98,27 @@ pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<Stri
             replace_bindings(s, keys.clone(), Alternates::new());
             (keys, Alternates::new())
         }
-        None => (shortcuts.clone(), alternates.clone()),
+        None => {
+            let ambiguous = ambiguous_shortcut_names(&list);
+            let keep = |id: &str| id.strip_prefix(PLAY_SHORTCUT_PREFIX).is_none_or(|name| !ambiguous.contains(name));
+            let mut keys = shortcuts.clone();
+            let mut alternate_keys = alternates.clone();
+            keys.retain(|id, _| keep(id));
+            alternate_keys.retain(|id, _| keep(id));
+            if keys != shortcuts || alternate_keys != alternates {
+                replace_bindings(s, keys.clone(), alternate_keys.clone());
+            }
+            (keys, alternate_keys)
+        }
     };
+    let document_history = s.documents().iter().map(|st| (st.doc.id, st.history.row_ids().max().unwrap_or(0), st.history.is_cleared())).collect();
+    // A document edit after a library command must start a new undo step.
+    for st in &mut s.docs {
+        st.coalesce = None;
+    }
     let undo = LibraryUndo {
         label,
+        document_history,
         list: std::mem::replace(&mut s.actions.list, list),
         sets: std::mem::replace(&mut s.actions.sets, sets),
         rows: std::mem::replace(&mut s.actions.set_rows, rows),
@@ -107,6 +127,7 @@ pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<Stri
         after_shortcuts,
         after_alternates,
     };
+    s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
     s.actions.touch();
     s.actions.library_undo = Some(Box::new(undo));
 }
@@ -152,9 +173,18 @@ fn undo_state(s: &Session) -> Result<&LibraryUndo> {
     Ok(undo)
 }
 
+/// Label for Edit Undo when the latest library change precedes no undoable document edit.
 pub fn undo_library_label(s: &Session) -> Option<&'static str> {
-    s.actions.library_undo.as_ref()?;
-    undo_state(s).ok().map(|undo| undo.label)
+    let undo = undo_state(s).ok()?;
+    if let Some(st) = s.active().filter(|st| st.history.can_undo()) {
+        let (_, last_id, was_cleared) =
+            undo.document_history.iter().find(|(id, _, _)| *id == st.doc.id).copied().unwrap_or((st.doc.id, 0, false));
+        let current_id = st.history.row_id(st.history.past_len()).unwrap_or(0);
+        if current_id > last_id || (st.history.is_cleared() && !was_cleared) {
+            return None;
+        }
+    }
+    Some(undo.label)
 }
 
 pub(super) fn undo_enabled(s: &Session) -> std::result::Result<(), String> {
@@ -167,6 +197,7 @@ pub(super) fn undo(s: &mut Session, _: &Value) -> Result<Value> {
     s.actions.list = undo.list;
     s.actions.sets = undo.sets;
     s.actions.set_rows = undo.rows;
+    s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
     replace_bindings(s, undo.shortcuts, undo.alternates);
     s.actions.touch();
     Ok(json!({"undone":true}))

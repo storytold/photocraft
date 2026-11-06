@@ -48,7 +48,9 @@ pub fn take_log(ctx: &egui::Context) -> Vec<(String, Outcome)> {
 /// their overrides apply. Held temporary tools (Space…) are not here: see [`crate::hold_keys`].
 pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
     let prefs = app.session.prefs();
-    let action_ids: Vec<String> = app.session.actions.list.iter().map(|a| crate::actions::shortcut_id(&a.name)).collect();
+    let ambiguous = photocraft_engine::actions_cmds::ambiguous_shortcut_names(&app.session.actions.list);
+    let action_ids: Vec<String> = app.session.actions.list.iter().filter(|a| !ambiguous.contains(a.name.as_str()))
+        .map(|a| crate::actions::shortcut_id(&a.name)).collect();
     let actions = action_ids.iter().map(|id| (id.as_str(), prefs.shortcut(id, None).map(str::to_string)));
     // The Keyboard Shortcuts dialog lists Photoshop's Window › <panel> item (`window.panel.*`)
     // in place of the shell command it runs (`window.toggle.*`, see `menus::panel_alias`), so an
@@ -98,6 +100,9 @@ pub fn bindings(app: &PhotocraftApp) -> Vec<(String, KeyboardShortcut)> {
     let alternate_ids: std::collections::BTreeSet<&str> =
         photocraft_engine::prefs::ALTERNATE_SHORTCUTS.iter().map(|(id, _)| *id).chain(prefs.alternate_shortcuts.keys().map(String::as_str)).collect();
     for id in alternate_ids {
+        if id.strip_prefix(crate::actions::SHORTCUT_PREFIX).is_some_and(|name| ambiguous.contains(name)) {
+            continue;
+        }
         let main = prefs.shortcut(id, crate::shortcuts::default_shortcut(id).as_deref()).map(str::to_string);
         let user = prefs.alternate_shortcuts.contains_key(id);
         candidates.extend(prefs.alternates(id, main.as_deref()).into_iter().map(|k| (id, Some(k), user)));
@@ -375,8 +380,9 @@ pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
 fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: bool) {
     let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
     let command_id = if action.is_some() { "actions.play" } else { id };
-    let outcome = if !crate::menus::is_enabled(app, command_id) {
-        let why = disabled_reason(app, command_id);
+    let ambiguous = action.is_some_and(|name| photocraft_engine::actions_cmds::ambiguous_shortcut_names(&app.session.actions.list).contains(name));
+    let outcome = if ambiguous || !crate::menus::is_enabled(app, command_id) {
+        let why = if ambiguous { "Multiple Actions use this name".into() } else { disabled_reason(app, command_id) };
         let template = "{label} is not available: {reason}";
         app.ui.status = crate::i18n::fmt(tl!(template), &[("label", crate::i18n::tr_id(crate::i18n::current(), id, &label(id))), ("reason", tl!(&why))]);
         app.ui.status_error = true;
