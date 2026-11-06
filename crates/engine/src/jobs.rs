@@ -1793,6 +1793,7 @@ impl Session {
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;
+        self.hint_before = None;
         // Finish successful command bookkeeping on the document the job edited.
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.

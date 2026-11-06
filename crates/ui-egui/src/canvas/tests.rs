@@ -2987,33 +2987,57 @@ fn damage_grows_by_nested_effect_reach() {
 /// the live pixels, redrew nothing more.
 #[test]
 fn live_strokes_into_a_feathered_mask_redraw_the_feathers_halo() {
-    use photocraft_engine::paint::StrokePoint;
-    let mut s = photocraft_engine::Session::new();
-    s.execute("file.new", json!({"width": 320, "height": 200, "background": "white"})).unwrap();
-    s.execute("layer.new.layer", json!({})).unwrap();
-    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 320, "height": 200})).unwrap();
-    s.execute("edit.fill", json!({"color": "#3070a0"})).unwrap();
-    s.execute("select.deselect", json!({})).unwrap();
-    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
-    s.execute("layer.layerMask.edit", json!({"feather": 10})).unwrap();
-    let before = s.active().unwrap().doc.clone();
-    let p = json!({"points": [[60, 100]], "size": 16, "hardness": 100, "color": "#000000", "target": "mask"});
-    let mut live = photocraft_engine::brush_cmds::LiveStroke::begin(&s, &p).unwrap();
-    let mut steps = vec![live.bounds()];
-    for x in (70..=260).step_by(10) {
-        steps.push(live.push(&[StrokePoint::new(f64::from(x), 100.0, 1.0)]).unwrap());
-    }
-    let doc = live.doc.clone();
-    let reach = effect_reach(&doc.layers);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 320, "height": 200, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 320, "height": 200})).unwrap();
+    app.run("edit.fill", json!({"color": "#3070a0"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.run("layer.layerMask.edit", json!({"feather": 10})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_mask_targets();
+    assert_eq!(paint_target(&app), json!("mask"));
+    app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 1.0}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let before = app.session.documents()[0].doc.clone();
+    let reach = effect_reach(&before.layers);
     assert!(reach > 0, "a feathered mask reaches past the dabs");
-    assert_eq!(effect_reach(&before.layers), reach, "the reach is the mask's, before and during the stroke");
+    let rev = app.session.documents()[0].revision;
+    let bounds = before.bounds();
+    let dk = canvas_display(&app, &before, None).1;
+    let mut seen = (rev, dk);
+    let m = egui::Modifiers::NONE;
+    // Drive the stroke through the canvas, taking each step's redraw rect from
+    // damage_since itself — the production path whose live-stroke branch grows the
+    // dab by effect_reach — so losing the feather term there fails this test.
+    let mut steps = Vec::new();
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 100.0, pressure: 1.0 }, m);
+    for x in std::iter::once(60.0).chain((70..=260).step_by(10).map(f64::from)) {
+        if x > 60.0 {
+            tool_event(&mut app, ToolEvent::Move { x, y: 100.0, pressure: 1.0 }, m);
+        }
+        let (shown_doc, key) = display_doc(&mut app, 0);
+        if let Some(d) = damage_since(&app, 0, seen, (rev, key), dk, None)
+            && !d.is_empty()
+        {
+            steps.push((d, shown_doc));
+        }
+        seen = (rev, key);
+    }
+    assert!(!steps.is_empty(), "the live stroke produced damage");
+    let doc = steps.last().unwrap().1.clone();
+    assert_eq!(effect_reach(&doc.layers), reach, "the reach is the mask's, before and during the stroke");
     // What the canvas shows: the document before the stroke, with each step's damage redrawn.
-    let bounds = doc.bounds();
     let w = bounds.width() as usize;
     let mut shown = photocraft_compose::render(&before, bounds);
-    for d in steps.iter().filter(|d| !d.is_empty()) {
-        let r = d.inflate(reach).intersect(&bounds);
-        let patch = photocraft_compose::render(&doc, r);
+    for (d, step_doc) in &steps {
+        let r = d.intersect(&bounds);
+        if r.is_empty() {
+            continue;
+        }
+        let patch = photocraft_compose::render(step_doc, r);
         for y in 0..r.height() as usize {
             let at = (r.y0 as usize + y) * w + r.x0 as usize;
             shown.px[at..at + r.width() as usize].copy_from_slice(&patch.px[y * r.width() as usize..][..r.width() as usize]);
