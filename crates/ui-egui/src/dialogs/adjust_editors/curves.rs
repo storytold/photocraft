@@ -63,6 +63,9 @@ pub(super) fn editor_channels(cx: &EditorCx, space: ToneSpace) -> Vec<(ToneChann
     channels.iter().enumerate().map(|(i, c)| (*c, tl!(c.label).to_owned(), i)).collect()
 }
 
+/// The Channel dropdown of the Levels and Curves editors; returns the picked entry of `channels`.
+/// With `shortcuts` (the dialogs, not the Properties panel), ⌘2 to ⌘9 also pick the channel of
+/// that tone space, as in Photoshop (#11283).
 pub(super) fn editor_channel_picker(ui: &mut egui::Ui, id: egui::Id, channels: &[(ToneChannel, String, usize)], shortcuts: Option<ToneSpace>) -> usize {
     if let Some(space) = shortcuts {
         const DIGITS: [(egui::Key, usize); 8] = [
