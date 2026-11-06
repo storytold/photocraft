@@ -30,9 +30,10 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 	</array>
 
-	<!-- Files: PhotoCraft gets a copy of what it opens (contents, as on the web), so it doesn't
-	     edit documents in place. Files and the Share sheet offer it for these types. -->
-	<key>LSSupportsOpeningDocumentsInPlace</key><false/>
+	<!-- Files: documents open in place (Files hands over the original, not a copy in the app's
+	     Inbox), so File › Save writes them back where they are. Files and the Share sheet offer
+	     PhotoCraft for these types. -->
+	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>

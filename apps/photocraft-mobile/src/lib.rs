@@ -3,21 +3,23 @@
 //! The same [`PhotocraftApp`] as the desktop and web builds. The native shells (SwiftUI with
 //! CraftKit, Compose with craftkit) own the app and its panels; this crate only says how
 //! PhotoCraft meets them:
-//! - **Files:** File › Open asks the shell's document picker for contents (as on the web);
-//!   File › Save and Export hand the encoded bytes to the shell's exporter. Files the system
-//!   hands over (Files, Share) open through the app's inbox.
+//! - **Files:** File › Open asks the shell's document picker. A file the shell can write back
+//!   (picked, or opened in place from Files) opens with its document path, as a file from disk
+//!   does, so File › Save writes it back without a sheet; the shell confirms the write, and only
+//!   then is the document saved. Everything else (Save As, a copy from Share or Photos, a format
+//!   the file can't keep) goes to the shell's exporter, as on the web.
 //! - **Native controls** map to PhotoCraft's own commands, exactly as its menu items run them.
 //! - **Panels** see the active document and its layers, top first.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, PoisonError};
 
-use craft_mobile::{Action, CraftApp, DocumentInfo, Item, PickedFile, Platform, Snapshot, Stylus};
+use craft_mobile::{Action, CraftApp, DocumentInfo, Item, PickedFile, Platform, SaveRoute, Snapshot, Stylus, WriteOutcome};
 use egui::TouchPhase;
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
-use photocraft_doc::{Document, Layer};
+use photocraft_doc::{DocId, Document, Layer};
 use photocraft_engine::Session;
 use photocraft_format::RecoveryStore;
 use photocraft_ui_egui::stylus::PenSample;
@@ -28,15 +30,36 @@ use serde_json::json;
 /// PhotoCraft as `craft-mobile` hosts it.
 pub struct PhotoCraftMobile {
     app: PhotocraftApp,
-    /// Files the system handed over, opened by the app on its next frame.
+    /// Copies the system handed over, opened by the app on its next frame.
     inbox: Inbox,
+    /// Files that can be saved back where they came from, as (document path, contents), opened
+    /// on the next frame.
+    located: Located,
+    /// Document paths the app wrote in place during this frame.
+    issued: Issued,
+    /// Writes in place the shell hasn't confirmed yet, oldest first.
+    writing: Vec<PendingWrite>,
+}
+
+/// See [`PhotoCraftMobile::located`]. A `Cell`: the services and the frame take turns, and
+/// neither can find it borrowed.
+type Located = Rc<Cell<Vec<(String, Vec<u8>)>>>;
+/// See [`PhotoCraftMobile::issued`].
+type Issued = Rc<Cell<Vec<String>>>;
+
+/// A document written back to its own file at `revision`: saved once the shell confirms.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PendingWrite {
+    path: String,
+    doc: DocId,
+    revision: u64,
 }
 
 impl CraftApp for PhotoCraftMobile {
     fn create(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>, platform: Platform) -> Self {
-        let inbox = Inbox::default();
-        let app = create_app(ctx, wgpu, services(&platform, inbox.clone()));
-        Self { app, inbox }
+        let (inbox, located, issued) = (Inbox::default(), Located::default(), Issued::default());
+        let app = create_app(ctx, wgpu, services(&platform, inbox.clone(), located.clone(), issued.clone()));
+        Self { app, inbox, located, issued, writing: Vec::new() }
     }
 
     fn wgpu_configuration() -> eframe::egui_wgpu::WgpuConfiguration {
@@ -47,7 +70,26 @@ impl CraftApp for PhotoCraftMobile {
     }
 
     fn open_file(&mut self, ctx: &egui::Context, file: PickedFile) {
-        self.inbox.lock().unwrap_or_else(PoisonError::into_inner).push((file.name, file.bytes));
+        match file.document_path() {
+            Some(path) => push(&self.located, (path, file.bytes)),
+            None => self.inbox.lock().unwrap_or_else(PoisonError::into_inner).push((file.name, file.bytes)),
+        }
+        ctx.request_repaint();
+    }
+
+    /// The document is saved now, at the revision that was written, if it still lives in that
+    /// file; a failure is reported (the shell offers the exporter for the same bytes).
+    fn written(&mut self, ctx: &egui::Context, outcome: &WriteOutcome) {
+        let pending = self.writing.iter().position(|w| w.path == outcome.path).map(|i| self.writing.remove(i));
+        let name = photocraft_ui_egui::file_open::display_name(&outcome.path);
+        match (&outcome.result, pending) {
+            (Ok(()), Some(write)) => {
+                mark_saved(&mut self.app.session, &write);
+                log::info!("photocraft-mobile: wrote {name} in place");
+            }
+            (Ok(()), None) => log::info!("photocraft-mobile: wrote {name} in place (a copy)"),
+            (Err(e), _) => photocraft_ui_egui::notices::error(&mut self.app, format!("Couldn't save {name}: {e}")),
+        }
         ctx.request_repaint();
     }
 
@@ -165,12 +207,58 @@ impl eframe::App for PhotoCraftMobile {
     }
 
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // As files from disk: decoded on a worker, then File › Save writes back to them.
+        for (path, bytes) in self.located.take() {
+            if let Err(e) = self.app.open_file(&path, &bytes) {
+                self.app.open_failed(&photocraft_ui_egui::file_open::display_name(&path), &e);
+            }
+        }
         self.app.logic(ctx, frame);
+        self.note_writes();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.app.ui(ui, frame);
+        self.note_writes();
     }
+}
+
+impl PhotoCraftMobile {
+    /// Tie each write in place issued since the last call to the document and revision it
+    /// wrote. Saves write the document they're for and record it in the same frame, so the
+    /// document now bound to the path is that one, at the revision written.
+    fn note_writes(&mut self) {
+        for path in self.issued.take() {
+            // None: a copy (the document lives elsewhere), which never marks it saved.
+            if let Some(st) = self.app.session.documents().iter().find(|st| st.path.as_deref() == Some(path.as_str())) {
+                self.writing.push(PendingWrite { path, doc: st.doc.id, revision: st.revision });
+            }
+        }
+    }
+}
+
+/// Mark `write`'s document saved at the revision written, if it still lives in that file (a
+/// Save As since moved it elsewhere, or it was closed).
+fn mark_saved(session: &mut Session, write: &PendingWrite) {
+    let Some(index) = session.documents().iter().position(|st| st.doc.id == write.doc && st.path.as_deref() == Some(write.path.as_str())) else {
+        return;
+    };
+    // As PhotoCraft finishes a background save: the document is made active for the change,
+    // then the active one is restored.
+    let active = session.active_index();
+    session.set_active(index);
+    if let Some(st) = session.active_mut() {
+        st.saved_revision = write.revision;
+    }
+    if let Some(active) = active {
+        session.set_active(active);
+    }
+}
+
+fn push<T>(queue: &Cell<Vec<T>>, item: T) {
+    let mut items = queue.take();
+    items.push(item);
+    queue.set(items);
 }
 
 craft_mobile::export!(PhotoCraftMobile);
@@ -192,8 +280,9 @@ fn create_app(ctx: &egui::Context, wgpu: Option<eframe::egui_wgpu::RenderState>,
     app
 }
 
-/// The in-process codecs (as on the web), and files through the shell's picker and exporter.
-fn services(platform: &Platform, inbox: Inbox) -> Services {
+/// The in-process codecs (as on the web), and files through the shell's picker, its writes in
+/// place and its exporter.
+fn services(platform: &Platform, inbox: Inbox, located: Located, issued: Issued) -> Services {
     let picker = platform.clone();
     let exporter = platform.clone();
     let clipboard = platform.clone();
@@ -212,18 +301,34 @@ fn services(platform: &Platform, inbox: Inbox) -> Services {
         file_dialog: Some(Box::new(move |request, _frame, reply| match request {
             // The picker hands over contents, not paths, as a browser does.
             FileDialogRequest::Open { multiple, extensions, .. } => {
-                picker.pick_files(multiple, extensions.unwrap_or_default(), Box::new(move |files| reply.send(pick_answer(multiple, files))))
+                let located = located.clone();
+                picker.pick_files(
+                    multiple,
+                    extensions.unwrap_or_default(),
+                    Box::new(move |files| {
+                        let (answer, in_place) = pick_answer(multiple, files);
+                        for file in in_place {
+                            push(&located, file);
+                        }
+                        reply.send(answer);
+                    }),
+                );
             }
             // Engine commands that read a folder need paths; a picker's folder isn't one.
             FileDialogRequest::Folder { .. } => reply.send(None),
-            // The exporter asks where; here only the name is settled.
+            // The exporter asks where; here only the name is settled. Where the desktop asks (Save
+            // As, a format the file can't keep), so does the exporter: only a save PhotoCraft
+            // writes without asking goes back in place.
             FileDialogRequest::Save { suggested } => reply.send(Some(FileDialogAnswer::SaveTo(file_name(&suggested)))),
         })),
         write: Some(Box::new(move |path: &str, bytes: &[u8]| {
-            exporter.export(file_name(path), bytes.to_vec());
+            if exporter.save(path, bytes.to_vec()) == SaveRoute::InPlace {
+                push(&issued, path.to_string());
+            }
             Ok(())
         })),
-        // The user may cancel the exporter, and nothing reports back: never mark the document saved.
+        // The user may cancel the exporter, and nothing reports back: never mark the document
+        // saved here. A write in place is confirmed later (`PhotoCraftMobile::written`).
         write_unconfirmed: true,
         inbox: Some(inbox),
         clipboard_set_image: Some(Box::new(move |w, h, rgba: &[u8]| {
@@ -280,14 +385,25 @@ fn recovery(services: &mut Services, dir: Option<PathBuf>) {
     }));
 }
 
-fn pick_answer(multiple: bool, files: Vec<PickedFile>) -> Option<FileDialogAnswer> {
-    let mut files = files.into_iter().map(|f| (f.name, f.bytes));
-    if multiple {
-        let all: Vec<_> = files.collect();
-        (!all.is_empty()).then_some(FileDialogAnswer::ContentsMany(all))
-    } else {
-        files.next().map(|(name, bytes)| FileDialogAnswer::Contents(name, bytes))
+/// The open picker's files as the dialog's answer, and the ones to open as files from disk (by
+/// document path) instead. Only File › Open (several files) opens documents; a command reading
+/// one file wants its contents, wherever it came from.
+fn pick_answer(multiple: bool, files: Vec<PickedFile>) -> (Option<FileDialogAnswer>, Vec<(String, Vec<u8>)>) {
+    if !multiple {
+        return (files.into_iter().next().map(|f| FileDialogAnswer::Contents(f.name, f.bytes)), Vec::new());
     }
+    if files.is_empty() {
+        return (None, Vec::new());
+    }
+    let mut copies = Vec::new();
+    let mut in_place = Vec::new();
+    for file in files {
+        match file.document_path() {
+            Some(path) => in_place.push((path, file.bytes)),
+            None => copies.push((file.name, file.bytes)),
+        }
+    }
+    (Some(FileDialogAnswer::ContentsMany(copies)), in_place)
 }
 
 fn file_name(path: &str) -> String {
@@ -299,17 +415,59 @@ mod tests {
     use super::*;
 
     fn file(name: &str) -> PickedFile {
-        PickedFile { name: name.into(), bytes: vec![1] }
+        PickedFile { name: name.into(), bytes: vec![1], location: None }
+    }
+
+    fn located(name: &str) -> PickedFile {
+        PickedFile { location: craft_mobile::Location::new(format!("file:///docs/{name}")), ..file(name) }
     }
 
     /// File › Open (several files) and a command reading one file get the shapes they expect;
     /// a cancelled picker answers nothing, never an empty list.
     #[test]
     fn picked_files_answer_the_dialog_that_asked() {
-        assert!(matches!(pick_answer(true, vec![file("a.png"), file("b.psd")]), Some(FileDialogAnswer::ContentsMany(f)) if f.len() == 2));
-        assert!(matches!(pick_answer(false, vec![file("a.png")]), Some(FileDialogAnswer::Contents(n, _)) if n == "a.png"));
-        assert_eq!(pick_answer(true, vec![]), None);
-        assert_eq!(pick_answer(false, vec![]), None);
+        assert!(matches!(pick_answer(true, vec![file("a.png"), file("b.psd")]), (Some(FileDialogAnswer::ContentsMany(f)), l) if f.len() == 2 && l.is_empty()));
+        assert!(matches!(pick_answer(false, vec![file("a.png")]), (Some(FileDialogAnswer::Contents(n, _)), _) if n == "a.png"));
+        assert_eq!(pick_answer(true, vec![]), (None, vec![]));
+        assert_eq!(pick_answer(false, vec![]), (None, vec![]));
+    }
+
+    /// Files File › Open may write back open by their document path; copies by their contents.
+    /// A command reading one file gets contents either way.
+    #[test]
+    fn picked_files_that_can_be_written_back_open_by_path() {
+        let (answer, in_place) = pick_answer(true, vec![located("a.psd"), file("b.png")]);
+        assert!(matches!(answer, Some(FileDialogAnswer::ContentsMany(f)) if f.len() == 1 && f.first().is_some_and(|(n, _)| n == "b.png")));
+        assert_eq!(in_place.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(), [located("a.psd").document_path().unwrap_or_default()]);
+        let (answer, in_place) = pick_answer(true, vec![located("a.psd")]);
+        assert_eq!(answer, Some(FileDialogAnswer::ContentsMany(vec![])), "answered, not cancelled");
+        assert_eq!(in_place.len(), 1);
+        assert!(matches!(pick_answer(false, vec![located("a.psd")]), (Some(FileDialogAnswer::Contents(n, _)), l) if n == "a.psd" && l.is_empty()));
+    }
+
+    /// A confirmed write marks the document saved at the revision written (later edits stay
+    /// unsaved), only while it still lives in that file, and leaves the active tab alone.
+    #[test]
+    fn a_confirmed_write_saves_the_revision_written() {
+        let mut session = Session::new();
+        for name in ["a", "b"] {
+            let doc = Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+            session.add_document(doc, None);
+        }
+        let path = "inplace://1/a.psd".to_string();
+        let doc = session.documents().first().map(|st| st.doc.id).unwrap_or(DocId(0));
+        session.set_active(0);
+        if let Some(st) = session.active_mut() {
+            st.path = Some(path.clone());
+            st.revision = 7;
+            st.saved_revision = 3;
+        }
+        session.set_active(1);
+        mark_saved(&mut session, &PendingWrite { path: path.clone(), doc, revision: 5 });
+        assert_eq!(session.documents().first().map(|st| st.saved_revision), Some(5), "saved as written, still dirty after");
+        assert_eq!(session.active_index(), Some(1));
+        mark_saved(&mut session, &PendingWrite { path: "inplace://2/a.psd".into(), doc, revision: 7 });
+        assert_eq!(session.documents().first().map(|st| st.saved_revision), Some(5), "moved elsewhere since: not this file's save");
     }
 
     #[test]
