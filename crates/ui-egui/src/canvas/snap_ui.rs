@@ -202,6 +202,7 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     let tool = crate::canvas::event_tool(app, mods);
     let moves_layer = crate::canvas::command_moves_layer(app, tool, p, mods);
     let crop_tol = crate::crop_ui::tolerance(app);
+    let straightens = tool == Tool::Crop && app.crop.drag.is_none() && (app.crop.straighten.armed || mods.command);
     let gesture = if let Some(t) = &app.ui.transform {
         use crate::transform_tool::Hit;
         let h = crate::transform_tool::box_hit(app, t, p, crate::transform_tool::handle_tolerance(app));
@@ -231,6 +232,11 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     } else if tool == Tool::Move || moves_layer {
         let exclude = app.session.active().map(|s| s.selected_layers()).unwrap_or_default();
         moving_rect(app, tool).map(|rect| (Gesture::Move { rect }, exclude))
+    } else if straightens {
+        // A straighten line (`crop_straighten::pointer` takes the press before the frame's drags)
+        // snaps its ends as points wherever it starts, never by the offset of a frame or image it
+        // doesn't move.
+        Some((Gesture::Point, Vec::new()))
     } else if tool == Tool::Crop
         && (crate::crop_mode::classic(app) || app.crop.default_frame)
         && let Some(rect) =
@@ -297,7 +303,10 @@ fn begin(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     } else {
         SnapTargets::default()
     };
-    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled: false });
+    // Windows Ctrl both starts a straighten line and is held while it is drawn: the override then
+    // covers the press too, or the line's start would snap and its end not.
+    let disabled = straightens && override_held(mods);
+    app.prefs_rt.snap = Some(ActiveSnap { gesture, start: p, targets, smart, disabled });
 }
 
 /// Snap a guide drag that ⌘ with a selection tool starts at `p` (`canvas::command_guide_at`,
@@ -524,6 +533,18 @@ fn follow_reposition(app: &mut PhotocraftApp) {
     }
 }
 
+/// A click on a crop frame or one of its handles (released where it was pressed, the frame not
+/// moved) changes nothing, as a Move-tool click doesn't move the layer (`canvas::tool_event`):
+/// snapping the release would pull an edge within reach onto a nearby one.
+fn crop_click(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    use crate::crop_ui::CropDrag;
+    let Some(snap) = app.prefs_rt.snap.as_ref() else { return false };
+    let Some(CropDrag::Move { rect, .. } | CropDrag::Resize { rect, .. } | CropDrag::MoveImage { rect, .. }) = app.crop.drag else {
+        return false;
+    };
+    app.ui.tool == Tool::Crop && p == snap.start && app.ui.crop_rect == Some(rect)
+}
+
 /// Snap a tool event's coordinates (called by `canvas::tool_event` before the tools see it).
 pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> ToolEvent {
     match ev {
@@ -562,6 +583,11 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
         }
         ToolEvent::Up { x, y } => {
             if app.prefs_rt.snap.is_none() {
+                return ev;
+            }
+            if crop_click(app, [x, y]) {
+                app.prefs_rt.snap = None;
+                app.prefs_rt.snap_lines.clear();
                 return ev;
             }
             follow_reposition(app);
