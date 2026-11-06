@@ -12,6 +12,7 @@
 # entries the same way.
 # Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in Latin
 # letters; the trailing "…" of dialog commands is kept.
+# Machine-translated with Claude (Anthropic) for @tronicum; not yet reviewed by a native speaker.
 # Layer Mask Display Options (the layer mask rubylith's colour and opacity)
 # Channel Options and New Spot Channel (#3761)
 # Guide layout dialog
@@ -4493,3 +4494,123 @@ navigator	Zoom	Zoom
 	Recently Used Colors	Culori utilizate recent
 	Shapes can't use patterns yet	Formele nu pot folosi încă modele
 	Stop Color	Culoarea marcajului
+
+# Strings added on main after the catalog was completed (2026-11-06)
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	O comandă a fost anulată sau oprită în timpul procesării în lot. Continuați cu următorul fișier sau opriți?
+	A file is still being placed; try again when it has finished.	Un fișier este încă în curs de plasare; încercați din nou după ce s-a terminat.
+	A frame supports affine transforms; select its image for perspective transforms	Un cadru acceptă transformări afine; selectați imaginea acestuia pentru transformări de perspectivă
+	A frame supports affine transforms; select its image to warp it	Un cadru acceptă transformări afine; selectați imaginea acestuia pentru a o deforma
+	Accelerated	Accelerat
+	Answer the open import question first, then import this file again.	Răspundeți mai întâi la întrebarea de import deschisă, apoi importați din nou acest fișier.
+	Arrowhead options	Opțiuni vârfuri de săgeată
+	Arrowheads	Vârfuri de săgeată
+	Attribute	Atribut
+	Background (default)	Fundal (implicit)
+	Batch preview	Previzualizare lot
+	Cancelled placing {name}	Plasarea {name} a fost anulată
+	Channel Options…	Opțiuni canal…
+	Concavity	Concavitate
+	Convert to Frame…	Conversie în cadru…
+	Create a new custom frame	Creare cadru personalizat nou
+	Create a new polygonal frame	Creare cadru poligonal nou
+	Create a new triangular frame	Creare cadru triunghiular nou
+	Create a single history state	Creare o singură stare de istoric
+	Data Sets as Files is unavailable on the web	Seturi de date ca fișiere nu este disponibil pe web
+	Dropped files weren't placed: their document was closed.	Fișierele plasate prin tragere nu au fost plasate: documentul lor a fost închis.
+	Dropped files weren't placed: too many are waiting for their document.	Fișierele plasate prin tragere nu au fost plasate: prea multe așteaptă după documentul lor.
+	Effect	Efect
+	Empty	Gol
+	End	Sfârșit
+	Filter for embedded smart objects	Filtrare după obiecte inteligente încorporate
+	Filter for linked smart objects that are missing	Filtrare după obiecte inteligente conectate care lipsesc
+	Filter for smart objects linked locally	Filtrare după obiecte inteligente conectate local
+	Fit Content to Frame	Încadrare conținut în cadru
+	Fit Frame to Content	Încadrare cadru la conținut
+	Frame coordinates must be finite and within 600000 pixels	Coordonatele cadrului trebuie să fie finite și în limita a 600000 de pixeli
+	High Memory Photoshop Document	Document Photoshop cu memorie mare
+	Image Compression	Compresie imagine
+	Import Image…	Import imagine…
+	Import as New Group	Import ca grup nou
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	Import ca grup nou păstrează „{group}” și adaugă fișierul ca grup nou alături de acesta.
+	Invalid frame transform	Transformare de cadru nevalidă
+	Invalid nested file drop	Plasare imbricată de fișiere nevalidă
+	LZW	LZW
+	Layer Effects	Efecte de strat
+	Learn	Învățare
+	Lining	Aliniate
+	Linked	Conectat
+	New Frame	Cadru nou
+	New file	Fișier nou
+	No Adv. Blending	Fără fuziune avansată
+	No Layer Effects	Fără efecte de strat
+	No Layer Mask	Fără mască de strat
+	No Vector Mask	Fără mască vectorială
+	No import is waiting. Import the file again.	Niciun import nu este în așteptare. Importați din nou fișierul.
+	Not Clipped	Netăiat
+	Not Empty	Nu este gol
+	Not Linked	Neconectat
+	Not Locked	Neblocat
+	Not Visible	Invizibil
+	Numerals	Cifre
+	On your computer	Pe computerul dvs.
+	Open anyway	Deschidere oricum
+	Opening this document uses more memory and may slow down your computer or other running applications.	Deschiderea acestui document folosește mai multă memorie și poate încetini computerul sau alte aplicații în execuție.
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	Deschiderea „{name}” necesită aproximativ {est} GiB de memorie ({avail} GiB disponibili).
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	Deschiderea „{name}” necesită aproximativ {est} GiB de memorie. Memoria disponibilă nu a putut fi măsurată.
+	Pause For	Pauză de
+	Pause For:	Pauză de:
+	Playback Options…	Opțiuni de redare…
+	Proportional	Proporționale
+	Proportional Lining	Proporționale aliniate
+	Proportional Oldstyle	Proporționale stil vechi
+	Replace Image…	Înlocuire imagine…
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	Înlocuirea șterge mai întâi tot conținutul din „{group}”, inclusiv presetările pe care le-ați editat sau mutat acolo. Această acțiune nu poate fi anulată.
+	Save Image Pyramid	Salvare piramidă de imagini
+	Save Transparency	Salvare transparență
+	Set 	Set 
+	Set 1	Set 1
+	Set 10	Set 10
+	Set 11	Set 11
+	Set 12	Set 12
+	Set 13	Set 13
+	Set 14	Set 14
+	Set 15	Set 15
+	Set 16	Set 16
+	Set 17	Set 17
+	Set 18	Set 18
+	Set 19	Set 19
+	Set 2	Set 2
+	Set 20	Set 20
+	Set 3	Set 3
+	Set 4	Set 4
+	Set 5	Set 5
+	Set 6	Set 6
+	Set 7	Set 7
+	Set 8	Set 8
+	Set 9	Set 9
+	Set as default	Setare ca implicit
+	Source: {name}	Sursă: {name}
+	Specify Channels:	Specificare canale:
+	Start	Început
+	Step by Step	Pas cu pas
+	Stylistic Sets	Seturi stilistice
+	Tabular	Tabelare
+	Tabular Lining	Tabelare aliniate
+	Tabular Oldstyle	Tabelare stil vechi
+	The GPU compositor is still being prepared	Compozitorul GPU este încă în curs de pregătire
+	The History Brush source was deleted: set a new source in the History panel	Sursa Pensulei istoric a fost ștearsă: setați o sursă nouă în panoul Istoric
+	The frame is locked	Cadrul este blocat
+	The frame is unavailable	Cadrul nu este disponibil
+	Transparent (default)	Transparent (implicit)
+	Use these settings for new arrows	Utilizare aceste setări pentru săgețile noi
+	Website	Site web
+	ZIP	ZIP
+	seconds	secunde
+	{message} into “{group}”	{message} în „{group}”
+	{ok} written to {dir}	{ok} scrise în {dir}
+	{set} from {file} replaced the one from {earlier}	Setul {set} din {file} l-a înlocuit pe cel din {earlier}
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	Grupul de pensule „{group}” are deja {n} pensulă de-a dvs.|Grupul de pensule „{group}” are deja {n} pensule de-ale dvs.|Grupul de pensule „{group}” are deja {n} de pensule de-ale dvs.
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	Grupul de degradeuri „{group}” există deja ({n} degrade).|Grupul de degradeuri „{group}” există deja ({n} degradeuri).|Grupul de degradeuri „{group}” există deja ({n} de degradeuri).
+@plural	{n} action file loaded|{n} action files loaded	{n} fișier de acțiuni încărcat|{n} fișiere de acțiuni încărcate|{n} de fișiere de acțiuni încărcate
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} fișier nu a putut fi încărcat: {errors}|{n} fișiere nu au putut fi încărcate: {errors}|{n} de fișiere nu au putut fi încărcate: {errors}
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} ieșire Resurse imagine a eșuat|{what}: {n} ieșiri Resurse imagine au eșuat|{what}: {n} de ieșiri Resurse imagine au eșuat
