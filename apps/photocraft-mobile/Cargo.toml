@@ -24,8 +24,8 @@ cognitive_complexity = "deny"
 wildcard_imports = "deny"
 
 [dependencies]
-# The shared native-shell host (local checkout beside the Craft repos; upstream: craft-libs).
-craft-mobile = { path = "../../../../craft-mobile" }
+# The shared native-shell host (craft-libs `crates/mobile`).
+craft-mobile = { workspace = true }
 serde_json = { workspace = true }
 photocraft-engine = { workspace = true }
 photocraft-io = { workspace = true }

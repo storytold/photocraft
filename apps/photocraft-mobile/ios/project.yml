@@ -1,10 +1,10 @@
 # PhotoCraft for iPad as an Xcode project, for running on a device (signing) and debugging:
-#   cd apps/photocraft-mobile/ios && xcodegen && open PhotoCraft.xcodeproj
-# Pick your team under Signing & Capabilities (or set DEVELOPMENT_TEAM when generating:
-# `DEVELOPMENT_TEAM=ABCDE12345 xcodegen`). build.sh still builds the simulator app without Xcode.
-# The Rust library is built by the "Build Rust" phase; CRAFT_TARGET_DIR overrides its target
-# directory (default: the workspace's target/). CraftKit comes from craft-mobile, checked out beside
-# the Craft repos (CRAFT_MOBILE_DIR overrides).
+#   apps/photocraft-mobile/ios/build.sh xcode && open apps/photocraft-mobile/ios/PhotoCraft.xcodeproj
+# build.sh runs XcodeGen with CRAFT_MOBILE_DIR set: CraftKit comes from craft-libs (crates/mobile),
+# checked out beside the Craft repos unless CRAFT_MOBILE_DIR says otherwise. Pick your team under
+# Signing & Capabilities (or set DEVELOPMENT_TEAM when generating). build.sh sim still builds the
+# simulator app without Xcode. The Rust library is built by the "Build Rust" phase;
+# CRAFT_TARGET_DIR overrides its target directory (default: the workspace's target/).
 name: PhotoCraft
 options:
   bundleIdPrefix: dev.craft
@@ -12,7 +12,7 @@ options:
     iOS: "26.0"
 settings:
   base:
-    CRAFT_MOBILE_DIR: $(SRCROOT)/../../../../../craft-mobile
+    CRAFT_MOBILE_DIR: ${CRAFT_MOBILE_DIR}
     CRAFT_TARGET_DIR: $(SRCROOT)/../../../target
     "CRAFT_RUST_TARGET[sdk=iphoneos*]": aarch64-apple-ios
     "CRAFT_RUST_TARGET[sdk=iphonesimulator*]": aarch64-apple-ios-sim
@@ -25,7 +25,7 @@ targets:
       # The Liquid Glass app icon (Icon Composer), with the other icon files.
       - path: ../../../assets/app-icon/PhotoCraft.icon
         buildPhase: resources
-      - path: ../../../../../craft-mobile/swift/CraftKit/Sources
+      - path: ${CRAFT_MOBILE_DIR}/swift/CraftKit/Sources
         group: CraftKit
     settings:
       base:
