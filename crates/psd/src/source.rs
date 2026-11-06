@@ -214,6 +214,11 @@ pub struct Stored {
 }
 
 impl Stored {
+    /// Whether `other` is the same bytes of the same source (a clone of it).
+    pub fn same_range(&self, other: &Stored) -> bool {
+        std::ptr::addr_eq(Arc::as_ptr(&self.source.0), Arc::as_ptr(&other.source.0)) && self.offset == other.offset && self.len == other.len
+    }
+
     /// Reads the bytes.
     pub fn read(&self) -> Result<Vec<u8>> {
         self.source.read_vec(self.offset, self.len)

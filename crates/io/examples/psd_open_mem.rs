@@ -39,7 +39,13 @@ fn embedded(doc: &photocraft_doc::Document) -> Vec<(String, u64, [u8; 32])> {
         .psd_global_blocks
         .iter()
         .filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD"))
-        .flat_map(|(_, _, d)| photocraft_io::linked::parse_linked_files(&d.bytes().unwrap_or_default()))
+        .flat_map(|(_, _, d)| {
+            let bytes = d.bytes().unwrap_or_else(|e| {
+                eprintln!("an embedded file could not be read: {e}");
+                std::process::exit(1)
+            });
+            photocraft_io::linked::parse_linked_files(&bytes)
+        })
         .map(|f| (f.uuid, f.bytes.len() as u64, *blake3::hash(&f.bytes).as_bytes()))
         .collect();
     v.sort();

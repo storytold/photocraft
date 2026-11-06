@@ -105,7 +105,11 @@ fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
         let bytes = data.bytes().map_err(|e| EngineError::Other(format!("Could not copy smart-object contents: {e}; the clipboard was not changed")))?;
         let selected = photocraft_io::linked::select_items(&bytes, &|uuid, _| paths.contains(uuid))
             .map_err(|e| EngineError::Other(format!("Could not copy smart-object contents: {e}; the clipboard was not changed")))?;
-        let selected = selected.map(photocraft_doc::Blob::new).unwrap_or_else(|| data.clone());
+        // Every record selected: the block itself, or (left in the opened file) the bytes just
+        // read, so the clipboard never depends on that file.
+        let selected = selected
+            .map(photocraft_doc::Blob::new)
+            .unwrap_or_else(|| if data.is_in_memory() { data.clone() } else { photocraft_doc::Blob::from(bytes.clone()) });
         if !selected.is_empty() {
             copies.metadata.psd_global_blocks.try_reserve(1).map_err(|_| EngineError::Other("not enough memory to copy smart-object source records".into()))?;
             copies.metadata.psd_global_blocks.push((*signature, *key, selected));
