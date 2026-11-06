@@ -327,14 +327,18 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
     let needle = filter.to_ascii_lowercase();
     // Shown in the Keyboard Shortcuts tab: matches the search, and isn't an empty row with no key.
     let eligible = |id: &str, label: &str, def: &Option<String>, cur: &Option<String>, alts: &[String], path: &[String]| {
-        !(path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty()) && {
-            let (shown_path, shown_label) = shown(id, label, path);
-            // Match what is shown and the English name (commands are documented in English).
-            let hay =
-                format!("{} {} {} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, id, cur.clone().unwrap_or_default(), alts.join(" "))
-                    .to_lowercase();
-            needle.is_empty() || hay.contains(&needle) || id.to_ascii_lowercase().contains(&needle)
+        if path.is_empty() && def.is_none() && cur.is_none() && alts.is_empty() {
+            return false;
         }
+        if needle.is_empty() {
+            return true;
+        }
+        let (shown_path, shown_label) = shown(id, label, path);
+        // Match what is shown and the English name (commands are documented in English).
+        let hay =
+            format!("{} {} {} {} {} {} {}", shown_path.join(" "), shown_label, path.join(" "), label, id, cur.clone().unwrap_or_default(), alts.join(" "))
+                .to_lowercase();
+        hay.contains(&needle) || id.to_ascii_lowercase().contains(&needle)
     };
     let mut menu_path: Vec<String> = f.get("shortcutPath").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
     let mut show_all = f.get("shortcutShowAll").and_then(Value::as_bool).unwrap_or(true);
@@ -344,6 +348,8 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             menu_path.clear();
             show_all = true;
         }
+        // Commands without a menu path are listed under "Other".
+        let in_other = menu_path.first().is_some_and(|name| name == "Other");
         let is_in_menu = |path: &[String], parent: &[String]| {
             if parent.first().is_some_and(|name| name == "Other") { path.is_empty() } else { path.starts_with(parent) }
         };
@@ -353,7 +359,7 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
             eligible(id, label, def, &cur, &alts, path)
         };
         let mut children = Vec::new();
-        if menu_path.first().is_none_or(|name| name != "Other") {
+        if !in_other {
             for (_, _, path, _) in &items {
                 if is_in_menu(path, &menu_path)
                     && path.len() > menu_path.len()
@@ -364,6 +370,13 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 }
             }
         }
+        let has_other = items.iter().any(|(id, _, path, def)| {
+            let cur = eff(&overrides, id, def);
+            path.is_empty() && (def.is_some() || cur.is_some() || !eff_alts(&alt_overrides, id, cur.as_deref()).is_empty())
+        });
+        if menu_path.is_empty() && has_other {
+            children.push("Other".to_string());
+        }
         let all_count = items.iter().filter(|(id, label, path, def)| is_in_menu(path, &menu_path) && row_shown(id, label, def, path)).count();
         let child_counts: Vec<usize> = children
             .iter()
@@ -371,7 +384,12 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 items
                     .iter()
                     .filter(|(id, label, path, def)| {
-                        path.get(menu_path.len()) == Some(child) && is_in_menu(path, &menu_path) && row_shown(id, label, def, path)
+                        let in_child = if menu_path.is_empty() && child == "Other" {
+                            path.is_empty()
+                        } else {
+                            path.get(menu_path.len()) == Some(child) && is_in_menu(path, &menu_path)
+                        };
+                        in_child && row_shown(id, label, def, path)
                     })
                     .count()
             })
@@ -417,16 +435,12 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                         for (id, label, path, def) in &items {
                             let cur = eff(&overrides, id, def);
                             let alts = eff_alts(&alt_overrides, id, cur.as_deref());
-                            let in_current_menu = is_in_menu(path, &menu_path) && (show_all || path.len() == menu_path.len());
+                            let in_current_menu = is_in_menu(path, &menu_path) && (show_all || in_other || path.len() == menu_path.len());
                             if !in_current_menu || !eligible(id, label, def, &cur, &alts, path) {
                                 continue;
                             }
                             let (shown_path, shown_label) = shown(id, label, path);
-                            let remaining_path = if menu_path.first().is_some_and(|name| name == "Other") {
-                                Vec::new()
-                            } else {
-                                shown_path.iter().skip(menu_path.len()).cloned().collect::<Vec<_>>()
-                            };
+                            let remaining_path = if in_other { Vec::new() } else { shown_path.iter().skip(menu_path.len()).cloned().collect::<Vec<_>>() };
                             let name = if remaining_path.is_empty() { shown_label } else { format!("{} › {shown_label}", remaining_path.join(" › ")) };
                             let sel = selected == *id;
                             let name_row = ui.selectable_label(sel, RichText::new(name).color(t.text_dim));
