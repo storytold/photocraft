@@ -580,8 +580,9 @@ fn paint_canvas(
         }
     }
 
-    // Pixel grid at high zoom, over pixels with content only (the GPU path draws its own).
-    if !on_gpu && pixel_grid && crate::pixel_grid::shows_at(view.zoom) {
+    // The GPU canvas draws its own grid. A channel texture already contains the preview,
+    // while the CPU grid samples the document, so leave the grid off over that texture.
+    if !on_gpu && channel_texture.is_none() && pixel_grid && crate::pixel_grid::shows_at(view.zoom) {
         crate::pixel_grid::paint(app, painter, &xf, idx, output, visible_doc_rect(&xf));
     }
 

@@ -1367,7 +1367,6 @@ fn affine_channel_capture_runs_in_the_worker_not_in_start() {
     }
 }
 
-
 // ---------- cooperative jobs (no worker threads, as on the web) ----------
 
 /// A job that needs `needed` calls, and records what each one saw.
