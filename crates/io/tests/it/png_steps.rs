@@ -87,9 +87,9 @@ fn stepped_png_import_keeps_a_palette_as_indexed_colour() {
 fn stepped_png_import_takes_a_step_per_row_and_bounded_steps_to_build_the_document() {
     let bytes = encode(&noise(8, 20, ChannelLayout::Rgba, SampleType::U8), Format::Png, &EncodeOptions::default()).unwrap();
     let (_, calls) = stepped("a.png", &bytes, 1);
-    // 19 calls that each decode a row, one that decodes the last and finishes the file, one that
-    // copies its rows into the surface, one that prunes it, and one that builds the document.
-    assert_eq!(calls, 23);
+    // 19 calls that each decode a row (its rows become tiles as they come), one that decodes the
+    // last row and reads to the end of the file, then the prune scan of the tiles and the document.
+    assert_eq!(calls, 21);
     let arc = Arc::new(bytes);
     let mut import = PngImport::new("a.png", &arc).unwrap().unwrap();
     assert_eq!(import.progress(), 0.0);
@@ -201,5 +201,110 @@ fn a_damaged_png_fails_in_steps_as_it_does_whole() {
             }
         });
         assert!(whole.is_err() && stepped.is_err(), "cut at {}", cut.len());
+    }
+}
+
+/// An `eXIf` chunk (little-endian) holding only the orientation `o`.
+fn exif_chunk(o: u16) -> Vec<u8> {
+    let mut t = b"II*\0".to_vec();
+    t.extend_from_slice(&8u32.to_le_bytes());
+    t.extend_from_slice(&1u16.to_le_bytes());
+    for v in [0x0112u16, 3] {
+        t.extend_from_slice(&v.to_le_bytes());
+    }
+    t.extend_from_slice(&1u32.to_le_bytes());
+    t.extend_from_slice(&o.to_le_bytes());
+    t.extend_from_slice(&[0, 0, 0, 0, 0, 0]);
+    png_chunk(b"eXIf", &t)
+}
+
+/// `png` with `chunk` just before its image data.
+fn with_chunk_before_idat(png: &[u8], chunk: &[u8]) -> Vec<u8> {
+    let at = png.windows(4).position(|w| w == b"IDAT").unwrap() - 4;
+    let mut out = png[..at].to_vec();
+    out.extend_from_slice(chunk);
+    out.extend_from_slice(&png[at..]);
+    out
+}
+
+/// Drives `bytes` to the end a row at a time; true if the import streamed at the start.
+fn streams_at_start(bytes: &[u8]) -> bool {
+    let bytes = Arc::new(bytes.to_vec());
+    PngImport::new("a.png", &bytes).unwrap().unwrap().streams()
+}
+
+/// A plain PNG streams its rows into the layer; a file that can't (interlaced, or stored in
+/// another orientation) is decoded whole.
+#[test]
+fn a_plain_png_streams_and_other_files_are_decoded_whole() {
+    let img = noise(40, 30, ChannelLayout::Rgb, SampleType::U8);
+    let plain = encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
+    assert!(streams_at_start(&plain));
+    let interlaced = encode(&img, Format::Png, &EncodeOptions { png_interlaced: true, ..Default::default() }).unwrap();
+    assert!(!streams_at_start(&interlaced));
+    assert!(!streams_at_start(&with_chunk_before_idat(&plain, &exif_chunk(6))));
+    // An upright eXIf streams; one after the image data is only seen at the end.
+    assert!(streams_at_start(&with_chunk_before_idat(&plain, &exif_chunk(1))));
+    assert!(streams_at_start(&with_chunks_before_iend(&plain, &[exif_chunk(6)])));
+}
+
+/// A file with an orientation turns upright in bands and gives the document the one-shot import
+/// gives, whether the `eXIf` comes before the image data (decoded whole from the start) or after
+/// it (streamed, then decoded whole), for every orientation, and a tall file takes many calls.
+#[test]
+fn an_oriented_png_is_turned_upright_in_steps_like_import() {
+    for (layout, sample) in [(ChannelLayout::Gray, SampleType::U8), (ChannelLayout::Rgba, SampleType::U16)] {
+        let mut img = noise(70, 150, layout, sample);
+        img.meta.dpi = Some((120.0, 120.0));
+        img.icc = Some(vec![7; 40]);
+        let base = encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
+        for o in 2..=8u16 {
+            for late in [false, true] {
+                let bytes = if late { with_chunks_before_iend(&base, &[exif_chunk(o)]) } else { with_chunk_before_idat(&base, &exif_chunk(o)) };
+                let what = format!("{layout:?} {sample:?} orientation {o}, eXIf {}", if late { "after" } else { "before" });
+                let expected = whole("o.png", &bytes);
+                assert_eq!(expected.document.size.width, if o >= 5 { 150 } else { 70 }, "{what}: upright");
+                let (got, calls) = stepped_zero_budget("o.png", &bytes);
+                assert_same(&got.document, &expected.document, &what);
+                assert_eq!(got.warnings, expected.warnings, "{what}");
+                // 150 rows decoded one call each, the turn in bands of 64 output rows, the copy.
+                assert!(calls > 150 + 2, "{what}: {calls} calls");
+                assert_stepped_equals_import("o.png", &bytes, &what);
+            }
+        }
+    }
+}
+
+/// A late `eXIf` sends a streamed import back to a whole decode, and the import says so.
+#[test]
+fn a_late_exif_ends_the_streaming() {
+    let base = encode(&noise(20, 20, ChannelLayout::Rgb, SampleType::U8), Format::Png, &EncodeOptions::default()).unwrap();
+    let bytes = Arc::new(with_chunks_before_iend(&base, &[exif_chunk(3)]));
+    let mut import = PngImport::new("a.png", &bytes).unwrap().unwrap();
+    assert!(import.streams());
+    while import.streams() {
+        assert!(import.step(&mut || false).unwrap().is_none());
+    }
+    // From here the whole image is decoded.
+    assert!(import.step(&mut || false).unwrap().is_none());
+    assert!(!import.streams());
+}
+
+/// A streamed import with an ICC profile, text and a resolution is the one-shot import, at every
+/// depth and layout, 16-bit included.
+#[test]
+fn a_streamed_png_with_a_profile_and_text_equals_import() {
+    for layout in [ChannelLayout::Gray, ChannelLayout::GrayA, ChannelLayout::Rgb, ChannelLayout::Rgba] {
+        for sample in [SampleType::U8, SampleType::U16] {
+            let mut img = noise(300, 270, layout, sample);
+            img.icc = Some(vec![9; 60]);
+            img.meta.dpi = Some((200.0, 200.0));
+            img.meta.text.push(("Title".into(), "streamed".into()));
+            let bytes = encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
+            assert!(streams_at_start(&bytes));
+            assert_stepped_equals_import("s.png", &bytes, &format!("{layout:?} {sample:?} with a profile"));
+            let (got, _) = stepped("s.png", &bytes, 0);
+            assert_eq!(got.document.icc_profile.as_deref().map(Vec::as_slice), Some(&[9u8; 60][..]));
+        }
     }
 }

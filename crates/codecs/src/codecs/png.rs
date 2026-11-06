@@ -7,7 +7,7 @@ use crate::Format;
 use crate::error::CodecError;
 use crate::fidelity::Plan;
 use crate::image::{ChannelLayout, DecodeWarning, Image, Metadata, SampleType};
-use crate::options::{EncodeOptions, Limits, PngCompression, PngStereo, alloc_zeroed};
+use crate::options::{EncodeOptions, Limits, PngCompression, PngStereo};
 
 const F: Format = Format::Png;
 pub(crate) const XMP_KEYWORD: &str = "XML:com.adobe.xmp";
@@ -26,6 +26,7 @@ pub(crate) fn dpi_of_ppm(ppm: u32) -> f32 {
     if (whole / f64::from(METERS_PER_INCH)).round() == f64::from(ppm) { whole as f32 } else { dpi as f32 }
 }
 
+/// Decodes a whole PNG, by driving a [`PngDecodeRows`] to its end.
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     PngDecodeRows::new(bytes, limits)?.step(&mut || true)?.ok_or_else(|| err("the decoder stopped before the image ended"))
 }
@@ -119,6 +120,8 @@ pub struct PngDecodeRows<B: AsRef<[u8]>> {
     /// The decoder's whole output size, for an interlaced image's single frame decode.
     size: usize,
     rows: usize,
+    /// For [`PngDecodeRows::step_stream`]: the first row of the group held in `buf`.
+    group_start: usize,
     interlaced: bool,
     images: u64,
     /// The chunks after the pixels: scanned from `text_at` up to `text_end`, a batch at a time,
@@ -213,6 +216,7 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
             line,
             size,
             rows: 0,
+            group_start: 0,
             interlaced,
             images,
             text_at: 8,
@@ -223,6 +227,35 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
             #[cfg(test)]
             pixel_finalizations: 0,
         })
+    }
+
+    /// [`PngDecodeRows::new`] without reserving the whole image, for a caller that streams the rows
+    /// ([`PngDecodeRows::step_stream`]) and so never holds them all. A caller that finds it must
+    /// decode the whole image after all (an interlaced file) calls
+    /// [`PngDecodeRows::reserve_output`] before [`PngDecodeRows::step`].
+    pub fn new_streaming(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
+        Self::open(bytes, limits, false)
+    }
+
+    /// Reserves the buffer [`PngDecodeRows::step`] decodes the whole image into.
+    pub fn reserve_output(&mut self) -> Result<(), CodecError> {
+        let size = self.size;
+        self.buf.try_reserve_exact(size).map_err(|_| CodecError::LimitExceeded(format!("cannot allocate {size} bytes for the image")))
+    }
+
+    /// Whether the rows come in final order, so [`PngDecodeRows::step_stream`] can hand them on:
+    /// not an interlaced file, not an APNG (its first frame may be a sub-rectangle), and not one
+    /// whose `eXIf` before the image data asks for another orientation. (An `eXIf` after the image
+    /// data shows only in [`PngExtras::orientation`] at the end.)
+    pub fn streamable(&self) -> bool {
+        let info = self.reader.info();
+        let upright = info.exif_metadata.as_deref().is_none_or(|e| crate::orientation::exif_orientation(e) == 1);
+        !self.interlaced && info.animation_control.is_none() && upright
+    }
+
+    /// The size and pixel format the rows of [`PngDecodeRows::step_stream`] come in.
+    pub fn header(&self) -> PngHeader {
+        PngHeader { width: self.width, height: u32::try_from(self.height).unwrap_or(u32::MAX), layout: self.layout, sample: self.sample }
     }
 
     /// The image's width and height in pixels.
@@ -296,6 +329,71 @@ impl<B: AsRef<[u8]>> PngDecodeRows<B> {
         }
         self.done = true;
         self.finish().map(Some)
+    }
+
+    /// Decodes the rows of a [`streamable`](PngDecodeRows::streamable) file a group at a time:
+    /// `sink(y0, data)` gets whole rows `y0..` in final order, `group` of them at a time (the last
+    /// group may be shorter; 0 counts as 1), native-endian, exactly the samples [`decode`] would
+    /// return, and the decoder keeps only that group. Decodes at least one row, then goes on while
+    /// `more()` returns true; `Some` with the extras once the file is read to its end, with the
+    /// resolution a format that lacks one takes from its EXIF or XMP. A damaged file fails with
+    /// the error [`decode`] gives, after however many rows were delivered. An orientation (an
+    /// `eXIf` after the image data may set one) is for the caller to apply.
+    pub fn step_stream<E: From<CodecError>>(
+        &mut self,
+        group: u32,
+        more: &mut dyn FnMut() -> bool,
+        sink: &mut PngRowSink<'_, E>,
+    ) -> Result<Option<PngExtras>, E> {
+        if self.done {
+            return Err(err("the image was already decoded").into());
+        }
+        let group = usize::try_from(group.max(1)).unwrap_or(usize::MAX);
+        if !self.tail {
+            while self.rows < self.height {
+                let held = self.rows - self.group_start;
+                let at = held.checked_mul(self.line).ok_or_else(|| err("image too large"))?;
+                let end = at.checked_add(self.line).ok_or_else(|| err("image too large"))?;
+                if self.buf.len() < end {
+                    self.buf.try_reserve_exact(end - self.buf.len()).map_err(|_| CodecError::LimitExceeded("cannot allocate a group of rows".into()))?;
+                    self.buf.resize(end, 0);
+                }
+                let row = self.buf.get_mut(at..end).ok_or_else(|| err("invalid PNG row group"))?;
+                if self.reader.read_row(row).map_err(map_png_err)?.is_none() {
+                    return Err(err("the image data ends before the last row").into());
+                }
+                if self.sample == SampleType::U16 {
+                    to_native_endian(row);
+                }
+                self.rows += 1;
+                if self.rows - self.group_start == group || self.rows == self.height {
+                    let data = self.buf.get(..end).ok_or_else(|| err("invalid PNG row group"))?;
+                    sink(u32::try_from(self.group_start).map_err(|_| err("image too large"))?, data)?;
+                    self.group_start = self.rows;
+                }
+                if self.rows < self.height && !more() {
+                    return Ok(None);
+                }
+            }
+            // Past the last row: trailing damage fails the same way it does in `decode`.
+            if self.reader.read_row(&mut []).map_err(map_png_err)?.is_some() {
+                return Err(err("the image has more rows than its header declares").into());
+            }
+            self.begin_tail()?;
+        }
+        while !self.text.done {
+            self.text_batch()?;
+            if !self.text.done && !more() {
+                return Ok(None);
+            }
+        }
+        self.done = true;
+        let mut extras = self.extras();
+        // As `decode_as_with` does for every format: a resolution the format lacks comes from EXIF or XMP.
+        if extras.meta.dpi.is_none() {
+            extras.meta.dpi = crate::resolution::from_metadata(extras.meta.exif.as_deref(), extras.meta.xmp.as_deref());
+        }
+        Ok(Some(extras))
     }
 
     /// Finishes the pixel reader and fixes where the metadata scan ends. Tolerate malformed
@@ -568,48 +666,13 @@ pub(crate) fn decode_rows<E: From<CodecError>>(
     begin: &mut dyn FnMut(&PngHeader) -> Result<bool, E>,
     rows: &mut PngRowSink<'_, E>,
 ) -> Result<Option<PngExtras>, E> {
-    let group = group.max(1);
     // The limits and plausibility checks are made here, before any row; the output is not reserved.
-    let mut dec = PngDecodeRows::open(bytes, limits, false)?;
-    let upright = dec.reader.info().exif_metadata.as_deref().is_none_or(|e| crate::orientation::exif_orientation(e) == 1);
-    if dec.interlaced || dec.reader.info().animation_control.is_some() || !upright {
+    let mut dec = PngDecodeRows::new_streaming(bytes, limits)?;
+    if !dec.streamable() || !begin(&dec.header())? {
         return Ok(None);
     }
-    let height = u32::try_from(dec.height).map_err(|_| err("image too large"))?;
-    if !begin(&PngHeader { width: dec.width, height, layout: dec.layout, sample: dec.sample })? {
-        return Ok(None);
-    }
-    let line = dec.line;
-    let mut buf = alloc_zeroed::<u8>(line.checked_mul(group.min(height) as usize).ok_or_else(|| err("image too large"))?)?;
-    let mut y0 = 0;
-    while y0 < height {
-        let n = group.min(height - y0) as usize;
-        for row in buf.chunks_exact_mut(line.max(1)).take(n) {
-            if dec.reader.read_row(row).map_err(map_png_err)?.is_none() {
-                return Err(err("the image data ends before the last row").into());
-            }
-        }
-        let rows_data = buf.get_mut(..line.saturating_mul(n)).ok_or_else(|| err("invalid PNG row group"))?;
-        if dec.sample == SampleType::U16 {
-            to_native_endian(rows_data);
-        }
-        rows(y0, rows_data)?;
-        y0 += n as u32;
-    }
-    // Past the last row: trailing damage fails the same way it does in `decode`.
-    if dec.reader.read_row(&mut []).map_err(map_png_err)?.is_some() {
-        return Err(err("the image has more rows than its header declares").into());
-    }
-    dec.begin_tail()?;
-    while !dec.text.done {
-        dec.text_batch()?;
-    }
-    let mut extras = dec.extras();
-    // As `decode_as_with` does for every format: a resolution the format lacks comes from EXIF or XMP.
-    if extras.meta.dpi.is_none() {
-        extras.meta.dpi = crate::resolution::from_metadata(extras.meta.exif.as_deref(), extras.meta.xmp.as_deref());
-    }
-    Ok(Some(extras))
+    // With a `more` that always says go on, the first call decodes the whole file.
+    dec.step_stream(group, &mut || true, rows)
 }
 
 /// The colour table of a palette PNG (`PLTE`) and the one entry its `tRNS` makes transparent.
@@ -797,6 +860,7 @@ struct Utf8Check {
 }
 
 impl Utf8Check {
+    /// Feeds the next bytes of the value; false at the first one that isn't valid UTF-8.
     fn feed(&mut self, bytes: &[u8]) -> bool {
         for &b in bytes {
             if self.need > 0 {
@@ -843,6 +907,7 @@ impl Utf8Check {
         true
     }
 
+    /// Whether the bytes so far end on a whole character.
     fn complete(&self) -> bool {
         self.need == 0
     }

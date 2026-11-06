@@ -259,7 +259,7 @@ impl FlatBuilder {
 /// What every flat format does to the document of its pixels: the palette mode, the save
 /// settings, a Targa's alpha channel and the profile an untagged image needs. `img` is the
 /// decoded image, when the document was built from one (a streamed PNG has none).
-fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Option<Format>, img: Option<&Image>) -> Result<(), IoError> {
+pub(crate) fn apply_flat_format(r: &mut ImportResult, bytes: &[u8], format: Option<Format>, img: Option<&Image>) -> Result<(), IoError> {
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
     // Photoshop (#3802, #4804, #7886). A GIF is always palette-based: the first frame's table.
     let palette = match format {
@@ -883,58 +883,48 @@ fn import_png_streamed(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ct
     import_png_streamed_with(name, bytes, opts, ctl, min_bytes, crate::memory::available)
 }
 
-/// [`import_png_streamed`], with the memory the machine can still use given (see
-/// [`crate::memory::available`]): `None` when it isn't known.
-fn import_png_streamed_with(
-    name: &str,
-    bytes: &[u8],
-    opts: &crate::ImportOptions,
-    ctl: &Interrupt,
-    min_bytes: u64,
-    available: impl FnOnce() -> Option<u64>,
-) -> Result<Option<ImportResult>, IoError> {
-    struct Stream {
-        surface: Surface,
-        header: codecs::PngHeader,
-        convert: RowConverter,
-    }
-    // Rows are worked off 0.02..0.55 so a fallback to the whole-image path, which reports 0.6
-    // after its decode, never takes progress backwards.
-    let state = std::cell::RefCell::new(None::<Stream>);
-    let mut available = Some(available);
-    let busy = || IoError::Unsupported("the PNG reader re-entered itself".into());
-    let mut begin = |header: &codecs::PngHeader| -> Result<bool, IoError> {
-        // Decoded size, from the header; a size that overflows is certainly large enough.
-        let bytes = u64::from(header.width)
-            .checked_mul(u64::from(header.height))
-            .and_then(|px| px.checked_mul((header.layout.channels() * header.sample.bytes()) as u64));
-        if bytes.is_some_and(|b| b < min_bytes) {
-            return Ok(false);
-        }
-        // A cancelled import is reported as such, not as the memory it would have needed.
-        ctl.check().map_err(|_| IoError::Cancelled)?;
+/// A PNG's rows becoming the tiles of its layer as they are decoded: the surface, and what turns a
+/// decoded row into its pixels. Shared by [`import_png_streamed`] (all at once) and the stepped
+/// import ([`crate::PngImport`], a bounded piece at a time), which give the same document.
+pub(crate) struct PngStream {
+    surface: Surface,
+    header: codecs::PngHeader,
+    convert: RowConverter,
+}
+
+impl PngStream {
+    /// Sets up the surface for rows of `header`, after checking the layer's tiles and a group of
+    /// rows as decoded and as converted against `available` (the memory the machine can still use,
+    /// when known): Linux overcommits, so the tiles would be allocated even when they can't be
+    /// backed, and writing them would have the process killed.
+    pub(crate) fn new(header: &codecs::PngHeader, available: Option<u64>) -> Result<Self, IoError> {
         let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
         // The layer's tiles, plus one group of rows as decoded and as converted into them.
-        // Linux overcommits, so the tiles would be allocated even when they can't be backed, and
-        // writing them would have the process killed: refuse first, as `tiff_to_document` does.
         let bpp = surface_format(target_layout, csample).bytes_per_pixel() as u64;
         let src_px = (header.layout.channels() * header.sample.bytes()) as u64;
         let group = u64::from(header.width).saturating_mul(u64::from(header.height.min(TILE_SIZE as u32)));
         let needed = tile_bytes(header.width, header.height, bpp).saturating_add(group.saturating_mul(src_px)).saturating_add(group.saturating_mul(bpp));
-        crate::memory::check_fits(header.width, header.height, needed, available.take().and_then(|f| f()))?;
-        *state.try_borrow_mut().map_err(|_| busy())? = Some(Stream {
+        crate::memory::check_fits(header.width, header.height, needed, available)?;
+        Ok(Self {
             surface: Surface::new(surface_format(target_layout, csample)),
             header: *header,
             convert: RowConverter::new((header.layout, header.sample), (target_layout, csample)),
-        });
-        ctl.progress(0.02);
-        Ok(true)
-    };
-    let mut rows = |y0: u32, data: &[u8]| -> Result<(), IoError> {
-        ctl.check().map_err(|_| IoError::Cancelled)?;
-        let mut guard = state.try_borrow_mut().map_err(|_| busy())?;
-        let Some(Stream { surface, header, convert }) = guard.as_mut() else { return Err(busy()) };
-        let (w, h) = (header.width, header.height);
+        })
+    }
+
+    /// [`PngStream::new`] for a stepped import, which streams every PNG whose rows come in order
+    /// and not only the big ones: a layer under [`STREAM_MIN_BYTES`] of tiles is not checked
+    /// against free memory, as the whole-image path leaves it unchecked ([`check_layer_fits`]).
+    pub(crate) fn for_steps(header: &codecs::PngHeader) -> Result<Self, IoError> {
+        let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
+        let tiles = tile_bytes(header.width, header.height, surface_format(target_layout, csample).bytes_per_pixel() as u64);
+        Self::new(header, if tiles < STREAM_MIN_BYTES { None } else { crate::memory::available() })
+    }
+
+    /// Converts the whole rows `y0..` in `data` into the tiles, checking `ctl` as it goes.
+    pub(crate) fn write_rows(&mut self, y0: u32, data: &[u8], ctl: &Interrupt) -> Result<(), IoError> {
+        let (w, h) = (self.header.width, self.header.height);
+        let convert = &self.convert;
         let row_bytes = (w as usize).checked_mul(convert.src_px).filter(|&b| b > 0).ok_or_else(|| IoError::Unsupported("image too large".into()))?;
         let n = u32::try_from(data.len() / row_bytes).unwrap_or(0);
         if n == 0 || !data.len().is_multiple_of(row_bytes) {
@@ -943,7 +933,7 @@ fn import_png_streamed_with(
         let to_i32 = |v: u32| i32::try_from(v).map_err(|_| IoError::Unsupported("image too large".into()));
         let rect = Rect::new(0, to_i32(y0)?, to_i32(w)?, to_i32(y0.saturating_add(n))?);
         let failed = std::sync::atomic::AtomicBool::new(false);
-        surface
+        self.surface
             .try_write_rows_with_interrupt(rect, ctl, |y, x0, dst| {
                 if !convert.fill(data, w as usize, y - rect.y0, x0, dst) {
                     failed.store(true, std::sync::atomic::Ordering::Relaxed);
@@ -956,6 +946,76 @@ fn import_png_streamed_with(
         if failed.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(IoError::Unsupported("the decoded image does not match its size".into()));
         }
+        Ok(())
+    }
+
+    /// Whether the layer is scanned for tiles of only the default pixel: only a source with alpha
+    /// has any.
+    pub(crate) fn scans(&self) -> bool {
+        self.header.layout.has_alpha()
+    }
+
+    /// Drops the tiles that hold only the default pixel, all at once.
+    pub(crate) fn prune(&mut self) {
+        if self.scans() {
+            self.surface.prune();
+        }
+    }
+
+    /// Drops one bounded batch of those tiles from where `cursor` left off; true when done.
+    pub(crate) fn prune_step(&mut self, cursor: &mut photocraft_raster::PruneCursor) -> bool {
+        !self.scans() || self.surface.prune_batch(cursor, PRUNE_BATCH)
+    }
+
+    /// A cursor for [`PngStream::prune_step`].
+    pub(crate) fn prune_cursor(&self) -> photocraft_raster::PruneCursor {
+        self.surface.prune_cursor()
+    }
+
+    /// The document of the layer, with the profile and metadata the file ended with.
+    pub(crate) fn into_document(self, name: &str, extras: codecs::PngExtras) -> Result<ImportResult, IoError> {
+        let Self { surface, header, .. } = self;
+        let (mode, _, depth, _) = flat_target(header.layout, header.sample);
+        let warnings = extras.warnings.iter().map(ToString::to_string).collect();
+        flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None)
+    }
+}
+
+/// [`import_png_streamed`], with the memory the machine can still use given (see
+/// [`crate::memory::available`]): `None` when it isn't known.
+fn import_png_streamed_with(
+    name: &str,
+    bytes: &[u8],
+    opts: &crate::ImportOptions,
+    ctl: &Interrupt,
+    min_bytes: u64,
+    available: impl FnOnce() -> Option<u64>,
+) -> Result<Option<ImportResult>, IoError> {
+    // Rows are worked off 0.02..0.55 so a fallback to the whole-image path, which reports 0.6
+    // after its decode, never takes progress backwards.
+    let state = std::cell::RefCell::new(None::<PngStream>);
+    let mut available = Some(available);
+    let busy = || IoError::Unsupported("the PNG reader re-entered itself".into());
+    let mut begin = |header: &codecs::PngHeader| -> Result<bool, IoError> {
+        // Decoded size, from the header; a size that overflows is certainly large enough.
+        let bytes = u64::from(header.width)
+            .checked_mul(u64::from(header.height))
+            .and_then(|px| px.checked_mul((header.layout.channels() * header.sample.bytes()) as u64));
+        if bytes.is_some_and(|b| b < min_bytes) {
+            return Ok(false);
+        }
+        // A cancelled import is reported as such, not as the memory it would have needed.
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        *state.try_borrow_mut().map_err(|_| busy())? = Some(PngStream::new(header, available.take().and_then(|f| f()))?);
+        ctl.progress(0.02);
+        Ok(true)
+    };
+    let mut rows = |y0: u32, data: &[u8]| -> Result<(), IoError> {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
+        let mut guard = state.try_borrow_mut().map_err(|_| busy())?;
+        let Some(stream) = guard.as_mut() else { return Err(busy()) };
+        stream.write_rows(y0, data, ctl)?;
+        let (h, n) = (stream.header.height, u32::try_from(data.len() / (stream.header.width as usize * stream.convert.src_px).max(1)).unwrap_or(0));
         ctl.progress(0.02 + 0.53 * (y0 + n) as f32 / h.max(1) as f32);
         Ok(())
     };
@@ -970,17 +1030,13 @@ fn import_png_streamed_with(
         return Ok(None);
     };
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let Some(Stream { mut surface, header, .. }) = state.into_inner() else { return Ok(None) };
+    let Some(mut stream) = state.into_inner() else { return Ok(None) };
     if extras.orientation != 1 {
         return Ok(None);
     }
     ctl.progress(0.95);
-    let (mode, _, depth, _) = flat_target(header.layout, header.sample);
-    if header.layout.has_alpha() {
-        surface.prune();
-    }
-    let warnings = extras.warnings.iter().map(ToString::to_string).collect();
-    flat_document(name, (header.width, header.height, header.layout, mode, depth), surface, extras.icc, &extras.meta, warnings, None).map(Some)
+    stream.prune();
+    stream.into_document(name, extras).map(Some)
 }
 
 /// The pixels of a decoded image as a surface of the target layout and sample type, converted
@@ -2604,6 +2660,18 @@ mod streamed_png_tests {
         let yes = || true;
         let r = export_png_streamed(&doc, &ExportOptions::default(), &Interrupt::cancel_only(&yes), 7);
         assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+    }
+
+    /// The stream a stepped import builds refuses a layer that won't fit with the error the
+    /// one-shot streamed import gives, and leaves a small one unchecked, as the whole-image path does.
+    #[test]
+    fn a_stream_for_steps_keeps_the_memory_errors() {
+        let big = codecs::PngHeader { width: 20_000, height: 20_000, layout: ChannelLayout::Rgba, sample: CSample::U8 };
+        let e = PngStream::new(&big, Some(1 << 20)).err().expect("refused");
+        assert!(matches!(&e, IoError::Unsupported(m) if m.contains("not enough memory to open this 20000 × 20000 px image")), "{e}");
+        let small = codecs::PngHeader { width: 64, height: 64, layout: ChannelLayout::Rgba, sample: CSample::U8 };
+        assert!(PngStream::for_steps(&small).is_ok(), "a small layer is not checked");
+        assert!(PngStream::new(&small, Some(1 << 20)).is_err(), "though the check itself would refuse it");
     }
 
     #[test]

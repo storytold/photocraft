@@ -635,11 +635,17 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
   without depending on the machine). Elsewhere the same work runs to the end on a worker thread,
   or inline under `execute`, and gives the same result.
 - `file_cmds::PlaceSteps` cuts a place into units: a plain PNG decodes a row at a time
-  (`photocraft_codecs::PngRows`, through `photocraft_io::PngImport`; an interlaced PNG and any other
-  format decode in one unit), the flatten runs in bands of four tiles
-  (`composite_to_surface`, the tiles moved into the result), the resize in bands of 64 output rows
-  (`photocraft_algo::resample::ResizeSteps`, the code `resize_surface` runs). Without a cooperative
-  session each stage is one unit and a desktop keeps its parallel flatten and resize.
+  (`photocraft_codecs::PngDecodeRows`, through `photocraft_io::PngImport`) and, when its rows come
+  in final order, each group of 256 rows becomes tiles at once and is dropped, as the one-shot import
+  does, so the decoded image never exists beside the layer (a 100 MP RGBA8 file would cost about 400 MB
+  more, too much for a browser tab). An interlaced, animated or oriented PNG is decoded whole, turned
+  upright in bands of 64 rows (`photocraft_codecs::OrientSteps`) and copied into tiles in bands; any
+  other format decodes in one unit. The flatten runs in bands of four tiles (`composite_to_surface`,
+  the tiles moved into the result), the resize in bands of 64 output rows
+  (`photocraft_algo::resample::ResizeSteps`, the code `resize_surface` runs), and moving the pixels to
+  where they land a tile at a time (`photocraft_raster::TranslateSteps`, the code
+  `Surface::translated` runs). Without a cooperative session each stage is one unit and a desktop
+  keeps its parallel flatten, resize and translate.
 - The UI places through a job when `background_jobs || session.cooperative_jobs()`
   (`jobs_ui::place_in_background`); `background_jobs` stays off on the web, since save, print and
   the other commands gated on it need threads. The status bar shows the progress and Esc cancels.

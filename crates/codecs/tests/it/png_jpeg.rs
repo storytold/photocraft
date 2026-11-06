@@ -594,3 +594,53 @@ fn pngsuite_corpus_rows_match_the_whole_decode() {
     eprintln!("pngsuite: {streamed} streamed, {refused} refused (interlaced), {skipped} skipped (not detected as PNG)");
     assert!(streamed > 100, "only {streamed} PNGs streamed: run `cargo xtask corpus --all`");
 }
+
+/// Streaming a PNG's rows a group at a time gives the pixels and metadata `decode` gives, holds
+/// only a group at a time, and stops between rows when asked.
+#[test]
+fn step_stream_gives_the_pixels_and_extras_of_decode() {
+    for (layout, sample) in [(ChannelLayout::Gray, SampleType::U8), (ChannelLayout::Rgb, SampleType::U16), (ChannelLayout::Rgba, SampleType::U8)] {
+        let (w, h) = (23u32, 19u32);
+        let len = w as usize * h as usize * layout.channels() * sample.bytes();
+        let mut img = Image::from_raw(w, h, layout, sample, (0..len).map(|i| (i.wrapping_mul(2_654_435_761) >> 11) as u8).collect()).unwrap();
+        img.meta.dpi = Some((144.0, 144.0));
+        img.meta.text.push(("Comment".into(), "streamed".into()));
+        img.icc = Some(vec![7; 40]);
+        let bytes = encode(&img, Format::Png, &EncodeOptions::default()).unwrap();
+        let want = decode(&bytes).unwrap();
+        for group in [0u32, 1, 4, 19, 64] {
+            let mut dec = PngDecodeRows::new_streaming(bytes.as_slice(), &Limits::default()).unwrap();
+            assert!(dec.streamable());
+            assert_eq!(dec.header(), PngHeader { width: w, height: h, layout, sample });
+            let (mut data, mut next, mut calls) = (Vec::new(), 0u32, 0);
+            let extras = loop {
+                calls += 1;
+                let mut sink = |y0: u32, rows: &[u8]| -> Result<(), CodecError> {
+                    assert_eq!(y0, next, "{layout:?} group {group}");
+                    assert!(rows.len() <= group.max(1) as usize * dec_line(w, layout, sample), "a group at most");
+                    next += (rows.len() / dec_line(w, layout, sample)) as u32;
+                    data.extend_from_slice(rows);
+                    Ok(())
+                };
+                if let Some(extras) = dec.step_stream(group, &mut || false, &mut sink).unwrap() {
+                    break extras;
+                }
+                assert!(calls < 10_000);
+            };
+            assert!(calls > 1, "{layout:?}: stopped between rows");
+            assert_eq!(data, want.data(), "{layout:?} group {group}: pixels");
+            assert_eq!((extras.icc.as_deref(), extras.meta.dpi, &extras.meta.text), (want.icc.as_deref(), want.meta.dpi, &want.meta.text));
+            assert_eq!(extras.orientation, 1);
+            assert!(dec.step_stream::<CodecError>(group, &mut || true, &mut |_, _| Ok(())).is_err(), "spent");
+        }
+    }
+    // An interlaced file doesn't stream.
+    let img = Image::from_raw(9, 9, ChannelLayout::Gray, SampleType::U8, vec![1; 81]).unwrap();
+    let bytes = encode(&img, Format::Png, &EncodeOptions { png_interlaced: true, ..Default::default() }).unwrap();
+    assert!(!PngDecodeRows::new_streaming(bytes.as_slice(), &Limits::default()).unwrap().streamable());
+}
+
+/// Bytes per row of `w` pixels.
+fn dec_line(w: u32, layout: ChannelLayout, sample: SampleType) -> usize {
+    w as usize * layout.channels() * sample.bytes()
+}

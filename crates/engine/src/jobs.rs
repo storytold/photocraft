@@ -630,6 +630,7 @@ pub struct Jobs {
 // Derivable on a desktop, where `cooperative` starts off; wasm starts it on.
 #[allow(clippy::derivable_impls)]
 impl Default for Jobs {
+    /// No jobs, spawning off; a session steps its jobs itself (cooperative) on wasm only.
     fn default() -> Self {
         Self {
             next: 0,

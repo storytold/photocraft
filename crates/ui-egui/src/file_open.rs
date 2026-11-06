@@ -510,6 +510,8 @@ impl PhotocraftApp {
         self.place_bytes_with(name, bytes, linked, &serde_json::json!({}))
     }
 
+    /// [`PhotocraftApp::place_bytes`] with the command's `params` (a frame to fill): a job where
+    /// places run in the background, else synchronously.
     fn place_bytes_with(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>, params: &serde_json::Value) -> Result<serde_json::Value, String> {
         let r = if crate::jobs_ui::place_in_background(self) {
             crate::jobs_ui::start_place_bytes(self, name, bytes, linked, params)
