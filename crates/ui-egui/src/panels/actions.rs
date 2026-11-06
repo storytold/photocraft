@@ -345,13 +345,13 @@ fn stop_step(app: &mut PhotocraftApp, action: &Action, i: usize, p: &Value) -> C
     Called::Paused(json!({"step": i, "id": id, "dialog": dialog}))
 }
 
-/// `suspended` is the recording a paused part of the same call took ([`PausedPlayback::record`]); it comes
-/// back, with that named call journaled, only when the whole call ends. `inner` are the called
-/// actions a resumed playback replays first, outermost first, each `(action, from)`: the first is
-/// the one this action's step before `from` called ([`resume`]).
-fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, params: &Value) -> Result<Option<u64>, String> {
-    use photocraft_engine::atn_cmds::{menu_item_command, menu_item_needs_settings};
+/// A descriptor-free menu step opens its command's actual settings editor on desktop.
+fn pause_menu_item(app: &mut PhotocraftApp, action: &str, from: usize, id: &str, params: &Value) -> Result<Option<u64>, String> {
+    use photocraft_engine::atn_cmds::{MENU_ITEM, menu_item_command, menu_item_needs_settings};
 
+    if id != MENU_ITEM || app.automation_input {
+        return Ok(None);
+    }
     let command = menu_item_command(params).map_err(|error| error.to_string())?;
     if !menu_item_needs_settings(command) {
         return Ok(None);
@@ -384,6 +384,10 @@ fn open_step_editor(app: &mut PhotocraftApp, command: &str) -> Result<u64, Strin
     }
 }
 
+/// `suspended` is the recording a paused part of the same call took ([`PausedPlayback::record`]); it comes
+/// back, with that named call journaled, only when the whole call ends. `inner` are the called
+/// actions a resumed playback replays first, outermost first, each `(action, from)`: the first is
+/// the one this action's step before `from` called ([`resume`]).
 fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>, inner: &[(String, usize)]) -> Result<Value, String> {
     let (action, from) = match actions_cmds::playback_plan(&app.session, params) {
         Ok(plan) => plan,
@@ -441,19 +445,16 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
             end_at(stop_step(app, &action, i, p), &mut ran, &mut failed, &mut paused, &mut stopped);
             break;
         }
-        // A descriptor-free menu step opens its command's actual settings editor on desktop.
-        if id == photocraft_engine::atn_cmds::MENU_ITEM && !app.automation_input {
-            match pause_menu_item(app, &action.name, i + 1, p) {
-                Ok(Some(dialog)) => {
-                    paused = Some(json!({"step": i, "id": id, "dialog": dialog}));
-                    break;
-                }
-                Err(error) => {
-                    failed = Some(json!({"step": i, "id": id, "error": error}));
-                    break;
-                }
-                Ok(None) => {}
+        match pause_menu_item(app, &action.name, i + 1, id, p) {
+            Ok(Some(dialog)) => {
+                paused = Some(json!({"step": i, "id": id, "dialog": dialog}));
+                break;
             }
+            Err(error) => {
+                failed = Some(json!({"step": i, "id": id, "error": error}));
+                break;
+            }
+            Ok(None) => {}
         }
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.

@@ -308,7 +308,6 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::stack_dialog::owns(fields) => crate::stack_dialog::body(app, ui, fields, d.id),
         _ if crate::tool_reset::owns(fields) => crate::tool_reset::body(ui),
         _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
-        _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ => return command_body_more(app, ui, d, fields, id),
     }
     outcome
@@ -318,6 +317,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
 fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ if merge_channels_ui::owns(fields) => merge_channels_ui::body(ui, fields),
         _ if crate::file_ui::owns(fields) => crate::file_ui::body(app, ui, fields, d.id),
         _ if crate::color_picker_ui::owns(fields) => {
