@@ -315,6 +315,13 @@ pub(crate) fn seed_from_recorded(fields: &mut Map<String, Value>, recorded: &Val
     let Some(kind) = fields.get("__adjust").and_then(Value::as_str) else { return };
     let Ok(adjustment) = photocraft_engine::adjust_params::from_params(kind, recorded, None, mode) else { return };
     if let Value::Object(mut values) = photocraft_engine::adjust_params::to_params(&adjustment) {
+        // Selective Color's chosen row is editor state, absent from the normalized adjustment.
+        // Keep it so an older single-colour record reopens on the colour the user edited.
+        if kind == "selectiveColor"
+            && let Some(colors) = recorded.get("colors")
+        {
+            values.insert("colors".into(), colors.clone());
+        }
         // The curves already hold Curves' Smooth passes: OK must overwrite a stored count, or
         // each render would apply them again.
         if recorded.get("smooth").is_some() {
