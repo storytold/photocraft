@@ -1,7 +1,9 @@
 //! Real panel controls compose the remaining commands with consent and retained selection.
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use egui_kittest::{Harness, kittest::Queryable};
-use photocraft_engine::{Session, actions_cmds::Action, actions_edit_cmds, atn_cmds};
-use photocraft_ui_egui::{PhotocraftApp, actions, dialogs};
+use photocraft_engine::{EngineError, Session, actions_cmds::Action, actions_edit_cmds, atn_cmds};
+use photocraft_ui_egui::{PhotocraftApp, actions, canvas, dialogs};
 use serde_json::{Value, json};
 
 /// A real panel and its dialogs with one selected action in a set.
@@ -104,6 +106,80 @@ fn insert_menu_item_chooser_cancels_or_records_descriptor_free_filter_event() {
     dialogs::confirm(h.state_mut(), dialog).unwrap();
     assert_eq!(photocraft_compose::flatten(&h.state().session.active().unwrap().doc).into_px(), expected);
     assert!(h.state().session.active().unwrap().doc.selection.is_some(), "confirmation resumes the following step");
+}
+
+static MENU_PREVIEW_CHECKS: AtomicUsize = AtomicUsize::new(0);
+static MENU_PREVIEW_DENIALS: AtomicUsize = AtomicUsize::new(0);
+
+/// Count actual menu preview checks and deny an edited map path.
+fn deny_menu_map_path(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+    if id == "filter.blur.gaussianBlur" {
+        MENU_PREVIEW_CHECKS.fetch_add(1, Ordering::SeqCst);
+        if params.get("mapPath").and_then(Value::as_str).is_some_and(|path| !path.is_empty()) {
+            MENU_PREVIEW_DENIALS.fetch_add(1, Ordering::SeqCst);
+            return Err(EngineError::Other("map path denied".into()));
+        }
+    }
+    Ok(())
+}
+
+/// A descriptor-free step retains its playback gate and the identity of its opened editor.
+#[test]
+fn paused_menu_preview_keeps_the_requesting_gate_and_rejects_retargeting() {
+    let mut h = harness();
+    h.state_mut().run("actions.insertMenuItem", json!({"action":"A","id":"filter.blur.gaussianBlur"})).unwrap();
+    h.state_mut().session.authorize = Some(deny_menu_map_path);
+    let paused = h.state_mut().run("actions.play", json!({"action":"A"})).unwrap();
+    let dialog = paused["paused"]["dialog"].as_u64().unwrap();
+    h.state_mut().session.authorize = None;
+
+    let context = h.ctx.clone();
+    let checks = MENU_PREVIEW_CHECKS.load(Ordering::SeqCst);
+    assert!(canvas::ensure_texture(h.state_mut(), &context, 0, None).is_some());
+    assert!(MENU_PREVIEW_CHECKS.load(Ordering::SeqCst) > checks, "the retained gate authorizes the real preview");
+
+    let revision = h.state().session.active().unwrap().revision;
+    let steps = h.state().session.actions.list[0].steps.clone();
+    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("mapPath".into(), json!("/outside/map.psd"));
+    let denials = MENU_PREVIEW_DENIALS.load(Ordering::SeqCst);
+    canvas::ensure_texture(h.state_mut(), &context, 0, None);
+    assert!(MENU_PREVIEW_DENIALS.load(Ordering::SeqCst) > denials, "the retained gate denies the edited path");
+
+    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("__command".into(), json!("filter.distort.displace"));
+    let error = dialogs::confirm(h.state_mut(), dialog).unwrap_err();
+    assert!(error.contains("the menu item command or its document changed"), "{error}");
+    assert!(h.state().ui.dialogs.is_empty());
+    assert!(!h.state().file_dialog_open());
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+    assert_eq!(h.state().session.actions.list[0].steps, steps);
+}
+
+/// Deny the default while allowing insertion of another mapped menu item.
+fn deny_image_size_choice(id: &str, params: &Value) -> photocraft_engine::Result<()> {
+    if id == "image.imageSize" || id == "actions.insertMenuItem" && params["id"] == "image.imageSize" {
+        return Err(EngineError::Other("choice denied".into()));
+    }
+    Ok(())
+}
+
+/// The chooser retains its caller and checks only the choice the caller confirms.
+#[test]
+fn menu_chooser_authorizes_the_selected_command_without_default_probe() {
+    let mut h = harness();
+    h.state_mut().session.authorize = Some(deny_image_size_choice);
+    let dialog = open(&mut h, "Insert Menu Item…");
+    h.state_mut().ui.dialog_mut(dialog).unwrap().fields.insert("id".into(), json!("filter.blur.gaussianBlur"));
+    h.state_mut().session.authorize = None;
+    dialogs::confirm(h.state_mut(), dialog).unwrap();
+    let steps = h.state().session.actions.list[0].steps.clone();
+    assert_eq!(steps, [(atn_cmds::MENU_ITEM.into(), json!({"id":"filter.blur.gaussianBlur","eventKind":"name"}))]);
+
+    h.state_mut().session.authorize = Some(deny_image_size_choice);
+    let dialog = open(&mut h, "Insert Menu Item…");
+    h.state_mut().session.authorize = None;
+    let error = dialogs::confirm(h.state_mut(), dialog).unwrap_err();
+    assert!(error.contains("choice denied"), "{error}");
+    assert_eq!(h.state().session.actions.list[0].steps, steps);
 }
 
 /// The selected path is snapshotted without applying it to the document.

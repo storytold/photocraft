@@ -9,7 +9,7 @@
 
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{Action, flush_recording, not_playing, pending_steps, resolve};
+use crate::actions_cmds::{flush_recording, not_playing, pending_steps, resolve};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
