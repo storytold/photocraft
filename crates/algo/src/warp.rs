@@ -35,7 +35,7 @@ const MAX_SS: f64 = 8.0;
 /// [`photocraft_geom::warp::Warp::map`] normalizes by), not the box the source fills, so it is
 /// not a stretch target — a partial domain samples only that part of the mesh, and stored warps
 /// keep their knots in this same space.
-fn placed_box(src_rect: Rect, _warp: Option<&photocraft_geom::warp::Warp>, placed_size: Option<(f64, f64)>) -> [f64; 4] {
+fn placed_box(src_rect: Rect, placed_size: Option<(f64, f64)>) -> [f64; 4] {
     if let Some((w, h)) = placed_size.filter(|(w, h)| w.is_finite() && h.is_finite() && *w > 0.0 && *h > 0.0) {
         return [0.0, 0.0, w, h];
     }
@@ -43,8 +43,8 @@ fn placed_box(src_rect: Rect, _warp: Option<&photocraft_geom::warp::Warp>, place
 }
 
 /// The affine stretching `src_rect` onto `placed_box`'s rect (identity when they agree).
-fn placed_stretch(src_rect: Rect, warp: Option<&photocraft_geom::warp::Warp>, placed_size: Option<(f64, f64)>) -> photocraft_geom::Affine {
-    let [x0, y0, x1, y1] = placed_box(src_rect, warp, placed_size);
+pub fn placed_stretch(src_rect: Rect, placed_size: Option<(f64, f64)>) -> photocraft_geom::Affine {
+    let [x0, y0, x1, y1] = placed_box(src_rect, placed_size);
     let (sw, sh) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
     let (bw, bh) = (x1 - x0, y1 - y0);
     if !(sw > 0.0 && sh > 0.0 && bw > 0.0 && bh > 0.0) {
@@ -67,7 +67,7 @@ pub fn place_source(
     warp: Option<&photocraft_geom::warp::Warp>,
     placed_size: Option<(f64, f64)>,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
-    let s = placed_stretch(src_rect, warp, placed_size);
+    let s = placed_stretch(src_rect, placed_size);
     let [a, b, c, d, e, f] = t.m;
     let [sa, sb, sc, sd, se, sf] = s.m;
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
@@ -96,7 +96,7 @@ pub fn place_source_projective(
     warp: Option<&photocraft_geom::warp::Warp>,
     placed_size: Option<(f64, f64)>,
 ) -> Result<Surface, photocraft_raster::AllocationError> {
-    let s = placed_stretch(src_rect, warp, placed_size);
+    let s = placed_stretch(src_rect, placed_size);
     let [sa, sb, sc, sd, se, sf] = s.m;
     if let Some(w) = warp.filter(|w| !w.is_identity()) {
         let map = |x: f64, y: f64| {

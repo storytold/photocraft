@@ -170,7 +170,10 @@ pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) 
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
     if sm.stack_mode.is_none() && sm.warp.is_none() && photocraft_io::svg::is_svg(bytes) {
-        let k = vector_scale(sm);
+        // The `Sz` stretch is part of the placement's scale; the source's own unit bounds are
+        // what it's measured against (same bounded read `source_box` uses).
+        let bounds = photocraft_io::svg::bounded_canvas_bounds(bytes, 24_000_000).ok();
+        let k = vector_scale(sm, bounds);
         let img = svg_source_image_in(bytes, doc, k)?;
         // `placed_size` is in the transform's units; the rasterised source and the transforms
         // here are in `k` of those, so scale the placed box to match (#10207).
@@ -282,14 +285,18 @@ pub(super) fn display_source(sm: &SmartObject, bytes: &Arc<Vec<u8>>) -> Arc<Vec<
         .map_or_else(|| bytes.clone(), |preview| preview.svg.clone())
 }
 
-/// The box of a smart object's source in source pixels (what its warp's `us`/`vs` span), or `None`
-/// when the source can't be read.
+/// The box a smart object's warp and transform are defined over (what its warp's `us`/`vs`
+/// span), or `None` when the source can't be read. With a stored `Sz` that is the placed box in
+/// the transform's units; without it, the source's own pixels.
 ///
 /// An SVG (or a native source's SVG preview) without Stack Mode is rendered by the bounded
 /// whole-drawing path, so its box only needs the canvas bounds: no editable layer caches are
 /// built, and a drawing whose layer caches exceed the budget still gets a warp frame. Stack Mode
 /// keeps the strict layered import it renders with.
 pub(crate) fn source_box(doc: &Document, sm: &SmartObject) -> Option<[f64; 4]> {
+    if let Some((w, h)) = sm.placed_size.filter(|&(w, h)| w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0) {
+        return Some([0.0, 0.0, w, h]);
+    }
     let (name, bytes) = source_bytes(&doc.metadata, &sm.source)?;
     let bytes = display_source(sm, &bytes);
     let fmt = doc.pixel_format();

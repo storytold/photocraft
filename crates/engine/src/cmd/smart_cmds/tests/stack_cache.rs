@@ -62,3 +62,16 @@ fn bad_smart_filter_edits_fail_at_once_with_start() {
     assert!(matches!(r, Err(EngineError::BadParams { .. })), "{r:?}");
     assert_eq!(active_smart(&s), before);
 }
+
+/// A `Sz`-only difference (linked instances, or undo of a size-only edit) can't share a placed
+/// stage: `placed_size` is part of the key along with the transform, warp and perspective.
+#[test]
+fn a_size_only_difference_gets_its_own_placed_stage_key() {
+    let key = |placed_size: Option<(f64, f64)>| {
+        let mut sm = SmartObject::new(SmartSource::Embedded { file_name: "a.psd".into(), bytes: Arc::new(vec![1, 2, 3]) }, Affine::IDENTITY, None);
+        sm.placed_size = placed_size;
+        crate::cmd::smart_cmds::stack_cache::placed_key(&[1, 2, 3], PixelFormat::RGBA8, &sm, Rect::new(0, 0, 64, 48))
+    };
+    assert_ne!(key(None), key(Some((32.0, 24.0))));
+    assert_ne!(key(Some((32.0, 24.0))), key(Some((16.0, 24.0))));
+}

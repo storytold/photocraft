@@ -341,9 +341,12 @@ pub(super) fn convert_svg_source(source: SourceImage, doc: &Document) -> Result<
 }
 
 /// The scale a vector source is rasterised at for its placement: the larger axis scale of the
-/// transform in 1/16 steps (so nudges reuse the cache), between 1/16 and 64.
-pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
-    let [a, b, c, d, ..] = sm.transform.m;
+/// transform on the `Sz`-stretched source (`src_bounds` in its own units) in 1/16 steps (so
+/// nudges reuse the cache), between 1/16 and 64. Without bounds the stretch can't be measured
+/// and the transform alone sets the scale.
+pub(crate) fn vector_scale(sm: &SmartObject, src_bounds: Option<Rect>) -> f64 {
+    let t = src_bounds.map(|b| sm.transform.mul(&photocraft_algo::warp::placed_stretch(b, sm.placed_size))).unwrap_or(sm.transform);
+    let [a, b, c, d, ..] = t.m;
     let k = (a * a + b * b).sqrt().max((c * c + d * d).sqrt());
     if !k.is_finite() {
         return 1.0;
