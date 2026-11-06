@@ -4616,3 +4616,7 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 # Strings main added after this catalog was written (integration batch 20).
 	Background (default)	Fon (defolt)
 	Transparent (default)	Şəffaf (defolt)
+	Select Pixels	Pikselləri seçin
+	Add Pixels to Selection	Pikselləri seçimə əlavə edin
+	Subtract Pixels from Selection	Pikselləri seçimdən çıxın
+	Intersect Pixels with Selection	Pikselləri seçimlə kəsişdirin
