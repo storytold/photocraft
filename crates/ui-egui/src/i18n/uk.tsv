@@ -651,7 +651,7 @@
 	Match Location	Узгодити розташування
 	Match Rotation	Узгодити поворот
 	Match All	Узгодити все
-	New Window	Нове вікно для документа
+	New Window	Нове вікно
 	Workspace	Робочий простір
 	Extensions	Розширення
 	Panels	Панелі
@@ -1314,6 +1314,7 @@
 	Path to Illustrator…	Контур до Illustrator…
 	Make Work Path	Створити робочий контур
 	Make Selection	Створити виділення
+	Make Shape	Створити фігуру
 	Fill Path	Залити контур
 	Stroke Path	Обвести контур
 	Clipping Path	Відсічний контур
@@ -2129,7 +2130,7 @@
 	Vertical Centers	Вертикальні центри
 	Video Frames to Layers…	Відеокадри в шари…
 	WIA Support…	Підтримка WIA…
-	Working CMY Plates	Робоча форма CMY
+	Working CMY Plates	Робочі форми CMY
 	Absolute	Абсолютний
 	Action	Дія
 	Adaptive	Адаптивний

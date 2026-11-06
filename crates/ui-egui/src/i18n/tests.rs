@@ -9,6 +9,16 @@ const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
 
 #[test]
+fn hindi_has_the_reveal_and_camera_raw_rows() {
+    assert_eq!(tr(HI(), "Reveal in Explorer"), "Explorer में दिखाएँ");
+    assert_eq!(tr(HI(), "Reveal in Finder"), "Finder में दिखाएँ");
+    assert_eq!(tr(HI(), "Camera Raw…"), "Camera Raw…");
+    let (rows, errors) = parse_entries(include_str!("hi.tsv"));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(rows.iter().any(|(ctx, src, _)| ctx.is_empty() && src == "Camera Raw…"), "Camera Raw… is a catalog row, not a fallback");
+}
+
+#[test]
 fn hindi_tags_resolve() {
     for tag in ["hi", "hi-IN", "hi_IN", "hi_IN.UTF-8"] {
         assert_eq!(lang_from_tag(tag), Some(HI()), "{tag}");

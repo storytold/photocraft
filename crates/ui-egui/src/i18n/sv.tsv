@@ -1212,6 +1212,7 @@
 	Path to Illustrator…	Bana till Illustrator…
 	Make Work Path	Skapa arbetsbana
 	Make Selection	Skapa markering
+	Make Shape	Skapa form
 	Fill Path	Fyll bana
 	Stroke Path	Linje på bana
 	Clipping Path	Urklippsbana
@@ -2059,7 +2060,7 @@
 	Vertical Centers	Lodräta mittpunkter
 	Video Frames to Layers…	Videobildrutor till lager…
 	WIA Support…	WIA-stöd…
-	Working CMY Plates	CMY-arbetsplåt
+	Working CMY Plates	CMY-arbetsplåtar
 
 # tl! literals (third pass)
 	Absolute	Absolut

@@ -756,7 +756,7 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plates	Radna CMY ploča
+	Working CMY Plates	Radne CMY ploče
 	Legacy Macintosh RGB (Gamma 1.8)	Stari Macintosh RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Internet standard RGB (sRGB)
 	Monitor RGB	RGB monitora
@@ -2509,6 +2509,7 @@
 	Path to Illustrator…	Putanja u Illustrator…
 	Make Work Path	Napravi radnu putanju
 	Make Selection	Napravi selekciju
+	Make Shape	Napravi oblik
 	Fill Path	Popuni putanju
 	Stroke Path	Ocrtaj putanju
 	Clipping Path	Putanja isecanja
