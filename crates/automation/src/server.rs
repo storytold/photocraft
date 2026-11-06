@@ -724,6 +724,7 @@ impl PhotocraftMcp {
         to_result(b.call_read("ui.inspect", json!({})).await)
     }
 
+    /// Opens through the available backend, forwarding layer selection and one-shot memory approval.
     #[tool(
         description = "Open an image or document file and make it active. PDF `layers` is auto, layers, or render; auto preserves authored layers when possible. Returns index, size and import warnings."
     )]

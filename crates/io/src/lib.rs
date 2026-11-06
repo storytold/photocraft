@@ -608,6 +608,7 @@ pub struct ImportOptions {
 }
 
 impl Default for ImportOptions {
+    /// Uses the standard SVG depth and demosaic defaults, adaptive pixel budgets, and no high-memory approval or PDF override.
     fn default() -> Self {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,

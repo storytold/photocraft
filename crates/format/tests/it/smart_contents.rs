@@ -176,6 +176,7 @@ fn native_vector_display_preview_roundtrips_separately_from_original_payload() {
     assert_eq!(smart.source, SmartSource::Embedded { file_name: "Artwork.ai".into(), bytes: source });
 }
 
+/// Verifies every PDF projection field round-trips and older manifests default missing metadata to None.
 #[test]
 fn smart_pdf_projection_roundtrips_and_legacy_bundles_leave_it_absent() {
     let mut doc = sample();

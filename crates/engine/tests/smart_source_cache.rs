@@ -33,6 +33,7 @@ fn session_with_smart_object(bytes: &[u8]) -> Session {
     s
 }
 
+/// Populates the decoded-source cache using the active document's pixel format.
 fn decode(s: &Session, bytes: &[u8]) {
     smart_cmds::source_image("art.png", bytes, s.active().unwrap().doc.pixel_format(), None).unwrap();
 }

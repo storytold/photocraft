@@ -653,6 +653,8 @@ impl Ctx<'_> {
         l
     }
 
+    /// Reconstructs a smart object with shared source identity, placement, filters, and a cached preview.
+    /// Mixes available unfiltered pixels through an enabled filter mask and retains raw placement data for round-tripping.
     fn smart_content(&mut self, rec: &LayerRecord, name: &str, k: &[u8; 4], principal: &impl Fn(&[u8; 4]) -> Option<Arc<Vec<u8>>>) -> LayerContent {
         let Placement { id, transform, perspective, warp } = match rec.block(k) {
             Some(b) if k == b"PlLd" => self.plld_placement(&b.data, name),
@@ -1289,6 +1291,8 @@ fn conversion_admission(
     crate::admit_psd(&estimate, ctl, &crate::ImportOptions::default()).map(Some)
 }
 
+/// Converts a PSD using supplied global blocks and optional decoded merged pixels after memory admission.
+/// Returns document, warnings, damage state, and any fatal error; cancellation during conversion returns `None`.
 fn psd_to_document_global(
     file: &PsdFile,
     ctl: &photocraft_raster::Interrupt,

@@ -61,6 +61,7 @@ enum Slot {
 }
 
 impl Slot {
+    /// Borrow the rendered thumbnail, if this slot completed successfully.
     fn ready(&self) -> Option<&Thumb> {
         match self {
             Slot::Ready(t) => Some(t),
@@ -68,6 +69,7 @@ impl Slot {
         }
     }
 
+    /// Whether this thumbnail still needs a render attempt.
     fn is_pending(&self) -> bool {
         matches!(self, Slot::Pending)
     }
@@ -210,12 +212,15 @@ fn defaults(f: &mut Map<String, Value>, app: &PhotocraftApp) {
     f.insert("reverseOrder".into(), json!(true));
 }
 
+/// Read a string field, falling back when it is absent or has another JSON type.
 fn s<'a>(f: &'a Map<String, Value>, k: &str, d: &'a str) -> &'a str {
     f.get(k).and_then(Value::as_str).unwrap_or(d)
 }
+/// Read a numeric field as `f32`, falling back when it is absent or not a number.
 fn num(f: &Map<String, Value>, k: &str, d: f32) -> f32 {
     f.get(k).and_then(Value::as_f64).map_or(d, |v| v as f32)
 }
+/// Read a boolean field, falling back when it is absent or has another JSON type.
 fn flag(f: &Map<String, Value>, k: &str, d: bool) -> bool {
     f.get(k).and_then(Value::as_bool).unwrap_or(d)
 }
@@ -416,6 +421,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     app.pdf_import.push(st);
 }
 
+/// Draw the labeled, masked password field and any error from the last unlock attempt.
 fn password_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, t: &Tokens) {
     ui.label(egui::RichText::new(tl!("The PDF is protected by a password.")).color(t.text));
     ui.add_space(6.0);
@@ -434,6 +440,7 @@ fn password_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, t: &Tokens) {
     }
 }
 
+/// Draw page/image selection, thumbnail choices and modifier-assisted selection ranges.
 fn left_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport, t: &Tokens, images: bool, size: &str) {
     ui.label(egui::RichText::new(tl!("Select:")).color(t.text_dim));
     ui.horizontal(|ui| {
@@ -558,6 +565,7 @@ fn left_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport
     });
 }
 
+/// Edit page and raster options, disabling controls that do not apply to images or preserved layers.
 fn right_column(ui: &mut egui::Ui, f: &mut Map<String, Value>, st: &mut PdfImport, t: &Tokens, images: bool) {
     let label_w = 76.0;
     let field = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
@@ -713,6 +721,7 @@ fn group(ui: &mut egui::Ui, t: &Tokens, title: &str, content: impl FnOnce(&mut e
     });
 }
 
+/// Draw a themed radio option whose circle and translated label share a click response.
 fn radio(ui: &mut egui::Ui, on: bool, label: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {

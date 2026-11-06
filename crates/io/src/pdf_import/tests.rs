@@ -17,6 +17,7 @@ struct TestPage<'a> {
     resources: &'a str,
 }
 
+/// Creates an unrotated page fixture with no extra dictionary entries or resources.
 fn page<'a>(w: f32, h: f32, content: &'a str) -> TestPage<'a> {
     TestPage { w, h, content, extra: "", resources: "" }
 }
@@ -47,6 +48,7 @@ fn pdf(pages: &[TestPage]) -> Vec<u8> {
     write(objs)
 }
 
+/// Wraps raw bytes in a PDF stream with an exact length and caller-supplied dictionary entries.
 fn stream(extra: &str, data: &[u8]) -> Vec<u8> {
     let mut o = format!("<< /Length {} {extra} >>\nstream\n", data.len()).into_bytes();
     o.extend_from_slice(data);
@@ -54,6 +56,7 @@ fn stream(extra: &str, data: &[u8]) -> Vec<u8> {
     o
 }
 
+/// Serializes numbered objects into a PDF with a cross-reference table and object 1 as catalog.
 fn write(objs: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -100,22 +103,27 @@ fn image_pdf(w: f32, h: f32, images: &[(u32, u32, bool, &str)], extra: &str) -> 
     write(objs)
 }
 
+/// Emits PDF operators that fill a rectangle with the supplied device RGB color.
 fn rect(x: f32, y: f32, w: f32, h: f32, rgb: (f32, f32, f32)) -> String {
     format!("{} {} {} rg {x} {y} {w} {h} re f\n", rgb.0, rgb.1, rgb.2)
 }
 
+/// Imports a PDF fixture with the requested options, failing the test if import is refused.
 fn open(bytes: &[u8], opts: PdfOpenOptions) -> ImportResult {
     import_pdf("test.pdf", bytes, &opts, &Interrupt::NONE).expect("import")
 }
 
+/// Uses the requested crop at one pixel per PDF point, leaving other import defaults intact.
 fn at72(crop: CropTo) -> PdfOpenOptions {
     PdfOpenOptions { crop, resolution: 72.0, ..Default::default() }
 }
 
+/// Reads normalized channels from the first imported raster layer at document coordinates.
 fn pixel(r: &ImportResult, x: i32, y: i32) -> Vec<f32> {
     r.document.layers[0].surface().expect("raster layer").pixel(x, y)
 }
 
+/// Recognizes PDF headers even after leading bytes, without accepting unrelated or empty data.
 #[test]
 fn detects_pdf_by_its_header() {
     assert!(is_pdf(b"%PDF-1.7\n%\xe2\xe3\xcf\xd3\n1 0 obj"));
@@ -125,6 +133,7 @@ fn detects_pdf_by_its_header() {
     assert!(!is_pdf(b"<svg/>"));
 }
 
+/// Converts point dimensions with half-up rounding and clamps nonpositive pixel sizes to one.
 #[test]
 fn pixel_size_rounds_half_up_as_photoshop() {
     assert_eq!(pixel_size((595.276, 841.89), 300.0), (2480, 3508));
@@ -136,6 +145,7 @@ fn pixel_size_rounds_half_up_as_photoshop() {
     assert_eq!(pixel_size((0.0, -5.0), 300.0), (1, 1));
 }
 
+/// Uses file stems for single pages and numbered PDF names for multi-page or explicitly named imports.
 #[test]
 fn document_names_follow_photoshop() {
     assert_eq!(page_name("single.pdf", None, 1, 1), "single");
@@ -146,6 +156,7 @@ fn document_names_follow_photoshop() {
     assert_eq!(page_name("a.b.pdf", Some("  "), 1, 1), "a.b");
 }
 
+/// Accepts every crop choice's ID and label case-insensitively while rejecting unknown choices.
 #[test]
 fn crop_choices_round_trip_their_ids() {
     for c in CropTo::ALL {
@@ -156,6 +167,7 @@ fn crop_choices_round_trip_their_ids() {
     assert_eq!(CropTo::from_id("fold"), None);
 }
 
+/// Preserves explicit page boxes, defaults missing boxes, and clips crop bounds to the media box.
 #[test]
 fn page_boxes_fall_back_to_the_crop_and_media_boxes() {
     let boxed = pdf(&[TestPage {
@@ -187,6 +199,7 @@ fn page_boxes_fall_back_to_the_crop_and_media_boxes() {
     assert_eq!(p.crop, [100.0, 100.0, 500.0, 400.0]);
 }
 
+/// Bounds transformed marks, clips, strokes, text, and images, with crop bounds for empty pages.
 #[test]
 fn bounding_box_is_the_geometry_of_the_marks() {
     let letter = |content: &str, resources: &str| pdf(&[TestPage { w: 612.0, h: 792.0, content, extra: "", resources }]);
@@ -221,6 +234,7 @@ fn bounding_box_is_the_geometry_of_the_marks() {
     assert_eq!(bb(&img), [10.0, 10.0, 300.0, 200.0]);
 }
 
+/// Renders a page into an unlocked transparent layer with the requested crop and resolution.
 #[test]
 fn a_page_opens_as_a_transparent_layer_1() {
     let bytes = pdf(&[page(400.0, 400.0, &rect(100.0, 100.0, 200.0, 200.0, (1.0, 0.0, 0.0)))]);
@@ -246,6 +260,7 @@ fn a_page_opens_as_a_transparent_layer_1() {
     assert_eq!((r.document.size.width, r.document.size.height, r.document.resolution_dpi), (1667, 1667, 300.0));
 }
 
+/// Selects and names individual pages, reports the page count, and rejects out-of-range page numbers.
 #[test]
 fn pages_of_a_multi_page_file_are_named_and_counted() {
     let bytes = pdf(&[page(612.0, 792.0, ""), page(595.0, 420.0, ""), page(300.0, 300.0, "")]);
@@ -261,6 +276,7 @@ fn pages_of_a_multi_page_file_are_named_and_counted() {
     assert_eq!(info(&bytes, None).unwrap().pages.len(), 3);
 }
 
+/// Keeps page dimensions, rendered marks, and crop transforms consistent for every quarter-turn rotation.
 #[test]
 fn rotation_turns_the_page_like_hayro_and_photoshop() {
     use hayro::hayro_interpret::TransformExt;
@@ -289,6 +305,7 @@ fn rotation_turns_the_page_like_hayro_and_photoshop() {
     }
 }
 
+/// Applies each selected page box to output dimensions and offsets while clipping mark bounds to the crop.
 #[test]
 fn crop_choices_use_the_page_boxes() {
     let bytes = pdf(&[TestPage {
@@ -314,6 +331,7 @@ fn crop_choices_use_the_page_boxes() {
     assert_eq!(pixel(&r, 0, 0)[3], 1.0);
 }
 
+/// Converts device colors into supported modes and depths, falling back to RGB U8 for unsupported choices.
 #[test]
 fn modes_depths_and_device_colours() {
     let cmyk_red = pdf(&[page(100.0, 100.0, "0 1 1 0 k 0 0 100 100 re f\n")]);
@@ -344,6 +362,7 @@ fn modes_depths_and_device_colours() {
     assert_eq!((r.document.mode, r.document.depth), (ColorMode::Rgb, SampleType::U8));
 }
 
+/// Disabling anti-aliasing removes partial edge coverage without removing the filled geometry.
 #[test]
 fn anti_aliasing_can_be_turned_off() {
     let triangle = pdf(&[page(100.0, 100.0, "0 0 0 rg 10 10 m 90 15 l 40 90 l h f\n")]);
@@ -355,6 +374,7 @@ fn anti_aliasing_can_be_turned_off() {
     assert!(alphas(&hard).iter().filter(|a| **a == 1.0).count() > 1000, "the triangle is still there");
 }
 
+/// Extracts a lone image at its native size and mode, but rasterizes pages containing additional marks.
 #[test]
 fn a_page_that_is_one_image_opens_as_that_image() {
     let bytes = image_pdf(612.0, 792.0, &[(100, 50, false, "200 0 0 100 100 100")], "");
@@ -382,6 +402,7 @@ fn a_page_that_is_one_image_opens_as_that_image() {
     assert!(opens_as_image(&bytes, None) && !opens_as_image(&two, None) && !opens_as_image(&with_rect, None));
 }
 
+/// Enumerates and extracts embedded images with stable indices, native dimensions, and fitted thumbnails.
 #[test]
 fn images_mode_lists_and_opens_the_embedded_images() {
     let two =
@@ -404,6 +425,7 @@ fn images_mode_lists_and_opens_the_embedded_images() {
     assert!(r.warnings.is_empty());
 }
 
+/// Clamps oversized rendered pages with a warning while honoring explicit pixel sizes within the limits.
 #[test]
 fn oversized_pages_are_scaled_down_with_a_warning() {
     let bytes = pdf(&[page(14400.0, 100.0, &rect(0.0, 0.0, 14400.0, 100.0, (0.0, 0.0, 1.0)))]);
@@ -417,6 +439,7 @@ fn oversized_pages_are_scaled_down_with_a_warning() {
     assert!(r.warnings.is_empty());
 }
 
+/// Returns PDF errors for damaged input and normalizes invalid resolutions instead of panicking.
 #[test]
 fn damaged_files_are_errors_not_panics() {
     let good = pdf(&[page(100.0, 100.0, "")]);
@@ -434,6 +457,7 @@ fn damaged_files_are_errors_not_panics() {
     assert_eq!((r.document.size.width, r.document.resolution_dpi), (1, MIN_RESOLUTION));
 }
 
+/// Fits rotated page thumbnails to the requested longest side and rejects nonexistent pages.
 #[test]
 fn thumbnails_fit_the_asked_side() {
     let bytes = pdf(&[TestPage { w: 612.0, h: 792.0, content: "", extra: "/Rotate 90", resources: "" }]);
@@ -443,6 +467,7 @@ fn thumbnails_fit_the_asked_side() {
     assert!(thumbnail(&bytes, 2, 128, None).is_err());
 }
 
+/// Uses first-page Photoshop defaults through generic import and honors explicit PDF options.
 #[test]
 fn plain_import_opens_pdfs_with_photoshop_defaults() {
     let bytes = pdf(&[page(72.0, 72.0, &rect(0.0, 0.0, 72.0, 72.0, (0.0, 0.0, 0.0))), page(36.0, 36.0, "")]);
@@ -485,12 +510,14 @@ fn declared_pdf(xobjects: &[&str], named: usize, content: &str) -> Vec<u8> {
 
 const HUGE: &str = "/Type /XObject /Subtype /Image /Width 40000 /Height 40000 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode";
 
+/// Requires import to refuse an unbounded or oversized fixture and returns its diagnostic for assertions.
 fn refused(bytes: &[u8], what: &str) -> String {
     let e = import_pdf("big.pdf", bytes, &PdfOpenOptions::default(), &Interrupt::NONE).err().unwrap_or_else(|| panic!("{what}: opened")).to_string();
     assert!(e.contains("can't be opened") || e.contains("can't be bounded"), "{what}: {e}");
     e
 }
 
+/// Rejects oversized image declarations before decoding across page, image, and thumbnail import paths.
 #[test]
 fn an_oversized_image_refuses_the_page_before_decoding() {
     // 40000 × 40000 px declared, 16 bytes of data: the decoders would build 1.6 GP.
@@ -507,6 +534,7 @@ fn an_oversized_image_refuses_the_page_before_decoding() {
     assert!(preflight(page_of(&load(&declared_pdf(&[edge], 1, "q 200 0 0 200 0 0 cm /X0 Do Q"), None).unwrap(), 1).unwrap()).is_ok());
 }
 
+/// Includes masks, nested resources, inline images, and aggregate pixels in preflight image bounds.
 #[test]
 fn an_oversized_mask_or_a_nested_or_unsized_image_refuses_too() {
     let small =
@@ -597,6 +625,7 @@ fn jpx_header_only(w: u32, h: u32, components: u16) -> Vec<u8> {
 /// `codestream` in a JP2 file: the signature and file type boxes, a `jp2h` with an `ihdr` of
 /// `ihdr_size` and a greyscale `colr`, then the `jp2c` box.
 fn jp2_file(ihdr_size: (u32, u32), codestream: &[u8]) -> Vec<u8> {
+    /// Encodes a JP2 box with its total length, four-byte type, and unchanged payload.
     fn bx(kind: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut b = ((body.len() + 8) as u32).to_be_bytes().to_vec();
         b.extend_from_slice(kind);
@@ -626,10 +655,12 @@ fn inline(dict: &str, data: &[u8]) -> Vec<u8> {
 const JPX_10: &str = "/Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /JPXDecode";
 const DRAW_X0: &[u8] = b"q 200 0 0 200 0 0 cm /X0 Do Q";
 
+/// Reports whether the first page passes resource preflight without attempting image decoding.
 fn passes(bytes: &[u8]) -> bool {
     preflight(page_of(&load(bytes, None).unwrap(), 1).unwrap()).is_ok()
 }
 
+/// Bounds JPX headers, components, and tiles independently of dictionary claims, including masks and inline images.
 #[test]
 fn a_jpx_codestream_larger_than_its_dictionary_refuses_the_page() {
     // 10 × 10 px declared, 20000 × 20000 encoded: the decoder would build the codestream's size.
@@ -675,6 +706,7 @@ fn a_jpx_codestream_larger_than_its_dictionary_refuses_the_page() {
     assert!(e.contains("20000 × 20000"), "{e}");
 }
 
+/// Allows bounded raw, boxed, and inline JPX images and preserves native grayscale pixels when decoding succeeds.
 #[test]
 fn a_jpx_image_within_its_dictionary_opens() {
     // A real 2 × 2 JPEG 2000 image, raw and in a JP2 file: the budget passes it, hayro decodes it.
@@ -702,6 +734,7 @@ fn a_jpx_image_within_its_dictionary_opens() {
     assert_eq!((r.document.size.width, r.document.size.height), (2, 2));
 }
 
+/// Charges inline images and repeated image or form draws against the shared per-page pixel budget.
 #[test]
 fn inline_images_count_toward_the_page_total() {
     let one = |w: u32| format!("q 10 0 0 10 0 0 cm BI /W {w} /H 8000 /CS /G /BPC 8 /F /Fl ID x EI Q\n");
@@ -755,6 +788,7 @@ fn shared_glyph_fonts(a_y: usize, b_y: usize) -> Vec<u8> {
     objects_pdf(&format!("/Font << /A {} /B {} >>", font(a_y), font(b_y)), "", "", b"", objs)
 }
 
+/// Builds a page drawing a chain of forms, each drawing its child `fan` times before a painted leaf.
 fn form_chain(levels: usize, fan: usize) -> Vec<u8> {
     let forms = (0..levels)
         .map(|i| {
@@ -902,6 +936,7 @@ fn ascii85_encode(data: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Decodes ASCII filter terminators, partial groups, and zero shorthand while rejecting invalid or overflowing input.
 #[test]
 fn the_ascii_decoders_read_what_the_spec_writes() {
     assert_eq!(super::ascii_hex(b"48 65 6c 6C 6f>ignored").as_deref(), Some(b"Hello".as_slice()));
@@ -979,6 +1014,7 @@ fn objects_pdf(resources: &str, page_extra: &str, content_dict: &str, content: &
 
 const CCITT_10: &str = "/Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /CCITTFaxDecode";
 
+/// Bounds CCITT allocations using fax parameters and dictionary height, including chained, inline, and masked images.
 #[test]
 fn a_ccitt_image_is_sized_by_its_decode_parameters() {
     // 10 × 10 px declared, /Columns × /Rows 20000 × 20000: the decoder allocates that up front.
@@ -1049,6 +1085,7 @@ fn region(w: u32, h: u32, coded: &[u8]) -> Vec<u8> {
 
 const JBIG2_10: &str = "/Type /XObject /Subtype /Image /Width 10 /Height 10 /ColorSpace /DeviceGray /BitsPerComponent 1 /Filter /JBIG2Decode";
 
+/// Bounds JBIG2 pages, regions, stripes, and globals while refusing unreadable or unbounded segment forms.
 #[test]
 fn a_jbig2_image_is_sized_by_its_segments() {
     let jbig2 = |segments: &[Vec<u8>]| xobject_pdf(&[(JBIG2_10, &segments.concat())], 1, DRAW_X0);
@@ -1111,6 +1148,7 @@ fn a_jbig2_image_is_sized_by_its_segments() {
 
 // ---- Streams that aren't images may not go through an image codec. ----
 
+/// Rejects image codecs in content and auxiliary streams even when an image dictionary disguises their role.
 #[test]
 fn a_stream_that_isnt_an_image_may_not_use_an_image_codec() {
     let jpx = jpx_header_only(9000, 9000, 1);
@@ -1216,6 +1254,7 @@ fn a_stream_that_isnt_an_image_may_not_use_an_image_codec() {
     assert!(opens_as_image(&ok, None));
 }
 
+/// Stops cyclic resource traversal and refuses exponentially repeated object paths at the walk limit.
 #[test]
 fn a_walk_past_its_limits_refuses_the_page() {
     // An array that holds itself ends the walk (the reader cuts the cycle).
@@ -1229,6 +1268,7 @@ fn a_walk_past_its_limits_refuses_the_page() {
 
 // ---- What opening a PDF ties to the file, and which files open as PDFs. ----
 
+/// Keeps the enclosing PDF read-only for rendered pages, automatic image extraction, and explicit image selection.
 #[test]
 fn pdf_sources_remain_read_only_for_pages_and_image_shortcuts() {
     let one = image_pdf(200.0, 100.0, &[(100, 50, false, "200 0 0 100 0 0")], "");
@@ -1244,6 +1284,7 @@ fn pdf_sources_remain_read_only_for_pages_and_image_shortcuts() {
     assert!(chosen(&one, PdfOpenOptions::default()), "anything Import PDF opens");
 }
 
+/// Gives recognizable non-PDF formats precedence over incidental PDF text while accepting prefixed PDF headers.
 #[test]
 fn a_file_opens_as_a_pdf_when_it_starts_like_one_or_nothing_else_takes_it() {
     let svg = b"<?xml version=\"1.0\"?>\n<!-- exported from %PDF-1.4 source -->\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"4\"><rect width=\"8\" height=\"4\" fill=\"red\"/></svg>";

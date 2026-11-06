@@ -51,14 +51,17 @@ pub(crate) enum LayeredPdfError {
 }
 
 impl LayeredPdfError {
+    /// Wraps a PDF input, selection, or resource-limit error message.
     fn pdf(message: impl Into<String>) -> Self {
         Self::Pdf(message.into())
     }
 
+    /// Wraps an error describing invalid or unsupported Photoshop preservation data.
     fn corrupt(message: impl Into<String>) -> Self {
         Self::Corrupt(message.into())
     }
 
+    /// Converts probe failures to import errors, preserving typed import errors and explaining explicit render-mode recovery.
     pub(crate) fn into_io(self) -> IoError {
         match self {
             Self::Absent => IoError::Pdf("this PDF has no Photoshop editable layer data; choose PDF render mode".into()),
@@ -82,6 +85,7 @@ pub(crate) fn import_page(name: &str, page: &Page<'_>, options: &crate::ImportOp
     })
 }
 
+/// Loads a size-checked PDF and imports a one-based page's preserved layers with default import settings.
 #[cfg(test)]
 fn layered_result(name: &str, bytes: &[u8], page: usize, password: Option<&str>, ctl: &Interrupt) -> Result<ImportResult, LayeredPdfError> {
     ctl.check().map_err(|_| LayeredPdfError::Cancelled)?;
@@ -94,6 +98,8 @@ fn layered_result(name: &str, bytes: &[u8], page: usize, password: Option<&str>,
     import_page(name, page, &crate::ImportOptions::default(), ctl)
 }
 
+/// Reconstructs an editable document from Photoshop private streams after validation and PSD memory admission.
+/// Returns combined import warnings, rejecting damaged editable channels rather than substituting a rendered page.
 fn layered_page(page: &Page<'_>, options: &crate::ImportOptions, ctl: &Interrupt) -> Result<(photocraft_doc::Document, Vec<String>), LayeredPdfError> {
     let private = photoshop_private_hayro(page)?;
     ctl.check().map_err(|_| LayeredPdfError::Cancelled)?;
@@ -138,6 +144,7 @@ fn layered_page(page: &Page<'_>, options: &crate::ImportOptions, ctl: &Interrupt
     Ok((document, warnings))
 }
 
+/// Finds the page's Photoshop Private dictionary, distinguishing absent preservation entries from malformed dictionaries.
 fn photoshop_private_hayro<'a>(page: &Page<'a>) -> Result<HayroDict<'a>, LayeredPdfError> {
     let raw = page.raw();
     if !raw.contains_key(b"PieceInfo") {
@@ -154,10 +161,12 @@ fn photoshop_private_hayro<'a>(page: &Page<'a>) -> Result<HayroDict<'a>, Layered
     adobe.get::<HayroDict<'_>>(b"Private").ok_or_else(|| LayeredPdfError::corrupt("invalid Photoshop Private dictionary"))
 }
 
+/// Retrieves a required Photoshop private stream, reporting missing or invalid entries as corrupt preservation data.
 fn private_stream_hayro<'a>(private: &HayroDict<'a>, key: &[u8]) -> Result<HayroStream<'a>, LayeredPdfError> {
     private.get::<HayroStream<'_>>(key).ok_or_else(|| LayeredPdfError::corrupt(format!("missing {key:?} in Photoshop Private data")))
 }
 
+/// Reads a size-bounded private stream, accepting only unfiltered bytes or a single Flate filter.
 fn decode_hayro_stream(stream: HayroStream<'_>, label: &str) -> Result<Vec<u8>, LayeredPdfError> {
     let raw = stream.raw_data();
     if raw.len() > MAX_PRIVATE_BYTES {
@@ -170,6 +179,7 @@ fn decode_hayro_stream(stream: HayroStream<'_>, label: &str) -> Result<Vec<u8>, 
     }
 }
 
+/// Builds and validates a PSD header from composite dimensions, component depth, and supported device or ICC colour space.
 fn composite_header_hayro(composite: &HayroStream<'_>) -> Result<Header, LayeredPdfError> {
     let dict = composite.dict();
     let integer = |key: &[u8]| dict.get::<i64>(key).ok_or_else(|| LayeredPdfError::corrupt(format!("CompositeImage {key:?} is invalid")));
@@ -197,6 +207,7 @@ fn composite_header_hayro(composite: &HayroStream<'_>) -> Result<Header, Layered
     Ok(header)
 }
 
+/// Retrieves the profile stream from an ICCBased composite colour space, rejecting other array forms.
 fn composite_icc_stream<'a>(composite: &HayroStream<'a>) -> Result<HayroStream<'a>, LayeredPdfError> {
     let color =
         composite.dict().get::<HayroArray<'_>>(b"ColorSpace").ok_or_else(|| LayeredPdfError::corrupt("CompositeImage uses an unsupported colour space"))?;
@@ -207,12 +218,14 @@ fn composite_icc_stream<'a>(composite: &HayroStream<'a>) -> Result<HayroStream<'
     entries.next::<HayroStream<'_>>().ok_or_else(|| LayeredPdfError::corrupt("ICCBased CompositeImage has no profile"))
 }
 
+/// Reads the composite ICC profile's declared channel count as an unsigned 16-bit value.
 fn composite_icc_channels(composite: &HayroStream<'_>) -> Result<u16, LayeredPdfError> {
     let profile = composite_icc_stream(composite)?;
     let count = profile.dict().get::<i64>(b"N").ok_or_else(|| LayeredPdfError::corrupt("CompositeImage ICC profile channel count is invalid"))?;
     u16::try_from(count).map_err(|_| LayeredPdfError::corrupt("CompositeImage ICC profile channel count is out of range"))
 }
 
+/// Decodes the composite's bounded ICC profile when its colour space is an array; returns `None` for non-array spaces.
 fn composite_icc_profile(composite: &HayroStream<'_>) -> Result<Option<Vec<u8>>, LayeredPdfError> {
     if composite.dict().get::<HayroArray<'_>>(b"ColorSpace").is_none() {
         return Ok(None);
@@ -252,6 +265,7 @@ fn validate_layer_block(data: &[u8]) -> Result<(), LayeredPdfError> {
     Ok(())
 }
 
+/// Copies uncompressed private data only when it fits the private-stream byte limit.
 fn bounded_copy(data: &[u8], label: &str) -> Result<Vec<u8>, LayeredPdfError> {
     if data.len() > MAX_PRIVATE_BYTES {
         return Err(LayeredPdfError::pdf(format!("{label} exceeds the {} MiB import limit", MAX_PRIVATE_BYTES >> 20)));
@@ -273,6 +287,7 @@ fn inflate_bounded(data: &[u8], label: &str) -> Result<Vec<u8>, LayeredPdfError>
     Ok(decoded)
 }
 
+/// Converts a composite dimension to a nonzero 32-bit unsigned integer, reporting invalid values as corrupt data.
 fn positive_u32(value: i64, label: &str) -> Result<u32, LayeredPdfError> {
     u32::try_from(value)
         .ok()

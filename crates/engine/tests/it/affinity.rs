@@ -75,6 +75,7 @@ fn background_preview_retains_the_source_protection_and_warning() {
     assert!(s.active().unwrap().path.is_none());
 }
 
+/// Placement and smart-source decoding reject preview-only Affinity imports instead of hiding warnings.
 #[test]
 fn warningless_auxiliary_paths_cannot_silently_use_a_thumbnail() {
     let bytes = fixture();

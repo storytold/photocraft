@@ -134,6 +134,7 @@ fn convert(s: &mut Session) -> u64 {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
 }
 
+/// Conversion preserves pixels, opacity, depth, off-canvas bounds, and undo at every sample depth.
 #[test]
 fn conversion_is_pixel_identical_at_every_depth() {
     for depth in DEPTHS {
@@ -192,6 +193,7 @@ fn masked_layer_and_group_convert_within_rounding() {
     assert!(max_diff(&flat(&s), &before) <= 1.0 / 255.0 + 1e-6);
 }
 
+/// Pattern conversion preserves rendered pixels and the pattern resource in editable contents.
 #[test]
 fn pattern_fill_converts_to_editable_smart_object_without_losing_its_pattern() {
     let mut s = session(8);

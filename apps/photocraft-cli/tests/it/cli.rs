@@ -1800,6 +1800,7 @@ fn batch_never_overwrites_a_pdf_named_png() {
     assert_eq!(std::fs::read(&source).unwrap(), original);
 }
 
+/// Verifies in-place conversion and command output cannot overwrite PDF bytes through hard-link aliases.
 #[test]
 fn convert_and_run_never_overwrite_pdf_sources_even_in_place() {
     let d = tmp("pdf-in-place");
@@ -1826,6 +1827,7 @@ fn convert_and_run_never_overwrite_pdf_sources_even_in_place() {
     }
 }
 
+/// Verifies recursive batches discover nested PDFs, export them and leave their source bytes intact.
 #[test]
 fn recursive_batch_includes_pdf_inputs() {
     let d = tmp("recursive-pdf");

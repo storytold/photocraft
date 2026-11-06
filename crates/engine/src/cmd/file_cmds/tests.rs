@@ -2735,6 +2735,7 @@ fn approve_memory_validates_parameters_and_unknown_ids() {
     );
 }
 
+/// Cancelling a memory approval releases its pending preflight and reports cancellation.
 #[test]
 fn approve_memory_cancels_and_removes_pending_preflight() {
     let mut s = Session::new();
@@ -2758,6 +2759,7 @@ fn approve_memory_cancels_and_removes_pending_preflight() {
     assert!(s.take_pending_preflight(id).is_none(), "preflight removed on cancel");
 }
 
+/// Approval rejects a source changed on disk since its preflight fingerprint was captured.
 #[test]
 fn approve_memory_refuses_when_source_changes_before_confirmation() {
     let dir = tmp("fingerprint_test");
@@ -2789,6 +2791,7 @@ fn approve_memory_refuses_when_source_changes_before_confirmation() {
     assert!(matches!(res, Err(EngineError::SourceChanged { .. })), "changed file must fail identity verification: {res:?}");
 }
 
+/// Approval cannot override a hard memory limit reduced since the preflight was queued.
 #[test]
 fn approve_memory_refuses_when_available_ram_decreases() {
     let gb = 1u64 << 30;
@@ -2818,6 +2821,7 @@ fn approve_memory_refuses_when_available_ram_decreases() {
     });
 }
 
+/// Filling the pending-preflight queue causes further requests to fail rather than be admitted.
 #[test]
 fn pending_preflights_cap_fails_closed() {
     let mut s = Session::new();
@@ -3174,6 +3178,7 @@ fn pdf_pages_and_images_open_untitled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Builds a two-page PDF with a red first page and green second page for projection tests.
 fn smart_pdf_pages() -> Vec<u8> {
     let red = "1 0 0 rg 0 0 8 4 re f";
     let green = "0 1 0 rg 0 0 8 4 re f";
@@ -3201,6 +3206,7 @@ fn smart_pdf_pages() -> Vec<u8> {
     bytes
 }
 
+/// Places page two as a rendered smart object at 144 DPI without fitting it to the canvas.
 fn place_smart_pdf(s: &mut Session) -> LayerId {
     LayerId(
         place_bytes(s, "pages.pdf", smart_pdf_pages(), None, &json!({"fit": false, "layers": "render", "page": 2, "resolution": 144, "crop": "mediaBox"}))
@@ -3210,11 +3216,13 @@ fn place_smart_pdf(s: &mut Session) -> LayerId {
     )
 }
 
+/// Returns a placed layer's smart object, failing the fixture if its content is not smart.
 fn pdf_smart(s: &Session, id: LayerId) -> &SmartObject {
     let LayerContent::Smart(smart) = &doc(s).layer(id).unwrap().content else { panic!("smart") };
     smart
 }
 
+/// Placement retains PDF import options, and decoded-source cache entries distinguish pages.
 #[test]
 fn pdf_smart_projection_is_captured_and_cache_separates_pages() {
     use photocraft_doc::{PdfBox, PdfImportMode, PdfImportOptions};
@@ -3239,6 +3247,7 @@ fn pdf_smart_projection_is_captured_and_cache_separates_pages() {
     assert_eq!(first.surface.pixel(0, 0), [1.0, 0.0, 0.0, 1.0]);
 }
 
+/// PSD export embeds the selected PDF page as PSB contents with its projected size and pixels.
 #[test]
 fn psd_export_materializes_selected_pdf_projection_as_psb() {
     let mut s = session(40, 24, 8);
@@ -3260,6 +3269,8 @@ fn psd_export_materializes_selected_pdf_projection_as_psb() {
     assert_eq!(photocraft_compose::flatten(&selected).px[0], [0.0, 1.0, 0.0, 1.0]);
 }
 
+/// Shared replacement rolls back invalid projections, while page editors commit independently.
+/// Repeated commits remain valid after parent undo and redo.
 #[test]
 fn shared_pdf_replace_rolls_back_and_editing_one_projection_isolated() {
     use photocraft_doc::PdfImportOptions;
@@ -3316,6 +3327,7 @@ fn shared_pdf_replace_rolls_back_and_editing_one_projection_isolated() {
     let _ = std::fs::remove_file(replacement);
 }
 
+/// Supplying a PDF password forces native embedded contents and rejects linked placement.
 #[test]
 fn password_supplied_pdf_is_native_embedded_and_linking_is_refused() {
     let mut s = session(40, 24, 8);
@@ -3327,6 +3339,7 @@ fn password_supplied_pdf_is_native_embedded_and_linking_is_refused() {
     assert_eq!(smart.pdf_import, None);
 }
 
+/// Placement journals retain the source path but never retain the supplied PDF password.
 #[test]
 fn pdf_password_is_not_journaled() {
     let mut s = session(40, 24, 8);
@@ -3341,6 +3354,7 @@ fn pdf_password_is_not_journaled() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Committed page projections keep separate editors, and parent undo preserves editor conflicts.
 #[test]
 fn saved_pdf_projection_editors_stay_distinct_and_undo_blocks_external_edits() {
     use photocraft_doc::PdfImportOptions;
@@ -3379,6 +3393,8 @@ fn saved_pdf_projection_editors_stay_distinct_and_undo_blocks_external_edits() {
     assert_eq!(reopened, second_editor);
 }
 
+/// Loaded default and explicit PDF projections retain separate editors and contents families.
+/// Repeated page commits and parent undo/redo leave the default projection's source untouched.
 #[test]
 fn loaded_mixed_pdf_family_keeps_unprojected_source_out_of_page_editor() {
     let mut original = session(40, 24, 8);
@@ -3440,6 +3456,7 @@ fn loaded_mixed_pdf_family_keeps_unprojected_source_out_of_page_editor() {
     assert_eq!(reopened, default_editor);
 }
 
+/// A lone PDF projection retains its editor after native commits and parent undo/redo.
 #[test]
 fn isolated_pdf_projection_keeps_its_editor_after_native_commit_and_parent_history() {
     let mut s = session(40, 24, 8);

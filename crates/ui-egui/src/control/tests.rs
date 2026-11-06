@@ -1841,6 +1841,7 @@ fn smart_control_app() -> (PhotocraftApp, egui::Context, photocraft_doc::LayerId
     (app, egui::Context::default(), photocraft_doc::LayerId(id))
 }
 
+/// Control requests edit nested embedded objects, convert the explicit target and save through the scoped writer.
 #[test]
 fn control_edits_nested_embedded_smart_objects_and_converts_an_explicit_target() {
     use photocraft_doc::{LayerContent, SmartSource};

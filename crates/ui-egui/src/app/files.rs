@@ -10,6 +10,7 @@ enum DecodeBytes<'a> {
 }
 
 impl DecodeBytes<'_> {
+    /// Borrow the input bytes without copying either storage variant.
     fn as_slice(&self) -> &[u8] {
         match self {
             Self::Borrowed(bytes) => bytes,
@@ -17,6 +18,7 @@ impl DecodeBytes<'_> {
         }
     }
 
+    /// Give an open job owned input, reusing the allocation when the bytes are already shared.
     fn job_source(&self) -> photocraft_engine::jobs::OpenSource {
         match self {
             Self::Borrowed(bytes) => jobs_ui::bytes(bytes),

@@ -29,6 +29,7 @@ fn png() -> Vec<u8> {
     photocraft_codecs::encode(&img, Format::Png, &EncodeOptions::default()).unwrap()
 }
 
+/// Source decoding grows peak RSS by less than 16 bytes per pixel when Linux peak accounting is available.
 #[test]
 fn decoding_a_smart_object_source_stays_within_16_bytes_a_source_pixel() {
     let bytes = png();

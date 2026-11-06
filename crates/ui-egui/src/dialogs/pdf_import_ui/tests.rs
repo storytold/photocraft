@@ -37,6 +37,7 @@ fn image_pdf(w: u32, h: u32, placed: f32) -> Vec<u8> {
     write(objs)
 }
 
+/// Serialize fixture objects with numbered references, byte offsets and a catalog-root trailer.
 fn write(objs: Vec<Vec<u8>>) -> Vec<u8> {
     let mut out = b"%PDF-1.7\n".to_vec();
     let mut offsets = Vec::new();
@@ -55,6 +56,7 @@ fn write(objs: Vec<Vec<u8>>) -> Vec<u8> {
     out
 }
 
+/// Create an app whose import service exercises the real document importer.
 fn app() -> PhotocraftApp {
     PhotocraftApp::new(
         Session::new(),
@@ -67,6 +69,7 @@ fn app() -> PhotocraftApp {
     )
 }
 
+/// Build three differently sized pages with distinct colored rectangles for selection tests.
 fn three_pages() -> Vec<u8> {
     pdf(&[(612.0, 792.0, "1 0 0 rg 72 72 468 648 re f"), (595.0, 420.0, "0 1 0 rg 30 30 535 360 re f"), (300.0, 300.0, "0 0 1 rg 20 20 260 260 re f")])
 }
@@ -97,15 +100,18 @@ fn layered_pages() -> Vec<u8> {
     ])
 }
 
+/// Find the Import PDF dialog among the app's open dialogs.
 fn dialog(app: &PhotocraftApp) -> Option<&crate::state::Dialog> {
     app.ui.dialogs.iter().find(|d| owns(&d.fields))
 }
 
+/// Set a field on the currently open Import PDF dialog.
 fn set(app: &mut PhotocraftApp, key: &str, v: Value) {
     let id = dialog(app).expect("the Import PDF dialog").id;
     app.ui.dialog_mut(id).expect("dialog").fields.insert(key.into(), v);
 }
 
+/// Opening a multipage PDF holds its source and presents defaults without creating documents.
 #[test]
 fn opening_a_pdf_shows_the_dialog_with_photoshop_defaults() {
     let mut app = app();
@@ -132,6 +138,7 @@ fn opening_a_pdf_shows_the_dialog_with_photoshop_defaults() {
     assert_eq!(st.path.as_deref(), Some("/tmp/pc-test/multi.pdf"));
 }
 
+/// Confirmed pages open in reverse order as source-protected documents and record the PDF in recents.
 #[test]
 fn ok_opens_the_selected_pages_in_reverse_order_as_unsaved_documents() {
     let mut app = app();
@@ -153,6 +160,7 @@ fn ok_opens_the_selected_pages_in_reverse_order_as_unsaved_documents() {
     assert!(app.ui.recent_files.iter().any(|p| p.ends_with("multi.pdf")), "the PDF goes to Open Recent");
 }
 
+/// Dialog naming, crop, resolution, color mode and depth are applied to the selected page.
 #[test]
 fn the_name_field_and_the_page_options_reach_the_documents() {
     let mut app = app();
@@ -175,6 +183,7 @@ fn the_name_field_and_the_page_options_reach_the_documents() {
     assert_eq!((o.page, o.crop, o.resolution, o.anti_alias, o.image), (2, CropTo::BoundingBox, 72.0, true, None));
 }
 
+/// Control opens honor explicit layer/render choices and never expose the PDF as a save target.
 #[test]
 fn control_open_keeps_pdf_layer_selection_and_source_protection() {
     use crate::control::{ControlRequest, Outcome, handle};
@@ -206,6 +215,7 @@ fn dialog_fields_after(app: &PhotocraftApp) -> Map<String, Value> {
     f
 }
 
+/// Cancel closes the import dialog and releases its held source without opening a document.
 #[test]
 fn cancel_opens_nothing_and_lets_the_file_go() {
     let mut app = app();
@@ -261,6 +271,7 @@ fn two_pdfs_keep_their_own_dialogs_and_files() {
     assert!(app.pdf_import.is_empty());
 }
 
+/// Confirming an empty selection retains the dialog and source while showing an error.
 #[test]
 fn ok_with_nothing_selected_keeps_the_dialog_up() {
     let mut app = app();
@@ -275,6 +286,7 @@ fn ok_with_nothing_selected_keeps_the_dialog_up() {
     assert_eq!(app.pdf_import.len(), 1);
 }
 
+/// An image-only PDF bypasses the dialog but remains source-protected at its native pixel size.
 #[test]
 fn a_one_image_pdf_opens_read_only_without_asking() {
     let mut app = app();
@@ -308,6 +320,7 @@ fn pair_pdf() -> Vec<u8> {
     write(objs)
 }
 
+/// Images mode extracts the selected embedded raster at its native dimensions.
 #[test]
 fn images_mode_opens_the_embedded_images() {
     let mut app = app();
@@ -321,6 +334,7 @@ fn images_mode_opens_the_embedded_images() {
     assert_eq!(doc.layers[0].name, "Background");
 }
 
+/// Inline and background file imports stay untitled and source-protected, including repeated opens.
 #[test]
 fn what_import_pdf_opens_from_a_file_stays_untitled() {
     let dir = std::env::temp_dir().join(format!("photocraft-pdf-untitled-{}", std::process::id()));
@@ -355,6 +369,7 @@ fn what_import_pdf_opens_from_a_file_stays_untitled() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A PDF signature inside an SVG comment must not divert the SVG through PDF import.
 #[test]
 fn an_svg_mentioning_pdf_opens_as_an_svg() {
     let svg = b"<?xml version=\"1.0\"?>\n<!-- exported from %PDF-1.4 source -->\n<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"8\" height=\"4\"><rect width=\"8\" height=\"4\" fill=\"red\"/></svg>";
@@ -367,6 +382,7 @@ fn an_svg_mentioning_pdf_opens_as_an_svg() {
     assert_eq!(st.path.as_deref(), Some("/tmp/pc-test/drawing.svg"));
 }
 
+/// Memory-size labels use Photoshop-style units and three significant digits for each pixel format.
 #[test]
 fn size_label_prints_three_significant_digits_like_photoshop() {
     assert_eq!(size_label(2550, 2856, "rgb", 8), "20.8M");
@@ -376,6 +392,7 @@ fn size_label_prints_three_significant_digits_like_photoshop() {
     assert_eq!(size_label(7000, 7000, "rgb", 8), "140M");
 }
 
+/// The rendered dialog exposes its controls and field names and completes every page thumbnail.
 #[test]
 fn the_dialog_draws_its_controls() {
     let mut app = app();
@@ -417,6 +434,7 @@ fn the_dialog_draws_its_controls() {
     assert!(st.thumbs.iter().all(|s| s.ready().is_some()), "every page has its thumbnail");
 }
 
+/// Failed thumbnails are skipped on later frames, allowing remaining pages through until size changes.
 #[test]
 fn a_failed_thumbnail_is_not_retried_and_does_not_hold_back_the_rest() {
     // Pages 1–3 each carry an inline image past the decode budget, so their thumbnails are
@@ -449,6 +467,7 @@ fn encrypted_pdf() -> Vec<u8> {
     plain.replace("/Root 1 0 R >>", &format!("/Root 1 0 R {encrypt} >>")).into_bytes()
 }
 
+/// The password prompt exposes an accessible name on its masked input, not only a nearby caption.
 #[test]
 fn the_password_prompt_names_its_field() {
     let bytes = encrypted_pdf();
@@ -541,6 +560,7 @@ fn background_pages_keep_their_order_and_the_drop_slot() {
     assert!(app.jobs.batches.is_empty(), "the set is forgotten once every page opened");
 }
 
+/// Page jobs share and charge the dialog's source allocation once until each memory approval releases it.
 #[cfg(all(not(target_arch = "wasm32"), target_pointer_width = "64"))]
 #[test]
 fn selected_page_jobs_retain_the_dialog_allocation_through_memory_approval() {

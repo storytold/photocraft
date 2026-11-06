@@ -369,6 +369,7 @@ fn minimum_maximum_preserve_roundness() {
     assert_eq!(params_for("filter.other.maximum", &json!({})), Some(FilterParams::Maximum { radius: 1.0, preserve: Preserve::Squareness }));
 }
 
+/// Applying Gaussian blur records its smart-filter command and parameters and refreshes the cache.
 #[test]
 fn smart_object_records_smart_filter() {
     use photocraft_doc::{Layer, SmartObject, SmartSource};

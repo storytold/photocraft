@@ -190,6 +190,7 @@ pub(crate) use source::{restore_unrendered, take_caches, vector_scale};
 const SO: &[&str] = &["Layer", "Smart Objects"];
 const SF: &[&str] = &["Layer", "Smart Filter"];
 
+/// Registers smart object and smart filter commands with their parameters and availability checks.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         spec!(

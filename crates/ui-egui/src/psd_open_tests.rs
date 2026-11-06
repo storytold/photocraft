@@ -198,6 +198,7 @@ fn background_damage_only_open_does_not_create_a_spurious_profile_question() {
     assert!(app.ui.dialogs.is_empty(), "color:null is not a profile question");
 }
 
+/// Canceling memory confirmation releases the pending preflight and all associated prompt state.
 #[test]
 fn memory_confirmation_dialog_and_cancel_lifecycle() {
     let mut app = app();
@@ -333,6 +334,7 @@ fn memory_confirmation_resume_background_success() {
     });
 }
 
+/// Inline approval rejects a changed source fingerprint before decoding or opening a document.
 #[test]
 fn memory_confirmation_refuses_when_source_changed_inline() {
     let mut app = app();
@@ -386,6 +388,7 @@ fn memory_confirmation_refuses_when_source_changed_inline() {
     assert!(app.held_memory_prompts.is_empty());
 }
 
+/// Background approval reports a changed source and clears its open job without creating a document.
 #[test]
 fn memory_confirmation_refuses_when_source_changed_async() {
     let mut app = app();
@@ -448,6 +451,7 @@ fn memory_confirmation_refuses_when_source_changed_async() {
     assert!(app.ui.status.contains("changed since it was checked"), "the background refusal names the changed identity: {}", app.ui.status);
 }
 
+/// Declining a batch's memory prompt releases its preflight, queue entry and completed batch.
 #[test]
 fn memory_decline_advances_queue_and_cleans_batch() {
     let mut app = app();
@@ -482,6 +486,7 @@ fn memory_decline_advances_queue_and_cleans_batch() {
     assert!(app.prompt_order.is_empty());
 }
 
+/// Canceling one held batch member preserves the others' ordering until the final cancellation.
 #[test]
 fn batch_single_file_cancel_preserves_other_held_memory_orders() {
     let mut app = app();
@@ -539,6 +544,7 @@ fn batch_single_file_cancel_preserves_other_held_memory_orders() {
     assert!(app.prompt_order.is_empty());
 }
 
+/// Canceling the whole open queue releases both profile-held documents and pending memory preflights.
 #[test]
 fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
     let mut app = app();
@@ -587,6 +593,7 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
     assert!(app.session.take_pending_preflight(preflight_id).is_none(), "pending preflight cancelled");
 }
 
+/// Damage and memory prompts are displayed in arrival order, advancing when the current one is canceled.
 #[test]
 fn mixed_prompts_follow_arrival_order_fifo() {
     let mut app = app();

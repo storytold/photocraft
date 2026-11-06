@@ -556,6 +556,7 @@ pub struct PdfImportOptions {
 }
 
 impl Default for PdfImportOptions {
+    /// Selects page one with automatic layer recovery and 300-ppi, antialiased RGB/8 rendering defaults.
     fn default() -> Self {
         Self {
             mode: PdfImportMode::Auto,
@@ -1426,6 +1427,7 @@ impl Document {
 mod tests {
     use super::*;
 
+    /// Checks that every persisted PDF projection choice produces a distinct cache identity.
     #[test]
     fn every_pdf_import_field_changes_its_key() {
         let base = PdfImportOptions::default();

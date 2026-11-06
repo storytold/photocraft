@@ -195,6 +195,7 @@ pub struct PdfOpenOptions {
 
 /// Prints every option but the password (logs and error messages carry `{opts:?}`).
 impl std::fmt::Debug for PdfOpenOptions {
+    /// Formats the import options while replacing any supplied password with a redaction marker.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PdfOpenOptions")
             .field("page", &self.page)
@@ -214,6 +215,7 @@ impl std::fmt::Debug for PdfOpenOptions {
 }
 
 impl Default for PdfOpenOptions {
+    /// Opens page 1 with automatic layer preservation, bounding-box crop, default resolution, and antialiased 8-bit RGB rendering.
     fn default() -> Self {
         PdfOpenOptions {
             layer_mode: PdfImportMode::Auto,
@@ -396,6 +398,7 @@ pub fn import_pdf(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Interru
     import_pdf_with_options(name, bytes, opts, &crate::ImportOptions::default(), ctl)
 }
 
+/// Imports the selected PDF content with caller resource settings, clearing notes when warning suppression is enabled.
 pub(crate) fn import_pdf_with_options(
     name: &str,
     bytes: &[u8],
@@ -410,6 +413,8 @@ pub(crate) fn import_pdf_with_options(
     Ok(r)
 }
 
+/// Opens a selected image or page, preferring preserved layers unless rendering is requested or Auto finds none.
+/// Rendered pages are preflighted and fitted to the page pixel budget before conversion to the requested mode and depth.
 fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, import_options: &crate::ImportOptions, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     if let Some(index) = opts.image {
         return import_image(name, bytes, index, opts.name.as_deref(), opts.password.as_deref(), ctl);
@@ -495,6 +500,7 @@ pub fn image_name(file: &str, chosen: Option<&str>, index: usize) -> String {
     format!("{stem}-{index}")
 }
 
+/// Removes directory components using either path separator, then strips the final filename extension.
 fn stem_of(file: &str) -> String {
     let name = file.rsplit(['/', '\\']).next().unwrap_or(file);
     name.rsplit_once('.').map_or(name.to_string(), |(s, _)| s.to_string())
@@ -579,6 +585,7 @@ pub fn image_thumbnail(bytes: &[u8], index: usize, max_side: u32, password: Opti
 
 // ------------------------------------------------------------------------------------- reading
 
+/// Loads PDF bytes with an optional password, distinguishing missing or wrong passwords from unsupported encryption and invalid files.
 pub(crate) fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError> {
     let data = Arc::new(bytes.to_vec());
     let r = match password {
@@ -600,6 +607,7 @@ pub(crate) fn load(bytes: &[u8], password: Option<&str>) -> Result<Pdf, IoError>
     })
 }
 
+/// Looks up a one-based page number, reporting an empty PDF or an out-of-range selection.
 fn page_of<'a>(pdf: &'a Pdf, page: usize) -> Result<&'a Page<'a>, IoError> {
     let n = pdf.pages().len();
     if n == 0 {
@@ -613,19 +621,23 @@ fn norm(r: hayro::hayro_syntax::object::Rect) -> [f32; 4] {
     [r.x0.min(r.x1) as f32, r.y0.min(r.y1) as f32, r.x0.max(r.x1) as f32, r.y0.max(r.y1) as f32]
 }
 
+/// Intersects two ordered boxes, clamping disjoint axes to zero extent.
 fn inter(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let (x0, y0) = (a[0].max(b[0]), a[1].max(b[1]));
     [x0, y0, a[2].min(b[2]).max(x0), a[3].min(b[3]).max(y0)]
 }
 
+/// Returns whether an ordered box has strictly positive width and height.
 fn has_area(b: [f32; 4]) -> bool {
     b[2] > b[0] && b[3] > b[1]
 }
 
+/// Converts a PDF box's single-precision coordinates to a double-precision rectangle.
 fn to_pt(b: [f32; 4]) -> PtRect {
     PtRect::new(f64::from(b[0]), f64::from(b[1]), f64::from(b[2]), f64::from(b[3]))
 }
 
+/// Collects normalized page boxes and rotation, using A4 for an invalid media box and the crop box for absent or empty optional boxes.
 fn page_info(p: &Page) -> PdfPage {
     // A page without a usable media box is treated as A4, as hayro renders it.
     let mut media = norm(p.media_box());
@@ -646,6 +658,7 @@ fn page_info(p: &Page) -> PdfPage {
     PdfPage { media, crop, bleed: get(b"BleedBox"), trim: get(b"TrimBox"), art: get(b"ArtBox"), rotation }
 }
 
+/// Uses the interpreter's default settings for rendering and mark collection.
 fn settings() -> InterpreterSettings {
     InterpreterSettings::default()
 }
@@ -748,18 +761,22 @@ fn image_fits(w: u32, h: u32) -> bool {
     w > 0 && h > 0 && w <= MAX_SIDE && h <= MAX_SIDE && u64::from(w) * u64::from(h) <= MAX_IMAGE_PIXELS
 }
 
+/// Reports that one image exceeds the supported side-length or pixel-count limit.
 fn image_error(what: &str, w: u32, h: u32) -> IoError {
     IoError::Pdf(format!("PDF: {what} of {w} × {h} px is past the {MAX_SIDE} px / {} MP limit, so the page can't be opened", MAX_IMAGE_PIXELS / 1_000_000))
 }
 
+/// Reports that the page's combined image decoding exceeds its pixel budget.
 fn total_error() -> IoError {
     IoError::Pdf(format!("PDF: the page's images decode to more than {} MP together, so it can't be opened", MAX_PAGE_IMAGE_PIXELS / 1_000_000))
 }
 
+/// Rejects image decoding when missing dimensions prevent a bounded allocation.
 fn no_size(what: &str) -> IoError {
     IoError::Pdf(format!("PDF: {what} doesn't declare its size, so its decoding can't be bounded; the page can't be opened"))
 }
 
+/// Reports why a codec's decoded dimensions cannot be checked before decoding.
 fn unchecked(what: &str, codec: &str, why: &str) -> IoError {
     IoError::Pdf(format!("PDF: {what} is a {codec} image whose size can't be checked before decoding ({why}), so the page can't be opened"))
 }
@@ -793,6 +810,7 @@ enum Encoded {
 }
 
 impl Encoded {
+    /// Returns the dimensions the codec will build, independent of the PDF image dictionary.
     fn size(self) -> (u32, u32) {
         match self {
             Encoded::Jpx(j) => j.size,
@@ -811,6 +829,7 @@ impl Encoded {
         u64::from(w) * u64::from(h) * planes
     }
 
+    /// Describes the codec-specific dimensions and, for JPX, component count used by preflight.
     fn describe(self) -> String {
         let (w, h) = self.size();
         match self {
@@ -1199,14 +1218,17 @@ fn jbig2_segment(d: &[u8], at: usize) -> Result<Jbig2Segment<'_>, &'static str> 
     Ok(Jbig2Segment { number, kind: flags & 0x3F, data, next: end })
 }
 
+/// Reads a big-endian 16-bit integer at the byte offset, returning `None` for a short slice.
 fn be16(d: &[u8], at: usize) -> Option<u16> {
     d.get(at..at + 2)?.try_into().ok().map(u16::from_be_bytes)
 }
 
+/// Reads a big-endian 32-bit integer at the byte offset, returning `None` for a short slice.
 fn be32(d: &[u8], at: usize) -> Option<u32> {
     d.get(at..at + 4)?.try_into().ok().map(u32::from_be_bytes)
 }
 
+/// Reads a big-endian 64-bit integer at the byte offset, returning `None` for a short slice.
 fn be64(d: &[u8], at: usize) -> Option<u64> {
     d.get(at..at + 8)?.try_into().ok().map(u64::from_be_bytes)
 }
@@ -1588,6 +1610,7 @@ struct Walk {
 }
 
 impl Walk {
+    /// Counts a newly visited XObject and rejects walks exceeding the object-count limit.
     fn count(&mut self) -> Result<(), IoError> {
         self.seen += 1;
         if self.seen > MAX_XOBJECTS {
@@ -1646,6 +1669,7 @@ impl Walk {
         self.nested(stream.dict().get::<Dict<'_>>(b"Resources"), depth)
     }
 
+    /// Walks an optional nested resource dictionary at the next depth, doing nothing when it is absent.
     fn nested(&mut self, resources: Option<Dict<'_>>, depth: usize) -> Result<(), IoError> {
         match resources {
             Some(r) => self.resources(Resources::new(r), depth + 1),
@@ -1947,6 +1971,7 @@ struct Placed {
 }
 
 impl Marks {
+    /// Adds a finite, positive-area rectangle to the mark bounds after intersecting it with the current clip.
     fn mark(&mut self, r: PtRect) {
         let r = match self.clips.last() {
             Some(c) => r.intersect(*c),
@@ -1982,6 +2007,7 @@ fn marks(page: &Page, decode: Option<usize>) -> Marks {
 }
 
 impl<'a> Device<'a> for Marks {
+    /// Counts a path and records its transformed bounds, conservatively expanding stroked paths.
     fn draw_path(&mut self, path: &BezPath, props: DrawProps<'a>, draw_mode: &DrawMode) {
         let mut r = path.bounding_box();
         if let DrawMode::Stroke(s) | DrawMode::FillAndStroke(_, s) = draw_mode {
@@ -1992,6 +2018,7 @@ impl<'a> Device<'a> for Marks {
         self.paths = self.paths.saturating_add(1);
     }
 
+    /// Pushes the clip path's bounding box intersected with the preceding clip.
     fn push_clip_path(&mut self, clip_path: &ClipPath) {
         let r = clip_path.path.bounding_box();
         let r = match self.clips.last() {
@@ -2001,8 +2028,10 @@ impl<'a> Device<'a> for Marks {
         self.clips.push(r);
     }
 
+    /// Ignores transparency-group compositing because this device collects bounds and placements rather than pixels.
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'a>>, _: BlendMode) {}
 
+    /// Counts glyphs and records a conservative glyph box transformed into page coordinates for each one.
     fn draw_glyph_run(&mut self, glyph_run: &GlyphRun<'_, 'a>, props: DrawProps<'a>, _: &DrawMode) {
         let b = PtRect::new(GLYPH_BOX[0], GLYPH_BOX[1], GLYPH_BOX[2], GLYPH_BOX[3]);
         for g in glyph_run.glyphs() {
@@ -2011,6 +2040,8 @@ impl<'a> Device<'a> for Marks {
         }
     }
 
+    /// Records image bounds and placement, counting stencils separately and sizing raster data without decoding.
+    /// Decodes only the selected raster image when its parts pass the per-image limits; callers preflight the page budget.
     fn draw_image(&mut self, image: Image<'a, '_>, props: ImageDrawProps<'a>) {
         // The transform places the image's own pixel grid (top row first).
         let (w, h) = (f64::from(image.width()), f64::from(image.height()));
@@ -2036,10 +2067,12 @@ impl<'a> Device<'a> for Marks {
         }
     }
 
+    /// Removes the innermost clip, restoring the preceding clip for subsequent marks.
     fn pop_clip(&mut self) {
         self.clips.pop();
     }
 
+    /// Leaves mark collection unchanged when an ignored transparency group ends.
     fn pop_transparency_group(&mut self) {}
 }
 

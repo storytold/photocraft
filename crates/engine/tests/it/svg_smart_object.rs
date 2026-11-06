@@ -22,6 +22,7 @@ fn red(s: &photocraft_raster::Surface, x: i32, y: i32) -> f32 {
     px[0]
 }
 
+/// Enlarged SVG placement keeps crisp vector edges and embeds contents that decode as shape layers.
 #[test]
 fn placed_svg_is_sharp_at_its_placement_scale_and_opens_as_shapes() {
     let mut s = Session::new();

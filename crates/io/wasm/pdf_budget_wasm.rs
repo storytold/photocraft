@@ -44,6 +44,7 @@ fn pdf_of(xobject: Option<(&str, &[u8])>, content: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Wraps raw fixture bytes in a PDF stream with an exact length and additional dictionary entries.
 fn stream(extra: &str, data: &[u8]) -> Vec<u8> {
     let mut o = format!("<< /Length {} {extra} >>\nstream\n", data.len()).into_bytes();
     o.extend_from_slice(data);

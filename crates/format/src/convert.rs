@@ -125,6 +125,7 @@ fn video_m(v: &photocraft_doc::VideoData, sink: &mut dyn Sink) -> crate::manifes
     }
 }
 
+/// Serializes a layer and its group children, storing binary payloads through the manifest's blob sink.
 fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
     let content = match &l.content {
         LayerContent::Raster(s) => ContentM::Raster { surface: surface_m(s, sink) },

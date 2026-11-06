@@ -32,6 +32,8 @@ pub(super) fn set_source(
     set_shared_source(s, id, label, keep_psd, new, pdf_import, validate_contents)
 }
 
+/// Validates readable replacement contents and reports whether their source is a PDF.
+/// Unavailable linked sources are classified by extension without attempting a decode.
 fn validate_replacement(meta: &Metadata, source: &SmartSource, pdf_import: Option<super::PdfImportOptions>) -> Result<bool> {
     let Some((file_name, bytes)) = source_bytes(meta, source) else {
         return Ok(matches!(source, SmartSource::Linked { path } if std::path::Path::new(path).extension().is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))));
@@ -41,6 +43,8 @@ fn validate_replacement(meta: &Metadata, source: &SmartSource, pdf_import: Optio
     Ok(is_pdf)
 }
 
+/// Replaces every shared instance in one undoable edit, preserving placement and filters.
+/// Optionally validates the new source, clears incompatible PDF options, and detaches old editors.
 fn set_shared_source(
     s: &mut Session,
     id: LayerId,
@@ -130,6 +134,8 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "fileName": name, "bytes": r.bytes.len(), "converted": true, "warnings": r.warnings}))
 }
 
+/// Activates an existing editor for this source projection or opens authorized contents in a new one.
+/// Distinct PDF projections receive separate editors even when their source identity is shared.
 pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;

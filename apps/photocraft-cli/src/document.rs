@@ -26,6 +26,7 @@ fn refuse_overwriting_input(in_place: bool, input: &Path, output: &Path) -> Resu
     Ok(())
 }
 
+/// Converts a file using the requested import/export policies without overwriting a read-only source.
 pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
@@ -56,6 +57,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     Ok(())
 }
 
+/// Prints document metadata and import/font warnings, omitting transient session history.
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
@@ -92,6 +94,7 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
 /// Reported once by `run --gpu` when a step is `file.export.quickExport`.
 const QUICK_EXPORT_CPU_NOTE: &str = "file.export.quickExport runs on the CPU compositor; --gpu applies to --out and the export commands that take a renderer";
 
+/// Executes ordered commands on a new or opened document and optionally exports the result.
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();

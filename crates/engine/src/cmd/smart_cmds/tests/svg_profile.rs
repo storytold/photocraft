@@ -133,6 +133,8 @@ fn svg_warp_frame_uses_bounded_bounds() {
     assert_eq!(frame(canvas(6001)), None);
 }
 
+/// SVG render caches distinguish destination profiles and preserve corrected colors through
+/// transforms, warps, and native save/reopen at every sample depth.
 #[test]
 fn svg_smart_render_cache_tracks_destination_profile_and_transform() {
     for depth in DEPTHS {

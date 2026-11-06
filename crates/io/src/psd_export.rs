@@ -972,6 +972,8 @@ impl Ex<'_> {
         r
     }
 
+    /// Registers a smart-object source, converting selected PDF content or PhotoCraft documents to nested PSB data.
+    /// Other payloads retain their bytes; linked sources must have readable image geometry.
     fn convert_source(
         &mut self,
         contents_id: SmartContentsId,

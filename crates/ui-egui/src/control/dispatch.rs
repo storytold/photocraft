@@ -1438,6 +1438,7 @@ fn forward_pointer_event(app: &mut PhotocraftApp, g: &PointerGesture, s: Pointer
 
 // ---- the application: open, save, quit ----
 
+/// Dispatch application open, save and quit requests; leave other methods for another handler.
 fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Option<Outcome> {
     let p = &req.params;
     Some(match req.method.as_str() {

@@ -2,6 +2,7 @@ use photocraft_automation::Headless;
 use photocraft_doc::LayerContent;
 use serde_json::json;
 
+/// Verifies a pathless smart-child save updates its parent without granting ambient filesystem writes.
 #[test]
 fn scoped_pathless_save_commits_smart_contents_without_filesystem_authority() {
     let mut headless = Headless::new();

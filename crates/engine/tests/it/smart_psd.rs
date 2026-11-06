@@ -75,6 +75,8 @@ fn keep(name: &str, bytes: &[u8]) {
     }
 }
 
+/// PSD round-trips preserve smart filters, masks, placement, and editable contents at every depth.
+/// Re-rendered pixels remain within tolerance, and repeated export does not duplicate source data.
 #[test]
 fn smart_objects_and_filters_survive_psd() {
     for depth in [8, 16, 32] {

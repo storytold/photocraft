@@ -29,6 +29,7 @@ fn smart(s: &Session, id: u64) -> &SmartObject {
     sm
 }
 
+/// Decodes and flattens a smart object's source, returning its first pixel for shared-content checks.
 fn contents_pixel(s: &Session, id: u64) -> [f32; 4] {
     let (name, bytes) = source_bytes(&s.active().unwrap().doc.metadata, &smart(s, id).source).unwrap();
     photocraft_compose::flatten(&decode_source(&name, &bytes, None).unwrap()).px[0]

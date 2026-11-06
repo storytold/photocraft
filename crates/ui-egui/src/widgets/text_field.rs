@@ -71,6 +71,8 @@ pub fn text_field_with_trailing(ui: &mut Ui, id: egui::Id, text: &mut String, hi
     text_field_in(ui, id, text, hint, [width, trailing], [false, false], None)
 }
 
+/// Draw the shared bounded editor with optional password masking and trailing space.
+/// Return its response and full field rectangle; oversized input changes only when edited.
 fn text_field_in(
     ui: &mut Ui,
     id: egui::Id,

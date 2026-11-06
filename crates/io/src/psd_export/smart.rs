@@ -16,6 +16,7 @@ pub(super) fn contents_uuid(contents_id: SmartContentsId, bytes: &[u8]) -> Strin
     crate::smart_map::uuid_from(identity.finalize().as_bytes())
 }
 
+/// Hashes the optional PDF import projection for source-conversion caching, distinguishing no projection from selected content.
 pub(super) fn pdf_selection_key(options: Option<&photocraft_doc::PdfImportOptions>) -> [u8; 32] {
     let mut hash = blake3::Hasher::new();
     if let Some(options) = options {

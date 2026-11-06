@@ -141,6 +141,7 @@ fn fill_dialog_draws_in_the_selected_language() {
     });
 }
 
+/// Languages with complete menus translate every Import PDF caption and enumerated choice.
 #[test]
 fn import_pdf_dialog_choices_have_translations() {
     let literals = [

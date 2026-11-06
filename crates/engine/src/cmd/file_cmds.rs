@@ -220,6 +220,7 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Registers file commands with their parameter contracts, availability checks, and journal policy.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {

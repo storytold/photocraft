@@ -99,6 +99,7 @@ fn cache() -> std::sync::MutexGuard<'static, Vec<CacheEntry>> {
     SOURCE_CACHE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// Keys decoded sources by bytes, destination format, and any nondefault PDF projection.
 pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat, pdf_import: Option<super::PdfImportOptions>) -> CacheKey {
     let mut hash = blake3::Hasher::new();
     hash.update(bytes);
@@ -379,6 +380,7 @@ mod tests {
         SourceImage { surface: Arc::new(s), bounds: Rect::new(0, 0, side, side) }
     }
 
+    /// Oversized images are not cached, while an image exactly at the byte limit is retained.
     #[test]
     fn a_source_larger_than_the_limit_is_returned_but_not_cached() {
         let key = cache_key(b"oversize", PixelFormat::RGBA8, None);

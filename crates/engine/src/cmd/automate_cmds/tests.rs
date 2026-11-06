@@ -336,6 +336,7 @@ fn statistics_makes_a_stack_mode_smart_object() {
     assert!(s.execute("file.scripts.statistics", json!({"mode": "average", "input": dir})).is_err());
 }
 
+/// Statistics embeds one top-level layer per input and preserves pixels with or without alignment.
 #[test]
 fn stacked_smart_object_holds_the_loaded_layers_at_its_top_level() {
     // Like Photoshop, Load Files into Stack › Create Smart Object (Statistics without alignment) and

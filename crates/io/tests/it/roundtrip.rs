@@ -104,6 +104,7 @@ fn round_trip_reaches_a_fixed_point() {
     assert_eq!(fa.layers(), fb.layers());
 }
 
+/// Preserves smart and shape raw blocks across PSD round trips while replacing stale placement and name entries.
 #[test]
 fn text_shape_smart_raw_blocks_survive() {
     use photocraft_doc::*;

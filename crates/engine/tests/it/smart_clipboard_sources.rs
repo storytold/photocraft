@@ -172,6 +172,8 @@ fn clipboard_group_keeps_nested_linked_sources() {
     assert_eq!(photocraft_compose::flatten(&s.active().unwrap().doc).px[0], [1.0, 0.0, 0.0, 1.0]);
 }
 
+/// Copying a selected smart object excludes private unselected linked records and unreadable tails
+/// from the pasted document's native save while retaining the selected record unchanged.
 #[test]
 fn copy_excludes_unselected_linked_records_from_native_save() {
     let mut doc = fixture(8);

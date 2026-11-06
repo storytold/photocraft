@@ -14,6 +14,7 @@ fn selected_session(doc: Document, ids: &[LayerId]) -> Session {
     s
 }
 
+/// Decodes the active smart object's embedded document for assertions about its editable contents.
 fn contents(s: &Session) -> Document {
     let SmartSource::Embedded { file_name, bytes } = active_smart(s).source else { panic!() };
     decode_source(&file_name, &bytes, None).unwrap()
@@ -153,6 +154,7 @@ fn explicit_layer_converts_only_that_layer_despite_multi_selection() {
     assert_eq!(contents(&s).layers[0].id, a_id);
 }
 
+/// Combined smart contents retain native identity and PSD layer order at every sample depth.
 #[test]
 fn combined_contents_survive_native_and_psd_save_open() {
     for depth in SampleType::ALL {

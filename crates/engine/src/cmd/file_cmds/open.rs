@@ -254,6 +254,7 @@ pub fn open_bytes_with_pdf(
     Ok(json!({"document": i, "color": color, "warnings": r.warnings}))
 }
 
+/// Reads a path and opens it with the requested format, PDF projection, and memory approval.
 pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.openAs")?.to_string();
     let as_ext = p.get("as").or_else(|| p.get("format")).and_then(Value::as_str);

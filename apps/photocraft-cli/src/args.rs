@@ -589,6 +589,7 @@ fn check_server(sub: &mut clap::Command, m: &ArgMatches, has_transport: bool, tr
 mod tests {
     use super::*;
 
+    /// Checks that layer-preservation flags do not replace raster colour-mode choices in either command.
     #[test]
     fn pdf_layers_flag_is_separate_from_color_mode() {
         for args in [

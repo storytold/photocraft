@@ -628,6 +628,7 @@ fn legacy_conversion_refuses_before_waiting_for_the_decode_gate() {
     handle.join().expect("worker thread");
 }
 
+/// Includes every pattern block variant in the owned conversion budget before global blocks are moved.
 #[test]
 fn owned_conversion_counts_patterns_before_moving_global_blocks() {
     use photocraft_psd::patterns::{PsdPattern, write_pattern_block};

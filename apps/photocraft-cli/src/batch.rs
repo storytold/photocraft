@@ -19,6 +19,7 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
+/// Recognizes existing files supported by the document importers or readable raster codecs.
 pub(crate) fn is_input(p: &Path) -> bool {
     let known = |e: &str| {
         matches!(e, "pcraft" | "psd" | "psb" | "pdf" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
@@ -47,6 +48,7 @@ fn strip_shell_steps(action: &mut Action) {
     (action.steps, action.disabled, action.dialogs) = (steps, disabled, dialogs);
 }
 
+/// Plans collision-checked batch outputs, runs the selected actions and reports per-file failures.
 pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (in_dir, out_dir) = (a.in_dir.as_path(), a.out.as_path());
     let (actions, mut set, warnings) = load_actions_file(&a.actions, a.action.as_deref())?;

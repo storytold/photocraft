@@ -174,6 +174,7 @@ fn stale_hash_content_identity_wrong_parent_deleted_and_locked_reject() {
     fails_without_edit(&mut s, params);
 }
 
+/// External SVG updates and exports reject linked sources and conflicting internal editors.
 #[test]
 fn linked_sources_and_internal_editor_conflicts_reject_without_reads() {
     let (mut s, id) = session(8);
@@ -707,6 +708,7 @@ fn native_update_authorizes_filters_on_every_shared_instance_before_editing() {
     assert_eq!(s.active().unwrap().doc, before);
 }
 
+/// Linking and re-embedding an edited EPS retain native bytes, vector preview, and rendered cache.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn eps_source_conversions_preserve_native_bytes_and_vector_preview() {

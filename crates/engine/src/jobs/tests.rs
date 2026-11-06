@@ -1319,6 +1319,8 @@ fn tiny_layered_pdf() -> Vec<u8> {
     bytes
 }
 
+/// Memory approval preserves the selected layered PDF page in inline and background imports.
+/// The imported document stays read-only and releases the pending source bytes.
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn approved_layered_pdf_retains_its_selected_projection() {
@@ -1357,6 +1359,7 @@ fn approved_layered_pdf_retains_its_selected_projection() {
     });
 }
 
+/// Consent for a smaller memory estimate does not authorize a larger import or admit a document.
 #[cfg(target_pointer_width = "64")]
 #[test]
 fn approval_is_bound_to_the_approved_estimate() {
@@ -1450,6 +1453,7 @@ fn a_failed_job_keeps_its_typed_error_for_wait_and_events() {
     );
 }
 
+/// Replacing a source inode fails approval with a source-identity error on both execution paths.
 #[cfg(unix)]
 #[test]
 fn a_replaced_path_is_refused_with_the_source_identity_reason() {
@@ -1478,6 +1482,7 @@ fn a_replaced_path_is_refused_with_the_source_identity_reason() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Rewriting a source is detected even when its size, bytes, inode, and modification time match.
 #[cfg(unix)]
 #[test]
 fn a_same_size_rewrite_with_a_restored_mtime_is_refused_with_the_identity_reason() {
