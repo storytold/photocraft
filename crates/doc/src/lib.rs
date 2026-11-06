@@ -15,6 +15,7 @@ pub mod blend_if;
 pub mod comps;
 pub mod effects;
 pub mod frame;
+mod layer_selection;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -37,6 +38,7 @@ pub use effects::{
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
 pub use frame::Frame;
+pub use layer_selection::SavedLayerSelection;
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
@@ -900,6 +902,10 @@ pub struct Document {
     pub ruler_origin: [f64; 2],
     /// Active selection as a grayscale coverage surface (None = no selection).
     pub selection: Option<Surface>,
+    /// Layer targeting carried by an imported file or an export snapshot. The editing session
+    /// consumes this on admission; live targeting remains session state, outside document edits.
+    /// `None` means the file did not specify targeting; an empty set explicitly deselects layers.
+    pub saved_layer_selection: Option<SavedLayerSelection>,
     pub metadata: Metadata,
     /// Global light used by layer effects (PSD resources 1037/1049).
     pub global_light: GlobalLight,
@@ -978,6 +984,8 @@ impl FileEncoding {
 pub type LayerPath = Vec<usize>;
 
 impl Document {
+    /// Creates an empty document with the requested size and pixel format.
+    /// Callers supply layers; new documents carry no imported layer-targeting metadata.
     pub fn new(name: impl Into<String>, size: Size, mode: ColorMode, depth: SampleType) -> Self {
         Document {
             id: DocId::fresh(),
@@ -992,6 +1000,7 @@ impl Document {
             guides: Guides::default(),
             ruler_origin: [0.0, 0.0],
             selection: None,
+            saved_layer_selection: None,
             metadata: Metadata::default(),
             global_light: GlobalLight::default(),
             paths: Vec::new(),

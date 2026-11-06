@@ -800,6 +800,70 @@ fn banded_layers_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #10195: banded and scratch-staged saves keep nested targeting against the emitted records,
+/// including the group's divider slot, with resource bytes checked independently of import.
+#[test]
+fn banded_and_staged_saves_preserve_layer_selection() {
+    struct RestoreOverrides {
+        bands: Option<(u64, usize)>,
+        directory: Option<std::path::PathBuf>,
+    }
+    impl Drop for RestoreOverrides {
+        fn drop(&mut self) {
+            banded::BANDS_FOR_TESTS.set(self.bands);
+            stage::DIR_FOR_TESTS.with(|d| *d.borrow_mut() = self.directory.take());
+        }
+    }
+    let _restore = RestoreOverrides { bands: banded::BANDS_FOR_TESTS.get(), directory: stage::DIR_FOR_TESTS.with(|d| d.borrow().clone()) };
+    let dir = std::env::temp_dir().join(format!("pc-psd-banded-selection-{}", std::process::id()));
+    let mut doc = banding_document(ColorMode::Rgb, SampleType::U8, 31, 19);
+    let mut child = doc.layers.pop().unwrap();
+    child.name = "Child".into();
+    let mut sibling = Layer::raster("Sibling", doc.pixel_format());
+    sibling.surface_mut().unwrap().fill_rect(doc.bounds(), &[0.2, 0.4, 0.6, 0.5]);
+    doc.saved_layer_selection = Some(photocraft_doc::SavedLayerSelection { active: Some(child.id), selected: vec![child.id, sibling.id] });
+    let pixels = child.surface().unwrap().read_region(doc.bounds());
+    doc.layers = vec![Layer::group("Group", vec![child]), sibling];
+
+    for force_psb in [false, true] {
+        for staged in [false, true] {
+            stage::DIR_FOR_TESTS.with(|d| *d.borrow_mut() = staged.then(|| dir.clone()));
+            let options = PsdExportOptions { force_psb, stage_on_scratch_from: staged.then_some(0), ..Default::default() };
+            let before = banded::BANDS_DONE.get();
+            let (file, warnings) = export_banded(&doc, &options, Some(2));
+            assert!(warnings.is_empty(), "{warnings:?}");
+            assert!(banded::BANDS_DONE.get() > before, "the tiny layers were saved in bands");
+            for layer in file.layers().iter().filter(|l| matches!(l.name().as_str(), "Child" | "Sibling")) {
+                assert!(layer.channels.iter().all(|c| c.stored.is_some() == staged), "staged {staged}: {}", layer.name());
+            }
+            let mut output = std::io::Cursor::new(Vec::new());
+            file.write_to(&mut output).unwrap();
+            let bytes = output.into_inner();
+            let parsed = PsdFile::from_bytes(&bytes).unwrap();
+            assert_eq!(parsed.header.version.is_psb(), force_psb);
+            let layers = parsed.layers();
+            let primary = layers.iter().position(|l| l.name() == "Child").unwrap();
+            assert_eq!(primary, 1, "the closing divider occupies record zero");
+            assert_eq!(layers[0].section_type(), SectionType::BoundingDivider);
+            let mut selected_bytes = 2_u16.to_be_bytes().to_vec();
+            for name in ["Child", "Sibling"] {
+                selected_bytes.extend(layers.iter().find(|l| l.name() == name).unwrap().layer_id().unwrap().to_be_bytes());
+            }
+            assert_eq!(parsed.resource(ids::LAYER_STATE).unwrap().data, (primary as u16).to_be_bytes());
+            assert_eq!(parsed.resource(ids::LAYER_SELECTION_IDS).unwrap().data, selected_bytes);
+            for id in [ids::LAYER_STATE, ids::LAYER_SELECTION_IDS] {
+                assert_eq!(parsed.resources.iter().filter(|r| r.id == id).count(), 1);
+            }
+            let read = crate::import(if force_psb { "banded.psb" } else { "banded.psd" }, &bytes).unwrap().document;
+            let saved = read.saved_layer_selection.as_ref().unwrap();
+            assert_eq!(read.layer(saved.active.unwrap()).unwrap().name, "Child");
+            assert_eq!(saved.selected.iter().map(|id| read.layer(*id).unwrap().name.as_str()).collect::<Vec<_>>(), ["Child", "Sibling"]);
+            assert_eq!(read.layer(saved.active.unwrap()).unwrap().surface().unwrap().read_region(read.bounds()), pixels);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #5333: a save cancelled while a layer is saved in bands stops at the next band (it neither
 /// finishes the layer nor encodes it again raw) and reports the cancel, so it never reaches its
 /// commit point and the target is never written: RLE and ZIP, PSD and PSB, in memory and staged.

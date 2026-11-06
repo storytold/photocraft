@@ -242,6 +242,59 @@ fn convert_png_pcraft_png_is_lossless() {
     std::fs::remove_dir_all(d).unwrap();
 }
 
+/// #10195: convert keeps imported metadata without a session, while run and batch capture the
+/// latest session target. Exercise the actual binary so its save entry points cannot diverge.
+#[test]
+fn convert_run_and_batch_preserve_saved_layer_selection() {
+    use photocraft_engine::Session;
+
+    let d = tmp("saved-layer-selection");
+    let input = d.join("input");
+    std::fs::create_dir_all(&input).unwrap();
+    let source = input.join("layers.psd");
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 2, "height": 1, "background": "white"})).unwrap();
+    session.execute("layer.new.layer", json!({"name": "Middle"})).unwrap();
+    session.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
+    let st = session.active().unwrap();
+    let ids: Vec<_> = st.doc.layers.iter().map(|l| l.id).collect();
+    // Primary Middle deliberately differs from the last member of the selected set.
+    session.restore_layer_selection(Some(ids[1]), &ids, Some(ids[0])).unwrap();
+    let bytes = photocraft_io::export(&session.active().unwrap().save_snapshot(), "layers.psd", &Default::default()).unwrap().bytes;
+    std::fs::write(&source, bytes).unwrap();
+    let assert_target = |path: &Path, active: Option<&str>, selected: &[&str]| {
+        let imported = photocraft_automation::files::open(path).unwrap().document;
+        let mut reopened = Session::new();
+        reopened.add_document(imported, None);
+        let st = reopened.active().unwrap();
+        assert_eq!(st.active_layer.and_then(|id| st.doc.layer(id)).map(|l| l.name.as_str()), active, "{}", path.display());
+        let mut names: Vec<_> = st.selected_layers().iter().map(|id| st.doc.layer(*id).unwrap().name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, selected, "{}", path.display());
+        assert!(st.doc.saved_layer_selection.is_none(), "file targeting is consumed on admission");
+    };
+    assert_target(&source, Some("Middle"), &["Background", "Middle", "Top"]);
+
+    let converted = d.join("converted.pcraft");
+    ok(bin().arg("convert").arg(&source).arg(&converted));
+    assert_target(&converted, Some("Middle"), &["Background", "Middle", "Top"]);
+    let converted_back = d.join("converted.psb");
+    ok(bin().arg("convert").arg(&converted).arg(&converted_back));
+    assert_target(&converted_back, Some("Middle"), &["Background", "Middle", "Top"]);
+
+    let run = d.join("run.psb");
+    ok(bin().arg("run").arg(&converted).args(["--cmd", "select.deselectLayers", "--out"]).arg(&run));
+    assert_target(&run, None, &[]);
+
+    let actions = d.join("actions.json");
+    std::fs::write(&actions, json!([["layer.select", {"name": "Top"}], ["layer.select", {"name": "Middle", "mode": "add"}]]).to_string()).unwrap();
+    let output = d.join("batch");
+    let printed = ok(bin().args(["batch", "--actions"]).arg(&actions).arg("--in").arg(&input).arg("--out").arg(&output).args(["--format", "pcraft"]));
+    assert!(printed.stdout.contains("1 succeeded, 0 failed"), "{}", printed.stdout);
+    assert_target(&output.join("layers.pcraft"), Some("Middle"), &["Middle", "Top"]);
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 #[test]
 fn convert_errors() {
     let d = tmp("converr");

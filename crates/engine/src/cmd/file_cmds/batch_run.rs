@@ -311,11 +311,12 @@ fn process_one(
             }
         }
         let d = scratch.active().ok_or(EngineError::NoDocument)?;
+        let snapshot = d.save_snapshot();
         let warnings = if let Some(format) = options.format {
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
-            if let Some(ctx) = options.ctx { save_batch_doc(&d.doc, out, &ext, save, ctx)? } else { save_doc_as(&d.doc, out, &ext, save)? }
+            if let Some(ctx) = options.ctx { save_batch_doc(&snapshot, out, &ext, save, ctx)? } else { save_doc_as(&snapshot, out, &ext, save)? }
         } else {
-            save_doc(&d.doc, out, save)?
+            save_doc(&snapshot, out, save)?
         };
         record_export_warnings(&mut scratch, out, warnings);
         Ok(())
@@ -975,7 +976,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                         charge_script_step(scratch)?;
                         if batch_save_point(id) {
                             let st = scratch.active_mut().ok_or(EngineError::NoDocument)?;
-                            saved = Some(st.doc.clone());
+                            saved = Some(st.save_snapshot());
                             // Batch performs the action's Save / Save As (to its destination), so the
                             // document is saved there as far as the steps after it see: a Close recorded
                             // without a save policy (`"save":"ask"`) then closes it. A Save a Copy leaves
@@ -1126,7 +1127,7 @@ fn batch_open_documents(
                 charge_script_step(s)?;
                 if batch_save_point(command) {
                     let state = s.active_mut().ok_or(EngineError::NoDocument)?;
-                    saved = Some(state.doc.clone());
+                    saved = Some(state.save_snapshot());
                     // With no destination nothing is written, so the document stays changed.
                     if command != "file.saveACopy" && planned.is_some() {
                         if marked.is_none() {
@@ -1145,9 +1146,9 @@ fn batch_open_documents(
             let Some(paths) = &planned else { return Ok(()) };
             let out = paths.get(index).ok_or_else(|| EngineError::Other("batch output plan is incomplete".into()))?;
             let doc = match saved {
-                Some(saved) if s.active().is_some_and(|state| state.doc.id == saved.id) => s.active().ok_or(EngineError::NoDocument)?.doc.clone(),
+                Some(saved) if s.active().is_some_and(|state| state.doc.id == saved.id) => s.active().ok_or(EngineError::NoDocument)?.save_snapshot(),
                 Some(saved) => saved,
-                None => s.documents().iter().find(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?.doc.clone(),
+                None => s.documents().iter().find(|state| state.doc.id.0 == *id).ok_or(EngineError::NoDocument)?.save_snapshot(),
             };
             let ext = if format == "same" { same_format(path) } else { format.trim_start_matches('.').to_ascii_lowercase() };
             save_doc_as(&doc, out, &ext, save)?;

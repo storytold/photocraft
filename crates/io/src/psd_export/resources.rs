@@ -1,4 +1,5 @@
 use super::{Document, ImageResource, TaggedBlock};
+use photocraft_psd::resources::ids;
 
 pub(crate) fn legacy_name(s: &str) -> Vec<u8> {
     s.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c as u8 } else { b'?' }).take(255).collect()
@@ -87,7 +88,12 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
 }
 
 /// Whether an imported (unmodelled) resource still describes the document and is written back.
+/// Layer-target resources are always excluded because the save snapshot regenerates them.
 pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bool {
+    // Targeting is regenerated from the save snapshot, never from a stale imported copy.
+    if matches!(id, ids::LAYER_STATE | ids::LAYER_SELECTION_IDS) {
+        return false;
+    }
     // Measurement scale / count resources: only while they still describe the document.
     if !crate::annotations_map::keep_resource(doc, id) {
         return false;
