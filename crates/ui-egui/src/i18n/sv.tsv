@@ -3197,6 +3197,8 @@ curves	Smooth	Jämna ut
 	Step {step} is waiting for its dialog	Steg {step} väntar på sin dialogruta
 @plural	{n} action|{n} actions	{n} åtgärd|{n} åtgärder
 	Background (Default)	Bakgrund (standard)
+	Background (default)	Bakgrund (standard)
+	Transparent (default)	Genomskinlig (standard)
 	Content-Aware Fill	Innehållsmedveten fyllning
 # Batch / Image Processor
 	Include All Subfolders	Ta med alla undermappar
@@ -4771,3 +4773,23 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was discarded	Banan kasserades
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
+
+# Action Stop message (#8386)
+	Message	Meddelande
+# Playback Options (#5212)
+	Playback Options…	Uppspelningsalternativ…
+	Playback Options	Uppspelningsalternativ
+	Accelerated	Accelererad
+	Step by Step	Steg för steg
+	Pause For:	Paus i:
+	Pause For	Paus i
+	seconds	sekunder
+	Create a single history state	Skapa ett enda historikläge
+
+# Channels panel menu (#11451)
+	Channel Options…	Kanalalternativ…
+	Specify Channels:	Ange kanaler:
+	Not enough grayscale documents for this mode.	Det finns inte tillräckligt många gråskaledokument för det här läget.
+	Pick a different document for each channel.	Välj ett annat dokument för varje kanal.
+	A picked document is no longer open.	Ett av de valda dokumenten är inte längre öppet.
+	A picked document is no longer a grayscale document of the same size.	Ett av de valda dokumenten är inte längre ett gråskaledokument i samma storlek.
