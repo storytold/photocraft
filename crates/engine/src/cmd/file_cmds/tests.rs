@@ -1727,6 +1727,7 @@ fn save_a_copy_writes_the_dds_options_asked_for() {
     }
 }
 
+/// `pngCompression` is unset when absent or null, one of four named levels, or a bad parameter.
 #[test]
 fn png_compression_param_names_the_four_levels_and_refuses_anything_else() {
     use photocraft_codecs::PngCompression;

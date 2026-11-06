@@ -303,9 +303,13 @@ fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// `doc.save`'s `pngCompression` sets the PNG encoder's deflate effort; a value it doesn't name is
+/// refused before a file is written.
 #[test]
 fn doc_save_png_compression_reaches_the_encoder() {
     let base = std::env::temp_dir().join(format!("pc-doc-save-png-{}", std::process::id()));
+    // Fresh, so a file left by an earlier run can't make the workspace refuse a write.
+    let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(&base).unwrap();
     let mut seed = 1u32;
     let noise: Vec<u8> = (0..128 * 96 * 3)
