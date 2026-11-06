@@ -140,6 +140,64 @@ fn shape_blur_admission_counts_the_tiles_the_run_processes() {
     assert!(pool.install(|| working_bytes_in(&wide, wide_area, canvas, 8, canvas)) > 1 << 30);
 }
 
+/// The clipped admission is exactly the admission of the area the run processes, for radius and
+/// whole-bounds filters alike: nothing when the area misses the extent, the area itself when the
+/// extent holds it, and the overlap otherwise.
+#[test]
+fn clipped_admission_counts_the_area_inside_the_extent() {
+    let canvas = Rect::new(0, 0, 3000, 2000);
+    let size = (2 * shape_blur::radius(60.0).ceil() as usize + 1) as i32;
+    let mask = Image { rect: Rect::new(0, 0, size, size), ch: 1, data: vec![1.0; (size * size) as usize] };
+    let bounds_filter = FilterParams::PolarCoordinates { mode: PolarMode::RectangularToPolar };
+    assert_eq!(bounds_filter.halo_for(canvas), Halo::Bounds);
+    let filters = [
+        FilterParams::GaussianBlur { radius: 40.0 },
+        FilterParams::ShapeBlur { radius: 60.0, shape: BlurShape::Circle },
+        FilterParams::CustomShapeBlur { radius: 60.0, kernel: Some(std::sync::Arc::new(mask)) },
+        bounds_filter,
+    ];
+    let inside = Rect::new(500, 400, 1500, 1200);
+    let straddling = Rect::new(-200, -100, 1000, 900);
+    let overlap = Rect::new(0, 0, 1000, 900);
+    for p in &filters {
+        // Disjoint or empty: the run processes nothing, so admits nothing.
+        assert_eq!(working_bytes_in(p, Rect::new(4000, 0, 4500, 500), canvas, 4, canvas), 0, "{p:?}");
+        assert_eq!(working_bytes_in(p, Rect::EMPTY, canvas, 4, canvas), 0, "{p:?}");
+        assert_eq!(working_bytes_in(p, inside, canvas, 4, Rect::EMPTY), 0, "{p:?}");
+        // Inside the extent, or an extent larger than the area: unchanged.
+        assert_eq!(working_bytes_in(p, inside, canvas, 4, canvas), working_bytes(p, inside, canvas, 4), "{p:?}");
+        assert_eq!(working_bytes_in(p, canvas, canvas, 4, canvas.inflate(5000)), working_bytes(p, canvas, canvas, 4), "{p:?}");
+        // Straddling: the overlap.
+        assert_eq!(working_bytes_in(p, straddling, canvas, 4, canvas), working_bytes(p, overlap, canvas, 4), "{p:?}");
+        assert!(working_bytes_in(p, straddling, canvas, 4, canvas) > 0, "{p:?}");
+    }
+}
+
+/// A custom shape holds the same single output tile as a built-in one through the clipped path
+/// (plus its kernel), and the row accumulator is one tile row of f64 at the largest tile
+/// [`auto_tile`] makes (2048 px; `shape_blur::Prepared::checked_run` allocates `tile × channels`).
+#[test]
+fn custom_shape_blur_admission_counts_one_tile_buffer_at_the_largest_tile() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().expect("thread pool");
+    let canvas = Rect::new(0, 0, 9000, 9000);
+    let radius = 1000.0f32;
+    let plain = FilterParams::ShapeBlur { radius, shape: BlurShape::Circle };
+    let tile = auto_tile(&plain, canvas) as u64;
+    assert_eq!(tile, 2048);
+    let Halo::Radius(reach) = plain.halo_for(canvas) else { panic!("Shape Blur has a radius halo") };
+    let window = tile + 2 * reach as u64;
+    let per_worker = (window * window + tile * tile) * 16 + ((window + 1) * (window + 1) + tile) * 4 * 8;
+    let results = (RESULT_BUDGET as u64) * 3;
+    let area = output_area(&plain, canvas, canvas, None);
+    assert_eq!(pool.install(|| working_bytes_in(&plain, area, canvas, 4, canvas)), results + per_worker * 4);
+
+    let size = (2 * shape_blur::radius(radius).ceil() as usize + 1) as i32;
+    let mask = Image { rect: Rect::new(0, 0, size, size), ch: 1, data: vec![1.0; (size * size) as usize] };
+    let custom = FilterParams::CustomShapeBlur { radius, kernel: Some(std::sync::Arc::new(mask)) };
+    let kernel = (size * size) as u64 * 4 + shape_blur::max_spans(size as usize) as u64 * 20;
+    assert_eq!(pool.install(|| working_bytes_in(&custom, area, canvas, 4, canvas)), results + per_worker * 4 + kernel);
+}
+
 fn fmt(s: SampleType) -> PixelFormat {
     PixelFormat::new(ColorMode::Rgb, s, true)
 }
