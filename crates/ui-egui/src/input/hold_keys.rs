@@ -13,9 +13,10 @@
 //!   gradient, eyedropper and other non-selection tools ([`cmd_moves`]); so ⌘-drag with the
 //!   Brush moves the layer, ⌘⌥-drag duplicates it first (`move_mods`), and a ⌘-click picks the
 //!   layer under the pointer, as with the Move tool itself; ⌘-arrows nudge ([`cmd_nudges`]). The
-//!   selection tools do their own ⌘ handling in `canvas` (⌘ inside the selection cuts the
-//!   selected pixels, outside it moves the layer, #896), and the Hand, Zoom, Crop, Slice, Path
-//!   Selection, shape, Pen and Type tools keep ⌘ for themselves.
+//!   Zoom tool's ⌘ is the Move tool too: Adobe's shortcut list excepts only the Hand and shape
+//!   tools from ⌘-as-Move. The selection tools do their own ⌘ handling in `canvas` (⌘ inside the
+//!   selection cuts the selected pixels, outside it moves the layer, #896), and the Hand, Crop,
+//!   Slice, Path Selection, shape, Pen and Type tools keep ⌘ for themselves.
 //! - With the Hand tool selected, ⌘ (Ctrl off the Mac) is Zoom In while held and ⌥ (with or
 //!   without ⌘) Zoom Out ([`hand_zoom`], #6434).
 //! - `~` (the backtick key) with the Brush or Pencil: a stroke started while it is held erases,
@@ -67,11 +68,12 @@ impl Temporary {
 }
 
 /// Tools on which holding ⌘ (Ctrl off the Mac) is the Move tool. Photoshop excepts the Hand,
-/// Rotate View, Zoom, Slice, Path and Direct Selection, shape, Pen and Type tools (⌘ means
-/// something else to each) and the Crop tool's frame; a Free Transform in progress keeps ⌘ for its
-/// distort handles. The selection tools are left out too: for them ⌘ is handled per press in
-/// `canvas::tool_event` (`selection_drag_kind`, `command_moves_layer`), which needs the selection
-/// tool to stay in effect.
+/// Rotate View, Slice, Path and Direct Selection, shape, Pen and Type tools (⌘ means something
+/// else to each) and the Crop tool's frame; a Free Transform in progress keeps ⌘ for its distort
+/// handles. The Zoom tool is not an exception: Adobe's "Keys for selecting and moving objects"
+/// excepts only the Hand and shape tools from ⌘-as-Move. The selection tools are left out too:
+/// for them ⌘ is handled per press in `canvas::tool_event` (`selection_drag_kind`,
+/// `command_moves_layer`), which needs the selection tool to stay in effect.
 pub fn cmd_moves(t: Tool) -> bool {
     !t.is_type()
         && !matches!(
@@ -79,7 +81,6 @@ pub fn cmd_moves(t: Tool) -> bool {
             Tool::Move
                 | Tool::Hand
                 | Tool::RotateView
-                | Tool::Zoom
                 | Tool::Crop
                 | Tool::PerspectiveCrop
                 | Tool::Slice

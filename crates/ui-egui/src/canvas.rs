@@ -1294,6 +1294,8 @@ struct CanvasOverlayInput<'a> {
     edge_rect: Rect,
     panning: bool,
     zoom_out: &'a dyn Fn(bool) -> bool,
+    /// The held temporary tool (`hold_keys`) this frame: the guide cursor reads it.
+    temporary: Option<crate::hold_keys::Temporary>,
 }
 
 fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>, ants: Vec<egui::Shape>) {
@@ -1386,6 +1388,12 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         let d = xf.to_doc(p);
         if tool == Tool::Move {
             return crate::rulers::guide_at(app, d[0], d[1]);
+        }
+        // A held temporary Hand / Zoom tool (Space, ⌘Space, ⌥Space, and the Hand's ⌘ / ⌥): the
+        // frame's tool is that tool's, ⌘ is the key's own gesture and not the Move tool's, so
+        // a guide under the pointer shows no guide cursor (its press would not move one).
+        if input.temporary.is_some() {
+            return None;
         }
         command_guide_at(app, tool, d, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
     });
@@ -2135,6 +2143,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             edge_rect,
             panning,
             zoom_out: &zoom_out,
+            temporary,
         };
         paint_primary_overlays(app, ui, &mut view, &input, ants);
     } else {
