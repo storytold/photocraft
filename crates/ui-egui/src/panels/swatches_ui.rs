@@ -1,6 +1,8 @@
 //! Window › Swatches: the swatch library (`photocraft_engine::presets::swatches`) in the shared
 //! preset browser: groups with disclosure triangles, a colour grid with name tooltips, a context
-//! menu (Rename, Delete, Move to), and the footer (size · New Group · New Swatch · Delete).
+//! menu (Rename, Delete, Move to), and the footer (size · New Group · New Swatch · Delete). Under
+//! the library a Recently Used Colors row lists what the Eyedropper sampled and the pickers picked
+//! lately, newest first, in the grid's own tiles (#11524).
 //!
 //! As in Photoshop, clicking a swatch sets the foreground colour (and recolours selected type or
 //! fills the selected shape layers with a shape, Pen or path selection tool);
@@ -13,7 +15,7 @@
 use std::ffi::OsStr;
 use std::sync::Arc;
 
-use egui::{Color32, CornerRadius, Rect};
+use egui::{Color32, CornerRadius, Rect, Sense, WidgetInfo, vec2};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -70,16 +72,81 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let canvas = app.last_canvas_rect;
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     st.sizes.entry(PANEL.to_string()).or_insert(DEFAULT_SIZE);
+    let size = st.sizes.get(PANEL).copied().unwrap_or(DEFAULT_SIZE);
     let max_h = (ui.available_height() - 30.0).max(60.0);
+    // Tiles of the Recently Used Colors row clicked this frame; they need `app` mutably, so they
+    // are taken once the browser is done with it.
+    let mut picked: Vec<[f32; 3]> = Vec::new();
+    let mut recent = |ui: &mut egui::Ui| recent_row(app, ui, size, &mut picked);
     // Flat, touching squares, as in Photoshop's Swatches panel (#5103).
-    let events = browser(ui, &mut st, PANEL, &groups, Place { canvas, max_h, new_tip: tl!("Create new swatch"), flush: true }, &mut |ui, r: Rect, gi, ii| {
-        let c = table.get(gi).and_then(|g| g.get(ii)).copied().unwrap_or(Color32::GRAY);
-        ui.painter().rect_filled(r, CornerRadius::ZERO, c);
-    });
+    let events = browser(
+        ui,
+        &mut st,
+        PANEL,
+        &groups,
+        Place { canvas, max_h, new_tip: tl!("Create new swatch"), flush: true, extra: Some(&mut recent) },
+        &mut |ui, r: Rect, gi, ii| {
+            let c = table.get(gi).and_then(|g| g.get(ii)).copied().unwrap_or(Color32::GRAY);
+            ui.painter().rect_filled(r, CornerRadius::ZERO, c);
+        },
+    );
+    drop(recent);
     app.ui.presets_ui = st;
     let mods = ui.input(|i| i.modifiers);
     for e in events {
         handle(app, e, mods.alt || mods.command || mods.ctrl);
+    }
+    for color in picked {
+        pick_recent_color(app, color);
+    }
+}
+
+/// The inset of the flush swatch grid, so the Recently Used Colors tiles line up with it.
+const GRID_INSET: f32 = 8.0;
+
+/// The Recently Used Colors row under the library (#11524): the colours the Eyedropper sampled and
+/// the Colour Picker and shape Fill and Stroke popovers picked lately, newest first — Photoshop's
+/// history, and exactly the list the popovers show (`crate::paint_picker`, `Preferences`
+/// `recentColors`, so it survives a restart). The row is absent while nothing has been picked, so
+/// an untouched library reads as before.
+fn recent_row(app: &PhotocraftApp, ui: &mut egui::Ui, size: f32, picked: &mut Vec<[f32; 3]>) {
+    let recent = crate::paint_picker::recent_colors(&app.session);
+    if recent.is_empty() {
+        return;
+    }
+    let t = crate::theme::Tokens::get(ui.ctx());
+    crate::widgets::hairline(ui);
+    ui.add_space(4.0);
+    // The popover's own label style, so both read the same (#11524).
+    ui.label(egui::RichText::new(tl!("Recently Used Colors")).color(t.text_dim).size(11.5));
+    let w = ui.available_width();
+    // Photoshop's tiles stay usable however small the library's cells are dragged.
+    let cell = size.max(16.0);
+    let cols = ((w - GRID_INSET) / cell).floor().max(1.0) as usize;
+    let rows = recent.len().div_ceil(cols);
+    let (area, _) = ui.allocate_exact_size(vec2(w, rows as f32 * cell + 4.0), Sense::hover());
+    for (i, rgb) in recent.iter().enumerate() {
+        let (cx, cy) = ((i % cols) as f32, (i / cols) as f32);
+        let r = Rect::from_min_size(area.min + vec2(GRID_INSET + cx * cell, 2.0 + cy * cell), vec2(cell, cell));
+        let resp = ui.interact(r, ui.scope_id().with(("recent-colors", i)), Sense::click());
+        let name = crate::color_picker_ui::hex(*rgb);
+        resp.widget_info(|| WidgetInfo::labeled(egui::Role::Button, true, &name));
+        ui.painter().rect_filled(r, CornerRadius::ZERO, c32(*rgb));
+        // Touching cells draw no border of their own: only the hovered one is outlined, as above.
+        if resp.hovered() {
+            ui.painter().rect_stroke(r, CornerRadius::ZERO, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside);
+        }
+        if resp.on_hover_text(&name).clicked() {
+            picked.push(*rgb);
+        }
+    }
+}
+
+/// Clicking a Recently Used Colors tile: it becomes the foreground colour, as picking a swatch
+/// does — the selected characters and shape layers take it too (#364, #9238).
+fn pick_recent_color(app: &mut PhotocraftApp, rgb: [f32; 3]) {
+    if run(app, "tools.setColors", json!({"foreground": [rgb[0], rgb[1], rgb[2], 1.0]})).is_some() {
+        crate::apply_color::swatch_picked(app);
     }
 }
 
@@ -397,6 +464,31 @@ mod tests {
         assert_eq!(runs[0].len, 5, "the selection is its own run");
         assert_eq!(runs[0].style.color.to_rgba8(), [230, 40, 40, 255]);
         assert_eq!(runs[1].style.color.to_rgba8(), [255, 255, 255, 255]);
+    }
+
+    /// #11524: the Recently Used Colors sit under the library, in the grid's own tiles, newest
+    /// first, and clicking one makes that colour the foreground — Photoshop's history of what the
+    /// Eyedropper and the pickers used. While nothing has been picked there is no row at all.
+    #[test]
+    fn recently_used_colors_list_under_the_library() {
+        use egui_kittest::kittest::Queryable;
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(300.0, 8000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel(app, ui), app);
+        h.run_steps(2);
+        let head = |h: &Harness<'_, PhotocraftApp>| h.query_all_by_label("Recently Used Colors").next().map(|n| n.rect());
+        let tile = |h: &Harness<'_, PhotocraftApp>, hex: &str| h.query_all_by_label(hex).map(|n| n.rect()).min_by(|a, b| a.left().total_cmp(&b.left()));
+        assert!(head(&h).is_none(), "no row before the first pick");
+        assert!(tile(&h, "#ff0000").is_none(), "and no tile to click");
+        crate::paint_picker::remember(h.state_mut(), [1.0, 0.0, 0.0]);
+        crate::paint_picker::remember(h.state_mut(), [0.0, 1.0, 0.0]);
+        h.run_steps(2);
+        let label = head(&h).expect("the row shows once a colour was picked");
+        assert!(label.top() > first_cell(&h).y, "the row reads under the swatch grid: {label:?}");
+        assert!(tile(&h, "#00ff00").expect("the green tile").left() < tile(&h, "#ff0000").expect("the red tile").left(), "newest first");
+        let at = tile(&h, "#ff0000").expect("the red tile").center();
+        click(&mut h, at, Modifiers::NONE);
+        assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "a tile is the foreground");
+        assert_eq!(h.state().session.tools.background, [1.0, 1.0, 1.0, 1.0], "its background untouched");
     }
 
     /// #4790: the footer (size slider, New Group, New, Delete) stays inside the panel however short

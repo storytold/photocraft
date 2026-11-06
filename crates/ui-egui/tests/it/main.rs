@@ -33,6 +33,7 @@ mod marquee_autoscroll;
 mod paint_bucket_all_layers;
 mod pattern_preview_canvas;
 mod radial_blur_center;
+mod recent_colors;
 mod remove_channel_target;
 mod system_locale;
 mod transform_readout_units;

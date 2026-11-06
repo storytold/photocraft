@@ -1636,6 +1636,36 @@ fn eyedropper_drag_updates_the_sampled_colour() {
     assert!(app.session.tools.foreground[1] > 0.99 && app.session.tools.foreground[0] < 0.01);
 }
 
+/// #11524: what the Eyedropper picks is remembered, as Photoshop's Recently Used Colors, which the
+/// Swatches panel now lists: newest first, every colour once, ⌥ (background) samples included.
+#[test]
+fn eyedropper_samples_join_the_recently_used_colors() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 60, "height": 20, "background": "transparent"})).unwrap();
+    for (x, fill) in [(0.0, "#ff0000"), (20.0, "#00ff00"), (40.0, "#0000ff")] {
+        app.run("shape.create", json!({"kind": "rect", "rect": [x, 0.0, 20.0, 20.0], "fill": fill})).unwrap();
+    }
+    app.ui.tool = Tool::Eyedropper;
+    let hex = |c: [f32; 4]| crate::color_picker_ui::hex([c[0], c[1], c[2]]);
+    let recent = |app: &PhotocraftApp| crate::paint_picker::recent_colors(&app.session).into_iter().map(crate::color_picker_ui::hex).collect::<Vec<String>>();
+    assert!(recent(&app).is_empty(), "nothing has been sampled yet");
+    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let red = hex(app.session.tools.foreground);
+    assert_eq!(recent(&app), [red.as_str()], "the first sample, remembered as it was applied");
+    // The drag keeps recording, newest first; coming back to a colour moves it to the front
+    // instead of listing it twice.
+    tool_event(&mut app, ToolEvent::Move { x: 30.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let green = hex(app.session.tools.foreground);
+    tool_event(&mut app, ToolEvent::Move { x: 10.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert_eq!(recent(&app), [red.as_str(), green.as_str()], "{red} before {green}");
+    // A ⌥ sample feeds the background and the history alike.
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::ALT);
+    assert_eq!(recent(&app), [hex(app.session.tools.background), red, green], "a background sample is just as recent");
+    // Off the image there is nothing to sample and nothing to remember.
+    tool_event(&mut app, ToolEvent::Down { x: 500.0, y: 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    assert_eq!(recent(&app).len(), 3, "a failed sample adds nothing");
+}
+
 /// #4298: an adjustment layer has no pixels, so after its icon thumbnail is clicked (the
 /// Layers panel no longer targets the mask) Fill, the fill keys and the Paint Bucket still
 /// edit its mask, as in Photoshop, instead of failing with "not a pixel layer".
