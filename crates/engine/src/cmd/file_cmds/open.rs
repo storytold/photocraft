@@ -486,7 +486,7 @@ pub(crate) fn prepare_place(input: PlaceInput, ctx: &JobCtx) -> Result<Prepared>
     // memory budget; resampling it to the frame's size first would allocate that surface twice.
     let px = if frame.is_none() {
         ctx.progress(0.6, "Flattening");
-        super::check_flattenable(&src, "file.place")?;
+        super::check_flattenable(&src, cmd)?;
         let bounds = src.bounds();
         let mut px = ctx
             .stage(0.6, 0.7, "Flattening", |ctl| photocraft_compose::composite_to_surface_with_interrupt(&src, bounds, fmt, None, ctl))
