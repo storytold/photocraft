@@ -437,6 +437,51 @@ fn crop_refuses_a_bad_explicit_rect_instead_of_cropping_to_the_selection() {
     assert_eq!(doc(&s).size, Size::new(21, 10));
 }
 
+/// The explicit rectangle of #9279's edge cases, each with a selection elsewhere that a fallback
+/// would crop to: `0` is a given origin, numeric strings are not numbers (refused, as `x`/`y`
+/// already were), and a rectangle partly past the canvas is used as passed, never clamped.
+#[test]
+fn crop_rect_edge_cases_never_fall_back_to_the_selection() {
+    let with_selection = || {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+        s
+    };
+    // `x`/`y` of 0 count as given: the red square (10, 5)..(20, 15) stays where it was, where a
+    // crop to the selection would have moved it to (5, 3).
+    let mut s = with_selection();
+    s.execute("image.crop", json!({"x": 0, "y": 0, "width": 15, "height": 10})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(15, 10));
+    assert_eq!(doc(&s).layers[1].surface().unwrap().content_bounds(), Rect::new(10, 5, 15, 10));
+    // Numeric strings are refused on every side, with or without a selection.
+    for p in [
+        json!({"x": "0", "y": "0", "width": "15", "height": "10"}),
+        json!({"x": "0", "y": 0, "width": 15, "height": 10}),
+        json!({"x": 0, "y": 0, "width": 15, "height": "10"}),
+    ] {
+        for mut s in [with_selection(), session()] {
+            let err = s.execute("image.crop", p.clone()).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{p}: {err:?}");
+            assert_eq!(doc(&s).size, Size::new(40, 20), "{p}");
+        }
+    }
+    // Partly outside the canvas: the canvas grows to the rectangle, not to its overlap with the
+    // canvas or the selection.
+    let mut s = with_selection();
+    s.execute("image.crop", json!({"x": -10, "y": -5, "width": 30, "height": 40})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(30, 40));
+    assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 10), vec![1.0, 0.0, 0.0, 1.0]);
+    // Reveal All passes all four sides through the same check (here x = y = 0: the hidden pixels
+    // are past the right and bottom edges), so a selection doesn't change what it reveals.
+    let mut s = with_selection();
+    s.execute("image.canvasSize", json!({"width": 12, "height": 8, "anchor": "topLeft"})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 4, "height": 4})).unwrap();
+    assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], true);
+    let size = doc(&s).size;
+    assert!(size.width >= 20 && size.height >= 15, "{size:?}: the red square is revealed");
+    assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(19, 14), vec![1.0, 0.0, 0.0, 1.0]);
+}
+
 #[test]
 fn crop_extension_fills_the_background_with_the_background_colour() {
     let mut shrink = Session::new();
