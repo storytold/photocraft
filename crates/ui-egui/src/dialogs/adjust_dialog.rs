@@ -246,7 +246,7 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 }
 
 /// Root of the dialog editor's view state in egui memory.
-fn dialog_mem(kind: &str) -> egui::Id {
+pub(crate) fn dialog_mem(kind: &str) -> egui::Id {
     egui::Id::unique(("adjust-dialog", kind))
 }
 
@@ -305,6 +305,31 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         fields.insert("target".into(), colors.params());
     }
     Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
+}
+
+/// Sets an adjustment dialog's parameters to the complete set `recorded` renders in a `mode`
+/// document, so the controls show it and OK keeps it. Laid over the dialog's defaults instead, a
+/// default can be read over a recorded key that means the same setting (a Lab `lightness` over
+/// `points`). Settings the engine can't read are left as they are, for OK to report on.
+pub(crate) fn seed_from_recorded(fields: &mut Map<String, Value>, recorded: &Value, mode: photocraft_doc::ColorMode) {
+    let Some(kind) = fields.get("__adjust").and_then(Value::as_str) else { return };
+    let Ok(adjustment) = photocraft_engine::adjust_params::from_params(kind, recorded, None, mode) else { return };
+    if let Value::Object(mut values) = photocraft_engine::adjust_params::to_params(&adjustment) {
+        // Selective Color's chosen row is editor state, absent from the normalized adjustment.
+        // Keep it so an older single-colour record reopens on the colour the user edited.
+        if kind == "selectiveColor"
+            && let Some(colors) = recorded.get("colors")
+        {
+            values.insert("colors".into(), colors.clone());
+        }
+        // The curves already hold Curves' Smooth passes: OK must overwrite a stored count, or
+        // each render would apply them again.
+        if recorded.get("smooth").is_some() {
+            values.insert("smooth".into(), json!(0));
+        }
+        fields.retain(|k, _| k.starts_with("__") || k == "target");
+        fields.extend(values);
+    }
 }
 
 /// Whether the dialog's captured target is a set of several Lab components, whose Levels and
