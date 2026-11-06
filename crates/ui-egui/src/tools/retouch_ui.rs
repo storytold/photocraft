@@ -36,14 +36,10 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
     // The Clone Source panel's active slot (set by ⌥-click) drives the stroke: the engine keeps
-    // the aligned pairing and applies the slot's scale/rotation/flip.
-    let slot = app.session.presets.clone.active().source.is_some();
-    match (app.ui.clone_offset.filter(|_| o.clone_aligned && !slot), app.ui.clone_source.filter(|_| !slot)) {
-        _ if slot => {}
-        (Some(off), _) => p["offset"] = json!(off),
-        (None, Some(src)) => p["source"] = json!(src),
-        (None, None) => return None,
-    }
+    // the aligned pairing and applies the slot's scale/rotation/flip. An empty slot refuses to
+    // paint, as with no source at all: `ui.clone_source` / `ui.clone_offset` carry no document,
+    // so falling back to them would read another document's coordinates from this one's pixels.
+    app.session.presets.clone.active().source?;
     Some(p)
 }
 

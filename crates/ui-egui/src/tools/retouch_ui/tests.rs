@@ -34,7 +34,7 @@ fn clone_stamp_in_pattern_preview_wraps_a_dab_across_the_right_edge() {
         let mut app = app();
         app.run("paint.pencil", json!({"points": [[10, 10]], "size": 24, "color": "#ff0000"})).unwrap();
         app.ui.tool = Tool::CloneStamp;
-        app.ui.clone_source = Some([10.0, 10.0]);
+        crate::retouch_ui::set_source(&mut app, 10.0, 10.0);
         app.ui.view.pattern_preview = pattern_preview;
         let modifiers = egui::Modifiers::NONE;
         tool_event(&mut app, ToolEvent::Down { x: 98.0, y: 30.0, pressure: 1.0 }, modifiers);
@@ -61,7 +61,7 @@ fn clone_stamp_paints_with_the_brush_hardness() {
         app.run("tools.setBrush", json!({"brush": {"size": 24, "hardness": hardness}})).unwrap();
         app.run("paint.pencil", json!({"points": [[15, 30]], "size": 40, "color": "#ff0000"})).unwrap();
         app.ui.tool = Tool::CloneStamp;
-        app.ui.clone_source = Some([15.0, 30.0]);
+        crate::retouch_ui::set_source(&mut app, 15.0, 30.0);
         let m = egui::Modifiers::NONE;
         tool_event(&mut app, ToolEvent::Down { x: 70.0, y: 30.0, pressure: 1.0 }, m);
         tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 30.0 }, m);
@@ -106,7 +106,7 @@ fn clone_stamp_brush_opacity_and_flow_reach_the_painted_pixels() {
     app.run("paint.pencil", json!({"points": [[10, 10]], "size": 16, "color": "#ff0000"})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     app.ui.tool = Tool::CloneStamp;
-    app.ui.clone_source = Some([10.0, 10.0]);
+    crate::retouch_ui::set_source(&mut app, 10.0, 10.0);
     app.ui.tool_options.clone_sample = "all".into();
     app.run("tools.setBrush", json!({"brush": {"opacity": 0.5, "flow": 0.5}})).unwrap();
     assert!(finish_stroke(&mut app, Tool::CloneStamp, &[[50.0, 30.0, 1.0]], egui::Modifiers::NONE));
@@ -128,7 +128,7 @@ fn healing_brush_heals_in_normal_with_a_mode_outside_its_menu() {
         app.ui.tool = tool;
         crate::paint_mouse::sync_tool_brush(&mut app);
         app.session.tools.brush.mode = photocraft_color::BlendMode::Overlay;
-        app.ui.clone_source = Some([10.0, 10.0]);
+        crate::retouch_ui::set_source(&mut app, 10.0, 10.0);
         drag(&mut app, tool);
         let (_, params) = app.session.journal.last().unwrap();
         assert_eq!(params["mode"], want, "{tool:?}");
@@ -149,7 +149,7 @@ fn retouch_mode_reaches_the_command() {
         app.ui.tool = tool;
         crate::paint_mouse::sync_tool_brush(&mut app);
         app.run("tools.setBrush", json!({"brush": {"mode": mode}})).unwrap();
-        app.ui.clone_source = Some([10.0, 10.0]);
+        crate::retouch_ui::set_source(&mut app, 10.0, 10.0);
         drag(&mut app, tool);
         let (id, params) = app.session.journal.last().unwrap();
         assert_eq!((id.as_str(), params["mode"].as_str()), (cmd, Some(mode)), "{tool:?}");
@@ -851,4 +851,17 @@ fn art_history_stroke_runs_the_command() {
     app.ui.tool_options.art_history_tolerance = 0.0;
     drag(&mut app, Tool::ArtHistoryBrush);
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
+}
+
+/// An empty Clone Source slot refuses to paint, as with no source at all: the ⌥-click point left
+/// in `ui.clone_source` carries no document, so it must not be read from another document.
+#[test]
+fn an_empty_clone_source_slot_refuses_to_paint() {
+    let mut app = app();
+    app.ui.tool = Tool::CloneStamp;
+    crate::retouch_ui::set_source(&mut app, 10.0, 10.0);
+    assert!(crate::retouch_ui::clone_params(&app).is_some());
+    app.run("cloneSource.select", json!({"index": 1})).unwrap();
+    assert!(app.ui.clone_source.is_some(), "the old ⌥-click point is still remembered");
+    assert!(crate::retouch_ui::clone_params(&app).is_none());
 }
