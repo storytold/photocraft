@@ -204,7 +204,10 @@ pub(crate) fn picker_button(ui: &mut egui::Ui, selected: bool, enabled: bool, to
     response
 }
 
-fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: photocraft_doc::ColorMode) {
+/// The eyedroppers and their Sample Size (#11124): the Eyedropper tool's, which they sample with
+/// (`canvas::composite_color`), set here because the tool's options bar is out of reach while the
+/// dialog is open.
+fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: photocraft_doc::ColorMode, sample_size: &mut u32) {
     use photocraft_engine::adjust_params::CurvesEyedropper;
     let current = picker(fields.get(CURVE_PICKER));
     let mut chosen = None;
@@ -226,6 +229,11 @@ fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: pho
         if !matches!(mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale) {
             ui.label(egui::RichText::new(tl!("Unavailable in this color mode")).color(tokens.text_faint).size(11.0));
         }
+    });
+    ui.horizontal(|ui| {
+        let tokens = crate::theme::Tokens::get(ui.ctx());
+        ui.label(egui::RichText::new(tl!("Sample Size:")).color(tokens.text_dim).size(12.0));
+        crate::widgets::dropdown(ui, "adjust-eyedropper-size", tl!("Size"), sample_size, &crate::eyedropper_ui::size_options(), 130.0);
     });
     if let Some((id, selected)) = chosen
         && current != Some(selected)
@@ -406,7 +414,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     let filter_mask = fields.get("target").and_then(Value::as_str) == Some("filterMask");
     let mode = curve_mode_for_fields(app, &kind, fields);
     if matches!(kind.as_str(), "levels" | "curves") {
-        picker_controls(ui, fields, mode);
+        picker_controls(ui, fields, mode, &mut app.ui.tool_options.eyedropper_size);
         ui.add_space(4.0);
     }
     let mut values = crate::filter_dialog::params_of(fields);

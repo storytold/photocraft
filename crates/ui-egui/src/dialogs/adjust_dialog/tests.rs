@@ -838,9 +838,11 @@ fn curves_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     h
 }
 
-/// The Channel popup's selected value (its option labels are what it shows).
+/// The Channel popup's selected value (its option labels are what it shows), past the
+/// eyedroppers' Sample Size popup.
 fn popup_channels(h: &mut Harness<'static, PhotocraftApp>) -> Vec<String> {
-    h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()
+    let sizes: Vec<String> = crate::eyedropper_ui::size_options().into_iter().map(|(_, l)| l.to_string()).collect();
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).filter(|v| !sizes.contains(v)).collect()
 }
 #[test]
 fn lab_subset_recall_preserves_combined_record_beside_native_lightness() {
@@ -966,4 +968,35 @@ fn captured_filter_mask_curves_stay_gray_after_selecting_native_channels() {
     let before = crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields);
     assert!(add_point_at(&mut app, &egui::Context::default(), 8.0, 8.0, false));
     assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields), before);
+}
+
+/// #11124: the Levels and Curves eyedroppers' Sample Size is chosen in the dialog; it is the
+/// Eyedropper tool's, and the next sample averages that square.
+#[test]
+fn the_eyedroppers_sample_size_is_chosen_in_the_dialog() {
+    for kind in ["curves", "levels"] {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.tool_options.eyedropper_size, 1);
+        assert!(h.get_by_label("Sample Size:").rect().is_positive(), "{kind}");
+        h.get_by_label("Size").click();
+        h.run_steps(3);
+        h.get_by_label("11 by 11 Average").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.tool_options.eyedropper_size, 11, "{kind}");
+        assert!(h.state().ui.dialogs.iter().any(|d| d.id == id), "{kind}: choosing a size keeps the dialog open");
+        // On the edge between #b04020 (x < 32) and white, Point Sample reads the pixel, an 11 by
+        // 11 Average both colours.
+        let mut samples = Vec::new();
+        for size in [1, 11] {
+            let app = h.state_mut();
+            app.ui.tool_options.eyedropper_size = size;
+            arm(app, id, "white");
+            assert!(sample_at(app, 31.5, 8.5));
+            samples.push(crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields));
+        }
+        assert_ne!(samples[0], samples[1], "{kind}: the size changes what the eyedropper reads");
+    }
 }
