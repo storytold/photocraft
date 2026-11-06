@@ -504,12 +504,60 @@ fn no_room(dir: &Path, cap: Option<u64>) -> String {
 }
 
 /// (available, total) bytes of the volume holding `dir`: the mount point that is its longest
-/// prefix. `None` if unknown, which disables only the free-space check, not spilling.
+/// prefix. `None` if unknown, which disables only the free-space check, not spilling. On Windows a
+/// network scratch folder isn't listed, so it reports `None` (no free-space reserve; import
+/// allowance only up to a Scratch Size Limit, if one is set). On Linux an unlisted network mount
+/// matches its listed parent mount, such as `/`, and uses that volume's numbers.
 #[cfg(not(target_arch = "wasm32"))]
 fn free_space(dir: &Path) -> Option<(u64, u64)> {
     let dir = std::fs::canonicalize(dir).ok()?;
+    let dir = without_verbatim_disk_prefix(&dir).unwrap_or(dir);
     let disks = sysinfo::Disks::new_with_refreshed_list_specifics(sysinfo::DiskRefreshKind::nothing().with_storage()).ok()?;
-    disks.iter().filter(|d| dir.starts_with(d.mount_point())).max_by_key(|d| d.mount_point().as_os_str().len()).map(|d| (d.available_space(), d.total_space()))
+    disks
+        .iter()
+        .filter(|d| dir.starts_with(d.mount_point()))
+        .max_by_key(|d| d.mount_point().as_os_str().len())
+        .and_then(|d| known_space(available_to_caller(d.mount_point()).unwrap_or_else(|| d.available_space()), d.total_space()))
+}
+
+/// sysinfo keeps a volume whose space query failed, with both numbers zero; treating that as an
+/// empty disk would pause spilling, so it counts as unknown.
+#[cfg(not(target_arch = "wasm32"))]
+fn known_space(available: u64, total: u64) -> Option<(u64, u64)> {
+    (total != 0).then_some((available, total))
+}
+
+/// Bytes the current user can write to the volume at `mount`, which a per-user disk quota can make
+/// less than the volume's free space that sysinfo reports. `None` if the query fails.
+#[cfg(windows)]
+fn available_to_caller(mount: &Path) -> Option<u64> {
+    let mut available = 0;
+    winsafe::GetDiskFreeSpaceEx(Some(mount.to_str()?), Some(&mut available), None, None).ok()?;
+    Some(available)
+}
+
+/// Elsewhere sysinfo's figure already is what the user can write.
+#[cfg(all(not(windows), not(target_arch = "wasm32")))]
+fn available_to_caller(_mount: &Path) -> Option<u64> {
+    None
+}
+
+/// The plain form of a verbatim disk path (`\\?\C:\x` to `C:\x`), or `None` to keep the path as
+/// is. `canonicalize` returns `\\?\C:\x` on Windows, whose prefix never equals a mount point's
+/// plain `C:\`. Unix paths never have a prefix component, so this is `None` there.
+#[cfg(not(target_arch = "wasm32"))]
+fn without_verbatim_disk_prefix(path: &Path) -> Option<PathBuf> {
+    use std::path::{Component, Prefix};
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return None;
+    };
+    let Prefix::VerbatimDisk(letter) = prefix.kind() else {
+        return None;
+    };
+    let mut out = PathBuf::from(format!("{}:", char::from(letter)));
+    out.extend(components);
+    Some(out)
 }
 
 #[cfg(target_arch = "wasm32")]
@@ -783,6 +831,75 @@ fn log_error(msg: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_disk_prefix_is_stripped_only_for_disks() {
+        let cases: &[(&str, Option<&str>)] = &[
+            (r"\\?\C:\x\y", Some(r"C:\x\y")),
+            (r"\\?\C:\", Some(r"C:\")),
+            (r"\\?\UNC\server\share\x", None),
+            (r"\\?\Volume{0000-1}\x", None),
+            (r"C:\x", None),
+            (r"\\server\share\x", None),
+        ];
+        for (input, want) in cases {
+            assert_eq!(without_verbatim_disk_prefix(Path::new(input)).as_deref(), want.map(Path::new), "{input}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_disk_prefix_keeps_non_utf8_names() {
+        use std::os::windows::ffi::OsStringExt;
+        let mut wide: Vec<u16> = r"\\?\C:\a".encode_utf16().collect();
+        wide.push(0xD800);
+        let path = PathBuf::from(std::ffi::OsString::from_wide(&wide));
+        let plain = without_verbatim_disk_prefix(&path).unwrap();
+        assert!(plain.starts_with(r"C:\"));
+        assert!(plain.to_str().is_none());
+    }
+
+    #[cfg(not(any(windows, target_arch = "wasm32")))]
+    #[test]
+    fn verbatim_disk_prefix_is_none_on_unix() {
+        assert_eq!(without_verbatim_disk_prefix(Path::new("/tmp/x")), None);
+        assert_eq!(without_verbatim_disk_prefix(Path::new(r"\\?\C:\x")), None);
+    }
+
+    // `free_space` returned `None` on Windows before the fix: `canonicalize` gives `\\?\C:\..`,
+    // which never started with the mount point `C:\`.
+    #[cfg(windows)]
+    #[test]
+    fn free_space_finds_the_temp_volume_on_windows() {
+        let temp = std::env::temp_dir();
+        let (available, total) = free_space(&temp).unwrap();
+        assert!(total > 0);
+        assert!(available <= total);
+        let mut temp_volume_total = 0;
+        winsafe::GetDiskFreeSpaceEx(Some(temp.to_str().unwrap()), None, Some(&mut temp_volume_total), None).unwrap();
+        assert_eq!(total, temp_volume_total);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_volume_with_no_total_is_unknown() {
+        assert_eq!(known_space(0, 0), None);
+        assert_eq!(known_space(5, 0), None);
+        assert_eq!(known_space(0, 10), Some((0, 10)));
+        assert_eq!(known_space(5, 10), Some((5, 10)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn available_to_caller_reads_the_temp_volume() {
+        let temp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let temp = without_verbatim_disk_prefix(&temp).unwrap_or(temp);
+        let mut temp_volume_total = 0;
+        winsafe::GetDiskFreeSpaceEx(Some(temp.to_str().unwrap()), None, Some(&mut temp_volume_total), None).unwrap();
+        assert!(temp_volume_total > 0);
+        assert!(available_to_caller(&temp).unwrap() <= temp_volume_total);
+    }
 
     #[test]
     fn failed_read_retains_backing_and_blocks_commit_until_repaired() {
