@@ -40,6 +40,10 @@ pub(crate) struct JpegMeta {
     pub adobe_transform: Option<u8>,
     /// (width, height, components) from the first SOFn.
     pub frame: Option<(u32, u32, u8)>,
+    /// SOF marker byte and precision from the first SOFn, used to decide whether the one-bit
+    /// Huffman scan is worth running.
+    pub sof_marker: Option<u8>,
+    pub sof_precision: Option<u8>,
     /// A DHT defines a one-bit Huffman code (a flat image's optimised tables), which
     /// `zune-jpeg` 0.5 decodes as garbage after the first few MCU rows.
     pub one_bit_huffman: bool,
@@ -158,6 +162,8 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
                 let h = u16::from_be_bytes([seg[1], seg[2]]) as u32;
                 let w = u16::from_be_bytes([seg[3], seg[4]]) as u32;
                 m.frame = Some((w, h, seg[5]));
+                m.sof_marker = Some(marker);
+                m.sof_precision = Some(seg[0]);
             }
             0xEE if seg.len() >= 12 && seg.starts_with(b"Adobe") => {
                 m.adobe_transform = Some(seg[11]);
@@ -166,7 +172,6 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
         }
         i += 2 + len;
     }
-    m.one_bit_huffman = has_one_bit_huffman(b);
     m.dpi = photoshop_resolution(&photoshop)
         .or_else(|| m.xmp.as_deref().and_then(xmp_resolution))
         .or_else(|| m.exif.as_deref().and_then(exif_resolution))
@@ -179,6 +184,14 @@ pub(crate) fn scan_metadata(b: &[u8]) -> JpegMeta {
         if seqs_ok || icc_parts.len() == 1 {
             m.icc = Some(icc_parts.iter().flat_map(|p| p.2.iter().copied()).collect());
         }
+    }
+    // Only scan the full stream for a one-bit Huffman table when the frame can actually route
+    // to craft-jpeg because of it: an 8-bit SOF0 or SOF1. Progressive, 12-bit, lossless and
+    // arithmetic frames never use this flag.
+    if m.sof_marker.is_some_and(|m| matches!(m, 0xC0 | 0xC1))
+        && m.sof_precision == Some(8)
+    {
+        m.one_bit_huffman = has_one_bit_huffman(b);
     }
     m
 }
@@ -309,10 +322,14 @@ fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
 /// zune-jpeg's failure would read as a damaged file. Baseline and extended-sequential frames with
 /// a one-bit Huffman code (a flat image's optimised tables) go there because zune-jpeg 0.5
 /// decodes the bottom of the image as black/green (#11342).
-fn uses_craft_jpeg(bytes: &[u8], meta: &JpegMeta) -> bool {
-    match craft_jpeg::frame(bytes) {
+///
+/// `frame` is the parsed SOFn header from `craft_jpeg::frame(bytes)`, or `None` when there is no
+/// frame. Parsing once here lets callers reuse it instead of parsing the same header twice.
+fn uses_craft_jpeg(frame: Option<craft_jpeg::FrameKind>, meta: &JpegMeta) -> bool {
+    match frame {
         Some(f) if (0xC9..=0xCB).contains(&f.marker) || f.marker == 0xC3 => true,
-        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8 || (meta.one_bit_huffman && f.marker <= 0xC1),
+        Some(f) if matches!(f.marker, 0xC0..=0xC1) && f.precision == 8 => meta.one_bit_huffman,
+        Some(f) if matches!(f.marker, 0xC0..=0xC2) => f.precision != 8,
         _ => false,
     }
 }
@@ -361,7 +378,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
     if let Some((w, h, nc)) = meta.frame {
         limits.check_bytes(w, h, u64::from(nc.max(1)))?;
     }
-    if uses_craft_jpeg(bytes, &meta) {
+    // Parse the frame header once; `uses_craft_jpeg` and the scan-size check below both need it.
+    let frame = craft_jpeg::frame(bytes);
+    if uses_craft_jpeg(frame, &meta) {
         // craft-jpeg sizes its buffers from the frame header before it reads a scan.
         if scan_bytes == 0 {
             return Err(err("the file has no scan data"));
@@ -369,7 +388,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         if let Some((w, h, _)) = meta.frame
             // Arithmetic coding (SOF9–SOF11) can spend well under a bit on a flat block, so only
             // sequential Huffman scans (SOF0–SOF1) also get the bound when complete.
-            && (end == DataEnd::Truncated || craft_jpeg::frame(bytes).is_some_and(|f| matches!(f.marker, 0xC0..=0xC1)))
+            && (end == DataEnd::Truncated || frame.is_some_and(|f| matches!(f.marker, 0xC0..=0xC1)))
             && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
         {
             let what = if end == DataEnd::Truncated { "the truncated scan" } else { "the scan data" };
@@ -871,18 +890,18 @@ mod tests {
     fn routing() {
         let plain = JpegMeta::default();
         let one_bit = JpegMeta { one_bit_huffman: true, ..Default::default() };
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8], &plain));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC3, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &plain));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &one_bit));
-        assert!(uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &one_bit));
-        assert!(!uses_craft_jpeg(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0], &one_bit));
+        assert!(!uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(!uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC9, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(!uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8]), &plain));
+        assert!(!uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 12, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC3, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &plain));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC0, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &one_bit));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC1, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &one_bit));
+        assert!(!uses_craft_jpeg(craft_jpeg::frame(&[0xFF, 0xD8, 0xFF, 0xC2, 0, 11, 8, 0, 8, 0, 8, 1, 1, 0x11, 0]), &one_bit));
     }
 
     /// A DHT may define several tables; a one-bit code in a later table must be detected too.
@@ -910,7 +929,7 @@ mod tests {
         bytes.extend([0xFF, 0xD9]);
         let meta = scan_metadata(&bytes);
         assert!(meta.one_bit_huffman);
-        assert!(uses_craft_jpeg(&bytes, &meta));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&bytes), &meta));
     }
 
     /// A complete one-bit baseline file still gets the scan-size budget, so a tiny file cannot
@@ -982,7 +1001,7 @@ mod tests {
         let mut with = stream[..2].to_vec();
         segment(&mut with, 0xED, &app13);
         with.extend_from_slice(&stream[2..]);
-        assert!(uses_craft_jpeg(&with, &scan_metadata(&with)));
+        assert!(uses_craft_jpeg(craft_jpeg::frame(&with), &scan_metadata(&with)));
         let img = crate::decode(&with).unwrap();
         assert_eq!(img.meta.photoshop_resources.as_deref(), Some(resources.as_slice()));
     }
