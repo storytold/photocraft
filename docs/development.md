@@ -607,8 +607,10 @@ CPU models, and each CPU is its own class. Hosted Linux and Windows runners have
 (`perf/**`, `xtask/src/perf.rs`, the workflow): the release build of the benches alone takes longer
 than PR CI should. A run on a CPU without a baseline for its mode (full or quick) yet records one,
 if every bench ran and the CPU canary held steady, and uploads it as the `perf-baseline-<os>`
-artifact: commit it to `perf/baselines/`. To re-record one, run the workflow by hand with
-`update_baseline`.
+artifact as a candidate for review. A steady canary does not prove an idle host: compare
+independent runs before committing the candidate. Prefer the multi-run `--from` process above
+with `--baseline 'perf/baselines/{class}.json'`; recording an artifact does not commit it.
+To re-record an existing baseline, run the workflow by hand with `update_baseline`.
 
 ## Web build
 

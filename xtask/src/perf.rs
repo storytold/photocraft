@@ -931,6 +931,7 @@ struct Opts {
     cpu: bool,
 }
 
+/// Parse benchmark options before any report or baseline is written.
 fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
     let mut o = Opts {
         quick: false,
@@ -974,11 +975,13 @@ fn parse_opts(rest: &[&str]) -> Result<Opts, String> {
     Ok(o)
 }
 
+/// Resolve Cargo's target directory, including CARGO_TARGET_DIR overrides.
 fn target_dir() -> Result<PathBuf, String> {
     let m = crate::metadata()?;
     m.get("target_directory").and_then(Value::as_str).map(PathBuf::from).ok_or_else(|| "cargo metadata: no target_directory".into())
 }
 
+/// Write a report or baseline, creating its parent directory when needed.
 fn write(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
@@ -986,15 +989,18 @@ fn write(path: &Path, text: &str) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| format!("write {}: {e}", path.display()))
 }
 
+/// Run the requested benchmark plan and report failures through the xtask exit status.
 pub fn run(root: &Path, rest: &[&str]) -> Result<(), String> {
     run_in(root, &target_dir()?, &parse_opts(rest)?)
 }
 
+/// Benchmarks and intentional exclusions for the selected mode and canvas.
 struct BenchPlan<'a> {
     benches: Vec<(&'a BenchSpec, Vec<String>)>,
     skipped: Vec<(String, String)>,
 }
 
+/// Select benchmarks and add CPU arguments without building or running them.
 fn bench_plan<'a>(root: &Path, budgets: &'a Budgets, o: &Opts) -> BenchPlan<'a> {
     // Which benches run in this mode.
     let mut plan: Vec<(&BenchSpec, Vec<String>)> = Vec::new();
@@ -1157,13 +1163,14 @@ fn run_in(root: &Path, target: &Path, o: &Opts) -> Result<(), String> {
     // scenarios): measured by the CPU canary against the baseline's, regressions are then
     // reported, not failures, and an unsteady run is never recorded as a new baseline.
     let steady = canary.is_some_and(|(start, end)| canary_steady(start, end));
-    let slow = machine_slow(canary.map(|(start, end)| start.max(end)), baseline_value.as_ref().and_then(|b| baseline_canary(b, mode)));
 
     // A per-class path (`{class}`) records a machine class (or mode) it hasn't seen yet instead of
     // only skipping: hosted runners rotate CPUs, so each one gets its own baseline file to commit.
     let per_class = baseline_path != o.baseline;
     let found = baseline_value.as_ref().map(|b| baseline_for(b, &class, mode));
     let have_mode = matches!(found, Some(Ok(_)));
+    // Host speed is comparable only when the regression baseline accepts this class and mode.
+    let slow = machine_slow(canary.map(|(start, end)| start.max(end)), baseline_value.as_ref().filter(|_| have_mode).and_then(|b| baseline_canary(b, mode)));
     let (baseline, why) = match found {
         Some(Ok(b)) => (Some(b), None),
         Some(Err(e)) => (None, Some(e)),
@@ -1289,6 +1296,7 @@ fn record_baseline(root: &Path, path: &str, old: Option<&Value>, results: &Value
     Ok(())
 }
 
+/// Serialize a baseline to the explicitly selected path.
 fn write_baseline(root: &Path, path: &str, baseline: &Value) -> Result<(), String> {
     let text = serde_json::to_string_pretty(baseline).map_err(|e| format!("encode baseline: {e}"))?;
     write(&root.join(path), &format!("{text}\n"))
@@ -1978,6 +1986,32 @@ row = "r99"
         // With advisory budgets only the regressions are left, and the slow host excuses them.
         reuse(&dir, &["--advisory-budgets"]).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn incompatible_baselines_cannot_label_the_host_slow() {
+        let rows = json!([{"name": "move row", "samples_ms": [10.0]}, {"name": "opacity row", "samples_ms": [10.0]}]);
+        let dir = scratch("incompatible-canary", rows, [200.0, 200.0]);
+        let path = dir.join(format!("perf/baselines/{}.json", this_class()));
+        for wrong_class in [true, false] {
+            write_baseline(&dir, 1.0, 1.0);
+            let mut baseline: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+            if wrong_class {
+                baseline["machine_class"] = json!("another-machine-class");
+            } else {
+                // A mode containing a canary but no scenarios is not a usable baseline.
+                baseline["modes"]["full"].as_object_mut().unwrap().remove("scenarios");
+            }
+            write(&path, &baseline.to_string()).unwrap();
+            reuse(&dir, &["--bench", "b"]).unwrap();
+            let results: Value = serde_json::from_str(&std::fs::read_to_string(dir.join("target/perf/results.json")).unwrap()).unwrap();
+            let note = results["baseline_note"].as_str().unwrap();
+            assert!(note.contains("regression check skipped"), "{note}");
+            assert!(!note.contains("machine slow"), "incompatible canaries must not be compared: {note}");
+            let summary = std::fs::read_to_string(dir.join("target/perf/summary.md")).unwrap();
+            assert!(!summary.contains("machine slow"));
+        }
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
