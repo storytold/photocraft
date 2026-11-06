@@ -1408,6 +1408,11 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             w.pick(t);
         }
     }
+    // E cycles the tool mode (add, subtract); Hand and Zoom edit nothing, so it leaves them alone.
+    let bare_e = ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::E, pressed: true, modifiers, .. } if modifiers.is_none())));
+    if bare_e && w.tool.edits() && pressed(Key::E, Modifiers::NONE) {
+        w.add = !w.add;
+    }
     if pressed(Key::OpenBracket, Modifiers::NONE) {
         let s = w.size();
         w.set_size((s * 0.9).min(s - 1.0));
@@ -1973,5 +1978,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
+#[cfg(test)]
+mod cycle_tool_mode_tests;
 #[cfg(test)]
 mod tests;

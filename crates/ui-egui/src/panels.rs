@@ -45,6 +45,7 @@ pub mod layer_row_ui;
 pub(super) mod layer_transfer;
 pub mod layer_tree_ui;
 mod layers;
+mod layers_empty_menu;
 pub mod layers_panel_ui;
 pub(super) mod mask_props_ui;
 pub mod mask_thumbs_ui;
@@ -61,7 +62,7 @@ pub mod swatches_ui;
 pub(super) mod timeline_ui;
 pub(crate) mod title_bar;
 pub(super) mod titlebar;
-mod toolbar;
+pub(crate) mod toolbar;
 pub mod type_panels_ui;
 pub(super) mod variables_ui;
 

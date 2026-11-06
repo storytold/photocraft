@@ -87,6 +87,7 @@
 	Right	Oikea
 	Open Recent	Viimeksi avatut
 	Clear Recent Files	Tyhjennä viimeisimmät tiedostot
+	Clear Recent File List	Tyhjennä viimeisimmät tiedostot
 	Remove from Recent	Poista viimeisimmistä
 	Remove {name} from Recent	Poista {name} viimeisimmistä
 	Close	Sulje
@@ -95,6 +96,10 @@
 	Restore	Palauta
 	Close All	Sulje kaikki
 	Close Others	Sulje muut
+	New Document…	Uusi asiakirja…
+	Open Document…	Avaa…
+	Consolidate All to Here	Kokoa kaikki tähän
+	Move to New Window	Siirrä uuteen ikkunaan
 	Save	Tallenna
 	Save As…	Tallenna nimellä…
 	Save a Copy…	Tallenna kopio…
@@ -509,7 +514,6 @@
 	Match Location	Täsmäytä sijainti
 	Match Rotation	Täsmäytä kierto
 	Match All	Täsmäytä kaikki
-	New Window for Document	Uusi ikkuna asiakirjalle
 	Workspace	Työtila
 	Extensions	Laajennukset
 	Panels	Paneelit
@@ -687,6 +691,7 @@
 	Units & Rulers…	Yksiköt ja viivaimet…
 	Guides, Grid & Slices…	Apuviivat, ruudukko ja viipaleet…
 	Plug-ins…	Laajennukset…
+	Plugins…	Laajennukset…
 	Technology Previews	Teknologian esikatselut
 	Scratch Disks…	Työlevyt…
 	Export Preferences…	Vientiasetukset…
@@ -921,8 +926,8 @@
 	ACES	ACES
 	Industry Standard	Alan standardi
 	Web	Verkko
-	Internet Standard RGB	Internetin standardi-RGB
-	Legacy Macintosh RGB	Vanha Macintosh RGB
+	Internet Standard RGB (sRGB)	Internetin standardi-RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Vanha Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Näytön RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	CMYK, päällystetty paperi
@@ -1743,6 +1748,7 @@
 	Saved	Tallennettu
 	Reveal in Finder	Näytä Finderissa
 	Show in Explorer	Näytä Resurssienhallinnassa
+	Reveal in Explorer	Näytä Resurssienhallinnassa
 	Show in Folder	Näytä kansiossa
 	Before (Y)	Ennen (Y)
 	Save Settings…	Tallenna asetukset…
@@ -1922,6 +1928,8 @@
 	Combine Shapes	Yhdistä muodot
 	Contract…	Supista…
 	Convert to Embedded	Muunna upotetuksi
+	Embed Linked	Upota linkitetty
+	Embed All Linked	Upota kaikki linkitetyt
 	Convert to Layers	Muunna tasoiksi
 	Convert to Linked…	Muunna linkitetyksi…
 	Count	Laskuri
@@ -2009,6 +2017,7 @@
 	Pixelate	Pikselöinti
 	Place Scale Marker…	Sijoita mittakaavamerkki…
 	Plug-ins	Laajennukset
+	Plugins	Laajennukset
 	Print One Copy	Tulosta yksi kopio
 	Print…	Tulosta…
 	Range	Alue
@@ -2053,7 +2062,7 @@
 	Vertical Centers	Pystykeskikohdat
 	Video Frames to Layers…	Videoruudut tasoiksi…
 	WIA Support…	WIA-tuki…
-	Working CMY Plate	Työ-CMY-levy
+	Working CMY Plates	Työ-CMY-levy
 
 # tl! literals (third pass)
 	Absolute	Absoluuttinen
@@ -2339,6 +2348,11 @@
 	Show canvas dots	Näytä kankaan pisteet
 	Clip thumbnails to layer bounds	Rajaa pikkukuvat tason rajoihin
 	Clip Thumbnails to Layer Bounds	Rajaa pikkukuvat tason rajoihin
+	No Thumbnails	Ei pikkukuvia
+	Small Thumbnails	Pienet pikkukuvat
+	Medium Thumbnails	Keskikokoiset pikkukuvat
+	Large Thumbnails	Suuret pikkukuvat
+	Clip Thumbnails to Document Bounds	Rajaa pikkukuvat asiakirjan rajoihin
 	Canvas color	Kankaan väri
 	Canvas custom color	Kankaan mukautettu väri
 	Classic	Klassinen

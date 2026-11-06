@@ -158,6 +158,10 @@
 	Clipboard	Vágólap
 	Close All	Összes bezárása
 	Close Others	Többi bezárása
+	New Document…	Új dokumentum…
+	Open Document…	Megnyitás…
+	Consolidate All to Here	Összes ide
+	Move to New Window	Áthelyezés új ablakba
 	Color Balance…	Színegyensúly…
 	Color Lookup Tables…	Színleképezési táblák…
 	Color Lookup…	Színleképezés…
@@ -257,6 +261,7 @@
 	Place Linked…	Csatolt elhelyezése…
 	Place Scale Marker…	Méretarány-jelölő elhelyezése…
 	Plug-ins…	Bővítmények…
+	Plugins…	Bővítmények…
 	Posterize…	Poszterizálás…
 	Preferences	Beállítások
 	Preset Manager…	Előbeállítás-kezelő…
@@ -342,6 +347,8 @@
 	Combine Shapes	Alakzatok kombinálása
 	Contract…	Szűkítés…
 	Convert to Embedded	Átalakítás beágyazottá
+	Embed Linked	Csatolt beágyazása
+	Embed All Linked	Összes csatolt beágyazása
 	Convert to Layers	Átalakítás rétegekké
 	Convert to Linked…	Átalakítás csatolttá…
 	Convert to Smart Object	Átalakítás intelligens objektummá
@@ -550,6 +557,7 @@
 	Clear Canvas Guides	Vászon-segédvonalak törlése
 	Clear Guides	Segédvonalak törlése
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
+	Clear Recent File List	Legutóbbi fájlok listájának törlése
 	Clear Selected Artboard Guides	Kijelölt rajztábla segédvonalainak törlése
 	Clear Slices	Szeletek törlése
 	Clipping Mask	Vágómaszk
@@ -681,7 +689,7 @@
 	Info	Információ
 	Install Plug-in	Bővítmény telepítése
 	Install Plug-in…	Bővítmény telepítése…
-	Internet Standard RGB	Internetes szabványos RGB
+	Internet Standard RGB (sRGB)	Internetes szabványos RGB (sRGB)
 	Inverse	Megfordítás
 	Iris Blur…	Íriszelmosás…
 	Join the ArtCraft Discord	Csatlakozás az ArtCraft Discordhoz
@@ -698,7 +706,7 @@
 	Layer From Background…	Réteg a háttérből…
 	Layers	Rétegek
 	Layers to Files	Rétegek fájlokba
-	Legacy Macintosh RGB	Régi Macintosh RGB
+	Legacy Macintosh RGB (Gamma 1.8)	Régi Macintosh RGB (Gamma 1.8)
 	Lens Blur…	Objektívelmosás…
 	Lens Flare…	Lencsecsillanás…
 	Light gray	Világosszürke
@@ -746,7 +754,6 @@
 	New Type Layer	Új szövegréteg
 	New Video Layer	Új videoréteg
 	New Window	Új ablak
-	New Window for Document	Új ablak a dokumentumhoz
 	New Workspace…	Új munkaterület…
 	Next Appearance Mode	Következő megjelenési mód
 	Next Document	Következő dokumentum
@@ -791,6 +798,7 @@
 	Pixel Grid	Pixelrács
 	Pixelate	Pixelesítés
 	Plug-ins	Bővítmények
+	Plugins	Bővítmények
 	Pointillize…	Pontozás…
 	Polar Coordinates…	Polárkoordináták…
 	Preferences…	Beállítások…
@@ -854,6 +862,7 @@
 	Show All	Összes megjelenítése
 	Show Extras Options…	Segédelemek beállításai…
 	Show in Explorer	Megjelenítés az Intézőben
+	Reveal in Explorer	Megjelenítés az Intézőben
 	Show in Folder	Megjelenítés mappában
 	Show menu colors	Menüszínek megjelenítése
 	Show/Hide All Panels	Összes panel megjelenítése/elrejtése
@@ -919,7 +928,7 @@
 	Windows LCD	Windows LCD
 	Wind…	Szél…
 	Working Black Plate	Fekete munkalemez
-	Working CMY Plate	CMY munkalemezek
+	Working CMY Plates	CMY munkalemezek
 	Working CMYK	Munka-CMYK
 	Working Cyan Plate	Cián munkalemez
 	Working Magenta Plate	Magenta munkalemez
@@ -3630,6 +3639,11 @@ cameraRaw	Yellow	Sárga
 	Show canvas dots	Vászonpontok megjelenítése
 	Clip thumbnails to layer bounds	Bélyegképek levágása a réteg határaira
 	Clip Thumbnails to Layer Bounds	Bélyegképek levágása a réteg határaira
+	No Thumbnails	Nincs bélyegkép
+	Small Thumbnails	Kis bélyegképek
+	Medium Thumbnails	Közepes bélyegképek
+	Large Thumbnails	Nagy bélyegképek
+	Clip Thumbnails to Document Bounds	Bélyegképek levágása a dokumentum határaira
 	Show channels in color	Csatornák megjelenítése színesen
 	Show crosshair in brush tip	Szálkereszt az ecsethegyben
 	Show extension panels	Bővítménypanelek megjelenítése
