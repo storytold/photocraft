@@ -154,7 +154,7 @@ const MIXED: Source = Source { label: "io corpus", dir: "corpus/psd", group_dept
 /// 226 vs the merged image + 10 vs the thumbnail (Advanced Blending knockouts: +7).
 const PSD_TOOLS: Source = Source { label: "psd-tools corpus", dir: "corpus/psd-tools", group_depth: 0, pass_floor: 249, roundtrip_floor: 308 };
 
-/// Our Photoshop-authored oracles (256 files; https://github.com/storytold/photocraft-corpus),
+/// Our Photoshop-authored oracles (258 files; https://github.com/storytold/photocraft-corpus),
 /// grouped by feature (`smart-filters`, `effects`, `text`, `adjustments/<mode><bits>`).
 const PHOTOSHOP: Source = Source { label: "photoshop oracles", dir: "corpus/photoshop", group_depth: 2, pass_floor: 190, roundtrip_floor: 258 };
 
@@ -316,9 +316,9 @@ fn check_file(name: &str, bytes: &[u8]) -> (Outcome, Option<f32>) {
             return (Outcome::Error, None);
         }
     };
-    let ours = photocraft_compose::flatten(doc).px;
+    let ours = photocraft_compose::flatten(doc).into_px();
     // Our own export must not change how the document renders.
-    let again = photocraft_compose::flatten(&reimported).px;
+    let again = photocraft_compose::flatten(&reimported).into_px();
     let rt = if again.len() == ours.len() { common::max_diff(&ours, &again) } else { f32::INFINITY };
     let layers = doc.layer_count();
     // Oracle choice: the merged image (Photoshop's composite; for files without layers it is the
