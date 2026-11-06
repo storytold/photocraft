@@ -94,6 +94,13 @@ pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option
     Some(if group { top_group(doc, hit) } else { hit })
 }
 
+/// The Move tool's top visible hit, including a fully locked layer that it must not click through.
+/// Generic Auto-Select and rollover keep using [`auto_select_target`].
+pub fn move_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
+    let hit = layers_hit(doc, x, y, true).into_iter().next()?;
+    Some(if group { top_group(doc, hit) } else { hit })
+}
+
 fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `x`".into() })?.floor() as i32;
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `y`".into() })?.floor() as i32;
@@ -105,7 +112,8 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "layers": names }));
     }
     let group = p.get("target").and_then(Value::as_str) == Some("group");
-    let Some(target) = auto_select_target(&doc, x, y, group) else { return Ok(json!({ "layer": null })) };
+    let target = if p.get("move").and_then(Value::as_bool).unwrap_or(false) { move_target(&doc, x, y, group) } else { auto_select_target(&doc, x, y, group) };
+    let Some(target) = target else { return Ok(json!({ "layer": null })) };
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
         // Like Photoshop, a plain click on one of several selected layers keeps them all
@@ -198,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Auto-Select Layer",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","list":bool=false (return visible layers at the point, including text bounds, topmost first)} → {layer} | {layers}"##,
+            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","list":bool=false (return visible layers at the point, including text bounds, topmost first),"move":bool=false (Move-tool hit test: do not click through a fully locked top hit)} → {layer} | {layers}"##,
             enabled: has_doc,
             journal: false,
             run: pick,
@@ -230,6 +238,21 @@ mod tests {
         // Hidden layers are ignored.
         s.execute("layer.setProps", json!({"layer": a.0, "visible": false})).unwrap();
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
+    }
+
+    #[test]
+    fn move_pick_preserves_a_fully_locked_top_hit_without_changing_auto_select() {
+        let (mut s, lower, _) = two_squares();
+        s.execute("layer.new.layer", json!({"name": "Locked"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let locked = s.active().unwrap().active_layer.unwrap();
+        s.execute("layer.lockLayers", json!({"all": true})).unwrap();
+
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], lower.0);
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false, "move": true})).unwrap()["layer"], locked.0);
+        s.execute("layer.pickAt", json!({"x": 5, "y": 5, "move": true})).unwrap();
+        assert_eq!(s.active().unwrap().selected_layers(), vec![locked]);
     }
 
     /// Two filled squares: A at (0..10), B at (20..30), both in their own layers.
