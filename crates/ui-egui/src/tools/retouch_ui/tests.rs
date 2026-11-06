@@ -413,12 +413,17 @@ fn a_new_patch_lasso_hides_and_replaces_the_old_selection() {
 
 /// The screen boxes of the marching ants painted in one canvas frame (meshes of black and white).
 fn painted_ants(app: &mut PhotocraftApp) -> Vec<egui::Rect> {
+    painted_ants_of(app, 0)
+}
+
+/// [`painted_ants`] for the document at `idx`.
+fn painted_ants_of(app: &mut PhotocraftApp, idx: usize) -> Vec<egui::Rect> {
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
     let view = crate::state::View { zoom: 2.0, center: [50.0, 30.0], doc_size: [100, 60], fit_pending: false, ..Default::default() };
     let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(rect), ..Default::default() }, |ui| {
-        crate::canvas::canvas_view(app, ui, 0, rect, view.clone(), true);
+        crate::canvas::canvas_view(app, ui, idx, rect, view.clone(), true);
     });
     output.textures_delta.clear();
     let black_and_white =
@@ -501,6 +506,32 @@ fn a_patch_drag_is_dropped_when_another_document_is_active() {
         tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, egui::Modifiers::NONE);
         let sel = app.session.active().unwrap().doc.selection.clone().unwrap();
         assert_eq!(sel.content_bounds(), photocraft_geom::Rect::new(50, 10, 80, 40), "{tool:?}: the other document's selection is untouched");
+    }
+}
+
+/// The active document can change after `sync_views` (a control request, a menu command) and
+/// before the canvas paints: a Patch drag pressed on the old one must not hide the new one's ants
+/// for that frame (#11024 review).
+#[test]
+fn a_patch_drag_on_another_document_hides_no_ants_before_it_is_dropped() {
+    for tool in [Tool::Patch, Tool::ContentAwareMove] {
+        let mut app = app();
+        app.run("select.rect", json!({"x": 10, "y": 20, "width": 16, "height": 20})).unwrap();
+        // The other document's selection is clear of the press, so the drag would lasso it.
+        app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
+        app.run("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 10})).unwrap();
+        let other = app.session.active_index().unwrap();
+        assert!(app.session.set_active(0));
+        app.sync_views();
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Move { x: 76.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        app.sync_views();
+
+        assert!(app.session.set_active(other));
+        assert!(app.drag.is_some(), "{tool:?}: not dropped yet; sync_views has not run");
+        assert!(!patch_replaces_selection(&app), "{tool:?}: the drag belongs to the other document");
+        assert!(!painted_ants_of(&mut app, other).is_empty(), "{tool:?}: the newly active document shows its ants");
     }
 }
 

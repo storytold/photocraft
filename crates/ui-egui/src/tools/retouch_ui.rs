@@ -315,10 +315,13 @@ pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modi
 
 /// A Patch or Content-Aware Move lasso that makes a new selection is being drawn: the selection it
 /// replaces is hidden from the press on, as in Photoshop, rather than shown beside the new outline
-/// until the release (#11024). Adding, subtracting and intersecting keep it visible.
+/// until the release (#11024). Adding, subtracting and intersecting keep it visible. A drag pressed
+/// on another document hides nothing, even before `cancel_stale` drops it (the active document can
+/// change between `sync_views` and the canvas paint).
 pub fn patch_replaces_selection(app: &PhotocraftApp) -> bool {
     app.drag.as_ref().is_some_and(|d| {
         matches!(d.tool, Tool::Patch | Tool::ContentAwareMove)
+            && d.document.as_ref().is_none_or(|doc| doc.is_active(app))
             && !patch_drags_selection(app, d.start, d.modifiers)
             && crate::canvas::selection_mode(app, d.modifiers) == "replace"
     })
