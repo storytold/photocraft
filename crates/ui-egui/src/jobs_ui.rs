@@ -351,6 +351,33 @@ pub fn start_save(
     save: SaveFileFn,
     automation: bool,
 ) -> Result<Option<(String, Vec<String>)>, String> {
+    let snapshot = Arc::clone(&app.session.active().ok_or("no document")?.doc);
+    start_save_of(app, path, settings, copy, save, automation, move || Ok(snapshot))
+}
+
+/// [`start_save`] of a copy made from the active document (Save a Copy, Export As): `make` gives
+/// the document to write, on the worker, so preparing it (an export's resize and colour
+/// conversion) doesn't hold up the window either. The document keeps its path and unsaved state.
+pub(crate) fn start_copy(
+    app: &mut PhotocraftApp,
+    path: String,
+    settings: ExportSettings,
+    save: SaveFileFn,
+    make: impl FnOnce() -> Result<Arc<photocraft_doc::Document>, String> + Send + 'static,
+) -> Result<Option<(String, Vec<String>)>, String> {
+    start_save_of(app, path, settings, true, save, false, make)
+}
+
+/// [`start_save`] of the document `make` gives on the worker.
+fn start_save_of(
+    app: &mut PhotocraftApp,
+    path: String,
+    settings: ExportSettings,
+    copy: bool,
+    save: SaveFileFn,
+    automation: bool,
+    make: impl FnOnce() -> Result<Arc<photocraft_doc::Document>, String> + Send + 'static,
+) -> Result<Option<(String, Vec<String>)>, String> {
     let st = app.session.active().ok_or("no document")?;
     if let Some(j) = app.session.job_on(st.doc.id) {
         // The engine's wording for a command refused while a job runs.
@@ -362,7 +389,7 @@ pub fn start_save(
     if app.jobs.saves.iter().any(|s| s.path == path) {
         return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
     }
-    let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    let (doc, revision) = (st.doc.id, st.revision);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();
@@ -376,6 +403,7 @@ pub fn start_save(
         move |ctx| {
             let _done = WorkerDone(worker);
             let ctl = SaveCtl { job: ctx.clone() };
+            let snapshot = make().map_err(photocraft_engine::EngineError::Other)?;
             save(&snapshot, &target, &settings, &ctl)
                 .map_err(|e| if ctl.check().is_err() { photocraft_engine::EngineError::Cancelled } else { photocraft_engine::EngineError::Other(e) })
         },

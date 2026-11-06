@@ -431,6 +431,39 @@ fn step_until(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&PhotocraftApp) 
     h.run_steps(2);
 }
 
+/// Save a Copy and Export As encode on the save worker too (#2017), the export made from the
+/// document there (here at half size); the document keeps its path and unsaved changes.
+#[test]
+fn copies_and_exports_run_on_the_save_worker_and_leave_the_document_alone() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let written: Arc<std::sync::Mutex<Vec<(String, u32)>>> = Arc::default();
+    let (g, w) = (gate.clone(), written.clone());
+    h.state_mut().services.save_file = Some(Arc::new(move |doc, path, _, ctl| {
+        while !g.load(Ordering::Relaxed) {
+            ctl.check()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        ctl.commit()?;
+        w.lock().unwrap().push((path.to_string(), doc.size.width));
+        Ok(Vec::new())
+    }));
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let r = crate::view_cmds::write_copy(h.state_mut(), &doc, "/tmp/photocraft-test/copy.psd", crate::FormatChoices::default()).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    assert!(h.state().saving());
+    let (frames, _) = frames_for_at_least(&mut h, 200, 3);
+    assert!(frames >= 3, "only {frames} frames while copying");
+    gate.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    let r = crate::export_dialog::replay(h.state_mut(), &json!({"path": "/tmp/photocraft-test/export.png", "format": "png", "scale": 50})).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(*written.lock().unwrap(), [("/tmp/photocraft-test/copy.psd".to_string(), 320), ("/tmp/photocraft-test/export.png".to_string(), 160)]);
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty() && st.path.is_none(), "copies leave the document's file and unsaved state alone");
+}
+
 #[test]
 fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     let mut h = app_harness();

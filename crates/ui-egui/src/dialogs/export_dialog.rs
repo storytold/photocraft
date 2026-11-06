@@ -1061,7 +1061,19 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 }
 
 /// Exports `doc` to `path` with the dialog settings `f` (Export As, and its replayed action step).
-fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>, path: &str, source_profile: &Profile) -> Result<Value, String> {
+/// With background jobs the export is made and encoded on the save worker, as File › Save is
+/// (#2017).
+fn write_export(app: &mut PhotocraftApp, doc: &Arc<Document>, f: &Map<String, Value>, path: &str, source_profile: &Arc<Profile>) -> Result<Value, String> {
+    if app.background_jobs
+        && let Some(save) = app.services.save_file.clone()
+    {
+        let (doc, f2, profile) = (Arc::clone(doc), f.clone(), Arc::clone(source_profile));
+        let make = move || export_document(&doc, &f2, None, &profile).map(Arc::new);
+        return Ok(match crate::jobs_ui::start_copy(app, path.to_string(), settings(f), save, make)? {
+            Some((path, warnings)) => json!({"path": path, "warnings": warnings}),
+            None => json!({"path": path, "warnings": [], "pending": true, "job": app.jobs.last_started.map(|j| j.0)}),
+        });
+    }
     let out = export_document(doc, f, None, source_profile)?;
     crate::app::ensure_memory_to_save(&out, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
