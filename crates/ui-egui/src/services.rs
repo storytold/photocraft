@@ -229,6 +229,10 @@ pub type FileStampFn = Box<dyn Fn(&str) -> Option<FileStamp>>;
 /// Whether two paths name one entry in one folder on disk; false when either can't be read.
 pub type SameFileFn = Box<dyn Fn(&str, &str) -> bool>;
 
+/// Whether a write of the document is waiting for the platform to confirm it (see
+/// [`Services::write_pending`]).
+pub type WritePendingFn = Box<dyn Fn(photocraft_doc::DocId) -> bool>;
+
 /// Encode a document and write it to a path, reporting the stage to the job; returns the export
 /// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
 /// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
@@ -466,6 +470,13 @@ pub struct Services {
     /// cancel and which reports nothing back), so a save through it names the document but
     /// leaves its changes unsaved and the leave-page guard armed (#4962).
     pub write_unconfirmed: bool,
+    /// With `write_unconfirmed`, where the platform confirms some writes later (iPadOS and
+    /// Android writing a file back where it came from): whether a write of the document is
+    /// still waiting for its answer. Then an unconfirmed save doesn't count as saved for closing:
+    /// the unsaved-changes prompt waits while the write is pending, goes on once the document is
+    /// saved, and otherwise asks again, so closing without a saved copy takes Don't Save. Without
+    /// it (a browser download, which never answers) the write counts, as it always has (#6414).
+    pub write_pending: Option<WritePendingFn>,
     /// File › Save writes a flat file (PNG, JPEG…) back without asking while it keeps the whole
     /// document: a single plain layer in a format PhotoCraft writes. The desktop asks for the
     /// name first, its own file suggested; where there is no such dialog to confirm (iPadOS and

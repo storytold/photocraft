@@ -223,11 +223,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     match saved {
         // A Save Document script may have edited the document after it was written: still dirty.
         // A write the platform can't confirm (a web download) leaves it dirty too, and counts.
-        Ok(_) => {
-            !app.save_options_open()
-                && !app.saving()
-                && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
-        }
+        Ok(_) => !app.save_options_open() && !app.saving() && counts_saved(app, doc),
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
@@ -243,12 +239,23 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 /// Copies and failed writes leave the doc dirty; so does any write when it is unconfirmed.
 pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
     // Still the prompt that asked (quitting may have replaced it meanwhile).
-    if !app.save_options_open()
-        && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc)
-        && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
-    {
+    if !app.save_options_open() && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc) && counts_saved(app, doc) {
         advance(app, ctx);
     }
+}
+
+/// Whether `doc` counts as saved for the prompt: it has no unsaved changes, or it was written
+/// where no write is ever confirmed (a web download, #6414). Where the platform confirms writes
+/// later ([`Services::write_pending`](crate::Services::write_pending)), only a confirmed one
+/// counts.
+fn counts_saved(app: &PhotocraftApp, doc: DocId) -> bool {
+    let unconfirmed_counts = app.services.write_unconfirmed && app.services.write_pending.is_none();
+    index_of(app, doc).is_some_and(|i| unconfirmed_counts || !app.session.documents()[i].is_dirty())
+}
+
+/// Where the platform confirms writes later: whether the prompt's document is waiting for one.
+fn write_pending(app: &PhotocraftApp, doc: DocId) -> bool {
+    app.services.write_pending.as_ref().is_some_and(|pending| pending(doc))
 }
 
 /// A save failure as reported ("cancelled" stays as it is: it isn't reported).
@@ -268,6 +275,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(p) = &app.discard else { return };
     let Some(&doc) = p.docs.first() else { return };
+    // A write the platform confirms later: hidden until it answers; saved then, it goes on.
+    if app.services.write_pending.is_some() && p.id != "file.revert" {
+        if write_pending(app, doc) {
+            if let Some(p) = app.discard.as_mut() {
+                p.focused = None;
+            }
+            return;
+        }
+        if index_of(app, doc).is_some_and(|i| !app.session.documents()[i].is_dirty()) {
+            advance(app, ctx);
+            return;
+        }
+    }
+    let Some(p) = &app.discard else { return };
     let (exits, reverts) = (p.id == EXIT, p.id == "file.revert");
     let Some(name) = index_of(app, doc).map(|i| app.session.documents()[i].doc.name.clone()) else {
         // Closed by something else while the prompt was up: nothing left to ask about.
@@ -381,7 +402,7 @@ pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str
     let Some(doc) = app.discard.as_ref().and_then(|p| p.docs.first().copied()) else {
         return Err("no unsaved-changes prompt is open".into());
     };
-    if app.file_dialog_open() || app.save_options_open() || app.saving() {
+    if app.file_dialog_open() || app.save_options_open() || app.saving() || write_pending(app, doc) {
         return Err("the unsaved-changes prompt is waiting for a save to finish".into());
     }
     let reverts = app.discard.as_ref().is_some_and(|p| p.id == "file.revert");
