@@ -1914,8 +1914,12 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                 let (tool, _) = DabTool::parse(&s, cmd, &p, &stroke).unwrap();
                 let mut effect = tool.effect(pre.format(), stroke.brush.spacing);
                 let mut reference = StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
-                // A fixed region containing all dabs plus their read neighbourhoods.
-                let orig = Region::read(&pre, Rect::new(-128, -128, 384, 256));
+                // The stroke starts off the canvas, and only the canvas changes (#5633): dabs that
+                // don't reach it are skipped, and each dab's footprint covers its part of the
+                // canvas plus the halo ring past it, which later dabs read but which is never shown.
+                let canvas = s.active().unwrap().doc.bounds();
+                let ring = canvas.inflate(tool.halo());
+                let orig = Region::read(&pre, ring);
                 let mut work = orig.clone();
                 let mut shown = pre.clone();
                 let mut done = 0;
@@ -1924,9 +1928,12 @@ fn live_dab_batches_match_the_accumulating_renderer() {
                 let mut render_new = |reference: &StrokeRenderer| {
                     let mut damage = Rect::EMPTY;
                     for (i, dab) in reference.dabs().iter().enumerate().skip(done) {
-                        let fp = reference.ctx.footprint(dab, i);
+                        if reference.ctx.dab_rect(dab, false).intersect(&canvas).is_empty() {
+                            continue;
+                        }
+                        let fp = footprint_within(&reference.ctx, dab, i, ring, canvas);
                         effect(&mut work, &fp);
-                        damage = damage.union(&fp.rect);
+                        damage = damage.union(&fp.rect.intersect(&canvas));
                     }
                     done = reference.dabs().len();
                     if !damage.is_empty() {
@@ -2532,3 +2539,5 @@ fn periodic_clone_interior_matches_ordinary_brush_masks_and_transparency() {
         }
     }
 }
+
+mod dab_clip;
