@@ -17,6 +17,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+mod brob;
+
+use std::borrow::Cow;
+
 use jxl_oxide::color::{ColourEncoding, ColourSpace, Primaries, TransferFunction, WhitePoint};
 use jxl_oxide::image::BitDepth;
 use jxl_oxide::{AllocTracker, AuxBoxData, InitializeResult, JxlImage, PixelFormat, UninitializedJxlImage};
@@ -179,7 +183,8 @@ fn guarded<T>(f: impl FnOnce() -> Result<T, Error>) -> Result<T, Error> {
 /// check their limits, and [`Decoder::decode`] then reads the pixels without parsing the header
 /// (and any embedded ICC profile) a second time.
 pub struct Decoder<'a> {
-    bytes: &'a [u8],
+    /// The file as fed to the decoder: borrowed, or a copy with its `brob` boxes bounded.
+    bytes: Cow<'a, [u8]>,
     image: JxlImage,
     /// Bytes the container parser has consumed; the rest is still to be fed.
     fed: usize,
@@ -198,7 +203,10 @@ impl<'a> Decoder<'a> {
         guarded(|| Self::open_unguarded(bytes, alloc_limit))
     }
 
-    fn open_unguarded(bytes: &'a [u8], alloc_limit: usize) -> Result<Self, Error> {
+    fn open_unguarded(original: &'a [u8], alloc_limit: usize) -> Result<Self, Error> {
+        // jxl-oxide inflates `brob` metadata boxes outside its allocation budget (a few KB can
+        // become gigabytes), so they are bounded before it sees the file.
+        let bytes = brob::sanitize(original, brob::BROB_CAP).map_or(Cow::Borrowed(original), Cow::Owned);
         let mut uninit: UninitializedJxlImage = JxlImage::builder().alloc_tracker(AllocTracker::with_limit(alloc_limit)).build_uninit();
         let mut fed = 0usize;
         let mut end = 0usize;
@@ -231,7 +239,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn decode_unguarded(mut self) -> Result<Decoded, Error> {
-        let (bytes, info) = (self.bytes, self.info);
+        let (bytes, info) = (std::mem::take(&mut self.bytes), self.info);
         let mut at = self.fed;
         while at < bytes.len() {
             let chunk = bytes.get(at..).unwrap_or(&[]);
@@ -267,17 +275,17 @@ impl<'a> Decoder<'a> {
         // quantized; everything else is handed out as the decoder converts it.
         let data = match (info.sample, info.premultiplied) {
             (Sample::U8, false) => {
-                let mut buf = vec![0u8; count];
+                let mut buf = zeroed::<u8>(count)?;
                 stream.write_to_buffer(&mut buf);
                 buf
             }
             (Sample::U16, false) => {
-                let mut buf = vec![0u16; count];
+                let mut buf = zeroed::<u16>(count)?;
                 stream.write_to_buffer(&mut buf);
                 buf.iter().flat_map(|v| v.to_ne_bytes()).collect()
             }
             (sample, premultiplied) => {
-                let mut buf = vec![0f32; count];
+                let mut buf = zeroed::<f32>(count)?;
                 stream.write_to_buffer(&mut buf);
                 if premultiplied {
                     unpremultiply(&mut buf, channels);
@@ -304,6 +312,15 @@ impl<'a> Decoder<'a> {
             complete: image.is_loading_done(),
         })
     }
+}
+
+/// `count` zeroed samples, or [`Error::Limit`] when the allocator refuses: the output buffer is
+/// sized by the (already limit-checked) header, but a failed allocation must not abort the app.
+fn zeroed<T: Clone + Default>(count: usize) -> Result<Vec<T>, Error> {
+    let mut buf = Vec::new();
+    buf.try_reserve_exact(count).map_err(|_| Error::Limit(format!("cannot allocate {count} samples of {} bytes", std::mem::size_of::<T>())))?;
+    buf.resize(count, T::default());
+    Ok(buf)
 }
 
 fn layout_of(format: PixelFormat) -> Result<Layout, Error> {
@@ -465,6 +482,30 @@ mod tests {
         }
     }
 
+    /// A container around [`TINY`] with `metadata` boxes before its codestream.
+    fn with_boxes(metadata: &[Vec<u8>]) -> Vec<u8> {
+        let mut boxes = vec![brob::plain_box(b"ftyp", b"jxl \0\0\0\0jxl ")];
+        boxes.extend_from_slice(metadata);
+        boxes.push(brob::plain_box(b"jxlc", &TINY));
+        brob::tests::container(&boxes)
+    }
+
+    /// A 54-byte file section that inflates to 64 MiB of XMP used to be decompressed in full
+    /// by jxl-oxide, outside the allocation budget; now the box is dropped and the pixels decode.
+    #[test]
+    fn a_brob_bomb_costs_the_metadata_not_the_decode() {
+        let bomb = with_boxes(&[brob::tests::brob_of(b"xml ", &brob::tests::BOMB_BR)]);
+        let d = decode(&bomb, &Options { alloc_limit: 1 << 20 }).unwrap();
+        assert_eq!((d.width, d.height, d.xmp, d.exif), (240, 135, None, None));
+    }
+
+    #[test]
+    fn a_small_brob_xmp_still_comes_through() {
+        let file = with_boxes(&[brob::tests::brob_of(b"xml ", &brob::tests::XMP_BR)]);
+        let d = decode(&file, &Options { alloc_limit: 1 << 20 }).unwrap();
+        assert_eq!(d.xmp.as_deref(), Some("<x:xmpmeta/>"));
+    }
+
     #[test]
     fn garbage_is_an_error() {
         for bytes in [&b""[..], &[0xFF, 0x0A][..], b"\0\0\0\x0cJXL \r\n\x87\n", &[0xFF; 64], b"\xff\x0a\xff\xff\xff\xff\xff\xff\xff\xff"] {
@@ -493,6 +534,12 @@ mod tests {
         let mut gray = [0.2];
         unpremultiply(&mut gray, 1);
         assert_eq!(gray, [0.2]);
+    }
+
+    #[test]
+    fn an_impossible_buffer_is_a_limit_error() {
+        assert!(matches!(zeroed::<u8>(usize::MAX), Err(Error::Limit(_))));
+        assert_eq!(zeroed::<u16>(3).unwrap(), [0, 0, 0]);
     }
 
     #[test]

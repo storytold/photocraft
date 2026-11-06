@@ -5474,6 +5474,7 @@ version = "0.20.1"
 name = "photocraft-jxl"
 version = "0.20.1"
 dependencies = [
+ "brotli-decompressor",
  "jxl-oxide",
 ]
 

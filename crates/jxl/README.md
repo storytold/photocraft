@@ -18,6 +18,10 @@ Errors are `Error::Unsupported` (CMYK images), `Error::Limit` (the decoder's own
 passed `alloc_limit`) or `Error::Malformed`. It never panics: every call into jxl-oxide runs under
 `catch_unwind`, and a panic inside it becomes `Error::Malformed`.
 
+Brotli-compressed metadata boxes (`brob`: Exif, XMP) are inflated here, under an 8 MiB cap, before
+the file reaches jxl-oxide, which would inflate them outside its allocation budget. A box over the
+cap is dropped (the pixels still decode); smaller ones are handed over as the plain box they wrap.
+
 ## Why it is a separate, optional crate
 
 Like `photocraft-heif`: `photocraft-codecs` uses this crate only behind its non-default `jxl`
