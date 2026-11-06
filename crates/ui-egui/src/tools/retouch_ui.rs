@@ -61,6 +61,8 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
         // The Eraser's Pencil and Block tips (as `strokes::stroke_params`).
         if crate::eraser_ui::pencil_mode(app, Tool::Eraser) {
             p["pencil"] = json!(true);
+            // Pencil mode has no Flow control: the Brush mode's setting must not carry over.
+            p["flow"] = json!(100.0);
         }
         if crate::eraser_ui::block_mode(app, Tool::Eraser) {
             p["block"] = json!(true);

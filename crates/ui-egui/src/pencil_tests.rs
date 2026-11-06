@@ -335,3 +335,16 @@ fn the_eraser_with_erase_to_history_paints_the_source_state_in_every_mode_even_o
         }
     }
 }
+
+#[test]
+fn erase_to_history_in_pencil_mode_ignores_the_brush_modes_flow() {
+    let mut app = app();
+    app.ui.tool = Tool::Eraser;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush": {"flow": 0.5}})).unwrap();
+    app.ui.tool_options.erase_to_history = true;
+    app.ui.tool_options.eraser_mode = "brush".into();
+    assert_eq!(crate::retouch_ui::history_brush_params(&app)["flow"], json!(50.0));
+    app.ui.tool_options.eraser_mode = "pencil".into();
+    assert_eq!(crate::retouch_ui::history_brush_params(&app)["flow"], json!(100.0));
+}
