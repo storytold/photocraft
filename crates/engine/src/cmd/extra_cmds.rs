@@ -416,7 +416,7 @@ pub fn reveal_all_bounds(doc: &Document) -> Rect {
 /// Bounds of `s`'s pixels outside `canvas` with alpha > 0, as Photoshop's layer bounds (#9379):
 /// the Eraser only clears alpha, so an erased pixel keeps its colour bytes and `content_bounds`
 /// counts it. Pixels inside `canvas` can't grow the result and aren't read.
-fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Rect {
+pub(crate) fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Rect {
     use rayon::prelude::*;
     let fmt = s.format();
     if !fmt.alpha || s.default_pixel().last().is_none_or(|a| *a > 0.0) {

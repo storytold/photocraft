@@ -234,7 +234,9 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     }
     out.put_tiles(shared);
     out.prune();
-    let bounds = out.content_bounds();
+    // Pixels with no alpha are not content (#11605): an erased pixel keeps its colour bytes, and
+    // counting it made Select All, Copy as big as the canvas where Photoshop's is the visible pixels.
+    let bounds = crate::extra_cmds::visible_bounds(&out, Rect::EMPTY);
     Ok(Clip { svg: None, components: None, surface: out, bounds, layers: None, resolution: None, source: None, board: None })
 }
 
