@@ -3455,6 +3455,40 @@ fn image_size_keep_print_size_without_a_resample_round_trips() {
     );
 }
 
+/// #11575 review: a `percent` the command itself would refuse must not be dropped on export. Beside
+/// a resolution with keep-print-size the dropped value even gained the default resampler, so the
+/// strict round trip produced a step that resamples pixels where the original step fails. The export
+/// refuses such a step instead, and Save Actions reports it. A null is "left out", as it is for the
+/// other optional sizes.
+#[test]
+fn image_size_refuses_to_export_a_step_with_an_unusable_percent() {
+    for params in [
+        json!({"resolution": 144, "keepPrintSize": true, "percent": "50"}),
+        json!({"resolution": 144, "keepPrintSize": true, "percent": 0}),
+        json!({"resolution": 144, "keepPrintSize": true, "percent": -50}),
+        json!({"resolution": 144, "keepPrintSize": true, "percent": true}),
+        json!({"width": 12, "percent": "50"}),
+    ] {
+        assert_eq!(image_size_round_trip(&params), None, "{params} must not export as another step");
+    }
+    // A null percent reads as the step without it, and a usable one is unaffected.
+    let kept = json!({"resolution": 144.0, "resample": "bicubic", "keepPrintSize": true, "scaleStyles": true});
+    assert_eq!(image_size_round_trip(&json!({"resolution": 144, "keepPrintSize": true, "percent": null})), Some(kept));
+    assert_eq!(
+        image_size_round_trip(&json!({"resolution": 144, "percent": null})),
+        Some(json!({"resolution": 144.0, "resample": "none", "scaleStyles": true}))
+    );
+    assert!(image_size_round_trip(&json!({"percent": 200})).is_some());
+
+    // Strict Save Actions reports the step instead of writing a different one; skipping names it.
+    let mut s = Session::new();
+    s.actions.list.push(Action::new("Size", vec![("image.imageSize".into(), json!({"resolution": 144, "keepPrintSize": true, "percent": "50"}))]));
+    let error = s.execute("actions.save", json!({"action": "Size", "skipUnsupported": false})).unwrap_err().to_string();
+    assert!(error.contains("image.imageSize"), "{error}");
+    let r = s.execute("actions.save", json!({"action": "Size", "skipUnsupported": true})).unwrap();
+    assert_eq!(r["skipped"], json!([{"action": "Size", "step": 0, "id": "image.imageSize"}]), "{r}");
+}
+
 /// #11515: the reported symptom. A 32×24 72 ppi document taken to 144 ppi with keep-print-size
 /// resamples to 64×48 when the step runs directly; through Save Actions, Load Actions and Play it
 /// kept its 32×24 pixels, because the export lost the resize. Strict export skips nothing and the
