@@ -96,7 +96,10 @@ fn on_other_layer(app: &PhotocraftApp, t: &TransformSession, p: [f64; 2]) -> boo
     }
     let Some(st) = app.session.active() else { return false };
     let doc = &st.doc;
-    let moved = |id: photocraft_doc::LayerId| id.0 == t.layer || t.layers.contains(&id.0);
+    // The layers the commit moves: `edit.transform` takes the link group along as it is then, so a
+    // layer linked after the box opened counts as moved too.
+    let moved = photocraft_engine::transform_cmds::box_targets(doc, &super::begin::moving_layers(t));
+    let moved = |id: photocraft_doc::LayerId| id.0 == t.layer || moved.contains(&id);
     // `as` saturates out-of-range floats; `layers_at` returns nothing off the canvas.
     photocraft_engine::pick_cmds::layers_at(doc, p[0].floor() as i32, p[1].floor() as i32)
         .into_iter()

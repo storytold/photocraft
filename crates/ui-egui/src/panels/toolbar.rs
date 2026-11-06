@@ -93,11 +93,20 @@ pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bo
     released && from_button && pointer.is_some_and(|p| row.contains(p))
 }
 
+fn more_flyout_id() -> egui::Id {
+    egui::Id::unique("toolbar-more-flyout-open")
+}
+
+/// Whether the "…" button's flyout is open: it owns Escape then (`shortcuts::handle`).
+pub(crate) fn more_flyout_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(more_flyout_id())).unwrap_or(false)
+}
+
 /// Right-click on the "…" button opens a flyout with one row, "Edit Toolbar…", drawn like a tool
 /// flyout. The row runs `edit.toolbar` and closes the flyout; Escape or a press outside closes it
 /// without running anything.
 fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens) {
-    let open_id = egui::Id::unique("toolbar-more-flyout-open");
+    let open_id = more_flyout_id();
     let open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
     if button.secondary_clicked() {
         ui.data_mut(|d| d.insert_temp(open_id, !open));
@@ -400,8 +409,11 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     let more = icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…"));
-                    if more.clicked() {
-                        let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+                    if more.clicked()
+                        && let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}))
+                    {
+                        app.ui.status = e;
+                        app.ui.status_error = true;
                     }
                     more_slot_flyout(app, ui, &more, &t);
                     reveal_focused_control(ui);

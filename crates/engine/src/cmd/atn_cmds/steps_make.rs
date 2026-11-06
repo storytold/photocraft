@@ -1113,6 +1113,11 @@ fn layer_set_from(d: &Descriptor, r: &[ReferenceItem]) -> Mapped {
         }
     }
     if let Some(list) = get_list(t, "Blnd") {
+        // Effects beside Blend If have no step here: keep the recorded step rather than play
+        // and save it back without them.
+        if t.items.iter().any(|(k, v)| k.is("Lefx") && !is_scale_only(k, v)) {
+            return unsupported;
+        }
         let Some(b) = blend_if_from(list) else { return unsupported };
         advanced.insert("blendIf".into(), b);
         // The Blending Options dialog's OK: with nothing but its own options, the opacities and

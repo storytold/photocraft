@@ -6623,6 +6623,8 @@ fn blend_if_with_the_recorded_effects_scale_saves_back_unchanged() {
     let with_fx = desc("Lyr ").with("Blnd", blnd).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0)).with("DrSh", D::Descriptor(desc("DrSh")))));
     let imp = import(&atn::write(&one_action(vec![layer_set(with_fx)])).unwrap()).unwrap();
     assert!(imp.actions[0].steps.iter().all(|(_, p)| p.get("__atnEffectsScale").is_none()), "{:?}", imp.actions[0].steps);
+    // Nor can it play without the shadow: it stays the recorded step.
+    assert_eq!(imp.actions[0].steps.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), [PHOTOSHOP_STEP], "{:?}", imp.actions[0].steps);
 }
 
 /// #10771: Blend If entries that are not whole levels, out of order, with half the Underlying

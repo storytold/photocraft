@@ -102,6 +102,40 @@ fn a_click_on_another_layers_pixels_commits_and_keeps_the_selection() {
     assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint], "the selection doesn't change");
 }
 
+/// A layer linked to the transformed one after the box opened moves with the commit
+/// (`edit.transform` takes the link group along), so a click on its pixels is not a click on
+/// another layer: the box stays open.
+#[test]
+fn a_click_on_a_layer_linked_after_the_box_opened_keeps_it_open() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 200, "height": 200, "background": "white"})).unwrap();
+    app.sync_views();
+    app.ui.extras.rulers = false;
+    app.ui.extras.snap = false;
+    let mut ids = Vec::new();
+    for (name, at, color) in [("Other", 120, "#0000ff"), ("Paint", 20, "#ff0000")] {
+        let id = app.run("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        app.run("layer.select", json!({"layer": id})).unwrap();
+        app.run("select.rect", json!({"x": at, "y": at, "width": 40, "height": 40})).unwrap();
+        app.run("edit.fill", json!({"contents": "color", "color": color})).unwrap();
+        app.run("select.deselect", json!({})).unwrap();
+        ids.push(LayerId(id));
+    }
+    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransform", json!({})).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 10.0, y]);
+    app.session
+        .edit("Link Layers", |doc, _| {
+            for id in &ids {
+                doc.layer_mut(*id).unwrap().link_group = Some(7);
+            }
+            Ok(())
+        })
+        .unwrap();
+    click(&mut app, [140.0, 140.0]);
+    assert!(app.ui.transform.is_some(), "the linked layer moves with the box: the click doesn't commit");
+}
+
 /// Only the frontmost layer under the click counts: where a grouped layer (not measured, so the
 /// box stays open there) covers a top-level layer's pixels, the click doesn't commit through the
 /// covered layer.
