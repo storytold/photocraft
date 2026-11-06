@@ -1,7 +1,7 @@
 //! Conversions between PSD planar big-endian channel data and interleaved
 //! native-endian surface bytes.
 
-use photocraft_color::SampleType;
+use photocraft_color::{PixelFormat, SampleType};
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::Surface;
 
@@ -192,19 +192,7 @@ fn surface_planes_into_white(surface: &Surface, r: Rect, invert: &[bool], lab16:
                     }
                     None => &default_row[..len * ch * bps],
                 };
-                let src = if let Some(white) = white {
-                    whitened.clear();
-                    whitened.extend_from_slice(src);
-                    let colors = fmt.mode.color_channels();
-                    for pixel in whitened.chunks_exact_mut(ch * bps) {
-                        if photocraft_color::read_sample(pixel, fmt.sample, colors) <= 0.0 {
-                            pixel[..colors * bps].copy_from_slice(&white[..colors * bps]);
-                        }
-                    }
-                    &whitened
-                } else {
-                    src
-                };
+                let src = if let Some(white) = white { whiten_row(src, fmt, white, &mut whitened) } else { src };
                 for (c, plane) in parts.iter_mut().enumerate() {
                     let out = &mut plane[dst..dst + len * bps];
                     let inv = invert.get(c).copied().unwrap_or(false);
@@ -235,6 +223,23 @@ fn surface_planes_into_white(surface: &Surface, r: Rect, invert: &[bool], lab16:
             }
         }
     });
+}
+
+/// Borrow opaque rows; copy and whiten only rows containing nonpositive alpha.
+fn whiten_row<'a>(src: &'a [u8], fmt: PixelFormat, white: &[u8], scratch: &'a mut Vec<u8>) -> &'a [u8] {
+    let colors = fmt.mode.color_channels();
+    let bpp = fmt.bytes_per_pixel();
+    let Some(first) = src.chunks_exact(bpp).position(|p| photocraft_color::read_sample(p, fmt.sample, colors) <= 0.0) else {
+        return src;
+    };
+    scratch.clear();
+    scratch.extend_from_slice(src);
+    for pixel in scratch.chunks_exact_mut(bpp).skip(first) {
+        if photocraft_color::read_sample(pixel, fmt.sample, colors) <= 0.0 {
+            pixel[..colors * fmt.sample.bytes()].copy_from_slice(&white[..colors * fmt.sample.bytes()]);
+        }
+    }
+    scratch
 }
 
 /// Copy one encoded channel from a tile row into a contiguous output plane.
@@ -427,6 +432,38 @@ pub fn bands(n: usize) -> Vec<std::ops::Range<usize>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Whitening preserves sample bits and borrows rows that need no replacement.
+    #[test]
+    fn whitening_borrows_unchanged_rows_and_matches_copying() {
+        use photocraft_color::{ColorMode, write_sample};
+        for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                let fmt = PixelFormat::new(mode, sample, true);
+                let (colors, bpp) = (mode.color_channels(), fmt.bytes_per_pixel());
+                let white = vec![0x37; bpp];
+                let mut scratch = Vec::new();
+                for alphas in [[1.0; 5], [1.0, 0.0, -0.0, -1.0, 0.25], [1.0, f32::NAN, f32::INFINITY, 0.0, 1.0]] {
+                    let mut src = vec![0x53; 5 * bpp];
+                    for (pixel, alpha) in src.chunks_exact_mut(bpp).zip(alphas) {
+                        write_sample(pixel, sample, colors, alpha);
+                    }
+                    let mut want = src.clone();
+                    for pixel in want.chunks_exact_mut(bpp) {
+                        if photocraft_color::read_sample(pixel, sample, colors) <= 0.0 {
+                            pixel[..colors * sample.bytes()].copy_from_slice(&white[..colors * sample.bytes()]);
+                        }
+                    }
+                    let got = whiten_row(&src, fmt, &white, &mut scratch);
+                    assert_eq!(got, want, "{mode:?} {sample:?}");
+                    if alphas == [1.0; 5] {
+                        assert_eq!(got.as_ptr(), src.as_ptr());
+                        assert_eq!(scratch.capacity(), 0);
+                    }
+                }
+            }
+        }
+    }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
