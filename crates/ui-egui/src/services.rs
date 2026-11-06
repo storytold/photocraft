@@ -331,6 +331,8 @@ pub struct ExternalVectorSource {
 pub type OpenExternalSvgFn = Box<dyn FnMut(ExternalSvgEditor, ExternalVectorSource) -> Result<Box<dyn ExternalSvgSession>, String>>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+/// Shared queue of browser canvas drops with the document captured at the drop event.
+pub type PlaceInbox = std::sync::Arc<std::sync::Mutex<Vec<(photocraft_doc::DocId, String, Vec<u8>)>>>;
 
 /// Read the saved preferences text (`None` when there is none yet).
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
@@ -461,7 +463,7 @@ pub struct Services {
     /// Files delivered asynchronously for a drop onto the active document's canvas (web
     /// drag-and-drop, routed by [`PhotocraftApp::dropped_on_canvas`]): placed as layers like a
     /// desktop canvas drop (Place Embedded, each in Free Transform).
-    pub place_inbox: Option<Inbox>,
+    pub place_inbox: Option<PlaceInbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
     pub clipboard_set_image: Option<ClipboardSetFn>,
     pub clipboard_get_image: Option<ClipboardGetFn>,
@@ -475,6 +477,11 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Load/save the bounded deterministic GPU compositor failure memo (native only).
+    pub load_gpu_memo: Option<LoadTextFn>,
+    pub save_gpu_memo: Option<SaveTextFn>,
+    /// Compiler identity included in GPU memo keys (for example `fxc` or `dxc:<path>`).
+    pub shader_compiler: Option<String>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,

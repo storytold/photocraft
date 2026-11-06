@@ -474,9 +474,11 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             // Ratios, sizes, saved presets, New / Delete Crop Preset… (#2443, #1919).
             crate::crop_presets::dropdown(app, ui);
             let o = &mut app.ui.tool_options;
+            let mut turn = false;
             let mut ratio_base = None;
             if o.crop_ratio == crate::crop_size::WHR {
-                crate::crop_size::fields(o, ui);
+                // ⇄ turns the frame with W and H, as with a ratio.
+                turn = crate::crop_size::fields(o, ui);
             } else {
                 // Keep partial edits in ToolOptions so the first side survives a frame;
                 // Original Ratio shows the document's numbers, as Photoshop does.
@@ -488,6 +490,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 let (cw, ch) = (fw.changed(), fh.changed());
                 if swap {
                     std::mem::swap(&mut rw, &mut rh);
+                    turn = true;
                 }
                 if cw || ch || swap {
                     crate::crop_size::set_custom_ratio_fields(o, rw, rh);
@@ -513,16 +516,22 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             let pick_shield_color = crate::crop_shield::options_button(&mut o.crop_shield, ui);
             widgets::checkbox(ui, &mut o.crop_delete, tl!("Delete Cropped Pixels"));
             // Fill: what a turned or extending crop puts where the image doesn't reach
-            // (#3823). Generative Expand is not offered.
+            // (#3823). Generative Expand is not offered. The first entry names the outcome as in
+            // Photoshop: the background colour, or transparency with Delete Cropped Pixels off
+            // (#10872); both store `crop_content_aware: false`.
             ui.label(tl!("Fill:"));
+            let delete_cropped_pixels = o.crop_delete;
             widgets::dropdown(
                 ui,
                 "crop-fill",
                 tl!("Fill:"),
                 &mut o.crop_content_aware,
-                &[(false, tl!("Background (Default)")), (true, tl!("Content-Aware Fill"))],
+                &[(false, crate::crop_ui::fill_label(delete_cropped_pixels)), (true, tl!("Content-Aware Fill"))],
                 150.0,
             );
+            if turn {
+                crate::crop_ui::turn_frame(app);
+            }
             if crate::crop_ui::preset_ratio(app) != before_ratio {
                 match ratio_base {
                     Some(base) => crate::crop_ui::apply_ratio_from(app, base),
@@ -546,6 +555,11 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 }
                 if icons::button(ui, "ban", 26.0, false, tl!("Cancel current crop operation  (Esc)")).clicked() {
                     crate::crop_ui::dismiss(app);
+                }
+                // Resets the box to its first frame; nothing to reset until it is changed.
+                let changed = crate::crop_ui::modified(app);
+                if ui.add_enabled_ui(changed, |ui| icons::button(ui, "undo-2", 26.0, false, tl!("Reset"))).inner.clicked() {
+                    crate::crop_ui::reset(app);
                 }
             });
         }

@@ -13,6 +13,7 @@ mod clipboard;
 mod commands;
 mod control;
 mod files;
+pub(crate) use files::ensure_memory_to_save;
 mod frame;
 mod gpu;
 mod ime;
@@ -89,6 +90,7 @@ impl PhotocraftApp {
             live_adjust: None,
             frame: 0,
             notices_hovered: false,
+            low_memory: crate::memory_warning::Watch::default(),
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
@@ -99,6 +101,8 @@ impl PhotocraftApp {
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
+            frame_tool_ctx: None,
+            frame_preview: None,
             drop_places: Default::default(),
             view_docs: Vec::new(),
             path_document: None,
@@ -112,6 +116,7 @@ impl PhotocraftApp {
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
+            guide_edit: None,
             filter_preview: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -168,6 +173,7 @@ impl PhotocraftApp {
             dialog_edits: Default::default(),
             color_picker_live: Vec::new(),
             pending_after_prompt: None,
+            after_transform_commit: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,
