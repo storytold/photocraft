@@ -218,6 +218,13 @@ impl PathGeometry {
         self.frame.length()
     }
 
+    /// Largest `f32` arc-length that never exceeds `length()`.
+    pub fn canonical_length_f32(&self) -> f32 {
+        let length = self.length();
+        let f = length as f32;
+        if f64::from(f) > length && f > 0.0 { f32::from_bits(f.to_bits() - 1) } else { f }
+    }
+
     /// Sample a point and unit tangent at an arc length.
     pub fn sample(&self, arc: f64) -> Option<((f64, f64), (f64, f64))> {
         if !arc.is_finite() {

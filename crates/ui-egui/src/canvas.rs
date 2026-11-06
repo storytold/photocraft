@@ -850,7 +850,12 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
         ctx.data_mut(|d| d.insert_temp(tool_press, press_mods));
         if tool.is_type() && press_mods.command && app.ui.text_edit.is_some() {
             let d = xf.to_doc(p);
-            tool_input::tool_event_with_view(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods, Some(xf));
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                press_mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
 
@@ -1024,7 +1029,12 @@ fn handle_canvas_tool_stroke(
         let d = xf.to_doc(p);
         // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
         let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
-        tool_input::tool_event_with_view(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods, Some(xf));
+        tool_input::tool_event_with_view(
+            app,
+            ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+            press_mods,
+            Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+        );
         app.press_stroke = app.drag.is_some();
     }
     let press_stroke = app.press_stroke;
@@ -1041,7 +1051,12 @@ fn handle_canvas_tool_stroke(
         }
         let d = xf.to_doc(p);
         let press_mods = if capture_press { ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods) } else { mods };
-        tool_input::tool_event_with_view(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods, Some(xf));
+        tool_input::tool_event_with_view(
+            app,
+            ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+            press_mods,
+            Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+        );
     }
     // A stroke started on the press takes its moves from the press on, not only once egui
     // recognises a drag (past its click distance): otherwise the first few points are lost
@@ -1092,7 +1107,12 @@ fn handle_canvas_tool_stroke(
             // This move's share of the pen samples the frame brought (pressure, tilt, rotation).
             app.stylus.select(k, n);
             let d = xf.to_doc(p);
-            tool_input::tool_event_with_view(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods, Some(xf));
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
         app.stylus.clear_selection();
         app.stylus.clock_ms = now_ms;
@@ -1125,7 +1145,12 @@ fn handle_canvas_tool_stroke(
         let p = at.map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
         if let Some(d) = p {
             tap_at_peak_pressure(app);
-            tool_input::tool_event_with_view(app, ToolEvent::Up { x: d[0], y: d[1] }, mods, Some(xf));
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Up { x: d[0], y: d[1] },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     // A stroke started on the press ends with the release, whether egui saw a drag, a click,
@@ -1137,7 +1162,12 @@ fn handle_canvas_tool_stroke(
             && app.drag.is_some()
         {
             tap_at_peak_pressure(app);
-            tool_input::tool_event_with_view(app, ToolEvent::Up { x: d[0], y: d[1] }, mods, Some(xf));
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Up { x: d[0], y: d[1] },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
     }
     if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
@@ -1206,9 +1236,19 @@ fn handle_canvas_tool_clicks(
                 }
                 // If this tool was not handled on pointer-down, fall back to a
                 // click-sized gesture while preserving pen pressure (mouse stays at 1).
-                tool_input::tool_event_with_view(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods, Some(xf));
+                tool_input::tool_event_with_view(
+                    app,
+                    ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                    click_mods,
+                    Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+                );
                 tap_at_peak_pressure(app);
-                tool_input::tool_event_with_view(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods, Some(xf));
+                tool_input::tool_event_with_view(
+                    app,
+                    ToolEvent::Up { x: d[0], y: d[1] },
+                    click_mods,
+                    Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+                );
             }
         }
     }
@@ -1227,7 +1267,12 @@ fn handle_canvas_tool_clicks(
         app.defer_live_stroke = true;
         for p in moves.into_iter().filter(|p| rect.contains(*p)) {
             let d = xf.to_doc(p);
-            tool_input::tool_event_with_view(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods, Some(xf));
+            tool_input::tool_event_with_view(
+                app,
+                ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() },
+                mods,
+                Some(tool_input::ToolViewContext::new(xf, Some(input.ctx.viewport_id()))),
+            );
         }
         app.defer_live_stroke = false;
         crate::magnetic_lasso_ui::flush(app);

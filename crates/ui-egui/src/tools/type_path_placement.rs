@@ -45,12 +45,22 @@ fn alignment_factor(align: photocraft_doc::text::TextAlign) -> f64 {
 fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]> {
     let TextShape::Path { path, start, end, .. } = &text.shape else { return None };
     let length = geometry.length();
-    let start = f64::from(*start);
+    let mut start = f64::from(*start);
     if !length.is_finite() || length <= 0.0 || !start.is_finite() {
         return None;
     }
     let range = if let Some(end) = end {
-        [start, f64::from(*end)]
+        let mut end = f64::from(*end);
+        if !path.closed {
+            let max_f32 = length as f32;
+            if end <= f64::from(max_f32) {
+                end = end.min(length);
+            }
+            if (start as f32) <= max_f32 {
+                start = start.min(length);
+            }
+        }
+        [start, end]
     } else {
         // Different paragraph alignments cannot share one equivalent interval.
         let runs = text.paragraph_runs();
@@ -266,6 +276,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
 /// One marker gesture. The document is changed only on release, so Escape is lossless.
 #[derive(Clone, Debug)]
 pub struct Drag {
+    pub(crate) viewport: Option<egui::ViewportId>,
     document: photocraft_doc::DocId,
     source: Weak<Document>,
     layer: photocraft_doc::LayerId,
@@ -399,6 +410,12 @@ pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
 }
 
 pub(crate) fn cancel_missing_release(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let Some(drag) = &app.ui.type_path_drag else { return };
+    if let Some(owner) = drag.viewport {
+        if ctx.viewport_id() != owner {
+            return;
+        }
+    }
     if ctx.input(|input| !input.focused || !input.pointer.primary_down()) {
         cancel(app);
     }
@@ -410,15 +427,39 @@ pub(crate) fn cancel(app: &mut PhotocraftApp) -> bool {
 
 #[cfg(test)]
 pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) -> bool {
-    pointer_with_view(app, event, None)
+    pointer_with_context(app, event, None, None)
 }
 
+#[cfg(test)]
 pub(crate) fn pointer_with_view(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent, view: Option<&ViewXform>) -> bool {
+    pointer_with_context(app, event, view, None)
+}
+
+pub(crate) fn pointer_with_context(
+    app: &mut PhotocraftApp,
+    event: crate::canvas::ToolEvent,
+    view: Option<&ViewXform>,
+    viewport: Option<egui::ViewportId>,
+) -> bool {
     use crate::canvas::ToolEvent;
     if matches!(event, ToolEvent::Down { .. }) {
-        cancel(app);
+        if let Some(drag) = &app.ui.type_path_drag {
+            if drag.viewport.is_none() || drag.viewport == viewport {
+                cancel(app);
+            } else {
+                return false;
+            }
+        }
     }
     if let Some(mut drag) = app.ui.type_path_drag.take() {
+        if let Some(owner) = drag.viewport {
+            if let Some(vp) = viewport {
+                if vp != owner {
+                    app.ui.type_path_drag = Some(drag);
+                    return false;
+                }
+            }
+        }
         if !drag.valid(app) {
             return true;
         }
@@ -433,7 +474,12 @@ pub(crate) fn pointer_with_view(app: &mut PhotocraftApp, event: crate::canvas::T
             ToolEvent::Up { x, y } => {
                 drag.update(x, y);
                 if drag.proposed != drag.original || drag.flipped {
-                    let (range, flip) = drag.placement();
+                    let (mut range, flip) = drag.placement();
+                    if !drag.closed {
+                        let canonical = drag.geometry.canonical_length_f32() as f64;
+                        range[1] = range[1].min(canonical);
+                        range[0] = range[0].clamp(0.0, range[1]);
+                    }
                     if let Err(error) = app.run(
                         "type.setPathPlacement",
                         serde_json::json!({
@@ -477,6 +523,7 @@ pub(crate) fn pointer_with_view(app: &mut PhotocraftApp, event: crate::canvas::T
     let point = inverse.apply(Point::new(x, y));
     let Some((previous, distance)) = geometry.project(point.x, point.y) else { return false };
     app.ui.type_path_drag = Some(Drag {
+        viewport,
         document: st.doc.id,
         source: Arc::downgrade(&st.doc),
         layer,
@@ -1129,5 +1176,101 @@ mod tests {
         assert_eq!(steps(&app), n + 1);
         assert!(app.session.undo());
         assert_eq!(shape(&app), before);
+    }
+
+    #[test]
+    fn type_path_placement_noninteger_line_rounding_upward_keeps_markers_visible() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::PathSelection;
+        // Line from (20, 20) to (27, 27) with length 7 * sqrt2 ≈ 9.899495.
+        app.run("path.set", json!({"name":"work", "path":{"subpaths":[{"closed":false,"knots":[[20,20],[27,27]]}]}})).unwrap();
+        app.ui.selected_path = Some("work".into());
+        app.run("type.create", json!({"text":"AB", "x":20, "y":20})).unwrap();
+        app.run("type.attachToPath", json!({"start":0})).unwrap();
+        app.ui.views[0].zoom = 1.0;
+
+        let xf = ViewXform::active(&app).unwrap();
+        let geom = PathGeometry::new(&photocraft_doc::vector::Subpath::polyline(&[(20.0, 20.0), (27.0, 27.0)]), false).unwrap();
+        let length_f32 = geom.length() as f32;
+        assert!(f64::from(length_f32) > geom.length(), "scale 7 * sqrt2 must round up in f32");
+
+        // Endpoint command keeps markers visible.
+        app.run("type.setPathPlacement", json!({"end": length_f32})).unwrap();
+        assert!(markers(active_text(&app).unwrap(), &xf).is_some(), "markers must remain visible after endpoint command");
+
+        // Zero-capacity endpoint range keeps markers visible.
+        app.run("type.setPathPlacement", json!({"start": length_f32, "end": length_f32})).unwrap();
+        assert!(markers(active_text(&app).unwrap(), &xf).is_some(), "zero-capacity endpoint markers must remain visible");
+
+        // Flipped case keeps markers visible.
+        app.run("type.setPathPlacement", json!({"start": 0.0, "end": length_f32, "flip": true})).unwrap();
+        assert!(markers(active_text(&app).unwrap(), &xf).is_some(), "flipped endpoint markers must remain visible");
+
+        // Reset to initial placement and test actual drag gesture to end.
+        app.run("type.setPathPlacement", json!({"start": 0.0, "end": 5.0, "flip": false})).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let from = xf.to_doc(tip);
+        assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
+        // Drag far past the endpoint.
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 50.0, y: 50.0, pressure: 1.0 }, Some(&xf)));
+        assert!(pointer_with_view(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, Some(&xf)));
+        assert!(markers(active_text(&app).unwrap(), &xf).is_some(), "markers must remain visible after actual drag release at endpoint");
+    }
+
+    #[test]
+    fn cancel_missing_release_viewport_ownership() {
+        let mut app = app(Tool::PathSelection);
+        let owner_vp = egui::ViewportId::from_hash_of("owner-viewport");
+        let nonowner_vp = egui::ViewportId::from_hash_of("nonowner-viewport");
+
+        let ctx_owner = egui::Context::default();
+        let ctx_nonowner = egui::Context::default();
+
+        let pos = egui::pos2(1000.0, 1000.0);
+
+        // Set owner ctx focused with primary down.
+        ctx_owner.begin_pass(egui::RawInput {
+            viewport_id: owner_vp,
+            focused: true,
+            events: vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
+            ..Default::default()
+        });
+        ctx_owner.end_pass().textures_delta.clear();
+
+        // Set nonowner ctx unfocused without primary pressed.
+        ctx_nonowner.begin_pass(egui::RawInput { viewport_id: nonowner_vp, focused: false, events: vec![], ..Default::default() });
+        ctx_nonowner.end_pass().textures_delta.clear();
+
+        // Start drag in owner viewport.
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let from = xf.to_doc(tip);
+        assert!(pointer_with_context(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf), Some(owner_vp)));
+        assert!(app.ui.type_path_drag.is_some());
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, Some(owner_vp));
+
+        // Unfocused nonowner cannot cancel.
+        cancel_missing_release(&mut app, &ctx_nonowner);
+        assert!(app.ui.type_path_drag.is_some(), "unfocused nonowner must not cancel owner drag");
+
+        // Focused held owner stays.
+        cancel_missing_release(&mut app, &ctx_owner);
+        assert!(app.ui.type_path_drag.is_some(), "focused held owner must retain drag");
+
+        // Owner focus loss cancels.
+        ctx_owner.begin_pass(egui::RawInput { viewport_id: owner_vp, focused: false, events: vec![], ..Default::default() });
+        cancel_missing_release(&mut app, &ctx_owner);
+        assert!(app.ui.type_path_drag.is_none(), "owner focus loss must cancel drag");
+
+        // Automation drag without owner retains cancellation on lost release.
+        assert!(pointer(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, None);
+        cancel_missing_release(&mut app, &ctx_nonowner);
+        assert!(app.ui.type_path_drag.is_none(), "automation fallback cleans up without owner");
     }
 }

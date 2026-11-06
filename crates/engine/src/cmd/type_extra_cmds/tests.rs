@@ -932,3 +932,41 @@ fn path_placement_availability_and_legacy_ranges() {
     s.execute("type.setPathPlacement", json!({"start": 190, "end": 210})).unwrap();
     assert!(matches!(text(&s, id).shape, TextShape::Path { start: 190.0, end: Some(210.0), .. }));
 }
+
+#[test]
+fn path_placement_noninteger_line_rounding_upward_and_zero_capacity() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    // Line from (0, 0) to (7, 7) has length 7 * sqrt(2) ≈ 9.899494936611665.
+    // In f32, length rounds upward to 9.8994951248168945.
+    let knots = [(0.0, 0.0), (7.0, 7.0)];
+    let path = Subpath::polyline(&knots);
+    let geometry = photocraft_text::warp::PathGeometry::new(&path, false).unwrap();
+    let length = geometry.length();
+    let length_f32 = length as f32;
+    assert!(f64::from(length_f32) > length, "scale 7 * sqrt2 must round upward in f32");
+    let canonical = geometry.canonical_length_f32();
+    assert!(f64::from(canonical) <= length, "canonical f32 must never exceed geometry");
+
+    with_text(&mut s, &json!({}), "attach", |t, _| {
+        t.shape = TextShape::Path { path: path.clone(), start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+
+    // Genuine out-of-bounds rejected.
+    assert!(s.execute("type.setPathPlacement", json!({"end": 9.95})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"end": length_f32 + 0.1})).is_err());
+
+    // Upward-rounded endpoint is accepted and normalized to canonical maximum.
+    s.execute("type.setPathPlacement", json!({"end": length_f32})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { end: Some(e), .. } if e == canonical));
+
+    // Zero-capacity endpoint range at the path boundary is accepted.
+    s.execute("type.setPathPlacement", json!({"start": length_f32, "end": length_f32})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start, end: Some(end), .. } if start == canonical && end == canonical));
+
+    // Flipped case at the path boundary is accepted.
+    s.execute("type.setPathPlacement", json!({"start": 0.0, "end": length_f32, "flip": true})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 0.0, end: Some(end), flip: true, .. } if end == canonical));
+}
