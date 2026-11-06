@@ -9,6 +9,7 @@ use crate::pickers::asset_browser::{
     standard_item_context_menu,
 };
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
+use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{ShellOptions, picker_shell};
 use crate::pickers::picker_state::{HierarchyOrderEntry, ItemRenameState};
@@ -18,6 +19,25 @@ use crate::pickers::preset_preview::c32;
 /// The engine's fallback owner for gradients created when the library has no groups. The shared
 /// hierarchy treats it as an invisible backing group while its cards live at the root.
 const ROOT_ITEMS_GROUP: &str = "Presets";
+
+fn gradient_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
+    let mut keys = PickerProjectionKeys::default();
+    for (group_index, group) in groups.iter().enumerate() {
+        keys.insert(
+            ProjectionNodeRef::Group(group_index),
+            PickerIdentityKey::from_parts("gradient-group", [group.name.as_str()]),
+            PickerNodeIdentity::Group(group.name.clone()),
+        );
+        for (item_index, item) in group.items.iter().enumerate() {
+            keys.insert(
+                ProjectionNodeRef::Item { group_index, item_index },
+                PickerIdentityKey::from_parts("gradient-preset", [item.key.as_str()]),
+                PickerNodeIdentity::Item { group: group.name.clone(), key: item.key.clone() },
+            );
+        }
+    }
+    keys
+}
 
 /// Draw a gradient swatch, showing transparency over the standard checkerboard.
 pub(crate) fn paint_gradient(ui: &egui::Ui, rect: Rect, stops: &[(f32, [f32; 4])]) {
@@ -104,6 +124,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     missing_root_items.append(&mut root_order);
     let root_order = missing_root_items;
     state.set_hierarchy_order("gradients", "", root_order);
+    let projection_keys = gradient_projection_keys(&groups);
     let canvas = canvas_drop_rect(app);
     let events = {
         let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
@@ -114,6 +135,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut adapter = BrowserAdapter {
             panel: "gradients",
             groups: &groups,
+            projection_keys: Some(&projection_keys),
             options: BrowserOptions {
                 canvas,
                 flush: false,
@@ -130,6 +152,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {

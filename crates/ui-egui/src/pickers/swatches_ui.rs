@@ -19,6 +19,7 @@ use crate::pickers::asset_browser::{
     BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
     standard_item_context_menu,
 };
+use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{ShellOptions, picker_shell};
 use crate::pickers::picker_state::PresetUi;
@@ -30,6 +31,25 @@ pub const PANEL: &str = "swatches";
 const DEFAULT_SIZE: f32 = 22.0;
 type SwatchColorTable = Vec<Vec<Color32>>;
 type SharedSwatchColorTable = Arc<SwatchColorTable>;
+
+fn swatch_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
+    let mut keys = PickerProjectionKeys::default();
+    for (group_index, group) in groups.iter().enumerate() {
+        keys.insert(
+            ProjectionNodeRef::Group(group_index),
+            PickerIdentityKey::from_parts("swatches-group", [group.name.as_str()]),
+            PickerNodeIdentity::Group(group.name.clone()),
+        );
+        for (item_index, item) in group.items.iter().enumerate() {
+            keys.insert(
+                ProjectionNodeRef::Item { group_index, item_index },
+                PickerIdentityKey::from_parts("swatches-item", [item.key.as_str()]),
+                PickerNodeIdentity::Item { group: group.name.clone(), key: item.key.clone() },
+            );
+        }
+    }
+    keys
+}
 
 fn c32(c: [f32; 3]) -> Color32 {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -76,6 +96,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             items: g.items.iter().map(|s| ItemView { key: s.name.clone(), name: s.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
+    let projection_keys = swatch_projection_keys(&groups);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let table = colors(app, ui.ctx());
     // Swatches are applied by clicking; dragging a swatch onto the canvas has no action. Keep
@@ -99,6 +120,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut adapter = BrowserAdapter {
             panel: PANEL,
             groups: &groups,
+            projection_keys: Some(&projection_keys),
             options: BrowserOptions {
                 canvas,
                 flush: true,
@@ -115,6 +137,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
             paint_group: None,
             paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {

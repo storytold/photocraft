@@ -7,7 +7,7 @@ use egui::{Pos2, Rect};
 
 use crate::PhotocraftApp;
 use crate::pickers::picker_browser_dragging::{DropHitRegion, PointerRegion};
-use crate::pickers::picker_browser_model::{ContainerId, HierarchyNode, NodeId, PickerBrowserHierarchy};
+use crate::pickers::picker_browser_model::{ContainerId, HierarchyNode, PickerBrowserHierarchy, PickerId};
 use crate::theme::Tokens;
 
 /// Canvas drop bounds used by preset-browser adapters, excluding the ruler strips.
@@ -22,21 +22,21 @@ pub(crate) enum AssetDrag {
         scope: String,
         key: String,
         /// Exact hierarchy identity for canonical drag arbitration. Legacy consumers may omit it.
-        node_id: Option<NodeId>,
+        node_id: Option<PickerId>,
         /// Selected item identities in visible browser order. Empty means a single-item drag.
-        selection: Vec<NodeId>,
+        selection: Vec<PickerId>,
     },
     /// Any group node, including a nested group. `path` is empty for a root group.
     Group { scope: String, name: String, path: Vec<String> },
     /// Canonical group source with an exact path-qualified node identity and browser selection.
-    CanonicalGroup { scope: String, node_id: NodeId, selection: Vec<NodeId> },
+    CanonicalGroup { scope: String, node_id: PickerId, label: String, selection: Vec<PickerId> },
 }
 
 impl AssetDrag {
     /// Return the path-qualified canonical source identity for this browser scope.
     /// Legacy name/path payloads intentionally do not produce canonical move requests.
     #[cfg(test)]
-    pub(crate) fn canonical_node_id(&self, expected_scope: &str) -> Option<&NodeId> {
+    pub(crate) fn canonical_node_id(&self, expected_scope: &str) -> Option<&PickerId> {
         match self {
             Self::Preset { scope, node_id: Some(node_id), .. } | Self::CanonicalGroup { scope, node_id, .. } if scope == expected_scope => Some(node_id),
             _ => None,
@@ -65,7 +65,7 @@ pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, last: bool) -> 
 
 /// Capture a card's leading/trailing half as a semantic sibling insertion target. The returned
 /// hit rectangle remains the card bounds; indicator geometry is a separate narrow line.
-pub(crate) fn card_drop_hit(rect: Rect, pointer: Pos2, grid: bool, target: NodeId, depth: usize, order: usize) -> DropHitRegion {
+pub(crate) fn card_drop_hit(rect: Rect, pointer: Pos2, grid: bool, target: PickerId, depth: usize, order: usize) -> DropHitRegion {
     let after = item_drop_after(rect, pointer, grid);
     let indicator_rect = if grid {
         let x = if after { rect.right() } else { rect.left() };
@@ -87,7 +87,7 @@ pub(crate) fn card_drop_hit(rect: Rect, pointer: Pos2, grid: bool, target: NodeI
 
 /// Register both halves of a card so the debug view and hit arbitration use the same full-time
 /// geometry even when the pointer is not currently over the card.
-pub(crate) fn card_drop_hits(rect: Rect, grid: bool, target: NodeId, depth: usize, order: usize) -> [DropHitRegion; 2] {
+pub(crate) fn card_drop_hits(rect: Rect, grid: bool, target: PickerId, depth: usize, order: usize) -> [DropHitRegion; 2] {
     let (leading, trailing) = if grid {
         let middle = rect.center().x;
         (Rect::from_min_max(rect.min, Pos2::new(middle, rect.bottom())), Rect::from_min_max(Pos2::new(middle, rect.top()), rect.max))
@@ -116,7 +116,7 @@ pub(crate) fn card_drop_hits(rect: Rect, grid: bool, target: NodeId, depth: usiz
 
 /// An open group's entire header receives drops into the group, including its lower half.
 /// Closed groups retain the lower sibling-after target because they have no visible body.
-pub(crate) fn group_header_drop_hits(rect: Rect, target: NodeId, depth: usize, order: usize, open: bool) -> Vec<DropHitRegion> {
+pub(crate) fn group_header_drop_hits(rect: Rect, target: PickerId, depth: usize, order: usize, open: bool) -> Vec<DropHitRegion> {
     if open {
         return vec![DropHitRegion {
             target: None,
@@ -153,7 +153,7 @@ pub(crate) fn group_header_drop_hits(rect: Rect, target: NodeId, depth: usize, o
 }
 
 /// Capture a drop-at-end target spanning a group's visible subtree (e.g. the indent column).
-pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: NodeId, depth: usize, order: usize) -> DropHitRegion {
+pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: PickerId, depth: usize, order: usize) -> DropHitRegion {
     DropHitRegion { target: None, container: Some(ContainerId::Group(group)), region: PointerRegion::ContainerEnd, hit_rect, indicator_rect, depth, order }
 }
 
@@ -162,8 +162,8 @@ pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: Node
 /// group. Each half paints over its own adjacent element's width.
 pub(crate) struct GroupGapDropSpec {
     pub(crate) rect: Rect,
-    pub(crate) upper: NodeId,
-    pub(crate) lower: NodeId,
+    pub(crate) upper: PickerId,
+    pub(crate) lower: PickerId,
     pub(crate) upper_bounds: Rect,
     pub(crate) lower_bounds: Rect,
     pub(crate) upper_depth: usize,
@@ -223,8 +223,8 @@ pub(crate) fn card_leading_marker_rect(rect: Rect) -> Rect {
 
 /// Return the last visible hierarchy node immediately before a lower group in depth-first order.
 /// Its parent is the meeting container, so inserting after it preserves the node's sibling level.
-pub(crate) fn group_gap_upper_anchor(hierarchy: &PickerBrowserHierarchy, lower_group: &NodeId) -> Option<(NodeId, usize)> {
-    fn flatten(nodes: &[HierarchyNode], depth: usize, out: &mut std::collections::BTreeMap<NodeId, usize>) {
+pub(crate) fn group_gap_upper_anchor(hierarchy: &PickerBrowserHierarchy, lower_group: &PickerId) -> Option<(PickerId, usize)> {
+    fn flatten(nodes: &[HierarchyNode], depth: usize, out: &mut std::collections::BTreeMap<PickerId, usize>) {
         for node in nodes {
             out.insert(node.id().clone(), depth);
             if node.is_group() {
@@ -260,7 +260,7 @@ pub(crate) fn root_append_hit(rect: Rect, indicator_rect: Rect, order: usize) ->
 }
 
 /// Capture the leading edge of the root sibling sequence, immediately before its first node.
-pub(crate) fn root_prepend_hit(rect: Rect, indicator_rect: Rect, first: NodeId, order: usize) -> DropHitRegion {
+pub(crate) fn root_prepend_hit(rect: Rect, indicator_rect: Rect, first: PickerId, order: usize) -> DropHitRegion {
     DropHitRegion {
         target: Some(first),
         container: None,
@@ -326,7 +326,7 @@ mod insertion_marker_tests {
         group_gap_upper_anchor, group_header_drop_hits, group_insertion_marker_rect, root_append_hit, root_prepend_hit,
     };
     use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use egui::{Pos2, Rect};
 
     #[test]
@@ -365,35 +365,35 @@ mod insertion_marker_tests {
     #[test]
     fn card_and_group_hit_regions_keep_hit_and_indicator_geometry_separate() {
         let card = Rect::from_min_max(Pos2::new(10.0, 30.0), Pos2::new(110.0, 70.0));
-        let hit = card_drop_hit(card, Pos2::new(90.0, 40.0), true, NodeId::from("card"), 1, 2);
+        let hit = card_drop_hit(card, Pos2::new(90.0, 40.0), true, PickerId::from("card"), 1, 2);
         assert_eq!(hit.hit_rect, card);
         assert_eq!(hit.region, PointerRegion::TrailingEdge);
         assert_eq!(hit.indicator_rect.width(), 4.0);
 
-        let halves = card_drop_hits(card, true, NodeId::from("card"), 1, 2);
+        let halves = card_drop_hits(card, true, PickerId::from("card"), 1, 2);
         assert_eq!(halves[0].region, PointerRegion::LeadingEdge);
         assert_eq!(halves[0].hit_rect.width(), 50.0);
         assert_eq!(halves[1].region, PointerRegion::TrailingEdge);
         assert_eq!(halves[1].hit_rect.width(), 50.0);
 
         let header = Rect::from_min_max(Pos2::new(10.0, 80.0), Pos2::new(210.0, 110.0));
-        let [into, after] = group_header_drop_hits(header, NodeId::from("group"), 0, 0, false).try_into().unwrap();
+        let [into, after] = group_header_drop_hits(header, PickerId::from("group"), 0, 0, false).try_into().unwrap();
         assert_eq!(into.region, PointerRegion::GroupBody);
-        assert_eq!(into.container, Some(ContainerId::Group(NodeId::from("group"))));
+        assert_eq!(into.container, Some(ContainerId::Group(PickerId::from("group"))));
         assert_eq!(into.hit_rect, Rect::from_min_max(header.min, Pos2::new(header.right(), header.center().y)));
         assert_eq!(into.indicator_rect, header);
         assert_eq!(after.region, PointerRegion::TrailingEdge);
-        assert_eq!(after.target, Some(NodeId::from("group")));
+        assert_eq!(after.target, Some(PickerId::from("group")));
         assert_eq!(after.container, None);
         assert_eq!(after.hit_rect, Rect::from_min_max(Pos2::new(header.left(), header.center().y), header.max));
         assert_eq!(after.indicator_rect, Rect::from_min_max(Pos2::new(header.left(), header.bottom() - 2.0), Pos2::new(header.right(), header.bottom() + 2.0)));
         assert_eq!(after.indicator_rect.width(), header.width());
         assert_eq!(after.order, into.order + 1);
 
-        let open = group_header_drop_hits(header, NodeId::from("group"), 0, 0, true);
+        let open = group_header_drop_hits(header, PickerId::from("group"), 0, 0, true);
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].region, PointerRegion::GroupBody);
-        assert_eq!(open[0].container, Some(ContainerId::Group(NodeId::from("group"))));
+        assert_eq!(open[0].container, Some(ContainerId::Group(PickerId::from("group"))));
         assert_eq!(open[0].hit_rect, header, "an open group has no lower sibling drop zone");
     }
 
@@ -403,9 +403,9 @@ mod insertion_marker_tests {
         for grid in [false, true] {
             let (leading_pointer, trailing_pointer) =
                 if grid { (Pos2::new(11.0, 50.0), Pos2::new(109.0, 50.0)) } else { (Pos2::new(50.0, 31.0), Pos2::new(50.0, 69.0)) };
-            let leading = card_drop_hit(card, leading_pointer, grid, NodeId::from("card"), 2, 4);
-            let trailing = card_drop_hit(card, trailing_pointer, grid, NodeId::from("card"), 2, 4);
-            let halves = card_drop_hits(card, grid, NodeId::from("card"), 2, 4);
+            let leading = card_drop_hit(card, leading_pointer, grid, PickerId::from("card"), 2, 4);
+            let trailing = card_drop_hit(card, trailing_pointer, grid, PickerId::from("card"), 2, 4);
+            let halves = card_drop_hits(card, grid, PickerId::from("card"), 2, 4);
 
             assert_eq!(leading.region, PointerRegion::LeadingEdge);
             assert_eq!(trailing.region, PointerRegion::TrailingEdge);
@@ -430,8 +430,8 @@ mod insertion_marker_tests {
         let lower_bounds = Rect::from_min_max(Pos2::new(31.0, 106.0), Pos2::new(231.0, 135.0));
         let split = group_gap_drop_hits(GroupGapDropSpec {
             rect: gap,
-            upper: NodeId::from("upper"),
-            lower: NodeId::from("lower"),
+            upper: PickerId::from("upper"),
+            lower: PickerId::from("lower"),
             upper_bounds,
             lower_bounds,
             upper_depth: 0,
@@ -440,14 +440,14 @@ mod insertion_marker_tests {
         });
         assert_eq!(split.len(), 2);
         assert_eq!(split[0].region, PointerRegion::TrailingEdge);
-        assert_eq!(split[0].target, Some(NodeId::from("upper")));
+        assert_eq!(split[0].target, Some(PickerId::from("upper")));
         assert_eq!(split[0].container, None);
         assert!(split[0].hit_rect.is_positive());
         assert_eq!(split[0].hit_rect.min, gap.min);
         assert_eq!(split[0].hit_rect.max, Pos2::new(gap.right(), gap.center().y));
         assert_eq!(split[0].hit_rect.height(), 3.0);
         assert_eq!(split[1].region, PointerRegion::LeadingEdge);
-        assert_eq!(split[1].target, Some(NodeId::from("lower")));
+        assert_eq!(split[1].target, Some(PickerId::from("lower")));
         assert_eq!(split[1].hit_rect.height(), 3.0);
         assert_eq!(split[0].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 104.0), Pos2::new(131.0, 108.0)));
         assert_eq!(split[1].indicator_rect, Rect::from_min_max(Pos2::new(31.0, 104.0), Pos2::new(231.0, 108.0)));
@@ -457,8 +457,8 @@ mod insertion_marker_tests {
         for (upper_depth, lower_depth) in [(0, 1), (0, 0), (1, 0)] {
             let split = group_gap_drop_hits(GroupGapDropSpec {
                 rect: gap,
-                upper: NodeId::from("upper"),
-                lower: NodeId::from("lower"),
+                upper: PickerId::from("upper"),
+                lower: PickerId::from("lower"),
                 upper_bounds,
                 lower_bounds,
                 upper_depth,
@@ -467,17 +467,17 @@ mod insertion_marker_tests {
             });
             assert_eq!(split.len(), 2);
             assert_eq!(split[0].region, PointerRegion::TrailingEdge);
-            assert_eq!(split[0].target, Some(NodeId::from("upper")));
+            assert_eq!(split[0].target, Some(PickerId::from("upper")));
             assert_eq!(split[0].container, None);
             assert_eq!(split[1].region, PointerRegion::LeadingEdge);
-            assert_eq!(split[1].target, Some(NodeId::from("lower")));
+            assert_eq!(split[1].target, Some(PickerId::from("lower")));
         }
 
         // Nested groups use the same child-level append anchor.
         let nested = group_gap_drop_hits(GroupGapDropSpec {
             rect: gap,
-            upper: NodeId::from("upper-folder"),
-            lower: NodeId::from("child-folder"),
+            upper: PickerId::from("upper-folder"),
+            lower: PickerId::from("child-folder"),
             upper_bounds,
             lower_bounds,
             upper_depth: 1,
@@ -485,7 +485,7 @@ mod insertion_marker_tests {
             order: 4,
         });
         assert_eq!(nested[0].region, PointerRegion::TrailingEdge);
-        assert_eq!(nested[0].target, Some(NodeId::from("upper-folder")));
+        assert_eq!(nested[0].target, Some(PickerId::from("upper-folder")));
         assert_eq!(nested[0].container, None);
     }
 
@@ -499,8 +499,8 @@ mod insertion_marker_tests {
                     let lower_bounds = Rect::from_min_size(Pos2::new(left + 3.0, top + 6.0), egui::vec2(width * 0.8, 29.0));
                     let hits = group_gap_drop_hits(GroupGapDropSpec {
                         rect: gap,
-                        upper: NodeId::from("upper"),
-                        lower: NodeId::from("lower"),
+                        upper: PickerId::from("upper"),
+                        lower: PickerId::from("lower"),
                         upper_bounds,
                         lower_bounds,
                         upper_depth: 0,
@@ -526,10 +526,10 @@ mod insertion_marker_tests {
                         HierarchyNode::item("moving-card"),
                     ])
                     .unwrap();
-                    let upper = resolve_drop_candidate(&NodeId::from("moving-card"), &hits[0], &hierarchy).unwrap();
-                    let lower = resolve_drop_candidate(&NodeId::from("moving-card"), &hits[1], &hierarchy).unwrap();
-                    assert_eq!(upper.position, DropPosition::After { target: NodeId::from("upper") });
-                    assert_eq!(lower.position, DropPosition::Before { target: NodeId::from("lower") });
+                    let upper = resolve_drop_candidate(&PickerId::from("moving-card"), &hits[0], &hierarchy).unwrap();
+                    let lower = resolve_drop_candidate(&PickerId::from("moving-card"), &hits[1], &hierarchy).unwrap();
+                    assert_eq!(upper.position, DropPosition::After { target: PickerId::from("upper") });
+                    assert_eq!(lower.position, DropPosition::Before { target: PickerId::from("lower") });
                     assert_eq!(upper.indicator, DropIndicator::InsertionLine { rect: hits[0].indicator_rect });
                     assert_eq!(lower.indicator, DropIndicator::InsertionLine { rect: hits[1].indicator_rect });
                     assert!(upper.is_valid());
@@ -551,10 +551,10 @@ mod insertion_marker_tests {
             ],
         )])
         .unwrap();
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("lower")), Some((NodeId::from("meeting-card"), 1)));
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("inner")), Some((NodeId::from("outer"), 0)));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &PickerId::from("lower")), Some((PickerId::from("meeting-card"), 1)));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &PickerId::from("inner")), Some((PickerId::from("outer"), 0)));
         let empty = PickerBrowserHierarchy::new(vec![Node::group("outer", vec![Node::group("empty", vec![])])]).unwrap();
-        assert_eq!(group_gap_upper_anchor(&empty, &NodeId::from("empty")), Some((NodeId::from("outer"), 0)));
+        assert_eq!(group_gap_upper_anchor(&empty, &PickerId::from("empty")), Some((PickerId::from("outer"), 0)));
     }
 
     #[test]
@@ -572,16 +572,16 @@ mod insertion_marker_tests {
         )])
         .unwrap();
 
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("lower-root")), Some((NodeId::from("root-last"), 1)));
-        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("deep")), Some((NodeId::from("nested-first"), 2)));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &PickerId::from("lower-root")), Some((PickerId::from("root-last"), 1)));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &PickerId::from("deep")), Some((PickerId::from("nested-first"), 2)));
     }
 
     #[test]
     fn group_body_and_root_end_hits_name_their_destination_container() {
         let rect = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(30.0, 80.0));
-        let group = group_append_hit(rect, rect, NodeId::from("group"), 2, 4);
+        let group = group_append_hit(rect, rect, PickerId::from("group"), 2, 4);
         assert_eq!(group.region, PointerRegion::ContainerEnd);
-        assert_eq!(group.container, Some(ContainerId::Group(NodeId::from("group"))));
+        assert_eq!(group.container, Some(ContainerId::Group(PickerId::from("group"))));
         let root = root_append_hit(rect, rect, 5);
         assert_eq!(root.region, PointerRegion::ContainerEnd);
         assert_eq!(root.container, Some(ContainerId::Root));
@@ -593,10 +593,10 @@ mod insertion_marker_tests {
 
         let first = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(210.0, 50.0));
         let pointer = Pos2::new(80.0, 20.0);
-        let node_edge = card_drop_hit(first, pointer, false, NodeId::from("first"), 0, 0);
-        let root_edge = root_prepend_hit(first, first, NodeId::from("first"), 1);
+        let node_edge = card_drop_hit(first, pointer, false, PickerId::from("first"), 0, 0);
+        let root_edge = root_prepend_hit(first, first, PickerId::from("first"), 1);
 
-        assert_eq!(root_edge.target, Some(NodeId::from("first")));
+        assert_eq!(root_edge.target, Some(PickerId::from("first")));
         assert_eq!(root_edge.region, PointerRegion::LeadingEdge);
         assert_eq!(root_edge.depth, usize::MAX);
         assert_eq!(arbitrate_hit_index(pointer, &[node_edge, root_edge]), Some(1));
@@ -608,14 +608,14 @@ mod insertion_marker_tests {
         let grid_midpoint = Pos2::new(card.center().x, card.center().y);
         let list_midpoint = Pos2::new(card.center().x, card.center().y);
 
-        assert_eq!(card_drop_hit(card, grid_midpoint, true, NodeId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
-        assert_eq!(card_drop_hit(card, list_midpoint, false, NodeId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
+        assert_eq!(card_drop_hit(card, grid_midpoint, true, PickerId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
+        assert_eq!(card_drop_hit(card, list_midpoint, false, PickerId::from("card"), 0, 0).region, PointerRegion::LeadingEdge);
         assert_eq!(
-            card_drop_hit(card, Pos2::new(card.center().x + 0.01, card.center().y), true, NodeId::from("card"), 0, 0).region,
+            card_drop_hit(card, Pos2::new(card.center().x + 0.01, card.center().y), true, PickerId::from("card"), 0, 0).region,
             PointerRegion::TrailingEdge
         );
         assert_eq!(
-            card_drop_hit(card, Pos2::new(card.center().x, card.center().y + 0.01), false, NodeId::from("card"), 0, 0).region,
+            card_drop_hit(card, Pos2::new(card.center().x, card.center().y + 0.01), false, PickerId::from("card"), 0, 0).region,
             PointerRegion::TrailingEdge
         );
     }
@@ -656,12 +656,12 @@ pub(crate) fn asset_browser_header_payload(scope: &str, group: &str, group_path:
 
 /// Register a draggable group source without installing any legacy target/release consumer.
 /// Register a canonical hierarchy node as a draggable header using its exact typed identity.
-pub(crate) fn asset_browser_header_drag_source_with_id(response: &egui::Response, scope: &str, node_id: NodeId, selection: &[NodeId]) {
-    response.dnd_set_drag_payload(AssetDrag::CanonicalGroup { scope: scope.to_owned(), node_id, selection: selection.to_vec() });
+pub(crate) fn asset_browser_header_drag_source_with_id(response: &egui::Response, scope: &str, node_id: PickerId, label: &str, selection: &[PickerId]) {
+    response.dnd_set_drag_payload(AssetDrag::CanonicalGroup { scope: scope.to_owned(), node_id, label: label.to_owned(), selection: selection.to_vec() });
 }
 
 /// Register a card source with its exact canonical identity (keys may repeat across groups).
-pub(crate) fn asset_browser_item_drag_source_with_id(response: &egui::Response, scope: &str, key: &str, node_id: NodeId, selection: &[NodeId]) {
+pub(crate) fn asset_browser_item_drag_source_with_id(response: &egui::Response, scope: &str, key: &str, node_id: PickerId, selection: &[PickerId]) {
     let selection = selection.to_vec();
     response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: Some(node_id), selection });
 }
@@ -832,26 +832,27 @@ mod tests {
 #[cfg(test)]
 mod canonical_drag_tests {
     use super::AssetDrag;
-    use crate::pickers::picker_browser_model::NodeId;
+    use crate::pickers::picker_browser_model::PickerId;
 
     #[test]
     fn canonical_source_identity_is_scope_checked_and_path_qualified() {
         let item = AssetDrag::Preset {
             scope: "brushes".to_owned(),
             key: "soft".to_owned(),
-            node_id: Some(NodeId::group_path(["Favorites"], "soft")),
+            node_id: Some(PickerId::group_path(["Favorites"], "soft")),
             selection: Vec::new(),
         };
-        let group_selection = vec![NodeId::group("Favorites"), NodeId::item("Other", "soft")];
+        let group_selection = vec![PickerId::group("Favorites"), PickerId::item("Other", "soft")];
         let group = AssetDrag::CanonicalGroup {
             scope: "brushes".to_owned(),
-            node_id: NodeId::group_path(["Favorites"], "Favorites"),
+            node_id: PickerId::group_path(["Favorites"], "Favorites"),
+            label: "Favorites".to_owned(),
             selection: group_selection.clone(),
         };
         let legacy = AssetDrag::Group { scope: "brushes".to_owned(), name: "Favorites".to_owned(), path: Vec::new() };
 
-        assert_eq!(item.canonical_node_id("brushes"), Some(&NodeId::group_path(["Favorites"], "soft")));
-        assert_eq!(group.canonical_node_id("brushes"), Some(&NodeId::group_path(["Favorites"], "Favorites")));
+        assert_eq!(item.canonical_node_id("brushes"), Some(&PickerId::group_path(["Favorites"], "soft")));
+        assert_eq!(group.canonical_node_id("brushes"), Some(&PickerId::group_path(["Favorites"], "Favorites")));
         assert!(matches!(&group, AssetDrag::CanonicalGroup { selection, .. } if selection == &group_selection));
         assert_eq!(item.canonical_node_id("patterns"), None);
         assert_eq!(legacy.canonical_node_id("brushes"), None);

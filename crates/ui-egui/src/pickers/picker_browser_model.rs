@@ -4,89 +4,162 @@
 //! schema. Adapters project domain assets into this tree and translate validated moves back into
 //! domain commands. Root and group containers both hold an ordered mixture of cards and groups.
 
+#[cfg(test)]
 use std::fmt;
+#[cfg(test)]
+use std::hash::{Hash, Hasher};
+#[cfg(test)]
+use std::sync::{Mutex, OnceLock};
+
+use super::picker_browser_identity::PickerIdentityKey;
 
 /// Maximum number of nested groups, with the root group at depth zero.
 pub(crate) const MAX_GROUP_DEPTH: usize = 32;
 
-/// Stable identity of one card or group in a browser tree.
+/// Opaque identity allocated by one picker session. It intentionally contains no domain data.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) enum NodeId {
-    /// An adapter-neutral identity used by model tests and generic consumers.
-    Adapter(String),
-    /// A group identified by its domain key.
-    Group(String),
-    /// A group identified by its original hierarchy path. The path remains stable while the node
-    /// is moved within a projected tree, and distinguishes equal names under different parents.
-    GroupPath(Vec<String>),
-    /// An item identified by both its owning asset group and stable item key.
-    Item { group: String, key: String },
-    /// An item identified by its owning hierarchy path and stable item key.
-    ItemPath { group_path: Vec<String>, key: String },
+pub(crate) struct PickerId {
+    scope: u64,
+    value: u64,
 }
 
-impl NodeId {
-    /// Create an identity from an adapter-owned stable key.
-    pub(crate) fn new(value: impl Into<String>) -> Self {
-        Self::Adapter(value.into())
+/// One allocator belongs to one picker instance and allocates IDs for cards and groups together.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PickerIdRegistry {
+    ids: std::collections::BTreeMap<PickerIdentityKey, PickerId>,
+    scope: u64,
+    next: u64,
+}
+
+impl PickerIdRegistry {
+    pub(crate) fn with_scope(scope: u64) -> Self {
+        Self { ids: std::collections::BTreeMap::new(), scope, next: 0 }
     }
 
-    /// Construct a typed group identity.
-    pub(crate) fn group(name: impl Into<String>) -> Self {
-        Self::Group(name.into())
+    pub(crate) fn id_for(&mut self, key: PickerIdentityKey) -> PickerId {
+        if let Some(id) = self.ids.get(&key) {
+            return id.clone();
+        }
+        #[cfg(test)]
+        if self.scope == 0 {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            key.hash(&mut hasher);
+            let mut value = hasher.finish().max(1);
+            while self.ids.values().any(|id| id.value == value) {
+                value = value.wrapping_add(1).max(1);
+            }
+            let id = PickerId { scope: self.scope, value };
+            self.ids.insert(key, id.clone());
+            return id;
+        }
+        self.next = self.next.wrapping_add(1).max(1);
+        let id = PickerId { scope: self.scope, value: self.next };
+        self.ids.insert(key, id.clone());
+        id
     }
 
-    /// Construct a group identity from its original root-to-parent path and own name.
+    pub(crate) fn rekey(&mut self, old: PickerIdentityKey, new: PickerIdentityKey, id: &PickerId) {
+        // Keep both keys until the next projection confirms which domain identity survived.
+        // Adapter callbacks can enqueue a domain action before the application model commits it;
+        // retaining the old key makes a rejected action harmless, while a successful projection
+        // resolves through `new` and prunes the stale alias.
+        if self.ids.get(&old) == Some(id) && self.ids.get(&new).is_none_or(|existing| existing == id) {
+            self.ids.insert(new, id.clone());
+        }
+    }
+
+    pub(crate) fn retain_keys(&mut self, live: &std::collections::BTreeSet<PickerIdentityKey>) {
+        self.ids.retain(|key, _| live.contains(key));
+    }
+}
+
+impl PickerId {
+    #[cfg(test)]
+    fn test(value: u64, label: impl Into<String>) -> Self {
+        let id = Self { scope: 0, value };
+        test_id_labels().lock().unwrap().insert((id.scope, id.value), label.into());
+        id
+    }
+
+    #[cfg(test)]
+    fn test_key(key: PickerIdentityKey, label: impl Into<String>) -> Self {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        Self::test(hasher.finish().max(1), label)
+    }
+
+    // Test-only conveniences keep the pure hierarchy model tests readable. Production projection
+    // must obtain IDs from PickerIdRegistry instead.
+    #[cfg(test)]
+    pub(crate) fn new(value: impl AsRef<str>) -> Self {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        value.as_ref().hash(&mut hasher);
+        Self::test(hasher.finish().max(1), value.as_ref())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn group(name: impl AsRef<str>) -> Self {
+        let name = name.as_ref();
+        Self::test_key(PickerIdentityKey::from_parts("test-group", [name]), name)
+    }
+    #[cfg(test)]
     pub(crate) fn group_path(path: impl IntoIterator<Item = impl Into<String>>, name: impl Into<String>) -> Self {
-        let mut path: Vec<String> = path.into_iter().map(Into::into).collect();
-        path.push(name.into());
-        Self::GroupPath(path)
+        let parts = path.into_iter().map(Into::into).collect::<Vec<String>>();
+        let name = name.into();
+        let group = parts.first().cloned().unwrap_or_default();
+        let folder_path: Vec<String> = parts.into_iter().skip(1).chain(std::iter::once(name.clone())).collect();
+        Self::test_key(PickerIdentityKey::from_parts("test-folder", std::iter::once(group.as_str()).chain(folder_path.iter().map(String::as_str))), name)
     }
-
-    /// Construct a typed item identity. Group and item keys may contain any delimiter.
+    #[cfg(test)]
     pub(crate) fn item(group: impl Into<String>, key: impl Into<String>) -> Self {
-        Self::Item { group: group.into(), key: key.into() }
+        let group = group.into();
+        let key = key.into();
+        Self::test_key(PickerIdentityKey::from_parts("test-item", [group.as_str(), key.as_str()]), key)
     }
-
-    /// Construct an item identity using its owning group's original root-to-group path.
+    #[cfg(test)]
     pub(crate) fn item_in_path(path: impl IntoIterator<Item = impl Into<String>>, key: impl Into<String>) -> Self {
-        Self::ItemPath { group_path: path.into_iter().map(Into::into).collect(), key: key.into() }
+        let parts = path.into_iter().map(Into::into).collect::<Vec<String>>();
+        let group = parts.first().cloned().unwrap_or_default();
+        let folder_path: Vec<String> = parts.into_iter().skip(1).collect();
+        let key = key.into();
+        Self::test_key(
+            PickerIdentityKey::from_parts(
+                "test-folder-item",
+                std::iter::once(group.as_str()).chain(folder_path.iter().map(String::as_str)).chain(std::iter::once(key.as_str())),
+            ),
+            key,
+        )
     }
 }
 
-impl From<&str> for NodeId {
+#[cfg(test)]
+fn test_id_labels() -> &'static Mutex<std::collections::BTreeMap<(u64, u64), String>> {
+    static LABELS: OnceLock<Mutex<std::collections::BTreeMap<(u64, u64), String>>> = OnceLock::new();
+    LABELS.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+#[cfg(test)]
+impl fmt::Display for PickerId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(label) = test_id_labels().lock().unwrap().get(&(self.scope, self.value)) {
+            f.write_str(label)
+        } else {
+            write!(f, "picker:{}:{}", self.scope, self.value)
+        }
+    }
+}
+
+#[cfg(test)]
+impl From<&str> for PickerId {
     fn from(value: &str) -> Self {
         Self::new(value)
     }
 }
 
-impl From<String> for NodeId {
+#[cfg(test)]
+impl From<String> for PickerId {
     fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl fmt::Display for NodeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Adapter(value) => fmt::Display::fmt(value, f),
-            Self::Group(name) => write!(f, "group:{name}"),
-            Self::GroupPath(path) => {
-                write!(f, "group-path")?;
-                for segment in path {
-                    write!(f, ":{}:{segment}", segment.len())?;
-                }
-                Ok(())
-            }
-            Self::Item { group, key } => write!(f, "item:{}:{group}:{}:{key}", group.len(), key.len()),
-            Self::ItemPath { group_path, key } => {
-                write!(f, "item-path")?;
-                for segment in group_path {
-                    write!(f, ":{}:{segment}", segment.len())?;
-                }
-                write!(f, ":{}:{key}", key.len())
-            }
-        }
+        Self::from(value.as_str())
     }
 }
 
@@ -94,24 +167,24 @@ impl fmt::Display for NodeId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HierarchyNode {
     /// A draggable asset card.
-    Item(NodeId),
+    Item(PickerId),
     /// A container that may hold cards and other groups.
-    Group { id: NodeId, children: Vec<HierarchyNode> },
+    Group { id: PickerId, children: Vec<HierarchyNode> },
 }
 
 impl HierarchyNode {
     /// Construct an item node.
-    pub(crate) fn item(id: impl Into<NodeId>) -> Self {
+    pub(crate) fn item(id: impl Into<PickerId>) -> Self {
         Self::Item(id.into())
     }
 
     /// Construct a group node with ordered children.
-    pub(crate) fn group(id: impl Into<NodeId>, children: Vec<Self>) -> Self {
+    pub(crate) fn group(id: impl Into<PickerId>, children: Vec<Self>) -> Self {
         Self::Group { id: id.into(), children }
     }
 
     /// Stable identity supplied by the asset adapter.
-    pub(crate) fn id(&self) -> &NodeId {
+    pub(crate) fn id(&self) -> &PickerId {
         match self {
             Self::Item(id) | Self::Group { id, .. } => id,
         }
@@ -137,7 +210,7 @@ pub(crate) enum ContainerId {
     /// The top-level browser sequence.
     Root,
     /// The child sequence owned by a group.
-    Group(NodeId),
+    Group(PickerId),
 }
 
 /// Exact structural destination for a drag operation.
@@ -147,11 +220,11 @@ pub(crate) enum ContainerId {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DropPosition {
     /// Insert immediately before the target in its current parent's ordered children.
-    Before { target: NodeId },
+    Before { target: PickerId },
     /// Insert immediately after the target in its current parent's ordered children.
-    After { target: NodeId },
+    After { target: PickerId },
     /// Insert as the first child of a group.
-    PrependTo { group: NodeId },
+    PrependTo { group: PickerId },
     /// Insert as the final child of a container.
     AppendTo { container: ContainerId },
 }
@@ -162,13 +235,13 @@ pub(crate) enum DropPosition {
 /// Keep its fields private so callers cannot manufacture partially resolved moves.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedMove {
-    source: NodeId,
+    source: PickerId,
     source_parent: ContainerId,
     source_index: usize,
-    source_snapshot: Vec<NodeId>,
+    source_snapshot: Vec<PickerId>,
     destination: ContainerId,
     insertion_index: usize,
-    destination_snapshot: Vec<NodeId>,
+    destination_snapshot: Vec<PickerId>,
 }
 
 impl ResolvedMove {
@@ -187,15 +260,15 @@ impl ResolvedMove {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HierarchyError {
     /// The source node does not exist.
-    MissingSource(NodeId),
+    MissingSource(PickerId),
     /// The requested target node does not exist.
-    MissingTarget(NodeId),
+    MissingTarget(PickerId),
     /// The requested destination group does not exist.
-    MissingContainer(NodeId),
+    MissingContainer(PickerId),
     /// An item was used as a destination container.
-    ItemCannotContainChildren(NodeId),
+    ItemCannotContainChildren(PickerId),
     /// A group cannot be moved into itself or one of its descendants.
-    Cycle(NodeId),
+    Cycle(PickerId),
     /// The input tree contains duplicate identities or an inconsistent adapter mapping.
     InvalidTree,
     /// The hierarchy exceeds the picker's supported nesting depth.
@@ -222,8 +295,8 @@ impl PickerBrowserHierarchy {
     }
 
     /// Find a node by stable identity.
-    pub(crate) fn node(&self, id: &NodeId) -> Option<&HierarchyNode> {
-        fn find<'a>(nodes: &'a [HierarchyNode], id: &NodeId) -> Option<&'a HierarchyNode> {
+    pub(crate) fn node(&self, id: &PickerId) -> Option<&HierarchyNode> {
+        fn find<'a>(nodes: &'a [HierarchyNode], id: &PickerId) -> Option<&'a HierarchyNode> {
             for node in nodes {
                 if node.id() == id {
                     return Some(node);
@@ -238,8 +311,8 @@ impl PickerBrowserHierarchy {
     }
 
     /// Return the immediate parent container of a node (`Root` for a top-level node).
-    pub(crate) fn parent_of(&self, id: &NodeId) -> Option<ContainerId> {
-        fn find(nodes: &[HierarchyNode], id: &NodeId, parent: &ContainerId) -> Option<ContainerId> {
+    pub(crate) fn parent_of(&self, id: &PickerId) -> Option<ContainerId> {
+        fn find(nodes: &[HierarchyNode], id: &PickerId, parent: &ContainerId) -> Option<ContainerId> {
             for node in nodes {
                 if node.id() == id {
                     return Some(parent.clone());
@@ -261,13 +334,13 @@ impl PickerBrowserHierarchy {
     }
 
     /// Apply one exact insertion operation. Validation occurs before the tree is changed.
-    pub(crate) fn move_node(&mut self, source: &NodeId, position: &DropPosition) -> Result<(), HierarchyError> {
+    pub(crate) fn move_node(&mut self, source: &PickerId, position: &DropPosition) -> Result<(), HierarchyError> {
         let resolved = self.resolve_move(source, position)?;
         self.apply_resolved_move(resolved)
     }
 
     /// Resolve a semantic drop into an exact source and destination in the current tree.
-    pub(crate) fn resolve_move(&self, source: &NodeId, position: &DropPosition) -> Result<ResolvedMove, HierarchyError> {
+    pub(crate) fn resolve_move(&self, source: &PickerId, position: &DropPosition) -> Result<ResolvedMove, HierarchyError> {
         self.validate_position(source, position)?;
         let destination = match position {
             DropPosition::Before { target } | DropPosition::After { target } => {
@@ -333,7 +406,7 @@ impl PickerBrowserHierarchy {
         if current_source_index != Some(resolved.source_index) {
             return Err(HierarchyError::MissingSource(resolved.source));
         }
-        let current_source: Vec<NodeId> = self
+        let current_source: Vec<PickerId> = self
             .children(&resolved.source_parent)
             .ok_or_else(|| match &resolved.source_parent {
                 ContainerId::Root => HierarchyError::InvalidTree,
@@ -345,7 +418,7 @@ impl PickerBrowserHierarchy {
         if current_source != resolved.source_snapshot {
             return Err(HierarchyError::InvalidTree);
         }
-        let current_destination: Vec<NodeId> = self
+        let current_destination: Vec<PickerId> = self
             .children(&resolved.destination)
             .ok_or_else(|| match &resolved.destination {
                 ContainerId::Root => HierarchyError::InvalidTree,
@@ -373,7 +446,7 @@ impl PickerBrowserHierarchy {
     }
 
     /// Check a proposed move without mutating the hierarchy.
-    pub(crate) fn validate_position(&self, source: &NodeId, position: &DropPosition) -> Result<(), HierarchyError> {
+    pub(crate) fn validate_position(&self, source: &PickerId, position: &DropPosition) -> Result<(), HierarchyError> {
         let source_node = self.node(source).ok_or_else(|| HierarchyError::MissingSource(source.clone()))?;
         let destination = match position {
             DropPosition::Before { target } | DropPosition::After { target } => {
@@ -424,7 +497,7 @@ impl PickerBrowserHierarchy {
         Ok(())
     }
 
-    fn node_depth(&self, id: &NodeId) -> usize {
+    fn node_depth(&self, id: &PickerId) -> usize {
         let mut depth = 0usize;
         let mut current = id.clone();
         while let Some(ContainerId::Group(parent)) = self.parent_of(&current) {
@@ -439,7 +512,7 @@ impl PickerBrowserHierarchy {
         depth
     }
 
-    fn subtree_group_height(&self, id: &NodeId) -> usize {
+    fn subtree_group_height(&self, id: &PickerId) -> usize {
         let Some(root) = self.node(id) else { return 0 };
         let mut pending: Vec<(&HierarchyNode, usize)> = root.children().iter().map(|node| (node, usize::from(node.is_group()))).collect();
         let mut height = 0;
@@ -450,7 +523,7 @@ impl PickerBrowserHierarchy {
         height
     }
 
-    fn is_descendant_of(&self, candidate: &NodeId, ancestor: &NodeId) -> bool {
+    fn is_descendant_of(&self, candidate: &PickerId, ancestor: &PickerId) -> bool {
         let mut parent = self.parent_of(candidate);
         while let Some(ContainerId::Group(id)) = parent {
             if &id == ancestor {
@@ -478,14 +551,14 @@ impl PickerBrowserHierarchy {
         }
     }
 
-    fn remove_from(&mut self, container: &ContainerId, id: &NodeId) -> Option<HierarchyNode> {
+    fn remove_from(&mut self, container: &ContainerId, id: &PickerId) -> Option<HierarchyNode> {
         let children = self.children_mut(container)?;
         let index = children.iter().position(|node| node.id() == id)?;
         Some(children.remove(index))
     }
 }
 
-fn find_group_mut<'a>(nodes: &'a mut [HierarchyNode], id: &NodeId) -> Option<&'a mut HierarchyNode> {
+fn find_group_mut<'a>(nodes: &'a mut [HierarchyNode], id: &PickerId) -> Option<&'a mut HierarchyNode> {
     for node in nodes {
         if node.id() == id {
             return node.is_group().then_some(node);
@@ -501,7 +574,65 @@ fn find_group_mut<'a>(nodes: &'a mut [HierarchyNode], id: &NodeId) -> Option<&'a
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerId, DropPosition, HierarchyError, HierarchyNode as Node, NodeId, PickerBrowserHierarchy};
+    use super::{ContainerId, DropPosition, HierarchyError, HierarchyNode as Node, PickerBrowserHierarchy, PickerId, PickerIdRegistry, PickerIdentityKey};
+
+    #[test]
+    fn picker_registry_reuses_ids_and_allocates_cards_and_groups_from_one_sequence() {
+        let mut registry = PickerIdRegistry::with_scope(41);
+        let group_key = PickerIdentityKey::from_parts("test", ["library"]);
+        let card_key = PickerIdentityKey::from_parts("test", ["card"]);
+        let folder_key = PickerIdentityKey::from_parts("test", ["nested"]);
+        let group = registry.id_for(group_key.clone());
+        let card = registry.id_for(card_key.clone());
+        let folder = registry.id_for(folder_key.clone());
+
+        assert_eq!(registry.id_for(group_key), group);
+        assert_eq!(registry.id_for(card_key), card);
+        assert_eq!(registry.id_for(folder_key), folder);
+        assert!(group != card && card != folder && group != folder);
+    }
+
+    #[test]
+    fn picker_instances_have_independent_identity_scopes() {
+        let key = PickerIdentityKey::from_parts("test", ["same opaque adapter token"]);
+        let left = PickerIdRegistry::with_scope(101).id_for(key.clone());
+        let right = PickerIdRegistry::with_scope(202).id_for(key);
+
+        assert_ne!(left, right);
+        assert_eq!(left.value, right.value);
+        assert_ne!(left.scope, right.scope);
+    }
+
+    #[test]
+    fn registry_rekey_preserves_identity_when_a_node_changes_domain_path() {
+        let mut registry = PickerIdRegistry::with_scope(9);
+        let old = PickerIdentityKey::from_parts("adapter", ["old-folder"]);
+        let new = PickerIdentityKey::from_parts("adapter", ["new-folder"]);
+        let id = registry.id_for(old.clone());
+
+        registry.rekey(old.clone(), new.clone(), &id);
+
+        assert_eq!(registry.id_for(new.clone()), id);
+        assert_eq!(registry.id_for(old.clone()), id, "the old key remains valid until the domain move is observed");
+        registry.retain_keys(&[new.clone()].into_iter().collect());
+        assert_eq!(registry.id_for(new), id);
+        assert_ne!(registry.id_for(old), id, "the stale pre-move key is retired after the new projection is observed");
+    }
+
+    #[test]
+    fn registry_rekey_does_not_overwrite_an_existing_identity_token() {
+        let mut registry = PickerIdRegistry::with_scope(10);
+        let old = PickerIdentityKey::from_parts("adapter", ["source"]);
+        let occupied = PickerIdentityKey::from_parts("adapter", ["destination"]);
+        let moving = registry.id_for(old.clone());
+        let existing = registry.id_for(occupied.clone());
+        assert_ne!(moving, existing);
+
+        registry.rekey(old.clone(), occupied.clone(), &moving);
+
+        assert_eq!(registry.id_for(old), moving);
+        assert_eq!(registry.id_for(occupied), existing, "a rekey collision must never alias two live nodes");
+    }
 
     fn tree() -> PickerBrowserHierarchy {
         PickerBrowserHierarchy::new(vec![
@@ -513,28 +644,27 @@ mod tests {
 
     #[test]
     fn adapter_identities_keep_group_and_item_keys_typed() {
-        assert_ne!(NodeId::group("A:B"), NodeId::group("A/B"));
-        assert_ne!(NodeId::item("First", "same"), NodeId::item("Second", "same"));
-        assert_ne!(NodeId::item("A:B", "C"), NodeId::item("A", "B:C"));
-        assert_ne!(NodeId::group("same"), NodeId::item("", "same"));
+        assert_ne!(PickerId::group("A:B"), PickerId::group("A/B"));
+        assert_ne!(PickerId::item("First", "same"), PickerId::item("Second", "same"));
+        assert_ne!(PickerId::item("A:B", "C"), PickerId::item("A", "B:C"));
+        assert_ne!(PickerId::group("same"), PickerId::item("", "same"));
     }
 
     #[test]
     fn path_qualified_group_and_item_ids_distinguish_equal_names_in_different_branches() {
-        let left = NodeId::group_path(["left"], "shared");
-        let right = NodeId::group_path(["right"], "shared");
+        let left = PickerId::group_path(["left"], "shared");
+        let right = PickerId::group_path(["right"], "shared");
         assert_ne!(left, right);
-        assert_ne!(NodeId::group_path(std::iter::empty::<String>(), "shared"), left);
-        assert_ne!(NodeId::item_in_path(["left", "shared"], "same"), NodeId::item_in_path(["right", "shared"], "same"));
-        assert_ne!(NodeId::group_path(["a:b"], "c"), NodeId::group_path(["a"], "b:c"));
-        assert_ne!(NodeId::group_path(["left"], "shared").to_string(), NodeId::group_path(["right"], "shared").to_string());
+        assert_ne!(PickerId::group_path(std::iter::empty::<String>(), "shared"), left);
+        assert_ne!(PickerId::item_in_path(["left", "shared"], "same"), PickerId::item_in_path(["right", "shared"], "same"));
+        assert_ne!(PickerId::group_path(["a:b"], "c"), PickerId::group_path(["a"], "b:c"));
     }
 
     #[test]
     fn resolved_move_rejects_a_changed_destination_snapshot() {
         let mut hierarchy = PickerBrowserHierarchy::new(vec![Node::item("moving"), Node::item("target"), Node::item("other")]).unwrap();
-        let resolved = hierarchy.resolve_move(&NodeId::from("moving"), &DropPosition::Before { target: "target".into() }).unwrap();
-        hierarchy.move_node(&NodeId::from("target"), &DropPosition::After { target: "other".into() }).unwrap();
+        let resolved = hierarchy.resolve_move(&PickerId::from("moving"), &DropPosition::Before { target: "target".into() }).unwrap();
+        hierarchy.move_node(&PickerId::from("target"), &DropPosition::After { target: "other".into() }).unwrap();
         let before = hierarchy.clone();
         assert_eq!(hierarchy.apply_resolved_move(resolved), Err(HierarchyError::InvalidTree));
         assert_eq!(hierarchy, before);
@@ -547,9 +677,9 @@ mod tests {
             Node::group("destination", vec![Node::item("target")]),
         ])
         .unwrap();
-        let resolved = hierarchy.resolve_move(&NodeId::from("moving"), &DropPosition::Before { target: "target".into() }).unwrap();
+        let resolved = hierarchy.resolve_move(&PickerId::from("moving"), &DropPosition::Before { target: "target".into() }).unwrap();
 
-        hierarchy.move_node(&NodeId::from("first"), &DropPosition::After { target: "last".into() }).unwrap();
+        hierarchy.move_node(&PickerId::from("first"), &DropPosition::After { target: "last".into() }).unwrap();
         let before = hierarchy.clone();
 
         assert_eq!(hierarchy.apply_resolved_move(resolved), Err(HierarchyError::InvalidTree));
@@ -577,14 +707,14 @@ mod tests {
         .unwrap()
     }
 
-    fn all_ids(nodes: &[Node], output: &mut Vec<NodeId>) {
+    fn all_ids(nodes: &[Node], output: &mut Vec<PickerId>) {
         for node in nodes {
             output.push(node.id().clone());
             all_ids(node.children(), output);
         }
     }
 
-    fn assert_same_nodes(actual: &PickerBrowserHierarchy, expected: &[NodeId]) {
+    fn assert_same_nodes(actual: &PickerBrowserHierarchy, expected: &[PickerId]) {
         let mut actual_ids = Vec::new();
         all_ids(actual.roots(), &mut actual_ids);
         actual_ids.sort();
@@ -597,27 +727,27 @@ mod tests {
     #[test]
     fn before_and_after_are_sibling_insertions_at_the_targets_parent() {
         let mut hierarchy = tree();
-        hierarchy.move_node(&NodeId::from("three"), &DropPosition::Before { target: NodeId::from("one") }).unwrap();
-        assert_eq!(ids(hierarchy.node(&NodeId::from("A")).unwrap().children()), ["three", "one", "B"]);
-        hierarchy.move_node(&NodeId::from("three"), &DropPosition::After { target: NodeId::from("B") }).unwrap();
-        assert_eq!(ids(hierarchy.node(&NodeId::from("A")).unwrap().children()), ["one", "B", "three"]);
+        hierarchy.move_node(&PickerId::from("three"), &DropPosition::Before { target: PickerId::from("one") }).unwrap();
+        assert_eq!(ids(hierarchy.node(&PickerId::from("A")).unwrap().children()), ["three", "one", "B"]);
+        hierarchy.move_node(&PickerId::from("three"), &DropPosition::After { target: PickerId::from("B") }).unwrap();
+        assert_eq!(ids(hierarchy.node(&PickerId::from("A")).unwrap().children()), ["one", "B", "three"]);
     }
 
     #[test]
     fn append_supports_empty_containers_and_root_level_cards() {
         let mut hierarchy = tree();
-        hierarchy.move_node(&NodeId::from("one"), &DropPosition::AppendTo { container: ContainerId::Group("C".into()) }).unwrap();
-        hierarchy.move_node(&NodeId::from("two"), &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
-        assert_eq!(ids(hierarchy.node(&NodeId::from("C")).unwrap().children()), ["one"]);
+        hierarchy.move_node(&PickerId::from("one"), &DropPosition::AppendTo { container: ContainerId::Group("C".into()) }).unwrap();
+        hierarchy.move_node(&PickerId::from("two"), &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
+        assert_eq!(ids(hierarchy.node(&PickerId::from("C")).unwrap().children()), ["one"]);
         assert_eq!(ids(hierarchy.roots()), ["A", "C", "two"]);
     }
 
     #[test]
     fn prepend_places_cards_and_groups_at_the_first_mixed_child_position() {
         let mut hierarchy = tree();
-        hierarchy.move_node(&NodeId::from("three"), &DropPosition::PrependTo { group: NodeId::from("A") }).unwrap();
-        hierarchy.move_node(&NodeId::from("C"), &DropPosition::PrependTo { group: NodeId::from("A") }).unwrap();
-        assert_eq!(ids(hierarchy.node(&NodeId::from("A")).unwrap().children()), ["C", "three", "one", "B"]);
+        hierarchy.move_node(&PickerId::from("three"), &DropPosition::PrependTo { group: PickerId::from("A") }).unwrap();
+        hierarchy.move_node(&PickerId::from("C"), &DropPosition::PrependTo { group: PickerId::from("A") }).unwrap();
+        assert_eq!(ids(hierarchy.node(&PickerId::from("A")).unwrap().children()), ["C", "three", "one", "B"]);
     }
 
     #[test]
@@ -625,11 +755,11 @@ mod tests {
         let mut hierarchy = tree();
         let before = hierarchy.clone();
         assert_eq!(
-            hierarchy.move_node(&NodeId::from("A"), &DropPosition::AppendTo { container: ContainerId::Group("B".into()) }),
+            hierarchy.move_node(&PickerId::from("A"), &DropPosition::AppendTo { container: ContainerId::Group("B".into()) }),
             Err(HierarchyError::Cycle("A".into()))
         );
         assert_eq!(
-            hierarchy.move_node(&NodeId::from("one"), &DropPosition::AppendTo { container: ContainerId::Group("two".into()) }),
+            hierarchy.move_node(&PickerId::from("one"), &DropPosition::AppendTo { container: ContainerId::Group("two".into()) }),
             Err(HierarchyError::ItemCannotContainChildren("two".into()))
         );
         assert_eq!(hierarchy, before);
@@ -638,8 +768,8 @@ mod tests {
     #[test]
     fn same_container_move_keeps_the_requested_adjacency() {
         let mut hierarchy = tree();
-        hierarchy.move_node(&NodeId::from("one"), &DropPosition::After { target: NodeId::from("three") }).unwrap();
-        assert_eq!(ids(hierarchy.node(&NodeId::from("A")).unwrap().children()), ["B", "three", "one"]);
+        hierarchy.move_node(&PickerId::from("one"), &DropPosition::After { target: PickerId::from("three") }).unwrap();
+        assert_eq!(ids(hierarchy.node(&PickerId::from("A")).unwrap().children()), ["B", "three", "one"]);
     }
 
     #[test]
@@ -660,9 +790,9 @@ mod tests {
             ])
             .unwrap();
 
-            hierarchy.move_node(&NodeId::from("moving"), &position).unwrap();
+            hierarchy.move_node(&PickerId::from("moving"), &position).unwrap();
 
-            assert_eq!(ids(hierarchy.node(&NodeId::from("parent")).unwrap().children()), expected);
+            assert_eq!(ids(hierarchy.node(&PickerId::from("parent")).unwrap().children()), expected);
             assert_eq!(ids(hierarchy.roots()), ["parent"]);
         }
     }
@@ -682,10 +812,10 @@ mod tests {
             ])
             .unwrap();
 
-            hierarchy.move_node(&NodeId::from("moving"), &position).unwrap();
+            hierarchy.move_node(&PickerId::from("moving"), &position).unwrap();
 
             assert_eq!(ids(hierarchy.roots()), expected);
-            assert_eq!(ids(hierarchy.node(&NodeId::from("parent")).unwrap().children()), ["first", "last"]);
+            assert_eq!(ids(hierarchy.node(&PickerId::from("parent")).unwrap().children()), ["first", "last"]);
         }
     }
 
@@ -697,11 +827,11 @@ mod tests {
         )])
         .unwrap();
 
-        hierarchy.move_node(&NodeId::from("moving"), &DropPosition::After { target: NodeId::from("last") }).unwrap();
-        assert_eq!(ids(hierarchy.node(&NodeId::from("parent")).unwrap().children()), ["first", "interior", "last", "moving"]);
+        hierarchy.move_node(&PickerId::from("moving"), &DropPosition::After { target: PickerId::from("last") }).unwrap();
+        assert_eq!(ids(hierarchy.node(&PickerId::from("parent")).unwrap().children()), ["first", "interior", "last", "moving"]);
 
-        hierarchy.move_node(&NodeId::from("moving"), &DropPosition::Before { target: NodeId::from("first") }).unwrap();
-        assert_eq!(ids(hierarchy.node(&NodeId::from("parent")).unwrap().children()), ["moving", "first", "interior", "last"]);
+        hierarchy.move_node(&PickerId::from("moving"), &DropPosition::Before { target: PickerId::from("first") }).unwrap();
+        assert_eq!(ids(hierarchy.node(&PickerId::from("parent")).unwrap().children()), ["moving", "first", "interior", "last"]);
     }
 
     #[test]
@@ -724,8 +854,8 @@ mod tests {
             nested = Node::group(format!("group-{depth}"), vec![nested]);
         }
         let mut hierarchy = PickerBrowserHierarchy::new(vec![nested, Node::item("extra")]).unwrap();
-        hierarchy.move_node(&NodeId::from("extra"), &DropPosition::AppendTo { container: ContainerId::Group("group-0".into()) }).unwrap();
-        assert_eq!(hierarchy.parent_of(&NodeId::from("extra")), Some(ContainerId::Group("group-0".into())));
+        hierarchy.move_node(&PickerId::from("extra"), &DropPosition::AppendTo { container: ContainerId::Group("group-0".into()) }).unwrap();
+        assert_eq!(hierarchy.parent_of(&PickerId::from("extra")), Some(ContainerId::Group("group-0".into())));
     }
 
     #[test]
@@ -737,7 +867,7 @@ mod tests {
         let mut hierarchy = PickerBrowserHierarchy::new(vec![Node::group("destination", vec![]), nested]).unwrap();
         let before = hierarchy.clone();
         assert_eq!(
-            hierarchy.move_node(&NodeId::from("group-32"), &DropPosition::AppendTo { container: ContainerId::Group("destination".into()) }),
+            hierarchy.move_node(&PickerId::from("group-32"), &DropPosition::AppendTo { container: ContainerId::Group("destination".into()) }),
             Err(HierarchyError::DepthExceeded)
         );
         assert_eq!(hierarchy, before);
@@ -750,8 +880,8 @@ mod tests {
             nested = Node::group(format!("group-{depth}"), vec![nested]);
         }
         let mut hierarchy = PickerBrowserHierarchy::new(vec![nested, Node::group("destination", vec![])]).unwrap();
-        hierarchy.move_node(&NodeId::from("group-32"), &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
-        assert_eq!(hierarchy.parent_of(&NodeId::from("group-32")), Some(ContainerId::Root));
+        hierarchy.move_node(&PickerId::from("group-32"), &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
+        assert_eq!(hierarchy.parent_of(&PickerId::from("group-32")), Some(ContainerId::Root));
     }
 
     #[test]
@@ -845,15 +975,15 @@ mod tests {
         ];
 
         for (source, position) in moves {
-            hierarchy.move_node(&NodeId::from(source), &position).unwrap_or_else(|error| panic!("{source} -> {position:?}: {error:?}"));
+            hierarchy.move_node(&PickerId::from(source), &position).unwrap_or_else(|error| panic!("{source} -> {position:?}: {error:?}"));
             assert_same_nodes(&hierarchy, &expected_ids);
         }
 
-        assert_eq!(hierarchy.parent_of(&NodeId::from("root-card-a")), Some(ContainerId::Group("root-group-a".into())));
-        assert_eq!(hierarchy.parent_of(&NodeId::from("root-group-b")), Some(ContainerId::Group("nested-group-a".into())));
-        assert_eq!(hierarchy.parent_of(&NodeId::from("deep-card-a")), Some(ContainerId::Root));
-        assert_eq!(hierarchy.parent_of(&NodeId::from("root-group-a")), Some(ContainerId::Root));
-        assert_eq!(hierarchy.parent_of(&NodeId::from("root-card-b")), Some(ContainerId::Group("nested-group-b".into())));
+        assert_eq!(hierarchy.parent_of(&PickerId::from("root-card-a")), Some(ContainerId::Group("root-group-a".into())));
+        assert_eq!(hierarchy.parent_of(&PickerId::from("root-group-b")), Some(ContainerId::Group("nested-group-a".into())));
+        assert_eq!(hierarchy.parent_of(&PickerId::from("deep-card-a")), Some(ContainerId::Root));
+        assert_eq!(hierarchy.parent_of(&PickerId::from("root-group-a")), Some(ContainerId::Root));
+        assert_eq!(hierarchy.parent_of(&PickerId::from("root-card-b")), Some(ContainerId::Group("nested-group-b".into())));
     }
 
     #[test]
@@ -868,7 +998,7 @@ mod tests {
             DropPosition::AppendTo { container: ContainerId::Group("root-card-a".into()) },
         ];
 
-        for source in [NodeId::from("missing"), NodeId::from("root-card-a"), NodeId::from("root-group-a")] {
+        for source in [PickerId::from("missing"), PickerId::from("root-card-a"), PickerId::from("root-group-a")] {
             for position in &invalid_positions {
                 let mut hierarchy = original.clone();
                 assert!(hierarchy.move_node(&source, position).is_err(), "source={source:?}, position={position:?}");

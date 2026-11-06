@@ -17,12 +17,77 @@ use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode, hie
 pub(crate) use crate::pickers::asset_browser_interaction::AssetDrag as BrushDrag;
 use crate::pickers::asset_browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_group_drop};
 use crate::pickers::picker_browser_dragging::DropMoveIntent;
-use crate::pickers::picker_browser_hierarchy::HierarchyIdentity;
-use crate::pickers::picker_browser_model::{ContainerId, DropPosition, NodeId};
+use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::picker_browser_model::{
+    ContainerId, DropPosition, HierarchyNode as PickerHierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry,
+};
 use crate::pickers::picker_state::{HierarchyOrderEntry, NestedGroupRenameState, PresetUi};
 use crate::theme::Tokens;
 
 type BrushDropDestination = (String, Vec<String>, Option<(&'static str, String)>);
+
+/// Reconcile Brush item and folder tokens after a successful hierarchy move. Both identities are
+/// qualified by the owning group/path; the stable preset name survives the move and lets us rekey
+/// before the authoritative preset vector is updated.
+fn brush_item_identity_key(name: &str, group: &str, path: &[String]) -> PickerIdentityKey {
+    PickerIdentityKey::from_parts("brush-item", std::iter::once(name).chain(std::iter::once(group)).chain(path.iter().map(String::as_str)))
+}
+
+fn rekey_brush_hierarchy(
+    hierarchy: &PickerBrowserHierarchy,
+    projection: &BTreeMap<PickerId, PickerNodeIdentity>,
+    presets: &[BrushPreset],
+    registry: &mut PickerIdRegistry,
+) {
+    fn visit(
+        nodes: &[PickerHierarchyNode],
+        parent_group: Option<&str>,
+        parent_folder: Option<&[String]>,
+        identities: &BTreeMap<PickerId, PickerNodeIdentity>,
+        presets: &[BrushPreset],
+        registry: &mut PickerIdRegistry,
+    ) {
+        for node in nodes {
+            let Some(identity) = identities.get(node.id()) else { continue };
+            match identity {
+                PickerNodeIdentity::Group(group) => visit(node.children(), Some(group), None, identities, presets, registry),
+                PickerNodeIdentity::Folder { group, path } => {
+                    let owner = parent_group.unwrap_or(group);
+                    let Some(leaf) = path.last() else { continue };
+                    let mut next_path = parent_folder.map_or_else(Vec::new, ToOwned::to_owned);
+                    next_path.push(leaf.clone());
+                    if owner != group || next_path != *path {
+                        registry.rekey(
+                            PickerIdentityKey::from_parts("brush-folder", std::iter::once(group.as_str()).chain(path.iter().map(String::as_str))),
+                            PickerIdentityKey::from_parts("brush-folder", std::iter::once(owner).chain(next_path.iter().map(String::as_str))),
+                            node.id(),
+                        );
+                    }
+                    visit(node.children(), Some(owner), Some(&next_path), identities, presets, registry);
+                }
+                PickerNodeIdentity::Item { group, key } | PickerNodeIdentity::FolderItem { group, path: _, key } => {
+                    let Some(preset) = preset_by_identity(presets, key) else { continue };
+                    let old_path = match identity {
+                        PickerNodeIdentity::FolderItem { path, .. } => path.as_slice(),
+                        _ => &[],
+                    };
+                    // A card dropped at the hierarchy root becomes an ungrouped Brush.
+                    let owner = parent_group.unwrap_or("");
+                    let next_path = parent_folder.unwrap_or_default();
+                    if owner != group || next_path != old_path {
+                        registry.rekey(
+                            brush_item_identity_key(&preset.name, group, old_path),
+                            brush_item_identity_key(&preset.name, owner, next_path),
+                            node.id(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    visit(hierarchy.roots(), None, None, projection, presets, registry);
+}
 
 /// Run a brush command, reporting failures in the status bar and returning whether it succeeded.
 pub(crate) fn run_or_status(app: &mut PhotocraftApp, id: &str, p: Value) -> bool {
@@ -201,6 +266,39 @@ fn brush_group_views(presets: &[BrushPreset]) -> Vec<BrushGroupView<'_>> {
     groups
 }
 
+/// Brush owns the identity policy: stable preset names are qualified by their current group/path,
+/// while the reverse metadata retains the preview occurrence key for exact command targeting.
+fn brush_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
+    let mut keys = PickerProjectionKeys::default();
+    for (group_index, group) in groups.iter().enumerate() {
+        keys.insert(
+            ProjectionNodeRef::Group(group_index),
+            PickerIdentityKey::from_parts("brush-group", [group.name.as_str()]),
+            PickerNodeIdentity::Group(group.name.clone()),
+        );
+        for (item_index, item) in group.items.iter().enumerate() {
+            let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH)];
+            let reverse = if folder_path.is_empty() {
+                PickerNodeIdentity::Item { group: group.name.clone(), key: item.key.clone() }
+            } else {
+                PickerNodeIdentity::FolderItem { group: group.name.clone(), path: folder_path.to_vec(), key: item.key.clone() }
+            };
+            keys.insert(ProjectionNodeRef::Item { group_index, item_index }, brush_item_identity_key(&item.name, &group.name, folder_path), reverse);
+            for depth in 1..=folder_path.len() {
+                keys.insert(
+                    ProjectionNodeRef::Folder { group_index, path: item.group_path[..depth].to_vec() },
+                    PickerIdentityKey::from_parts(
+                        "brush-folder",
+                        std::iter::once(group.name.as_str()).chain(item.group_path[..depth].iter().map(String::as_str)),
+                    ),
+                    PickerNodeIdentity::Folder { group: group.name.clone(), path: item.group_path[..depth].to_vec() },
+                );
+            }
+        }
+    }
+    keys
+}
+
 /// Persisted mixed root order follows the engine's single preset vector: each ungrouped preset is
 /// a root card, while each named group occupies the position of its first preset.
 fn brush_root_sequence(presets: &[BrushPreset]) -> Vec<HierarchyOrderEntry> {
@@ -217,34 +315,6 @@ fn brush_root_sequence(presets: &[BrushPreset]) -> Vec<HierarchyOrderEntry> {
 }
 
 /// Reverse identities for every canonical node projected from the Brush library.
-fn brush_hierarchy_identities(groups: &[GroupView]) -> BTreeMap<NodeId, HierarchyIdentity> {
-    let mut identities = BTreeMap::new();
-    for group in groups {
-        identities.insert(NodeId::group(&group.name), HierarchyIdentity::Group(group.name.clone()));
-        for item in &group.items {
-            let path = &item.group_path[..item.group_path.len().min(crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH)];
-            let mut parent = Vec::new();
-            for part in path {
-                parent.push(part.clone());
-                let id = NodeId::group_path(std::iter::once(group.name.clone()).chain(parent[..parent.len() - 1].iter().cloned()), part.clone());
-                identities.insert(id, HierarchyIdentity::Folder { group: group.name.clone(), path: parent.clone() });
-            }
-            let id = if path.is_empty() {
-                NodeId::item(&group.name, &item.key)
-            } else {
-                NodeId::item_in_path(std::iter::once(group.name.clone()).chain(path.iter().cloned()), item.key.clone())
-            };
-            let identity = if path.is_empty() {
-                HierarchyIdentity::Item { group: group.name.clone(), key: item.key.clone() }
-            } else {
-                HierarchyIdentity::FolderItem { group: group.name.clone(), path: path.to_vec(), key: item.key.clone() }
-            };
-            identities.insert(id, identity);
-        }
-    }
-    identities
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum BrushSiblingAnchor {
     Folder(String),
@@ -284,20 +354,24 @@ fn brush_item_index(presets: &[BrushPreset], group: &str, before_index: usize, s
 /// Translate one validated canonical move into an existing authoritative Brush command action.
 /// Moves that the name/path command API cannot express exactly are rejected rather than persisted
 /// into the generic picker hierarchy.
-fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<NodeId, HierarchyIdentity>, intent: &DropMoveIntent) -> Result<Action, String> {
+fn brush_drop_intent_to_action(
+    presets: &[BrushPreset],
+    identities: &BTreeMap<PickerId, PickerNodeIdentity>,
+    intent: &DropMoveIntent,
+) -> Result<Action, String> {
     let source = identities.get(&intent.source).ok_or_else(|| "The dragged Brush no longer exists.".to_owned())?;
     let source_item = match source {
-        HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. } => Some(key.as_str()),
+        PickerNodeIdentity::Item { key, .. } | PickerNodeIdentity::FolderItem { key, .. } => Some(key.as_str()),
         _ => None,
     };
     let source_group = match source {
-        HierarchyIdentity::Item { group, .. }
-        | HierarchyIdentity::FolderItem { group, .. }
-        | HierarchyIdentity::Group(group)
-        | HierarchyIdentity::Folder { group, .. } => group,
+        PickerNodeIdentity::Item { group, .. }
+        | PickerNodeIdentity::FolderItem { group, .. }
+        | PickerNodeIdentity::Group(group)
+        | PickerNodeIdentity::Folder { group, .. } => group,
     };
     let source_folder = match source {
-        HierarchyIdentity::FolderItem { path, .. } | HierarchyIdentity::Folder { path, .. } => path.clone(),
+        PickerNodeIdentity::FolderItem { path, .. } | PickerNodeIdentity::Folder { path, .. } => path.clone(),
         _ => Vec::new(),
     };
     let source_name = source_item.map(|key| occurrence_name(presets, key).ok_or_else(|| "The dragged Brush name is ambiguous.".to_owned())).transpose()?;
@@ -309,12 +383,12 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
         return Err("The ungrouped Brush collection cannot be moved as a group.".to_owned());
     }
 
-    let destination = |id: &NodeId| -> Result<BrushDropDestination, String> {
+    let destination = |id: &PickerId| -> Result<BrushDropDestination, String> {
         match identities.get(id) {
-            Some(HierarchyIdentity::Item { group, key }) => Ok((group.clone(), Vec::new(), Some(("item", key.clone())))),
-            Some(HierarchyIdentity::FolderItem { group, path, key }) => Ok((group.clone(), path.clone(), Some(("item", key.clone())))),
-            Some(HierarchyIdentity::Group(group)) => Ok((group.clone(), Vec::new(), Some(("group", group.clone())))),
-            Some(HierarchyIdentity::Folder { group, path }) => {
+            Some(PickerNodeIdentity::Item { group, key }) => Ok((group.clone(), Vec::new(), Some(("item", key.clone())))),
+            Some(PickerNodeIdentity::FolderItem { group, path, key }) => Ok((group.clone(), path.clone(), Some(("item", key.clone())))),
+            Some(PickerNodeIdentity::Group(group)) => Ok((group.clone(), Vec::new(), Some(("group", group.clone())))),
+            Some(PickerNodeIdentity::Folder { group, path }) => {
                 Ok((group.clone(), path[..path.len().saturating_sub(1)].to_vec(), Some(("folder", path.last().cloned().unwrap_or_default()))))
             }
             None => Err("The Brush drop target no longer exists.".to_owned()),
@@ -324,8 +398,8 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
     match &intent.position {
         DropPosition::PrependTo { group: container } => {
             let (group, path) = match identities.get(container) {
-                Some(HierarchyIdentity::Group(group)) => (group.clone(), Vec::new()),
-                Some(HierarchyIdentity::Folder { group, path }) => (group.clone(), path.clone()),
+                Some(PickerNodeIdentity::Group(group)) => (group.clone(), Vec::new()),
+                Some(PickerNodeIdentity::Folder { group, path }) => (group.clone(), path.clone()),
                 _ => return Err("The Brush drop target is not a folder.".to_owned()),
             };
             let group_name = group_key(presets, &group);
@@ -371,8 +445,8 @@ fn brush_drop_intent_to_action(presets: &[BrushPreset], identities: &BTreeMap<No
         }
         DropPosition::AppendTo { container: ContainerId::Group(container) } => {
             let (group, path) = match identities.get(container) {
-                Some(HierarchyIdentity::Group(group)) => (group.clone(), Vec::new()),
-                Some(HierarchyIdentity::Folder { group, path }) => (group.clone(), path.clone()),
+                Some(PickerNodeIdentity::Group(group)) => (group.clone(), Vec::new()),
+                Some(PickerNodeIdentity::Folder { group, path }) => (group.clone(), path.clone()),
                 _ => return Err("The Brush drop target is not a folder.".to_owned()),
             };
             let group = group_key(presets, &group);
@@ -559,7 +633,7 @@ pub(crate) fn picker_browser(
                 .collect(),
         })
         .collect();
-    let identities = brush_hierarchy_identities(&groups);
+    let projection_keys = brush_projection_keys(&groups);
     let mut hierarchy_actions = Vec::new();
 
     preset_ui.sizes.insert(PANEL.to_string(), 40.0);
@@ -595,14 +669,18 @@ pub(crate) fn picker_browser(
         paint_brush_list_row(ui, rect, preset, selected);
     };
     let browser_actions = {
-        let mut canonical_move = |intent: &DropMoveIntent| {
-            let action = brush_drop_intent_to_action(presets, &identities, intent)?;
+        let mut rekey = |hierarchy: &PickerBrowserHierarchy, projection: &BTreeMap<PickerId, PickerNodeIdentity>, registry: &mut PickerIdRegistry| {
+            rekey_brush_hierarchy(hierarchy, projection, presets, registry);
+        };
+        let mut canonical_move = |intent: &DropMoveIntent, projection: &BTreeMap<PickerId, PickerNodeIdentity>| {
+            let action = brush_drop_intent_to_action(presets, projection, intent)?;
             hierarchy_actions.push(action);
             Ok(())
         };
         let mut adapter = BrowserAdapter {
             panel: PANEL,
             groups: &groups,
+            projection_keys: Some(&projection_keys),
             options: BrowserOptions {
                 canvas: egui::Rect::NOTHING,
                 flush: false,
@@ -629,6 +707,7 @@ pub(crate) fn picker_browser(
             group_context_menu: Some(brush_group_context_menu),
             nested_group_context_menu: Some(brush_nested_group_context_menu),
             canonical_hierarchy_move: Some(&mut canonical_move),
+            rekey_hierarchy_after_move: Some(&mut rekey),
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut paint_item,
@@ -1324,7 +1403,7 @@ pub fn preset_list(
                 .collect(),
         })
         .collect();
-    let identities = brush_hierarchy_identities(&groups);
+    let projection_keys = brush_projection_keys(&groups);
     let mut hierarchy_actions = Vec::new();
     let list = st.view == BrushesView::List;
     let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
@@ -1342,14 +1421,18 @@ pub fn preset_list(
         }
     };
     let browser_actions = {
-        let mut canonical_move = |intent: &DropMoveIntent| {
-            let action = brush_drop_intent_to_action(presets, &identities, intent)?;
+        let mut rekey = |hierarchy: &PickerBrowserHierarchy, projection: &BTreeMap<PickerId, PickerNodeIdentity>, registry: &mut PickerIdRegistry| {
+            rekey_brush_hierarchy(hierarchy, projection, presets, registry);
+        };
+        let mut canonical_move = |intent: &DropMoveIntent, projection: &BTreeMap<PickerId, PickerNodeIdentity>| {
+            let action = brush_drop_intent_to_action(presets, projection, intent)?;
             hierarchy_actions.push(action);
             Ok(())
         };
         let mut adapter = BrowserAdapter {
             panel: PANEL,
             groups: &groups,
+            projection_keys: Some(&projection_keys),
             options: BrowserOptions {
                 canvas: egui::Rect::NOTHING,
                 flush: false,
@@ -1372,6 +1455,7 @@ pub fn preset_list(
             group_context_menu: Some(brush_group_context_menu),
             nested_group_context_menu: Some(brush_nested_group_context_menu),
             canonical_hierarchy_move: Some(&mut canonical_move),
+            rekey_hierarchy_after_move: Some(&mut rekey),
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut paint_item,
@@ -1478,14 +1562,7 @@ fn paint_brush_hierarchy_drag_label(ui: &egui::Ui, scope: &str, id: egui::Id) {
         BrushDrag::Group { scope, name, path } => {
             (scope.as_str(), path.last().cloned().unwrap_or_else(|| if name.is_empty() { UNGROUPED.to_string() } else { name.clone() }))
         }
-        BrushDrag::CanonicalGroup { scope, node_id, .. } => {
-            let name = match node_id {
-                NodeId::Group(name) => name.clone(),
-                NodeId::GroupPath(path) => path.last().cloned().unwrap_or_default(),
-                _ => return,
-            };
-            (scope.as_str(), name)
-        }
+        BrushDrag::CanonicalGroup { scope, label, .. } => (scope.as_str(), label.clone()),
         BrushDrag::Preset { .. } => return,
     };
     if drag_scope != scope {
@@ -1555,19 +1632,165 @@ mod preview_regression_tests {
 #[cfg(test)]
 mod hierarchy_anchor_identity_tests {
     use super::{
-        Action, HierarchyIdentity, Renaming, browser_actions_to_actions, brush_drop_intent_to_action, brush_group_views, brush_root_sequence, picker_browser,
-        preview_identity,
+        Action, PickerNodeIdentity, Renaming, browser_actions_to_actions, brush_drop_intent_to_action, brush_group_views, brush_projection_keys,
+        brush_root_sequence, picker_browser, preview_identity, rekey_brush_hierarchy,
     };
     use crate::PhotocraftApp;
-    use crate::pickers::asset_browser::BrowserAction;
+    use crate::pickers::asset_browser::{BrowserAction, GroupView, ItemView};
     use crate::pickers::picker_browser_dragging::DropMoveIntent;
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, NodeId};
-    use crate::pickers::picker_state::PresetUi;
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, PickerId, PickerIdRegistry};
+    use crate::pickers::picker_browser_projection::build_hierarchy_projection;
+    use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
     use photocraft_engine::paint::BrushPreset;
     use serde_json::json;
 
     fn preset(name: &str, group: &str) -> BrushPreset {
         BrushPreset { name: name.into(), brush: Default::default(), builtin: false, group: group.into(), folder: Vec::new(), captures: Default::default() }
+    }
+
+    fn group(name: &str, items: Vec<ItemView>) -> GroupView {
+        GroupView { name: name.into(), root_only: false, items }
+    }
+
+    fn item_with_key(key: &str, name: &str, path: &[&str]) -> ItemView {
+        ItemView { key: key.into(), name: name.into(), group_path: path.iter().map(|part| (*part).to_owned()).collect() }
+    }
+
+    #[test]
+    fn brush_adapter_owns_reverse_mapping_from_picker_projection_metadata() {
+        let group = PickerId::new("group-runtime");
+        let folder = PickerId::new("folder-runtime");
+        let card = PickerId::new("card-runtime");
+        let projection = std::collections::BTreeMap::from([
+            (group.clone(), PickerNodeIdentity::Group("Kit".into())),
+            (folder.clone(), PickerNodeIdentity::Folder { group: "Kit".into(), path: vec!["Soft".into()] }),
+            (card.clone(), PickerNodeIdentity::FolderItem { group: "Kit".into(), path: vec!["Soft".into()], key: "soft-brush".into() }),
+        ]);
+
+        assert_eq!(projection.get(&group), Some(&PickerNodeIdentity::Group("Kit".into())));
+        assert_eq!(projection.get(&folder), Some(&PickerNodeIdentity::Folder { group: "Kit".into(), path: vec!["Soft".into()] }));
+        assert_eq!(projection.get(&card), Some(&PickerNodeIdentity::FolderItem { group: "Kit".into(), path: vec!["Soft".into()], key: "soft-brush".into() }));
+    }
+
+    #[test]
+    fn brush_adapter_rekeys_nested_folder_identity_after_cross_group_move() {
+        let mut presets = vec![preset("nested", "A")];
+        presets[0].folder = vec!["Folder".into()];
+        // Preview identities are address-backed, so compute the key only after the preset has
+        // reached its final location in the source vector.
+        let nested_key = preview_identity(&presets[0]);
+        let before_groups = vec![group("A", vec![item_with_key(&nested_key, "nested", &["Folder"])]), group("B", vec![])];
+        let before_orders = std::collections::BTreeMap::from([
+            ("".into(), vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("B".into())]),
+            ("A".into(), vec![HierarchyOrderEntry::Item(nested_key.clone())]),
+            ("B".into(), Vec::new()),
+        ]);
+        let mut registry = PickerIdRegistry::with_scope(88);
+        let (_, mut hierarchy, identities) = build_hierarchy_projection(
+            &before_groups,
+            &[(0, 0), (1, 0)],
+            &Default::default(),
+            &before_orders,
+            &brush_projection_keys(&before_groups),
+            &mut registry,
+        )
+        .unwrap();
+        let folder_id = identities
+            .iter()
+            .find_map(|(id, identity)| {
+                matches!(identity, PickerNodeIdentity::Folder { group, path } if group == "A" && path == &["Folder".to_owned()]).then(|| id.clone())
+            })
+            .unwrap();
+        let card_id = identities
+            .iter()
+            .find_map(|(id, identity)| {
+                matches!(identity, PickerNodeIdentity::FolderItem { group, key, .. } if group == "A" && key == &nested_key).then(|| id.clone())
+            })
+            .unwrap();
+        let destination =
+            identities.iter().find_map(|(id, identity)| matches!(identity, PickerNodeIdentity::Group(group) if group == "B").then(|| id.clone())).unwrap();
+
+        let resolved = hierarchy.resolve_move(&folder_id, &DropPosition::AppendTo { container: ContainerId::Group(destination) }).unwrap();
+        hierarchy.apply_resolved_move(resolved).unwrap();
+        rekey_brush_hierarchy(&hierarchy, &identities, &presets, &mut registry);
+
+        let after_groups = vec![group("A", vec![]), group("B", vec![item_with_key(&nested_key, "nested", &["Folder"])])];
+        let after_orders = std::collections::BTreeMap::from([
+            ("".into(), vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("B".into())]),
+            ("A".into(), Vec::new()),
+            ("B".into(), vec![HierarchyOrderEntry::Item(nested_key.clone())]),
+        ]);
+        let (_, _, after) = build_hierarchy_projection(
+            &after_groups,
+            &[(0, 0), (1, 0)],
+            &Default::default(),
+            &after_orders,
+            &brush_projection_keys(&after_groups),
+            &mut registry,
+        )
+        .unwrap();
+        let moved_folder_id = after
+            .iter()
+            .find_map(|(id, identity)| {
+                matches!(identity, PickerNodeIdentity::Folder { group, path } if group == "B" && path == &["Folder".to_owned()]).then(|| id.clone())
+            })
+            .unwrap();
+        let moved_card_id = after
+            .iter()
+            .find_map(|(id, identity)| {
+                matches!(identity, PickerNodeIdentity::FolderItem { group, key, .. } if group == "B" && key == &nested_key).then(|| id.clone())
+            })
+            .unwrap();
+
+        assert_eq!(moved_folder_id, folder_id);
+        assert_eq!(moved_card_id, card_id);
+    }
+
+    #[test]
+    fn brush_adapter_preserves_card_id_when_promoting_a_group_card_to_root() {
+        let presets = vec![preset("Loose", "A")];
+        let key = preview_identity(&presets[0]);
+        let before_groups = vec![group("A", vec![item_with_key(&key, "Loose", &[])])];
+        let before_orders = std::collections::BTreeMap::from([
+            ("".into(), vec![HierarchyOrderEntry::Group("A".into())]),
+            ("A".into(), vec![HierarchyOrderEntry::Item(key.clone())]),
+        ]);
+        let mut registry = PickerIdRegistry::with_scope(89);
+        let (_, mut hierarchy, identities) =
+            build_hierarchy_projection(&before_groups, &[(0, 0)], &Default::default(), &before_orders, &brush_projection_keys(&before_groups), &mut registry)
+                .unwrap();
+        let card_id = identities
+            .iter()
+            .find_map(|(id, identity)| {
+                matches!(identity, PickerNodeIdentity::Item { group, key: item_key } if group == "A" && item_key == &key).then(|| id.clone())
+            })
+            .unwrap();
+
+        hierarchy.move_node(&card_id, &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
+        rekey_brush_hierarchy(&hierarchy, &identities, &presets, &mut registry);
+
+        let after_groups = vec![GroupView { name: String::new(), root_only: true, items: vec![item_with_key(&key, "Loose", &[])] }, group("A", vec![])];
+        let after_orders = std::collections::BTreeMap::from([
+            ("".into(), vec![HierarchyOrderEntry::RootItem { group: String::new(), key: key.clone() }, HierarchyOrderEntry::Group("A".into())]),
+            ("A".into(), Vec::new()),
+        ]);
+        let (_, _, after) = build_hierarchy_projection(
+            &after_groups,
+            &[(0, 0), (1, 0)],
+            &Default::default(),
+            &after_orders,
+            &brush_projection_keys(&after_groups),
+            &mut registry,
+        )
+        .unwrap();
+        let moved_id = after
+            .iter()
+            .find_map(|(id, identity)| {
+                matches!(identity, PickerNodeIdentity::Item { group, key: item_key } if group.is_empty() && item_key == &key).then(|| id.clone())
+            })
+            .unwrap();
+
+        assert_eq!(moved_id, card_id);
     }
 
     #[test]
@@ -1643,8 +1866,8 @@ mod hierarchy_anchor_identity_tests {
     fn dropping_an_ungrouped_brush_to_root_persists_its_root_index() {
         let presets = [preset("Loose A", ""), preset("Kit brush", "Kit"), preset("Loose B", "")];
         let key = preview_identity(&presets[0]);
-        let source = NodeId::item("", key.clone());
-        let identities = [(source.clone(), HierarchyIdentity::Item { group: String::new(), key })].into_iter().collect();
+        let source = PickerId::item("", key.clone());
+        let identities = [(source.clone(), PickerNodeIdentity::Item { group: String::new(), key })].into_iter().collect();
         let action = brush_drop_intent_to_action(
             &presets,
             &identities,
@@ -1687,11 +1910,11 @@ mod hierarchy_anchor_identity_tests {
             BrushPreset { folder: vec!["Source".into()], ..preset("Moving brush", "Kit") },
         ];
         let source_key = preview_identity(&presets[3]);
-        let source = NodeId::item_in_path(["Kit", "Source"], source_key.clone());
-        let target = NodeId::group_path(["Kit"], "A");
+        let source = PickerId::item_in_path(["Kit", "Source"], source_key.clone());
+        let target = PickerId::group_path(["Kit"], "A");
         let identities = [
-            (source.clone(), HierarchyIdentity::FolderItem { group: "Kit".into(), path: vec!["Source".into()], key: source_key }),
-            (target.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["A".into()] }),
+            (source.clone(), PickerNodeIdentity::FolderItem { group: "Kit".into(), path: vec!["Source".into()], key: source_key }),
+            (target.clone(), PickerNodeIdentity::Folder { group: "Kit".into(), path: vec!["A".into()] }),
         ]
         .into_iter()
         .collect();
@@ -1710,11 +1933,11 @@ mod hierarchy_anchor_identity_tests {
             BrushPreset { folder: vec!["C".into()], ..preset("C child", "Kit") },
             BrushPreset { folder: vec!["Source".into()], ..preset("Source child", "Kit") },
         ];
-        let source = NodeId::group_path(["Kit"], "Source");
-        let target = NodeId::group_path(["Kit"], "A");
+        let source = PickerId::group_path(["Kit"], "Source");
+        let target = PickerId::group_path(["Kit"], "A");
         let identities = [
-            (source.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["Source".into()] }),
-            (target.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["A".into()] }),
+            (source.clone(), PickerNodeIdentity::Folder { group: "Kit".into(), path: vec!["Source".into()] }),
+            (target.clone(), PickerNodeIdentity::Folder { group: "Kit".into(), path: vec!["A".into()] }),
         ]
         .into_iter()
         .collect();
@@ -1730,10 +1953,10 @@ mod hierarchy_anchor_identity_tests {
     fn dropping_a_brush_onto_a_group_places_it_before_the_first_child() {
         let presets = [preset("First", "Kit"), preset("Second", "Kit"), preset("Moving", "Other")];
         let source_key = preview_identity(&presets[2]);
-        let source = NodeId::item("Other", source_key.clone());
-        let target = NodeId::group("Kit");
+        let source = PickerId::item("Other", source_key.clone());
+        let target = PickerId::group("Kit");
         let identities =
-            [(source.clone(), HierarchyIdentity::Item { group: "Other".into(), key: source_key }), (target.clone(), HierarchyIdentity::Group("Kit".into()))]
+            [(source.clone(), PickerNodeIdentity::Item { group: "Other".into(), key: source_key }), (target.clone(), PickerNodeIdentity::Group("Kit".into()))]
                 .into_iter()
                 .collect();
 
@@ -1752,11 +1975,11 @@ mod hierarchy_anchor_identity_tests {
         let presets =
             [BrushPreset { folder: vec!["Folder".into()], ..preset("First", "Kit") }, BrushPreset { folder: vec!["Folder".into()], ..preset("Moving", "Kit") }];
         let source_key = preview_identity(&presets[1]);
-        let source = NodeId::item_in_path(["Kit", "Folder"], source_key.clone());
-        let target = NodeId::group_path(["Kit"], "Folder");
+        let source = PickerId::item_in_path(["Kit", "Folder"], source_key.clone());
+        let target = PickerId::group_path(["Kit"], "Folder");
         let identities = [
-            (source.clone(), HierarchyIdentity::FolderItem { group: "Kit".into(), path: vec!["Folder".into()], key: source_key }),
-            (target.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["Folder".into()] }),
+            (source.clone(), PickerNodeIdentity::FolderItem { group: "Kit".into(), path: vec!["Folder".into()], key: source_key }),
+            (target.clone(), PickerNodeIdentity::Folder { group: "Kit".into(), path: vec!["Folder".into()] }),
         ]
         .into_iter()
         .collect();
@@ -1778,11 +2001,11 @@ mod hierarchy_anchor_identity_tests {
             preset("Direct child", "Kit"),
             BrushPreset { folder: vec!["Source".into()], ..preset("Source child", "Other") },
         ];
-        let source = NodeId::group_path(["Other"], "Source");
-        let target = NodeId::group("Kit");
+        let source = PickerId::group_path(["Other"], "Source");
+        let target = PickerId::group("Kit");
         let identities = [
-            (source.clone(), HierarchyIdentity::Folder { group: "Other".into(), path: vec!["Source".into()] }),
-            (target.clone(), HierarchyIdentity::Group("Kit".into())),
+            (source.clone(), PickerNodeIdentity::Folder { group: "Other".into(), path: vec!["Source".into()] }),
+            (target.clone(), PickerNodeIdentity::Group("Kit".into())),
         ]
         .into_iter()
         .collect();

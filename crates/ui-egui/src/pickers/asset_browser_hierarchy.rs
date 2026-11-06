@@ -5,7 +5,7 @@
 
 /// Maximum group depth rendered by the shared browser. This matches the preset import/storage
 /// limit while keeping recursive projection and traversal bounded for malformed external data.
-pub(crate) const MAX_HIERARCHY_DEPTH: usize = 32;
+pub(crate) const MAX_HIERARCHY_DEPTH: usize = crate::pickers::picker_browser_model::MAX_GROUP_DEPTH;
 
 /// An item or nested group in the projected hierarchy.
 #[derive(Debug)]

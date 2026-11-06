@@ -5,58 +5,33 @@
 
 use std::collections::BTreeMap;
 
-use super::picker_browser_model::{DropPosition, HierarchyError, HierarchyNode, NodeId, PickerBrowserHierarchy};
+use super::picker_browser_identity::PickerNodeIdentity;
+use super::picker_browser_model::{DropPosition, HierarchyError, HierarchyNode, PickerBrowserHierarchy, PickerId};
 use super::picker_state::{HierarchyOrderEntry, PresetUi};
-
-/// Adapter-owned domain identity for projecting a moved hierarchy back to persisted picker state.
-/// Item identity deliberately stores the persisted item key and original group; its current parent
-/// is derived from the canonical tree after the move, not from the ID's original projection path.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HierarchyIdentity {
-    Item {
-        group: String,
-        key: String,
-    },
-    Group(String),
-    /// A nested folder identified by its owning root group and full folder path.
-    /// This identity is domain-owned and must not be persisted through the legacy
-    /// name-keyed `PresetUi` hierarchy representation.
-    Folder {
-        group: String,
-        path: Vec<String>,
-    },
-    /// An item inside a nested folder, qualified by its owning root group and full folder path.
-    FolderItem {
-        group: String,
-        path: Vec<String>,
-        key: String,
-    },
-}
 
 /// Apply one resolved browser drop and persist the resulting canonical child sequences.
 ///
-/// `identities` is the adapter's reverse map for every node in `hierarchy`; it must remain stable
-/// for the lifetime of that projected tree. Path-qualified `NodeId`s distinguish equal group names
-/// in different branches and remain unchanged while a node moves. No render indices or encoded
-/// `NodeId` strings are interpreted here. A successful move rewrites the existing serialized
-/// hierarchy representation from the resulting tree, retiring stale source tokens and anchors.
+/// `projection` maps opaque runtime IDs to the metadata required to translate the existing
+/// name/key-based preference representation. Path-qualified values distinguish equal names in
+/// different branches; no encoded `PickerId` strings are interpreted here. A successful move
+/// rewrites the existing serialized hierarchy representation from the resulting tree.
 pub(crate) fn commit_hierarchy_move(
     state: &mut PresetUi,
     panel: &str,
     hierarchy: &mut PickerBrowserHierarchy,
-    source: &NodeId,
+    source: &PickerId,
     position: &DropPosition,
-    identities: &BTreeMap<NodeId, HierarchyIdentity>,
+    identities: &BTreeMap<PickerId, PickerNodeIdentity>,
 ) -> Result<(), HierarchyError> {
     fn count_nodes(nodes: &[HierarchyNode]) -> usize {
         nodes.iter().map(|node| 1 + count_nodes(node.children())).sum()
     }
 
-    fn validate_identities(nodes: &[HierarchyNode], identities: &BTreeMap<NodeId, HierarchyIdentity>) -> Result<(), HierarchyError> {
+    fn validate_identities(nodes: &[HierarchyNode], identities: &BTreeMap<PickerId, PickerNodeIdentity>) -> Result<(), HierarchyError> {
         for node in nodes {
             match (node, identities.get(node.id())) {
-                (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { .. })) => {}
-                (HierarchyNode::Group { children, .. }, Some(HierarchyIdentity::Group(_))) => validate_identities(children, identities)?,
+                (HierarchyNode::Item(_), Some(PickerNodeIdentity::Item { .. })) => {}
+                (HierarchyNode::Group { children, .. }, Some(PickerNodeIdentity::Group(_))) => validate_identities(children, identities)?,
                 _ => return Err(HierarchyError::InvalidTree),
             }
         }
@@ -76,16 +51,16 @@ pub(crate) fn commit_hierarchy_move(
         panel: &str,
         parent: &str,
         nodes: &[HierarchyNode],
-        identities: &BTreeMap<NodeId, HierarchyIdentity>,
+        identities: &BTreeMap<PickerId, PickerNodeIdentity>,
     ) -> Result<(), HierarchyError> {
         let mut entries = Vec::with_capacity(nodes.len());
         for node in nodes {
             let entry = match (node, identities.get(node.id())) {
-                (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { group, key })) if parent.is_empty() => {
+                (HierarchyNode::Item(_), Some(PickerNodeIdentity::Item { group, key })) if parent.is_empty() => {
                     HierarchyOrderEntry::RootItem { group: group.clone(), key: key.clone() }
                 }
-                (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { key, .. })) => HierarchyOrderEntry::Item(key.clone()),
-                (HierarchyNode::Group { .. }, Some(HierarchyIdentity::Group(name))) => HierarchyOrderEntry::Group(name.clone()),
+                (HierarchyNode::Item(_), Some(PickerNodeIdentity::Item { key, .. })) => HierarchyOrderEntry::Item(key.clone()),
+                (HierarchyNode::Group { .. }, Some(PickerNodeIdentity::Group(name))) => HierarchyOrderEntry::Group(name.clone()),
                 _ => return Err(HierarchyError::InvalidTree),
             };
             entries.push(entry);
@@ -99,14 +74,14 @@ pub(crate) fn commit_hierarchy_move(
         panel: &str,
         parent: &str,
         nodes: &[HierarchyNode],
-        identities: &BTreeMap<NodeId, HierarchyIdentity>,
+        identities: &BTreeMap<PickerId, PickerNodeIdentity>,
     ) -> Result<(), HierarchyError> {
         persist_children(state, panel, parent, nodes, identities)?;
         for node in nodes {
             if !node.is_group() {
                 continue;
             }
-            let Some(HierarchyIdentity::Group(name)) = identities.get(node.id()) else {
+            let Some(PickerNodeIdentity::Group(name)) = identities.get(node.id()) else {
                 return Err(HierarchyError::InvalidTree);
             };
             persist_tree(state, panel, name, node.children(), identities)?;
@@ -122,45 +97,46 @@ pub(crate) fn commit_hierarchy_move(
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{HierarchyIdentity, commit_hierarchy_move};
-    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use super::commit_hierarchy_move;
+    use crate::pickers::picker_browser_identity::PickerNodeIdentity;
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
 
-    fn identities() -> BTreeMap<NodeId, HierarchyIdentity> {
+    fn identities() -> BTreeMap<PickerId, PickerNodeIdentity> {
         BTreeMap::from([
-            (NodeId::from("A"), HierarchyIdentity::Group("A".into())),
-            (NodeId::from("a1"), HierarchyIdentity::Item { group: "A".into(), key: "a1".into() }),
-            (NodeId::from("B"), HierarchyIdentity::Group("B".into())),
-            (NodeId::from("b1"), HierarchyIdentity::Item { group: "B".into(), key: "b1".into() }),
-            (NodeId::from("a2"), HierarchyIdentity::Item { group: "A".into(), key: "a2".into() }),
-            (NodeId::from("root-one"), HierarchyIdentity::Item { group: "Original".into(), key: "root-one".into() }),
-            (NodeId::from("C"), HierarchyIdentity::Group("C".into())),
-            (NodeId::from("root-two"), HierarchyIdentity::Item { group: "Original".into(), key: "root-two".into() }),
+            (PickerId::from("A"), PickerNodeIdentity::Group("A".into())),
+            (PickerId::from("a1"), PickerNodeIdentity::Item { group: "A".into(), key: "a1".into() }),
+            (PickerId::from("B"), PickerNodeIdentity::Group("B".into())),
+            (PickerId::from("b1"), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
+            (PickerId::from("a2"), PickerNodeIdentity::Item { group: "A".into(), key: "a2".into() }),
+            (PickerId::from("root-one"), PickerNodeIdentity::Item { group: "Original".into(), key: "root-one".into() }),
+            (PickerId::from("C"), PickerNodeIdentity::Group("C".into())),
+            (PickerId::from("root-two"), PickerNodeIdentity::Item { group: "Original".into(), key: "root-two".into() }),
         ])
     }
 
-    fn assert_persisted_tree(state: &PresetUi, panel: &str, hierarchy: &PickerBrowserHierarchy, identities: &BTreeMap<NodeId, HierarchyIdentity>) {
+    fn assert_persisted_tree(state: &PresetUi, panel: &str, hierarchy: &PickerBrowserHierarchy, identities: &BTreeMap<PickerId, PickerNodeIdentity>) {
         fn collect(
             parent: &str,
             nodes: &[HierarchyNode],
-            identities: &BTreeMap<NodeId, HierarchyIdentity>,
+            identities: &BTreeMap<PickerId, PickerNodeIdentity>,
             expected: &mut BTreeMap<String, Vec<HierarchyOrderEntry>>,
         ) {
             let entries = nodes
                 .iter()
                 .map(|node| match (node, identities.get(node.id())) {
-                    (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { group, key })) if parent.is_empty() => {
+                    (HierarchyNode::Item(_), Some(PickerNodeIdentity::Item { group, key })) if parent.is_empty() => {
                         HierarchyOrderEntry::RootItem { group: group.clone(), key: key.clone() }
                     }
-                    (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { key, .. })) => HierarchyOrderEntry::Item(key.clone()),
-                    (HierarchyNode::Group { .. }, Some(HierarchyIdentity::Group(name))) => HierarchyOrderEntry::Group(name.clone()),
+                    (HierarchyNode::Item(_), Some(PickerNodeIdentity::Item { key, .. })) => HierarchyOrderEntry::Item(key.clone()),
+                    (HierarchyNode::Group { .. }, Some(PickerNodeIdentity::Group(name))) => HierarchyOrderEntry::Group(name.clone()),
                     _ => panic!("every canonical node must have a matching adapter identity"),
                 })
                 .collect();
             expected.insert(parent.to_owned(), entries);
             for node in nodes {
                 if let HierarchyNode::Group { children, .. } = node {
-                    let Some(HierarchyIdentity::Group(name)) = identities.get(node.id()) else { panic!("group identity is required") };
+                    let Some(PickerNodeIdentity::Group(name)) = identities.get(node.id()) else { panic!("group identity is required") };
                     collect(name, children, identities, expected);
                 }
             }
@@ -179,15 +155,22 @@ mod tests {
         ])
         .unwrap();
         let identities = BTreeMap::from([
-            (NodeId::from("A"), HierarchyIdentity::Group("A".into())),
-            (NodeId::from("one"), HierarchyIdentity::Item { group: "A".into(), key: "one".into() }),
-            (NodeId::from("two"), HierarchyIdentity::Item { group: "A".into(), key: "two".into() }),
-            (NodeId::from("B"), HierarchyIdentity::Group("B".into())),
+            (PickerId::from("A"), PickerNodeIdentity::Group("A".into())),
+            (PickerId::from("one"), PickerNodeIdentity::Item { group: "A".into(), key: "one".into() }),
+            (PickerId::from("two"), PickerNodeIdentity::Item { group: "A".into(), key: "two".into() }),
+            (PickerId::from("B"), PickerNodeIdentity::Group("B".into())),
         ]);
         let mut state = PresetUi::default();
 
-        commit_hierarchy_move(&mut state, "gradients", &mut hierarchy, &NodeId::from("B"), &DropPosition::Before { target: NodeId::from("one") }, &identities)
-            .unwrap();
+        commit_hierarchy_move(
+            &mut state,
+            "gradients",
+            &mut hierarchy,
+            &PickerId::from("B"),
+            &DropPosition::Before { target: PickerId::from("one") },
+            &identities,
+        )
+        .unwrap();
 
         assert_eq!(
             state.hierarchy_order["gradients"]["A"],
@@ -201,9 +184,9 @@ mod tests {
         let mut hierarchy =
             PickerBrowserHierarchy::new(vec![HierarchyNode::group("A", vec![HierarchyNode::item("child")]), HierarchyNode::item("root-card")]).unwrap();
         let identities = BTreeMap::from([
-            (NodeId::from("A"), HierarchyIdentity::Group("A".into())),
-            (NodeId::from("child"), HierarchyIdentity::Item { group: "A".into(), key: "child".into() }),
-            (NodeId::from("root-card"), HierarchyIdentity::Item { group: "Original".into(), key: "root-card".into() }),
+            (PickerId::from("A"), PickerNodeIdentity::Group("A".into())),
+            (PickerId::from("child"), PickerNodeIdentity::Item { group: "A".into(), key: "child".into() }),
+            (PickerId::from("root-card"), PickerNodeIdentity::Item { group: "Original".into(), key: "root-card".into() }),
         ]);
         let mut state = PresetUi::default();
 
@@ -211,7 +194,7 @@ mod tests {
             &mut state,
             "gradients",
             &mut hierarchy,
-            &NodeId::from("root-card"),
+            &PickerId::from("root-card"),
             &DropPosition::AppendTo { container: ContainerId::Group("A".into()) },
             &identities,
         )
@@ -223,7 +206,7 @@ mod tests {
             &mut state,
             "gradients",
             &mut hierarchy,
-            &NodeId::from("root-card"),
+            &PickerId::from("root-card"),
             &DropPosition::AppendTo { container: ContainerId::Root },
             &identities,
         )
@@ -260,7 +243,7 @@ mod tests {
         ];
 
         for (source, position) in moves {
-            commit_hierarchy_move(&mut state, "gradients", &mut hierarchy, &NodeId::from(source), &position, &identities)
+            commit_hierarchy_move(&mut state, "gradients", &mut hierarchy, &PickerId::from(source), &position, &identities)
                 .unwrap_or_else(|error| panic!("{source} -> {position:?}: {error:?}"));
             assert_persisted_tree(&state, "gradients", &hierarchy, &identities);
         }
@@ -275,8 +258,8 @@ mod tests {
         state.set_hierarchy_order("gradients", "", vec![HierarchyOrderEntry::Group("A".into())]);
         let original_state = state.clone();
         let incomplete = BTreeMap::from([
-            (NodeId::from("A"), HierarchyIdentity::Group("A".into())),
-            (NodeId::from("root-one"), HierarchyIdentity::Item { group: "Original".into(), key: "root-one".into() }),
+            (PickerId::from("A"), PickerNodeIdentity::Group("A".into())),
+            (PickerId::from("root-one"), PickerNodeIdentity::Item { group: "Original".into(), key: "root-one".into() }),
         ]);
 
         assert_eq!(
@@ -284,7 +267,7 @@ mod tests {
                 &mut state,
                 "gradients",
                 &mut hierarchy,
-                &NodeId::from("root-one"),
+                &PickerId::from("root-one"),
                 &DropPosition::PrependTo { group: "A".into() },
                 &incomplete,
             ),

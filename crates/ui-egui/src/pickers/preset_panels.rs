@@ -26,6 +26,7 @@ pub use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode}
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
 #[cfg(test)]
 use crate::pickers::asset_browser_interaction::{AssetDrag, asset_browser_header_payload, header_drop_before};
+use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::picker_footer::FooterOptions;
 #[cfg(test)]
 use crate::pickers::picker_shell::{CustomShellOptions, picker_shell_custom};
@@ -86,6 +87,29 @@ fn empty(ui: &mut egui::Ui, s: &str) {
     ui.label(egui::RichText::new(s).color(t.text_faint).size(11.5));
 }
 
+/// Stable adapter-owned tokens for the flat Styles and Shapes projections.
+fn flat_preset_projection_keys(groups: &[GroupView], domain: &str, custom_source_index: Option<usize>) -> PickerProjectionKeys {
+    let mut keys = PickerProjectionKeys::default();
+    for (group_index, group) in groups.iter().enumerate() {
+        let custom_source = custom_source_index == Some(group_index);
+        let group_namespace = if custom_source { "custom-source-group" } else { "group" };
+        let item_namespace = if custom_source { "custom-source-item" } else { "item" };
+        keys.insert(
+            ProjectionNodeRef::Group(group_index),
+            PickerIdentityKey::from_parts(domain, [group_namespace, group.name.as_str()]),
+            PickerNodeIdentity::Group(group.name.clone()),
+        );
+        for (item_index, item) in group.items.iter().enumerate() {
+            keys.insert(
+                ProjectionNodeRef::Item { group_index, item_index },
+                PickerIdentityKey::from_parts(domain, [item_namespace, item.key.as_str()]),
+                PickerNodeIdentity::Item { group: group.name.clone(), key: item.key.clone() },
+            );
+        }
+    }
+    keys
+}
+
 /// Draw the standard Patterns panel.
 pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::pickers::pattern_browser::patterns_panel(app, ui);
@@ -111,6 +135,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
+    let projection_keys = flat_preset_projection_keys(&groups, "styles", None);
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
@@ -128,6 +153,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut adapter = BrowserAdapter {
             panel: "styles",
             groups: &groups,
+            projection_keys: Some(&projection_keys),
             options: BrowserOptions {
                 canvas,
                 flush: false,
@@ -144,6 +170,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -193,6 +220,10 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
+    // `Custom Shapes` is a separate engine collection and may legally contain a name also used by
+    // a saved preset. Keep its tokens in a distinct namespace rather than conflating two cards.
+    let custom_source_index = (!app.session.edit_state.custom_shapes.is_empty()).then_some(src.len().saturating_sub(1));
+    let projection_keys = flat_preset_projection_keys(&groups, "shapes", custom_source_index);
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
@@ -206,6 +237,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut adapter = BrowserAdapter {
             panel: "shapes",
             groups: &groups,
+            projection_keys: Some(&projection_keys),
             options: BrowserOptions {
                 canvas,
                 flush: false,
@@ -230,6 +262,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -629,6 +662,27 @@ mod tests {
     use crate::pickers::picker_state::{HierarchyOrderEntry, MAX_GROUP_DEPTH};
     use crate::state::ToolOptions;
 
+    #[test]
+    fn shape_custom_source_has_distinct_identity_even_when_names_overlap() {
+        let groups = vec![
+            GroupView {
+                name: "Custom Shapes".into(),
+                root_only: false,
+                items: vec![ItemView { key: "Star".into(), name: "Star".into(), group_path: Vec::new() }],
+            },
+            GroupView {
+                name: "Custom Shapes".into(),
+                root_only: false,
+                items: vec![ItemView { key: "Star".into(), name: "Star".into(), group_path: Vec::new() }],
+            },
+        ];
+        let keys = flat_preset_projection_keys(&groups, "shapes", Some(1));
+
+        assert_ne!(keys.key(&ProjectionNodeRef::Group(0)), keys.key(&ProjectionNodeRef::Group(1)));
+        assert_ne!(keys.key(&ProjectionNodeRef::Item { group_index: 0, item_index: 0 }), keys.key(&ProjectionNodeRef::Item { group_index: 1, item_index: 0 }),);
+        assert_eq!(keys.all_keys().len(), 4);
+    }
+
     fn app() -> (PhotocraftApp, egui::Context) {
         let ctx = egui::Context::default();
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
@@ -864,6 +918,7 @@ mod tests {
         let mut adapter = BrowserAdapter {
             panel: "short-library",
             groups: &groups,
+            projection_keys: None,
             options: BrowserOptions {
                 canvas: Rect::NOTHING,
                 flush: false,
@@ -878,6 +933,7 @@ mod tests {
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
@@ -907,6 +963,7 @@ mod tests {
         let mut adapter = BrowserAdapter {
             panel: "short-rename",
             groups: &groups,
+            projection_keys: None,
             options: BrowserOptions {
                 canvas: Rect::NOTHING,
                 flush: false,
@@ -921,6 +978,7 @@ mod tests {
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
@@ -1003,6 +1061,7 @@ mod tests {
         let mut adapter = BrowserAdapter {
             panel: "compact-library",
             groups: &groups,
+            projection_keys: None,
             options: BrowserOptions {
                 canvas: Rect::NOTHING,
                 flush: false,
@@ -1024,6 +1083,7 @@ mod tests {
             group_context_menu: None,
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
@@ -1262,6 +1322,7 @@ mod tests {
         let mut adapter = BrowserAdapter {
             panel: "consumer-actions",
             groups: &groups,
+            projection_keys: None,
             options: BrowserOptions {
                 canvas: Rect::NOTHING,
                 flush: false,
@@ -1276,6 +1337,7 @@ mod tests {
             group_context_menu: Some(consumer_group_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},

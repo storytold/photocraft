@@ -1036,7 +1036,13 @@ fn brushes_panel_shows_nested_folders() {
         assert!(h.query_by_label(label).is_some(), "{label} is shown");
     }
     // Closing a folder hides what it holds, and only that.
-    h.get_by_label("Test Inks").click();
+    let disclosure = h.get_by_label("Test Inks").rect().left_center() + egui::vec2(8.0, 0.0);
+    h.event(egui::Event::PointerMoved(disclosure));
+    h.run_steps(1);
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos: disclosure, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+    }
     h.run_steps(3);
     assert_eq!(h.state().ui.brushes_panel.collapsed.last().map(String::as_str), Some("Kit/Test Inks"));
     assert!(h.query_by_label("Kit Nib").is_none() && h.query_by_label("Test Fine").is_none());

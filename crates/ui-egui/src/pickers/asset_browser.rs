@@ -21,8 +21,13 @@ use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, 
 use crate::pickers::picker_browser_dragging::{
     DragSession, DropCommitResult, DropHitRegion, DropMoveIntent, PointerRegion, arbitrate_hit_index, hierarchy_move_sources, paint_candidate,
 };
-use crate::pickers::picker_browser_hierarchy::{HierarchyIdentity, commit_hierarchy_move};
-use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+use crate::pickers::picker_browser_hierarchy::commit_hierarchy_move;
+#[cfg(test)]
+use crate::pickers::picker_browser_identity::PickerIdentityKey;
+use crate::pickers::picker_browser_identity::{PickerNodeIdentity, PickerNodeRole, PickerProjectionKeys, ProjectionNodeRef};
+use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry};
+use crate::pickers::picker_browser_projection::build_hierarchy_projection;
+pub(crate) use crate::pickers::picker_browser_projection::{GroupView, ItemView};
 use crate::pickers::picker_state::escape_hierarchy_key_part;
 use crate::pickers::picker_state::{HierarchyOrderEntry, ItemRenameState, PresetUi};
 use crate::theme::Tokens;
@@ -39,7 +44,7 @@ const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
 
 #[derive(Clone, Debug, PartialEq)]
 enum BrowserDragGhostSource {
-    Group(NodeId),
+    Group(PickerId),
     Item { group: usize, item: usize },
 }
 
@@ -218,30 +223,6 @@ fn hit_debug_label_position(hit: &DropHitRegion) -> Pos2 {
     pos2(hit.hit_rect.left() + 3.0, label_y)
 }
 
-/// Asset-neutral item identity and label consumed by the shared picker browser.
-#[derive(Clone)]
-pub(crate) struct ItemView {
-    /// Stable consumer-defined key used for selection, emitted events, and persisted sibling
-    /// ordering. Keys must be unique within their containing group.
-    pub(crate) key: String,
-    /// Display label shown in the item card or list row.
-    pub(crate) name: String,
-    /// Optional nested-group path beneath the containing root group.
-    pub(crate) group_path: Vec<String>,
-}
-
-/// Asset-neutral group and its ordered items, ready for rendering by the shared browser.
-#[derive(Clone)]
-pub(crate) struct GroupView {
-    /// Group label and stable identity used for collapse state and group actions. Names are unique within a picker.
-    pub(crate) name: String,
-    /// Domain-only backing container for cards represented directly in the root sequence.
-    /// It participates in item identity/commands but has no visible group header of its own.
-    pub(crate) root_only: bool,
-    /// Items in the order they should appear within this group.
-    pub(crate) items: Vec<ItemView>,
-}
-
 /// Test helper for the shared browser's root-group/nested-group/item query contract.
 #[cfg(test)]
 pub(crate) fn filter_groups(groups: &[GroupView], query: &str) -> Vec<GroupView> {
@@ -277,316 +258,8 @@ fn item_visible_for_query(item: &ItemView, query: &str, group_matches: bool) -> 
     query.is_empty() || group_matches || item_matches_query(item, query)
 }
 
-struct GroupRenderSegment {
-    group_index: usize,
-    depth: usize,
-    root_items: bool,
-    show_header: bool,
-    folder_path: Vec<String>,
-    show_folder_header: bool,
-    /// Source group and item index for each card. Root card runs can span backing groups;
-    /// nested segments still naturally contain entries from their owning group only.
-    item_indices: Vec<(usize, usize)>,
-}
-
-fn last_visible_descendant_bounds(node: &HierarchyNode, bounds: &std::collections::BTreeMap<NodeId, Rect>) -> Option<Rect> {
+fn last_visible_descendant_bounds(node: &HierarchyNode, bounds: &std::collections::BTreeMap<PickerId, Rect>) -> Option<Rect> {
     if node.is_group() { node.children().iter().rev().find_map(|child| last_visible_descendant_bounds(child, bounds)) } else { bounds.get(node.id()).copied() }
-}
-
-/// Flatten the shared sibling sequences into render segments. Cards and child groups are walked in
-/// their canonical order; adjacent cards are batched for grid layout, and every group is emitted at
-/// exactly the position represented by its `Group` token.
-fn build_hierarchy_projection(
-    groups: &[GroupView],
-    display: &[(usize, usize)],
-    parents: &std::collections::BTreeMap<String, String>,
-    orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
-) -> Option<(Vec<GroupRenderSegment>, PickerBrowserHierarchy, std::collections::BTreeMap<NodeId, HierarchyIdentity>)> {
-    fn group_id(name: &str) -> NodeId {
-        NodeId::group(name)
-    }
-
-    fn item_id(group: &str, key: &str) -> NodeId {
-        NodeId::item(group, key)
-    }
-
-    fn insert_path_item(
-        nodes: &mut Vec<HierarchyNode>,
-        root_group: &str,
-        parent_path: &[String],
-        path: &[String],
-        item: HierarchyNode,
-        identities: &mut std::collections::BTreeMap<NodeId, HierarchyIdentity>,
-    ) {
-        let Some((name, rest)) = path.split_first() else {
-            nodes.push(item);
-            return;
-        };
-        let full_path: Vec<String> = parent_path.iter().cloned().chain(std::iter::once(name.clone())).collect();
-        let id = NodeId::group_path(std::iter::once(root_group.to_owned()).chain(parent_path.iter().cloned()), name.clone());
-        let index = nodes.iter().position(|node| node.id() == &id).unwrap_or_else(|| {
-            nodes.push(HierarchyNode::group(id.clone(), Vec::new()));
-            identities.insert(id.clone(), HierarchyIdentity::Folder { group: root_group.to_owned(), path: full_path.clone() });
-            nodes.len() - 1
-        });
-        if let Some(HierarchyNode::Group { children, .. }) = nodes.get_mut(index) {
-            insert_path_item(children, root_group, &full_path, rest, item, identities);
-        }
-    }
-
-    struct ProjectionContext<'a> {
-        groups: &'a [GroupView],
-        display: &'a [(usize, usize)],
-        parents: &'a std::collections::BTreeMap<String, String>,
-        orders: &'a std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
-        lifted_items: &'a BTreeSet<(String, String)>,
-        visited: BTreeSet<usize>,
-        item_indices: std::collections::BTreeMap<NodeId, (usize, usize)>,
-        identities: std::collections::BTreeMap<NodeId, HierarchyIdentity>,
-    }
-
-    fn build_group(group_index: usize, depth: usize, context: &mut ProjectionContext<'_>) -> Option<HierarchyNode> {
-        let (group_name, group_items) = {
-            let group = context.groups.get(group_index)?;
-            (group.name.clone(), group.items.clone())
-        };
-        if !context.visited.insert(group_index) {
-            return None;
-        }
-        let children: Vec<(usize, usize)> = context
-            .display
-            .iter()
-            .filter_map(|&(index, child_depth)| {
-                let child = context.groups.get(index)?;
-                (child_depth == depth + 1 && context.parents.get(&child.name).is_some_and(|parent| parent == &group_name)).then_some((index, child_depth))
-            })
-            .collect();
-        let child_names: std::collections::BTreeMap<String, (usize, usize)> =
-            children.iter().filter_map(|&(index, child_depth)| context.groups.get(index).map(|child| (child.name.clone(), (index, child_depth)))).collect();
-        let mut entries = context.orders.get(&group_name).cloned().unwrap_or_default();
-        if !context.orders.contains_key(&group_name) {
-            entries.extend(
-                group_items
-                    .iter()
-                    .filter(|item| !context.lifted_items.contains(&(group_name.clone(), item.key.clone())))
-                    .map(|item| HierarchyOrderEntry::Item(item.key.clone())),
-            );
-            entries.extend(children.iter().filter_map(|(index, _)| context.groups.get(*index).map(|child| HierarchyOrderEntry::Group(child.name.clone()))));
-        }
-        // Saved sequences can be stale or partial. Keep the same deterministic append behavior
-        // as the old projection while ensuring every live adapter node is represented once.
-        for item in group_items.iter().filter(|item| !context.lifted_items.contains(&(group_name.clone(), item.key.clone()))) {
-            let entry = HierarchyOrderEntry::Item(item.key.clone());
-            if !entries.contains(&entry) {
-                entries.push(entry);
-            }
-        }
-        for (index, _) in &children {
-            if let Some(child) = context.groups.get(*index) {
-                let entry = HierarchyOrderEntry::Group(child.name.clone());
-                if !entries.contains(&entry) {
-                    entries.push(entry);
-                }
-            }
-        }
-        let item_by_key: std::collections::BTreeMap<String, usize> = group_items
-            .iter()
-            .enumerate()
-            .filter(|(_, item)| !context.lifted_items.contains(&(group_name.clone(), item.key.clone())))
-            .map(|(index, item)| (item.key.clone(), index))
-            .collect();
-        let mut nodes = Vec::new();
-        for entry in entries {
-            match entry {
-                HierarchyOrderEntry::Item(key) => {
-                    if let Some(&index) = item_by_key.get(&key) {
-                        let item = &group_items[index];
-                        let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH)];
-                        let id = if folder_path.is_empty() {
-                            item_id(&group_name, &key)
-                        } else {
-                            NodeId::item_in_path(std::iter::once(group_name.clone()).chain(folder_path.iter().cloned()), key.clone())
-                        };
-                        context.item_indices.insert(id.clone(), (group_index, index));
-                        if folder_path.is_empty() {
-                            context.identities.insert(id.clone(), HierarchyIdentity::Item { group: group_name.clone(), key });
-                            nodes.push(HierarchyNode::item(id));
-                        } else {
-                            context.identities.insert(id.clone(), HierarchyIdentity::FolderItem { group: group_name.clone(), path: folder_path.to_vec(), key });
-                            insert_path_item(&mut nodes, &group_name, &[], folder_path, HierarchyNode::item(id), &mut context.identities);
-                        }
-                    }
-                }
-                HierarchyOrderEntry::Group(name) => {
-                    if let Some((index, child_depth)) = child_names.get(&name).copied()
-                        && let Some(child) = build_group(index, child_depth, context)
-                    {
-                        nodes.push(child);
-                    }
-                }
-                // Root-only entries are never valid in a group's child sequence.
-                HierarchyOrderEntry::RootItem { .. } => {}
-            }
-        }
-        let id = group_id(&group_name);
-        context.identities.insert(id.clone(), HierarchyIdentity::Group(group_name));
-        Some(HierarchyNode::group(id, nodes))
-    }
-
-    fn flatten_group(
-        node: &HierarchyNode,
-        depth: usize,
-        root_group_index: usize,
-        folder_path: &[String],
-        item_indices: &std::collections::BTreeMap<NodeId, (usize, usize)>,
-        group_indices: &std::collections::BTreeMap<NodeId, usize>,
-        out: &mut Vec<GroupRenderSegment>,
-    ) {
-        let group_index = group_indices.get(node.id()).copied().unwrap_or(root_group_index);
-        let mut run = Vec::new();
-        let mut first = true;
-        for child in node.children() {
-            match child {
-                HierarchyNode::Item(id) => {
-                    if let Some((source_group_index, item_index)) = item_indices.get(id) {
-                        run.push((*source_group_index, *item_index));
-                    }
-                }
-                HierarchyNode::Group { .. } => {
-                    if !run.is_empty() || first {
-                        out.push(GroupRenderSegment {
-                            group_index,
-                            depth,
-                            root_items: false,
-                            show_header: folder_path.is_empty() && first,
-                            folder_path: folder_path.to_vec(),
-                            show_folder_header: !folder_path.is_empty() && first,
-                            item_indices: std::mem::take(&mut run),
-                        });
-                        first = false;
-                    }
-                    match child.id() {
-                        NodeId::GroupPath(path) => {
-                            flatten_group(child, depth, root_group_index, path.get(1..).unwrap_or_default(), item_indices, group_indices, out);
-                        }
-                        _ => {
-                            let child_index = group_indices.get(child.id()).copied().unwrap_or(root_group_index);
-                            flatten_group(child, depth + 1, child_index, &[], item_indices, group_indices, out);
-                        }
-                    }
-                }
-            }
-        }
-        if !run.is_empty() || first {
-            out.push(GroupRenderSegment {
-                group_index,
-                depth,
-                root_items: false,
-                show_header: folder_path.is_empty() && first,
-                folder_path: folder_path.to_vec(),
-                show_folder_header: !folder_path.is_empty() && first,
-                item_indices: run,
-            });
-        }
-    }
-
-    let lifted_items: BTreeSet<(String, String)> = orders
-        .get("")
-        .into_iter()
-        .flatten()
-        .filter_map(|entry| match entry {
-            HierarchyOrderEntry::RootItem { group, key } => Some((group.clone(), key.clone())),
-            _ => None,
-        })
-        .collect();
-    let mut context = ProjectionContext {
-        groups,
-        display,
-        parents,
-        orders,
-        lifted_items: &lifted_items,
-        visited: BTreeSet::new(),
-        item_indices: std::collections::BTreeMap::new(),
-        identities: std::collections::BTreeMap::new(),
-    };
-    let mut roots: Vec<HierarchyNode> = display
-        .iter()
-        .filter_map(|&(index, depth)| (depth == 0).then_some(index))
-        .filter(|index| groups.get(*index).is_some_and(|group| !group.root_only))
-        .filter_map(|index| build_group(index, 0, &mut context))
-        .collect();
-    let mut item_indices = context.item_indices;
-    let mut identities = context.identities;
-    let root_entries = orders.get("").cloned().unwrap_or_default();
-    let group_by_name: std::collections::BTreeMap<&str, usize> = groups.iter().enumerate().map(|(i, g)| (g.name.as_str(), i)).collect();
-    let root_group_display_order: Vec<String> = roots
-        .iter()
-        .filter_map(|node| match identities.get(node.id()) {
-            Some(HierarchyIdentity::Group(name)) => Some(name.clone()),
-            _ => None,
-        })
-        .collect();
-    let mut root_groups: std::collections::BTreeMap<String, HierarchyNode> = roots
-        .drain(..)
-        .filter_map(|node| {
-            let HierarchyIdentity::Group(name) = identities.get(node.id())? else { return None };
-            Some((name.clone(), node))
-        })
-        .collect();
-    let mut ordered_roots = Vec::new();
-    for entry in root_entries {
-        match entry {
-            HierarchyOrderEntry::Group(name) => {
-                if let Some(node) = root_groups.remove(&name) {
-                    ordered_roots.push(node);
-                }
-            }
-            // Ordinary Item entries belong to a group sequence; malformed/root legacy values are ignored.
-            HierarchyOrderEntry::Item(_) => {}
-            HierarchyOrderEntry::RootItem { group: group_name, key } => {
-                let Some(&group_index) = group_by_name.get(group_name.as_str()) else { continue };
-                let Some(item_index) = groups[group_index].items.iter().position(|item| item.key == key) else { continue };
-                let id = item_id(&group_name, &key);
-                item_indices.insert(id.clone(), (group_index, item_index));
-                identities.insert(id.clone(), HierarchyIdentity::Item { group: group_name.clone(), key: key.clone() });
-                ordered_roots.push(HierarchyNode::item(id));
-            }
-        }
-    }
-    for name in root_group_display_order {
-        if let Some(node) = root_groups.remove(&name) {
-            ordered_roots.push(node);
-        }
-    }
-    roots = ordered_roots;
-    // Adapter group names are stable unique identities; item IDs are typed group/key pairs, so
-    // duplicate card keys across groups remain distinct without delimiter encoding.
-    let Ok(hierarchy) = PickerBrowserHierarchy::new(roots) else { return None };
-    let group_indices: std::collections::BTreeMap<NodeId, usize> = groups.iter().enumerate().map(|(index, group)| (group_id(&group.name), index)).collect();
-    let mut out = Vec::new();
-    for root in hierarchy.roots() {
-        if let HierarchyNode::Item(id) = root {
-            if let Some((group_index, item_index)) = item_indices.get(id) {
-                if let Some(segment) = out.last_mut().filter(|segment: &&mut GroupRenderSegment| segment.root_items) {
-                    segment.item_indices.push((*group_index, *item_index));
-                } else {
-                    out.push(GroupRenderSegment {
-                        group_index: *group_index,
-                        depth: 0,
-                        root_items: true,
-                        show_header: false,
-                        folder_path: Vec::new(),
-                        show_folder_header: false,
-                        item_indices: vec![(*group_index, *item_index)],
-                    });
-                }
-            }
-        } else {
-            let root_index = group_indices.get(root.id()).copied().unwrap_or_default();
-            flatten_group(root, 0, root_index, &[], &item_indices, &group_indices, &mut out);
-        }
-    }
-    Some((out, hierarchy, identities))
 }
 
 #[cfg(test)]
@@ -595,8 +268,41 @@ fn group_render_segments(
     display: &[(usize, usize)],
     parents: &std::collections::BTreeMap<String, String>,
     orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
-) -> Vec<GroupRenderSegment> {
-    build_hierarchy_projection(groups, display, parents, orders).map(|(segments, _, _)| segments).unwrap_or_default()
+) -> Vec<crate::pickers::picker_browser_projection::GroupRenderSegment> {
+    let keys = test_projection_keys(groups);
+    build_hierarchy_projection(groups, display, parents, orders, &keys, &mut PickerIdRegistry::default()).map(|(segments, _, _)| segments).unwrap_or_default()
+}
+
+#[cfg(test)]
+fn test_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
+    let mut keys = PickerProjectionKeys::default();
+    for (group_index, group) in groups.iter().enumerate() {
+        keys.insert(
+            ProjectionNodeRef::Group(group_index),
+            PickerIdentityKey::from_parts("test-group", [group.name.as_str()]),
+            PickerNodeIdentity::Group(group.name.clone()),
+        );
+        for (item_index, item) in group.items.iter().enumerate() {
+            let folder_path = &item.group_path[..item.group_path.len().min(crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH)];
+            keys.insert(
+                ProjectionNodeRef::Item { group_index, item_index },
+                PickerIdentityKey::from_parts("test-item", [group.name.as_str(), item.key.as_str()]),
+                if folder_path.is_empty() {
+                    PickerNodeIdentity::Item { group: group.name.clone(), key: item.key.clone() }
+                } else {
+                    PickerNodeIdentity::FolderItem { group: group.name.clone(), path: folder_path.to_vec(), key: item.key.clone() }
+                },
+            );
+            for depth in 1..=folder_path.len() {
+                keys.insert(
+                    ProjectionNodeRef::Folder { group_index, path: folder_path[..depth].to_vec() },
+                    PickerIdentityKey::from_parts("test-folder", std::iter::once(group.name.as_str()).chain(folder_path[..depth].iter().map(String::as_str))),
+                    PickerNodeIdentity::Folder { group: group.name.clone(), path: folder_path[..depth].to_vec() },
+                );
+            }
+        }
+    }
+    keys
 }
 
 fn item_occurrence_position(groups: &[GroupView], key: &str) -> Option<(usize, usize)> {
@@ -760,10 +466,10 @@ fn select_dropped_item(st: &mut PresetUi, panel: &str, group: &str, group_path: 
 /// Resolve the moved item's destination from the drop position, not its stable source identity.
 /// Item identities deliberately retain their original group/path across hierarchy moves.
 fn hierarchy_drop_item_destination(
-    source: &NodeId,
+    source: &PickerId,
     position: &DropPosition,
     hierarchy: &PickerBrowserHierarchy,
-    identities: &std::collections::BTreeMap<NodeId, HierarchyIdentity>,
+    identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
 ) -> Option<(String, Vec<String>)> {
     let container = match position {
         DropPosition::Before { target } | DropPosition::After { target } => hierarchy.parent_of(target)?,
@@ -773,37 +479,38 @@ fn hierarchy_drop_item_destination(
 
     match container {
         ContainerId::Group(group_id) => match identities.get(&group_id)? {
-            HierarchyIdentity::Group(group) => Some((group.clone(), Vec::new())),
-            HierarchyIdentity::Folder { group, path } => Some((group.clone(), path.clone())),
+            PickerNodeIdentity::Group(group) => Some((group.clone(), Vec::new())),
+            PickerNodeIdentity::Folder { group, path } => Some((group.clone(), path.clone())),
             _ => None,
         },
         // Root-level items retain their original owning library group. The target of a root
         // insertion may belong to a different group, so it must never determine selection owner.
         ContainerId::Root => match identities.get(source)? {
-            HierarchyIdentity::Item { group, .. }
-            | HierarchyIdentity::FolderItem { group, .. }
-            | HierarchyIdentity::Group(group)
-            | HierarchyIdentity::Folder { group, .. } => Some((group.clone(), Vec::new())),
+            PickerNodeIdentity::Item { group, .. }
+            | PickerNodeIdentity::FolderItem { group, .. }
+            | PickerNodeIdentity::Group(group)
+            | PickerNodeIdentity::Folder { group, .. } => Some((group.clone(), Vec::new())),
         },
     }
 }
 
-fn source_node_for_drag(drag: &AssetDrag, panel: &str, identities: &std::collections::BTreeMap<NodeId, HierarchyIdentity>) -> Option<NodeId> {
+fn source_node_for_drag(drag: &AssetDrag, panel: &str, identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>) -> Option<PickerId> {
     if let AssetDrag::CanonicalGroup { scope, node_id, .. } = drag {
-        return (scope == panel && matches!(identities.get(node_id), Some(HierarchyIdentity::Group(_) | HierarchyIdentity::Folder { .. })))
-            .then(|| node_id.clone());
+        return (scope == panel
+            && identities.get(node_id).is_some_and(|identity| matches!(identity.role(), PickerNodeRole::AssetGroup | PickerNodeRole::StructuralFolder)))
+        .then(|| node_id.clone());
     }
     if let AssetDrag::Preset { scope, key, node_id, .. } = drag {
         return node_id
             .as_ref()
             .filter(|node_id| {
-                scope == panel && matches!(identities.get(*node_id), Some(HierarchyIdentity::Item { key: identity_key, .. } | HierarchyIdentity::FolderItem { key: identity_key, .. }) if identity_key == key)
+                scope == panel && matches!(identities.get(*node_id), Some(PickerNodeIdentity::Item { key: identity_key, .. } | PickerNodeIdentity::FolderItem { key: identity_key, .. }) if identity_key == key)
             })
             .cloned();
     }
     identities.iter().find_map(|(id, identity)| {
         let matches = match (drag, identity) {
-            (AssetDrag::Group { scope, name, .. }, HierarchyIdentity::Group(group)) => scope == panel && name == group,
+            (AssetDrag::Group { scope, name, .. }, PickerNodeIdentity::Group(group)) => scope == panel && name == group,
             _ => false,
         };
         matches.then(|| id.clone())
@@ -812,7 +519,7 @@ fn source_node_for_drag(drag: &AssetDrag, panel: &str, identities: &std::collect
 
 /// Return the selected visible nodes that should move as independent hierarchy roots.
 /// Selecting both a group and one of its descendants moves the group subtree only.
-fn selected_drag_nodes(state: &PresetUi, panel: &str, visible_order: &[NodeId], source: &NodeId, hierarchy: &PickerBrowserHierarchy) -> Vec<NodeId> {
+fn selected_drag_nodes(state: &PresetUi, panel: &str, visible_order: &[PickerId], source: &PickerId, hierarchy: &PickerBrowserHierarchy) -> Vec<PickerId> {
     let Some(selected) = state.browser_selection.get(panel).filter(|selected| selected.contains(source)) else {
         return Vec::new();
     };
@@ -839,19 +546,19 @@ fn selected_drag_nodes(state: &PresetUi, panel: &str, visible_order: &[NodeId], 
 /// selected cards are inserted into one destination container.
 fn plan_hierarchy_item_moves(
     hierarchy: &PickerBrowserHierarchy,
-    sources: &[NodeId],
+    sources: &[PickerId],
     position: &DropPosition,
-    identities: &std::collections::BTreeMap<NodeId, HierarchyIdentity>,
+    identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
     root_item_group: Option<&str>,
 ) -> Result<Vec<(String, String, String, usize)>, String> {
     let mut planned_hierarchy = hierarchy.clone();
     let mut item_moves = Vec::new();
     for source in hierarchy_move_sources(sources, position) {
-        if let Some(HierarchyIdentity::Item { group, key }) = identities.get(&source) {
+        if let Some(PickerNodeIdentity::Item { group, key }) = identities.get(&source) {
             let resolved = planned_hierarchy.resolve_move(&source, position).map_err(|error| format!("Could not resolve item move: {error:?}"))?;
             let destination_group = match resolved.destination() {
                 ContainerId::Group(destination_id) => {
-                    let Some(HierarchyIdentity::Group(destination_group)) = identities.get(destination_id) else {
+                    let Some(PickerNodeIdentity::Group(destination_group)) = identities.get(destination_id) else {
                         return Err("The destination group is no longer available.".to_owned());
                     };
                     Some(destination_group.as_str())
@@ -880,8 +587,8 @@ mod selected_drag_nodes_tests {
     use std::collections::BTreeMap;
 
     use super::{plan_hierarchy_item_moves, selected_drag_nodes};
-    use crate::pickers::picker_browser_hierarchy::HierarchyIdentity;
-    use crate::pickers::picker_browser_model::{DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use crate::pickers::picker_browser_identity::PickerNodeIdentity;
+    use crate::pickers::picker_browser_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use crate::pickers::picker_state::PresetUi;
 
     #[test]
@@ -891,50 +598,54 @@ mod selected_drag_nodes_tests {
             HierarchyNode::group("B", vec![HierarchyNode::item("b1")]),
         ])
         .unwrap();
-        let visible = ["A", "a1", "Nested", "nested-card", "B", "b1"].map(NodeId::from);
+        let visible = ["A", "a1", "Nested", "nested-card", "B", "b1"].map(PickerId::from);
         let mut state = PresetUi::default();
-        for (index, id) in ["A", "a1", "Nested", "nested-card", "b1"].into_iter().map(NodeId::from).enumerate() {
+        for (index, id) in ["A", "a1", "Nested", "nested-card", "b1"].into_iter().map(PickerId::from).enumerate() {
             state.select_browser_node("panel", id, index != 0);
         }
 
-        assert_eq!(selected_drag_nodes(&state, "panel", &visible, &NodeId::from("a1"), &hierarchy), [NodeId::from("A"), NodeId::from("b1")]);
+        assert_eq!(selected_drag_nodes(&state, "panel", &visible, &PickerId::from("a1"), &hierarchy), [PickerId::from("A"), PickerId::from("b1")]);
     }
 
     #[test]
     fn dragging_an_unselected_node_does_not_move_the_other_selected_nodes() {
         let hierarchy = PickerBrowserHierarchy::new(vec![HierarchyNode::group("A", vec![HierarchyNode::item("a1")])]).unwrap();
         let mut state = PresetUi::default();
-        state.select_browser_node("panel", NodeId::from("A"), false);
+        state.select_browser_node("panel", PickerId::from("A"), false);
 
-        assert!(selected_drag_nodes(&state, "panel", &[NodeId::from("A"), NodeId::from("a1")], &NodeId::from("a1"), &hierarchy).is_empty());
+        assert!(selected_drag_nodes(&state, "panel", &[PickerId::from("A"), PickerId::from("a1")], &PickerId::from("a1"), &hierarchy).is_empty());
     }
 
     #[test]
     fn item_callback_indices_follow_prior_selected_moves_for_every_insertion_position() {
         let hierarchy = PickerBrowserHierarchy::new(vec![
             HierarchyNode::group(
-                NodeId::group("A"),
-                vec![HierarchyNode::item(NodeId::item("A", "a1")), HierarchyNode::item(NodeId::item("A", "a2")), HierarchyNode::item(NodeId::item("A", "a3"))],
+                PickerId::group("A"),
+                vec![
+                    HierarchyNode::item(PickerId::item("A", "a1")),
+                    HierarchyNode::item(PickerId::item("A", "a2")),
+                    HierarchyNode::item(PickerId::item("A", "a3")),
+                ],
             ),
-            HierarchyNode::group(NodeId::group("B"), vec![HierarchyNode::item(NodeId::item("B", "b1")), HierarchyNode::item(NodeId::item("B", "b2"))]),
+            HierarchyNode::group(PickerId::group("B"), vec![HierarchyNode::item(PickerId::item("B", "b1")), HierarchyNode::item(PickerId::item("B", "b2"))]),
         ])
         .unwrap();
         let identities = BTreeMap::from([
-            (NodeId::group("A"), HierarchyIdentity::Group("A".into())),
-            (NodeId::item("A", "a1"), HierarchyIdentity::Item { group: "A".into(), key: "a1".into() }),
-            (NodeId::item("A", "a2"), HierarchyIdentity::Item { group: "A".into(), key: "a2".into() }),
-            (NodeId::item("A", "a3"), HierarchyIdentity::Item { group: "A".into(), key: "a3".into() }),
-            (NodeId::group("B"), HierarchyIdentity::Group("B".into())),
-            (NodeId::item("B", "b1"), HierarchyIdentity::Item { group: "B".into(), key: "b1".into() }),
-            (NodeId::item("B", "b2"), HierarchyIdentity::Item { group: "B".into(), key: "b2".into() }),
+            (PickerId::group("A"), PickerNodeIdentity::Group("A".into())),
+            (PickerId::item("A", "a1"), PickerNodeIdentity::Item { group: "A".into(), key: "a1".into() }),
+            (PickerId::item("A", "a2"), PickerNodeIdentity::Item { group: "A".into(), key: "a2".into() }),
+            (PickerId::item("A", "a3"), PickerNodeIdentity::Item { group: "A".into(), key: "a3".into() }),
+            (PickerId::group("B"), PickerNodeIdentity::Group("B".into())),
+            (PickerId::item("B", "b1"), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
+            (PickerId::item("B", "b2"), PickerNodeIdentity::Item { group: "B".into(), key: "b2".into() }),
         ]);
-        let sources = [NodeId::item("A", "a1"), NodeId::item("A", "a2")];
+        let sources = [PickerId::item("A", "a1"), PickerId::item("A", "a2")];
         let cases = [
-            (DropPosition::Before { target: NodeId::item("B", "b1") }, vec![("a1", 0), ("a2", 1)]),
-            (DropPosition::After { target: NodeId::item("B", "b1") }, vec![("a2", 1), ("a1", 1)]),
-            (DropPosition::PrependTo { group: NodeId::group("B") }, vec![("a2", 0), ("a1", 0)]),
-            (DropPosition::AppendTo { container: crate::pickers::picker_browser_model::ContainerId::Group(NodeId::group("B")) }, vec![("a1", 2), ("a2", 3)]),
-            (DropPosition::After { target: NodeId::item("A", "a3") }, vec![("a2", 2), ("a1", 1)]),
+            (DropPosition::Before { target: PickerId::item("B", "b1") }, vec![("a1", 0), ("a2", 1)]),
+            (DropPosition::After { target: PickerId::item("B", "b1") }, vec![("a2", 1), ("a1", 1)]),
+            (DropPosition::PrependTo { group: PickerId::group("B") }, vec![("a2", 0), ("a1", 0)]),
+            (DropPosition::AppendTo { container: crate::pickers::picker_browser_model::ContainerId::Group(PickerId::group("B")) }, vec![("a1", 2), ("a2", 3)]),
+            (DropPosition::After { target: PickerId::item("A", "a3") }, vec![("a2", 2), ("a1", 1)]),
         ];
 
         for (position, expected) in cases {
@@ -944,14 +655,33 @@ mod selected_drag_nodes_tests {
     }
 }
 
-fn item_node_for_identity(group: &str, group_path: &[String], key: &str, identities: &std::collections::BTreeMap<NodeId, HierarchyIdentity>) -> Option<NodeId> {
+fn item_node_for_identity(
+    group: &str,
+    group_path: &[String],
+    key: &str,
+    identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+) -> Option<PickerId> {
     identities.iter().find_map(|(id, identity)| {
         let matches = matches!(identity,
-            HierarchyIdentity::Item { group: item_group, key: item_key } if group_path.is_empty() && item_group == group && item_key == key
+            PickerNodeIdentity::Item { group: item_group, key: item_key } if group_path.is_empty() && item_group == group && item_key == key
         ) || matches!(identity,
-            HierarchyIdentity::FolderItem { group: item_group, path, key: item_key } if !group_path.is_empty() && item_group == group && path == group_path && item_key == key
+            PickerNodeIdentity::FolderItem { group: item_group, path, key: item_key } if !group_path.is_empty() && item_group == group && path == group_path && item_key == key
         );
         matches.then(|| id.clone())
+    })
+}
+
+fn picker_group_id(registry: &mut PickerIdRegistry, group_index: usize, keys: &PickerProjectionKeys) -> PickerId {
+    registry.id_for(keys.key(&ProjectionNodeRef::Group(group_index)).expect("adapter supplies group identity").clone())
+}
+
+fn picker_folder_id(registry: &mut PickerIdRegistry, group_index: usize, keys: &PickerProjectionKeys, path: &[String]) -> PickerId {
+    registry.id_for(keys.key(&ProjectionNodeRef::Folder { group_index, path: path.to_vec() }).expect("adapter supplies folder identity").clone())
+}
+
+fn folder_node_for_identity(group: &str, path: &[String], identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>) -> Option<PickerId> {
+    identities.iter().find_map(|(id, identity)| {
+        matches!(identity, PickerNodeIdentity::Folder { group: owner, path: candidate } if owner == group && candidate == path).then(|| id.clone())
     })
 }
 
@@ -1064,7 +794,8 @@ pub(crate) struct ItemContextMenuArgs<'a> {
 /// its own commands. Top-level picker menus are deliberately not adapter fields: the containing
 /// `picker_shell` owns their shared structure and exposes one ordered domain-extension point. The
 /// browser never knows about gradient, pattern, swatch, style, or brush data.
-type CanonicalHierarchyMove<'a> = dyn FnMut(&DropMoveIntent) -> Result<(), String> + 'a;
+type CanonicalHierarchyMove<'a> = dyn FnMut(&DropMoveIntent, &std::collections::BTreeMap<PickerId, PickerNodeIdentity>) -> Result<(), String> + 'a;
+type RekeyHierarchyAfterMove<'a> = dyn FnMut(&PickerBrowserHierarchy, &std::collections::BTreeMap<PickerId, PickerNodeIdentity>, &mut PickerIdRegistry) + 'a;
 type HierarchyItemMove<'a> = dyn FnMut(&str, &str, &str, usize) -> Result<(), String> + 'a;
 type ItemHierarchyTarget = (egui::Response, Rect, bool, bool, usize, String, Vec<String>);
 
@@ -1073,6 +804,8 @@ pub(crate) struct BrowserAdapter<'a> {
     pub(crate) panel: &'a str,
     /// Consumer-projected groups and ordered items to display.
     pub(crate) groups: &'a [GroupView],
+    /// Opaque stable node tokens supplied by this adapter; shared projection only allocates IDs.
+    pub(crate) projection_keys: Option<&'a PickerProjectionKeys>,
     /// Grid geometry and consumer-specific layout options.
     pub(crate) options: BrowserOptions,
     /// Toggleable interactions supported by this consumer.
@@ -1091,6 +824,8 @@ pub(crate) struct BrowserAdapter<'a> {
     /// path-aware folder/item moves). Returning an error rejects the move and is shown to the user.
     /// When absent, the shared browser uses its legacy hierarchy persistence for Group/Item trees.
     pub(crate) canonical_hierarchy_move: Option<&'a mut CanonicalHierarchyMove<'a>>,
+    /// Adapter-owned reconciliation for identity tokens whose semantics change on a move.
+    pub(crate) rekey_hierarchy_after_move: Option<&'a mut RekeyHierarchyAfterMove<'a>>,
     /// Domain commit for simple flat item moves. Receives the source group/key and the exact
     /// destination group/final insertion index computed by the canonical hierarchy resolver.
     pub(crate) hierarchy_item_move: Option<&'a mut HierarchyItemMove<'a>>,
@@ -1127,12 +862,13 @@ pub(crate) fn delete_item_actions(targets: &[(String, ItemView)]) -> Vec<Browser
 }
 
 struct BrowserDeleteContext<'a> {
-    selection_order: &'a [NodeId],
+    selection_order: &'a [PickerId],
     hierarchy: &'a PickerBrowserHierarchy,
-    identities: &'a std::collections::BTreeMap<NodeId, HierarchyIdentity>,
+    identities: &'a std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
 }
 
-fn full_hierarchy_selection_order(hierarchy: &PickerBrowserHierarchy) -> Vec<NodeId> {
+#[cfg(test)]
+fn full_hierarchy_selection_order(hierarchy: &PickerBrowserHierarchy) -> Vec<PickerId> {
     let mut order = Vec::new();
     let mut pending: Vec<_> = hierarchy.roots().iter().rev().collect();
     while let Some(node) = pending.pop() {
@@ -1144,7 +880,7 @@ fn full_hierarchy_selection_order(hierarchy: &PickerBrowserHierarchy) -> Vec<Nod
 
 /// Resolve a selected browser node set to independent domain deletions. Deleting a selected group
 /// already deletes its subtree, so selected descendants must not produce duplicate operations.
-fn selected_delete_actions(selection: &BTreeSet<NodeId>, clicked: &NodeId, context: &BrowserDeleteContext<'_>) -> Option<Vec<BrowserAction>> {
+fn selected_delete_actions(selection: &BTreeSet<PickerId>, clicked: &PickerId, context: &BrowserDeleteContext<'_>) -> Option<Vec<BrowserAction>> {
     if !selection.contains(clicked) {
         return None;
     }
@@ -1163,14 +899,14 @@ fn selected_delete_actions(selection: &BTreeSet<NodeId>, clicked: &NodeId, conte
             continue;
         }
         match context.identities.get(id) {
-            Some(HierarchyIdentity::Group(group)) => actions.push(BrowserAction::DeleteGroup(group.clone())),
-            Some(HierarchyIdentity::Folder { group, path }) => {
+            Some(PickerNodeIdentity::Group(group)) => actions.push(BrowserAction::DeleteGroup(group.clone())),
+            Some(PickerNodeIdentity::Folder { group, path }) => {
                 actions.push(BrowserAction::DeleteNestedGroup { group: group.clone(), group_path: path.clone() })
             }
-            Some(HierarchyIdentity::Item { group, key }) => {
+            Some(PickerNodeIdentity::Item { group, key }) => {
                 actions.push(BrowserAction::DeleteItem { group: group.clone(), group_path: Vec::new(), key: key.clone() })
             }
-            Some(HierarchyIdentity::FolderItem { group, path, key }) => {
+            Some(PickerNodeIdentity::FolderItem { group, path, key }) => {
                 actions.push(BrowserAction::DeleteItem { group: group.clone(), group_path: path.clone(), key: key.clone() });
             }
             None => {}
@@ -1184,7 +920,7 @@ fn replace_selected_delete_actions(
     start: usize,
     state: &PresetUi,
     panel: &str,
-    clicked: &NodeId,
+    clicked: &PickerId,
     context: &BrowserDeleteContext<'_>,
 ) {
     if !events.get(start..).is_some_and(|new_events| {
@@ -1204,18 +940,18 @@ fn replace_selected_delete_actions(
 #[cfg(test)]
 mod selected_delete_tests {
     use super::{
-        BrowserAction, BrowserDeleteContext, HierarchyIdentity, full_hierarchy_selection_order, replace_selected_delete_actions, selected_delete_actions,
+        BrowserAction, BrowserDeleteContext, PickerNodeIdentity, full_hierarchy_selection_order, replace_selected_delete_actions, selected_delete_actions,
     };
-    use crate::pickers::picker_browser_model::{HierarchyNode as HNode, NodeId, PickerBrowserHierarchy};
+    use crate::pickers::picker_browser_model::{HierarchyNode as HNode, PickerBrowserHierarchy, PickerId};
     use crate::pickers::picker_state::PresetUi;
     use std::collections::{BTreeMap, BTreeSet};
 
-    fn fixture() -> (PickerBrowserHierarchy, BTreeMap<NodeId, HierarchyIdentity>, Vec<NodeId>) {
-        let a = NodeId::group("A");
-        let a_card = NodeId::item("A", "a1");
-        let b = NodeId::group("B");
-        let b_card = NodeId::item("B", "b1");
-        let c = NodeId::group("C");
+    fn fixture() -> (PickerBrowserHierarchy, BTreeMap<PickerId, PickerNodeIdentity>, Vec<PickerId>) {
+        let a = PickerId::group("A");
+        let a_card = PickerId::item("A", "a1");
+        let b = PickerId::group("B");
+        let b_card = PickerId::item("B", "b1");
+        let c = PickerId::group("C");
         let hierarchy = PickerBrowserHierarchy::new(vec![
             HNode::group(a.clone(), vec![HNode::item(a_card.clone())]),
             HNode::group(b.clone(), vec![HNode::item(b_card.clone())]),
@@ -1223,11 +959,11 @@ mod selected_delete_tests {
         ])
         .unwrap();
         let identities = BTreeMap::from([
-            (a.clone(), HierarchyIdentity::Group("A".into())),
-            (a_card.clone(), HierarchyIdentity::Item { group: "A".into(), key: "a1".into() }),
-            (b.clone(), HierarchyIdentity::Group("B".into())),
-            (b_card.clone(), HierarchyIdentity::Item { group: "B".into(), key: "b1".into() }),
-            (c.clone(), HierarchyIdentity::Group("C".into())),
+            (a.clone(), PickerNodeIdentity::Group("A".into())),
+            (a_card.clone(), PickerNodeIdentity::Item { group: "A".into(), key: "a1".into() }),
+            (b.clone(), PickerNodeIdentity::Group("B".into())),
+            (b_card.clone(), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
+            (c.clone(), PickerNodeIdentity::Group("C".into())),
         ]);
         let order = full_hierarchy_selection_order(&hierarchy);
         (hierarchy, identities, order)
@@ -1236,9 +972,9 @@ mod selected_delete_tests {
     #[test]
     fn mixed_selection_deletes_groups_and_cards_in_visual_order() {
         let (hierarchy, identities, visible) = fixture();
-        let selected = BTreeSet::from([NodeId::group("A"), NodeId::item("B", "b1"), NodeId::group("C")]);
+        let selected = BTreeSet::from([PickerId::group("A"), PickerId::item("B", "b1"), PickerId::group("C")]);
         let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
-        let actions = selected_delete_actions(&selected, &NodeId::group("A"), &context);
+        let actions = selected_delete_actions(&selected, &PickerId::group("A"), &context);
         assert!(matches!(actions.as_deref(), Some([
             BrowserAction::DeleteGroup(a),
             BrowserAction::DeleteItem { group, key, .. },
@@ -1249,31 +985,34 @@ mod selected_delete_tests {
     #[test]
     fn selected_group_subsumes_its_selected_descendant_and_unselected_click_falls_back() {
         let (hierarchy, identities, visible) = fixture();
-        let selected = BTreeSet::from([NodeId::group("A"), NodeId::item("A", "a1")]);
+        let selected = BTreeSet::from([PickerId::group("A"), PickerId::item("A", "a1")]);
         let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
-        let actions = selected_delete_actions(&selected, &NodeId::item("A", "a1"), &context);
+        let actions = selected_delete_actions(&selected, &PickerId::item("A", "a1"), &context);
         assert!(matches!(actions.as_deref(), Some([BrowserAction::DeleteGroup(group)]) if group == "A"));
-        assert!(selected_delete_actions(&selected, &NodeId::group("B"), &context).is_none());
+        assert!(selected_delete_actions(&selected, &PickerId::group("B"), &context).is_none());
     }
 
     #[test]
     fn nested_folder_deletion_subsumes_selected_nested_folders_and_folder_items() {
-        let root = NodeId::group("A");
-        let folder = NodeId::group_path(["A"], "Folder");
-        let nested = NodeId::group_path(["A", "Folder"], "Nested");
-        let folder_item = NodeId::item_in_path(["A", "Folder", "Nested"], "nested-card");
-        let root_item = NodeId::item("A", "root-card");
+        let root = PickerId::group("A");
+        let folder = PickerId::group_path(["A"], "Folder");
+        let nested = PickerId::group_path(["A", "Folder"], "Nested");
+        let folder_item = PickerId::item_in_path(["A", "Folder", "Nested"], "nested-card");
+        let root_item = PickerId::item("A", "root-card");
         let hierarchy = PickerBrowserHierarchy::new(vec![HNode::group(
             root.clone(),
             vec![HNode::group(folder.clone(), vec![HNode::group(nested.clone(), vec![HNode::item(folder_item.clone())])]), HNode::item(root_item.clone())],
         )])
         .unwrap();
         let identities = BTreeMap::from([
-            (root.clone(), HierarchyIdentity::Group("A".into())),
-            (folder.clone(), HierarchyIdentity::Folder { group: "A".into(), path: vec!["Folder".into()] }),
-            (nested.clone(), HierarchyIdentity::Folder { group: "A".into(), path: vec!["Folder".into(), "Nested".into()] }),
-            (folder_item.clone(), HierarchyIdentity::FolderItem { group: "A".into(), path: vec!["Folder".into(), "Nested".into()], key: "nested-card".into() }),
-            (root_item.clone(), HierarchyIdentity::Item { group: "A".into(), key: "root-card".into() }),
+            (root.clone(), PickerNodeIdentity::Group("A".into())),
+            (folder.clone(), PickerNodeIdentity::Folder { group: "A".into(), path: vec!["Folder".into()] }),
+            (nested.clone(), PickerNodeIdentity::Folder { group: "A".into(), path: vec!["Folder".into(), "Nested".into()] }),
+            (
+                folder_item.clone(),
+                PickerNodeIdentity::FolderItem { group: "A".into(), path: vec!["Folder".into(), "Nested".into()], key: "nested-card".into() },
+            ),
+            (root_item.clone(), PickerNodeIdentity::Item { group: "A".into(), key: "root-card".into() }),
         ]);
         let visible = vec![root, folder.clone(), nested.clone(), folder_item.clone(), root_item.clone()];
 
@@ -1297,15 +1036,15 @@ mod selected_delete_tests {
 
     #[test]
     fn nested_domain_groups_subsume_selected_child_groups_and_cards() {
-        let root = NodeId::group("A");
-        let child = NodeId::group("B");
-        let card = NodeId::item("B", "b1");
+        let root = PickerId::group("A");
+        let child = PickerId::group("B");
+        let card = PickerId::item("B", "b1");
         let hierarchy =
             PickerBrowserHierarchy::new(vec![HNode::group(root.clone(), vec![HNode::group(child.clone(), vec![HNode::item(card.clone())])])]).unwrap();
         let identities = BTreeMap::from([
-            (root.clone(), HierarchyIdentity::Group("A".into())),
-            (child.clone(), HierarchyIdentity::Group("B".into())),
-            (card.clone(), HierarchyIdentity::Item { group: "B".into(), key: "b1".into() }),
+            (root.clone(), PickerNodeIdentity::Group("A".into())),
+            (child.clone(), PickerNodeIdentity::Group("B".into())),
+            (card.clone(), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
         ]);
         let visible = vec![root.clone(), child.clone(), card.clone()];
         let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
@@ -1318,13 +1057,13 @@ mod selected_delete_tests {
     #[test]
     fn group_context_menu_delete_expands_to_the_mixed_selection() {
         let (hierarchy, identities, visible) = fixture();
-        let selected = BTreeSet::from([NodeId::group("A"), NodeId::item("B", "b1")]);
+        let selected = BTreeSet::from([PickerId::group("A"), PickerId::item("B", "b1")]);
         let mut state = PresetUi::default();
         state.browser_selection.insert("panel".into(), selected);
         let mut events = vec![BrowserAction::DeleteGroup("A".into())];
 
         let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
-        replace_selected_delete_actions(&mut events, 0, &state, "panel", &NodeId::group("A"), &context);
+        replace_selected_delete_actions(&mut events, 0, &state, "panel", &PickerId::group("A"), &context);
 
         assert!(
             matches!(events.as_slice(), [BrowserAction::DeleteGroup(group), BrowserAction::DeleteItem { group: item_group, key, .. }] if group == "A" && item_group == "B" && key == "b1")
@@ -1334,8 +1073,8 @@ mod selected_delete_tests {
     #[test]
     fn card_context_menu_delete_expands_to_the_mixed_selection() {
         let (hierarchy, identities, visible) = fixture();
-        let clicked = NodeId::item("B", "b1");
-        let selected = BTreeSet::from([NodeId::group("A"), clicked.clone()]);
+        let clicked = PickerId::item("B", "b1");
+        let selected = BTreeSet::from([PickerId::group("A"), clicked.clone()]);
         let mut state = PresetUi::default();
         state.browser_selection.insert("panel".into(), selected);
         let mut events = vec![BrowserAction::DeleteItem { group: "B".into(), group_path: Vec::new(), key: "b1".into() }];
@@ -1352,16 +1091,16 @@ mod selected_delete_tests {
     fn unselected_context_menu_target_keeps_its_original_delete_action() {
         let (hierarchy, identities, visible) = fixture();
         let mut state = PresetUi::default();
-        state.browser_selection.insert("panel".into(), BTreeSet::from([NodeId::group("A")]));
+        state.browser_selection.insert("panel".into(), BTreeSet::from([PickerId::group("A")]));
         let original = BrowserAction::DeleteGroup("B".into());
         let mut events = vec![original.clone()];
 
         let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
-        replace_selected_delete_actions(&mut events, 0, &state, "panel", &NodeId::group("B"), &context);
+        replace_selected_delete_actions(&mut events, 0, &state, "panel", &PickerId::group("B"), &context);
 
         assert!(matches!(events.as_slice(), [BrowserAction::DeleteGroup(group)] if group == "B"));
 
-        let clicked_card = NodeId::item("B", "b1");
+        let clicked_card = PickerId::item("B", "b1");
         let mut events = vec![BrowserAction::DeleteItem { group: "B".into(), group_path: Vec::new(), key: "b1".into() }];
         replace_selected_delete_actions(&mut events, 0, &state, "panel", &clicked_card, &context);
         assert!(matches!(events.as_slice(), [BrowserAction::DeleteItem { group, key, .. }] if group == "B" && key == "b1"));
@@ -1463,7 +1202,7 @@ fn canvas_drop_target(pointer: Pos2, item: Rect, canvas: Rect, browser: Rect) ->
 #[cfg(test)]
 mod display_layout_tests {
     use super::{canvas_drop_target, item_grid_position, list_layout_geometry};
-    use crate::pickers::picker_browser_model::NodeId;
+    use crate::pickers::picker_browser_model::PickerId;
     use crate::pickers::picker_state::{PickerDisplayMode, PresetUi};
 
     #[test]
@@ -1505,7 +1244,7 @@ mod display_layout_tests {
         assert_eq!(item_grid_position(3, rows, cols, true), (1.0, 1.0));
         assert_eq!(item_grid_position(4, rows, cols, true), (2.0, 0.0));
 
-        let visible = (0..5).map(|index| NodeId::item("group", index.to_string())).collect::<Vec<_>>();
+        let visible = (0..5).map(|index| PickerId::item("group", index.to_string())).collect::<Vec<_>>();
         let mut state = PresetUi::default();
         state.select_browser_node("panel", visible[1].clone(), false);
         state.select_browser_range("panel", &visible, &visible[2]);
@@ -1548,8 +1287,21 @@ pub(crate) fn browser_with_root_sequence(
 ) -> Vec<BrowserAction> {
     let t = Tokens::get(ui.ctx());
     let panel = adapter.panel;
+    let picker_registry_id = ui.id().with(("shared-picker-id-registry", panel));
+    #[cfg(test)]
+    let picker_scope = 0;
+    #[cfg(not(test))]
+    let picker_scope = picker_registry_id.value();
+    let mut picker_ids =
+        ui.ctx().data(|data| data.get_temp::<PickerIdRegistry>(picker_registry_id)).unwrap_or_else(|| PickerIdRegistry::with_scope(picker_scope));
     let query = st.search.get(panel).map(|query| query.trim().to_lowercase()).unwrap_or_default();
     let groups = adapter.groups;
+    #[cfg(test)]
+    let fallback_projection_keys = test_projection_keys(groups);
+    #[cfg(test)]
+    let projection_keys = adapter.projection_keys.unwrap_or(&fallback_projection_keys);
+    #[cfg(not(test))]
+    let Some(projection_keys) = adapter.projection_keys else { return Vec::new() };
     let BrowserOptions { canvas, flush, center_grid, all_groups_open, compact_context_menus, domain_hierarchy_actions, root_item_group } = adapter.options;
     // Kept in the options shape for existing consumers; spacing/borders are now consistent.
     let _legacy_flush_layout = flush;
@@ -1561,6 +1313,7 @@ pub(crate) fn browser_with_root_sequence(
     let group_context_menu = adapter.group_context_menu;
     let nested_group_context_menu = adapter.nested_group_context_menu;
     let canonical_hierarchy_move = &mut adapter.canonical_hierarchy_move;
+    let rekey_hierarchy_after_move = &mut adapter.rekey_hierarchy_after_move;
     let hierarchy_item_move = &mut adapter.hierarchy_item_move;
     let paint_group = &mut adapter.paint_group;
     let paint_item = &mut adapter.paint_item;
@@ -1664,8 +1417,8 @@ pub(crate) fn browser_with_root_sequence(
     let mut indent_drop_targets: Vec<(String, egui::Response)> = Vec::new();
     let mut indent_release: Option<(String, String)> = None;
     let mut group_content_areas: Vec<(String, Rect)> = Vec::new();
-    let mut gap_headers: Vec<(NodeId, Rect, usize, bool)> = Vec::new();
-    let canonical_node_bounds = std::cell::RefCell::new(std::collections::BTreeMap::<NodeId, Rect>::new());
+    let mut gap_headers: Vec<(PickerId, Rect, usize, bool)> = Vec::new();
+    let canonical_node_bounds = std::cell::RefCell::new(std::collections::BTreeMap::<PickerId, Rect>::new());
     let mut expanded_groups = BTreeSet::new();
     let mut dropped: Option<(String, Pos2)> = None;
     let mut browser_item_drop = false;
@@ -1719,7 +1472,9 @@ pub(crate) fn browser_with_root_sequence(
         hierarchy_orders.insert(group.name.clone(), entries);
     }
     hierarchy_orders.insert("".into(), root_entries);
-    let Some((render_segments, mut hierarchy, hierarchy_identities)) = build_hierarchy_projection(groups, &display, &parents, &hierarchy_orders) else {
+    let Some((render_segments, mut hierarchy, hierarchy_identities)) =
+        build_hierarchy_projection(groups, &display, &parents, &hierarchy_orders, projection_keys, &mut picker_ids)
+    else {
         return ev;
     };
     let mut selected_items = Vec::new();
@@ -1765,7 +1520,7 @@ pub(crate) fn browser_with_root_sequence(
                 continue;
             }
             let open = !query.is_empty() || group_open(st, panel, segment.group_index, &group.name, all_groups_open);
-            visible_selection_order.push(NodeId::group(&group.name));
+            visible_selection_order.push(picker_group_id(&mut picker_ids, segment.group_index, projection_keys));
             if !open {
                 selection_hidden_groups.insert(group.name.clone());
             }
@@ -1782,11 +1537,7 @@ pub(crate) fn browser_with_root_sequence(
             !st.toggled.contains(&format!("{panel}/{}/{}", escape_hierarchy_key_part(&group.name), path))
         };
         if segment.show_folder_header {
-            let name = segment.folder_path.last().cloned().unwrap_or_default();
-            visible_selection_order.push(NodeId::group_path(
-                std::iter::once(group.name.clone()).chain(segment.folder_path.iter().take(segment.folder_path.len().saturating_sub(1)).cloned()),
-                name,
-            ));
+            visible_selection_order.push(picker_folder_id(&mut picker_ids, segment.group_index, projection_keys, &segment.folder_path));
             if !folder_open {
                 selection_hidden_folders.insert((group.name.clone(), segment.folder_path.clone()));
             }
@@ -1907,16 +1658,16 @@ pub(crate) fn browser_with_root_sequence(
                 } else if capabilities.group_drag && hresp.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-                gap_headers.push((NodeId::group(&g.name), header_rect, depth, open));
-                canonical_node_bounds.borrow_mut().insert(NodeId::group(&g.name), header_rect);
+                gap_headers.push((picker_group_id(&mut picker_ids, gi, projection_keys), header_rect, depth, open));
+                canonical_node_bounds.borrow_mut().insert(picker_group_id(&mut picker_ids, gi, projection_keys), header_rect);
                 let header_released = if canonical_hierarchy_drag {
                     if capabilities.group_drag {
-                        let source_id = NodeId::group(&g.name);
+                        let source_id = picker_group_id(&mut picker_ids, gi, projection_keys);
                         let selection = selected_drag_nodes(st, panel, &visible_selection_order, &source_id, &hierarchy);
-                        asset_browser_header_drag_source_with_id(&hresp, panel, source_id, &selection);
+                        asset_browser_header_drag_source_with_id(&hresp, panel, source_id, &g.name, &selection);
                     }
                     let hit_index = canonical_drop_hits.borrow().len();
-                    for hit in group_header_drop_hits(header_rect, NodeId::group(&g.name), depth, hit_index, open) {
+                    for hit in group_header_drop_hits(header_rect, picker_group_id(&mut picker_ids, gi, projection_keys), depth, hit_index, open) {
                         canonical_drop_hits.borrow_mut().push((hit, hresp.clone()));
                     }
                     None
@@ -1940,7 +1691,7 @@ pub(crate) fn browser_with_root_sequence(
                 if hresp.clicked() && !disclosure.clicked() {
                     let modifiers = ui.input(|input| input.modifiers);
                     if capabilities.selection {
-                        let id = NodeId::group(&g.name);
+                        let id = picker_group_id(&mut picker_ids, gi, projection_keys);
                         if modifiers.shift {
                             st.select_browser_range(panel, &visible_selection_order, &id);
                         } else {
@@ -1954,7 +1705,7 @@ pub(crate) fn browser_with_root_sequence(
                         st.toggled.insert(k);
                     }
                 }
-                if st.browser_node_selected(panel, &NodeId::group(&g.name)) {
+                if st.browser_node_selected(panel, &picker_group_id(&mut picker_ids, gi, projection_keys)) {
                     ui.painter().rect_filled(header_rect, egui::CornerRadius::ZERO, t.row_selected.gamma_multiply(0.35));
                 }
                 if let Some(menu) = group_context_menu {
@@ -1967,7 +1718,7 @@ pub(crate) fn browser_with_root_sequence(
                                 start,
                                 st,
                                 panel,
-                                &NodeId::group(&g.name),
+                                &picker_group_id(&mut picker_ids, gi, projection_keys),
                                 &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
                             );
                         });
@@ -1980,7 +1731,7 @@ pub(crate) fn browser_with_root_sequence(
                                 start,
                                 st,
                                 panel,
-                                &NodeId::group(&g.name),
+                                &picker_group_id(&mut picker_ids, gi, projection_keys),
                                 &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
                             );
                         });
@@ -2019,7 +1770,7 @@ pub(crate) fn browser_with_root_sequence(
                     && let Some(gr) = browser_drag_ghost_rect(
                         ui,
                         panel,
-                        BrowserDragGhostSource::Group(NodeId::group(&g.name)),
+                        BrowserDragGhostSource::Group(picker_group_id(&mut picker_ids, gi, projection_keys)),
                         hresp.dragged(),
                         hr,
                         browser_bounds,
@@ -2035,7 +1786,7 @@ pub(crate) fn browser_with_root_sequence(
                     released = Some((gi, p));
                 }
                 if capabilities.group_drag && capabilities.selection && hresp.drag_stopped() {
-                    let id = NodeId::group(&g.name);
+                    let id = picker_group_id(&mut picker_ids, gi, projection_keys);
                     if !st.browser_node_selected(panel, &id) {
                         st.select_browser_node(panel, id, false);
                     }
@@ -2101,10 +1852,7 @@ pub(crate) fn browser_with_root_sequence(
                                 Some(group.count),
                             );
                             let name = group.path.last().map(String::as_str).unwrap_or("");
-                            let node_id = NodeId::group_path(
-                                std::iter::once(g.name.clone()).chain(group.path.iter().take(group.path.len().saturating_sub(1)).cloned()),
-                                name.to_owned(),
-                            );
+                            let Some(node_id) = folder_node_for_identity(&g.name, &group.path, &hierarchy_identities) else { return };
                             if capabilities.group_drag
                                 && let Some(ghost_rect) = browser_drag_ghost_rect(
                                     ui,
@@ -2138,7 +1886,7 @@ pub(crate) fn browser_with_root_sequence(
                             if canonical_hierarchy_drag {
                                 if capabilities.group_drag {
                                     let selection = selected_drag_nodes(&st_cell.borrow(), panel, &visible_selection_order, &node_id, &hierarchy);
-                                    asset_browser_header_drag_source_with_id(&fresp, panel, node_id.clone(), &selection);
+                                    asset_browser_header_drag_source_with_id(&fresp, panel, node_id.clone(), name, &selection);
                                 }
                                 let hit_index = canonical_drop_hits.borrow().len();
                                 for hit in group_header_drop_hits(inset_row_rect(fr, row_depth), node_id.clone(), row_depth, hit_index, group_open) {
@@ -2421,10 +2169,10 @@ pub(crate) fn browser_with_root_sequence(
                                     if root_level_items {
                                         let source_identity = node_id.as_ref().and_then(|id| hierarchy_identities.get(id)).cloned().or_else(|| {
                                             item_occurrence_position(groups, &key).and_then(|(source_group_index, _)| {
-                                                groups.get(source_group_index).map(|source_group| HierarchyIdentity::Item { group: source_group.name.clone(), key: key.clone() })
+                                                groups.get(source_group_index).map(|source_group| PickerNodeIdentity::Item { group: source_group.name.clone(), key: key.clone() })
                                             })
                                         });
-                                        if let Some(HierarchyIdentity::Item { group: source_group, key: source_key }) = source_identity {
+                                        if let Some(PickerNodeIdentity::Item { group: source_group, key: source_key }) = source_identity {
                                             let source_entry = HierarchyOrderEntry::RootItem { group: source_group.clone(), key: source_key.clone() };
                                             let target_entry = HierarchyOrderEntry::RootItem { group: item_group.name.clone(), key: it.key.clone() };
                                             let entries = hierarchy_orders.get("").cloned().unwrap_or_default();
@@ -2518,14 +2266,16 @@ pub(crate) fn browser_with_root_sequence(
                                             let start = ev_cell.borrow().len();
                                             let mut state = st_cell.borrow_mut();
                                             menu(ui, &mut state, args, &mut ev_cell.borrow_mut());
-                                            replace_selected_delete_actions(
-                                                &mut ev_cell.borrow_mut(),
-                                                start,
-                                                &state,
-                                                panel,
-                                                node_id.as_ref().unwrap_or(&NodeId::item(&item_group.name, &it.key)),
-                                                &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                                            );
+                                            if let Some(node_id) = node_id.as_ref() {
+                                                replace_selected_delete_actions(
+                                                    &mut ev_cell.borrow_mut(),
+                                                    start,
+                                                    &state,
+                                                    panel,
+                                                    node_id,
+                                                    &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
+                                                );
+                                            }
                                         });
                                     } else {
                                         let args = ItemContextMenuArgs { panel, item: it, group: item_group, group_names: &group_names, selected_items: &selected_items };
@@ -2533,14 +2283,16 @@ pub(crate) fn browser_with_root_sequence(
                                             let start = ev_cell.borrow().len();
                                             let mut state = st_cell.borrow_mut();
                                             menu(ui, &mut state, args, &mut ev_cell.borrow_mut());
-                                            replace_selected_delete_actions(
-                                                &mut ev_cell.borrow_mut(),
-                                                start,
-                                                &state,
-                                                panel,
-                                                node_id.as_ref().unwrap_or(&NodeId::item(&item_group.name, &it.key)),
-                                                &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                                            );
+                                            if let Some(node_id) = node_id.as_ref() {
+                                                replace_selected_delete_actions(
+                                                    &mut ev_cell.borrow_mut(),
+                                                    start,
+                                                    &state,
+                                                    panel,
+                                                    node_id,
+                                                    &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
+                                                );
+                                            }
                                         });
                                     }
                                 }
@@ -2651,7 +2403,7 @@ pub(crate) fn browser_with_root_sequence(
             // Each expanded group owns a drop area spanning its full header width. Its vertical
             // span covers the group's complete visible subtree and ends before the next sibling.
             if capabilities.group_drag {
-                for (_, header, group_name) in &headers {
+                for (group_index, header, group_name) in &headers {
                     if !expanded_groups.contains(group_name) {
                         continue;
                     }
@@ -2683,7 +2435,7 @@ pub(crate) fn browser_with_root_sequence(
                                     groups.get(*index).is_some_and(|group| group.name == *group_name).then_some(*depth)
                                 }).unwrap_or(0);
                                 let hit_index = canonical_drop_hits.borrow().len();
-                                let hit = group_append_hit(column, append_indicator, NodeId::group(group_name), depth, hit_index);
+                                let hit = group_append_hit(column, append_indicator, picker_group_id(&mut picker_ids, *group_index, projection_keys), depth, hit_index);
                                 canonical_drop_hits.borrow_mut().push((hit, response.clone()));
                             }
                             indent_drop_targets.push((group_name.clone(), response));
@@ -2817,7 +2569,7 @@ pub(crate) fn browser_with_root_sequence(
                 // inside arbitrarily nested parent groups. Offer a split boundary after the
                 // complete preceding group subtree: append into that group, or insert after
                 // the group while remaining in its parent container.
-                fn collect_group_item_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(NodeId, NodeId)>) {
+                fn collect_group_item_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(PickerId, PickerId)>) {
                     for pair in nodes.windows(2) {
                         if matches!(pair, [HierarchyNode::Group { .. }, HierarchyNode::Item(_)]) {
                             out.push((pair[0].id().clone(), pair[1].id().clone()));
@@ -2839,7 +2591,7 @@ pub(crate) fn browser_with_root_sequence(
                         continue;
                     };
                     let mut subtree_nodes = Vec::new();
-                    fn collect_group_nodes(node: &HierarchyNode, out: &mut Vec<NodeId>) {
+                    fn collect_group_nodes(node: &HierarchyNode, out: &mut Vec<PickerId>) {
                         out.push(node.id().clone());
                         for child in node.children() {
                             collect_group_nodes(child, out);
@@ -2849,7 +2601,7 @@ pub(crate) fn browser_with_root_sequence(
                         continue;
                     };
                     collect_group_nodes(group_node, &mut subtree_nodes);
-                    let subtree_bounds: Vec<(NodeId, Rect)> = subtree_nodes
+                    let subtree_bounds: Vec<(PickerId, Rect)> = subtree_nodes
                         .iter()
                         .filter_map(|id| canonical_node_bounds.borrow().get(id).copied().map(|rect| (id.clone(), rect)))
                         .collect();
@@ -2902,7 +2654,7 @@ pub(crate) fn browser_with_root_sequence(
                 // group. Header-only gap pairing above cannot see that boundary when there is
                 // no earlier group header, so register the same two-sided group boundary from
                 // the actual hierarchy sibling sequence.
-                fn collect_item_group_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(NodeId, NodeId)>) {
+                fn collect_item_group_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(PickerId, PickerId)>) {
                     for pair in nodes.windows(2) {
                         if matches!(pair, [HierarchyNode::Item(_), HierarchyNode::Group { .. }]) {
                             out.push((pair[0].id().clone(), pair[1].id().clone()));
@@ -3166,7 +2918,7 @@ pub(crate) fn browser_with_root_sequence(
             canonical_drop_hits.borrow_mut().push((root_prepend_hit(hit_rect, indicator, first.id().clone(), usize::MAX), response));
         }
     }
-    let mut hierarchy_drop_feedback = None;
+    let mut hierarchy_drop_feedback = st.browser_feedback.get(panel).cloned();
     if canonical_hierarchy_drag && let Some(pointer) = ui.ctx().pointer_interact_pos() {
         // Geometric arbitration must respect the ScrollArea viewport. Otherwise a hit region
         // clipped out of view can still win when its un-clipped rectangle overlaps another
@@ -3223,13 +2975,22 @@ pub(crate) fn browser_with_root_sequence(
                             };
                             let result = session.commit_with(|intent| {
                                 if let Some(commit) = canonical_hierarchy_move.as_deref_mut() {
-                                    return commit(intent);
+                                    let mut moved = hierarchy.clone();
+                                    let moved_ok =
+                                        moved.resolve_move(&intent.source, &intent.position).and_then(|resolved| moved.apply_resolved_move(resolved)).is_ok();
+                                    let result = commit(intent, &hierarchy_identities);
+                                    if result.is_ok()
+                                        && moved_ok
+                                        && let Some(rekey) = rekey_hierarchy_after_move.as_deref_mut()
+                                    {
+                                        rekey(&moved, &hierarchy_identities, &mut picker_ids);
+                                    }
+                                    return result;
                                 }
                                 let sources = if intent.selection.is_empty() { vec![intent.source.clone()] } else { intent.selection.clone() };
                                 let hierarchy_sources = hierarchy_move_sources(&sources, &intent.position);
-                                let legacy_persistable = hierarchy_identities
-                                    .values()
-                                    .all(|identity| matches!(identity, HierarchyIdentity::Item { .. } | HierarchyIdentity::Group(_)));
+                                let legacy_persistable =
+                                    hierarchy_identities.values().all(|identity| matches!(identity.role(), PickerNodeRole::Card | PickerNodeRole::AssetGroup));
                                 if !legacy_persistable {
                                     return Err("This asset adapter does not support path-aware hierarchy moves.".to_owned());
                                 }
@@ -3248,7 +3009,7 @@ pub(crate) fn browser_with_root_sequence(
                             });
                             if matches!(result, DropCommitResult::Committed) {
                                 if moved_sources.contains(&source) {
-                                    if let Some(HierarchyIdentity::Item { key, .. } | HierarchyIdentity::FolderItem { key, .. }) =
+                                    if let Some(PickerNodeIdentity::Item { key, .. } | PickerNodeIdentity::FolderItem { key, .. }) =
                                         hierarchy_identities.get(&source)
                                         && let Some((group, path)) =
                                             hierarchy_drop_item_destination(&source, &candidate.position, &hierarchy, &hierarchy_identities)
@@ -3257,7 +3018,9 @@ pub(crate) fn browser_with_root_sequence(
                                     }
                                 }
                                 if selection.is_empty()
-                                    && matches!(hierarchy_identities.get(&source), Some(HierarchyIdentity::Group(_) | HierarchyIdentity::Folder { .. }))
+                                    && hierarchy_identities
+                                        .get(&source)
+                                        .is_some_and(|identity| matches!(identity.role(), PickerNodeRole::AssetGroup | PickerNodeRole::StructuralFolder))
                                 {
                                     st.select_browser_node(panel, source.clone(), false);
                                 }
@@ -3265,7 +3028,7 @@ pub(crate) fn browser_with_root_sequence(
                             hierarchy_drop_feedback = match result {
                                 DropCommitResult::Committed | DropCommitResult::NoCandidate => None,
                                 DropCommitResult::Rejected(reason) => Some(format!("Move rejected: {reason:?}")),
-                                DropCommitResult::Failed(error) => Some(error),
+                                DropCommitResult::Failed(error) => Some(format!("Move rejected: {error:?}")),
                             };
                         } else {
                             hierarchy_drop_feedback = Some("Move rejected: the dragged source changed before release.".to_owned());
@@ -3275,8 +3038,11 @@ pub(crate) fn browser_with_root_sequence(
             }
         }
     }
-    if let Some(message) = hierarchy_drop_feedback {
+    if let Some(message) = hierarchy_drop_feedback.as_ref() {
+        st.browser_feedback.insert(panel.to_owned(), message.clone());
         ui.colored_label(ui.visuals().error_fg_color, message);
+    } else {
+        st.browser_feedback.remove(panel);
     }
     // A nested group header is a distinct target family from the root-group rows. If the pointer
     // is over one, the root resolver must not reinterpret that same release as a root reorder.
@@ -3352,6 +3118,7 @@ pub(crate) fn browser_with_root_sequence(
     if let Some((key, pos)) = dropped.filter(|_| !browser_item_drop) {
         ev.push(BrowserAction::Drop(key, pos));
     }
+    ui.ctx().data_mut(|data| data.insert_temp(picker_registry_id, picker_ids));
     ev
 }
 
@@ -3406,7 +3173,7 @@ mod filter_tests {
     use super::{
         BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, HIT_DEBUG_LABEL_HEIGHT, HierarchyOrderEntry, ItemPaintState, ItemView,
         best_drop_target_index, best_indent_drop_target_index, browser, filter_groups, group_render_segments, hit_debug_label_position,
-        item_hierarchy_insertion_anchor, item_occurrence_position,
+        item_hierarchy_insertion_anchor, item_occurrence_position, test_projection_keys,
     };
     use crate::pickers::picker_state::PresetUi;
     use egui_kittest::kittest::Queryable;
@@ -3581,8 +3348,8 @@ mod filter_tests {
         let gap = egui::Rect::from_min_max(egui::pos2(10.0, 100.0), egui::pos2(210.0, 106.0));
         let hits = crate::pickers::asset_browser_interaction::group_gap_drop_hits(crate::pickers::asset_browser_interaction::GroupGapDropSpec {
             rect: gap,
-            upper: crate::pickers::picker_browser_model::NodeId::from("upper"),
-            lower: crate::pickers::picker_browser_model::NodeId::from("lower"),
+            upper: crate::pickers::picker_browser_model::PickerId::from("upper"),
+            lower: crate::pickers::picker_browser_model::PickerId::from("lower"),
             upper_bounds: egui::Rect::from_min_max(egui::pos2(20.0, 60.0), egui::pos2(120.0, 90.0)),
             lower_bounds: egui::Rect::from_min_max(egui::pos2(20.0, 106.0), egui::pos2(210.0, 135.0)),
             upper_depth: 0,
@@ -3611,7 +3378,7 @@ mod filter_tests {
         );
     }
 
-    fn segment_summary(segments: &[super::GroupRenderSegment], groups: &[GroupView]) -> Vec<(String, bool, Vec<String>)> {
+    fn segment_summary(segments: &[crate::pickers::picker_browser_projection::GroupRenderSegment], groups: &[GroupView]) -> Vec<(String, bool, Vec<String>)> {
         segments
             .iter()
             .map(|segment| {
@@ -3697,8 +3464,8 @@ mod filter_tests {
     #[test]
     fn typed_root_items_distinguish_duplicate_keys_from_different_groups() {
         use super::build_hierarchy_projection;
-        use crate::pickers::picker_browser_hierarchy::HierarchyIdentity;
-        use crate::pickers::picker_browser_model::HierarchyNode;
+        use crate::pickers::picker_browser_identity::PickerNodeIdentity;
+        use crate::pickers::picker_browser_model::{HierarchyNode, PickerIdRegistry};
 
         let groups = vec![group("First", vec![item("same", "Same", &[])]), group("Second", vec![item("same", "Same", &[])])];
         let display = [(0, 0), (1, 0)];
@@ -3714,12 +3481,57 @@ mod filter_tests {
             ("Second".into(), vec![HierarchyOrderEntry::Item("same".into())]),
         ]
         .into();
-        let (_, hierarchy, identities) = build_hierarchy_projection(&groups, &display, &Default::default(), &orders).unwrap();
+        let (_, hierarchy, identities) =
+            build_hierarchy_projection(&groups, &display, &Default::default(), &orders, &test_projection_keys(&groups), &mut PickerIdRegistry::default())
+                .unwrap();
         let root_items: Vec<_> = hierarchy.roots().iter().filter(|node| matches!(node, HierarchyNode::Item(_))).collect();
         assert_eq!(root_items.len(), 2);
-        assert_eq!(identities[root_items[0].id()], HierarchyIdentity::Item { group: "First".into(), key: "same".into() });
-        assert_eq!(identities[root_items[1].id()], HierarchyIdentity::Item { group: "Second".into(), key: "same".into() });
+        assert_eq!(identities[root_items[0].id()], PickerNodeIdentity::Item { group: "First".into(), key: "same".into() });
+        assert_eq!(identities[root_items[1].id()], PickerNodeIdentity::Item { group: "Second".into(), key: "same".into() });
         assert!(hierarchy.roots().iter().all(|node| !node.is_group() || node.children().is_empty()));
+    }
+
+    #[test]
+    fn projection_keeps_group_folder_and_card_ids_stable_when_sibling_order_changes() {
+        use super::build_hierarchy_projection;
+        use crate::pickers::picker_browser_identity::PickerNodeIdentity;
+        use crate::pickers::picker_browser_model::{PickerId, PickerIdRegistry};
+
+        let groups = vec![
+            group("A", vec![item("a-root", "A root", &[]), item("a-nested", "A nested", &["Folder", "Inner"])]),
+            group("B", vec![item("b-card", "B card", &[])]),
+        ];
+        let first_orders = std::collections::BTreeMap::from([
+            ("".into(), vec![HierarchyOrderEntry::Group("A".into()), HierarchyOrderEntry::Group("B".into())]),
+            ("A".into(), vec![HierarchyOrderEntry::Item("a-root".into()), HierarchyOrderEntry::Item("a-nested".into())]),
+            ("B".into(), vec![HierarchyOrderEntry::Item("b-card".into())]),
+        ]);
+        let second_orders = std::collections::BTreeMap::from([
+            ("".into(), vec![HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Group("A".into())]),
+            ("A".into(), vec![HierarchyOrderEntry::Item("a-nested".into()), HierarchyOrderEntry::Item("a-root".into())]),
+            ("B".into(), vec![HierarchyOrderEntry::Item("b-card".into())]),
+        ]);
+        let mut registry = PickerIdRegistry::with_scope(77);
+        let (_, first_tree, first) =
+            build_hierarchy_projection(&groups, &[(0, 0), (1, 0)], &Default::default(), &first_orders, &test_projection_keys(&groups), &mut registry).unwrap();
+        let (_, second_tree, second) =
+            build_hierarchy_projection(&groups, &[(1, 0), (0, 0)], &Default::default(), &second_orders, &test_projection_keys(&groups), &mut registry).unwrap();
+
+        let by_identity = |identities: std::collections::BTreeMap<PickerId, PickerNodeIdentity>| {
+            identities.into_iter().map(|(id, identity)| (identity, id)).collect::<std::collections::BTreeMap<_, _>>()
+        };
+        let first_ids = by_identity(first);
+        let second_ids = by_identity(second);
+
+        assert_eq!(first_ids, second_ids, "reordering groups, cards and nested folders must not allocate new runtime IDs");
+        assert_ne!(first_tree, second_tree, "the projected order should actually change in this fixture");
+        assert!(first_ids.contains_key(&PickerNodeIdentity::Folder { group: "A".into(), path: vec!["Folder".into()] }));
+        assert!(first_ids.contains_key(&PickerNodeIdentity::Folder { group: "A".into(), path: vec!["Folder".into(), "Inner".into()] }));
+        assert!(first_ids.contains_key(&PickerNodeIdentity::FolderItem {
+            group: "A".into(),
+            path: vec!["Folder".into(), "Inner".into()],
+            key: "a-nested".into()
+        }));
     }
 
     #[test]
@@ -3766,6 +3578,7 @@ mod filter_tests {
                 let mut adapter = BrowserAdapter {
                     panel: "hierarchy-drop-test",
                     groups: &groups,
+                    projection_keys: None,
                     options: BrowserOptions {
                         canvas: egui::Rect::NOTHING,
                         flush: false,
@@ -3787,6 +3600,7 @@ mod filter_tests {
                     group_context_menu: None,
                     nested_group_context_menu: None,
                     canonical_hierarchy_move: None,
+                    rekey_hierarchy_after_move: None,
                     hierarchy_item_move: None,
                     paint_group: None,
                     paint_item: &mut paint_item,

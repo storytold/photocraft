@@ -11,12 +11,32 @@ use crate::pickers::asset_browser::{
     item_context_targets, move_item_actions,
 };
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
+use crate::pickers::picker_browser_identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{ShellOptions, picker_shell};
 use crate::pickers::picker_state::PresetUi;
 use crate::pickers::preset_commands::{generic, run};
 use crate::pickers::preset_preview::{c32, cached_texture, sample_fingerprint};
 use crate::theme::Tokens;
+
+fn pattern_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys {
+    let mut keys = PickerProjectionKeys::default();
+    for (group_index, group) in groups.iter().enumerate() {
+        keys.insert(
+            ProjectionNodeRef::Group(group_index),
+            PickerIdentityKey::from_parts("pattern-group", [group.name.as_str()]),
+            PickerNodeIdentity::Group(group.name.clone()),
+        );
+        for (item_index, item) in group.items.iter().enumerate() {
+            keys.insert(
+                ProjectionNodeRef::Item { group_index, item_index },
+                PickerIdentityKey::from_parts("pattern-id", [item.key.as_str()]),
+                PickerNodeIdentity::Item { group: group.name.clone(), key: item.key.clone() },
+            );
+        }
+    }
+    keys
+}
 
 pub(crate) fn pattern_texture(ctx: &egui::Context, pat: &photocraft_doc::Pattern) -> TextureHandle {
     let (w, h) = (pat.width.max(1), pat.height.max(1));
@@ -118,6 +138,7 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     photocraft_engine::presets::patterns::sync(&mut app.session);
     let lib = app.session.patterns.items.clone();
     let groups = pattern_group_views(&lib, &app.session.presets.pattern_groups);
+    let projection_keys = pattern_projection_keys(&groups);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let canvas = canvas_drop_rect(app);
     let ctx = ui.ctx().clone();
@@ -130,6 +151,7 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let mut adapter = BrowserAdapter {
             panel: "patterns",
             groups: &groups,
+            projection_keys: Some(&projection_keys),
             options: BrowserOptions {
                 canvas,
                 flush: false,
@@ -146,6 +168,7 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
             nested_group_context_menu: None,
             canonical_hierarchy_move: None,
+            rekey_hierarchy_after_move: None,
             hierarchy_item_move: Some(&mut commit_item_move),
             paint_group: None,
             paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -292,9 +315,11 @@ pub(crate) fn compact_pattern_browser(
     }
     state.set_selected(panel, selected);
     let browser_h = max_h.min(ui.available_height());
+    let projection_keys = pattern_projection_keys(groups);
     let mut adapter = BrowserAdapter {
         panel,
         groups,
+        projection_keys: Some(&projection_keys),
         options: BrowserOptions {
             canvas: Rect::NOTHING,
             flush: false,
@@ -319,6 +344,7 @@ pub(crate) fn compact_pattern_browser(
         group_context_menu: Some(compact_group_context_menu),
         nested_group_context_menu: None,
         canonical_hierarchy_move: None,
+        rekey_hierarchy_after_move: None,
         hierarchy_item_move: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, paint_state: ItemPaintState| {
@@ -387,15 +413,15 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, panel: &'st
 mod hierarchy_drop_tests {
     use crate::pickers::asset_browser_interaction::card_drop_hit;
     use crate::pickers::picker_browser_dragging::{PointerRegion, resolve_drop_candidate};
-    use crate::pickers::picker_browser_model::{DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use crate::pickers::picker_browser_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use egui::{Pos2, Rect};
 
     #[test]
     fn list_and_grid_card_edges_resolve_to_the_same_sibling_positions() {
-        let moving = NodeId::item("Patterns", "moving-pattern");
-        let target = NodeId::item("Patterns", "target-pattern");
+        let moving = PickerId::item("Patterns", "moving-pattern");
+        let target = PickerId::item("Patterns", "target-pattern");
         let hierarchy = PickerBrowserHierarchy::new(vec![HierarchyNode::group(
-            NodeId::group("Patterns"),
+            PickerId::group("Patterns"),
             vec![HierarchyNode::item(moving.clone()), HierarchyNode::item(target.clone())],
         )])
         .unwrap();

@@ -111,9 +111,12 @@ pub struct PresetUi {
     /// Multi-selection owned by the shared browser. Transient because domain adapters still own
     /// the active preset used by commands; these identities describe only the visible UI selection.
     #[serde(skip)]
-    pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::picker_browser_model::NodeId>>,
+    pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::picker_browser_model::PickerId>>,
     #[serde(skip)]
-    pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::picker_browser_model::NodeId>,
+    pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::picker_browser_model::PickerId>,
+    /// Transient per-picker feedback from rejected hierarchy operations. Never persisted.
+    #[serde(skip)]
+    pub(crate) browser_feedback: BTreeMap<String, String>,
     /// Tool Presets: Current Tool Only.
     pub current_tool_only: bool,
     /// Custom Shape tool: the shape it draws.
@@ -280,11 +283,11 @@ impl PresetUi {
         self.display_mode(panel).is_list() && self.wrap_list.get(panel).copied().unwrap_or(true)
     }
 
-    pub(crate) fn browser_node_selected(&self, panel: &str, id: &crate::pickers::picker_browser_model::NodeId) -> bool {
+    pub(crate) fn browser_node_selected(&self, panel: &str, id: &crate::pickers::picker_browser_model::PickerId) -> bool {
         self.browser_selection.get(panel).is_some_and(|selection| selection.contains(id))
     }
 
-    pub(crate) fn select_browser_node(&mut self, panel: &str, id: crate::pickers::picker_browser_model::NodeId, additive: bool) {
+    pub(crate) fn select_browser_node(&mut self, panel: &str, id: crate::pickers::picker_browser_model::PickerId, additive: bool) {
         let selection = self.browser_selection.entry(panel.to_owned()).or_default();
         if !additive {
             selection.clear();
@@ -302,8 +305,8 @@ impl PresetUi {
     pub(crate) fn select_browser_range(
         &mut self,
         panel: &str,
-        visible: &[crate::pickers::picker_browser_model::NodeId],
-        target: &crate::pickers::picker_browser_model::NodeId,
+        visible: &[crate::pickers::picker_browser_model::PickerId],
+        target: &crate::pickers::picker_browser_model::PickerId,
     ) {
         let Some(anchor) = self.browser_selection_anchor.get(panel) else {
             self.select_browser_node(panel, target.clone(), false);
@@ -1059,13 +1062,13 @@ mod tests {
     }
     #[test]
     fn browser_multi_selection_toggles_nodes_and_shift_selects_the_visible_interval() {
-        use crate::pickers::picker_browser_model::NodeId;
+        use crate::pickers::picker_browser_model::PickerId;
 
-        let first = NodeId::group("First");
-        let card_a = NodeId::item("First", "a");
-        let collapsed = NodeId::group("Collapsed");
-        let hidden_card = NodeId::item("Collapsed", "hidden");
-        let card_b = NodeId::item("Last", "b");
+        let first = PickerId::group("First");
+        let card_a = PickerId::item("First", "a");
+        let collapsed = PickerId::group("Collapsed");
+        let hidden_card = PickerId::item("Collapsed", "hidden");
+        let card_b = PickerId::item("Last", "b");
         let visible = vec![first.clone(), card_a.clone(), collapsed.clone(), card_b.clone()];
         let mut state = PresetUi::default();
 

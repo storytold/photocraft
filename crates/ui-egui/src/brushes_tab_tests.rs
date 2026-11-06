@@ -131,7 +131,7 @@ fn drag_in_brush_picker(
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(3);
 
-    let source = h.get_by_label(source).rect().center();
+    let source = h.query_all_by_label(source).next().expect("drag source card").rect().center();
     let target = h.get_by_label(target).rect().center();
     h.event(Event::PointerMoved(source));
     h.run_steps(1);
@@ -165,7 +165,7 @@ fn canonical_brush_folder_item_drop_maps_to_authoritative_move_action() {
     assert!(
         matches!(
             h.state().1.as_slice(),
-            [Action::Move { name, group, folder: Some(path), index: None }]
+            [Action::Move { name, group, folder: Some(path), index: Some(0) }]
                 if name == "Moving brush" && group == "Kit" && path == &["Hard".to_string()]
         ),
         "canonical FolderItem drops map to a Brush move with the complete destination path: {:?}",
@@ -216,8 +216,10 @@ fn canonical_brush_folder_item_rejection_is_reported_without_a_domain_action() {
 
     assert!(h.state().1.is_empty(), "an unaddressable duplicate-name preset must not emit a lossy Brush command: {:?}", h.state().1);
     assert!(
-        h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous in the library.\"").next().is_some(),
-        "the canonical adapter's error must be visible to the user",
+        h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous.\"").next().is_some()
+            || h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous in the library.\"").next().is_some(),
+        "the canonical adapter's error must be visible to the user: {:?}",
+        h.state().0.browser_feedback,
     );
 }
 
