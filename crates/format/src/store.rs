@@ -457,6 +457,10 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
 pub(crate) fn load_reporting(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Document, Vec<String>)> {
     let m = read_manifest(src, opts)?;
     admit_canvas(m.document.size, opts)?;
+    // Rolling the timeline back to its start makes its base the document.
+    if let Some(t) = m.document.design_timeline.as_deref() {
+        admit_canvas(t.base.size, opts)?;
+    }
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
     let mut loader = Loader {
         fetch: &mut fetch,

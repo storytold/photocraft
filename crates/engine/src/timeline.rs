@@ -19,6 +19,8 @@ pub(crate) struct Before {
     history_row: Option<u64>,
     /// The command started in this document (not another one, like Save Contents in the child).
     was_active: bool,
+    /// A job's command left this document as it was when it started the job (`job_started`).
+    untouched: bool,
 }
 
 /// Commands that change no document but feed the steps after them (tool colours and options).
@@ -83,8 +85,27 @@ pub(crate) fn capture(s: &Session) -> Vec<Before> {
             active: st.active_layer,
             selected: st.selected_layers.clone(),
             history_row: st.history.row_id(st.history.past_len()),
+            untouched: false,
         })
         .collect()
+}
+
+/// Notes which documents of `before` the command hasn't changed by the time it starts a job.
+pub(crate) fn job_started(s: &Session, before: &mut [Before]) {
+    for b in before {
+        b.untouched = s.docs.iter().any(|st| st.doc.id == b.doc && Arc::ptr_eq(&st.doc, &b.state));
+    }
+}
+
+/// As a job's result applies: its untouched documents as they are now, so an edit made in one
+/// while the job ran isn't recorded as the job's.
+pub(crate) fn job_applying(s: &Session, before: &mut [Before]) {
+    for b in before.iter_mut().filter(|b| b.untouched) {
+        if let Some(st) = s.docs.iter().find(|st| st.doc.id == b.doc) {
+            b.state = st.doc.clone();
+            b.history_row = st.history.row_id(st.history.past_len());
+        }
+    }
 }
 
 /// Record command `id` (run under id-scope `step`) into each document of `before` it changed.
@@ -94,6 +115,8 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
     if before.is_empty() || id.starts_with("design.") || !crate::commands::find(id).is_some_and(|c| c.journal) {
         return;
     }
+    let pinned = pin_color_settings(s, id, params);
+    let params = pinned.as_ref().unwrap_or(params);
     let mut recorded = false;
     // The document the command ran in: a step it made in another one names it as the source.
     let source = s.active().map(|st| st.doc.name.clone()).unwrap_or_default();
@@ -152,6 +175,29 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
     } else if PRELUDE.iter().any(|p| id.starts_with(p)) {
         s.timeline_prelude.push(Prelude { command: id.to_string(), params: params.clone() });
     }
+}
+
+/// A mode change's `params` with the Color Settings it ran with filled in: a replay (in a scratch
+/// session, or after the file moves to another machine) converts the same way. A working space
+/// given by `.icc` path then reaches outside the document, so the step is baked.
+fn pin_color_settings(s: &Session, id: &str, params: &Value) -> Option<Value> {
+    use photocraft_doc::ColorMode;
+    let mode = match id {
+        "image.mode.rgb" => ColorMode::Rgb,
+        "image.mode.grayscale" => ColorMode::Grayscale,
+        "image.mode.cmyk" => ColorMode::Cmyk,
+        "image.mode.lab" => ColorMode::Lab,
+        _ => return None,
+    };
+    let mut p = params.as_object().cloned().unwrap_or_default();
+    if !p.contains_key("profile")
+        && let Some((spec, _)) = s.color.working_setting(mode)
+    {
+        p.insert("profile".into(), spec.into());
+    }
+    p.entry("intent").or_insert_with(|| s.color.settings.intent().id().into());
+    p.entry("bpc").or_insert_with(|| s.color.settings.bpc.into());
+    Some(Value::Object(p))
 }
 
 /// A step's label: the history step's, naming where its content came from. A layer copied from
@@ -355,6 +401,10 @@ fn apply_baked(r: &mut Session, step: &DesignStep, baked: &photocraft_doc::desig
 /// Drop the oldest checkpoints while the pixels only they hold exceed a quarter of the history
 /// budget. The base and the newest checkpoint are kept.
 pub(crate) fn budget_checkpoints(history: &photocraft_ops::History, current: &Document, tl: &mut photocraft_doc::design::DesignTimeline) {
+    // No History byte limit (0: scratch disks hold the pixels), so none for checkpoints either.
+    if history.max_bytes == 0 {
+        return;
+    }
     let cap = history.max_bytes / 4;
     loop {
         let held: Vec<&Document> = tl.steps.iter().filter_map(|st| st.checkpoint.0.as_deref()).collect();

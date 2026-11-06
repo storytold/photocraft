@@ -95,11 +95,6 @@ impl IdScope {
         self.owner
     }
 
-    /// Install no scope until the guard drops: commands run meanwhile are steps of their own.
-    pub fn detach() -> IdScopeGuard {
-        IdScopeGuard(ID_SCOPE.with(|s| s.replace(None)))
-    }
-
     /// The scope installed on this thread, if any.
     pub fn current() -> Option<IdScope> {
         ID_SCOPE.with(|s| s.borrow().clone())
@@ -119,7 +114,6 @@ impl IdScope {
     pub fn enter(&self) -> IdScopeGuard {
         IdScopeGuard(ID_SCOPE.with(|s| s.replace(Some(self.clone()))))
     }
-
 
     /// The next id of this step, or `None` once the step or its counter is out of range.
     fn mint(&self) -> Option<u64> {

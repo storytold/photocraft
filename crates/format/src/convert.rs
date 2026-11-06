@@ -699,7 +699,9 @@ impl Loader<'_> {
             };
             steps.push(st);
         }
-        let mut tl = DesignTimeline { base: Arc::new(base), steps, marker: t.marker };
+        // A damaged file's marker past the last step would leave Edit Parameters no marker to restore.
+        let marker = t.marker.map(|m| m.min(steps.len()));
+        let mut tl = DesignTimeline { base: Arc::new(base), steps, marker };
         // The saved document is what the steps in effect produce: replay can resume from it.
         let n = tl.in_effect();
         if let Some(last) = n.checked_sub(1).and_then(|i| tl.steps.get_mut(i)) {

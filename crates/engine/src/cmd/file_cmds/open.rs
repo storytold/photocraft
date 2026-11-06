@@ -118,6 +118,8 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;
     let fresh = import_opened(s, &file_name(&path), &bytes)?;
+    // The file may have been saved by another session since: no later step reuses its ids.
+    s.next_step = s.next_step.max(photocraft_doc::next_step_after(&fresh));
     s.edit("Revert", |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;

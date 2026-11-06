@@ -1736,6 +1736,11 @@ impl Session {
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     /// Ids a command mints are keyed to its step; a command run on another's behalf shares it.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        // Playing an action is no step: each command it runs is one, as History lists them, and
+        // replays as that command. Inside another command (a script) they join its step instead.
+        if matches!(id, "actions.play" | "actions.conditional") && !self.in_own_scope() {
+            return self.dispatch_scoped(id, params, background);
+        }
         self.run_step(id, params, false, |s, p| s.dispatch_scoped(id, p, background))
     }
 
@@ -1756,6 +1761,8 @@ impl Session {
         match (&r, recorded) {
             (Ok(Started::Done(_)), Some(p)) => crate::timeline::record(self, before, scope.step(), id, &p, force_bake),
             (Ok(Started::Job(j)), Some(p)) => {
+                let mut before = before;
+                crate::timeline::job_started(self, &mut before);
                 if let Some(job) = self.jobs.running.iter_mut().find(|job| job.id == *j) {
                     job.timeline = Some((before, scope.step(), p, force_bake));
                 }
@@ -2006,7 +2013,10 @@ impl Session {
     /// Apply (or report the failure of) a job whose worker has delivered `r`.
     fn finish_job(&mut self, mut job: Running, r: Result<Payload>) {
         let apply = job.apply.take();
-        let timeline = job.timeline.take();
+        let mut timeline = job.timeline.take();
+        if let Some((before, ..)) = timeline.as_mut() {
+            crate::timeline::job_applying(self, before);
+        }
         // Keep the typed error beside its display text, so `wait_job` and `JobEvent` can still
         // report a hard budget's required/limit or an approval request's limits.
         let (outcome, error) = match r {

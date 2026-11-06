@@ -129,3 +129,25 @@ fn a_timeline_keyed_to_a_step_near_the_limit_keeps_its_ids() {
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(back.design_timeline.expect("the timeline survives").base.layers[0].id, late);
 }
+
+/// The timeline's base is a document too (rolling back to the start shows it): a base past the
+/// canvas limits is refused like a document past them.
+#[test]
+fn a_timeline_base_past_the_canvas_limits_is_refused() {
+    let mut doc = with_timeline();
+    let tl = Arc::make_mut(doc.design_timeline.as_mut().unwrap());
+    Arc::make_mut(&mut tl.base).size = Size::new(64, 64);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let opts = LoadOptions { max_canvas_side: 16, ..Default::default() };
+    assert!(matches!(load_from_bytes_with(&bytes, &opts), Err(FormatError::LimitExceeded(_))));
+    assert!(load_from_bytes(&bytes).is_ok(), "within the default limits");
+}
+
+/// A damaged file's marker past the last step loads as the end of the timeline.
+#[test]
+fn a_marker_past_the_steps_is_clamped() {
+    let mut doc = with_timeline();
+    Arc::make_mut(doc.design_timeline.as_mut().unwrap()).marker = Some(99);
+    let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back.design_timeline.unwrap().marker, Some(2));
+}

@@ -349,7 +349,8 @@ fn edit(app: &mut PhotocraftApp, i: usize) -> Result<(), String> {
         if let Some(o) = st.params.as_object() {
             d.fields.extend(o.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
-        d.fields.insert(EDIT.into(), json!({ "step": st.step, "restore": tl.marker }));
+        let doc = app.session.active().map(|d| d.doc.id.0);
+        d.fields.insert(EDIT.into(), json!({ "step": st.step, "restore": tl.marker, "doc": doc }));
     }
     app.filter_preview_hold = size.map(|size| (dialog, size));
     Ok(())
@@ -360,9 +361,12 @@ fn edit(app: &mut PhotocraftApp, i: usize) -> Result<(), String> {
 pub fn confirm_edit(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Option<Result<Value, String>> {
     let e = fields.get(EDIT)?;
     let params = crate::filter_dialog::params_of(fields);
-    let r = app.run("design.editStep", json!({ "step": e["step"], "params": params, "restore": e["restore"] }));
-    // While the replay runs as a job, the edited preview stays on screen (as for a filter's OK).
-    let running = app.session.active().is_some_and(|st| app.session.job_on(st.doc.id).is_some());
+    let r = on_edited_document(app, e, |app| {
+        let r = app.run("design.editStep", json!({ "step": e["step"], "params": params, "restore": e["restore"] }));
+        // While the replay runs as a job, the edited preview stays on screen (as for a filter's OK).
+        (r, app.session.active().is_some_and(|st| app.session.job_on(st.doc.id).is_some()))
+    });
+    let (r, running) = r.unwrap_or_else(|e| (Err(e), false));
     match app.filter_preview.as_mut() {
         Some(p) if r.is_ok() && running => p.committing = true,
         _ => app.filter_preview = None,
@@ -373,10 +377,24 @@ pub fn confirm_edit(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Va
 /// A cancelled Edit Parameters dialog: the marker goes back where it was.
 pub fn cancel_edit(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) {
     if let Some(e) = fields.get(EDIT)
-        && let Err(e) = app.run("design.rollTo", json!({ "at": e["restore"] }))
+        && let Err(e) = on_edited_document(app, e, |app| app.run("design.rollTo", json!({ "at": e["restore"] }))).and_then(|r| r)
     {
         app.ui.status = e;
     }
+}
+
+/// Run `f` on the document the Edit Parameters dialog `e` opened on (another may be active by
+/// now: a background open activates its document), then reactivate the one that was active.
+fn on_edited_document<T>(app: &mut PhotocraftApp, e: &Value, f: impl FnOnce(&mut PhotocraftApp) -> T) -> Result<T, String> {
+    let index = |app: &PhotocraftApp, id: Option<u64>| app.session.documents().iter().position(|d| Some(d.doc.id.0) == id);
+    let i = index(app, e["doc"].as_u64()).ok_or_else(|| photocraft_engine::EngineError::NoDocument.to_string())?;
+    let was = app.session.active().map(|d| d.doc.id.0);
+    app.session.set_active(i);
+    let r = f(app);
+    if let Some(back) = index(app, was) {
+        app.session.set_active(back);
+    }
+    Ok(r)
 }
 
 #[cfg(test)]
@@ -483,6 +501,42 @@ mod tests {
         let d = a.ui.dialogs.last().unwrap().id;
         crate::dialogs::cancel(&mut a, d).unwrap();
         assert_eq!(timeline(&a).unwrap().in_effect(), 3);
+    }
+
+    /// Another document activated while the dialog is open (a background open) is left alone:
+    /// OK and Cancel act on the edited step's document and keep the other one active.
+    #[test]
+    fn edit_parameters_applies_to_the_document_it_opened_on() {
+        let mut a = app();
+        a.run("design.start", json!({})).unwrap();
+        a.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        a.run("filter.noise.addNoise", json!({"amount": 10})).unwrap();
+        a.run("layer.new.layer", json!({"name": "B"})).unwrap();
+        let edited = a.session.active().unwrap().doc.id;
+        let open_other = |a: &mut PhotocraftApp| {
+            a.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+            a.run("design.start", json!({})).unwrap();
+            a.session.active().unwrap().doc.id
+        };
+        let timeline_of = |a: &PhotocraftApp, id| a.session.documents().iter().find(|d| d.doc.id == id).and_then(|d| d.doc.design_timeline.clone()).unwrap();
+        edit(&mut a, 1).unwrap();
+        let other = open_other(&mut a);
+        let d = a.ui.dialogs.last().unwrap().id;
+        a.ui.dialog_mut(d).unwrap().fields.insert("amount".into(), json!(40));
+        crate::dialogs::confirm(&mut a, d).unwrap();
+        assert_eq!(timeline_of(&a, edited).steps[1].params["amount"], json!(40));
+        assert_eq!(timeline_of(&a, edited).in_effect(), 3);
+        assert!(timeline_of(&a, other).steps.is_empty(), "the other document is untouched");
+        assert_eq!(a.session.active().unwrap().doc.id, other, "and stays active");
+        // Cancel restores the edited document's marker, from wherever.
+        let i = a.session.documents().iter().position(|d| d.doc.id == edited).unwrap();
+        a.session.set_active(i);
+        edit(&mut a, 1).unwrap();
+        let other = open_other(&mut a);
+        let d = a.ui.dialogs.last().unwrap().id;
+        crate::dialogs::cancel(&mut a, d).unwrap();
+        assert_eq!(timeline_of(&a, edited).in_effect(), 3);
+        assert_eq!(a.session.active().unwrap().doc.id, other);
     }
 
     #[test]

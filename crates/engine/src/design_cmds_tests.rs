@@ -635,3 +635,109 @@ fn an_embedded_place_by_path_replays_without_its_source() {
     assert_eq!(doc(&s), before, "the placed pixels come from the step, not the file");
     assert_eq!(state(&mut s, 1), "ok");
 }
+
+/// An action played inside another command's step (a script) mints under that step: its layer
+/// doesn't reuse an id the command already minted.
+#[test]
+fn an_action_played_inside_a_command_shares_its_step() {
+    let mut s = started();
+    s.execute("actions.record", json!({"name": "New"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Recorded"})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    {
+        // What a script's dispatch installs around the commands it runs.
+        let scope = photocraft_doc::IdScope::new(s.next_step).owned_by(s.scope_owner.0);
+        let _g = scope.enter();
+        s.execute("layer.new.layer", json!({"name": "Script"})).unwrap();
+        s.execute("actions.play", json!({"action": "New"})).unwrap();
+    }
+    let ids: Vec<_> = doc(&s).walk().iter().map(|(_, _, l)| l.id).collect();
+    assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len(), "{ids:?}");
+}
+
+/// An edit made in another timeline document while a job runs is that edit's step only: the
+/// job's step, recorded when it applies, doesn't take it in as well.
+#[test]
+fn a_job_records_only_its_own_changes() {
+    let mut s = started();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let group = s.execute("layer.groupLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
+    s.set_active(0);
+    let src = photocraft_doc::Document::new("p", photocraft_doc::Size::new(8, 8), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let bytes = photocraft_io::export(&src, "p.png", &Default::default()).unwrap().bytes;
+    let crate::jobs::Started::Job(id) = s.start_place_bytes("p.png", bytes, None, json!({})).unwrap() else { panic!("expected a job") };
+    s.set_active(1);
+    // Not a step of its own (view state), so a job attributing it to itself would bake the group.
+    s.execute("layer.setExpanded", json!({"layer": group, "expanded": false})).unwrap();
+    s.wait_job(id).unwrap();
+    let commands =
+        |s: &Session, i: usize| -> Vec<String> { s.documents()[i].doc.design_timeline.as_ref().unwrap().steps.iter().map(|st| st.command.clone()).collect() };
+    assert_eq!(commands(&s, 1), ["layer.new.layer", "layer.groupLayers"], "no step for the job there");
+    assert_eq!(commands(&s, 0), ["file.placeEmbedded"]);
+}
+
+/// Revert loads whatever the file holds now, maybe saved by another session with later steps:
+/// steps made afterwards reuse none of its step numbers or layer ids.
+#[test]
+fn steps_after_a_revert_reuse_no_step_of_the_file() {
+    let path = std::env::temp_dir().join(format!("revert-steps-{}.pcraft", std::process::id()));
+    let save = |s: &Session| std::fs::write(&path, photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap()).unwrap();
+    let mut a = started();
+    save(&a);
+    a.add_document((*a.active().unwrap().doc).clone(), Some(path.to_string_lossy().into_owned()));
+    // Another session takes the file further.
+    let mut b = Session::new();
+    b.add_document(photocraft_format::load_from_bytes(&std::fs::read(&path).unwrap()).unwrap(), None);
+    for _ in 0..3 {
+        b.execute("layer.new.layer", json!({})).unwrap();
+    }
+    save(&b);
+    a.execute("file.revert", json!({})).unwrap();
+    a.execute("layer.new.layer", json!({})).unwrap();
+    let _ = std::fs::remove_file(&path);
+    let d = &a.active().unwrap().doc;
+    let steps: Vec<u64> = d.design_timeline.as_ref().unwrap().steps.iter().map(|st| st.step).collect();
+    assert!(steps.windows(2).all(|w| w[0] < w[1]), "{steps:?}");
+    let ids: Vec<_> = d.walk().iter().map(|(_, _, l)| l.id).collect();
+    assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len(), "{ids:?}");
+}
+
+/// A mode change records the working space and conversion options it ran with, so a session with
+/// other Color Settings replays the same conversion.
+#[test]
+fn a_mode_change_replays_with_the_colour_settings_it_ran_with() {
+    let mut s = Session::new();
+    s.execute("edit.colorSettings", json!({"workingRgb": "rec2020"})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8, "mode": "gray", "depth": 8, "background": "white"})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("image.mode.rgb", json!({})).unwrap();
+    let step = s.active().unwrap().doc.design_timeline.as_ref().unwrap().steps.last().unwrap().clone();
+    assert_eq!(step.params["profile"], "rec2020", "{}", step.params);
+    assert!(step.baked.is_none(), "a built-in working space replays");
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let mut r = Session::new();
+    r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
+    let before = doc(&r);
+    r.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&r), before, "replayed with sRGB settings, still the Rec. 2020 conversion");
+}
+
+/// History without a byte limit (0, as with scratch disks on) keeps every checkpoint too.
+#[test]
+fn no_history_byte_limit_keeps_every_checkpoint() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    // Each fill replaces the tile: the earlier checkpoints hold pixels the document no longer has.
+    for color in ["#ff0000", "#00ff00", "#0000ff"] {
+        s.execute("edit.fill", json!({"color": color})).unwrap();
+    }
+    let st = s.active().unwrap();
+    let mut tl = (*st.doc.design_timeline.clone().unwrap()).clone();
+    assert!(tl.steps.iter().all(|st| st.checkpoint.0.is_some()));
+    // An empty History (0 bytes: no limit), so the checkpoints alone hold the earlier fills.
+    let history = photocraft_ops::History::new(50);
+    crate::timeline::budget_checkpoints(&history, &st.doc, &mut tl);
+    assert!(tl.steps.iter().all(|st| st.checkpoint.0.is_some()), "{:?}", tl.steps.iter().map(|st| st.checkpoint.0.is_some()).collect::<Vec<_>>());
+}

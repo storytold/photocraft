@@ -225,15 +225,21 @@ impl ColorState {
     /// The working profile of a mode from Color Settings (the built-in default when the
     /// setting does not resolve or cannot be both an RGB source and editing destination).
     pub fn working(&self, mode: ColorMode) -> Arc<Profile> {
+        self.working_setting(mode).map_or_else(|| working_profile(mode), |(_, p)| p)
+    }
+
+    /// The Color Settings working space [`Self::working`] uses for `mode`, as set and resolved;
+    /// `None` when it falls back to the built-in default.
+    pub(crate) fn working_setting(&self, mode: ColorMode) -> Option<(&str, Arc<Profile>)> {
         let space = mode_space(mode);
-        self.settings
-            .working_spec(space)
-            .and_then(|spec| resolve_profile(spec, None, Some(mode)).ok())
+        let spec = self.settings.working_spec(space)?;
+        resolve_profile(spec, None, Some(mode))
+            .ok()
             .filter(|p| {
                 p.color_space == space
                     && (space != ColorSpace::Rgb || (p.pcs_to_device(self.settings.intent()).is_ok() && p.device_to_pcs(self.settings.intent()).is_ok()))
             })
-            .unwrap_or_else(|| working_profile(mode))
+            .map(|p| (spec, p))
     }
 
     /// Resolve a profile spec, reading "working…" specs from Color Settings.
