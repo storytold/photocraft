@@ -251,7 +251,16 @@ impl PlaceSteps {
             let px = px.ok_or_else(|| EngineError::Other(format!("{}: a frame's image must be a smart object", input.name)))?;
             LayerContent::Raster(px)
         };
-        Ok(Prepared { content, layer_name: stem(&input.name), label, scale, bounds, smart, frame: input.frame.as_ref().map(|(id, _)| *id), anchor: input.anchor })
+        Ok(Prepared {
+            content,
+            layer_name: stem(&input.name),
+            label,
+            scale,
+            bounds,
+            smart,
+            frame: input.frame.as_ref().map(|(id, _)| *id),
+            anchor: input.anchor,
+        })
     }
 }
 
