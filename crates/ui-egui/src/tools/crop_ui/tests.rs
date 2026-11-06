@@ -665,6 +665,226 @@ fn space_on_the_canvas_moves_the_frame_not_the_view() {
     assert!(st.crop.drag.is_none());
 }
 
+/// Real egui input: a handle dragged past the canvas edge and held there scrolls the view, as a
+/// marquee drag does (#4183), so the frame can reach the part of the image that was off screen.
+#[test]
+fn a_handle_held_past_the_canvas_edge_scrolls_the_view() {
+    use egui::{Event, PointerButton, pos2};
+    let mut a = app(SampleType::U8);
+    // 200x100 at 400% in a 600x400 canvas: document x 25..175 shows.
+    a.ui.views = vec![crate::state::View {
+        zoom: 4.0,
+        center: [100.0, 50.0],
+        fit_pending: false,
+        fill_pending: false,
+        doc_size: [200, 100],
+        rotation: 0.0,
+        zoom_animating: false,
+        zoom_anchor: None,
+        display_camera: None,
+        zoom_transition: None,
+    }];
+    a.ui.crop_rect = Some([40.0, 10.0, 100.0, 40.0]);
+    a.crop.default_frame = false;
+    a.ui.extras.rulers = false;
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let v = app.ui.views[0].clone();
+            crate::canvas::canvas_view(app, ui, 0, ui.max_rect(), v, true);
+        },
+        a,
+    );
+    h.run_steps(2);
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    // The right edge's middle handle: document (100, 25).
+    let p0 = h.state().ui.views[0].center;
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
+    let xf = crate::canvas::ViewXform { rect, zoom: 4.0, center: p0, flip: false, rotation: 0.0, aspect: 1.0 };
+    let grab = xf.to_screen(100.0, 25.0);
+    h.event(Event::PointerMoved(grab));
+    h.event(button(grab, true));
+    h.step();
+    let out = pos2(650.0, grab.y);
+    for p in [pos2(grab.x + 40.0, grab.y), out] {
+        h.event(Event::PointerMoved(p));
+        h.step();
+    }
+    let before = h.state().ui.views[0].center;
+    h.run_steps(10);
+    let st = h.state();
+    assert!(matches!(st.crop.drag, Some(CropDrag::Resize { .. })), "{:?}", st.crop.drag);
+    assert!(st.ui.views[0].center[0] > before[0], "the view scrolled right: {:?} -> {:?}", before, st.ui.views[0].center);
+    assert!(st.ui.crop_rect.is_some_and(|r| r[2] > 175.0), "the frame reached past what showed: {:?}", st.ui.crop_rect);
+    h.event(button(out, false));
+    h.step();
+}
+
+/// A press that started off the canvas (a panel slider beside it) doesn't scroll the view,
+/// even with a crop drag still recorded: only a drag on the canvas auto-scrolls.
+#[test]
+fn a_press_beside_the_canvas_does_not_scroll_it_for_a_crop_drag() {
+    use egui::{Event, PointerButton, pos2};
+    let mut a = app(SampleType::U8);
+    a.ui.views = vec![crate::state::View {
+        zoom: 4.0,
+        center: [100.0, 50.0],
+        fit_pending: false,
+        fill_pending: false,
+        doc_size: [200, 100],
+        rotation: 0.0,
+        zoom_animating: false,
+        zoom_anchor: None,
+        display_camera: None,
+        zoom_transition: None,
+    }];
+    a.ui.crop_rect = Some([40.0, 10.0, 100.0, 40.0]);
+    a.crop.default_frame = false;
+    a.ui.extras.rulers = false;
+    // Left over from a drag a tool switch didn't end.
+    a.crop.drag = Some(CropDrag::Resize { hx: 1, hy: 0, start: [100.0, 25.0], rect: [40.0, 10.0, 100.0, 40.0], view: None });
+    // The canvas takes the left 400 points; the rest stands in for a panel.
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let v = app.ui.views[0].clone();
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 400.0));
+            crate::canvas::canvas_view(app, ui, 0, rect, v, true);
+        },
+        a,
+    );
+    h.run_steps(2);
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let p = pos2(500.0, 100.0);
+    h.event(Event::PointerMoved(p));
+    h.event(button(p, true));
+    h.step();
+    h.event(Event::PointerMoved(pos2(550.0, 100.0)));
+    h.run_steps(10);
+    assert_eq!(h.state().ui.views[0].center, [100.0, 50.0], "the view stayed put");
+    h.event(button(pos2(550.0, 100.0), false));
+    h.step();
+}
+
+/// The 200x100 test document at 400% (document x 25..175 shows in a 600-point canvas).
+fn zoomed_view(height: u32) -> crate::state::View {
+    crate::state::View {
+        zoom: 4.0,
+        center: [100.0, height as f32 / 2.0],
+        fit_pending: false,
+        fill_pending: false,
+        doc_size: [200, height],
+        rotation: 0.0,
+        zoom_animating: false,
+        zoom_anchor: None,
+        display_camera: None,
+        zoom_transition: None,
+    }
+}
+
+/// A press held just inside the canvas edge (past egui's click time, so egui starts a drag) that
+/// slips a point past it is still a click: it draws no frame and doesn't scroll the view, which
+/// would grow a frame under the still pointer. A new frame dragged past the edge does scroll.
+#[test]
+fn a_held_click_at_the_canvas_edge_draws_no_frame_and_does_not_scroll() {
+    use egui::{Event, PointerButton, pos2};
+    let mut a = app(SampleType::U8);
+    a.ui.views = vec![zoomed_view(100)];
+    a.ui.extras.rulers = false;
+    // The canvas starts 100 points from the window's left, so its left edge (no scrollbar there)
+    // has room past it.
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(700.0, 400.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let v = app.ui.views[0].clone();
+            let rect = egui::Rect::from_min_size(egui::pos2(100.0, 0.0), egui::vec2(600.0, 400.0));
+            crate::canvas::canvas_view(app, ui, 0, rect, v, true);
+        },
+        a,
+    );
+    h.run_steps(2);
+    let frame = h.state().ui.crop_rect;
+    assert!(h.state().crop.default_frame, "{frame:?}");
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    let press = pos2(101.0, 200.0);
+    let slip = pos2(99.0, 200.0);
+    h.event(Event::PointerMoved(press));
+    h.event(button(press, true));
+    h.step();
+    for p in [slip, pos2(98.5, 200.0), slip] {
+        h.event(Event::PointerMoved(p));
+        h.run_steps(4);
+    }
+    assert!(matches!(h.state().crop.drag, Some(CropDrag::Draw { .. })), "egui started a drag: {:?}", h.state().crop.drag);
+    assert_eq!(h.state().ui.views[0].center, [100.0, 50.0], "a click doesn't scroll the view");
+    h.event(button(slip, false));
+    h.step();
+    let st = h.state();
+    assert_eq!(st.ui.crop_rect, frame, "the click drew no frame");
+    assert!(st.crop.default_frame);
+    // A new frame dragged from inside the canvas past its edge does scroll.
+    let start = pos2(300.0, 200.0);
+    h.event(Event::PointerMoved(start));
+    h.event(button(start, true));
+    h.step();
+    for p in [pos2(240.0, 220.0), pos2(50.0, 220.0)] {
+        h.event(Event::PointerMoved(p));
+        h.step();
+    }
+    let before = h.state().ui.views[0].center;
+    h.run_steps(10);
+    let st = h.state();
+    assert!(matches!(st.crop.drag, Some(CropDrag::Draw { .. })), "{:?}", st.crop.drag);
+    assert!(st.ui.views[0].center[0] < before[0], "the frame drag scrolled left: {:?} -> {:?}", before, st.ui.views[0].center);
+    assert!(st.ui.crop_rect.is_some_and(|r| r[0] < 25.0), "the frame reached past what showed: {:?}", st.ui.crop_rect);
+    h.event(button(pos2(50.0, 220.0), false));
+    h.step();
+}
+
+/// A scrollbar drag is the scrollbar's, even with a crop drag still recorded (left over from a
+/// drag a tool switch didn't end): dragged out past the canvas edge, it doesn't auto-scroll the
+/// view as a crop drag would.
+#[test]
+fn a_scrollbar_drag_past_the_canvas_edge_does_not_scroll_for_a_crop_drag() {
+    use egui::{Event, PointerButton, pos2};
+    let doc = Document::with_background("crop", Size::new(200, 200), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut s = photocraft_engine::Session::new();
+    s.add_document(doc, None);
+    let mut a = PhotocraftApp::new(s, crate::Services::default());
+    a.ui.tool = Tool::Crop;
+    a.ui.tool_options.crop_shield.classic_mode = true;
+    a.ui.extras.snap = false;
+    a.ui.extras.rulers = false;
+    // 200x200 at 400% in a 600x400 canvas: both scrollbars show.
+    a.ui.views = vec![zoomed_view(200)];
+    a.ui.crop_rect = Some([40.0, 10.0, 100.0, 40.0]);
+    a.crop.default_frame = false;
+    a.crop.drag = Some(CropDrag::Resize { hx: 1, hy: 0, start: [100.0, 25.0], rect: [40.0, 10.0, 100.0, 40.0], view: None });
+    // The window is taller than the canvas, so the pointer can leave it below the bottom bar.
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 500.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let v = app.ui.views[0].clone();
+            let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0));
+            crate::canvas::canvas_view(app, ui, 0, rect, v, true);
+        },
+        a,
+    );
+    h.run_steps(2);
+    assert!(h.state().ui.view.shows_scrollbars());
+    let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+    // The horizontal bar's thumb (the view is centred, so is the thumb), dragged straight down
+    // out of the canvas: the bar keeps x, and nothing else may move the view.
+    let thumb = pos2(294.0, 400.0 - crate::canvas::scrollbars::THICKNESS / 2.0);
+    h.event(Event::PointerMoved(thumb));
+    h.event(button(thumb, true));
+    h.step();
+    for p in [pos2(294.0, 420.0), pos2(294.0, 480.0)] {
+        h.event(Event::PointerMoved(p));
+        h.step();
+    }
+    h.run_steps(10);
+    assert_eq!(h.state().ui.views[0].center, [100.0, 100.0], "the view stayed put");
+    h.event(button(pos2(294.0, 480.0), false));
+    h.step();
+}
+
 /// #1918: a pending crop belongs to the document it was drawn on. File › New, opening a file
 /// or switching tabs cancels it; it never shows on, or crops, another document.
 /// A turned pending frame is dropped with its angle when another document becomes active, and
@@ -982,6 +1202,126 @@ fn the_stylus_eraser_and_a_gesture_in_progress_keep_the_frame_pending() {
     app.ui.tool = Tool::Move;
     ensure_frame(&mut app);
     assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+}
+
+/// A tool key pressed while a drag on the frame is held (⇧C to Perspective Crop): the next
+/// tool's events end the gesture, even a tool that takes every event before the Crop tool's
+/// handler, and leaving then commits the frame as it does for any other tool (#3368).
+#[test]
+fn a_tool_switch_during_a_drag_ends_it_and_commits_the_frame() {
+    for tool in [Tool::PerspectiveCrop, Tool::Ruler, Tool::Slice, Tool::Frame, Tool::Artboard, Tool::Brush] {
+        let mut app = app(SampleType::U8);
+        ensure_frame(&mut app);
+        drag(&mut app, &[[20.0, 20.0], [120.0, 80.0]], NONE);
+        tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 50.0, pressure: 1.0 }, NONE);
+        assert!(app.crop.drag.is_some());
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Move { x: 70.0, y: 50.0, pressure: 1.0 }, NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 50.0 }, NONE);
+        assert!(app.crop.drag.is_none(), "{tool:?}");
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None, "{tool:?}");
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 60), "{tool:?}");
+    }
+}
+
+/// The same mid-drag tool switch on the untouched default frame: a box drawn over it, or the
+/// frame resized by a handle, is an edit and commits on leave; a box too small to keep goes back
+/// to the default frame, which leaving drops (#9223).
+#[test]
+fn a_tool_switch_during_a_drag_on_the_default_frame_keeps_the_edit() {
+    let cases: [(&[[f64; 2]], Size); 3] = [
+        (&[[20.0, 20.0], [120.0, 80.0]], Size::new(100, 60)),
+        (&[[200.0, 100.0], [150.0, 80.0]], Size::new(150, 80)),
+        (&[[20.0, 20.0], [20.0, 20.0]], Size::new(200, 100)),
+    ];
+    for (path, size) in cases {
+        for tool in [Tool::PerspectiveCrop, Tool::Brush] {
+            let mut app = app(SampleType::U8);
+            ensure_frame(&mut app);
+            assert!(app.crop.default_frame);
+            tool_event(&mut app, ToolEvent::Down { x: path[0][0], y: path[0][1], pressure: 1.0 }, NONE);
+            tool_event(&mut app, ToolEvent::Move { x: path[1][0], y: path[1][1], pressure: 1.0 }, NONE);
+            assert!(app.crop.drag.is_some());
+            app.ui.tool = tool;
+            tool_event(&mut app, ToolEvent::Move { x: 70.0, y: 50.0, pressure: 1.0 }, NONE);
+            tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 50.0 }, NONE);
+            assert!(app.crop.drag.is_none(), "{tool:?} {path:?}");
+            ensure_frame(&mut app);
+            assert_eq!(app.ui.crop_rect, None, "{tool:?} {path:?}");
+            assert_eq!(app.session.active().unwrap().doc.size, size, "{tool:?} {path:?}");
+        }
+    }
+}
+
+/// Real egui input: a tool picked while a box is being drawn over the untouched default frame
+/// (a tool key mid-drag) commits that box on leaving, whichever tool it is; the canvas ends the
+/// gesture before the frame sees the switch, also for the Hand, whose events never reach
+/// `tool_event` (#9223).
+#[test]
+fn a_tool_switch_during_a_real_drag_commits_the_drawn_box() {
+    use egui::{Event, PointerButton, pos2};
+    for tool in [Tool::Brush, Tool::PerspectiveCrop, Tool::Hand] {
+        let mut a = app(SampleType::U8);
+        a.sync_views();
+        let v = &mut a.ui.views[0];
+        (v.zoom, v.center, v.fit_pending, v.doc_size, v.rotation) = (2.0, [100.0, 50.0], false, [200, 100], 0.0);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let v = app.ui.views[0].clone();
+                crate::canvas::canvas_view(app, ui, 0, ui.max_rect(), v, true);
+            },
+            a,
+        );
+        h.run_steps(2);
+        assert!(h.state().crop.default_frame, "{tool:?}");
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let p0 = pos2(200.0, 150.0);
+        h.event(Event::PointerMoved(p0));
+        h.event(button(p0, true));
+        h.step();
+        for p in [pos2(220.0, 170.0), pos2(260.0, 190.0)] {
+            h.event(Event::PointerMoved(p));
+            h.step();
+        }
+        assert!(h.state().crop.drag.is_some(), "{tool:?}");
+        h.state_mut().ui.tool = tool;
+        h.event(Event::PointerMoved(pos2(270.0, 195.0)));
+        h.step();
+        h.event(button(pos2(270.0, 195.0), false));
+        h.run_steps(2);
+        let st = h.state();
+        assert!(st.crop.drag.is_none(), "{tool:?}");
+        assert_eq!(st.ui.crop_rect, None, "{tool:?}");
+        assert_eq!(st.session.active().unwrap().doc.size, Size::new(30, 20), "{tool:?}: the drawn 60x40 screen px at 200%");
+    }
+}
+
+/// A press inside the untouched default frame that never moves draws nothing, so the frame
+/// stays the default one and leaving drops it: no crop to the selection's bounds, released or
+/// cut short by a tool switch (#9223).
+#[test]
+fn a_press_that_never_moves_leaves_the_default_frame_untouched() {
+    for switch in [false, true] {
+        let mut app = app(SampleType::U8);
+        app.run("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 40})).unwrap();
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([10.0, 20.0, 40.0, 60.0]));
+        let steps = app.session.active().unwrap().history.past_len();
+        tool_event(&mut app, ToolEvent::Down { x: 25.0, y: 40.0, pressure: 1.0 }, NONE);
+        if switch {
+            app.ui.tool = Tool::Brush;
+            end_drag_on_leave(&mut app);
+        } else {
+            tool_event(&mut app, ToolEvent::Up { x: 25.0, y: 40.0 }, NONE);
+            assert!(app.crop.default_frame, "a click is no edit");
+            app.ui.tool = Tool::Brush;
+        }
+        ensure_frame(&mut app);
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps), "switch: {switch}");
+        assert_eq!(app.ui.crop_rect, None, "switch: {switch}");
+    }
 }
 
 /// Image › Crop with a pending crop commits the frame (the one Image item Photoshop keeps).
