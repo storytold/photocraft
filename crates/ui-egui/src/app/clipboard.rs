@@ -125,12 +125,20 @@ impl PhotocraftApp {
     /// it is dropped rather than pasted. Unexported internal copies survive unavailable or empty
     /// system clipboards.
     pub(crate) fn import_os_clipboard(&mut self) -> Result<bool, String> {
+        const MAX_PASTE_IMAGE_DIM: usize = 16_384;
+        const MAX_PASTE_IMAGE_PIXELS: usize = 64 * 1024 * 1024;
         let pasted_event = self.pending_paste_image.take().and_then(|pasted| {
             let [w, h] = pasted.size;
-            u32::try_from(w).ok().zip(u32::try_from(h).ok()).map(|(w, h)| {
-                let bytes: Vec<u8> = pasted.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
-                (w, h, bytes)
-            })
+            let pixels = w.checked_mul(h)?;
+            if w == 0 || h == 0 || w > MAX_PASTE_IMAGE_DIM || h > MAX_PASTE_IMAGE_DIM || pixels > MAX_PASTE_IMAGE_PIXELS || pasted.pixels.len() != pixels {
+                return None;
+            }
+            let (w, h) = u32::try_from(w).ok().zip(u32::try_from(h).ok())?;
+            let mut bytes = Vec::with_capacity(pixels * 4);
+            for c in &pasted.pixels {
+                bytes.extend_from_slice(&c.to_srgba_unmultiplied());
+            }
+            Some((w, h, bytes))
         });
         let Some(get) = self.services.clipboard_get_image.as_mut() else {
             let Some((w, h, bytes)) = pasted_event else { return Ok(false) };

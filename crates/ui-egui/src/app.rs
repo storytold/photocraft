@@ -266,7 +266,10 @@ impl eframe::App for PhotocraftApp {
             && cmd != "edit.paste"
         {
             raw_input.events.retain(|e| !matches!(e, egui::Event::PasteImage(_)));
-            let _ = self.run(&cmd, serde_json::json!({}));
+            if let Err(error) = self.run(&cmd, serde_json::json!({})) {
+                self.ui.status = error;
+                self.ui.status_error = true;
+            }
         } else if got_paste_image {
             self.pending_paste_cmd = None;
         }
