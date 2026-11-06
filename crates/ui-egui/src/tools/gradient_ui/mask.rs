@@ -268,7 +268,10 @@ pub(crate) fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // A menu over the canvas owns Esc and ↩ while it is open: Esc closes the menu and the pending
     // gradient stands, as the crop menu leaves its crop alone (#6561, CodeRabbit on #10722). These
     // run before `esc_taken` is read further down `shortcuts`, so they are checked here.
-    if app.ui.canvas_tool_menu.is_some() || app.ui.layer_menu.is_some() || ctx.any_popup_open() {
+    // `Popup::is_any_open` reads the state kept from the last frame; `ctx.any_popup_open` only sees
+    // this frame's popups, which are drawn after the keys are handled (as `shortcuts` notes for the
+    // polygon and crop, CodeRabbit on #10722).
+    if app.ui.canvas_tool_menu.is_some() || app.ui.layer_menu.is_some() || egui::Popup::is_any_open(ctx) {
         return false;
     }
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {

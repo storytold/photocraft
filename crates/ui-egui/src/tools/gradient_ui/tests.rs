@@ -742,6 +742,24 @@ fn a_canvas_menu_takes_escape_before_the_pending_mask_gradient() {
     assert_eq!(mask::pending(&app), None, "with the menu closed, Esc drops it");
 }
 
+/// CodeRabbit on #10722: an open popup (the status bar's Show menu, an options bar list) owns Esc
+/// too. Its id lives in egui's memory from the last frame, which is what the keys see — the
+/// popups of this frame are drawn after them, so `ctx.any_popup_open` would still read false.
+#[test]
+fn an_open_popup_takes_escape_before_the_pending_mask_gradient() {
+    let (mut app, _) = app_on_mask();
+    drag(&mut app, [20.0, 60.0], [120.0, 60.0]);
+    let pending = mask::pending(&app);
+    assert!(pending.is_some(), "a gradient is pending");
+    let ctx = egui::Context::default();
+    egui::Popup::open_id(&ctx, egui::Id::new("a-list-in-the-options-bar"));
+    assert!(egui::Popup::is_any_open(&ctx), "the popup is open in egui's memory");
+    let key = |pressed| egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE };
+    let input = egui::RawInput { events: vec![key(true), key(false)], ..Default::default() };
+    ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx())).textures_delta.clear();
+    assert_eq!(mask::pending(&app), pending, "the popup's Esc leaves the gradient pending");
+}
+
 /// CodeRabbit on #10722: a command the engine won't run leaves the gradient pending. Paste with
 /// nothing on the clipboard is refused by its own precondition (`has_clip_only`) in the precheck
 /// `before_command` runs, so no history step is written for a paste that does nothing.
