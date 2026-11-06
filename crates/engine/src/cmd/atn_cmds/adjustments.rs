@@ -372,8 +372,13 @@ fn gradient_map_to(p: &Value) -> Option<Descriptor> {
         .iter()
         .map(|st| {
             let a = st.as_array()?;
-            let location = a.first()?.as_f64()? * 4096.0;
-            if !location.is_finite() || !(0.0..=4096.0).contains(&location) || location.fract() != 0.0 {
+            let position = a.first()?.as_f64()?;
+            if !position.is_finite() {
+                return None;
+            }
+            // The native command casts to f32 and clamps before applying this stop.
+            let location = f64::from((position as f32).clamp(0.0, 1.0)) * 4096.0;
+            if location.fract() != 0.0 {
                 return None;
             }
             Some(D::Descriptor(

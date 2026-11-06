@@ -600,8 +600,8 @@ fn a_selective_color_step_in_the_scalar_form_keeps_its_values() {
     assert_eq!(range(&nulled, "reds"), [35.0, 0.0, 0.0, 0.0], "{nulled}");
 }
 
-/// ATN locations have 4096 steps; a legacy Gradient Map stop between them must not move
-/// silently when Save Actions writes either adjustment event (#11509).
+/// ATN locations have 4096 steps; an executed Gradient Map stop between them must not move
+/// silently, while inputs the native command clamps or casts onto the grid remain exportable (#11509).
 #[test]
 fn gradient_map_stop_locations_must_fit_the_atn_grid() {
     for id in ["image.adjustments.gradientMap", "layer.newAdjustmentLayer.gradientMap"] {
@@ -616,12 +616,14 @@ fn gradient_map_stop_locations_must_fit_the_atn_grid() {
         assert_eq!(skipped["skipped"], json!([{"action": "A", "step": 0, "id": id}]), "{id}");
         assert_eq!(s.actions.list[0].steps, before, "{id}");
 
-        s.actions.list[0].steps[0].1["stops"][1][0] = json!(0.300048828125);
-        let saved = s.execute("actions.save", json!({"action": "A"})).unwrap();
-        assert_eq!(saved["skipped"], json!([]), "{id}");
-        let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
-        let imported = import(&bytes).unwrap();
-        assert_eq!(imported.actions[0].steps[0].1["stops"][1][0], json!(0.300048828125), "{id}");
+        for (input, executed) in [(0.300048828125, 0.300048828125), (0.300048828126, 0.300048828125), (1.25, 1.0), (-0.25, 0.0)] {
+            s.actions.list[0].steps[0].1["stops"][1][0] = json!(input);
+            let saved = s.execute("actions.save", json!({"action": "A"})).unwrap();
+            assert_eq!(saved["skipped"], json!([]), "{id} {input}");
+            let bytes = photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap();
+            let imported = import(&bytes).unwrap();
+            assert_eq!(imported.actions[0].steps[0].1["stops"][1][0].as_f64(), Some(executed), "{id} {input}");
+        }
     }
 }
 
