@@ -152,7 +152,8 @@ fn show(app: &mut PhotocraftApp) {
     let Some(front) = app.held_opens.front() else { return };
     if let Some(a) = &front.animated {
         let format = a.get("format").and_then(Value::as_str).unwrap_or("GIF").to_string();
-        let frames = a.get("frames").and_then(Value::as_u64).unwrap_or(0).to_string();
+        // A damaged file's frames can't all be counted, but it has more than one.
+        let frames = a.get("frames").and_then(Value::as_u64).map_or_else(|| "2+".to_string(), |n| n.to_string());
         let message = crate::i18n::fmt(
             tl!("“{name}” is an animated {format} with {frames} frames. Open it as:"),
             &[("format", &format), ("frames", &frames), ("name", &front.name)],
@@ -341,9 +342,10 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
 }
 
 /// The animation prompt's answer (`choice`: `frames`, `video` or `firstFrame`): the first queued
-/// file takes that shape, then its profile prompt shows or it opens. With `remember` the choice
-/// becomes the File Handling preference for the format, which answers for the files already
-/// waiting with the same question too.
+/// file takes that shape, then its profile prompt shows or it opens. The file was read as its first
+/// frame to ask, so First Frame Only opens that, and Frames or Video read it again in the
+/// background. With `remember` the choice becomes the File Handling preference for the format,
+/// which answers for the files already waiting with the same question too.
 pub fn answer_animated(app: &mut PhotocraftApp, choice: &str, remember: bool) -> Result<Value, String> {
     use photocraft_engine::prefs::AnimatedOpen;
     let choice = AnimatedOpen::parse(choice).filter(|c| *c != AnimatedOpen::Ask).ok_or_else(|| format!("unknown choice `{choice}`"))?;
@@ -352,32 +354,71 @@ pub fn answer_animated(app: &mut PhotocraftApp, choice: &str, remember: bool) ->
         app.run("prefs.set", json!({"path": format!("fileHandling.{key}"), "value": choice.name()}))?;
     }
     let asks = |h: &Held| h.animated.as_ref().and_then(|a| a.get("key")?.as_str()) == Some(key.as_str());
-    let mut failed = Vec::new();
-    for (i, held) in app.held_opens.iter_mut().enumerate() {
-        if i > 0 && !(remember && asks(held)) {
-            continue;
-        }
-        held.animated = None;
-        if let Err(e) = photocraft_engine::animated_open::apply(&mut held.doc, choice, held.path.as_deref()) {
-            failed.push((i, e.to_string()));
-        }
-    }
-    // A file that couldn't take the shape is reported and dropped; the rest still open.
-    for (i, e) in failed.iter().rev() {
-        if let Some(h) = app.held_opens.remove(*i) {
-            // The queue keeps one entry per held file, in order.
-            if let Some(pos) = app.prompt_order.iter().enumerate().filter(|(_, p)| **p == PromptKind::Open).nth(*i).map(|(pos, _)| pos) {
-                app.prompt_order.remove(pos);
+    let answered: Vec<usize> = app.held_opens.iter().enumerate().filter(|(i, h)| *i == 0 || (remember && asks(h))).map(|(i, _)| i).collect();
+    let mut first_failure = None;
+    if choice == AnimatedOpen::FirstFrame {
+        for &i in &answered {
+            if let Some(held) = app.held_opens.get_mut(i) {
+                held.animated = None;
             }
-            app.open_failed(&h.name, e);
+        }
+    } else {
+        // Out of the queue, last first so the earlier places hold, then read in their order.
+        let mut rereads: Vec<(usize, Held)> = answered.iter().rev().filter_map(|&i| leave_queue(app, i).map(|h| (i, h))).collect();
+        rereads.reverse();
+        for (i, held) in rereads {
+            let name = held.name.clone();
+            if let Err(e) = read_answered(app, held, choice) {
+                // A file that can't be read for the shape is reported; the rest still open.
+                app.open_failed(&name, &e);
+                if i == 0 {
+                    first_failure = Some(e);
+                }
+            }
         }
     }
     advance(app);
     crate::jobs_ui::end_batch(app);
-    match failed.first() {
-        Some((0, e)) => Err(e.clone()),
-        _ => Ok(json!({"choice": choice.name(), "remembered": remember})),
+    match first_failure {
+        Some(e) => Err(e),
+        None => Ok(json!({"choice": choice.name(), "remembered": remember})),
     }
+}
+
+/// Takes the file at place `i` out of the queue, with its entry in the prompt order (which keeps
+/// one entry per held file, in order).
+fn leave_queue(app: &mut PhotocraftApp, i: usize) -> Option<Held> {
+    let held = app.held_opens.remove(i)?;
+    if let Some(pos) = app.prompt_order.iter().enumerate().filter(|(_, p)| **p == PromptKind::Open).nth(i).map(|(pos, _)| pos) {
+        app.prompt_order.remove(pos);
+    }
+    Some(held)
+}
+
+/// Reads a held file again as `choice` (Frames or Video) says, from the bytes it came from or else
+/// its path. It keeps its tab slot and place in its set, and comes back like any open.
+fn read_answered(app: &mut PhotocraftApp, held: Held, choice: photocraft_engine::prefs::AnimatedOpen) -> Result<(), String> {
+    use photocraft_engine::jobs::OpenSource;
+    let Held { name, path, bytes, slot, order, .. } = held;
+    let source = match (bytes, &path) {
+        (Some(bytes), _) => OpenSource::Bytes(bytes),
+        (None, Some(path)) => OpenSource::Path(path.clone()),
+        (None, None) => return Err(format!("`{name}` can't be read again")),
+    };
+    crate::jobs_ui::start_open_answered(app, &name, path, source, slot, order, choice)
+}
+
+/// A file read to ask how it opens arrives in the queue, unless a remembered answer came while it
+/// was being read: that answers for it too.
+pub(crate) fn arrive_asking(app: &mut PhotocraftApp, mut held: Held) -> Result<(), String> {
+    use photocraft_engine::prefs::AnimatedOpen;
+    match photocraft_engine::animated_open::preferred(app.session.prefs(), &held.name) {
+        Some(choice @ (AnimatedOpen::Frames | AnimatedOpen::Video)) if held.animated.is_some() => return read_answered(app, held, choice),
+        Some(AnimatedOpen::FirstFrame) => held.animated = None,
+        _ => {}
+    }
+    arrive(app, held);
+    Ok(())
 }
 
 /// Opens a queued file, applying `action` (the prompt's answer) or else the Color Settings

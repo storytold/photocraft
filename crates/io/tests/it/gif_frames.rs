@@ -359,3 +359,44 @@ fn frames_of_a_webp_keep_its_file_encoding() {
     assert_eq!(r.document.file_encoding, photocraft_io::file_encoding(&bytes));
     assert_ne!(r.document.file_encoding, Default::default(), "the source's encoding, not an unset one");
 }
+
+/// #6898 review: reading the frames honours `flat_max_pixel_bytes` as any flat decode does.
+#[test]
+fn opening_as_frames_stays_within_the_flat_decode_limit() {
+    let bytes = encode_gif_animated(
+        1,
+        1,
+        &(0..5).map(|i| GifFrame { indices: vec![0], palette: vec![[i, 0, 0]], transparent: None, delay_cs: 2 }).collect::<Vec<_>>(),
+        true,
+    )
+    .unwrap();
+    // Three 1×1 RGBA frames fit.
+    let opts = ImportOptions { animation: AnimationImport::Frames, flat_max_pixel_bytes: 12, ..Default::default() };
+    let r = photocraft_io::import_with_options("a.gif", &bytes, &opts).unwrap();
+    assert_eq!(r.document.layers.len(), 3);
+    assert!(r.warnings.iter().any(|w| w.contains("only the first 3 frames")), "{:?}", r.warnings);
+
+    let frames: Vec<_> = (0..5).map(|i| photocraft_codecs::web::WebpFrame { rgba: vec![i, 0, 0, 255], delay_ms: 100 }).collect();
+    let webp = photocraft_codecs::web::encode_webp_animated(1, 1, &frames, 0).unwrap();
+    let r = photocraft_io::import_with_options("a.webp", &webp, &opts).unwrap();
+    assert_eq!(r.document.layers.len(), 3);
+    assert!(r.warnings.iter().any(|w| w.contains("only the first 3 frames")), "{:?}", r.warnings);
+}
+
+/// #6898 review: Cancel stops the read of an animation's frames.
+#[test]
+fn opening_as_frames_can_be_cancelled() {
+    let bytes = encode_gif_animated(
+        1,
+        1,
+        &(0..5).map(|i| GifFrame { indices: vec![0], palette: vec![[i, 0, 0]], transparent: None, delay_cs: 2 }).collect::<Vec<_>>(),
+        true,
+    )
+    .unwrap();
+    let opts = ImportOptions { animation: AnimationImport::Frames, ..Default::default() };
+    let yes = || true;
+    let r = photocraft_io::import_for_open_with("a.gif", &bytes, &opts, &photocraft_raster::Interrupt::cancel_only(&yes));
+    assert!(matches!(r, Err(IoError::Cancelled)));
+    let r = photocraft_io::import_animation_frames_with("a.gif", &bytes, &opts, &photocraft_raster::Interrupt::cancel_only(&yes), &mut |_, _| Ok(()));
+    assert!(matches!(r, Err(IoError::Cancelled)));
+}

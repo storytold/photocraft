@@ -34,8 +34,14 @@ pub struct AnimationFrame {
 /// ([`MAX_GIF_FRAMES`]) and the total decoded bytes are checked against `opts.limits` before
 /// each frame is kept.
 pub fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>, CodecError> {
-    let (frames, more) = decode_frames(bytes, opts, MAX_GIF_FRAMES, false)?;
-    if more {
+    decode_until(bytes, opts, &|| false)
+}
+
+/// [`decode`], giving up between frames once `stop` says so; the frames read by then are returned,
+/// and the caller who asked to stop knows they aren't all of them.
+pub fn decode_until(bytes: &[u8], opts: &DecodeOptions, stop: &dyn Fn() -> bool) -> Result<Vec<AnimationFrame>, CodecError> {
+    let (frames, more) = decode_frames(bytes, opts, MAX_GIF_FRAMES, false, stop)?;
+    if more && !stop() {
         return Err(CodecError::LimitExceeded(format!("more than {MAX_GIF_FRAMES} frames")));
     }
     Ok(frames)
@@ -47,10 +53,21 @@ pub fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>,
 /// rather than failing the whole GIF. Otherwise the limits and the handling of a damaged frame are
 /// those of [`decode`].
 pub fn decode_prefix(bytes: &[u8], opts: &DecodeOptions, keep: usize) -> Result<(Vec<AnimationFrame>, bool), CodecError> {
-    decode_frames(bytes, opts, keep, true)
+    decode_prefix_until(bytes, opts, keep, &|| false)
 }
 
-fn decode_frames(bytes: &[u8], opts: &DecodeOptions, keep: usize, prefix_on_budget: bool) -> Result<(Vec<AnimationFrame>, bool), CodecError> {
+/// [`decode_prefix`], also ending the prefix between frames once `stop` says so.
+pub fn decode_prefix_until(bytes: &[u8], opts: &DecodeOptions, keep: usize, stop: &dyn Fn() -> bool) -> Result<(Vec<AnimationFrame>, bool), CodecError> {
+    decode_frames(bytes, opts, keep, true, stop)
+}
+
+fn decode_frames(
+    bytes: &[u8],
+    opts: &DecodeOptions,
+    keep: usize,
+    prefix_on_budget: bool,
+    stop: &dyn Fn() -> bool,
+) -> Result<(Vec<AnimationFrame>, bool), CodecError> {
     let limits = &opts.limits;
     let map = |e: image::ImageError| match e {
         image::ImageError::Limits(l) => CodecError::LimitExceeded(l.to_string()),
@@ -82,7 +99,7 @@ fn decode_frames(bytes: &[u8], opts: &DecodeOptions, keep: usize, prefix_on_budg
                 break;
             }
         };
-        if out.len() >= keep {
+        if out.len() >= keep || stop() {
             more = true;
             break;
         }
@@ -130,5 +147,18 @@ mod prefix_tests {
         assert_eq!((f.len(), more), (3, true));
         assert!(decode(&gif(5), &tight).is_err(), "decode keeps refusing a GIF that doesn't fit");
         assert_eq!(decode(&gif(5), &opts).unwrap().len(), 5, "decode still returns every frame");
+    }
+
+    #[test]
+    fn asking_to_stop_ends_the_read_between_frames() {
+        let opts = DecodeOptions::default();
+        let read = std::cell::Cell::new(0);
+        let stop = || {
+            read.set(read.get() + 1);
+            read.get() > 2
+        };
+        let (f, more) = decode_prefix_until(&gif(5), &opts, 50, &stop).unwrap();
+        assert_eq!((f.len(), more), (2, true));
+        assert_eq!(decode_until(&gif(5), &opts, &|| true).unwrap().len(), 0, "stopping isn't a refusal");
     }
 }

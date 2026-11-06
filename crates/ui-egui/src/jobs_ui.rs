@@ -271,7 +271,34 @@ pub fn start_open(
     order: Option<OpenOrder>,
 ) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())? {
+    let started = app.session.start_open_for_user_with_background(name, source, app.background_jobs).map_err(|e| e.to_string())?;
+    track_open(app, name, path, started, slot, order)
+}
+
+/// [`start_open`] for the animation prompt's answer (`choice`, Frames or Video): the file `name` is
+/// read again in that shape, without asking.
+pub(crate) fn start_open_answered(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+    choice: photocraft_engine::prefs::AnimatedOpen,
+) -> Result<(), String> {
+    let started = app.session.start_open_answered(name, source, choice, app.background_jobs).map_err(|e| e.to_string())?;
+    track_open(app, name, path, started, slot, order)
+}
+
+fn track_open(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    started: Started,
+    slot: Option<usize>,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
+    match started {
         // Inline (wasm, or background jobs off): finish now, like a background open that ended at
         // once. A preflight keeps the slot and set order in its memory prompt.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, slot, order),
@@ -697,10 +724,11 @@ fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Valu
     };
     // Held back for the profile prompt (Ask When Opening) or the animation prompt.
     if let Some(id) = v.get("held").and_then(Value::as_u64) {
+        let bytes = app.session.take_held_open_bytes(id);
         let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
         let asked = |k: &str| v.get(k).filter(|q| !q.is_null()).cloned();
-        crate::open_prompt::arrive(app, held(doc, read_only, asked("color"), asked("animated"), false));
-        return Ok(());
+        let waiting = crate::open_prompt::Held { bytes, ..held(doc, read_only, asked("color"), asked("animated"), false) };
+        return crate::open_prompt::arrive_asking(app, waiting);
     }
     // poll_jobs applies all ready jobs before the shell handles their events. An earlier
     // handler may have moved or closed tabs, so the apply-time index is no longer authority.

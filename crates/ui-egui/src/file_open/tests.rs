@@ -89,12 +89,14 @@ fn automation_open_keeps_the_frame_animation_of_a_native_document() {
         [[255, 0, 0], [0, 0, 255], [0, 255, 0]].iter().map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 }).collect();
     let gif = encode_gif_animated(3, 2, &frames, true).unwrap();
     let services = Services {
-        // Whatever the name says, the import reads a frame animation, as `.pcraft` does for one it saved.
-        import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-            let opts = photocraft_io::ImportOptions { animation: photocraft_io::AnimationImport::Frames, ..Default::default() };
-            let doc = photocraft_io::import_with_options("a.gif", &gif, &opts).map_err(|e| e.to_string())?.document;
-            assert!(doc.frame_animation.is_some(), "{name}");
-            Ok((doc, Vec::new()))
+        // A native name reads a frame animation whatever is asked, as `.pcraft` does for one it saved;
+        // a GIF reads as the options say.
+        import: Some(Box::new(move |name: &str, _bytes: &[u8], opts: &photocraft_io::ImportOptions| {
+            let native = name.to_ascii_lowercase().ends_with(".pcraft");
+            let opts = if native { photocraft_io::ImportOptions { animation: photocraft_io::AnimationImport::Frames, ..*opts } } else { *opts };
+            let r = photocraft_io::import_with_options("a.gif", &gif, &opts).map_err(|e| e.to_string())?;
+            assert_eq!(r.document.frame_animation.is_some(), native, "{name}");
+            Ok((r.document, r.warnings))
         })),
         ..Default::default()
     };

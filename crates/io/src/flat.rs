@@ -118,7 +118,7 @@ fn import_flat_impl_with_options(
     // Asked for: every frame of an animated GIF or WebP as its own layer, to edit by hand.
     if opts.animation == AnimationImport::Frames
         && matches!(format, Some(Format::Gif | Format::WebP))
-        && let Some(mut r) = import_animation_layers(name, bytes)?
+        && let Some(mut r) = import_animation_layers(name, bytes, opts, ctl)?
     {
         r.document.file_encoding = file_encoding_as(format, bytes);
         return Ok(r);
@@ -228,21 +228,29 @@ fn gif_layer_frames(bytes: &[u8]) -> usize {
 /// An animated GIF or WebP as one document with a raster layer per frame ("Frame 1" at the
 /// bottom), each a full picture of the canvas, and a frame animation that shows one layer per
 /// frame with the file's delays. `None` for a still image, which opens as any flat image does.
-fn import_animation_layers(name: &str, bytes: &[u8]) -> Result<Option<ImportResult>, IoError> {
+/// `opts.flat_max_pixel_bytes` limits the frames as it does any flat decode, and `ctl` stops the
+/// read between frames.
+fn import_animation_layers(name: &str, bytes: &[u8], opts: &crate::ImportOptions, ctl: &Interrupt) -> Result<Option<ImportResult>, IoError> {
     let gif = codecs::detect(bytes) == Some(Format::Gif);
+    let decode = codecs::DecodeOptions { limits: decode_limits(opts), ..Default::default() };
+    let stop = || ctl.cancelled();
     // Only the first frames are decoded: each is a full-canvas picture, and every frame hides all
     // the other layers, so the animation grows with the square of the frame count.
     let (frames, more) = if gif {
-        codecs::decode_gif_frames_prefix(bytes, &codecs::DecodeOptions::default(), gif_layer_frames(bytes))?
+        codecs::decode_gif_frames_prefix_until(bytes, &decode, gif_layer_frames(bytes), &stop)?
     } else {
-        codecs::decode_webp_frames_prefix(bytes, &codecs::DecodeOptions::default(), |w, h| layer_frames(u64::from(w), u64::from(h)))?
+        // Past the limit a GIF's prefix ends by itself; a WebP's stops at the frames that fit.
+        let fits = |w: u32, h: u32| usize::try_from(decode.limits.max_alloc / (u64::from(w) * u64::from(h) * 4).max(1)).unwrap_or(usize::MAX).max(1);
+        codecs::decode_webp_frames_prefix_until(bytes, &decode, |w, h| layer_frames(u64::from(w), u64::from(h)).min(fits(w, h)), &stop)?
     };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     if frames.len() < 2 {
         return Ok(None);
     }
     let mut result: Option<ImportResult> = None;
     let mut delays = Vec::with_capacity(frames.len());
     for (i, f) in frames.into_iter().enumerate() {
+        ctl.check().map_err(|_| IoError::Cancelled)?;
         let mut r = image_to_document(name, &f.image)?;
         let Some(mut layer) = r.document.layers.pop() else { continue };
         layer.name = format!("Frame {}", i + 1);
@@ -388,6 +396,27 @@ pub fn import_animation_frames(name: &str, bytes: &[u8], each: &mut dyn FnMut(Do
         Some(Format::WebP) => import_webp_frames(name, bytes, each),
         _ => Err(codecs::CodecError::UnknownFormat.into()),
     }
+}
+
+/// [`import_animation_frames`] for a caller that can stop the read and limit it: `ctl` stops the
+/// decode between frames, and `opts.flat_max_pixel_bytes` limits it as any flat decode. An animation
+/// that doesn't fit is refused rather than cut short.
+pub fn import_animation_frames_with(
+    name: &str,
+    bytes: &[u8],
+    opts: &crate::ImportOptions,
+    ctl: &Interrupt,
+    each: &mut dyn FnMut(Document, u32) -> Result<(), IoError>,
+) -> Result<usize, IoError> {
+    let decode = codecs::DecodeOptions { limits: decode_limits(opts), ..Default::default() };
+    let stop = || ctl.cancelled();
+    let frames = match codecs::detect(bytes) {
+        Some(Format::Gif) => codecs::decode_gif_frames_until(bytes, &decode, &stop)?,
+        Some(Format::WebP) => codecs::decode_webp_frames_until(bytes, &decode, &stop)?,
+        _ => return Err(codecs::CodecError::UnknownFormat.into()),
+    };
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    import_frames(name, frames, each)
 }
 
 /// The lossy settings `bytes` were encoded with, for File › Save to keep: a JPEG's quality

@@ -70,16 +70,18 @@ pub(crate) fn is_animated(bytes: &[u8]) -> bool {
 /// and the first one carries [`DecodeWarning::Truncated`]. The frame count
 /// ([`super::gif_frames::MAX_GIF_FRAMES`]) and the total decoded bytes are checked against
 /// `limits` before each frame is kept.
-pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits) -> Result<Option<Vec<super::gif_frames::AnimationFrame>>, CodecError> {
-    Ok(decode_prefix(bytes, limits, &|_, _| usize::MAX)?.map(|(frames, _)| frames))
+pub(crate) fn decode_frames(bytes: &[u8], limits: &Limits, stop: &dyn Fn() -> bool) -> Result<Option<Vec<super::gif_frames::AnimationFrame>>, CodecError> {
+    Ok(decode_prefix(bytes, limits, &|_, _| usize::MAX, stop)?.map(|(frames, _)| frames))
 }
 
 /// [`decode_frames`], stopping after the first `keep(width, height)` frames so that a caller who
-/// can only hold those never decodes the rest; the `bool` says that more frames follow.
+/// can only hold those never decodes the rest, or once `stop` says so; the `bool` says that more
+/// frames follow.
 pub(crate) fn decode_prefix(
     bytes: &[u8],
     limits: &Limits,
     keep: &dyn Fn(u32, u32) -> usize,
+    stop: &dyn Fn() -> bool,
 ) -> Result<Option<(Vec<super::gif_frames::AnimationFrame>, bool)>, CodecError> {
     use super::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
     if !is_animated(bytes) {
@@ -94,7 +96,7 @@ pub(crate) fn decode_prefix(
     let mut damaged = false;
     let mut more = false;
     for _ in 0..dec.num_frames() {
-        if out.len() >= keep {
+        if out.len() >= keep || stop() {
             more = true;
             break;
         }

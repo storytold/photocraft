@@ -102,6 +102,47 @@ fn an_animated_gif_asks_how_to_open_and_each_answer_shapes_it() {
     }
 }
 
+/// #6898 review: First frame only from the prompt opens what the remembered preference opens: a
+/// normal read of the first frame, Indexed for a GIF.
+#[test]
+fn first_frame_from_the_prompt_opens_as_the_remembered_preference_does() {
+    let opened = |remembered: bool| {
+        let mut h = harness(true);
+        if remembered {
+            h.state_mut().session.execute("prefs.set", serde_json::json!({"path": "fileHandling.animatedGif", "value": "firstFrame"})).unwrap();
+        }
+        open(&mut h, "a.gif", &gif(3));
+        if !remembered {
+            click(&mut h, "First frame only");
+            click(&mut h, "OK");
+        }
+        let doc = &h.state().session.active().unwrap().doc;
+        (doc.mode, doc.layers.len(), doc.color_table.is_some(), doc.file_encoding)
+    };
+    assert_eq!(opened(false), opened(true));
+    assert_eq!(opened(false).0, photocraft_doc::ColorMode::Indexed);
+}
+
+/// A file opened from disk is read again from its path for Frames or Video, into the place it held.
+#[test]
+fn an_answer_reads_the_file_again_from_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("a.gif");
+    std::fs::write(&path, gif(3)).unwrap();
+    for background in [false, true] {
+        for (choice, want) in [("Frame animation", (3, Some(3), None)), ("Video layer", (1, None, Some(3)))] {
+            let mut h = harness(background);
+            h.state_mut().open_paths(&[path.to_string_lossy().into_owned()]);
+            settle(&mut h);
+            click(&mut h, choice);
+            click(&mut h, "OK");
+            assert_eq!(prompt(&h), None, "not asked twice");
+            assert_eq!(shape(&h), want, "{choice}, background {background}");
+            assert!(h.state().jobs.batches.is_empty(), "the set ends with the read");
+        }
+    }
+}
+
 #[test]
 fn remembering_answers_later_files_of_that_format_only() {
     let mut h = harness(true);
@@ -130,6 +171,23 @@ fn a_remembered_answer_covers_the_files_already_waiting() {
     assert_eq!(prompt(&h), None, "b.gif was waiting with the same question");
     let docs = h.state().session.documents();
     assert_eq!(docs.iter().map(|d| (d.doc.name.as_str(), d.doc.layers.len())).collect::<Vec<_>>(), [("a.gif", 1), ("b.gif", 1)]);
+}
+
+#[test]
+fn a_remembered_frames_answer_reads_the_files_already_waiting_again() {
+    for background in [false, true] {
+        let mut h = harness(background);
+        for name in ["a.gif", "b.gif"] {
+            h.state_mut().open_file(&format!("/pics/{name}"), &gif(2)).unwrap();
+        }
+        settle(&mut h);
+        click(&mut h, "Frame animation");
+        click(&mut h, "Remember this choice for GIF files");
+        click(&mut h, "OK");
+        assert_eq!(prompt(&h), None, "b.gif was waiting with the same question");
+        let docs = h.state().session.documents();
+        assert_eq!(docs.iter().map(|d| (d.doc.name.as_str(), d.doc.layers.len())).collect::<Vec<_>>(), [("a.gif", 2), ("b.gif", 2)], "background {background}");
+    }
 }
 
 /// A set is forgotten once its last file has answered the prompt and opened, as it is after the

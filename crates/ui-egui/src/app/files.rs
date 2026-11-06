@@ -91,14 +91,14 @@ impl PhotocraftApp {
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
         let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
-        // An animated GIF or WebP reads its frames when File Handling wants them or asks.
+        // An animated GIF or WebP reads as File Handling says (`animated_open`).
         opts.animation = photocraft_engine::animated_open::import_mode(self.session.prefs(), name);
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
         // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
         // string. Every other format keeps the shell's import service.
         let typed_open = photocraft_io::is_psd(bytes) || photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff);
-        let (mut doc, warnings, damaged) = if typed_open {
+        let (mut doc, mut warnings, damaged) = if typed_open {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning. A TIFF never
             // sets it: its layered import has no damaged-content confirmation.
@@ -118,9 +118,12 @@ impl PhotocraftApp {
         // Preferences › Raw Defaults › Resolution, as the engine's open applies it.
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // An animated GIF or WebP opens as File Handling says, or asks first (`open_prompt`).
-        let animated = photocraft_engine::animated_open::question(self.session.prefs(), name, &doc);
-        if animated.is_none() {
-            photocraft_engine::animated_open::apply_preferred(self.session.prefs(), name, &mut doc, path).map_err(|e| e.to_string())?;
+        let choice = photocraft_engine::animated_open::preferred(self.session.prefs(), name);
+        let animated =
+            if choice == Some(photocraft_engine::prefs::AnimatedOpen::Ask) { photocraft_engine::animated_open::question(name, &warnings) } else { None };
+        if choice == Some(photocraft_engine::prefs::AnimatedOpen::Video) {
+            photocraft_engine::animated_open::open_as_video(&mut doc, &mut warnings, bytes, path, &opts, &photocraft_raster::Interrupt::NONE)
+                .map_err(|e| e.to_string())?;
         }
         // Edit › Color Settings policies apply on open; Ask When Opening holds the file back
         // until its prompt is answered, and later files wait behind it (`open_prompt`).
@@ -139,7 +142,8 @@ impl PhotocraftApp {
                 name: name.to_string(),
                 path: path.map(str::to_string),
                 warnings: warnings.clone(),
-                bytes: (wants_raw && path.is_none()).then(|| std::sync::Arc::new(bytes.to_vec())),
+                // The prompt's answer may read the frames from them, whatever `path` names.
+                bytes: (animated.is_some() || (wants_raw && path.is_none())).then(|| std::sync::Arc::new(bytes.to_vec())),
                 slot,
                 order,
                 question,
@@ -200,12 +204,12 @@ impl PhotocraftApp {
         let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
         opts.animation = photocraft_engine::animated_open::import_for(animation);
         opts.psd_high_memory_approved = approved;
-        let (mut doc, warnings) = import(name, bytes, &opts)?;
+        let (mut doc, mut warnings) = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
-        // No source path to reload a video layer from: the capability read the bytes. A frame
-        // animation saved in a native document is the document: only an import is reshaped.
-        if !std::path::Path::new(name).extension().is_some_and(|e| e.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
-            photocraft_engine::animated_open::apply(&mut doc, animation, None).map_err(|e| e.to_string())?;
+        // No source path to reload a video layer from: the capability read the bytes.
+        if animation == photocraft_engine::prefs::AnimatedOpen::Video {
+            photocraft_engine::animated_open::open_as_video(&mut doc, &mut warnings, bytes, None, &opts, &photocraft_raster::Interrupt::NONE)
+                .map_err(|e| e.to_string())?;
         }
         // The caller records the path it read from.
         self.session.add_document(doc, None);

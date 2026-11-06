@@ -218,11 +218,11 @@ fn rasterize(s: &mut Session, _p: &Value) -> Result<Value> {
 // ------------------------------------------------------------------ file-based footage
 
 /// Frames loaded from a file or an image sequence.
-struct Footage {
-    frames: Vec<Surface>,
+pub(crate) struct Footage {
+    pub(crate) frames: Vec<Surface>,
     /// The frame rate the footage itself implies (a single animated GIF's or WebP's delays); `None` for
     /// stills and sequences, which carry none.
-    fps: Option<f32>,
+    pub(crate) fps: Option<f32>,
 }
 
 /// The frame rate for a GIF's frame delays (milliseconds): that of the most common delay, the
@@ -253,13 +253,6 @@ pub(crate) fn fps_from_delays(delays: &[u32]) -> Option<f32> {
     best.map(|(d, _)| 1000.0 / d as f32)
 }
 
-/// `photocraft_io::import_gif_frames` / `import_webp_frames`.
-type ImportFrames = fn(
-    &str,
-    &[u8],
-    &mut dyn FnMut(photocraft_doc::Document, u32) -> std::result::Result<(), photocraft_io::IoError>,
-) -> std::result::Result<usize, photocraft_io::IoError>;
-
 /// Frame storage one footage import may keep (whole tiles, all frames together).
 const MAX_FOOTAGE_BYTES: u64 = 2 << 30;
 
@@ -286,7 +279,7 @@ fn footage_import_options(s: &Session) -> photocraft_io::ImportOptions {
 /// Per-thread test overrides for the footage import limits. A scope restores the previous values
 /// on drop, and the thread-local keeps parallel tests from lowering each other's limits.
 #[cfg(test)]
-mod limits {
+pub(crate) mod limits {
     use std::cell::Cell;
 
     #[derive(Clone, Copy, Default)]
@@ -343,6 +336,81 @@ fn tiff_page_error(display: &std::path::Path, name: &str, page: usize, error: ph
     }
 }
 
+/// The frames a footage import has kept so far, within its limits.
+struct KeptFrames {
+    frames: Vec<Surface>,
+    // Each frame stores whole tiles however little it draws, so count the tiles kept so far.
+    bytes: u64,
+    max_bytes: u64,
+}
+
+impl KeptFrames {
+    fn with_capacity(capacity: usize) -> Self {
+        Self { frames: Vec::with_capacity(capacity), bytes: 0, max_bytes: footage_byte_limit() }
+    }
+
+    fn keep(&mut self, surface: Surface) -> std::result::Result<(), String> {
+        // A frame of fully transparent pixels stores no tiles, so the count needs its own limit.
+        if self.frames.len() >= crate::timeline_cmds::MAX_DURATION {
+            return Err(format!("the footage has more than {} frames", crate::timeline_cmds::MAX_DURATION));
+        }
+        let tile = u64::from(photocraft_geom::TILE_SIZE.unsigned_abs()).pow(2) * surface.format().bytes_per_pixel() as u64;
+        self.bytes = self.bytes.saturating_add(tile.saturating_mul(surface.tile_count() as u64));
+        if self.bytes > self.max_bytes {
+            return Err(format!("the footage needs more than {} MiB of frames", self.max_bytes >> 20));
+        }
+        self.frames.push(surface);
+        Ok(())
+    }
+
+    /// Keeps every frame of the animated GIF or WebP in `bytes`, each flattened to `fmt`, and
+    /// adds their delays to `delays`.
+    fn keep_animation(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        fmt: photocraft_color::PixelFormat,
+        opts: &photocraft_io::ImportOptions,
+        ctl: &photocraft_raster::Interrupt,
+        delays: &mut Vec<u32>,
+    ) -> Result<()> {
+        let mut over = None;
+        let done = photocraft_io::import_animation_frames_with(name, bytes, opts, ctl, &mut |doc, delay_ms| {
+            ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
+            if let Err(msg) = self.keep(crate::file_cmds::flattened(&doc, fmt)) {
+                over = Some(msg);
+                return Err(photocraft_io::IoError::Cancelled);
+            }
+            delays.push(delay_ms);
+            Ok(())
+        });
+        if let Some(msg) = over {
+            return Err(EngineError::Other(format!("`{name}`: {msg}")));
+        }
+        match done {
+            Ok(_) => Ok(()),
+            Err(photocraft_io::IoError::Cancelled) => Err(EngineError::Cancelled),
+            Err(e) => Err(EngineError::Other(format!("`{name}`: {e}"))),
+        }
+    }
+}
+
+/// Every frame of the animated GIF or WebP in `bytes` called `name`, as a footage import keeps
+/// them: within the footage limits, and refused rather than cut short past them. `ctl` stops the
+/// read between frames.
+pub(crate) fn animation_footage(
+    name: &str,
+    bytes: &[u8],
+    fmt: photocraft_color::PixelFormat,
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Footage> {
+    let mut kept = KeptFrames::with_capacity(0);
+    let mut delays = Vec::new();
+    kept.keep_animation(name, bytes, fmt, opts, ctl, &mut delays)?;
+    Ok(Footage { frames: kept.frames, fps: fps_from_delays(&delays) })
+}
+
 /// Load frames from `path`: a single image (1 frame, or every frame of an animated GIF or WebP), or a
 /// directory of images (sorted = an image sequence). Each becomes a full raster frame in the
 /// document's format.
@@ -368,47 +436,19 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
     if files.is_empty() {
         return Err(EngineError::Other(format!("no images in `{path}`")));
     }
-    let mut frames: Vec<Surface> = Vec::with_capacity(files.len());
+    let mut kept = KeptFrames::with_capacity(files.len());
     let mut delays = Vec::new();
-    // Each frame stores whole tiles however little it draws, so count the tiles kept so far.
-    let mut kept_bytes = 0u64;
-    let max_footage_bytes = footage_byte_limit();
-    let mut keep = |frames: &mut Vec<Surface>, surface: Surface| -> std::result::Result<(), String> {
-        // A frame of fully transparent pixels stores no tiles, so the count needs its own limit.
-        if frames.len() >= crate::timeline_cmds::MAX_DURATION {
-            return Err(format!("the footage has more than {} frames", crate::timeline_cmds::MAX_DURATION));
-        }
-        let tile = u64::from(photocraft_geom::TILE_SIZE.unsigned_abs()).pow(2) * surface.format().bytes_per_pixel() as u64;
-        kept_bytes = kept_bytes.saturating_add(tile.saturating_mul(surface.tile_count() as u64));
-        if kept_bytes > max_footage_bytes {
-            return Err(format!("the footage needs more than {} MiB of frames", max_footage_bytes >> 20));
-        }
-        frames.push(surface);
-        Ok(())
-    };
     for f in &files {
         let bytes = std::fs::read(f).map_err(|e| EngineError::Other(format!("read `{}`: {e}", f.display())))?;
         let name = f.to_string_lossy();
         // A GIF (a still one is its only frame) or an animated WebP brings every frame.
-        let animation = match photocraft_codecs::detect(&bytes) {
-            Some(photocraft_codecs::Format::Gif) => Some(photocraft_io::import_gif_frames as ImportFrames),
-            Some(photocraft_codecs::Format::WebP) if photocraft_codecs::webp_is_animated(&bytes) => Some(photocraft_io::import_webp_frames as ImportFrames),
-            _ => None,
+        let animated = match photocraft_codecs::detect(&bytes) {
+            Some(photocraft_codecs::Format::Gif) => true,
+            Some(photocraft_codecs::Format::WebP) => photocraft_codecs::webp_is_animated(&bytes),
+            _ => false,
         };
-        if let Some(import) = animation {
-            let mut over = None;
-            let done = import(&name, &bytes, &mut |doc, delay_ms| {
-                if let Err(msg) = keep(&mut frames, crate::file_cmds::flattened(&doc, fmt)) {
-                    over = Some(msg);
-                    return Err(photocraft_io::IoError::Cancelled);
-                }
-                delays.push(delay_ms);
-                Ok(())
-            });
-            if let Some(msg) = over {
-                return Err(EngineError::Other(format!("`{}`: {msg}", f.display())));
-            }
-            done.map_err(|e| EngineError::Other(format!("`{}`: {e}", f.display())))?;
+        if animated {
+            kept.keep_animation(&name, &bytes, fmt, opts, &photocraft_raster::Interrupt::NONE, &mut delays)?;
             continue;
         }
         // A multi-page TIFF: every full-resolution page of the main chain, in order, as the
@@ -434,7 +474,7 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
                     // The page is flattened before admission of the next one, so the retained
                     // frames of every page count against the footage limit, as GIF and WebP
                     // frames do.
-                    keep(&mut frames, crate::file_cmds::flattened(&doc, fmt)).map_err(|msg| EngineError::Other(format!("`{}`: {msg}", f.display())))?;
+                    kept.keep(crate::file_cmds::flattened(&doc, fmt)).map_err(|msg| EngineError::Other(format!("`{}`: {msg}", f.display())))?;
                 }
                 continue;
             }
@@ -444,12 +484,12 @@ fn load_frames(path: &str, fmt: photocraft_color::PixelFormat, opts: &photocraft
         if f.extension().is_some_and(|e| e.eq_ignore_ascii_case("tga")) {
             photocraft_io::tga_alpha_channel_to_transparency(&mut doc);
         }
-        keep(&mut frames, crate::file_cmds::flattened_checked(&doc, fmt, "layer.videoLayers.newVideoLayerFromFile")?)
+        kept.keep(crate::file_cmds::flattened_checked(&doc, fmt, "layer.videoLayers.newVideoLayerFromFile")?)
             .map_err(|msg| EngineError::Other(format!("`{}`: {msg}", f.display())))?;
     }
     // Only a lone GIF or WebP says how fast it plays; a sequence mixing files has no single rate.
     let fps = if files.len() == 1 { fps_from_delays(&delays) } else { None };
-    Ok(Footage { frames, fps })
+    Ok(Footage { frames: kept.frames, fps })
 }
 
 fn new_from_file(s: &mut Session, p: &Value) -> Result<Value> {

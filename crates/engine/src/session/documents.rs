@@ -149,19 +149,26 @@ impl Session {
         i
     }
 
-    /// Holds a decoded document back from opening (see `held_opens`); returns its id.
-    pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool) -> u64 {
+    /// Holds a decoded document back from opening (see `held_opens`), with the bytes it came from
+    /// when the answer may need them; returns its id.
+    pub(crate) fn hold_open(&mut self, doc: Document, source_read_only: bool, bytes: Option<std::sync::Arc<Vec<u8>>>) -> u64 {
         self.next_held_open = self.next_held_open.wrapping_add(1);
-        self.held_opens.push((self.next_held_open, doc, source_read_only));
+        self.held_opens.push((self.next_held_open, doc, source_read_only, bytes));
         self.next_held_open
     }
 
     /// Takes a document a background open held back for the profile prompt: the document and
     /// whether its source is read-only. `None` when there is no such document (already taken).
     pub fn take_held_open(&mut self, id: u64) -> Option<(Document, bool)> {
-        let i = self.held_opens.iter().position(|(h, _, _)| *h == id)?;
-        let (_, doc, read_only) = self.held_opens.remove(i);
+        let i = self.held_opens.iter().position(|(h, ..)| *h == id)?;
+        let (_, doc, read_only, _) = self.held_opens.remove(i);
         Some((doc, read_only))
+    }
+
+    /// The bytes held with a document for the animation prompt ([`Self::take_held_open`] takes the
+    /// document itself).
+    pub fn take_held_open_bytes(&mut self, id: u64) -> Option<std::sync::Arc<Vec<u8>>> {
+        self.held_opens.iter_mut().find(|(h, ..)| *h == id)?.3.take()
     }
 
     pub fn close(&mut self, index: usize) -> Option<DocState> {

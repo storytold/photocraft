@@ -1,11 +1,13 @@
 //! How an animated GIF or WebP opens. File › Open follows Preferences › File Handling, or shows a
-//! prompt when they say Ask: the file reads as a frame animation, a layer per frame
-//! (`photocraft_io`'s flat import with [`photocraft_io::AnimationImport::Frames`]), and the choice
-//! reshapes that document before it opens: kept as frames, turned into one video layer on the
-//! timeline, or cut to its first frame. Headless opens (scripts, the CLI, MCP) read the first frame
-//! only, unless the caller asks for frames or a video layer ([`requested`]).
+//! prompt when they say Ask. Each choice reads the file its own way: a frame animation with a layer
+//! per frame (`photocraft_io`'s flat import with [`photocraft_io::AnimationImport::Frames`]), one
+//! video layer on the timeline ([`open_as_video`]), or the first frame like any flat image. Asking
+//! reads the first frame and its frame count, and only Frames or Video reads the file again.
+//! Headless opens (scripts, the CLI, MCP) read the first frame only, unless the caller asks for
+//! frames or a video layer ([`requested`]).
 
-use photocraft_doc::{Document, Layer, LayerContent, Timeline, VideoData, VideoSource};
+use photocraft_codecs::DecodeWarning;
+use photocraft_doc::{ColorMode, Document, Layer, Timeline, VideoData, VideoSource};
 use serde_json::{Value, json};
 
 use crate::prefs::{AnimatedOpen, Preferences};
@@ -22,27 +24,26 @@ pub fn pref_key(name: &str) -> Option<&'static str> {
     }
 }
 
-/// The preferred choice for `name`.
-fn preferred(prefs: &Preferences, name: &str) -> Option<AnimatedOpen> {
+/// File Handling's choice for `name`; `None` for a format that has none.
+pub fn preferred(prefs: &Preferences, name: &str) -> Option<AnimatedOpen> {
     Some(match pref_key(name)? {
         "animatedGif" => prefs.file_handling.animated_gif,
         _ => prefs.file_handling.animated_webp,
     })
 }
 
-/// How File › Open reads `name`: an animated GIF's or WebP's frames when File Handling says to
-/// open them as frames or a video layer, or to ask (the prompt needs them, to count and to apply
-/// the answer); its first frame when it says so, and for every other file.
+/// How File › Open first reads `name`: an animated GIF's or WebP's frames when File Handling says
+/// to open them as frames, else the first frame like any flat image.
 pub fn import_mode(prefs: &Preferences, name: &str) -> photocraft_io::AnimationImport {
     preferred(prefs, name).map_or(photocraft_io::AnimationImport::FirstFrame, import_for)
 }
 
-/// What the import has to read for `choice`: the frames for a frame animation or a video layer
-/// (and to ask), else the first frame.
+/// What the import has to read for `choice`: a layer per frame for a frame animation, else the
+/// first frame (a video layer reads its frames as footage, [`open_as_video`]).
 pub fn import_for(choice: AnimatedOpen) -> photocraft_io::AnimationImport {
     match choice {
-        AnimatedOpen::Ask | AnimatedOpen::Frames | AnimatedOpen::Video => photocraft_io::AnimationImport::Frames,
-        AnimatedOpen::FirstFrame => photocraft_io::AnimationImport::FirstFrame,
+        AnimatedOpen::Frames => photocraft_io::AnimationImport::Frames,
+        AnimatedOpen::Ask | AnimatedOpen::Video | AnimatedOpen::FirstFrame => photocraft_io::AnimationImport::FirstFrame,
     }
 }
 
@@ -58,81 +59,61 @@ pub fn requested(param: Option<&str>) -> Result<AnimatedOpen> {
     }
 }
 
-/// Whether `doc`, just read from `name`, is an animation the choice applies to.
-fn is_animation(name: &str, doc: &Document) -> bool {
-    pref_key(name).is_some() && doc.frame_animation.as_ref().is_some_and(|a| a.frames.len() > 1)
+/// Whether a read's warnings say the file has frames past the one that was read.
+pub fn more_frames(warnings: &[String]) -> bool {
+    warnings.iter().any(|w| DecodeWarning::more_frames_in(w).is_some())
 }
 
-/// What opening `doc` (just read from `name`) has to ask: `{format, key, frames}` when it is
-/// an animation and the preference says Ask, else `None`.
-pub fn question(prefs: &Preferences, name: &str, doc: &Document) -> Option<Value> {
-    if !is_animation(name, doc) || preferred(prefs, name) != Some(AnimatedOpen::Ask) {
-        return None;
-    }
+/// What opening `name` has to ask, given the warnings of reading its first frame:
+/// `{format, key, frames}` when it is an animated GIF or WebP. `frames` is null for a damaged file
+/// whose frames couldn't be counted.
+pub fn question(name: &str, warnings: &[String]) -> Option<Value> {
     let key = pref_key(name)?;
+    let frames = warnings.iter().find_map(|w| DecodeWarning::more_frames_in(w))?;
     let format = if key == "animatedGif" { "GIF" } else { "WebP" };
-    let frames = doc.frame_animation.as_ref().map_or(0, |a| a.frames.len());
     Some(json!({"format": format, "key": key, "frames": frames}))
 }
 
-/// Applies the preferred choice to `doc` when it is an animation and the preference names one
-/// (Ask leaves it for [`question`]). `path` is the file, for a video layer to reload from.
-pub fn apply_preferred(prefs: &Preferences, name: &str, doc: &mut Document, path: Option<&str>) -> Result<()> {
-    match preferred(prefs, name) {
-        Some(choice) if choice != AnimatedOpen::Ask && is_animation(name, doc) => apply(doc, choice, path),
-        _ => Ok(()),
+/// Turns `doc`, the first frame just read from the animated GIF or WebP in `bytes`, into one video
+/// layer holding every frame, on a timeline at the rate the delays give, as File › Open and
+/// automation ask for. The frames are read as footage is ([`crate::video_cmds::animation_footage`]),
+/// so the footage limits apply rather than the layer budget of a frame animation. Anything else
+/// (a still image, a native document) is left alone. `path` is the file, for the layer to reload
+/// from; `ctl` stops the read between frames.
+pub fn open_as_video(
+    doc: &mut Document,
+    warnings: &mut Vec<String>,
+    bytes: &[u8],
+    path: Option<&str>,
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<()> {
+    let Some(total) = warnings.iter().find_map(|w| DecodeWarning::more_frames_in(w)) else { return Ok(()) };
+    if !matches!(photocraft_codecs::detect(bytes), Some(photocraft_codecs::Format::Gif | photocraft_codecs::Format::WebP)) {
+        return Ok(());
     }
-}
-
-/// Reshapes a just-read frame animation (a layer per frame, "Frame 1" at the bottom) as
-/// `choice` says. Frames and Ask keep it as it is, and a document without a frame animation is
-/// left alone.
-pub fn apply(doc: &mut Document, choice: AnimatedOpen, path: Option<&str>) -> Result<()> {
-    match choice {
-        AnimatedOpen::Ask | AnimatedOpen::Frames => Ok(()),
-        // Read as its first frame already (or not an animation): nothing to cut.
-        AnimatedOpen::FirstFrame if doc.frame_animation.is_none() => Ok(()),
-        AnimatedOpen::FirstFrame => {
-            doc.frame_animation = None;
-            doc.layers.truncate(1);
-            if let Some(l) = doc.layers.first_mut() {
-                // As a still GIF or a WebP with transparency opens.
-                l.name = "Layer 0".into();
-                l.visible = true;
-            }
-            Ok(())
-        }
-        AnimatedOpen::Video => to_video(doc, path),
-    }
-}
-
-/// One video layer holding every frame, on a timeline at the rate the delays give.
-fn to_video(doc: &mut Document, path: Option<&str>) -> Result<()> {
-    let Some(animation) = doc.frame_animation.take() else { return Ok(()) };
-    let delays: Vec<u32> = animation.frames.iter().map(|f| f.delay_ms).collect();
-    let fps = crate::video_cmds::fps_from_delays(&delays).unwrap_or(10.0);
-    let frames: Vec<_> = std::mem::take(&mut doc.layers)
-        .into_iter()
-        .filter_map(|l| match l.content {
-            LayerContent::Raster(s) => Some(s),
-            _ => None,
-        })
-        .collect();
-    if frames.is_empty() {
-        return Err(EngineError::Other("the animation has no frames".into()));
-    }
-    let n = frames.len();
+    // A video layer's frames are full colour, whatever the first frame's palette was.
+    doc.mode = ColorMode::Rgb;
+    doc.color_table = None;
+    let fmt = doc.pixel_format();
+    let footage = crate::video_cmds::animation_footage(&doc.name.clone(), bytes, fmt, opts, ctl)?;
+    let n = footage.frames.len();
+    let fps = footage.fps.unwrap_or(10.0);
     let stem = std::path::Path::new(&doc.name).file_stem().and_then(|s| s.to_str()).unwrap_or("Video").to_string();
-    let mut layer = Layer::raster(stem, doc.pixel_format());
-    let mut v = VideoData::new(frames, fps);
+    let mut layer = Layer::raster(stem, fmt);
+    let mut v = VideoData::new(footage.frames, fps);
     v.original_frames = Some(v.frames.clone());
     if let Some(p) = path {
         v.source = VideoSource::File { path: p.to_string() };
     }
     layer.video = Some(v);
-    doc.layers.push(layer);
+    doc.layers = vec![layer];
     doc.timeline = Some(Timeline::new(n, fps));
     crate::video_cmds::sync(doc);
+    warnings.retain(|w| DecodeWarning::more_frames_in(w).is_none());
+    if total != u32::try_from(n).ok() {
+        warnings.push(format!("the animation is damaged: only {n} of its frames could be read"));
+    }
     Ok(())
 }
 

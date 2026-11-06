@@ -30,7 +30,10 @@ pub mod source_settings;
 pub mod web;
 pub use crate::cicp::Cicp;
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
-pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES, decode_prefix as decode_gif_frames_prefix};
+pub use crate::codecs::gif_frames::{
+    AnimationFrame, MAX_GIF_FRAMES, decode_prefix as decode_gif_frames_prefix, decode_prefix_until as decode_gif_frames_prefix_until,
+    decode_until as decode_gif_frames_until,
+};
 pub use crate::codecs::png::{
     PngExtras, PngHeader, PngPalette, PngRowSink, PngRows, encode_indexed as encode_png_indexed, palette as png_palette, stereo as png_stereo,
 };
@@ -203,7 +206,13 @@ pub fn decode_gif_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anima
 /// [`decode`] keeps the first frame only. See [`MAX_GIF_FRAMES`] and `opts.limits` for what is
 /// refused.
 pub fn decode_webp_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>, CodecError> {
-    match crate::codecs::webp::decode_frames(bytes, &opts.limits)? {
+    decode_webp_frames_until(bytes, opts, &|| false)
+}
+
+/// [`decode_webp_frames`], giving up between frames once `stop` says so; the frames read by then
+/// are returned.
+pub fn decode_webp_frames_until(bytes: &[u8], opts: &DecodeOptions, stop: &dyn Fn() -> bool) -> Result<Vec<AnimationFrame>, CodecError> {
+    match crate::codecs::webp::decode_frames(bytes, &opts.limits, stop)? {
         Some(frames) => Ok(frames),
         None => Ok(vec![AnimationFrame { image: decode_as_with(Format::WebP, bytes, opts)?, delay_ms: 0 }]),
     }
@@ -212,7 +221,17 @@ pub fn decode_webp_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Anim
 /// [`decode_webp_frames`], stopping after the first `keep(width, height)` frames so that a caller
 /// who can only hold those never decodes the rest; the `bool` says that more frames follow.
 pub fn decode_webp_frames_prefix(bytes: &[u8], opts: &DecodeOptions, keep: impl Fn(u32, u32) -> usize) -> Result<(Vec<AnimationFrame>, bool), CodecError> {
-    match crate::codecs::webp::decode_prefix(bytes, &opts.limits, &keep)? {
+    decode_webp_frames_prefix_until(bytes, opts, keep, &|| false)
+}
+
+/// [`decode_webp_frames_prefix`], also ending the prefix between frames once `stop` says so.
+pub fn decode_webp_frames_prefix_until(
+    bytes: &[u8],
+    opts: &DecodeOptions,
+    keep: impl Fn(u32, u32) -> usize,
+    stop: &dyn Fn() -> bool,
+) -> Result<(Vec<AnimationFrame>, bool), CodecError> {
+    match crate::codecs::webp::decode_prefix(bytes, &opts.limits, &keep, stop)? {
         Some(prefix) => Ok(prefix),
         None => Ok((vec![AnimationFrame { image: decode_as_with(Format::WebP, bytes, opts)?, delay_ms: 0 }], false)),
     }

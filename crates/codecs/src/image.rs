@@ -229,6 +229,18 @@ fn dpx_code_name(code: u8) -> &'static str {
     }
 }
 
+impl DecodeWarning {
+    /// What a warning's text says of a file's frames, when it is [`DecodeWarning::MoreFrames`]'s:
+    /// the total, or `Some(None)` when the file has more than one but they couldn't be counted.
+    pub fn more_frames_in(text: &str) -> Option<Option<u32>> {
+        if text == (DecodeWarning::MoreFrames { total: None }).to_string() {
+            return Some(None);
+        }
+        let total = text.strip_prefix("only the first of ")?.strip_suffix(" frames was imported")?.parse().ok()?;
+        (text == (DecodeWarning::MoreFrames { total: Some(total) }).to_string()).then_some(Some(total))
+    }
+}
+
 impl fmt::Display for DecodeWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

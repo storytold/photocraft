@@ -57,8 +57,8 @@ pub fn open_bytes_as(
 ) -> Result<Opened, AutomationError> {
     let opts = photocraft_io::ImportOptions { animation: photocraft_engine::animated_open::import_for(animation), ..*opts };
     let mut opened = open_bytes_with_options(name, bytes, &opts)?;
-    if !is_native_name(name) {
-        photocraft_engine::animated_open::apply(&mut opened.document, animation, path)?;
+    if animation == AnimatedOpen::Video {
+        photocraft_engine::animated_open::open_as_video(&mut opened.document, &mut opened.warnings, bytes, path, &opts, &photocraft_raster::Interrupt::NONE)?;
     }
     Ok(opened)
 }
@@ -67,9 +67,17 @@ pub fn open_bytes_as(
 pub fn open_as(path: &Path, animation: AnimatedOpen, opts: &photocraft_io::ImportOptions) -> Result<Opened, AutomationError> {
     let opts = photocraft_io::ImportOptions { animation: photocraft_engine::animated_open::import_for(animation), ..*opts };
     let mut opened = open_with_options(path, &opts)?;
-    // A frame animation saved in a native document is the document: only an import is reshaped.
-    if !path.is_dir() && !path.file_name().is_some_and(|name| is_native_name(&name.to_string_lossy())) {
-        photocraft_engine::animated_open::apply(&mut opened.document, animation, path.to_str())?;
+    // Only a read cut short at its first frame has more to read: a native document is the document.
+    if animation == AnimatedOpen::Video && photocraft_engine::animated_open::more_frames(&opened.warnings) {
+        let bytes = std::fs::read(path).map_err(|e| AutomationError::BadRequest(format!("read `{}`: {e}", path.display())))?;
+        photocraft_engine::animated_open::open_as_video(
+            &mut opened.document,
+            &mut opened.warnings,
+            &bytes,
+            path.to_str(),
+            &opts,
+            &photocraft_raster::Interrupt::NONE,
+        )?;
     }
     Ok(opened)
 }
