@@ -323,14 +323,29 @@ fn doc_save_png_compression_reaches_the_encoder() {
     std::fs::write(base.join("in.png"), photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
     let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap());
     h.handle("doc.open", json!({"path": "in.png"})).unwrap();
-    let size = |h: &mut Headless, name: &str, level: &str| {
-        h.handle("doc.save", json!({"path": name, "pngCompression": level})).unwrap();
-        std::fs::metadata(base.join(name)).unwrap().len()
-    };
-    let (none, fast, best) = (size(&mut h, "none.png", "none"), size(&mut h, "fast.png", "fast"), size(&mut h, "best.png", "best"));
-    // Stored deflate is far larger than either compressed level (which of fast or best is
-    // smaller depends on the image).
-    assert!(none > fast && none > best, "none {none}, fast {fast}, best {best}");
+    // Each level's file is what exporting the document at that level writes, and the four
+    // differ on this image, so a level that reached the encoder as another can't pass.
+    use photocraft_codecs::PngCompression;
+    let doc = h.session.active().unwrap().doc.clone();
+    let mut saved = Vec::new();
+    for (name, level) in [("none", PngCompression::None), ("fast", PngCompression::Fast), ("default", PngCompression::Default), ("best", PngCompression::Best)]
+    {
+        let file = format!("{name}.png");
+        h.handle("doc.save", json!({"path": file, "pngCompression": name})).unwrap();
+        let bytes = std::fs::read(base.join(&file)).unwrap();
+        let mut opts = photocraft_io::ExportOptions::default();
+        opts.encode.png_compression = level;
+        let reference = photocraft_io::export(&doc, "png", &opts).unwrap().bytes;
+        assert!(bytes == reference, "{name}: saved {} bytes, an export at that level is {}", bytes.len(), reference.len());
+        assert!(
+            saved.iter().all(|(_, b): &(&str, Vec<u8>)| *b != bytes),
+            "{name} wrote the same file as {:?}",
+            saved.iter().find(|(_, b)| *b == bytes).map(|(n, _)| n)
+        );
+        saved.push((name, bytes));
+    }
+    // Stored deflate is far larger than any compressed level.
+    assert!(saved[1..].iter().all(|(_, b)| b.len() < saved[0].1.len()), "{:?}", saved.iter().map(|(n, b)| (n, b.len())).collect::<Vec<_>>());
     for level in [json!("turbo"), json!(9), json!(true)] {
         let refused = h.handle("doc.save", json!({"path": "x.png", "pngCompression": level})).unwrap_err().to_string();
         assert!(refused.contains("pngCompression"), "{level}: {refused}");
