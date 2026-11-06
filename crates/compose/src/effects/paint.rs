@@ -48,9 +48,9 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
 /// (`glow_reach_edge`, 0 at and beyond the reach, 1 from a pixel inside it), and the transfer is
 /// `min(contour(u), max(edge, u))`, with `u = min(v / range, 1)` what a Linear contour paints.
 /// The edge is linear in `v` from 0 until it reaches 1 (`glow_edge_per_coverage`), so the
-/// table's linear interpolation follows it, its first step from entry 0 included (Softer's knee
-/// also lands on a table entry; Precise's falls between two, which chord it); the coverage
-/// where it reaches 1 is per technique:
+/// table's linear interpolation follows it, its first step from entry 0 included (the knee is
+/// rounded down to a table entry for both techniques); the coverage where it reaches 1 is per
+/// technique:
 ///
 /// - Precise: the falloff is linear in distance, so the edge is the distance left to the reach's
 ///   end: the last pixel steps down by how far inside the reach its centre is (one soft pixel,
