@@ -431,6 +431,10 @@ pub struct HostMenu {
     pub run: HostRunFn,
 }
 
+/// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
+/// whether the app window is focused (to re-assert WinTab overlap priority on activation).
+pub type TabletPollFn = Box<dyn FnMut(bool)>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -563,6 +567,8 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// WinTab packet poll (Windows with Windows Ink disabled; see `photocraft_tablet::wintab`).
+    pub tablet_poll: Option<TabletPollFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
