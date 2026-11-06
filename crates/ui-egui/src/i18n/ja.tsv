@@ -870,7 +870,7 @@
 	Consolidate All to Tabs	すべてをタブに統合
 	Float in Window	ウィンドウ内に浮動
 	Float All in Windows	すべてをウィンドウ内に浮動
-	New Window	ドキュメントの新規ウィンドウ
+	New Window	新規ウィンドウ
 	Workspace	ワークスペース
 	Essentials	基本
 	Graphic and Web	グラフィックと Web
@@ -932,6 +932,12 @@
 	Timeline	タイムライン
 	Tool Presets	ツールプリセット
 	Tools	ツール
+	Contextual Task Bar	コンテキストタスクバー
+	Hide bar	バーを隠す
+	Reset bar position	バーの位置をリセット
+	Pin bar position	バーの位置を固定
+	Move bar	バーを移動
+	More options	その他のオプション
 	About PhotoCraft	PhotoCraft について
 	PhotoCraft Website	PhotoCraft の Web サイト
 	PhotoCraft on GitHub	GitHub 上の PhotoCraft
@@ -2160,7 +2166,6 @@
 	Show only crosshair while painting	描画中は十字線のみ表示
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
-	Enable animations	アニメーションを有効にする
 	Show highlight on rollover	ロールオーバー時にハイライトを表示
 	Show bounding box when dragging layer	レイヤーのドラッグ中にバウンディングボックスを表示
 	System title bar	システムのタイトルバー
@@ -3042,6 +3047,7 @@ fontWeight	Italic	斜体
 	Magnetic Lasso	マグネット投げ縄
 	Make	作成
 	Make Selection	選択範囲を作成
+	Make Shape	シェイプを作成
 	Make Work Path	作業用パスを作成
 	Match Color	カラーを一致
 	Mezzotint	メゾティント

@@ -756,7 +756,7 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plates	Radna CMY ploča
+	Working CMY Plates	Radne CMY ploče
 	Legacy Macintosh RGB (Gamma 1.8)	Stari Macintosh RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Internet standard RGB (sRGB)
 	Monitor RGB	RGB monitora
@@ -911,6 +911,12 @@
 	Timeline	Vremenska linija
 	Tool Presets	Šabloni alatki
 	Tools	Alatke
+	Contextual Task Bar	Kontekstualna traka zadataka
+	Hide bar	Sakrij traku
+	Reset bar position	Vrati položaj trake
+	Pin bar position	Zakači položaj trake
+	Move bar	Pomeri traku
+	More options	Više opcija
 	About PhotoCraft	O programu PhotoCraft
 	PhotoCraft Website	Veb-sajt PhotoCraft-a
 	PhotoCraft on GitHub	PhotoCraft na GitHub-u
@@ -2120,7 +2126,6 @@
 	Show only crosshair while painting	Prikaži samo krstić tokom slikanja
 	Show slice numbers	Prikaži brojeve isečaka
 	Show tooltips	Prikaži opise alatki
-	Enable animations	Omogući animacije
 	Show highlight on rollover	Istakni pri prelasku pokazivačem
 	Show transformation values	Prikaži vrednosti transformacije
 	Slice color	Boja isečka
@@ -2510,6 +2515,7 @@
 	Path to Illustrator…	Putanja u Illustrator…
 	Make Work Path	Napravi radnu putanju
 	Make Selection	Napravi selekciju
+	Make Shape	Napravi oblik
 	Fill Path	Popuni putanju
 	Stroke Path	Ocrtaj putanju
 	Clipping Path	Putanja isecanja

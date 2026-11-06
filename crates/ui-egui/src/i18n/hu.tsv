@@ -908,6 +908,12 @@
 	Titling Alternates	Címbetű-változatok
 	Tool Presets	Eszköz-előbeállítások
 	Tools	Eszközök
+	Contextual Task Bar	Környezetfüggő feladatsáv
+	Hide bar	Sáv elrejtése
+	Reset bar position	Sáv helyzetének visszaállítása
+	Pin bar position	Sáv helyzetének rögzítése
+	Move bar	Sáv áthelyezése
+	More options	További beállítások
 	Trace Contour…	Kontúrkövetés…
 	Transform Symmetry	Szimmetria alakítása
 	Tree…	Fa…
@@ -3299,7 +3305,6 @@ cameraRaw	Yellow	Sárga
 	Ellipse Tool	Ellipszis
 	Elliptical Marquee Tool	Ellipszis-kijelölés
 	Enable	Bekapcsolás
-	Enable animations	Animációk engedélyezése
 	Enable flick panning	Lendítéses pásztázás engedélyezése
 	Enable floating document window docking	Lebegő dokumentumablakok dokkolásának engedélyezése
 	Enable narrow options bar	Keskeny beállítósáv engedélyezése
@@ -3444,6 +3449,7 @@ cameraRaw	Yellow	Sárga
 	Magnetic Lasso	Mágneses lasszó
 	Magnetic Lasso Tool	Mágneses lasszó
 	Make Selection	Kijelölés készítése
+	Make Shape	Alakzat készítése
 	Make work path from selection	Munkaútvonal készítése a kijelölésből
 	Manual	Kézi
 	manual	kézi
