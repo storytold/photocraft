@@ -241,12 +241,15 @@ fn import_report_limits_also_apply_to_already_cached_blobs() {
     use photocraft_doc::import_conversion::MAX_CONVERSION_BYTES;
     let mut doc = Document::new("Cached blob", photocraft_geom::Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
     doc.icc_profile = Some(std::sync::Arc::new(vec![0; MAX_CONVERSION_BYTES + 1]));
+    let mut layer = Layer::raster("Cached", doc.pixel_format());
+    layer.psd_blocks.push((*b"test", doc.icc_profile.as_ref().unwrap().clone()));
+    doc.layers.push(layer);
     doc.metadata.import_conversion = Some(conversion_report().into());
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     let bad = edit_import_manifest(&bytes, |v| {
         v["document"]["metadata"]["import_conversion"]["attachments"][0] = v["document"]["icc_profile"].clone();
     });
-    assert!(matches!(load_from_bytes(&bad), Err(FormatError::LimitExceeded(_))));
+    assert!(matches!(load_from_bytes(&bad), Err(FormatError::LimitExceeded(ref message)) if message == "optional preview blob exceeds its limit"));
 }
 
 #[test]
