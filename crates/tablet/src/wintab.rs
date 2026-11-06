@@ -178,7 +178,10 @@ pub fn poll(focused: bool, callback: &dyn Fn(Option<Sample>)) {
 /// `TPS_PROXIMITY` status only says the cursor left the context. Clearing the feed here covers
 /// drivers that send the hardware leave without a following out-of-context packet.
 pub(crate) fn on_message(message: u32, wparam: usize, lparam: isize) {
-    STATE.with_borrow_mut(|slot| {
+    // This runs inside the Win32 hook, where a panic aborts the app: a driver call under `poll`
+    // that pumps this thread's messages would find `STATE` borrowed. Such a message is skipped.
+    let _ = STATE.try_with(|cell| {
+        let Ok(mut slot) = cell.try_borrow_mut() else { return };
         let Some(state) = slot.as_mut() else { return };
         let decoded = match &state.backend {
             Backend::Oriented { context, .. } => context.message(message, WPARAM(wparam), LPARAM(lparam)),
