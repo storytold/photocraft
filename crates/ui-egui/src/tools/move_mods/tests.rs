@@ -90,7 +90,7 @@ fn alt_drag_duplicates_and_moves_the_copy_in_one_step() {
     assert_eq!(bounds(&app, copy), photocraft_geom::Rect::new(18, 13, 34, 29));
     let st = app.session.active().unwrap();
     assert_eq!(st.history.past_len(), h0 + 1, "one undo step");
-    assert_eq!(st.history.undo_label(), Some(DUPLICATE_MOVE_LABEL));
+    assert_eq!(st.history.undo_label(), Some("Move"));
     assert!(app.session.undo());
     assert_eq!(app.session.active().unwrap().doc.layers.len(), n0);
     assert_eq!(bounds(&app, orig), photocraft_geom::Rect::new(8, 8, 24, 24));
@@ -115,7 +115,7 @@ fn alt_drag_keeps_the_later_states_in_non_linear_history() {
     assert!(app.session.undo());
     let mut expected = app.session.active().unwrap().history.entries();
     expected.extend(app.session.active().unwrap().history.redo_labels().map(str::to_string));
-    expected.push(DUPLICATE_MOVE_LABEL.into());
+    expected.push("Move".into());
     drag(&mut app, &[[16.0, 16.0], [20.0, 16.0], [26.0, 21.0]], egui::Modifiers::ALT);
     assert_eq!(app.session.active().unwrap().history.entries(), expected, "the later state stays");
 }
@@ -328,7 +328,7 @@ fn a_run_of_arrow_nudges_is_one_history_step() {
     assert!(press_at(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT, 7.6));
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(20, 18, 36, 34));
     assert_eq!(history(&app), h0 + 1, "thirteen presses, one state");
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"));
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Nudge"));
     assert!(app.session.undo());
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(8, 8, 24, 24), "one Undo takes back the run");
     assert!(app.session.redo());
@@ -434,7 +434,7 @@ fn alt_nudges_do_not_join_a_run() {
     press(&mut app, egui::Key::ArrowRight, egui::Modifiers::ALT);
     press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE);
     assert_eq!(history(&app), h0 + 3);
-    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"), "the run after the copy is a state of its own");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Nudge"), "the run after the copy is a state of its own");
 }
 
 /// #2259: nudges of the selection outline bundle the same way.
@@ -498,4 +498,28 @@ fn free_transform_nudges_bundle_into_one_undo_step() {
     }
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(quad(&app), moved(2.0, 0.0));
+}
+
+/// Arrow keys while editing text must not nudge layers, leaving the keys to the type tool (#5355).
+#[test]
+fn arrow_keys_ignored_during_text_edit() {
+    let mut app = app_with_layer();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let b0 = bounds(&app, id);
+    app.ui.text_edit = Some(crate::state::TextEdit {
+        layer: id.0,
+        document: None,
+        caret: 0,
+        anchor: 0,
+        session: "test".into(),
+        created: false,
+        mask: false,
+        dragging: false,
+        resize: None,
+        preedit: None,
+    });
+    assert!(!press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+    assert!(!press(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT));
+    assert!(!press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::ALT));
+    assert_eq!(bounds(&app, id), b0, "arrow keys do not nudge while editing text");
 }
