@@ -129,6 +129,9 @@ const FLAT_TOL: f64 = 0.5;
 const MAX_LEAVES: usize = 1 << 18;
 /// Cells narrower than this (source px) aren't split further.
 const MIN_CELL: f64 = 0.5;
+/// Cells each patch starts as, per axis: a curve that crosses its chord at the midpoint (a flag's
+/// S-shaped edge, a twist) looks straight to a test of the midpoint alone.
+const START_CELLS: usize = 4;
 
 /// A cell of the source rectangle in normalised coordinates: `[u0, u1, v0, v1]`.
 type Cell = [f64; 4];
@@ -137,8 +140,9 @@ type TriMesh = (Vec<([f64; 2], [f64; 2])>, Vec<[usize; 3]>);
 
 /// Warps `src` through a smart object's warp, `f`, as the reference application draws one: the
 /// surface is cut into cells, each drawn as two flat triangles (split along the diagonal from the
-/// top-left corner), and a cell is halved, along an axis or both, until its edges and its middle
-/// stray at most [`FLAT_TOL`] from the surface. So cells are small where the warp bends hard and
+/// top-left corner): each patch starts as [`START_CELLS`] × [`START_CELLS`] cells, and a cell is
+/// halved, along an axis or both, until its edges and its middle stray at most [`FLAT_TOL`] from
+/// the surface. So cells are small where the warp bends hard and
 /// large where it is flat, and the picture keeps the slight facets of that tessellation, which
 /// cells of a few pixels everywhere ([`warp_mesh_surface`]) smoothed away. `cuts_u`/`cuts_v` are
 /// the patch borders inside the rectangle (normalised, `0..1`): the cells start from them.
@@ -178,8 +182,9 @@ fn tessellate(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64],
     };
     let (us, vs) = (cut_list(cuts_u), cut_list(cuts_v));
     let mut queue: std::collections::VecDeque<Cell> = std::collections::VecDeque::new();
-    for v in vs.windows(2) {
-        for u in us.windows(2) {
+    let steps = |w: &[f64]| (0..START_CELLS).map(move |k| [w[0] + (w[1] - w[0]) * k as f64 / START_CELLS as f64, w[0] + (w[1] - w[0]) * (k + 1) as f64 / START_CELLS as f64]);
+    for v in vs.windows(2).flat_map(steps) {
+        for u in us.windows(2).flat_map(steps) {
             queue.push_back([u[0], u[1], v[0], v[1]]);
         }
     }
