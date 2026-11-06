@@ -27,9 +27,11 @@ pub fn track(app: &mut PhotocraftApp, ctx: &egui::Context) -> Option<LayerId> {
     let index = app.session.active_index()?;
     let active = app.session.active()?.active_layer;
     let now = Seen(index, active);
-    // The canvas sets the marker in its frame and the panel may draw before or after it, so it reads the
-    // marker in that frame or the next. An older one is a pick the hidden panel never saw: discard.
-    let pick = app.move_pick.take().filter(|&(_, frame)| frame + 1 >= app.frame).map(|(id, _)| id);
+    // The marker says the latest active-layer change was a Move-way pick of that layer: it holds only
+    // while no later change happened (the engine's change count is unchanged), however many frames a
+    // hidden panel missed, and whether or not the final layer is the same id.
+    let changes = app.session.active_layer_changes();
+    let pick = app.move_pick.take().filter(|&(id, at)| Some(id) == active && at == changes).map(|(id, _)| id);
     let before = ctx.data(|d| d.get_temp::<Seen>(seen_id()));
     ctx.data_mut(|d| d.insert_temp(seen_id(), now));
     match before {

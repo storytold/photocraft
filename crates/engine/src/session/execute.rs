@@ -15,7 +15,12 @@ impl Session {
     /// Runs synchronously, including job-capable commands (see [`jobs`]; [`Session::start`] runs
     /// those in the background).
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value> {
-        match self.dispatch(id, params, false)? {
+        let before = self.active().map(|st| (st.doc.id, st.active_layer));
+        let result = self.dispatch(id, params, false);
+        if self.active().map(|st| (st.doc.id, st.active_layer)) != before {
+            self.active_layer_changes = self.active_layer_changes.wrapping_add(1);
+        }
+        match result? {
             jobs::Started::Done(v) => Ok(v),
             // Not reached: inline dispatch never starts a job. Waiting is still correct.
             jobs::Started::Job(j) => self.wait_job(j),

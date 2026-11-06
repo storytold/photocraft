@@ -1986,3 +1986,21 @@ fn the_document_activation_generation_bumps_on_switch_and_back() {
     assert_eq!(s.active_generation(), g3);
     assert_eq!(s.active().unwrap().doc.id, first);
 }
+
+#[test]
+fn the_active_layer_change_count_moves_only_when_a_command_changes_the_active_layer() {
+    let mut s = session_with_doc();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let a = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let b = s.active().unwrap().active_layer.unwrap();
+    let n = s.active_layer_changes();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    assert_eq!(s.active_layer_changes(), n, "selecting the active layer again changes nothing");
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    assert!(s.active_layer_changes() > n);
+    let m = s.active_layer_changes();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    assert!(s.active_layer_changes() >= m + 2, "a round trip back to the same layer still counts");
+}

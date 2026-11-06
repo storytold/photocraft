@@ -389,13 +389,39 @@ fn a_pick_marker_the_hidden_layers_panel_never_read_does_not_hide_a_later_comman
 }
 
 #[test]
-fn a_pick_marker_is_read_in_its_frame_and_the_next() {
+fn a_pick_marker_survives_any_number_of_frames_while_the_layers_panel_is_hidden() {
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
+    app.ui.tool_options.move_auto_select = false;
+    ctrl_click(&mut app);
+    app.frame += 5;
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(!expanded(&app, group), "the pick is still the latest change of the active layer");
+}
+
+#[test]
+fn commands_after_a_pick_in_the_same_frame_or_the_next_make_it_a_command_change() {
     for gap in [0, 1] {
         let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
         app.ui.tool_options.move_auto_select = false;
         ctrl_click(&mut app);
         app.frame += gap;
+        app.run("layer.select", json!({"layer": group.0})).unwrap();
+        app.run("layer.select", json!({"layer": inner.0})).unwrap();
         assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
-        assert!(!expanded(&app, group), "a pick {gap} frame(s) old still governs the reveal");
+        assert!(expanded(&app, group), "selects {gap} frame(s) after the pick reveal the layer");
     }
+}
+
+#[test]
+fn a_pick_marker_is_read_once_and_governs_the_next_change_only() {
+    let (mut app, inner, group, ctx) = closed_group_doc(Tool::Brush, false);
+    app.ui.tool_options.move_auto_select = false;
+    ctrl_click(&mut app);
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(!expanded(&app, group));
+    app.run("layer.select", json!({"layer": group.0})).unwrap();
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(group));
+    app.run("layer.select", json!({"layer": inner.0})).unwrap();
+    assert_eq!(crate::layer_reveal::track(&mut app, &ctx), Some(inner));
+    assert!(expanded(&app, group), "a later command change opens the group");
 }

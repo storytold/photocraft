@@ -216,6 +216,10 @@ pub struct Session {
     active_generation: u64,
     /// The document id [`Self::active_generation`] was last bumped for.
     active_doc_for_generation: Option<photocraft_doc::DocId>,
+    /// Counts the [`Session::execute`] calls that changed the active document or layer (selection
+    /// commands, Action playback, undo, a canvas pick). A caller that remembers how a change came
+    /// about compares it to see that nothing changed the active layer since.
+    active_layer_changes: u64,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,

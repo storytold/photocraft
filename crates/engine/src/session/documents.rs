@@ -43,6 +43,11 @@ impl Session {
         self.active_generation
     }
 
+    /// Count of [`Self::execute`] calls that changed the active document or layer; see the field.
+    pub fn active_layer_changes(&self) -> u64 {
+        self.active_layer_changes
+    }
+
     /// Bump [`Self::active_generation`] when the active document id changed. Call after every
     /// assignment to `self.active`.
     pub(crate) fn note_active_change(&mut self) {

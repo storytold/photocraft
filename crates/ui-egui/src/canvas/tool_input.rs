@@ -212,12 +212,13 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     Some((raw, ev, mods))
 }
 
-/// Remember a Move-way pick that changed the active layer (with this frame), so the Layers panel's
+/// Remember a Move-way pick that changed the active layer (with the engine's change count after it, so
+/// any later change invalidates the marker), so the Layers panel's
 /// reveal can honour Expand layer group on click (layer_reveal.rs).
 fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc::LayerId>) {
     let active_after = app.session.active().and_then(|st| st.active_layer);
     if active_after != active_before {
-        app.move_pick = active_after.map(|id| (id, app.frame));
+        app.move_pick = active_after.map(|id| (id, app.session.active_layer_changes()));
     }
 }
 

@@ -429,8 +429,9 @@ pub struct PhotocraftApp {
     /// A ⌘⌥⌃-click layer pick is in progress; its drag and release are swallowed (`quick_pick`).
     pub(crate) quick_pick: bool,
     /// The layer a canvas click picked the Move tool way (its Auto-Select, or a ⌘-click from another
-    /// tool) and the frame (`frame`) of the pick, until the Layers panel's reveal reads it. The
-    /// reveal accepts it in that frame or the next only (`layer_reveal`, #11381).
+    /// tool) and the engine's active-layer change count right after that pick
+    /// (`Session::active_layer_changes`). The Layers panel's reveal reads it when it next draws, and
+    /// accepts it only if nothing changed the active layer since, however long ago (`layer_reveal`, #11381).
     pub(crate) move_pick: Option<(photocraft_doc::LayerId, u64)>,
     /// The next tool `Down` is an Alt+right-drag that resizes the brush (#297). `tool_event`
     /// takes it on every event, so a press another handler consumes can't leave it set.
