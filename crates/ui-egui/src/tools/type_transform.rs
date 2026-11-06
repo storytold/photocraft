@@ -397,13 +397,13 @@ pub(crate) fn draw(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXf
         return false;
     }
     let Some(t) = frame(app) else { return false };
-    draw_box(painter, xf, &t);
+    draw_box(painter, xf, &t, true);
     true
 }
 
 /// A transform box: its outline, corner and edge handles and reference point. Shared with
 /// Content-Aware Move's Transform On Drop.
-pub(crate) fn draw_box(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession) {
+pub(crate) fn draw_box(painter: &egui::Painter, xf: &ViewXform, t: &TransformSession, reference_point: bool) {
     let tokens = crate::theme::Tokens::get(painter.ctx());
     let pts = t.quad.map(|p| xf.to_screen(p[0] as f32, p[1] as f32));
     painter.add(egui::Shape::closed_line(pts.to_vec(), Stroke::new(3.0, tokens.shadow)));
@@ -413,6 +413,9 @@ pub(crate) fn draw_box(painter: &egui::Painter, xf: &ViewXform, t: &TransformSes
         let r = egui::Rect::from_center_size(*p, vec2(7.0, 7.0));
         painter.rect_filled(r, 0.0, tokens.accent_text);
         painter.rect_stroke(r, 0.0, Stroke::new(1.0, tokens.accent), egui::StrokeKind::Inside);
+    }
+    if !reference_point {
+        return;
     }
     let c = xf.to_screen(t.pivot[0] as f32, t.pivot[1] as f32);
     painter.circle_stroke(c, 4.0, Stroke::new(2.0, tokens.shadow));

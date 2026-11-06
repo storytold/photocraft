@@ -413,7 +413,7 @@ fn canvas_size(pv: &TransformPreview) -> [f32; 2] {
 /// screen. Pixels past the canvas edge are never shown, also not while transforming (Photoshop;
 /// #2027): only the box and its handles reach over the pasteboard. Clipping in document space
 /// stays exact under a rotated or flipped view, where a screen clip rectangle would not.
-fn clip_to_canvas(mut mesh: egui::Mesh, size: [f32; 2], to_screen: impl Fn(Pos2) -> Pos2) -> egui::Mesh {
+pub(crate) fn clip_to_canvas(mut mesh: egui::Mesh, size: [f32; 2], to_screen: impl Fn(Pos2) -> Pos2) -> egui::Mesh {
     let inside = |p: Pos2| p.x >= 0.0 && p.y >= 0.0 && p.x <= size[0] && p.y <= size[1];
     if mesh.vertices.iter().all(|v| inside(v.pos)) {
         for v in &mut mesh.vertices {

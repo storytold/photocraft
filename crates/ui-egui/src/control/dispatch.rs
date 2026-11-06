@@ -309,6 +309,7 @@ struct ToolSet {
     eyedropper_sample: Option<String>,
     eyedropper_ring: Option<bool>,
     cam_transform_on_drop: Option<bool>,
+    patch_affinity: Option<bool>,
     move_show_transform: Option<bool>,
     tile_grid: Option<bool>,
     layer_filter: Option<crate::layer_filter_ui::Filter>,
@@ -334,6 +335,7 @@ impl ToolSet {
             eyedropper_ring: bool_field(p, "eyedropperRing")?,
             // Content-Aware Move's Transform On Drop checkbox.
             cam_transform_on_drop: bool_field(p, "camTransformOnDrop")?,
+            patch_affinity: bool_field(p, "patchAffinity")?,
             move_show_transform: bool_field(p, "moveShowTransform")?,
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
@@ -386,6 +388,9 @@ impl ToolSet {
         }
         if let Some(ring) = self.eyedropper_ring {
             app.ui.tool_options.eyedropper_ring = ring;
+        }
+        if let Some(on) = self.patch_affinity {
+            app.ui.tool_options.patch_affinity = on;
         }
         if let Some(on) = self.cam_transform_on_drop {
             app.ui.tool_options.cam_transform_on_drop = on;

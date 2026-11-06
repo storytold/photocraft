@@ -406,8 +406,12 @@ pub struct PhotocraftApp {
     pub(crate) reorder_preview: Option<layers_panel_ui::ReorderPreview>,
     /// Whether the currently dragged layer is over a valid destination this frame.
     pub(crate) reorder_preview_hit: bool,
-    /// Patch Tool drag: the healed document at the pointer (`patch_preview`).
+    /// Pointer position in document coordinates for the Affinity Patch hover preview.
+    pub(crate) patch_hover: Option<[f64; 2]>,
+    /// The healed preview document at the pointer or inside the Patch transform box.
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
+    pub(crate) patch_worker: Option<patch_preview::PatchWorker>,
+    pub(crate) patch_motion: Option<patch_preview::PatchMotion>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
     pub(crate) cam_preview: Option<cam_preview::CamPreview>,
     /// The pixels a Magnetic Lasso border follows (`magnetic_lasso_ui`).

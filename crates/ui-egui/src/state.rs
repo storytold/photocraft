@@ -18,7 +18,7 @@ pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
 use tool_options::{default_brush_tool, default_layer_filter_mode, layer_filter_mode_or_normal, yes};
 pub use transform::{
-    BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
+    BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, PatchTarget, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
 };
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

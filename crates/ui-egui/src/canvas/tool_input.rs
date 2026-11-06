@@ -19,6 +19,9 @@ pub enum ToolEvent {
 /// and update the live stroke once (see `canvas_view`).
 fn tool_move(app: &mut PhotocraftApp, x: f64, y: f64, pressure: f32, mods: egui::Modifiers) {
     let tool = app.active_tool();
+    if tool == Tool::Patch && crate::retouch_ui::affinity_patch(app) {
+        app.patch_hover = Some([x, y]);
+    }
     if tool.is_type() && app.drag.is_none() {
         crate::type_tool::pointer_move(app, x, y, mods);
     }
@@ -78,7 +81,7 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
     if app.ui.transform.is_none() && crate::type_transform::pointer(app, ev, mods) {
         return None;
     }
-    // Content-Aware Move's Transform On Drop box takes every press until ↩ or Esc.
+    // A placed retouch box owns pointer input until it is applied or cancelled.
     if crate::cam_transform::pointer(app, ev, mods) {
         return None;
     }

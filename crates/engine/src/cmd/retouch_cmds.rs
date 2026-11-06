@@ -33,7 +33,7 @@ pub use pattern_stamp::live_impressionist as live_pattern_impressionist;
 mod periodic;
 mod remove;
 pub use content_aware_move::{ContentAwarePreview, preview as content_aware_move_preview};
-pub use patch::preview as patch_preview;
+pub use patch::{PatchPreviewJob, prepare_preview as prepare_patch_preview, preview as patch_preview};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -281,7 +281,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Patch",
             menu: &[],
             shortcut: None,
-            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"source|destination"="source","contentAware":bool=false (fill the selection content-aware from the dragged-to place; a background job),"structure":1..7=4 (content-aware: 3..7 copy the middle exactly, 1..2 re-synthesise more of it),"color":0..10=0 (content-aware: how far the copy's level adapts to the selection's surroundings),"sampleAllLayers":bool=false (content-aware),"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset"}"#,
+            params: r#"{"offset":[dx,dy] (how far the selection was dragged),"mode":"source|destination"="source","scaleX":%=100,"scaleY":%=100,"rotate":deg=0 (Normal: transform the moved box about its centre, then apply offset),"clipDestination":bool=false (Normal Destination: crop at the canvas edge),"deselect":bool=false (Normal: clear the selection in the same undo step),"contentAware":bool=false (fill the selection content-aware from the dragged-to place; a background job),"structure":1..7=4 (content-aware: 3..7 copy the middle exactly, 1..2 re-synthesise more of it),"color":0..10=0 (content-aware: how far the copy's level adapts to the selection's surroundings),"sampleAllLayers":bool=false (content-aware),"layer":id?=active,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target} → {"damage","offset"}"#,
             enabled: patch::enabled,
             run: patch::patch,
             journal: true,

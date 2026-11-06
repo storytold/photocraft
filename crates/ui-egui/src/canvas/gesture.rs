@@ -6,6 +6,11 @@ use super::strokes::{
 use super::textures::shown_as_document;
 use super::{PhotocraftApp, Tool, json};
 
+fn pts_are_click(app: &PhotocraftApp, drag: &Drag, end: [f64; 2]) -> bool {
+    let near_start = |p: [f64; 2]| (p[0] - drag.start[0]).hypot(p[1] - drag.start[1]) * f64::from(app.point_zoom()) < 3.0;
+    near_start(end) && drag.points.iter().all(|p| near_start([p[0], p[1]]))
+}
+
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     finish(app, d, None);
 }
@@ -131,7 +136,18 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                 json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "line": line, "antiAlias": false, "feather": feather}),
             );
         }
-        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
+        Tool::Patch if crate::retouch_ui::affinity_patch(app) && pts_are_click(app, &d, [end[0], end[1]]) && !d.modifiers.shift && !d.modifiers.alt => {
+            if let Some(offset) = crate::retouch_ui::affinity_offset(app, [end[0], end[1]]) {
+                if offset != [0, 0] || !crate::cam_transform::patch_placement(app, offset).is_plain_move() {
+                    crate::cam_transform::begin_patch(app, offset);
+                } else {
+                    crate::retouch_ui::patch_hint(app);
+                }
+            }
+        }
+        Tool::Patch if !crate::retouch_ui::affinity_patch(app) && crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+            crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]])
+        }
         Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             crate::retouch_ui::finish_content_aware_move(app, d.start, [end[0], end[1]])
         }

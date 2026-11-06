@@ -106,29 +106,29 @@ struct Plan {
 /// Transform On Drop's `scaleX` / `scaleY` (%) and `rotate` (degrees): the map from a source point
 /// to where it lands, about the centre of `area` and then moved by `offset`. `None` when the params
 /// leave the content as it is (a plain move).
-fn placement(p: &Value, area: Rect, (dx, dy): (i32, i32)) -> Result<Option<Homography>> {
+pub(super) fn placement(cmd: &str, p: &Value, area: Rect, (dx, dy): (i32, i32)) -> Result<Option<Homography>> {
     let num = |k: &str, default: f64| -> Result<f64> {
         match p.get(k) {
             None | Some(Value::Null) => Ok(default),
-            Some(v) => v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad(CMD, format!("`{k}` must be a finite number"))),
+            Some(v) => v.as_f64().filter(|x| x.is_finite()).ok_or_else(|| bad(cmd, format!("`{k}` must be a finite number"))),
         }
     };
     let scale = |k: &str| -> Result<f64> {
         let v = num(k, 100.0)?;
         // 1% to 10000% either way (a negative scale flips): beyond that the content collapses to
         // nothing or outgrows any selection the move can take.
-        if (1.0..=10_000.0).contains(&v.abs()) { Ok(v / 100.0) } else { Err(bad(CMD, format!("`{k}` must be 1..10000 % (or -10000..-1 to flip)"))) }
+        if (1.0..=10_000.0).contains(&v.abs()) { Ok(v / 100.0) } else { Err(bad(cmd, format!("`{k}` must be 1..10000 % (or -10000..-1 to flip)"))) }
     };
     let (sx, sy) = (scale("scaleX")?, scale("scaleY")?);
     let deg = num("rotate", 0.0)?;
     if deg.abs() > 36_000.0 {
-        return Err(bad(CMD, "`rotate` must be -36000..36000 degrees"));
+        return Err(bad(cmd, "`rotate` must be -36000..36000 degrees"));
     }
     let deg = deg.rem_euclid(360.0);
     if sx == 1.0 && sy == 1.0 && deg == 0.0 {
         return Ok(None);
     }
-    let (cx, cy) = (f64::from(area.x0 + area.x1) / 2.0, f64::from(area.y0 + area.y1) / 2.0);
+    let (cx, cy) = ((f64::from(area.x0) + f64::from(area.x1)) / 2.0, (f64::from(area.y0) + f64::from(area.y1)) / 2.0);
     let t = |x: f64, y: f64| Homography([1.0, 0.0, x, 0.0, 1.0, y, 0.0, 0.0, 1.0]);
     let (sa, ca) = deg.to_radians().sin_cos();
     let rot = Homography([ca, -sa, 0.0, sa, ca, 0.0, 0.0, 0.0, 1.0]);
@@ -137,7 +137,7 @@ fn placement(p: &Value, area: Rect, (dx, dy): (i32, i32)) -> Result<Option<Homog
 }
 
 /// The pixel bounds of `r` mapped by `h`.
-fn mapped_bounds(h: &Homography, r: Rect) -> Rect {
+pub(super) fn mapped_bounds(h: &Homography, r: Rect) -> Rect {
     let corners = [(r.x0, r.y0), (r.x1, r.y0), (r.x1, r.y1), (r.x0, r.y1)].map(|(x, y)| h.apply(f64::from(x), f64::from(y)));
     let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     for (x, y) in corners {
@@ -153,7 +153,7 @@ fn mapped_bounds(h: &Homography, r: Rect) -> Rect {
 
 /// `src` resampled (bilinear, edges clamped) through `inv` (destination → source) over `rect`:
 /// the content as it lands. Works on float samples, so at any depth; rows in parallel.
-fn resample(src: &Region, inv: &Homography, rect: Rect) -> Region {
+pub(super) fn resample(src: &Region, inv: &Homography, rect: Rect) -> Region {
     use rayon::prelude::*;
     let (sw, sh, n) = (src.rect.width() as usize, src.rect.height() as usize, src.ch);
     let w = rect.width() as usize;
@@ -224,7 +224,7 @@ fn plan(s: &Session, p: &Value, margin: i32) -> Result<Plan> {
     if pixels > MAX_PIXELS {
         return Err(bad(CMD, format!("the selection is too large to move ({pixels} pixels, at most {MAX_PIXELS})")));
     }
-    let map = placement(p, area, (dx, dy))?;
+    let map = placement(CMD, p, area, (dx, dy))?;
     if map.is_none() && (dx, dy) == (0, 0) {
         return Err(bad(CMD, "drag the selection to where the content should go"));
     }
@@ -681,7 +681,7 @@ fn run_scaled(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, scale: 
         offset.1 += (canvas.y0 - moved.y0).max(0) - (moved.y1 - canvas.y1).max(0);
     }
     let map = match plan.map {
-        Some(_) => placement(p, area, offset)?,
+        Some(_) => placement(CMD, p, area, offset)?,
         None => None,
     };
     let dest = landing(map.as_ref(), area, offset, canvas)?;

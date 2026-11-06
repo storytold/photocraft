@@ -313,17 +313,55 @@ pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modi
     sel.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) > 0.0
 }
 
-/// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
-/// canvas (the engine rejects a patch or move that leaves it).
-pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
-    let (dx, dy) = ((end[0] - start[0]).round(), (end[1] - start[1]).round());
-    let (dx, dy) = if dx.is_finite() && dy.is_finite() { (dx.clamp(-1e7, 1e7) as i32, dy.clamp(-1e7, 1e7) as i32) } else { (0, 0) };
-    let Some((canvas, sel)) = app.session.active().and_then(|st| Some((st.doc.bounds(), st.doc.selection.clone()?))) else { return [dx, dy] };
-    let key = u64::MAX - app.session.active().map_or(0, |st| st.doc.id.0);
-    let b = app.cached_bounds(key, &sel).intersect(&canvas);
-    if b.is_empty() {
-        return [dx, dy];
+pub(crate) fn affinity_patch(app: &PhotocraftApp) -> bool {
+    let o = &app.ui.tool_options;
+    app.ui.tool == Tool::Patch && o.patch_affinity && !o.patch_content_aware
+}
+
+pub(crate) fn patch_target(app: &PhotocraftApp) -> crate::state::PatchTarget {
+    crate::state::PatchTarget {
+        mode: app.ui.tool_options.patch_mode.clone(),
+        layer: app.session.active().and_then(|st| st.active_layer),
+        target: crate::canvas::paint_target(app),
     }
+}
+
+pub(crate) fn patch_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value {
+    let mut params = json!({"offset": offset, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
+    if affinity_patch(app) && app.ui.tool_options.patch_mode == "destination" {
+        params["clipDestination"] = true.into();
+    }
+    params
+}
+
+pub(crate) fn patch_bounds(app: &mut PhotocraftApp) -> Option<photocraft_geom::Rect> {
+    let st = app.session.active()?;
+    let sel = st.doc.selection.clone()?;
+    let canvas = st.doc.bounds();
+    let key = u64::MAX - st.doc.id.0;
+    let bounds = if sel.default_pixel().first().is_some_and(|v| *v > 0.0) { canvas } else { app.cached_bounds(key, &sel).intersect(&canvas) };
+    (!bounds.is_empty()).then_some(bounds)
+}
+
+pub(crate) fn affinity_offset(app: &mut PhotocraftApp, at: [f64; 2]) -> Option<[i32; 2]> {
+    let b = patch_bounds(app)?;
+    let center = [(f64::from(b.x0) + f64::from(b.x1)) / 2.0, (f64::from(b.y0) + f64::from(b.y1)) / 2.0];
+    if app.ui.tool_options.patch_mode == "destination" {
+        return Some(rounded_patch_offset(center, at));
+    }
+    Some(patch_offset(app, center, at))
+}
+
+fn rounded_patch_offset(start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
+    let delta = [(end[0] - start[0]).round(), (end[1] - start[1]).round()];
+    if delta.iter().all(|d| d.is_finite()) { delta.map(|d| d.clamp(-9_999_999.0, 9_999_999.0) as i32) } else { [0, 0] }
+}
+
+/// Whole-pixel offset for a drag, limited so the dragged outline stays on the canvas.
+pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
+    let [dx, dy] = rounded_patch_offset(start, end);
+    let Some(canvas) = app.session.active().map(|st| st.doc.bounds()) else { return [dx, dy] };
+    let Some(b) = patch_bounds(app) else { return [dx, dy] };
     let clamp = |d: i32, lo: i32, hi: i32| if lo > hi { 0 } else { d.clamp(lo, hi) };
     [clamp(dx, canvas.x0 - b.x0, canvas.x1 - b.x1), clamp(dy, canvas.y0 - b.y0, canvas.y1 - b.y1)]
 }
@@ -332,7 +370,7 @@ pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> 
 /// has to be dragged somewhere. Without it a lasso, or a click inside the selection, changes
 /// nothing on the canvas and the tool looks dead (#1715).
 pub fn patch_hint(app: &mut PhotocraftApp) {
-    app.ui.status = tl!("Now drag the selection onto another area").into();
+    app.ui.status = if affinity_patch(app) { tl!("Click to place the patch") } else { tl!("Now drag the selection onto another area") }.into();
     app.ui.status_error = false;
 }
 
@@ -361,9 +399,9 @@ pub fn finish_patch(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         }
         return;
     }
-    let p = json!({"offset": off, "mode": app.ui.tool_options.patch_mode, "target": crate::canvas::paint_target(app)});
-    match app.run("paint.patch", p) {
-        Ok(_) => crate::patch_preview::committed(app, preview, off),
+    let p = patch_params(app, off.map(i64::from));
+    match app.run("paint.patch", p.clone()) {
+        Ok(_) => crate::patch_preview::committed(app, preview, &p),
         Err(e) => {
             app.ui.status = e;
             app.ui.status_error = true;
@@ -501,6 +539,30 @@ fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
     crate::widgets::value_field(ui, v, 1.0..=100.0, "%", 58.0);
 }
 
+fn patch_transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let place = app
+        .ui
+        .cam_transform
+        .as_ref()
+        .filter(|t| t.patch.is_some())
+        .and_then(crate::cam_transform::placement)
+        .unwrap_or_else(|| crate::cam_transform::patch_placement(app, [0, 0]));
+    let mut rotation = place.rotate as f32;
+    let mut scale = place.scale[0] as f32;
+    opt(ui, tl!("Rotation:"));
+    let rotated = crate::widgets::value_field_prec(ui, &mut rotation, -360.0..=360.0, "°", 59.0, 1).changed();
+    opt(ui, tl!("Scale:"));
+    let scaled = crate::widgets::value_field_prec(ui, &mut scale, 1.0..=10_000.0, "%", 66.0, 1).changed();
+    if rotated || scaled {
+        let scale = if scaled {
+            [f64::from(scale), (place.scale[1] * f64::from(scale) / place.scale[0]).abs().clamp(1.0, 10_000.0).copysign(place.scale[1])]
+        } else {
+            place.scale
+        };
+        crate::cam_transform::set_patch_transform(app, scale, f64::from(rotation));
+    }
+}
+
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
     if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
@@ -549,6 +611,12 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
             crate::widgets::dropdown(ui, "patch-kind", tl!("Type"), &mut kind, &kinds, 120.0);
             o.patch_content_aware = kind == "contentAware";
+            if !o.patch_content_aware {
+                let workflows = [("photoshop".to_string(), "Photoshop"), ("affinity".to_string(), "Affinity")];
+                let mut workflow = if o.patch_affinity { "affinity" } else { "photoshop" }.to_string();
+                crate::widgets::dropdown(ui, "patch-workflow", tl!("Workflow"), &mut workflow, &workflows, 115.0);
+                o.patch_affinity = workflow == "affinity";
+            }
             if o.patch_content_aware {
                 opt(ui, tl!("Structure:"));
                 crate::widgets::value_field(ui, &mut o.patch_structure, 1.0..=7.0, "", 40.0);
@@ -556,15 +624,24 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 crate::widgets::value_field(ui, &mut o.patch_color, 0.0..=10.0, "", 40.0);
                 crate::widgets::checkbox(ui, &mut o.sample_all.patch, tl!("Sample All Layers"));
             } else {
-                for (k, l) in [("source", tl!("Source")), ("destination", tl!("Destination"))] {
-                    let mut on = o.patch_mode == k;
-                    if crate::widgets::checkbox(ui, &mut on, l).clicked() {
-                        o.patch_mode = k.into();
+                let directions = if o.patch_affinity {
+                    [("source", tl!("Selection is target")), ("destination", tl!("Selection is source"))]
+                } else {
+                    [("source", tl!("Source")), ("destination", tl!("Destination"))]
+                };
+                for (key, label) in directions {
+                    let mut on = o.patch_mode == key;
+                    if crate::widgets::checkbox(ui, &mut on, label).clicked() {
+                        o.patch_mode = key.into();
                     }
                 }
             }
             crate::widgets::vline(ui, 22.0);
-            opt(ui, tl!("Lasso around an area, then drag the selection"));
+            if o.patch_affinity && !o.patch_content_aware {
+                patch_transform_fields(app, ui);
+            } else {
+                opt(ui, tl!("Lasso around an area, then drag the selection"));
+            }
         }
         Tool::ContentAwareMove => {
             opt(ui, tl!("Mode:"));

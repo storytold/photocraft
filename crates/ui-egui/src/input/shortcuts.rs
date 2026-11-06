@@ -595,7 +595,7 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
             return true;
         }
     }
-    // Content-Aware Move's Transform On Drop box: ↩ computes the move, Esc drops it.
+    // A placed Patch or Content-Aware Move box: ↩ applies it, Esc cancels.
     if crate::cam_transform::active(app) {
         if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
             crate::cam_transform::commit(app);

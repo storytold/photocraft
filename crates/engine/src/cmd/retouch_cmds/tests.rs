@@ -1084,6 +1084,10 @@ fn patch_fails_gracefully() {
         json!({"offset": "far"}),
         json!({"offset": [1e300, 0]}),
         json!({"offset": [0, 0]}),
+        json!({"offset": [10, 0], "rotate": "bogus"}),
+        json!({"offset": [10, 0], "scaleX": 0}),
+        json!({"offset": [10, 0], "rotate": 10, "contentAware": true}),
+        json!({"offset": [1000, 0], "rotate": 10, "mode": "destination"}),
         json!({"offset": [10, 0], "mode": "bogus"}),
         json!({"offset": [60, 0]}),
         json!({"offset": [0, -30]}),
@@ -1125,6 +1129,34 @@ fn patch_preview_matches_the_command_and_its_coarse_solve_is_close() {
     // 8-bit steps), all in the colour fit: the texture is exact.
     assert!(worst < 0.03, "coarse preview off by {worst}");
     assert!(patch_preview(&s, &json!({"offset": [500, 0]}), 64, 1).is_err());
+}
+
+#[test]
+fn transformed_patch_rotates_the_texture_in_both_directions() {
+    for (mode, selection_x, offset) in [("destination", 8, 56), ("source", 64, -56)] {
+        let mut s = session(112, 64, 16, "rgb");
+        paint_layer(&mut s, |x, y| if (15..33).contains(&x) && (30..34).contains(&y) { [1.0, 0.0, 0.0, 1.0] } else { [1.0; 4] });
+        s.execute("select.rect", json!({"x": selection_x, "y": 16, "width": 32, "height": 32, "feather": 1})).unwrap();
+        let p = json!({"offset": [offset, 0], "mode": mode, "rotate": 90, "scaleX": 125, "deselect": true});
+        let steps = s.active().unwrap().history.past_len();
+        let (preview, damage) = patch_preview(&s, &p, u64::MAX, 1).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        let surf = preview.layer(id).unwrap().surface().unwrap();
+        assert!(damage.contains(80, 27) && !damage.contains(24, 32), "{mode}: {damage:?}");
+        assert!(surf.rgba(80, 27)[1] < 0.25, "{mode}: the turned red stripe");
+        assert!(surf.rgba(86, 32)[1] > 0.9, "{mode}: no horizontal red stripe");
+        assert_eq!(rgba(&s, 80, 27), [1.0; 4], "preview leaves the document alone");
+
+        s.execute("paint.patch", p).unwrap();
+        assert_eq!(rgba(&s, 80, 27), surf.rgba(80, 27), "{mode}: preview agrees with commit");
+        assert_eq!(rgba(&s, 24, 32), [1.0, 0.0, 0.0, 1.0], "{mode}: source untouched");
+        let st = s.active().unwrap();
+        assert!(st.doc.selection.is_none());
+        assert_eq!(st.history.past_len(), steps + 1);
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(rgba(&s, 80, 27), [1.0; 4]);
+        assert!(s.active().unwrap().doc.selection.is_some());
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
