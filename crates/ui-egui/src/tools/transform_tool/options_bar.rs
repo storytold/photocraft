@@ -1,4 +1,4 @@
-use super::begin::{enter_warp, leave_warp, warps_type};
+use super::begin::{enter_warp, interpolation_preference, leave_warp, warps_type};
 use super::commit::{cancel, commit};
 use super::pointer::point_on_quad;
 use super::warp::edit_session_warp;
@@ -240,9 +240,11 @@ fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSes
     let mut interp = t.interpolation.clone();
     let opts = [("bicubic".to_string(), tl!("Bicubic")), ("bilinear".to_string(), tl!("Bilinear")), ("nearest".to_string(), tl!("Nearest Neighbor"))];
     if crate::widgets::dropdown(ui, "transform-interp", tl!("Interpolation"), &mut interp, &opts, 130.0)
+        && let Some(preference) = interpolation_preference(&interp)
         && let Some(s) = app.ui.transform.as_mut()
     {
         s.interpolation = interp;
+        app.ui.tool_options.transform_interpolation = Some(preference);
     }
 }
 
@@ -253,9 +255,25 @@ pub(super) fn matching_anchor(quad: [[f64; 2]; 4], pivot: [f64; 2]) -> Option<us
     })
 }
 
-fn anchor_grid_widget(ui: &mut egui::Ui, current_anchor: Option<usize>) -> Option<usize> {
+/// Toggle Reference Point: the unlabelled check box Photoshop puts before the 3×3 grid (#11098).
+fn reference_point_toggle(ui: &mut egui::Ui, on: &mut bool) -> bool {
+    let tk = crate::theme::Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+    }
+    crate::widgets::check_box(ui.painter(), rect, *on, resp.hovered(), resp.is_pointer_button_down_on(), &tk);
+    // The catalogue's "Toggle reference point" (sentence case, like the grid's tooltip).
+    let label = tl!("Toggle reference point");
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, *on, label));
+    resp.on_hover_text(label);
+    *on
+}
+
+fn anchor_grid_widget(ui: &mut egui::Ui, current_anchor: Option<usize>, enabled: bool) -> Option<usize> {
     let size = egui::vec2(16.0, 16.0);
-    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    // Greyed and inert while Toggle Reference Point is off, as in Photoshop (#11098).
+    let (rect, resp) = ui.allocate_exact_size(size, if enabled { egui::Sense::click() } else { egui::Sense::hover() });
     let tk = crate::theme::Tokens::get(ui.ctx());
     let painter = ui.painter();
     painter.rect_stroke(rect, 1.0, egui::Stroke::new(1.0, tk.card_border), egui::StrokeKind::Inside);
@@ -270,11 +288,8 @@ fn anchor_grid_widget(ui: &mut egui::Ui, current_anchor: Option<usize>) -> Optio
             if resp.clicked() && pointer.is_some_and(|p| (p.x - cx).abs() <= 3.0 && (p.y - cy).abs() <= 3.0) {
                 clicked = Some(idx);
             }
-            if current_anchor == Some(idx) {
-                painter.rect_filled(pt_rect, 0.5, tk.accent);
-            } else {
-                painter.rect_filled(pt_rect, 0.5, tk.text_dim);
-            }
+            let color = if current_anchor == Some(idx) { tk.accent } else { tk.text_dim };
+            painter.rect_filled(pt_rect, 0.5, if enabled { color } else { color.gamma_multiply(0.4) });
         }
     }
     resp.on_hover_text(tl!("Reference point location"));
@@ -290,7 +305,8 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     };
     let current_anchor = matching_anchor(t.quad, t.pivot);
     let mut pivot = t.pivot;
-    if let Some(new_anchor) = anchor_grid_widget(ui, current_anchor) {
+    let show = reference_point_toggle(ui, &mut app.ui.tool_options.transform_reference_point);
+    if let Some(new_anchor) = anchor_grid_widget(ui, current_anchor, show) {
         let new_p = point_on_quad(t.quad, new_anchor);
         if let Some(s) = app.ui.transform.as_mut() {
             s.pivot = new_p;
