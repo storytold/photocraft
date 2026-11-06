@@ -415,18 +415,34 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"dialog": crate::new_group_ui::open(app, id)}))
         }
         // Channels › Channel Options… without params: the dialog on the targeted alpha/spot
-        // channel, Layer Mask Display Options on a targeted layer mask, or Quick Mask Options while
-        // in Quick Mask (with params: the engine directly).
+        // channel (also in Quick Mask mode, where its row is the selected one), Quick Mask Options
+        // in Quick Mask otherwise, or Layer Mask Display Options on a targeted layer mask (with
+        // params: the engine directly).
         crate::channel_options_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
             let mask = app.layer_mask_targeted();
             let st = app.session.active().ok_or("no document is open")?;
             let channel = match st.channel_view.target {
-                _ if st.doc.quick_mask.is_some() => json!("quickMask"),
                 photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) => json!(i),
+                _ if st.doc.quick_mask.is_some() => json!("quickMask"),
                 _ if mask => json!("mask"),
                 _ => return Err("target an alpha or spot channel, or a layer mask, first".into()),
             };
             let dialog = crate::channel_options_ui::open(app, &channel).ok_or("no such channel")?;
+            Ok(json!({"dialog": dialog}))
+        }
+        // Channels › New Channel… without params: its dialog (with params: the engine). The
+        // panel's New button makes one at once, as Photoshop's does.
+        crate::channel_options_ui::NEW_CHANNEL if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let dialog = crate::channel_options_ui::open_new_channel(app).ok_or("no document is open")?;
+            Ok(json!({"dialog": dialog}))
+        }
+        // Channels › Merge Channels… without params: its dialog, which picks the mode and the
+        // documents (with params: the engine).
+        crate::dialogs::merge_channels_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
+            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+                return Err(why);
+            }
+            let dialog = crate::dialogs::merge_channels_ui::open(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))
         }
         // Channels › New Spot Channel… without params: its dialog (with params: the engine).
