@@ -10,7 +10,9 @@
 //! The file holds no secret. A crashed (or, on macOS, quit) app can leave it behind; nothing then
 //! listens on its port ([`probe`]), and the app's next launch replaces it or removes it
 //! ([`remove_stale_connection`]). Until then another program could take that port, so a client
-//! checks that [`Connection::pid`] is still running before it sends the token.
+//! checks that [`Connection::pid`] is still running before it sends the token. That narrows the
+//! gap without closing it (a pid can be reused); `docs/control-protocol.md` says when a client
+//! should not send the token on the strength of this file.
 
 use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};

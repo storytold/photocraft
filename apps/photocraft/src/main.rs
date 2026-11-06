@@ -186,8 +186,16 @@ impl Drop for Published {
 /// server still runs, as with `--control`.
 fn publish_connection(dir: &std::path::Path, port: u16, token_file: &std::path::Path) -> Option<Published> {
     use photocraft_automation::agent_link::{Connection, write_connection};
-    // A relative `--control-token-file` is relative to this process's folder, not the client's.
-    let token_file = std::path::absolute(token_file).unwrap_or_else(|_| token_file.to_path_buf());
+    // A relative `--control-token-file` is relative to this process's folder, not the client's:
+    // publish nothing rather than a path a client would resolve somewhere else.
+    let token_file = match std::path::absolute(token_file) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("photocraft: couldn't publish the control connection: {}: {e}", token_file.display());
+            log::warn!("couldn't publish the control connection: {}: {e}", token_file.display());
+            return None;
+        }
+    };
     match write_connection(dir, &Connection::new(port, token_file)) {
         Ok(()) => {
             eprintln!("photocraft: control connection published in {}", dir.join(photocraft_automation::agent_link::CONNECTION_FILE).display());
@@ -1303,6 +1311,9 @@ mod tests {
         let c = agent_link::read_connection(&dir).unwrap().expect("a connection");
         assert_eq!(c.token_file, std::env::current_dir().unwrap().join("relative.token"));
         drop(published);
+        // One that can't be made absolute (empty) is not published as given.
+        assert!(super::publish_connection(&dir, 7878, std::path::Path::new("")).is_none());
+        assert_eq!(agent_link::read_connection(&dir).unwrap(), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
