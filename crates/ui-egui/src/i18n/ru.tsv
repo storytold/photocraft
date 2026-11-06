@@ -4760,3 +4760,49 @@ shape	Appearance	Оформление
 	Replace Image…	Заменить изображение…
 	The frame is locked	Рамка заблокирована
 	The frame is unavailable	Рамка недоступна
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	При вылете {bleed} мм на этой странице {width} × {height} мм не остаётся обрезного формата.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Профиль CMYK не установлен. Установите на этот компьютер профиль типографии (например, ISO Coated v2 или Coated FOGRA39) и сохраните снова.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	Для PDF/X-4 нужен профиль ICC версии 2 или 4. Выберите профиль типографии (например, PSO Coated v3 или Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	Для {standard} нужен профиль ICC версии 2. Выберите профиль типографии (например, ISO Coated v2 или Coated FOGRA39) или сохраните в PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Профиль документа ({profile}) имеет ICC версии {version}, которую {standard} не может встроить. Преобразуйте в выходной профиль или сохраните в PDF/X-4.
+	Document: {profile}	Документ: {profile}
+	Working CMYK: {profile}	Рабочий CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Обычный PDF для просмотра и для типографий, которые не требуют PDF/X. Изображение сохраняет свои цвета и встроенный профиль.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) для печати: все цвета в CMYK или градациях серого, преобразованы в выходные условия типографии. Его принимает большинство типографий. PDF 1.3, выходной профиль ICC версии 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) для печати: как PDF/X-1a, но цвета могут также сохранять собственный профиль ICC, а преобразует их типография. PDF 1.3, профили ICC версии 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), действующий стандарт печати: цвета преобразованы в выходные условия или сохранены в собственном профиле, профили ICC версии 2 или 4, метаданные XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Изображение сохраняется сведённым: слои, текст и прозрачность как таковые не сохраняются. Чтобы редактировать его позже, сохраните документ в .psd или .pcraft.
+	Images	Изображения
+	Downsampling:	Понижение разрешения:
+	Do Not Downsample	Не понижать разрешение
+	Compression:	Сжатие:
+	ZIP (lossless)	ZIP (без потерь)
+	Image Quality:	Качество изображения:
+	8 bits per channel	8 бит на канал
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	PDF для печати записываются в полном разрешении со сжатием без потерь, поэтому по пути в типографию ничего не теряется.
+	Color Conversion:	Преобразование цвета:
+	Convert to Destination	Преобразовать в целевой
+	No Conversion	Без преобразования
+	Destination:	Назначение:
+	N/A	Н/Д
+	Profile Inclusion Policy:	Правило включения профилей:
+	Include Tagged Source Profiles	Включать профили помеченных источников
+	Don't Include Profiles	Не включать профили
+	Include Destination Profile	Включить целевой профиль
+	The CMYK numbers are kept.	Значения CMYK сохраняются.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Цвета сохраняют профиль документа, встроенный в PDF; преобразует их типография.
+	The colours are converted to this profile in the PDF; the document is not changed.	Цвета преобразуются в этот профиль в PDF; документ не изменяется.
+	Output Intent Profile Name:	Имя профиля выходных условий:
+	Output Condition Identifier:	Идентификатор выходных условий:
+	Bleed:	Вылет под обрез:
+	already in the document	уже есть в документе
+	Standard:	Стандарт:
+	Compatibility:	Совместимость:
+	Page:	Страница:
+	Trim:	Обрезной формат:
+	Warnings	Предупреждения
+	PDF Preset:	Набор PDF:
+	[High Quality Print]	[Высококачественная печать]
+	Save PDF	Сохранить PDF

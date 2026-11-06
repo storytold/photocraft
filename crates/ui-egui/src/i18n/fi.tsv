@@ -4788,3 +4788,49 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Pause For	Tauko
 	seconds	sekuntia
 	Create a single history state	Luo yksi historiatila
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm:n leikkuuvara ei jätä tälle {width} × {height} mm:n sivulle lainkaan leikattua kokoa.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	CMYK-profiilia ei ole asennettu. Asenna painotalon profiili (esimerkiksi ISO Coated v2 tai Coated FOGRA39) tähän tietokoneeseen ja tallenna uudelleen.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 vaatii ICC-version 2 tai 4 profiilin. Valitse painotalon profiili (esimerkiksi PSO Coated v3 tai Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} vaatii ICC-version 2 profiilin. Valitse painotalon profiili (esimerkiksi ISO Coated v2 tai Coated FOGRA39) tai tallenna PDF/X-4-muodossa.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Asiakirjan profiili ({profile}) on ICC-versiota {version}, jota {standard} ei voi upottaa. Muunna tulostusprofiiliin tai tallenna PDF/X-4-muodossa.
+	Document: {profile}	Asiakirja: {profile}
+	Working CMYK: {profile}	Työ-CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Tavallinen PDF katseluun ja painotaloille, jotka eivät vaadi PDF/X:ää. Kuva säilyttää värinsä ja upotetun profiilinsa.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) painatukseen: kaikki värit ovat CMYK- tai harmaasävyvärejä, muunnettuina painotalon tulostusolosuhteeseen. Useimmat painotalot hyväksyvät sen. PDF 1.3, ICC-version 2 tulostusprofiili.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) painatukseen: kuten PDF/X-1a, mutta värit voivat myös säilyttää oman ICC-profiilinsa, jolloin painotalo muuntaa ne. PDF 1.3, ICC-version 2 profiilit.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), nykyinen painostandardi: värit muunnetaan tulostusolosuhteeseen tai ne säilyttävät oman profiilinsa, ICC-version 2 tai 4 profiilit, XMP-metatiedot. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Kuva tallennetaan litistettynä: tasoja, tekstiä ja läpinäkyvyyttä ei säilytetä sellaisinaan. Säilytä asiakirja .psd- tai .pcraft-muodossa, jotta voit muokata sitä myöhemmin.
+	Images	Kuvat
+	Downsampling:	Alinäytteistys:
+	Do Not Downsample	Älä alinäytteistä
+	Compression:	Pakkaus:
+	ZIP (lossless)	ZIP (häviötön)
+	Image Quality:	Kuvanlaatu:
+	8 bits per channel	8 bittiä kanavaa kohden
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	Painatukseen tarkoitetut PDF:t kirjoitetaan täydellä tarkkuudella ja häviöttömällä pakkauksella, joten mitään ei menetetä matkalla painokoneelle.
+	Color Conversion:	Värimuunnos:
+	Convert to Destination	Muunna kohteeseen
+	No Conversion	Ei muunnosta
+	Destination:	Kohde:
+	N/A	Ei sovellu
+	Profile Inclusion Policy:	Profiilien sisällytys:
+	Include Tagged Source Profiles	Sisällytä merkityt lähdeprofiilit
+	Don't Include Profiles	Älä sisällytä profiileja
+	Include Destination Profile	Sisällytä kohdeprofiili
+	The CMYK numbers are kept.	CMYK-arvot säilytetään.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Värit säilyttävät asiakirjan profiilin, joka upotetaan PDF:ään; painotalo muuntaa ne.
+	The colours are converted to this profile in the PDF; the document is not changed.	Värit muunnetaan PDF:ssä tähän profiiliin; asiakirjaa ei muuteta.
+	Output Intent Profile Name:	Tulostustarkoituksen profiilin nimi:
+	Output Condition Identifier:	Tulostusolosuhteen tunniste:
+	Bleed:	Leikkuuvara:
+	already in the document	on jo asiakirjassa
+	Standard:	Standardi:
+	Compatibility:	Yhteensopivuus:
+	Page:	Sivu:
+	Trim:	Leikattu koko:
+	Warnings	Varoitukset
+	PDF Preset:	PDF-esiasetus:
+	[High Quality Print]	[Korkealaatuinen painatus]
+	Save PDF	Tallenna PDF

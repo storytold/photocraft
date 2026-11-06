@@ -4072,3 +4072,49 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	Thay ảnh…
 	The frame is locked	Khung đã bị khóa
 	The frame is unavailable	Khung không khả dụng
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Phần tràn lề {bleed} mm không để lại khổ thành phẩm nào trên trang {width} × {height} mm này.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Chưa cài hồ sơ CMYK nào. Hãy cài hồ sơ của nhà in (ví dụ ISO Coated v2 hoặc Coated FOGRA39) trên máy tính này rồi lưu lại.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 cần hồ sơ ICC phiên bản 2 hoặc 4. Hãy chọn hồ sơ của nhà in (ví dụ PSO Coated v3 hoặc Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} cần hồ sơ ICC phiên bản 2. Hãy chọn hồ sơ của nhà in (ví dụ ISO Coated v2 hoặc Coated FOGRA39), hoặc lưu dạng PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Hồ sơ của tài liệu ({profile}) là ICC phiên bản {version}, mà {standard} không thể nhúng. Hãy chuyển sang hồ sơ đầu ra, hoặc lưu dạng PDF/X-4.
+	Document: {profile}	Tài liệu: {profile}
+	Working CMYK: {profile}	CMYK làm việc: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	PDF thông thường để xem và cho các nhà in không yêu cầu PDF/X. Ảnh giữ nguyên màu và hồ sơ nhúng của nó.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) dành cho in ấn: mọi màu đều là CMYK hoặc xám, được chuyển sang điều kiện đầu ra của nhà in. Hầu hết nhà in đều chấp nhận. PDF 1.3, hồ sơ đầu ra ICC phiên bản 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) dành cho in ấn: giống PDF/X-1a, nhưng màu cũng có thể giữ hồ sơ ICC riêng để nhà in chuyển đổi. PDF 1.3, hồ sơ ICC phiên bản 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), chuẩn in hiện hành: màu được chuyển sang điều kiện đầu ra hoặc giữ trong hồ sơ riêng, hồ sơ ICC phiên bản 2 hoặc 4, siêu dữ liệu XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Ảnh được lưu ở dạng làm phẳng: lớp, chữ và độ trong suốt không được giữ nguyên. Hãy giữ tài liệu dạng .psd hoặc .pcraft để chỉnh sửa sau này.
+	Images	Hình ảnh
+	Downsampling:	Giảm mẫu:
+	Do Not Downsample	Không giảm mẫu
+	Compression:	Nén:
+	ZIP (lossless)	ZIP (không mất dữ liệu)
+	Image Quality:	Chất lượng ảnh:
+	8 bits per channel	8 bit mỗi kênh
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	PDF để in được ghi ở độ phân giải đầy đủ với nén không mất dữ liệu, nên không có gì bị mất trên đường đến máy in.
+	Color Conversion:	Chuyển đổi màu:
+	Convert to Destination	Chuyển sang đích
+	No Conversion	Không chuyển đổi
+	Destination:	Đích:
+	N/A	Không áp dụng
+	Profile Inclusion Policy:	Chính sách đưa hồ sơ vào:
+	Include Tagged Source Profiles	Đưa vào hồ sơ nguồn đã gắn thẻ
+	Don't Include Profiles	Không đưa hồ sơ vào
+	Include Destination Profile	Đưa vào hồ sơ đích
+	The CMYK numbers are kept.	Các giá trị CMYK được giữ nguyên.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Màu giữ hồ sơ của tài liệu, được nhúng trong PDF; nhà in sẽ chuyển đổi chúng.
+	The colours are converted to this profile in the PDF; the document is not changed.	Màu được chuyển sang hồ sơ này trong PDF; tài liệu không bị thay đổi.
+	Output Intent Profile Name:	Tên hồ sơ mục đích đầu ra:
+	Output Condition Identifier:	Mã định danh điều kiện đầu ra:
+	Bleed:	Tràn lề:
+	already in the document	đã có trong tài liệu
+	Standard:	Chuẩn:
+	Compatibility:	Tương thích:
+	Page:	Trang:
+	Trim:	Khổ thành phẩm:
+	Warnings	Cảnh báo
+	PDF Preset:	Thiết lập sẵn PDF:
+	[High Quality Print]	[In chất lượng cao]
+	Save PDF	Lưu PDF

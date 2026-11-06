@@ -95,7 +95,7 @@ impl Prompt {
         }
         let Some(c) = self.candidates.get(self.profile) else {
             return Some(
-                tl!("No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) in Windows and save again.")
+                tl!("No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.")
                     .into(),
             );
         };

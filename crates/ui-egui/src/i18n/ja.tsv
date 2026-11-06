@@ -4243,3 +4243,49 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Replace Image…	画像を置き換え…
 	The frame is locked	フレームはロックされています
 	The frame is unavailable	フレームを利用できません
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm の裁ち落としを取ると、この {width} × {height} mm のページには仕上がり領域が残りません。
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	CMYK プロファイルがインストールされていません。印刷所のプロファイル (例: ISO Coated v2 や Coated FOGRA39) をこのコンピューターにインストールしてから、もう一度保存してください。
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 には ICC バージョン 2 または 4 のプロファイルが必要です。印刷所のプロファイル (例: PSO Coated v3 や Coated FOGRA39) を選択してください。
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} には ICC バージョン 2 のプロファイルが必要です。印刷所のプロファイル (例: ISO Coated v2 や Coated FOGRA39) を選択するか、PDF/X-4 で保存してください。
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	ドキュメントのプロファイル ({profile}) は ICC バージョン {version} のため、{standard} には埋め込めません。出力プロファイルに変換するか、PDF/X-4 で保存してください。
+	Document: {profile}	ドキュメント: {profile}
+	Working CMYK: {profile}	作業用 CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	表示用、および PDF/X を求めない印刷所向けの通常の PDF です。画像のカラーと埋め込みプロファイルはそのまま保持されます。
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	印刷用の PDF/X-1a:2001 (ISO 15930-1): すべてのカラーは CMYK またはグレーで、印刷所の出力条件に変換されます。ほとんどの印刷所で受け付けられます。PDF 1.3、ICC バージョン 2 の出力プロファイル。
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	印刷用の PDF/X-3:2002 (ISO 15930-3): PDF/X-1a と同様ですが、カラーに独自の ICC プロファイルを残して印刷所側で変換させることもできます。PDF 1.3、ICC バージョン 2 のプロファイル。
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7)、現行の印刷規格: カラーは出力条件に変換するか独自のプロファイルのまま保持します。ICC バージョン 2 または 4 のプロファイル、XMP メタデータ。PDF 1.6。
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	画像は統合して保存されます。レイヤー、テキスト、透明部分はそのままの形では保持されません。後で編集するには、ドキュメントを .psd または .pcraft で保存しておいてください。
+	Images	画像
+	Downsampling:	ダウンサンプル:
+	Do Not Downsample	ダウンサンプルしない
+	Compression:	圧縮:
+	ZIP (lossless)	ZIP (可逆)
+	Image Quality:	画質:
+	8 bits per channel	8 ビット/チャンネル
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	印刷用 PDF はフル解像度、可逆圧縮で書き出されるため、印刷までの過程で何も失われません。
+	Color Conversion:	カラー変換:
+	Convert to Destination	出力先プロファイルに変換
+	No Conversion	変換しない
+	Destination:	出力先:
+	N/A	該当なし
+	Profile Inclusion Policy:	プロファイル埋め込みポリシー:
+	Include Tagged Source Profiles	タグ付きソースプロファイルを含める
+	Don't Include Profiles	プロファイルを含めない
+	Include Destination Profile	出力先プロファイルを含める
+	The CMYK numbers are kept.	CMYK の値はそのまま保持されます。
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	カラーはドキュメントのプロファイルを保持し、そのプロファイルは PDF に埋め込まれます。変換は印刷所側で行われます。
+	The colours are converted to this profile in the PDF; the document is not changed.	カラーは PDF 内でこのプロファイルに変換されます。ドキュメント自体は変更されません。
+	Output Intent Profile Name:	出力インテントのプロファイル名:
+	Output Condition Identifier:	出力条件の識別子:
+	Bleed:	裁ち落とし:
+	already in the document	ドキュメントに含まれています
+	Standard:	規格:
+	Compatibility:	互換性:
+	Page:	ページ:
+	Trim:	仕上がり:
+	Warnings	警告
+	PDF Preset:	PDF プリセット:
+	[High Quality Print]	[高品質印刷]
+	Save PDF	PDF を保存

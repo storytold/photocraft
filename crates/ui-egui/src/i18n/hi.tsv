@@ -643,3 +643,55 @@ cameraRaw	Yellow	पीला
 	Pause For	इतने समय रुकें
 	seconds	सेकंड
 	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm ब्लीड के बाद इस {width} × {height} mm पेज पर ट्रिम के लिए कुछ नहीं बचता।
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	कोई CMYK प्रोफ़ाइल इंस्टॉल नहीं है। प्रिंटर की प्रोफ़ाइल (उदाहरण के लिए ISO Coated v2 या Coated FOGRA39) इस कंप्यूटर पर इंस्टॉल करें और फिर से सहेजें।
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 को ICC संस्करण 2 या 4 की प्रोफ़ाइल चाहिए। प्रिंटर की प्रोफ़ाइल चुनें (उदाहरण के लिए PSO Coated v3 या Coated FOGRA39)।
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} को ICC संस्करण 2 की प्रोफ़ाइल चाहिए। प्रिंटर की प्रोफ़ाइल चुनें (उदाहरण के लिए ISO Coated v2 या Coated FOGRA39), या PDF/X-4 के रूप में सहेजें।
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	दस्तावेज़ की प्रोफ़ाइल ({profile}) ICC संस्करण {version} की है, जिसे {standard} एम्बेड नहीं कर सकता। आउटपुट प्रोफ़ाइल में बदलें, या PDF/X-4 के रूप में सहेजें।
+	Document: {profile}	दस्तावेज़: {profile}
+	Working CMYK: {profile}	वर्किंग CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	देखने के लिए और उन प्रिंटरों के लिए सामान्य PDF जो PDF/X नहीं माँगते। इमेज अपना रंग और एम्बेड की गई प्रोफ़ाइल बनाए रखती है।
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	प्रिंट के लिए PDF/X-1a:2001 (ISO 15930-1): सारा रंग CMYK या ग्रे होता है, जिसे प्रिंटर की आउटपुट कंडीशन में बदला जाता है। अधिकांश प्रिंट शॉप इसे स्वीकार करती हैं। PDF 1.3, ICC संस्करण 2 आउटपुट प्रोफ़ाइल।
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	प्रिंट के लिए PDF/X-3:2002 (ISO 15930-3): PDF/X-1a जैसा, लेकिन रंग अपनी ICC प्रोफ़ाइल भी रख सकता है ताकि प्रिंटर उसे बदले। PDF 1.3, ICC संस्करण 2 प्रोफ़ाइलें।
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), वर्तमान प्रिंट मानक: रंग आउटपुट कंडीशन में बदला जाता है या अपनी प्रोफ़ाइल में रखा जाता है, ICC संस्करण 2 या 4 प्रोफ़ाइलें, XMP मेटाडेटा। PDF 1.6।
+	Description	विवरण
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	इमेज फ़्लैट करके सहेजी जाती है: लेयर, टेक्स्ट और पारदर्शिता जैसे के तैसे नहीं रखे जाते। बाद में संपादित करने के लिए दस्तावेज़ को .psd या .pcraft के रूप में रखें।
+	Images	इमेज
+	Downsampling:	डाउनसैंपलिंग:
+	Do Not Downsample	डाउनसैंपल न करें
+	Compression:	कम्प्रेशन:
+	ZIP (lossless)	ZIP (लॉसलेस)
+	Image Quality:	इमेज गुणवत्ता:
+	8 bits per channel	प्रति चैनल 8 बिट
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	प्रिंट PDF पूरे रिज़ॉल्यूशन पर लॉसलेस कम्प्रेशन के साथ लिखे जाते हैं, इसलिए प्रेस तक पहुँचने में कुछ भी नहीं खोता।
+	Color Conversion:	रंग रूपांतरण:
+	Convert to Destination	गंतव्य में बदलें
+	No Conversion	कोई रूपांतरण नहीं
+	Destination:	गंतव्य:
+	N/A	लागू नहीं
+	Profile Inclusion Policy:	प्रोफ़ाइल शामिल करने की नीति:
+	Include Tagged Source Profiles	टैग की गई स्रोत प्रोफ़ाइलें शामिल करें
+	Don't Include Profiles	प्रोफ़ाइलें शामिल न करें
+	Include Destination Profile	गंतव्य प्रोफ़ाइल शामिल करें
+	The CMYK numbers are kept.	CMYK मान वैसे ही रखे जाते हैं।
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	रंग दस्तावेज़ की प्रोफ़ाइल रखते हैं, जो PDF में एम्बेड होती है; प्रिंटर उन्हें बदलता है।
+	The colours are converted to this profile in the PDF; the document is not changed.	रंग PDF में इस प्रोफ़ाइल में बदले जाते हैं; दस्तावेज़ नहीं बदलता।
+	Output Intent Profile Name:	आउटपुट इंटेंट प्रोफ़ाइल नाम:
+	Output Condition Identifier:	आउटपुट कंडीशन पहचानकर्ता:
+	Bleed:	ब्लीड:
+	already in the document	दस्तावेज़ में पहले से
+	Standard:	मानक:
+	None	कोई नहीं
+	Compatibility:	संगतता:
+	Page:	पेज:
+	Trim:	ट्रिम:
+	Settings	सेटिंग्स
+	Warnings	चेतावनियाँ
+	Save as PDF	PDF के रूप में सहेजें
+	PDF Preset:	PDF प्रीसेट:
+	[High Quality Print]	[उच्च गुणवत्ता प्रिंट]
+	Save PDF	PDF सहेजें
+	Save failed: {error}	सहेजना विफल: {error}
+	Save cancelled	सहेजना रद्द किया गया

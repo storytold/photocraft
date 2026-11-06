@@ -3788,3 +3788,49 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is unavailable	프레임을 사용할 수 없습니다
 	X	X
 	Y	Y
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm 도련을 적용하면 이 {width} × {height} mm 페이지에 재단 후 남는 영역이 없습니다.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	CMYK 프로파일이 설치되어 있지 않습니다. 인쇄소의 프로파일(예: ISO Coated v2 또는 Coated FOGRA39)을 이 컴퓨터에 설치한 뒤 다시 저장하세요.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4에는 ICC 버전 2 또는 4 프로파일이 필요합니다. 인쇄소의 프로파일(예: PSO Coated v3 또는 Coated FOGRA39)을 선택하세요.
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard}에는 ICC 버전 2 프로파일이 필요합니다. 인쇄소의 프로파일(예: ISO Coated v2 또는 Coated FOGRA39)을 선택하거나 PDF/X-4로 저장하세요.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	문서의 프로파일({profile})은 ICC 버전 {version}이므로 {standard}에 포함할 수 없습니다. 출력 프로파일로 변환하거나 PDF/X-4로 저장하세요.
+	Document: {profile}	문서: {profile}
+	Working CMYK: {profile}	작업용 CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	화면 보기용 및 PDF/X를 요구하지 않는 인쇄소용 일반 PDF입니다. 이미지의 색상과 포함된 프로파일이 그대로 유지됩니다.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	인쇄용 PDF/X-1a:2001(ISO 15930-1): 모든 색상은 CMYK 또는 회색이며 인쇄소의 출력 조건으로 변환됩니다. 대부분의 인쇄소에서 받아들입니다. PDF 1.3, ICC 버전 2 출력 프로파일.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	인쇄용 PDF/X-3:2002(ISO 15930-3): PDF/X-1a와 같지만, 색상이 자체 ICC 프로파일을 유지하여 인쇄소에서 변환하게 할 수도 있습니다. PDF 1.3, ICC 버전 2 프로파일.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008(ISO 15930-7), 현행 인쇄 표준: 색상은 출력 조건으로 변환되거나 자체 프로파일로 유지됩니다. ICC 버전 2 또는 4 프로파일, XMP 메타데이터. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	이미지는 병합되어 저장됩니다. 레이어, 문자, 투명도는 그대로 유지되지 않습니다. 나중에 편집하려면 문서를 .psd 또는 .pcraft로 보관하세요.
+	Images	이미지
+	Downsampling:	다운샘플링:
+	Do Not Downsample	다운샘플링 안 함
+	Compression:	압축:
+	ZIP (lossless)	ZIP(무손실)
+	Image Quality:	이미지 품질:
+	8 bits per channel	채널당 8비트
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	인쇄용 PDF는 전체 해상도와 무손실 압축으로 기록되므로 인쇄까지 가는 동안 아무것도 손실되지 않습니다.
+	Color Conversion:	색상 변환:
+	Convert to Destination	대상으로 변환
+	No Conversion	변환 안 함
+	Destination:	대상:
+	N/A	해당 없음
+	Profile Inclusion Policy:	프로파일 포함 정책:
+	Include Tagged Source Profiles	태그된 소스 프로파일 포함
+	Don't Include Profiles	프로파일 포함 안 함
+	Include Destination Profile	대상 프로파일 포함
+	The CMYK numbers are kept.	CMYK 값이 그대로 유지됩니다.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	색상은 문서의 프로파일을 유지하며 이 프로파일이 PDF에 포함됩니다. 변환은 인쇄소에서 합니다.
+	The colours are converted to this profile in the PDF; the document is not changed.	색상은 PDF 안에서 이 프로파일로 변환됩니다. 문서는 변경되지 않습니다.
+	Output Intent Profile Name:	출력 의도 프로파일 이름:
+	Output Condition Identifier:	출력 조건 식별자:
+	Bleed:	도련:
+	already in the document	문서에 이미 포함됨
+	Standard:	표준:
+	Compatibility:	호환성:
+	Page:	페이지:
+	Trim:	재단 크기:
+	Warnings	경고
+	PDF Preset:	PDF 사전 설정:
+	[High Quality Print]	[고품질 인쇄]
+	Save PDF	PDF 저장

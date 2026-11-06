@@ -4598,3 +4598,49 @@ shape	Appearance	Apparence
 	Replace Image…	Remplacer l’image…
 	The frame is locked	Le cadre est verrouillé
 	The frame is unavailable	Le cadre n’est pas disponible
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Un fond perdu de {bleed} mm ne laisse aucun format fini sur cette page de {width} × {height} mm.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Aucun profil CMJN n'est installé. Installez le profil de l'imprimeur (par exemple ISO Coated v2 ou Coated FOGRA39) sur cet ordinateur et enregistrez à nouveau.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4:2008 nécessite un profil ICC version 2 ou 4. Choisissez le profil de l'imprimeur (par exemple PSO Coated v3 ou Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} nécessite un profil ICC version 2. Choisissez le profil de l'imprimeur (par exemple ISO Coated v2 ou Coated FOGRA39), ou enregistrez en PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Le profil du document ({profile}) est un profil ICC version {version}, que {standard} ne peut pas incorporer. Convertissez vers le profil de sortie, ou enregistrez en PDF/X-4.
+	Document: {profile}	Document : {profile}
+	Working CMYK: {profile}	CMJN de travail : {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Un PDF simple pour l'affichage et pour les imprimeurs qui ne demandent pas de PDF/X. L'image garde ses couleurs et son profil incorporé.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) pour l'impression : toutes les couleurs sont en CMJN ou en niveaux de gris, converties vers les conditions de sortie de l'imprimeur. La plupart des imprimeurs l'acceptent. PDF 1.3, un profil de sortie ICC version 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) pour l'impression : comme PDF/X-1a, mais les couleurs peuvent aussi garder leur propre profil ICC, que l'imprimeur convertira. PDF 1.3, profils ICC version 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), la norme d'impression actuelle : couleurs converties vers les conditions de sortie ou gardées dans leur propre profil, profils ICC version 2 ou 4, métadonnées XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	L'image est enregistrée aplatie : les calques, le texte et la transparence ne sont pas conservés en tant que tels. Conservez le document au format .psd ou .pcraft pour le modifier plus tard.
+	Images	Images
+	Downsampling:	Sous-échantillonnage :
+	Do Not Downsample	Ne pas sous-échantillonner
+	Compression:	Compression :
+	ZIP (lossless)	ZIP (sans perte)
+	Image Quality:	Qualité d'image :
+	8 bits per channel	8 bits par couche
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	Les PDF d'impression sont écrits en pleine résolution avec une compression sans perte, pour que rien ne se perde en chemin vers la presse.
+	Color Conversion:	Conversion des couleurs :
+	Convert to Destination	Convertir vers la destination
+	No Conversion	Aucune conversion
+	Destination:	Destination :
+	N/A	S.O.
+	Profile Inclusion Policy:	Règle d'inclusion des profils :
+	Include Tagged Source Profiles	Inclure les profils source balisés
+	Don't Include Profiles	Ne pas inclure les profils
+	Include Destination Profile	Inclure le profil de destination
+	The CMYK numbers are kept.	Les valeurs CMJN sont conservées.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Les couleurs gardent le profil du document, incorporé dans le PDF ; l'imprimeur les convertit.
+	The colours are converted to this profile in the PDF; the document is not changed.	Les couleurs sont converties vers ce profil dans le PDF ; le document n'est pas modifié.
+	Output Intent Profile Name:	Nom du profil d'intention de sortie :
+	Output Condition Identifier:	Identifiant des conditions de sortie :
+	Bleed:	Fond perdu :
+	already in the document	déjà dans le document
+	Standard:	Norme :
+	Compatibility:	Compatibilité :
+	Page:	Page :
+	Trim:	Format fini :
+	Warnings	Avertissements
+	PDF Preset:	Paramètre prédéfini PDF :
+	[High Quality Print]	[Impression haute qualité]
+	Save PDF	Enregistrer le PDF

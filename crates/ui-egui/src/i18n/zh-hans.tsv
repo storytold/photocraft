@@ -3254,3 +3254,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Frame	框架
 	X	X
 	Y	Y
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm 出血会使这个 {width} × {height} mm 的页面裁切后不剩任何区域。
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	未安装 CMYK 配置文件。请在这台计算机上安装印刷厂的配置文件（例如 ISO Coated v2 或 Coated FOGRA39），然后重新保存。
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 需要 ICC 版本 2 或 4 的配置文件。请选择印刷厂的配置文件（例如 PSO Coated v3 或 Coated FOGRA39）。
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} 需要 ICC 版本 2 的配置文件。请选择印刷厂的配置文件（例如 ISO Coated v2 或 Coated FOGRA39），或保存为 PDF/X-4。
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	文档的配置文件（{profile}）为 ICC 版本 {version}，{standard} 无法嵌入。请转换为输出配置文件，或保存为 PDF/X-4。
+	Document: {profile}	文档：{profile}
+	Working CMYK: {profile}	工作 CMYK：{profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	用于屏幕查看以及不要求 PDF/X 的印刷厂的普通 PDF。图像保留其颜色和嵌入的配置文件。
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001（ISO 15930-1），用于印刷：所有颜色均为 CMYK 或灰度，并转换为印刷厂的输出条件。大多数印刷厂都接受。PDF 1.3，ICC 版本 2 输出配置文件。
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002（ISO 15930-3），用于印刷：与 PDF/X-1a 类似，但颜色也可以保留自身的 ICC 配置文件，交由印刷厂转换。PDF 1.3，ICC 版本 2 配置文件。
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008（ISO 15930-7），当前的印刷标准：颜色转换为输出条件或保留在自身的配置文件中，ICC 版本 2 或 4 配置文件，XMP 元数据。PDF 1.6。
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	图像将拼合后保存：图层、文字和透明度不会按原样保留。若要以后编辑，请将文档保存为 .psd 或 .pcraft。
+	Images	图像
+	Downsampling:	缩减像素采样：
+	Do Not Downsample	不缩减像素采样
+	Compression:	压缩：
+	ZIP (lossless)	ZIP（无损）
+	Image Quality:	图像品质：
+	8 bits per channel	每通道 8 位
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	印刷用 PDF 以全分辨率和无损压缩写入，因此送印过程中不会有任何损失。
+	Color Conversion:	颜色转换：
+	Convert to Destination	转换为目标
+	No Conversion	不转换
+	Destination:	目标：
+	N/A	不适用
+	Profile Inclusion Policy:	配置文件包含策略：
+	Include Tagged Source Profiles	包含标记的源配置文件
+	Don't Include Profiles	不包含配置文件
+	Include Destination Profile	包含目标配置文件
+	The CMYK numbers are kept.	CMYK 数值保持不变。
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	颜色保留文档的配置文件，并嵌入 PDF 中；由印刷厂进行转换。
+	The colours are converted to this profile in the PDF; the document is not changed.	颜色在 PDF 中转换为此配置文件；文档本身不会更改。
+	Output Intent Profile Name:	输出意图配置文件名称：
+	Output Condition Identifier:	输出条件标识符：
+	Bleed:	出血：
+	already in the document	已包含在文档中
+	Standard:	标准：
+	Compatibility:	兼容性：
+	Page:	页面：
+	Trim:	成品尺寸：
+	Settings	设置
+	Warnings	警告
+	PDF Preset:	PDF 预设：
+	[High Quality Print]	[高质量印刷]
+	Save PDF	保存 PDF
