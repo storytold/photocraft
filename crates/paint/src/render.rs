@@ -1068,11 +1068,13 @@ impl StrokeRenderer {
     pub fn coverage_in_with_tail(&self, r: Rect, tail: &Self) -> Vec<f32> {
         (r.y0..r.y1)
             .flat_map(|y| (r.x0..r.x1).map(move |x| (x, y)))
-            .map(
-                |(x, y)| {
-                    if tail.cov.tiles.contains_key(&tile_key((x.div_euclid(COV_TILE), y.div_euclid(COV_TILE)))) { tail.coverage_at(x, y) } else { self.coverage_at(x, y) }
-                },
-            )
+            .map(|(x, y)| {
+                if tail.cov.tiles.contains_key(&tile_key((x.div_euclid(COV_TILE), y.div_euclid(COV_TILE)))) {
+                    tail.coverage_at(x, y)
+                } else {
+                    self.coverage_at(x, y)
+                }
+            })
             .collect()
     }
 
