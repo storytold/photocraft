@@ -350,6 +350,46 @@ fn erase_to_history_in_pencil_mode_ignores_the_brush_modes_flow() {
 }
 
 #[test]
+fn alt_at_the_press_reverses_erase_to_history_for_one_eraser_stroke() {
+    for (mode, pencil) in [("brush", false), ("pencil", true)] {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+        let painted = layer(&app).surface().unwrap().rgba(60, 40);
+        app.run("history.setSource", json!({"state": 1})).unwrap();
+        app.ui.tool = Tool::Eraser;
+        crate::paint_mouse::sync_tool_brush(&mut app);
+        app.run("tools.setBrush", json!({"brush": {"size": 15, "hardness": 1.0, "smoothing": {"amount": 0.0}}})).unwrap();
+        app.ui.tool_options.eraser_mode = mode.into();
+        let stroke = |app: &mut PhotocraftApp, down: Modifiers, later: Modifiers| {
+            tool_event(app, ToolEvent::Down { x: 55.0, y: 40.0, pressure: 1.0 }, down);
+            tool_event(app, ToolEvent::Move { x: 65.0, y: 40.0, pressure: 1.0 }, later);
+            tool_event(app, ToolEvent::Up { x: 65.0, y: 40.0 }, later);
+        };
+        // A plain stroke erases, and ⌥ first pressed during it changes nothing.
+        stroke(&mut app, Modifiers::NONE, Modifiers::ALT);
+        assert!(layer(&app).surface().unwrap().rgba(60, 40)[3] < 0.01, "{mode}");
+        // ⌥ at the press paints the source back, and letting go of it during the stroke doesn't stop it.
+        stroke(&mut app, Modifiers::ALT, Modifiers::NONE);
+        let (id, p) = last(&app);
+        assert_eq!((id.as_str(), &p["eraseToHistory"]), ("paint.historyBrush", &json!(true)), "{mode}: {id} {p}");
+        assert_eq!(p["pencil"] == json!(true), pencil, "{mode}: {p}");
+        let after = layer(&app).surface().unwrap().rgba(60, 40);
+        assert!(after[3] > 0.99 && (0..3).all(|i| (after[i] - painted[i]).abs() < 0.01), "{mode}: {after:?} vs {painted:?}");
+        // The option itself stays off, so the next plain stroke erases again.
+        assert!(!app.ui.tool_options.erase_to_history, "{mode}");
+        stroke(&mut app, Modifiers::NONE, Modifiers::NONE);
+        assert!(layer(&app).surface().unwrap().rgba(60, 40)[3] < 0.01, "{mode}");
+        // With the option on, a plain stroke paints the source back and ⌥ at the press erases.
+        app.ui.tool_options.erase_to_history = true;
+        stroke(&mut app, Modifiers::NONE, Modifiers::NONE);
+        assert!(layer(&app).surface().unwrap().rgba(60, 40)[3] > 0.99, "{mode}");
+        stroke(&mut app, Modifiers::ALT, Modifiers::NONE);
+        assert!(layer(&app).surface().unwrap().rgba(60, 40)[3] < 0.01, "{mode}");
+        assert!(app.ui.tool_options.erase_to_history, "{mode}");
+    }
+}
+
+#[test]
 fn a_tool_key_during_an_erase_to_history_stroke_keeps_the_stroke_as_it_began() {
     for (mode, pencil) in [("brush", false), ("pencil", true)] {
         let mut app = app();

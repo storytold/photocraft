@@ -51,12 +51,18 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 /// options bar's Mode, which is the tool's own brush's. For an Eraser with Erase to History they
 /// also carry `eraseToHistory` and the Eraser's Pencil or Block tip.
 pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
+    history_brush_params_with(app, app.ui.tool_options.erase_to_history)
+}
+
+/// [`history_brush_params`], with Erase to History on whatever the option says: ⌥ reverses the
+/// option for one stroke.
+fn history_brush_params_with(app: &PhotocraftApp, erase_to_history: bool) -> Value {
     let mut p = json!({
         "mode": app.session.tools.brush.mode.label(),
         "opacity": app.session.tools.brush.opacity * 100.0,
         "flow": app.session.tools.brush.flow * 100.0,
     });
-    if app.ui.tool == Tool::Eraser && app.ui.tool_options.erase_to_history {
+    if app.ui.tool == Tool::Eraser && erase_to_history {
         p["eraseToHistory"] = json!(true);
         // The Eraser's tip: the tool's brush changes with the tool, if a tool key is pressed mid-stroke.
         let brush = &app.session.tools.brush;
@@ -78,8 +84,8 @@ pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
 }
 
 /// The options a stroke of `tool` keeps from its press (`canvas::Drag::history_params`).
-pub(crate) fn history_params_at_press(app: &PhotocraftApp, tool: Tool) -> Option<Value> {
-    (tool == Tool::HistoryBrush).then(|| history_brush_params(app))
+pub(crate) fn history_params_at_press(app: &PhotocraftApp, tool: Tool, alt: bool) -> Option<Value> {
+    (tool == Tool::HistoryBrush).then(|| history_brush_params_with(app, alt != app.ui.tool_options.erase_to_history))
 }
 
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
