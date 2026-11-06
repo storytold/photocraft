@@ -455,6 +455,35 @@ mod lookup_tests {
         }
     }
 
+    /// A degenerate domain (zero span on red, NaN on green, inverted on blue) falls back
+    /// to plain 0..1 per channel through the whole apply path, both interpolations: an
+    /// identity lookup then leaves every pixel exactly as a default-domain one does.
+    #[test]
+    fn color_lookup_adjustment_survives_a_degenerate_domain() {
+        let mk = |tetrahedral, domain_min, domain_max| Adjustment::ColorLookup {
+            name: "id".into(),
+            lut: Some(std::sync::Arc::new(identity(5))),
+            size: 5,
+            tetrahedral,
+            dither: false,
+            source: None,
+            domain_min,
+            domain_max,
+        };
+        let before = vec![[0.25, 0.5, 0.75, 1.0], [0.9, 0.1, 0.3, 1.0]];
+        let rect = photocraft_geom::Rect::new(0, 0, 2, 1);
+        for tet in [false, true] {
+            let mut buf = Buffer { rect, px: before.clone() };
+            apply(&mk(tet, [0.5, f32::NAN, 0.9], [0.5, 1.0, 0.1]), &mut buf);
+            for (p, b) in buf.px.iter().zip(&before) {
+                for k in 0..3 {
+                    assert!((p[k] - b[k]).abs() < 1e-5, "{tet} {p:?} vs {b:?}");
+                }
+                assert_eq!(p[3], 1.0);
+            }
+        }
+    }
+
     #[test]
     fn dither_offsets_are_balanced() {
         let sum: f32 = (0..4).flat_map(|y| (0..4).map(move |x| bayer4(x, y))).sum();
