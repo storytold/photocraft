@@ -169,6 +169,28 @@ fn replacing_shared_contents_reduces_the_new_file_once_for_all_instances() {
     replace_contents_bytes(&mut s, id, "big.png", png).unwrap();
     let built = photocraft_algo::warp::reduced_levels_built() - before;
     assert_eq!(built, 1, "built {built} reduced levels for three instances");
+    // Every instance holds the new file and was re-rendered at its own place (a tenth of 900 ×
+    // 600, sheared by the warp, from x = 3k).
+    let doc = &s.active().unwrap().doc;
+    let smart_layers: Vec<(&Layer, &SmartObject)> = doc
+        .walk()
+        .into_iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Smart(sm) => Some((l, sm)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(smart_layers.len(), 3);
+    let mut origins = Vec::new();
+    for (l, sm) in smart_layers {
+        assert!(matches!(&sm.source, SmartSource::Embedded { file_name, .. } if file_name == "big.png"), "{}: {:?}", l.name, sm.source);
+        let b = sm.cache.as_ref().map(|c| c.content_bounds()).unwrap_or_default();
+        assert!(b.width() >= 85 && b.height() >= 55, "{}: rendered {b:?}", l.name);
+        origins.push(b.x0);
+    }
+    origins.sort_unstable();
+    assert_eq!(origins.len(), 3);
+    assert!(origins.windows(2).all(|w| (w[1] - w[0] - 3).abs() <= 1), "each at its own place: {origins:?}");
 }
 
 #[test]
