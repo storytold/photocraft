@@ -30,8 +30,8 @@
 //!   RGB, adjusts and converts back (CMYK even changes when the settings are neutral), which a
 //!   composite in display RGB can't reproduce;
 //! - in Grayscale documents, kinds that make colour from gray (Vibrance, Color Balance, Black &
-//!   White, Photo Filter, Channel Mixer, Gradient Map, colorized Hue/Saturation): the command
-//!   folds each pixel back to gray, the composite would carry the colour through;
+//!   White, Photo Filter, Channel Mixer, Gradient Map, Selective Color, colorized Hue/Saturation):
+//!   the command folds each pixel back to gray, the composite would carry the colour through;
 //! - on the GPU canvas, documents the wgpu compositor doesn't cover (it would fall back to a
 //!   full CPU composite per change); on the CPU canvas, documents above the proxy size.
 
