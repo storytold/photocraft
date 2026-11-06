@@ -302,7 +302,7 @@ On FreeBSD 15 (x86_64 or aarch64), the release has a tarball laid out like `/usr
 
 ```sh
 pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib
-tar -xzf photocraft-<version>-freebsd-x86_64.tar.gz --strip-components 1 -C /usr/local
+tar -xzf photocraft-<version>-freebsd-<arch>.tar.gz --strip-components 1 -C /usr/local   # <arch> is x86_64 or aarch64
 photocraft
 ```
 
