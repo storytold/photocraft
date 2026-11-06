@@ -304,6 +304,21 @@ fn with_b_nested_in_a() -> PresetUi {
     state
 }
 
+fn with_nested_item_before_group() -> PresetUi {
+    let mut state = with_b_nested_in_a();
+    state.set_hierarchy_order(
+        PANEL,
+        "A",
+        vec![
+            HierarchyOrderEntry::Item("a1".into()),
+            HierarchyOrderEntry::Group("B".into()),
+            HierarchyOrderEntry::Item("a2".into()),
+            HierarchyOrderEntry::Item("a3".into()),
+        ],
+    );
+    state
+}
+
 fn with_root_item_between_groups(group: &str, key: &str) -> PresetUi {
     let mut state = PresetUi::default();
     state.set_hierarchy_order(
@@ -857,6 +872,36 @@ fn actual_card_above_group_lower_half_shows_only_the_groups_upper_horizontal_mar
         (card_y0..=card_y1).filter(|y| has_card_edge(*y)).count() < (card_y1 - card_y0) as usize / 4,
         "lower half must not also paint the preceding card's right edge; card={card:?}, x={card_x}"
     );
+
+    h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let root_order = &h.state().0.hierarchy_order[PANEL][""];
+    let card_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() }).unwrap();
+    let dragged_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
+    let lower_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group("B".into())).unwrap();
+    assert_eq!(dragged_index, card_index + 1, "the lower half should insert the dragged group immediately after the root card: {root_order:?}");
+    assert_eq!(lower_index, dragged_index + 1, "the lower group should remain immediately after the dragged group: {root_order:?}");
+    assert_eq!(h.state().0.parent_of(PANEL, "C"), None, "the lower-half drop remains at the root sibling level");
+}
+
+#[test]
+fn actual_nested_item_above_group_lower_half_drops_group_as_parent_sibling() {
+    let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_nested_item_before_group());
+    let source = h.get_by_label("C").rect().center();
+    let card = h.get_by_label("A card 1").rect();
+    let lower_group = h.get_by_label("B").rect();
+    assert!(card.bottom() <= lower_group.top(), "the nested item should be the immediately preceding sibling: card={card:?}, group={lower_group:?}");
+
+    let target = pos2(card.center().x, lower_group.top() - 2.0);
+    pointer_drag(&mut h, source, target);
+
+    let siblings = &h.state().0.hierarchy_order[PANEL]["A"];
+    let card_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Item("a1".into())).unwrap();
+    let dragged_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
+    let lower_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Group("B".into())).unwrap();
+    assert_eq!(dragged_index, card_index + 1, "the lower half should insert C immediately after the nested item: {siblings:?}");
+    assert_eq!(lower_index, dragged_index + 1, "B should remain immediately after C under A: {siblings:?}");
+    assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("A"));
 }
 
 #[test]

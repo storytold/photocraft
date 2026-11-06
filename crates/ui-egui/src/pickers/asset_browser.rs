@@ -1616,6 +1616,263 @@ fn paint_drag_ghosts(
     }
 }
 
+/// Register canonical insertion targets at sibling boundaries involving group headers.
+///
+/// These targets are resolved only after every visible node has its final layout bounds.
+fn register_canonical_sibling_gap_targets(
+    ui: &mut egui::Ui,
+    panel: &str,
+    gap_headers: &[(PickerId, Rect, usize, bool)],
+    hierarchy: &PickerBrowserHierarchy,
+    canonical_node_bounds: &std::cell::RefCell<std::collections::BTreeMap<PickerId, Rect>>,
+    canonical_drop_hits: &std::cell::RefCell<Vec<(DropHitRegion, egui::Response)>>,
+) {
+    for pair in gap_headers.windows(2) {
+        let (upper_id, upper_rect, _upper_depth, upper_open) = &pair[0];
+        let (lower_id, lower_rect, lower_depth, _) = &pair[1];
+        let gap_rect = Rect::from_min_max(
+            // A parent/child boundary spans two indentation levels. Keep the hit
+            // target reachable from the parent's gutter as well as the child's row;
+            // otherwise dragging at the visual boundary between them misses the gap.
+            pos2(upper_rect.left().min(lower_rect.left()), lower_rect.top() - GROUP_GAP_DROP_HEIGHT),
+            pos2(lower_rect.right(), lower_rect.top()),
+        );
+        if gap_rect.is_positive() {
+            let response = ui.interact(gap_rect, ui.id().with(("group-gap", panel, upper_id, lower_id)), Sense::hover());
+            let upper_anchor = group_gap_upper_anchor(hierarchy, lower_id);
+            let upper_parent = hierarchy.parent_of(lower_id).unwrap_or(ContainerId::Root);
+            let anchor_is_parent = upper_anchor.as_ref().is_some_and(|(anchor, _)| upper_parent == ContainerId::Group(anchor.clone()));
+            let parent_depth = match &upper_parent {
+                ContainerId::Root => 0,
+                ContainerId::Group(parent_id) => {
+                    let mut depth = 0;
+                    let mut ancestor = hierarchy.parent_of(parent_id).unwrap_or(ContainerId::Root);
+                    while let ContainerId::Group(id) = ancestor {
+                        depth += 1;
+                        ancestor = hierarchy.parent_of(&id).unwrap_or(ContainerId::Root);
+                    }
+                    depth
+                }
+            };
+            let upper_bounds = upper_anchor
+                .as_ref()
+                .and_then(|(anchor, _)| canonical_node_bounds.borrow().get(anchor).copied())
+                .or_else(|| match &upper_parent {
+                    ContainerId::Root => None,
+                    ContainerId::Group(parent_id) => canonical_node_bounds.borrow().get(parent_id).copied(),
+                })
+                .unwrap_or(*upper_rect);
+            // An expanded group's final card can occupy the same row as the next
+            // group's insertion band. Restrict that band to the trailing whitespace
+            // after the visible subtree, so a drop on a real card remains card-relative.
+            let upper_content_right = if *upper_open && !anchor_is_parent {
+                upper_anchor
+                    .as_ref()
+                    .and_then(|(anchor, _)| hierarchy.node(anchor))
+                    .and_then(|node| last_visible_descendant_bounds(node, &canonical_node_bounds.borrow()))
+                    .map_or(gap_rect.left(), |bounds| bounds.right())
+            } else {
+                gap_rect.left()
+            };
+            let upper_target = upper_anchor.as_ref().map(|(anchor, _)| anchor.clone()).unwrap_or_else(|| upper_id.clone());
+            let lower_bounds = canonical_node_bounds.borrow().get(lower_id).copied().unwrap_or(*lower_rect);
+            let mut hits = group_gap_drop_hits(GroupGapDropSpec {
+                rect: gap_rect,
+                upper: upper_target,
+                lower: lower_id.clone(),
+                upper_bounds,
+                lower_bounds,
+                upper_depth: upper_anchor.as_ref().map(|(_, depth)| *depth).unwrap_or(parent_depth),
+                lower_depth: *lower_depth,
+                order: canonical_drop_hits.borrow().len(),
+            });
+            if anchor_is_parent {
+                // The parent indentation gutter is visually part of the upper
+                // container, not the lower child's leading-edge column. Route the
+                // whole gutter strip to the parent-append half; retain the ordinary
+                // vertical split to the right of the child's indentation.
+                let gutter_right = lower_rect.left().min(gap_rect.right());
+                hits[0].hit_rect = Rect::from_min_max(gap_rect.min, pos2(gutter_right, gap_rect.bottom()));
+                hits[1].hit_rect.min.x = gutter_right;
+                // Both sibling-level markers meet at the lower header's top border.
+                // The gap is a hit affordance above that boundary, not the marker's
+                // vertical placement.
+                for hit in &mut hits {
+                    hit.indicator_rect =
+                        Rect::from_min_max(pos2(hit.indicator_rect.left(), lower_rect.top() - 2.0), pos2(hit.indicator_rect.right(), lower_rect.top() + 2.0));
+                }
+                hits[0].order = usize::MAX;
+            }
+            for hit in &mut hits {
+                hit.hit_rect.min.x = hit.hit_rect.min.x.max(upper_content_right);
+                // The trailing blank strip of the final card is also a row-append
+                // target. In the whitespace after the whole group, the group boundary
+                // is the more specific structural destination and must win that tie.
+                hit.depth = usize::MAX - 1;
+            }
+            if anchor_is_parent {
+                // Apply this after the common structural-boundary priority above:
+                // the parent's gutter append must outrank the overlapping subtree
+                // append target, not be demoted by the generic gap-hit assignment.
+                hits[0].depth = usize::MAX;
+            }
+            // This is the upper half of a group boundary, so its feedback is the
+            // horizontal sibling line at the lower group's top edge even when the
+            // preceding sibling is a card. Card-edge markers are for card-to-card
+            // insertion, not for this group boundary.
+            // If the lower group is first in its sibling sequence, append to its parent.
+            // Otherwise insert after the actual preceding sibling (card or group).
+            if let Some((anchor, _)) = upper_anchor.filter(|_| !anchor_is_parent) {
+                hits[0].target = Some(anchor);
+                hits[0].container = None;
+                hits[0].region = PointerRegion::TrailingEdge;
+            } else {
+                hits[0].target = None;
+                hits[0].container = Some(upper_parent);
+                hits[0].region = PointerRegion::ContainerEnd;
+            }
+            for hit in hits {
+                canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+            }
+        }
+    }
+    // Any group may be followed by a card at the same sibling level, including
+    // inside arbitrarily nested parent groups. Offer a split boundary after the
+    // complete preceding group subtree: append into that group, or insert after
+    // the group while remaining in its parent container.
+    fn collect_group_item_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(PickerId, PickerId)>) {
+        for pair in nodes.windows(2) {
+            if matches!(pair, [HierarchyNode::Group { .. }, HierarchyNode::Item(_)]) {
+                out.push((pair[0].id().clone(), pair[1].id().clone()));
+            }
+        }
+        for node in nodes {
+            if node.is_group() {
+                collect_group_item_sibling_pairs(node.children(), out);
+            }
+        }
+    }
+    let mut group_item_pairs = Vec::new();
+    collect_group_item_sibling_pairs(hierarchy.roots(), &mut group_item_pairs);
+    for (group_id, item_id) in group_item_pairs {
+        let Some(group_header) = canonical_node_bounds.borrow().get(&group_id).copied() else {
+            continue;
+        };
+        let Some(item_bounds) = canonical_node_bounds.borrow().get(&item_id).copied() else {
+            continue;
+        };
+        let mut subtree_nodes = Vec::new();
+        fn collect_group_nodes(node: &HierarchyNode, out: &mut Vec<PickerId>) {
+            out.push(node.id().clone());
+            for child in node.children() {
+                collect_group_nodes(child, out);
+            }
+        }
+        let Some(group_node) = hierarchy.node(&group_id) else {
+            continue;
+        };
+        collect_group_nodes(group_node, &mut subtree_nodes);
+        let subtree_bounds: Vec<(PickerId, Rect)> =
+            subtree_nodes.iter().filter_map(|id| canonical_node_bounds.borrow().get(id).copied().map(|rect| (id.clone(), rect))).collect();
+        let Some(group_bottom) = subtree_bounds.iter().map(|(_, rect)| rect.bottom()).max_by(f32::total_cmp) else {
+            continue;
+        };
+        let boundary_y = (group_bottom + item_bounds.top()) * 0.5;
+        let gap = Rect::from_min_max(
+            pos2(ui.clip_rect().left(), boundary_y - GROUP_GAP_DROP_HEIGHT * 0.5),
+            pos2(ui.clip_rect().right(), boundary_y + GROUP_GAP_DROP_HEIGHT * 0.5),
+        );
+        let response = ui.interact(gap, ui.id().with(("group-root-card-gap", panel, &group_id, &item_id)), Sense::hover());
+        let marker_y = group_bottom;
+        let append_marker = Rect::from_min_max(pos2(group_header.left(), marker_y - 2.0), pos2(group_header.right(), marker_y + 2.0));
+        let order = canonical_drop_hits.borrow().len();
+        canonical_drop_hits.borrow_mut().push((
+            DropHitRegion {
+                target: None,
+                container: Some(ContainerId::Group(group_id.clone())),
+                region: PointerRegion::ContainerEnd,
+                hit_rect: Rect::from_min_max(gap.min, pos2(gap.right(), gap.center().y)),
+                indicator_rect: append_marker,
+                // This boundary takes precedence over overlapping neighboring card
+                // edge regions at every hierarchy depth.
+                depth: usize::MAX,
+                order,
+            },
+            response.clone(),
+        ));
+        canonical_drop_hits.borrow_mut().push((
+            DropHitRegion {
+                target: Some(group_id),
+                container: None,
+                region: PointerRegion::TrailingEdge,
+                hit_rect: Rect::from_min_max(pos2(gap.left(), gap.center().y), gap.max),
+                // This is an after-group sibling insertion, so show the group's
+                // horizontal lower border rather than the last card's vertical edge.
+                indicator_rect: append_marker,
+                // See the append half above: this boundary wins overlapping card hits.
+                depth: usize::MAX,
+                order: order.saturating_add(1),
+            },
+            response,
+        ));
+    }
+    // A root card (or nested item) can be the immediate preceding sibling of a
+    // group. Header-only gap pairing above cannot see that boundary when there is
+    // no earlier group header, so register the same two-sided group boundary from
+    // the actual hierarchy sibling sequence.
+    fn collect_item_group_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(PickerId, PickerId)>) {
+        for pair in nodes.windows(2) {
+            if matches!(pair, [HierarchyNode::Item(_), HierarchyNode::Group { .. }]) {
+                out.push((pair[0].id().clone(), pair[1].id().clone()));
+            }
+        }
+        for node in nodes {
+            if node.is_group() {
+                collect_item_group_sibling_pairs(node.children(), out);
+            }
+        }
+    }
+    let mut item_group_pairs = Vec::new();
+    collect_item_group_sibling_pairs(hierarchy.roots(), &mut item_group_pairs);
+    for (item_id, group_id) in item_group_pairs {
+        let Some(item_bounds) = canonical_node_bounds.borrow().get(&item_id).copied() else {
+            continue;
+        };
+        let Some(group_bounds) = canonical_node_bounds.borrow().get(&group_id).copied() else {
+            continue;
+        };
+        let gap = Rect::from_min_max(
+            pos2(item_bounds.left().min(group_bounds.left()), group_bounds.top() - GROUP_GAP_DROP_HEIGHT),
+            pos2(group_bounds.right(), group_bounds.top()),
+        );
+        if !gap.is_positive() {
+            continue;
+        }
+        let response = ui.interact(gap, ui.id().with(("group-card-sibling-gap", panel, &item_id, &group_id)), Sense::hover());
+        let order = canonical_drop_hits.borrow().len();
+        let mut hits = group_gap_drop_hits(GroupGapDropSpec {
+            rect: gap,
+            upper: item_id.clone(),
+            lower: group_id,
+            upper_bounds: item_bounds,
+            lower_bounds: group_bounds,
+            upper_depth: 0,
+            lower_depth: 0,
+            order,
+        });
+        // Keep the two halves mutually exclusive: upper appends after the card
+        // (its right edge); lower inserts before the group (its upper boundary).
+        hits[0].indicator_rect = card_trailing_marker_rect(item_bounds, true);
+        // This structural boundary is more specific than the overlapping card
+        // trailing edge and group leading edge targets.
+        hits[0].depth = usize::MAX;
+        hits[1].depth = usize::MAX;
+        for hit in hits {
+            canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+        }
+    }
+}
+
 /// Resolve the canonical hierarchy target and commit a validated release. The returned `None`
 /// means no release was consumed; `Some(Ok(()))` clears old feedback and `Some(Err(_))` reports a
 /// rejected or failed move. Keeping the one-shot payload handling here makes target arbitration,
@@ -1822,6 +2079,1192 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     browser_with_root_sequence(ui, st, adapter, allocated_height, None)
 }
 
+/// Resolve item-level hierarchy drops before indentation-column arbitration.
+fn resolve_item_hierarchy_drop_target(
+    ui: &mut egui::Ui,
+    panel: &str,
+    item_hierarchy_targets: &[ItemHierarchyTarget],
+    groups: &[GroupView],
+    group_names: &[String],
+    hierarchy_orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+    parents: &std::collections::BTreeMap<String, String>,
+    canonical_hierarchy_drag: bool,
+    domain_hierarchy_actions: bool,
+    indent_release: &mut Option<(String, String)>,
+    browser_item_drop: &mut bool,
+    released: &mut Option<(usize, Pos2)>,
+    ev: &mut Vec<BrowserAction>,
+    st: &mut PresetUi,
+) -> bool {
+    // Match the existing indentation-column arbitration: the last eligible
+    // (topmost/deepest) hit target wins both its preview and its release.
+    let best_item_hierarchy_target = best_drop_target_index(&item_hierarchy_targets, |(response, _, _, accepts, _, _, _)| {
+        *accepts
+            && response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel))
+    });
+    // The indentation column overlaps the leading edge of nested cards. Treat these as
+    // competing destinations, not independent drop zones: when a card wins, its vertical
+    // insertion marker and release must suppress the column's horizontal append marker.
+    let item_hierarchy_target_wins = best_item_hierarchy_target.is_some();
+    if item_hierarchy_target_wins {
+        *indent_release = None;
+    }
+    if !canonical_hierarchy_drag
+        && let Some((response, rect, grid, _, item_index, target_name, target_group_path)) =
+            best_item_hierarchy_target.and_then(|index| item_hierarchy_targets.get(index))
+        && let Some((dragged, after)) = asset_browser_item_hierarchy_target(ui, response, *rect, *grid, true)
+        && let Some(target_group) = groups.iter().find(|group| group.name == *target_name)
+    {
+        *browser_item_drop = true;
+        let moving_group_path = match &dragged {
+            AssetDrag::Group { name, path, .. } if *name == *target_name && !path.is_empty() => Some(path.clone()),
+            _ => None,
+        };
+        match dragged {
+            AssetDrag::Group { scope, name, path } if scope == panel && domain_hierarchy_actions => {
+                let (before, before_item) =
+                    item_hierarchy_insertion_anchor(&target_group.items, *item_index, target_group_path, after, moving_group_path.as_deref());
+                ev.push(BrowserAction::MoveInto {
+                    group: name,
+                    group_path: path,
+                    into: Some((target_name.clone(), target_group_path.clone())),
+                    before,
+                    before_item,
+                });
+                // The nested card/header target has consumed this release. Do not let the
+                // source root header also resolve a between-root-groups reorder.
+                *released = None;
+            }
+            AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && !domain_hierarchy_actions => {
+                if let Some(target_item) = target_group.items.get(*item_index).map(|item| item.key.clone()) {
+                    let entries = hierarchy_orders.get(target_name).cloned().unwrap_or_default();
+                    let target_entry = HierarchyOrderEntry::Item(target_item);
+                    let before = entries
+                        .iter()
+                        .position(|entry| entry == &target_entry)
+                        .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
+                    if let Some(old_parent) = parents.get(&name).filter(|parent| *parent != target_name) {
+                        st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(name.clone()));
+                    }
+                    st.nest_group(panel, &group_names, &name, Some(target_name));
+                    st.move_hierarchy_entry(panel, target_name, entries, HierarchyOrderEntry::Group(name), before.as_ref());
+                    *released = None;
+                }
+            }
+            _ => {}
+        }
+    }
+    item_hierarchy_target_wins
+}
+
+/// Register the expanded groups' indentation-column drop targets.
+fn register_group_indent_drop_targets(
+    ui: &mut egui::Ui,
+    panel: &str,
+    headers: &[(usize, Rect, String)],
+    expanded_groups: &BTreeSet<String>,
+    parents: &std::collections::BTreeMap<String, String>,
+    group_content_areas: &[(String, Rect)],
+    display: &[(usize, usize)],
+    groups: &[GroupView],
+    picker_ids: &mut PickerIdRegistry,
+    projection_keys: &PickerProjectionKeys,
+    canonical_drop_hits: &std::cell::RefCell<Vec<(DropHitRegion, egui::Response)>>,
+    indent_drop_targets: &mut Vec<(String, egui::Response)>,
+    capabilities: BrowserCapabilities,
+    canonical_hierarchy_drag: bool,
+) {
+    // Each expanded group owns a drop area spanning its full header width. Its vertical
+    // span covers the group's complete visible subtree and ends before the next sibling.
+    if capabilities.group_drag {
+        for (group_index, header, group_name) in headers {
+            if !expanded_groups.contains(group_name) {
+                continue;
+            }
+            let bottom = headers
+                .iter()
+                .filter(|(_, _, name)| name == group_name || group_is_descendant(&parents, group_name, name))
+                .map(|(_, rect, _)| rect.bottom())
+                .chain(
+                    group_content_areas
+                        .iter()
+                        .filter(|(name, _)| name == group_name || group_is_descendant(&parents, group_name, name))
+                        .map(|(_, rect)| rect.bottom()),
+                )
+                .max_by(f32::total_cmp);
+            if let Some(bottom) = bottom {
+                let column = Rect::from_min_max(pos2(header.left(), header.bottom()), pos2(header.left() + ROW_INDENT, bottom));
+                if column.is_positive() {
+                    let response = ui.interact(column, ui.id().with(("group-indent-column", panel, group_name)), Sense::hover());
+                    if canonical_hierarchy_drag {
+                        let append_indicator = Rect::from_min_max(pos2(header.left(), bottom - 2.0), pos2(header.right(), bottom + 2.0));
+                        let depth = display
+                            .iter()
+                            .find_map(|(index, depth)| groups.get(*index).is_some_and(|group| group.name == *group_name).then_some(*depth))
+                            .unwrap_or(0);
+                        let hit_index = canonical_drop_hits.borrow().len();
+                        let hit =
+                            group_append_hit(column, append_indicator, picker_group_id(&mut *picker_ids, *group_index, projection_keys), depth, hit_index);
+                        canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+                    }
+                    indent_drop_targets.push((group_name.clone(), response));
+                }
+            }
+        }
+    }
+}
+
+/// Apply the group releases and folder toggles collected while rendering a segment.
+fn apply_group_releases_and_toggles(
+    group_releases: &mut Vec<GroupRelease>,
+    group_toggles: Vec<String>,
+    groups: &[GroupView],
+    panel: &str,
+    domain_hierarchy_actions: bool,
+    st: &mut PresetUi,
+    ev: &mut Vec<BrowserAction>,
+    browser_item_drop: &mut bool,
+) {
+    for (dragged, target_group, target_group_path, edge) in group_releases.drain(..) {
+        match dragged {
+            AssetDrag::Preset { scope, key, .. } if scope == panel => {
+                let before = groups
+                    .iter()
+                    .find(|group| group.name == target_group)
+                    .and_then(|group| group.items.iter().find(|item| item.group_path == target_group_path))
+                    .map(|item| item.key.clone());
+                select_dropped_item(st, panel, &target_group, &target_group_path, &key);
+                ev.push(BrowserAction::MoveItemToGroup { key, group: target_group, group_path: target_group_path, before });
+                *browser_item_drop = true;
+            }
+            AssetDrag::Group { scope, name, path } if scope == panel && domain_hierarchy_actions => {
+                if let Some(action) = hierarchy_group_drop(&name, &path, &target_group, &target_group_path, edge) {
+                    ev.push(hierarchy_action(action));
+                }
+            }
+            _ => {}
+        }
+    }
+    for key in group_toggles {
+        if !st.toggled.remove(&key) {
+            st.toggled.insert(key);
+        }
+    }
+}
+
+/// Choose the eligible indentation-column target and consume its legacy group release.
+fn resolve_group_indent_target<'a>(
+    ui: &egui::Ui,
+    panel: &str,
+    indent_drop_targets: &'a [(String, egui::Response)],
+    item_hierarchy_target_wins: bool,
+    canonical_hierarchy_drag: bool,
+    parents: &std::collections::BTreeMap<String, String>,
+    indent_release: &mut Option<(String, String)>,
+    non_root_hierarchy_target_hovered: &std::cell::Cell<bool>,
+) -> Option<&'a (String, egui::Response)> {
+    // `dnd_release_payload` takes the one global egui payload. Resolve the card target
+    // first, then allow the indentation column to consume it only when no card target
+    // won and the pointer is actually over an eligible column. Calling it while merely
+    // registering each column lets an overlapping column steal a card release.
+    let indent_target = best_indent_drop_target_index(&indent_drop_targets, item_hierarchy_target_wins, |(parent, response)| {
+            if canonical_hierarchy_drag {
+                ui.ctx().pointer_interact_pos().is_some_and(|pointer| response.rect.contains(pointer))
+            } else {
+                response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                    matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && name != parent && !group_is_descendant(&parents, name, parent))
+                })
+            }
+        }).and_then(|index| indent_drop_targets.get(index));
+    if indent_target.is_none()
+        && indent_drop_targets.iter().any(|(_, response)| {
+            response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel))
+        })
+    {
+        non_root_hierarchy_target_hovered.set(true);
+    }
+    if !canonical_hierarchy_drag
+        && let Some((parent, response)) = indent_target
+        && let Some(AssetDrag::Group { scope, name, path }) = response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone())
+        && scope == panel
+        && path.is_empty()
+        && name != *parent
+    {
+        *indent_release = Some((name, parent.clone()));
+    }
+    indent_target
+}
+
+/// Paint the legacy append and between-header insertion markers for group drops.
+fn paint_group_drop_insertion_markers(
+    ui: &mut egui::Ui,
+    indent_target: Option<&(String, egui::Response)>,
+    headers: &[(usize, Rect, String)],
+    group_content_areas: &[(String, Rect)],
+    parents: &std::collections::BTreeMap<String, String>,
+    canonical_hierarchy_drag: bool,
+    item_hierarchy_target_wins: bool,
+    drag: Option<(usize, Pos2)>,
+    groups: &[GroupView],
+    accent: egui::Color32,
+) {
+    // Keep the legacy append marker below the parent's complete visible subtree. The
+    // canonical path instead highlights the full receiving group because group-body
+    // drops now insert at its first child position.
+    let indent_target_hovered = indent_target.is_some();
+    if indent_target_hovered && let Some((parent, _)) = indent_target {
+        let end = headers
+            .iter()
+            .filter(|(_, _, name)| name == parent || group_is_descendant(&parents, parent, name))
+            .map(|(_, rect, _)| *rect)
+            .chain(group_content_areas.iter().filter(|(name, _)| name == parent || group_is_descendant(&parents, parent, name)).map(|(_, rect)| *rect))
+            .max_by(|a, b| a.bottom().total_cmp(&b.bottom()));
+        if let (Some(anchor), Some((_, header, _))) = (end, headers.iter().find(|(_, _, name)| name == parent)) {
+            // Keep the user-facing append marker aligned to the destination header,
+            // not to the narrower indentation hit target or full-width content area.
+            let marker_anchor = Rect::from_min_max(pos2(header.left(), anchor.bottom() - header.height()), pos2(header.right(), anchor.bottom()));
+            if !canonical_hierarchy_drag {
+                paint_group_insertion_line(ui, marker_anchor, false, accent);
+            }
+        }
+    }
+    // The regular group drag marker handles between-header reordering.
+    if !canonical_hierarchy_drag
+        && !indent_target_hovered
+        && !item_hierarchy_target_wins
+        && let Some((from, p)) = drag
+    {
+        // Header targets already paint their feedback through the shared interaction
+        // helper. Only draw the between-groups insertion marker when the pointer is in a
+        // gap/outside a target header.
+        if !headers.iter().any(|(i, r, _)| *i != from && r.contains(p))
+            && let Some(from_name) = groups.get(from).map(|group| group.name.as_str())
+        {
+            let before = group_drop_before(&headers, from, from_name, p, &parents);
+            // The source header resolves to a no-op on release; never show a marker
+            // suggesting that dropping it there would move it.
+            if before != Some(from) {
+                let source_parent = parents.get(from_name);
+                let source_rect = headers.iter().find(|(index, _, _)| *index == from).map(|(_, rect, _)| *rect);
+                let promote_to_root = source_parent.is_some() && source_rect.is_some_and(|rect| p.x < rect.left() + ROW_INDENT * 0.5);
+                let destination_parent = if promote_to_root { None } else { source_parent };
+                let anchor = match before {
+                    Some(i) => headers.iter().find(|(x, _, _)| *x == i).map(|(_, r, _)| *r),
+                    None => headers
+                        .iter()
+                        .rev()
+                        .find(|(_, _, name)| parents.get(name).map(String::as_str) == destination_parent.map(String::as_str))
+                        .map(|(_, r, _)| *r),
+                };
+                if let Some(r) = anchor {
+                    paint_group_insertion_line(ui, r, before.is_some(), accent);
+                }
+            }
+        }
+    }
+}
+
+/// Allocate and paint one visible group header, using the adapter override when present.
+fn draw_browser_group_header(
+    ui: &mut egui::Ui,
+    group: &GroupView,
+    open: bool,
+    depth: usize,
+    paint_group: &mut Option<&mut PaintGroup>,
+) -> (Rect, egui::Response) {
+    if let Some(paint) = paint_group.as_deref_mut() {
+        let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
+        let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
+        let response = ui.interact(inset_row_rect(rect, depth), allocated.id, Sense::click_and_drag());
+        paint(ui, rect, group, open, response.hovered() || response.dragged(), 1.0);
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, &group.name));
+        (rect, response)
+    } else {
+        asset_browser_header(ui, &group.name, open, depth, None, GROUP_HEADER_HEIGHT)
+    }
+}
+
+/// Allocate and paint a nested-folder header, returning its hit and disclosure responses.
+fn draw_nested_folder_header(
+    ui: &mut egui::Ui,
+    group: &HierarchyGroup<'_, ItemView>,
+    group_open: bool,
+    group_depth: usize,
+    parent_depth: usize,
+) -> (Rect, egui::Response, egui::Response, usize) {
+    let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
+    let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
+    let row_depth = group_depth + 1 + parent_depth;
+    let response = ui.interact(inset_row_rect(rect, row_depth), allocated.id, Sense::click_and_drag());
+    let nested_header_rect = inset_row_rect(rect, row_depth);
+    let disclosure_rect =
+        Rect::from_min_max(nested_header_rect.min, pos2((nested_header_rect.left() + 18.0).min(nested_header_rect.right()), nested_header_rect.bottom()));
+    let disclosure = ui.interact(disclosure_rect, response.id.with("disclosure"), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, group.path.last().map(String::as_str).unwrap_or("")));
+    paint_asset_browser_header(ui, rect, group_open, group.path.last().map(String::as_str).unwrap_or(""), row_depth, response.hovered(), Some(group.count));
+    (rect, response, disclosure, row_depth)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_nested_folder_row(
+    ui: &mut egui::Ui,
+    group: &HierarchyGroup<'_, ItemView>,
+    group_open: bool,
+    group_depth: usize,
+    parent_depth: usize,
+    panel: &str,
+    root_group: &GroupView,
+    capabilities: BrowserCapabilities,
+    canonical_hierarchy_drag: bool,
+    domain_hierarchy_actions: bool,
+    compact_context_menus: bool,
+    nested_group_context_menu: Option<NestedGroupContextMenu>,
+    parents: &std::collections::BTreeMap<String, String>,
+    hierarchy: &PickerBrowserHierarchy,
+    hierarchy_identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+    visible_selection_order: &[PickerId],
+    browser_bounds: Rect,
+    tokens: &Tokens,
+    state: &std::cell::RefCell<&mut PresetUi>,
+    events: &std::cell::RefCell<&mut Vec<BrowserAction>>,
+    group_toggles: &mut Vec<String>,
+    gap_headers: &mut Vec<(PickerId, Rect, usize, bool)>,
+    canonical_node_bounds: &std::cell::RefCell<std::collections::BTreeMap<PickerId, Rect>>,
+    canonical_drop_hits: &std::cell::RefCell<Vec<(DropHitRegion, egui::Response)>>,
+    nested_group_drag_ghosts: &mut Vec<NestedGroupDragGhost>,
+    group_releases: &mut Vec<GroupRelease>,
+    non_root_hierarchy_target_hovered: &std::cell::Cell<bool>,
+) {
+    if !gap_headers.is_empty() {
+        ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
+    }
+    let (rect, response, disclosure, row_depth) = draw_nested_folder_header(ui, group, group_open, group_depth, parent_depth);
+    if response.hovered()
+        && response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel))
+    {
+        non_root_hierarchy_target_hovered.set(true);
+    }
+    let name = group.path.last().map(String::as_str).unwrap_or("");
+    let Some(node_id) = folder_node_for_identity(&root_group.name, &group.path, hierarchy_identities) else { return };
+    if capabilities.group_drag
+        && let Some(ghost_rect) = browser_drag_ghost_rect(ui, panel, BrowserDragGhostSource::Group(node_id.clone()), response.dragged(), rect, browser_bounds)
+    {
+        nested_group_drag_ghosts.push((ghost_rect, group_open, name.to_owned(), row_depth, group.count));
+    }
+    if response.clicked() && !disclosure.clicked() {
+        let modifiers = ui.input(|input| input.modifiers);
+        if capabilities.selection {
+            if modifiers.shift {
+                state.borrow_mut().select_browser_range(panel, visible_selection_order, &node_id);
+            } else {
+                state.borrow_mut().select_browser_node(panel, node_id.clone(), modifiers.ctrl);
+            }
+        }
+    }
+    if disclosure.clicked() {
+        group_toggles.push(format!(
+            "{panel}/{}/{}",
+            escape_hierarchy_key_part(&root_group.name),
+            group.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/")
+        ));
+    }
+    if state.borrow().browser_node_selected(panel, &node_id) {
+        ui.painter().rect_filled(inset_row_rect(rect, row_depth), egui::CornerRadius::ZERO, tokens.row_selected.gamma_multiply(0.35));
+    }
+    gap_headers.push((node_id.clone(), inset_row_rect(rect, row_depth), row_depth, group_open));
+    canonical_node_bounds.borrow_mut().insert(node_id.clone(), inset_row_rect(rect, row_depth));
+    if canonical_hierarchy_drag {
+        if capabilities.group_drag {
+            let selection = selected_drag_nodes(&state.borrow(), panel, visible_selection_order, &node_id, hierarchy);
+            asset_browser_header_drag_source_with_id(&response, panel, node_id.clone(), name, &selection);
+        }
+        let hit_index = canonical_drop_hits.borrow().len();
+        for hit in group_header_drop_hits(inset_row_rect(rect, row_depth), node_id.clone(), row_depth, hit_index, group_open) {
+            canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+        }
+    } else if !canonical_hierarchy_drag
+        && let Some(dragged) = asset_browser_header_target_with_capabilities(
+            ui,
+            &response,
+            inset_row_rect(rect, row_depth),
+            panel,
+            &root_group.name,
+            &group.path,
+            HeaderDropCapabilities {
+                item_drop: capabilities.item_drop && domain_hierarchy_actions,
+                // Nested path groups can only accept group drops when the consumer has a domain
+                // adapter for those paths. Never consume a release the transient model cannot apply.
+                group_drag: capabilities.group_drag && domain_hierarchy_actions,
+                reject_group_drop: response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                    matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && group_is_descendant(parents, name, &root_group.name))
+                }),
+            },
+        )
+    {
+        let edge = ui.ctx().pointer_interact_pos().is_some_and(|pointer| header_drop_before(rect, pointer));
+        group_releases.push((dragged, root_group.name.clone(), group.path.clone(), edge));
+    }
+    if let Some(menu) = nested_group_context_menu {
+        let draw_menu = |ui: &mut egui::Ui| {
+            let start = events.borrow().len();
+            let mut state = state.borrow_mut();
+            menu(ui, &mut state, panel, root_group, &group.path, &mut events.borrow_mut());
+            replace_selected_delete_actions(
+                &mut events.borrow_mut(),
+                start,
+                &state,
+                panel,
+                &node_id,
+                &BrowserDeleteContext { selection_order: visible_selection_order, hierarchy, identities: hierarchy_identities },
+            );
+        };
+        if compact_context_menus {
+            compact_context_menu_target(ui, response.clone(), draw_menu);
+        } else {
+            context_menu_target(response.clone(), draw_menu);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_root_group_header(
+    ui: &mut egui::Ui,
+    state: &mut PresetUi,
+    events: &mut Vec<BrowserAction>,
+    groups: &[GroupView],
+    panel: &str,
+    group: &GroupView,
+    group_index: usize,
+    depth: usize,
+    open: bool,
+    capabilities: BrowserCapabilities,
+    canonical_hierarchy_drag: bool,
+    compact_context_menus: bool,
+    group_context_menu: Option<GroupContextMenu>,
+    domain_hierarchy_actions: bool,
+    parents: &std::collections::BTreeMap<String, String>,
+    hierarchy: &PickerBrowserHierarchy,
+    hierarchy_identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+    hierarchy_orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+    visible_selection_order: &[PickerId],
+    projection_keys: &PickerProjectionKeys,
+    picker_ids: &mut PickerIdRegistry,
+    paint_group: &mut Option<&mut PaintGroup>,
+    browser_bounds: Rect,
+    tokens: &Tokens,
+    canonical_node_bounds: &std::cell::RefCell<std::collections::BTreeMap<PickerId, Rect>>,
+    canonical_drop_hits: &std::cell::RefCell<Vec<(DropHitRegion, egui::Response)>>,
+    gap_headers: &mut Vec<(PickerId, Rect, usize, bool)>,
+    headers: &mut Vec<(usize, Rect, String)>,
+    group_drag_ghosts: &mut Vec<GroupDragGhost>,
+    browser_item_drop: &mut bool,
+    drag: &mut Option<(usize, Pos2)>,
+    released: &mut Option<(usize, Pos2)>,
+) {
+    // Keep the visible separator compact; drag hit-testing has a larger invisible target.
+    if !gap_headers.is_empty() {
+        ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
+    }
+    let (header_rect, response) = draw_browser_group_header(ui, group, open, depth, paint_group);
+    let header_hit_rect = inset_row_rect(header_rect, depth);
+    let disclosure_rect = Rect::from_min_max(
+        pos2(header_hit_rect.left(), header_hit_rect.top()),
+        pos2((header_hit_rect.left() + 18.0).min(header_hit_rect.right()), header_hit_rect.bottom()),
+    );
+    let disclosure = ui.interact(disclosure_rect, response.id.with("disclosure"), Sense::click());
+    if capabilities.group_drag && response.is_pointer_button_down_on() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if capabilities.group_drag && response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    let group_id = picker_group_id(picker_ids, group_index, projection_keys);
+    gap_headers.push((group_id.clone(), header_hit_rect, depth, open));
+    canonical_node_bounds.borrow_mut().insert(group_id.clone(), header_hit_rect);
+    let header_released = if canonical_hierarchy_drag {
+        if capabilities.group_drag {
+            let selection = selected_drag_nodes(state, panel, visible_selection_order, &group_id, hierarchy);
+            asset_browser_header_drag_source_with_id(&response, panel, group_id.clone(), &group.name, &selection);
+        }
+        let hit_index = canonical_drop_hits.borrow().len();
+        for hit in group_header_drop_hits(header_hit_rect, group_id.clone(), depth, hit_index, open) {
+            canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+        }
+        None
+    } else {
+        asset_browser_header_target_with_capabilities(
+            ui,
+            &response,
+            header_hit_rect,
+            panel,
+            &group.name,
+            &[],
+            HeaderDropCapabilities {
+                item_drop: capabilities.item_drop,
+                group_drag: capabilities.group_drag,
+                reject_group_drop: response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                    matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && group_is_descendant(parents, name, &group.name))
+                }),
+            },
+        )
+    };
+    if response.clicked() && !disclosure.clicked() {
+        let modifiers = ui.input(|input| input.modifiers);
+        if capabilities.selection {
+            if modifiers.shift {
+                state.select_browser_range(panel, visible_selection_order, &group_id);
+            } else {
+                state.select_browser_node(panel, group_id.clone(), modifiers.ctrl);
+            }
+        }
+    }
+    if disclosure.clicked() {
+        let key = format!("{panel}/{}", escape_hierarchy_key_part(&group.name));
+        if !state.toggled.remove(&key) {
+            state.toggled.insert(key);
+        }
+    }
+    if state.browser_node_selected(panel, &group_id) {
+        ui.painter().rect_filled(header_hit_rect, egui::CornerRadius::ZERO, tokens.row_selected.gamma_multiply(0.35));
+    }
+    if let Some(menu) = group_context_menu {
+        let draw_menu = |ui: &mut egui::Ui| {
+            let start = events.len();
+            menu(ui, state, panel, group, events);
+            replace_selected_delete_actions(
+                events,
+                start,
+                state,
+                panel,
+                &group_id,
+                &BrowserDeleteContext { selection_order: visible_selection_order, hierarchy, identities: hierarchy_identities },
+            );
+        };
+        if compact_context_menus {
+            compact_context_menu_target(ui, response.clone(), draw_menu);
+        } else {
+            context_menu_target(response.clone(), draw_menu);
+        }
+    }
+    if let Some(dragged) = header_released {
+        apply_root_header_release(ui, state, events, groups, panel, group, header_rect, dragged, domain_hierarchy_actions, hierarchy_orders, browser_item_drop);
+    }
+    if capabilities.group_drag
+        && response.dragged()
+        && let Some(pointer) = ui.ctx().pointer_interact_pos()
+    {
+        *drag = Some((group_index, pointer));
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    if capabilities.group_drag
+        && let Some(ghost_rect) =
+            browser_drag_ghost_rect(ui, panel, BrowserDragGhostSource::Group(group_id.clone()), response.dragged(), header_rect, browser_bounds)
+    {
+        group_drag_ghosts.push((ghost_rect, group_index, open, depth));
+    }
+    if capabilities.group_drag
+        && !canonical_hierarchy_drag
+        && response.drag_stopped()
+        && let Some(pointer) = ui.ctx().pointer_interact_pos()
+    {
+        *released = Some((group_index, pointer));
+    }
+    if capabilities.group_drag && capabilities.selection && response.drag_stopped() && !state.browser_node_selected(panel, &group_id) {
+        state.select_browser_node(panel, group_id, false);
+    }
+    headers.push((group_index, inset_row_rect(header_rect, depth), group.name.clone()));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_root_header_release(
+    ui: &egui::Ui,
+    state: &mut PresetUi,
+    events: &mut Vec<BrowserAction>,
+    groups: &[GroupView],
+    panel: &str,
+    group: &GroupView,
+    header_rect: Rect,
+    dragged: AssetDrag,
+    domain_hierarchy_actions: bool,
+    hierarchy_orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+    browser_item_drop: &mut bool,
+) {
+    match dragged {
+        AssetDrag::Preset { scope, key, .. } if scope.as_str() == panel => {
+            select_dropped_item(state, panel, &group.name, &[], &key);
+            events.push(BrowserAction::MoveItem(key.clone(), group.name.clone(), Some(0)));
+            *browser_item_drop = true;
+            if !domain_hierarchy_actions
+                && let Some((source_index, _)) = item_occurrence_position(groups, &key)
+                && let Some(source_group) = groups.get(source_index)
+            {
+                move_item_sibling_order(
+                    state,
+                    panel,
+                    hierarchy_orders,
+                    &source_group.name,
+                    &group.name,
+                    &key,
+                    hierarchy_orders.get(&group.name).and_then(|entries| entries.first()),
+                );
+            }
+        }
+        // Top-level group source headers are handled once by the final release resolver below,
+        // which also knows the between-header insertion order.
+        AssetDrag::Group { scope, path, .. } if scope.as_str() == panel && path.is_empty() && domain_hierarchy_actions => {}
+        AssetDrag::Group { scope, name, path } if scope.as_str() == panel && domain_hierarchy_actions => {
+            let edge = ui.ctx().pointer_interact_pos().is_some_and(|p| header_drop_before(header_rect, p));
+            if let Some(action) = hierarchy_group_drop(&name, &path, &group.name, &[], edge) {
+                events.push(hierarchy_action(action));
+            }
+        }
+        _ => {}
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn commit_preset_item_drop(
+    state: &mut PresetUi,
+    events: &mut Vec<BrowserAction>,
+    panel: &str,
+    groups: &[GroupView],
+    hierarchy_orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+    hierarchy_identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+    domain_hierarchy_actions: bool,
+    root_level_items: bool,
+    key: &str,
+    source_node_id: Option<&PickerId>,
+    target_group_index: usize,
+    target_item_index: usize,
+    target_group: &GroupView,
+    target_item: &ItemView,
+    after: bool,
+) {
+    let mut index = target_item_index + usize::from(after);
+    if let Some((source_group, source_index)) = item_occurrence_position(groups, key)
+        && source_group == target_group_index
+        && source_index < index
+    {
+        index = index.saturating_sub(1);
+    }
+    if root_level_items {
+        let source_identity = source_node_id.and_then(|id| hierarchy_identities.get(id)).cloned().or_else(|| {
+            item_occurrence_position(groups, key).and_then(|(source_group_index, _)| {
+                groups.get(source_group_index).map(|source_group| PickerNodeIdentity::Item { group: source_group.name.clone(), key: key.to_owned() })
+            })
+        });
+        if let Some(PickerNodeIdentity::Item { group: source_group, key: source_key }) = source_identity {
+            let source_entry = HierarchyOrderEntry::RootItem { group: source_group.clone(), key: source_key.clone() };
+            let target_entry = HierarchyOrderEntry::RootItem { group: target_group.name.clone(), key: target_item.key.clone() };
+            let entries = hierarchy_orders.get("").cloned().unwrap_or_default();
+            let before = entries
+                .iter()
+                .position(|entry| entry == &target_entry)
+                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
+            state.move_hierarchy_entry(panel, "", entries, source_entry, before.as_ref());
+            select_dropped_item(state, panel, &source_group, &[], key);
+        }
+    } else if target_item.group_path.is_empty() {
+        if !domain_hierarchy_actions
+            && let Some((source_group_index, _)) = item_occurrence_position(groups, key)
+            && let Some(source_group) = groups.get(source_group_index)
+        {
+            let entries = hierarchy_orders.get(&target_group.name).cloned().unwrap_or_default();
+            let target = HierarchyOrderEntry::Item(target_item.key.clone());
+            let before = entries
+                .iter()
+                .position(|entry| entry == &target)
+                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
+            move_item_sibling_order(state, panel, hierarchy_orders, &source_group.name, &target_group.name, key, before.as_ref());
+        }
+        select_dropped_item(state, panel, &target_group.name, &[], key);
+        events.push(BrowserAction::MoveItem(key.to_owned(), target_group.name.clone(), Some(index)));
+    } else {
+        let before = if after {
+            target_group
+                .items
+                .iter()
+                .skip(target_item_index + 1)
+                .find(|candidate| candidate.group_path == target_item.group_path && candidate.key != key)
+                .map(|candidate| candidate.key.clone())
+        } else {
+            Some(target_item.key.clone())
+        };
+        select_dropped_item(state, panel, &target_group.name, &target_item.group_path, key);
+        events.push(BrowserAction::MoveItemToGroup {
+            key: key.to_owned(),
+            group: target_group.name.clone(),
+            group_path: target_item.group_path.clone(),
+            before,
+        });
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_browser_projection(
+    groups: &[GroupView],
+    state: &mut PresetUi,
+    panel: &str,
+    query: &str,
+    all_groups_open: bool,
+    domain_hierarchy_actions: bool,
+    domain_root_sequence: Option<&[HierarchyOrderEntry]>,
+    projection_keys: &PickerProjectionKeys,
+    picker_ids: &mut PickerIdRegistry,
+) -> Option<BrowserProjection> {
+    BrowserProjection::build(groups, state, panel, query, all_groups_open, domain_hierarchy_actions, domain_root_sequence, projection_keys, picker_ids)
+}
+
+/// Apply the existing query, ancestor-collapse and folder-collapse rules to one render segment.
+/// `None` means the segment is skipped; `Some(open)` preserves its existing expanded state.
+#[allow(clippy::too_many_arguments)]
+fn browser_segment_open(
+    segment: &GroupRenderSegment,
+    group: &GroupView,
+    groups: &[GroupView],
+    query: &str,
+    parent_hidden: bool,
+    hidden_groups: &mut BTreeSet<String>,
+    hidden_folders: &BTreeSet<(String, Vec<String>)>,
+    expanded_groups: &mut BTreeSet<String>,
+    state: &PresetUi,
+    panel: &str,
+    all_groups_open: bool,
+) -> Option<bool> {
+    let group_matches = group_matches_query(group, query);
+    let has_matching_items = group.items.iter().any(|item| item_matches_query(item, query));
+    let root_run_visible = segment.root_items
+        && segment.item_indices.iter().any(|(group_index, item_index)| {
+            groups.get(*group_index).is_some_and(|source_group| {
+                source_group.items.get(*item_index).is_some_and(|item| item_visible_for_query(item, query, group_matches_query(source_group, query)))
+            })
+        });
+    if (segment.root_items && !root_run_visible) || (!segment.root_items && !group_visible_for_query(query, group_matches, has_matching_items)) {
+        return None;
+    }
+    if !segment.root_items && segment.show_header && parent_hidden {
+        hidden_groups.insert(group.name.clone());
+        return None;
+    }
+    if !segment.root_items && hidden_groups.contains(&group.name) && !segment.show_header {
+        return None;
+    }
+    if !segment.folder_path.is_empty()
+        && (1..=segment.folder_path.len()).any(|length| hidden_folders.contains(&(group.name.clone(), segment.folder_path[..length].to_vec())))
+    {
+        return None;
+    }
+    // A non-empty query should reveal matching items even when their group was collapsed before the search began.
+    let open = segment.root_items || !segment.show_header || !query.is_empty() || group_open(state, panel, segment.group_index, &group.name, all_groups_open);
+    if !open {
+        hidden_groups.insert(group.name.clone());
+    } else {
+        expanded_groups.insert(group.name.clone());
+    }
+    Some(open)
+}
+
+/// Allocate the item grid/list area and return the geometry shared by every item in this segment.
+#[allow(clippy::too_many_arguments)]
+fn allocate_browser_item_grid(
+    ui: &mut egui::Ui,
+    item_count: usize,
+    root_level_items: bool,
+    depth: usize,
+    group_path_depth: usize,
+    list: bool,
+    display_mode: crate::pickers::picker_state::PickerDisplayMode,
+    wrap_list: bool,
+    size: f32,
+    center_grid: bool,
+) -> (Rect, egui::Vec2, usize, usize, f32, f32, f32) {
+    let width = ui.available_width();
+    let hierarchy_indent = row_indent(depth + group_path_depth + 1);
+    let content_indent = if root_level_items { 0.0 } else { hierarchy_indent };
+    let pad = content_indent;
+    let gap = if list { 0.0 } else { GRID_GAP };
+    let (cell, cols, rows) = if list {
+        let row_height = display_mode.item_height();
+        list_layout_geometry(width, content_indent, row_height, wrap_list, display_mode.list_width(), item_count)
+    } else {
+        let cell = vec2(size, size);
+        let cols = ((width - pad + gap) / (cell.x + gap)).floor().max(1.0) as usize;
+        (cell, cols, item_count.div_ceil(cols))
+    };
+    let grid_width = cols as f32 * cell.x + cols.saturating_sub(1) as f32 * gap;
+    let center_offset = if !list && center_grid { ((width - pad - grid_width).max(0.0)) * 0.5 } else { 0.0 };
+    // Reserve the exact grid height: the extra two pixels here used to accumulate with row
+    // spacing and leave uneven vertical gaps.
+    let grid_height = if rows == 0 { 0.0 } else { rows as f32 * cell.y + rows.saturating_sub(1) as f32 * gap };
+    let (area, _) = ui.allocate_exact_size(vec2(width, grid_height), Sense::hover());
+    (area, cell, cols, rows, pad, center_offset, grid_height)
+}
+
+/// Paint one item in its selected list/grid presentation without changing its hit target.
+#[allow(clippy::too_many_arguments)]
+fn paint_browser_item(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    rect: Rect,
+    name: &str,
+    group_index: usize,
+    item_index: usize,
+    selected: bool,
+    cell_height: f32,
+    list: bool,
+    display_mode: crate::pickers::picker_state::PickerDisplayMode,
+    paint_list_item: &mut Option<&mut PaintListItem<'_>>,
+    paint_item: &mut PaintItem<'_>,
+    tokens: &Tokens,
+) {
+    if list {
+        if display_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {
+            asset_browser_list_row(ui, response, rect, name, selected);
+            ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, tokens.card_border), egui::StrokeKind::Inside);
+            let label_rect = Rect::from_min_max(pos2(rect.left() + 8.0, rect.top()), rect.right_bottom());
+            let mut label_ui = ui.new_child(egui::UiBuilder::new().max_rect(label_rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
+            crate::widgets::elided_label(&mut label_ui, name, label_rect.width());
+        } else if let Some(paint) = paint_list_item.as_deref_mut() {
+            asset_browser_item_info(response, name, selected);
+            paint(ui, rect, group_index, item_index, selected);
+            if !selected && response.hovered() {
+                ui.painter().rect_filled(rect, 2.0, tokens.hover.gamma_multiply(0.5));
+            }
+            ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, tokens.card_border), egui::StrokeKind::Inside);
+        } else {
+            asset_browser_list_row(ui, response, rect, name, selected);
+            let thumb_size = (cell_height - 2.0).max(0.0);
+            let thumb_rect = Rect::from_min_size(rect.min + vec2(1.0, 1.0), vec2(thumb_size, thumb_size));
+            paint_item(ui, thumb_rect, group_index, item_index, ItemPaintState::Item { selected });
+            ui.painter().text(pos2(thumb_rect.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, name, FontId::proportional(11.5), tokens.text);
+            ui.painter().rect_stroke(rect, CornerRadius::ZERO, Stroke::new(1.0, tokens.card_border), egui::StrokeKind::Inside);
+        }
+    } else {
+        asset_browser_item_info(response, name, selected);
+        paint_item(ui, rect, group_index, item_index, ItemPaintState::Item { selected });
+        ui.painter().rect_stroke(
+            rect,
+            CornerRadius::ZERO,
+            Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { tokens.accent } else { tokens.card_border }),
+            // Keep the entire border inside the allocated card rect: it consumes card dimensions
+            // and cannot overlap neighbours.
+            egui::StrokeKind::Inside,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_browser_item_cell(
+    ui: &mut egui::Ui,
+    run_index: usize,
+    item_count: usize,
+    rows: usize,
+    columns: usize,
+    wrap_list: bool,
+    item_origin_x: f32,
+    pad: f32,
+    center_offset: f32,
+    area: Rect,
+    cell: egui::Vec2,
+    gap: f32,
+    panel: &str,
+    item_group_index: usize,
+    item_index: usize,
+    item_group: &GroupView,
+    item: &ItemView,
+    depth: usize,
+    root_level_items: bool,
+    hierarchy_identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+    state: &std::cell::RefCell<&mut PresetUi>,
+    list: bool,
+    display_mode: crate::pickers::picker_state::PickerDisplayMode,
+    paint_list_item: &mut Option<&mut PaintListItem<'_>>,
+    paint_item: &mut PaintItem<'_>,
+    tokens: &Tokens,
+) -> (Rect, Option<Rect>, egui::Response, Option<PickerId>, usize, bool) {
+    let (cx, cy) = item_grid_position(run_index, rows, columns, wrap_list);
+    let rect = Rect::from_min_size(pos2(item_origin_x + pad + center_offset + cx * (cell.x + gap), area.min.y + cy * (cell.y + gap)), cell);
+    let next_rect = (run_index + 1 < item_count).then(|| {
+        let next_index = run_index + 1;
+        let (next_x, next_y) = item_grid_position(next_index, rows, columns, wrap_list);
+        Rect::from_min_size(pos2(item_origin_x + pad + center_offset + next_x * (cell.x + gap), area.min.y + next_y * (cell.y + gap)), cell)
+    });
+    let response = ui.interact(rect, ui.id().with((panel, item_group_index, item_index)), Sense::click_and_drag());
+    let cursor = if response.is_pointer_button_down_on() {
+        Some(egui::CursorIcon::Grabbing)
+    } else if panel == "gradients" {
+        Some(egui::CursorIcon::PointingHand)
+    } else {
+        None
+    };
+    let response = if let Some(cursor) = cursor { response.on_hover_cursor(cursor) } else { response };
+    let node_id = item_node_for_identity(&item_group.name, &item.group_path, &item.key, hierarchy_identities);
+    let item_depth = depth + item.group_path.len() + usize::from(!root_level_items);
+    let selected = {
+        let state = state.borrow();
+        node_id.as_ref().is_some_and(|id| state.browser_node_selected(panel, id))
+    };
+    paint_browser_item(
+        ui,
+        &response,
+        rect,
+        &item.name,
+        item_group_index,
+        item_index,
+        selected,
+        cell.y,
+        list,
+        display_mode,
+        paint_list_item,
+        paint_item,
+        tokens,
+    );
+    (rect, next_rect, response, node_id, item_depth, selected)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn register_browser_item_drop_targets(
+    ui: &mut egui::Ui,
+    response: &egui::Response,
+    rect: Rect,
+    next_rect: Option<Rect>,
+    area: Rect,
+    run_index: usize,
+    item_count: usize,
+    columns: usize,
+    list: bool,
+    panel: &str,
+    item_group_index: usize,
+    item_index: usize,
+    item_group: &GroupView,
+    item: &ItemView,
+    item_depth: usize,
+    capabilities: BrowserCapabilities,
+    canonical_hierarchy_drag: bool,
+    domain_hierarchy_actions: bool,
+    parents: &std::collections::BTreeMap<String, String>,
+    hierarchy_identities: &std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+    state: &std::cell::RefCell<&mut PresetUi>,
+    visible_selection_order: &[PickerId],
+    hierarchy: &PickerBrowserHierarchy,
+    insertion_markers: &mut Vec<(Rect, bool, bool)>,
+    item_hierarchy_targets: &mut Vec<(egui::Response, Rect, bool, bool, usize, String, Vec<String>)>,
+    canonical_node_bounds: &std::cell::RefCell<std::collections::BTreeMap<PickerId, Rect>>,
+    canonical_drop_hits: &std::cell::RefCell<Vec<(DropHitRegion, egui::Response)>>,
+    non_root_hierarchy_target_hovered: &std::cell::Cell<bool>,
+) -> Option<AssetDrag> {
+    let hierarchy_accepts = response
+        .dnd_hover_payload::<AssetDrag>()
+        .is_some_and(|payload| hierarchy_drop_accepts(payload.as_ref(), panel, &item_group.name, &item.group_path, parents, domain_hierarchy_actions));
+    let hierarchy_drag =
+        response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel));
+    if hierarchy_drag && !hierarchy_accepts {
+        // Invalid/self/unsupported card targets must not fall through and reinterpret the same
+        // release as a root-group reorder.
+        non_root_hierarchy_target_hovered.set(true);
+    }
+    if capabilities.group_drag {
+        item_hierarchy_targets.push((response.clone(), rect, !list, hierarchy_accepts, item_index, item_group.name.clone(), item.group_path.clone()));
+    }
+    if canonical_hierarchy_drag {
+        if capabilities.item_drag
+            && let Some(source_id) = item_node_for_identity(&item_group.name, &item.group_path, &item.key, hierarchy_identities)
+        {
+            let selected_nodes = selected_drag_nodes(&state.borrow(), panel, visible_selection_order, &source_id, hierarchy);
+            asset_browser_item_drag_source_with_id(response, panel, &item.key, source_id, &selected_nodes);
+        }
+        if let Some(target_id) = item_node_for_identity(&item_group.name, &item.group_path, &item.key, hierarchy_identities) {
+            canonical_node_bounds.borrow_mut().insert(target_id.clone(), rect);
+            let hit_index = canonical_drop_hits.borrow().len();
+            // The same hit widget backs cards and list rows. In list mode its leading/trailing
+            // halves are top/bottom; card_drop_hits owns that orientation and preview.
+            for hit in card_drop_hits(rect, !list, target_id, item_depth, hit_index) {
+                canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+            }
+        }
+    }
+    let mut released_drag = if capabilities.item_drag && !hierarchy_drag && !canonical_hierarchy_drag {
+        asset_browser_item_target(ui, ItemDropTarget { response, rect, next_rect, insertion_markers, scope: panel, key: &item.key, grid: !list })
+    } else {
+        None
+    };
+    // Grid rows leave horizontal whitespace after their last card, so expose that strip as an
+    // extra target. A list row already spans the available width and its lower half is trailing.
+    // Prepend stays within the card/row's leading half in both layouts.
+    if capabilities.item_drag && !list && (canonical_hierarchy_drag || released_drag.is_none()) {
+        let last_in_row = run_index + 1 == item_count || (run_index + 1) % columns == 0;
+        let right_edge = item_row_edge_targets(area, rect, last_in_row);
+        let pointer = ui.ctx().pointer_interact_pos();
+        if canonical_hierarchy_drag && let Some(edge_rect) = right_edge {
+            let edge_response = ui.interact(edge_rect, ui.id().with((panel, item_group_index, item_index, "right")), Sense::hover());
+            if let Some(target_id) = item_node_for_identity(&item_group.name, &item.group_path, &item.key, hierarchy_identities) {
+                let hit_index = canonical_drop_hits.borrow().len();
+                let mut hit = card_drop_hit(rect, Pos2::new(rect.right(), rect.center().y), true, target_id, item_depth, hit_index);
+                hit.hit_rect = edge_rect;
+                canonical_drop_hits.borrow_mut().push((hit, edge_response));
+            }
+        }
+        let edge_target = right_edge.filter(|edge_rect| pointer.is_some_and(|pointer| edge_rect.contains(pointer))).map(|edge_rect| ("right", edge_rect));
+        if let Some((side, edge_rect)) = edge_target {
+            let edge_response = ui.interact(edge_rect, ui.id().with((panel, item_group_index, item_index, side)), Sense::hover());
+            let edge_hierarchy_accepts = edge_response
+                .dnd_hover_payload::<AssetDrag>()
+                .is_some_and(|payload| hierarchy_drop_accepts(payload.as_ref(), panel, &item_group.name, &item.group_path, parents, domain_hierarchy_actions));
+            let edge_hierarchy_drag = edge_response
+                .dnd_hover_payload::<AssetDrag>()
+                .is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel));
+            if capabilities.group_drag {
+                item_hierarchy_targets.push((
+                    edge_response.clone(),
+                    rect,
+                    true,
+                    edge_hierarchy_accepts,
+                    item_index,
+                    item_group.name.clone(),
+                    item.group_path.clone(),
+                ));
+            }
+            if !edge_hierarchy_drag && !canonical_hierarchy_drag {
+                released_drag = asset_browser_item_target(
+                    ui,
+                    ItemDropTarget { response: &edge_response, rect, next_rect, insertion_markers, scope: panel, key: &item.key, grid: true },
+                );
+            }
+        }
+    }
+    released_drag
+}
+
+#[allow(clippy::too_many_arguments)]
+fn apply_browser_item_gesture(
+    ui: &egui::Ui,
+    response: egui::Response,
+    panel: &str,
+    group: &GroupView,
+    item: &ItemView,
+    capabilities: BrowserCapabilities,
+    node_id: Option<&PickerId>,
+    state: &std::cell::RefCell<&mut PresetUi>,
+    visible_selection_order: &[PickerId],
+    events: &std::cell::RefCell<&mut Vec<BrowserAction>>,
+) -> egui::Response {
+    let hover = if item.group_path.is_empty() { item.name.clone() } else { format!("{} / {}", item.group_path.join(" / "), item.name) };
+    let response = response.on_hover_text(hover);
+    let (selected, activated) = asset_browser_item_gesture(&response, capabilities.selection, capabilities.activation);
+    if selected && let Some(id) = node_id {
+        let modifiers = ui.input(|input| input.modifiers);
+        if modifiers.shift {
+            state.borrow_mut().select_browser_range(panel, visible_selection_order, id);
+        } else {
+            state.borrow_mut().select_browser_node(panel, id.clone(), modifiers.ctrl);
+        }
+    }
+    if activated {
+        events.borrow_mut().push(BrowserAction::ActivateItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
+    } else if selected {
+        events.borrow_mut().push(BrowserAction::SelectItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
+    }
+    response
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_browser_item_context_menu(
+    ui: &mut egui::Ui,
+    response: egui::Response,
+    compact: bool,
+    menu: ItemContextMenu,
+    args: ItemContextMenuArgs<'_>,
+    state: &std::cell::RefCell<&mut PresetUi>,
+    events: &std::cell::RefCell<&mut Vec<BrowserAction>>,
+    node_id: Option<&PickerId>,
+    panel: &str,
+    delete_context: &BrowserDeleteContext<'_>,
+) {
+    let draw_menu = |ui: &mut egui::Ui| {
+        let start = events.borrow().len();
+        let mut state = state.borrow_mut();
+        menu(ui, &mut state, args, &mut events.borrow_mut());
+        if let Some(node_id) = node_id {
+            replace_selected_delete_actions(&mut events.borrow_mut(), start, &state, panel, node_id, delete_context);
+        }
+    };
+    if compact {
+        compact_context_menu_target(ui, response, draw_menu);
+    } else {
+        context_menu_target(response, draw_menu);
+    }
+}
+
+/// Register the root-leading insertion target after the first visible hierarchy node is laid out.
+fn register_canonical_root_leading_target(
+    ui: &mut egui::Ui,
+    panel: &str,
+    enabled: bool,
+    browser_parent_clip: Rect,
+    hierarchy: &PickerBrowserHierarchy,
+    canonical_node_bounds: &std::cell::RefCell<std::collections::BTreeMap<PickerId, Rect>>,
+    canonical_drop_hits: &std::cell::RefCell<Vec<(DropHitRegion, egui::Response)>>,
+) {
+    if enabled
+        && let Some(first) = hierarchy.roots().first()
+        && let Some(first_bounds) = canonical_node_bounds.borrow().get(first.id()).copied()
+    {
+        let hit_rect =
+            Rect::from_min_max(pos2(browser_parent_clip.left(), browser_parent_clip.top()), pos2(browser_parent_clip.right(), first_bounds.top() + 0.75));
+        if hit_rect.is_positive() {
+            let indicator = if first.is_group() {
+                Rect::from_min_max(pos2(browser_parent_clip.left(), first_bounds.top()), pos2(browser_parent_clip.right(), first_bounds.top() + 4.0))
+            } else {
+                card_leading_marker_rect(first_bounds)
+            };
+            let response = ui.interact(hit_rect, ui.id().with(("root-leading-group-drop", panel)), Sense::hover());
+            canonical_drop_hits.borrow_mut().push((root_prepend_hit(hit_rect, indicator, first.id().clone(), usize::MAX), response));
+        }
+    }
+}
+
+/// Register the canonical root-end target after all visible rows have final bounds.
+fn register_canonical_root_end_target(
+    ui: &mut egui::Ui,
+    canonical_hierarchy_drag: bool,
+    hierarchy: &PickerBrowserHierarchy,
+    canonical_node_bounds: &std::cell::RefCell<std::collections::BTreeMap<PickerId, Rect>>,
+    canonical_drop_hits: &std::cell::RefCell<Vec<(DropHitRegion, egui::Response)>>,
+    list: bool,
+) {
+    if canonical_hierarchy_drag {
+        // The leading target is registered before rows are laid out. Resolve a card's
+        // actual edge now that its final grid bounds are available.
+        if let Some(first) = hierarchy.roots().first()
+            && !first.is_group()
+            && let Some(bounds) = canonical_node_bounds.borrow().get(first.id()).copied()
+            && let Some((hit, _)) =
+                canonical_drop_hits.borrow_mut().iter_mut().find(|(hit, _)| hit.region == PointerRegion::LeadingEdge && hit.target.as_ref() == Some(first.id()))
+        {
+            hit.indicator_rect = card_leading_marker_rect(bounds);
+        }
+        // The whole trailing blank area is the root append target, not just a narrow
+        // sixteen-pixel strip immediately after the final node. This lets users drop in
+        // the whitespace below the last group while keeping the indicator at its top edge.
+        let root_end_height = (ui.clip_rect().bottom() - ui.cursor().top()).max(32.0);
+        let (root_end_rect, root_end_response) = ui.allocate_exact_size(vec2(ui.available_width(), root_end_height), Sense::hover());
+        let indicator = match hierarchy.roots().last() {
+            Some(last) if !last.is_group() => {
+                canonical_node_bounds.borrow().get(last.id()).copied().map(|bounds| card_trailing_marker_rect(bounds, !list)).unwrap_or_else(|| {
+                    Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0))
+                })
+            }
+            _ => Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0)),
+        };
+        let hit_index = canonical_drop_hits.borrow().len();
+        let visible_root_end = root_end_rect.intersect(ui.clip_rect());
+        if visible_root_end.is_positive() {
+            canonical_drop_hits.borrow_mut().push((root_append_hit(visible_root_end, indicator, hit_index), root_end_response));
+        }
+    }
+}
+
 /// Draw the shared browser with an optional domain-owned mixed root sibling sequence.
 ///
 /// Domain adapters can supply `Group` and `RootItem` entries in their authoritative order without
@@ -1902,7 +3345,7 @@ pub(crate) fn browser_with_root_sequence(
         hierarchy_identities,
         selected_items,
         visible_selection_order,
-    }) = BrowserProjection::build(groups, st, panel, &query, all_groups_open, domain_hierarchy_actions, domain_root_sequence, projection_keys, &mut picker_ids)
+    }) = build_browser_projection(groups, st, panel, &query, all_groups_open, domain_hierarchy_actions, domain_root_sequence, projection_keys, &mut picker_ids)
     else {
         return ev;
     };
@@ -1953,200 +3396,57 @@ pub(crate) fn browser_with_root_sequence(
                 let gi = segment.group_index;
                 let depth = segment.depth;
                 let Some(g) = groups.get(gi) else { continue };
-                let group_matches = group_matches_query(g, &query);
-                let has_matching_items = g.items.iter().any(|item| item_matches_query(item, &query));
-                let root_run_visible = segment.root_items
-                    && segment.item_indices.iter().any(|(group_index, item_index)| {
-                        groups.get(*group_index).is_some_and(|source_group| {
-                            source_group.items.get(*item_index)
-                                .is_some_and(|item| item_visible_for_query(item, &query, group_matches_query(source_group, &query)))
-                        })
-                    });
-                if (segment.root_items && !root_run_visible) || (!segment.root_items && !group_visible_for_query(&query, group_matches, has_matching_items)) {
+                let parent_hidden = parents.get(&g.name).is_some_and(|parent| hidden_groups.contains(parent));
+                let Some(open) = browser_segment_open(
+                    segment,
+                    g,
+                    groups,
+                    &query,
+                    parent_hidden,
+                    &mut hidden_groups,
+                    &hidden_folders,
+                    &mut expanded_groups,
+                    st,
+                    panel,
+                    all_groups_open,
+                ) else {
                     continue;
-                }
-                let parent = parents.get(&g.name);
-                if !segment.root_items && segment.show_header && parent.is_some_and(|p| hidden_groups.contains(p)) {
-                    hidden_groups.insert(g.name.clone());
-                    continue;
-                }
-                if !segment.root_items && hidden_groups.contains(&g.name) && !segment.show_header {
-                    continue;
-                }
-                if !segment.folder_path.is_empty()
-                    && (1..=segment.folder_path.len()).any(|length| hidden_folders.contains(&(g.name.clone(), segment.folder_path[..length].to_vec())))
-                {
-                    continue;
-                }
-                // A non-empty query should reveal matching items even when their group was
-                // collapsed before the search began.
-                let open = segment.root_items || !segment.show_header || !query.is_empty() || group_open(st, panel, gi, &g.name, all_groups_open);
-                if !open {
-                    hidden_groups.insert(g.name.clone());
-                } else {
-                    expanded_groups.insert(g.name.clone());
-                }
+                };
                 if segment.show_header {
-                // Keep the visible separator compact; drag hit-testing has a larger invisible target.
-                if !gap_headers.is_empty() {
-                    ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
-                }
-                let (hr, hresp) = if let Some(paint) = paint_group.as_deref_mut() {
-                    let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
-                    let r = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
-                    let response = ui.interact(inset_row_rect(r, depth), allocated.id, Sense::click_and_drag());
-                    paint(ui, r, g, open, response.hovered() || response.dragged(), 1.0);
-                    let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
-                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, &g.name));
-                    (r, response)
-                } else {
-                    asset_browser_header(ui, &g.name, open, depth, None, GROUP_HEADER_HEIGHT)
-                };
-                let header_rect = inset_row_rect(hr, depth);
-                let disclosure_rect = Rect::from_min_max(
-                    pos2(header_rect.left(), header_rect.top()),
-                    pos2((header_rect.left() + 18.0).min(header_rect.right()), header_rect.bottom()),
-                );
-                let disclosure = ui.interact(disclosure_rect, hresp.id.with("disclosure"), Sense::click());
-                if capabilities.group_drag && hresp.is_pointer_button_down_on() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                } else if capabilities.group_drag && hresp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                gap_headers.push((picker_group_id(&mut picker_ids, gi, projection_keys), header_rect, depth, open));
-                canonical_node_bounds.borrow_mut().insert(picker_group_id(&mut picker_ids, gi, projection_keys), header_rect);
-                let header_released = if canonical_hierarchy_drag {
-                    if capabilities.group_drag {
-                        let source_id = picker_group_id(&mut picker_ids, gi, projection_keys);
-                        let selection = selected_drag_nodes(st, panel, &visible_selection_order, &source_id, &hierarchy);
-                        asset_browser_header_drag_source_with_id(&hresp, panel, source_id, &g.name, &selection);
-                    }
-                    let hit_index = canonical_drop_hits.borrow().len();
-                    for hit in group_header_drop_hits(header_rect, picker_group_id(&mut picker_ids, gi, projection_keys), depth, hit_index, open) {
-                        canonical_drop_hits.borrow_mut().push((hit, hresp.clone()));
-                    }
-                    None
-                } else {
-                    asset_browser_header_target_with_capabilities(
+                    draw_root_group_header(
                         ui,
-                        &hresp,
-                        header_rect,
+                        st,
+                        &mut ev,
+                        groups,
                         panel,
-                        &g.name,
-                        &[],
-                        HeaderDropCapabilities {
-                            item_drop: capabilities.item_drop,
-                            group_drag: capabilities.group_drag,
-                            reject_group_drop: hresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                                matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && group_is_descendant(&parents, name, &g.name))
-                            }),
-                        },
-                    )
-                };
-                if hresp.clicked() && !disclosure.clicked() {
-                    let modifiers = ui.input(|input| input.modifiers);
-                    if capabilities.selection {
-                        let id = picker_group_id(&mut picker_ids, gi, projection_keys);
-                        if modifiers.shift {
-                            st.select_browser_range(panel, &visible_selection_order, &id);
-                        } else {
-                            st.select_browser_node(panel, id, modifiers.ctrl);
-                        }
-                    }
-                }
-                if disclosure.clicked() {
-                    let k = format!("{panel}/{}", escape_hierarchy_key_part(&g.name));
-                    if !st.toggled.remove(&k) {
-                        st.toggled.insert(k);
-                    }
-                }
-                if st.browser_node_selected(panel, &picker_group_id(&mut picker_ids, gi, projection_keys)) {
-                    ui.painter().rect_filled(header_rect, egui::CornerRadius::ZERO, t.row_selected.gamma_multiply(0.35));
-                }
-                if let Some(menu) = group_context_menu {
-                    if compact_context_menus {
-                        compact_context_menu_target(ui, hresp.clone(), |ui| {
-                            let start = ev.len();
-                            menu(ui, st, panel, g, &mut ev);
-                            replace_selected_delete_actions(
-                                &mut ev,
-                                start,
-                                st,
-                                panel,
-                                &picker_group_id(&mut picker_ids, gi, projection_keys),
-                                &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                            );
-                        });
-                    } else {
-                        context_menu_target(hresp.clone(), |ui| {
-                            let start = ev.len();
-                            menu(ui, st, panel, g, &mut ev);
-                            replace_selected_delete_actions(
-                                &mut ev,
-                                start,
-                                st,
-                                panel,
-                                &picker_group_id(&mut picker_ids, gi, projection_keys),
-                                &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                            );
-                        });
-                    }
-                }
-                if let Some(dragged) = header_released {
-                    match dragged {
-                        AssetDrag::Preset { scope, key, .. } if scope.as_str() == panel => {
-                            select_dropped_item(st, panel, &g.name, &[], &key);
-                            ev.push(BrowserAction::MoveItem(key.clone(), g.name.clone(), Some(0)));
-                            browser_item_drop = true;
-                            if !domain_hierarchy_actions
-                                && let Some((source_index, _)) = item_occurrence_position(groups, &key)
-                                && let Some(source_group) = groups.get(source_index)
-                            {
-                                move_item_sibling_order(st, panel, &hierarchy_orders, &source_group.name, &g.name, &key, hierarchy_orders.get(&g.name).and_then(|entries| entries.first()));
-                            }
-                        }
-                        // Top-level group source headers are handled once by the final release
-                        // resolver below, which also knows the between-header insertion order.
-                        AssetDrag::Group { scope, path, .. } if scope.as_str() == panel && path.is_empty() && domain_hierarchy_actions => {}
-                        AssetDrag::Group { scope, name, path } if scope.as_str() == panel && domain_hierarchy_actions => {
-                            let edge = ui.ctx().pointer_interact_pos().is_some_and(|p| header_drop_before(hr, p));
-                            if let Some(action) = hierarchy_group_drop(&name, &path, &g.name, &[], edge) {
-                                ev.push(hierarchy_action(action));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                if capabilities.group_drag && hresp.dragged() && let Some(p) = ui.ctx().pointer_interact_pos() {
-                    drag = Some((gi, p));
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                }
-                if capabilities.group_drag
-                    && let Some(gr) = browser_drag_ghost_rect(
-                        ui,
-                        panel,
-                        BrowserDragGhostSource::Group(picker_group_id(&mut picker_ids, gi, projection_keys)),
-                        hresp.dragged(),
-                        hr,
+                        g,
+                        gi,
+                        depth,
+                        open,
+                        capabilities,
+                        canonical_hierarchy_drag,
+                        compact_context_menus,
+                        group_context_menu,
+                        domain_hierarchy_actions,
+                        &parents,
+                        &hierarchy,
+                        &hierarchy_identities,
+                        &hierarchy_orders,
+                        &visible_selection_order,
+                        projection_keys,
+                        &mut picker_ids,
+                        paint_group,
                         browser_bounds,
-                    )
-                {
-                    group_drag_ghosts.push((gr, gi, open, depth));
-                }
-                if capabilities.group_drag
-                    && !canonical_hierarchy_drag
-                    && hresp.drag_stopped()
-                    && let Some(p) = ui.ctx().pointer_interact_pos()
-                {
-                    released = Some((gi, p));
-                }
-                if capabilities.group_drag && capabilities.selection && hresp.drag_stopped() {
-                    let id = picker_group_id(&mut picker_ids, gi, projection_keys);
-                    if !st.browser_node_selected(panel, &id) {
-                        st.select_browser_node(panel, id, false);
-                    }
-                }
-                headers.push((gi, inset_row_rect(hr, depth), g.name.clone()));
+                        &t,
+                        &canonical_node_bounds,
+                        &canonical_drop_hits,
+                        &mut gap_headers,
+                        &mut headers,
+                        &mut group_drag_ghosts,
+                        &mut browser_item_drop,
+                        &mut drag,
+                        &mut released,
+                    );
                 }
                 // Keep each group's assets directly beneath its header. The previous separate
                 // content pass placed every swatch after every group header, so expanding a group
@@ -2169,161 +3469,57 @@ pub(crate) fn browser_with_root_sequence(
                             .filter_map(|(group_index, item_index)| {
                                 let source_group = groups.get(*group_index)?;
                                 let item = source_group.items.get(*item_index)?;
-                                item_visible_for_query(item, &query, group_matches_query(source_group, &query))
-                                    .then_some((*group_index, *item_index, item))
+                                item_visible_for_query(item, &query, group_matches_query(source_group, &query)).then_some((*group_index, *item_index, item))
                             })
                             .collect();
                         let st_cell = std::cell::RefCell::new(&mut *st);
                         let ev_cell = std::cell::RefCell::new(&mut ev);
                         let mut draw_group = |ui: &mut egui::Ui, group: &HierarchyGroup<'_, ItemView>, group_open: bool, group_depth: usize| {
-                            if !gap_headers.is_empty() {
-                                ui.add_space((GROUP_LAYOUT_GAP - ui.spacing().item_spacing.y).max(0.0));
-                            }
-                            let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
-                            let fr = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
-                            let row_depth = group_depth + 1 + depth;
-                            let fresp = ui.interact(inset_row_rect(fr, row_depth), allocated.id, Sense::click_and_drag());
-                            let nested_header_rect = inset_row_rect(fr, row_depth);
-                            let disclosure_rect = Rect::from_min_max(
-                                nested_header_rect.min,
-                                pos2((nested_header_rect.left() + 18.0).min(nested_header_rect.right()), nested_header_rect.bottom()),
-                            );
-                            let disclosure = ui.interact(disclosure_rect, fresp.id.with("disclosure"), Sense::click());
-                            if fresp.hovered()
-                                && fresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel))
-                            {
-                                non_root_hierarchy_target_hovered.set(true);
-                            }
-                            fresp.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, group.path.last().map(String::as_str).unwrap_or(""))
-                            });
-                            paint_asset_browser_header(
+                            draw_nested_folder_row(
                                 ui,
-                                fr,
+                                group,
                                 group_open,
-                                group.path.last().map(String::as_str).unwrap_or(""),
-                                row_depth,
-                                fresp.hovered(),
-                                Some(group.count),
-                            );
-                            let name = group.path.last().map(String::as_str).unwrap_or("");
-                            let Some(node_id) = folder_node_for_identity(&g.name, &group.path, &hierarchy_identities) else { return };
-                            if capabilities.group_drag
-                                && let Some(ghost_rect) = browser_drag_ghost_rect(
-                                    ui,
-                                    panel,
-                                    BrowserDragGhostSource::Group(node_id.clone()),
-                                    fresp.dragged(),
-                                    fr,
-                                    browser_bounds,
-                                )
-                            {
-                                nested_group_drag_ghosts.push((ghost_rect, group_open, name.to_owned(), row_depth, group.count));
-                            }
-                            if fresp.clicked() && !disclosure.clicked() {
-                                let modifiers = ui.input(|input| input.modifiers);
-                                if capabilities.selection {
-                                    if modifiers.shift {
-                                        st_cell.borrow_mut().select_browser_range(panel, &visible_selection_order, &node_id);
-                                    } else {
-                                        st_cell.borrow_mut().select_browser_node(panel, node_id.clone(), modifiers.ctrl);
-                                    }
-                                }
-                            }
-                            if disclosure.clicked() {
-                                group_toggles.push(format!("{panel}/{}/{}", escape_hierarchy_key_part(&g.name), group.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/")));
-                            }
-                            if st_cell.borrow().browser_node_selected(panel, &node_id) {
-                                ui.painter().rect_filled(inset_row_rect(fr, row_depth), egui::CornerRadius::ZERO, t.row_selected.gamma_multiply(0.35));
-                            }
-                            gap_headers.push((node_id.clone(), inset_row_rect(fr, row_depth), row_depth, group_open));
-                            canonical_node_bounds.borrow_mut().insert(node_id.clone(), inset_row_rect(fr, row_depth));
-                            if canonical_hierarchy_drag {
-                                if capabilities.group_drag {
-                                    let selection = selected_drag_nodes(&st_cell.borrow(), panel, &visible_selection_order, &node_id, &hierarchy);
-                                    asset_browser_header_drag_source_with_id(&fresp, panel, node_id.clone(), name, &selection);
-                                }
-                                let hit_index = canonical_drop_hits.borrow().len();
-                                for hit in group_header_drop_hits(inset_row_rect(fr, row_depth), node_id.clone(), row_depth, hit_index, group_open) {
-                                    canonical_drop_hits.borrow_mut().push((hit, fresp.clone()));
-                                }
-                            } else if !canonical_hierarchy_drag
-                                && let Some(dragged) = asset_browser_header_target_with_capabilities(
-                                ui,
-                                &fresp,
-                                inset_row_rect(fr, row_depth),
+                                group_depth,
+                                depth,
                                 panel,
-                                &g.name,
-                                &group.path,
-                                HeaderDropCapabilities {
-                                    item_drop: capabilities.item_drop && domain_hierarchy_actions,
-                                    // Nested path groups can only accept group drops when the
-                                    // consumer has a domain adapter for those paths. Never consume
-                                    // a release that the transient root-group model cannot apply.
-                                    group_drag: capabilities.group_drag && domain_hierarchy_actions,
-                                    reject_group_drop: fresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                                        matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && group_is_descendant(&parents, name, &g.name))
-                                    }),
-                                },
-                            ) {
-                                let edge = ui.ctx().pointer_interact_pos().is_some_and(|p| header_drop_before(fr, p));
-                                group_releases.push((dragged, g.name.clone(), group.path.clone(), edge));
-                            }
-                            if let Some(menu) = nested_group_context_menu {
-                                if compact_context_menus {
-                                    compact_context_menu_target(ui, fresp.clone(), |ui| {
-                                        let start = ev_cell.borrow().len();
-                                        let mut state = st_cell.borrow_mut();
-                                        menu(ui, &mut state, panel, g, &group.path, &mut ev_cell.borrow_mut());
-                                        replace_selected_delete_actions(
-                                            &mut ev_cell.borrow_mut(),
-                                            start,
-                                            &state,
-                                            panel,
-                                            &node_id,
-                                            &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                                        );
-                                    });
-                                } else {
-                                    context_menu_target(fresp.clone(), |ui| {
-                                        let start = ev_cell.borrow().len();
-                                        let mut state = st_cell.borrow_mut();
-                                        menu(ui, &mut state, panel, g, &group.path, &mut ev_cell.borrow_mut());
-                                        replace_selected_delete_actions(
-                                            &mut ev_cell.borrow_mut(),
-                                            start,
-                                            &state,
-                                            panel,
-                                            &node_id,
-                                            &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                                        );
-                                    });
-                                }
-                            }
+                                g,
+                                capabilities,
+                                canonical_hierarchy_drag,
+                                domain_hierarchy_actions,
+                                compact_context_menus,
+                                nested_group_context_menu,
+                                &parents,
+                                &hierarchy,
+                                &hierarchy_identities,
+                                &visible_selection_order,
+                                browser_bounds,
+                                &t,
+                                &st_cell,
+                                &ev_cell,
+                                &mut group_toggles,
+                                &mut gap_headers,
+                                &canonical_node_bounds,
+                                &canonical_drop_hits,
+                                &mut nested_group_drag_ghosts,
+                                &mut group_releases,
+                                &non_root_hierarchy_target_hovered,
+                            );
                         };
                         let mut draw_items = |ui: &mut egui::Ui, items: &[(usize, usize, &ItemView)], group_path: &[String]| {
-                            let w = ui.available_width();
                             let root_level_items = segment.root_items;
-                            // Cards are children of their containing group and retain the
-                            // additional hierarchy inset at every nested depth.
-                            let hierarchy_indent = row_indent(depth + group_path.len() + 1);
-                            let content_indent = if root_level_items { 0.0 } else { hierarchy_indent };
-                            let pad = content_indent;
+                            let (area, cell, cols, rows, pad, center_offset, grid_height) = allocate_browser_item_grid(
+                                ui,
+                                items.len(),
+                                root_level_items,
+                                depth,
+                                group_path.len(),
+                                list,
+                                display_mode,
+                                wrap_list,
+                                size,
+                                center_grid,
+                            );
                             let gap = if list { 0.0 } else { GRID_GAP };
-                            let (cell, cols, rows) = if list {
-                                let row_h = display_mode.item_height();
-                                list_layout_geometry(w, content_indent, row_h, wrap_list, display_mode.list_width(), items.len())
-                            } else {
-                                let cell = vec2(size, size);
-                                let cols = ((w - pad + gap) / (cell.x + gap)).floor().max(1.0) as usize;
-                                (cell, cols, items.len().div_ceil(cols))
-                            };
-                            let grid_width = cols as f32 * cell.x + cols.saturating_sub(1) as f32 * gap;
-                            let center_offset = if !list && center_grid { ((w - pad - grid_width).max(0.0)) * 0.5 } else { 0.0 };
-                            // Reserve the exact grid height: the extra two pixels here used to
-                            // accumulate with row spacing and leave uneven vertical gaps.
-                            let grid_height = if rows == 0 { 0.0 } else { rows as f32 * cell.y + rows.saturating_sub(1) as f32 * gap };
-                            let (area, _) = ui.allocate_exact_size(vec2(w, grid_height), Sense::hover());
                             // Anchor to the same clip edge as group headers so the full hierarchy
                             // indent is applied exactly once, not on top of the area's base inset.
                             let item_origin_x = ui.clip_rect().left() + 1.0;
@@ -2334,240 +3530,100 @@ pub(crate) fn browser_with_root_sequence(
                             for (run_i, (item_group_index, ii, it)) in items.iter().enumerate() {
                                 let Some(item_group) = groups.get(*item_group_index) else { continue };
                                 let it = *it;
-                                let (cx, cy) = item_grid_position(run_i, rows, cols, wrap_list);
-                                let r = Rect::from_min_size(pos2(item_origin_x + pad + center_offset + cx * (cell.x + gap), area.min.y + cy * (cell.y + gap)), cell);
-                                let next_rect = (run_i + 1 < items.len()).then(|| {
-                                    let next_i = run_i + 1;
-                                    let (next_x, next_y) = item_grid_position(next_i, rows, cols, wrap_list);
-                                    Rect::from_min_size(
-                                        pos2(item_origin_x + pad + center_offset + next_x * (cell.x + gap), area.min.y + next_y * (cell.y + gap)),
-                                        cell,
-                                    )
-                                });
-                                let resp = ui.interact(r, ui.id().with((panel, item_group_index, ii)), Sense::click_and_drag());
-                                let cursor = if resp.is_pointer_button_down_on() {
-                                    Some(egui::CursorIcon::Grabbing)
-                                } else if panel == "gradients" {
-                                    Some(egui::CursorIcon::PointingHand)
-                                } else {
-                                    None
-                                };
-                                let resp = if let Some(cursor) = cursor { resp.on_hover_cursor(cursor) } else { resp };
-                                let node_id = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities);
-                                let item_depth = depth + it.group_path.len() + usize::from(!root_level_items);
-                                let is_sel = {
-                                    let state = st_cell.borrow();
-                                    node_id.as_ref().is_some_and(|id| state.browser_node_selected(panel, id))
-                                };
-                                if list {
-                                    if display_mode == crate::pickers::picker_state::PickerDisplayMode::TextOnly {
-                                        asset_browser_list_row(ui, &resp, r, &it.name, is_sel);
-                                        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-                                        let label_rect = Rect::from_min_max(pos2(r.left() + 8.0, r.top()), r.right_bottom());
-                                        let mut label_ui = ui.new_child(
-                                            egui::UiBuilder::new()
-                                                .max_rect(label_rect)
-                                                .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                                        );
-                                        label_ui.set_clip_rect(label_rect.intersect(ui.clip_rect()));
-                                        crate::widgets::elided_label(&mut label_ui, &it.name, label_rect.width());
-                                    } else if let Some(paint) = paint_list_item.as_deref_mut() {
-                                        asset_browser_item_info(&resp, &it.name, is_sel);
-                                        paint(ui, r, *item_group_index, *ii, is_sel);
-                                        if !is_sel && resp.hovered() {
-                                            ui.painter().rect_filled(r, 2.0, t.hover.gamma_multiply(0.5));
-                                        }
-                                        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-                                    } else {
-                                        asset_browser_list_row(ui, &resp, r, &it.name, is_sel);
-                                        let thumb_size = (cell.y - 2.0).max(0.0);
-                                        let tr = Rect::from_min_size(r.min + vec2(1.0, 1.0), vec2(thumb_size, thumb_size));
-                                        paint_item(ui, tr, *item_group_index, *ii, ItemPaintState::Item { selected: is_sel });
-                                        ui.painter().text(
-                                            pos2(tr.right() + 8.0, r.center().y),
-                                            Align2::LEFT_CENTER,
-                                            &it.name,
-                                            FontId::proportional(11.5),
-                                            t.text,
-                                        );
-                                        ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-                                    }
-                                } else {
-                                    asset_browser_item_info(&resp, &it.name, is_sel);
-                                    paint_item(ui, r, *item_group_index, *ii, ItemPaintState::Item { selected: is_sel });
-                                    ui.painter().rect_stroke(
-                                        r,
-                                        CornerRadius::ZERO,
-                                        Stroke::new(if is_sel { 2.0 } else { 1.0 }, if is_sel { t.accent } else { t.card_border }),
-                                        // Keep the entire border inside the allocated card rect:
-                                        // it consumes card dimensions and cannot overlap neighbours.
-                                        egui::StrokeKind::Inside,
-                                    );
-                                }
-                                let hierarchy_accepts = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                                    hierarchy_drop_accepts(payload.as_ref(), panel, &item_group.name, &it.group_path, &parents, domain_hierarchy_actions)
-                                });
-                                let hierarchy_drag = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                                    matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
-                                });
-                                if hierarchy_drag && !hierarchy_accepts {
-                                    // Invalid/self/unsupported card targets must not fall through
-                                    // and reinterpret the same release as a root-group reorder.
-                                    non_root_hierarchy_target_hovered.set(true);
-                                }
-                                if capabilities.group_drag {
-                                    item_hierarchy_targets.push((resp.clone(), r, !list, hierarchy_accepts, *ii, item_group.name.clone(), it.group_path.clone()));
-                                }
-                                if canonical_hierarchy_drag {
-                                    if capabilities.item_drag
-                                        && let Some(source_id) = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities) {
-                                            let selected_nodes = selected_drag_nodes(&st_cell.borrow(), panel, &visible_selection_order, &source_id, &hierarchy);
-                                            asset_browser_item_drag_source_with_id(&resp, panel, &it.key, source_id, &selected_nodes);
-                                        }
-                                    if let Some(target_id) = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities) {
-                                        canonical_node_bounds.borrow_mut().insert(target_id.clone(), r);
-                                        let hit_index = canonical_drop_hits.borrow().len();
-                                        // The same hit widget backs both cards and list rows. In
-                                        // list mode its leading/trailing halves are top/bottom;
-                                        // card_drop_hits owns that orientation and the matching
-                                        // horizontal insertion preview.
-                                        for hit in card_drop_hits(r, !list, target_id, item_depth, hit_index) {
-                                            canonical_drop_hits.borrow_mut().push((hit, resp.clone()));
-                                        }
-                                    }
-                                }
-                                let mut released_drag = if capabilities.item_drag && !hierarchy_drag && !canonical_hierarchy_drag {
-                                    asset_browser_item_target(
-                                        ui,
-                                        ItemDropTarget { response: &resp, rect: r, next_rect, insertion_markers: &mut insertion_markers, scope: panel, key: &it.key, grid: !list },
-                                    )
-                                } else {
-                                    None
-                                };
-                                // Grid rows leave horizontal whitespace after their last card,
-                                // so expose that strip as an extra target. A list row already spans
-                                // the available width and its lower half is the trailing target.
-                                // Prepend stays within the card/row's leading half in both layouts.
-                                if capabilities.item_drag && !list && (canonical_hierarchy_drag || released_drag.is_none()) {
-                                    let last_in_row = run_i + 1 == items.len() || (run_i + 1) % cols == 0;
-                                    let right_edge = item_row_edge_targets(area, r, last_in_row);
-                                    let pointer = ui.ctx().pointer_interact_pos();
-                                    if canonical_hierarchy_drag
-                                        && let Some(edge_rect) = right_edge {
-                                            let edge_response = ui.interact(edge_rect, ui.id().with((panel, item_group_index, ii, "right")), Sense::hover());
-                                            if let Some(target_id) = item_node_for_identity(&item_group.name, &it.group_path, &it.key, &hierarchy_identities) {
-                                                let hit_index = canonical_drop_hits.borrow().len();
-                                                let mut hit = card_drop_hit(r, Pos2::new(r.right(), r.center().y), true, target_id, item_depth, hit_index);
-                                                hit.hit_rect = edge_rect;
-                                                canonical_drop_hits.borrow_mut().push((hit, edge_response));
-                                            }
-                                        }
-                                    let edge_target = right_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("right", rect));
-                                    if let Some((side, edge_rect)) = edge_target {
-                                        let edge_response = ui.interact(edge_rect, ui.id().with((panel, item_group_index, ii, side)), Sense::hover());
-                                        let edge_hierarchy_accepts = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                                            hierarchy_drop_accepts(payload.as_ref(), panel, &item_group.name, &it.group_path, &parents, domain_hierarchy_actions)
-                                        });
-                                        let edge_hierarchy_drag = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                                            matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
-                                        });
-                                        if capabilities.group_drag {
-                                            item_hierarchy_targets.push((edge_response.clone(), r, true, edge_hierarchy_accepts, *ii, item_group.name.clone(), it.group_path.clone()));
-                                        }
-                                        if !edge_hierarchy_drag && !canonical_hierarchy_drag {
-                                            released_drag = asset_browser_item_target(
-                                                ui,
-                                                ItemDropTarget {
-                                                    response: &edge_response,
-                                                    rect: r,
-                                                    next_rect,
-                                                    insertion_markers: &mut insertion_markers,
-                                                    scope: panel,
-                                                    key: &it.key,
-                                                    grid: true,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
+                                let (r, next_rect, resp, node_id, item_depth, is_sel) = paint_browser_item_cell(
+                                    ui,
+                                    run_i,
+                                    items.len(),
+                                    rows,
+                                    cols,
+                                    wrap_list,
+                                    item_origin_x,
+                                    pad,
+                                    center_offset,
+                                    area,
+                                    cell,
+                                    gap,
+                                    panel,
+                                    *item_group_index,
+                                    *ii,
+                                    item_group,
+                                    &it,
+                                    depth,
+                                    root_level_items,
+                                    &hierarchy_identities,
+                                    &st_cell,
+                                    list,
+                                    display_mode,
+                                    paint_list_item,
+                                    paint_item,
+                                    &t,
+                                );
+                                let released_drag = register_browser_item_drop_targets(
+                                    ui,
+                                    &resp,
+                                    r,
+                                    next_rect,
+                                    area,
+                                    run_i,
+                                    items.len(),
+                                    cols,
+                                    list,
+                                    panel,
+                                    *item_group_index,
+                                    *ii,
+                                    item_group,
+                                    &it,
+                                    item_depth,
+                                    capabilities,
+                                    canonical_hierarchy_drag,
+                                    domain_hierarchy_actions,
+                                    &parents,
+                                    &hierarchy_identities,
+                                    &st_cell,
+                                    &visible_selection_order,
+                                    &hierarchy,
+                                    &mut insertion_markers,
+                                    &mut item_hierarchy_targets,
+                                    &canonical_node_bounds,
+                                    &canonical_drop_hits,
+                                    &non_root_hierarchy_target_hovered,
+                                );
                                 if let Some(AssetDrag::Preset { scope, key, node_id, .. }) = released_drag
                                     && scope.as_str() == panel
                                     && key.as_str() != it.key.as_str()
                                 {
                                     browser_item_drop = true;
                                     let after = ui.ctx().pointer_interact_pos().is_some_and(|p| item_drop_after(r, p, !list));
-                                    let mut index = *ii + usize::from(after);
-                                    if let Some((source_group, source_index)) = item_occurrence_position(groups, &key)
-                                        && source_group == *item_group_index
-                                        && source_index < index
-                                    {
-                                        index = index.saturating_sub(1);
-                                    }
-                                    if root_level_items {
-                                        let source_identity = node_id.as_ref().and_then(|id| hierarchy_identities.get(id)).cloned().or_else(|| {
-                                            item_occurrence_position(groups, &key).and_then(|(source_group_index, _)| {
-                                                groups.get(source_group_index).map(|source_group| PickerNodeIdentity::Item { group: source_group.name.clone(), key: key.clone() })
-                                            })
-                                        });
-                                        if let Some(PickerNodeIdentity::Item { group: source_group, key: source_key }) = source_identity {
-                                            let source_entry = HierarchyOrderEntry::RootItem { group: source_group.clone(), key: source_key.clone() };
-                                            let target_entry = HierarchyOrderEntry::RootItem { group: item_group.name.clone(), key: it.key.clone() };
-                                            let entries = hierarchy_orders.get("").cloned().unwrap_or_default();
-                                            let before = entries.iter().position(|entry| entry == &target_entry)
-                                                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
-                                            st_cell.borrow_mut().move_hierarchy_entry(panel, "", entries, source_entry, before.as_ref());
-                                            select_dropped_item(&mut st_cell.borrow_mut(), panel, &source_group, &[], &key);
-                                        }
-                                    } else if it.group_path.is_empty() {
-                                        if !domain_hierarchy_actions
-                                            && let Some((source_group_index, _)) = item_occurrence_position(groups, &key)
-                                            && let Some(source_group) = groups.get(source_group_index)
-                                        {
-                                            let entries = hierarchy_orders.get(&item_group.name).cloned().unwrap_or_default();
-                                            let target = HierarchyOrderEntry::Item(it.key.clone());
-                                            let before = entries
-                                                .iter()
-                                                .position(|entry| entry == &target)
-                                                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
-                                            move_item_sibling_order(&mut st_cell.borrow_mut(), panel, &hierarchy_orders, &source_group.name, &item_group.name, &key, before.as_ref());
-                                        }
-                                        select_dropped_item(&mut st_cell.borrow_mut(), panel, &item_group.name, &[], &key);
-                                        ev_cell.borrow_mut().push(BrowserAction::MoveItem(key, item_group.name.clone(), Some(index)));
-                                    } else {
-                                        let before = if after {
-                                            item_group.items
-                                                .iter()
-                                                .skip(*ii + 1)
-                                                .find(|candidate| candidate.group_path == it.group_path && candidate.key != key)
-                                                .map(|candidate| candidate.key.clone())
-                                        } else {
-                                            Some(it.key.clone())
-                                        };
-                                        select_dropped_item(&mut st_cell.borrow_mut(), panel, &item_group.name, &it.group_path, &key);
-                                        ev_cell.borrow_mut().push(BrowserAction::MoveItemToGroup {
-                                            key,
-                                            group: item_group.name.clone(),
-                                            group_path: it.group_path.clone(),
-                                            before,
-                                        });
-                                    }
+                                    commit_preset_item_drop(
+                                        &mut **st_cell.borrow_mut(),
+                                        &mut **ev_cell.borrow_mut(),
+                                        panel,
+                                        groups,
+                                        &hierarchy_orders,
+                                        &hierarchy_identities,
+                                        domain_hierarchy_actions,
+                                        root_level_items,
+                                        &key,
+                                        node_id.as_ref(),
+                                        *item_group_index,
+                                        *ii,
+                                        item_group,
+                                        &it,
+                                        after,
+                                    );
                                 }
-                                let hover = if it.group_path.is_empty() { it.name.clone() } else { format!("{} / {}", it.group_path.join(" / "), it.name) };
-                                let resp = resp.on_hover_text(hover);
-                                let (selected, activated) = asset_browser_item_gesture(&resp, capabilities.selection, capabilities.activation);
-                                if selected && let Some(id) = node_id.as_ref() {
-                                    let modifiers = ui.input(|input| input.modifiers);
-                                    if modifiers.shift {
-                                        st_cell.borrow_mut().select_browser_range(panel, &visible_selection_order, id);
-                                    } else {
-                                        st_cell.borrow_mut().select_browser_node(panel, id.clone(), modifiers.ctrl);
-                                    }
-                                }
-                                if activated {
-                                    ev_cell.borrow_mut().push(BrowserAction::ActivateItem { group: item_group.name.clone(), group_path: it.group_path.clone(), key: it.key.clone() });
-                                } else if selected {
-                                    ev_cell.borrow_mut().push(BrowserAction::SelectItem { group: item_group.name.clone(), group_path: it.group_path.clone(), key: it.key.clone() });
-                                }
+                                let resp = apply_browser_item_gesture(
+                                    ui,
+                                    resp,
+                                    panel,
+                                    item_group,
+                                    it,
+                                    capabilities,
+                                    node_id.as_ref(),
+                                    &st_cell,
+                                    &visible_selection_order,
+                                    &ev_cell,
+                                );
                                 if capabilities.item_drag && resp.dragged() {
                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                 }
@@ -2590,48 +3646,34 @@ pub(crate) fn browser_with_root_sequence(
                                 {
                                     dropped = Some((it.key.clone(), pp));
                                 }
-                                if capabilities.item_drag && capabilities.selection && resp.drag_stopped()
+                                if capabilities.item_drag
+                                    && capabilities.selection
+                                    && resp.drag_stopped()
                                     && let Some(id) = node_id.as_ref()
                                     && !st_cell.borrow().browser_node_selected(panel, &id)
                                 {
                                     st_cell.borrow_mut().select_browser_node(panel, id.clone(), false);
                                 }
                                 if let Some(menu) = item_context_menu {
-                                    if compact_context_menus {
-                                        let args = ItemContextMenuArgs { panel, item: it, group: item_group, group_names: &group_names, selected_items: &selected_items };
-                                        compact_context_menu_target(ui, resp.clone(), |ui| {
-                                            let start = ev_cell.borrow().len();
-                                            let mut state = st_cell.borrow_mut();
-                                            menu(ui, &mut state, args, &mut ev_cell.borrow_mut());
-                                            if let Some(node_id) = node_id.as_ref() {
-                                                replace_selected_delete_actions(
-                                                    &mut ev_cell.borrow_mut(),
-                                                    start,
-                                                    &state,
-                                                    panel,
-                                                    node_id,
-                                                    &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                                                );
-                                            }
-                                        });
-                                    } else {
-                                        let args = ItemContextMenuArgs { panel, item: it, group: item_group, group_names: &group_names, selected_items: &selected_items };
-                                        context_menu_target(resp.clone(), |ui| {
-                                            let start = ev_cell.borrow().len();
-                                            let mut state = st_cell.borrow_mut();
-                                            menu(ui, &mut state, args, &mut ev_cell.borrow_mut());
-                                            if let Some(node_id) = node_id.as_ref() {
-                                                replace_selected_delete_actions(
-                                                    &mut ev_cell.borrow_mut(),
-                                                    start,
-                                                    &state,
-                                                    panel,
-                                                    node_id,
-                                                    &BrowserDeleteContext { selection_order: &visible_selection_order, hierarchy: &hierarchy, identities: &hierarchy_identities },
-                                                );
-                                            }
-                                        });
-                                    }
+                                    let args =
+                                        ItemContextMenuArgs { panel, item: it, group: item_group, group_names: &group_names, selected_items: &selected_items };
+                                    let delete_context = BrowserDeleteContext {
+                                        selection_order: &visible_selection_order,
+                                        hierarchy: &hierarchy,
+                                        identities: &hierarchy_identities,
+                                    };
+                                    draw_browser_item_context_menu(
+                                        ui,
+                                        resp.clone(),
+                                        compact_context_menus,
+                                        menu,
+                                        args,
+                                        &st_cell,
+                                        &ev_cell,
+                                        node_id.as_ref(),
+                                        panel,
+                                        &delete_context,
+                                    );
                                 }
                             }
                             for (marker_rect, after, grid) in insertion_markers {
@@ -2650,518 +3692,76 @@ pub(crate) fn browser_with_root_sequence(
                             draw_items(ui, &segment_items, &segment.folder_path);
                         }
                     }
-                    for (dragged, target_group, target_group_path, edge) in group_releases.drain(..) {
-                        match dragged {
-                            AssetDrag::Preset { scope, key, .. } if scope == panel => {
-                                let before = groups
-                                    .iter()
-                                    .find(|group| group.name == target_group)
-                                    .and_then(|group| group.items.iter().find(|item| item.group_path == target_group_path))
-                                    .map(|item| item.key.clone());
-                                select_dropped_item(st, panel, &target_group, &target_group_path, &key);
-                                ev.push(BrowserAction::MoveItemToGroup { key, group: target_group, group_path: target_group_path, before });
-                                browser_item_drop = true;
-                            }
-                            AssetDrag::Group { scope, name, path } if scope == panel && domain_hierarchy_actions => {
-                                if let Some(action) = hierarchy_group_drop(&name, &path, &target_group, &target_group_path, edge) {
-                                    ev.push(hierarchy_action(action));
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    for key in group_toggles {
-                        if !st.toggled.remove(&key) {
-                            st.toggled.insert(key);
-                        }
-                    }
+                    apply_group_releases_and_toggles(
+                        &mut group_releases,
+                        group_toggles,
+                        groups,
+                        panel,
+                        domain_hierarchy_actions,
+                        st,
+                        &mut ev,
+                        &mut browser_item_drop,
+                    );
                 }
             }
-            // Match the existing indentation-column arbitration: the last eligible
-            // (topmost/deepest) hit target wins both its preview and its release.
-            let best_item_hierarchy_target = best_drop_target_index(&item_hierarchy_targets, |(response, _, _, accepts, _, _, _)| {
-                    *accepts
-                        && response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                            matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
-                        })
-                });
-            // The indentation column overlaps the leading edge of nested cards. Treat these as
-            // competing destinations, not independent drop zones: when a card wins, its vertical
-            // insertion marker and release must suppress the column's horizontal append marker.
-            let item_hierarchy_target_wins = best_item_hierarchy_target.is_some();
-            if item_hierarchy_target_wins {
-                indent_release = None;
-            }
-            if !canonical_hierarchy_drag
-                && let Some((response, rect, grid, _, item_index, target_name, target_group_path)) =
-                best_item_hierarchy_target.and_then(|index| item_hierarchy_targets.get(index))
-                && let Some((dragged, after)) = asset_browser_item_hierarchy_target(ui, response, *rect, *grid, true)
-                && let Some(target_group) = groups.iter().find(|group| group.name == *target_name)
-            {
-                browser_item_drop = true;
-                let moving_group_path = match &dragged {
-                    AssetDrag::Group { name, path, .. } if *name == *target_name && !path.is_empty() => Some(path.clone()),
-                    _ => None,
-                };
-                match dragged {
-                    AssetDrag::Group { scope, name, path } if scope == panel && domain_hierarchy_actions => {
-                        let (before, before_item) =
-                            item_hierarchy_insertion_anchor(&target_group.items, *item_index, target_group_path, after, moving_group_path.as_deref());
-                        ev.push(BrowserAction::MoveInto {
-                            group: name,
-                            group_path: path,
-                            into: Some((target_name.clone(), target_group_path.clone())),
-                            before,
-                            before_item,
-                        });
-                        // The nested card/header target has consumed this release. Do not let the
-                        // source root header also resolve a between-root-groups reorder.
-                        released = None;
-                    }
-                    AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && !domain_hierarchy_actions => {
-                        if let Some(target_item) = target_group.items.get(*item_index).map(|item| item.key.clone()) {
-                            let entries = hierarchy_orders.get(target_name).cloned().unwrap_or_default();
-                            let target_entry = HierarchyOrderEntry::Item(target_item);
-                            let before = entries
-                                .iter()
-                                .position(|entry| entry == &target_entry)
-                                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
-                            if let Some(old_parent) = parents.get(&name).filter(|parent| *parent != target_name) {
-                                st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(name.clone()));
-                            }
-                            st.nest_group(panel, &group_names, &name, Some(target_name));
-                            st.move_hierarchy_entry(panel, target_name, entries, HierarchyOrderEntry::Group(name), before.as_ref());
-                            released = None;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // Each expanded group owns a drop area spanning its full header width. Its vertical
-            // span covers the group's complete visible subtree and ends before the next sibling.
-            if capabilities.group_drag {
-                for (group_index, header, group_name) in &headers {
-                    if !expanded_groups.contains(group_name) {
-                        continue;
-                    }
-                    let bottom = headers
-                        .iter()
-                        .filter(|(_, _, name)| name == group_name || group_is_descendant(&parents, group_name, name))
-                        .map(|(_, rect, _)| rect.bottom())
-                        .chain(
-                            group_content_areas
-                                .iter()
-                                .filter(|(name, _)| name == group_name || group_is_descendant(&parents, group_name, name))
-                                .map(|(_, rect)| rect.bottom()),
-                        )
-                        .max_by(f32::total_cmp);
-                    if let Some(bottom) = bottom {
-                        let column = Rect::from_min_max(pos2(header.left(), header.bottom()), pos2(header.left() + ROW_INDENT, bottom));
-                        if column.is_positive() {
-                            let response = ui.interact(
-                                column,
-                                ui.id().with(("group-indent-column", panel, group_name)),
-                                Sense::hover(),
-                            );
-                            if canonical_hierarchy_drag {
-                                let append_indicator = Rect::from_min_max(
-                                    pos2(header.left(), bottom - 2.0),
-                                    pos2(header.right(), bottom + 2.0),
-                                );
-                                let depth = display.iter().find_map(|(index, depth)| {
-                                    groups.get(*index).is_some_and(|group| group.name == *group_name).then_some(*depth)
-                                }).unwrap_or(0);
-                                let hit_index = canonical_drop_hits.borrow().len();
-                                let hit = group_append_hit(column, append_indicator, picker_group_id(&mut picker_ids, *group_index, projection_keys), depth, hit_index);
-                                canonical_drop_hits.borrow_mut().push((hit, response.clone()));
-                            }
-                            indent_drop_targets.push((group_name.clone(), response));
-                        }
-                    }
-                }
-            }
-            // Each adjacent visible group pair gets a six-pixel target immediately before the
-            // lower header. The upper half appends after the preceding sibling; the lower half
-            // inserts before the lower group. Keeping the band above the header preserves the
-            // header's drop-into semantics.
+            let item_hierarchy_target_wins = resolve_item_hierarchy_drop_target(
+                ui,
+                panel,
+                &item_hierarchy_targets,
+                groups,
+                &group_names,
+                &hierarchy_orders,
+                &parents,
+                canonical_hierarchy_drag,
+                domain_hierarchy_actions,
+                &mut indent_release,
+                &mut browser_item_drop,
+                &mut released,
+                &mut ev,
+                st,
+            );
+            register_group_indent_drop_targets(
+                ui,
+                panel,
+                &headers,
+                &expanded_groups,
+                &parents,
+                &group_content_areas,
+                &display,
+                groups,
+                &mut picker_ids,
+                projection_keys,
+                &canonical_drop_hits,
+                &mut indent_drop_targets,
+                capabilities,
+                canonical_hierarchy_drag,
+            );
             if canonical_hierarchy_drag {
-                for pair in gap_headers.windows(2) {
-                    let (upper_id, upper_rect, _upper_depth, upper_open) = &pair[0];
-                    let (lower_id, lower_rect, lower_depth, _) = &pair[1];
-                    let gap_rect = Rect::from_min_max(
-                        // A parent/child boundary spans two indentation levels. Keep the hit
-                        // target reachable from the parent's gutter as well as the child's row;
-                        // otherwise dragging at the visual boundary between them misses the gap.
-                        pos2(upper_rect.left().min(lower_rect.left()), lower_rect.top() - GROUP_GAP_DROP_HEIGHT),
-                        pos2(lower_rect.right(), lower_rect.top()),
-                    );
-                    if gap_rect.is_positive() {
-                        let response = ui.interact(
-                            gap_rect,
-                            ui.id().with(("group-gap", panel, upper_id, lower_id)),
-                            Sense::hover(),
-                        );
-                        let upper_anchor = group_gap_upper_anchor(&hierarchy, lower_id);
-                        let upper_parent = hierarchy.parent_of(lower_id).unwrap_or(ContainerId::Root);
-                        let anchor_is_parent = upper_anchor.as_ref().is_some_and(|(anchor, _)| {
-                            upper_parent == ContainerId::Group(anchor.clone())
-                        });
-                        let parent_depth = match &upper_parent {
-                            ContainerId::Root => 0,
-                            ContainerId::Group(parent_id) => {
-                                let mut depth = 0;
-                                let mut ancestor = hierarchy.parent_of(parent_id).unwrap_or(ContainerId::Root);
-                                while let ContainerId::Group(id) = ancestor {
-                                    depth += 1;
-                                    ancestor = hierarchy.parent_of(&id).unwrap_or(ContainerId::Root);
-                                }
-                                depth
-                            }
-                        };
-                        let upper_bounds = upper_anchor
-                            .as_ref()
-                            .and_then(|(anchor, _)| canonical_node_bounds.borrow().get(anchor).copied())
-                            .or_else(|| match &upper_parent {
-                                ContainerId::Root => None,
-                                ContainerId::Group(parent_id) => canonical_node_bounds.borrow().get(parent_id).copied(),
-                            })
-                            .unwrap_or(*upper_rect);
-                        // An expanded group's final card can occupy the same row as the next
-                        // group's insertion band. Restrict that band to the trailing whitespace
-                        // after the visible subtree, so a drop on a real card remains card-relative.
-                        let upper_content_right = if *upper_open && !anchor_is_parent {
-                            upper_anchor
-                                .as_ref()
-                                .and_then(|(anchor, _)| hierarchy.node(anchor))
-                                .and_then(|node| last_visible_descendant_bounds(node, &canonical_node_bounds.borrow()))
-                                .map_or(gap_rect.left(), |bounds| bounds.right())
-                        } else {
-                            gap_rect.left()
-                        };
-                        let upper_target = upper_anchor.as_ref().map(|(anchor, _)| anchor.clone()).unwrap_or_else(|| upper_id.clone());
-                        let lower_bounds = canonical_node_bounds.borrow().get(lower_id).copied().unwrap_or(*lower_rect);
-                        let mut hits = group_gap_drop_hits(GroupGapDropSpec {
-                            rect: gap_rect,
-                            upper: upper_target,
-                            lower: lower_id.clone(),
-                            upper_bounds,
-                            lower_bounds,
-                            upper_depth: upper_anchor.as_ref().map(|(_, depth)| *depth).unwrap_or(parent_depth),
-                            lower_depth: *lower_depth,
-                            order: canonical_drop_hits.borrow().len(),
-                        });
-                        if anchor_is_parent {
-                            // The parent indentation gutter is visually part of the upper
-                            // container, not the lower child's leading-edge column. Route the
-                            // whole gutter strip to the parent-append half; retain the ordinary
-                            // vertical split to the right of the child's indentation.
-                            let gutter_right = lower_rect.left().min(gap_rect.right());
-                            hits[0].hit_rect = Rect::from_min_max(gap_rect.min, pos2(gutter_right, gap_rect.bottom()));
-                            hits[1].hit_rect.min.x = gutter_right;
-                            // Both sibling-level markers meet at the lower header's top border.
-                            // The gap is a hit affordance above that boundary, not the marker's
-                            // vertical placement.
-                            for hit in &mut hits {
-                                hit.indicator_rect = Rect::from_min_max(
-                                    pos2(hit.indicator_rect.left(), lower_rect.top() - 2.0),
-                                    pos2(hit.indicator_rect.right(), lower_rect.top() + 2.0),
-                                );
-                            }
-                            hits[0].order = usize::MAX;
-                        }
-                        for hit in &mut hits {
-                            hit.hit_rect.min.x = hit.hit_rect.min.x.max(upper_content_right);
-                            // The trailing blank strip of the final card is also a row-append
-                            // target. In the whitespace after the whole group, the group boundary
-                            // is the more specific structural destination and must win that tie.
-                            hit.depth = usize::MAX - 1;
-                        }
-                        if anchor_is_parent {
-                            // Apply this after the common structural-boundary priority above:
-                            // the parent's gutter append must outrank the overlapping subtree
-                            // append target, not be demoted by the generic gap-hit assignment.
-                            hits[0].depth = usize::MAX;
-                        }
-                        // This is the upper half of a group boundary, so its feedback is the
-                        // horizontal sibling line at the lower group's top edge even when the
-                        // preceding sibling is a card. Card-edge markers are for card-to-card
-                        // insertion, not for this group boundary.
-                        // If the lower group is first in its sibling sequence, append to its parent.
-                        // Otherwise insert after the actual preceding sibling (card or group).
-                        if let Some((anchor, _)) = upper_anchor.filter(|_| !anchor_is_parent) {
-                            hits[0].target = Some(anchor);
-                            hits[0].container = None;
-                            hits[0].region = PointerRegion::TrailingEdge;
-                        } else {
-                            hits[0].target = None;
-                            hits[0].container = Some(upper_parent);
-                            hits[0].region = PointerRegion::ContainerEnd;
-                        }
-                        for hit in hits {
-                            canonical_drop_hits.borrow_mut().push((hit, response.clone()));
-                        }
-                    }
-                }
-                // Any group may be followed by a card at the same sibling level, including
-                // inside arbitrarily nested parent groups. Offer a split boundary after the
-                // complete preceding group subtree: append into that group, or insert after
-                // the group while remaining in its parent container.
-                fn collect_group_item_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(PickerId, PickerId)>) {
-                    for pair in nodes.windows(2) {
-                        if matches!(pair, [HierarchyNode::Group { .. }, HierarchyNode::Item(_)]) {
-                            out.push((pair[0].id().clone(), pair[1].id().clone()));
-                        }
-                    }
-                    for node in nodes {
-                        if node.is_group() {
-                            collect_group_item_sibling_pairs(node.children(), out);
-                        }
-                    }
-                }
-                let mut group_item_pairs = Vec::new();
-                collect_group_item_sibling_pairs(hierarchy.roots(), &mut group_item_pairs);
-                for (group_id, item_id) in group_item_pairs {
-                    let Some(group_header) = canonical_node_bounds.borrow().get(&group_id).copied() else {
-                        continue;
-                    };
-                    let Some(item_bounds) = canonical_node_bounds.borrow().get(&item_id).copied() else {
-                        continue;
-                    };
-                    let mut subtree_nodes = Vec::new();
-                    fn collect_group_nodes(node: &HierarchyNode, out: &mut Vec<PickerId>) {
-                        out.push(node.id().clone());
-                        for child in node.children() {
-                            collect_group_nodes(child, out);
-                        }
-                    }
-                    let Some(group_node) = hierarchy.node(&group_id) else {
-                        continue;
-                    };
-                    collect_group_nodes(group_node, &mut subtree_nodes);
-                    let subtree_bounds: Vec<(PickerId, Rect)> = subtree_nodes
-                        .iter()
-                        .filter_map(|id| canonical_node_bounds.borrow().get(id).copied().map(|rect| (id.clone(), rect)))
-                        .collect();
-                    let Some(group_bottom) = subtree_bounds.iter().map(|(_, rect)| rect.bottom()).max_by(f32::total_cmp) else {
-                        continue;
-                    };
-                    let boundary_y = (group_bottom + item_bounds.top()) * 0.5;
-                    let gap = Rect::from_min_max(
-                        pos2(ui.clip_rect().left(), boundary_y - GROUP_GAP_DROP_HEIGHT * 0.5),
-                        pos2(ui.clip_rect().right(), boundary_y + GROUP_GAP_DROP_HEIGHT * 0.5),
-                    );
-                    let response = ui.interact(gap, ui.id().with(("group-root-card-gap", panel, &group_id, &item_id)), Sense::hover());
-                    let marker_y = group_bottom;
-                    let append_marker = Rect::from_min_max(
-                        pos2(group_header.left(), marker_y - 2.0),
-                        pos2(group_header.right(), marker_y + 2.0),
-                    );
-                    let order = canonical_drop_hits.borrow().len();
-                    canonical_drop_hits.borrow_mut().push((
-                        DropHitRegion {
-                            target: None,
-                            container: Some(ContainerId::Group(group_id.clone())),
-                            region: PointerRegion::ContainerEnd,
-                            hit_rect: Rect::from_min_max(gap.min, pos2(gap.right(), gap.center().y)),
-                            indicator_rect: append_marker,
-                            // This boundary takes precedence over overlapping neighboring card
-                            // edge regions at every hierarchy depth.
-                            depth: usize::MAX,
-                            order,
-                        },
-                        response.clone(),
-                    ));
-                    canonical_drop_hits.borrow_mut().push((
-                        DropHitRegion {
-                            target: Some(group_id),
-                            container: None,
-                            region: PointerRegion::TrailingEdge,
-                            hit_rect: Rect::from_min_max(pos2(gap.left(), gap.center().y), gap.max),
-                            // This is an after-group sibling insertion, so show the group's
-                            // horizontal lower border rather than the last card's vertical edge.
-                            indicator_rect: append_marker,
-                            // See the append half above: this boundary wins overlapping card hits.
-                            depth: usize::MAX,
-                            order: order.saturating_add(1),
-                        },
-                        response,
-                    ));
-                }
-                // A root card (or nested item) can be the immediate preceding sibling of a
-                // group. Header-only gap pairing above cannot see that boundary when there is
-                // no earlier group header, so register the same two-sided group boundary from
-                // the actual hierarchy sibling sequence.
-                fn collect_item_group_sibling_pairs(nodes: &[HierarchyNode], out: &mut Vec<(PickerId, PickerId)>) {
-                    for pair in nodes.windows(2) {
-                        if matches!(pair, [HierarchyNode::Item(_), HierarchyNode::Group { .. }]) {
-                            out.push((pair[0].id().clone(), pair[1].id().clone()));
-                        }
-                    }
-                    for node in nodes {
-                        if node.is_group() {
-                            collect_item_group_sibling_pairs(node.children(), out);
-                        }
-                    }
-                }
-                let mut item_group_pairs = Vec::new();
-                collect_item_group_sibling_pairs(hierarchy.roots(), &mut item_group_pairs);
-                for (item_id, group_id) in item_group_pairs {
-                    let Some(item_bounds) = canonical_node_bounds.borrow().get(&item_id).copied() else {
-                        continue;
-                    };
-                    let Some(group_bounds) = canonical_node_bounds.borrow().get(&group_id).copied() else {
-                        continue;
-                    };
-                    let gap = Rect::from_min_max(
-                        pos2(item_bounds.left().min(group_bounds.left()), group_bounds.top() - GROUP_GAP_DROP_HEIGHT),
-                        pos2(group_bounds.right(), group_bounds.top()),
-                    );
-                    if !gap.is_positive() {
-                        continue;
-                    }
-                    let response = ui.interact(gap, ui.id().with(("group-card-sibling-gap", panel, &item_id, &group_id)), Sense::hover());
-                    let order = canonical_drop_hits.borrow().len();
-                    let mut hits = group_gap_drop_hits(GroupGapDropSpec {
-                        rect: gap,
-                        upper: item_id.clone(),
-                        lower: group_id,
-                        upper_bounds: item_bounds,
-                        lower_bounds: group_bounds,
-                        upper_depth: 0,
-                        lower_depth: 0,
-                        order,
-                    });
-                    // Keep the two halves mutually exclusive: upper appends after the card
-                    // (its right edge); lower inserts before the group (its upper boundary).
-                    hits[0].indicator_rect = card_trailing_marker_rect(item_bounds, true);
-                    // This structural boundary is more specific than the overlapping card
-                    // trailing edge and group leading edge targets.
-                    hits[0].depth = usize::MAX;
-                    hits[1].depth = usize::MAX;
-                    for hit in hits {
-                        canonical_drop_hits.borrow_mut().push((hit, response.clone()));
-                    }
-                }
+                register_canonical_sibling_gap_targets(ui, panel, &gap_headers, &hierarchy, &canonical_node_bounds, &canonical_drop_hits);
             }
-            // `dnd_release_payload` takes the one global egui payload. Resolve the card target
-            // first, then allow the indentation column to consume it only when no card target
-            // won and the pointer is actually over an eligible column. Calling it while merely
-            // registering each column lets an overlapping column steal a card release.
-            let indent_target = best_indent_drop_target_index(&indent_drop_targets, item_hierarchy_target_wins, |(parent, response)| {
-                    if canonical_hierarchy_drag {
-                        ui.ctx().pointer_interact_pos().is_some_and(|pointer| response.rect.contains(pointer))
-                    } else {
-                        response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                            matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && name != parent && !group_is_descendant(&parents, name, parent))
-                        })
-                    }
-                }).and_then(|index| indent_drop_targets.get(index));
-            if indent_target.is_none()
-                && indent_drop_targets.iter().any(|(_, response)| {
-                    response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel))
-                })
-            {
-                non_root_hierarchy_target_hovered.set(true);
-            }
-            if !canonical_hierarchy_drag
-                && let Some((parent, response)) = indent_target
-                && let Some(AssetDrag::Group { scope, name, path }) = response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone())
-                && scope == panel
-                && path.is_empty()
-                && name != *parent
-            {
-                indent_release = Some((name, parent.clone()));
-            }
-            // Keep the legacy append marker below the parent's complete visible subtree. The
-            // canonical path instead highlights the full receiving group because group-body
-            // drops now insert at its first child position.
-            let indent_target_hovered = indent_target.is_some();
-            if indent_target_hovered
-                && let Some((parent, _)) = indent_target {
-                    let end = headers
-                        .iter()
-                        .filter(|(_, _, name)| name == parent || group_is_descendant(&parents, parent, name))
-                        .map(|(_, rect, _)| *rect)
-                        .chain(
-                            group_content_areas
-                                .iter()
-                                .filter(|(name, _)| name == parent || group_is_descendant(&parents, parent, name))
-                                .map(|(_, rect)| *rect),
-                        )
-                        .max_by(|a, b| a.bottom().total_cmp(&b.bottom()));
-                    if let (Some(anchor), Some((_, header, _))) = (
-                        end,
-                        headers.iter().find(|(_, _, name)| name == parent),
-                    ) {
-                        // Keep the user-facing append marker aligned to the destination header,
-                        // not to the narrower indentation hit target or full-width content area.
-                        let marker_anchor = Rect::from_min_max(
-                            pos2(header.left(), anchor.bottom() - header.height()),
-                            pos2(header.right(), anchor.bottom()),
-                        );
-                        if !canonical_hierarchy_drag {
-                            paint_group_insertion_line(ui, marker_anchor, false, t.accent);
-                        }
-                    }
-                }
-            // The regular group drag marker handles between-header reordering.
-            if !canonical_hierarchy_drag && !indent_target_hovered && !item_hierarchy_target_wins && let Some((from, p)) = drag {
-                // Header targets already paint their feedback through the shared interaction
-                // helper. Only draw the between-groups insertion marker when the pointer is in a
-                // gap/outside a target header.
-                if !headers.iter().any(|(i, r, _)| *i != from && r.contains(p))
-                    && let Some(from_name) = groups.get(from).map(|group| group.name.as_str()) {
-                        let before = group_drop_before(&headers, from, from_name, p, &parents);
-                        // The source header resolves to a no-op on release; never show a marker
-                        // suggesting that dropping it there would move it.
-                        if before != Some(from) {
-                            let source_parent = parents.get(from_name);
-                            let source_rect = headers.iter().find(|(index, _, _)| *index == from).map(|(_, rect, _)| *rect);
-                            let promote_to_root = source_parent.is_some() && source_rect.is_some_and(|rect| p.x < rect.left() + ROW_INDENT * 0.5);
-                            let destination_parent = if promote_to_root { None } else { source_parent };
-                            let anchor = match before {
-                                Some(i) => headers.iter().find(|(x, _, _)| *x == i).map(|(_, r, _)| *r),
-                                None => headers.iter().rev().find(|(_, _, name)| parents.get(name).map(String::as_str) == destination_parent.map(String::as_str)).map(|(_, r, _)| *r),
-                            };
-                            if let Some(r) = anchor {
-                                paint_group_insertion_line(ui, r, before.is_some(), t.accent);
-                            }
-                        }
-                    }
-            }
-            if canonical_hierarchy_drag {
-                // The leading target is registered before rows are laid out. Resolve a card's
-                // actual edge now that its final grid bounds are available.
-                if let Some(first) = hierarchy.roots().first()
-                    && !first.is_group()
-                    && let Some(bounds) = canonical_node_bounds.borrow().get(first.id()).copied()
-                    && let Some((hit, _)) = canonical_drop_hits
-                        .borrow_mut()
-                        .iter_mut()
-                        .find(|(hit, _)| hit.region == PointerRegion::LeadingEdge && hit.target.as_ref() == Some(first.id()))
-                {
-                    hit.indicator_rect = card_leading_marker_rect(bounds);
-                }
-                // The whole trailing blank area is the root append target, not just a narrow
-                // sixteen-pixel strip immediately after the final node. This lets users drop in
-                // the whitespace below the last group while keeping the indicator at its top edge.
-                let root_end_height = (ui.clip_rect().bottom() - ui.cursor().top()).max(32.0);
-                let (root_end_rect, root_end_response) = ui.allocate_exact_size(vec2(ui.available_width(), root_end_height), Sense::hover());
-                let indicator = match hierarchy.roots().last() {
-                    Some(last) if !last.is_group() => canonical_node_bounds
-                        .borrow()
-                        .get(last.id())
-                        .copied()
-                        .map(|bounds| card_trailing_marker_rect(bounds, !list))
-                        .unwrap_or_else(|| Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0))),
-                    _ => Rect::from_min_max(pos2(ui.clip_rect().left(), root_end_rect.top() - 2.0), pos2(ui.clip_rect().right(), root_end_rect.top() + 2.0)),
-                };
-                let hit_index = canonical_drop_hits.borrow().len();
-                let visible_root_end = root_end_rect.intersect(ui.clip_rect());
-                if visible_root_end.is_positive() {
-                    canonical_drop_hits.borrow_mut().push((root_append_hit(visible_root_end, indicator, hit_index), root_end_response));
-                }
-            }
+            let indent_target = resolve_group_indent_target(
+                ui,
+                panel,
+                &indent_drop_targets,
+                item_hierarchy_target_wins,
+                canonical_hierarchy_drag,
+                &parents,
+                &mut indent_release,
+                &non_root_hierarchy_target_hovered,
+            );
+            paint_group_drop_insertion_markers(
+                ui,
+                indent_target,
+                &headers,
+                &group_content_areas,
+                &parents,
+                canonical_hierarchy_drag,
+                item_hierarchy_target_wins,
+                drag,
+                groups,
+                t.accent,
+            );
+            register_canonical_root_end_target(ui, canonical_hierarchy_drag, &hierarchy, &canonical_node_bounds, &canonical_drop_hits, list);
         });
     if empty_area_clicked.get() {
         st.browser_selection.entry(panel.to_owned()).or_default().clear();
@@ -3183,26 +3783,7 @@ pub(crate) fn browser_with_root_sequence(
     let browser_view_clip =
         Rect::from_min_max(pos2(browser_parent_clip.left(), browser_parent_clip.top()), pos2(browser_parent_clip.right(), scroll.inner_rect.bottom()))
             .intersect(browser_parent_clip);
-    // The root is a real sibling sequence, not merely the area after the final group. The shell
-    // can leave a small top inset before the first row; make that inset the root-leading target.
-    // Keep its lower edge exactly at the first node so dropping on the first group header/card is
-    // still a drop-into/onto target rather than being stolen by this root insertion target.
-    if canonical_hierarchy_drag
-        && let Some(first) = hierarchy.roots().first()
-        && let Some(first_bounds) = canonical_node_bounds.borrow().get(first.id()).copied()
-    {
-        let hit_rect =
-            Rect::from_min_max(pos2(browser_parent_clip.left(), browser_parent_clip.top()), pos2(browser_parent_clip.right(), first_bounds.top() + 0.75));
-        if hit_rect.is_positive() {
-            let indicator = if first.is_group() {
-                Rect::from_min_max(pos2(browser_parent_clip.left(), first_bounds.top()), pos2(browser_parent_clip.right(), first_bounds.top() + 4.0))
-            } else {
-                card_leading_marker_rect(first_bounds)
-            };
-            let response = ui.interact(hit_rect, ui.id().with(("root-leading-group-drop", panel)), Sense::hover());
-            canonical_drop_hits.borrow_mut().push((root_prepend_hit(hit_rect, indicator, first.id().clone(), usize::MAX), response));
-        }
-    }
+    register_canonical_root_leading_target(ui, panel, canonical_hierarchy_drag, browser_parent_clip, &hierarchy, &canonical_node_bounds, &canonical_drop_hits);
     let mut hierarchy_drop_feedback = st.browser_feedback.get(panel).cloned();
     if canonical_hierarchy_drag
         && let Some(result) = resolve_canonical_drop(
