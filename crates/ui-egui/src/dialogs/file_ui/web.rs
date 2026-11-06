@@ -634,20 +634,21 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
 /// Validate the selection and output options, then build the command's numbered filter.
 pub(super) fn web_params(fields: &Map<String, Value>, doc: &photocraft_doc::Document) -> Result<Value, String> {
     let mut p = params(fields);
-    if p["slices"] == "selected" {
+    let selected = p["slices"] == "selected";
+    let explicit = p.get("numbers").filter(|v| !v.is_null());
+    if !selected && explicit.is_none() {
+        return Ok(p);
+    }
+    let slices = photocraft_doc::slices::resolve(doc);
+    if let Some(numbers) = explicit {
+        web_cmds::web_slice_numbers(numbers, &slices).map_err(|e| e.to_string())?;
+    }
+    if selected {
         let html = b(fields, "html", true);
         p["html"] = json!(html);
-        let numbers = fields.get("__selectedSlices").and_then(Value::as_array).filter(|numbers| !numbers.is_empty());
-        let numbers = numbers.ok_or("Select one or more slices")?;
-        let slices = photocraft_doc::slices::resolve(doc);
-        if numbers.iter().any(|n| n.as_u64().is_none_or(|n| !slices.iter().any(|slice| u64::try_from(slice.number).ok() == Some(n)))) {
-            return Err("Invalid selected slice number".into());
-        }
-        if !html
-            && !slices
-                .iter()
-                .any(|slice| slice.kind != photocraft_doc::SliceKind::NoImage && numbers.iter().any(|n| n.as_u64() == u64::try_from(slice.number).ok()))
-        {
+        let selection = fields.get("__selectedSlices").filter(|v| !v.is_null()).ok_or("Select one or more slices")?;
+        let numbers = web_cmds::web_slice_numbers(selection, &slices).map_err(|e| e.to_string())?;
+        if !html && !slices.iter().any(|slice| slice.kind != photocraft_doc::SliceKind::NoImage && numbers.contains(&slice.number)) {
             return Err("Selected slices contain no images; enable HTML output".into());
         }
         p["slices"] = json!("all");

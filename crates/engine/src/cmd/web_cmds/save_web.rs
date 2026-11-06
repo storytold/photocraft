@@ -168,6 +168,25 @@ fn remember_web_settings(s: &mut Session, cmd: &str, settings: &Value) {
     });
 }
 
+/// Parse a nonempty numbered slice filter against the current resolved layout.
+pub fn web_slice_numbers(numbers: &Value, slices: &[ResolvedSlice]) -> Result<Vec<usize>> {
+    let cmd = "file.export.saveForWebLegacy";
+    let numbers = numbers.as_array().ok_or_else(|| bad(cmd, "numbers must be an array of slice numbers"))?;
+    if numbers.is_empty() {
+        return Err(bad(cmd, "Select one or more slices"));
+    }
+    numbers
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|n| slices.iter().any(|slice| slice.number == *n))
+                .ok_or_else(|| bad(cmd, format!("Invalid selected slice number: {value}")))
+        })
+        .collect()
+}
+
 /// Estimate or save a web export, checking selected image sizes before any write.
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
@@ -184,15 +203,23 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     };
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
+    let filter = p.get("numbers").filter(|v| !v.is_null());
+    let all = slices::resolve(&s.active().ok_or(EngineError::NoDocument)?.doc);
     // A whole-image path would ignore the requested slice numbers.
-    if single.is_some()
-        && dir.is_none()
-        && matches!(mode, None | Some(Value::Null))
-        && p.get("numbers").is_some_and(|v| !v.is_null())
-        && slices::resolve(&s.active().ok_or(EngineError::NoDocument)?.doc).len() > 1
-    {
+    if single.is_some() && dir.is_none() && matches!(mode, None | Some(Value::Null)) && filter.is_some() && all.len() > 1 {
         return Err(bad(cmd, "`path` writes the whole image as one file: to export the slices in `numbers`, use `dir`"));
     }
+    let whole_path = single.filter(|_| dir.is_none() && (all.len() == 1 || mode.is_none()));
+    // `folder` without `path` or `dir` writes the whole image under the document's name (#5305).
+    let folder = p.get("folder").and_then(Value::as_str).filter(|_| single.is_none() && dir.is_none());
+    let numbers = if whole_path.is_none() && (single.is_some() || dir.is_some()) {
+        if pick == "selected" && filter.is_none() {
+            return Err(bad(cmd, "Select one or more slices"));
+        }
+        filter.map(|numbers| web_slice_numbers(numbers, &all)).transpose()?
+    } else {
+        None
+    };
     // Direct platform calls must export the moved selection as it appears on the canvas,
     // just as Session::execute does before dispatching the native command.
     crate::float_cmds::before_command(s, cmd)?;
@@ -209,24 +236,18 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let exif = web_exif(&doc, st.metadata);
     let dpi = wdoc.resolution_dpi;
     let warnings = web_warnings(&st, exif, dpi);
-    let all = slices::resolve(&doc);
-    let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
     let chosen = |r: &ResolvedSlice| match (&numbers, pick) {
-        (Some(n), _) => n.contains(&(r.number as u64)),
+        (Some(n), _) => n.contains(&r.number),
         (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
         _ => true,
     };
-    // `folder` (with no `path` or `dir`): the whole image into that folder under the document's
-    // own name, so an action recorded with the suggested name saves each document it is played
-    // on under that document's name, as in Photoshop (#5305).
-    let folder = p.get("folder").and_then(Value::as_str).filter(|_| single.is_none() && dir.is_none());
     let mut last_web = p.clone();
     // A trusted-markup decision applies to this export only, never to another document opened
     // with the dialog's remembered settings.
     if let Some(last) = last_web.as_object_mut() {
         last.remove("trustedSliceHtml");
     }
-    // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
+    // Estimate only (the dialog's annotations): the whole image.
     if single.is_none() && dir.is_none() && folder.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
         return Ok(
@@ -243,7 +264,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let path = join(folder, &name);
         return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "warnings": warnings}));
     }
-    if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
+    if let Some(path) = whole_path {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
         write(path, &o.bytes)?;
         remember_web_settings(s, cmd, &last_web);
@@ -280,8 +301,10 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         }
     }
     let mut written = 0usize;
-    let mut write = |path: &str, bytes: &[u8]| -> Result<()> {
-        write(path, bytes).map_err(|error| other(format!("Could not write `{path}`: {error}; {written} earlier output(s) may remain")))?;
+    let mut write = |relative: &str, bytes: &[u8]| -> Result<()> {
+        let path = web_derived_path(&dir, relative, native_paths)
+            .map_err(|error| if written == 0 { error } else { other(format!("{error}; {written} earlier output(s) may remain")) })?;
+        write(&path, bytes).map_err(|error| other(format!("Could not write `{path}`: {error}; {written} earlier output(s) may remain")))?;
         written += 1;
         Ok(())
     };
@@ -336,7 +359,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let name = unique(&slice_file(&r.name), o.ext);
         let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
         let out = join(&dir, &rel);
-        write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
+        write(&rel, &o.bytes)?;
         total += o.bytes.len();
         files.push(out);
         let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
@@ -356,12 +379,12 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
         if let Some(sp) = &spacer {
             let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
-            write(&web_derived_path(&dir, sp, native_paths)?, &gif)?;
+            write(sp, &gif)?;
         }
         let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
-        let hp = join(&dir, &format!("{base}.html"));
-        write(&web_derived_path(&dir, &format!("{base}.html"), native_paths)?, page.as_bytes())?;
-        html_path = Some(hp);
+        let rel = format!("{base}.html");
+        write(&rel, page.as_bytes())?;
+        html_path = Some(join(&dir, &rel));
     }
     remember_web_settings(s, cmd, &last_web);
     s.file_menu.last_web = Some(last_web);

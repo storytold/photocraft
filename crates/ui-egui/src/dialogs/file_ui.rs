@@ -446,6 +446,31 @@ mod web_playback_tests {
         }
     }
 
+    /// Automation may set an explicit filter with All Slices. Invalid filters stop before authorization and the picker.
+    #[test]
+    fn save_for_web_validates_explicit_slice_numbers_before_opening_a_picker() {
+        let mut app = sliced_app();
+        app.services.file_dialog = Some(Box::new(|_, _, _| panic!("invalid slice filter must not open the picker")));
+        app.services.write = Some(Box::new(|_, _| panic!("invalid slice filter must not write files")));
+        app.session.authorize = Some(|_, _| panic!("invalid slice filter must not reach authorization"));
+        for numbers in [json!([]), json!(2), json!([1, "2"]), json!([1, 999])] {
+            let fields = serde_json::from_value(json!({"slices": "all", "numbers": numbers})).unwrap();
+            let err = web_confirm(&mut app, &fields).unwrap_err();
+            assert!(err.contains("slice number") || err.contains("one or more slices"), "{err}");
+            assert!(!app.file_dialog_open());
+        }
+        app.session.authorize = None;
+        let downloads = capture_downloads(&mut app);
+        let fields = serde_json::from_value(json!({"slices": "all", "numbers": [2]})).unwrap();
+        let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+        assert_eq!(p["numbers"], json!([2]));
+        p["dir"] = json!(".");
+        download_for_web(&mut app, p).unwrap();
+        let files = downloads.borrow();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].0.ends_with("/right.png"));
+    }
+
     /// WebP (#6391): Quality until Lossless is ticked; 4-Up halves a lossy quality like JPEG's.
     #[test]
     fn webp_settings_show_quality_until_lossless() {

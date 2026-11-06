@@ -204,6 +204,72 @@ fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
 }
 
+/// Derived path failures identify the blocked output and count files already written.
+#[test]
+fn later_slice_output_path_rejection_reports_earlier_files() {
+    for (blocked, earlier) in [("images/right.png", 1), ("images/spacer.gif", 2), ("web.html", 3)] {
+        let dir = tmp(&format!("web-output-path-{earlier}"));
+        let mut s = session(8);
+        let saved = json!({"format": "png24", "path": "last.png"});
+        save_for_web_with_writer(&mut s, &saved, &mut |_, _| Ok(())).unwrap();
+        s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+        s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+        std::fs::create_dir_all(format!("{dir}/{blocked}")).unwrap();
+
+        let err = s.execute("file.export.saveForWebLegacy", json!({"dir": dir, "html": true})).unwrap_err().to_string();
+        assert!(err.contains(blocked) && err.contains("is not a file"), "{err}");
+        assert!(err.contains(&format!("{earlier} earlier output(s) may remain")), "{err}");
+        let outputs = ["images/left.png", "images/right.png", "images/spacer.gif", "web.html"];
+        for (i, name) in outputs.into_iter().enumerate() {
+            assert_eq!(std::path::Path::new(&dir).join(name).is_file(), i < earlier, "{blocked}: {name}");
+        }
+        assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+    }
+}
+
+/// Refuse invalid slice filters before any write while retaining estimates and valid numbered exports.
+#[test]
+fn slice_export_validates_numbered_filters() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    for mut p in [
+        json!({"slices": "selected"}),
+        json!({"slices": "selected", "numbers": null}),
+        json!({"slices": "selected", "numbers": []}),
+        json!({"numbers": []}),
+        json!({"slices": "all", "numbers": 2}),
+        json!({"slices": "all", "numbers": [1, "2"]}),
+        json!({"slices": "user", "numbers": [1.5]}),
+        json!({"numbers": [0]}),
+        json!({"numbers": [-1]}),
+        json!({"numbers": [1, 999]}),
+    ] {
+        p["dir"] = json!("downloads");
+        let err = save_for_web_with_writer(&mut s, &p, &mut |_, _| panic!("invalid filter must not write")).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{p}: {err}");
+        assert!(s.file_menu.last_web.is_none());
+    }
+    let estimate = save_for_web_with_writer(&mut s, &json!({"slices": "selected"}), &mut |_, _| panic!("an estimate must not write")).unwrap();
+    assert_eq!((estimate["width"].as_u64(), estimate["height"].as_u64()), (Some(64), Some(48)));
+    assert!(s.file_menu.last_web.is_none());
+
+    for mode in [None, Some("all"), Some("user"), Some("selected")] {
+        let mut p = json!({"dir": "downloads", "numbers": [2]});
+        if let Some(mode) = mode {
+            p["slices"] = json!(mode);
+        }
+        let mut files = Vec::new();
+        let result = save_for_web_with_writer(&mut s, &p, &mut |path, _| {
+            files.push(path.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(files, ["downloads/images/right.png"]);
+        assert_eq!(result["slices"], 1);
+    }
+}
+
 #[test]
 fn invalid_slice_mode_and_whole_image_destination_refuse_before_writing() {
     let mut s = session(8);
