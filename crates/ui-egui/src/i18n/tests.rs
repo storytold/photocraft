@@ -44,9 +44,24 @@ fn thai_tags_resolve() {
         assert_eq!(Lang::from_pref(tag), th, "{tag}");
     }
     assert_eq!(th.name(), "ไทย");
-    assert_eq!(th.0.plural(5), 0, "Thai has one plural form");
+    assert_eq!((th.0.plural)(5), 0, "Thai has one plural form");
     assert_eq!(tr(th, "File"), "ไฟล์");
     assert_eq!(tr(th, "Layer"), "เลเยอร์");
+}
+
+/// Tamil: regional tags resolve, counts take one|other, and placeholders stay untranslated.
+#[test]
+fn tamil_tags_plurals_and_placeholders() {
+    let ta = Lang::from_code("ta").expect("ta registered");
+    for tag in ["ta", "ta-IN", "ta_LK", "ta_IN.UTF-8"] {
+        assert_eq!(Lang::from_pref(tag), ta, "{tag}");
+    }
+    let forms: Vec<usize> = [0, 1, 2, 21].into_iter().map(ta.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1]);
+    assert_eq!(trn(ta, 1, "{n} layer", "{n} layers"), "1 அடுக்கு");
+    assert_eq!(trn(ta, 3, "{n} layer", "{n} layers"), "3 அடுக்குகள்");
+    assert!(tr(ta, "Scratch: {size}").contains("{size}"));
+    assert_ne!(tr(ta, "Zoom In (hold, drag to scrub)"), "Zoom In (hold, drag to scrub)");
 }
 
 #[test]

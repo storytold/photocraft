@@ -1,7 +1,7 @@
 PhotoCraft's Korean, German, Spanish, Brazilian Portuguese, Italian, Ukrainian, Dutch, Czech,
 Turkish, Hungarian, Serbian, Russian, Swedish, Finnish, Danish, Norwegian Bokmål, Bosnian, Hebrew,
-Urdu, Romanian and Azerbaijani UI translation catalogs are licensed under MIT OR Apache-2.0, at
-your option.
+Urdu, Romanian, Azerbaijani, Thai and Tamil UI translation catalogs are licensed under MIT OR
+Apache-2.0, at your option.
 The full license texts are in ../../../../LICENSE-MIT and ../../../../LICENSE-APACHE.
 
 Azerbaijani (Latin script) translations: machine-assisted drafts of PhotoCraft's
@@ -81,3 +81,7 @@ Thai translations: PhotoCraft contributors, with opencode (DeepSeek) as an AI co
 machine-assisted first draft from PhotoCraft's English labels, reviewed for UI terminology. The
 resulting catalog is licensed under MIT OR Apache-2.0 as stated above, and no proprietary
 localisation resource was used.
+
+Tamil translations: @newsbaba24x7 and PhotoCraft contributors, original translations of
+PhotoCraft's English labels written from their plain meaning; no proprietary localisation
+resource was used.

@@ -241,7 +241,6 @@ pub static LANGUAGES: [LangInfo; 34] = [
     LangInfo { code: "ko", name: "한국어", source: catalog!("ko"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "pl", name: "Polski", source: catalog!("pl"), plural: plural_polish, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "de", name: "Deutsch", source: catalog!("de"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
-    LangInfo { code: "ta", name: "தமிழ்", source: catalog!("ta"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Brazilian Portuguese; `pt`, `pt-BR` and `pt-PT` locales all resolve here (see `candidates`).
     LangInfo { code: "pt-br", name: "Português (Brasil)", source: catalog!("pt-br"), plural: plural_pt, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "el", name: "Ελληνικά", source: catalog!("el"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
@@ -283,6 +282,8 @@ pub static LANGUAGES: [LangInfo; 34] = [
     // Romanian; `ro-RO` and `ro-MD` resolve here. Standard left-to-right; see `plural_romanian`
     // for the one/few/other rule.
     LangInfo { code: "ro", name: "Română", source: catalog!("ro"), plural: plural_romanian, complete_menus: true, catalog: OnceLock::new() },
+    // Tamil; `ta-IN`, `ta-LK` and `ta_IN.UTF-8` resolve here. CLDR plural: one|other.
+    LangInfo { code: "ta", name: "தமிழ்", source: catalog!("ta"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {

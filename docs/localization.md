@@ -28,6 +28,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Magyar | `hu` | one form |
 | Tiếng Việt | `vi` | one form |
 | ไทย | `th` | one form |
+| தமிழ் | `ta` | one / other |
 | Srpski | `sr` | one / few / many (teens use many) |
 | Bosanski | `bs` | one / few / other (teens use other) |
 | हिन्दी | `hi` | one / other |

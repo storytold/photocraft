@@ -6,7 +6,7 @@
 # the trailing "…" of dialog commands is kept.
 
 	Mask Options…	மறைப்பு விருப்பங்கள்…
-	Layer Mask Display Options…  அடுக்கு மறைப்பு காட்சி விருப்பங்கள்…
+	Layer Mask Display Options…	அடுக்கு மறைப்பு காட்சி விருப்பங்கள்…
 	Channel Color	சேனல் நிறம்
 	Color Indicates:	நிறம் குறிப்பது:
 	Solidity:	திண்மை:
@@ -646,7 +646,7 @@
 	Color Blindness — Protanopia-type	சிவப்பு நிறக்குருடு
 	Color Blindness — Deuteranopia-type	பச்சை நிறக்குருடு
 	Zoom In	பெரிதாக்கு
-	Zoom In	(hold, drag to scrub) பெரிதாக்கு (அழுத்திப் பிடித்து, நகர்த்தித் தேடவும்)
+	Zoom In (hold, drag to scrub)	பெரிதாக்கு (அழுத்திப் பிடித்து, நகர்த்தித் தேடவும்)
 	Zoom Out	சிறிதாக்கு
 	Zoom Out (hold)	சிறிதாக்கு (அழுத்திப் பிடிக்கவும்)
 	Fit on Screen	திரைக்குப் பொருத்து
@@ -1648,7 +1648,7 @@
 	Color Dodge	நிற ஒளிர்வு
 	Color Dynamics	நிற இயக்கவியல்
 	Color Overlay	நிற மேலடுக்கு
-	Color Sampler Tool	நிற மாதிரி கருவி	
+	Color Sampler Tool	நிற மாதிரி கருவி
 	Comic Book	காமிக் புத்தகம்
 	Conform	இணங்கு
 	Content-Aware Fill needs a selection on a pixel layer	உள்ளடக்கம் அறிந்த நிரப்புக்கு பிக்சல் அடுக்கில் தேர்வு தேவை
@@ -1856,7 +1856,7 @@
 	Do you want to save the changes you made to “{name}” before quitting?	வெளியேறும் முன் “{name}” இல் செய்த மாற்றங்களைச் சேமிக்க விரும்புகிறீர்களா?
 	Do you want to save the changes you made to “{name}” before closing?	மூடும் முன் “{name}” இல் செய்த மாற்றங்களைச் சேமிக்க விரும்புகிறீர்களா?
 	Doc: {flat}/{layered}	ஆவணம்: {flat}/{layered}
-	Scratch: {size}	நினைவக: {அளவு}
+	Scratch: {size}	நினைவக: {size}
 	Untagged {mode}	குறிச்சொல்லிடப்படாத {mode}
 	Invalid {mode} profile	தவறான {mode} சுயவிவரம்
 	Unnamed {mode} profile	பெயரிடப்படாத {mode} சுயவிவரம்
@@ -2101,7 +2101,7 @@
 	Show the layer's effects  ({key}-click: all layers)	அடுக்கின் விளைவுகளைக் காண்பி ({key}-கிளிக்: அனைத்து அடுக்குகள்)
 	Brush picker	தூரிகைத் தேர்வி
 	Erase	அழி
-	Erase with Brush or Pencil (hold)	தூரிகை அல்லது பென்சிலைக் கொண்டு அழி (அழுத்திப் பிடி)	
+	Erase with Brush or Pencil (hold)	தூரிகை அல்லது பென்சிலைக் கொண்டு அழி (அழுத்திப் பிடி)
 	Right click with painting tools	ஓவியக் கருவிகளுடன் வலது கிளிக்
 	System Info…	கணினித் தகவல்…
 	System Info	கணினித் தகவல்
@@ -3617,7 +3617,7 @@ layerLabel	No Color	நிறம் இல்லை
 	Numerals	எண்கள்
 	Lining	நேர்கோட்டு எண்கள்
 	Proportional	விகிதாசார எண்கள்
-	Proportional Lining விகிதாசார நேர்கோட்டு எண்கள்
+	Proportional Lining	விகிதாசார நேர்கோட்டு எண்கள்
 	Proportional Oldstyle	விகிதாசார பழைய பாணி எண்கள்
 	Tabular	அட்டவணை வடிவ எண்கள்
 	Tabular Lining	அட்டவணை நேர்கோட்டு எண்கள்
@@ -4139,7 +4139,7 @@ navigator	Zoom	பெரிதாக்கல்
 	Include All Subfolders	அனைத்து உட்கோப்புறைகளையும் சேர்
 	Auto Add/Delete	தானாகச் சேர்/நீக்கு
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	அச்சு அமைப்புகளில்… எதிரொளிப் படத்தையும் தேர்ந்தெடுக்க வேண்டாம்: இரண்டு புரட்டல்களும் ஒன்றையொன்று ரத்துசெய்யும்.
-	Print Settings…	அச்சு அமைப்புகள்… 
+	Print Settings…	அச்சு அமைப்புகள்…
 	Remember to turn off the printer's own colour management in Print Settings…	அச்சு அமைப்புகளில் அச்சுப்பொறியின் சொந்த வண்ண மேலாண்மையை அணைக்க நினைவில் கொள்ளவும்…
 	Sent to {printer}	{printer} க்கு அனுப்பப்பட்டது
 	set in Print Settings…	அச்சு அமைப்புகளில் அமைக்கப்பட்டுள்ளது…
