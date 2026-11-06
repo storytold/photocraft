@@ -17,6 +17,7 @@
 # not Farsi's. Product and technology names (PhotoCraft, ArtCraft, OpenType, CMYK, Lab ...) stay in
 # Latin letters, as do key names and placeholders; the trailing "…" of dialog commands is kept.
 # Urdu plural rule (as used in casual software UI): one|other.
+# Machine-translated with Claude (Anthropic) for @tronicum; not yet reviewed by a native speaker.
 
 	Mask Options…	ماسک کے اختیارات…
 	Layer Mask Display Options…	تہہ ماسک کی نمائش کے اختیارات…
@@ -4451,3 +4452,123 @@ navigator	Zoom	زوم
 	Recently Used Colors	حال ہی میں استعمال شدہ رنگ
 	Shapes can't use patterns yet	شکلیں ابھی نمونے استعمال نہیں کر سکتیں
 	Stop Color	اسٹاپ کا رنگ
+
+# Strings added on main after the catalog was completed (2026-11-06)
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	بیچ پروسیسنگ کے دوران ایک کمانڈ منسوخ یا روک دی گئی۔ اگلی فائل کے ساتھ جاری رکھیں یا روک دیں؟
+	A file is still being placed; try again when it has finished.	ایک فائل ابھی رکھی جا رہی ہے؛ مکمل ہونے کے بعد دوبارہ کوشش کریں۔
+	A frame supports affine transforms; select its image for perspective transforms	فریم صرف affine تبدیلیوں کی حمایت کرتا ہے؛ پرسپیکٹو تبدیلیوں کے لیے اس کی تصویر منتخب کریں
+	A frame supports affine transforms; select its image to warp it	فریم صرف affine تبدیلیوں کی حمایت کرتا ہے؛ وارپ کرنے کے لیے اس کی تصویر منتخب کریں
+	Accelerated	تیز رفتار
+	Answer the open import question first, then import this file again.	پہلے درآمد کا زیرِ التوا سوال جواب دیں، پھر یہ فائل دوبارہ درآمد کریں۔
+	Arrowhead options	تیر کے سرے کے اختیارات
+	Arrowheads	تیر کے سرے
+	Attribute	خصوصیت
+	Background (default)	پس منظر (ڈیفالٹ)
+	Batch preview	بیچ کا پیش منظر
+	Cancelled placing {name}	{name} کو رکھنا منسوخ ہو گیا
+	Channel Options…	چینل کے اختیارات…
+	Concavity	مقعریت
+	Convert to Frame…	فریم میں تبدیل کریں…
+	Create a new custom frame	نیا حسبِ ضرورت فریم بنائیں
+	Create a new polygonal frame	نیا کثیرالاضلاع فریم بنائیں
+	Create a new triangular frame	نیا مثلثی فریم بنائیں
+	Create a single history state	ایک واحد تاریخ کی حالت بنائیں
+	Data Sets as Files is unavailable on the web	ڈیٹا سیٹس بطور فائلیں ویب پر دستیاب نہیں
+	Dropped files weren't placed: their document was closed.	چھوڑی گئی فائلیں نہیں رکھی گئیں: ان کی دستاویز بند ہو چکی تھی۔
+	Dropped files weren't placed: too many are waiting for their document.	چھوڑی گئی فائلیں نہیں رکھی گئیں: بہت سی فائلیں اپنی دستاویز کی منتظر ہیں۔
+	Effect	اثر
+	Empty	خالی
+	End	اختتام
+	Filter for embedded smart objects	ایمبیڈڈ سمارٹ آبجیکٹس کے لیے فلٹر کریں
+	Filter for linked smart objects that are missing	غائب لنک شدہ سمارٹ آبجیکٹس کے لیے فلٹر کریں
+	Filter for smart objects linked locally	مقامی طور پر لنک شدہ سمارٹ آبجیکٹس کے لیے فلٹر کریں
+	Fit Content to Frame	مواد کو فریم میں فٹ کریں
+	Fit Frame to Content	فریم کو مواد میں فٹ کریں
+	Frame coordinates must be finite and within 600000 pixels	فریم کے نقاط محدود اور 600000 پکسلز کے اندر ہونے چاہئیں
+	High Memory Photoshop Document	زیادہ میموری والی Photoshop دستاویز
+	Image Compression	تصویر کی کمپریشن
+	Import Image…	تصویر درآمد کریں…
+	Import as New Group	نئے گروپ کے طور پر درآمد کریں
+	Import as New Group keeps “{group}” and adds the file as a new group beside it.	نئے گروپ کے طور پر درآمد “{group}” کو برقرار رکھتا ہے اور فائل کو اس کے ساتھ ایک نئے گروپ کے طور پر شامل کرتا ہے۔
+	Invalid frame transform	فریم کی غلط تبدیلی
+	Invalid nested file drop	غلط نیسٹڈ فائل ڈراپ
+	LZW	LZW
+	Layer Effects	تہہ کے اثرات
+	Learn	سیکھیں
+	Lining	لائننگ
+	Linked	لنک شدہ
+	New Frame	نیا فریم
+	New file	نئی فائل
+	No Adv. Blending	ایڈوانسڈ امتزاج نہیں
+	No Layer Effects	تہہ کے اثرات نہیں
+	No Layer Mask	تہہ ماسک نہیں
+	No Vector Mask	ویکٹر ماسک نہیں
+	No import is waiting. Import the file again.	کوئی درآمد زیرِ التوا نہیں۔ فائل دوبارہ درآمد کریں۔
+	Not Clipped	کلپڈ نہیں
+	Not Empty	خالی نہیں
+	Not Linked	لنک شدہ نہیں
+	Not Locked	مقفل نہیں
+	Not Visible	نظر نہ آنے والا
+	Numerals	اعداد
+	On your computer	آپ کے کمپیوٹر پر
+	Open anyway	پھر بھی کھولیں
+	Opening this document uses more memory and may slow down your computer or other running applications.	یہ دستاویز کھولنے میں زیادہ میموری استعمال ہوتی ہے اور یہ آپ کے کمپیوٹر یا دیگر چلتی ایپلیکیشنز کو سست کر سکتی ہے۔
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	“{name}” کھولنے کے لیے اندازاً {est} GiB میموری درکار ہے ({avail} GiB دستیاب)۔
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	“{name}” کھولنے کے لیے اندازاً {est} GiB میموری درکار ہے۔ دستیاب میموری کی پیمائش نہیں ہو سکی۔
+	Pause For	اس کے لیے توقف
+	Pause For:	اس کے لیے توقف:
+	Playback Options…	پلے بیک کے اختیارات…
+	Proportional	متناسب
+	Proportional Lining	متناسب لائننگ
+	Proportional Oldstyle	متناسب پرانے انداز
+	Replace Image…	تصویر تبدیل کریں…
+	Replace deletes everything in “{group}” first, including presets you edited or moved there. This can't be undone.	تبدیل کرنا پہلے “{group}” میں موجود سب کچھ حذف کر دیتا ہے، بشمول وہ پری سیٹس جو آپ نے وہاں ترمیم یا منتقل کیے۔ اسے واپس نہیں کیا جا سکتا۔
+	Save Image Pyramid	تصویری اہرام محفوظ کریں
+	Save Transparency	شفافیت محفوظ کریں
+	Set 	سیٹ 
+	Set 1	سیٹ 1
+	Set 10	سیٹ 10
+	Set 11	سیٹ 11
+	Set 12	سیٹ 12
+	Set 13	سیٹ 13
+	Set 14	سیٹ 14
+	Set 15	سیٹ 15
+	Set 16	سیٹ 16
+	Set 17	سیٹ 17
+	Set 18	سیٹ 18
+	Set 19	سیٹ 19
+	Set 2	سیٹ 2
+	Set 20	سیٹ 20
+	Set 3	سیٹ 3
+	Set 4	سیٹ 4
+	Set 5	سیٹ 5
+	Set 6	سیٹ 6
+	Set 7	سیٹ 7
+	Set 8	سیٹ 8
+	Set 9	سیٹ 9
+	Set as default	ڈیفالٹ کے طور پر سیٹ کریں
+	Source: {name}	ماخذ: {name}
+	Specify Channels:	چینلز متعین کریں:
+	Start	آغاز
+	Step by Step	قدم بہ قدم
+	Stylistic Sets	اسلوبیاتی سیٹس
+	Tabular	جدولی
+	Tabular Lining	جدولی لائننگ
+	Tabular Oldstyle	جدولی پرانے انداز
+	The GPU compositor is still being prepared	GPU کمپوزیٹر ابھی تیار ہو رہا ہے
+	The History Brush source was deleted: set a new source in the History panel	ہسٹری برش کا ماخذ حذف کر دیا گیا: ہسٹری پینل میں نیا ماخذ مقرر کریں
+	The frame is locked	فریم مقفل ہے
+	The frame is unavailable	فریم دستیاب نہیں
+	Transparent (default)	شفاف (ڈیفالٹ)
+	Use these settings for new arrows	نئے تیروں کے لیے یہ ترتیبات استعمال کریں
+	Website	ویب سائٹ
+	ZIP	ZIP
+	seconds	سیکنڈ
+	{message} into “{group}”	{message} “{group}” میں
+	{ok} written to {dir}	{ok} کو {dir} میں لکھا گیا
+	{set} from {file} replaced the one from {earlier}	{file} سے {set} نے {earlier} والے کی جگہ لے لی
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	برش گروپ “{group}” میں پہلے ہی آپ کا {n} برش موجود ہے۔|برش گروپ “{group}” میں پہلے ہی آپ کے {n} برشز موجود ہیں۔
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	گریڈیئنٹ گروپ “{group}” پہلے سے موجود ہے ({n} گریڈیئنٹ)۔|گریڈیئنٹ گروپ “{group}” پہلے سے موجود ہے ({n} گریڈیئنٹس)۔
+@plural	{n} action file loaded|{n} action files loaded	{n} ایکشن فائل لوڈ ہوئی|{n} ایکشن فائلیں لوڈ ہوئیں
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} فائل لوڈ نہیں ہو سکی: {errors}|{n} فائلیں لوڈ نہیں ہو سکیں: {errors}
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} تصویری اثاثہ آؤٹ پٹ ناکام ہوا|{what}: {n} تصویری اثاثے آؤٹ پٹس ناکام ہوئے
