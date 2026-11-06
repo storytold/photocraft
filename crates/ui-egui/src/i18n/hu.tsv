@@ -4495,6 +4495,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Channel Options…	Csatornabeállítások…
 	Specify Channels:	Csatornák megadása:
 	Not enough grayscale documents for this mode.	Nincs elég szürkeárnyalatos dokumentum ehhez a módhoz.
-	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
+	Pick a different document for each channel.	Válasszon minden csatornához másik dokumentumot.
 	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
 	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
