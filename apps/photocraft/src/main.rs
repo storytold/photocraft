@@ -225,9 +225,7 @@ fn claim_single_instance(
     // keeps its own process instead of handing its files over and being ignored.
     launch_options.extend_from_slice(&single_instance::env_launch_options());
     // The CPU-compatibility relaunch's `--safe-gpu` is not a person's: it takes part.
-    if !single_instance::safe_gpu_is_launch_option(std::env::var_os("PHOTOCRAFT_GPU_STARTUP_FAILURE").as_deref()) {
-        launch_options.retain(|option| *option != launch_args::PerProcess::SafeGpu);
-    }
+    let launch_options = single_instance::without_relaunch_safe_gpu(launch_options, std::env::var_os("PHOTOCRAFT_GPU_STARTUP_FAILURE").as_deref());
     let context = single_instance::LaunchContext {
         per_user_settings: app_dirs::current().mode == app_dirs::Mode::Platform,
         new_instance_flag: new_instance,

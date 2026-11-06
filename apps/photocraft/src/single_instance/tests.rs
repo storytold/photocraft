@@ -269,6 +269,36 @@ fn the_cpu_relaunch_takes_part_in_single_instance() {
     assert!(!safe_gpu_is_launch_option(Some(std::ffi::OsStr::new(""))));
 }
 
+/// The filtering `claim_single_instance` applies, through to `skip_reason`: the relaunch's own
+/// `--safe-gpu` takes part, a person's stays separate, and the relaunch keeps any other option.
+#[test]
+fn the_cpu_relaunch_filter_decides_who_takes_part() {
+    let check = |options: &[PerProcess], failure: Option<&str>| {
+        let launch_options = without_relaunch_safe_gpu(options.to_vec(), failure.map(std::ffi::OsStr::new));
+        let context = LaunchContext {
+            per_user_settings: true,
+            new_instance_flag: false,
+            new_instance_env: None,
+            control: false,
+            unreadable_paths: false,
+            launch_options: &launch_options,
+        };
+        (launch_options.clone(), skip_reason(&context))
+    };
+    // The CPU relaunch with no other options takes part, whatever its reason says.
+    for failure in ["wgpu: no adapter", ""] {
+        assert_eq!(check(&[PerProcess::SafeGpu], Some(failure)), (vec![], None));
+    }
+    // A person's `--safe-gpu` keeps its own process.
+    let (kept, reason) = check(&[PerProcess::SafeGpu], None);
+    assert_eq!(kept, [PerProcess::SafeGpu]);
+    assert!(reason.is_some());
+    // The relaunch drops only its own `--safe-gpu`: another option still keeps it separate.
+    let (kept, reason) = check(&[PerProcess::SafeGpu, PerProcess::GpuAdapterEnv], Some("wgpu: no adapter"));
+    assert_eq!(kept, [PerProcess::GpuAdapterEnv]);
+    assert!(reason.is_some());
+}
+
 #[test]
 fn an_unreachable_instance_falls_back_to_a_standalone_launch() {
     let dir = temp_dir("unreachable");

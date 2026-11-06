@@ -186,6 +186,15 @@ pub fn safe_gpu_is_launch_option(gpu_startup_failure: Option<&std::ffi::OsStr>) 
     gpu_startup_failure.is_none()
 }
 
+/// `options` without the `--safe-gpu` the CPU-compatibility relaunch adds; a person's stays
+/// ([`safe_gpu_is_launch_option`]). Every other option is kept.
+pub fn without_relaunch_safe_gpu(mut options: Vec<PerProcess>, gpu_startup_failure: Option<&std::ffi::OsStr>) -> Vec<PerProcess> {
+    if !safe_gpu_is_launch_option(gpu_startup_failure) {
+        options.retain(|option| *option != PerProcess::SafeGpu);
+    }
+    options
+}
+
 /// Why this launch runs as its own instance, or `None` to take part in single-instance.
 pub fn skip_reason(c: &LaunchContext) -> Option<String> {
     if !c.per_user_settings {
