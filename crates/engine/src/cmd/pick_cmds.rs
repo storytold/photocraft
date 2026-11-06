@@ -87,12 +87,16 @@ fn top_group(doc: &Document, id: LayerId) -> LayerId {
 /// The layer an Auto-Select click at (x, y) picks (with `group`, its outermost group): the topmost
 /// movable hit, a type layer by its text bounds. It clicks through Position or All locks
 /// (including locks inherited from a group) to the layer under it; the right-click list
-/// still shows it. The click (`layer.pickAt`) and the Move tool's rollover highlight both ask
-/// here, so the outline always names the layer a click takes.
+/// still shows it. The Move tool's rollover highlight and `layer.pickAt` with `moveAutoSelect`
+/// use the same eligibility, so the outline names the layer the click takes.
 pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
+    pick_target(doc, x, y, group, true)
+}
+
+fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool) -> Option<LayerId> {
     let hit = layers_hit(doc, x, y, true).into_iter().find(|id| {
         let locks = doc.effective_locks(*id);
-        !locks.position && !locks.all
+        !locks.all && (!move_auto_select || !locks.position)
     })?;
     Some(if group { top_group(doc, hit) } else { hit })
 }
@@ -108,7 +112,8 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "layers": names }));
     }
     let group = p.get("target").and_then(Value::as_str) == Some("group");
-    let Some(target) = auto_select_target(&doc, x, y, group) else { return Ok(json!({ "layer": null })) };
+    let move_auto_select = p.get("moveAutoSelect").and_then(Value::as_bool).unwrap_or(false);
+    let Some(target) = pick_target(&doc, x, y, group, move_auto_select) else { return Ok(json!({ "layer": null })) };
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
         // Like Photoshop, a plain click on one of several selected layers keeps them all
@@ -201,7 +206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Auto-Select Layer",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","list":bool=false (return visible layers at the point, including text bounds, topmost first)} → {layer} | {layers}"##,
+            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","moveAutoSelect":bool=false (also skip Position locks),"list":bool=false (return visible layers at the point, including text bounds, topmost first)} → {layer} | {layers}"##,
             enabled: has_doc,
             journal: false,
             run: pick,
@@ -224,16 +229,15 @@ mod tests {
         let a = s.active().unwrap().active_layer.unwrap();
         s.execute("layer.new.layer", json!({"name": "B"})).unwrap();
         s.execute("select.deselect", json!({})).unwrap();
-        // Empty B is skipped; A wins inside its square, the locked Background is not picked.
+        // Empty B is skipped; A wins inside its square, the Background elsewhere.
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap()["layer"], a.0);
         assert_eq!(s.active().unwrap().active_layer, Some(a));
-        assert_eq!(s.execute("layer.pickAt", json!({"x": 30, "y": 30, "select": false})).unwrap()["layer"], Value::Null);
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 30, "y": 30, "select": false})).unwrap()["layer"], bg.0);
         let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
         assert_eq!(list["layers"].as_array().unwrap().len(), 2);
-        assert_eq!(list["layers"][1]["layer"], bg.0, "locked layers remain in the context menu");
         // Hidden layers are ignored.
         s.execute("layer.setProps", json!({"layer": a.0, "visible": false})).unwrap();
-        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], Value::Null);
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
     }
 
     /// Two filled squares: A at (0..10), B at (20..30), both in their own layers.
@@ -264,7 +268,8 @@ mod tests {
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "target": "layer"})).unwrap()["layer"], a.0);
         // Hiding the outer group hides its layers from the pick.
         s.execute("layer.setProps", json!({"layer": outer, "visible": false})).unwrap();
-        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], Value::Null);
+        let bg = s.active().unwrap().doc.layers[0].id;
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
     }
 
     #[test]
@@ -277,11 +282,11 @@ mod tests {
         s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap();
         let st = s.active().unwrap();
         assert!(st.is_layer_selected(a) && st.is_layer_selected(b));
-        // A direct pick miss does not mutate selection; the Move UI handles locked-only clicks.
-        assert_eq!(s.execute("layer.pickAt", json!({"x": 35, "y": 5})).unwrap()["layer"], Value::Null);
-        assert_eq!(s.active().unwrap().selected_layers().len(), 2);
+        // Clicking the Background (not selected) replaces the selection.
+        s.execute("layer.pickAt", json!({"x": 35, "y": 5})).unwrap();
+        assert_eq!(s.active().unwrap().selected_layers().len(), 1);
+        assert!(!s.active().unwrap().is_layer_selected(a));
         // Shift-click (add) builds a selection up again.
-        s.execute("select.deselectLayers", json!({})).unwrap();
         s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap();
         s.execute("layer.pickAt", json!({"x": 25, "y": 25, "mode": "add"})).unwrap();
         let st = s.active().unwrap();
@@ -314,13 +319,13 @@ mod tests {
         assert_eq!(pick(&mut s, 5, 5, "group"), a.0, "Group mode stops inside the board");
         assert_eq!(pick(&mut s, 20, 20, "layer"), board, "an empty spot on the board picks the board");
         assert_eq!(s.active().unwrap().active_layer, Some(LayerId(board)));
-        assert_eq!(pick(&mut s, 33, 33, "layer"), Value::Null, "off the board: neither the locked Background nor A's clipped pixels");
+        assert_eq!(pick(&mut s, 33, 33, "layer"), bg.0, "off the board: the Background, not A's clipped pixels");
         let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();
         let ids: Vec<u64> = list["layers"].as_array().unwrap().iter().map(|l| l["layer"].as_u64().unwrap()).collect();
         assert_eq!(ids, vec![a.0, board, bg.0]);
         // A hidden board is skipped with its layers.
         s.execute("layer.setProps", json!({"layer": board, "visible": false})).unwrap();
-        assert_eq!(pick(&mut s, 5, 5, "layer"), Value::Null);
+        assert_eq!(pick(&mut s, 5, 5, "layer"), bg.0);
     }
 
     #[test]
@@ -333,7 +338,7 @@ mod tests {
         s.execute("select.deselect", json!({})).unwrap();
         let top = s.active().unwrap().active_layer.unwrap();
         let lock = |s: &mut Session, id: u64, locks: Value| s.execute("layer.setProps", json!({"layer": id, "locks": locks})).unwrap();
-        let pick = |s: &mut Session| s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap()["layer"].clone();
+        let pick = |s: &mut Session| s.execute("layer.pickAt", json!({"x": 5, "y": 5, "moveAutoSelect": true})).unwrap()["layer"].clone();
         assert_eq!(pick(&mut s), top.0);
         // Position and All locks are both skipped; Image Pixels still permits picking.
         lock(&mut s, top.0, json!({"position": true}));
@@ -386,7 +391,7 @@ mod tests {
         let pick = |s: &mut Session, x: i32, y: i32| s.execute("layer.pickAt", json!({"x": x, "y": y, "select": false})).unwrap()["layer"].clone();
         assert_eq!(pick(&mut s, 12, 15), t.0, "on a glyph");
         assert_eq!(pick(&mut s, 17, 15), t.0, "between the glyphs: the type layer, not the one under it");
-        assert_eq!(pick(&mut s, 17, 20), Value::Null, "below the text bounds, the locked Background is skipped");
+        assert_eq!(pick(&mut s, 17, 20), bg.0, "below the text bounds");
         // The context menu also reaches this type layer between the glyphs (#4259).
         let list = s.execute("layer.pickAt", json!({"x": 17, "y": 15, "list": true})).unwrap();
         assert_eq!(list["layers"][0]["layer"], t.0);
@@ -498,8 +503,8 @@ mod tests {
         s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
         let red = s.active().unwrap().active_layer.unwrap();
         s.execute("layer.layerMask.hideAll", json!({})).unwrap();
-        // Full density hides the layer; the locked Background cannot be picked either.
-        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], Value::Null);
+        // Full density: the mask hides the layer, so the click reaches the Background.
+        assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], bg.0);
         s.execute("layer.layerMask.edit", json!({"density": 0})).unwrap();
         assert_eq!(s.execute("layer.pickAt", json!({"x": 5, "y": 5, "select": false})).unwrap()["layer"], red.0);
         let list = s.execute("layer.pickAt", json!({"x": 5, "y": 5, "list": true})).unwrap();

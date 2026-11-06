@@ -108,6 +108,8 @@ fn locked_only_click_clears_each_measured_selection_and_shift_keeps_its_base() {
     let mut f = Fixture::new();
     let [a, b, c] = f.layers;
     let before = f.bounds();
+    let ordinary = f.app.run("layer.pickAt", json!({"x": 74, "y": 40, "select": false})).unwrap();
+    assert_eq!(ordinary["layer"], f.background.0, "ordinary point picks still find locked Background");
     for selected in [vec![a], vec![a, b, c], vec![f.background]] {
         f.select(&selected);
         f.gesture([74.0, 40.0], [74.0, 40.0], Modifiers::NONE);
