@@ -434,7 +434,7 @@ impl PsdFile {
         let (v, widen) = self.write_form();
         let psb = v.is_psb();
         let len_field = |long: bool| if long { 8u64 } else { 4 };
-        let blocks_len = |blocks: &[TaggedBlock]| blocks.iter().fold(0u64, |n, b| n.saturating_add(b.encoded_len_aligned(v, 4) as u64));
+        let blocks_len = |blocks: &[TaggedBlock]| blocks.iter().fold(0u64, |n, b| n.saturating_add(b.encoded_len_aligned(v, 4)));
         let body_len = |info: &LayerInfo| -> Result<u64> {
             let unpadded = info.unpadded_len_as(v, widen)?;
             let padding = info.padding.as_ref().map_or(unpadded % 2, |p| p.len() as u64);

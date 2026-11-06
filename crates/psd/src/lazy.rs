@@ -148,7 +148,9 @@ impl PsdFile {
 
     /// [`Self::from_source_and_merged_preflight`] that also leaves the data of each global block
     /// `defer(key, length)` accepts in the source ([`TaggedBlock::stored`]): an embedded
-    /// smart-object block (`lnk2`) can be most of a file.
+    /// smart-object block (`lnk2`) can be most of a file. Defer only blocks the reader loads
+    /// before use (the linked-file blocks `lnk2`/`lnk3`/`lnkD`): a deferred block's `data` is
+    /// empty, and [`TaggedBlock::parsed`] refuses it.
     pub fn from_source_deferring(
         source: Source,
         defer: impl Fn(&[u8; 4], u64) -> bool,
