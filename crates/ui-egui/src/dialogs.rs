@@ -262,15 +262,20 @@ const CLOSE_BOX_SIZE: f32 = 20.0;
 
 /// The close box's square: flush with the title band's right end `right`, centred on the title
 /// row at height `centre_y`.
-fn close_box_rect(right: f32, centre_y: f32) -> egui::Rect {
+pub(crate) fn close_box_rect(right: f32, centre_y: f32) -> egui::Rect {
     egui::Rect::from_min_size(egui::pos2(right - CLOSE_BOX_SIZE, centre_y - CLOSE_BOX_SIZE / 2.0), egui::vec2(CLOSE_BOX_SIZE, CLOSE_BOX_SIZE))
 }
 
 /// Draws a title bar's close box in `rect`, the same × icon button the floating panels close with,
 /// and says whether it was clicked. Its own child `Ui`, so the title row's layout is unchanged.
+/// Uses `Sense::CLICK` without `FOCUSABLE` so Tab in dialogs cycles controls, not the window ×.
 pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    crate::icons::button(&mut child, "x", CLOSE_BOX_SIZE, false, tl!("Close")).clicked()
+    let (box_rect, resp) = child.allocate_exact_size(egui::vec2(CLOSE_BOX_SIZE, CLOSE_BOX_SIZE), egui::Sense::CLICK);
+    let tint = crate::icons::button_chrome(&child, box_rect, false, resp.hovered());
+    crate::icons::paint(&child, box_rect, "x", (CLOSE_BOX_SIZE * 0.52).round(), tint);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, child.is_enabled(), tl!("Close")));
+    resp.on_hover_text(tl!("Close")).clicked()
 }
 
 /// The dialog's contents under the title rule, picked by its kind and the marker field that routes
