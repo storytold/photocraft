@@ -381,6 +381,43 @@ fn on_the_canvas_the_border_follows_the_hovering_pointer_and_keys_work() {
     assert!((area - 5600.0).abs() < 120.0, "{area}");
 }
 
+/// #9841: the hover moves are a pointer-only gesture: they must keep running on frames with no
+/// button event, and they must be suppressed while a menu-dismissal press is being consumed.
+#[test]
+fn on_the_canvas_hover_moves_survive_a_menu_dismissal_and_resume() {
+    let mut h = harness();
+    ui_click(&mut h, 52.0, 37.0);
+    assert!(h.state().ui.magnetic.active());
+    h.run_steps(2);
+    // A right-click opens the view menu without disturbing the border in progress.
+    let p = screen(&h, 90.0, 90.0);
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "right-click opens the menu");
+    // The dismissal press well clear of the menu: inert, and the pointer-only hover must not run.
+    let far = screen(&h, 12.0, 140.0);
+    h.event(egui::Event::PointerMoved(far));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "the outside press dismisses the menu");
+    let held = h.state().ui.magnetic.clone();
+    h.event(egui::Event::PointerMoved(screen(&h, 100.0, 36.0)));
+    h.run_steps(2);
+    assert_eq!(h.state().ui.magnetic, held, "a held dismissal press must not track the pointer");
+    // Released: the very next pointer move tracks again, with no button event at all.
+    h.event(egui::Event::PointerButton { pos: far, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    ui_hover(&mut h, &[[52.0, 37.0], [100.0, 36.0]]);
+    let m = &h.state().ui.magnetic;
+    let end = m.live.last().or(m.path.last()).copied().unwrap();
+    assert!((end[0] - 100.0).abs() < 1.5 && (end[1] - 40.0).abs() < 0.01, "hover resumes after the dismissal: {end:?}");
+}
+
 #[test]
 fn on_the_canvas_a_double_click_closes_the_border() {
     let mut h = harness();

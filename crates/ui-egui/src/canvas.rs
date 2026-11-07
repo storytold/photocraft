@@ -1153,6 +1153,26 @@ fn handle_canvas_tool_clicks(
     let ppp = input.ppp;
     let zoom_out = input.zoom_out;
     let display_zoom = input.display_zoom;
+    // Magnetic Lasso: between clicks the border follows the pointer with the button up. This is a
+    // pointer-only gesture — `canvas_buttons` makes `clicked` false on frames without a button
+    // event — so it must stay outside the click-only branch below, or live edge tracking and
+    // automatic fastening freeze until the next click. A menu-dismissal gesture is inert, so the
+    // hover is suppressed with the same flag that starves the rest of the input pass (#9841).
+    if tool == Tool::MagneticLasso
+        && app.ui.magnetic.active()
+        && !input.menu_dismiss_press
+        && !(buttons.started || buttons.dragged || buttons.stopped)
+        && response.hovered()
+    {
+        let moves: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
+        app.defer_live_stroke = true;
+        for p in moves.into_iter().filter(|p| rect.contains(*p)) {
+            let d = xf.to_doc(p);
+            tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+        }
+        app.defer_live_stroke = false;
+        crate::magnetic_lasso_ui::flush(app);
+    }
     if buttons.clicked
         && let Some(p) = response.interact_pointer_pos()
     {
@@ -1211,17 +1231,6 @@ fn handle_canvas_tool_clicks(
                     tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
                 }
             }
-        }
-        // Magnetic Lasso: between clicks the border follows the pointer with the button up.
-        if tool == Tool::MagneticLasso && app.ui.magnetic.active() && !(buttons.started || buttons.dragged || buttons.stopped) && response.hovered() {
-            let moves: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
-            app.defer_live_stroke = true;
-            for p in moves.into_iter().filter(|p| rect.contains(*p)) {
-                let d = xf.to_doc(p);
-                tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
-            }
-            app.defer_live_stroke = false;
-            crate::magnetic_lasso_ui::flush(app);
         }
         // Move tool: a double-click on type edits it, as in Photoshop (#1132). Only the selected
         // Move tool, not ⌘ held over another tool; an open transform box keeps its double-click
