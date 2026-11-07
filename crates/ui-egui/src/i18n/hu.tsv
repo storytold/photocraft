@@ -317,7 +317,7 @@
 	Toggle Last State	Utolsó állapot be-/kikapcsolása
 	Toolbar…	Eszköztár…
 	Tools…	Eszközök…
-	Transform	Alakítás
+	Transform	Átalakítás
 	Transparency & Gamut…	Átlátszóság és színtartomány…
 	Trap…	Ráfutás…
 	Trim…	Levágás…
@@ -406,7 +406,6 @@
 	Insert Blank Frame	Üres képkocka beszúrása
 	Interpret Footage…	Videoanyag értelmezése…
 	Intersect Shape Areas	Alakzatterületek metszete
-	Inverse Selection	Kijelölés megfordítása
 	Invert…	Invertálás…
 	Isolate Layers	Rétegek elkülönítése
 	Kurtosis	Csúcsosság
@@ -817,7 +816,6 @@
 	Proof Colors	Színpróba
 	Proof Setup	Színpróba beállítása
 	Properties	Tulajdonságok
-	Quick Export As PNG	Gyors exportálás PNG-be
 	Quit	Kilépés
 	Quit {app}	Kilépés: {app}
 	Radial Blur…	Sugárirányú elmosás…
@@ -1998,7 +1996,7 @@ layerLabel	Magenta	Bíbor
 	Shift	Shift
 	Show Extras Options	Segédelemek beállításai
 	Show Overlay	Átfedés megjelenítése
-	Show Transform Controls	Alakítási vezérlők megjelenítése
+	Show Transform Controls	Átalakítási vezérlők megjelenítése
 	Size:	Méret:
 	Source: not set ({key}-click with Clone Stamp)	Forrás: nincs beállítva ({key}+kattintás a klónozó bélyegzővel)
 	Source: set	Forrás: beállítva
@@ -2536,7 +2534,6 @@ navigator	Zoom	Nagyítás mértéke
 	Use Measurement Scale	Mérési méretarány használata
 	Use Selection In Source	Kijelölés használata a forrásban
 	Use Selection In Target	Kijelölés használata a célban
-	Uses the foreground and background colours.	Az előtér- és a háttérszínt használja.
 	Vertical Only	Csak függőleges
 	Vibrance	Élénkség
 	View Options	Nézetbeállítások
@@ -2737,7 +2734,8 @@ cameraRaw	Yellow	Sárga
 	All Slices	Összes szelet
 	All User Slices	Összes felhasználói szelet
 	Always create smart objects when placing	Elhelyezéskor mindig intelligens objektum létrehozása
-	Answer the unsaved-changes prompt first	Előbb válaszolj a nem mentett módosításokra vonatkozó kérdésre
+	Skip transform when placing	Átalakítás kihagyása elhelyezéskor
+	Answer the unsaved-changes prompt first	Előbb válaszoljon a nem mentett módosításokra vonatkozó kérdésre
 	Appearance Settings…	Megjelenési beállítások…
 	Apple Watch 45mm	Apple Watch 45 mm
 	Applies at next launch.	A következő indításkor lép életbe.
@@ -2759,7 +2757,7 @@ cameraRaw	Yellow	Sárga
 	Binary assets removed	Eltávolított bináris elemek
 	Bit depth	Bitmélység
 	Black Point Compensation	Feketepont-kompenzáció
-	BLANK DOCUMENT PRESETS ({n})	ÜRES DOKUMENTUMOK ELŐBEÁLLÍTÁSAI ({n})
+	BLANK DOCUMENT PRESETS ({n})	ÜRES DOKUMENTUM-ELŐBEÁLLÍTÁSOK ({n})
 	Bleach Bypass	Kihagyott fehérítés
 	Bottom:	Alsó:
 	Breeze dark	Breeze sötét
@@ -3721,7 +3719,7 @@ cameraRaw	Yellow	Sárga
 	Top Left	Bal felső
 	Top Right	Jobb felső
 	Touch gestures	Érintési gesztusok
-	Transform Again on a Copy	Alakítás ismétlése másolaton
+	Transform Again on a Copy	Átalakítás ismétlése egy másolaton
 	Transition	Átmenet
 	Transparency & Gamut	Átlátszóság és színtartomány
 	Trap	Ráfutás
