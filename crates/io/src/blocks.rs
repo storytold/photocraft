@@ -459,7 +459,9 @@ pub fn fill_from_desc(key: &[u8; 4], d: &Descriptor) -> Option<Fill> {
     match key {
         b"SoCo" => Some(Fill::Solid(color_from_desc(get_desc(d, "Clr ")?)?)),
         b"GdFl" => {
-            let angle = num(d.get("Angl")).unwrap_or(90.0) as f32;
+            // Photoshop omits `Angl` when the angle is 0° (the noise fills in psd-tools'
+            // gradient-styles.psd have no `Angl` and horizontal pixels); psd-tools reads it as 0.
+            let angle = num(d.get("Angl")).unwrap_or(0.0) as f32;
             let scale = num(d.get("Scl ")).map_or(1.0, |v| v as f32 / 100.0);
             let gradient = get_desc(d, "Grad");
             let raw = gradient.map(|g| gradient_stops_editable(g, gradient_method(d)));

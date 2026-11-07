@@ -82,6 +82,31 @@ fn gradient_fill_reads_the_interpolation_method() {
     assert!((mid("Smoo") - 99.0).abs() <= 2.0, "Smooth: {}", mid("Smoo"));
 }
 
+/// Photoshop omits `Angl` from a gradient fill at 0°: the five linear noise fills of
+/// psd-tools' gradient-styles.psd have no `Angl` and store pixels that vary horizontally,
+/// and psd-tools reads the missing key as 0. The corpus set is MIT and fetched by `xtask`,
+/// not committed (`docs/development.md`); this test synthesizes its own descriptor.
+#[test]
+fn gradient_fill_without_angl_is_horizontal() {
+    use photocraft_color::Color;
+    use photocraft_doc::{Fill, GradientStyle};
+    let (k, mut d) = super::fill_to_desc(&Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 0.0, 1.0, GradientStyle::Linear, false));
+    d.items.retain(|(key, _)| !key.is("Angl"));
+    let Some(Fill::Gradient { angle, .. }) = super::fill_from_desc(&k, &d) else { panic!("gradient fill") };
+    assert_eq!(angle, 0.0);
+}
+
+/// Only a missing `Angl` means 0°: an explicit angle (90° here) is read as written.
+#[test]
+fn gradient_fill_keeps_an_explicit_angle() {
+    use photocraft_color::Color;
+    use photocraft_doc::{Fill, GradientStyle};
+    let f = Fill::gradient(vec![(0.0, Color::BLACK), (1.0, Color::WHITE)], 90.0, 1.0, GradientStyle::Linear, false);
+    let (k, data) = super::write_fill(&f);
+    let Some(Fill::Gradient { angle, .. }) = super::parse_fill(&k, &data) else { panic!("gradient fill") };
+    assert_eq!(angle, 90.0);
+}
+
 #[test]
 fn lab_descriptor_colours_round_trip() {
     use photocraft_color::ColorMode;
