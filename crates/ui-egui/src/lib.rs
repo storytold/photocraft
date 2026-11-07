@@ -873,6 +873,9 @@ mod save_identity_tests;
 mod move_auto_select_tests;
 
 #[cfg(test)]
+mod move_target_default_tests;
+
+#[cfg(test)]
 mod move_history_names_tests;
 #[cfg(test)]
 mod move_shift_diagonal_tests;

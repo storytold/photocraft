@@ -145,8 +145,8 @@ pub struct ToolOptions {
     #[serde(default = "one")]
     pub slice_height: f32,
     /// Move tool: Auto-Select (with "layer" or "group" target) and Show Transform Controls.
-    /// Auto-Select is on with the "group" target by default, as in current Photoshop;
-    /// ⌘/Ctrl-click inverts it.
+    /// Auto-Select is on with the "layer" target by default, as Photoshop's Reset Tool leaves it
+    /// (measured for #11380; #4056 had asked for "group"); ⌘/Ctrl-click inverts it.
     #[serde(default = "yes")]
     pub move_auto_select: bool,
     #[serde(default = "default_move_target")]
@@ -292,7 +292,7 @@ fn default_crop_resolution_unit() -> String {
 }
 
 fn default_move_target() -> String {
-    "group".into()
+    "layer".into()
 }
 
 fn default_pen_path_op() -> String {
