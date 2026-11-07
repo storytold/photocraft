@@ -30,6 +30,10 @@ pub enum DropTarget {
     /// The tab strip: opened with their tabs from this position (the strip shows it while files
     /// hover).
     Tabs(usize),
+    /// The Layers panel's list: placed like a canvas drop, directly above the row (or the gap
+    /// above it) under the pointer, or below the last row over the empty space under it (`None`:
+    /// no rows, above the active layer).
+    Layers(Option<RowSlot>),
     /// Anywhere else (panels, a dialog, no document): opened like File › Open.
     Elsewhere,
 }
@@ -37,8 +41,9 @@ pub enum DropTarget {
 /// A file dropped on the canvas, waiting its turn to be placed in the document it was dropped on
 /// (queued with its [`DocId`] in `drop_places`).
 pub(crate) enum DropPlace {
-    /// Destination captured when the file is dropped, before a later pointer move.
-    At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId> },
+    /// Destination captured when the file is dropped, before a later pointer move: the frame
+    /// under the pointer, and the Layers spot it was dropped on (`None`: above the active layer).
+    At { source: Box<DropPlace>, frame: Option<photocraft_doc::LayerId>, row: Option<RowDrop> },
     /// Dropped onto the window (desktop): read from its path, or through egui.
     File(egui::DroppedFileHandle),
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
@@ -65,6 +70,43 @@ impl DropPlace {
             Self::Bytes(..) => true,
         }
     }
+}
+
+/// A spot beside a Layers row that a dropped file goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowSlot {
+    Above(photocraft_doc::LayerId),
+    Below(photocraft_doc::LayerId),
+}
+
+/// A drop on the Layers panel. All its files carry the same spot and `group`: each is placed above
+/// the layer the one before it made, and only a file that fails to land leaves the spot to the next.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RowDrop {
+    pub slot: RowSlot,
+    pub group: u64,
+}
+
+/// The Layers panel as it was drawn last frame, for routing a file dropped on it.
+pub(crate) struct DropLayers {
+    pub doc: DocId,
+    /// The frame it was drawn in: a panel that is no longer shown must not take drops.
+    pub frame: u64,
+    /// The visible list.
+    pub list: egui::Rect,
+    /// Each drawn row with the gap above it, and the layer it stands for.
+    pub slots: Vec<(egui::Rect, photocraft_doc::LayerId)>,
+}
+
+/// What a shell that reads dropped files itself does with one (see [`PhotocraftApp::dropped_destinations`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DropDest {
+    /// Open it like File › Open.
+    Open,
+    /// Place it on the canvas.
+    Canvas,
+    /// Place it at this Layers spot (dropped on the Layers panel).
+    Row(RowDrop),
 }
 
 /// The most browser drops, each holding its whole file, that can wait for their document to come
@@ -307,22 +349,28 @@ impl PhotocraftApp {
     /// absolute path, read in bounded reads (#375) rather than egui's whole-file read.
     pub fn open_dropped(&mut self, ctx: &egui::Context, files: Vec<egui::DroppedFileHandle>, at: Option<egui::Pos2>) {
         let target = self.drop_target(ctx, at);
-        let frame = at.and_then(|at| crate::canvas::ViewXform::active(self).map(|xf| xf.to_doc(at))).and_then(|p| crate::frame_tool::frame_at(self, p));
+        let placing = matches!(target, DropTarget::Canvas | DropTarget::Layers(_));
+        // A Layers drop goes beside a row, never into a frame.
+        let frame = at
+            .filter(|_| target == DropTarget::Canvas)
+            .and_then(|at| crate::canvas::ViewXform::active(self).map(|xf| xf.to_doc(at)))
+            .and_then(|p| crate::frame_tool::frame_at(self, p));
+        let row = if let DropTarget::Layers(Some(slot)) = target { Some(RowDrop { slot, group: self.next_drop_group() }) } else { None };
         let mut slot = match target {
             DropTarget::Tabs(slot) => Some(slot),
-            DropTarget::Canvas | DropTarget::Elsewhere => None,
+            DropTarget::Canvas | DropTarget::Layers(_) | DropTarget::Elsewhere => None,
         };
         // A box still open from an earlier drop (or any Free Transform) is applied first (#4833):
         // the queue below places the next file only once no box is open, so a separate drop
         // would otherwise wait unseen for ↩. Files dropped together still go one by one.
-        if target == DropTarget::Canvas && self.ui.transform.is_some() && files.iter().any(|f| !crate::preset_files_ui::is_preset_file(&dropped_name(f))) {
+        if placing && self.ui.transform.is_some() && files.iter().any(|f| !crate::preset_files_ui::is_preset_file(&dropped_name(f))) {
             crate::transform_tool::commit(self);
         }
         for f in files {
             let name = dropped_name(&f);
-            if target == DropTarget::Canvas && !crate::preset_files_ui::is_preset_file(&name) {
+            if placing && !crate::preset_files_ui::is_preset_file(&name) {
                 if let Some(doc) = self.session.active().map(|st| st.doc.id) {
-                    self.queue_drop(doc, DropPlace::At { source: Box::new(DropPlace::File(f)), frame });
+                    self.queue_drop(doc, DropPlace::At { source: Box::new(DropPlace::File(f)), frame, row });
                 }
                 continue;
             }
@@ -334,26 +382,34 @@ impl PhotocraftApp {
         }
     }
 
-    /// Which of the files called `names`, dropped onto the window just now, are placed on the
-    /// active document's canvas rather than opened, for a shell that reads dropped files itself
-    /// (the browser reads them asynchronously, so the web shell can't hand them to
-    /// [`open_dropped`](Self::open_dropped)). It delivers those through
+    /// Where each of the files called `names`, dropped onto the window just now, goes: placed on
+    /// the active document (on its canvas, or above a Layers row) or opened, for a shell that
+    /// reads dropped files itself (the browser reads them asynchronously, so the web shell can't
+    /// hand them to [`open_dropped`](Self::open_dropped)). It delivers the placed ones through
     /// [`Services::place_inbox`](crate::Services::place_inbox) and the rest through
     /// [`Services::inbox`](crate::Services::inbox). The pointer comes from
     /// [`Services::cursor_pos`](crate::Services::cursor_pos). As with a desktop canvas drop, a Free
-    /// Transform still open is applied first (#4833).
-    pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
+    /// Transform still open is applied first (#4833). Files dropped on the Layers panel share one
+    /// [`RowDrop`], as on the desktop.
+    pub fn dropped_destinations(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<DropDest> {
         let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
-        let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
-        let places: Vec<bool> = names.iter().map(|n| canvas && !crate::preset_files_ui::is_preset_file(n)).collect();
-        if places.contains(&true) {
-            // The shell reads the files after this returns: they go to this document even if the
-            // tab changes before they arrive.
-            if self.ui.transform.is_some() {
-                crate::transform_tool::commit(self);
-            }
+        let target = self.drop_target(ctx, at);
+        let row = if let DropTarget::Layers(Some(slot)) = target { Some(RowDrop { slot, group: self.next_drop_group() }) } else { None };
+        let placing = matches!(target, DropTarget::Canvas | DropTarget::Layers(_));
+        let dests: Vec<DropDest> = names
+            .iter()
+            .map(|n| match (placing && !crate::preset_files_ui::is_preset_file(n), row) {
+                (false, _) => DropDest::Open,
+                (true, Some(row)) => DropDest::Row(row),
+                (true, None) => DropDest::Canvas,
+            })
+            .collect();
+        // The shell reads the files after this returns: they go to this document even if the
+        // tab changes before they arrive.
+        if dests.iter().any(|d| *d != DropDest::Open) && self.ui.transform.is_some() {
+            crate::transform_tool::commit(self);
         }
-        places
+        dests
     }
 
     /// Where a drop at `at` lands. Over a window or dialog it's neither the canvas nor the tabs.
@@ -364,11 +420,48 @@ impl PhotocraftApp {
         if let Some(strip) = self.tab_strip.as_ref().filter(|s| s.rect.contains(p)) {
             return DropTarget::Tabs(strip.slot(p.x));
         }
+        if let Some(row) = self.layers_drop_at(ctx, p) {
+            return DropTarget::Layers(row);
+        }
         // The canvas shown last frame may belong to a document closed since.
         if self.session.active().is_some() && self.drop_canvas_rect.is_some_and(|r| r.contains(p)) {
             return DropTarget::Canvas;
         }
         DropTarget::Elsewhere
+    }
+
+    /// The spot a drop at `p` goes to, if `p` is on the active document's Layers panel as drawn
+    /// last frame: above the row (or the gap above it) there, else below the last row.
+    fn layers_drop_at(&self, ctx: &egui::Context, p: egui::Pos2) -> Option<Option<RowSlot>> {
+        let l = self.drop_layers.as_ref().filter(|l| l.frame + 1 >= ctx.cumulative_frame_nr() && l.list.contains(p))?;
+        if self.session.active().is_none_or(|st| st.doc.id != l.doc) {
+            return None;
+        }
+        let above = l.slots.iter().find(|(r, _)| r.contains(p)).map(|&(_, id)| RowSlot::Above(id));
+        Some(above.or_else(|| l.slots.last().map(|&(_, id)| RowSlot::Below(id))))
+    }
+
+    /// A new id for the files of one drop on the Layers panel.
+    fn next_drop_group(&mut self) -> u64 {
+        self.drop_group += 1;
+        self.drop_group
+    }
+
+    /// The Layers spot for the next file of `row`'s drop: above the layer the file before it made,
+    /// or the drop's own spot while none has landed.
+    fn row_slot(&self, row: RowDrop) -> RowSlot {
+        let landed = self.drop_chain.filter(|(group, _)| *group == row.group).map(|(_, id)| id);
+        match (landed, self.session.active()) {
+            (Some(id), Some(st)) if st.doc.layer(id).is_some() => RowSlot::Above(id),
+            _ => row.slot,
+        }
+    }
+
+    /// Remember the layer the file being placed made, so the next one of its drop goes above it.
+    pub(crate) fn note_landed(&mut self, result: &serde_json::Value) {
+        if let (Some(group), Some(id)) = (self.placing_group.take(), result.get("layer").and_then(serde_json::Value::as_u64)) {
+            self.drop_chain = Some((group, photocraft_doc::LayerId(id)));
+        }
     }
 
     /// Open one dropped file; with `slot`, its tab goes there (at once, or when a held prompt is
@@ -414,13 +507,22 @@ impl PhotocraftApp {
             let Some((_, next)) = self.drop_places.iter().position(|(doc, _)| *doc == active).and_then(|i| self.drop_places.remove(i)) else {
                 return;
             };
-            let (next, frame) = match next {
-                DropPlace::At { source, frame } => (*source, Some(frame)),
+            let (next, dest) = match next {
+                DropPlace::At { source, frame, row } => (*source, Some((frame, row))),
                 next => (next, None),
             };
-            let params = frame.map_or_else(
+            self.placing_group = dest.and_then(|(_, row)| row).map(|row| row.group);
+            let params = dest.map_or_else(
                 || serde_json::json!({}),
-                |frame| serde_json::json!({"frame": frame.map_or(serde_json::Value::Bool(false), |id| serde_json::json!(id.0))}),
+                |(frame, row)| {
+                    let mut p = serde_json::json!({"frame": frame.map_or(serde_json::Value::Bool(false), |id| serde_json::json!(id.0))});
+                    match row.map(|row| self.row_slot(row)) {
+                        Some(RowSlot::Above(id)) => p["above"] = serde_json::json!(id.0),
+                        Some(RowSlot::Below(id)) => p["below"] = serde_json::json!(id.0),
+                        None => {}
+                    }
+                    p
+                },
             );
             let (name, placed) = match next {
                 DropPlace::At { .. } => {
@@ -449,6 +551,7 @@ impl PhotocraftApp {
                 // Running in the background: Free Transform starts when the layer has landed.
                 Ok(started) if crate::jobs_ui::track_place(self, &name, &started) => return,
                 Ok(result) => {
+                    self.note_landed(&result);
                     if result.get("frame").and_then(serde_json::Value::as_u64).is_some() {
                         continue;
                     }
@@ -465,10 +568,11 @@ impl PhotocraftApp {
     /// ([`Services::place_inbox`](crate::Services::place_inbox)), for the document they were
     /// dropped on.
     pub(crate) fn queue_web_places(&mut self) {
-        let arrived: Vec<(DocId, String, Vec<u8>)> =
+        let arrived: Vec<(DocId, String, Vec<u8>, Option<RowDrop>)> =
             self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        for (doc, name, bytes) in arrived {
-            self.queue_drop(doc, DropPlace::Bytes(name, bytes));
+        for (doc, name, bytes, row) in arrived {
+            let place = DropPlace::Bytes(name, bytes);
+            self.queue_drop(doc, if row.is_some() { DropPlace::At { source: Box::new(place), frame: None, row } } else { place });
         }
     }
 

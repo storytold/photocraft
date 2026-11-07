@@ -335,6 +335,20 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     response.context_menu(|ui| super::layers_empty_menu::show(app, ui));
                 }
             }
+            // Files dropped from the OS go directly above the row under the pointer, or the row
+            // below the gap it is in, like a layer dropped from inside the list.
+            if ctx.viewport_id() == egui::ViewportId::ROOT && ui.layer_id().order == egui::Order::Background {
+                let mut top = None;
+                let slots = drawn
+                    .iter()
+                    .map(|&(id, r)| {
+                        let zone = Rect::from_min_max(pos2(r.left(), top.unwrap_or(r.top())), r.right_bottom());
+                        top = Some(r.bottom());
+                        (zone, id)
+                    })
+                    .collect();
+                app.drop_layers = Some(crate::file_open::DropLayers { doc: doc.id, frame: ctx.cumulative_frame_nr(), list: ui.clip_rect(), slots });
+            }
             // Tab / ⇧Tab in a rename: rename the layer below / above next, as in Photoshop. The
             // Background isn't renamed in place (double-clicking it converts it), so it ends there.
             if let Some((from, up)) = crate::layer_row_ui::take_next_rename(ui.ctx())

@@ -355,6 +355,8 @@ pub(crate) struct PlaceInput {
     /// The frame the image goes into: the active layer's, `"frame"` in the params, or none
     /// (`"frame": false`). Its image renders through a smart object.
     pub(super) frame: Option<(LayerId, photocraft_doc::Frame)>,
+    /// The layer the new one goes beside (and how), when not the active layer.
+    pub(super) anchor: Option<(LayerId, crate::layer_place::Place)>,
 }
 
 impl PlaceInput {
@@ -382,6 +384,24 @@ impl PlaceInput {
                     .ok_or_else(|| EngineError::Other("the destination frame is unavailable".into()))
             })
             .transpose()?;
+        // `"above"` / `"below"`: the layer the new one goes directly above / below (a drop on the
+        // Layers panel), instead of the active layer.
+        let layer_param = |key: &str| -> Result<Option<LayerId>> {
+            match p.get(key) {
+                None | Some(Value::Null) => Ok(None),
+                Some(v) => {
+                    let id = LayerId(v.as_u64().ok_or_else(|| EngineError::Other(format!("{key} must be a layer id")))?);
+                    d.doc.layer(id).ok_or_else(|| EngineError::Other("the destination layer is unavailable".into()))?;
+                    Ok(Some(id))
+                }
+            }
+        };
+        let anchor = match (layer_param("above")?, layer_param("below")?) {
+            (Some(_), Some(_)) => return Err(EngineError::Other("give either above or below, not both".into())),
+            (Some(id), None) => Some((id, crate::layer_place::Place::AutoEditable)),
+            (None, Some(id)) => Some((id, crate::layer_place::Place::Below)),
+            (None, None) => None,
+        };
         let canvas = frame.as_ref().map_or((d.doc.size.width as f64, d.doc.size.height as f64), |(_, f)| {
             let [a, b, c, d, _, _] = f.transform.m;
             (a.hypot(b), c.hypot(d))
@@ -411,6 +431,7 @@ impl PlaceInput {
                 PlaceFile::Path(_) => Some(Arc::clone(&d.doc)),
             },
             frame,
+            anchor,
             params: p.clone(),
             file,
             linked,
@@ -439,11 +460,13 @@ pub(crate) struct Prepared {
     pub(super) smart: bool,
     /// The frame the layer fills, if any (it becomes the frame's content instead of a new layer).
     pub(super) frame: Option<LayerId>,
+    /// Insert beside this layer instead of above the active one.
+    pub(super) anchor: Option<(LayerId, crate::layer_place::Place)>,
 }
 
 /// Insert the prepared layer as one undo step and report the place. Runs on the session's thread.
 pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
-    let Prepared { content, layer_name, label, scale, bounds, smart, frame } = p;
+    let Prepared { content, layer_name, label, scale, bounds, smart, frame, anchor } = p;
     let layer = Layer::new(layer_name, content);
     let id = layer.id;
     s.edit(label, move |doc, active| {
@@ -451,7 +474,8 @@ pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
             crate::frame_cmds::put_content(doc, frame_id, layer)?;
             *active = Some(frame_id);
         } else {
-            crate::layer_place::insert_new(doc, *active, layer, crate::layer_place::Place::AutoEditable);
+            let (beside, place) = anchor.map_or((*active, crate::layer_place::Place::AutoEditable), |(id, place)| (Some(id), place));
+            crate::layer_place::insert_new(doc, beside, layer, place);
             *active = Some(id);
         }
         Ok(())

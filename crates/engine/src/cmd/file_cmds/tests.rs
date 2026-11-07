@@ -1920,6 +1920,35 @@ fn place_embedded_centres_fits_and_embeds() {
     }
 }
 
+/// `"above"` puts the placed layer directly above that layer instead of the active one, and a
+/// layer that no longer exists is refused rather than falling back to the top of the stack.
+#[test]
+fn place_embedded_above_a_layer_ignores_the_active_one() {
+    let dir = tmp("place-above");
+    let small = png(&dir, "small.png", 10, 10, "#0000ff");
+    let mut s = session(100, 100, 8);
+    let bottom = s.active().unwrap().doc.layers[0].id;
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let before = doc(&s).layers.len();
+    let r = s.execute("file.placeEmbedded", json!({"path": small, "above": bottom.0})).unwrap();
+    let ids: Vec<u64> = doc(&s).layers.iter().map(|l| l.id.0).collect();
+    assert_eq!(ids.len(), before + 1);
+    assert_eq!(ids.get(1).copied(), r["layer"].as_u64(), "directly above the anchor, not the active layer");
+    assert_eq!(s.active().unwrap().active_layer.map(|l| l.0), r["layer"].as_u64());
+    let gone = s.execute("file.placeEmbedded", json!({"path": small, "above": 999_999_u64}));
+    assert!(gone.is_err(), "a missing destination layer is an error");
+    assert!(s.execute("file.placeEmbedded", json!({"path": small, "above": "x"})).is_err());
+    assert!(s.execute("file.placeEmbedded", json!({"path": small, "above": bottom.0, "below": bottom.0})).is_err(), "above and below exclude each other");
+    assert_eq!(doc(&s).layers.len(), before + 1);
+    // `below` goes directly under the layer: the new bottom of the stack here.
+    let top = doc(&s).layers.last().unwrap().id;
+    let r = s.execute("file.placeEmbedded", json!({"path": small, "below": top.0})).unwrap();
+    let ids: Vec<u64> = doc(&s).layers.iter().map(|l| l.id.0).collect();
+    let (at, anchor) = (ids.iter().position(|i| Some(*i) == r["layer"].as_u64()).unwrap(), ids.iter().position(|i| *i == top.0).unwrap());
+    assert_eq!(at + 1, anchor, "directly below the anchor");
+}
+
 /// Preferences ▸ General ▸ Always Create Smart Objects When Placing: unchecked, an embedded place
 /// lands as a plain pixel layer; a linked place is always a smart object and `"smartObject"` wins.
 #[test]
