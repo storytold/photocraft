@@ -39,13 +39,28 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 /// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
 /// Photoshop; the Background Eraser always shows its sampling hotspot.
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
-    if tool == Tool::QuickSelection {
+    if matches!(tool, Tool::QuickSelection | Tool::SelectionBrush) {
         return false;
     }
     if matches!(tool, Tool::CloneStamp | Tool::Healing) {
         return option || show_crosshair;
     }
     show_crosshair || tool == Tool::BackgroundEraser
+}
+
+/// Draw the document-space brush footprint without inheriting unrelated preset shapes.
+pub(super) fn brush_outline(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, p: Pos2, tool: Tool, option: bool) -> egui::CursorIcon {
+    let brush = &app.session.tools.brush;
+    if tool == Tool::SelectionBrush {
+        let radius = (brush.size.clamp(1.0, 5000.0) * 0.5 * xf.zoom).max(1.0);
+        return crate::tool_cursor::circle(painter, p, radius, false);
+    }
+    let prefs = app.session.prefs();
+    let cur = &prefs.cursors;
+    let centre = brush_tip_centre(tool, option, cur.show_crosshair_in_brush_tip);
+    let axes = crate::brush_cursor::pen_axes(xf, brush, app.stylus.sample());
+    let radius = (brush.size * 0.5 * xf.zoom).max(1.0);
+    crate::brush_cursor::cursor(painter, p, brush, radius, axes, cur.painting == photocraft_engine::prefs::PaintingCursor::NormalTip, centre)
 }
 
 /// The display colour of an RGB triple (0..1 per channel) as an egui colour.

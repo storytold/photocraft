@@ -55,6 +55,7 @@ pub enum Tool {
     Dodge,
     Burn,
     Sponge,
+    SelectionBrush,
     QuickSelection,
     ObjectSelection,
     Pen,
@@ -79,7 +80,7 @@ pub enum Tool {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 68] = [
+    pub const ALL: [Tool; 69] = [
         Tool::Move,
         Tool::Artboard,
         Tool::RectMarquee,
@@ -131,6 +132,7 @@ impl Tool {
         Tool::Sponge,
         Tool::QuickSelection,
         Tool::ObjectSelection,
+        Tool::SelectionBrush,
         Tool::Pen,
         Tool::FreeformPen,
         Tool::CurvaturePen,
@@ -204,6 +206,7 @@ impl Tool {
             Tool::Dodge => "Dodge Tool",
             Tool::Burn => "Burn Tool",
             Tool::Sponge => "Sponge Tool",
+            Tool::SelectionBrush => "Selection Brush Tool",
             Tool::QuickSelection => "Quick Selection Tool",
             Tool::ObjectSelection => "Object Selection Tool",
             Tool::Pen => "Pen Tool",
@@ -283,10 +286,10 @@ impl Tool {
             // In the Marquee flyout, but M cycles only the Rectangular and Elliptical Marquee.
             Tool::SingleRowMarquee | Tool::SingleColumnMarquee => '\0',
             Tool::Dodge | Tool::Burn | Tool::Sponge => 'O',
-            Tool::QuickSelection | Tool::ObjectSelection => 'W',
+            Tool::SelectionBrush | Tool::QuickSelection | Tool::ObjectSelection => 'W',
             Tool::Pen | Tool::FreeformPen | Tool::CurvaturePen => 'P',
             // In the Pen flyout, but P never reaches them.
-            Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => ' ',
+            Tool::AddAnchorPoint | Tool::DeleteAnchorPoint | Tool::ConvertPoint => '\0',
             Tool::PathSelection | Tool::DirectSelection => 'A',
             Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => 'U',
         }

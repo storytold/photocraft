@@ -15,7 +15,7 @@ pub use panel_state::{
     PointCurveDrag, PointCurveState,
 };
 pub use tool::Tool;
-pub use tool_options::{SampleAllLayers, ToolOptions};
+pub use tool_options::{SampleAllLayers, SelectionBrushOptions, ToolOptions};
 use tool_options::{default_brush_tool, default_layer_filter_mode, layer_filter_mode_or_normal, yes};
 pub use transform::{
     BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
@@ -766,17 +766,18 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 68);
+        assert_eq!(Tool::from_name("Selection Brush Tool"), Some(Tool::SelectionBrush));
+        assert_eq!(Tool::ALL.len(), 69);
     }
 
     fn vector_tool_names_parse() {
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));
-        assert_eq!(Tool::DeleteAnchorPoint.key(), ' ');
+        assert_eq!(Tool::DeleteAnchorPoint.key(), '\0');
         assert_eq!(Tool::from_name("convertPoint"), Some(Tool::ConvertPoint));
         assert_eq!(Tool::from_name("Convert Point Tool"), Some(Tool::ConvertPoint));
-        assert_eq!(Tool::ConvertPoint.key(), ' ', "P never reaches it");
+        assert_eq!(Tool::ConvertPoint.key(), '\0', "P never reaches it");
         assert!(!Tool::ConvertPoint.is_brushlike());
         assert_eq!(Tool::from_name("Remove Tool"), Some(Tool::Remove));
         assert_eq!(Tool::Remove.key(), 'J');

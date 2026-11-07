@@ -40,6 +40,7 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
         // A tool seen for the first time takes what the brush has, at Photoshop's smoothing, but
         // in Normal mode: each tool's Mode starts at Normal, so a Multiply Brush doesn't make the
         // first Clone Stamp stroke multiply (or give Healing a mode its menu doesn't have).
+        None if tool == Tool::SelectionBrush => BrushSettings { size: 60.0, hardness: 0.7, opacity: 1.0, ..fresh_brush(&current) },
         // The Art History Brush also starts at full opacity (#10263): its Opacity is its own.
         None => {
             let opacity = if tool == Tool::ArtHistoryBrush { BrushSettings::default().opacity } else { current.opacity };
@@ -100,7 +101,7 @@ pub struct Buttons {
 
 /// Tools with the options-bar brush chip, which opens the Brush Preset picker.
 pub fn has_brush_picker(tool: Tool) -> bool {
-    tool.is_brushlike() || tool == Tool::QuickSelection
+    tool.is_brushlike() || matches!(tool, Tool::QuickSelection | Tool::SelectionBrush)
 }
 
 /// Tools whose canvas right-click opens the Brush Preset picker: the painting tools. The Quick

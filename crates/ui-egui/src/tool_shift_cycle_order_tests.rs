@@ -93,8 +93,8 @@ fn the_first_shift_letter_from_another_tool_lands_on_the_groups_first_tool() {
 }
 
 #[test]
-fn w_cycles_object_selection_quick_selection_magic_wand() {
-    assert_eq!(sequence('W', 4), vec![Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand, Tool::ObjectSelection]);
+fn w_cycles_object_selection_quick_selection_magic_wand_and_selection_brush() {
+    assert_eq!(sequence('W', 5), vec![Tool::ObjectSelection, Tool::QuickSelection, Tool::MagicWand, Tool::SelectionBrush, Tool::ObjectSelection]);
 }
 
 #[test]
@@ -133,7 +133,7 @@ fn with_the_shift_switch_preference_off_plain_w_keeps_the_old_order() {
     app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
     app.ui.tool = Tool::MagicWand;
     let mut seen = Vec::new();
-    for _ in 0..3 {
+    for _ in 0..4 {
         let ctx = egui::Context::default();
         let modifiers = Modifiers::NONE;
         let raw = egui::RawInput {
@@ -145,7 +145,7 @@ fn with_the_shift_switch_preference_off_plain_w_keeps_the_old_order() {
         ctx.end_pass().textures_delta.clear();
         seen.push(app.ui.tool);
     }
-    assert_eq!(seen, vec![Tool::QuickSelection, Tool::ObjectSelection, Tool::MagicWand]);
+    assert_eq!(seen, vec![Tool::QuickSelection, Tool::ObjectSelection, Tool::SelectionBrush, Tool::MagicWand]);
 }
 
 #[test]

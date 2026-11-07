@@ -1586,22 +1586,25 @@ fn freehand_tools_are_the_ones_that_follow_a_path() {
 
 #[test]
 fn clone_stamp_centre_appears_only_with_option() {
-    assert!(!brush_tip_centre(Tool::CloneStamp, false, false));
-    assert!(brush_tip_centre(Tool::CloneStamp, true, false));
-    assert!(brush_tip_centre(Tool::Healing, true, false));
-    assert!(!brush_tip_centre(Tool::Healing, false, false));
-    assert!(brush_tip_centre(Tool::CloneStamp, false, true));
-    assert!(!brush_tip_centre(Tool::PatternStamp, true, false), "Pattern Stamp keeps the brush cursor; Option does not switch it to a clone-source mark");
-    assert!(!brush_tip_centre(Tool::QuickSelection, false, true));
-    assert!(brush_tip_centre(Tool::BackgroundEraser, false, false));
+    assert!(!super::cursors::brush_tip_centre(Tool::CloneStamp, false, false));
+    assert!(super::cursors::brush_tip_centre(Tool::CloneStamp, true, false));
+    assert!(super::cursors::brush_tip_centre(Tool::Healing, true, false));
+    assert!(!super::cursors::brush_tip_centre(Tool::Healing, false, false));
+    assert!(super::cursors::brush_tip_centre(Tool::CloneStamp, false, true));
+    assert!(
+        !super::cursors::brush_tip_centre(Tool::PatternStamp, true, false),
+        "Pattern Stamp keeps the brush cursor; Option does not switch it to a clone-source mark"
+    );
+    assert!(!super::cursors::brush_tip_centre(Tool::QuickSelection, false, true));
+    assert!(super::cursors::brush_tip_centre(Tool::BackgroundEraser, false, false));
 }
 
 #[test]
 fn brush_tip_centre_follows_the_crosshair_preference_at_any_size() {
     // A large tip used to show the centre mark whatever Show Crosshair in Brush Tip said.
     for tool in [Tool::Brush, Tool::Eraser, Tool::PatternStamp, Tool::Dodge] {
-        assert!(!brush_tip_centre(tool, false, false), "{tool:?}: off");
-        assert!(brush_tip_centre(tool, false, true), "{tool:?}: on");
+        assert!(!super::cursors::brush_tip_centre(tool, false, false), "{tool:?}: off");
+        assert!(super::cursors::brush_tip_centre(tool, false, true), "{tool:?}: on");
     }
 }
 

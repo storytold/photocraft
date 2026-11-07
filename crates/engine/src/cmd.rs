@@ -131,6 +131,7 @@ pub mod retouch_cmds;
 pub mod sample_cmds;
 pub mod sampler_cmds;
 pub mod select_extra_cmds;
+pub mod selection_brush_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;
 pub mod smart_cmds;
@@ -471,25 +472,7 @@ fn build() -> Vec<CommandSpec> {
                     };
                     // Sparse Add/Subtract keeps untouched pixels outside the canvas. Only pixels
                     // inside the document count when deciding whether a selection remains.
-                    let has_on_canvas_pixels = (combined.default_bytes().first().copied().unwrap_or(0) != 0 && {
-                        let canvas_tiles = u64::from(area.width().div_ceil(TILE_SIZE as u32)) * u64::from(area.height().div_ceil(TILE_SIZE as u32));
-                        let stored = combined.tiles().filter(|(coord, _)| !coord.rect().intersect(&area).is_empty()).count() as u64;
-                        stored < canvas_tiles
-                    }) || combined.tiles().any(|(coord, tile)| {
-                        let tile_rect = coord.rect();
-                        let overlap = tile_rect.intersect(&area);
-                        if overlap.is_empty() {
-                            return false;
-                        }
-                        let x0 = (overlap.x0 - tile_rect.x0) as usize;
-                        let x1 = (overlap.x1 - tile_rect.x0) as usize;
-                        (overlap.y0 - tile_rect.y0..overlap.y1 - tile_rect.y0).any(|y| {
-                            let row_start = y as usize * TILE_SIZE as usize;
-                            let start = row_start + x0;
-                            tile.bytes().get(start..row_start + x1).is_some_and(|row| row.iter().any(|&v| v != 0))
-                        })
-                    });
-                    doc.selection = has_on_canvas_pixels.then_some(combined);
+                    doc.selection = selection_has_canvas_pixels(&combined, area).then_some(combined);
                     Ok(())
                 })?;
                 Ok(Value::Null)
@@ -1328,6 +1311,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::vector_cmds::specs());
     v.extend(crate::path_edit_cmds::specs());
     v.extend(crate::smartselect_cmds::specs());
+    v.extend(crate::selection_brush_cmds::specs());
     v.extend(crate::cutout_cmds::specs());
     v.extend(crate::symmetry_cmds::specs());
     v.extend(crate::edit_cmds::specs());
@@ -1437,6 +1421,28 @@ fn test_panic_command() -> CommandSpec {
         panic!("test: this command panicked on purpose")
     }
     CommandSpec { id: "test.panic", label: "Test Panic", menu: &[], shortcut: None, params: r##"{}"##, enabled: |_: &Session| Ok(()), run, journal: false }
+}
+
+/// Whether a grayscale selection has coverage within the document bounds.
+fn selection_has_canvas_pixels(mask: &Surface, area: Rect) -> bool {
+    (mask.default_bytes().first().copied().unwrap_or(0) != 0 && {
+        let canvas_tiles = u64::from(area.width().div_ceil(TILE_SIZE as u32)) * u64::from(area.height().div_ceil(TILE_SIZE as u32));
+        let stored = mask.tiles().filter(|(coord, _)| !coord.rect().intersect(&area).is_empty()).count() as u64;
+        stored < canvas_tiles
+    }) || mask.tiles().any(|(coord, tile)| {
+        let tile_rect = coord.rect();
+        let overlap = tile_rect.intersect(&area);
+        if overlap.is_empty() {
+            return false;
+        }
+        let x0 = (overlap.x0 - tile_rect.x0) as usize;
+        let x1 = (overlap.x1 - tile_rect.x0) as usize;
+        (overlap.y0 - tile_rect.y0..overlap.y1 - tile_rect.y0).any(|y| {
+            let row_start = y as usize * TILE_SIZE as usize;
+            let start = row_start + x0;
+            tile.bytes().get(start..row_start + x1).is_some_and(|row| row.iter().any(|&v| v != 0))
+        })
+    })
 }
 
 #[cfg(test)]

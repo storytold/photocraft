@@ -11,6 +11,7 @@ use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
 use crate::photo_util::{par_map, par_rows};
+pub mod brush;
 
 /// How a new selection combines with the current one.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]

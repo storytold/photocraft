@@ -20,6 +20,9 @@ pub(crate) fn finish_release(app: &mut PhotocraftApp, d: Drag, click: bool) {
 /// `click`: whether the gesture was a click, when the caller saw the release before snapping;
 /// otherwise the end point decides.
 fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
+    if d.tool == Tool::SelectionBrush && (app.ui.tool != Tool::SelectionBrush || !d.selection_brush_valid(app)) {
+        return;
+    }
     // Control can select a different tool and release before the next frame cancels the drag.
     // Cancel before even recording a Shift-stroke anchor, including the preview fallback paths.
     if d.tool == Tool::MixerBrush && app.ui.tool != Tool::MixerBrush {
