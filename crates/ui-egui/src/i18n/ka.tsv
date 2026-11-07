@@ -4705,7 +4705,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Frame coordinates must be finite and within 600000 pixels	ჩარჩოს კოორდინატები სასრული უნდა იყოს და 600000 პიქსელს არ უნდა აღემატებოდეს
 	Import Image…	გამოსახულების იმპორტი…
 	Invalid frame transform	ჩარჩოს არასწორი გარდაქმნა
-	Invalid nested file drop	ფაილის ჩადგმული ჩაგდება არასწორია
+	Invalid nested file drop	ფაილის ჩაგდების არასწორი მოთხოვნა
 	New Frame	ახალი ჩარჩო
 	Replace Image…	გამოსახულების ჩანაცვლება…
 	The frame is locked	ჩარჩო ჩაკეტილია
