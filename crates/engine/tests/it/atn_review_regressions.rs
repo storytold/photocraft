@@ -365,6 +365,27 @@ fn batch_save_close_refuses_targa_24_alpha_loss() {
     }
 }
 
+/// Save and Close refuses a 24-bit BMP of a transparent BMP before writing, as it does a Targa;
+/// 32 bits rewrite it with its transparency.
+#[test]
+fn batch_save_close_refuses_bmp_24_alpha_loss() {
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image};
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("alpha.bmp");
+    let image = Image::from_u8(2, 1, ChannelLayout::Rgba, vec![11, 22, 33, 255, 77, 88, 99, 0]).unwrap();
+    let before = photocraft_codecs::encode(&image, Format::Bmp, &EncodeOptions::default()).unwrap();
+    std::fs::write(&input, &before).unwrap();
+    let result = Session::new().execute("file.automate.batch", json!({"input":[input],"destination":"saveAndClose","bmpBits":24,"steps":[]})).unwrap();
+    assert_eq!(result["files"], json!([]), "{result}");
+    assert!(result["errors"][0]["error"].as_str().unwrap().contains("24-bit BMP"), "{result}");
+    assert_eq!(std::fs::read(&input).unwrap(), before, "the source is left as it was");
+    let result = Session::new().execute("file.automate.batch", json!({"input":[input],"destination":"saveAndClose","bmpBits":32,"steps":[]})).unwrap();
+    assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
+    let after = photocraft_codecs::decode(&std::fs::read(&input).unwrap()).unwrap();
+    assert_eq!(after.layout(), ChannelLayout::Rgba);
+    assert_eq!((after.data()[3], after.data()[7]), (255, 0), "the transparency is kept");
+}
+
 /// Automatic/32-bit Targa keeps hidden RGB and alpha; separate 24-bit output reports the loss.
 #[test]
 fn batch_targa_preservation_and_export_warnings() {

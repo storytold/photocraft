@@ -1275,3 +1275,18 @@ fn bmp_bits_choose_the_bmp_depth() {
     let img = photocraft_codecs::decode(&r.bytes).unwrap();
     assert!(img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255), "opaque alpha");
 }
+
+/// Save and Close (`preserve_alpha`) refuses a 24-bit BMP that would composite the transparency
+/// over white in place, as it does a 24-bit Targa; 32 bits, no choice and an opaque document
+/// still write.
+#[test]
+fn preserve_alpha_refuses_a_24_bit_bmp_of_transparency() {
+    let d = half_transparent_doc();
+    let opts = |bits| ExportOptions { bmp_bits: bits, preserve_alpha: true, ..ExportOptions::default() };
+    let err = export(&d, "a.bmp", &opts(Some(BmpBits::Bits24))).unwrap_err();
+    assert!(matches!(&err, IoError::Unsupported(m) if m.contains("24-bit BMP")), "{err:?}");
+    assert_eq!(bmp_bpp(&export(&d, "a.bmp", &opts(Some(BmpBits::Bits32))).unwrap().bytes), 32);
+    assert_eq!(bmp_bpp(&export(&d, "a.bmp", &opts(None)).unwrap().bytes), 32);
+    let (opaque, _) = tga_rgb_doc();
+    assert_eq!(bmp_bpp(&export(&opaque, "a.bmp", &opts(Some(BmpBits::Bits24))).unwrap().bytes), 24);
+}
