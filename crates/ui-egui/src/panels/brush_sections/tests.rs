@@ -347,12 +347,17 @@ fn check_scatter_header(section: usize) {
             let mut h = section_harness(section, b.clone());
             crate::PhotocraftApp::setup_context(&h.ctx, kind);
             h.run_steps(3);
-            let label = h.get_by_label("Scatter").rect();
+            let label = caption_rect(&h, "Scatter");
             let axes = h.get_by_label("Both Axes").rect();
             let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(214.0)).unwrap().rect();
             assert!((label.center().y - axes.center().y).abs() < 2.0, "{kind:?}, section {section}: axes belongs on the Scatter header");
             assert!((axes.center().y - field.center().y).abs() < 2.0, "{kind:?}, section {section}: axes and percentage share a row");
             assert!(label.right() < axes.left() && axes.right() < field.left(), "{kind:?}, section {section}: label, checkbox, percentage order");
+            assert_eq!(
+                h.query_all_by_role_and_label(Role::Slider, "Scatter").count(),
+                1,
+                "{kind:?}, section {section}: the slider is named by its caption, like other slider rows"
+            );
             assert_eq!(h.state(), &b, "rendering retains fractional scatter and other settings");
         }
     }
@@ -396,7 +401,7 @@ fn scatter_header_preserves_values_percentage_limits_and_label_scrubbing() {
             b.dual_brush.scatter = 2.15;
         }
         assert_eq!(h.state(), &b, "percentage edits preserve the other brush block");
-        let label = h.get_by_label("Scatter").rect().center();
+        let label = caption_rect(&h, "Scatter").center();
         drag(&mut h, label, label + vec2(18.0, 0.0));
         let amount = if section == 2 { h.state().scattering.scatter.jitter } else { h.state().dual_brush.scatter };
         assert!(amount > 2.15, "the label still scrubs the percentage across the checkbox");

@@ -383,15 +383,21 @@ fn scatter_row(ui: &mut egui::Ui, amount: &mut f32, both_axes: &mut bool) {
     let t = Tokens::get(ui.ctx());
     let mut percent = (*amount * 100.0).round();
     let mut changed = false;
-    ui.horizontal(|ui| {
-        let label = ui.label(RichText::new(tl!("Scatter")).color(t.text_dim));
-        widgets::scrub_label_within(ui, &label, f32::INFINITY);
-        widgets::checkbox(ui, both_axes, tl!("Both Axes"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            changed = widgets::value_field(ui, &mut percent, 0.0..=1000.0, "%", 74.0).changed();
-        });
-    });
-    changed |= widgets::slider(ui, &mut percent, 0.0..=1000.0, None).changed();
+    let label = ui
+        .horizontal(|ui| {
+            let label = ui.label(RichText::new(tl!("Scatter")).color(t.text_dim));
+            widgets::scrub_label_within(ui, &label, f32::INFINITY);
+            widgets::checkbox(ui, both_axes, tl!("Both Axes"));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                changed = widgets::value_field(ui, &mut percent, 0.0..=1000.0, "%", 74.0).changed();
+            });
+            label.id
+        })
+        .inner;
+    // Named by its caption, like every `slider_row` slider.
+    let slider = widgets::slider(ui, &mut percent, 0.0..=1000.0, None);
+    slider.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(percent), tl!("Scatter")));
+    changed |= slider.labelled_by(label).changed();
     if changed {
         *amount = (percent.round() / 100.0).clamp(0.0, 10.0);
     }
