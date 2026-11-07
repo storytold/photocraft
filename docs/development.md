@@ -181,7 +181,8 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` | Desktop app only: automation write root (`--automation-write-root`). Headless CLI modes require the flag |
 | `PHOTOCRAFT_IN_WINDOW_MENUS=1` (or `--in-window-menus`) | macOS: keep the menus inside the window instead of the menu bar. `0`, `false`, `no`, `off` or empty is off |
 | `PHOTOCRAFT_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
-| `PHOTOCRAFT_NATIVE_WAYLAND=1` | Linux: stay on native Wayland when a pen is attached (by default the window then opens through Xwayland, because Wayland gives the app no pen input; #639). A pen is an input device with `BTN_TOOL_PEN` and the `ABS_X`/`ABS_Y` axes; virtual keyboards that claim every key are not pens (#1072) |
+| `PHOTOCRAFT_NATIVE_WAYLAND=1` | Linux: stay on native Wayland when a pen is attached even if the compositor has no tablet protocol (by default the window then opens through Xwayland, the only way the pen works there; #639). With the tablet protocol (`zwp_tablet_manager_v2`) the window stays on native Wayland anyway and reads the pen itself (#79). A pen is an input device with `BTN_TOOL_PEN` and the `ABS_X`/`ABS_Y` axes; virtual keyboards that claim every key are not pens (#1072) |
+| `PHOTOCRAFT_XWAYLAND_PEN=1` | Linux: open the window through Xwayland when a pen is attached even if the compositor has the tablet protocol (the behaviour before native Wayland pens, #79) |
 | `PHOTOCRAFT_GPU_ADAPTER=nvidia` | Linux: use the graphics adapter whose name contains this (case-insensitive); overrides `performance.gpuAdapter` for one launch |
 | `WGPU_BACKEND=dx12` | Pick the wgpu backend(s) (`vulkan`, `dx12`, `metal`, `gl`); overrides `performance.gpuBackend` and the startup fallback. Tests read it too: on Windows with an Intel GPU, run them with `WGPU_BACKEND=dx12`, since loading the Intel Vulkan driver crashes the test process with `STATUS_ACCESS_VIOLATION` (#4) |
 | `WGPU_DX12_COMPILER=fxc` | DX12 shader compiler (`fxc`, `dxc`, `auto`); `dxc` and `auto` look `dxcompiler.dll` up through the DLL search path |
@@ -196,6 +197,17 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `PHOTOCRAFT_FRAME_LATENCY=1` (or `--frame-latency`) | Frames the swap chain may queue, 1 to 3 (wgpu's GL backend ignores it). For latency comparisons; shown in the stroke trace. A bad `--frame-latency` is a usage error; a bad variable is logged and ignored |
 | `PHOTOCRAFT_PRINT_PORTAL=1` | Linux: File › Print always opens the system print dialog (the XDG print portal) instead of talking to CUPS; `0` never does. See [printing](printing.md). |
 | `PHOTOCRAFT_THEME_FILE=tokens.json` | **Debug builds only:** live design-token overrides, re-read on change |
+
+### Pen tablets on Linux
+
+When the compositor offers `zwp_tablet_manager_v2` (check with `wayland-info | grep
+zwp_tablet_manager_v2`), PhotoCraft binds it on winit's own connection and reads the pen natively
+on Wayland; it prints `tablet: reading the pen through the Wayland tablet protocol`. Pressure,
+cursor movement, clicks, drag, context menus, mouse/pen switching and interaction with the rest
+of the UI are hardware-verified on KDE Plasma 6.8.2 with a Wacom One (CTL-472). Compositors
+without the protocol keep the Xwayland fallback, and `PHOTOCRAFT_XWAYLAND_PEN=1` forces it.
+Eraser, tilt and rotation need a pen that reports them; [wl.rs](../crates/tablet/src/wl.rs)
+tests that mapping with synthetic protocol events.
 
 ### Live design tokens
 
@@ -216,7 +228,7 @@ stroke trace: 62 frames on vulkan NVIDIA GeForce RTX 5090 (p50/p95 ms): interval
 | Column | What it is |
 |---|---|
 | `interval` | Time between frame starts while drawing (the display's refresh period when the app keeps up) |
-| `moves/frame` | Pointer moves the OS delivered per frame (control-channel `ui.pointer` input bypasses raw input and counts 0) |
+| `moves/frame` | Pointer moves the OS (or the native Wayland pen reader) delivered per frame (control-channel `ui.pointer` input bypasses raw input and counts 0) |
 | `stroke` | Rendering the stroke's new points (the live stroke; on the last frame, the commit) |
 | `canvas` | Canvas refresh: composite and upload |
 | `ui` | Building the UI, the two above included |

@@ -255,8 +255,9 @@ fn claim_single_instance(
     }
 }
 
-/// The display server to open the window on: Xwayland for a pen on Wayland, which gives this app
-/// no pen input (#639). Exits with the package to install when its libraries are missing.
+/// The display server to open the window on: Xwayland for a pen on a Wayland compositor without
+/// the tablet protocol, which gives this app no pen input (#639). Exits with the package to
+/// install when its libraries are missing.
 #[cfg(target_os = "linux")]
 fn linux_display_session() -> linux_libs::DisplaySession {
     let session = tablet::display_session();
@@ -339,6 +340,8 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
     }
 }
 
+/// Start PhotoCraft: tune memory, install logging and the crash guard, pick the display session
+/// (Xwayland when a pen needs it), then run the UI with the platform pen readers.
 fn main() -> eframe::Result {
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
@@ -418,6 +421,12 @@ fn main() -> eframe::Result {
     let tablet_monitor = std::cell::OnceCell::new();
     #[cfg(target_os = "macos")]
     let tablet_monitor = &tablet_monitor;
+    // The Wayland tablet reader: it reads winit's display, so it stops when this drops, after the
+    // event loop returned and before the process exits.
+    #[cfg(target_os = "linux")]
+    let wayland_tablet = std::cell::OnceCell::new();
+    #[cfg(target_os = "linux")]
+    let wayland_tablet = &wayland_tablet;
     // The Windows pointer message hook; dropping it unhooks when the event loop returns.
     #[cfg(target_os = "windows")]
     let tablet_monitor_win = std::cell::OnceCell::new();
@@ -659,8 +668,9 @@ fn main() -> eframe::Result {
             #[cfg(not(target_os = "linux"))]
             let portal = false;
             app.services.screen_pick = screen_color::service(cc, portal);
-            // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
-            // write into the stylus feed. The monitor goes in here, not before the event loop:
+            // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 and
+            // Wayland readers write into the stylus feed (on Wayland the pen's motion and buttons
+            // too, which winit never sees there). The monitor goes in here, not before the event loop:
             // AppKit's shared application only exists once winit created it (#759).
             #[cfg(target_os = "macos")]
             if let Some(monitor) = tablet::install_macos(&app.stylus.feed) {
@@ -680,6 +690,10 @@ fn main() -> eframe::Result {
             }
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
+            #[cfg(target_os = "linux")]
+            if let Some(reader) = tablet::spawn_wayland(cc, &app.stylus.feed, display) {
+                let _ = wayland_tablet.set(reader);
+            }
             app.services.right_button_down = tablet::right_button_service();
             app.services.pen_end = tablet::pen_end_service();
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
