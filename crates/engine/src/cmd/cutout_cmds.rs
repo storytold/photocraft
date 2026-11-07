@@ -1,7 +1,8 @@
 //! Remove Background, Photoshop's Quick Action for a pixel layer (Properties › Quick Actions):
 //! Select Subject with a light edge refinement, turned into a layer mask, in one history step.
 //! Like Photoshop it is non-destructive (the pixels stay; the mask hides the background), turns
-//! the Background layer into a normal layer first and has no menu item.
+//! the Background layer into a normal layer first and has no menu item. With a subject model ready
+//! (see [`crate::subject_model`]) the model finds the subject and its soft mask is used as it is.
 
 use photocraft_algo::matting::{self, RefineParams};
 use photocraft_algo::segment::subject;
@@ -40,7 +41,7 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
 /// doesn't fill the canvas (placed, or the canvas grown) would otherwise stand out from the
 /// empty canvas around it as the subject, and the mask would reveal its whole rectangle, which a
 /// Stroke then outlines (#8235). The whole canvas when sampling all layers.
-fn subject_area(l: &Layer, canvas: Rect, sample_all: bool) -> Rect {
+pub(crate) fn subject_area(l: &Layer, canvas: Rect, sample_all: bool) -> Rect {
     let Some(s) = l.surface().filter(|_| !sample_all) else { return canvas };
     let empty_around = s.format().alpha && s.default_pixel().last().is_some_and(|a| *a <= 0.0);
     let b = s.content_bounds().intersect(&canvas);
@@ -49,26 +50,37 @@ fn subject_area(l: &Layer, canvas: Rect, sample_all: bool) -> Rect {
 
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
+    let model = crate::subject_model_cmds::pick(s, CMD, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     check(doc, layer).map_err(EngineError::Other)?;
     let sample_all = p.get("sampleAllLayers").and_then(Value::as_bool).unwrap_or(false);
     let refine = p.get("refine").and_then(Value::as_bool).unwrap_or(true);
     let area = subject_area(layer, doc.bounds(), sample_all);
+    let method = if model.is_some() { "model" } else { "classic" };
     crate::jobs::edit_job(
         s,
         "Remove Background",
         move |doc, _, ctx| {
-            // Cancel reaches the min cuts inside Select Subject, so Esc doesn't wait for them.
-            let found = ctx
-                .stage(0.1, 0.6, "Finding subject", |ctl| with_doc_sampler(doc, Some(id), sample_all, |smp, _| subject::select_subject_with(smp, area, ctl)))
-                .map_err(|_| EngineError::Cancelled)?;
+            let found = match &model {
+                Some(model) => {
+                    ctx.progress(0.1, "Finding subject");
+                    crate::subject_model_cmds::find_in(model, doc, Some(id), sample_all, area, ctx)?
+                }
+                // Cancel reaches the min cuts inside Select Subject, so Esc doesn't wait for them.
+                None => ctx
+                    .stage(0.1, 0.6, "Finding subject", |ctl| {
+                        with_doc_sampler(doc, Some(id), sample_all, |smp, _| subject::select_subject_with(smp, area, ctl))
+                    })
+                    .map_err(|_| EngineError::Cancelled)?,
+            };
             let region = found.ok_or_else(|| EngineError::Other("no subject found".into()))?;
             let mut surface = matting::region_surface(&region);
             if ctx.cancelled() {
                 return Err(EngineError::Cancelled);
             }
-            if refine {
+            // A model's mask is already soft along hair and fur.
+            if refine && model.is_none() {
                 let refined = ctx.stage(0.6, 0.95, "Refining edge", |interrupt| {
                     with_doc_sampler(doc, Some(id), sample_all, |smp, _| matting::refine_surface_with_interrupt(smp, &surface, area, &REFINE, None, interrupt))
                 });
@@ -84,7 +96,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let b = surface.content_bounds();
             Ok([b.x0, b.y0, b.width() as i32, b.height() as i32])
         },
-        move |bounds| json!({ "layer": id.0, "bounds": bounds }),
+        move |bounds| json!({ "layer": id.0, "bounds": bounds, "method": method }),
     )
 }
 
@@ -95,7 +107,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Remove Background",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"sampleAllLayers":bool=false,"refine":bool=true} → {layer,bounds} (adds a layer mask from Select Subject; the Background becomes a normal layer)"##,
+        params: r##"{"layer":id?,"sampleAllLayers":bool=false,"refine":bool=true,"method":"auto"|"model"|"classic"="auto"} → {layer,bounds,method} (adds a layer mask from Select Subject; the Background becomes a normal layer; auto uses the subject model when it is ready, and refine applies only to classic)"##,
         enabled,
         run,
         journal: true,

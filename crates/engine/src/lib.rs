@@ -45,6 +45,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
+pub mod subject_model;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
@@ -149,6 +150,7 @@ pub use cmd::smartselect_cmds;
 pub use cmd::solid_fill_cmds;
 pub use cmd::stamp_cmds;
 pub use cmd::style_asl_cmds;
+pub use cmd::subject_model_cmds;
 pub use cmd::swatch_cmds;
 pub use cmd::symmetry_cmds;
 use cmd::timeline_cmds;
@@ -310,6 +312,9 @@ pub struct Session {
     link_missing: std::collections::HashSet<(u64, String)>,
     /// Select Subject's last result, reused while the pixels are unchanged (#2865).
     subject_cache: smartselect_cmds::SubjectCache,
+    /// The subject model the app installed (see [`subject_model`]); `None` keeps Select Subject
+    /// and Remove Background on their built-in method.
+    subject_model: Option<subject_model::SharedSubjectModel>,
     /// Object Selection's Object Finder results (#4087), shared by the hover preview and the
     /// click that commits it; valid while the pixels are unchanged.
     pub object_finder: smartselect_cmds::ObjectFinderCache,

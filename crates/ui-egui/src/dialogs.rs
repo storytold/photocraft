@@ -277,19 +277,6 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 /// it. Returns `Some(true)` / `Some(false)` when the body itself answered OK / Cancel.
 /// The body of a command dialog: the first handler whose marker the fields carry. The prompts and
 /// small editors come first; the rest are in `command_body_more`.
-/// The delete confirmations: a layer from the Layers panel's trash, or a note (#11788).
-fn delete_prompt(fields: &Fields) -> bool {
-    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields)
-}
-
-fn delete_prompt_body(ui: &mut egui::Ui, fields: &mut Fields) {
-    if crate::analysis_ui::owns_delete_note(fields) {
-        crate::analysis_ui::delete_note_body(ui, fields);
-    } else {
-        crate::delete_layer_prompt::body(ui, fields);
-    }
-}
-
 fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
@@ -305,7 +292,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::channel_options_ui::owns(fields) => crate::channel_options_ui::body(ui, fields),
         _ if crate::channel_options_ui::owns_new_spot(fields) => crate::channel_options_ui::new_spot_body(ui, fields),
         _ if crate::shape_dialog::owns(fields) => crate::shape_dialog::body(app, ui, fields),
-        _ if delete_prompt(fields) => delete_prompt_body(ui, fields),
+        _ if is_short_prompt(fields) => short_prompt_body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
@@ -523,6 +510,14 @@ fn button_row(
                 fields.insert("choice".into(), json!("new"));
             }
             hit
+        } else if crate::subject_model_prompt::owns(fields) {
+            // Download / Cancel / Use Built-in Method: Enter downloads.
+            let built_in = DialogButton::new(ButtonRole::Alternate, tl!("Use Built-in Method"), 150.0);
+            let hit = dialog_buttons(ui, &[ok, cancel, built_in]);
+            if hit == Some(ButtonRole::Alternate) {
+                fields.insert("choice".into(), json!("builtIn"));
+            }
+            hit
         } else {
             dialog_buttons(ui, &[ok, cancel])
         };
@@ -538,6 +533,34 @@ fn button_row(
     (outcome, apply_requested)
 }
 
+/// A prompt that asks before a command runs: deleting a layer from the Layers panel's trash or a
+/// note (#11788), or the subject model's offer.
+fn is_short_prompt(fields: &serde_json::Map<String, Value>) -> bool {
+    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields) || crate::subject_model_prompt::owns(fields)
+}
+
+/// The body of a prompt [`is_short_prompt`] names.
+fn short_prompt_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
+    if crate::subject_model_prompt::owns(fields) {
+        crate::subject_model_prompt::body(ui, fields);
+    } else if crate::analysis_ui::owns_delete_note(fields) {
+        crate::analysis_ui::delete_note_body(ui, fields);
+    } else {
+        crate::delete_layer_prompt::body(ui, fields);
+    }
+}
+
+/// The OK of a prompt [`is_short_prompt`] names.
+fn short_prompt_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    if crate::subject_model_prompt::owns(fields) {
+        crate::subject_model_prompt::confirm(app, fields)
+    } else if crate::analysis_ui::owns_delete_note(fields) {
+        crate::analysis_ui::confirm_delete_note(app, fields)
+    } else {
+        crate::delete_layer_prompt::confirm(app, fields)
+    }
+}
+
 /// The default button's label: what OK means for this dialog.
 fn ok_label(d: &Dialog) -> &'static str {
     if d.kind == DialogKind::NewDocument {
@@ -548,6 +571,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
         tl!("Delete")
+    } else if crate::subject_model_prompt::owns(&d.fields) {
+        tl!("Download")
     } else if crate::analysis_ui::owns_delete_note(&d.fields) {
         tl!("Yes")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
@@ -881,6 +906,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     merge_channels_ui::owns,
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
+    crate::subject_model_prompt::owns,
     crate::analysis_ui::owns_delete_note,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
@@ -1074,7 +1100,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::channel_options_ui::owns(&d.fields) => crate::channel_options_ui::confirm(app, &d.fields),
         _ if crate::channel_options_ui::owns_new_spot(&d.fields) => crate::channel_options_ui::confirm_new_spot(app, &d.fields),
         _ if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
-        _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
+        _ if is_short_prompt(&d.fields) => short_prompt_confirm(app, &d.fields),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
@@ -1098,7 +1124,6 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
-        _ if crate::analysis_ui::owns_delete_note(&d.fields) => crate::analysis_ui::confirm_delete_note(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
@@ -1279,6 +1304,7 @@ pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod stack_dialog;
 pub mod stroke_ui;
+pub mod subject_model_prompt;
 pub mod targa_options_ui;
 #[cfg(test)]
 mod tests;

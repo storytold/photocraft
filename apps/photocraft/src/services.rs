@@ -731,6 +731,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         }) as photocraft_ui_egui::AutomationCommandFn
     });
     Services {
+        // Select Subject and Remove Background through the Craft suite's shared AI layer. Reads
+        // settings only when asked; the model is fetched only after a person agrees.
+        subject_model: crate::subject_ai::shared(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             crate::crash_guard::guard("Open", || {
                 photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())

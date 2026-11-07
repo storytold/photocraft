@@ -185,6 +185,7 @@ pub use dialogs::snapshot_dialog;
 pub(crate) use dialogs::solid_fill_ui;
 pub use dialogs::stack_dialog;
 pub use dialogs::stroke_ui;
+pub use dialogs::subject_model_prompt;
 pub use dialogs::targa_options_ui;
 pub use dialogs::tiff_options_ui;
 pub use dialogs::vp_ui;

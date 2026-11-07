@@ -408,7 +408,8 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
 /// cannot acquire such settings through the automation interface.
 pub fn authorize_desktop_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
     authorize_engine_command(id, params)?;
-    if id.starts_with("image.mode.") {
+    // Only a person agrees to a model's terms.
+    if id.starts_with("image.mode.") || id == photocraft_engine::subject_model_cmds::INSTALL_CMD {
         return Err(command_error(id));
     }
     Ok(())

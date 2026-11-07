@@ -307,6 +307,9 @@ pub struct SubjectCache {
     doc_id: Option<photocraft_doc::DocId>,
     /// The sampled layer; `None` = the composite.
     target: Option<LayerId>,
+    /// The name of the subject model that found it; `None` for the built-in method. Another model
+    /// (a person can choose one in another Craft app) finds it again.
+    model: Option<String>,
     region: Option<std::sync::Arc<Region>>,
 }
 
@@ -322,20 +325,45 @@ impl SubjectCache {
 fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
     // The selected layer's pixels; the composite only when no pixel layer is selected.
     let all_layers = b(p, "sampleAllLayers", false);
+    let (model, by_model) = crate::subject_model_cmds::pick_named(s, "select.subject", p)?.unzip();
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // What `with_doc_sampler` samples: the active layer's pixels, else the composite.
     let target = d.active_layer.filter(|id| !all_layers && d.doc.layer(*id).and_then(Layer::surface).is_some());
     let c = &s.subject_cache;
-    let hit = c.target == target && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
+    let hit = c.model == by_model && c.target == target && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
+    let selection = mode(p, "replace");
     let region = if hit {
         c.region.clone()
+    } else if let Some(model) = model {
+        // Seconds on a graphics card, longer on the processor: a job, unlike the built-in method.
+        let doc = std::sync::Arc::clone(&d.doc);
+        let layer = d.active_layer;
+        return crate::jobs::run(
+            s,
+            "Select Subject",
+            true,
+            move |ctx| {
+                let area = layer.and_then(|id| doc.layer(id)).map_or(doc.bounds(), |l| crate::cutout_cmds::subject_area(l, doc.bounds(), all_layers));
+                let found = crate::subject_model_cmds::find_in(&model, &doc, layer, all_layers, area, ctx)?;
+                Ok((doc, found.map(std::sync::Arc::new)))
+            },
+            move |s, (doc, region)| {
+                s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, model: by_model, region: region.clone() };
+                apply_subject(s, region.as_deref(), selection)
+            },
+        );
     } else {
         let doc = std::sync::Arc::clone(&d.doc);
         let region = with_doc_sampler(&doc, d.active_layer, all_layers, |smp, doc| subject::select_subject(smp, doc.bounds())).map(std::sync::Arc::new);
-        s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, region: region.clone() };
+        s.subject_cache = SubjectCache { doc: std::sync::Arc::downgrade(&doc), doc_id: Some(doc.id), target, model: by_model, region: region.clone() };
         region
     };
-    let out = apply(s, "Select Subject", region.as_deref(), mode(p, "replace"))?;
+    apply_subject(s, region.as_deref(), selection)
+}
+
+/// Stores Select Subject's `region` as one history step.
+fn apply_subject(s: &mut Session, region: Option<&Region>, selection: SelectionMode) -> Result<Value> {
+    let out = apply(s, "Select Subject", region, selection)?;
     // Follow the document past the selection edit just made (same pixels), so a short history
     // dropping the older state doesn't turn the next repeat into a miss.
     if let Some(d) = s.active()
