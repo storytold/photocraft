@@ -72,7 +72,7 @@ pub(crate) fn choices() -> Vec<((Option<BlendMode>, bool), &'static str)> {
 fn blend_items(behind: bool, clear: bool) -> Vec<Item> {
     let mut out = Vec::new();
     for m in BlendMode::LAYER_MODES {
-        if matches!(m, BlendMode::Darken | BlendMode::Lighten | BlendMode::Overlay | BlendMode::Difference | BlendMode::Hue) {
+        if crate::panels::starts_blend_group(m) {
             out.push(Item::Separator);
         }
         out.push(Item::Blend(m));
