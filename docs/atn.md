@@ -1465,7 +1465,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Glass
 
 - Event: `Gls ` / `glass`
-- PhotoCraft command: `filter.gallery.glass`
+- PhotoCraft command: `filter.gallery.glass` (only the Frosted and Canvas textures map; a Brick, Burlap or Sandstone step stays a kept step)
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|

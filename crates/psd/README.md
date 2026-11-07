@@ -148,7 +148,7 @@ allocations for padded channels return an error on failure.
 * Smart objects: `SoLd`, `PlLd`, `SoLE`, `lnk2`, `lnkD`, `lnk3`.
 * Shapes: `vogk`, `vscg` (vector masks, `vmsk` / `vsms`, are typed by `path`).
 * Adjustment and fill layers: `curv`, `levl`, `hue2`, `SoCo`, `GdFl`, `PtFl`, …, plus `Txt2`, `FMsk`, 3D and video blocks.
-* Global layer mask info (raw, with accessors), thumbnails (raw), guides, and every other resource id except paths (`path`) and slices (`slices`).
+* Global layer mask info (raw, with accessors), thumbnails (raw), guides, and every other resource id except the ones `ImageResource::parsed()` types (resolution info, layer state, layer group info, global angle and altitude, version info, timeline info), paths (`path`) and slices (`slices`).
 
 ## Legacy animation inspection
 
