@@ -155,6 +155,43 @@ fn the_size_captions_scrub_their_fields() {
     assert!(g.marker_size <= 10, "within its range");
 }
 
+/// Drags the visible "Marker Size:" caption `dx` points right in four moves.
+fn scrub_marker_size(h: &mut Harness<'static, PhotocraftApp>, dx: f32) {
+    let from = h
+        .query_all(egui_kittest::kittest::by().label("Marker Size:").include_labels())
+        .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+        .expect("the Marker Size: caption")
+        .rect()
+        .center();
+    h.hover_at(from);
+    h.run();
+    h.drag_at(from);
+    h.run();
+    for i in 1..=4 {
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.hover_at(from + vec2(dx / 4.0 * i as f32, 0.0));
+        h.run();
+    }
+    h.drop_at(from + vec2(dx, 0.0));
+    h.run_steps(2);
+}
+
+#[test]
+fn one_size_scrub_is_one_history_step() {
+    let mut h = harness(app(1));
+    let steps = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let before = steps(&h);
+    scrub_marker_size(&mut h, 24.0);
+    let size = h.state().session.active().unwrap().doc.measurement.count_groups[0].marker_size;
+    assert!(size > 2, "the scrub moved Marker Size several steps: {size}");
+    assert_eq!(steps(&h), before + 1, "one scrub, one Undo step");
+    // Back left, as the first may have reached the top of the range.
+    scrub_marker_size(&mut h, -24.0);
+    let back = h.state().session.active().unwrap().doc.measurement.count_groups[0].marker_size;
+    assert!(back < size, "the second scrub moved it back: {size} -> {back}");
+    assert_eq!(steps(&h), before + 2, "a second scrub is a step of its own");
+}
+
 #[test]
 fn automation_delete_and_clear_work_as_today() {
     // The greying is the options bar's: the commands still delete the last group and clear a

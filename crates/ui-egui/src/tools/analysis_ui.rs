@@ -596,11 +596,25 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             // scrubs the field after it when dragged.
             let caption = |ui: &mut egui::Ui, text: &str| crate::panels::opt_label(ui, text);
             caption(ui, "Marker Size:");
-            let a = crate::widgets::value_field_whole(ui, &mut ms, 1.0..=10.0, "", 40.0).accessible_name(tl!("Marker Size")).changed();
+            let a = crate::widgets::value_field_whole(ui, &mut ms, 1.0..=10.0, "", 40.0).accessible_name(tl!("Marker Size"));
             caption(ui, "Label Size:");
-            let b = crate::widgets::value_field_whole(ui, &mut ls, 8.0..=72.0, "", 44.0).accessible_name(tl!("Label Size")).changed();
-            if (a || b) && group.is_some() {
-                let _ = app.run("count.setGroup", count_size_params(ms, ls));
+            let b = crate::widgets::value_field_whole(ui, &mut ls, 8.0..=72.0, "", 44.0).accessible_name(tl!("Label Size"));
+            // One undo step per scrub (of a field or its caption), as the Gradient tool's Opacity.
+            let drag = |r: &egui::Response| {
+                let key = r.id.with("count-size-drag");
+                if r.drag_started() {
+                    let n = ui.ctx().cumulative_pass_nr();
+                    ui.data_mut(|d| d.insert_temp(key, n));
+                }
+                if r.changed() && r.dragged() { ui.data(|d| d.get_temp::<u64>(key)).map(|n| format!("count-size:{}:{n}", key.value())) } else { None }
+            };
+            let coalesce = drag(&a).or(drag(&b));
+            if (a.changed() || b.changed()) && group.is_some() {
+                let mut p = count_size_params(ms, ls);
+                if let Some(k) = coalesce {
+                    p["coalesce"] = json!(k);
+                }
+                let _ = app.run("count.setGroup", p);
             }
             true
         }
