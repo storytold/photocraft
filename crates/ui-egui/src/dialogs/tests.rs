@@ -109,7 +109,9 @@ fn the_close_box_and_the_title_drag_keep_apart() {
     let x = h.get_by_label("Close").rect();
     let frame = rects(&h.ctx)[0];
     assert!((x.center().y - title.center().y).abs() < 2.0 && x.left() > title.right(), "the × is on the title row: {x:?}, {title:?}");
-    assert!(frame.right() - x.right() < 16.0, "at its right end: {x:?} in {frame:?}");
+    // The title row ends where the dialog's margin starts, so the × sits that far in from the frame.
+    let margin = crate::widgets::DIALOG_MARGIN.right as f32;
+    assert!(frame.right() - x.right() < margin + 4.0, "at its right end: {x:?} in {frame:?}");
     let drag = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2| {
         h.hover_at(from);
         h.drag_at(from);
@@ -547,7 +549,8 @@ fn fit_image_is_as_narrow_as_its_content() {
     let d = crate::menus::invoke(h.state_mut(), &ctx, "file.automate.fitImage", json!({})).unwrap()["dialog"].as_u64().unwrap();
     h.run_steps(4);
     let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", d)))).expect("the Fit Image window");
-    assert!(window.width() < 300.0, "Fit Image is {} points wide", window.width());
+    let content = window.width() - crate::widgets::DIALOG_MARGIN.sum().x;
+    assert!(content < 288.0, "Fit Image's content is {content} points wide");
     for label in ["Fit Image", "Width", "Height", "OK", "Cancel"] {
         // A caption and the field it names share the label; either sits inside the window.
         let node = h.query_all_by_label(label).next().unwrap_or_else(|| panic!("{label} in the dialog"));

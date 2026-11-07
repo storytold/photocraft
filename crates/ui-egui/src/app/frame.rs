@@ -262,7 +262,7 @@ impl PhotocraftApp {
         // View › Screen Mode › Full Screen Mode: only the image, on black (F or Esc returns).
         screen_picker::show(&ctx);
         if screen_picker::busy(&ctx) && screen_picker::showing(&ctx) {
-            egui::Modal::new(egui::Id::unique("screen-color-wait")).show(&ctx, |ui| {
+            crate::widgets::modal(&ctx, egui::Id::unique("screen-color-wait")).show(&ctx, |ui| {
                 ui.spinner();
                 ui.label(tl!("Pick a screen pixel or press Esc to cancel"));
                 if ui.button(tl!("Cancel")).clicked() {

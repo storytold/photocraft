@@ -237,7 +237,9 @@ fn file_info_camera_data_draws_in_the_selected_language_read_only() {
         let ctx = h.ctx.clone();
         let dialog = crate::menus::invoke(h.state_mut(), &ctx, "file.fileInfo", json!({})).expect("file info")["dialog"].as_u64().expect("dialog id");
         assert_eq!(h.state_mut().ui.dialog_mut(dialog).expect("open").fields["__camera"]["exposure"], "1/250 s");
-        h.run_steps(4);
+        // The dialog grows into its full height over a few frames, without asking for a repaint
+        // (so `run` stops early); read it once it has settled.
+        h.run_steps(8);
         let text = drawn_text(&h);
         let de = lang("de");
         let labels = [tr(de, "Camera Data"), tr_ctx(de, "cameraData", "Make"), tr_ctx(de, "cameraData", "Exposure"), tr_ctx(de, "cameraData", "F-Stop")];

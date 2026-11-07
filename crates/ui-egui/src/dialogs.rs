@@ -148,7 +148,7 @@ pub fn free_press(ctx: &egui::Context, canvas: egui::Rect) -> Option<egui::Pos2>
 
 /// Height of a dialog's title, rule, button row and frame margins (points), around a body that
 /// scrolls.
-const DIALOG_CHROME: f32 = 150.0;
+const DIALOG_CHROME: f32 = 138.0 + (crate::widgets::DIALOG_MARGIN.top + crate::widgets::DIALOG_MARGIN.bottom) as f32;
 
 /// Draw a dialog body that opens on its first number, selected, as Photoshop's value dialogs do:
 /// typing replaces it and Enter applies it (#1757). Once per dialog `id`, on the first laid-out
@@ -233,6 +233,16 @@ fn show_modal<T>(
     interactive: bool,
     contents: impl FnOnce(&mut egui::Ui) -> T,
 ) -> egui::ModalResponse<T> {
+    // egui draws the resize grip in the resizable area's corner, which the dialog margin put on top
+    // of the button row. The area takes the frame's right and bottom room instead, so the grip
+    // sits in the dialog's own corner; sizes stay those of the contents.
+    let modal = if resizable.is_some() {
+        let margin = crate::widgets::DIALOG_MARGIN;
+        let outside = egui::Margin { right: margin.right - DIALOG_GRIP_ROOM.right, bottom: margin.bottom - DIALOG_GRIP_ROOM.bottom, ..margin };
+        modal.frame(crate::widgets::dialog_frame(&ctx.global_style()).inner_margin(outside))
+    } else {
+        modal
+    };
     modal.show(ctx, |ui| {
         // Disable the entire older modal, including its resize grip, not just its body.
         if !interactive {
@@ -246,12 +256,24 @@ fn show_modal<T>(
         } else if let Some((size, min, max)) = resizable {
             // No stroke: Resize outlines its contents 2 points out, an inner box inside the
             // dialog's frame that left the title and buttons flush against it (#8199).
-            egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max).show(ui, contents)
+            let room = DIALOG_GRIP_ROOM.sum();
+            egui::Resize::default()
+                .id(id.with("resize"))
+                .with_stroke(false)
+                .default_size(size.min(max) + room)
+                .min_size(min + room)
+                .max_size(max + room)
+                .show(ui, |ui| egui::Frame::NONE.inner_margin(DIALOG_GRIP_ROOM).show(ui, contents).inner)
         } else {
             contents(ui)
         }
     })
 }
+
+/// The part of a resizable dialog's right and bottom margin inside its resizable area: the rest,
+/// 4 points, is left between the resize grip and the dialog's edge.
+const DIALOG_GRIP_ROOM: egui::Margin =
+    egui::Margin { left: 0, top: 0, right: crate::widgets::DIALOG_MARGIN.right - 4, bottom: crate::widgets::DIALOG_MARGIN.bottom - 4 };
 
 /// Whether dialogs have a close box (×) in their title bar (#5496). Photoshop's modal dialogs have
 /// one on Windows, where clicking it is Cancel, and none on macOS; Linux and the web follow Windows.
@@ -605,10 +627,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.move_to_top(area.layer());
         }
         let color_picker = crate::color_picker_ui::owns(&fields);
-        let mut modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT);
-        if color_picker {
-            modal = modal.frame(egui::Frame::popup(&ctx.global_style()).inner_margin(16));
-        }
+        let modal = crate::widgets::modal(ctx, id).area(area).backdrop_color(egui::Color32::TRANSPARENT);
         // Tab / ⇧Tab walk the topmost dialog's text fields, not every widget (field_tab.rs).
         let tab = if top == Some(d.id) && !egui::Popup::is_any_open(ctx) { crate::field_tab::take_step(ctx) } else { 0 };
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
@@ -712,11 +731,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     apply_requested |= apply;
                 });
             }
-            // The frame around the content (Frame::popup's margin and stroke).
-            ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
-        // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
-        shown.push(if color_picker { modal.response.rect } else { modal.inner });
+        // The whole frame, margin included, guards the canvas.
+        shown.push(modal.response.rect);
         // The size Curves was given (dragged or grown to fit) is the one it reopens at (#8984).
         // A size at the window's limit is the window's, not the user's: a large remembered size
         // squeezed into a small window is kept for a larger one.
