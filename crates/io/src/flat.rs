@@ -1673,11 +1673,11 @@ pub fn export_flat_with_renderer(
     mut renderer: Option<&mut dyn BandRenderer>,
 ) -> Result<ExportResult, IoError> {
     if let Some(mut r) = export_mode_specific(doc, format, opts)? {
-        // Palette PNG/BMP and Duotone exports render on their own paths before the renderer
+        // Palette PNG/BMP/GIF and Duotone exports render on their own paths before the renderer
         // branch: say so, or `--gpu` would silently do nothing for them.
         if let Some(renderer) = &mut renderer {
             let why = match doc.mode {
-                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP export uses the CPU compositor",
+                ColorMode::Indexed => "palette (Indexed Color) PNG/BMP/GIF export uses the CPU compositor",
                 ColorMode::Duotone => "Duotone export uses the CPU compositor",
                 _ => "this export uses the CPU compositor",
             };
@@ -2258,16 +2258,44 @@ fn cmyk_image_to_srgb(img: &Image) -> Result<Image, IoError> {
     Ok(Image::from_normalized(w, h, layout, sample, &out)?.with_icc(Some(dst.to_bytes().to_vec())).with_meta(img.meta.clone()))
 }
 
-/// Indexed Color → PNG-8 or an 8-bit BMP with its colour table; Duotone → the inks rendered as RGB.
+/// The metadata a GIF cannot hold, worded as the generic encoder's fidelity warnings word it.
+/// The indexed route encodes straight from the document instead of through [`encode_image`], so it
+/// has to report what that check would have warned about.
+fn gif_dropped_metadata(doc: &Document, opts: &ExportOptions) -> Vec<String> {
+    let mut w = Vec::new();
+    if !opts.encode.embed_metadata {
+        return w;
+    }
+    if doc.icc_profile.is_some() && opts.encode.embed_icc {
+        w.push("ICC profile not supported; it will be dropped".into());
+    }
+    if doc.metadata.exif.is_some() {
+        w.push("EXIF not supported; it will be dropped".into());
+    }
+    // Export As ▸ Metadata: None already dropped these before the generic encoder got to say so.
+    if opts.xmp != XmpEmbed::None {
+        if doc.metadata.xmp.is_some() {
+            w.push("XMP not supported; it will be dropped".into());
+        }
+        if !doc.metadata.text.is_empty() {
+            w.push("text metadata not supported; it will be dropped".into());
+        }
+    }
+    w.push("resolution (DPI) not supported; it will be dropped".into());
+    w
+}
+
+/// Indexed Color → PNG-8, an 8-bit BMP or a GIF with the document's colour table; Duotone → the
+/// inks rendered as RGB.
 fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) -> Result<Option<ExportResult>, IoError> {
     match doc.mode {
-        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp) => {
+        ColorMode::Indexed if matches!(format, Format::Png | Format::Bmp | Format::Gif) => {
             let Some(table) = doc.color_table.as_ref().filter(|t| !t.colors.is_empty() && t.colors.len() <= 256) else { return Ok(None) };
-            // PNG transparency belongs to a palette index, not its RGB value. Keep the
+            // PNG and GIF transparency belongs to a palette index, not its RGB value. Keep the
             // transparent entry out of opaque lookup, even when it duplicates an opaque colour.
-            let png_transparent_index = table.transparent.map(usize::from).filter(|_| format == Format::Png);
+            let transparent_index = table.transparent.map(usize::from).filter(|_| format != Format::Bmp);
             let (opaque_indices, colors): (Vec<u8>, Vec<_>) =
-                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != png_transparent_index).map(|(i, c)| (i as u8, c)).unzip();
+                table.colors.iter().copied().enumerate().filter(|(i, _)| Some(*i) != transparent_index).map(|(i, c)| (i as u8, c)).unzip();
             let opaque = photocraft_doc::ColorTable { colors, transparent: None };
             let mut idx = try_buffer(doc.size.area() as usize, 1)?;
             photocraft_compose::render_bands(doc, doc.bounds(), 0, |band| -> Result<(), IoError> {
@@ -2288,6 +2316,15 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 if let Some(t) = table.transparent {
                     warnings.push(format!("BMP has no transparency; transparent pixels are written in the colour of palette entry {t}"));
                 }
+                return Ok(Some(ExportResult { bytes, warnings }));
+            }
+            if format == Format::Gif {
+                // The whole table in its original order, as the palette PNG and BMP write it: a
+                // GIF colour table holds 2^n entries, and the writer pads the ones past the
+                // document's last entry with black, so no used index moves (#11824).
+                let bytes = codecs::web::encode_gif_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, false)?;
+                let mut warnings = vec![format!("written as a GIF with the document's colour table ({} colours)", table.colors.len())];
+                warnings.extend(gif_dropped_metadata(doc, opts));
                 return Ok(Some(ExportResult { bytes, warnings }));
             }
             // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
