@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use parley::FontContext;
@@ -161,6 +161,17 @@ pub fn shared_generation() -> u64 {
     SHARED_GENERATION.load(Ordering::Relaxed)
 }
 
+static SYSTEM_FONTS_DIRTY: AtomicBool = AtomicBool::new(false);
+
+/// The operating system said the installed fonts changed (Windows `WM_FONTCHANGE`, which a font
+/// manager broadcasts after turning a font on or off). The shared engine rescans the next time a
+/// font list is asked for, and [`shared_generation`] moves now so cached font menus ask again.
+/// Only sets flags: safe to call from a message hook.
+pub fn system_fonts_changed() {
+    SYSTEM_FONTS_DIRTY.store(true, Ordering::Relaxed);
+    SHARED_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
 /// One face in the database (for font menus).
 #[derive(Clone, Debug, PartialEq)]
 pub struct FaceInfo {
@@ -189,6 +200,8 @@ pub struct ResolvedFont {
 pub struct FontDb {
     pub(crate) fcx: FontContext,
     system_loaded: bool,
+    /// The system font files already registered (canonical paths), so a rescan adds only new ones.
+    system_files: HashSet<std::path::PathBuf>,
     /// PostScript name → (family, weight, italic), filled lazily.
     ps_cache: HashMap<String, Option<ResolvedFont>>,
     fallbacks: Vec<String>,
@@ -217,6 +230,7 @@ impl FontDb {
         let mut db = FontDb {
             fcx: FontContext { collection, source_cache: SourceCache::default() },
             system_loaded: false,
+            system_files: HashSet::new(),
             ps_cache: HashMap::new(),
             fallbacks: Vec::new(),
             missing_glyph_protection: true,
@@ -261,34 +275,50 @@ impl FontDb {
         self.system_loaded = true;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // One call per file: fontique's directory scan is much slower on large folders.
-            let mut files = Vec::new();
-            for d in system_font_dirs() {
-                collect_font_files(&d, 0, &mut files);
-            }
-            #[cfg(target_os = "linux")]
-            files.extend(fontconfig_font_paths());
-            // Core Text knows every font macOS offers, also those activated from outside the
-            // font folders (#6683).
-            #[cfg(target_os = "macos")]
-            files.extend(coretext_font_paths());
-            // PingFang (the macOS Chinese UI font) lives outside the font folders.
-            if cfg!(target_os = "macos") {
-                files.extend(crate::cjk::mac_pingfang());
-            }
-            let mut seen = HashSet::new();
-            for path in files {
-                let key = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if seen.insert(key) {
-                    self.fcx.collection.load_fonts_from_paths([path]);
-                }
-            }
+            self.register_system_files(system_font_files());
             self.ps_cache.clear();
             self.face_cache.clear();
             self.traits_cache.clear();
             self.refresh_generics();
         }
     }
+
+    /// Registers the files not registered before; true when there was one. One call per file:
+    /// fontique's directory scan is much slower on large folders.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn register_system_files(&mut self, files: Vec<std::path::PathBuf>) -> bool {
+        let mut added = false;
+        for path in files {
+            let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if self.system_files.insert(key) {
+                self.fcx.collection.load_fonts_from_paths([path]);
+                added = true;
+            }
+        }
+        added
+    }
+
+    /// Runs the rescan a font change asked for ([`system_fonts_changed`]): fonts activated since
+    /// the first scan are registered, the others are left alone.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn sync_system_fonts(&mut self) {
+        if !self.system_loaded || !SYSTEM_FONTS_DIRTY.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        if self.register_system_files(system_font_files()) {
+            self.ps_cache.clear();
+            self.face_cache.clear();
+            self.traits_cache.clear();
+            self.refresh_generics();
+            GENERATION.fetch_add(1, Ordering::Relaxed);
+            if self.shared {
+                SHARED_GENERATION.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn sync_system_fonts(&mut self) {}
 
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
     pub fn register_font_data(&mut self, bytes: Vec<u8>) -> Vec<String> {
@@ -382,6 +412,7 @@ impl FontDb {
 
     /// All family names, sorted.
     pub fn families(&mut self) -> Vec<String> {
+        self.sync_system_fonts();
         // Private system faces (a leading '.', e.g. macOS ".SF NS") are hidden, as in Photoshop.
         let mut v: Vec<String> = self.fcx.collection.family_names().filter(|n| !is_hidden_family(n)).map(str::to_string).collect();
         v.sort_by_key(|s| s.to_lowercase());
@@ -421,6 +452,7 @@ impl FontDb {
     }
 
     pub fn has_family(&mut self, name: &str) -> bool {
+        self.sync_system_fonts();
         self.fcx.collection.family_id(name).is_some()
     }
 
@@ -451,6 +483,7 @@ impl FontDb {
 
     /// Faces of a family, preserving names even when multiple faces share CSS attributes.
     pub fn faces(&mut self, family: &str) -> Vec<FaceInfo> {
+        self.sync_system_fonts();
         if let Some(faces) = self.face_cache.get(family) {
             return faces.clone();
         }
@@ -855,6 +888,76 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
     ResolvedFont { family: family.trim().to_string(), weight, italic, exact: false }
 }
 
+/// The font file a Windows font registry value points to, if it names one outside the font
+/// folders' own relative entries: the value must be an absolute path to a font file. (Fonts the
+/// system installed are listed by bare file name and are found by the folder scan.)
+/// `value` with each `%NAME%` replaced by that environment variable, as Windows expands a
+/// `REG_EXPAND_SZ` registry value. An unset name, or a lone `%`, is kept as written.
+#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+fn expand_env_vars(value: &str, var: impl Fn(&str) -> Option<String>) -> String {
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        let Some(len) = after.find('%') else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let name = &after[..len];
+        match (!name.is_empty()).then(|| var(name)).flatten() {
+            Some(v) => {
+                out.push_str(&v);
+                rest = &after[len + 1..];
+            }
+            None => {
+                out.push('%');
+                out.push_str(name);
+                rest = &after[len..];
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(any(target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+fn registry_font_file(value: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(value.trim().trim_matches('"'));
+    let is_font = path.extension().and_then(|x| x.to_str()).is_some_and(|x| matches!(x.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"));
+    (is_font && path.is_absolute() && path.is_file()).then_some(path)
+}
+
+/// Windows lists every installed font under `Software\Microsoft\Windows NT\CurrentVersion\Fonts`,
+/// for the machine and for the user. A font manager (FontBase, Ares Font Manager, Adobe's) turns
+/// a font on by writing its value there and calling `AddFontResource`, leaving the file where it
+/// is, so a scan of the font folders never meets it. Word and every GDI/DirectWrite program see
+/// it; this puts it in our collection too. Unreadable keys give no files.
+#[cfg(target_os = "windows")]
+fn registry_font_paths() -> Vec<std::path::PathBuf> {
+    use winsafe::{self as w, co};
+    const KEY: &str = r"Software\Microsoft\Windows NT\CurrentVersion\Fonts";
+    let mut files = Vec::new();
+    for root in [w::HKEY::CURRENT_USER, w::HKEY::LOCAL_MACHINE] {
+        let Ok(key) = root.RegOpenKeyEx(Some(KEY), co::REG_OPTION::default(), co::KEY::READ) else {
+            continue;
+        };
+        let Ok(names) = key.RegEnumValue() else {
+            continue;
+        };
+        let names: Vec<String> = names.flatten().map(|(name, _)| name).collect();
+        for name in names {
+            let value = match key.RegQueryValueEx(Some(&name)) {
+                Ok(w::RegistryValue::Sz(v)) => v,
+                Ok(w::RegistryValue::ExpandSz(v)) => expand_env_vars(&v, |n| std::env::var(n).ok()),
+                _ => continue,
+            };
+            files.extend(registry_font_file(&value));
+        }
+    }
+    files
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
@@ -963,6 +1066,29 @@ fn font_files_of(collection: &mut Collection) -> Vec<std::path::PathBuf> {
     files
 }
 
+/// Every font file the platform offers: the font folders, plus what only its own list knows.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_font_files() -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for d in system_font_dirs() {
+        collect_font_files(&d, 0, &mut files);
+    }
+    #[cfg(target_os = "linux")]
+    files.extend(fontconfig_font_paths());
+    // Fonts a font manager activated keep their own folder: only the registry lists them.
+    #[cfg(target_os = "windows")]
+    files.extend(registry_font_paths());
+    // Core Text knows every font macOS offers, also those activated from outside the
+    // font folders (#6683).
+    #[cfg(target_os = "macos")]
+    files.extend(coretext_font_paths());
+    // PingFang (the macOS Chinese UI font) lives outside the font folders.
+    if cfg!(target_os = "macos") {
+        files.extend(crate::cjk::mac_pingfang());
+    }
+    files
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
@@ -1021,6 +1147,52 @@ pub fn is_hidden_family(name: &str) -> bool {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    #[test]
+    fn a_rescan_registers_only_the_new_files_and_moves_the_generation() {
+        let dir = std::env::temp_dir().join(format!("pc-rescan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("rescan.ttf");
+        std::fs::write(&source, super::INTER_REGULAR.as_slice()).unwrap();
+        let mut db = super::FontDb::new();
+        db.load_system_fonts();
+        let file = vec![source];
+        db.register_system_files(file.clone());
+        assert!(!db.register_system_files(file), "the same file twice adds nothing");
+        let before = super::shared_generation();
+        super::system_fonts_changed();
+        assert!(super::shared_generation() > before, "menus keyed on the generation must ask again");
+        db.sync_system_fonts();
+        assert!(!super::SYSTEM_FONTS_DIRTY.load(std::sync::atomic::Ordering::Relaxed));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn expandable_registry_values_resolve_environment_variables() {
+        let var = |n: &str| (n == "LOCALAPPDATA").then(|| r"C:\Users\a\AppData\Local".to_string());
+        assert_eq!(super::expand_env_vars(r"%LOCALAPPDATA%\Fonts\x.ttf", var), r"C:\Users\a\AppData\Local\Fonts\x.ttf");
+        assert_eq!(super::expand_env_vars(r"%UNSET%\x.ttf", var), r"%UNSET%\x.ttf");
+        assert_eq!(super::expand_env_vars("100% %LOCALAPPDATA%", var), r"100% C:\Users\a\AppData\Local");
+        assert_eq!(super::expand_env_vars("a%%b", var), "a%%b");
+        assert_eq!(super::expand_env_vars("plain", var), "plain");
+    }
+
+    #[test]
+    fn registry_value_must_be_an_existing_absolute_font_file() {
+        let dir = std::env::temp_dir().join(format!("pc-regfont-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let font = dir.join("Some Font.TTF");
+        std::fs::write(&font, b"x").unwrap();
+        let text = dir.join("notes.txt");
+        std::fs::write(&text, b"x").unwrap();
+        let quoted = format!("\"{}\"", font.display());
+        assert_eq!(super::registry_font_file(&font.display().to_string()), Some(font.clone()));
+        assert_eq!(super::registry_font_file(&quoted), Some(font.clone()));
+        assert_eq!(super::registry_font_file(&text.display().to_string()), None);
+        assert_eq!(super::registry_font_file("arial.ttf"), None, "bare names belong to the system folder");
+        assert_eq!(super::registry_font_file(&dir.join("missing.ttf").display().to_string()), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn hidden_families_sort_last_and_are_not_listed() {
         assert!(super::is_hidden_family(".Hiragino Kaku Gothic Interface"));
