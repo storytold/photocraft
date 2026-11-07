@@ -763,7 +763,7 @@
 	Working Magenta Plate	Lastra magenta di lavoro
 	Working Yellow Plate	Lastra gialla di lavoro
 	Working Black Plate	Lastra nera di lavoro
-	Working CMY Plates	Lastra CMY di lavoro
+	Working CMY Plates	Lastre CMY di lavoro
 	Legacy Macintosh RGB (Gamma 1.8)	RGB legacy Macintosh (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RGB standard Internet (sRGB)
 	Monitor RGB	RGB monitor
@@ -918,6 +918,12 @@
 	Timeline	Timeline
 	Tool Presets	Predefiniti strumento
 	Tools	Strumenti
+	Contextual Task Bar	Barra delle attività contestuale
+	Hide bar	Nascondi barra
+	Reset bar position	Ripristina posizione barra
+	Pin bar position	Blocca posizione barra
+	Move bar	Sposta barra
+	More options	Altre opzioni
 	About PhotoCraft	Informazioni su PhotoCraft
 	PhotoCraft Website	Sito web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft su GitHub
@@ -1871,6 +1877,7 @@
 	Move Tool	Strumento Sposta
 	Could not use the move tool because the layer is locked.	Impossibile usare lo strumento Sposta perché il livello è bloccato.
 	Could not complete the Free Transform command because the layer is locked.	Impossibile completare il comando Trasformazione libera perché il livello è bloccato.
+	Could not transform because the layer is locked.	Impossibile trasformare perché il livello è bloccato.
 	Multiply	Moltiplica
 	My Brushes	I miei pennelli
 	Neutrals	Neutri
@@ -2400,6 +2407,7 @@
 	Punctuation	Punteggiatura
 	Make Work Path	Crea tracciato di lavoro
 	Make Selection	Crea selezione
+	Make Shape	Crea forma
 	Fill Path	Riempi tracciato
 	Stroke Path	Traccia tracciato
 	Delete Path	Elimina tracciato
