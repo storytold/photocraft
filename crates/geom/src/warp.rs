@@ -410,7 +410,12 @@ fn bernstein(t: f64) -> [f64; 4] {
 }
 
 fn lerp(a: [f64; 2], b: [f64; 2], t: f64) -> [f64; 2] {
-    [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+    std::array::from_fn(|i| {
+        // Split parameters lie in [0, 1]. Opposite-sign endpoints can overflow b - a;
+        // their weighted terms have opposite signs, so that form cannot overflow.
+        // For same-sign endpoints, the difference is finite and keeps the usual rounding.
+        if a[i].is_sign_negative() != b[i].is_sign_negative() { (1.0 - t) * a[i] + t * b[i] } else { a[i] + (b[i] - a[i]) * t }
+    })
 }
 
 /// De Casteljau split of a cubic at `t`: 7 points (left 0..=3, right 3..=6).
@@ -645,8 +650,12 @@ impl BezierMesh {
     }
 
     /// Splits the patch column containing `s` at `s` (a vertical split line). Exact: the surface
-    /// is unchanged. Returns false when `s` is on or too close to an existing boundary.
+    /// is unchanged. Returns false for malformed meshes, at the 64-column limit, or when `s`
+    /// is on or too close to an existing boundary.
     pub fn split_u(&mut self, s: f64) -> bool {
+        if !self.is_valid() || self.us.len() >= 65 {
+            return false;
+        }
         let (pi, a) = Self::locate(&self.us, s);
         if !(0.01..=0.99).contains(&a) {
             return false;
@@ -665,8 +674,12 @@ impl BezierMesh {
         true
     }
 
-    /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact.
+    /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact; rejects
+    /// malformed meshes and splits beyond the 64-row limit.
     pub fn split_v(&mut self, t: f64) -> bool {
+        if !self.is_valid() || self.vs.len() >= 65 {
+            return false;
+        }
         self.transpose();
         let ok = self.split_u(t);
         self.transpose();
@@ -675,8 +688,12 @@ impl BezierMesh {
 
     /// Removes interior vertical boundary `k` (1..us.len()-1), merging its two patch columns.
     /// Exact when the patches came from an unedited split; otherwise the outer control points are
-    /// kept and the inner handles extrapolated.
+    /// kept and the inner handles extrapolated. Returns false without changes for malformed
+    /// meshes or extrapolated handles outside the finite coordinate range.
     pub fn remove_split_u(&mut self, k: usize) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         if k == 0 || k >= self.us.len().saturating_sub(1) {
             return false;
         }
@@ -690,6 +707,11 @@ impl BezierMesh {
             // De Casteljau inverse: q1 = lerp(p0, p1, a), r2 = lerp(p2, p3, a).
             let p1 = [(q1[0] - (1.0 - a) * p0[0]) / a, (q1[1] - (1.0 - a) * p0[1]) / a];
             let p2 = [(r2[0] - a * p3[0]) / (1.0 - a), (r2[1] - a * p3[1]) / (1.0 - a)];
+            // An edited patch can require handles outside f64's finite range when
+            // merging. Refuse the candidate before replacing any knots or points.
+            if !p1.iter().chain(p2.iter()).all(|v| v.is_finite()) {
+                return false;
+            }
             pts.extend_from_slice(&row[..c0]);
             pts.extend_from_slice(&[p0, p1, p2, p3]);
             pts.extend_from_slice(&row[c0 + 7..]);
@@ -699,8 +721,11 @@ impl BezierMesh {
         true
     }
 
-    /// Removes interior horizontal boundary `k`.
+    /// Removes interior horizontal boundary `k`; rejects malformed meshes and non-finite results.
     pub fn remove_split_v(&mut self, k: usize) -> bool {
+        if !self.is_valid() {
+            return false;
+        }
         self.transpose();
         let ok = self.remove_split_u(k);
         self.transpose();
@@ -743,8 +768,12 @@ impl BezierMesh {
         for _ in 0..12 {
             let h = 1e-5;
             let q = self.eval(s, t);
-            let (qs, qt) = (self.eval(s + h, t), self.eval(s, t + h));
-            let (a, b, c, d) = ((qs[0] - q[0]) / h, (qt[0] - q[0]) / h, (qs[1] - q[1]) / h, (qt[1] - q[1]) / h);
+            // eval clamps parameters to the box. Step inward near the upper edges;
+            // stepping outside would yield a zero derivative and stop refinement.
+            let hs = if s + h <= 1.0 { h } else { -h };
+            let ht = if t + h <= 1.0 { h } else { -h };
+            let (qs, qt) = (self.eval(s + hs, t), self.eval(s, t + ht));
+            let (a, b, c, d) = ((qs[0] - q[0]) / hs, (qt[0] - q[0]) / ht, (qs[1] - q[1]) / hs, (qt[1] - q[1]) / ht);
             let det = a * d - b * c;
             if det.abs() < 1e-12 {
                 break;
@@ -767,16 +796,24 @@ impl BezierMesh {
     /// its anchors and the neighbouring cells and dividers bend with the pull. Then the four inner
     /// control points of the grabbed patch make up the rest, so the grabbed point lands exactly at
     /// its start + `d`. Grabbing near an anchor moves that anchor more, and the inner points less.
+    /// Malformed meshes, non-finite inputs and drags whose result overflows are left unchanged.
     pub fn pull(&mut self, base: &[[f64; 2]], s: f64, t: f64, d: [f64; 2]) {
         /// Within this distance of the mesh border (in 0..1 box units) a grab starts to drag the
         /// border with it; further in, the border stays exactly where it is.
         const BORDER_ZONE: f64 = 0.12;
         /// Falloff radius, in the grabbed patch's size.
         const REACH: f64 = 1.8;
-        if base.len() != self.points.len() || !d.iter().all(|v| v.is_finite()) {
+        if !self.is_valid()
+            || base.len() != self.points.len()
+            || !s.is_finite()
+            || !t.is_finite()
+            || !d.iter().all(|v| v.is_finite())
+            || !base.iter().flatten().all(|v| v.is_finite())
+        {
             return;
         }
-        self.points.copy_from_slice(base);
+        // Keep the last displayed grid until the candidate has finite coordinates.
+        let previous_points = std::mem::replace(&mut self.points, base.to_vec());
         let (cols, rows) = (self.us.len() - 1, self.vs.len() - 1);
         let (pi, a) = Self::locate(&self.us, s);
         let (pj, b) = Self::locate(&self.vs, t);
@@ -914,6 +951,9 @@ impl BezierMesh {
                 self.smooth_lines((3 * pi).saturating_sub(3), 3 * pi + 7, (3 * pj).saturating_sub(3), 3 * pj + 7);
             }
         }
+        if !self.points.iter().flatten().all(|v| v.is_finite()) {
+            self.points = previous_points;
+        }
     }
 
     /// Makes the tangent equal on both sides of every interior grid line, for the control points
@@ -954,11 +994,19 @@ impl BezierMesh {
     /// - a handle moves with the two points beside it across its line, and the handle opposite
     ///   it on the same anchor turns the other way (with its two neighbours), so the line keeps
     ///   passing straight through the anchor instead of creasing there.
+    ///
+    /// Malformed meshes, non-finite inputs and drags whose result overflows are left unchanged.
     pub fn drag_point(&mut self, base: &[[f64; 2]], index: usize, d: [f64; 2]) {
-        if base.len() != self.points.len() || index >= base.len() || !d.iter().all(|v| v.is_finite()) {
+        if !self.is_valid()
+            || base.len() != self.points.len()
+            || index >= base.len()
+            || !d.iter().all(|v| v.is_finite())
+            || !base.iter().flatten().all(|v| v.is_finite())
+        {
             return;
         }
-        self.points.copy_from_slice(base);
+        // Keep the last displayed grid until the candidate has finite coordinates.
+        let previous_points = std::mem::replace(&mut self.points, base.to_vec());
         let (nx, ny) = (self.nx(), self.ny());
         let (i, j) = (index % nx, index / nx);
         let mut shift = |i: isize, j: isize, d: [f64; 2]| {
@@ -1006,6 +1054,9 @@ impl BezierMesh {
             }
             // An inner point of a patch has no handle of its own.
             _ => shift(ii, jj, d),
+        }
+        if !self.points.iter().flatten().all(|v| v.is_finite()) {
+            self.points = previous_points;
         }
     }
 

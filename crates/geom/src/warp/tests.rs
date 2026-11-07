@@ -457,3 +457,226 @@ fn locate_binary_search_matches_linear_scan() {
     }
     assert_eq!(BezierMesh::locate(&knots, f64::NAN), linear(f64::NAN));
 }
+
+#[test]
+fn split_edits_reject_incomplete_mesh_without_changes() {
+    for vertical in [false, true] {
+        for remove in [false, true] {
+            let mut mesh = BezierMesh::identity(B, 2, 2);
+            mesh.points.pop();
+            let before = mesh.clone();
+            let accepted = match (vertical, remove) {
+                (false, false) => mesh.split_u(0.25),
+                (true, false) => mesh.split_v(0.25),
+                (false, true) => mesh.remove_split_u(1),
+                (true, true) => mesh.remove_split_v(1),
+            };
+            assert!(!accepted);
+            assert_eq!(mesh, before);
+        }
+    }
+}
+
+#[test]
+fn pulling_malformed_mesh_leaves_it_unchanged() {
+    let empty = BezierMesh { us: Vec::new(), vs: Vec::new(), points: Vec::new() };
+    let mut incomplete = BezierMesh::identity(B, 2, 2);
+    incomplete.points.truncate(1);
+    for mut mesh in [empty, incomplete] {
+        let before = mesh.clone();
+        mesh.pull(&before.points, 0.5, 0.5, [5.0, -3.0]);
+        assert_eq!(mesh, before);
+    }
+}
+
+#[test]
+fn dragging_point_on_incomplete_mesh_leaves_it_unchanged() {
+    let mut mesh = BezierMesh::identity(B, 2, 2);
+    mesh.points.truncate(1);
+    let before = mesh.clone();
+    mesh.drag_point(&before.points, 0, [5.0, -3.0]);
+    assert_eq!(mesh, before);
+}
+
+#[test]
+fn split_rejects_patch_limit_without_invalidating_mesh() {
+    for vertical in [false, true] {
+        let mut mesh = if vertical { BezierMesh::identity(B, 1, 64) } else { BezierMesh::identity(B, 64, 1) };
+        assert!(mesh.is_valid());
+        let before = mesh.clone();
+        let accepted = if vertical { mesh.split_v(0.5 / 64.0) } else { mesh.split_u(0.5 / 64.0) };
+        assert!(!accepted, "must reject a 65th patch on axis {vertical}");
+        assert!(mesh.is_valid());
+        assert_eq!(mesh, before);
+    }
+}
+
+#[test]
+fn split_can_reach_patch_limit_and_still_edit_other_axis() {
+    let mut mesh = BezierMesh::identity(B, 63, 63);
+    assert!(mesh.split_u(0.5 / 63.0));
+    assert!(mesh.is_valid());
+    assert!(mesh.split_v(0.5 / 63.0));
+    assert!(mesh.is_valid());
+    assert_eq!((mesh.us.len(), mesh.vs.len()), (65, 65));
+    assert!(mesh.remove_split_u(1));
+    assert!(mesh.split_u(0.5 / 63.0));
+    assert!(mesh.is_valid());
+}
+
+#[test]
+fn pulling_with_non_finite_coordinates_preserves_mesh() {
+    let before = BezierMesh::identity(B, 2, 2);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for (s, t) in [(bad, 0.5), (0.5, bad)] {
+            let mut mesh = before.clone();
+            mesh.pull(&before.points, s, t, [5.0, -3.0]);
+            assert!(mesh.is_valid(), "coordinates ({s}, {t}) corrupted the mesh");
+            assert_eq!(mesh, before);
+        }
+    }
+}
+
+#[test]
+fn dragging_with_non_finite_base_points_preserves_mesh() {
+    let before = BezierMesh::identity(B, 2, 2);
+    for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        for component in 0..2 {
+            let mut base = before.points.clone();
+            base[0][component] = bad;
+            for surface in [false, true] {
+                let mut mesh = before.clone();
+                if surface {
+                    mesh.pull(&base, 0.5, 0.5, [5.0, -3.0]);
+                } else {
+                    mesh.drag_point(&base, 0, [5.0, -3.0]);
+                }
+                assert!(mesh.is_valid(), "base {bad}, component {component}, surface {surface} corrupted the mesh");
+                assert_eq!(mesh, before);
+            }
+        }
+    }
+}
+
+#[test]
+fn overflowing_point_drag_preserves_previous_state_and_allows_next_drag() {
+    let mut base = BezierMesh::identity(B, 2, 2);
+    base.points[0][0] = f64::MAX;
+    assert!(base.is_valid());
+    let mut mesh = base.clone();
+    mesh.drag_point(&base.points, 0, [0.0, 2.0]);
+    let before_overflow = mesh.clone();
+    mesh.drag_point(&base.points, 0, [f64::MAX, 0.0]);
+    assert!(mesh.is_valid(), "a finite displacement overflowed a control point");
+    assert_eq!(mesh, before_overflow);
+    mesh.drag_point(&base.points, 0, [0.0, 0.0]);
+    assert_eq!(mesh, base);
+}
+
+#[test]
+fn overflowing_surface_drag_preserves_previous_state_and_allows_next_drag() {
+    let base = BezierMesh::identity(B, 2, 2);
+    let mut mesh = base.clone();
+    mesh.pull(&base.points, 0.3, 0.4, [2.0, -1.0]);
+    let before_overflow = mesh.clone();
+    mesh.pull(&base.points, 0.3, 0.4, [f64::MAX, f64::MAX]);
+    assert!(mesh.is_valid(), "finite displacement overflowed surface fitting");
+    assert_eq!(mesh, before_overflow);
+    mesh.pull(&base.points, 0.3, 0.4, [2.0, -1.0]);
+    assert_eq!(mesh, before_overflow);
+}
+
+#[test]
+fn splitting_extreme_finite_control_points_keeps_mesh_valid_and_shape() {
+    for vertical in [false, true] {
+        for split in [0.25, 0.5, 0.75] {
+            let mut mesh = BezierMesh::identity(B, 1, 1);
+            for j in 0..4 {
+                for i in 0..4 {
+                    let k = if vertical { j } else { i };
+                    mesh.points[j * 4 + i][usize::from(vertical)] = if k == 0 || k == 3 { -f64::MAX } else { f64::MAX };
+                }
+            }
+            assert!(mesh.is_valid());
+            let before = mesh.clone();
+            assert!(if vertical { mesh.split_v(split) } else { mesh.split_u(split) });
+            assert!(mesh.is_valid(), "split {split} on axis {vertical} produced non-finite points");
+            for (s, t) in [(0.1, 0.3), (0.5, 0.5), (0.8, 0.9)] {
+                let a = before.eval(s, t);
+                let b = mesh.eval(s, t);
+                for component in 0..2 {
+                    let scale = if component == usize::from(vertical) { f64::MAX } else { 1.0 };
+                    assert!((a[component] / scale - b[component] / scale).abs() < 1e-12);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn removing_split_with_unrepresentable_handles_preserves_mesh() {
+    for vertical in [false, true] {
+        let mut mesh = BezierMesh::identity(B, 2, 2);
+        let nx = mesh.nx();
+        for j in 0..mesh.ny() {
+            for i in 0..nx {
+                let k = if vertical { j } else { i };
+                mesh.points[j * nx + i][usize::from(vertical)] = match k {
+                    0 => f64::MAX,
+                    1 => -f64::MAX,
+                    _ => 0.0,
+                };
+            }
+        }
+        assert!(mesh.is_valid());
+        let before = mesh.clone();
+        let accepted = if vertical { mesh.remove_split_v(1) } else { mesh.remove_split_u(1) };
+        assert!(!accepted, "axis {vertical} accepted non-finite extrapolated handles");
+        assert!(mesh.is_valid());
+        assert_eq!(mesh, before);
+    }
+}
+
+#[test]
+fn removing_tiny_split_preserves_mesh_when_extrapolation_overflows() {
+    for vertical in [false, true] {
+        let mut mesh = if vertical { BezierMesh::identity(B, 1, 3) } else { BezierMesh::identity(B, 3, 1) };
+        let knots = if vertical { &mut mesh.vs } else { &mut mesh.us };
+        *knots = vec![0.0, f64::MIN_POSITIVE / 16.0, 0.5, 1.0];
+        assert!(mesh.is_valid());
+        let before = mesh.clone();
+        let accepted = if vertical { mesh.remove_split_v(1) } else { mesh.remove_split_u(1) };
+        assert!(!accepted);
+        assert!(mesh.is_valid());
+        assert_eq!(mesh, before);
+    }
+}
+
+#[test]
+fn inverse_mapping_refines_points_near_right_and_bottom_edges() {
+    let mesh = BezierMesh::identity(B, 1, 1);
+    for (s, t) in [(0.99, 0.347), (0.382, 0.99), (0.999, 0.999), (1.0, 0.347), (0.382, 1.0), (0.001, 0.001)] {
+        let (u, v) = mesh.param_at(mesh.eval(s, t));
+        assert!((u - s).abs() < 1e-8 && (v - t).abs() < 1e-8, "({s}, {t}) mapped back to ({u}, {v})");
+    }
+}
+
+#[test]
+fn inverse_mapping_refines_curved_mesh_near_edges() {
+    let mut mesh = BezierMesh::identity(B, 1, 1);
+    mesh.points[5] = [25.0, 28.0];
+    mesh.points[6] = [95.0, 32.0];
+    for (s, t) in [(0.999, 0.347), (0.382, 0.999), (0.999, 0.999), (1.0, 0.347), (0.382, 1.0)] {
+        let (u, v) = mesh.param_at(mesh.eval(s, t));
+        assert!((u - s).abs() < 1e-7 && (v - t).abs() < 1e-7, "({s}, {t}) mapped back to ({u}, {v})");
+    }
+}
+
+#[test]
+fn clicked_split_near_edge_does_not_snap_to_boundary() {
+    let mut mesh = BezierMesh::identity(B, 2, 2);
+    let (u, v) = mesh.param_at(mesh.eval(0.99, 0.99));
+    assert!(mesh.split_u(u));
+    assert!(mesh.split_v(v));
+    assert!(mesh.is_valid());
+}
