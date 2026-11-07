@@ -97,6 +97,27 @@ pub(crate) fn crosshair(painter: &Painter, at: Pos2, length: f32, gap: f32) -> C
     show(painter, at, Shape::Crosshair { length, gap })
 }
 
+/// The Perspective Crop's pointer for what a press at `at` does (#11974): with no quad a small
+/// crosshair centred on the point with the tool's icon below right; inside the quad the arrow;
+/// over a corner the hollow white arrowhead with its tip on the point.
+pub(crate) fn perspective_crop(painter: &Painter, zone: crate::perspective_crop_ui::Zone, at: Pos2) -> CursorIcon {
+    use crate::perspective_crop_ui::Zone;
+    match zone {
+        Zone::Idle => {
+            crate::icons::crosshair_badge(painter.ctx(), crate::icons::tool_icon(Tool::PerspectiveCrop), at);
+            crosshair(painter, at, 5.0, 0.0)
+        }
+        Zone::Inside => CursorIcon::Default,
+        Zone::Corner(_) => {
+            // The tip of the arrowhead is at (4, 4) of its 24-unit box.
+            crate::icons::cursor(painter.ctx(), "mouse-pointer-2", at, vec2(4.0, 4.0) / 24.0, 18.0);
+            CursorIcon::None
+        }
+        // A press there does nothing yet (#11801): the tool's usual crosshair.
+        Zone::Outside => standard_crosshair(painter, at),
+    }
+}
+
 pub(crate) fn standard_crosshair(painter: &Painter, at: Pos2) -> CursorIcon {
     show(painter, at, STANDARD_CROSSHAIR.clone())
 }

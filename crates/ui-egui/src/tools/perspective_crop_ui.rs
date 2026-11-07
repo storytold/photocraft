@@ -105,6 +105,47 @@ fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
     })
 }
 
+/// What a press at a point does, which the hover cursor shows (#11974).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zone {
+    /// No quad yet: a press starts a box or places a corner.
+    Idle,
+    /// Within the corner tolerance: a press drags that corner.
+    Corner(usize),
+    /// Inside the quad: a press moves it.
+    Inside,
+    /// Elsewhere with a quad: a press does nothing yet (edge handles and rotate are #11801).
+    Outside,
+}
+
+/// The zone at `p` (document px): the hit-testing of a press in [`pointer`].
+pub fn zone(app: &PhotocraftApp, p: [f64; 2]) -> Zone {
+    let Some(q) = app.ui.perspective_crop else {
+        return Zone::Idle;
+    };
+    let tol = crate::distort_ui::tolerance(app);
+    let dist = |i: usize| (q[i][0] - p[0]).hypot(q[i][1] - p[1]);
+    match (0..4).filter(|&i| dist(i) <= tol).min_by(|&i, &j| dist(i).total_cmp(&dist(j))) {
+        Some(index) => Zone::Corner(index),
+        None if inside(&q, p) => Zone::Inside,
+        None => Zone::Outside,
+    }
+}
+
+/// The hover cursor's zone at `p`: what a press there does. While a drag is held it stays the
+/// zone the drag started in, as the Crop tool keeps its drag's cursor (not measured).
+pub fn cursor(app: &PhotocraftApp, p: [f64; 2]) -> Option<Zone> {
+    if !active(app) || !p[0].is_finite() || !p[1].is_finite() {
+        return None;
+    }
+    Some(match app.pcrop.drag {
+        Some(Drag::New { .. }) => Zone::Idle,
+        Some(Drag::Corner { index, .. }) => Zone::Corner(index),
+        Some(Drag::Move { .. }) => Zone::Inside,
+        None => zone(app, p),
+    })
+}
+
 /// Pointer events (document px) with the tool. True when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
     if app.ui.tool != Tool::PerspectiveCrop {
@@ -118,21 +159,13 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
         return true;
     }
     cancel_stale(app);
-    let tol = crate::distort_ui::tolerance(app);
     match ev {
         ToolEvent::Down { .. } => {
-            app.pcrop.drag = match app.ui.perspective_crop {
-                Some(q) => {
-                    let near = (0..4)
-                        .filter(|&i| (q[i][0] - p[0]).hypot(q[i][1] - p[1]) <= tol)
-                        .min_by(|&i, &j| (q[i][0] - p[0]).hypot(q[i][1] - p[1]).total_cmp(&(q[j][0] - p[0]).hypot(q[j][1] - p[1])));
-                    match near {
-                        Some(index) => Some(Drag::Corner { index, offset: [p[0] - q[index][0], p[1] - q[index][1]] }),
-                        None if inside(&q, p) => Some(Drag::Move { start: p, quad: q }),
-                        None => None,
-                    }
-                }
-                None => Some(Drag::New { start: p, cur: p }),
+            app.pcrop.drag = match (zone(app, p), app.ui.perspective_crop) {
+                (Zone::Corner(index), Some(q)) => Some(Drag::Corner { index, offset: [p[0] - q[index][0], p[1] - q[index][1]] }),
+                (Zone::Inside, Some(q)) => Some(Drag::Move { start: p, quad: q }),
+                (Zone::Idle, _) => Some(Drag::New { start: p, cur: p }),
+                _ => None,
             };
         }
         ToolEvent::Move { .. } => drag_to(app, p),

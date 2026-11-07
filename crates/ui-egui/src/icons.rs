@@ -84,17 +84,22 @@ pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f
 /// cutting the selected pixels). Below-right of the arrow, white with a dark outline. The caller
 /// keeps the arrow (`CursorIcon::Default`).
 pub fn cursor_badge(ctx: &egui::Context, name: &str, p: egui::Pos2) {
-    badge(ctx, name, p, false);
+    badge(ctx, name, p + egui::vec2(20.0, 19.0), false);
+}
+
+/// A small icon below right of a crosshair centred on `p` (the Perspective Crop's idle pointer).
+pub fn crosshair_badge(ctx: &egui::Context, name: &str, p: egui::Pos2) {
+    badge(ctx, name, p + egui::vec2(13.0, 13.0), false);
 }
 
 /// Photoshop's duplicate badge: a second, dark arrowhead behind a white one.
 pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
-    badge(ctx, "mouse-pointer-2", p, true);
+    badge(ctx, "mouse-pointer-2", p + egui::vec2(20.0, 19.0), true);
 }
 
-fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
+fn badge(ctx: &egui::Context, name: &str, centre: egui::Pos2, doubled: bool) {
     const SIZE: f32 = 12.0;
-    let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
+    let rect = Rect::from_center_size(centre, Vec2::splat(SIZE));
     let area = egui::Area::new(egui::Id::unique("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image(name, SIZE, Color32::from_black_alpha(220));
