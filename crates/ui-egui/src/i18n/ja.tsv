@@ -1888,6 +1888,7 @@
 	Move Tool	移動ツール
 	Could not use the move tool because the layer is locked.	レイヤーがロックされているため、移動ツールを使用できません。
 	Could not complete the Free Transform command because the layer is locked.	レイヤーがロックされているため、自由変形コマンドを完了できません。
+	Could not transform because the layer is locked.	レイヤーがロックされているため、変形できません。
 	Multiply	乗算
 	My Brushes	マイブラシ
 	Neutrals	中間色系

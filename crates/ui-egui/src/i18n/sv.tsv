@@ -1636,6 +1636,7 @@
 	Move Tool	Flyttverktyg
 	Could not use the move tool because the layer is locked.	Det gick inte att använda flyttverktyget eftersom lagret är låst.
 	Could not complete the Free Transform command because the layer is locked.	Det gick inte att slutföra kommandot Ombilda fritt eftersom lagret är låst.
+	Could not transform because the layer is locked.	Det gick inte att omforma eftersom lagret är låst.
 	Rectangular Marquee Tool	Verktyget Rektangulär markeringsram
 	Elliptical Marquee Tool	Verktyget Elliptisk markeringsram
 	Single Row Marquee Tool	Verktyget Enradsmarkeringsram
