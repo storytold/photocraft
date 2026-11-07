@@ -1,4 +1,4 @@
-use photocraft_codecs::{ChannelLayout, CodecError, Format, SampleType, decode, decode_as};
+use photocraft_codecs::{ChannelLayout, CodecError, EncodeOptions, Format, Image, SampleType, decode, decode_as, encode};
 
 const PAM_GRAY: &[u8] = b"P7\nWIDTH 1\nHEIGHT 1\nDEPTH 1\nMAXVAL 255\nENDHDR";
 const ENDINGS: &[&[u8]] = &[b"\n", b" \n", b"\t \n", b"\r\n", b" \t\r\n"];
@@ -78,5 +78,45 @@ fn binary_pnm_keeps_its_single_whitespace_separator() {
             let expected: Vec<u8> = (0..8).map(|bit| if first & (0x80 >> bit) == 0 { 255 } else { 0 }).collect();
             assert_eq!(decode(&bytes).unwrap().data(), expected);
         }
+    }
+}
+
+/// Wide integer exports retain network byte order in PGM, PPM and PAM.
+#[test]
+fn binary_pnm_export_writes_u16_in_network_byte_order() {
+    for (layout, tag, tuple) in [
+        (ChannelLayout::Gray, "P5", ""),
+        (ChannelLayout::Rgb, "P6", ""),
+        (ChannelLayout::GrayA, "P7", "GRAYSCALE_ALPHA"),
+        (ChannelLayout::Rgba, "P7", "RGB_ALPHA"),
+        (ChannelLayout::Cmyk, "P7", "CMYK"),
+        (ChannelLayout::CmykA, "P7", "CMYK_ALPHA"),
+    ] {
+        let samples: Vec<u16> = (0..6 * layout.channels()).map(|i| (i as u16).wrapping_mul(1021)).collect();
+        let image = Image::from_u16(3, 2, layout, &samples).unwrap();
+        let mut expected = if tag == "P7" {
+            format!("P7\nWIDTH 3\nHEIGHT 2\nDEPTH {}\nMAXVAL 65535\nTUPLTYPE {tuple}\nENDHDR\n", layout.channels()).into_bytes()
+        } else {
+            format!("{tag}\n3 2\n65535\n").into_bytes()
+        };
+        expected.extend(samples.iter().flat_map(|v| v.to_be_bytes()));
+        assert_eq!(encode(&image, Format::Pnm, &EncodeOptions::default()).unwrap(), expected, "{layout:?}");
+    }
+}
+
+/// PFM reverses rows while preserving native floating-point bits, including NaNs.
+#[test]
+fn pfm_export_writes_native_float_bits_bottom_up() {
+    let bits = [0u32, 0x80000000, 1, 0x3f400000, 0x7f800000, 0xff800000, 0x7fc12345, 0x7f812345];
+    for (layout, tag) in [(ChannelLayout::Gray, "Pf"), (ChannelLayout::Rgb, "PF")] {
+        let row = 3 * layout.channels();
+        let samples: Vec<u32> = (0..2 * row).map(|i| bits[i % bits.len()]).collect();
+        let raw = samples.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let image = Image::from_raw(3, 2, layout, SampleType::F32, raw).unwrap();
+        let mut expected = format!("{tag}\n3 2\n-1.0\n").into_bytes();
+        for row in samples.chunks_exact(row).rev() {
+            expected.extend(row.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        assert_eq!(encode(&image, Format::Pnm, &EncodeOptions::default()).unwrap(), expected, "{layout:?}");
     }
 }

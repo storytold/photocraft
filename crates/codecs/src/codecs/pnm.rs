@@ -305,6 +305,7 @@ fn decode_pam(r: &mut Reader<'_>, limits: &Limits) -> Result<Image, CodecError> 
     read_binary(r.rest(), n, maxval)?.into_image(w, h, layout)
 }
 
+/// Write native sample bytes in file order without a full typed staging buffer.
 pub(crate) fn encode(src: &Image, plan: Plan, _opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
@@ -318,11 +319,11 @@ pub(crate) fn encode(src: &Image, plan: Plan, _opts: &EncodeOptions) -> Result<V
                 l => return Err(CodecError::encode(F, format!("PFM cannot store {l:?}"))),
             };
             out.extend_from_slice(format!("{tag}\n{w} {h}\n-1.0\n").as_bytes());
-            let s = img.to_f32_samples().unwrap_or_default();
+            let s = img.data().as_chunks::<4>().0;
             let row = w as usize * layout.channels();
             for y in (0..h as usize).rev() {
                 for v in &s[y * row..(y + 1) * row] {
-                    out.extend_from_slice(&v.to_le_bytes());
+                    out.extend_from_slice(&f32::from_ne_bytes(*v).to_le_bytes());
                 }
             }
         }
@@ -344,8 +345,8 @@ pub(crate) fn encode(src: &Image, plan: Plan, _opts: &EncodeOptions) -> Result<V
             if sample == SampleType::U8 {
                 out.extend_from_slice(img.data());
             } else {
-                for v in img.to_u16_samples().unwrap_or_default() {
-                    out.extend_from_slice(&v.to_be_bytes());
+                for bytes in img.data().as_chunks::<2>().0 {
+                    out.extend_from_slice(&u16::from_ne_bytes(*bytes).to_be_bytes());
                 }
             }
         }
