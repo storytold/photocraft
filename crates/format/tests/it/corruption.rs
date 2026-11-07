@@ -523,3 +523,22 @@ fn declared_canvas_outside_the_budget_is_refused() {
     let opts = LoadOptions { max_canvas_side: 65_536, ..Default::default() };
     assert!(matches!(load_from_bytes_with(&with_size(65_537, 1), &opts), Err(FormatError::LimitExceeded(_))));
 }
+
+/// #8595: the default decode budget follows the machine: the format's cap, lowered to the
+/// available RAM plus the scratch disk's room, never below 1 GiB. A bundle that expands past the
+/// budget a machine gets stops with an error instead of running it out of memory.
+#[test]
+fn the_default_decode_budget_follows_the_machines_memory() {
+    let cap = 16 << 30;
+    assert_eq!(total_budget(cap, None, None), cap, "nothing known: the format's cap");
+    assert_eq!(total_budget(cap, Some(4 << 30), None), 4 << 30);
+    assert_eq!(total_budget(cap, Some(4 << 30), Some(8 << 30)), 12 << 30, "spilled tiles count too");
+    assert_eq!(total_budget(cap, Some(64 << 30), None), cap);
+    assert_eq!(total_budget(cap, Some(0), None), MIN_TOTAL_BUDGET, "a brief shortage doesn't refuse every load");
+    assert_eq!(total_budget(1 << 20, Some(4 << 30), None), 1 << 20, "never above the cap");
+    // The budget a machine gets is enforced: a bundle that expands past it is refused.
+    let b = sample();
+    assert!(load_from_bytes(&b).is_ok());
+    let opts = LoadOptions { max_total_bytes: total_budget(1000, Some(4 << 30), Some(4 << 30)), ..Default::default() };
+    assert!(matches!(load_from_bytes_with(&b, &opts), Err(FormatError::LimitExceeded(_))));
+}
