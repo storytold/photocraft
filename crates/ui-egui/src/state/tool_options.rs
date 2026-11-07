@@ -417,7 +417,7 @@ impl Default for ToolOptions {
             bucket_clear: false,
             type_font: "Inter".into(),
             type_style: "Regular".into(),
-            type_size: 48.0,
+            type_size: 50.0,
             type_aa: "sharp".into(),
             type_align: "left".into(),
             type_style_defaults: serde_json::Map::new(),
