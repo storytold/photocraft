@@ -126,20 +126,24 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
 }
 
-/// The Info panel's Color Sampler readouts and the (document, revision) they were composited for.
-pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64), std::sync::Arc<Vec<Value>>);
+/// The Info panel's Color Sampler readouts and the (document, revision, Sample Size) they were
+/// composited for.
+pub(crate) type SamplerReadouts = ((photocraft_doc::DocId, u64, u32), std::sync::Arc<Vec<Value>>);
 
 /// The Color Sampler readouts of the active document, composited once per revision (#4528):
 /// adding, moving or deleting a sampler and every pixel edit bump the revision, so between them
 /// the Info panel reuses them instead of compositing each point through the stack every frame.
+/// They average over the Sample Size shared with the Eyedropper (#11732), which is part of the
+/// key, so changing it re-reads every sampler at once.
 pub(crate) fn sampler_readouts(app: &mut PhotocraftApp) -> std::sync::Arc<Vec<Value>> {
-    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision)) else { return std::sync::Arc::default() };
+    let size = app.ui.tool_options.eyedropper_size;
+    let Some(key) = app.session.active().map(|s| (s.doc.id, s.revision, size)) else { return std::sync::Arc::default() };
     if let Some((k, v)) = &app.info_samplers
         && *k == key
     {
         return v.clone();
     }
-    let list = app.session.execute("view.colorSamplers.list", json!({})).ok();
+    let list = app.session.execute("view.colorSamplers.list", json!({"size": size})).ok();
     let v = std::sync::Arc::new(list.as_ref().and_then(|v| v["samplers"].as_array()).cloned().unwrap_or_default());
     app.info_samplers = Some((key, v.clone()));
     v

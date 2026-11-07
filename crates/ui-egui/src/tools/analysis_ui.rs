@@ -604,6 +604,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::ColorSampler => {
             let t = Tokens::get(ui.ctx());
+            // Sample Size, shared with the Eyedropper as in Photoshop (#11732).
+            ui.label(RichText::new(tl!("Sample Size:")).color(t.text_dim).size(12.0));
+            let sizes = crate::eyedropper_ui::size_options();
+            crate::widgets::dropdown(ui, "color-sampler-size", tl!("Size"), &mut app.ui.tool_options.eyedropper_size, &sizes, 130.0);
+            crate::widgets::vline(ui, 22.0);
             let n = app.session.active().map_or(0, |d| d.color_samplers.len());
             ui.label(
                 RichText::new(crate::i18n::fmt(
