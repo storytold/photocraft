@@ -283,7 +283,6 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         return true;
     };
     let tol = tolerance(app);
-    let samplers: Vec<[f64; 2]> = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
@@ -384,7 +383,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         // there (a click on it moves it to the clicked pixel); Escape cancels either drag.
         (Tool::ColorSampler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
-            match nearest_sampler(&samplers, p, tol) {
+            match sampler_at(app, p) {
                 // ⌥-click a point removes it.
                 Some(i) if mods.alt => {
                     let _ = app.run("view.colorSamplers.delete", json!({"index": i}));
