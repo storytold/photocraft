@@ -355,7 +355,9 @@ fn color_of(cmd: &str, key: &str, v: &Value) -> Result<[f32; 3]> {
     match v {
         Value::String(s) => {
             let h = s.trim_start_matches('#');
-            let b = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).map(|x| f32::from(x) / 255.0);
+            let b = |i: usize| {
+                h.get(i..i + 2).filter(|x| x.bytes().all(|c| c.is_ascii_hexdigit())).and_then(|x| u8::from_str_radix(x, 16).ok()).map(|x| f32::from(x) / 255.0)
+            };
             match (h.len(), b(0), b(2), b(4)) {
                 (6 | 8, Some(r), Some(g), Some(bb)) => Ok([r, g, bb]),
                 _ => Err(err()),
