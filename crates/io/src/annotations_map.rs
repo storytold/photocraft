@@ -390,9 +390,7 @@ fn count_point_from_descriptor(value: &Value) -> Option<[f64; 2]> {
 
 /// Consume readable Count data. Keep only opaque bytes when no resource can be read.
 pub(crate) fn import_count_resource(doc: &mut Document) {
-    if let Some(groups) =
-        doc.metadata.psd_resources.iter().filter(|(id, _, _)| *id == COUNT_INFO).find_map(|(_, _, data)| count_groups_from_resource(data))
-    {
+    if let Some(groups) = doc.metadata.psd_resources.iter().filter(|(id, _, _)| *id == COUNT_INFO).find_map(|(_, _, data)| count_groups_from_resource(data)) {
         doc.measurement.count_groups = groups;
         doc.metadata.psd_resources.retain(|(id, _, _)| *id != COUNT_INFO);
     }
