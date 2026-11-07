@@ -12,6 +12,13 @@ pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts::default(), None).0
 }
 
+/// A [`value_field`] for a whole number: no decimals, and the arrow keys and a scrub (of the field
+/// or of its caption) move it a whole step at a time, whatever its range. A small range such as
+/// 1–10 would otherwise scrub in hundredths, which a whole-number setting rounds away (#11765).
+pub fn value_field_whole(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), step_from_decimals: true, ..Default::default() }, None).0
+}
+
 /// A [`value_field`] whose visible caption was drawn apart from it (an options-bar caption in a
 /// nested layout): `name` names the number when the caption's scrub link did not reach it.
 pub fn value_field_named(ui: &mut Ui, name: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
