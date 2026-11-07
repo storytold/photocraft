@@ -37,6 +37,119 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
     ranged_lut(&g.contour, g.range)
 }
 
+/// The coverage transfer a glow paints through (CPU `glow_map` and the GPU's `MFinish` stage
+/// alike): [`glow_lut`], and for an outer glow with a custom contour, capped by the glow's
+/// anti-aliased reach (#11361).
+///
+/// The contour remaps the falloff only within the glow's reach. Run through `glow_lut` alone,
+/// a contour that starts above 0 (Photoshop's flat "always 100 %" one, `(0,1)–(1,1)`) also
+/// lights every pixel the glow never reaches (coverage 0), out to the edge of the effect's
+/// rectangle. Here coverage `v` is also turned into how much of the pixel the reach covers
+/// (`glow_reach_edge`, 0 at and beyond the reach, rising to 1 inside it), and the transfer is
+/// `min(contour(u), max(edge, u))`, with `u = min(v / range, 1)` what a Linear contour paints.
+/// The edge is linear in `v` from 0 until it reaches 1 (`glow_edge_per_coverage`), so the
+/// table's linear interpolation follows it, its first step from entry 0 included (the knee is
+/// rounded down to a table entry for both techniques); the coverage where it reaches 1 is per
+/// technique:
+///
+/// - Precise: the falloff is linear in distance, so the edge is the distance left to the reach's
+///   end: the last pixel steps down by how far inside the reach its centre is (one soft pixel,
+///   as Photoshop's flat-contour band).
+/// - Softer: a fixed coverage, `SOFTER_FULL_COVERAGE` (0.12), whatever the size (#11651).
+///   Measured in Photoshop 2021 (flat contour, Range 50 %, spread 0, sizes 2–10): the band fades
+///   over several pixels at its outer edge and a single pixel's glow stays faint, and every
+///   measured pixel, along a straight edge or out from a 1 px dot, is `min(1, v / 0.12)` within
+///   one level, with `v` the coverage of Photoshop's tent (two integer-width boxes, taps
+///   `(w − |i|) / w²`; the Linear control row is exactly `2v` of it). That is 25/6 ≈ 4.17× the
+///   Linear glow at Range 50 % (the reporter's "roughly 4×": exactly 4× reads 5–9 levels low on
+///   every soft pixel). Our tent's half-weight end taps at even widths add `1 / (4w²)` to that
+///   coverage and light one more faint pixel at `w` (as they do for a Linear glow), so at even
+///   sizes the soft pixels read up to `255 / (0.48·w²)` levels above Photoshop's (33 at size 4,
+///   5 at size 10); see `softer_flat_contour_glow_matches_photoshop`.
+///
+/// So:
+///
+/// - coverage 0 always paints 0, for any contour (nothing beyond the reach);
+/// - a high contour is solid up to the edge's knee, then follows it down: one soft pixel for
+///   Precise, a fade over the outer pixels for Softer;
+/// - the reach cap is never below the Linear contour, so a contour that already follows or
+///   stays under the falloff (Linear, or a custom curve with `contour(0) = 0` rising no faster
+///   than the reach edge) is unchanged. The reach does not depend on Range: Range stretches the
+///   contour over the falloff, the falloff still ends where it ends.
+///
+/// Measured: the flat contour at Range 50 % (both techniques). Modelled: the `min` with other
+/// contours (a contour that is high but not flat could equally be scaled by the edge; only a
+/// mid-level flat contour can tell the two apart), other Ranges (the Softer knee is taken in
+/// coverage, so it does not move with Range), Softer spread and sizes over 10 px.
+///
+/// Inner glows keep `glow_lut` (`inner`): their unreached pixels are the shape's interior, where
+/// Photoshop's behaviour with a high contour is unmeasured. `None` = identity.
+pub fn glow_paint_lut(g: &Glow, inner: bool) -> Option<Vec<f32>> {
+    let lut = glow_lut(g);
+    if inner || matches!(g.contour, Contour::Linear) {
+        return lut;
+    }
+    let lut = lut?;
+    let range = if g.range.is_finite() { g.range.clamp(0.01, 1.0) } else { 1.0 };
+    let per_coverage = glow_edge_per_coverage(g);
+    // The GPU samples a 4096-entry table (`compose.wgsl` `lut`), as `ranged_lut` builds.
+    Some(
+        (0..GLOW_LUT_LEN)
+            .map(|k| {
+                let v = k as f32 / (GLOW_LUT_LEN - 1) as f32;
+                let c = lut_at(&lut, v);
+                let linear = (v / range).min(1.0);
+                c.min(glow_reach_edge(per_coverage, v).max(linear))
+            })
+            .collect(),
+    )
+}
+
+/// Entries in a glow's transfer table: the GPU's `compose.wgsl` `lut` reads 4096, linearly
+/// interpolated, as the CPU's [`lut_at`] does.
+const GLOW_LUT_LEN: usize = 4096;
+
+/// How much of a pixel of glow coverage `v` the glow's reach covers, 0..=1: 0 at and beyond the
+/// reach (coverage 0, whatever `per_coverage` is), else `per_coverage · v` up to 1.
+fn glow_reach_edge(per_coverage: f32, v: f32) -> f32 {
+    let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    if v == 0.0 {
+        return 0.0;
+    }
+    let edge = per_coverage * v;
+    if edge.is_finite() { edge.clamp(0.0, 1.0) } else { 1.0 }
+}
+
+/// The slope of [`glow_reach_edge`]: `1 / (the coverage at which the edge reaches 1)`, that
+/// coverage rounded down to a whole table step (at least one), so the knee lands on a table entry
+/// and the table interpolates the edge exactly (rounding down only widens what paints in full).
+///
+/// - Precise: `v = ½·(1 − (d − solid) / soft)`, which reaches 0 at `d = size + 1` (centre to
+///   centre), so the distance left to the reach's end is `size + 1 − d = 2·soft·v`: full at
+///   `v = 1 / (2·soft)`.
+/// - Softer: full at [`SOFTER_FULL_COVERAGE`].
+fn glow_edge_per_coverage(g: &Glow) -> f32 {
+    let full = match g.technique {
+        GlowTechnique::Precise => {
+            let solid = g.size * g.spread;
+            0.5 / (g.size + 1.0 - solid).max(1e-3)
+        }
+        GlowTechnique::Softer => SOFTER_FULL_COVERAGE,
+    };
+    let steps = (GLOW_LUT_LEN - 1) as f32;
+    // `max` also turns a NaN (never expected) into the one-step minimum.
+    steps / (full * steps).floor().max(1.0)
+}
+
+/// The tent coverage at which a Softer outer glow's reach edge reaches full strength (#11651),
+/// the same for every size: Photoshop 2021's flat-contour Softer glow (Range 50 %) paints
+/// `min(1, v / 0.12)`. Fitted on sizes 3, 4, 6 and 10, square edge and 1 px dot alike: the
+/// square's soft pixels alone pin the gain `1 / 0.12` to 8.31–8.35 (236 at size 3, 133 at 4,
+/// 59 and 177 at 6, 21, 64, 127 and 213 at 10), and the dot rows (79, 157 at size 3; 33, 66,
+/// 100 at 4; 10 … 49 at 6) agree within a level. Rounded down to a table entry it is 491 steps,
+/// a gain of 8.340.
+const SOFTER_FULL_COVERAGE: f32 = 0.12;
+
 /// A contour applied over a Range (`contour(min(v / range, 1))`); `None` = identity.
 pub fn ranged_lut(contour: &Contour, range: f32) -> Option<Vec<f32>> {
     let base = contour_lut(contour);
@@ -306,7 +419,7 @@ pub(super) fn glow_map(shape: &Map, g: &Glow, inner: bool, origin: (i32, i32)) -
             m
         }
     };
-    m = apply_lut(m, glow_lut(g));
+    m = apply_lut(m, glow_paint_lut(g, inner));
     if inner && g.source == GlowSource::Center {
         m = m.map(|v| 1.0 - v);
     }
