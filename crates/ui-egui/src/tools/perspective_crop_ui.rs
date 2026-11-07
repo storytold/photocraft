@@ -317,6 +317,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 #[cfg(test)]
+#[path = "perspective_crop_session_keys_tests.rs"]
+mod perspective_crop_session_keys_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
