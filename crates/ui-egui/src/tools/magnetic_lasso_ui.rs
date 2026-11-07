@@ -381,11 +381,13 @@ pub fn replaces_selection(app: &PhotocraftApp) -> bool {
     app.ui.magnetic.active() && app.ui.magnetic.mode == "replace"
 }
 
-/// Once a frame (`primary_down`: the primary pointer button is down): a border left behind by a tool or document switch is dropped.
-pub fn frame(app: &mut PhotocraftApp, primary_down: bool) {
+/// Once a frame of a document canvas (`primary_down`: its primary pointer button is down; `active_canvas`:
+/// it is the canvas of the active document, the one that owns a press in progress): a border left behind by a tool or document switch is dropped.
+pub fn frame(app: &mut PhotocraftApp, primary_down: bool, active_canvas: bool) {
     // The button is up: the held-button spacing ends even when the release went to the temporary
-    // Move (Ctrl pressed during the drag) and never reached this tool.
-    if !primary_down {
+    // Move (Ctrl pressed during the drag) and never reached this tool. Only the active canvas
+    // says so: another window's button being up says nothing about the drag in this one.
+    if active_canvas && !primary_down {
         app.magnetic.held = false;
     }
     let m = &app.ui.magnetic;

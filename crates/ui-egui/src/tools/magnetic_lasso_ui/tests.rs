@@ -201,16 +201,16 @@ fn agents_see_the_border_in_progress() {
 fn switching_tools_or_documents_drops_the_border() {
     let mut app = app();
     click(&mut app, 52.0, 37.0, Modifiers::NONE);
-    frame(&mut app, true);
+    frame(&mut app, true, true);
     assert!(app.ui.magnetic.active());
     app.ui.tool = Tool::Lasso;
-    frame(&mut app, true);
+    frame(&mut app, true, true);
     assert!(!app.ui.magnetic.active());
     app.ui.tool = Tool::MagneticLasso;
     click(&mut app, 52.0, 37.0, Modifiers::NONE);
     app.run("file.new", json!({"width": 50, "height": 50})).unwrap();
     app.sync_views();
-    frame(&mut app, true);
+    frame(&mut app, true, true);
     assert!(!app.ui.magnetic.active());
 }
 
@@ -271,10 +271,13 @@ fn the_button_up_spacing_applies_after_a_release_the_temporary_move_took() {
     });
     assert!(moved <= 6, "after a release taken by the Move: {moved} points");
     // The canvas frame also clears it: the button is up, whoever saw the release.
-    let framed = points_after_walk(|a| frame(a, false));
+    let framed = points_after_walk(|a| frame(a, false, true));
     assert!(framed <= 6, "after a frame with the button up: {framed} points");
+    // Another (inactive) canvas with its own button up leaves a live drag alone.
+    let other = points_after_walk(|a| frame(a, false, false));
+    assert!(other > 10, "an inactive canvas's frame must not end the hold: {other} points");
     // A frame with the button still down keeps the held-button spacing.
-    let held = points_after_walk(|a| frame(a, true));
+    let held = points_after_walk(|a| frame(a, true, true));
     assert!(held > 10, "button held: {held} points");
 }
 
