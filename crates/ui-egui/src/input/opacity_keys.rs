@@ -3,6 +3,7 @@
 //! Eraser they set the brush's Opacity (⇧: Flow; swapped while airbrush build-up is on); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
 //! active layer's Opacity (⇧: Fill). Tools whose number is a strength or exposure are left alone.
+//! ⌥+digit sets the Smoothing of the tools that show it (Brush, Pencil, Eraser; #11892).
 
 use egui::{Event, Key};
 use serde_json::json;
@@ -57,11 +58,33 @@ fn digit(k: Key) -> Option<u8> {
     })
 }
 
-/// Consumes this frame's unmodified (or ⇧) digit presses and applies them.
+/// The tools whose options bar has a Smoothing field, which ⌥+digit sets (#11892).
+fn has_smoothing(tool: Tool) -> bool {
+    matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser)
+}
+
+/// Consumes this frame's unmodified (or ⇧) digit presses and applies them, and ⌥+digit presses
+/// for the tools with a Smoothing field.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    let smoothing = has_smoothing(app.ui.tool);
+    let mut alt_presses: Vec<u8> = Vec::new();
     let presses: Vec<(u8, bool)> = ctx.input_mut(|i| {
         let mut out = Vec::new();
         i.events.retain(|e| match e {
+            // ⌥+digit: one tens value each (1 = 10% … 0 = 100%), never two digits.
+            Event::Key { key, physical_key, pressed: true, repeat, modifiers }
+                if smoothing && modifiers.alt && !modifiers.shift && !modifiers.command && !modifiers.ctrl =>
+            {
+                match physical_key.and_then(digit).or_else(|| digit(*key)) {
+                    Some(d) => {
+                        if !repeat {
+                            alt_presses.push(d);
+                        }
+                        false
+                    }
+                    None => true,
+                }
+            }
             // The physical key, so ⇧+digit is still a digit whatever symbol the layout puts there.
             Event::Key { key, physical_key, pressed: true, repeat, modifiers } if !modifiers.command && !modifiers.ctrl && !modifiers.alt => {
                 match physical_key.and_then(digit).or_else(|| digit(*key)) {
@@ -80,6 +103,10 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
         out
     });
+    for d in alt_presses {
+        let amount = if d == 0 { 1.0 } else { f64::from(d) / 10.0 };
+        let _ = app.run("tools.setBrush", json!({ "brush": { "smoothing": { "enabled": true, "amount": amount } } }));
+    }
     let now = crate::gpu_canvas::now_ms();
     for (d, shift) in presses {
         press(app, d, shift, now);
