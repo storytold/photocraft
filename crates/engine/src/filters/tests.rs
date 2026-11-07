@@ -588,14 +588,25 @@ fn displace_on_a_smart_object_embeds_its_map() {
     assert_eq!(first_value(&sm.smart_filters[1].params), 0.0, "the black map, not the passed-back white one");
 }
 
-/// A filter that yields nothing without a cancellation (a custom Shape Blur kernel it could not
-/// allocate or accept) reports a failure; only a cancelled job reports `Cancelled`.
+/// Distinguish cancellation, invalid native samples and rejected legacy working data.
 #[test]
-fn filter_without_output_is_cancelled_only_when_the_job_was() {
-    assert!(matches!(filter_output(None, true), Err(EngineError::Cancelled)));
-    let failure = filter_output(None, false).unwrap_err();
-    assert!(!matches!(failure, EngineError::Cancelled), "{failure:?}");
+fn filter_errors_keep_the_kernel_diagnostic() {
+    assert!(matches!(filter_error(algo::ApplyError::Cancelled), EngineError::Cancelled));
+    assert!(matches!(filter_error(algo::ApplyError::Native(algo::coverage::Error::Cancelled)), EngineError::Cancelled));
+    let failure = filter_error(algo::ApplyError::WorkingData);
     assert!(failure.to_string().contains("could not prepare"), "{failure}");
-    let surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
-    assert!(filter_output(Some(surface), true).is_ok());
+    let failure = filter_error(algo::ApplyError::Native(algo::coverage::Error::NonFiniteSample));
+    assert!(failure.to_string().contains("finite"), "{failure}");
+    assert!(!failure.to_string().contains("could not prepare"));
+}
+
+/// Replayed checked filters expose bad samples instead of a misleading generic allocation error.
+#[test]
+fn replayed_average_reports_nonfinite_samples() {
+    let area = photocraft_geom::Rect::new(0, 0, 1, 1);
+    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
+    surface.write_pixel(0, 0, &[f32::NAN, 0., 0., 1.]);
+    let error = apply_filter_to_surface("filter.blur.average", &json!({}), &surface, area, None, area).unwrap_err();
+    assert!(error.to_string().contains("finite"), "{error}");
+    assert!(!error.to_string().contains("could not prepare"));
 }

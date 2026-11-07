@@ -1,6 +1,30 @@
 use super::*;
 use photocraft_raster::{Interrupt, Surface};
 
+/// The fallible dispatcher retains native failures instead of converting them into missing output.
+#[test]
+fn checked_dispatch_preserves_parameters_samples_limits_and_cancellation() {
+    let area = Rect::new(0, 0, 1, 1);
+    let mut source = Surface::new(PixelFormat::RGBA32F);
+    source.write_pixel(0, 0, &[f32::NAN, 0., 0., 1.]);
+    for params in [FilterParams::Average, FilterParams::SetAlpha { value: 0.5 }] {
+        assert_eq!(try_apply_in_with(&source, &params, area, area, None, area, &Interrupt::NONE), Err(ApplyError::Native(coverage::Error::NonFiniteSample)));
+    }
+    let bad_hdr = FilterParams::HdrToning(tone::HdrToning { radius: f32::NAN, ..Default::default() });
+    assert_eq!(
+        try_apply_in_with(&source, &bad_hdr, area, area, None, area, &Interrupt::NONE),
+        Err(ApplyError::Hdr(tone::checked_hdr::Error::InvalidParameter))
+    );
+    let huge = Rect::new(0, 0, 10_000, 10_000);
+    assert_eq!(
+        try_apply_in_with(&source, &FilterParams::Average, huge, huge, None, huge, &Interrupt::NONE),
+        Err(ApplyError::Native(coverage::Error::InvalidGeometry))
+    );
+    let cancel = || true;
+    assert_eq!(try_apply_in_with(&source, &FilterParams::Average, area, area, None, area, &Interrupt::cancel_only(&cancel)), Err(ApplyError::Cancelled));
+    assert!(apply_in_with(&source, &FilterParams::Average, area, area, None, area, &Interrupt::NONE).is_none());
+}
+
 #[test]
 /// Pin CMYK convolution offsets to brightness rather than increasing the stored ink amounts.
 fn cmyk_convolution_offset_is_a_brightness_offset() {

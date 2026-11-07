@@ -1131,7 +1131,78 @@ pub fn apply_in_with(
     extent: Rect,
     ctl: &photocraft_raster::Interrupt,
 ) -> Option<Surface> {
-    apply_tiled_with(surface, params, area.intersect(&extent), bounds, selection, auto_tile(params, bounds), Some(extent), ctl)
+    try_apply_in_with(surface, params, area, bounds, selection, extent, ctl).ok()
+}
+
+/// A checked native kernel's original failure, or failure of a legacy tiled kernel.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ApplyError {
+    Cancelled,
+    Native(coverage::Error),
+    Hdr(tone::checked_hdr::Error),
+    WorkingData,
+}
+
+impl std::fmt::Display for ApplyError {
+    /// Preserve the checked kernel's diagnostic instead of guessing why it produced no output.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("filter cancelled"),
+            Self::Native(error) => error.fmt(f),
+            Self::Hdr(error) => error.fmt(f),
+            Self::WorkingData => f.write_str("the filter could not prepare its working data (not enough memory, or an unusable kernel)"),
+        }
+    }
+}
+impl std::error::Error for ApplyError {}
+
+impl ApplyError {
+    /// Classify cancellation independently of the selected native kernel's error type.
+    pub fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled | Self::Native(coverage::Error::Cancelled) | Self::Hdr(tone::checked_hdr::Error::Cancelled))
+    }
+}
+
+/// [`apply_in_with`] with specific checked-kernel diagnostics; compatibility APIs retain their optional result.
+pub fn try_apply_in_with(
+    surface: &Surface,
+    params: &FilterParams,
+    area: Rect,
+    bounds: Rect,
+    selection: Option<&Surface>,
+    extent: Rect,
+    ctl: &photocraft_raster::Interrupt,
+) -> Result<Surface, ApplyError> {
+    if ctl.cancelled() {
+        return Err(ApplyError::Cancelled);
+    }
+    let area = area.intersect(&extent);
+    if let Some(result) = checked_native_filter(surface, params, area, bounds, selection, Some(extent), ctl) {
+        return result;
+    }
+    apply_tiled_with(surface, params, area, bounds, selection, auto_tile(params, bounds), Some(extent), ctl)
+        .ok_or_else(|| if ctl.cancelled() { ApplyError::Cancelled } else { ApplyError::WorkingData })
+}
+
+/// Keep native error dispatch shared by diagnostic and legacy optional entry points.
+fn checked_native_filter(
+    surface: &Surface,
+    params: &FilterParams,
+    area: Rect,
+    bounds: Rect,
+    selection: Option<&Surface>,
+    extent: Option<Rect>,
+    ctl: &photocraft_raster::Interrupt,
+) -> Option<Result<Surface, ApplyError>> {
+    let domain = extent.unwrap_or(bounds);
+    Some(match params {
+        FilterParams::HdrToning(options) => tone::checked_hdr::apply_with(surface, options, area, bounds, selection, ctl).map_err(ApplyError::Hdr),
+        FilterParams::Percentile(options) => rank::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
+        FilterParams::ChannelNoise(options) => channel_noise::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
+        FilterParams::Convolution(options) => convolution::apply_with(surface, options, area, domain, selection, ctl).map_err(ApplyError::Native),
+        FilterParams::Average => average::apply_with(surface, area, bounds, selection, ctl).map_err(ApplyError::Native),
+        _ => coverage::apply_with(surface, coverage_operation(params)?, area, domain, selection, ctl).map_err(ApplyError::Native),
+    })
 }
 
 /// Results do not depend on the tiling, so wide-halo filters use bigger tiles to keep the
@@ -1267,23 +1338,8 @@ fn apply_tiled_with_impl(
     {
         return None;
     }
-    if let FilterParams::HdrToning(options) = params {
-        return tone::checked_hdr::apply_with(surface, options, area, bounds, selection, ctl).ok();
-    }
-    if let FilterParams::Percentile(options) = params {
-        return rank::apply_with(surface, options, area, extent.unwrap_or(bounds), selection, ctl).ok();
-    }
-    if let FilterParams::ChannelNoise(options) = params {
-        return channel_noise::apply_with(surface, options, area, extent.unwrap_or(bounds), selection, ctl).ok();
-    }
-    if let FilterParams::Convolution(options) = params {
-        return convolution::apply_with(surface, options, area, extent.unwrap_or(bounds), selection, ctl).ok();
-    }
-    if matches!(params, FilterParams::Average) {
-        return average::apply_with(surface, area, bounds, selection, ctl).ok();
-    }
-    if let Some(operation) = coverage_operation(params) {
-        return coverage::apply_with(surface, operation, area, extent.unwrap_or(bounds), selection, ctl).ok();
+    if let Some(result) = checked_native_filter(surface, params, area, bounds, selection, extent, ctl) {
+        return result.ok();
     }
     let mut out = surface.clone();
     if area.is_empty() {

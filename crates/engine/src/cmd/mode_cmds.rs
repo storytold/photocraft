@@ -501,6 +501,7 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
         return Err(bad(cmd, format!("the pattern \"{}\" is empty or too large", pat.display_name())));
     }
     let count = usize::try_from(pat.pixel_count()).map_err(|_| bad(cmd, "the pattern is too large"))?;
+    quantize::custom_pattern_working_bytes(count).map_err(|_| bad(cmd, "the pattern's threshold ranking exceeds the 256 MiB workspace limit"))?;
     let mut lightness = Vec::new();
     lightness.try_reserve_exact(count).map_err(|_| bad(cmd, "not enough memory for the pattern's lightness map"))?;
     let mut band = Vec::new();
@@ -510,7 +511,9 @@ fn custom_pattern_map(s: &Session, cmd: &str, p: &Value) -> Result<(Vec<f32>, us
         lightness.extend(band.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]]) * q[3] + (1.0 - q[3])));
     }
     // Rank the complete pattern once: band-local ranks would change its thresholds.
-    Ok((quantize::custom_pattern_thresholds(&lightness), pat.width as usize, pat.height as usize))
+    drop(band);
+    let map = quantize::custom_pattern_thresholds(&lightness).map_err(|error| bad(cmd, format!("could not rank the pattern: {error}")))?;
+    Ok((map, pat.width as usize, pat.height as usize))
 }
 
 fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
