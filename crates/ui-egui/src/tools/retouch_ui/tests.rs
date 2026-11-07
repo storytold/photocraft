@@ -762,16 +762,16 @@ fn create_a_new_layer_sends_new_layer_to_the_command() {
 
 #[test]
 fn red_eye_is_in_the_j_flyout() {
-    let j = [Tool::Remove, Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye];
+    let j = [Tool::SpotHealing, Tool::Remove, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye];
     assert!(j.contains(&Tool::RedEye));
     assert!(j.iter().all(|t| t.key() == 'J'));
 }
 
 #[test]
-fn j_cycles_from_remove() {
+fn j_cycles_from_spot_healing() {
     // J from another group picks the first J tool, and repeated J goes on in this order.
     let group: Vec<Tool> = Tool::ALL.iter().copied().filter(|t| t.key() == 'J').collect();
-    assert_eq!(group, [Tool::Remove, Tool::SpotHealing, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye]);
+    assert_eq!(group, [Tool::SpotHealing, Tool::Remove, Tool::Healing, Tool::Patch, Tool::ContentAwareMove, Tool::RedEye]);
 }
 
 #[test]
