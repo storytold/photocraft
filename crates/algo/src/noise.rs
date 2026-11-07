@@ -32,18 +32,24 @@ pub(crate) fn add(src: &Image, out: Rect, ctx: &Ctx, amount: f32, dist: Distribu
             continue;
         }
         let (x, y) = (out.x0 + (i % w) as i32, out.y0 + (i / w) as i32);
-        for (c, pv) in px.iter_mut().enumerate().take(cc) {
-            let ch = if mono { 0 } else { c as u32 };
-            let v = match dist {
-                Distribution::Uniform => (hash01(x, y, ch, seed) - 0.5) * 2.0 * a,
-                Distribution::Gaussian => {
-                    let u1 = hash01(x, y, ch * 2 + 101, seed).max(1e-7);
-                    let u2 = hash01(x, y, ch * 2 + 102, seed);
-                    (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos() * a * 0.5
-                }
-            };
-            // Integer storage clamps on write; float surfaces keep the value.
-            *pv += v;
+        let value = |ch| match dist {
+            Distribution::Uniform => (hash01(x, y, ch, seed) - 0.5) * 2.0 * a,
+            Distribution::Gaussian => {
+                let u1 = hash01(x, y, ch * 2 + 101, seed).max(1e-7);
+                let u2 = hash01(x, y, ch * 2 + 102, seed);
+                (-2.0 * u1.ln()).sqrt() * (std::f32::consts::TAU * u2).cos() * a * 0.5
+            }
+        };
+        // Integer storage clamps on write; float surfaces keep the value.
+        if mono {
+            let v = value(0);
+            for pv in px.iter_mut().take(cc) {
+                *pv += v;
+            }
+        } else {
+            for (c, pv) in px.iter_mut().enumerate().take(cc) {
+                *pv += value(c as u32);
+            }
         }
     }
     res
