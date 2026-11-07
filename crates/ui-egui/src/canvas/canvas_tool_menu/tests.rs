@@ -1183,6 +1183,37 @@ fn space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop() {
     assert!(!crate::crop_ui::pending(h.state()), "with no menu open Esc discards the crop");
 }
 
+/// Only a plain Esc and ↵ are the view menu's (#11271): a modified key dispatches with the menu
+/// open (⌘A selects all), and Esc with a tool key in one pass closes the menu and picks the tool.
+#[test]
+fn space_hand_view_menu_reserves_only_plain_escape_and_enter() {
+    let mut app = crop_app();
+    let knots = serde_json::json!([[4, 4], [20, 4], [20, 20], [4, 20]]);
+    app.run("path.set", serde_json::json!({"path": {"subpaths": [{"closed": true, "op": "combine", "knots": knots}]}})).unwrap();
+    app.run("path.toSelection", serde_json::json!({})).unwrap();
+    let selection_of = |a: &PhotocraftApp| a.session.active().unwrap().doc.selection.as_ref().map(|s| s.content_bounds().x0);
+    assert!(selection_of(&app).is_some(), "the path is selected to start with");
+    let mut h = shortcut_harness(app);
+    let center = h.state().last_canvas_rect.center();
+    let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+    h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    right_click(&mut h, center, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "Space's Hand opens the view menu");
+    let both = Modifiers::COMMAND | Modifiers::ALT;
+    h.event(egui::Event::ModifiersChanged(both));
+    h.event(key(egui::Key::Enter, both));
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    assert_eq!(selection_of(h.state()), None, "⌘⌥↵ subtracts the path under the view menu");
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "and leaves the menu open");
+    h.event(key(egui::Key::Escape, Modifiers::NONE));
+    h.event(key(egui::Key::B, Modifiers::NONE));
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
+    assert_eq!(h.state().ui.tool, Tool::Brush, "and B in the same pass still picks the Brush");
+}
+
 /// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
 /// untouched default frame.
 fn crop_app() -> PhotocraftApp {
