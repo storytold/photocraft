@@ -68,7 +68,7 @@ pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
-pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
+pub use drag::{Drag, DragDocument, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
 pub(crate) use drag::{angle_readout, doc_box_corners, draw_readout, draw_value_readout};
 #[cfg(test)]
 pub(crate) use drag::{marquee_drag_ants, marquee_preview_px};
@@ -79,7 +79,7 @@ pub(crate) use filter_preview::{ensure_filter_preview, filter_channel_preview, f
 #[cfg(test)]
 pub(crate) use gesture::constrained_polygon_point;
 pub use gesture::{commit_crop, commit_polygon, polygon_cancel_stale, polygon_replaces_selection, polygon_retract};
-pub(crate) use gesture::{finish_gesture, selection_mode};
+pub(crate) use gesture::{finish_gesture, polygon_close_reach, selection_mode};
 pub(crate) use navigator::NavigatorCache;
 #[cfg(test)]
 use navigator::navigator_waits_for_drag;
@@ -111,11 +111,12 @@ use tabs::{dots, paint_dots};
 use tabs::{main_canvas_document, move_target_after_filter};
 #[cfg(test)]
 pub(crate) use textures::detail_plan;
+pub(crate) use textures::visible_doc_rect;
 pub(crate) use textures::{DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
 pub use textures::{MAX_TEXTURE, ensure_texture};
 #[cfg(test)]
 use textures::{clamp_texture_side, preview_bounds, texture_factor};
-use textures::{ensure_gpu, redraw_focus, visible_doc_rect};
+use textures::{ensure_gpu, redraw_focus};
 pub use tool_input::{ToolEvent, selection_drag_kind, tool_event};
 pub(crate) use tool_input::{command_guide_at, command_moves_layer, event_tool};
 pub(crate) use transform_controls::ControlsPress;
@@ -247,8 +248,20 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
         Some(None) => (None, 1),
         Some(Some((proxy, k))) => (proxy.selection.as_ref(), (*k).max(1)),
     };
+    // ⌥'s "is anything selected" (`tool_feedback::document_selection_mode`) reads the active
+    // document's selection bounds every frame: cache them here even while the ants are hidden
+    // (Selection Edges off, a lasso replacing them), or each frame would scan the selection.
+    if app.session.active_index() == Some(input.idx)
+        && let Some(sel) = input.doc.selection.as_ref()
+    {
+        app.cached_bounds(u64::MAX - input.doc.id.0, sel);
+    }
     // Selection outline: true boundary, animated marching ants (cached per revision).
-    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
+    // A Patch lasso drag replaces the active document's selection, not a floating piece or Select
+    // and Mask's refined preview; other documents keep their ants.
+    let patch_replaces =
+        || refined.is_none() && floated.is_none() && app.session.active_index() == Some(input.idx) && crate::retouch_ui::patch_replaces_selection(app);
+    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && !patch_replaces()) {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -525,6 +538,11 @@ fn paint_canvas(
             painter.image(tex, xf.doc_rect(a), uv, Color32::WHITE);
         }
     }
+    // Image › Adjustments › Levels: Alt-drag on the black / white Input slider (levels_clipping.rs).
+    // The main canvas only: the display keeps one cache, sized to that view.
+    if primary {
+        crate::levels_clipping::paint(app, ctx, painter, &xf, idx);
+    }
     crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
@@ -702,6 +720,19 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     // Layer Style on a Drop or Inner Shadow page: a drag on the image moves the shadow (#5701).
     let shadow_drag =
         !picking && app.ui.dialogs.last().is_some_and(|d| d.kind == crate::state::DialogKind::LayerStyle && crate::layer_style::drags_shadow(&d.fields));
+    // Layer Style on a Gradient Overlay page: a drag on the image moves the gradient (#10763), as
+    // long as the dialog's layer is there to move it on.
+    let gradient_drag = !picking
+        && app.ui.dialogs.last().is_some_and(|d| {
+            d.kind == crate::state::DialogKind::LayerStyle
+                && crate::layer_style::drags_gradient(&d.fields)
+                && crate::layer_style::gradient_layer_bounds(&app.session, &d.fields).is_some()
+        });
+    // Off that page (another one chosen under a held press, say) the stored drag is over: the
+    // page chosen again starts from the offset shown.
+    if !gradient_drag && let Some(d) = app.ui.dialogs.last_mut().filter(|d| d.kind == crate::state::DialogKind::LayerStyle) {
+        crate::layer_style::end_gradient_drag(&mut d.fields);
+    }
     // ⌘/Ctrl-click with Curves open: a point at the pixel's tone (#7325), whatever the tool. The
     // press's own modifiers decide, and only the press adds: a drag would add one per frame.
     let curve_point_press = (input.primary && !input.middle && crate::adjust_dialog::curves_on_top(app))
@@ -716,7 +747,14 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         .flatten()
         .map(|m| crate::workspace_ui::sticky_mods(app, m))
         .filter(|m| m.command);
-    let dialog_hand = app.ui.tool == Tool::Hand && !picking && !range_picking && !refine_brushing && !pinning && !shadow_drag && curve_point_press.is_none();
+    let dialog_hand = app.ui.tool == Tool::Hand
+        && !picking
+        && !range_picking
+        && !refine_brushing
+        && !pinning
+        && !shadow_drag
+        && !gradient_drag
+        && curve_point_press.is_none();
     // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
     // With the Hand tool, ⌘ alone is Zoom In (#6434); under Curves that press is the dialog's
     // point (#7325), not a zoom.
@@ -753,6 +791,17 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
                 crate::layer_style::drag_shadow(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)]);
             }
         }
+    } else if gradient_drag && !input.middle && crate::dialogs::free_pointer_over(input.ctx, input.rect).is_some() {
+        input.ctx.set_cursor_icon(egui::CursorIcon::Move);
+        if let Some(p) = crate::dialogs::free_press(input.ctx, input.rect) {
+            let (start, origin) = input.ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.press_origin().unwrap_or(p)));
+            let total = input.xf.unmap_vec(p - origin) / (input.view.zoom / input.ppp);
+            // The gradient's offset is a fraction of the layer's bounds, as the renderer paints it.
+            let bounds = app.ui.dialogs.last().and_then(|d| crate::layer_style::gradient_layer_bounds(&app.session, &d.fields));
+            if let (Some(bounds), Some(d)) = (bounds, app.ui.dialogs.last_mut()) {
+                crate::layer_style::drag_gradient(&mut d.fields, start, [f64::from(total.x), f64::from(total.y)], bounds);
+            }
+        }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
         if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
             input.ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -764,7 +813,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             if curves_picking {
                 crate::adjust_dialog::sample_at(app, d[0], d[1]);
             } else if replace_picking {
-                crate::filter_dialog::color_eyedropper_sample(app, d[0], d[1]);
+                crate::filter_dialog::color_eyedropper_sample(app, d[0], d[1], input.ctx.input(|i| i.modifiers));
             } else {
                 crate::color_picker_ui::sample_at(app, d[0], d[1]);
             }

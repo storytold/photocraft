@@ -331,6 +331,7 @@ impl PhotocraftApp {
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
+        crate::retouch_ui::cancel_stale(self);
         // A polygon under construction belongs to the Polygonal Lasso tool, not the next tool.
         if self.ui.tool != Tool::PolygonLasso {
             self.ui.polygon.clear();
@@ -377,6 +378,10 @@ impl PhotocraftApp {
         if !self.channel_views.is_empty() {
             let docs = self.session.documents();
             self.channel_views.retain(|id, _| docs.iter().any(|d| d.doc.id.0 == *id));
+        }
+        // With no document left, no canvas paints the Levels clipping display to drop its cache.
+        if self.session.documents().is_empty() {
+            self.levels_clipping = None;
         }
         // Commands may close and reopen a preserved-ID document before the next repaint.
         canvas::retain_gpu_documents(self);

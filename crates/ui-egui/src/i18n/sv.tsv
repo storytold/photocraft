@@ -109,7 +109,6 @@
 	Export As…	Exportera som…
 	Export	Exportera
 	Export…	Exportera…
-	Quick Export As PNG	Snabbexportera som PNG
 	Quick Export as PNG	Snabbexportera som PNG
 	Place Embedded…	Placera inbäddad…
 	Place Linked…	Placera länkad…
@@ -313,7 +312,6 @@
 	All	Alla
 	Deselect	Avmarkera
 	Reselect	Markera igen
-	Inverse Selection	Omvänd markering
 	Inverse	Omvänd
 	Color Range…	Färgintervall…
 	Select and Mask…	Markera och maskera…
@@ -604,8 +602,8 @@
 	Background	Bakgrund
 	Set foreground color	Ange förgrundsfärg
 	Set background color	Ange bakgrundsfärg
-	Swap colours (X)	Byt plats på färgerna (X)
-	Default colours (D)	Standardfärger (D)
+	Switch Foreground and Background Colors (X)	Växla förgrunds- och bakgrundsfärg (X)
+	Default Foreground and Background Colors (D)	Standardfärger för förgrund och bakgrund (D)
 	Brush Tool Options	Alternativ för penselverktyget
 	Opacity	Opacitet
 	Flow	Flöde
@@ -1612,7 +1610,7 @@
 	Revert “{name}” to the last saved version? Your changes will be lost.	Vill du återgå till den senast sparade versionen av ”{name}”? Dina ändringar går förlorade.
 	{key} to subtract	{key} för att subtrahera
 	↑↓ navigate   {key} run   esc close	↑↓ navigera   {key} kör   esc stäng
-	Click to restore the current colour	Klicka för att återställa den aktuella färgen
+	Click to restore the current color	Klicka för att återställa den aktuella färgen
 	Click with the Note tool to add a note.	Klicka med anteckningsverktyget för att lägga till en anteckning.
 	Drag a rectangle around the object	Dra en rektangel runt objektet
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Dra i bilden för att lägga till en begränsning; Shift för vågrätt/lodrätt; högerklicka på en begränsning för att ändra eller ta bort den.
@@ -1694,10 +1692,10 @@
 	Drag to move the active layer	Dra för att flytta det aktiva lagret
 	Drag to pan  ·  hold Space with any tool	Dra för att panorera  ·  håll ned blanksteg med valfritt verktyg
 	Drag to draw a gradient	Dra för att rita en gradient
-	Click to fill similar colours	Klicka för att fylla liknande färger
+	Click to fill similar colors	Klicka för att fylla liknande färger
 	Click to add text	Klicka för att lägga till text
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Dra (lasso) eller klicka på punkter (polygonal) · {add} lägg till · {sub} subtrahera
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Dra en beskärningsram · dra inuti för att flytta · kanterna ändrar storlek ({ratio} proportioner, {centre} centrerat) · Blanksteg flyttar medan du ritar · piltangenterna flyttar stegvis · X byter orientering · {commit} verkställer · Esc avbryter
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Dra en beskärningsram · dra inuti för att flytta · kanterna ändrar storlek ({ratio} proportioner, {centre} centrerat) · Blanksteg flyttar medan du ritar · piltangenterna flyttar stegvis · X byter orientering · {commit} verkställer · Esc avbryter
 	{mode} Color · {bits} bit	{mode}-färg · {bits} bitar
 	Drag to move the layer	Dra för att flytta lagret
 	Fit Screen	Anpassa till skärmen
@@ -1729,7 +1727,7 @@
 	Appearance	Utseende
 	Text Position:	Textposition:
 	Text color	Textfärg
-	Uses the foreground and background colours.	Använder förgrunds- och bakgrundsfärgerna.
+	Uses the foreground and background colors.	Använder förgrunds- och bakgrundsfärgerna.
 	Answer the unsaved-changes prompt first	Svara först på frågan om osparade ändringar
 	Unsaved changes	Osparade ändringar
 	Don't Save	Spara inte
@@ -1749,7 +1747,7 @@
 	name	namn
 	new	ny
 	Go to Layer	Gå till lager
-	Open a document to select a colour range.	Öppna ett dokument för att välja ett färgintervall.
+	Open a document to select a color range.	Öppna ett dokument för att välja ett färgintervall.
 	Saved	Sparat
 	Reveal in Finder	Visa i Finder
 	Show in Explorer	Visa i Utforskaren
@@ -1927,8 +1925,8 @@
 	Character Styles Panel	Panelen Teckenformat
 	Clear Canvas Guides	Rensa stödlinjer för arbetsytan
 	Clear Selected Artboard Guides	Rensa stödlinjer för markerad rityta
-	Color Blindness — Deuteranopia-type	Färgblindhet — deuteranopityp
-	Color Blindness — Protanopia-type	Färgblindhet — protanopityp
+	Color Blindness - Deuteranopia-type	Färgblindhet — deuteranopityp
+	Color Blindness - Protanopia-type	Färgblindhet — protanopityp
 	Color Table…	Färgtabell…
 	Combine Shapes	Kombinera former
 	Contract…	Dra ihop…
@@ -2102,7 +2100,7 @@
 	Canvas	Arbetsyta
 	Capture	Fånga
 	Center Crop Marks	Centrerade beskärningsmärken
-	Centre the gradient (offset 0, 0)	Centrera gradienten (förskjutning 0, 0)
+	Center the gradient (offset 0, 0)	Centrera gradienten (förskjutning 0, 0)
 	Change Screen Mode  (F)	Ändra skärmläge  (F)
 	Change To:	Ändra till:
 	Clear All	Rensa alla
@@ -2254,7 +2252,7 @@
 	Roughness	Grovhet
 	Roundness	Rundhet
 	Rulers & Grids	Linjaler och rutnät
-	Sample: foreground colour	Prov: förgrundsfärg
+	Sample: foreground color	Prov: förgrundsfärg
 	Sampling: Background Swatch	Provtagning: bakgrundsfärgruta
 	Sampling: Continuous	Provtagning: kontinuerlig
 	Sampling: Once	Provtagning: en gång
@@ -2527,7 +2525,7 @@
 	Alt-click to define a source point to clone from	Alt-klicka för att ange en källpunkt att klona från
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Det finns ingen bana att skapa en markering från: rita en med pennverktyget eller markera en i panelen Banor.
 	Cancel opening	Avbryt öppning
-	Cancelled opening {name}	Öppningen av {name} avbröts
+	Canceled opening {name}	Öppningen av {name} avbröts
 	Damaged Photoshop document	Skadat Photoshop-dokument
 	The document “{name}” may be damaged.	Dokumentet ”{name}” kan vara skadat.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Vissa lager, pixlar eller masker kunde inte läsas. Vill du fortsätta att öppna det?
@@ -2537,7 +2535,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokumentet ”{name}” har en inbäddad färgprofil som inte matchar den aktuella arbetsfärgrymden för {mode}.
 	Working: {working}	Arbetsfärgrymd: {working}
 	Developing {name}	Framkallar {name}
-	Cancelled {label}	{label} avbröts
+	Canceled {label}	{label} avbröts
 	Esc to cancel	Esc för att avbryta
 	Opened {name}	Öppnade {name}
 	Opening {name}	Öppnar {name}
@@ -2545,7 +2543,7 @@
 	Saving {name}	Sparar {name}
 	Saving {percent}	Sparar {percent}
 	A save to {name} is still running; try again when it finishes	En sparning till {name} pågår fortfarande; försök igen när den är klar
-	{label} is writing the file and can no longer be cancelled	{label} skriver filen och kan inte längre avbrytas
+	{label} is writing the file and can no longer be canceled	{label} skriver filen och kan inte längre avbrytas
 	Opening {name}…	Öppnar {name}…
 	Opening…	Öppnar…
 	Reading…	Läser…
@@ -2642,7 +2640,7 @@ cameraRaw	Roughness	Grovhet
 	Discard Layers and Save a Copy	Släng lager och spara en kopia
 	Don't show again	Visa inte igen
 	Save failed: {error}	Det gick inte att spara: {error}
-	Save cancelled	Sparandet avbröts
+	Save canceled	Sparandet avbröts
 	Couldn't place {name}: {error}	Det gick inte att placera {name}: {error}
 	Magnetic Lasso Tool	Verktyget Magnetiskt lasso
 	Frequency	Frekvens
@@ -2786,7 +2784,7 @@ fontWeight	Italic	Kursiv
 	Impressionist	Impressionistisk
 	Rotate View Tool	Verktyget Rotera vy
 	Reset View	Återställ vy
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Dra runt mitten för att rotera vyn  ·  Shift begränsar till 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Dra runt mitten för att rotera vyn  ·  Shift begränsar till 15°
 
 # Painting symmetry presets.
 	Dual Axis	Dubbelaxel
@@ -2806,11 +2804,11 @@ fontWeight	Italic	Kursiv
 	All Layers No Adjustments	Alla lager utan justeringar
 	Current & Below No Adjustments	Aktuellt och under utan justeringar
 	Show Sampling Ring	Visa provtagningsring
-	Click to sample the foreground colour  ·  {key}-click for background	Klicka för att ta prov på förgrundsfärgen  ·  {key}-klicka för bakgrundsfärgen
+	Click to sample the foreground color  ·  {key}-click for background	Klicka för att ta prov på förgrundsfärgen  ·  {key}-klicka för bakgrundsfärgen
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Utanför färgomfånget för utskrift: klicka för närmaste utskrivbara färg
-	Not a web colour: click for the nearest web colour	Inte en webbfärg: klicka för närmaste webbfärg
+	Out of gamut for printing: click for the nearest printable color	Utanför färgomfånget för utskrift: klicka för närmaste utskrivbara färg
+	Not a web color: click for the nearest web color	Inte en webbfärg: klicka för närmaste webbfärg
 	Color to Alpha…	Färg till alfa…
 	Transparency Threshold	Tröskelvärde för genomskinlighet
 	Opacity Threshold	Opacitetströskelvärde
@@ -3228,7 +3226,7 @@ curves	Smooth	Jämna ut
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Markera inte också Spegelvänd bild i Utskriftsinställningar…: de två vändningarna tar ut varandra.
 	Print Settings…	Utskriftsinställningar…
-	Remember to turn off the printer's own colour management in Print Settings…	Kom ihåg att stänga av skrivarens egen färghantering i Utskriftsinställningar…
+	Remember to turn off the printer's own color management in Print Settings…	Kom ihåg att stänga av skrivarens egen färghantering i Utskriftsinställningar…
 	Sent to {printer}	Skickat till {printer}
 	set in Print Settings…	anges i Utskriftsinställningar…
 	ICO is limited to 256 × 256 pixels	ICO är begränsat till 256 × 256 pixlar
@@ -3892,12 +3890,12 @@ curves	Smooth	Jämna ut
 	In White	Vitt in
 	Increase Brush Hardness	Öka penselns hårdhet
 	Demosaic	Demosaicering
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hur kamerans färgfiltermosaik fylls i. Den tillämpas när filen öppnas; förhandsgranskningen visar metoden som den öppnades med.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hur kamerans färgfiltermosaik fylls i. Den tillämpas när filen öppnas; förhandsgranskningen visar metoden som den öppnades med.
 	AHD (adaptive homogeneity)	AHD (adaptiv homogenitet)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: renast kanter och minst färgfransning, men långsammast.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Gradientkorrigerad interpolering: skarp och snabb, med viss färgfransning i fina detaljer.
-	The fastest and the softest, with colour fringing on fine detail.	Snabbast och mjukast, med färgfransar vid fina detaljer.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: renast kanter och minst färgfransning, men långsammast.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Gradientkorrigerad interpolering: skarp och snabb, med viss färgfransning i fina detaljer.
+	The fastest and the softest, with color fringing on fine detail.	Snabbast och mjukast, med färgfransar vid fina detaljer.
 	“{name}” already exists. Replace it?	”{name}” finns redan. Vill du ersätta den?
 	The name in the save dialog was “{name}”.	Namnet i dialogrutan Spara var ”{name}”.
 	Move Up	Flytta uppåt
@@ -4548,7 +4546,6 @@ curves	Smooth	Jämna ut
 	Use File › Open to open an image.	Öppna en bild med Arkiv › Öppna.
 	Use Selection In Source	Använd markering i källan
 	Use Selection In Target	Använd markering i målet
-	Uses the foreground and background colors.	Använder förgrunds- och bakgrundsfärgerna.
 	Vanishing Point	Fluktpunkt
 	Variable Data Sets	Variabla datauppsättningar
 	Vector Mask Hides Effects	Vektormask döljer effekter
@@ -4758,8 +4755,8 @@ cameraRaw	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Camera Raw Filter ({layer})	Camera Raw-filter ({layer})
 cameraRaw	Camera Raw isn't open	Camera Raw är inte öppet
 cameraRaw	Cancel	Avbryt
-cameraRaw	Cancelled opening {name}	Öppningen av {name} avbröts
-cameraRaw	Cancelled {label}	{label} avbröts
+cameraRaw	Canceled opening {name}	Öppningen av {name} avbröts
+cameraRaw	Canceled {label}	{label} avbröts
 cameraRaw	Color Priority	Färgprioritet
 cameraRaw	Developing {name}	Framkallar {name}
 cameraRaw	Full-resolution preview unavailable	Förhandsgranskning i full upplösning är inte tillgänglig
@@ -4823,3 +4820,10 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	Show layer bounds on hover	Visa lagrets gränser vid hovring
 	Expand layer group on click	Expandera lagergrupp vid klick
 	Show hover bounds from Layers	Visa hovringsgränser från Lager
+# Artboard tool options bar (#11385)
+	Distribute Widths	Fördela bredder
+	Distribute Heights	Fördela höjder
+	Auto-nest Layers	Kapsla in lager automatiskt
+	Auto-size Canvas	Ändra storlek på arbetsytan automatiskt
+	Keep Relative Position During Layer Reordering	Behåll relativ position vid ändring av lagerordning
+	Shrinkwrap Canvas on Save	Krymp arbetsytan till innehållet vid sparning
