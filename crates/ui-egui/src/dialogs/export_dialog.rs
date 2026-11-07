@@ -216,6 +216,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
         let paths = batch_paths(&path, &docs);
         let mut exported = Vec::new();
         for (doc, path) in docs.iter().zip(paths) {
+            crate::app::ensure_memory_to_save(doc, &path)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
             let (bytes, warnings) = export(doc, &path, &ExportSettings { xmp_all: false, ..Default::default() })?;
             let write = app.services.write.as_mut().ok_or("no writer configured")?;
@@ -461,6 +462,9 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
     let metadata = s(f, "metadata");
     ExportSettings {
         jpeg_quality: (fmt == "jpg").then_some(quality),
+        // Photoshop's 1-7 Export As presets measured 4:2:0 at 1-4 and 4:4:4 at 5-7.
+        // An exact mapping to 1-100 is unestablished; reuse PhotoCraft's Save for Web cutoff.
+        jpeg_chroma_subsampling: fmt == "jpg" && quality <= 50,
         webp_lossless: fmt != "webp" || lossless(f),
         webp_quality: (fmt == "webp" && !lossless(f)).then_some(quality),
         xmp_all: metadata == "all",
@@ -1062,6 +1066,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 /// Exports `doc` to `path` with the dialog settings `f` (Export As, and its replayed action step).
 fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>, path: &str, source_profile: &Profile) -> Result<Value, String> {
     let out = export_document(doc, f, None, source_profile)?;
+    crate::app::ensure_memory_to_save(&out, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(&out, path, &settings(f))?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
@@ -1111,6 +1116,7 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
         let mut exported = Vec::new();
         for (doc, path) in docs.iter().zip(batch_paths(&path, &docs)) {
             let out = export_document(doc, &f, None, &source_profile)?;
+            crate::app::ensure_memory_to_save(&out, &path)?;
             let export = app.services.export.as_ref().ok_or("no exporter configured")?;
             let (bytes, warnings) = export(&out, &path, &settings)?;
             let write = app.services.write.as_mut().ok_or("no writer configured")?;

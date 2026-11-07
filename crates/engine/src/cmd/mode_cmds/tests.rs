@@ -452,6 +452,18 @@ fn bitmap_output_resolution_resamples_and_sets_the_resolution() {
     assert_eq!(first_white(doc(&s), 0, 1, 0), Some(128));
 }
 
+/// #9212: the Output resolution resamples the pixels outside the canvas too. A 10 px crop that
+/// kept a 1000 px document's pixels, converted from 1 to 100 ppi, would grow them to 100000 px a
+/// side (20 GB of gray and alpha at 8 bits, past the 8 GiB budget): refused before allocating.
+#[test]
+fn bitmap_output_resolution_budgets_the_hidden_pixels() {
+    let mut s = ramp(1000, 1000, 8, 1.0);
+    s.execute("image.crop", json!({"x": 0, "y": 0, "width": 10, "height": 10, "deleteCroppedPixels": false})).unwrap();
+    let err = s.execute("image.mode.bitmap", json!({"method": "threshold", "resolution": 100})).unwrap_err().to_string();
+    assert!(err.contains("100000 x 100000 px is 10000 megapixels"), "{err}");
+    assert_eq!((doc(&s).size.width, doc(&s).mode), (10, ColorMode::Grayscale));
+}
+
 #[test]
 fn bitmap_halftone_screen_is_laid_out_at_the_output_resolution() {
     // The same 10 lines/inch screen has twice the cell (in pixels) at twice the resolution: the
@@ -568,7 +580,7 @@ fn bitmap_budgets_a_conversion_at_the_document_resolution_too() {
 
 /// The Bitmap conversion of `d` the pre-#8477 way, from one full-canvas composite over white.
 fn bitmap_oracle(d: &Document, method: Option<BitmapMethod>, custom: Option<(&[f32], usize, usize)>) -> Vec<f32> {
-    let px = photocraft_compose::flatten(d).over_background([1.0; 3]).px;
+    let px = photocraft_compose::flatten(d).over_background([1.0; 3]).into_px();
     let mut gray: Vec<f32> = px.iter().map(|q| photocraft_color::convert::rgb_to_gray([q[0], q[1], q[2]])).collect();
     let w = d.size.width as usize;
     match (method, custom) {
@@ -730,7 +742,7 @@ fn duotone_to_colour_modes_keeps_the_ink_colours() {
                 s.execute("image.mode.duotone", cfg.clone()).unwrap();
                 let before = s.active().unwrap().doc.clone();
                 let gray: Vec<f32> = (0..16).map(|x| before.layers[0].surface().unwrap().pixel(x, 1)[0]).collect();
-                let shown = photocraft_compose::render(&display_document(&before).unwrap(), Rect::from_xywh(0, 1, 16, 1)).px;
+                let shown = photocraft_compose::render(&display_document(&before).unwrap(), Rect::from_xywh(0, 1, 16, 1)).into_px();
                 s.execute(&format!("image.mode.{mode}"), json!({})).unwrap();
                 let d = doc(&s);
                 assert!(d.duotone.is_none(), "{ctx}");

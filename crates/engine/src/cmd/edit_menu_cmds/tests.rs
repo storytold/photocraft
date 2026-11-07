@@ -1,6 +1,8 @@
 use super::*;
 use photocraft_doc::vector::Subpath;
 
+static PURGE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn session(depth: u32) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 64, "height": 48, "depth": depth, "background": "white"})).unwrap();
@@ -10,6 +12,10 @@ fn session(depth: u32) -> Session {
 fn px(s: &Session, x: i32, y: i32) -> Vec<f32> {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)
+}
+
+fn px_rgba(s: &Session, x: i32, y: i32) -> [f32; 4] {
+    active(s).surface().unwrap().rgba(x, y)
 }
 
 fn active(s: &Session) -> &Layer {
@@ -143,6 +149,36 @@ fn fade_follows_the_target_the_command_ran_on() {
     assert_eq!(s.active().unwrap().doc.channels[0].surface.pixel(5, 5)[0], 0.0, "the channel is left alone");
 }
 
+/// Edit › Stroke and the Magic Eraser follow the Channels panel's target but still edit the layer,
+/// so with an alpha channel targeted Fade fades the layer they changed, not the untouched channel.
+#[test]
+fn fade_after_a_routed_command_that_edited_the_layer_fades_the_layer() {
+    for depth in [8, 16, 32] {
+        for command in ["edit.stroke", "paint.magicEraser"] {
+            let mut s = session(depth);
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ffffff"})).unwrap();
+            s.execute("channel.new", json!({"fill": "black"})).unwrap();
+            s.execute("channel.target", json!({"channel": 0})).unwrap();
+            let (x, y) = if command == "edit.stroke" {
+                s.execute("select.rect", json!({"x": 10, "y": 10, "width": 10, "height": 10})).unwrap();
+                s.execute(command, json!({"width": 2, "color": "#000000", "location": "inside"})).unwrap();
+                assert_eq!(px(&s, 10, 15)[0], 0.0, "{depth} {command}: the layer was stroked");
+                (10, 15)
+            } else {
+                s.execute(command, json!({"x": 5, "y": 5, "antiAlias": false})).unwrap();
+                assert_eq!(px(&s, 5, 5)[3], 0.0, "{depth} {command}: the layer was erased");
+                (5, 5)
+            };
+            assert!(matches!(s.edit_state.fade.as_ref().map(|f| f.target), Some(FadeTarget::Pixels(_))), "{depth} {command}");
+            s.execute("edit.fade", json!({"opacity": 50})).unwrap();
+            let k = if command == "edit.stroke" { 0 } else { 3 };
+            assert!((px(&s, x, y)[k] - 0.5).abs() < 0.01, "{depth} {command}: the layer faded {:?}", px(&s, x, y));
+            assert_eq!(s.active().unwrap().doc.channels[0].surface.pixel(x, y)[0], 0.0, "{depth} {command}: the channel is left alone");
+        }
+    }
+}
+
 /// A command that only edits layers (Auto Tone) fades the layer, even given a channel `target`.
 #[test]
 fn fade_ignores_a_target_the_command_doesnt_take() {
@@ -154,6 +190,7 @@ fn fade_ignores_a_target_the_command_doesnt_take() {
 
 #[test]
 fn purge_commands() {
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = session(8);
     assert!(!s.is_enabled("edit.purge.undo"));
     assert!(s.is_enabled("edit.purge.videoCache"));
@@ -180,6 +217,30 @@ fn purge_commands() {
     let _ = s.execute("edit.purge.all", json!({}));
 }
 
+#[test]
+fn purge_all_releases_prepared_brush_tips_even_without_a_document() {
+    let _purge_test_guard = PURGE_TEST_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    use photocraft_paint::{BrushContext, BrushSettings, Dab, GrayTile, TipShape};
+    let mut s = Session::new();
+    let brush = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(31, 17, |x, y| ((x + y) % 5) as f32 / 4.0)), ..Default::default() };
+    let ctx = BrushContext::new(&brush);
+    let dab = Dab::round(photocraft_geom::Point::new(12.5, 14.5), 10.0, 1.0);
+    let rect = ctx.dab_rect(&dab, false);
+    let mut before = Vec::new();
+    ctx.rasterize(&dab, false, rect, &mut before);
+    assert!(s.is_enabled("edit.purge.all"), "prepared tips alone enable All");
+    let result = s.execute("edit.purge.all", json!({})).unwrap();
+    assert!(result["purged"].as_array().unwrap().contains(&json!("brush mip cache")));
+    assert!(result["bytes"].as_u64().unwrap() > 0);
+    // An already prepared brush remains valid after the cache releases its Arc.
+    let mut after = Vec::new();
+    ctx.rasterize(&dab, false, rect, &mut after);
+    assert_eq!(before, after);
+    let next = BrushContext::new(&brush);
+    next.rasterize(&dab, false, rect, &mut after);
+    assert_eq!(before, after);
+}
+
 /// White canvas with vertical black stripes, a red blob to remove, and a selection around it.
 fn blob_session(depth: u32) -> Session {
     let mut s = session(depth);
@@ -194,6 +255,16 @@ fn blob_session(depth: u32) -> Session {
     .unwrap();
     s.execute("select.rect", json!({"x": 26, "y": 16, "width": 12, "height": 14})).unwrap();
     s
+}
+
+#[test]
+fn content_aware_fill_uses_a_named_nonactive_source_layer() {
+    let mut s = blob_session(8);
+    let id = s.active().unwrap().active_layer.unwrap();
+    let name = s.active().unwrap().doc.layer(id).unwrap().name.clone();
+    s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
+    let result = s.execute("edit.contentAwareFill", json!({"layer": name, "colorAdaptation": "none"})).unwrap();
+    assert_eq!(result["layer"], id.0, "fill must use the recorded source rather than the active layer");
 }
 
 #[test]
@@ -475,6 +546,38 @@ fn content_aware_scale_keeps_subject() {
         assert_eq!(striped.count(), 6, "depth {depth}: the striped subject survives");
         s.undo();
         assert_eq!(active(&s).surface().unwrap().content_bounds().width(), 64);
+    }
+}
+
+/// On the Background, which can't hold transparency, the area a selection's Content-Aware Scale
+/// vacates takes the background colour, as Delete leaves it (Photoshop); the layer stays the
+/// Background. On a normal layer it is left transparent.
+#[test]
+fn content_aware_scale_on_the_background_vacates_to_the_background_colour() {
+    for depth in [8, 16] {
+        let mut s = session(depth);
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 10})).unwrap();
+        let r = s.execute("edit.contentAwareScale", json!({"width": 10})).unwrap();
+        assert_eq!(r["bounds"], json!([10, 10, 10, 10]), "{depth}-bit");
+        let st = s.active().unwrap();
+        assert!(st.doc.is_background(id), "{depth}-bit: still the Background");
+        let px = |x, y| st.doc.layer(id).unwrap().surface().unwrap().rgba(x, y);
+        for (x, y) in [(20, 10), (25, 15), (29, 19)] {
+            assert_eq!(px(x, y), [0.0, 0.0, 1.0, 1.0], "{depth}-bit: ({x}, {y}) is vacated");
+        }
+        assert_eq!(px(12, 15), [1.0, 1.0, 1.0, 1.0], "{depth}-bit: the scaled pixels");
+        assert_eq!(px(5, 5), [1.0, 1.0, 1.0, 1.0], "{depth}-bit: outside the selection");
+        // A normal layer's vacated area is transparent.
+        let mut s = session(depth);
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("edit.contentAwareScale", json!({"width": 10})).unwrap();
+        assert_eq!(px_rgba(&s, 25, 15)[3], 0.0, "{depth}-bit: a layer's hole is transparent");
+        assert_eq!(px_rgba(&s, 12, 15), [1.0, 0.0, 0.0, 1.0], "{depth}-bit");
     }
 }
 

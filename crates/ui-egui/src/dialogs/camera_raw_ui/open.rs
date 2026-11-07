@@ -440,7 +440,7 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
             crate::notices::error(app, format!("{}: {err}", e.label));
         }
         photocraft_engine::jobs::JobOutcome::Cancelled => {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
     }
@@ -455,7 +455,7 @@ pub(super) fn cancel(app: &mut PhotocraftApp) {
     {
         app.session.close(index);
         app.sync_views();
-        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &raw.name)]);
+        app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &raw.name)]);
         app.ui.status_error = false;
     }
 }
@@ -469,6 +469,9 @@ pub(super) enum Coverage {
 }
 
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    if photocraft_engine::color_channels::selected(&app.session).is_some_and(|c| c.len() > 1) {
+        return Err("Camera Raw requires the composite or one colour channel".into());
+    }
     photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::Selection, Target::NewFilter)
