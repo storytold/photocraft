@@ -1023,3 +1023,24 @@ fn a_right_click_moved_and_released_in_one_frame_still_opens_its_menu() {
     assert_eq!(h.state().ui.brush_picker, None);
     assert_eq!(h.state().ui.canvas_tool_menu, None);
 }
+
+/// #11897: Clear chosen on a pixel layer, then the Background activated: a Brush stroke there
+/// paints the foreground, and the Mode reads Normal afterwards.
+#[test]
+fn chosen_clear_paints_normally_on_the_background_and_the_mode_reads_normal() {
+    let mut h = harness(None);
+    h.state_mut().ui.tool_options.brush_clear = true;
+    let bg = h.state().session.active().unwrap().doc.background().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(2);
+    let (a, b) = drag(&mut h, PointerButton::Primary);
+    assert!(!h.state().ui.tool_options.brush_clear, "the Mode reads Normal");
+    let last = strokes(&h).last().cloned().unwrap();
+    assert!(last.get("mode").is_none() && !last["erase"].as_bool().unwrap(), "{last}");
+    let app = h.state();
+    let v = app.ui.views[0].clone();
+    let d = ((a + (b - a) * 0.5) - app.last_canvas_rect.center()) / v.zoom;
+    let st = app.session.active().unwrap();
+    let px = st.doc.layer(bg).unwrap().surface().unwrap().rgba((d.x + v.center[0]) as i32, (d.y + v.center[1]) as i32);
+    assert!(px[2] > 0.9 && px[0] < 0.1, "the foreground blue, not the background colour: {px:?}");
+}
