@@ -210,6 +210,10 @@ pub struct SaveParams {
     /// DDS: also write the full mip chain, each level a box filter of the one above.
     #[serde(default, rename = "ddsMipmaps")]
     pub dds_mipmaps: bool,
+    /// PDF: write the spot channels as overprinting Separation plates after the flattened image
+    /// (a Multichannel document as plates alone). On by default; false writes the image only.
+    #[serde(default, rename = "pdfSpotPlates")]
+    pub pdf_spot_plates: Option<bool>,
     /// .pcraft: request the flattened document at its canvas size as `composite/full.png`.
     /// The save may omit it; check the manifest's `full_composite` member. Off by default.
     #[serde(default, rename = "pcraftFullComposite")]
@@ -1195,6 +1199,7 @@ impl PhotocraftMcp {
                 p.tiff_layers.then_some("tiffLayers"),
                 p.pcraft_full_composite.is_some().then_some("pcraftFullComposite"),
                 dpx_bits.is_some().then_some("dpxBits"),
+                p.pdf_spot_plates.is_some().then_some("pdfSpotPlates"),
                 p.index.is_some().then_some("index"),
             ]
             .into_iter()
@@ -1234,6 +1239,7 @@ impl PhotocraftMcp {
                     tiff_layers: p.tiff_layers,
                     tiff_transparency: p.tiff_transparency,
                     tga_bits,
+                    pdf_spot_plates: p.pdf_spot_plates.unwrap_or(true),
                     pcraft_full_composite: p.pcraft_full_composite.unwrap_or(false),
                     ..Default::default()
                 };
