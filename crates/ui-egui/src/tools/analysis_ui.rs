@@ -294,7 +294,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 Some((g, i)) => app.ui.analysis.drag = Some(Drag::Count(g, i, [x, y])),
                 None if !mods.alt => {
-                    let _ = app.run("count.add", json!({"x": x, "y": y}));
+                    // A marker that stays invisible looks like the click did nothing, so adding one
+                    // brings View > Show > Count back. It is view state, not a history step.
+                    let added = app.run("count.add", json!({"x": x, "y": y})).is_ok();
+                    app.ui.view.show.count |= added;
                 }
                 None => {}
             }
