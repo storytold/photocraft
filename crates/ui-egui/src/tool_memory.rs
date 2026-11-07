@@ -11,6 +11,10 @@
 //! `paint_mouse::sync_tool_brush`) is kept the same way in `Preferences::tool_brushes` (#6212),
 //! with the tool that owns the session brush (that brush itself is `Preferences::last_brush`).
 //! Reset Tool and Reset All Tools change both, so the next save forgets what they reset.
+//!
+//! The tools used last (`UiState::group_tools`) are kept the same way in
+//! `Preferences::group_tools` (#3569), so a tool picked from a flyout stays on its toolbar slot
+//! and its key after a restart. A name this version doesn't know is skipped, as with the options.
 
 use photocraft_engine::BrushSettings;
 use serde_json::{Map, Value, json};
@@ -25,13 +29,25 @@ pub(crate) type ToolBrushes = (Tool, Vec<(Tool, BrushSettings)>);
 pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     app.stylus.tool_before_eraser = None;
     app.ui.spring = None;
+    if app.ui.tool == Tool::Frame && tool != Tool::Frame {
+        crate::frame_tool::cancel(app);
+    }
     app.ui.tool = tool;
+    ended_by_tool(app);
+}
+
+/// Add New Artboard's placing mode ends with the Artboard tool (#11386): every place that sets
+/// `ui.tool` calls this right after, so there is one rule.
+pub(crate) fn ended_by_tool(app: &mut PhotocraftApp) {
+    if app.ui.tool != Tool::Artboard {
+        app.ui.artboard_tool.adding = false;
+    }
 }
 
 /// Temporary canvas overrides do not change `ui.tool`. Spring-loaded letters and the pen's
 /// eraser end do, so remember the tool they will return to instead. A different explicit choice
 /// (or beginning a type edit) owns the tool and stands, just as in `spring_tools::tick`.
-fn selected(app: &PhotocraftApp) -> Tool {
+pub(crate) fn selected(app: &PhotocraftApp) -> Tool {
     let tool = if app.ui.tool == Tool::Eraser { app.stylus.tool_before_eraser.unwrap_or(app.ui.tool) } else { app.ui.tool };
     if let Some(s) = &app.ui.spring
         && tool == s.tool
@@ -51,8 +67,9 @@ fn changed(o: &ToolOptions) -> Value {
     if diff.is_empty() { Value::Null } else { Value::Object(diff) }
 }
 
-/// Remember the selected tool and its options once the user lets go of the pointer. Run every
-/// frame, so choices made through the control channel or a tool preset are remembered too.
+/// Remember the selected tool, the tools used last and the options once the user lets go of the
+/// pointer. Run every frame, so choices made through the control channel or a tool preset are
+/// remembered too.
 pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if ctx.input(|i| i.pointer.any_down()) {
         return;
@@ -68,6 +85,7 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.request_repaint();
         }
     }
+    persist_group_tools(app, ctx, tool);
     persist_brushes(app);
     if app.prefs_rt.tool_options.as_ref() == Some(&app.ui.tool_options) {
         return;
@@ -76,6 +94,24 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let now = changed(&app.ui.tool_options);
     if app.session.prefs().tool_options != now {
         app.session.prefs.edit(|p| p.tool_options = now);
+    }
+}
+
+/// Remember the tools used last when the list changes, whether or not the selected tool did: a
+/// tool picked during a drag that ends on the tool it began with changes only the list.
+fn persist_group_tools(app: &mut PhotocraftApp, ctx: &egui::Context, tool: Tool) {
+    // Noted here as well: no frame follows a tool picked right before quitting.
+    app.ui.remember_group_tool(tool);
+    if app.prefs_rt.group_tools.as_ref() == Some(&app.ui.group_tools) {
+        return;
+    }
+    app.prefs_rt.group_tools = Some(app.ui.group_tools.clone());
+    if let Ok(now) = serde_json::to_value(&app.ui.group_tools)
+        && app.session.prefs().group_tools != now
+    {
+        app.session.prefs.edit(|p| p.group_tools = now);
+        // As for the selected tool: prefs_ui::tick ran before the panels.
+        ctx.request_repaint();
     }
 }
 
@@ -162,19 +198,35 @@ pub(crate) fn save_on_exit(app: &mut PhotocraftApp) -> Result<(), String> {
     crate::prefs_ui::save_preferences(app)
 }
 
+/// Restore the tools used last, keeping their order. Anything that isn't a tool is skipped with a
+/// warning: the rest of the list still holds.
+fn restore_group_tools(app: &mut PhotocraftApp) {
+    let saved = app.session.prefs().group_tools.clone();
+    if !saved.is_null() && !saved.is_array() {
+        log::warn!("Preferences: the remembered group tools are not a list; using the defaults");
+    }
+    for v in saved.as_array().into_iter().flatten().rev() {
+        match serde_json::from_value::<Tool>(v.clone()) {
+            Ok(tool) => app.ui.remember_group_tool(tool),
+            Err(_) => log::warn!("Preferences: ignoring the remembered group tool {v}"),
+        }
+    }
+}
+
 /// Restore the selected tool before the first frame and its options field by field.
 pub fn restore(app: &mut PhotocraftApp) {
+    restore_group_tools(app);
     let saved = app.session.prefs().selected_tool.clone();
     if !saved.is_null() {
         match serde_json::from_value::<Tool>(saved) {
-            Ok(tool) => {
-                app.ui.tool = tool;
-                app.ui.remember_group_tool();
-            }
+            Ok(tool) => app.ui.tool = tool,
             Err(err) => log::warn!("Preferences: ignoring the remembered selected tool: {err}"),
         }
     }
+    // Here rather than on the first frame, so a launch alone has nothing to save.
+    app.ui.remember_group_tool(app.ui.tool);
     app.prefs_rt.selected_tool = Some(app.ui.tool);
+    app.prefs_rt.group_tools = Some(app.ui.group_tools.clone());
     let saved = app.session.prefs().tool_options.clone();
     if let Some(saved) = saved.as_object()
         && let Ok(Value::Object(mut cur)) = serde_json::to_value(&app.ui.tool_options)
@@ -196,6 +248,12 @@ pub fn restore(app: &mut PhotocraftApp) {
     }
     app.prefs_rt.tool_options = Some(app.ui.tool_options.clone());
     restore_brushes(app);
+}
+
+/// The values Width and Height take under a marquee or Slice tool Style: a size in px for Fixed
+/// Size, else a ratio.
+pub(crate) fn style_range(style: &str) -> std::ops::RangeInclusive<f32> {
+    if style == "fixedSize" { 1.0..=crate::panels::FIXED_SIZE_MAX_PX as f32 } else { 0.001..=999.0 }
 }
 
 /// Bring remembered options into the ranges their options-bar fields allow, so a hand-edited or
@@ -221,10 +279,20 @@ pub(crate) fn sanitize(o: &mut ToolOptions) {
     fit(&mut o.corner_radius, 0.0, 10000.0, d.corner_radius);
     fit(&mut o.line_weight, 1.0, 1000.0, d.line_weight);
     fit(&mut o.curve_fit, 0.5, 10.0, d.curve_fit);
-    // The marquee's Width and Height are a ratio or a size in px, as its Style says.
-    let (lo, hi) = if o.marquee_style == "fixedSize" { (1.0, 300_000.0) } else { (0.001, 999.0) };
+    // The marquee's and the Slice tool's Width and Height are a ratio or a size in px, as their
+    // Style says.
+    let (lo, hi) = style_range(&o.marquee_style).into_inner();
     fit(&mut o.marquee_width, lo, hi, d.marquee_width);
     fit(&mut o.marquee_height, lo, hi, d.marquee_height);
+    if !matches!(o.slice_style.as_str(), "normal" | "fixedRatio" | "fixedSize") {
+        o.slice_style = d.slice_style.clone();
+    }
+    let (lo, hi) = style_range(&o.slice_style).into_inner();
+    fit(&mut o.slice_width, lo, hi, d.slice_width);
+    fit(&mut o.slice_height, lo, hi, d.slice_height);
+    if o.slice_style == "fixedSize" {
+        (o.slice_width, o.slice_height) = (o.slice_width.round(), o.slice_height.round());
+    }
     fit(&mut o.crop_custom_ratio_width, 0.0, f32::MAX, d.crop_custom_ratio_width);
     fit(&mut o.crop_custom_ratio_height, 0.0, f32::MAX, d.crop_custom_ratio_height);
     fit(&mut o.magic_eraser_opacity, 1.0, 100.0, d.magic_eraser_opacity);
@@ -271,12 +339,12 @@ mod tests {
     #[test]
     fn selected_tool_and_non_default_options_roundtrip() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.ui.tool = Tool::Move;
+        app.ui.tool = Tool::Lasso;
         app.ui.tool_options.tolerance = 42.5;
         persist(&mut app, &egui::Context::default());
 
         let saved = app.session.prefs();
-        assert_eq!(saved.selected_tool, serde_json::to_value(Tool::Move).unwrap());
+        assert_eq!(saved.selected_tool, serde_json::to_value(Tool::Lasso).unwrap());
         assert_eq!(saved.tool_options["tolerance"], Value::from(42.5));
         assert!(saved.tool_options.get("contiguous").is_none(), "unchanged defaults are not written");
 
@@ -286,7 +354,7 @@ mod tests {
             p.tool_options = saved.tool_options.clone();
         });
         restore(&mut restored);
-        assert_eq!(restored.ui.tool, Tool::Move);
+        assert_eq!(restored.ui.tool, Tool::Lasso);
         assert_eq!(restored.ui.tool_options.tolerance, 42.5);
     }
 
