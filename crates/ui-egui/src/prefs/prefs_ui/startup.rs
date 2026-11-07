@@ -69,7 +69,6 @@ pub fn load(app: &mut PhotocraftApp) {
     crate::color_panel_ui::restore(app);
     crate::brush_picker::restore(app);
     crate::last_brush::restore(app);
-    sync_view_state(app);
     crate::tool_memory::restore(app);
     crate::view_cmds::restore(app);
     app.sync_recent();
@@ -79,6 +78,10 @@ pub fn load(app: &mut PhotocraftApp) {
         Some(stored) => stored_base(&loaded, &stored),
         None => loaded,
     });
+    // The browser attaches its Actions store before loading preferences. Save against the
+    // pre-prune baseline so stale keys are removed from storage as well.
+    app.session.prune_missing_action_set_preferences();
+    sync_view_state(app);
     if !invalid.is_empty() {
         repair_invalid(app, &invalid);
     }
@@ -227,7 +230,7 @@ pub(crate) fn on_recovery_event(app: &mut PhotocraftApp, e: &JobEvent) -> bool {
             // Native bundle decoding cannot stop midway. Cancel admission and the rest of the
             // batch so another large decoder isn't started while this worker finishes.
             app.prefs_rt.recovery_queue.clear();
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", tl!(&e.label))]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", tl!(&e.label))]);
             app.ui.status_error = false;
         }
     }

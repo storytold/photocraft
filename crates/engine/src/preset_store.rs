@@ -1136,6 +1136,24 @@ impl Session {
         self.tools.presets_rev += 1;
     }
 
+    /// Remove stale folder preferences when preferences and the Actions store are both loaded.
+    /// Frontends that attach the store first call this after loading preferences.
+    pub fn prune_missing_action_set_preferences(&mut self) {
+        self.prune_action_set_preferences(None);
+    }
+
+    /// Prune absent collapse keys after an authoritative library attach, or for one removed set.
+    pub(crate) fn prune_action_set_preferences(&mut self, removed_set: Option<&str>) {
+        if self.prefs().collapsed_action_sets.is_empty() || self.preset_store.as_ref().is_none_or(|store| store.actions_skipped) {
+            return;
+        }
+        let names = crate::actions_edit_cmds::set_names(self);
+        let stale = |name: &String| removed_set.is_none_or(|set| name.as_str() == set) && !names.contains(name);
+        if self.prefs().collapsed_action_sets.keys().any(&stale) {
+            self.prefs.edit(|prefs| prefs.collapsed_action_sets.retain(|name, _| !stale(name)));
+        }
+    }
+
     /// Attach a loaded store: merge its presets into the library (a stored preset replaces the
     /// built-in of the same name; presets created before the store finished loading win), hide
     /// deleted built-ins, then sync. Returns the load warnings.
@@ -1195,6 +1213,7 @@ impl Session {
             }
             self.actions.rev = self.actions.rev.saturating_add(1).max(1);
         }
+        self.prune_missing_action_set_preferences();
         self.brush_presets_changed();
         self.sync_preset_store();
         // A brush remembered from the previous run (or picked before the store loaded) may be

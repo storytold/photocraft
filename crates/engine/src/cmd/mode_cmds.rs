@@ -566,7 +566,7 @@ fn bitmap(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.edit("Bitmap", |doc, active| {
         if (nw, nh) != (doc.size.width, doc.size.height) {
-            crate::image_cmds::resample_doc(doc, nw, nh, photocraft_algo::resample::Resample::Bicubic);
+            crate::image_cmds::resample_doc(doc, CMD, nw, nh, photocraft_algo::resample::Resample::Bicubic)?;
         }
         doc.resolution_dpi = dpi;
         let w = doc.size.width as usize;

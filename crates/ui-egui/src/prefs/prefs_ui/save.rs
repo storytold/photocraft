@@ -1,4 +1,4 @@
-use super::appearance::{canvas_style, sync_animations, sync_appearance, sync_display_scale, sync_tooltips};
+use super::appearance::{canvas_style, sync_appearance, sync_display_scale, sync_tooltips};
 use super::startup::{load, presets_store, recovery, sync_view_state};
 use super::{DocId, HashMap, PhotocraftApp, Value, prefs};
 
@@ -14,7 +14,6 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
     presets_store(app);
     sync_tooltips(app, ctx);
-    sync_animations(app, ctx);
     app.sync_recent();
     // Monotonic, not `ctx.input(|i| i.time)`: logic also runs on hidden ticks, where egui's input
     // time is that of the last UI pass.
@@ -115,15 +114,27 @@ pub(super) fn persist(app: &mut PhotocraftApp, now: f64) -> Option<f64> {
 fn write_prefs(app: &mut PhotocraftApp, ours: &Value) -> Result<(), String> {
     let Some(save) = app.services.save_prefs.as_mut() else { return Ok(()) };
     let stored = app.services.load_prefs.as_mut().and_then(|load| load()).and_then(|t| serde_json::from_str::<Value>(&t).ok());
-    let text = match (stored, &app.prefs_rt.saved_value) {
+    let mut merged = match (stored, &app.prefs_rt.saved_value) {
         (Some(mut theirs @ Value::Object(_)), Some(base)) => {
-            let base = &without_stale_migration(base, &theirs);
-            merge_changes(base, ours, &mut theirs);
-            serde_json::to_string_pretty(&theirs)
+            let mut base = without_stale_migration(base, &theirs);
+            // Older files have no toolColors object. Diff the first saved swatches against
+            // their actual defaults so an unchanged field cannot overwrite another window's edit.
+            if matches!(base.get("toolColors"), None | Some(Value::Null))
+                && ours.get("toolColors").is_some_and(Value::is_object)
+                && let Some(fields) = base.as_object_mut()
+            {
+                fields.insert("toolColors".into(), crate::tool_memory::default_colors());
+            }
+            merge_changes(&base, ours, &mut theirs);
+            theirs
         }
-        _ => serde_json::to_string_pretty(ours),
+        _ => ours.clone(),
+    };
+    // An explicit expansion must participate in the per-key merge before it is omitted on disk.
+    if let Some(sets) = merged.get_mut("collapsedActionSets").and_then(Value::as_object_mut) {
+        sets.retain(|_, value| value.as_bool() == Some(true));
     }
-    .map_err(|e| e.to_string())?;
+    let text = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     save(&text)
 }
 
