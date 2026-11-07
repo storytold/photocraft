@@ -1,8 +1,10 @@
 # Path-text placement
 
-Path Selection and Direct Selection can adjust the active type layer's text range independently of its curve. Drag the beginning or ending marker along the curve to change that boundary; drag the text to move its paragraph anchor and both boundaries while they fit. At an open endpoint the range shortens so a range already reaching the endpoint remains movable. Crossing the curve flips the side and direction. Escape discards the current gesture; release commits one undo step. Character-panel Baseline Shift moves text across the curve without changing direction.
+Path Selection and Direct Selection can adjust the active type layer's text range independently of its curve. The beginning of the range is marked on the path with an `x` and the end with a small circle. Drag either marker along the curve to change that boundary; drag the text to move its paragraph anchor and both boundaries while they fit. At an open endpoint the range shortens so a range already reaching the endpoint remains movable. Crossing the curve flips the side and direction. Escape discards the current gesture; release commits one undo step. Character-panel Baseline Shift moves text across the curve without changing direction.
 
-The on-canvas preview uses the native text renderer. Its cached document leaves document history unchanged while dragging, and repaint damage is limited to the old and new text areas. The ending marker shows a plus when the path range hides drawable glyphs.
+The pointer shows what a press grabs: an I-beam with a right-pointing triangle over the beginning marker, a left-pointing triangle over the end marker, and both triangles over the text, which moves as a whole. Direct Selection reshapes paths, so where a marker sits on an anchor or handle (an open path's default end marker sits on its last anchor) that tool edits the path; Path Selection always takes the marker.
+
+The on-canvas preview uses the native text renderer. Its cached document leaves document history unchanged while dragging, and repaint damage is limited to the old and new text areas. The end circle shows a plus inside while the path range hides drawable glyphs.
 
 ## Data and automation
 
@@ -10,19 +12,19 @@ The on-canvas preview uses the native text renderer. Its cached document leaves 
 
 Offsets are measured in the text layer's local space, along its current direction of travel. An explicit end is unwrapped: equal start/end means no capacity, and an end one path length after the start means a full closed lap. The renderer limits closed paths to one lap. Native `.pcraft` files preserve the range; older files without an end retain legacy placement until an actual edit.
 
-## Photoshop reference and remaining verification
+## Reference behaviour and remaining verification
 
-Adobe documents the Path/Direct Selection gestures and directional cursors in [Flip or move text along a path](https://helpx.adobe.com/photoshop/desktop/text-typography/text-on-paths-shapes/flip-or-move-text-along-a-path.html). The [Photoshop reference](https://helpx.adobe.com/pdf/cs6/photoshop_reference.pdf) distinguishes flipping from baseline shift. These documents guide the implementation; direct visual comparison against Photoshop is still required before claiming exact parity.
+The markers, cursors and gestures follow the reference editor's documented behaviour: an `x` and a circle mark the beginning and end, a plus in the circle signals overflow, the I-beam's triangle points right at the beginning and left at the end, and dragging across the path flips the text, unlike baseline shift. Direct side-by-side comparison is still required before claiming exact parity.
 
-Editable PSD end-limit mapping is unresolved. PSD export warns that the end limit is lost; alignment, placement, and overflow can therefore change when reopened. The existing path/start/flip export mapping is retained. Native persistence tests do not establish Photoshop interchange fidelity.
+Editable PSD end-limit mapping is unresolved: neither PSD oracle has a moved or limited range, so the key that stores it is unverified. PSD export warns that the end limit is lost; alignment, placement, and overflow can therefore change when reopened. The existing path/start/flip export mapping is retained. Native persistence tests do not establish PSD interchange fidelity.
 
 ## Manual comparison protocol
 
-Use the same font, size, content, baseline shift, and alignment in PhotoCraft and Photoshop.
+Use the same font, size, content, baseline shift, and alignment in PhotoCraft and the reference editor.
 
 1. Create an open curve and a circle, then add path text. Test left, center, and right alignment.
-2. Select each path-selection tool in turn. Check beginning/end markers, directional cursors, and text-body hover.
-3. Drag each marker along the path. Shorten the interval until text overflows; check the ending marker and hidden glyphs.
+2. Select each path-selection tool in turn. Check the `x` and circle markers, the right/left/double triangle cursors, and Direct Selection on a marker that sits on an anchor.
+3. Drag each marker along the path. Shorten the interval until text overflows; check the plus in the end circle and hidden glyphs.
 4. Drag the text along the curve and across it. Check the occupied path interval, direction, and baseline side before and after a flip.
 5. Cross a closed-path seam in both directions. Check for jumps and duplicate text. Repeat after zoom, view rotation/mirroring, and a skewed layer transform.
 6. Repeat the first drag on an older native file with centered/right-aligned text and no explicit end. Check for an unexpected placement jump.

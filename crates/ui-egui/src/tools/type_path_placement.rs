@@ -178,25 +178,57 @@ pub(crate) fn markers_with_geometry(text: &TextLayer, geometry: &PathGeometry, x
     Some([sample(start)?, sample(finish)?])
 }
 
-/// Returns the tip position of a placement marker directed perpendicularly away from the path tangent.
-fn marker_tip(point: Pos2, tangent: Vec2, index: usize) -> Pos2 {
-    let side = if index == 0 { -1.0 } else { 1.0 };
-    point + Vec2::new(-tangent.y, tangent.x) * (10.0 * side)
-}
+/// Screen radius of the beginning (`x`) and ending (`o`) markers drawn on the path.
+const MARKER_RADIUS: f32 = 4.0;
+/// Screen distance from a marker within which a press grabs it.
+const MARKER_REACH: f32 = 6.0;
 
-/// Hit-tests a screen point against start and end marker tips within hit tolerance.
+/// Hit-tests a screen point against the start and end markers, which sit on the path itself.
 fn marker_hit(ends: [(Pos2, Vec2); 2], p: Pos2) -> Option<(usize, f32)> {
     ends.into_iter()
         .enumerate()
-        .map(|(index, (point, tangent))| (index, marker_tip(point, tangent, index).distance(p)))
-        .filter(|(_, distance)| *distance <= 6.0)
+        .map(|(index, (point, _))| (index, point.distance(p)))
+        .filter(|(_, distance)| *distance <= MARKER_REACH)
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-/// Determines whether the path selection cursor should indicate start/body placement (true) or end marker movement (false).
-pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option<bool> {
+/// Whether Direct Selection should edit the path instead of moving a marker at document point
+/// `(x, y)`: that tool reshapes paths, so an anchor or handle under a marker (an open path's
+/// default end marker sits on its last anchor) keeps the click. Path Selection always takes the
+/// marker.
+fn anchor_wins(app: &PhotocraftApp, x: f64, y: f64) -> bool {
+    use photocraft_vector::edit::Hit;
+    app.ui.tool == Tool::DirectSelection && matches!(crate::direct_select::hit_target(app, [x, y], true), Some((_, _, Hit::Anchor(_) | Hit::Handle(..))))
+}
+
+/// What the pointer would move: the cursor shows an I-beam with a right-pointing triangle for the
+/// beginning, a left-pointing one for the end, and both for the whole text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Grab {
+    /// The beginning marker.
+    Start,
+    /// The ending marker.
+    End,
+    /// The text body: both boundaries move together.
+    Body,
+}
+
+impl Grab {
+    /// The grab a gesture with `endpoint` (marker index, or `None` for the body) performs.
+    fn of(endpoint: Option<usize>) -> Self {
+        match endpoint {
+            Some(0) => Self::Start,
+            Some(_) => Self::End,
+            None => Self::Body,
+        }
+    }
+}
+
+/// What a press at screen point `p` would grab, for the hover cursor (the active gesture's grab
+/// while dragging).
+pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option<Grab> {
     if let Some(drag) = app.ui.type_path_drag.as_ref().filter(|drag| drag.valid(app)) {
-        return Some(drag.endpoint != Some(1));
+        return Some(Grab::of(drag.endpoint));
     }
     if !app.ui.view.shows(app.ui.view.show.target_path) {
         return None;
@@ -210,28 +242,33 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
     let text = active_text(app)?;
     let geometry = active_path_geometry(app, text)?;
     let ends = markers_with_geometry(text, &geometry, xf)?;
-    if let Some((index, _)) = marker_hit(ends, p) {
-        return Some(index == 0);
-    }
     let d = xf.to_doc(p);
-    (crate::type_tool::hit_layer(app, d[0], d[1]) == Some(layer)).then_some(true)
+    if let Some((index, _)) = marker_hit(ends, p) {
+        return (!anchor_wins(app, d[0], d[1])).then_some(Grab::of(Some(index)));
+    }
+    (crate::type_tool::hit_layer(app, d[0], d[1]) == Some(layer)).then_some(Grab::Body)
 }
 
-/// Draws the directional type path placement cursor overlay with a directional arrow indicator.
-pub(crate) fn draw_cursor(ctx: &egui::Context, p: Pos2, right: bool) {
+/// Draws the placement cursor: an I-beam with a filled triangle on the side `grab` points to.
+pub(crate) fn draw_cursor(ctx: &egui::Context, p: Pos2, grab: Grab) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("type-path-cursor")));
-    let sign = if right { 1.0 } else { -1.0 };
-    let segments = [
+    let beam = [
         (p + Vec2::new(0.0, -7.0), p + Vec2::new(0.0, 7.0)),
         (p + Vec2::new(-3.0, -7.0), p + Vec2::new(3.0, -7.0)),
         (p + Vec2::new(-3.0, 7.0), p + Vec2::new(3.0, 7.0)),
-        (p + Vec2::new(2.0 * sign, 0.0), p + Vec2::new(9.0 * sign, 0.0)),
-        (p + Vec2::new(9.0 * sign, 0.0), p + Vec2::new(6.0 * sign, -3.0)),
-        (p + Vec2::new(9.0 * sign, 0.0), p + Vec2::new(6.0 * sign, 3.0)),
     ];
-    for (a, b) in segments {
+    for (a, b) in beam {
         painter.line_segment([a, b], Stroke::new(3.0, egui::Color32::BLACK));
         painter.line_segment([a, b], Stroke::new(1.0, egui::Color32::WHITE));
+    }
+    let sides: &[f32] = match grab {
+        Grab::Start => &[1.0],
+        Grab::End => &[-1.0],
+        Grab::Body => &[-1.0, 1.0],
+    };
+    for &sign in sides {
+        let triangle = vec![p + Vec2::new(3.0 * sign, -4.0), p + Vec2::new(8.0 * sign, 0.0), p + Vec2::new(3.0 * sign, 4.0)];
+        painter.add(egui::Shape::convex_polygon(triangle, egui::Color32::BLACK, Stroke::new(1.0, egui::Color32::WHITE)));
     }
 }
 
@@ -271,17 +308,20 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
     let Some(markers) = markers_with_geometry(&preview, &geometry, xf) else { return };
     let stroke = Stroke::new(1.5, crate::theme::Tokens::get(painter.ctx()).accent);
     let overflow = overflows(app, painter.ctx(), &preview);
-    for (index, (point, tangent)) in markers.into_iter().enumerate() {
-        let normal = Vec2::new(-tangent.y, tangent.x);
-        let side = if index == 0 { -1.0 } else { 1.0 };
-        let tip = marker_tip(point, tangent, index);
-        painter.line_segment([point, tip], stroke);
-        painter.line_segment([tip, tip + tangent * (5.0 * -side)], stroke);
-        if index == 1 && overflow {
-            let center = tip + normal * 5.0;
-            painter.line_segment([center - tangent * 3.0, center + tangent * 3.0], stroke);
-            painter.line_segment([center - normal * 3.0, center + normal * 3.0], stroke);
-        }
+    let [(start, tangent), (end, end_tangent)] = markers;
+    // The beginning is an `x` across the path, square to its direction.
+    let normal = Vec2::new(-tangent.y, tangent.x);
+    for diagonal in [tangent + normal, tangent - normal] {
+        let arm = diagonal * (MARKER_RADIUS / std::f32::consts::SQRT_2);
+        painter.line_segment([start - arm, start + arm], stroke);
+    }
+    // The end is a small circle, with a plus inside while the range hides glyphs.
+    painter.circle_stroke(end, MARKER_RADIUS, stroke);
+    if overflow {
+        let normal = Vec2::new(-end_tangent.y, end_tangent.x);
+        let arm = MARKER_RADIUS - 1.5;
+        painter.line_segment([end - end_tangent * arm, end + end_tangent * arm], stroke);
+        painter.line_segment([end - normal * arm, end + normal * arm], stroke);
     }
 }
 
@@ -600,6 +640,9 @@ pub(crate) fn pointer_with_context(
     let best = markers_with_geometry(&text, &geometry, &xf).and_then(|ends| marker_hit(ends, p));
     let active_layer = app.session.active().and_then(|st| st.active_layer);
     let endpoint = if let Some((index, _)) = best {
+        if anchor_wins(app, x, y) {
+            return false;
+        }
         Some(index)
     } else if crate::type_tool::hit_layer(app, x, y) == active_layer && active_layer.is_some() {
         None
@@ -848,9 +891,9 @@ mod tests {
                 app.ui.view.flip_horizontal = mirror;
                 let xf = ViewXform::active(&app).unwrap();
                 let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-                for (index, (point, tangent)) in ends.into_iter().enumerate() {
-                    let screen = marker_tip(point, tangent, index);
-                    assert_eq!(cursor(&mut app, &xf, screen), Some(index == 0));
+                for (index, (point, _)) in ends.into_iter().enumerate() {
+                    let screen = point;
+                    assert_eq!(cursor(&mut app, &xf, screen), Some(Grab::of(Some(index))));
                     let doc = xf.to_doc(screen);
                     down(&mut app, doc[0], doc[1]);
                     assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(index));
@@ -868,8 +911,8 @@ mod tests {
         xf.zoom = 2.0;
         xf.rotation = 37.0;
         xf.aspect = 1.5;
-        let (point, tangent) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
-        let from = xf.to_doc(marker_tip(point, tangent, 0));
+        let (point, _) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
+        let from = xf.to_doc(point);
         assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
         let to = [from[0] + 10.0, from[1]];
@@ -893,8 +936,8 @@ mod tests {
             })
             .unwrap();
         let xf = ViewXform::active(&app).unwrap();
-        let (point, tangent) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
-        let from = xf.to_doc(marker_tip(point, tangent, 0));
+        let (point, _) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
+        let from = xf.to_doc(point);
         assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
         let text = active_text(&app).unwrap();
@@ -1015,6 +1058,45 @@ mod tests {
         text.transform.apply(Point::new(x, y))
     }
 
+    /// The markers sit on the path: the beginning at its start offset and the end at its end
+    /// offset. Hovering the text body shows the double-headed cursor, and a gesture keeps the
+    /// cursor of what it grabbed.
+    #[test]
+    fn markers_sit_on_the_path_and_body_hover_grabs_both_ends() {
+        let mut app = app(Tool::PathSelection);
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        for ((point, _), x) in ends.into_iter().zip([40.0, 120.0]) {
+            let doc = xf.to_doc(point);
+            assert!((doc[0] - x).abs() < 1e-3 && (doc[1] - 100.0).abs() < 1e-3, "{doc:?}");
+        }
+        // Off the marker but on the path below it: nothing to grab there.
+        assert!(marker_hit(ends, ends[0].0 + Vec2::new(0.0, MARKER_REACH + 1.0)).is_none());
+        let point = body_point(&mut app);
+        let screen = xf.to_screen(point.x as f32, point.y as f32);
+        assert_eq!(cursor(&mut app, &xf, screen), Some(Grab::Body));
+        down(&mut app, point.x, point.y);
+        assert_eq!(cursor(&mut app, &xf, ends[1].0), Some(Grab::Body), "the gesture's grab wins while dragging");
+        assert!(cancel(&mut app));
+    }
+
+    /// An open path's default end marker sits on its last anchor. Direct Selection reshapes the
+    /// path there (the anchor keeps the click), while Path Selection moves the marker.
+    #[test]
+    fn direct_selection_anchor_under_a_marker_keeps_the_click() {
+        for (tool, marker) in [(Tool::DirectSelection, false), (Tool::PathSelection, true)] {
+            let mut app = app(tool);
+            app.run("type.setPathPlacement", json!({"end": null})).unwrap();
+            let xf = ViewXform::active(&app).unwrap();
+            let end = markers(active_text(&app).unwrap(), &xf).unwrap()[1].0;
+            let doc = xf.to_doc(end);
+            assert!((doc[0] - 180.0).abs() < 1e-3, "end marker on the last anchor: {doc:?}");
+            assert_eq!(cursor(&mut app, &xf, end), marker.then_some(Grab::End), "{tool:?}");
+            assert_eq!(pointer(&mut app, ToolEvent::Down { x: doc[0], y: doc[1], pressure: 1.0 }), marker, "{tool:?}");
+            assert_eq!(app.ui.type_path_drag.as_ref().map(|d| d.endpoint), marker.then_some(Some(1)));
+        }
+    }
+
     /// Proves dragging text body translates the placement range even when one boundary touches the open path endpoint.
     #[test]
     fn body_drag_can_move_text_when_range_reaches_the_open_endpoint() {
@@ -1070,8 +1152,8 @@ mod tests {
             let before = shape(&app);
             let n = steps(&app);
             let xf = ViewXform::active(&app).unwrap();
-            let (point, tangent) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
-            let screen = marker_tip(point, tangent, 0);
+            let (point, _) = markers(active_text(&app).unwrap(), &xf).unwrap()[0];
+            let screen = point;
             let doc = xf.to_doc(screen);
             assert!(!pointer(&mut app, ToolEvent::Down { x: doc[0], y: doc[1], pressure: 1.0 }));
             assert!(app.session.execute("type.setPathPlacement", json!({"start":30})).is_err());
@@ -1158,7 +1240,7 @@ mod tests {
         let count = steps(&app);
         let xf = ViewXform::active(&app).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let tip = ends[1].0;
         let point = xf.to_doc(tip);
         down(&mut app, point[0], point[1]);
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
@@ -1183,7 +1265,7 @@ mod tests {
 
         let xf = ViewXform::active(&app).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let tip = ends[1].0;
         let from = xf.to_doc(tip);
         assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
@@ -1336,7 +1418,7 @@ mod tests {
         // Reset to initial placement and test actual drag gesture to end.
         app.run("type.setPathPlacement", json!({"start": 0.0, "end": 5.0, "flip": false})).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let tip = ends[1].0;
         let from = xf.to_doc(tip);
         assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
@@ -1382,7 +1464,7 @@ mod tests {
         // Start drag in owner viewport.
         let xf = ViewXform::active(&app).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let tip = ends[1].0;
         let from = xf.to_doc(tip);
         assert!(pointer_with_context(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf), Some(owner_vp)));
         assert!(app.ui.type_path_drag.is_some());
@@ -1428,7 +1510,7 @@ mod tests {
 
         let xf = ViewXform::active(&app).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let tip = ends[1].0;
         let from = xf.to_doc(tip);
 
         assert!(pointer_with_context(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf), Some(owner_vp)));
@@ -1455,7 +1537,7 @@ mod tests {
         assert_eq!(steps(&app), history_count + 1);
 
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let tip = ends[1].0;
         let from_updated = xf.to_doc(tip);
 
         assert!(pointer_with_context(&mut app, ToolEvent::Down { x: from_updated[0], y: from_updated[1], pressure: 1.0 }, Some(&xf), None));
@@ -1514,7 +1596,7 @@ mod tests {
 
         let xf = ViewXform::active(&app).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
-        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let tip = ends[1].0;
         let from = xf.to_doc(tip);
         assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
@@ -1554,10 +1636,10 @@ mod tests {
         // Markers remain visible on shortened path with bounded effective range.
         let xf = ViewXform::active(&app).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).expect("markers must remain visible after shortening");
-        let tip0 = marker_tip(ends[0].0, ends[0].1, 0);
-        let tip1 = marker_tip(ends[1].0, ends[1].1, 1);
-        assert_eq!(cursor(&mut app, &xf, tip0), Some(true));
-        assert_eq!(cursor(&mut app, &xf, tip1), Some(false));
+        let tip0 = ends[0].0;
+        let tip1 = ends[1].0;
+        assert_eq!(cursor(&mut app, &xf, tip0), Some(Grab::Start));
+        assert_eq!(cursor(&mut app, &xf, tip1), Some(Grab::End));
 
         // Click and release without dragging preserves stored document and history count.
         let before = shape(&app);
@@ -1616,10 +1698,10 @@ mod tests {
         // Markers remain visible, bounded to the endpoint of the shortened path.
         let xf = ViewXform::active(&app).unwrap();
         let ends = markers(active_text(&app).unwrap(), &xf).expect("markers must remain visible when start is beyond length");
-        let tip0 = marker_tip(ends[0].0, ends[0].1, 0);
-        let tip1 = marker_tip(ends[1].0, ends[1].1, 1);
-        assert_eq!(cursor(&mut app, &xf, tip0), Some(true));
-        assert_eq!(cursor(&mut app, &xf, tip1), Some(false));
+        let tip0 = ends[0].0;
+        let tip1 = ends[1].0;
+        assert_eq!(cursor(&mut app, &xf, tip0), Some(Grab::Start));
+        assert_eq!(cursor(&mut app, &xf, tip1), Some(Grab::End));
 
         // Click and release or cancel preserves original stored shape.
         let before = shape(&app);

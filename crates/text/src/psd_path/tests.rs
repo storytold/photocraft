@@ -30,7 +30,7 @@ fn photoshop_path_frames_read_into_text_space() {
     assert!(circle.knots.iter().all(|k| k.smooth));
 }
 
-/// Verifies updating path text frames preserves existing Photoshop frame entries or writes transformed paths.
+/// Verifies updating path text frames preserves existing PSD frame entries or writes transformed paths.
 #[test]
 fn written_frames_read_back() {
     for src in [CIRCLE, WAVE] {
