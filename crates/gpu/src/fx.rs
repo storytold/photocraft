@@ -435,7 +435,7 @@ pub(crate) fn shape(doc: &photocraft_doc::Document, layer: &Layer, r: Rect) -> V
     if r.is_empty() {
         return Vec::new();
     }
-    let parts = par_map(bands(r, BAND), |band| photocraft_compose::layer_shape(doc, layer, band));
+    let parts = par_map(bands(r, BAND), |band| shape_band(doc, layer, band));
     let mut shape = photocraft_raster::scratch::take_cap(parts.iter().map(Vec::len).sum());
     // A band can be a pooled mask (Transparency Shapes Layer off): hand each back once copied.
     for part in parts {
@@ -443,6 +443,53 @@ pub(crate) fn shape(doc: &photocraft_doc::Document, layer: &Layer, r: Rect) -> V
         photocraft_raster::scratch::give(part);
     }
     shape
+}
+
+/// Unmasked raster, text and Smart Object coverage is the displayed surface's stored alpha.
+fn shape_band(doc: &photocraft_doc::Document, layer: &Layer, band: Rect) -> Vec<f32> {
+    if layer.advanced.transparency_shapes
+        && layer.mask.is_none()
+        && layer.vector_mask.is_none()
+        && matches!(layer.content, LayerContent::Raster(_) | LayerContent::Text(_) | LayerContent::Smart(_))
+        && let Some(surface) = layer.surface()
+    {
+        let width = band.width() as usize;
+        let Some(len) = width.checked_mul(band.height() as usize) else { return Vec::new() };
+        let mut out = photocraft_raster::scratch::take_exact(len, 1.0);
+        if width > 0 && surface.format().alpha {
+            let channel = surface.format().mode.color_channels();
+            for (y, values) in (band.y0..band.y1).zip(out.chunks_exact_mut(width)) {
+                surface.sample_row_strided(y, band.x0, 1, channel, values);
+            }
+        }
+        return out;
+    }
+    photocraft_compose::layer_shape(doc, layer, band)
+}
+
+/// Compare each rendered band directly with the cached shape without assembling another full map.
+pub(crate) fn shape_matches(doc: &photocraft_doc::Document, layer: &Layer, r: Rect, cached: &[f32]) -> bool {
+    if r.is_empty() {
+        return cached.is_empty();
+    }
+    let width = r.width() as usize;
+    let Some(len) = width.checked_mul(r.height() as usize) else { return false };
+    if cached.len() != len {
+        return false;
+    }
+    par_map(bands(r, BAND), |band| {
+        let v = shape_band(doc, layer, band);
+        let start = (i64::from(band.y0) - i64::from(r.y0)) as usize * width;
+        // NaN is unequal to itself, but identical stored coverage must keep its cached maps.
+        let equal = start
+            .checked_add(v.len())
+            .and_then(|end| cached.get(start..end))
+            .is_some_and(|prior| prior.iter().zip(&v).all(|(a, b)| a.to_bits() == b.to_bits()));
+        photocraft_raster::scratch::give(v);
+        equal
+    })
+    .into_iter()
+    .all(|equal| equal)
 }
 
 /// Write `v` (row-major over `r`) into the region-sized `shape`.
