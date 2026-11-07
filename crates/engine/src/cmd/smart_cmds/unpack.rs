@@ -9,7 +9,7 @@ use std::sync::Arc;
 use photocraft_algo::transform::Interp;
 use photocraft_cms::Intent;
 use photocraft_color::BlendMode;
-use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
+use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, Pattern, SmartObject, SmartSource};
 use serde_json::{Value, json};
 
 use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
@@ -17,8 +17,9 @@ use crate::commands::layer_param;
 use crate::{EngineError, Result, Session};
 
 /// The smart object's contents as layers in `doc`'s colour model, profile and depth, still in
-/// source pixel coordinates. A Background becomes a normal layer (it can't sit above others).
-fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
+/// source pixel coordinates, with the contents' patterns that `doc` lacks (pattern fills and
+/// effects reference them by id). A Background becomes a normal layer (it can't sit above others).
+fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<(Vec<Layer>, Vec<Pattern>)> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
     let mut src = decode_source(&name, &bytes)?;
@@ -41,7 +42,8 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
         }
         embed_nested(&src.metadata, l);
     }
-    Ok(layers)
+    let patterns = std::mem::take(&mut src.patterns).into_iter().filter(|p| !doc.patterns.iter().any(|d| d.id == p.id)).collect();
+    Ok((layers, patterns))
 }
 
 /// Nested PSD placed layers find their files in the contents' own global blocks, which stay
@@ -179,7 +181,7 @@ pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = &st.doc;
     let so = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let sm = smart(doc, id)?;
-    let mut layers = contents(s, doc, sm, intent, bpc)?;
+    let (mut layers, patterns) = contents(s, doc, sm, intent, bpc)?;
     place(s, doc, sm, &mut layers)?;
     let discarded = sm.smart_filters.len();
     let out = unpacked(so, layers);
@@ -187,6 +189,7 @@ pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Convert to Layers", |doc, active| {
         let path = doc.path_of(id).ok_or(EngineError::NoLayer(id))?;
         *doc.layer_at_mut(&path).ok_or(EngineError::NoLayer(id))? = out;
+        doc.patterns.extend(patterns);
         *active = Some(new_id);
         Ok(())
     })?;
