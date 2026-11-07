@@ -33,6 +33,7 @@ fn selection_only_copy_preserves_source_and_soft_coverage_across_documents() {
     for depth in [8, 16, 32] {
         let (mut s, paint) = two_docs(40, 30, depth);
         s.execute("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+        s.execute("layer.setProps", json!({"layer": paint.0, "opacity": 0.4})).unwrap();
         std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection.as_mut().unwrap().write_pixel(7, 8, &[0.5]);
         let before = doc(&s, 0).clone();
         let r = s.execute("layer.copyToDocument", json!({"source": 0, "document": 1, "layers": [paint.0], "selectionOnly": true, "offset": [10, 5]})).unwrap();
@@ -40,12 +41,29 @@ fn selection_only_copy_preserves_source_and_soft_coverage_across_documents() {
         assert_eq!(bounds(&s, 1, id), Rect::new(17, 13, 20, 17));
         assert_eq!(*doc(&s, 0), before);
         let pixel = doc(&s, 1).layer(id).unwrap().surface().unwrap().rgba(17, 13);
+        assert!((doc(&s, 1).layer(id).unwrap().opacity - 0.4).abs() < 1e-6);
         assert_eq!(&pixel[..3], &[1.0, 0.0, 0.0]);
         assert!((pixel[3] - 0.5).abs() <= 1.0 / 255.0, "soft selection coverage survives depth conversion");
         assert!(s.undo());
         assert_eq!(doc(&s, 1).layers.len(), 1);
         assert_eq!(*doc(&s, 0), before);
     }
+}
+
+#[test]
+fn selection_only_copy_rejects_a_floating_layer_mask() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(paint).unwrap().mask = Some(photocraft_doc::LayerMask::reveal_all());
+        Ok(())
+    })
+    .unwrap();
+    s.execute("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+    s.execute("select.float", json!({"dx": 2, "dy": 0, "copy": true, "target": "mask"})).unwrap();
+    let source = doc(&s, 0).clone();
+    assert!(s.execute("layer.copyToDocument", json!({"source": 0, "document": 1, "layers": [paint.0], "selectionOnly": true})).is_err());
+    assert_eq!(*doc(&s, 0), source);
+    assert_eq!(doc(&s, 1).layers.len(), 1);
 }
 
 #[test]

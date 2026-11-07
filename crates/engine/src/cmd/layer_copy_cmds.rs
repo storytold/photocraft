@@ -261,6 +261,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         let src_layer = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
         let mut l = if selection_only {
             let parts = match floating.as_ref().filter(|f| f.layer == *id) {
+                Some(f) if f.parts.is_mask() => return Err(bad("a floating layer mask cannot be transferred as selected pixels")),
                 Some(f) => f.parts.clone(),
                 None => std::sync::Arc::new(crate::float_cmds::CutParts::new(&sdoc, *id, true, s.tools.background, false)?),
             };
@@ -268,6 +269,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(bad("the selected pixels are empty"));
             }
             let mut layer = Layer::new(src_layer.name.clone(), LayerContent::Raster(parts.selected_pixels().clone()));
+            layer.opacity = src_layer.opacity;
             if let Some(f) = floating.as_ref().filter(|f| f.layer == *id) {
                 crate::commands::translate_layer(&sdoc, &mut layer, f.offset.0, f.offset.1);
             }

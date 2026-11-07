@@ -161,6 +161,40 @@ fn a_plain_layer_can_be_dragged_directly_between_tiled_canvases() {
 }
 
 #[test]
+fn a_tiled_selection_drag_that_returns_to_its_source_still_moves_there() {
+    let (mut h, _) = harness();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    h.state_mut().run("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+    h.run_steps(3);
+    let before = h.state().session.documents()[0].doc.clone();
+    let history = h.state().session.documents()[0].history.past_len();
+    let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).unwrap();
+    let view = &h.state().ui.views[0];
+    let ppp = h.state().canvas_ppp();
+    let source_xf = ViewXform {
+        rect: crate::rulers::content_rect(h.state(), cells[0].1.shrink(1.0)),
+        zoom: view.zoom / ppp,
+        center: view.center,
+        flip: false,
+        rotation: view.rotation,
+        aspect: 1.0,
+    }
+    .pixel_aligned_for(h.state(), ppp);
+    let grab = source_xf.to_screen(8.0, 10.0);
+    let moved = source_xf.to_screen(13.0, 10.0);
+    assert!(cells[0].1.contains(moved), "release {moved:?} is outside source cell {:?}", cells[0].1);
+    drag_along(&mut h, &[grab, cells[1].1.center(), moved], Modifiers::NONE);
+    let state = h.state();
+    assert_eq!(*state.session.documents()[0].doc, *before, "a selection move remains floating until it is dropped");
+    let floating = state.session.documents()[0].floating.as_ref().expect("returning to the source preserves and releases the original move drag");
+    assert!(floating.moved);
+    assert_ne!(floating.offset, (0, 0));
+    assert_eq!(state.session.documents()[0].history.past_len(), history);
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1);
+}
+
+#[test]
 fn a_layers_panel_drag_onto_a_tab_drops_the_layer_where_it_is_released() {
     let (mut h, _) = harness();
     let row = h.get_by_role_and_label(Role::Button, "paint").rect().center();

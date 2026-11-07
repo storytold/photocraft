@@ -90,11 +90,17 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
             return false;
         }
         // The Move drag ends without moving anything; an ⌥-drag's copy is taken back.
-        let previous = app.drag.take().and_then(|d| d.transfer_floating_before);
+        let Some(drag) = app.drag.take() else { return false };
+        let previous = drag.transfer_floating_before.clone();
         app.move_preview = None;
         crate::move_mods::abandon(app);
-        // A fresh selection drag is only a floating preview. Returning that
-        // piece preserves source pixels/history when the drag becomes a copy.
+        // An Option-drag of an existing float first drops it and floats a copy. Take that
+        // compound start back before restoring the captured float, so document, history and
+        // floating revision remain one consistent source state.
+        if previous.as_ref().is_some_and(|before| app.session.active().is_some_and(|st| st.revision != before.revision)) && !app.session.rollback() {
+            app.drag = Some(drag);
+            return false;
+        }
         if let Some(st) = app.session.active_mut() {
             st.floating = previous;
         }
@@ -152,6 +158,12 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if get(ctx).is_some() {
         return;
     }
+    // Do not consume a source drag merely because it passes over another tile. On release this
+    // runs before canvas input, so a destination can take ownership without the source committing;
+    // returning to the source still releases as the original move.
+    if !ctx.input(|i| i.pointer.any_released()) {
+        return;
+    }
     let Some(pos) = pointer_if_armed(app, ctx) else { return };
     let Some((dest, _)) = target_at(app, pos) else { return };
     if app.session.active_index() != Some(dest) && arm_move_transfer(app, ctx, dest) {
@@ -169,14 +181,16 @@ fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 
     match crate::canvas::arranged_cells(app, app.last_canvas_rect) {
         Some(cells) => cells.into_iter().find(|(_, r)| r.contains(p)).and_then(|(d, r)| {
             let view = app.ui.views.get(d)?;
+            let ppp = app.canvas_ppp();
             let xf = crate::canvas::ViewXform {
                 rect: crate::rulers::content_rect(app, r.shrink(1.0)),
-                zoom: view.zoom / app.ppp,
+                zoom: view.zoom / ppp,
                 center: view.center,
                 flip: app.ui.view.flip_horizontal,
                 rotation: view.rotation,
                 aspect: app.ui.view.display_aspect(),
-            };
+            }
+            .pixel_aligned_for(app, ppp);
             Some((d, Some(xf.to_doc(p))))
         }),
         None => Some((app.session.active_index()?, crate::canvas::ViewXform::active(app).map(|xf| xf.to_doc(p)))),
