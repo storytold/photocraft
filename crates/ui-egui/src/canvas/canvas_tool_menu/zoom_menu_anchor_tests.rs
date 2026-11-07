@@ -112,6 +112,48 @@ fn held_zoom_keys_still_open_no_view_menu() {
 }
 
 #[test]
+fn held_zoom_with_zoom_selected_keeps_the_menu_pressed_point_anchor() {
+    for animated in [false, true] {
+        for (command, direction) in [("view.zoomIn", 1), ("view.zoomOut", -1)] {
+            let mut app = zoom_app(400, 300);
+            app.ui.tool = Tool::Zoom;
+            app.run("prefs.set", json!({"values": {"general.animatedZoom": animated, "tools.zoomClickedPointToCenter": false, "tools.overscroll": true}}))
+                .unwrap();
+            let mut h = harness(app);
+            h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+            h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
+            h.step();
+            assert_eq!(crate::hold_keys::held_tool(h.state(), &h.ctx), Some(crate::hold_keys::Temporary::ZoomOut));
+            let zoom = h.state().ui.views[0].zoom;
+            let center = h.state().ui.views[0].center;
+            let doc = [300.0, 100.0];
+            let p = screen_of(h.state(), doc);
+            h.event(egui::Event::PointerMoved(p));
+            h.step();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed, modifiers: Modifiers::ALT });
+                h.step();
+            }
+            assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.tool == Tool::Zoom));
+            assert_eq!(crate::hold_keys::held_tool(h.state(), &h.ctx), Some(crate::hold_keys::Temporary::ZoomOut));
+            let ctx = h.ctx.clone();
+            choose(h.state_mut(), &ctx, command);
+            assert_eq!(h.state().ui.views[0].zoom, crate::zoom_levels::step(zoom, direction, [400, 300]));
+            assert_ne!(h.state().ui.views[0].center, center, "{command}: preserve the held tool's pressed-point behavior");
+            h.step();
+            h.input_mut().time = Some(ctx.input(|i| i.time) + 0.11);
+            h.step();
+            assert!(screen_of(h.state(), doc).distance(p) < 1.0, "{command}: anchor during animation");
+            h.input_mut().time = Some(ctx.input(|i| i.time) + 0.3);
+            h.step();
+            assert!(screen_of(h.state(), doc).distance(p) < 1.0, "{command}: settled anchor");
+            assert_eq!(h.state().ui.tool, Tool::Zoom);
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), 0);
+        }
+    }
+}
+
+#[test]
 fn held_z_menu_keeps_its_existing_pressed_point_anchor() {
     for label in ["Zoom In", "Zoom Out"] {
         let mut app = zoom_app(400, 300);

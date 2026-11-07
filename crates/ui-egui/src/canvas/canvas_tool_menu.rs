@@ -935,7 +935,7 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
     }
     let (Some((zoom0, c)), Some(d)) = (before, menu.anchor) else { return Ok(()) };
     let center_on_point = app.session.prefs().tools.zoom_clicked_point_to_center;
-    if menu.tool == Tool::Zoom && app.ui.tool == Tool::Zoom && app.ui.spring.is_none() && !center_on_point {
+    if menu.tool == Tool::Zoom && app.ui.tool == Tool::Zoom && app.ui.spring.is_none() && crate::hold_keys::held_tool(app, ctx).is_none() && !center_on_point {
         return Ok(());
     }
     let Some(v) = app.ui.views.get_mut(i) else { return Ok(()) };
