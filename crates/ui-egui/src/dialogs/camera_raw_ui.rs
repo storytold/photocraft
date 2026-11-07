@@ -35,6 +35,17 @@ mod open;
 mod proxy;
 mod sidecar;
 
+#[cfg(test)]
+mod file_dialog_tests;
+
+pub(crate) fn viewport_id() -> egui::ViewportId {
+    egui::ViewportId::from_hash_of("camera-raw-window")
+}
+
+fn ensure_picker_closed(app: &PhotocraftApp) -> Result<(), String> {
+    if app.file_dialog_in_viewport(viewport_id()) { Err("Finish choosing the Camera Raw settings file first".into()) } else { Ok(()) }
+}
+
 pub use controls::show;
 #[cfg(test)]
 use convert::open_pixels;

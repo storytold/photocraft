@@ -74,6 +74,7 @@ pub fn queue_open_dialog(
 
 /// Opens the queued open-time dialog on its document's (only) layer.
 pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen) -> Result<(), String> {
+    super::ensure_picker_closed(app)?;
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
@@ -449,6 +450,9 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
 
 /// Cancel: closes the dialog; for the open-time dialog also the document it was opening.
 pub(super) fn cancel(app: &mut PhotocraftApp) {
+    if super::ensure_picker_closed(app).is_err() {
+        return;
+    }
     let Some(d) = app.camera_raw.take() else { return };
     if let (Target::OpenRaw, Some(raw)) = (d.target, &d.raw_open)
         && let Some(index) = document_index(app, raw.document)
@@ -469,6 +473,7 @@ pub(super) enum Coverage {
 }
 
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    super::ensure_picker_closed(app)?;
     if photocraft_engine::color_channels::selected(&app.session).is_some_and(|c| c.len() > 1) {
         return Err("Camera Raw requires the composite or one colour channel".into());
     }
@@ -481,6 +486,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
 /// the pixels below it; OK updates that filter (`layer.smartFilter.setParams`), as double-clicking
 /// a Camera Raw smart filter does in Photoshop.
 pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: LayerId, index: usize) -> Result<(), String> {
+    super::ensure_picker_closed(app)?;
     use photocraft_engine::lens_cmds::{RAW, raw_params};
     let st = app.session.active().ok_or("no document")?;
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else {

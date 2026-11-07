@@ -8,6 +8,9 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     if id != "filter.cameraRaw" {
         return None;
     }
+    if let Err(e) = super::ensure_picker_closed(app) {
+        return Some(Err(e));
+    }
     let Some(fields) = params.as_object() else {
         return Some(Err("Camera Raw params must be an object".into()));
     };

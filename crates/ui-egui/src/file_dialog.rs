@@ -67,9 +67,16 @@ impl FileDialogReply {
     }
 }
 
+/// The window that requested a file dialog. `frame` supplies the root window's handles only;
+/// native hosts resolve auxiliary `viewport`s through their window lifecycle hooks.
+#[derive(Clone, Copy)]
+pub struct FileDialogParent<'a> {
+    pub viewport: egui::ViewportId,
+    pub frame: Option<&'a eframe::Frame>,
+}
+
 /// Show a file dialog and return at once, answering through the reply when the user is done.
-/// The window (`None` in tests) is the dialog's parent.
-pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, Option<&eframe::Frame>, FileDialogReply)>;
+pub type FileDialogFn = Box<dyn FnMut(FileDialogRequest, FileDialogParent<'_>, FileDialogReply)>;
 
 /// What to do with the answer (`None`: cancelled).
 type Then = Box<dyn FnOnce(&mut PhotocraftApp, Option<FileDialogAnswer>) -> Result<Value, String>>;
@@ -79,6 +86,7 @@ type SavedPath = Box<dyn Fn(&PhotocraftApp, &str) -> String>;
 
 /// The file dialog in progress.
 pub(crate) struct Pending {
+    viewport: egui::ViewportId,
     /// Not shown yet: it is shown at the end of the frame, which has the window to parent it to.
     request: Option<FileDialogRequest>,
     answer: Option<Receiver<Option<FileDialogAnswer>>>,
@@ -98,6 +106,16 @@ impl PhotocraftApp {
     /// Whether a file dialog is open (or about to be shown).
     pub fn file_dialog_open(&self) -> bool {
         self.file_dialog.is_some()
+    }
+
+    /// Includes queued requests: the native owner must stay alive until its reply is consumed.
+    pub(crate) fn file_dialog_in_viewport(&self, viewport: egui::ViewportId) -> bool {
+        self.file_dialog.as_ref().is_some_and(|p| p.viewport == viewport)
+    }
+
+    /// A replacement question belongs to the same window as its completed native save picker.
+    pub(crate) fn file_dialog_prompt_viewport(&self) -> Option<egui::ViewportId> {
+        self.file_dialog.as_ref().filter(|p| p.held.is_some()).map(|p| p.viewport)
     }
 
     /// Show a file dialog; `then` continues with the user's choice on a later frame (see the
@@ -124,8 +142,17 @@ impl PhotocraftApp {
             Some(FileDialogAnswer::Unavailable(why)) => Err(why),
             Some(a) => then(app, a),
         });
-        self.file_dialog = Some(Pending { request: Some(request), answer: None, then, saved_path: None, held: None });
+        self.file_dialog = Some(Pending { viewport: egui::ViewportId::ROOT, request: Some(request), answer: None, then, saved_path: None, held: None });
         Ok(json!({ "fileDialog": kind }))
+    }
+
+    /// Associate a successfully queued request with its requesting window, before it is shown.
+    pub(crate) fn set_file_dialog_viewport(&mut self, viewport: egui::ViewportId) {
+        if let Some(p) = self.file_dialog.as_mut()
+            && p.request.is_some()
+        {
+            p.viewport = viewport;
+        }
     }
 
     /// Ask the user to choose a folder, starting in the folder of the most recent file when known.
@@ -321,7 +348,8 @@ impl PhotocraftApp {
             let (tx, rx) = mpsc::channel();
             p.answer = Some(rx);
             if let Some(show) = self.services.file_dialog.as_mut() {
-                show(request, parent, FileDialogReply { tx, ctx: ctx.clone() });
+                let viewport = if ctx.embed_viewports() { egui::ViewportId::ROOT } else { p.viewport };
+                show(request, FileDialogParent { viewport, frame: parent }, FileDialogReply { tx, ctx: ctx.clone() });
             }
         }
         let answer = match p.answer.as_ref().map(Receiver::try_recv) {

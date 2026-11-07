@@ -57,6 +57,7 @@ pub(super) fn open_pixels(
     coverage: Coverage,
     target: Target,
 ) -> Result<(), String> {
+    super::ensure_picker_closed(app)?;
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
