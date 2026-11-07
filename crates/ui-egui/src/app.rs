@@ -1,4 +1,4 @@
-use super::services::{ExportSettings, FormatChoices, SAVE_OPTIONS_OPEN, SaveKind, Services, plain_raster, saved_revision_after_write};
+use super::services::{ExportSettings, FormatChoices, SAVE_OPTIONS_OPEN, SaveKind, Services, flat_file_keeps_extras, plain_raster, saved_revision_after_write};
 use super::{
     ControlRequest, DocId, Document, HashMap, PhotocraftApp, Receiver, Session, SyntheticTarget, Tool, UiState, Value, actions, analysis_ui, brush_panel,
     brush_picker, camera_raw_ui, canvas, dds_options_ui, delete_layer_prompt, dialogs, discard_ui, distort_ui, dock, field_wheel, file_open, gpu_canvas,
@@ -198,6 +198,10 @@ impl PhotocraftApp {
             file_dialog: None,
             tiff_options: None,
             tiff_remembered: Default::default(),
+            flat_copy: None,
+            flat_copy_confirmed: None,
+            flat_copy_docs: Default::default(),
+            flat_copy_saves: Default::default(),
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,

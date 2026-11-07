@@ -434,11 +434,13 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
             }
         }
         JobOutcome::Failed(err) => {
+            app.flat_copy_saves.remove(&(save.doc, save.path));
             // Don't close the window over the error.
             app.jobs.close_after_saves = false;
             notices::error(app, crate::i18n::fmt(tl!("Save failed: {error}"), &[("error", &err)]));
         }
         JobOutcome::Cancelled => {
+            app.flat_copy_saves.remove(&(save.doc, save.path));
             app.jobs.close_after_saves = false;
             app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", label)]);
             app.ui.status_error = false;

@@ -1248,6 +1248,7 @@ pub mod filter_dialog;
 pub(super) mod filter_preview_ui;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod filter_preview_worker;
+pub mod flat_copy_ui;
 pub mod gallery_ui;
 pub(crate) mod guide_edit;
 pub mod guide_layout_ui;

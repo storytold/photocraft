@@ -748,6 +748,45 @@ fn save_a_copy(h: &mut Harness<'static, PhotocraftApp>, gates: &Gates, path: &st
     h.run_steps(2);
 }
 
+/// The close prompt says only a flat copy exists: not when that copy never got written, and still
+/// when an earlier one did.
+#[test]
+fn a_failed_background_save_records_no_flat_copy() {
+    let mut h = app_harness();
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    let gates = Gates::default();
+    h.state_mut().services.save_file = Some(gates.save(Some("disk full")));
+    let doc = h.state().active_doc_id().unwrap();
+    let write = |h: &mut Harness<'static, PhotocraftApp>| {
+        assert_eq!(h.state_mut().write_flat_aware("/tmp/photocraft-test/flat.png".into(), &crate::ExportSettings::default(), true), Ok(None));
+        h.run_steps(2);
+        gates.encode.store(true, Ordering::Relaxed);
+        step_until(h, |a| !a.saving());
+    };
+    write(&mut h);
+    assert!(!h.state().only_saved_flat(doc));
+    assert!(h.state().flat_copy_saves.is_empty());
+    h.state_mut().flat_copy_docs.insert(doc);
+    gates.encode.store(false, Ordering::Relaxed);
+    write(&mut h);
+    assert!(h.state().only_saved_flat(doc), "the earlier copy still exists");
+}
+
+#[test]
+fn a_background_flat_save_counts_once_written() {
+    let mut h = app_harness();
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    let gates = Gates { write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    let doc = h.state().active_doc_id().unwrap();
+    assert_eq!(h.state_mut().write_flat_aware("/tmp/photocraft-test/flat.png".into(), &crate::ExportSettings::default(), true), Ok(None));
+    h.run_steps(2);
+    assert!(!h.state().only_saved_flat(doc), "not before the file is written");
+    gates.encode.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    assert!(h.state().only_saved_flat(doc));
+}
+
 #[test]
 fn quitting_waits_for_a_background_save_to_finish() {
     let mut h = app_harness();

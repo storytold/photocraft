@@ -139,6 +139,8 @@ fn transparent_png_keeps_its_format_until_its_lone_layer_becomes_smart() {
 fn layered_save_respects_explicit_jpeg_choices() {
     let ctx = egui::Context::default();
     let (mut app, open, written) = jpeg_app(Some("/pics/My image.JPEG"), true);
+    // The question about the layers comes first (`flat_copy_ui`): here it's the JPEG's.
+    app.session.edit_prefs(|p| p.file_handling.ask_before_saving_flat_copy = false);
     menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
     app.poll_file_dialog(&ctx, None);
     answer(&open, Some(FileDialogAnswer::SaveTo("/exports/chosen.JPEG".into())));

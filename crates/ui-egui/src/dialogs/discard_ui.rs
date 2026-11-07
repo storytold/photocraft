@@ -282,7 +282,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         } else {
             tl!("Do you want to save the changes you made to “{name}” before closing?")
         };
-        (tl!("Unsaved changes"), crate::i18n::fmt(template, &[("name", &name)]))
+        let mut message = crate::i18n::fmt(template, &[("name", &name)]);
+        // Without this, a saved copy makes these look like small changes worth dropping.
+        if app.only_saved_flat(doc) {
+            message.push_str("\n\n");
+            message.push_str(tl!("Only a flat copy of this document has been saved. Its layers and other content aren't in any file."));
+        }
+        (tl!("Unsaved changes"), message)
     };
     // Each question comes up with its default answer focused, as in Photoshop: the arrow keys then
     // move between the answers and Enter presses the focused one (#6441).

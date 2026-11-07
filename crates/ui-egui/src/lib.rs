@@ -154,6 +154,7 @@ pub use dialogs::file_ui;
 pub use dialogs::fill_ui;
 pub use dialogs::filter_dialog;
 use dialogs::filter_preview_ui;
+pub use dialogs::flat_copy_ui;
 pub use dialogs::gallery_ui;
 use dialogs::guide_edit;
 pub use dialogs::guide_layout_ui;
@@ -703,6 +704,16 @@ pub struct PhotocraftApp {
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
     /// The last TIFF Options compression and pyramid answer, where the next prompt starts. Session-only.
     pub(crate) tiff_remembered: tiff_options_ui::Remembered,
+    /// A Save As to a file that can't keep the document, parked behind its question (see
+    /// `flat_copy_ui`).
+    pub(crate) flat_copy: Option<flat_copy_ui::Prompt>,
+    /// The path of the save confirmed there, so no notice repeats it. It lasts through the file's
+    /// own options (Targa, DDS, JPEG), which can follow the question.
+    pub(crate) flat_copy_confirmed: Option<String>,
+    /// Documents whose last save was a copy that left content behind, for the close prompt.
+    pub(crate) flat_copy_docs: std::collections::HashSet<photocraft_doc::DocId>,
+    /// Such copies still being written: they count once the file is.
+    pub(crate) flat_copy_saves: std::collections::HashSet<(photocraft_doc::DocId, String)>,
     /// Where each document was last saved or exported to through a dialog (#1826): its next Save
     /// As or export dialog starts there rather than beside the document. Session-only.
     pub(crate) save_dirs: HashMap<photocraft_doc::DocId, std::path::PathBuf>,

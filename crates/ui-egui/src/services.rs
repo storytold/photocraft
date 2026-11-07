@@ -192,6 +192,20 @@ impl ExportSettings {
     }
 }
 
+/// Whether a flat file at `path` keeps what a document holds beside its layers. Saved paths, layer
+/// comps and a quick mask are in no flat file. A TIFF keeps the alpha channels, and a Targa or DDS
+/// one, as its alpha; anything else keeps none. Guides don't count: they're not worth a Save As.
+pub(crate) fn flat_file_keeps_extras(doc: &Document, path: &str) -> bool {
+    if !doc.paths.is_empty() || !doc.layer_comps.is_empty() || doc.quick_mask.is_some() {
+        return false;
+    }
+    match photocraft_engine::file_cmds::extension(path).as_deref() {
+        Some("tif" | "tiff") => true,
+        Some("tga" | "dds") => doc.channels.len() <= 1 && doc.channels.iter().all(|c| c.spot.is_none()),
+        _ => doc.channels.is_empty(),
+    }
+}
+
 /// The document's lone layer when it is a plain raster a flat file keeps: visible, at full
 /// opacity, in Normal mode, with no masks, effects or blending restrictions (#2234).
 pub(crate) fn plain_raster(doc: &Document) -> Option<&photocraft_doc::Layer> {

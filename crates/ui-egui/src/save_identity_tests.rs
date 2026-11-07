@@ -172,6 +172,79 @@ fn save_as_flat_keeps_the_layered_original() {
     assert_eq!(identity(&app), before);
 }
 
+/// One layer isn't all a document holds: alpha channels, saved paths and layer comps aren't in a
+/// flat file either. It was marked saved all the same, so closing it lost them without a prompt.
+#[test]
+fn save_as_flat_keeps_a_document_with_more_than_its_layer_unsaved() {
+    let ctx = egui::Context::default();
+    for case in ["alpha channel", "saved path", "layer comp", "quick mask"] {
+        for flat in ["art.png", "art.jpg", "art.tif"] {
+            // A TIFF keeps alpha channels, so that save is the real thing (below).
+            if flat == "art.tif" && case == "alpha channel" {
+                continue;
+            }
+            let mut app = app();
+            app.run("file.new", json!({"width": 4, "height": 4, "name": "One", "background": "white"})).unwrap();
+            {
+                let doc = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+                let gray = || photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+                match case {
+                    "alpha channel" => doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", gray())),
+                    "saved path" => doc.paths.push(Default::default()),
+                    "layer comp" => {}
+                    _ => doc.quick_mask = Some(photocraft_doc::AlphaChannel::new("Quick Mask", gray())),
+                }
+            }
+            if case == "layer comp" {
+                app.run("layerComp.new", json!({"name": "Comp"})).unwrap();
+            }
+            app.session.active_mut().unwrap().revision += 1;
+            let before = identity(&app);
+            menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": flat, "jpegFormat": "baseline"})).unwrap();
+            assert_eq!(identity(&app), before, "{case} saved as {flat}");
+        }
+    }
+    let mut app = app();
+    app.run("file.new", json!({"width": 4, "height": 4, "name": "One", "background": "white"})).unwrap();
+    app.run("channel.new", json!({"name": "Alpha 1"})).unwrap();
+    // TIFF Options answered here, so the save isn't parked behind it.
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "art.tif", "tiffCompression": "lzw"})).unwrap();
+    let st = app.session.active().unwrap();
+    assert_eq!((st.path.as_deref(), st.saved_revision), (Some("art.tif"), st.revision), "a TIFF holds alpha channels");
+    // A Targa or DDS holds one as its alpha, not two.
+    for (flat, channels, saved) in [("art.tga", 1, true), ("art.tga", 2, false), ("art.dds", 1, true), ("art.dds", 2, false)] {
+        let mut app = super::save_identity_tests::app();
+        app.run("file.new", json!({"width": 4, "height": 4, "name": "One", "background": "white"})).unwrap();
+        for _ in 0..channels {
+            app.run("channel.new", json!({"name": "Alpha"})).unwrap();
+        }
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": flat, "tgaBits": 32, "ddsFormat": "bc3", "ddsMipmaps": false})).unwrap();
+        let st = app.session.active().unwrap();
+        assert_eq!(st.path.as_deref() == Some(flat), saved, "{flat} with {channels}");
+    }
+}
+
+/// The exporter reports flattened layers but not alpha channels, saved paths or layer comps, so the
+/// app says those stayed behind. A real save, and the copies people ask for, don't need telling.
+#[test]
+fn save_as_says_what_a_flat_copy_left_behind() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.run("file.new", json!({"width": 4, "height": 4, "name": "One", "background": "white"})).unwrap();
+    app.run("channel.new", json!({"name": "Alpha 1"})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "flat.png"})).unwrap();
+    assert_eq!(app.ui.notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), ["Saving a copy"]);
+    app.ui.notices.clear();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": "art.psd"})).unwrap();
+    assert!(app.ui.notices.is_empty(), "a PSD holds everything");
+    let dir = std::env::temp_dir().join(format!("pc-flat-copy-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let copy = dir.join("copy.png").to_string_lossy().into_owned();
+    let _ = menus::invoke(&mut app, &ctx, "file.saveACopy", json!({"path": copy}));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(app.ui.notices.iter().all(|n| n.title != "Saving a copy"), "Save a Copy is a copy by request");
+}
+
 /// A flat document that isn't in a layered file becomes the flat file it is saved as, as before.
 #[test]
 fn save_as_flat_retargets_a_flat_document() {

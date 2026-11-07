@@ -99,7 +99,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let written = app.with_document(p.doc, |app| {
             // A Save As that keeps the document's own name records only its folder (#5305).
             app.record_answered_save_as(p.record, &mut step);
-            app.write_document(p.path, &settings, p.copy)
+            app.write_answered(p.path, &settings, p.copy, p.record)
         });
         if written.is_ok() {
             // An action being recorded keeps the Save As or Save a Copy with this answer.
