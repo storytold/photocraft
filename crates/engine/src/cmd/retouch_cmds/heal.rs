@@ -62,7 +62,7 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let dst = if which == SampleLayers::Current { Region::read(surf, g) } else { composite_region(pre, id, which, g, fmt) };
         let mask: Vec<bool> = cov.iter().map(|c| *c > 0.0).collect();
         let healed = heal_region(&fmt, &src, &dst, &mask);
-        Ok(apply_coverage(surf, g, &cov, stroke.brush.opacity, sel, lock, &healed, mode))
+        Ok(apply_coverage(surf, g, &cov, stroke.brush.opacity, sel, lock, &healed, mode, crate::channel_cmds::is_color_target(p)))
     })?;
     Ok(clone_result(dmg, off, aligned, p, &stroke))
 }
@@ -98,7 +98,7 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
         let src = if src_surface.format() == fmt { src_surface } else { src_surface.convert(fmt) };
         let (bounds, cov) = coverage(CMD, &stroke)?;
         let paint = Region::read(&src, bounds);
-        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
+        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode, crate::channel_cmds::is_color_target(p)))
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
     if from_live {
@@ -219,7 +219,7 @@ fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: 
     let healed = heal_region(&fmt, &src, &img, &heal_mask);
     let dmg = bounds.intersect(&region_rect);
     let dmg_cov: Vec<f32> = (dmg.y0..dmg.y1).flat_map(|y| (dmg.x0..dmg.x1).map(move |x| (x, y))).map(|(x, y)| stroke_cov[img.index(x, y)]).collect();
-    Ok(apply_coverage(surf, dmg, &dmg_cov, stroke.brush.opacity, sel, lock, &healed, BlendMode::Normal))
+    Ok(apply_coverage(surf, dmg, &dmg_cov, stroke.brush.opacity, sel, lock, &healed, BlendMode::Normal, false))
 }
 
 pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {

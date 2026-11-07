@@ -73,10 +73,12 @@ impl Setup {
     }
 
     /// One Impressionist dab's edit of a working copy in `fmt`.
-    fn impressionist_effect(&self, fmt: PixelFormat) -> super::DabEffect {
+    /// `color`: the target is a layer's colour pixels, so a float document keeps light above white.
+    fn impressionist_effect(&self, fmt: PixelFormat, color: bool) -> super::DabEffect {
         let (tile, phase, scale, angle, seed, mode) = (self.tile.clone(), self.phase, self.scale, self.angle, self.seed, self.mode);
         let (tw, th) = (self.pat.width as f32 * scale, self.pat.height as f32 * scale);
-        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, mode))
+        let float = color && fmt.sample == photocraft_color::SampleType::F32;
+        Box::new(move |work, fp| stamp_dab(work, &fmt, &tile, fp, phase, scale, angle, seed, tw, th, mode, float))
     }
 }
 
@@ -90,10 +92,10 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let sel = pre.selection.as_ref();
         if st.impressionist {
             // Halo is the dab footprint only: Impressionist jitters phase, it does not blur.
-            let effect = st.impressionist_effect(surf.format());
+            let effect = st.impressionist_effect(surf.format(), crate::channel_cmds::is_color_target(p));
             Ok(apply_dab_stroke(surf, &st.stroke, sel, lock, 0, effect))
         } else {
-            paint_aligned(surf, &st.stroke, sel, lock, &st.tile, st.placement(), st.mode, CMD)
+            paint_aligned(surf, &st.stroke, sel, lock, &st.tile, st.placement(), st.mode, crate::channel_cmds::is_color_target(p), CMD)
         }
     })?;
     s.hint_damage(dmg);
@@ -117,7 +119,8 @@ pub fn live_impressionist(s: &Session, p: &Value) -> Result<super::LiveDab> {
     }
     let (stroke, id) = (st.stroke.clone(), st.id);
     let doc = (*s.active().ok_or(crate::EngineError::NoDocument)?.doc).clone();
-    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format()))?.with_tail_preview()
+    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format(), crate::channel_cmds::is_color_target(p)))?
+        .with_tail_preview()
 }
 
 /// The pattern under destination `rect` in `fmt` (native channels): what an aligned stroke paints
@@ -201,6 +204,7 @@ fn paint_aligned(
     tile: &Tile,
     place: Placement,
     mode: BlendMode,
+    color: bool,
     cmd: &str,
 ) -> Result<Rect> {
     let (bounds, cov) = super::coverage(cmd, stroke)?;
@@ -208,7 +212,7 @@ fn paint_aligned(
         return Ok(Rect::EMPTY);
     }
     let paint = paint_region(tile, &place, &surf.format(), bounds);
-    Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
+    Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode, color))
 }
 
 fn footprint_cov(fp: &Footprint, x: i32, y: i32) -> f32 {
@@ -235,6 +239,7 @@ fn stamp_dab(
     tw: f32,
     th: f32,
     mode: BlendMode,
+    float: bool,
 ) {
     let r = fp.rect.intersect(&work.rect);
     if r.is_empty() {
@@ -265,7 +270,7 @@ fn stamp_dab(
                 }
             } else {
                 let d = to_rgba(fmt, dst);
-                let o = photocraft_color::blend::composite(mode, d, *px, k);
+                let o = photocraft_color::blend::composite_as(float, false, mode, d, *px, k);
                 from_rgba_into(fmt, o, &mut enc);
                 if let Some(src) = enc.get(..n) {
                     dst.copy_from_slice(src);

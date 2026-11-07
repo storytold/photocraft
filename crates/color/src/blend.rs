@@ -448,6 +448,30 @@ pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
 /// `αo·Co = (1−αs)·αb·Cb + (1−αb)·αs·Cs + αs·αb·B(Cb,Cs)`.
 /// Dissolve must be resolved by the caller (per-pixel coverage decision) before calling.
 pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_with(blend_rgb, mode, backdrop, source, opacity)
+}
+
+/// [`composite`], or [`composite_atop`] when `atop`, with the float blend when `hdr` (the colour
+/// pixels of a 32-bit float document, [`composite_hdr`]). For paint paths that know both per pixel.
+#[inline]
+pub fn composite_as(hdr: bool, atop: bool, mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    match (hdr, atop) {
+        (false, false) => composite(mode, backdrop, source, opacity),
+        (false, true) => composite_atop(mode, backdrop, source, opacity),
+        (true, false) => composite_hdr(mode, backdrop, source, opacity),
+        (true, true) => composite_atop_hdr(mode, backdrop, source, opacity),
+    }
+}
+
+/// [`composite`] for colour in 32-bit float documents: the blend is [`blend_rgb_hdr`], so Linear
+/// Dodge (Add) and Divide keep values above 1, and so do Hue, Saturation, Color and Luminosity.
+pub fn composite_hdr(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_with(blend_rgb_hdr, mode, backdrop, source, opacity)
+}
+
+/// [`composite`] through the blend function `blend` (`B(Cb, Cs)`), for callers with their own
+/// mode variants (the layer compositor's).
+pub fn composite_with(blend: fn(BlendMode, [f32; 3], [f32; 3]) -> [f32; 3], mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
     let ab = backdrop[3];
     let as_ = source[3] * opacity;
     if as_ <= 0.0 {
@@ -455,7 +479,7 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
     }
     let cb = [backdrop[0], backdrop[1], backdrop[2]];
     let cs = [source[0], source[1], source[2]];
-    let b = blend_rgb(mode, cb, cs);
+    let b = blend(mode, cb, cs);
     let ao = as_ + ab * (1.0 - as_);
     if ao <= 0.0 {
         return [0.0; 4];
@@ -473,11 +497,27 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
 /// Transparency): "source atop", `Co = (1−αs)·Cb + αs·B(Cb,Cs)`, `αo = αb`. Unlike source-over
 /// followed by restoring the alpha, a half-transparent backdrop takes the new colour by `αs` alone.
 pub fn composite_atop(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_atop_with(blend_rgb, mode, backdrop, source, opacity)
+}
+
+/// [`composite_atop`] for 32-bit float documents (see [`composite_hdr`]).
+pub fn composite_atop_hdr(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_atop_with(blend_rgb_hdr, mode, backdrop, source, opacity)
+}
+
+/// [`composite_atop`] through the blend function `blend` (see [`composite_with`]).
+pub fn composite_atop_with(
+    blend: fn(BlendMode, [f32; 3], [f32; 3]) -> [f32; 3],
+    mode: BlendMode,
+    backdrop: [f32; 4],
+    source: [f32; 4],
+    opacity: f32,
+) -> [f32; 4] {
     let as_ = source[3] * opacity;
     if as_ <= 0.0 {
         return backdrop;
     }
-    let b = blend_rgb(mode, [backdrop[0], backdrop[1], backdrop[2]], [source[0], source[1], source[2]]);
+    let b = blend(mode, [backdrop[0], backdrop[1], backdrop[2]], [source[0], source[1], source[2]]);
     let mut out = backdrop;
     for i in 0..3 {
         out[i] = (1.0 - as_) * backdrop[i] + as_ * b[i];

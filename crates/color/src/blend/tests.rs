@@ -399,3 +399,27 @@ fn composite_atop_keeps_alpha_and_moves_colour_by_source_alpha() {
     // A transparent source leaves the backdrop.
     assert_eq!(composite_atop(BlendMode::Normal, bg, [0.0, 0.0, 0.0, 0.0], 1.0), bg);
 }
+
+/// The float composites keep a Linear Dodge (Add) or Divide result above 1 where the integer ones
+/// clip; every other mode, opacity and coverage come out the same.
+#[test]
+fn hdr_composites_keep_light_above_white() {
+    let (b, s) = ([0.75, 0.5, 0.2, 1.0], [0.5, 0.75, 0.1, 1.0]);
+    for opacity in [1.0, 0.5] {
+        let hdr = composite_hdr(BlendMode::LinearDodge, b, s, opacity);
+        let clipped = composite(BlendMode::LinearDodge, b, s, opacity);
+        let want = |i: usize| b[i] + opacity * ((b[i] + s[i]) - b[i]);
+        assert!((hdr[0] - want(0)).abs() < 1e-6 && (hdr[1] - want(1)).abs() < 1e-6, "{hdr:?}");
+        assert!(clipped[0] <= 1.0 && clipped[1] <= 1.0, "{clipped:?}");
+        assert_eq!(composite_atop_hdr(BlendMode::LinearDodge, b, s, opacity)[..3], hdr[..3]);
+        for mode in [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen] {
+            assert_eq!(composite_hdr(mode, b, s, opacity), composite(mode, b, s, opacity), "{mode:?}");
+            assert_eq!(composite_atop_hdr(mode, b, s, opacity), composite_atop(mode, b, s, opacity), "{mode:?}");
+        }
+    }
+    let divided = composite_hdr(BlendMode::Divide, [0.8, 0.8, 0.8, 1.0], [0.4, 0.4, 0.4, 1.0], 1.0);
+    assert!((divided[0] - 2.0).abs() < 1e-6, "{divided:?}");
+    // Color keeps a backdrop luminance above 1.
+    let colored = composite_hdr(BlendMode::Color, [2.0, 2.0, 2.0, 1.0], [1.0, 0.0, 0.0, 1.0], 1.0);
+    assert!(lum([colored[0], colored[1], colored[2]]) > 1.5, "{colored:?}");
+}

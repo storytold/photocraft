@@ -34,6 +34,8 @@ pub(super) struct Composite<'a> {
     pub selection: Option<&'a Surface>,
     pub lock: bool,
     pub mode: BlendMode,
+    /// A layer's colour pixels ([`photocraft_paint::retouch::apply_coverage`]'s `color`).
+    pub color: bool,
 }
 
 impl Composite<'_> {
@@ -98,7 +100,7 @@ impl Composite<'_> {
                         }
                     }
                     self.target.write_region(dst, &self.before.read_region(dst));
-                    apply_coverage(self.target, dst, &stroke.coverage, self.opacity, self.selection, self.lock, &stroke.paint, self.mode);
+                    apply_coverage(self.target, dst, &stroke.coverage, self.opacity, self.selection, self.lock, &stroke.paint, self.mode, self.color);
                     damage = damage.union(&dst);
                     x = x1;
                 }

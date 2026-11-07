@@ -111,12 +111,18 @@ pub fn with_hdr<R>(hdr: bool, f: impl FnOnce() -> R) -> R {
 
 /// `B(Cb, Cs)` with Photoshop's variants.
 pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    blend_rgb_as(HDR.with(|h| h.get()), mode, cb, cs)
+}
+
+/// [`blend_rgb`] for a document whose depth is given (`hdr`: 32-bit float) rather than read from
+/// [`HDR`], for callers that blend outside a composite, on worker threads (Edit › Fill, #11126).
+pub fn blend_rgb_as(hdr: bool, mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     match mode {
         BlendMode::VividLight => std::array::from_fn(|i| vivid_light_ps(cb[i], cs[i])),
         BlendMode::HardMix => std::array::from_fn(|i| hard_mix_ps(cb[i], cs[i])),
         BlendMode::ColorBurn => std::array::from_fn(|i| color_burn(cb[i], cs[i])),
         BlendMode::ColorDodge => std::array::from_fn(|i| color_dodge(cb[i], cs[i])),
-        m if HDR.with(|h| h.get()) => generic::blend_rgb_hdr(m, cb, cs),
+        m if hdr => generic::blend_rgb_hdr(m, cb, cs),
         m => generic::blend_rgb(m, cb, cs),
     }
 }

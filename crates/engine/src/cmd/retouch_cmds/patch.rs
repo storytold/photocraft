@@ -208,7 +208,7 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
     let cov = coverage(sel, g.translate(-dst_shift.0, -dst_shift.1));
     let mask: Vec<bool> = cov.iter().map(|c| *c > 0.0).collect();
     let healed = heal_region_coarse(&fmt, &src, &dst, &mask, step);
-    apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal)
+    apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal, false)
 }
 
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {

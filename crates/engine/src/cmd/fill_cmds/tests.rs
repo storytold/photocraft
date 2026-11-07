@@ -313,3 +313,146 @@ fn unselected_tiles_stay_shared() {
         s.execute("select.deselect", json!({})).unwrap();
     }
 }
+
+/// #11126: in a 32-bit float document Linear Dodge (Add) keeps a sum above white, as its layers
+/// composite, also with Preserve Transparency; 8- and 16-bit documents still clip at white, and a
+/// sum below white is the same at every depth.
+#[test]
+fn a_float_linear_dodge_fill_keeps_light_above_white() {
+    let fill = |depth: u32, base: f32, add: f32, preserve: bool| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1, "height": 1, "mode": "rgb", "depth": depth, "background": "transparent"})).unwrap();
+        s.execute("edit.fill", json!({"color": [base, base, base, 1.0], "mode": "normal"})).unwrap();
+        s.execute("edit.fill", json!({"color": [add, add, add, 1.0], "mode": "linearDodge", "preserveTransparency": preserve})).unwrap();
+        px(&s, 0, 0)
+    };
+    for preserve in [false, true] {
+        let hdr = fill(32, 0.75, 0.5, preserve);
+        assert!((hdr[0] - 1.25).abs() < 1e-6 && hdr[3] == 1.0, "32-bit, preserve {preserve}: {hdr:?}");
+        for depth in [8, 16] {
+            let clipped = fill(depth, 0.75, 0.5, preserve);
+            assert!((clipped[0] - 1.0).abs() < 1e-3, "{depth}-bit, preserve {preserve}: {clipped:?}");
+        }
+        for depth in [8, 16, 32] {
+            let below = fill(depth, 0.25, 0.5, preserve);
+            assert!((below[0] - 0.75).abs() < 3e-3, "{depth}-bit below white, preserve {preserve}: {below:?}");
+        }
+    }
+}
+
+/// #11126: a layer mask or an alpha channel of a 32-bit document holds coverage, so a Linear Dodge
+/// fill there still stops at 1, while the layer's colour doesn't.
+#[test]
+fn a_float_linear_dodge_fill_on_a_mask_or_channel_stays_coverage() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 1, "height": 1, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("channel.new", json!({"name": "Alpha 1"})).unwrap();
+    let gray = |v: f32| json!([v, v, v, 1.0]);
+    for target in [json!("mask"), json!({"channel": 0})] {
+        s.execute("edit.fill", json!({"color": gray(0.75), "mode": "normal", "target": target})).unwrap();
+        s.execute("edit.fill", json!({"color": gray(0.5), "mode": "linearDodge", "target": target})).unwrap();
+    }
+    let st = s.active().unwrap();
+    let mask = st.doc.layers.last().unwrap().mask.as_ref().unwrap().surface.read_region(Rect::new(0, 0, 1, 1))[0];
+    let channel = st.doc.channels[0].surface.read_region(Rect::new(0, 0, 1, 1))[0];
+    assert!(mask <= 1.0 && (mask - 1.0).abs() < 1e-3, "the mask stops at full coverage: {mask}");
+    assert!(channel <= 1.0 && (channel - 1.0).abs() < 1e-3, "the alpha channel stops at full coverage: {channel}");
+}
+
+/// #11126 for every tool that paints with a blend mode: in a 32-bit document, 0.5 in Linear Dodge
+/// over 0.75 on a layer keeps 1.25 (Paint Bucket, Gradient, Brush, Edit › Stroke, Fade), and the
+/// same on a layer mask stops at 1 (masks hold coverage).
+#[test]
+fn every_float_paint_tool_keeps_light_above_white_on_colour_only() {
+    let base = || {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.75, 0.75, 0.75, 1.0], "mode": "normal"})).unwrap();
+        s
+    };
+    let half = "#808080";
+    let tools: [(&str, serde_json::Value); 5] = [
+        ("paint.bucket", json!({"x": 20, "y": 20, "color": half, "mode": "linearDodge", "tolerance": 0})),
+        ("paint.gradient", json!({"from": [0, 20], "to": [40, 20], "colors": [half, half], "mode": "linearDodge", "dither": false})),
+        ("paint.stroke", json!({"points": [[20, 20], [21, 20]], "color": half, "size": 12, "hardness": 100, "mode": "linearDodge"})),
+        ("edit.stroke", json!({"width": 4, "color": half, "location": "inside", "mode": "linearDodge"})),
+        ("edit.fade", json!({"opacity": 100, "mode": "linearDodge"})),
+    ];
+    for (cmd, params) in tools {
+        let mut s = base();
+        if cmd == "edit.stroke" {
+            s.execute("select.all", json!({})).unwrap();
+        }
+        if cmd == "edit.fade" {
+            // Fade blends the last edit (a 0.5 fill) over what it replaced (0.75).
+            s.execute("edit.fill", json!({"color": [0.5, 0.5, 0.5, 1.0], "mode": "normal"})).unwrap();
+        }
+        s.execute(cmd, params.clone()).unwrap();
+        let (x, y) = if cmd == "edit.stroke" { (1, 1) } else { (20, 20) };
+        let v = px(&s, x, y)[0];
+        assert!(v > 1.2, "{cmd}: light above white is kept on the layer: {v}");
+    }
+    // On a layer mask: coverage, so it stops at 1.
+    for (cmd, params) in [
+        ("paint.bucket", json!({"x": 20, "y": 20, "color": half, "mode": "linearDodge", "tolerance": 0, "target": "mask"})),
+        ("paint.stroke", json!({"points": [[20, 20], [21, 20]], "color": half, "size": 12, "hardness": 100, "mode": "linearDodge", "target": "mask"})),
+    ] {
+        let mut s = base();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.75, 0.75, 0.75, 1.0], "mode": "normal", "target": "mask"})).unwrap();
+        s.execute(cmd, params).unwrap();
+        let st = s.active().unwrap();
+        let m = st.doc.layers.last().unwrap().mask.as_ref().unwrap().surface.read_region(Rect::new(20, 20, 21, 21))[0];
+        assert!(m <= 1.0 && m > 0.99, "{cmd} on a mask stops at full coverage: {m}");
+    }
+}
+
+/// #11126: a 32-bit fill blends as a layer of the same mode composites, also for the modes the
+/// compositor has its own variants of.
+#[test]
+fn a_float_fill_blends_as_its_layers_composite() {
+    for (mode, name) in [
+        (BlendMode::ColorDodge, "colorDodge"),
+        (BlendMode::ColorBurn, "colorBurn"),
+        (BlendMode::VividLight, "vividLight"),
+        (BlendMode::LinearDodge, "linearDodge"),
+        (BlendMode::Color, "color"),
+    ] {
+        // The second pair tells the compositor's Color Dodge from the generic one: a backdrop of
+        // 1e-6 stays black in the compositor's, and doesn't in the generic one.
+        for (b, c) in [([0.6, 0.3, 1.4, 1.0], [0.5, 0.7, 0.2, 1.0]), ([1e-6, 0.3, 1.4, 1.0], [1.0, 0.7, 0.2, 1.0])] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 1, "height": 1, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
+            s.execute("edit.fill", json!({"color": b, "mode": "normal"})).unwrap();
+            s.execute("edit.fill", json!({"color": c, "mode": name})).unwrap();
+            let got = px(&s, 0, 0);
+            let want = photocraft_compose::psblend::with_hdr(true, || photocraft_compose::psblend::composite(mode, b, c, 1.0));
+            assert!(close(got, want), "{mode:?} over {b:?}: fill {got:?}, layer {want:?}");
+        }
+    }
+}
+
+/// #11126: a 32-bit gradient keeps stop colours above white on a layer's colour, and Stroke Path's
+/// brush keeps a Linear Dodge above white as the Brush does.
+#[test]
+fn float_gradient_stops_and_stroke_path_keep_light_above_white() {
+    let base = || {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 40, "mode": "rgb", "depth": 32, "background": "transparent"})).unwrap();
+        s.execute("edit.fill", json!({"color": [0.5, 0.5, 0.5, 1.0], "mode": "normal"})).unwrap();
+        s
+    };
+    let mut s = base();
+    let bright = [2.0, 2.0, 2.0, 1.0];
+    s.execute("paint.gradient", json!({"from": [0, 20], "to": [40, 20], "colors": [bright, bright], "mode": "linearDodge"})).unwrap();
+    let v = px(&s, 20, 20)[0];
+    assert!((v - 2.5).abs() < 0.01, "a stop of 2 over 0.5 in Linear Dodge: {v}");
+    let mut s = base();
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}})).unwrap();
+    // Stroke Path paints with the Brush tool's settings, its blend mode included.
+    s.tools.brush.mode = BlendMode::LinearDodge;
+    s.execute("path.stroke", json!({"tool": "pencil", "size": 4, "color": [0.75, 0.75, 0.75, 1.0], "opacity": 100})).unwrap();
+    let v = px(&s, 20, 10)[0];
+    assert!((v - 1.25).abs() < 0.01, "Stroke Path in Linear Dodge keeps light above white: {v}");
+}

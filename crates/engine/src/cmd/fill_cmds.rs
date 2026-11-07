@@ -155,7 +155,8 @@ pub fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         s.edit("Fill", |doc, _| {
             let sel = doc.selection.clone();
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
-            blend_into(surf, area, &source, sel.as_ref(), Blend { mode, opacity, keep_alpha: preserve || lock, restore })?;
+            let hdr = crate::channel_cmds::is_color_target(p);
+            blend_into(surf, area, &source, sel.as_ref(), Blend { mode, opacity, keep_alpha: preserve || lock, restore, hdr })?;
             Ok(())
         })
     })?;
@@ -200,13 +201,13 @@ fn read_rgba(src: &Surface, area: Rect, purpose: &str) -> Result<Vec<[f32; 4]>> 
 /// a paste into a layer mask or channel, which keeps the pasted pixels' luminosity (#1035).
 pub(crate) fn composite_over(surf: &mut Surface, src: &Surface, area: Rect, limit: Option<&Surface>) -> Result<()> {
     let source = Source::Pixels(area, read_rgba(src, area, "pasting pixels")?);
-    blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
+    blend_into(surf, area, &source, limit, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false, hdr: false })
 }
 
 /// `area` of `surf` filled with an opaque `color` (Normal, 100 %), weighted by `sel` when given:
 /// Clear on a targeted alpha channel or the Quick Mask (#2734).
 pub(crate) fn fill_color(surf: &mut Surface, area: Rect, color: [f32; 4], sel: Option<&Surface>) -> Result<()> {
-    blend_into(surf, area, &Source::Color(color), sel, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false })
+    blend_into(surf, area, &Source::Color(color), sel, Blend { mode: BlendMode::Normal, opacity: 1.0, keep_alpha: false, restore: false, hdr: false })
 }
 
 /// Reuse Edit › Fill's compositing for Edit › Stroke. The stroke's rasterized band
@@ -222,12 +223,13 @@ pub(crate) fn blend_color_mask(
     mode: BlendMode,
     opacity: f32,
     preserve_transparency: bool,
+    color_target: bool,
 ) -> Result<()> {
     let source = match picked {
         Some(cmyk) if color[3] >= 1.0 => Source::Cmyk { rgba: color, cmyk },
         _ => Source::Color(color),
     };
-    blend_into(surf, area, &source, Some(coverage), Blend { mode, opacity, keep_alpha: preserve_transparency, restore: false })
+    blend_into(surf, area, &source, Some(coverage), Blend { mode, opacity, keep_alpha: preserve_transparency, restore: false, hdr: color_target })
 }
 
 /// The selection filled from its surroundings (`photocraft_algo::content_aware`), as straight
@@ -362,6 +364,10 @@ struct Blend {
     keep_alpha: bool,
     /// Normal mode replaces the pixels, transparency included (History: back to that state).
     restore: bool,
+    /// The target is colour pixels, so a 32-bit float one keeps the values above 1 the float blend
+    /// gives (Linear Dodge, Divide, and Hue, Saturation, Color and Luminosity, #11126). Masks,
+    /// alpha channels and Quick Mask hold coverage, which stays in 0..1 at every depth.
+    hdr: bool,
 }
 
 /// `d` moved towards `c` by `k`, in premultiplied space (straight RGBA in and out).
@@ -454,12 +460,36 @@ impl<'a> Mask<'a> {
     }
 }
 
+/// A straight-alpha composite: `(mode, backdrop, source, opacity)`.
+type Composite = fn(BlendMode, [f32; 4], [f32; 4], f32) -> [f32; 4];
+
+/// The layer compositor's blend in a 32-bit float document.
+fn float_blend(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
+    photocraft_compose::psblend::blend_rgb_as(true, mode, cb, cs)
+}
+
+fn float_over(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    photocraft_color::blend::composite_with(float_blend, mode, backdrop, source, opacity)
+}
+
+fn float_atop(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    photocraft_color::blend::composite_atop_with(float_blend, mode, backdrop, source, opacity)
+}
+
 /// Blend into one tile's encoded pixels (`bytes`, the tile at `origin`) over `tr`.
 fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rect, tr: Rect, source: &Source, mask: Option<&Mask>, b: Blend) {
-    let Blend { mode, opacity, keep_alpha, restore } = b;
+    let Blend { mode, opacity, keep_alpha, restore, hdr } = b;
     let n = fmt.channels();
     let bpp = fmt.bytes_per_pixel();
     let blend = if mode == BlendMode::Dissolve { BlendMode::Normal } else { mode };
+    // Colour pixels of a 32-bit float document blend as its layers composite: values above 1 stay
+    // where the float blend keeps them, with the compositor's own mode variants (#11126). Chosen
+    // once for the tile.
+    let (over, atop): (Composite, Composite) = if hdr && fmt.sample == photocraft_color::SampleType::F32 {
+        (float_over, float_atop)
+    } else {
+        (photocraft_color::blend::composite, photocraft_color::blend::composite_atop)
+    };
     let mut px = [0.0f32; 8];
     let mut enc = [0.0f32; 8];
     // An opaque colour at full coverage in Normal mode just replaces the colour (and the alpha
@@ -510,9 +540,9 @@ fn blend_tile(bytes: &mut [u8], fmt: &photocraft_color::PixelFormat, origin: Rec
             } else if keep {
                 // Alpha kept: source atop, so a half-transparent pixel takes the new colour by the
                 // source alpha alone (#5783).
-                photocraft_color::blend::composite_atop(blend, d, c, k)
+                atop(blend, d, c, k)
             } else {
-                photocraft_color::blend::composite(blend, d, c, k)
+                over(blend, d, c, k)
             };
             if keep {
                 o[3] = d[3];

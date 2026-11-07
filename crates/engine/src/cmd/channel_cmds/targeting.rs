@@ -32,6 +32,13 @@ pub(crate) fn target_of(p: &Value) -> Target {
     }
 }
 
+/// The target is a layer's colour pixels, not a mask, an alpha channel or the Quick Mask (which hold
+/// coverage, in 0..1 at every depth): a 32-bit float document paints it with the float blend, so
+/// light above white stays (#11126).
+pub(crate) fn is_color_target(p: &Value) -> bool {
+    matches!(target_of(p), Target::Pixels)
+}
+
 /// The target is an alpha channel or the Quick Mask (no layer involved).
 pub(crate) fn is_channel_target(p: &Value) -> bool {
     matches!(target_of(p), Target::Alpha(_) | Target::QuickMask)

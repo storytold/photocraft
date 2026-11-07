@@ -130,26 +130,34 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
     let from_live = live.is_some();
     let map = clone_mapping(s, p, &stroke, CMD)?;
     let off = map.offset();
-    let dmg =
-        run_stroke(s, "Clone Stamp", id, p, |pre, surf, sel, lock| {
-            if let Some(l) = live {
-                *surf = l.surface;
-                return Ok(l.bounds);
+    let dmg = run_stroke(s, "Clone Stamp", id, p, |pre, surf, sel, lock| {
+        if let Some(l) = live {
+            *surf = l.surface;
+            return Ok(l.bounds);
+        }
+        if flag(p, "wrap", false) {
+            let mut renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0);
+            renderer.push(&stroke.points);
+            renderer.finish();
+            let before = surf.clone();
+            let bounds = renderer.bounds();
+            return periodic::Composite {
+                target: surf,
+                before: &before,
+                tile: pre.bounds(),
+                opacity: stroke.brush.opacity,
+                selection: sel,
+                lock,
+                mode,
+                color: crate::channel_cmds::is_color_target(p),
             }
-            if flag(p, "wrap", false) {
-                let mut renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0);
-                renderer.push(&stroke.points);
-                renderer.finish();
-                let before = surf.clone();
-                let bounds = renderer.bounds();
-                return periodic::Composite { target: surf, before: &before, tile: pre.bounds(), opacity: stroke.brush.opacity, selection: sel, lock, mode }
-                    .draw(bounds, &stroke.brush, &stroke.points, |r| clone_sample(pre, id, &before, which, r, &map, true, CMD));
-            }
-            let (bounds, cov) = coverage(CMD, &stroke)?;
-            // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
-            let paint = clone_sample(pre, id, surf, which, bounds, &map, flag(p, "wrap", false), CMD)?;
-            Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
-        })?;
+            .draw(bounds, &stroke.brush, &stroke.points, |r| clone_sample(pre, id, &before, which, r, &map, true, CMD));
+        }
+        let (bounds, cov) = coverage(CMD, &stroke)?;
+        // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
+        let paint = clone_sample(pre, id, surf, which, bounds, &map, flag(p, "wrap", false), CMD)?;
+        Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode, crate::channel_cmds::is_color_target(p)))
+    })?;
     let mut r = clone_result(dmg, off, aligned, p, &stroke);
     if from_live {
         r["fromLive"] = json!(true);
@@ -369,6 +377,7 @@ impl LiveRetouch {
             selection: self.sel.as_ref(),
             lock: self.lock,
             mode: self.mode,
+            color: crate::channel_cmds::is_color_target(&self.params),
         }
         .draw(dirty, &self.brush, &self.points, |r| clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, true, cmd))
     }
@@ -387,6 +396,7 @@ impl LiveRetouch {
         };
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         surf.write_region(r, &self.pre_surf.read_region(r));
-        Ok(apply_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode).union(&r))
+        let color = crate::channel_cmds::is_color_target(&self.params);
+        Ok(apply_coverage(surf, r, cov, self.opacity, self.sel.as_ref(), self.lock, &paint, self.mode, color).union(&r))
     }
 }
