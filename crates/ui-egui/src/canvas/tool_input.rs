@@ -359,6 +359,23 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
     true
 }
 
+/// A Magic Wand press. The reference refuses it with an error dialog and an OK button when the
+/// targeted layer is a group and Sample All Layers is off (#11784): the engine already left the
+/// selection and the history alone, so the UI only has to say so. A refused Move is shown the same
+/// way (`move_lock::prompt`).
+fn handle_magic_wand_press(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    let o = app.ui.tool_options.clone();
+    let mode = selection_mode(app, mods);
+    let group_target = app
+        .run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}))
+        .err()
+        .is_some_and(|e| e == photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR);
+    if group_target {
+        let message = tl!(photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR);
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": message}).as_object().cloned().unwrap_or_default());
+    }
+}
+
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     if consumes_cancelled_vector_event(app, ev) {
@@ -477,9 +494,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     return;
                 }
                 Tool::MagicWand => {
-                    let o = app.ui.tool_options.clone();
-                    let mode = selection_mode(app, mods);
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+                    handle_magic_wand_press(app, x, y, mods);
                     return;
                 }
                 Tool::MagicEraser => {
