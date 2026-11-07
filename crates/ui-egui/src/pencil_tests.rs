@@ -298,6 +298,7 @@ fn b_cycles_brush_pencil_color_replacement_and_mixer_brush() {
     assert_eq!(Tool::from_name("mixerBrush"), Some(Tool::MixerBrush));
 }
 
+/// Erase to History paints the source state in each Eraser mode, even on a layer made since.
 #[test]
 fn the_eraser_with_erase_to_history_paints_the_source_state_in_every_mode_even_on_a_layer_made_since() {
     for mode in ["brush", "pencil", "block"] {
@@ -349,6 +350,7 @@ fn erase_to_history_in_pencil_mode_ignores_the_brush_modes_flow() {
     assert_eq!(crate::retouch_ui::history_brush_params(&app)["flow"], json!(100.0));
 }
 
+/// ⌥ at the press reverses Erase to History for that stroke, and the option itself stays as it was.
 #[test]
 fn alt_at_the_press_reverses_erase_to_history_for_one_eraser_stroke() {
     for (mode, pencil) in [("brush", false), ("pencil", true)] {
@@ -389,6 +391,7 @@ fn alt_at_the_press_reverses_erase_to_history_for_one_eraser_stroke() {
     }
 }
 
+/// A tool key pressed mid-stroke changes neither the stroke's options nor its tip.
 #[test]
 fn a_tool_key_during_an_erase_to_history_stroke_keeps_the_stroke_as_it_began() {
     for (mode, pencil) in [("brush", false), ("pencil", true)] {

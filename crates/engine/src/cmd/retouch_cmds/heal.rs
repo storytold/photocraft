@@ -108,6 +108,8 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
     }
 }
 
+/// `paint.historyBrush`: paints the stroke from the `history_source` surface. With `eraseToHistory`
+/// it is the Eraser's Erase to History, and its History row says History Eraser.
 pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.historyBrush";
     let (stroke, id) = parse_brush(s, p, CMD)?;

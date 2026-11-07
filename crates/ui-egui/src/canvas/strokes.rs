@@ -352,6 +352,8 @@ pub(crate) fn stroke_command(app: &PhotocraftApp, tool: Tool) -> &'static str {
     if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) { "paint.pencil" } else { "paint.stroke" }
 }
 
+/// Starts the live preview of the current drag, from the params its tool commits. `None` without
+/// an active document or drag, or when the tool's preview can't begin.
 pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     static STROKES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let st = app.session.active()?;

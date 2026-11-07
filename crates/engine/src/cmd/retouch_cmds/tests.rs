@@ -744,6 +744,7 @@ fn erase_to_history_on_a_new_layer_without_pixels_names_the_target_not_the_docum
     assert!(err.contains("did not exist"), "{err}");
 }
 
+/// A single shape with a solid fill paints that colour along the whole stroke, past its path.
 #[test]
 fn erase_to_history_paints_a_single_solid_shapes_colour_past_its_path() {
     for depth in [8u64, 16, 32] {
@@ -761,6 +762,7 @@ fn erase_to_history_paints_a_single_solid_shapes_colour_past_its_path() {
     }
 }
 
+/// A single shape without a solid fill paints plain white along the whole stroke, past its path.
 #[test]
 fn erase_to_history_paints_white_past_the_path_of_a_single_shape_without_a_solid_fill() {
     let gradient = json!({"kind": "rect", "rect": [1, 1, 5, 5], "fill": {"gradient": {"stops": [[0, "#ff0000"], [1, "#0000ff"]], "angle": 0}}});
@@ -781,6 +783,7 @@ fn erase_to_history_paints_white_past_the_path_of_a_single_shape_without_a_solid
     }
 }
 
+/// The white past a shape's path holds in every colour mode.
 #[test]
 fn erase_to_history_paints_white_past_a_shapes_path_in_every_colour_mode() {
     for mode in ["cmyk", "gray", "lab"] {
@@ -797,6 +800,7 @@ fn erase_to_history_paints_white_past_a_shapes_path_in_every_colour_mode() {
     }
 }
 
+/// A source state holding two layers refuses a layer it doesn't contain.
 #[test]
 fn erase_to_history_refuses_a_new_layer_from_a_state_holding_two_layers() {
     let mut s = session(40, 20, 8, "rgb");
