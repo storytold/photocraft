@@ -27,7 +27,7 @@ pub fn open_web(app: &mut PhotocraftApp) -> u64 {
         .unwrap_or_else(|| json!({"format": "jpeg", "quality": 60}));
     if let Value::Object(m) = last {
         for (k, v) in m {
-            if !matches!(k.as_str(), "path" | "dir" | "width" | "height" | "percent" | "colorTable" | "colorTableEdits") {
+            if !matches!(k.as_str(), "path" | "dir" | "folder" | "width" | "height" | "percent" | "colorTable" | "colorTableEdits" | "numbers") {
                 f.insert(k, v);
             }
         }
@@ -152,13 +152,14 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
     };
     ui.vertical(|ui| {
         ui.set_width(size.x);
-        let (r, response) = ui.allocate_exact_size((size - egui::vec2(0.0, 42.0)).max(egui::vec2(1.0, 1.0)), egui::Sense::drag());
+        let (r, response) = ui.allocate_exact_size((size - egui::vec2(0.0, 42.0)).max(egui::vec2(1.0, 1.0)), egui::Sense::click_and_drag());
         let response = response.on_hover_cursor(egui::CursorIcon::Grab);
         if let Some(rects) = f.get_mut("__previewRects").and_then(Value::as_array_mut) {
             rects.push(json!([r.left(), r.top(), r.right(), r.bottom()]));
         }
         crate::widgets::checker(ui.painter(), r, 8.0);
-        web_preview::paint(ui, r, &response, &tex, source_size, f);
+        let image = web_preview::paint(ui, r, &response, &tex, source_size, f);
+        web_preview::slices(ui, r, image, &response, &doc, crate::tools::slice_ui::slice_color(app), f);
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
         let (l1, l2) = match (p, info) {
             (None, _) => ("Original".to_string(), format!("{}  ·  {} × {} px", doc.name, doc.size.width, doc.size.height)),
@@ -412,7 +413,15 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(crate::i18n::trn(crate::i18n::current(), nslices as u64, "{n} slice", "{n} slices")).color(t.text_dim));
                     check(ui, f, "html", tl!("Save HTML and Images"), true);
-                    dropdown_str(ui, "web-slices", tl!("Slices"), f, "slices", &[("all", tl!("All Slices")), ("user", tl!("All User Slices"))], 150.0);
+                    dropdown_str(
+                        ui,
+                        "web-slices",
+                        tl!("Slices"),
+                        f,
+                        "slices",
+                        &[("all", tl!("All Slices")), ("user", tl!("All User Slices")), ("selected", tl!("Selected Slices"))],
+                        150.0,
+                    );
                 }
             });
         });
@@ -551,22 +560,26 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
         }
         Ok(())
     };
-    let mut p = params(f);
+    let has_slices = app.session.active().is_some_and(|st| !st.doc.slices.is_empty());
+    let mut p = web_params(f, has_slices)?;
     authorize(&p)?;
     // Confirmation may follow a field edit without an intervening frame (Enter or automation).
     let mut fields = f.clone();
     web_preview::prepare_table(app, &mut fields)?;
-    let prepared = params(&fields);
+    let prepared = web_params(&fields, has_slices)?;
     if prepared != p {
         // The policy must also approve the actual palette-bearing export parameters.
         authorize(&prepared)?;
         p = prepared;
     }
-    if p.get("path").is_some() || p.get("dir").is_some() {
+    // A null or empty destination is none: the picker asks for one.
+    if let Some(fields) = p.as_object_mut() {
+        fields.retain(|key, value| !(matches!(key.as_str(), "path" | "dir" | "folder") && (value.is_null() || value.as_str() == Some(""))));
+    }
+    if p.get("path").is_some() || p.get("dir").is_some() || p.get("folder").is_some() {
         return save_for_web(app, p);
     }
     let doc = app.session.active().ok_or("no document")?.doc.clone();
-    let has_slices = !doc.slices.is_empty();
     let html = b(f, "html", true);
     let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
     let base = photocraft_doc::slices::base_name(&doc);
@@ -577,11 +590,42 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
             let dir = path.rfind(['/', '\\']).map(|i| path[..i].to_string()).unwrap_or_else(|| ".".into());
             p["dir"] = json!(dir);
             p["html"] = json!(html);
+        } else if let Some(folder) = kept_name_folder(&path, &base, st.format.ext())
+            // A save that renamed the document meanwhile: the engine would name the file after
+            // the new name, not the one picked.
+            && app.session.active().is_some_and(|state| photocraft_doc::slices::base_name(&state.doc) == base)
+        {
+            // The suggested name kept: only the folder, so a recorded action saves each
+            // document under its own name, as in Photoshop (#5305).
+            p["folder"] = json!(folder);
         } else {
             p["path"] = json!(path);
         }
         save_for_web(app, p)
     })
+}
+
+/// The folder of `path` when its file is the one Save for Web suggests and writes from a folder
+/// alone: `base` (a name usable on Windows as it is) with the format's own extension `ext`.
+fn kept_name_folder(path: &str, base: &str, ext: &str) -> Option<String> {
+    let file = std::path::Path::new(path);
+    let portable = photocraft_engine::file_cmds::portable_device_name(base.to_string()) == base;
+    let kept = portable && file.file_stem().is_some_and(|s| s.to_string_lossy() == base) && file.extension().is_some_and(|e| e.to_string_lossy() == ext);
+    kept.then(|| file.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default())
+}
+
+/// The export parameters: the fields, plus the numbers of the slices selected in the preview
+/// when the document's slices are exported as Selected Slices.
+pub(super) fn web_params(f: &Map<String, Value>, has_slices: bool) -> Result<Value, String> {
+    let mut p = params(f);
+    if has_slices && s(f, "slices", "all") == "selected" {
+        let numbers = web_preview::selected_slices(f);
+        if numbers.is_empty() {
+            return Err(tl!("No slices are selected. Click a slice in the preview to select it.").to_string());
+        }
+        p["numbers"] = json!(numbers);
+    }
+    Ok(p)
 }
 
 /// Runs Save for Web with `p`, which says where to write.

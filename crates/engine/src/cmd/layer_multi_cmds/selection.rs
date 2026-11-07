@@ -49,6 +49,7 @@ pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
 pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>, anchor: Option<LayerId>) -> Result<()> {
+    let before = s.active_layer_stamp();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if let Some(bad) = ids.iter().chain(active.iter()).find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*bad));
@@ -70,6 +71,7 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
         st.saved_revision = st.revision;
     }
     st.last_damage = Some(Rect::EMPTY);
+    s.note_layer_change(before);
     Ok(())
 }
 
@@ -133,6 +135,15 @@ pub(super) fn same_named_targets(doc: &photocraft_doc::Document, name: &str, mov
 /// (omitting `layer`) so that the recorded step applies to whatever layer is targeted when
 /// replayed or exported to `.atn` (#7248).
 pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Option<&[LayerId]>) -> Value {
+    if id == "select.loadSelection"
+        && let Some(layer_id) = p.get("layer").and_then(Value::as_u64).map(LayerId)
+    {
+        return recorded_source_layer(s, p, layer_id);
+    }
+    if crate::actions_record::needs_source_layer(id) {
+        // An explicit layer supplies content, even when it is the sole selection.
+        return p;
+    }
     if id == "layer.select" {
         return recorded_selection(s, p);
     }
@@ -158,9 +169,6 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
             fields.remove("layer");
         }
         return p;
-    }
-    if id == "select.loadSelection" {
-        return recorded_source_layer(s, p, layer_id);
     }
     p
 }

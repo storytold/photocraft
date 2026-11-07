@@ -34,6 +34,8 @@ pub mod ids {
     pub const EXIF: u16 = 1058;
     /// XMP metadata.
     pub const XMP: u16 = 1060;
+    /// Document timeline settings (versioned descriptor).
+    pub const TIMELINE_INFO: u16 = 1075;
 }
 
 /// One image resource block.
@@ -297,6 +299,10 @@ pub enum ResourceData<'a> {
     PixelAspectRatio(PixelAspectRatio),
     /// 1073 and the legacy 1038.
     ColorSamplers(ColorSamplers),
+    /// 1075: document timeline settings; tracks and rational times remain descriptor data.
+    TimelineInfo(crate::VersionedDescriptor),
+    /// A `mani` legacy animation resource in the plug-in resource id range (4000..=4999).
+    Animation(crate::animation::AnimationResource<'a>),
 }
 
 impl ImageResource {
@@ -329,6 +335,8 @@ impl ImageResource {
             ids::XMP => Ok(ResourceData::Xmp(d)),
             ids::PIXEL_ASPECT_RATIO => PixelAspectRatio::from_bytes(d).map(ResourceData::PixelAspectRatio),
             ids::COLOR_SAMPLERS | ids::COLOR_SAMPLERS_OLD => ColorSamplers::from_bytes(d).map(ResourceData::ColorSamplers),
+            ids::TIMELINE_INFO => crate::animation::parse_descriptor(d).map(ResourceData::TimelineInfo),
+            4000..=4999 if d.starts_with(b"mani") => crate::animation::AnimationResource::from_bytes(d).map(ResourceData::Animation),
             _ => return None,
         })
     }

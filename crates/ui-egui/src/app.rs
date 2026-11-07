@@ -13,6 +13,7 @@ mod clipboard;
 mod commands;
 mod control;
 mod files;
+pub(crate) use files::ensure_memory_to_save;
 mod frame;
 mod gpu;
 mod ime;
@@ -46,6 +47,7 @@ impl PhotocraftApp {
             streams: HashMap::new(),
             info_samplers: None,
             monitors: Default::default(),
+            thumbnail_cache: std::sync::Arc::new(std::sync::Mutex::new(crate::home_recent_ui::ThumbnailCache::default())),
             checker: None,
             drag: None,
             cancelled_vector_drag: false,
@@ -76,6 +78,7 @@ impl PhotocraftApp {
             last_stroke_end: None,
             brush_resize: None,
             quick_pick: false,
+            move_pick: None,
             brush_resize_armed: false,
             alt_sampling: false,
             mixer_sampling: false,
@@ -88,6 +91,7 @@ impl PhotocraftApp {
             live_adjust: None,
             frame: 0,
             notices_hovered: false,
+            low_memory: crate::memory_warning::Watch::default(),
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
@@ -98,6 +102,8 @@ impl PhotocraftApp {
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
+            frame_tool_ctx: None,
+            frame_preview: None,
             drop_places: Default::default(),
             view_docs: Vec::new(),
             path_document: None,
@@ -112,6 +118,7 @@ impl PhotocraftApp {
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
+            guide_edit: None,
             filter_preview: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -121,6 +128,7 @@ impl PhotocraftApp {
             color_range: None,
             adjust_preview: None,
             live_adjust_preview: None,
+            levels_clipping: None,
             synthetic: Vec::new(),
             synthetic_batch: None,
             synthetic_reinject: false,
@@ -166,7 +174,9 @@ impl PhotocraftApp {
             raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
+            color_picker_live: Vec::new(),
             pending_after_prompt: None,
+            after_transform_commit: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,
@@ -238,8 +248,12 @@ impl eframe::App for PhotocraftApp {
         self.finish_type_reset_logic(ctx);
     }
 
+    /// Drain the platform's optional WinTab queue before the frame's input is processed.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
+        if let Some(tablet_poll) = self.services.tablet_poll.as_mut() {
+            tablet_poll(raw_input.focused);
+        }
         // An undecorated window gets its caption back when the toolkit changes its flags
         // (maximize, restore, …): take it off again before the frame is laid out (#2246).
         if let Some(window_frame) = self.services.window_frame.as_mut() {

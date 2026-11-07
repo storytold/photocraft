@@ -230,6 +230,23 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
     let _ = app.run("image.analysis.rulerTool", json!({"start": r.start, "end": r.end, "protractor": r.protractor}));
 }
 
+#[cfg(test)]
+#[path = "note_show_on_new_tests.rs"]
+mod note_show_on_new_tests;
+
+/// Create a note at the rounded document position using the Note tool's options.
+/// After `notes.add` succeeds, select the note and open the Notes panel. Enable Show Notes
+/// while leaving the master Extras switch alone.
+pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Value, String> {
+    let a = &app.ui.analysis;
+    let params = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": a.note_color});
+    let result = app.run("notes.add", params)?;
+    app.ui.analysis.note_selected = result["index"].as_u64().map(|v| v as usize);
+    app.ui.analysis.notes = true;
+    app.ui.view.show.notes = true;
+    Ok(result)
+}
+
 /// Pointer input for the Ruler, Count, Note and Color Sampler tools. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let tool = app.active_tool();
@@ -318,12 +335,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                     app.ui.analysis.drag = Some(Drag::Note(i, [x - doc.notes[i].position[0], y - doc.notes[i].position[1]]));
                 }
                 None => {
-                    let a = &app.ui.analysis;
-                    let p = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": [a.note_color[0], a.note_color[1], a.note_color[2]]});
-                    if let Ok(r) = app.run("notes.add", p) {
-                        app.ui.analysis.note_selected = r["index"].as_u64().map(|v| v as usize);
-                        app.ui.analysis.notes = true;
-                    }
+                    let _ = create_note(app, x, y);
                 }
             }
         }
@@ -821,11 +833,8 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(p) = edit {
         let _ = app.run("notes.set", p);
     }
-    if delete
-        && let Some(i) = sel
-        && app.run("notes.delete", json!({"index": i})).is_ok()
-    {
-        app.ui.analysis.note_selected = (n > 1).then(|| i.min(n - 2));
+    if delete && let Some(i) = sel {
+        ask_delete_note(app, i);
     }
     if close {
         app.ui.analysis.notes = false;
@@ -988,3 +997,97 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// Marks the "Delete this note?" alert (#11788).
+const DELETE_NOTE_MARK: &str = "__deleteNote";
+/// Its "Don't show again", kept with the other dialog preferences.
+const DELETE_NOTE_PREF: &str = "notes.delete.confirmation";
+
+/// Delete note `index` of the active document, as the Note tool's ⌫/Delete and the Notes panel's
+/// trash do: after the alert "Delete this note?" ([Yes] [No], "Don't show again"), or at once once
+/// that is ticked. Nothing is selected afterwards.
+pub fn ask_delete_note(app: &mut PhotocraftApp, index: usize) {
+    let skip = app.session.prefs().dialogs.get(DELETE_NOTE_PREF).and_then(|v| v.get("skip")).and_then(Value::as_bool) == Some(true);
+    let Some(doc) = app.session.active().map(|s| s.doc.id.0) else { return };
+    if skip {
+        delete_note(app, index);
+        return;
+    }
+    if app.ui.dialogs.iter().any(|d| owns_delete_note(&d.fields)) {
+        return;
+    }
+    let mut f = Map::new();
+    f.insert(DELETE_NOTE_MARK.into(), json!(true));
+    f.insert("__command".into(), json!("notes.delete"));
+    f.insert("__label".into(), json!(tl!("Delete Note")));
+    f.insert("document".into(), json!(doc));
+    f.insert("index".into(), json!(index));
+    f.insert("skip".into(), json!(false));
+    app.ui.open_dialog(crate::state::DialogKind::Command, f);
+}
+
+fn delete_note(app: &mut PhotocraftApp, index: usize) {
+    match app.run("notes.delete", json!({"index": index})) {
+        Ok(_) => app.ui.analysis.note_selected = None,
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+pub fn owns_delete_note(fields: &Map<String, Value>) -> bool {
+    fields.contains_key(DELETE_NOTE_MARK)
+}
+
+pub fn delete_note_body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    ui.label(tl!("Delete this note?"));
+    ui.add_space(8.0);
+    let mut skip = fields.get("skip").and_then(Value::as_bool).unwrap_or(false);
+    ui.checkbox(&mut skip, tl!("Don't show again"));
+    fields.insert("skip".into(), json!(skip));
+}
+
+/// Yes: the note goes (one "Delete Note" step), and "Don't show again" is remembered.
+pub fn confirm_delete_note(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    let index = fields.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or(tl!("No note to delete"))?;
+    let doc = app.session.active().map(|s| (s.doc.id.0, s.doc.notes.len()));
+    if doc.map(|d| d.0) != fields.get("document").and_then(Value::as_u64) || doc.is_none_or(|d| index >= d.1) {
+        return Err(tl!("The document or its notes changed. Please delete the note again.").into());
+    }
+    let result = app.run("notes.delete", json!({"index": index}))?;
+    app.ui.analysis.note_selected = None;
+    if fields.get("skip").and_then(Value::as_bool) == Some(true) {
+        app.session.edit_prefs(|prefs| {
+            prefs.dialogs.insert(DELETE_NOTE_PREF.into(), json!({"skip": true}));
+        });
+        if let Err(error) = crate::prefs_ui::save_preferences(app) {
+            app.ui.status = crate::i18n::fmt(tl!("Note deleted, but the preference could not be saved: {error}"), &[("error", &error)]);
+            app.ui.status_error = true;
+        }
+    }
+    Ok(result)
+}
+
+/// The Note tool with a note selected: ⌫/Delete asks to delete the note (#11788), never the
+/// layer (Delete Layer) or the pixels (Edit › Clear). Text fields keep the keys.
+pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    use crate::shortcut_dispatch::Focus;
+    let Some(index) = app.ui.analysis.note_selected else { return false };
+    if app.ui.tool != Tool::Note || app.ui.text_edit.is_some() || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget) {
+        return false;
+    }
+    if app.session.active().is_none_or(|s| index >= s.doc.notes.len()) {
+        return false;
+    }
+    let mods = ctx.input(|i| i.modifiers);
+    if !mods.is_none() || !ctx.input_mut(|i| i.consume_key(mods, egui::Key::Delete) || i.consume_key(mods, egui::Key::Backspace)) {
+        return false;
+    }
+    ask_delete_note(app, index);
+    true
+}
+
+#[cfg(test)]
+#[path = "note_delete_key_tests.rs"]
+mod note_delete_key_tests;

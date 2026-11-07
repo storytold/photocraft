@@ -440,7 +440,7 @@ pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
             crate::notices::error(app, format!("{}: {err}", e.label));
         }
         photocraft_engine::jobs::JobOutcome::Cancelled => {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
     }
@@ -455,7 +455,7 @@ pub(super) fn cancel(app: &mut PhotocraftApp) {
     {
         app.session.close(index);
         app.sync_views();
-        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &raw.name)]);
+        app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &raw.name)]);
         app.ui.status_error = false;
     }
 }

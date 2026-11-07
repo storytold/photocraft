@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use photocraft_doc::{Document, Fill, Layer, LayerContent, TextLayer};
+use photocraft_doc::{Document, Fill, GradientStyle, Layer, LayerContent, TextLayer};
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_raster::Surface;
 
@@ -52,8 +52,12 @@ fn map_angle(a: &Affine, deg: f32) -> f32 {
 }
 
 fn map_fill(a: &Affine, f: &mut Fill) {
-    if let Fill::Gradient { angle, offset, .. } = f {
+    if let Fill::Gradient { angle, offset, style, reverse, .. } = f {
         *angle = map_angle(a, *angle);
+        // An Angle gradient sweeps clockwise from its angle; a mirror turns the sweep around.
+        if *style == GradientStyle::Angle && a.m[0] * a.m[3] - a.m[1] * a.m[2] < 0.0 {
+            *reverse = !*reverse;
+        }
         // The centre offset (a fraction of the frame) turns with the canvas: exact for 90° turns
         // and flips, where the frame's sides swap with the axes. Scale (Image Size) resizes the
         // frame too, so only each axis's direction applies.
@@ -138,6 +142,26 @@ pub(crate) fn retarget_type_resolution(doc: &mut Document, dpi: f32) {
         }
         retag_text(dpi, t);
     });
+    // The styles travelling with the copies scale the same way: a style a copy brings to a
+    // document that lacks it defines the rewritten size, so the copy has no local override.
+    let st = &mut doc.text_styles;
+    let sets = st
+        .character
+        .iter_mut()
+        .map(|c| &mut c.attrs)
+        .chain(st.paragraph.iter_mut().chain([&mut st.basic]).flat_map(|p| [&mut p.para_attrs, &mut p.char_attrs]));
+    for attrs in sets {
+        for (key, v) in attrs.iter_mut() {
+            let Some(n) = v.as_f64().filter(|n| n.is_finite()) else { continue };
+            let n = n as f32;
+            let scaled = match key.as_str() {
+                "size_pt" | "leading_pt" => point_size(n, k),
+                "baseline_shift_pt" | "first_line_indent_pt" | "start_indent_pt" | "end_indent_pt" | "space_before_pt" | "space_after_pt" => grown(n, k),
+                _ => continue,
+            };
+            *v = serde_json::json!(scaled);
+        }
+    }
 }
 
 /// A positive size in points times `k`, kept finite and above zero (a tiny ratio must not make
@@ -156,6 +180,14 @@ fn grown(v: f32, k: f64) -> f32 {
 /// the parts Free Transform (`transform_layer`) doesn't move are touched: unlinked vector masks,
 /// gradient fill angles, effect reference points and artboards.
 pub(crate) fn transform_layer_geometry(l: &mut Layer, a: &Affine, content: bool, dpi: f32) {
+    if content && let Some(f) = &mut l.frame {
+        f.transform = a.mul(&f.transform);
+        // Past `Frame::valid`'s bounds it would no longer load; the vector mask, moved below,
+        // keeps the clip as a plain masked group.
+        if !f.valid() {
+            l.frame = None;
+        }
+    }
     if let Some(vm) = l.vector_mask.as_mut()
         && (content || !vm.linked)
     {

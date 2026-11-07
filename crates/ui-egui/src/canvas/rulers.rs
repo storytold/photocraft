@@ -218,7 +218,7 @@ pub fn guide_cursor(xf: &ViewXform, vertical: bool) -> egui::CursorIcon {
 }
 
 /// `doc`'s guides, when its window shows them (`shown`: View › Show › Guides there), and New Guide
-/// Layout's preview and a guide being dragged either way.
+/// Layout's preview, an open New Guide edit session and a guide being dragged either way.
 pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document, shown: bool) {
     let clip = painter.clip_rect();
     // A guide being dragged or selected is the active document's, not this tile's.
@@ -226,7 +226,8 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
     let drag = app.guide_drag.filter(|_| active);
     let g = &app.session.prefs().guides_grid_and_slices;
     let preview = crate::guide_layout_ui::preview(app, doc);
-    let guides = preview.as_ref().map(|(guides, _)| guides).unwrap_or(&doc.guides);
+    let edit = crate::new_guide_ui::edit_preview(app, doc);
+    let guides = edit.or_else(|| preview.as_ref().map(|(guides, _)| guides)).unwrap_or(&doc.guides);
     let (guide, style) =
         (preview.as_ref().map(|(_, color)| *color).unwrap_or_else(|| pref_color(&g.guide_color, Color32::from_rgb(74, 255, 255))), g.guide_style);
     let line = |vertical: bool, pos: f64, color: Color32| {
@@ -236,12 +237,12 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
     // A guide given a colour in New Guide keeps it; the rest use the preference colour (or, while
     // New Guide Layout previews, the colour it will set). The selected guide is Photoshop's blue.
     let own = |vertical: bool, p: f64| {
-        if active && crate::guide_select::is_selected(app, vertical, p) {
+        if active && edit.is_none() && crate::guide_select::is_selected(app, vertical, p) {
             return crate::guide_select::SELECTED_COLOR;
         }
         guides.color(vertical, p).map_or(guide, |[r, g, b]| Color32::from_rgb(r, g, b))
     };
-    if shown || preview.is_some() {
+    if shown || preview.is_some() || edit.is_some() {
         for (vertical, list) in [(true, &guides.vertical), (false, &guides.horizontal)] {
             for (i, p) in list.iter().enumerate() {
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {

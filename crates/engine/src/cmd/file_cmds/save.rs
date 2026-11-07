@@ -29,6 +29,8 @@ pub(crate) struct SaveOpts {
     /// TIFF: Save Transparency (`"tiffTransparency": bool`); unset, the transparency is kept
     /// unless the document has alpha or spot channels ([`photocraft_io::ExportOptions::tiff_transparency`]).
     pub tiff_transparency: Option<bool>,
+    /// Protect RGB Targa24 alpha and flat-TIFF transparency for Save and Close; not a user option.
+    pub preserve_alpha: bool,
     /// TIFF: Save Image Pyramid (`"tiffPyramid": bool`); unset, off.
     pub tiff_pyramid: bool,
     /// DDS: the compression and whether to write the mip chain (`"ddsCompression"`,
@@ -55,6 +57,7 @@ impl Default for SaveOpts {
             dpx_bits: None,
             tiff_compression: None,
             tiff_transparency: None,
+            preserve_alpha: false,
             tiff_pyramid: false,
             dds: photocraft_io::DdsOptions::default(),
             image_previews: true,
@@ -69,7 +72,8 @@ impl SaveOpts {
     /// `jpegFormat` it doesn't name or a `tgaBits` other than 24 or 32 is an error); the image
     /// previews and the PSD merged image from the session's File Handling preferences (Ask When
     /// Saving has no dialog here, so it saves them, as Photoshop's Save As checkbox and its
-    /// Maximize Compatibility checkbox both start on). The `.pcraft` full-size composite comes from
+    /// Maximize Compatibility checkbox both start on); `maximizeCompatibility` decides the merged
+    /// image for this save instead. The `.pcraft` full-size composite comes from
     /// `pcraftFullComposite`, or without it from the File Handling preference.
     pub(crate) fn from_params(s: &Session, p: &Value, cmd: &str) -> Result<Self> {
         let file_handling = &s.prefs().file_handling;
@@ -81,10 +85,11 @@ impl SaveOpts {
             dpx_bits: dpx_bits_param(p, cmd)?,
             tiff_compression: tiff_compression_param(p, cmd)?,
             tiff_transparency: tiff_bool_param(p, "tiffTransparency", cmd)?,
+            preserve_alpha: false,
             tiff_pyramid: tiff_bool_param(p, "tiffPyramid", cmd)?.unwrap_or(false),
             dds: dds_param(p, cmd)?.unwrap_or_default(),
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
-            psd_maximize_compatibility: file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never,
+            psd_maximize_compatibility: maximize_compatibility_param(p, cmd)?.unwrap_or(file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never),
             pcraft_full_composite: pcraft_full_composite_param(p, cmd)?.unwrap_or(file_handling.pcraft_full_composite),
         })
     }
@@ -124,6 +129,19 @@ pub fn pcraft_full_composite_param(p: &Value, cmd: &str) -> Result<Option<bool>>
             .as_bool()
             .map(Some)
             .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`pcraftFullComposite` must be true or false, got {v}") }),
+    }
+}
+
+/// One save's Maximize Compatibility in `p` (`"maximizeCompatibility": bool`, Photoshop's checkbox
+/// when saving a PSD/PSB; absent or null: the File Handling preference decides). Anything else is
+/// a bad parameter of command `cmd` (#8064).
+pub fn maximize_compatibility_param(p: &Value, cmd: &str) -> Result<Option<bool>> {
+    match p.get("maximizeCompatibility") {
+        None | Some(Value::Null) => Ok(None),
+        Some(v) => v
+            .as_bool()
+            .map(Some)
+            .ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`maximizeCompatibility` must be true or false, got {v}") }),
     }
 }
 
@@ -216,6 +234,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     let mut opts = photocraft_io::ExportOptions {
         tiff_layers: save.tiff_layers,
         tiff_transparency: save.tiff_transparency,
+        preserve_alpha: save.preserve_alpha,
         tga_bits: save.tga_bits,
         image_previews: save.image_previews,
         psd_maximize_compatibility: save.psd_maximize_compatibility,
@@ -250,6 +269,13 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
 
 pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
     let (bytes, warnings) = encode(doc, path, save)?;
+    write_file(path, &bytes)?;
+    Ok(warnings)
+}
+
+/// Save Batch bytes in the chosen format even when its naming rules omit or replace the suffix.
+pub(crate) fn save_doc_as(doc: &Document, path: &str, format: &str, save: impl Into<SaveOpts>) -> Result<Vec<String>> {
+    let (bytes, warnings) = encode(doc, format, save)?;
     write_file(path, &bytes)?;
     Ok(warnings)
 }
