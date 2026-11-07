@@ -543,6 +543,12 @@
 	Timeline	Aikajana
 	Tool Presets	Työkalujen esiasetukset
 	Tools	Työkalut
+	Contextual Task Bar	Kontekstuaalinen tehtäväpalkki
+	Hide bar	Piilota palkki
+	Reset bar position	Palauta palkin sijainti
+	Pin bar position	Kiinnitä palkin sijainti
+	Move bar	Siirrä palkkia
+	More options	Lisää vaihtoehtoja
 	Libraries	Kirjastot
 	3D	3D
 	Toolbars	Työkalurivit
@@ -1215,6 +1221,7 @@
 	Path to Illustrator…	Polku Illustratoriin…
 	Make Work Path	Luo työpolku
 	Make Selection	Luo valinta
+	Make Shape	Luo muoto
 	Fill Path	Täytä polku
 	Stroke Path	Piirrä polun reunaviiva
 	Clipping Path	Leikkauspolku
@@ -1632,6 +1639,7 @@
 	Move Tool	Siirtotyökalu
 	Could not use the move tool because the layer is locked.	Siirtotyökalua ei voitu käyttää, koska taso on lukittu.
 	Could not complete the Free Transform command because the layer is locked.	Vapaa muunnos -komentoa ei voitu suorittaa, koska taso on lukittu.
+	Could not transform because the layer is locked.	Muuntaminen ei onnistunut, koska taso on lukittu.
 	Rectangular Marquee Tool	Suorakulmainen valintakehys
 	Elliptical Marquee Tool	Elliptinen valintakehys
 	Single Row Marquee Tool	Yhden rivin valintakehys
@@ -2062,7 +2070,7 @@
 	Vertical Centers	Pystykeskikohdat
 	Video Frames to Layers…	Videoruudut tasoiksi…
 	WIA Support…	WIA-tuki…
-	Working CMY Plates	Työ-CMY-levy
+	Working CMY Plates	Työ-CMY-levyt
 
 # tl! literals (third pass)
 	Absolute	Absoluuttinen
@@ -4809,3 +4817,12 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.
 	A picked document is no longer open.	Yksi valituista asiakirjoista ei ole enää auki.
 	A picked document is no longer a grayscale document of the same size.	Yksi valituista asiakirjoista ei ole enää samankokoinen harmaasävyasiakirja.
+# Move tool options bar (#11381)
+	Align top edges	Tasaa yläreunat
+	Align vertical centers	Tasaa pystykeskikohdat
+	Align bottom edges	Tasaa alareunat
+	Distribute vertically	Jaa pystysuunnassa
+	Distribute horizontally	Jaa vaakasuunnassa
+	Show layer bounds on hover	Näytä tason rajat osoitettaessa
+	Expand layer group on click	Laajenna tasoryhmä napsautuksella
+	Show hover bounds from Layers	Näytä rajat osoitettaessa Tasot-paneelista

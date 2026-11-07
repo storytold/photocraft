@@ -752,7 +752,7 @@
 	Working Magenta Plate	Robocza płyta magenty
 	Working Yellow Plate	Robocza płyta żółci
 	Working Black Plate	Robocza płyta czerni
-	Working CMY Plates	Robocza płyta CMY
+	Working CMY Plates	Robocze płyty CMY
 	Legacy Macintosh RGB (Gamma 1.8)	Starszy Macintosh RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Standardowy RGB dla Internetu (sRGB)
 	Monitor RGB	RGB monitora
@@ -846,7 +846,7 @@
 	Consolidate All to Tabs	Połącz wszystko w karty
 	Float in Window	Odłącz do okna
 	Float All in Windows	Odłącz wszystko do okien
-	New Window	Nowe okno dla dokumentu
+	New Window	Nowe okno
 	Workspace	Obszar roboczy
 	Essentials	Podstawowe
 	Graphic and Web	Grafika i Internet
@@ -908,6 +908,12 @@
 	Timeline	Oś czasu
 	Tool Presets	Ustawienia wstępne narzędzi
 	Tools	Narzędzia
+	Contextual Task Bar	Kontekstowy pasek zadań
+	Hide bar	Ukryj pasek
+	Reset bar position	Resetuj położenie paska
+	Pin bar position	Przypnij położenie paska
+	Move bar	Przesuń pasek
+	More options	Więcej opcji
 	About PhotoCraft	O programie PhotoCraft
 	PhotoCraft Website	Strona internetowa PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft na GitHubie
@@ -1868,6 +1874,7 @@
 	Move Tool	Narzędzie Przesunięcie
 	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
 	Could not complete the Free Transform command because the layer is locked.	Nie można ukończyć polecenia Dowolne przekształcanie, ponieważ warstwa jest zablokowana.
+	Could not transform because the layer is locked.	Nie można przekształcić, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -2525,6 +2532,7 @@
 	Path to Illustrator…	Ścieżka do Illustratora…
 	Make Work Path	Utwórz ścieżkę roboczą
 	Make Selection	Utwórz zaznaczenie
+	Make Shape	Utwórz kształt
 	Fill Path	Wypełnij ścieżkę
 	Stroke Path	Obrysuj ścieżkę
 	Clipping Path	Ścieżka przycinająca
@@ -4216,3 +4224,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wybierz inny dokument dla każdego kanału.
 	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
 	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.
+# Move tool options bar (#11381)
+	Align top edges	Wyrównaj górne krawędzie
+	Align vertical centers	Wyrównaj środki w pionie
+	Align bottom edges	Wyrównaj dolne krawędzie
+	Distribute vertically	Rozmieść w pionie
+	Distribute horizontally	Rozmieść w poziomie
+	Show layer bounds on hover	Pokaż granice warstwy po najechaniu
+	Expand layer group on click	Rozwiń grupę warstw po kliknięciu
+	Show hover bounds from Layers	Pokaż granice po najechaniu z panelu Warstwy
