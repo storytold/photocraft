@@ -4705,3 +4705,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Scegli un documento diverso per ogni canale.
 	A picked document is no longer open.	Uno dei documenti scelti non è più aperto.
 	A picked document is no longer a grayscale document of the same size.	Uno dei documenti scelti non è più un documento in scala di grigio delle stesse dimensioni.
+# Move tool options bar (#11381)
+	Align top edges	Allinea i bordi superiori
+	Align vertical centers	Allinea i centri verticali
+	Align bottom edges	Allinea i bordi inferiori
+	Distribute vertically	Distribuisci verticalmente
+	Distribute horizontally	Distribuisci orizzontalmente
+	Show layer bounds on hover	Mostra i limiti del livello al passaggio del mouse
+	Expand layer group on click	Espandi il gruppo di livelli al clic
+	Show hover bounds from Layers	Mostra i limiti al passaggio dal pannello Livelli

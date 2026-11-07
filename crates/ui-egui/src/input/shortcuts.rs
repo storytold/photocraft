@@ -485,9 +485,9 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if crate::canvas::cancel_mixer_on_context_change(app, ctx) {
         return false;
     }
-    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key brings
-    // it back later (#2608).
-    app.ui.remember_group_tool();
+    // However the tool was picked (toolbar, flyout, shortcut, automation), its group's key and its
+    // toolbar slot bring it back later (#2608). A temporary tool is no choice, so it isn't noted.
+    app.ui.remember_group_tool(crate::tool_memory::selected(app));
     crate::canvas::polygon_cancel_stale(app);
     // Camera Raw is modal like Photoshop's filter dialog: no application shortcut (Save, Undo,
     // tools) runs beneath it, and it handles its own keys (Y, U, O, S). Unlike the other dialogs
@@ -745,6 +745,10 @@ fn handle_object_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool
     if crate::slice_ui::keys(app, ctx) {
         return true;
     }
+    // A note selected with the Note tool: ⌫/Delete asks to delete the note, not the layer (#11788).
+    if crate::analysis_ui::note_keys(app, ctx) {
+        return true;
+    }
     // A selected smart filter row: ⌫/Delete removes the filter, not its smart object (#4751).
     crate::smart_ui::keys(app, ctx)
 }
@@ -926,8 +930,10 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
                 Some(i) => group[(i + 1) % group.len()],
                 None => app
                     .ui
-                    .group_tool(t.key())
-                    .filter(|last| group.contains(last))
+                    .group_tools
+                    .iter()
+                    .copied()
+                    .find(|last| group.contains(last))
                     .unwrap_or_else(|| group.iter().copied().min_by_key(|tool| crate::panels::toolbar::toolbar_position(*tool)).unwrap_or(t)),
             };
             crate::tool_memory::ended_by_tool(app);

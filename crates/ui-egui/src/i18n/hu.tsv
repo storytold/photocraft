@@ -4513,3 +4513,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
 	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
 	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
+# Move tool options bar (#11381)
+	Align top edges	Felső szélek igazítása
+	Align vertical centers	Függőleges középpontok igazítása
+	Align bottom edges	Alsó szélek igazítása
+	Distribute vertically	Egyenletes elosztás függőlegesen
+	Distribute horizontally	Egyenletes elosztás vízszintesen
+	Show layer bounds on hover	Réteghatárok megjelenítése rámutatáskor
+	Expand layer group on click	Rétegcsoport kibontása kattintásra
+	Show hover bounds from Layers	Határok megjelenítése a Rétegek panelről rámutatáskor
