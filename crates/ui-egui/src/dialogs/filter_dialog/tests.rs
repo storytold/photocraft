@@ -159,6 +159,30 @@ fn only_direction_angles_get_the_dial() {
 }
 
 #[test]
+fn smart_sharpen_greys_out_the_angle_unless_it_removes_motion_blur() {
+    let cmd = "filter.sharpen.smartSharpen";
+    let fields = |remove: Option<&str>| {
+        let mut f = Map::new();
+        if let Some(r) = remove {
+            f.insert("remove".into(), json!(r));
+        }
+        f
+    };
+    for (remove, inactive) in [(None, true), (Some("gaussianBlur"), true), (Some("lensBlur"), true), (Some("motionBlur"), false)] {
+        let f = fields(remove);
+        assert_eq!(param_inactive(cmd, "angle", &f), inactive, "{remove:?}");
+        for key in ["amount", "radius", "reduceNoise", "remove"] {
+            assert!(!param_inactive(cmd, key, &f), "{remove:?} {key}");
+        }
+    }
+    assert!(!param_inactive("filter.blur.motionBlur", "angle", &fields(None)), "other filters are never greyed out");
+    // The Remove menu reads as in Photoshop.
+    let remove = parse_spec(photocraft_engine::commands::find(cmd).unwrap().params).into_iter().find(|p| p.key == "remove").unwrap();
+    let Kind::Choice { options, .. } = remove.kind else { panic!("Remove is a menu") };
+    assert_eq!(options.iter().map(|o| source_label(o)).collect::<Vec<_>>(), ["Gaussian Blur", "Lens Blur", "Motion Blur"]);
+}
+
+#[test]
 fn restores_only_valid_previous_filter_choices() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.session.prefs.edit(|prefs| {

@@ -1,10 +1,13 @@
-//! Unsharp Mask, Smart Sharpen (basic), High Pass.
+//! Unsharp Mask, Smart Sharpen (Gaussian unsharp, or Richardson–Lucy deconvolution for Lens and Motion Blur), High Pass.
 
 use photocraft_geom::Rect;
 
-use crate::Ctx;
 use crate::blur::{conv_sep, gaussian_kernel};
 use crate::image::Image;
+use crate::{Ctx, SharpenRemove};
+
+pub(crate) mod deconv;
+mod smallfft;
 
 pub(crate) mod exact;
 
@@ -38,15 +41,33 @@ pub(crate) fn unsharp(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f3
     exact::run(src, out, ctx, amount, radius, threshold, &photocraft_raster::Interrupt::NONE).unwrap_or_default()
 }
 
-pub(crate) fn smart(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f32, reduce_noise: f32) -> Vec<f32> {
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn smart(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f32, reduce_noise: f32, remove: SharpenRemove, angle: f32) -> Vec<f32> {
     let k = amount / 100.0;
     let nr = (reduce_noise / 100.0).clamp(0.0, 1.0);
-    with_blur(src, out, ctx, radius, |o, b| {
-        let d = o - b;
-        // Suppress small (noise-level) differences.
-        let keep = 1.0 - nr * (-(d.abs() * 40.0)).exp();
-        o + k * d * keep
-    })
+    // Suppress small (noise-level) differences.
+    let keep = |d: f32| 1.0 - nr * (-(d.abs() * 40.0)).exp();
+    if remove == SharpenRemove::Gaussian {
+        return with_blur(src, out, ctx, radius, |o, b| {
+            let d = o - b;
+            o + k * d * keep(d)
+        });
+    }
+    let taps = deconv::kernel(remove, radius, angle);
+    let sharp = deconv::deconvolve(src, out, ctx, &taps, deconv::ITERATIONS);
+    let mut res = src.crop(out);
+    let n = src.ch;
+    let cc = if ctx.alpha { n.saturating_sub(1) } else { n };
+    for (px, sh) in res.chunks_exact_mut(n.max(1)).zip(sharp.chunks_exact(n.max(1))) {
+        if ctx.alpha && px.last().is_none_or(|a| *a <= 0.0) {
+            continue;
+        }
+        for (p, s) in px.iter_mut().zip(sh).take(cc) {
+            let d = s - *p;
+            *p += k * d * keep(d);
+        }
+    }
+    res
 }
 
 pub(crate) fn high_pass(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> {

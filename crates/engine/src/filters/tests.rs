@@ -122,6 +122,58 @@ fn every_filter_command_runs_changes_pixels_and_undoes() {
 }
 
 #[test]
+fn smart_sharpen_removes_lens_and_motion_blur_by_deconvolution() {
+    let gaussian = {
+        let mut s = session();
+        paint_pattern(&mut s);
+        s.execute("filter.sharpen.smartSharpen", json!({"amount": 100, "radius": 2})).unwrap();
+        active_pixels(&s)
+    };
+    for params in [json!({"amount": 100, "radius": 2, "remove": "lensBlur"}), json!({"amount": 100, "radius": 3, "remove": "motionBlur", "angle": 45})] {
+        let mut s = session();
+        paint_pattern(&mut s);
+        let before = active_pixels(&s);
+        s.execute("filter.sharpen.smartSharpen", params.clone()).unwrap();
+        let after = active_pixels(&s);
+        assert_ne!(before, after, "{params}");
+        assert!(after.iter().all(|v| v.is_finite()), "{params}");
+        assert_ne!(after, gaussian, "{params} must not fall back to the unsharp path");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(active_pixels(&s), before, "{params} undoes in one step");
+    }
+}
+
+#[test]
+fn smart_sharpen_checks_its_removal_parameters() {
+    for bad in [
+        json!({"remove": "no-such-blur"}),
+        json!({"remove": "lens"}),
+        json!({"remove": "lensBlur", "radius": 1e9}),
+        json!({"remove": "motionBlur", "angle": 1e30}),
+        json!({"remove": "motionBlur", "angle": 361}),
+        json!({"moreAccurate": true}),
+    ] {
+        let mut s = session();
+        paint_pattern(&mut s);
+        let before = active_pixels(&s);
+        assert!(matches!(s.execute("filter.sharpen.smartSharpen", bad.clone()), Err(crate::EngineError::BadParams { .. })), "{bad}");
+        assert_eq!(active_pixels(&s), before, "{bad} must leave the layer alone");
+    }
+    // The ends of every range run and stay finite.
+    for good in [
+        json!({"remove": "lensBlur", "radius": 64}),
+        json!({"remove": "lensBlur", "radius": 0.1, "amount": 500}),
+        json!({"remove": "motionBlur", "radius": 64, "angle": -360}),
+        json!({"remove": "motionBlur", "radius": 0.1, "angle": 360}),
+    ] {
+        let mut s = session();
+        paint_pattern(&mut s);
+        s.execute("filter.sharpen.smartSharpen", good.clone()).unwrap();
+        assert!(active_pixels(&s).iter().all(|v| v.is_finite()), "{good}");
+    }
+}
+
+#[test]
 fn preset_filters_record_their_own_name() {
     // #528: one-step presets run a generic algorithm but name the step after themselves;
     // the generic commands keep the algorithm's name.

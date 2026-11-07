@@ -106,14 +106,18 @@ pub(super) const NO_OPTIONS: [&str; 11] = ["Blr ", "BlrM", "Avrg", "Dspc", "FndE
 // Dust & Scratches (filterID DstS): DstS { Rds  long, Thsh long }
 // ```
 //
-// PhotoCraft's Smart Sharpen removes a Gaussian blur, non-legacy: Lens Blur, Motion Blur, legacy
-// mode, Shadow/Highlight settings or any other key keep the whole entry verbatim. `presetKind`
+// PhotoCraft's Smart Sharpen is the non-legacy filter removing a Gaussian, Lens or Motion blur
+// (`remove`, with Motion's `angle`): legacy mode, Shadow/Highlight settings or any other key keep
+// the whole entry verbatim. `presetKind`
 // only names the dialog's preset: it is accepted on open but not kept (the engine takes no such
 // parameter) and not written (Photoshop leaves it out of entries with explicit values).
 
 pub(super) const SMART_SHARPEN: &str = "smartSharpen";
 
-const SMART_SHARPEN_KEYS: [&str; 6] = ["presetKind", "useLegacy", "Amnt", "Rds ", "noiseReduction", "blur"];
+const SMART_SHARPEN_KEYS: [&str; 7] = ["presetKind", "useLegacy", "Amnt", "Rds ", "noiseReduction", "blur", "Angl"];
+
+/// Smart Sharpen's `blurType` codes ↔ the engine's `remove` values.
+pub(super) const SMART_SHARPEN_BLUR: [(&str, &str); 3] = [("GsnB", "gaussianBlur"), ("lensBlur", "lensBlur"), ("MtnB", "motionBlur")];
 
 /// A `UntF` value in `unit`, finite and within `lo..=hi`.
 fn unit_in(d: &Descriptor, key: &str, u: &[u8; 4], lo: f64, hi: f64) -> Option<f64> {
@@ -130,13 +134,26 @@ fn smart_sharpen_params(f: &Descriptor) -> Option<J> {
     }
     let Some(Value::Boolean(false)) = f.get("useLegacy") else { return None };
     let Some(Value::Enumerated { type_id, value }) = f.get("blur") else { return None };
-    if !type_id.is("blurType") || !value.is("GsnB") {
+    if !type_id.is("blurType") {
         return None;
     }
+    let remove = SMART_SHARPEN_BLUR.iter().find(|(code, _)| value.is(code))?.1;
+    // Only Motion Blur has a direction, a whole number of degrees within the dialog's range.
+    let angle = match (remove, f.get("Angl")) {
+        ("motionBlur", Some(Value::Integer(a))) if (-360..=360).contains(a) => Some(*a),
+        (_, None) if remove != "motionBlur" => None,
+        _ => return None,
+    };
     let mut out = Map::new();
     out.insert("amount".into(), json!(unit_in(f, "Amnt", b"#Prc", 1.0, 500.0)?));
     out.insert("radius".into(), json!(unit_in(f, "Rds ", b"#Pxl", 0.1, 64.0)?));
     out.insert("reduceNoise".into(), json!(unit_in(f, "noiseReduction", b"#Prc", 0.0, 100.0)?));
+    if remove != "gaussianBlur" {
+        out.insert("remove".into(), json!(remove));
+    }
+    if let Some(a) = angle {
+        out.insert("angle".into(), json!(a));
+    }
     match f.get("presetKind") {
         None => {}
         Some(Value::Enumerated { type_id, .. }) if type_id.is("presetKindType") => {}
