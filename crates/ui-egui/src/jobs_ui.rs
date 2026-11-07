@@ -440,7 +440,7 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
         }
         JobOutcome::Cancelled => {
             app.jobs.close_after_saves = false;
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", label)]);
             app.ui.status_error = false;
         }
     }
@@ -538,13 +538,13 @@ pub fn try_cancel(app: &mut PhotocraftApp, id: JobId) -> Result<(), CancelRefuse
     // A save that has started replacing the file runs to the end: cancelling it now would leave
     // the file written but the document marked unsaved.
     if r == Err(CancelRefused::Committing) {
-        app.ui.status = crate::i18n::fmt(tl!("{label} is writing the file and can no longer be cancelled"), &[("label", label.as_deref().unwrap_or_default())]);
+        app.ui.status = crate::i18n::fmt(tl!("{label} is writing the file and can no longer be canceled"), &[("label", label.as_deref().unwrap_or_default())]);
         app.ui.status_error = false;
     }
     if r.is_ok() {
         // The event (and its status text) arrives with the next poll; say so now as well.
         if let Some(l) = label {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &l)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &l)]);
             app.ui.status_error = false;
         }
     }
@@ -619,7 +619,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             }
             JobOutcome::Failed(err) => app.open_failed(&tab.name, &err),
             JobOutcome::Cancelled => {
-                app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &tab.name)]);
+                app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &tab.name)]);
                 app.ui.status_error = false;
             }
         }
@@ -643,7 +643,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             crate::file_ui::print_status(app, result);
         }
         JobOutcome::Done(_) if cancelled_batch => {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
         JobOutcome::Done(_) => {
@@ -659,7 +659,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             notices::error(app, format!("{}: {err}", e.label));
         }
         JobOutcome::Cancelled => {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
     }
@@ -986,7 +986,7 @@ fn batch_interrupt_dialog(app: &mut PhotocraftApp, ctx: &egui::Context, id: JobI
         ui.set_width(390.0);
         ui.label(RichText::new(tl!("Batch")).font(crate::theme::semibold(15.0)));
         ui.add_space(8.0);
-        ui.label(RichText::new(tl!("A command was cancelled or stopped during batch processing. Continue with the next file or stop?")).color(t.text_dim));
+        ui.label(RichText::new(tl!("A command was canceled or stopped during batch processing. Continue with the next file or stop?")).color(t.text_dim));
         ui.add_space(14.0);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if crate::widgets::primary_button(ui, tl!("Continue"), 96.0).clicked() {

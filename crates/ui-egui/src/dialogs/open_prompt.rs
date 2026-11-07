@@ -207,7 +207,7 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
         app.jobs.opens.clear();
         app.jobs.batches.clear();
         app.ui.dialogs.retain(|d| !owns(&d.fields) && !owns_damage(&d.fields) && !owns_memory(&d.fields));
-        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
+        app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
         return Ok(json!({"cancelled": dropped}));
     };
@@ -309,7 +309,7 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
         if let Some(pos) = app.prompt_order.iter().position(|p| *p == PromptKind::Open) {
             app.prompt_order.remove(pos);
         }
-        app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
+        app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
     }
     advance(app);
@@ -470,7 +470,7 @@ pub(crate) fn answer_memory(app: &mut PhotocraftApp, accept: bool) -> Result<Val
                     }
                 }
             } else {
-                app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
+                app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &name)]);
                 app.ui.status_error = false;
                 crate::jobs_ui::end_batch(app);
             }
