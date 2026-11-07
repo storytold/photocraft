@@ -46,7 +46,7 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         h.run_steps(2);
         h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color")).click();
         h.run_steps(2);
-        assert!(h.query_by_role_and_label(Role::Label, tr("White Balance: As Shot")).is_some(), "{}: White Balance", lang.code());
+        assert!(h.query_by_role_and_label(Role::Label, tr("White Balance")).is_some(), "{}: White Balance", lang.code());
         for label in ["Temperature", "Tint", "Vibrance", "Saturation"] {
             assert!(h.query_by_role_and_label(Role::Slider, tr(label)).is_some(), "{}: {label}", lang.code());
         }
