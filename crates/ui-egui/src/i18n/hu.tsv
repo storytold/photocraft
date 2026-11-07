@@ -781,7 +781,7 @@
 	Other…	Egyéb…
 	Painting	Festés
 	Panels	Panelek
-	Paragraph Panel	Bekezdés panel
+	Paragraph Panel	Bekezdéspanel
 	Paragraph Styles	Bekezdésstílusok
 	Paragraph Styles Panel	Bekezdésstílusok panel
 	Paste Complete Stroke	Teljes körvonal beillesztése
@@ -902,7 +902,7 @@
 	Swash	Díszbetűk
 	Swatches	Színminták
 	Sync with system	Rendszer szerint
-	System Info…	Rendszerinformáció…
+	System Info…	Rendszeradatok…
 	Target Path	Célútvonal
 	Theme	Téma
 	Tile	Mozaikelrendezés
@@ -1069,8 +1069,8 @@
 	Commit any current edits ({key})	Folyamatban lévő módosítások véglegesítése ({key})
 	Commit current crop operation  ({key})	Körbevágás véglegesítése  ({key})
 	Commit Puppet Warp ({key})	Bábtorzítás véglegesítése ({key})
-	Commit transform	Alakítás véglegesítése
-	Commit transform ({key})	Alakítás véglegesítése ({key})
+	Commit transform	Átalakítás véglegesítése
+	Commit transform ({key})	Átalakítás véglegesítése ({key})
 	Commit warp ({key})	Hajlítás véglegesítése ({key})
 	Condensed	Keskeny
 	Content-Aware	Tartalomérzékeny
@@ -2701,7 +2701,7 @@ cameraRaw	Tint	Színezet
 cameraRaw	Vibrance	Élénkség
 cameraRaw	Whites	Fehérek
 cameraRaw	Yellow	Sárga
-	% of all commits	Commitok aránya (%)
+	% of all commits	Véglegesítések aránya (%)
 	(print to the printer)	(nyomtatás a nyomtatón)
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	A 0 kikapcsolja ezt a küszöböt; a 100 szintnél mélyebben egymásba ágyazott SVG-csoportok mindig raszterizálódnak.
 	12 Columns	12 oszlop
@@ -2718,7 +2718,7 @@ cameraRaw	Yellow	Sárga
 	75%	75%
 	8 bit	8 bites
 	8 Columns	8 oszlop
-	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PR, {commits} commit, +{added} / −{deleted} sor (Δ {delta}), +{binAdded} / −{binDeleted} bináris elem, {first} – {last}
+	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} beolvasztási kérés, {commits} véglegesítés, +{added} / −{deleted} sor (Δ {delta}), +{binAdded} / −{binDeleted} bináris elem, {first} – {last}
 	About	Névjegy
 	Absolute Colorimetric	Abszolút kolorimetrikus
 	Action	Művelet
@@ -2792,7 +2792,7 @@ cameraRaw	Yellow	Sárga
 	Comic Book	Képregény
 	Command	Parancs
 	command or shortcut	parancs vagy billentyűparancs
-	Commits	Commitok
+	Commits	Véglegesítések
 	Company	Cég
 	Compare	Összehasonlítás
 	Compatibility	Kompatibilitás
@@ -2802,7 +2802,7 @@ cameraRaw	Yellow	Sárga
 	Content-Aware Fill needs a selection on a pixel layer	A tartalomérzékeny kitöltéshez kijelölés kell egy pixelrétegen
 	Contents:	Tartalom:
 	Contributors	Közreműködők
-	Contributors: {contributors} · Commits: {commits}	Közreműködők: {contributors} · Commitok: {commits}
+	Contributors: {contributors} · Commits: {commits}	Közreműködők: {contributors} · Véglegesítések: {commits}
 	Convert to sRGB	Átalakítás sRGB-re
 	Cool	Hideg
 	Copies	Példányszám
@@ -2872,7 +2872,7 @@ cameraRaw	Yellow	Sárga
 	Film & Video	Film és videó
 	Finish	Befejezés
 	First	Első
-	First commit	Első commit
+	First commit	Első véglegesítés
 	Fit Image	Kép méretre igazítása
 	Floating point	Lebegőpontos
 	Focal Length35mm	Gyújtótávolság (35 mm)
@@ -2916,7 +2916,7 @@ cameraRaw	Yellow	Sárga
 	Landscape, 6 x 4	Fekvő, 6 x 4
 	Landscape, 7 x 5	Fekvő, 7 x 5
 	Last	Utolsó
-	Last commit	Utolsó commit
+	Last commit	Utolsó véglegesítés
 	Leave as is (don't color manage)	Változatlanul hagyás (nincs színkezelés)
 	Leave empty for automatic size	Automatikus mérethez hagyja üresen
 	Left	Bal
@@ -2934,7 +2934,7 @@ cameraRaw	Yellow	Sárga
 	Make	Gyártó
 	Margin	Margó
 	Matte	Alapszín
-	Merged PRs	Beolvasztott PR-ek
+	Merged PRs	Beolvasztott beolvasztási kérések
 	Metadata	Metaadatok
 	Metal	Metal
 	Millimeters	Milliméter
@@ -3078,7 +3078,7 @@ cameraRaw	Yellow	Sárga
 	sRGB IEC61966-2.1	sRGB IEC61966-2.1
 	Studio light	Studio világos
 	Studio Light	Studio világos
-	System Info	Rendszerinformáció
+	System Info	Rendszeradatok
 	Table	Táblázat
 	Tabloid	Tabloid
 	Targa Options	Targa-beállítások
@@ -3106,7 +3106,7 @@ cameraRaw	Yellow	Sárga
 	Unsaved changes	Nem mentett módosítások
 	Untitled	Névtelen
 	Untitled-1	Névtelen-1
-	URLs	URL-ek
+	URLs	Webcímek
 	Use Default	Alapértelmezés használata
 	Use shift key for tool switch	Eszközváltás a Shift billentyűvel
 	Username	Felhasználónév
@@ -3846,12 +3846,12 @@ cameraRaw	Yellow	Sárga
 	Commit current crop operation  (↵)	Körbevágás véglegesítése  (↵)
 	Commit Perspective Warp (↩)	Perspektivikus torzítás véglegesítése (↩)
 	Commit Puppet Warp (↩)	Bábtorzítás véglegesítése (↩)
-	Commit transform (↩)	Alakítás véglegesítése (↩)
+	Commit transform (↩)	Átalakítás véglegesítése (↩)
 	Commit warp (↩)	Hajlítás véglegesítése (↩)
 	Convert Frames > Video Layers	Képkockák átalakítása > Videórétegek
 	Convert to Grayscale	Átalakítás szürkeárnyalatossá
 	Copper	Réz
-	Copyright Info URL	Szerzői jogi információk URL-je
+	Copyright Info URL	Szerzői jogi információk webcíme
 	Could not open	Nem nyitható meg
 	Country	Ország
 	Create a new layer  (⇧⌘N)	Új réteg létrehozása  (⇧⌘N)
@@ -3953,7 +3953,7 @@ cameraRaw	Yellow	Sárga
 	Keeps the current texture when switching presets.	Előbeállítás váltásakor megtartja a jelenlegi textúrát.
 	Last Modified	Utolsó módosítás
 	Layer Styles	Rétegstílusok
-	Learn More	További információ
+	Learn More	Tudjon meg többet
 	Lens Corrections	Objektívkorrekciók
 	Lens Info	Objektívadatok
 	Limit Playback	Lejátszás korlátozása
@@ -4069,7 +4069,7 @@ cameraRaw	Yellow	Sárga
 	Spacing:	Térköz:
 	Split at Playhead	Felosztás a lejátszófejnél
 	Split Toning	Osztott tónusozás
-	Status Information	Állapotinformáció
+	Status Information	Állapotadatok
 	Step Forward	Lépés előre
 	Stop For Errors	Leállás hiba esetén
 	Subdivisions	Felosztások
@@ -4274,7 +4274,7 @@ cameraRaw	Yellow	Sárga
 	Technique	Technika
 	Chisel Hard	Kemény vésés
 	Chisel Soft	Lágy vésés
-	Open color-less EXR as ACEScg	Színinformáció nélküli EXR megnyitása ACEScg-ként
+	Open color-less EXR as ACEScg	Színadatok nélküli EXR megnyitása ACEScg-ként
 	Do not append "copy" to filename when saving a copy	Ne fűzze a „copy” szót a fájlnévhez másolat mentésekor
 	Save Full-Size Composite in .pcraft Files	Teljes méretű kompozit kép mentése a .pcraft fájlokba
 	Edit Selected Guides	Kijelölt segédvonalak szerkesztése
