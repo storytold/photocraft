@@ -35,7 +35,8 @@ const MAX_SS: f64 = 8.0;
 /// Places a smart object's source image (`src`, its pixels in `src_rect`) in the document:
 /// through `warp` (source space) and then the affine `t` (source → document) in one resampling
 /// pass, an exact shift for whole-pixel translations (so conversions and re-renders are
-/// lossless), bicubic otherwise. A warp samples bilinearly, as the reference application draws a
+/// lossless), a resize into a box snapped to whole pixels when it is only scaled and moved
+/// ([`place_scaled`]), bicubic otherwise. A warp samples bilinearly, as the reference application draws a
 /// warped smart object: with bicubic, the sharp detail of a warp (cell borders, a fold's edges)
 /// came out crisper than its render. Shared by the engine's re-render and PSD export's filter
 /// cache.
@@ -58,7 +59,50 @@ pub fn place_source(
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
         return Ok(crate::resample::translate_surface(src, e.round() as i32, f.round() as i32));
     }
+    if near(b, 0.0)
+        && near(c, 0.0)
+        && let Some(out) = place_scaled(src, src_rect, [a, d, e, f])
+    {
+        return Ok(out);
+    }
     crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::Bicubic)
+}
+
+/// Placed sizes past this (px a side) take the general path, which bounds its own work.
+const MAX_SCALED_SIDE: f64 = (1u32 << 20) as f64;
+
+/// A smart object scaled and moved (no rotation, skew or flip: `[sx, sy, dx, dy]`, source →
+/// document), as the reference application draws one: its box is snapped to whole pixels (its
+/// left and top edges rounded, and its width and height), and the contents are resized to fill
+/// it with Image Size's Bicubic Automatic: Bicubic Sharper where they shrink, Smoother where
+/// they grow. Past the contents' edges the filter reads transparency, and nothing is drawn
+/// outside the box. Measured against the reference application at 16 scales from 10 % to 200 %:
+/// within 0.02 levels. `None` for a flip or a size this path doesn't take.
+fn place_scaled(src: &Surface, src_rect: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Option<Surface> {
+    if src_rect.is_empty() || !(sx > 0.0 && sy > 0.0) {
+        return None;
+    }
+    let (w, h) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
+    let (x0, y0) = ((dx + sx * f64::from(src_rect.x0)).round(), (dy + sy * f64::from(src_rect.y0)).round());
+    let (pw, ph) = ((sx * w).round().max(1.0), (sy * h).round().max(1.0));
+    let fits = |v: f64| v.is_finite() && v.abs() < MAX_SCALED_SIDE;
+    if !(fits(x0) && fits(y0) && fits(pw) && fits(ph)) {
+        return None;
+    }
+    let (x0, y0) = (x0 as i32, y0 as i32);
+    let fmt = src.format();
+    let with_alpha;
+    let src = if fmt.alpha {
+        src
+    } else {
+        with_alpha = src.convert(PixelFormat::new(fmt.mode, fmt.sample, true));
+        &with_alpha
+    };
+    // The contents at the origin, so the resize (about the origin) fills [0, pw) x [0, ph).
+    let at_origin = crate::resample::crop_surface(src, src_rect).translated(-src_rect.x0, -src_rect.y0, src_rect);
+    let resized =
+        if pw == w && ph == h { at_origin } else { crate::resample::resize_surface(&at_origin, pw / w, ph / h, crate::resample::Resample::BicubicAutomatic) };
+    Some(crate::resample::translate_surface(&resized, x0, y0))
 }
 
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
@@ -999,6 +1043,55 @@ mod tests {
             }
         }
         assert!(holes.is_empty(), "{} see-through pixels, e.g. {:?}", holes.len(), &holes[..holes.len().min(5)]);
+    }
+
+    /// The probe the reference application was measured with: a 256 x 32 grey (128) strip with
+    /// 1 px white lines at these columns, placed at (192, 32).
+    fn line_strip() -> Surface {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        let g = 128.0 / 255.0;
+        s.fill_rect(Rect::new(192, 32, 448, 64), &[g, g, g, 1.0]);
+        for x in [8, 41, 73, 106, 138, 171, 203, 236] {
+            s.fill_rect(Rect::new(192 + x, 32, 193 + x, 64), &[1.0, 1.0, 1.0, 1.0]);
+        }
+        s
+    }
+
+    /// The strip scaled horizontally by `k` about x = 320, as Free Transform does it: the row at
+    /// y = 48 composited over black, in levels of 255.
+    fn scaled_strip(k: f64) -> Vec<f64> {
+        let t = photocraft_geom::Affine { m: [k, 0.0, 0.0, 1.0, 320.0 * (1.0 - k), 0.0] };
+        let out = place_source(&line_strip(), Rect::new(192, 32, 448, 64), &t, None).unwrap();
+        (0..640).map(|x| out.pixel(x, 48)).map(|p| if p.is_empty() { 0.0 } else { f64::from(p[0] * p[3]) * 255.0 }).collect()
+    }
+
+    /// A scaled smart object fills a box snapped to whole pixels, as in the reference
+    /// application: a third of 256 px (85.33 px, from 277.33) covers exactly 277..362.
+    #[test]
+    fn a_scaled_smart_object_fills_whole_pixels() {
+        let row = scaled_strip(1.0 / 3.0);
+        assert_eq!(row[276], 0.0);
+        assert!(row[277] > 100.0 && row[361] > 100.0, "{} {}", row[277], row[361]);
+        assert_eq!(row[362], 0.0);
+    }
+
+    /// Shrinking resamples with Bicubic Sharper and enlarging with Bicubic Smoother (Image Size's
+    /// Bicubic Automatic): pixel values the reference application gave for the same strip, line
+    /// at column 41 and the left edge, at 50 % and 150 %. The bicubic warp was 4.75 levels off.
+    #[test]
+    fn scaling_a_smart_object_resamples_as_the_reference_does() {
+        for (k, first, want) in
+            [(0.5, 273, [128.0, 128.0, 114.25, 185.21, 156.19, 119.84, 128.0]), (1.5, 187, [121.32, 127.18, 201.72, 233.25, 158.09, 117.78, 127.15])]
+        {
+            let row = scaled_strip(k);
+            for (i, w) in want.iter().enumerate() {
+                let got = row[first + i];
+                assert!((got - w).abs() < 1.0, "{k}: pixel {}: {got} vs {w}", first + i);
+            }
+        }
+        // The edge pixel reads transparency past the contents, as the reference does.
+        let edge = scaled_strip(0.5)[256];
+        assert!((edge - 121.67).abs() < 1.0, "{edge}");
     }
 
     #[test]
