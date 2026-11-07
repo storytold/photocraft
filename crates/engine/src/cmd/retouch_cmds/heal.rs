@@ -78,6 +78,29 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
         .map_err(|_| EngineError::Other("the target did not exist (as pixels, a mask or a channel) in that history state".into()))
 }
 
+/// `src` in format `fmt` over `r`: the surface itself when the formats match, else only the tiles
+/// `r` touches converted (a small stroke on a large image converts a few tiles, not the whole
+/// source; it reads within `r` exactly as a full conversion would, #11594).
+pub(super) fn source_in_format(src: Surface, fmt: PixelFormat, r: Rect) -> Surface {
+    if src.format() == fmt { src } else { convert_source(&src, fmt, r) }
+}
+
+/// `src` converted to `fmt` over `r` (the tiles `r` touches).
+pub(super) fn convert_source(src: &Surface, fmt: PixelFormat, r: Rect) -> Surface {
+    #[cfg(test)]
+    if FULL_CONVERSION.with(std::cell::Cell::get) {
+        return src.convert(fmt);
+    }
+    src.convert_region(fmt, r)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Tests set this to convert history sources whole, as before #11594: the oracle the
+    /// region-limited conversion must match bit for bit.
+    pub(super) static FULL_CONVERSION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "paint.historyBrush";
     let (stroke, id) = parse_brush(s, p, CMD)?;
@@ -94,10 +117,8 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
             *surf = l.surface;
             return Ok(l.bounds);
         }
-        let fmt = surf.format();
-        let src = if src_surface.format() == fmt { src_surface } else { src_surface.convert(fmt) };
         let (bounds, cov) = coverage(CMD, &stroke)?;
-        let paint = Region::read(&src, bounds);
+        let paint = Region::read(&source_in_format(src_surface, surf.format(), bounds), bounds);
         Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
     })?;
     let mut r = json!({ "damage": damage_json(dmg) });
