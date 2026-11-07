@@ -162,7 +162,10 @@ fn smart_object_context_menu_edits_the_clicked_layer() {
 fn mask_thumbnail_context_menu_acts_on_the_clicked_mask() {
     use crate::PhotocraftApp;
     use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
-    use egui_kittest::{Harness, kittest::Queryable};
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
 
     fn click(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, button: PointerButton) {
         h.hover_at(at);
@@ -195,11 +198,19 @@ fn mask_thumbnail_context_menu_acts_on_the_clicked_mask() {
     let at = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1.center();
     click(&mut h, at, PointerButton::Secondary);
     assert!(h.query_by_label("Blending Options…").is_none(), "the mask menu, not the layer menu");
-    for item in
-        ["Disable Layer Mask", "Delete Layer Mask", "Apply Layer Mask", "Subtract Mask from Selection", "Intersect Mask with Selection", "Select and Mask…"]
-    {
+    for item in [
+        "Disable Layer Mask",
+        "Delete Layer Mask",
+        "Apply Layer Mask",
+        "Copy Layer Mask",
+        "Paste Layer Mask",
+        "Subtract Mask from Selection",
+        "Intersect Mask with Selection",
+        "Select and Mask…",
+    ] {
         h.get_by_label(item);
     }
+    assert!(h.get_by_label("Paste Layer Mask").accesskit_node().is_disabled(), "nothing has been copied yet");
     let at = h.get_by_label("Add Mask to Selection").rect().center();
     click(&mut h, at, PointerButton::Primary);
     let st = h.state().session.active().unwrap();
@@ -408,7 +419,7 @@ fn multi_selection_menu_greys_what_acts_on_one_layer() {
         assert!(!h.get_by_label(label).accesskit_node().is_disabled(), "{label} acts on the selection");
     }
     // Greyed here only for lack of something to act on: no style on the clipboard, no style to clear.
-    for label in ["Paste Layer Style", "Clear Layer Style"] {
+    for label in ["Paste Layer Style", "Clear Layer Style", "Paste Layer Mask"] {
         assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} has nothing to do here");
     }
     // Whatever the clicked layer is, the menu has the same shape: no per-layer mask or Smart Object items.
@@ -421,9 +432,14 @@ fn multi_selection_menu_greys_what_acts_on_one_layer() {
 /// [`single_layer_only`]; a new single-layer command added to the menu must be classified.
 #[test]
 fn single_layer_only_covers_the_per_layer_commands() {
-    for id in
-        ["layer.layerStyle.blendingOptions", "layer.layerStyle.copyLayerStyle", "layer.layerMask.enabled", "layer.layerMask.apply", "layer.layerMask.delete"]
-    {
+    for id in [
+        "layer.layerStyle.blendingOptions",
+        "layer.layerStyle.copyLayerStyle",
+        "layer.layerMask.copy",
+        "layer.layerMask.enabled",
+        "layer.layerMask.apply",
+        "layer.layerMask.delete",
+    ] {
         assert!(single_layer_only(id), "{id}");
     }
     for id in [
@@ -441,6 +457,7 @@ fn single_layer_only_covers_the_per_layer_commands() {
         "layer.layerMask.hideSelection",
         "layer.layerStyle.pasteLayerStyle",
         "layer.layerStyle.clear",
+        "layer.layerMask.paste",
     ] {
         assert!(!single_layer_only(id), "{id}");
     }
