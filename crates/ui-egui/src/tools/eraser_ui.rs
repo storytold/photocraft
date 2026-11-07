@@ -104,9 +104,9 @@ fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> b
     let mut a = b.angle;
     let r = widgets::value_field_named(ui, tl!("Angle"), &mut a, -ANGLE_TYPED_MAX..=ANGLE_TYPED_MAX, "°", 52.0);
     let out_of_range = r.id.with("bg-eraser-angle-out-of-range");
-    // Each edit starts clean: a flag left by an entry the field never committed (the tool was
-    // switched mid-typing) must not alert on the next one.
-    if r.gained_focus() {
+    // The flag lives only while an entry is being typed: drawn without the keyboard, the field
+    // drops it, so an entry the tool switch cut off (never committed) can't alert on a later one.
+    if !r.has_focus() && !r.lost_focus() {
         ui.data_mut(|d| d.remove_temp::<bool>(out_of_range));
     }
     if r.changed() && a.is_finite() {
