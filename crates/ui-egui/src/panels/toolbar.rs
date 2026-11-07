@@ -95,6 +95,63 @@ pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bo
     released && from_button && pointer.is_some_and(|p| row.contains(p))
 }
 
+fn more_flyout_id() -> egui::Id {
+    egui::Id::unique("toolbar-more-flyout-open")
+}
+
+/// Whether the "…" button's flyout is open: it owns Escape then (`shortcuts::handle`).
+pub(crate) fn more_flyout_open(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(more_flyout_id())).unwrap_or(false)
+}
+
+/// Right-click on the "…" button opens a flyout with one row, "Edit Toolbar…", drawn like a tool
+/// flyout. The row runs `edit.toolbar` and closes the flyout; Escape or a press outside closes it
+/// without running anything.
+fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::Response, t: &Tokens) {
+    let open_id = more_flyout_id();
+    let open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+    if button.secondary_clicked() {
+        ui.data_mut(|d| d.insert_temp(open_id, !open));
+        ui.ctx().request_repaint();
+        return;
+    }
+    if !open {
+        return;
+    }
+    let (pivot, pos) = if crate::direction::is_rtl() {
+        (egui::Align2::RIGHT_BOTTOM, button.rect.left_bottom() - vec2(6.0, 0.0))
+    } else {
+        (egui::Align2::LEFT_BOTTOM, button.rect.right_bottom() + vec2(6.0, 0.0))
+    };
+    let area = egui::Area::new(egui::Id::unique("toolbar-more-flyout")).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let label = tl!("Edit Toolbar…");
+            let label_w = ui.painter().layout_no_wrap(label.to_string(), egui::FontId::proportional(12.5), t.text).size().x;
+            let (r, row) = ui.allocate_exact_size(vec2((label_w + 24.0).max(180.0), 26.0), Sense::click());
+            row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            if row.hovered() {
+                ui.painter().rect_filled(r, 3.0, t.hover);
+            }
+            ui.painter().text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.5), t.text);
+            row.clicked()
+        })
+    });
+    if area.inner.inner {
+        ui.data_mut(|d| d.remove::<bool>(open_id));
+        let ctx = ui.ctx().clone();
+        if let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return;
+    }
+    let pressed_outside =
+        ui.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !button.rect.contains(p)));
+    if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ui.data_mut(|d| d.remove::<bool>(open_id));
+    }
+}
+
 /// Render tool selection and view gestures without changing document content.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -137,14 +194,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let flyout_id = egui::Id::unique("tool-flyout");
             let held_id = flyout_id.with("held");
             let pointer = gestures::read(ui, flyout_id);
-            let released = ui.input(|i| i.pointer.primary_released());
+            let released = pointer.released;
             if (pointer.started_press && !released) || (pointer.interrupted_before_release && !pointer.active_press) {
                 ui.data_mut(|d| d.remove::<egui::Id>(held_id));
             }
             // No tool tooltips over an open flyout, or while a button is held to open one (#4450):
             // Photoshop shows none there. (The flyout is our own Area, so egui's rule for popups
             // doesn't hide them.)
-            let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !ui.input(|i| i.pointer.primary_down());
+            let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !pointer.active_press;
             let ctx = ui.ctx().clone();
             let footer = (if t.pro { 8.0 } else { 14.0 })
                 + chips_height(t.pro, t.round_chips, t.round_chips && double)
@@ -189,9 +246,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     let held = ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
                                     controls.push(gestures::Control::Slot { target: gestures::Target::new(&resp), tools: slot, key, displayed: tool, held });
                                     // Retained contact ownership also preserves its original long-press deadline.
-                                    let held_for = (pointer.active_press && resp.is_pointer_button_down_on())
-                                        .then(|| pointer.press_started_at.map(|t0| ui.input(|i| i.time) - t0))
-                                        .flatten();
+                                    let held_for = pointer.press_on(ui, &resp).then(|| pointer.press_started_at.map(|t0| ui.input(|i| i.time) - t0)).flatten();
                                     if slot.len() > 1
                                         && let Some(seconds) = held_for
                                         && seconds < 0.35
@@ -199,10 +254,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
                                     }
                                     let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
-                                    let drag_open = pointer.active_press
-                                        && ui.input(|i| {
-                                            tool_flyout_drag_open(resp.rect, i.pointer.press_origin(), i.pointer.hover_pos(), i.pointer.primary_down())
-                                        });
+                                    let drag_open = pointer.drag_open(ui, &resp);
                                     // Clicking the button of its open flyout again, with either button, closes
                                     // it (#4932); the release that ends the long press that opened it doesn't.
                                     let open_here = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
@@ -295,10 +347,11 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                         );
                                         // Any press outside the flyout and its button closes it, as in Photoshop: a
                                         // drag on the canvas (cropping, painting) isn't a click (#4460).
-                                        let pressed_outside = ui.input(|i| {
-                                            i.pointer.any_pressed()
-                                                && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !resp.rect.contains(p))
-                                        });
+                                        let pressed_outside = pointer.new_pointer_press
+                                            && ui.input(|i| {
+                                                i.pointer.any_pressed()
+                                                    && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !resp.rect.contains(p))
+                                            });
                                         if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                             ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
                                         }
@@ -308,9 +361,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         }
                     }
                     pointer.apply(ui, app, &controls);
-                    if icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
-                        let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
+                    let more = icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…"));
+                    if more.clicked()
+                        && let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}))
+                    {
+                        app.ui.status = e;
+                        app.ui.status_error = true;
                     }
+                    more_slot_flyout(app, ui, &more, &t);
                     reveal_focused_control(ui);
                 });
             if released || (pointer.interrupted_after_release() && !pointer.active_press) {

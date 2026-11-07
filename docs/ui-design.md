@@ -134,15 +134,18 @@ Modified clicks do not join that pair, including when a modifier is released bef
 button. An ordinary pair immediately after Alt/Option-click remains usable; a third rapid
 ordinary click does not repeat the action. Keyboard and accessibility activation only select
 the tool. Completed gestures run in input order, including when several arrive in one frame.
-Replayed pointer releases respect enabled controls, clipping, foreground areas and modals in
-both the previous and current layouts.
+Clicks retain egui’s configured interaction radius outside a button's painted box. Batched
+pointer replay resolves each endpoint’s nearest eligible widget, preserving click/drag priority,
+clipping, foreground areas and modals in both the previous and current layouts.
 
 A completed touch release retains its position and flyout ownership through the immediate
 pointer disappearance emitted by the native and web integrations. Standalone disappearance,
 focus loss, touch cancellation and releases elsewhere break future click history without
 undoing an earlier completed release in the same frame. Cancelled contacts cannot become
 later held flyouts. Additional touch contacts cannot restart the original contact's 0.35-second
-hold deadline. These rules leave release-time Alt/Option tool cycling unchanged.
+hold deadline. A secondary contact's emulated up cannot release the original contact, and a
+duplicate down cannot dismiss or retarget its flyout. These rules leave release-time
+Alt/Option tool cycling unchanged.
 
 ## Menus
 
@@ -236,6 +239,7 @@ Languages shipped (`complete_menus` marks a catalog that covers every menu strin
 - French (`fr`), complete, with two plural forms (0 and 1 use the singular).
 - Czech (`cs`), complete, with three plural forms.
 - Indonesian (`id`), complete, with one plural form.
+- Azerbaijani (`az`, Latin script), complete, with two integer plural forms (1 / other).
 
 - `tr(lang, s)` plain strings; `tr_ctx` when one English word needs different translations;
   `tr_id(lang, command_id, label)` for menu items (keyed by command id, English label as the
