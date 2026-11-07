@@ -228,6 +228,31 @@ impl PathGeometry {
         if f64::from(f) > length && f > 0.0 { f32::from_bits(f.to_bits() - 1) } else { f }
     }
 
+    /// Returns the geometry traversed in the opposite direction.
+    pub fn flipped(&self) -> Self {
+        let mut pts = self.frame.pts.clone();
+        pts.reverse();
+        let mut cum = Vec::with_capacity(pts.len());
+        let mut acc = 0.0;
+        for (i, p) in pts.iter().enumerate() {
+            if let Some(q) = i.checked_sub(1).and_then(|j| pts.get(j)) {
+                acc += (p.0 - q.0).hypot(p.1 - q.1);
+            }
+            cum.push(acc);
+        }
+        Self {
+            frame: PathFrame {
+                pts,
+                cum,
+                closed: self.frame.closed,
+                start: self.frame.start,
+                range_length: self.frame.range_length,
+                text_start: self.frame.text_start,
+                vertical: self.frame.vertical,
+            },
+        }
+    }
+
     /// Sample a point and unit tangent at an arc length.
     pub fn sample(&self, arc: f64) -> Option<((f64, f64), (f64, f64))> {
         if !arc.is_finite() {
@@ -237,8 +262,7 @@ impl PathGeometry {
         (p.0.is_finite() && p.1.is_finite() && t.0.is_finite() && t.1.is_finite()).then_some((p, t))
     }
 
-    /// Project to the nearest branch, breaking distance ties within 0.01 text-space pixels
-    /// by proximity to `previous`. Closed paths compare circular arc distance across the seam.
+    /// Projects to candidate branches maintaining movement-aware continuity near `previous`.
     pub fn project_near(&self, x: f64, y: f64, previous: f64) -> Option<(f64, f64)> {
         if !x.is_finite() || !y.is_finite() || !previous.is_finite() {
             return None;
@@ -347,16 +371,20 @@ impl PathFrame {
         self.project_with_dist(x, y).1
     }
 
-    /// Projects a point to the nearest path branch, resolving ties within 0.01 px by proximity to `previous`.
+    /// Projects a point to candidate branches, maintaining continuity near `previous` while tracking closest projections.
     fn project_near(&self, x: f64, y: f64, previous: f64) -> f64 {
         if self.pts.len() < 2 {
             return 0.0;
         }
         let (min_d, nearest) = self.project_with_dist(x, y);
-        let limit = min_d + 0.01;
         let length = self.length();
+        // Distance from current pointer (x, y) to the previous projected path point (self.at(previous)).
+        // Smoothly broadens the candidate basin limit as the pointer moves farther from the path projection.
+        let (prev_pt, _) = self.at(previous);
+        let pointer_to_prev_path_dist = (x - prev_pt.0).hypot(y - prev_pt.1);
+        let limit = min_d + (pointer_to_prev_path_dist * 0.5 + 0.5).clamp(0.5, 4.0);
 
-        // Adjacent near-distance segments belong to one branch. Keep its closest
+        // Adjacent near-distance segments belong to one branch basin. Keep its closest
         // projection before comparing arc continuity between separate branches.
         struct Branch {
             first: usize,
@@ -387,10 +415,12 @@ impl PathFrame {
                 branches.push(Branch { first: i, last: i, distance, arc });
             }
         }
+
+        // Seam first and last basins merge across closed path endpoints.
         if self.closed
             && branches.len() > 1
-            && branches.first().is_some_and(|first| first.first == 0)
-            && branches.last().is_some_and(|last| last.last + 2 == self.pts.len())
+            && branches.first().is_some_and(|f| f.first == 0)
+            && branches.last().is_some_and(|l| l.last + 2 == self.pts.len())
             && let Some(last) = branches.pop()
             && let Some(first) = branches.first_mut()
             && last.distance < first.distance
@@ -399,20 +429,23 @@ impl PathFrame {
             first.arc = last.arc;
         }
 
-        let mut best = (f64::INFINITY, nearest);
-        for Branch { arc, .. } in branches {
+        let continuity_distance = |arc: f64| -> f64 {
             let diff = (arc - previous).abs();
-            let continuity = if self.closed && length > 0.0 {
+            if self.closed && length > 0.0 {
                 let d = diff.rem_euclid(length);
                 d.min(length - d)
             } else {
                 diff
-            };
-            if continuity < best.0 {
-                best = (continuity, arc);
             }
-        }
-        best.1
+        };
+
+        let local_threshold = (pointer_to_prev_path_dist * 2.0 + 2.0).clamp(4.0, 24.0);
+        branches
+            .iter()
+            .filter(|b| continuity_distance(b.arc) <= local_threshold)
+            .min_by(|a, b| a.distance.total_cmp(&b.distance).then_with(|| continuity_distance(a.arc).total_cmp(&continuity_distance(b.arc))))
+            .map(|b| b.arc)
+            .unwrap_or_else(|| branches.iter().min_by(|a, b| continuity_distance(a.arc).total_cmp(&continuity_distance(b.arc))).map_or(nearest, |b| b.arc))
     }
 
     /// Point and unit tangent: closed paths wrap; open paths extend their end tangents.
@@ -509,6 +542,49 @@ mod tests {
         // Approaching crossing along branch 2: stays on branch 2 even if perturbed slightly toward branch 1.
         let near_b2 = geometry.project_near(50.005, 50.005, d2 - 1.0).unwrap();
         assert!((near_b2.0 - d2).abs() < 0.1, "should stay on branch 2: {}", near_b2.0);
+
+        // 0.1 pointer move across crossing from (49.95, 49.95) to (50.05, 49.95) avoids ~241 arc jump.
+        let step1 = geometry.project_near(49.95, 49.95, d1 - 1.0).unwrap();
+        let step2 = geometry.project_near(50.05, 49.95, step1.0).unwrap();
+        assert!((step2.0 - d1).abs() < 0.2, "bowtie 0.1 move stays on branch 1 without ~241 jump: {}", step2.0);
+
+        // Moving deliberately away along branch 2 eventually allows switching to branch 2.
+        let away = geometry.project_near(70.0, 30.0, step1.0).unwrap();
+        assert!((away.0 - (d2 + 20.0 * 2.0_f64.sqrt())).abs() < 1.0, "deliberate move switches to branch 2: {}", away.0);
+    }
+
+    /// Verifies movement-aware continuity preserves branch basins across perturbed non-symmetric crossings.
+    #[test]
+    fn path_geometry_project_near_perturbed_crossing() {
+        // Perturbed bowtie crossing near (50.1, 49.9).
+        let path = Subpath::polygon(&[(0.0, 0.0), (100.2, 99.8), (0.0, 99.8), (100.2, 0.0)]);
+        let geometry = PathGeometry::new(&path, false).unwrap();
+        let (d1, _) = geometry.project(50.1, 49.9).unwrap();
+        let step1 = geometry.project_near(49.9, 49.8, d1 - 1.0).unwrap();
+        let step2 = geometry.project_near(50.3, 50.0, step1.0).unwrap();
+        assert!((step2.0 - d1).abs() < 1.0, "perturbed crossing preserves branch 1: {}", step2.0);
+    }
+
+    #[test]
+    fn path_geometry_project_near_seam_basins_merge_and_compete() {
+        let mut path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (50.0, 80.0)]);
+        path.closed = true;
+        let geometry = PathGeometry::new(&path, false).unwrap();
+        let len = geometry.length();
+
+        let (arc_first, dist_first) = geometry.project_near(2.0, 0.5, len - 1.0).unwrap();
+        assert!((arc_first - 2.0).abs() < 0.1);
+        assert!((dist_first - 0.5).abs() < 0.1);
+
+        let (arc_last, _) = geometry.project_near(0.5, 1.0, 1.0).unwrap();
+        assert!(arc_last > len - 2.0);
+
+        let mut p = Subpath::polygon(&[(0.0, 0.0), (50.0, 0.0), (0.0, 1.0), (0.0, 50.0)]);
+        p.closed = true;
+        let g = PathGeometry::new(&p, false).unwrap();
+        let mid_arc = g.project(0.0, 1.0).unwrap().0;
+        let (arc_mid, _) = g.project_near(0.0, 1.05, mid_arc).unwrap();
+        assert!((arc_mid - mid_arc).abs() < 1.0);
     }
 
     /// Verifies projection tracking remains continuous across sharp polygon corners, closed seams, and perpendicular flips.

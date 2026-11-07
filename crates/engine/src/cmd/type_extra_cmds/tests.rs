@@ -933,6 +933,46 @@ fn path_placement_availability_and_legacy_ranges() {
     .unwrap();
     s.execute("type.setPathPlacement", json!({"start": 190, "end": 210})).unwrap();
     assert!(matches!(text(&s, id).shape, TextShape::Path { start: 190.0, end: Some(210.0), .. }));
+
+    // Degenerate closed path is rejected on explicit range.
+    with_text(&mut s, &json!({}), "degenerate_closed", |t, _| {
+        t.shape = TextShape::Path { path: Subpath::polygon(&[(0.0, 0.0), (0.0, 0.0)]), start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 0.0, "end": 10.0})).is_err());
+
+    // Closed negative seam offsets, huge multi-lap ranges, and stationary ranges are stored gracefully.
+    with_text(&mut s, &json!({}), "closed_ranges", |t, _| {
+        let mut path = line.clone();
+        path.closed = true;
+        t.shape = TextShape::Path { path, start: 0.0, end: None, flip: false };
+        Ok(())
+    })
+    .unwrap();
+    s.execute("type.setPathPlacement", json!({"start": -25.0, "end": 1000.0})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: -25.0, end: Some(1000.0), .. }));
+    s.execute("type.setPathPlacement", json!({"start": 40.0, "end": 40.0})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 40.0, end: Some(40.0), .. }));
+
+    // Explicit start on open legacy end:null validated against bounds and canonical normalized.
+    with_text(&mut s, &json!({}), "open_start_null_end", |t, _| {
+        t.shape = TextShape::Path { path: line.clone(), start: 10.0, end: Some(50.0), flip: false };
+        Ok(())
+    })
+    .unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 120.0, "end": null})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": -5.0, "end": null})).is_err());
+    s.execute("type.setPathPlacement", json!({"start": 30.0, "end": null})).unwrap();
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, end: None, .. }));
+
+    // Position-locked and fully locked layers are rejected upfront.
+    s.execute("layer.lock", json!({"position": true})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_err());
+    s.execute("layer.lock", json!({"position": false, "all": true})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_err());
+    s.execute("layer.lock", json!({"all": false})).unwrap();
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_ok());
 }
 
 /// Proves path placement validation tolerates `f32` precision upward rounding at endpoints while rejecting true out-of-bounds spans.

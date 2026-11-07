@@ -91,11 +91,75 @@ fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]
     Some(range)
 }
 
+/// Single-entry cache for flattened type path geometry keyed by document snapshot and shape identity.
+#[derive(Clone, Debug)]
+pub struct CachedGeometry {
+    pub(crate) doc: Weak<Document>,
+    pub(crate) layer: photocraft_doc::LayerId,
+    pub(crate) path: photocraft_doc::vector::Subpath,
+    pub(crate) flip: bool,
+    pub(crate) geometry: Arc<PathGeometry>,
+    pub(crate) reversed: Arc<PathGeometry>,
+}
+
+impl PartialEq for CachedGeometry {
+    fn eq(&self, other: &Self) -> bool {
+        self.doc.ptr_eq(&other.doc) && self.layer == other.layer && self.flip == other.flip && self.path == other.path
+    }
+}
+
+/// Bounded single-entry geometry cache wrapper implementing equality and interior mutability.
+#[derive(Clone, Debug, Default)]
+pub struct GeometryCache(pub(crate) Arc<std::sync::Mutex<Option<CachedGeometry>>>);
+
+impl PartialEq for GeometryCache {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for GeometryCache {}
+
+/// Retrieves or creates cached path geometry, reusing active drag geometry or single-entry cache across frames.
+pub(crate) fn active_path_geometry(app: &PhotocraftApp, text: &TextLayer) -> Option<Arc<PathGeometry>> {
+    let TextShape::Path { path, flip, .. } = &text.shape else { return None };
+    if let Some(drag) = app.ui.type_path_drag.as_ref().filter(|d| d.valid(app)) {
+        if *flip == drag.original_flip {
+            return Some(Arc::clone(&drag.geometry));
+        } else {
+            return Some(Arc::clone(&drag.reversed_geometry));
+        }
+    }
+    let st = app.session.active()?;
+    let layer = st.active_layer?;
+    let mut guard = app.ui.type_path_geometry_cache.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(cached) = guard.as_ref()
+        && cached.doc.ptr_eq(&Arc::downgrade(&st.doc))
+        && cached.layer == layer
+        && cached.path == *path
+    {
+        if cached.flip == *flip {
+            return Some(Arc::clone(&cached.geometry));
+        } else {
+            return Some(Arc::clone(&cached.reversed));
+        }
+    }
+    let geometry = Arc::new(PathGeometry::new(path, *flip)?);
+    let reversed = Arc::new(geometry.flipped());
+    *guard = Some(CachedGeometry { doc: Arc::downgrade(&st.doc), layer, path: path.clone(), flip: *flip, geometry: Arc::clone(&geometry), reversed });
+    Some(geometry)
+}
+
 /// Computes screen-space positions and tangents for start and end placement markers.
 pub(crate) fn markers(text: &TextLayer, xf: &ViewXform) -> Option<[(Pos2, Vec2); 2]> {
     let TextShape::Path { path, flip, .. } = &text.shape else { return None };
     let geometry = PathGeometry::new(path, *flip)?;
-    let [start, finish] = effective_range(text, &geometry)?;
+    markers_with_geometry(text, &geometry, xf)
+}
+
+/// Computes placement markers using existing or cached path geometry.
+pub(crate) fn markers_with_geometry(text: &TextLayer, geometry: &PathGeometry, xf: &ViewXform) -> Option<[(Pos2, Vec2); 2]> {
+    let [start, finish] = effective_range(text, geometry)?;
     let sample = |arc| {
         let ((x, y), (tx, ty)) = geometry.sample(arc)?;
         let a = text.transform.apply(Point::new(x, y));
@@ -138,7 +202,8 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
         return None;
     }
     let text = active_text(app)?;
-    let ends = markers(text, xf)?;
+    let geometry = active_path_geometry(app, text)?;
+    let ends = markers_with_geometry(text, &geometry, xf)?;
     if let Some((index, _)) = marker_hit(ends, p) {
         return Some(index == 0);
     }
@@ -196,7 +261,8 @@ pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform)
             *flip = side;
         }
     }
-    let Some(markers) = markers(&preview, xf) else { return };
+    let Some(geometry) = active_path_geometry(app, &preview) else { return };
+    let Some(markers) = markers_with_geometry(&preview, &geometry, xf) else { return };
     let stroke = Stroke::new(1.5, crate::theme::Tokens::get(painter.ctx()).accent);
     let overflow = overflows(app, painter.ctx(), &preview);
     for (index, (point, tangent)) in markers.into_iter().enumerate() {
@@ -295,7 +361,8 @@ pub struct Drag {
     revision: u64,
     tool: Tool,
     inverse: photocraft_doc::Affine,
-    geometry: PathGeometry,
+    pub(crate) geometry: Arc<PathGeometry>,
+    pub(crate) reversed_geometry: Arc<PathGeometry>,
     closed: bool,
     endpoint: Option<usize>,
     alignment: f64,
@@ -474,10 +541,7 @@ pub(crate) fn pointer_with_context(
         }
     }
     if let Some(mut drag) = app.ui.type_path_drag.take() {
-        if let Some(owner) = drag.viewport
-            && let Some(vp) = viewport
-            && vp != owner
-        {
+        if drag.viewport.is_some_and(|owner| Some(owner) != viewport) {
             app.ui.type_path_drag = Some(drag);
             return false;
         }
@@ -522,12 +586,12 @@ pub(crate) fn pointer_with_context(
     }
     let Some(text) = active_text(app).cloned() else { return false };
     let TextShape::Path { path, flip, .. } = &text.shape else { return false };
-    let Some(geometry) = PathGeometry::new(path, *flip) else { return false };
+    let Some(geometry) = active_path_geometry(app, &text) else { return false };
     let Some(inverse) = text.transform.inverse() else { return false };
     let Some(original) = effective_range(&text, &geometry) else { return false };
     let Some(xf) = view.copied().or_else(|| ViewXform::active(app)) else { return false };
     let p = xf.to_screen(x as f32, y as f32);
-    let best = markers(&text, &xf).and_then(|ends| marker_hit(ends, p));
+    let best = markers_with_geometry(&text, &geometry, &xf).and_then(|ends| marker_hit(ends, p));
     let active_layer = app.session.active().and_then(|st| st.active_layer);
     let endpoint = if let Some((index, _)) = best {
         Some(index)
@@ -543,6 +607,7 @@ pub(crate) fn pointer_with_context(
     }
     let point = inverse.apply(Point::new(x, y));
     let Some((previous, distance)) = geometry.project(point.x, point.y) else { return false };
+    let reversed_geometry = Arc::new(geometry.flipped());
     app.ui.type_path_drag = Some(Drag {
         viewport,
         document: st.doc.id,
@@ -552,6 +617,7 @@ pub(crate) fn pointer_with_context(
         tool: app.ui.tool,
         inverse,
         geometry,
+        reversed_geometry,
         closed: path.closed,
         endpoint,
         alignment: text.paragraph_runs().first().map_or(0.0, |run| alignment_factor(run.style.align)),
@@ -1346,5 +1412,114 @@ mod tests {
         cancel_missing_release(&mut app, &ctx_nonowner);
         assert!(app.ui.type_path_drag.is_none(), "automation fallback cleans up without owner");
         ctx_nonowner.end_pass().textures_delta.clear();
+    }
+
+    #[test]
+    fn owned_viewport_rejects_foreign_or_none_events_and_finishes() {
+        let mut app = app(Tool::PathSelection);
+        let owner_vp = egui::ViewportId::from_hash_of("owner-viewport");
+        let nonowner_vp = egui::ViewportId::from_hash_of("nonowner-viewport");
+
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let from = xf.to_doc(tip);
+
+        assert!(pointer_with_context(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf), Some(owner_vp)));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, Some(owner_vp));
+        let history_count = steps(&app);
+
+        assert!(!pointer_with_context(&mut app, ToolEvent::Move { x: from[0] + 10.0, y: from[1] + 10.0, pressure: 1.0 }, Some(&xf), None));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, Some(owner_vp));
+
+        assert!(!pointer_with_context(&mut app, ToolEvent::Move { x: from[0] + 10.0, y: from[1] + 10.0, pressure: 1.0 }, Some(&xf), Some(nonowner_vp)));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, Some(owner_vp));
+
+        assert!(!pointer_with_context(&mut app, ToolEvent::Up { x: from[0] + 10.0, y: from[1] + 10.0 }, Some(&xf), None));
+        assert!(app.ui.type_path_drag.is_some());
+        assert_eq!(steps(&app), history_count);
+
+        assert!(!pointer_with_context(&mut app, ToolEvent::Up { x: from[0] + 10.0, y: from[1] + 10.0 }, Some(&xf), Some(nonowner_vp)));
+        assert!(app.ui.type_path_drag.is_some());
+        assert_eq!(steps(&app), history_count);
+
+        assert!(pointer_with_context(&mut app, ToolEvent::Move { x: from[0] + 10.0, y: from[1] + 10.0, pressure: 1.0 }, Some(&xf), Some(owner_vp)));
+        assert!(pointer_with_context(&mut app, ToolEvent::Up { x: from[0] + 10.0, y: from[1] + 10.0 }, Some(&xf), Some(owner_vp)));
+        assert!(app.ui.type_path_drag.is_none());
+        assert_eq!(steps(&app), history_count + 1);
+
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let from_updated = xf.to_doc(tip);
+
+        assert!(pointer_with_context(&mut app, ToolEvent::Down { x: from_updated[0], y: from_updated[1], pressure: 1.0 }, Some(&xf), None));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, None);
+        assert!(pointer_with_context(&mut app, ToolEvent::Move { x: from_updated[0] + 10.0, y: from_updated[1] + 10.0, pressure: 1.0 }, Some(&xf), None));
+        assert!(pointer_with_context(&mut app, ToolEvent::Up { x: from_updated[0] + 10.0, y: from_updated[1] + 10.0 }, Some(&xf), None));
+        assert!(app.ui.type_path_drag.is_none());
+    }
+
+    #[test]
+    fn marker_geometry_cache_reuse_and_invalidation() {
+        let mut app = app(Tool::PathSelection);
+        let text = active_text(&app).unwrap().clone();
+
+        let geom1 = active_path_geometry(&app, &text).expect("initial geometry");
+        let initial_length = geom1.length();
+        assert!(app.ui.type_path_geometry_cache.0.lock().unwrap().is_some());
+
+        let geom2 = active_path_geometry(&app, &text).expect("cached geometry");
+        assert!(Arc::ptr_eq(&geom1, &geom2));
+
+        let st = app.session.active_mut().unwrap();
+        let cloned_doc = (*st.doc).clone();
+        st.doc = Arc::new(cloned_doc);
+        let geom_doc_replaced = active_path_geometry(&app, &text).expect("recomputed geometry");
+        assert!(!Arc::ptr_eq(&geom1, &geom_doc_replaced));
+
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[0, 0], [200, 0]]}]}})).unwrap();
+        app.run("type.attachToPath", json!({"start": 0})).unwrap();
+        let text_after_path = active_text(&app).unwrap();
+        let geom_new_path = active_path_geometry(&app, text_after_path).expect("new path geometry");
+        assert_ne!(geom_new_path.length(), initial_length);
+        assert!(!Arc::ptr_eq(&geom_doc_replaced, &geom_new_path));
+
+        app.run("type.setPathPlacement", json!({"flip": true})).unwrap();
+        let text_after_flip = active_text(&app).unwrap();
+        let geom_flipped = active_path_geometry(&app, text_after_flip).expect("flipped geometry");
+        assert!(!Arc::ptr_eq(&geom_new_path, &geom_flipped));
+        let geom_flipped2 = active_path_geometry(&app, text_after_flip).expect("cached flipped geometry");
+        assert!(Arc::ptr_eq(&geom_flipped, &geom_flipped2));
+        assert_eq!(geom_flipped.sample(10.0).unwrap().1.0, -geom_new_path.sample(10.0).unwrap().1.0);
+    }
+
+    #[test]
+    fn pointer_perturbed_crossing_stays_on_branch_and_releases() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.sync_views();
+        app.ui.tool = Tool::PathSelection;
+        app.run("path.set", json!({"name":"work", "path":{"subpaths":[{"closed":true,"knots":[[20,20],[180.2,179.8],[20,179.8],[180.2,20]]}]}})).unwrap();
+        app.ui.selected_path = Some("work".into());
+        app.run("type.create", json!({"text":"ABC", "x":20, "y":20})).unwrap();
+        app.run("type.attachToPath", json!({"start":20})).unwrap();
+        app.run("type.setPathPlacement", json!({"end":80})).unwrap();
+        app.ui.views[0].zoom = 1.0;
+
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        let tip = marker_tip(ends[1].0, ends[1].1, 1);
+        let from = xf.to_doc(tip);
+        assert!(pointer_with_view(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, Some(&xf)));
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 100.1, y: 99.9, pressure: 1.0 }, Some(&xf)));
+        assert!(pointer_with_view(&mut app, ToolEvent::Move { x: 140.0, y: 140.0, pressure: 1.0 }, Some(&xf)));
+        assert!(pointer_with_view(&mut app, ToolEvent::Up { x: 140.0, y: 140.0 }, Some(&xf)));
+
+        let (start, end, flip) = placement(&app);
+        assert_eq!(start, 20.0);
+        let end = end.expect("explicit end");
+        assert!((end - 169.8).abs() < 2.0, "end must stay on branch 1 without jumping: {end}");
+        assert!(!flip);
     }
 }

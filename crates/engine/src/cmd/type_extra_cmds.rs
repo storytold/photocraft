@@ -494,7 +494,8 @@ fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
     let flip = p.get("flip").map(|v| v.as_bool().ok_or_else(|| bad("flip must be a boolean"))).transpose()?;
     let id = layer_param(s, p)?;
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    if doc.effective_locks(id).position {
+    let locks = doc.effective_locks(id);
+    if locks.position || locks.all {
         return Err(EngineError::Other("the type layer's position is locked".into()));
     }
     with_text(s, p, "Set Path Placement", |t, _| {
@@ -510,10 +511,10 @@ fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
             if !new_start.is_finite() || !end_val.is_finite() {
                 return Err(bad("range must be finite"));
             }
+            let geometry = photocraft_text::warp::PathGeometry::new(path, false)
+                .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
+                .ok_or_else(|| bad("path must have a finite nonzero length"))?;
             if !path.closed {
-                let geometry = photocraft_text::warp::PathGeometry::new(path, false)
-                    .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
-                    .ok_or_else(|| bad("path must have a finite nonzero length"))?;
                 let length = geometry.length();
                 let max_f32 = length as f32;
                 if new_start < 0.0 || new_start > max_f32 || end_val > max_f32 {
@@ -529,8 +530,20 @@ fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
                 new_end = Some(end_val);
             }
             *current_start = new_start;
-        } else if let Some(start) = start {
-            *current_start = start;
+        } else if let Some(start_val) = start {
+            if !path.closed {
+                let geometry = photocraft_text::warp::PathGeometry::new(path, false)
+                    .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
+                    .ok_or_else(|| bad("path must have a finite nonzero length"))?;
+                let length = geometry.length();
+                let max_f32 = length as f32;
+                if start_val < 0.0 || start_val > max_f32 {
+                    return Err(bad("range must lie on the path"));
+                }
+                let canonical_max = geometry.canonical_length_f32();
+                new_start = start_val.min(canonical_max);
+            }
+            *current_start = new_start;
         }
         *current_end = new_end;
         if let Some(flip) = flip {

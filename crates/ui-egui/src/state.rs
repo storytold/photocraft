@@ -362,6 +362,8 @@ pub struct UiState {
     pub corner_radius: Option<crate::corner_radius::Drag>,
     #[serde(skip)]
     pub type_path_drag: Option<crate::type_path_placement::Drag>,
+    #[serde(skip)]
+    pub type_path_geometry_cache: crate::type_path_placement::GeometryCache,
     /// The bounding box of several selected shape layers, a handle being dragged.
     #[serde(skip)]
     pub shape_box: Option<crate::shape_bounds_box::Drag>,
@@ -630,6 +632,7 @@ impl Default for UiState {
             direct_selection: Default::default(),
             corner_radius: None,
             type_path_drag: None,
+            type_path_geometry_cache: Default::default(),
             shape_box: None,
             selected_path: None,
             hidden_work_path: None,
