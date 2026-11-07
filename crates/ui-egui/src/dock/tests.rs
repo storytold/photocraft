@@ -165,9 +165,13 @@ fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() 
     let default = drawn(&h).0;
     assert_eq!(h.state().ui.dock, DockLayout::default());
     h.state_mut().ui.dock.heights.insert(Group::Color, 300.0);
+    h.state_mut().ui.panels.toolbar = false;
+    h.state_mut().ui.panels.options_bar = false;
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
     h.run_steps(3);
     assert_eq!(drawn(&h).0, default);
+    assert!(h.state().ui.panels.toolbar, "reset should restore the toolbar");
+    assert!(h.state().ui.panels.options_bar, "reset should restore the options bar");
     crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Tall Layers"})).unwrap();
     assert_eq!(h.state().ui.dock, mine);
 }
