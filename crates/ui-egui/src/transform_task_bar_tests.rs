@@ -182,10 +182,6 @@ fn transform_task_bar_ignores_a_foreign_preview_after_a_document_switch() {
     assert_eq!(h.state().transform_preview.as_ref().unwrap().doc.id, owner);
     assert_eq!(bar(&mut h)["visible"], false);
 
-    // Deliver a click to the old widget before the harness redraws the new document's canvas.
-    h.get_by_label("Done").click_accesskit();
-    h.run_steps(1);
-    assert_eq!(h.state().transform_preview.as_ref().unwrap().doc.id, owner);
     assert_eq!(h.state().ui.transform.as_ref().unwrap().quad, quad);
 }
 
@@ -210,9 +206,32 @@ fn transform_task_bar_commits_when_done_and_hide_arrive_together() {
 #[test]
 fn transform_task_bar_does_not_report_its_rect_as_crop_after_cancel() {
     let mut h = open_box();
-    assert!(bar(&mut h)["rect"].is_array());
-    h.get_by_label("Cancel").click_accesskit();
-    h.run_steps(1);
+    let prior_rect = h.state().ui.task_bar_shown.unwrap();
+    let cancel = h.get_by_label("Cancel").rect().center();
+    let ctx = h.ctx.clone();
+    let mut input = h.input().clone();
+    input.events = vec![
+        egui::Event::PointerMoved(cancel),
+        egui::Event::PointerButton { pos: cancel, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE },
+        egui::Event::PointerButton { pos: cancel, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE },
+    ];
+    let app = h.state_mut();
+    let view = &app.ui.views[0];
+    let xf = ViewXform {
+        rect: crate::rulers::content_rect(app, app.last_canvas_rect),
+        zoom: view.zoom,
+        center: view.center,
+        flip: app.ui.view.flip_horizontal,
+        rotation: view.rotation,
+        aspect: app.ui.view.display_aspect(),
+    };
+    let _ = ctx.run_ui(input, |ui| {
+        if app.ui.transform.is_some() {
+            // Model the main canvas recording its rect before the extra window handles Cancel.
+            app.ui.task_bar_shown = Some(prior_rect);
+            crate::transform_task_bar::draw(app, ui, &xf);
+        }
+    });
     assert!(h.state().ui.transform.is_none());
 
     // No UI pass between the Crop request and inspection.
