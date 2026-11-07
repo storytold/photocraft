@@ -3277,6 +3277,7 @@ cameraData	Lens	Objektiv
 	Motion Blur	Rozostření pohybem
 	Mouse	Myš
 	Move Layer	Přesunout vrstvu
+	Move Layer to Target	Přesunout vrstvu do cíle
 	Movie Prime	Filmové pevné ohnisko
 	Multiple Flames Along Path	Více plamenů podél cesty
 	Multiple Flames One Direction	Více plamenů jedním směrem
@@ -3405,7 +3406,6 @@ cameraData	Lens	Objektiv
 	Rename Group	Přejmenovat skupinu
 	Rename Layer Comp	Přejmenovat kompozici vrstev
 	Render Video	Renderovat video
-	Reorder Layer	Změnit pořadí vrstvy
 	Repeat	Opakovat
 	Replace	Nahradit
 	Replace Color	Nahradit barvu

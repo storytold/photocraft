@@ -4097,6 +4097,7 @@ curves	Smooth	Tasoita
 	Motion Blur	Liikesumennus
 	Mouse	Hiiri
 	Move Layer	Siirrä tasoa
+	Move Layer to Target	Siirrä taso kohteeseen
 	Movie Prime	Elokuvaobjektiivi
 	Multiple Flames Along Path	Useita liekkejä polkua pitkin
 	Multiple Flames One Direction	Useita liekkejä yhteen suuntaan
@@ -4285,7 +4286,6 @@ curves	Smooth	Tasoita
 	Rename Tool Preset	Nimeä työkalun esiasetus uudelleen
 	Render Video	Renderöi video
 	Rendering…	Renderöidään…
-	Reorder Layer	Järjestä taso uudelleen
 	Replace Color	Korvaa väri
 	Replace Contents	Korvaa sisältö
 	Replace Footage	Korvaa kuvamateriaali

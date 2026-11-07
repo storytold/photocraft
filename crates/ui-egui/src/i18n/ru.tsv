@@ -4113,6 +4113,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Motion Blur	Размытие в движении
 	Mouse	Мышь
 	Move Layer	Переместить слой
+	Move Layer to Target	Переместить слой к цели
 	Movie Prime	Киносъёмочный фикс
 	Multiple Flames Along Path	Несколько языков пламени вдоль контура
 	Multiple Flames One Direction	Несколько языков пламени в одном направлении
@@ -4301,7 +4302,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Rename Tool Preset	Переименовать набор
 	Render Video	Экспорт видео
 	Rendering…	Отрисовка…
-	Reorder Layer	Изменить порядок слоя
 	Replace Color	Замена цвета
 	Replace Contents	Заменить содержимое
 	Replace Footage	Заменить материал

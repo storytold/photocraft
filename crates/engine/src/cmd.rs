@@ -201,7 +201,12 @@ pub fn list_entry(s: &Session, c: &CommandSpec, reason: Option<String>) -> Value
 /// options it stands for (#5060). `select.rect` is also the Elliptical and Single Row/Column
 /// Marquee, which an agent searches for as "ellipse" or "marquee".
 pub(crate) const SEARCH_KEYWORDS: &[(&str, &str)] =
-    &[("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")")];
+    &[
+        ("select.rect", "Rectangular Marquee, Elliptical Marquee (\"ellipse\":true), ellipse, oval, circle, Single Row/Column Marquee (\"line\")"),
+        // The label was "Reorder Layer" until it became "Move Layer to Target" (#11424);
+        // the command-list filter must still find the command as "reorder".
+        ("layer.moveTo", "reorder"),
+    ];
 
 /// [`SEARCH_KEYWORDS`] of command `id`, if it has any.
 pub fn search_keywords(id: &str) -> Option<&'static str> {
@@ -955,10 +960,10 @@ fn build() -> Vec<CommandSpec> {
         ),
         cmd!(
             "layer.moveTo",
-            "Reorder Layer",
+            "Move Layer to Target",
             [],
             None,
-            r##"{"layer":id|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"}?| "layers":[id,…]?, "target":id|name|{"index":uint},"targetOccurrence":n? (which of several layers named `target`, in document order),"position":"above|below|into"="above","copy":bool=false} (typed target: pre-move recorded stack boundary, omit position; layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row; recorded typed references retain their form)"##,
+            r##"{"layer":id|{"index":uint}|{"ordinal":"Trgt|Frwr|Bckw|Frnt|Back"}?| "layers":[id,…]?, "target":id|name|{"index":uint},"targetOccurrence":n? (which of several layers named `target`, in document order),"position":"above|below|into"="above" (into: move the layers into the target group, reparenting them out of their current parent; the target must be a group, and a non-group target fails with `target is not a group`),"copy":bool=false} (typed target: pre-move recorded stack boundary, omit position; layers: one undoable move, document order preserved; copy: place duplicates there and leave the layers, as ⌥-dragging a Layers panel row; recorded typed references retain their form)"##,
             has_layer,
             crate::layer_multi_cmds::move_to
         ),

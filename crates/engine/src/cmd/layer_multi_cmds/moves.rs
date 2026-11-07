@@ -486,7 +486,7 @@ fn apply_move(doc: &mut Document, moved_ids: &[LayerId], target: LayerId, pos: &
         let at = if pos == "below" { idx } else { idx + 1 };
         siblings.splice(at..at, moved);
     }
-    check_group_depth(doc, "Reorder Layer")?;
+    check_group_depth(doc, "Move Layer to Target")?;
     // A copy is a new layer: it starts unlinked from its original, as a Duplicate does
     // (#11217); copies of a whole linked set stay linked to each other under a fresh group.
     if copy {

@@ -4096,6 +4096,7 @@ curves	Smooth	Jevn ut
 	Motion Blur	Bevegelsessløring
 	Mouse	Mus
 	Move Layer	Flytt lag
+	Move Layer to Target	Flytt lag til mål
 	Movie Prime	Film-prime
 	Multiple Flames Along Path	Flere flammer langs banen
 	Multiple Flames One Direction	Flere flammer i én retning
@@ -4284,7 +4285,6 @@ curves	Smooth	Jevn ut
 	Rename Tool Preset	Gi verktøyforvalget nytt navn
 	Render Video	Gjengi video
 	Rendering…	Gjengir…
-	Reorder Layer	Omordne lag
 	Replace Color	Erstatt farge
 	Replace Contents	Erstatt innhold
 	Replace Footage	Erstatt opptak

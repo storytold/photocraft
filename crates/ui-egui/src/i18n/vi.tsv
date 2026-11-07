@@ -3369,6 +3369,7 @@ cameraData	Lens	Ống kính
 	Mosaic Tiles	Ô khảm
 	Motion Blur	Làm mờ chuyển động
 	Move Layer	Di chuyển lớp
+	Move Layer to Target	Di chuyển lớp đến đích
 	Movie Prime	Phim Prime
 	Multiple Flames Along Path	Nhiều ngọn lửa dọc đường dẫn
 	Multiple Flames One Direction	Nhiều ngọn lửa cùng hướng
@@ -3474,7 +3475,6 @@ cameraData	Lens	Ống kính
 	Rename Group	Đổi tên nhóm
 	Rename Layer Comp	Đổi tên bố cục lớp
 	Render Video	Kết xuất video
-	Reorder Layer	Sắp xếp lại lớp
 	Repeat	Lặp lại
 	Replace Color	Thay thế màu
 	Replace Contents	Thay nội dung

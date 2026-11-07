@@ -4094,6 +4094,7 @@ curves	Smooth	Jämna ut
 	Motion Blur	Rörelseoskärpa
 	Mouse	Mus
 	Move Layer	Flytta lager
+	Move Layer to Target	Flytta lag till mål
 	Movie Prime	Film med fast brännvidd
 	Multiple Flames Along Path	Flera lågor längs banan
 	Multiple Flames One Direction	Flera lågor i en riktning
@@ -4282,7 +4283,6 @@ curves	Smooth	Jämna ut
 	Rename Tool Preset	Byt namn på verktygsförinställning
 	Render Video	Rendera video
 	Rendering…	Renderar…
-	Reorder Layer	Ändra lagerordning
 	Replace Color	Ersätt färg
 	Replace Contents	Ersätt innehåll
 	Replace Footage	Ersätt material
