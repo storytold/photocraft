@@ -17,9 +17,12 @@
 //! (3: 32 of 42 levels, 31 of 102; 10: 35 of 42, 95 of 102). It runs as a background job, like
 //! the move.
 
+use photocraft_algo::transform::Homography;
+
+use super::content_aware_move::{mapped_bounds, placement, resample};
 use super::{
     BlendMode, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, Session, Surface, Value, apply_coverage, bad, clamp_samples, damage_json,
-    flag, has_pixel_layer, heal_region, json, point, poisson, run_stroke, string, targets_pixels,
+    flag, has_pixel_layer, heal_region, json, point, poisson, string, targets_pixels,
 };
 
 const CMD: &str = "paint.patch";
@@ -153,19 +156,26 @@ struct Plan {
     src_shift: (i32, i32),
     destination: bool,
     offset: (i32, i32),
+    /// Original selection coordinates to the positioned box.
+    transform: Option<Homography>,
 }
 
+/// Resolve the active document and target layer before validating the Patch parameters.
 fn plan(s: &Session, p: &Value) -> Result<Plan> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    plan_for(&d.doc, target_layer(s, p)?, p)
+}
+
+/// Validate Patch geometry against a document snapshot so preview and commit share the same rules.
+fn plan_for(doc: &Document, id: Option<LayerId>, p: &Value) -> Result<Plan> {
     let mode = match string(p, "mode", "source") {
         "source" => PatchMode::Source,
         "destination" => PatchMode::Destination,
         o => return Err(bad(CMD, format!("unknown mode `{o}` (source|destination)"))),
     };
     let (dx, dy) = offset(CMD, p)?;
-    let id = target_layer(s, p)?;
-    let d = s.active().ok_or(EngineError::Other("no document open".into()))?;
-    let canvas = d.doc.bounds();
-    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
+    let canvas = doc.bounds();
+    let sel = doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
     let area = selection_area(sel, canvas);
     if area.is_empty() {
         return Err(bad(CMD, "the selection is empty"));
@@ -174,23 +184,42 @@ fn plan(s: &Session, p: &Value) -> Result<Plan> {
     if pixels > MAX_PIXELS {
         return Err(bad(CMD, format!("the selection is too large to patch ({pixels} pixels, at most {MAX_PIXELS})")));
     }
-    if (dx, dy) == (0, 0) {
+    let transform = placement(CMD, p, area, (dx, dy))?;
+    if transform.is_some() && flag(p, "contentAware", false) {
+        return Err(bad(CMD, "patch transforms require Normal mode"));
+    }
+    if transform.is_none() && (dx, dy) == (0, 0) {
         return Err(bad(CMD, "drag the selection to the area to sample from"));
     }
-    // Both the texture and the repaired area must lie on the canvas: off-canvas pixels are empty.
-    if !canvas.contains_rect(&area.translate(dx, dy)) {
-        return Err(bad(CMD, "the dragged patch must stay inside the canvas"));
+    // A destination patch can be cropped at the canvas edge. Its sample stays on the canvas.
+    let boxed = transform.as_ref().map_or_else(|| area.translate(dx, dy), |map| mapped_bounds(map, area));
+    if !canvas.contains_rect(&boxed) {
+        let clip = mode == PatchMode::Destination && flag(p, "clipDestination", false) && !flag(p, "contentAware", false);
+        if !clip {
+            let message = if transform.is_some() && mode == PatchMode::Source {
+                "the sample must stay inside the canvas"
+            } else {
+                "the dragged patch must stay inside the canvas"
+            };
+            return Err(bad(CMD, message));
+        }
+        if canvas.intersect(&boxed).is_empty() {
+            return Err(bad(CMD, "the patch must overlap the canvas"));
+        }
     }
     let (dst_shift, src_shift) = match mode {
         PatchMode::Source => ((0, 0), (dx, dy)),
         PatchMode::Destination => ((dx, dy), (-dx, -dy)),
     };
-    Ok(Plan { id, canvas, area, dst_shift, src_shift, destination: mode == PatchMode::Destination, offset: (dx, dy) })
+    Ok(Plan { id, canvas, area, dst_shift, src_shift, destination: mode == PatchMode::Destination, offset: (dx, dy), transform })
 }
 
 /// Heal `surf` at the selection (shifted by `dst_shift`) with texture read `src_shift` away, the
 /// membrane solved `step` times coarser (1 = exact). Returns the damaged rectangle.
-fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, step: usize) -> Rect {
+fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, step: usize) -> Result<Rect> {
+    if let Some(map) = &plan.transform {
+        return transformed_patch(surf, sel, plan, map, lock, step);
+    }
     let Plan { canvas, area, dst_shift, src_shift, .. } = *plan;
     // The repaired area plus a two-pixel ring: the ring is the Dirichlet boundary of the solve. It is
     // clipped to where both the repaired and the sampled pixels lie on the canvas, so a patch at the
@@ -198,7 +227,7 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
     let dst_area = area.translate(dst_shift.0, dst_shift.1);
     let g = dst_area.inflate(2).intersect(&canvas).intersect(&canvas.translate(-src_shift.0, -src_shift.1));
     if g.is_empty() {
-        return Rect::EMPTY;
+        return Ok(Rect::EMPTY);
     }
     let fmt = surf.format();
     let dst = Region::read(surf, g);
@@ -208,44 +237,117 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
     let cov = coverage(sel, g.translate(-dst_shift.0, -dst_shift.1));
     let mask: Vec<bool> = cov.iter().map(|c| *c > 0.0).collect();
     let healed = heal_region_coarse(&fmt, &src, &dst, &mask, step);
-    apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal)
+    Ok(apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal))
 }
 
+/// In Destination, the box moves both the sample and its mask onto the repaired area.
+/// In Source, the mask stays put and the box describes the pixels sampled through it.
+fn transformed_patch(surf: &mut Surface, sel: &Surface, plan: &Plan, map: &Homography, lock: bool, step: usize) -> Result<Rect> {
+    let Plan { canvas, area, destination, .. } = *plan;
+    let boxed = mapped_bounds(map, area);
+    let (dst_area, sample_map) =
+        if destination { (boxed.intersect(&canvas), map.inverse().ok_or_else(|| bad(CMD, "the transform collapses the selection"))?) } else { (area, *map) };
+    let g = dst_area.inflate(2).intersect(&canvas);
+    let samples = mapped_bounds(&sample_map, g).inflate(1).intersect(&canvas);
+    if dst_area.is_empty() || samples.is_empty() {
+        return Err(bad(CMD, "the transformed patch must overlap the canvas"));
+    }
+    for rect in [g, samples] {
+        if u64::from(rect.width()) * u64::from(rect.height()) > MAX_PIXELS {
+            return Err(bad(CMD, "the transformed patch is too large"));
+        }
+    }
+    let cov = if destination {
+        let padded = area.inflate(1);
+        let mut data = coverage(sel, padded);
+        for (y, row) in data.chunks_exact_mut(padded.width() as usize).enumerate() {
+            for (x, value) in row.iter_mut().enumerate() {
+                let x = padded.x0 + x as i32;
+                let y = padded.y0 + y as i32;
+                if x < area.x0 || x >= area.x1 || y < area.y0 || y >= area.y1 {
+                    *value = 0.0;
+                }
+            }
+        }
+        resample(&Region { rect: padded, ch: 1, data }, &sample_map, g).data
+    } else {
+        coverage(sel, g)
+    };
+    let src = resample(&Region::read(surf, samples), &sample_map, g);
+    let dst = Region::read(surf, g);
+    let mask: Vec<bool> = cov.iter().map(|c| *c > 0.0).collect();
+    if !mask.iter().any(|c| *c) {
+        return Err(bad(CMD, "the transformed selection covers no pixels"));
+    }
+    let healed = heal_region_coarse(&surf.format(), &src, &dst, &mask, step);
+    Ok(apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal))
+}
+
+/// Apply a Patch to the requested paint target in one undoable edit.
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
     if flag(p, "contentAware", false) {
         return patch_content_aware(s, p);
     }
     let plan = plan(s, p)?;
     let label = if plan.destination { "Patch (Destination)" } else { "Patch" };
-    let dmg = run_stroke(s, label, plan.id, p, |pre, surf, _, lock| {
-        let sel = pre.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
-        Ok(patch_surface(surf, sel, &plan, lock, 1))
+    let dmg = s.edit(label, |doc, _| {
+        let sel = doc.selection.clone().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
+        let (surf, lock) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
+        let dmg = patch_surface(surf, &sel, &plan, lock, 1)?;
+        if flag(p, "deselect", false) {
+            doc.selection = None;
+        }
+        Ok(dmg)
     })?;
+    s.hint_damage(dmg);
     Ok(json!({ "damage": damage_json(dmg), "offset": [plan.offset.0, plan.offset.1] }))
 }
 
-/// The live preview of `paint.patch` with params `p`: the active document with the patch applied
-/// (nothing is recorded), and the rectangle it changed. For large patches the membrane is solved
-/// coarser, so the preview costs about the same whatever the selection's size: the texture is
-/// exact, the colour fit approximate. `max_cells` caps the coarse grid, `min_step` sets a floor on
-/// the coarsening (the view's zoom-out factor: finer detail wouldn't show).
-pub fn preview(s: &Session, p: &Value, max_cells: u64, min_step: u32) -> Result<(Document, Rect)> {
-    let captured = crate::channel_cmds::inject_target(s, CMD, p.clone());
-    let p = &captured;
-    let plan = plan(s, p)?;
-    let d = s.active().ok_or(EngineError::Other("no document open".into()))?;
-    let pixels = u64::from(plan.area.width() + 4) * u64::from(plan.area.height() + 4);
-    // Smallest step whose grid fits `max_cells`: step² · cells ≥ pixels.
-    let need = (pixels as f64 / max_cells.max(1) as f64).sqrt().ceil() as usize;
-    let step = need.max(min_step as usize).clamp(1, 64);
-    let mut doc = (*d.doc).clone();
-    let sel = d.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
-    let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, plan.id, p)?;
-    let dmg = patch_surface(surf, sel, &plan, lock, step);
-    if let (Some(colors), Some(id)) = (crate::color_channels::target(s, p)?, plan.id) {
-        crate::channel_cmds::restrict_to_color(&d.doc, &mut doc, id, colors)?;
+/// A snapshot of the patch inputs. The preview can run independently of the editor session.
+pub struct PatchPreviewJob {
+    doc: std::sync::Arc<Document>,
+    params: Value,
+    layer: Option<LayerId>,
+    colors: Option<crate::color_channels::ColorChannels>,
+    max_cells: u64,
+    min_step: u32,
+}
+
+impl PatchPreviewJob {
+    /// Apply the preview to a copy of the document and return the damaged rectangle.
+    pub fn run(self) -> Result<(Document, Rect)> {
+        let plan = plan_for(&self.doc, self.layer, &self.params)?;
+        let area = match &plan.transform {
+            Some(map) if plan.destination => mapped_bounds(map, plan.area).intersect(&plan.canvas),
+            _ => plan.area,
+        };
+        let pixels = u64::from(area.width() + 4) * u64::from(area.height() + 4);
+        let need = (pixels as f64 / self.max_cells.max(1) as f64).sqrt().ceil() as usize;
+        let step = need.max(self.min_step as usize).clamp(1, 64);
+        let mut doc = (*self.doc).clone();
+        let sel = self.doc.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
+        let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, plan.id, &self.params)?;
+        let damage = patch_surface(surf, sel, &plan, lock, step)?;
+        if let (Some(colors), Some(id)) = (self.colors, plan.id) {
+            crate::channel_cmds::restrict_to_color(&self.doc, &mut doc, id, colors)?;
+        }
+        Ok((doc, damage))
     }
-    Ok((doc, dmg))
+}
+
+/// Capture the live preview inputs. `max_cells` limits the resolution of the colour-fit solve.
+/// The sample texture and selection coverage retain their full resolution.
+pub fn prepare_preview(s: &Session, p: &Value, max_cells: u64, min_step: u32) -> Result<PatchPreviewJob> {
+    let params = crate::channel_cmds::inject_target(s, CMD, p.clone());
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let layer = target_layer(s, &params)?;
+    let colors = crate::color_channels::target(s, &params)?;
+    Ok(PatchPreviewJob { doc: d.doc.clone(), params, layer, colors, max_cells, min_step })
+}
+
+/// Render a patch preview synchronously.
+pub fn preview(s: &Session, p: &Value, max_cells: u64, min_step: u32) -> Result<(Document, Rect)> {
+    prepare_preview(s, p, max_cells, min_step)?.run()
 }
 
 /// Optional whole-number param in `lo..=hi`; absent or null gives `default`.

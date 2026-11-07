@@ -43,12 +43,12 @@ use drag_modes::{HandleIndicator, handle_indicator, keep_convex, turns};
 pub(crate) use drag_modes::{apply_drag, corner_distorts, legacy_mods};
 #[cfg(test)]
 pub(crate) use drag_modes::{apply_mode_drag, unlinked_mods};
-pub(crate) use draw::draw_handle_cursor;
 #[cfg(test)]
 use draw::scale_values;
 #[cfg(test)]
 pub(crate) use draw::{Readout, live_readout, styled_frame};
 pub(crate) use draw::{carries_selection_of, moves_selection, selection_ants};
+pub(crate) use draw::{clip_to_canvas, draw_handle_cursor};
 pub use draw::{draw_content, draw_overlay};
 #[cfg(test)]
 use draw::{front_vertices, handle_anchor};
@@ -59,7 +59,7 @@ use options_bar::{
     set_size_unit, size_pct, size_shown, size_unit, warp_grid_id,
 };
 pub use options_bar::{options_bar, reset_warp};
-pub(crate) use pointer::{Gesture, Hit, box_hit, hit, rotate_cursor_dir};
+pub(crate) use pointer::{Gesture, Hit, box_hit, hit, hit_with, rotate_cursor_dir};
 #[cfg(test)]
 use pointer::{accepts_outside_click, carry_pivot, near_rotate_corner, point_on_quad, rotation_degrees};
 pub use pointer::{cursor, pointer};

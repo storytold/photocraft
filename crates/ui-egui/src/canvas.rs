@@ -312,7 +312,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             app.outline_cache = Some((input.doc.id, key, std::sync::Arc::new(segs)));
         }
         // Under Content-Aware Move's Transform On Drop box the ants are drawn where it puts them.
-        if let Some((_, _, segs)) = app.outline_cache.as_ref().filter(|_| !crate::cam_transform::active(app)) {
+        if let Some((_, _, segs)) = app.outline_cache.as_ref().filter(|_| !crate::cam_transform::move_active(app)) {
             let time = input.ui.input(|i| i.time);
             // A floating piece (and a selection being dragged) draws its ants where it is shown.
             let mut shown = input.xf;
@@ -815,6 +815,7 @@ struct CanvasToolInput<'a> {
     display_zoom: f32,
 }
 
+/// Route pointer input for the active canvas to navigation, overlays, or the current tool.
 fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasToolInput<'_>) {
     let ctx = input.ctx;
     let response = input.response;
@@ -860,6 +861,9 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
     handle_canvas_tool_stroke(app, ui, input, mods, capture_press, tool_press, &mut buttons);
     handle_canvas_tool_clicks(app, ui, view, input, mods, tool_press, &buttons);
+    if crate::retouch_ui::affinity_patch(app) && (buttons.started || buttons.dragged || buttons.stopped || buttons.clicked) {
+        ctx.request_repaint();
+    }
 }
 
 fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>, mods: egui::Modifiers, buttons: &mut crate::paint_mouse::Buttons) {
@@ -1147,6 +1151,7 @@ fn handle_canvas_tool_stroke(
     }
 }
 
+/// Handle discrete canvas clicks, including tools that need a click without a drag.
 fn handle_canvas_tool_clicks(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1255,7 +1260,7 @@ fn handle_canvas_tool_clicks(
     {
         crate::transform_tool::commit(app);
     }
-    if crate::cam_transform::active(app) && response.double_clicked() {
+    if crate::cam_transform::move_active(app) && response.double_clicked() {
         crate::cam_transform::commit(app);
     }
     // Crop: a double-click inside the frame commits it, as ↵ does (#1792).
@@ -1299,6 +1304,7 @@ struct CanvasOverlayInput<'a> {
     zoom_out: &'a dyn Fn(bool) -> bool,
 }
 
+/// Paint editing overlays in canvas order, including Patch outlines and placement handles.
 fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>, ants: Vec<egui::Shape>) {
     let ctx = input.ctx;
     let painter = input.painter;
@@ -1312,6 +1318,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     // The transform preview is image content: it goes under the grid and guides, which
     // stay visible across a layer being transformed (#5086); the box is drawn later.
     crate::transform_tool::draw_content(app, painter, xf);
+    crate::patch_preview::draw_motion(app, painter, xf, doc.id);
     // So are Puppet Warp's, Perspective Warp's and Vanishing Point's warped pixels (#7781).
     crate::distort_ui::draw_content(app, painter, xf);
     if app.ui.extras.grid && app.ui.view.extras {
@@ -1358,8 +1365,19 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     }
     crate::type_tool::draw_overlay(app, painter, xf);
     crate::transform_tool::draw_overlay(app, painter, xf);
+    if let Some(map) = crate::patch_preview::hover_map(app)
+        && let Some((doc_id, _, segs)) = &app.outline_cache
+        && *doc_id == doc.id
+    {
+        let time = ctx.input(|i| i.time);
+        marching_ants_mapped(painter, segs, time, |[x, y]| {
+            let (x, y) = map.apply(f64::from(x), f64::from(y));
+            xf.to_screen(x as f32, y as f32)
+        });
+    }
     crate::cam_transform::draw(app, painter, xf);
     crate::cam_preview::wake(app, painter.ctx());
+    crate::patch_preview::wake(app, painter.ctx());
     crate::distort_ui::draw_overlay(app, painter, xf);
     crate::perspective_crop_ui::draw_overlay(app, painter, xf);
     crate::retouch_ui::draw_source_marker(app, painter, xf);
@@ -1845,6 +1863,7 @@ fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, pri
     }
 }
 
+/// Draw one document view, including interactive tool input and overlays when it is primary.
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     // The Frame tool starts transforms from pointer events, which carry no context; the options
@@ -1924,6 +1943,14 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let xf = ViewXform { zoom: display_view.zoom / ppp, center: display_view.center, ..target_xf }.pixel_aligned_for(app, ppp);
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
+    if primary {
+        crate::cam_transform::cancel_stale(app);
+        app.patch_hover = if app.active_tool() == Tool::Patch && app.ui.dialogs.is_empty() && crate::retouch_ui::affinity_patch(app) {
+            response.hover_pos().map(|p| xf.to_doc(p))
+        } else {
+            None
+        };
+    }
     crate::paint_mouse::track_right_press(&response);
     let stroke_dismissal = primary && crate::shape_stroke_ui::dismiss_from_canvas(app, &response);
     let painter = ui.painter_at(rect);
@@ -1955,7 +1982,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         target_xf,
         pixel_grid,
     };
-    let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
+    // A positioned patch follows the current input frame before its sample quad is drawn.
+    let patch_motion = primary && crate::retouch_ui::affinity_patch(app) && app.ui.tool_options.patch_mode == "destination";
+    let painted = if crop_camera || patch_motion { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
     let img_rect = xf.doc_rect(doc.bounds());
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
@@ -2132,6 +2161,9 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     } else {
         xf
     };
+    if primary {
+        crate::patch_preview::update_motion(app, &ctx, idx, output);
+    }
     let (beyond, layer_edges, edge_rect, ants) = painted.unwrap_or_else(|| paint_canvas(app, ui, &display_view, xf, &paint_input));
     // A Hand drag (the tool, Space or the middle button) keeps every overlay on screen, as in
     // Photoshop: the Pen path being drawn, paths, guides, grid, transform box (#6592). Only the

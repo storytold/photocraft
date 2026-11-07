@@ -29,7 +29,8 @@ pub(crate) fn box_hit(app: &PhotocraftApp, t: &TransformSession, p: [f64; 2], to
     hit_with(t, p, tol, app.ui.tool_options.transform_reference_point)
 }
 
-fn hit_with(t: &TransformSession, p: [f64; 2], tol: f64, pivot: bool) -> Hit {
+/// Find the nearest enabled handle within tolerance, then fall back to the inside or outside of the quad.
+pub(crate) fn hit_with(t: &TransformSession, p: [f64; 2], tol: f64, pivot: bool) -> Hit {
     let d = |a: [f64; 2]| ((a[0] - p[0]).powi(2) + (a[1] - p[1]).powi(2)).sqrt();
     let mid = |i: usize| {
         let (a, b) = (t.quad[i], t.quad[(i + 1) % 4]);

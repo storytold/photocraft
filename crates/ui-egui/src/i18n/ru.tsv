@@ -2701,6 +2701,12 @@ cameraRaw	Roughness	Неровность
 	Patch Tool	Заплатка
 	Patch:	Заплатка:
 	Lasso around an area, then drag the selection	Обведите область лассо, затем перетащите выделение
+	Workflow	Режим работы
+	Selection is target	Выделение — цель
+	Selection is source	Выделение — источник
+	Lasso around an area, then click to place the patch	Обведите область лассо, затем щёлкните, чтобы разместить заплатку
+	Click to place the patch	Щёлкните, чтобы разместить заплатку
+	Adjust the patch, then click outside the box to apply	Настройте заплатку и щёлкните за рамкой, чтобы применить
 	Transform On Drop	Трансформировать при отпускании
 	Scale or rotate the moved area, then press {key}	Масштабируйте или поверните перемещённую область, затем нажмите {key}
 	Now drag the selection onto another area	Теперь перетащите выделение на другую область
@@ -3097,6 +3103,7 @@ cameraData	Lens	Объектив
 	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	Перетаскивание: рисовать от руки · {alt}-щелчок: прямой сегмент · отпустить на начальной точке: замкнуть
 	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	Клик: гладкая точка · двойной клик: угол · перетаскивание точки: переместить · клик по первой точке: замкнуть · {key} завершить
 	Scale:	Масштаб:
+	Rotation:	Поворот:
 	Snap to Origin	Привязать к началу координат
 	Link with Layer	Связать со слоем
 	Rasterize Layer Style	Растрировать стиль слоя

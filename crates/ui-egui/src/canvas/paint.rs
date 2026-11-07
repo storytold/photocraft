@@ -578,6 +578,7 @@ pub(super) fn draw_tool_state(app: &PhotocraftApp, painter: &egui::Painter, xf: 
     }
 }
 
+/// Draw the transient geometry of a canvas drag, including the offset outline for classic Patch.
 pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     draw_tool_state(app, painter, xf, painter.ctx().input(|i| i.pointer.hover_pos()));
     // Remove strokes waiting for ↩ stay tinted between drags.
@@ -658,7 +659,9 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             crate::tool_feedback::draw_ants(painter, &pts, true);
         }
         // Patch / Content-Aware Move dragging the selection: its outline follows the pointer.
-        Tool::Patch | Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+        Tool::Patch | Tool::ContentAwareMove
+            if (d.tool != Tool::Patch || !crate::retouch_ui::affinity_patch(app)) && crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) =>
+        {
             let start = d.start;
             let [dx, dy] = crate::retouch_ui::patch_offset(app, start, last);
             if let Some((_, _, segs)) = &app.outline_cache {

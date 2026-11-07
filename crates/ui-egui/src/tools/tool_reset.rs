@@ -203,7 +203,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Zoom => reset!(zoom_scrubby),
         Tool::SpotHealing => reset!(spot_type),
         Tool::Healing => reset!(clone_aligned, clone_sample),
-        Tool::Patch => reset!(patch_mode, patch_content_aware, patch_structure, patch_color),
+        Tool::Patch => reset!(patch_mode, patch_affinity, patch_rotation, patch_scale, patch_content_aware, patch_structure, patch_color),
         Tool::ContentAwareMove => reset!(cam_mode, cam_structure, cam_color, cam_transform_on_drop),
         Tool::RedEye => reset!(red_eye_pupil_size, red_eye_darken),
         Tool::CloneStamp => reset!(clone_aligned, clone_sample),

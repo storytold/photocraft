@@ -168,17 +168,30 @@ pub struct TypeTransform {
     pub(crate) gesture: crate::transform_tool::Gesture,
 }
 
-/// Content-Aware Move with Transform On Drop: the box on the dropped patch. The document is
+/// What the Patch box will edit, captured when it is placed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PatchTarget {
+    pub mode: String,
+    pub layer: Option<photocraft_doc::LayerId>,
+    pub target: serde_json::Value,
+}
+
+/// The box on a positioned Patch or Content-Aware Move. The document is
 /// unchanged until it is committed; this is view state.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CamTransform {
     pub document: u64,
     pub revision: u64,
+    /// The Patch target, or None for Content-Aware Move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch: Option<PatchTarget>,
     /// How far the selection was dragged; the box's `rect` is the selection's bounds there.
     pub offset: [i32; 2],
     pub frame: TransformSession,
     #[serde(skip)]
     pub(crate) gesture: Option<crate::transform_tool::Gesture>,
+    #[serde(skip)]
+    pub(crate) outside_drag: bool,
 }
 
 /// View-menu overlays.

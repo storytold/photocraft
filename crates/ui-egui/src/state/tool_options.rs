@@ -66,6 +66,10 @@ pub struct ToolOptions {
     pub spot_type: String,
     /// Patch: source (repair the selection) | destination (repair where it is dragged).
     pub patch_mode: String,
+    /// Normal Patch uses click placement and a transform box in the Affinity workflow.
+    pub patch_affinity: bool,
+    pub patch_rotation: f64,
+    pub patch_scale: [f64; 2],
     /// Patch: Content-Aware instead of Normal, with its Structure 1..7 and Color 0..10.
     pub patch_content_aware: bool,
     pub patch_structure: f32,
@@ -420,6 +424,9 @@ impl Default for ToolOptions {
             clone_sample: "current".into(),
             spot_type: "contentAware".into(),
             patch_mode: "source".into(),
+            patch_affinity: false,
+            patch_rotation: 0.0,
+            patch_scale: [100.0; 2],
             patch_content_aware: false,
             patch_structure: 4.0,
             patch_color: 0.0,
