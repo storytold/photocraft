@@ -310,13 +310,34 @@ fn issue_11807_ctrl_y_keeps_its_actual_proof_colors_binding_not_an_invented_redo
     assert_eq!(h.state().ui.tool, Tool::PerspectiveCrop);
 }
 
+/// Width is hint text, not an accessible label. Bind the crop row by its swap button,
+/// then take its sole TextInput immediately to the left, never Properties' Width SpinButton.
+fn crop_width(h: &App) -> egui_kittest::Node<'_> {
+    use egui_kittest::kittest::NodeT;
+
+    let swap = h.get_by_role_and_label(egui::accesskit::Role::Button, "Swaps height and width");
+    let row = swap.parent().expect("the production crop options row");
+    let swap_rect = swap.rect();
+    let mut fields = row.query_all_by_role(egui::accesskit::Role::TextInput).filter(|field| {
+        let rect = field.rect();
+        rect.right() <= swap_rect.left() && rect.top() <= swap_rect.center().y && rect.bottom() >= swap_rect.center().y
+    });
+    let width = fields.next().expect("the crop-width TextInput before its swap button");
+    assert!(fields.next().is_none(), "only crop width occupies this part of the options row");
+    assert!(width.rect().is_positive() && swap_rect.is_positive(), "the real controls have clickable geometry");
+    assert!(!width.accesskit_node().is_hidden() && !width.accesskit_node().is_disabled());
+    width
+}
+
 #[test]
 fn issue_11807_focused_width_field_keeps_typing_and_text_undo() {
     let mut h = app();
     quad(&mut h);
     let before = pending(&h);
-    h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Width").click();
+    assert_eq!(crop_width(&h).value().as_deref(), Some(""), "the actual crop-width editor starts empty");
+    crop_width(&h).click();
     h.run_steps(2);
+    assert!(crop_width(&h).is_focused(), "the clicked crop-width editor itself owns focus");
     assert_eq!(crate::shortcut_dispatch::Focus::of(&h.ctx), crate::shortcut_dispatch::Focus::Text);
     for (key, text) in [(Key::V, "v"), (Key::B, "b")] {
         h.event(Event::Text(text.into()));
@@ -324,15 +345,11 @@ fn issue_11807_focused_width_field_keeps_typing_and_text_undo() {
         assert_eq!(crate::shortcut_dispatch::Focus::of(&h.ctx), crate::shortcut_dispatch::Focus::Text);
         assert_eq!(pending(&h), before, "the field owns the tool letters");
     }
-    let value = || h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Width").value();
+    let value = || crop_width(&h).value();
     assert_eq!(value().as_deref(), Some("vb"), "letters were delivered to the actual production field");
     h.run_steps(40);
     tap(&mut h, Key::Z, command(false));
-    assert_ne!(
-        h.get_by_role_and_label(egui::accesskit::Role::TextInput, "Width").value().as_deref(),
-        Some("vb"),
-        "the focused text editor, not the quad, takes text Undo"
-    );
+    assert_ne!(crop_width(&h).value().as_deref(), Some("vb"), "the focused text editor, not the quad, takes text Undo");
     assert_eq!(pending(&h), before, "Undo belongs to the focused text editor, not the document");
     assert!(crate::shortcut_dispatch::take_log(&h.ctx).is_empty());
 }

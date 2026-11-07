@@ -210,12 +210,36 @@ pub fn commit(app: &mut PhotocraftApp) {
     }
 }
 
-/// ↵ commits and Esc cancels while the tool has something pending. True when a key was taken.
+/// ↵ commits and Esc cancels while the tool has something pending. True when handled exclusively.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if !active(app) || !pending(app) {
         return false;
     }
     use egui::{Key, Modifiers};
+    if app.ui.perspective_crop.is_some() {
+        // Only a completed quad owns these keys (#11807), not partial clicked corners.
+        // Match each event exactly: consume_key accepts extra Shift and would also take Redo.
+        let bindings = crate::shortcut_dispatch::bindings(app);
+        let undo = egui::KeyboardShortcut::new(Modifiers::COMMAND, Key::Z);
+        ctx.input_mut(|i| {
+            i.events.retain(|event| {
+                let egui::Event::Key { key, pressed: true, modifiers, .. } = event else { return true };
+                let bound = bindings.iter().find(|(_, sc)| crate::shortcuts::key_matches(sc, *key, *modifiers));
+                let undo = crate::shortcuts::key_matches(&undo, *key, *modifiers) && bound.is_some_and(|(id, _)| id == "edit.undo");
+                // Explicit assignments and modified/non-letter chords retain their existing policy.
+                let tool = bound.is_none()
+                    && !modifiers.command
+                    && !modifiers.ctrl
+                    && !modifiers.mac_cmd
+                    && !modifiers.alt
+                    && Tool::ALL
+                        .into_iter()
+                        .any(|tool| crate::tool_shortcuts::uses_default(app, tool) && crate::spring_tools::key_of(tool.key()) == Some(*key));
+                !undo && !tool
+            });
+        });
+        // Keep unrelated events in this batch available to normal shortcut dispatch below.
+    }
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
         commit(app);
         return true;
