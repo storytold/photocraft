@@ -88,6 +88,8 @@ impl Axis {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Device {
     pub id: u16,
+    /// `XIQueryDevice` name (for diagnostics).
+    pub name: String,
     /// The eraser end of a pen.
     pub eraser: bool,
     /// Pen axes (other valuators are not kept).
@@ -104,13 +106,26 @@ impl Device {
             .filter_map(|(number, label, min, max)| Some(Axis { kind: AxisKind::from_label(&label)?, number, min, max }))
             .take(MAX_AXES)
             .collect();
-        Self { id, eraser: name.to_ascii_lowercase().contains("eraser"), axes }
+        Self { id, name: name.to_string(), eraser: name.to_ascii_lowercase().contains("eraser"), axes }
     }
 
     /// A pen (tip or eraser): has a pressure axis.
     pub fn is_tablet(&self) -> bool {
         self.axes.iter().any(|a| a.kind == AxisKind::Pressure)
     }
+}
+
+/// Escape a device name before capping the single-line XInput inventory diagnostic.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn diagnostic_name(name: &str) -> String {
+    const MAX_NAME_CHARS: usize = 128;
+    let mut chars = name.chars().flat_map(char::escape_debug);
+    let mut name: String = chars.by_ref().take(MAX_NAME_CHARS).collect();
+    if chars.next().is_some() {
+        let _ = name.pop();
+        name.push('…');
+    }
+    name
 }
 
 /// The values a raw event carries: valuator numbers set in `mask` (32 per word, LSB first)
@@ -186,6 +201,35 @@ pub fn fp3232(integral: i32, frac: u32) -> f64 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn diagnostic_name_escapes_control_characters() {
+        let raw = "Pen eraser\nInjected\r\t\u{1b}[31m";
+        let device = wacom(9, raw);
+        let formatted = diagnostic_name(&device.name);
+        assert_eq!(formatted, r"Pen eraser\nInjected\r\t\u{1b}[31m");
+        assert!(!formatted.chars().any(char::is_control));
+        assert_eq!(device.name, raw);
+        assert!(device.eraser);
+    }
+
+    #[test]
+    fn diagnostic_name_preserves_plain_unicode_empty_and_truncation() {
+        for name in ["", "Wacom 绘图笔 Café🙂"] {
+            assert_eq!(diagnostic_name(name), name);
+        }
+        assert_eq!(diagnostic_name(&"笔".repeat(128)), "笔".repeat(128));
+        assert_eq!(diagnostic_name(&"笔".repeat(129)), format!("{}…", "笔".repeat(127)));
+    }
+
+    #[test]
+    fn diagnostic_name_caps_the_escaped_output() {
+        assert_eq!(diagnostic_name(&"\t".repeat(64)), r"\t".repeat(64));
+        let formatted = diagnostic_name(&"\t".repeat(65));
+        assert_eq!(formatted.chars().count(), 128);
+        assert!(formatted.ends_with('…'));
+        assert!(!formatted.chars().any(char::is_control));
+    }
+
     fn wacom(id: u16, name: &str) -> Device {
         Device::new(
             id,
@@ -250,6 +294,36 @@ mod tests {
         // A mouse moving means mouse; a master or unknown id changes nothing.
         assert_eq!(st.handle(12, [(0, 3.0)]), Update::Set(None));
         assert_eq!(st.handle(2, [(2, 3.0)]), Update::Keep);
+    }
+
+    /// #10460's pressure values use the device's advertised range, including sparse updates.
+    /// XIAllDevices can deliver master and slave copies; this is a protocol control sequence,
+    /// not a claim that the reporter supplied a complete ordered application event trace.
+    #[test]
+    fn intuos_pressure_survives_master_copies_sparse_motion_and_release() {
+        for master_first in [false, true] {
+            let mut st = State::default();
+            st.set_devices([Device::new(19, "Wacom Intuos3 6x11 Pen stylus", [(2, "Abs Pressure".into(), 0.0, 65536.0)]), mouse(12)]);
+            for raw in [53107.0, 50289.0, 17296.0, 0.0] {
+                if master_first {
+                    assert_eq!(st.handle(2, [(2, raw)]), Update::Keep);
+                }
+                let pen = sample(st.handle(19, valuators(&[1 << 2], &[raw])));
+                assert!((f64::from(pen.pressure) - raw / 65536.0).abs() < 1e-6);
+                if !master_first {
+                    assert_eq!(st.handle(2, [(2, raw)]), Update::Keep);
+                }
+                assert_eq!(sample(st.handle(19, [(0, 10.0), (1, 20.0)])).pressure, pen.pressure);
+                assert_eq!(st.handle(99, [(2, raw)]), Update::Keep, "an unknown device cannot replace a pen");
+                // A query refresh (DeviceChanged) preserves the same device's unchanged axes.
+                st.set_devices([Device::new(19, "Wacom Intuos3 6x11 Pen stylus", [(2, "Abs Pressure".into(), 0.0, 65536.0)]), mouse(12)]);
+                assert_eq!(sample(st.handle(19, [])).pressure, pen.pressure);
+            }
+            assert_eq!(sample(st.handle(19, [])).pressure, 0.0, "release without changed axes retains lift pressure");
+            assert_eq!(st.handle(12, [(0, 1.0)]), Update::Set(None), "a genuine mouse clears pen state");
+            st.set_devices([mouse(12)]);
+            assert_eq!(st.handle(19, [(2, 53107.0)]), Update::Keep, "removed devices do not revive pressure");
+        }
     }
 
     #[test]

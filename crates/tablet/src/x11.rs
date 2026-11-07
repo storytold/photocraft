@@ -21,11 +21,14 @@ use x11rb::protocol::xinput::{self, ConnectionExt as _, DeviceClassData, DeviceT
 use x11rb::protocol::xproto::ConnectionExt as _;
 use x11rb::rust_connection::RustConnection;
 
-use crate::xi::{Device, State, fp3232, valuators};
+use crate::xi::{Device, State, diagnostic_name, fp3232, valuators};
 use crate::{Error, Sample, Update, deliver};
 
 /// `XIAllDevices`: select for every device, slaves included.
 const ALL_DEVICES: u16 = 0;
+
+/// Query failures can repeat on device changes; keep diagnostics bounded for this reader.
+const MAX_QUERY_WARNINGS: u8 = 4;
 
 /// Start listening on `display` (`None` = `$DISPLAY`, the display winit uses). The connection
 /// and the XI2 version are checked before this returns; events are then read on a background
@@ -46,37 +49,66 @@ pub fn spawn(display: Option<&str>, callback: impl Fn(Option<Sample>) + Send + '
         .check()
         .map_err(|e| Error::Platform(format!("XISelectEvents: {e}")))?;
     let mut state = State::default();
-    state.set_devices(query_devices(&conn));
+    let mut query_warnings = 0;
+    let devices = query_devices(&conn, &mut query_warnings);
     std::thread::Builder::new()
         .name("photocraft-tablet-x11".into())
-        .spawn(move || run(&conn, &mut state, &callback))
+        .spawn(move || {
+            log_tablet_devices(&devices);
+            state.set_devices(devices);
+            run(&conn, &mut state, &callback, query_warnings);
+        })
         .map_err(|e| Error::Platform(format!("cannot start the tablet thread: {e}")))
 }
 
-fn run(conn: &RustConnection, state: &mut State, callback: &dyn Fn(Option<Sample>)) {
-    // A connection error (the display went away) ends the loop; malformed events are skipped by
-    // x11rb's parser and by the bounds in `xi`.
-    while let Ok(event) = conn.wait_for_event() {
+/// Read until the connection closes; diagnostic budgets live for this reader, not each stroke.
+fn run(conn: &RustConnection, state: &mut State, callback: &dyn Fn(Option<Sample>), mut query_warnings: u8) {
+    let mut reported_pressure = false;
+    loop {
+        let event = match conn.wait_for_event() {
+            Ok(event) => event,
+            Err(error) => {
+                log::warn!("tablet: XInput2 reader stopped: {error}");
+                break;
+            }
+        };
+        let mut raw_ids = None;
         let update = match event {
             Event::XinputRawMotion(e) | Event::XinputRawButtonPress(e) | Event::XinputRawButtonRelease(e) => {
+                raw_ids = Some((e.deviceid, e.sourceid));
                 let values: Vec<f64> = e.axisvalues.iter().map(|v| fp3232(v.integral, v.frac)).collect();
                 state.handle(e.deviceid, valuators(&e.valuator_mask, &values))
             }
             Event::XinputHierarchy(_) | Event::XinputDeviceChanged(_) => {
-                state.set_devices(query_devices(conn));
+                state.set_devices(query_devices(conn, &mut query_warnings));
                 Update::Keep
             }
             _ => Update::Keep,
         };
         if let Update::Set(sample) = update {
             deliver(callback, sample);
+            // Hovering at zero must not hide the first pressure-bearing sample. One receipt
+            // proves this reader reached the callback, without logging every event or stroke.
+            if !reported_pressure
+                && let (Some(sample), Some((device, source))) = (sample, raw_ids)
+                && sample.pressure > 0.0
+            {
+                reported_pressure = true;
+                log::debug!("tablet: first XInput2 pressure callback: device={device} source={source} pressure={}", sample.pressure);
+            }
         }
     }
 }
 
-/// The slave pointer devices with their pen valuators (empty on any error).
-fn query_devices(conn: &RustConnection) -> Vec<Device> {
-    let Ok(reply) = conn.xinput_xi_query_device(ALL_DEVICES).map_err(drop).and_then(|c| c.reply().map_err(drop)) else { return Vec::new() };
+/// The slave pointer devices with their pen valuators (empty on query error).
+fn query_devices(conn: &RustConnection, warnings: &mut u8) -> Vec<Device> {
+    let reply = match conn.xinput_xi_query_device(ALL_DEVICES).map_err(|e| e.to_string()).and_then(|c| c.reply().map_err(|e| e.to_string())) {
+        Ok(reply) => reply,
+        Err(error) => {
+            query_warning(warnings, format_args!("device query failed: {error}"));
+            return Vec::new();
+        }
+    };
     let mut out = Vec::new();
     for info in reply.infos.iter().take(crate::xi::MAX_DEVICES) {
         if info.type_ != DeviceType::SLAVE_POINTER && info.type_ != DeviceType::FLOATING_SLAVE {
@@ -85,7 +117,7 @@ fn query_devices(conn: &RustConnection) -> Vec<Device> {
         let name = String::from_utf8_lossy(&info.name);
         let valuators = info.classes.iter().take(crate::xi::MAX_AXES).filter_map(|c| match &c.data {
             DeviceClassData::Valuator(v) => {
-                let label = atom_name(conn, v.label)?;
+                let label = atom_name(conn, v.label, info.deviceid, warnings)?;
                 Some((v.number, label, fp3232(v.min.integral, v.min.frac), fp3232(v.max.integral, v.max.frac)))
             }
             _ => None,
@@ -95,10 +127,40 @@ fn query_devices(conn: &RustConnection) -> Vec<Device> {
     out
 }
 
-fn atom_name(conn: &RustConnection, atom: u32) -> Option<String> {
+/// Atom zero is legitimately unlabeled; failed lookups use the shared query-warning budget.
+fn atom_name(conn: &RustConnection, atom: u32, device: u16, warnings: &mut u8) -> Option<String> {
     if atom == 0 {
         return None;
     }
-    let reply = conn.get_atom_name(atom).ok()?.reply().ok()?;
+    let reply = match conn.get_atom_name(atom).map_err(|e| e.to_string()).and_then(|c| c.reply().map_err(|e| e.to_string())) {
+        Ok(reply) => reply,
+        Err(error) => {
+            query_warning(warnings, format_args!("label atom {atom} for device {device} could not be read: {error}"));
+            return None;
+        }
+    };
     Some(String::from_utf8_lossy(&reply.name).into_owned())
+}
+
+/// A shared per-reader budget covers query and label errors, including hotplug refreshes.
+fn query_warning(warnings: &mut u8, message: std::fmt::Arguments<'_>) {
+    if *warnings >= MAX_QUERY_WARNINGS {
+        return;
+    }
+    *warnings += 1;
+    let suffix = if *warnings == MAX_QUERY_WARNINGS { "; further query diagnostics suppressed" } else { "" };
+    log::warn!("tablet: XInput2 {message}{suffix}");
+}
+
+/// Log the initial pen inventory on the reader thread, after its creation succeeded.
+fn log_tablet_devices(devices: &[Device]) {
+    const MAX_PENS: usize = 16;
+    let total = devices.iter().filter(|d| d.is_tablet()).count();
+    let pens: Vec<_> = devices.iter().filter(|d| d.is_tablet()).take(MAX_PENS).map(|d| format!("{} (id {})", diagnostic_name(&d.name), d.id)).collect();
+    if pens.is_empty() {
+        log::info!("tablet: XInput2 reader started; no pen devices with an Abs Pressure valuator yet");
+        return;
+    }
+    let suffix = if total > pens.len() { format!("; {} further pen devices suppressed", total - pens.len()) } else { String::new() };
+    log::info!("tablet: XInput2 reader started; pen devices: {} ({total} total){suffix}", pens.join(", "));
 }
