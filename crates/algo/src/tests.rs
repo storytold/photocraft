@@ -27,9 +27,10 @@ fn shape_blur_admission_counts_prefix_sums_and_the_retained_kernel() {
     let threads = rayon::current_num_threads().max(1) as u64;
     let tile = auto_tile(&plain, area) as u64;
     let window = tile + 2 * reach as u64;
-    // The float windows every radius filter admits (4 channels of f32), then the f64 prefix sums.
-    let windows = (area.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (window * window + tile * tile * 3) * 16 * threads;
-    let prefix = (window + 1) * (window + 1) * 4 * 8 * threads;
+    // The source window and output tile each worker holds (4 channels of f32), then its f64
+    // prefix sums and row accumulator.
+    let windows = (area.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (window * window + tile * tile) * 16 * threads;
+    let prefix = ((window + 1) * (window + 1) + tile) * 4 * 8 * threads;
     assert_eq!(working_bytes(&plain, area, area, 4), windows + prefix);
 
     let size = (2 * shape_blur::radius(radius).ceil() as usize + 1) as i32;
@@ -52,8 +53,8 @@ fn radius_filter_admission_counts_no_more_workers_than_tiles() {
     let tiles = 6000u64.div_ceil(tile) * 4000u64.div_ceil(tile);
     let workers = (rayon::current_num_threads().max(1) as u64).min(tiles);
     let window = tile + 2 * reach as u64;
-    let windows = (area.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (window * window + tile * tile * 3) * 16 * workers;
-    let prefix = (window + 1) * (window + 1) * 4 * 8 * workers;
+    let windows = (area.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (window * window + tile * tile) * 16 * workers;
+    let prefix = ((window + 1) * (window + 1) + tile) * 4 * 8 * workers;
     assert_eq!(working_bytes(&plain, area, area, 4), windows + prefix);
     // One tile: one worker, whatever the thread count.
     let small = Rect::new(0, 0, 200, 200);
@@ -61,8 +62,140 @@ fn radius_filter_admission_counts_no_more_workers_than_tiles() {
     let Halo::Radius(r) = one.halo_for(small) else { panic!("Shape Blur has a radius halo") };
     let t = auto_tile(&one, small) as u64;
     let w = t + 2 * r as u64;
-    let single = (small.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (w * w + t * t * 3) * 16 + (w + 1) * (w + 1) * 4 * 8;
+    let single = (small.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (w * w + t * t) * 16 + ((w + 1) * (w + 1) + t) * 4 * 8;
     assert_eq!(working_bytes(&one, small, small, 4), single);
+}
+
+/// Every radius filter but Shape Blur keeps three tile-sized float buffers per worker beside its
+/// source window (output plus intermediate passes), and no Shape Blur terms (#11493).
+#[test]
+fn radius_filter_admission_counts_three_tile_buffers() {
+    let area = Rect::new(0, 0, 6000, 4000);
+    let blur = FilterParams::GaussianBlur { radius: 10.0 };
+    let Halo::Radius(reach) = blur.halo_for(area) else { panic!("Gaussian Blur has a radius halo") };
+    let tile = auto_tile(&blur, area) as u64;
+    let tiles = 6000u64.div_ceil(tile) * 4000u64.div_ceil(tile);
+    let workers = (rayon::current_num_threads().max(1) as u64).min(tiles);
+    let window = tile + 2 * reach as u64;
+    let windows = (area.size().area() * 16).min(RESULT_BUDGET as u64) * 3 + (window * window + 3 * tile * tile) * 16 * workers;
+    assert_eq!(working_bytes(&blur, area, area, 4), windows);
+}
+
+/// Issue #11493: Shape Blur radius 500 on 6000 x 4000 peaked at 5.37 GB on a 32-thread machine
+/// (24 workers, one per tile). Each worker holds its f32 source window, its f32 output tile and
+/// its f64 prefix sums (plus one f64 row): the admission counts exactly that, so the estimate
+/// stays above the measured peak and fits the default 8 GiB ceiling, while a run that really
+/// needs more than the ceiling is still refused.
+#[test]
+fn shape_blur_admission_counts_what_each_worker_holds() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(32).build().expect("thread pool");
+    let area = Rect::new(0, 0, 6000, 4000);
+    let plain = FilterParams::ShapeBlur { radius: 500.0, shape: BlurShape::Heart };
+    let Halo::Radius(reach) = plain.halo_for(area) else { panic!("Shape Blur has a radius halo") };
+    let tile = auto_tile(&plain, area) as u64;
+    assert_eq!(tile, 1024);
+    let window = tile + 2 * reach as u64;
+    let source = window * window * 4 * 4;
+    let output = tile * tile * 4 * 4;
+    let prefix = (window + 1) * (window + 1) * 4 * 8;
+    let row = tile * 4 * 8;
+    let per_worker = source + output + prefix + row;
+    let results = (RESULT_BUDGET as u64) * 3;
+    let estimate = pool.install(|| working_bytes(&plain, area, area, 4));
+    assert_eq!(estimate, results + per_worker * 24);
+    assert!(estimate >= 5_370_000_000, "{estimate}");
+    // Room under 8 GiB for the process itself (document, undo, the noise pass before it).
+    assert!(estimate < 7 << 30, "{estimate}");
+    // 20000 x 20000 at radius 1000 keeps 32 workers on 2048 px tiles busy: far over the ceiling.
+    let big = Rect::new(0, 0, 20_000, 20_000);
+    let wide = FilterParams::ShapeBlur { radius: 1000.0, shape: BlurShape::Circle };
+    assert!(pool.install(|| working_bytes(&wide, big, big, 4)) > 8 << 30);
+}
+
+/// Issue #11493 on a many-core host: the engine admits the halo-inflated output area (7002 x 5002
+/// for radius 500 on 6000 x 4000, 35 tiles), but the run clips it to the canvas first and only
+/// processes 24 tiles. With 64 threads the admission must count those 24 workers, so the
+/// repro's estimate fits the default 8 GiB ceiling with the CLI's ~416 MB resident set taken off,
+/// whatever the CI host's core count. Runs that really are too big are still refused.
+#[test]
+fn shape_blur_admission_counts_the_tiles_the_run_processes() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(64).build().expect("thread pool");
+    let canvas = Rect::new(0, 0, 6000, 4000);
+    let plain = FilterParams::ShapeBlur { radius: 500.0, shape: BlurShape::Heart };
+    let area = output_area(&plain, canvas, canvas, None);
+    assert_eq!((area.width(), area.height()), (7002, 5002));
+    let Halo::Radius(reach) = plain.halo_for(canvas) else { panic!("Shape Blur has a radius halo") };
+    let tile = auto_tile(&plain, canvas) as u64;
+    let window = tile + 2 * reach as u64;
+    let per_worker = (window * window + tile * tile) * 16 + ((window + 1) * (window + 1) + tile) * 4 * 8;
+    let results = (RESULT_BUDGET as u64) * 3;
+    let estimate = pool.install(|| working_bytes_in(&plain, area, canvas, 4, canvas));
+    assert_eq!(estimate, results + per_worker * 24);
+    assert!(estimate < (8u64 << 30) - 416_000_000, "{estimate}");
+    // Unclipped, the same run would be charged 35 workers and refused.
+    assert_eq!(pool.install(|| working_bytes(&plain, area, canvas, 4)), results + per_worker * 35);
+    // Radius 1000 at 8 channels is still far over a 1 GiB policy.
+    let wide = FilterParams::ShapeBlur { radius: 1000.0, shape: BlurShape::Circle };
+    let wide_area = output_area(&wide, canvas, canvas, None);
+    assert!(pool.install(|| working_bytes_in(&wide, wide_area, canvas, 8, canvas)) > 1 << 30);
+}
+
+/// The clipped admission is exactly the admission of the area the run processes, for radius and
+/// whole-bounds filters alike: nothing when the area misses the extent, the area itself when the
+/// extent holds it, and the overlap otherwise.
+#[test]
+fn clipped_admission_counts_the_area_inside_the_extent() {
+    let canvas = Rect::new(0, 0, 3000, 2000);
+    let size = (2 * shape_blur::radius(60.0).ceil() as usize + 1) as i32;
+    let mask = Image { rect: Rect::new(0, 0, size, size), ch: 1, data: vec![1.0; (size * size) as usize] };
+    let bounds_filter = FilterParams::PolarCoordinates { mode: PolarMode::RectangularToPolar };
+    assert_eq!(bounds_filter.halo_for(canvas), Halo::Bounds);
+    let filters = [
+        FilterParams::GaussianBlur { radius: 40.0 },
+        FilterParams::ShapeBlur { radius: 60.0, shape: BlurShape::Circle },
+        FilterParams::CustomShapeBlur { radius: 60.0, kernel: Some(std::sync::Arc::new(mask)) },
+        bounds_filter,
+    ];
+    let inside = Rect::new(500, 400, 1500, 1200);
+    let straddling = Rect::new(-200, -100, 1000, 900);
+    let overlap = Rect::new(0, 0, 1000, 900);
+    for p in &filters {
+        // Disjoint or empty: the run processes nothing, so admits nothing.
+        assert_eq!(working_bytes_in(p, Rect::new(4000, 0, 4500, 500), canvas, 4, canvas), 0, "{p:?}");
+        assert_eq!(working_bytes_in(p, Rect::EMPTY, canvas, 4, canvas), 0, "{p:?}");
+        assert_eq!(working_bytes_in(p, inside, canvas, 4, Rect::EMPTY), 0, "{p:?}");
+        // Inside the extent, or an extent larger than the area: unchanged.
+        assert_eq!(working_bytes_in(p, inside, canvas, 4, canvas), working_bytes(p, inside, canvas, 4), "{p:?}");
+        assert_eq!(working_bytes_in(p, canvas, canvas, 4, canvas.inflate(5000)), working_bytes(p, canvas, canvas, 4), "{p:?}");
+        // Straddling: the overlap.
+        assert_eq!(working_bytes_in(p, straddling, canvas, 4, canvas), working_bytes(p, overlap, canvas, 4), "{p:?}");
+        assert!(working_bytes_in(p, straddling, canvas, 4, canvas) > 0, "{p:?}");
+    }
+}
+
+/// A custom shape holds the same single output tile as a built-in one through the clipped path
+/// (plus its kernel), and the row accumulator is one tile row of f64 at the largest tile
+/// [`auto_tile`] makes (2048 px; `shape_blur::Prepared::checked_run` allocates `tile × channels`).
+#[test]
+fn custom_shape_blur_admission_counts_one_tile_buffer_at_the_largest_tile() {
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build().expect("thread pool");
+    let canvas = Rect::new(0, 0, 9000, 9000);
+    let radius = 1000.0f32;
+    let plain = FilterParams::ShapeBlur { radius, shape: BlurShape::Circle };
+    let tile = auto_tile(&plain, canvas) as u64;
+    assert_eq!(tile, 2048);
+    let Halo::Radius(reach) = plain.halo_for(canvas) else { panic!("Shape Blur has a radius halo") };
+    let window = tile + 2 * reach as u64;
+    let per_worker = (window * window + tile * tile) * 16 + ((window + 1) * (window + 1) + tile) * 4 * 8;
+    let results = (RESULT_BUDGET as u64) * 3;
+    let area = output_area(&plain, canvas, canvas, None);
+    assert_eq!(pool.install(|| working_bytes_in(&plain, area, canvas, 4, canvas)), results + per_worker * 4);
+
+    let size = (2 * shape_blur::radius(radius).ceil() as usize + 1) as i32;
+    let mask = Image { rect: Rect::new(0, 0, size, size), ch: 1, data: vec![1.0; (size * size) as usize] };
+    let custom = FilterParams::CustomShapeBlur { radius, kernel: Some(std::sync::Arc::new(mask)) };
+    let kernel = (size * size) as u64 * 4 + shape_blur::max_spans(size as usize) as u64 * 20;
+    assert_eq!(pool.install(|| working_bytes_in(&custom, area, canvas, 4, canvas)), results + per_worker * 4 + kernel);
 }
 
 fn fmt(s: SampleType) -> PixelFormat {

@@ -294,7 +294,7 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
             ctx.check()?;
             let prepare_kernel = |fp: &mut FilterParams| ctx.stage(0.0, 0.1, "Preparing filter", |ctl| crate::filters_ext::resolve_shape_kernel(fp, &p, ctl));
             let filter = |surf: &photocraft_raster::Surface, fp: &FilterParams, area, bounds, sel: Option<&photocraft_raster::Surface>, extent| {
-                let _working = photocraft_raster::memory::try_reserve_operation(algo::working_bytes(fp, area, bounds, surf.format().channels()))
+                let _working = photocraft_raster::memory::try_reserve_operation(algo::working_bytes_in(fp, area, bounds, surf.format().channels(), extent))
                     .map_err(EngineError::Other)?;
                 let out = ctx.stage(0.1, 1.0, &msg, |ctl| algo::apply_in_with(surf, fp, area, bounds, sel, extent, ctl));
                 filter_output(out, ctx.cancelled())
