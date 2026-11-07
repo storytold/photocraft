@@ -8,6 +8,9 @@ use super::{
     BlendMode, Layer, LayerId, MaskKind, PhotocraftApp, Rect, Sense, Tokens, Value, empty, icons, json, label, pos2, starts_blend_group, theme, vec2, widgets,
 };
 
+#[cfg(test)]
+mod resize_tests;
+
 // ----------------------------------------------------------------------------- layers
 
 /// The simple themes' single lock button. On the Background it converts the layer to a normal
@@ -106,7 +109,19 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
     ui.add_space(2.0);
 }
 
+/// Render Layers in a bounded child so its fixed controls cannot enlarge the dock.
 pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // A very short panel may clip its fixed controls, but must not grow its enclosing
+    // frame into the status bar. Keep the content's minimum size local to this child.
+    let rect = ui.available_rect_before_wrap();
+    let mut content = ui.new_child(egui::UiBuilder::new().id_salt("layers-content").max_rect(rect));
+    layers_content(app, &mut content);
+    ui.advance_cursor_after_rect(rect);
+}
+
+/// Reserve the action footer, then clip controls and scroll layer rows in the space above it.
+/// Actions collected from the controls and rows are dispatched after the panel is drawn.
+fn layers_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());
     let Some(st) = app.session.active() else {
@@ -121,6 +136,13 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut actions: Vec<(String, Value)> = Vec::new();
 
     let t = Tokens::get(ui.ctx());
+    // Reserve the footer before laying out controls or rows. In a short dock neither a
+    // partially visible row nor the fixed-height controls may push it into the status bar.
+    let panel = ui.available_rect_before_wrap().intersect(ui.clip_rect() - widgets::body_margin(t.pro));
+    let footer_h = widgets::footer_height(ui);
+    let footer_top = (panel.bottom() - footer_h).max(panel.top());
+    let clip = ui.clip_rect();
+    ui.set_clip_rect(clip.intersect(Rect::from_min_max(panel.min, pos2(panel.right(), footer_top))));
     app.reorder_preview_hit = false;
     if !ui.input(|i| i.pointer.primary_down()) || !app.ui.layers_panel_options.preview_on_canvas_when_reordering_layers {
         app.reorder_preview = None;
@@ -245,15 +267,13 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Top of the stack first, groups above their contents, closed groups' contents hidden (#126).
     let rows = crate::layer_tree_ui::panel_rows(app, &doc);
     let ctx = ui.ctx().clone();
-    let footer = widgets::footer_height(ui) + ui.spacing().item_spacing.y;
-    let fill = ui.available_height() > footer + 60.0;
-    let rows_h = if fill { ui.available_height() - footer } else { f32::INFINITY };
+    let rows_h = (footer_top - ui.cursor().top() - ui.spacing().item_spacing.y).max(0.0);
     egui::ScrollArea::vertical()
         // Keep each document's position independent, even when tab indices change (#5522).
         .id_salt(("layer-rows", doc.id.0))
         .max_height(rows_h)
-        .min_scrolled_height(if fill { rows_h } else { 0.0 })
-        .auto_shrink([false, !fill])
+        .min_scrolled_height(0.0)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             // The drag keys are set only by actual layer-row and fx drags, not clicks or
             // ordinary scrolling. The ScrollArea applies this to its own content.
@@ -389,7 +409,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ctx.data_mut(|d| d.remove::<MaskDrag>(mask_drag_key()));
         ctx.data_mut(|d| d.remove::<crate::smart_ui::FilterDrag>(crate::smart_ui::drag_key()));
     }
-    widgets::panel_footer(ui, |ui| {
+    ui.set_clip_rect(clip);
+    widgets::panel_footer_in(ui, panel, |ui| {
         let active_layer = active.and_then(|id| doc.layer(id));
         let (delete, label) = if app.ui.vector_mask_target && active_layer.is_some_and(|l| l.vector_mask.is_some()) {
             ("layer.vectorMask.delete", "Delete Vector Mask")

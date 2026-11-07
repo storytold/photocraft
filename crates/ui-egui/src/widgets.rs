@@ -54,8 +54,8 @@ pub use fields::{
 };
 pub(crate) use panel::body_margin;
 pub use panel::{
-    FOOTER_BAR, chevron_icon, drop_line, footer_height, hairline, panel_footer, panel_menu_button, pill_tab, section_label, style_spectrum_popup_menu, surface,
-    vline,
+    FOOTER_BAR, chevron_icon, drop_line, footer_height, hairline, panel_footer, panel_footer_in, panel_menu_button, pill_tab, section_label,
+    style_spectrum_popup_menu, surface, vline,
 };
 pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label};
 #[cfg(test)]
