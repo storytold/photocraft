@@ -246,6 +246,54 @@ pub fn rgba8_image(s: &Surface, area: Rect) -> Vec<[u8; 4]> {
     img
 }
 
+/// The surface's own stored channels over `area` as 0–255 levels, up to four channels (a missing
+/// fourth, e.g. no alpha, reads 255 so it never splits a region), read in parallel bands like
+/// [`rgba8_image`].
+///
+/// Unlike [`rgba8_image`] this converts nothing: a Lab document gives its stored Lightness, a and
+/// b, a CMYK document its inks. The Magic Wand measures Tolerance on those channels for the
+/// document modes the reference measures that way (#11785), where reading the picture as RGB
+/// would measure the Tolerance in a colour space the document is not in.
+///
+/// The wand calls this on 8-bit documents, where the levels are the stored bytes exactly; a
+/// deeper surface is quantized to the 8-bit grid here, which is why the mode-aware sampling is
+/// the caller's decision, not this function's.
+pub fn stored_levels_image(s: &Surface, area: Rect) -> Vec<[u8; 4]> {
+    let (w, h) = (area.width() as usize, area.height() as usize);
+    let mut img = vec![[0u8; 4]; w * h];
+    if w == 0 || h == 0 {
+        return img;
+    }
+    let stride = s.channels().max(1);
+    let take = stride.min(4);
+    // A surface without a stored alpha is fully opaque, like every other read of one.
+    let opaque = !s.format().alpha;
+    let band = 256usize;
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let read = |bi: usize, chunk: &mut [[u8; 4]]| {
+        let y0 = area.y0 + (bi * band) as i32;
+        let mut px = Vec::new();
+        s.read_region_into(Rect::new(area.x0, y0, area.x1, y0 + (chunk.len() / w) as i32), &mut px);
+        for (d, src) in chunk.iter_mut().zip(px.chunks_exact(stride)) {
+            for (k, v) in src.iter().take(take).enumerate() {
+                d[k] = q(*v);
+            }
+            if opaque {
+                d[3] = 255;
+            }
+        }
+    };
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        img.par_chunks_mut(w * band).enumerate().for_each(|(bi, c)| read(bi, c));
+    }
+    #[cfg(target_arch = "wasm32")]
+    img.chunks_mut(w * band).enumerate().for_each(|(bi, c)| read(bi, c));
+    img
+}
+
 /// A selected region: 8-bit coverage over `bbox` (row-major), the bounding box of the pixels
 /// touched (including the anti-aliased fringe).
 #[derive(Clone, Debug, PartialEq)]
@@ -266,10 +314,66 @@ impl Region {
     }
 }
 
+/// Whether a difference of exactly `tolerance` levels still matches a Magic Wand seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WandBound {
+    /// A difference of at most `tolerance` levels matches (≤). What the tools that sample the
+    /// picture as 8-bit RGBA do, and what their Tolerance has always meant.
+    AtMost,
+    /// A difference of *below* `tolerance` levels matches (<), with Tolerance 0 and 1 both
+    /// meaning "the same colour". The wand uses this on a document's own colour channels, where
+    /// the reference's Tolerance is measured finer than the document's 8-bit grid (#11785: see
+    /// [`wand_region_bound`]).
+    Below,
+}
+
+/// Integer greatest difference still matching `bound`, in stored levels.
+fn wand_max_diff(tolerance: f32, bound: WandBound) -> i32 {
+    match bound {
+        WandBound::AtMost => (tolerance + 1e-3).floor().max(0.0) as i32,
+        // `d < tolerance` on whole levels, so Tolerance 5 keeps differences 0..=4. A NaN or a
+        // negative Tolerance keeps exactly the same colour rather than selecting nothing, and a
+        // Tolerance past the scale keeps every difference.
+        WandBound::Below => {
+            if tolerance.is_nan() || tolerance <= 1.0 {
+                0
+            } else if tolerance >= 256.0 {
+                255
+            } else {
+                tolerance.ceil() as i32 - 1
+            }
+        }
+    }
+}
+
 /// Magic wand on 8-bit pixels: a scanline flood fill (or a global match) that only allocates a
 /// byte mark per pixel, then anti-aliases just the edges inside the touched bounding box.
 /// Matches [`magic_wand`] for 8-bit sources. `None` if the seed is outside `area`.
 pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
+    wand_region_bound(img, area, seed, tolerance, contiguous, anti_alias, WandBound::AtMost)
+}
+
+/// [`wand_region`] with the Tolerance bound chosen: [`WandBound::AtMost`] is [`wand_region`]
+/// itself, [`WandBound::Below`] is what the Magic Wand measures a document's own colour channels
+/// at (#11785).
+///
+/// Why the wand's document-channel comparison is exclusive at the bound: the reference measures
+/// Tolerance on the document's channels, finer than an 8-bit document stores them. Its table
+/// (#11785, 8-bit Lab document, grey ramp of ten 40 px blocks 100, 105, … 145, click on the
+/// 100 block) says Tolerance 5 reaches only the 100 block and Tolerance 32 reaches up to the
+/// 130 block. Here that ramp stores Lightness 108, 113, 118, 124, … 153 (L\* / 100 × 255), so
+/// the steps from the seed are 0, 5, 10, 16, …, 31, 36, …: 5 levels must not match at
+/// Tolerance 5 (unrounded they are 5.2), while 31 do at Tolerance 32 (unrounded 30.6). On the
+/// stored grid that is a difference below the Tolerance, not at most it.
+pub fn wand_region_bound(
+    img: &[[u8; 4]],
+    area: Rect,
+    seed: (i32, i32),
+    tolerance: f32,
+    contiguous: bool,
+    anti_alias: bool,
+    bound: WandBound,
+) -> Option<Region> {
     if !area.contains(seed.0, seed.1) {
         return None;
     }
@@ -278,7 +382,7 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
         return None;
     }
     let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
-    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
+    let tol = wand_max_diff(tolerance, bound);
     // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
     // split a transparent region into pieces, as if the copied source were still visible.
     let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
