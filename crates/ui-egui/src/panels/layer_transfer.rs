@@ -49,7 +49,9 @@ fn begin(app: &PhotocraftApp, ctx: &egui::Context, id: LayerId, grab: Option<[f6
         [one] => st.doc.layer(*one).map_or_else(String::new, |l| l.name.clone()),
         many => crate::i18n::trn(crate::i18n::current(), many.len() as u64, "{n} layer", "{n} layers"),
     };
-    let selection_only = grab.is_some() && st.doc.selection.is_some();
+    // Several selected layers move whole; the engine's selected-pixel copy intentionally accepts
+    // exactly one raster layer.
+    let selection_only = grab.is_some() && layers.len() == 1 && st.doc.selection.is_some();
     let t = Transfer { source: st.doc.id, layers: layers.iter().map(|l| l.0).collect(), grab, label, selection_only };
     ctx.data_mut(|d| d.insert_temp(key(), t));
     true
@@ -123,10 +125,6 @@ pub fn over_tab(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize) {
 /// layers there; while the button is held a ghost follows the pointer.
 pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(t) = get(ctx) else { return };
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-        clear(ctx);
-        return;
-    }
     let (pos, released, down) = ctx.input(|i| (i.pointer.latest_pos(), i.pointer.any_released(), i.pointer.primary_down()));
     let target = pos.and_then(|p| target_at(app, p));
     if !released {
@@ -162,8 +160,8 @@ pub(crate) fn prepare(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The document under screen point `p` that isn't the source, and the document point there
-/// (`None` in a tile: tiles keep their own views).
+/// The document under screen point `p` and the document point there. Arranged tiles use their
+/// own view transform, so selected pixels and plain layers both land at the visible drop point.
 fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 2]>)> {
     if !app.last_canvas_rect.contains(p) {
         return None;

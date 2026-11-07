@@ -135,6 +135,32 @@ fn a_selection_can_be_dragged_directly_between_tiled_canvases() {
 }
 
 #[test]
+fn a_plain_layer_can_be_dragged_directly_between_tiled_canvases() {
+    let (mut h, paint) = harness();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    h.run_steps(3);
+    let before = source_square(&h, paint);
+    let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).unwrap();
+    let view = &h.state().ui.views[0];
+    let source_xf = ViewXform {
+        rect: crate::rulers::content_rect(h.state(), cells[0].1.shrink(1.0)),
+        zoom: view.zoom / h.state().ppp,
+        center: view.center,
+        flip: false,
+        rotation: view.rotation,
+        aspect: 1.0,
+    };
+    let grab = source_xf.to_screen(9.0, 11.0);
+    let drop = cells[1].1.center();
+    drag_along(&mut h, &[grab, drop], Modifiers::NONE);
+    let (name, copied) = copy(&h);
+    assert_eq!(name, "paint");
+    assert_eq!(copied.size(), vec2(10.0, 10.0));
+    assert_eq!(source_square(&h, paint), before, "the tiled transfer preserves the source layer");
+}
+
+#[test]
 fn a_layers_panel_drag_onto_a_tab_drops_the_layer_where_it_is_released() {
     let (mut h, _) = harness();
     let row = h.get_by_role_and_label(Role::Button, "paint").rect().center();
