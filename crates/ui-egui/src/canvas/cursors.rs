@@ -203,6 +203,8 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
     true
 }
 
+/// Sample the image or targeted raster mask at (x, y) using the configured Sample Size.
+/// Write a valid sample to the foreground swatch, or to the background swatch with Alt.
 pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
     let rgb = if let Some((surface, canvas)) = eyedropper_mask_source(app) {
         sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)

@@ -8,6 +8,7 @@ use crate::{PhotocraftApp, Services};
 
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
+/// Select the Eyedropper and target a fully revealed mask on a red pixel layer or an Invert adjustment above it.
 fn app_with_mask(adjustment: bool) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
