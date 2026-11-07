@@ -55,7 +55,9 @@ impl Gesture {
         let gap = now - self.last;
         // A gesture still `New` here started where no control took it: a panel or the view's.
         let scrolling = matches!(self.owner, Owner::Elsewhere | Owner::New);
-        if scrolling && self.moved {
+        // A move past [`MOVE_IGNORE`], in an earlier frame or in this wheel's own, is going
+        // somewhere: the panel's gesture is over.
+        if scrolling && (self.moved || (moved && gap > MOVE_IGNORE)) {
             return false;
         }
         gap <= GESTURE_GAP || (scrolling && !self.moved && !moved && gap <= SCROLL_LATCH)

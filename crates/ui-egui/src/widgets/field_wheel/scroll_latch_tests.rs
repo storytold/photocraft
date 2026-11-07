@@ -231,3 +231,30 @@ fn a_move_within_100_ms_of_the_wheel_keeps_the_panel_scrolling() {
         assert!(s.offset > 0.0, "{control:?}: the panel scrolled");
     }
 }
+
+/// The move and the next wheel in one frame, 133 ms after the panel's last wheel: the move is
+/// going somewhere, so the control it reaches takes that wheel.
+#[test]
+fn a_move_in_the_wheels_own_frame_after_100_ms_lets_the_control_take_it() {
+    for control in ALL {
+        let mut h = harness(control);
+        h.hover_at(rect(&h, control).center() - vec2(0.0, 30.0));
+        h.run_steps(1);
+        swipe(&mut h, 40.0);
+        h.run_steps(4);
+        // Straight into the next frame's input: queued events would each get a frame of their own.
+        let at = rect(&h, control).center();
+        h.input_mut().events.push(egui::Event::PointerMoved(at));
+        h.input_mut().events.push(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -40.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(18);
+        let s = *h.state();
+        assert!(!untouched(&s), "{control:?}: the control under the moved pointer stepped: {s:?}");
+        assert_eq!(s.offset, 0.0, "{control:?}: the panel didn't scroll");
+    }
+}
