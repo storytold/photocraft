@@ -438,6 +438,58 @@ fn read_only_file_on_disk_is_never_replaced() {
     atomic_write(&d.0.join("fresh.psd"), b"x").unwrap();
 }
 
+/// #11185: the document portal's mount is `/run/user/<uid>/doc/…`, nowhere else.
+#[test]
+fn recognizes_document_portal_paths() {
+    assert!(is_document_portal_path(Path::new("/run/user/1000/doc/9f3abc/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/home/user/Documents/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/run/user/1000/other/file.psd")));
+    assert!(!is_document_portal_path(Path::new("/home/user/run/user/1000/doc/file.psd")));
+    assert!(!is_document_portal_path(Path::new("doc/file.psd")));
+}
+
+/// #11185: a failed save to a document-portal folder names the portal and the remedy in
+/// its error, at whichever step failed; a failure anywhere else does not.
+#[test]
+fn portal_failures_carry_the_portal_clause() {
+    let portal = Path::new("/run/user/1000/doc/9f3abc/file.psd");
+    let local = Path::new("/home/user/Documents/file.psd");
+    let e = rename_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), portal);
+    assert!(e.to_string().contains("document portal") && e.to_string().contains("Flatseal"), "{e}");
+    let e = rename_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), local);
+    assert!(!e.to_string().contains("document portal"), "{e}");
+    let e = write_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), portal, portal.parent().unwrap());
+    assert!(e.to_string().contains("document portal"), "{e}");
+    let e = write_error(io::Error::new(io::ErrorKind::PermissionDenied, "injected"), local, local.parent().unwrap());
+    assert!(!e.to_string().contains("document portal"), "{e}");
+}
+
+/// #11185 on Linux, where `$XDG_RUNTIME_DIR` is the test user's own `/run/user/<uid>`:
+/// a portal save the file system allows is NOT refused — the bytes land and no
+/// temporary file remains — and one whose rename fails carries the portal clause,
+/// keeps the original, and still cleans its temporary file up. (Other platforms
+/// have no `/run/user` to save into; the clause itself is covered everywhere by
+/// `portal_failures_carry_the_portal_clause`.)
+#[cfg(target_os = "linux")]
+#[test]
+fn document_portal_saves_run_and_failed_ones_name_the_portal() {
+    let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else { return };
+    let dir = PathBuf::from(runtime).join("doc").join(format!("pc-atomic-portal-{}", std::process::id()));
+    let p = dir.join("file.psd");
+    let run = || {
+        atomic_write(&p, b"new").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        assert_no_temp(&dir);
+        let fs = Faulty { fail_rename: Some(io::ErrorKind::PermissionDenied), ..Default::default() };
+        let e = atomic_write_with(&fs, NO_RETRY, &p, b"newer").unwrap_err();
+        assert!(e.to_string().contains("document portal"), "{e}");
+        assert_eq!(std::fs::read(&p).unwrap(), b"new");
+        assert_no_temp(&dir);
+    };
+    run();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn read_only_folder_errors_clearly_and_never_writes_in_place() {
