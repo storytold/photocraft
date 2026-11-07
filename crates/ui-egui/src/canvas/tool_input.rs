@@ -109,6 +109,11 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
     Some((armed, mods))
 }
 
+/// The handlers a pointer event meets before the tool: dropping a floating piece the press won't
+/// drag, snapping, and the overlays and modifier gestures (Free Transform, sticky keys, brush
+/// resize, the ⌥ eyedropper, path and shape widgets…) that take the event for themselves. `None`:
+/// one of them handled it; otherwise the event as it came and as filtered (snapped, the Move
+/// tool's axis lock), and the modifiers with the sticky keys applied.
 fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, armed: bool) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
@@ -116,8 +121,9 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::move_box::pointer(app, raw) {
         return None;
     }
-    // A press anywhere but on the floating piece (or with ⇧ / ⌥, to draw) drops it first; the
-    // Move tool (⌘ with a painting tool too, `event_tool`) drags it from anywhere.
+    // A press that doesn't drag the floating piece drops it first: off it, with ⇧ / ⌥ to draw, or a
+    // plain selection-tool press on it, which moves the outline only (#11368). The Move tool (⌘
+    // with a painting tool too, `event_tool`) drags it from anywhere.
     if let ToolEvent::Down { x, y, .. } = raw
         && app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some())
         && !crate::move_ui::moves_selected_pixels_with(app, event_tool(app, mods))
@@ -673,12 +679,13 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
 }
 
 /// Does a press with `tool` at `p` drag the selection rather than draw a new one? `Some(true)`
-/// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; a floating piece moves with a plain
-/// drag; the Polygonal Lasso and Magic Wand need ⌘, as a plain press there places or samples),
-/// `Some(false)` just the outline (no ⇧ / ⌥ and the options bar on New Selection, so a combining
-/// drag still draws). The Single Row / Single Column Marquee drag the outline too (#11392); a click
-/// without moving, inside the selection or on a floating piece (dropped first), still selects the
-/// line under the pointer (`finish_gesture`).
+/// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; the Polygonal Lasso and Magic Wand need
+/// ⌘, as a plain press there places or samples), `Some(false)` just the outline (no ⇧ / ⌥ and the
+/// options bar on New Selection, so a combining drag still draws). A plain drag on a floating piece
+/// moves the outline too, as in Photoshop: the press drops the piece first (#11368). The Single Row
+/// / Single Column Marquee drag the outline too (#11392); a click without moving, inside the
+/// selection or on a floating piece (dropped first), still selects the line under the pointer
+/// (`finish_gesture`).
 pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifiers) -> Option<bool> {
     // Click-driven selection tools (a press places a point or samples): only ⌘ drags the
     // selection, and not while a polygon is being drawn.
@@ -690,11 +697,18 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     // ⌘ cuts, ⌘⌥ copies (`select.float`'s `copy`).
     let cut = mods.command && !mods.shift;
     if let Some(f) = app.session.active().and_then(photocraft_engine::float_cmds::floating) {
-        // A press on the piece's outline (where its ants are) drags it; one in the margin the cut
-        // left of the selection starts a new selection (#7538).
+        // A ⌘ press on the piece's outline (where its ants are) drags it; a plain one drags the
+        // outline, dropping the piece where it is first (`filter_event_before_tool`, #11368); one
+        // in the margin the cut left of the selection starts a new selection (#7538).
         let at = [p[0] - f64::from(f.offset.0), p[1] - f64::from(f.offset.1)];
         let on = f.parts.outline().map_or_else(|| inside_selection(app, at), |o| covers(o, at));
-        return (on && !mods.shift && (!mods.alt || mods.command) && (cut || !clicky)).then_some(true);
+        if !on {
+            return None;
+        }
+        if cut {
+            return Some(true);
+        }
+        return (!clicky && !mods.command && selection_mode(app, mods) == "replace").then_some(false);
     }
     if !inside_selection(app, p) {
         return None;
