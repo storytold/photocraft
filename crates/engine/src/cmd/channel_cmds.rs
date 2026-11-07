@@ -54,9 +54,10 @@ fn can_split(s: &Session) -> std::result::Result<(), String> {
         Ok(())
     }
 }
+/// Merge Channels needs a document per colour channel: three at least (RGB and Lab; CMYK four).
 fn can_merge(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
-    if mergeable(s).len() >= 2 { Ok(()) } else { Err("Merge Channels needs at least two open grayscale documents of the same size".into()) }
+    if mergeable(s).len() >= 3 { Ok(()) } else { Err("Merge Channels needs at least three open grayscale documents of the same size".into()) }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -173,7 +174,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Calculations…",
             ["Image"],
             None,
-            r##"{"source1":{"document","layer","channel","invert"},"source2":{…},"blending":"multiply|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"mask":{…}?,"result":"newChannel|newDocument|selection"="newChannel","name":str?}"##,
+            r##"{"source1":{"document","layer","channel","invert"},"source2":{…},"blending":"multiply|…"="multiply","opacity":0..100=100,"scale":1..2=1,"offset":-255..255=0,"mask":{…}?,"result":"newChannel|newDocument|selection"="newChannel","name":str?} (source channel: {"targeted":true} for one targeted colour/alpha, {"name":text} for a literal alpha name, {"color":text} for a colour component; source layer: {"name":text} for a literal layer name)"##,
             has_doc,
             calculations
         ),

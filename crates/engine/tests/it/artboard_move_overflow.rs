@@ -102,6 +102,7 @@ fn locked_cross_board_moves_still_reparent_without_translation() {
     }
 }
 
+/// Same-board moves and moves that leave or enter an artboard retain canvas pixels.
 #[test]
 fn same_board_and_moves_without_two_boards_keep_canvas_position() {
     let (mut s, red, a, b) = two_boards([-1_500_000_000, 0], [1_500_000_000, 0]);
@@ -148,6 +149,7 @@ fn nonpixel_layer(s: &mut Session, board: LayerId, kind: &str, state: &str) -> L
     id
 }
 
+/// Adjustment/Fill layers with no positioned state or only unlinked masks can move across distant boards while retaining layer state and undo.
 fn unpositioned_move(kind: &str) {
     for state in ["none", "unlinked mask", "unlinked vector"] {
         let (mut s, _red, a, b) = two_boards([-1_500_000_000, 0], [1_500_000_000, 0]);
@@ -176,6 +178,7 @@ fn unpositioned_fill_can_reparent_between_distant_boards() {
     unpositioned_move("fill");
 }
 
+/// Linked pixel/vector masks and effects references require translation, so overflow refuses before document, history, or selection is committed.
 #[test]
 fn positioned_adjustment_and_fill_overflow_still_refuses_atomically() {
     for kind in ["adjustment", "fill"] {
@@ -199,6 +202,7 @@ fn positioned_adjustment_and_fill_overflow_still_refuses_atomically() {
     }
 }
 
+/// An ordinary cross-board move and preview match normal translation for each tested nonpixel state.
 #[test]
 fn representable_nonpixel_moves_match_the_existing_translation_path() {
     for kind in ["adjustment", "fill"] {
