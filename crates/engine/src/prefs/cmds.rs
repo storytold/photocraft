@@ -118,6 +118,9 @@ fn toolbar(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(o) = ids("order") {
             pr.toolbar.order = o;
         }
+        if let Some(d) = p.get("disableHiddenShortcuts").and_then(Value::as_bool) {
+            pr.toolbar.disable_hidden_shortcuts = d;
+        }
     });
     Ok(serde_json::to_value(&s.prefs().toolbar).unwrap_or_default())
 }
@@ -200,6 +203,14 @@ pub fn specs() -> Vec<CommandSpec> {
             menus,
             true
         ),
-        spec!("edit.toolbar", "Toolbar…", ["Edit"], None, r##"{"hidden":["<tool>",…]?,"order":["<tool>",…]?,"reset":bool=false}"##, toolbar, true),
+        spec!(
+            "edit.toolbar",
+            "Toolbar…",
+            ["Edit"],
+            None,
+            r##"{"hidden":["<tool>",…]?,"order":["<tool>",…]?,"disableHiddenShortcuts":bool?,"reset":bool=false}"##,
+            toolbar,
+            true
+        ),
     ]
 }

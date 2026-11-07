@@ -449,6 +449,14 @@ fn menus_and_toolbar_customisation_persist() {
     s.execute("edit.toolbar", json!({"hidden": ["Sponge"]})).unwrap();
     let back: Preferences = serde_json::from_str(&s.prefs_to_json()).unwrap();
     assert_eq!(back.toolbar.hidden, vec!["Sponge".to_string()]);
+    // Disable Shortcuts for Hidden Toolbar Extras: off by default, kept, and Restore Defaults clears it.
+    assert!(!back.toolbar.disable_hidden_shortcuts);
+    s.execute("edit.toolbar", json!({"disableHiddenShortcuts": true})).unwrap();
+    let back: Preferences = serde_json::from_str(&s.prefs_to_json()).unwrap();
+    assert!(back.toolbar.disable_hidden_shortcuts);
+    assert_eq!(back.toolbar.hidden, vec!["Sponge".to_string()], "setting the checkbox keeps the hidden tools");
+    s.execute("edit.toolbar", json!({"reset": true})).unwrap();
+    assert!(!s.prefs().toolbar.disable_hidden_shortcuts);
 }
 
 /// #5096: Edit › Menus can't hide the way back into itself, Preferences, Save or Exit.

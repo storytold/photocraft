@@ -40,6 +40,81 @@ fn tool_key_brings_back_the_groups_last_used_tool() {
     assert_eq!(app.ui.tool, Tool::MagneticLasso);
 }
 
+/// By default a tool hidden in Edit › Toolbar keeps its letter and its place in the ⇧ cycle, as in
+/// Photoshop (measured: Lasso moved to Extra Tools, L still picks it, ⇧L cycles onto it).
+#[test]
+fn hidden_tools_keep_their_keys_by_default() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    assert!(!app.session.prefs().toolbar.disable_hidden_shortcuts);
+    app.session.edit_prefs(|p| p.toolbar.hidden = ["Brush", "Gradient", "Lasso"].map(String::from).to_vec());
+    for (key, tool) in [(Key::G, Tool::Gradient), (Key::B, Tool::Brush), (Key::L, Tool::Lasso)] {
+        app.ui.tool = Tool::Move;
+        press_key(&mut app, &ctx, key, Modifiers::NONE);
+        assert_eq!(app.ui.tool, tool);
+    }
+    // ⇧G from Paint Bucket wraps onto the hidden Gradient.
+    app.ui.tool = Tool::PaintBucket;
+    press_key(&mut app, &ctx, Key::G, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Gradient);
+}
+
+/// With "Disable Shortcuts for Hidden Toolbar Extras" ticked, a tool hidden in Edit › Toolbar is
+/// out of its key's choice too: right after launch nothing is remembered, and the key used to pick
+/// the group's first tool while the toolbar showed another.
+#[test]
+fn tool_keys_skip_tools_hidden_from_the_toolbar() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.session.edit_prefs(|p| {
+        p.toolbar.hidden = ["Brush", "Gradient", "Lasso"].map(String::from).to_vec();
+        p.toolbar.disable_hidden_shortcuts = true;
+    });
+    for (key, tool) in [(Key::G, Tool::PaintBucket), (Key::B, Tool::Pencil), (Key::L, Tool::PolygonLasso)] {
+        app.ui.tool = Tool::Move;
+        press_key(&mut app, &ctx, key, Modifiers::NONE);
+        assert_eq!(app.ui.tool, tool);
+    }
+    // Shift+key cycles the visible tools only, wrapping past the hidden one.
+    app.ui.tool = Tool::MixerBrush;
+    press_key(&mut app, &ctx, Key::B, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Pencil);
+    app.ui.tool = Tool::PaintBucket;
+    press_key(&mut app, &ctx, Key::G, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::PaintBucket);
+    // A tool remembered from before it was hidden does not come back.
+    app.ui.tool = Tool::PolygonLasso;
+    press_key(&mut app, &ctx, Key::L, Modifiers::NONE);
+    assert_eq!(app.ui.group_tool('L'), Some(Tool::PolygonLasso));
+    app.session.edit_prefs(|p| p.toolbar.hidden.push("PolygonLasso".to_string()));
+    app.ui.tool = Tool::Move;
+    press_key(&mut app, &ctx, Key::L, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::MagneticLasso);
+    // A group hidden whole: the key and Shift+key do nothing (measured in Photoshop with the whole
+    // Lasso group in Extra Tools and the checkbox ticked).
+    app.session.edit_prefs(|p| p.toolbar.hidden.push("PaintBucket".to_string()));
+    app.ui.tool = Tool::Move;
+    press_key(&mut app, &ctx, Key::G, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Move);
+    press_key(&mut app, &ctx, Key::G, Modifiers::SHIFT);
+    assert_eq!(app.ui.tool, Tool::Move);
+    // Unticked again, the hidden tools answer their letter.
+    app.session.edit_prefs(|p| p.toolbar.disable_hidden_shortcuts = false);
+    press_key(&mut app, &ctx, Key::G, Modifiers::NONE);
+    assert!(matches!(app.ui.tool, Tool::Gradient | Tool::PaintBucket));
+    app.session.edit_prefs(|p| p.toolbar.disable_hidden_shortcuts = true);
+    // Brush stays on the toolbar under a shortcut of its own, so B has no hidden tool to fall back on.
+    app.session.edit_prefs(|p| {
+        p.toolbar.hidden = ["Pencil", "MixerBrush", "ColorReplacement"].map(String::from).to_vec();
+        p.shortcuts.insert("tools.select.brush".to_string(), "F6".to_string());
+    });
+    app.ui.tool = Tool::Move;
+    press_key(&mut app, &ctx, Key::B, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Move);
+}
+
 /// #3296: by default T keeps the current type tool and only Shift+T cycles, as in Photoshop.
 #[test]
 fn shift_key_tool_switch_is_the_default() {
@@ -183,7 +258,11 @@ fn selection_bounds(app: &PhotocraftApp) -> Option<[i32; 4]> {
 
 fn press_key(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
     ctx.begin_pass(egui::RawInput {
-        events: vec![egui::Event::ModifiersChanged(modifiers), egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }],
+        events: vec![
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+            egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+        ],
         ..Default::default()
     });
     handle(app, ctx);

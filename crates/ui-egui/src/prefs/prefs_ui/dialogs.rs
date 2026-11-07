@@ -172,6 +172,7 @@ pub fn open_shortcuts(app: &mut PhotocraftApp, tab: u64) -> u64 {
         "hidden": p.menus.hidden,
         "colors": p.menus.colors,
         "toolbarHidden": p.toolbar.hidden,
+        "toolbarDisableShortcuts": p.toolbar.disable_hidden_shortcuts,
         "selected": "",
         "capture": false,
         "message": "",
@@ -212,10 +213,15 @@ pub(super) fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             }
         });
     });
+    // Off by default: a hidden tool keeps its letter unless this is ticked, as in Photoshop.
+    let mut disable = f.get("toolbarDisableShortcuts").and_then(Value::as_bool).unwrap_or(false);
+    crate::widgets::checkbox(ui, &mut disable, tl!("Disable Shortcuts for Hidden Toolbar Extras"));
     if ui.button(tl!("Restore Defaults")).clicked() {
         hidden.clear();
+        disable = false;
     }
     f.insert("toolbarHidden".into(), json!(hidden));
+    f.insert("toolbarDisableShortcuts".into(), json!(disable));
 }
 
 pub(super) fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -392,13 +398,17 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
             let hidden = f.get("hidden").cloned().unwrap_or(json!([]));
             let colors = f.get("colors").cloned().unwrap_or(json!({}));
             let toolbar = f.get("toolbarHidden").cloned().unwrap_or(json!([]));
+            let disable = f.get("toolbarDisableShortcuts").and_then(Value::as_bool).unwrap_or(false);
             let sets = f.get("sets").cloned().unwrap_or(json!({}));
             let active = f.get("activeSet").cloned().unwrap_or(json!(""));
             app.run(
                 "edit.keyboardShortcuts",
                 json!({"reset": true, "set": ov, "alternates": alt, "allowUnknown": true, "removeConflicts": false, "sets": sets, "activeSet": active}),
             )?;
-            app.run("prefs.set", json!({"values": {"menus": {"hidden": hidden, "colors": colors}, "toolbar": {"hidden": toolbar}}}))
+            app.run(
+                "prefs.set",
+                json!({"values": {"menus": {"hidden": hidden, "colors": colors}, "toolbar.hidden": toolbar, "toolbar.disableHiddenShortcuts": disable}}),
+            )
         }
         "presets" => Ok(Value::Null),
         "presetsIO" => {

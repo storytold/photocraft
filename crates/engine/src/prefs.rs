@@ -1186,6 +1186,9 @@ impl MenuCustomization {
 pub struct ToolbarCustomization {
     pub hidden: Vec<String>,
     pub order: Vec<String>,
+    /// "Disable Shortcuts for Hidden Toolbar Extras": tool letters and their ⇧ cycle skip the
+    /// hidden tools. Off by default, so a hidden tool still answers its letter, as in Photoshop.
+    pub disable_hidden_shortcuts: bool,
 }
 
 /// Layer Mask Display Options (double-click the layer mask's row in the Channels panel, or Mask

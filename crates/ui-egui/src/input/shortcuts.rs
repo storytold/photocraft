@@ -921,10 +921,22 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
             if cycle_shift {
                 group.sort_by_key(|x| crate::panels::toolbar::toolbar_position(*x));
             }
+            // Tools hidden in Edit › Toolbar keep their letter, as in Photoshop, unless "Disable Shortcuts
+            // for Hidden Toolbar Extras" is ticked: then the key and its ⇧ cycle skip them.
+            let toolbar = &app.session.prefs().toolbar;
+            if toolbar.disable_hidden_shortcuts {
+                let hidden: Vec<Tool> = toolbar.hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
+                group.retain(|x| !hidden.contains(x));
+            }
+            // Nothing left to pick: every tool of the letter is hidden (Photoshop then ignores the key
+            // too), or the visible ones have shortcuts of their own.
+            if group.is_empty() {
+                return true;
+            }
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
-                None => app.ui.group_tool(t.key()).filter(|last| group.contains(last)).unwrap_or(group[0]),
+                None => app.ui.group_tools.iter().copied().find(|last| group.contains(last)).unwrap_or(group[0]),
             };
             crate::tool_memory::ended_by_tool(app);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
