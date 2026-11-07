@@ -193,15 +193,28 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
             Adjustment::ChannelMixer { matrix, monochrome }
         }
         "gradientMap" => {
-            let (stops0, rev0, dither0) = match base {
-                Some(Adjustment::GradientMap { stops, reverse, dither }) => (stops.clone(), *reverse, *dither),
-                _ => (vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], false, false),
+            let (stops0, rev0, dither0, source0) = match base {
+                Some(Adjustment::GradientMap { stops, reverse, dither, source }) => (stops.clone(), *reverse, *dither, source.clone()),
+                _ => (vec![(0.0, [0.0; 3]), (1.0, [1.0; 3])], false, false, None),
             };
-            let stops = match p.get("stops") {
-                None | Some(Value::Null) => stops0,
-                Some(v) => gradient_stops(&cmd, v)?,
+            // Photoshop's gradient (#8351): unchanged, it keeps the stops already baked from it
+            // (a Lab document's bake isn't reproduced from sRGB stops); changed, it is baked again.
+            // Plain `stops` (or `"source": null`) replace it.
+            let (stops, source) = match (p.get("source"), p.get("stops")) {
+                (Some(Value::Null), stops) => (stops.filter(|v| !v.is_null()).map_or(Ok(stops0), |v| gradient_stops(&cmd, v))?, None),
+                (Some(v), _) => {
+                    let same = source0.as_ref().is_some_and(|s0| source_params(s0) == *v);
+                    if same {
+                        (stops0, source0)
+                    } else {
+                        let src = gradient_source(&cmd, v)?;
+                        (photocraft_io::gradient_bake::bake_source(&src), Some(src))
+                    }
+                }
+                (None, None | Some(Value::Null)) => (stops0, source0),
+                (None, Some(v)) => (gradient_stops(&cmd, v)?, None),
             };
-            Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)? }
+            Adjustment::GradientMap { stops, reverse: r.boolean("reverse", rev0)?, dither: r.boolean("dither", dither0)?, source }
         }
         "selectiveColor" => crate::adjust_cmds::selective_from_params(p, base.filter(|b| matches!(b, Adjustment::SelectiveColor { .. })))?,
         "colorLookup" => crate::adjust_cmds::lookup_from_params(p, base.filter(|b| matches!(b, Adjustment::ColorLookup { .. })))?,
@@ -273,8 +286,12 @@ pub fn to_params(adj: &Adjustment) -> Value {
             }
             v
         }
-        Adjustment::GradientMap { stops, reverse, dither } => {
-            json!({"stops": stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(), "reverse": reverse, "dither": dither})
+        Adjustment::GradientMap { stops, reverse, dither, source } => {
+            let mut v = json!({"stops": stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(), "reverse": reverse, "dither": dither});
+            if let Some(src) = source {
+                v["source"] = source_params(src);
+            }
+            v
         }
         Adjustment::SelectiveColor { relative, adjustments } => {
             let mut v = json!({"method": if *relative { "relative" } else { "absolute" }});
@@ -1066,6 +1083,45 @@ fn gradient_stops(cmd: &str, v: &Value) -> Result<Vec<(f32, [f32; 3])>> {
     }
     out.sort_by(|a, b| a.0.total_cmp(&b.0));
     Ok(out)
+}
+
+/// A Gradient Map's Photoshop gradient as params: `{"stops": [[location, "#rrggbb"], …],
+/// "midpoints": [0.05..0.95 per segment], "smoothness": 0..1, "method": name}`.
+pub fn source_params(src: &photocraft_doc::adjust::GradientSource) -> Value {
+    json!({
+        "stops": src.stops.iter().map(|(t, c)| json!([t, hex(*c)])).collect::<Vec<_>>(),
+        "midpoints": src.midpoints,
+        "smoothness": src.smoothness,
+        "method": src.method,
+    })
+}
+
+/// [`source_params`] read back, checked: 2..=64 stops (sorted), one midpoint (0.05..0.95) per
+/// segment (default halfway), Smoothness 0..1 (default 0), a known method (default classic).
+fn gradient_source(cmd: &str, v: &Value) -> Result<photocraft_doc::adjust::GradientSource> {
+    let o = v.as_object().ok_or_else(|| bad(cmd, "`source` must be {stops, midpoints?, smoothness?, method?}"))?;
+    let stops = gradient_stops(cmd, o.get("stops").ok_or_else(|| bad(cmd, "`source.stops` is missing"))?)?;
+    let segments = stops.len() - 1;
+    let midpoints = match o.get("midpoints") {
+        None | Some(Value::Null) => vec![0.5; segments],
+        Some(Value::Array(a)) if a.len() == segments => a
+            .iter()
+            .map(|m| m.as_f64().filter(|m| m.is_finite() && (0.05..=0.95).contains(m)).map(|m| m as f32))
+            .collect::<Option<Vec<f32>>>()
+            .ok_or_else(|| bad(cmd, "`source.midpoints` must be numbers in 0.05..0.95"))?,
+        Some(_) => return Err(bad(cmd, format!("`source.midpoints` must hold {segments} numbers, one per segment"))),
+    };
+    let smoothness = match o.get("smoothness") {
+        None | Some(Value::Null) => 0.0,
+        Some(s) => s.as_f64().filter(|s| s.is_finite() && (0.0..=1.0).contains(s)).ok_or_else(|| bad(cmd, "`source.smoothness` must be 0..1"))? as f32,
+    };
+    let method = match o.get("method").and_then(Value::as_str) {
+        None => "classic".to_string(),
+        Some(m) => photocraft_io::gradient_bake::Method::from_name(m)
+            .map(|m| m.name().to_string())
+            .ok_or_else(|| bad(cmd, "`source.method` must be classic, perceptual, linear or smooth"))?,
+    };
+    Ok(photocraft_doc::adjust::GradientSource { stops, midpoints, smoothness, method })
 }
 
 /// Params with the private keys (`layer`, `coalesce`, `__kind`) removed.
