@@ -164,6 +164,7 @@
 	Right	Kanan
 	Open Recent	Terakhir Dibuka
 	Clear Recent Files	Hapus Daftar Berkas Terakhir
+	Clear Recent File List	Hapus Daftar Berkas Terakhir
 	Remove from Recent	Hapus dari Daftar Terakhir
 	Remove {name} from Recent	Hapus {name} dari Daftar Terakhir
 	Close	Tutup
@@ -172,6 +173,10 @@
 	Restore	Pulihkan
 	Close All	Tutup Semua
 	Close Others	Tutup Lainnya
+	New Document…	Dokumen Baru…
+	Open Document…	Buka…
+	Consolidate All to Here	Gabungkan Semua ke Sini
+	Move to New Window	Pindahkan ke Jendela Baru
 	Save	Simpan
 	Save As…	Simpan Sebagai…
 	Save a Copy…	Simpan Salinan…
@@ -224,6 +229,7 @@
 	Create Smart Object after Loading Layers	Buat Smart Object setelah Memuat Layer
 	Reveal in Finder	Tampilkan di Finder
 	Show in Explorer	Tampilkan di Explorer
+	Reveal in Explorer	Tampilkan di Explorer
 	Show in Folder	Tampilkan di Folder
 	File Info…	Info Berkas…
 	Print…	Cetak…
@@ -310,6 +316,7 @@
 	Units & Rulers…	Satuan & Penggaris…
 	Guides, Grid & Slices…	Panduan, Grid & Slice…
 	Plug-ins…	Plug-in…
+	Plugins…	Plug-in…
 	Type…	Teks…
 	Enhanced Controls…	Kontrol Lanjutan…
 	Camera Raw…	Camera Raw…
@@ -459,6 +466,8 @@
 	Smart Object	Smart Object
 	Convert to Smart Object	Konversi ke Smart Object
 	Convert to Embedded	Konversi ke Tertanam
+	Embed Linked	Tanamkan yang Tertaut
+	Embed All Linked	Tanamkan Semua yang Tertaut
 	Convert to Layers	Konversi ke Layer
 	Convert to Linked…	Konversi ke Tertaut…
 	Edit Contents	Edit Isi
@@ -526,7 +535,9 @@
 	Unite Shapes	Satukan Bentuk
 	Subtract Front Shape	Kurangi Bentuk Depan
 	Intersect Shape Areas	Irisan Area Bentuk
+	Unite Shapes at Overlap	Irisan Area Bentuk
 	Exclude Overlapping Shapes	Kecualikan Bentuk yang Tumpang Tindih
+	Subtract Shapes at Overlap	Kecualikan Bentuk yang Tumpang Tindih
 	Merge Shape Components	Gabungkan Komponen Bentuk
 	Path operations	Operasi path
 	Align	Rata
@@ -711,6 +722,7 @@
 	Minimum…	Minimum…
 	Offset…	Offset…
 	Plug-ins	Plug-in
+	Plugins	Plug-in
 	Proof Setup	Pengaturan Proof
 	Proof Colors	Warna Proof
 	Gamut Warning	Peringatan Gamut
@@ -719,9 +731,9 @@
 	Working Magenta Plate	Pelat Magenta Kerja
 	Working Yellow Plate	Pelat Kuning Kerja
 	Working Black Plate	Pelat Hitam Kerja
-	Working CMY Plate	Pelat CMY Kerja
-	Legacy Macintosh RGB	RGB Macintosh Lawas
-	Internet Standard RGB	RGB Standar Internet
+	Working CMY Plates	Pelat CMY Kerja
+	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh Lawas (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB Standar Internet (sRGB)
 	Monitor RGB	RGB Monitor
 	Color Blindness — Protanopia-type	Buta Warna — Tipe Protanopia
 	Color Blindness — Deuteranopia-type	Buta Warna — Tipe Deuteranopia
@@ -813,7 +825,7 @@
 	Consolidate All to Tabs	Gabungkan Semua ke Tab
 	Float in Window	Mengambang di Jendela
 	Float All in Windows	Mengambangkan Semua di Jendela
-	New Window for Document	Jendela Baru untuk Dokumen
+	New Window	Jendela Baru
 	Workspace	Ruang Kerja
 	Essentials	Esensial
 	Graphic and Web	Grafis dan Web
@@ -875,6 +887,12 @@
 	Timeline	Timeline
 	Tool Presets	Preset Alat
 	Tools	Alat
+	Contextual Task Bar	Bilah Tugas Kontekstual
+	Hide bar	Sembunyikan bilah
+	Reset bar position	Atur ulang posisi bilah
+	Pin bar position	Sematkan posisi bilah
+	Move bar	Pindahkan bilah
+	More options	Opsi lainnya
 	About PhotoCraft	Tentang PhotoCraft
 	PhotoCraft Website	Situs Web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft di GitHub
@@ -1833,6 +1851,7 @@
 	Move Tool	Alat Pindah
 	Could not use the move tool because the layer is locked.	Tidak dapat menggunakan alat Pindahkan karena layer terkunci.
 	Could not complete the Free Transform command because the layer is locked.	Tidak dapat menyelesaikan perintah Transformasi Bebas karena layer terkunci.
+	Could not transform because the layer is locked.	Tidak dapat mentransformasi karena layer terkunci.
 	Multiply	Multiply
 	My Brushes	Kuas Saya
 	Neutrals	Netral
@@ -1987,6 +2006,11 @@
 	Show canvas dots	Tampilkan titik kanvas
 	Clip thumbnails to layer bounds	Pangkas thumbnail ke batas layer
 	Clip Thumbnails to Layer Bounds	Pangkas Thumbnail ke Batas Layer
+	No Thumbnails	Tanpa Thumbnail
+	Small Thumbnails	Thumbnail Kecil
+	Medium Thumbnails	Thumbnail Sedang
+	Large Thumbnails	Thumbnail Besar
+	Clip Thumbnails to Document Bounds	Pangkas Thumbnail ke Batas Dokumen
 	Canvas color	Warna kanvas
 	Canvas custom color	Warna kustom kanvas
 	Color picker	Pemilih warna
@@ -2104,7 +2128,6 @@
 	Show only crosshair while painting	Tampilkan crosshair saja saat melukis
 	Show slice numbers	Tampilkan nomor slice
 	Show tooltips	Tampilkan tooltip
-	Enable animations	Aktifkan animasi
 	Show highlight on rollover	Tampilkan sorotan saat kursor melintas
 	Show transformation values	Tampilkan nilai transformasi
 	Slice color	Warna slice
@@ -2485,6 +2508,7 @@
 	Path to Illustrator…	Path ke Illustrator…
 	Make Work Path	Buat Work Path
 	Make Selection	Buat Seleksi
+	Make Shape	Buat Bentuk
 	Fill Path	Isi Path
 	Stroke Path	Stroke Path
 	Clipping Path	Clipping Path

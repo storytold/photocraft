@@ -168,6 +168,7 @@
 	Right	Direita
 	Open Recent	Abrir recentes
 	Clear Recent Files	Limpar arquivos recentes
+	Clear Recent File List	Limpar arquivos recentes
 	Remove from Recent	Remover dos recentes
 	Remove {name} from Recent	Remover {name} dos recentes
 	Close	Fechar
@@ -176,6 +177,10 @@
 	Restore	Restaurar
 	Close All	Fechar tudo
 	Close Others	Fechar outros
+	New Document…	Novo documento…
+	Open Document…	Abrir…
+	Consolidate All to Here	Consolidar tudo aqui
+	Move to New Window	Mover para nova janela
 	Save	Salvar
 	Save As…	Salvar como…
 	Save a Copy…	Salvar uma cópia…
@@ -227,6 +232,7 @@
 	Create Smart Object after Loading Layers	Criar objeto inteligente após carregar as camadas
 	Reveal in Finder	Mostrar no Finder
 	Show in Explorer	Mostrar no Explorador
+	Reveal in Explorer	Mostrar no Explorador
 	Show in Folder	Mostrar na pasta
 	File Info…	Informações do arquivo…
 	Print…	Imprimir…
@@ -313,6 +319,7 @@
 	Units & Rulers…	Unidades e réguas…
 	Guides, Grid & Slices…	Guias, grade e fatias…
 	Plug-ins…	Plug-ins…
+	Plugins…	Plug-ins…
 	Type…	Tipo…
 	Enhanced Controls…	Controles aprimorados…
 	Camera Raw…	Camera Raw…
@@ -462,6 +469,8 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Converter em objeto inteligente
 	Convert to Embedded	Converter em incorporado
+	Embed Linked	Incorporar vinculado
+	Embed All Linked	Incorporar todos os vinculados
 	Convert to Layers	Converter em camadas
 	Convert to Linked…	Converter em vinculado…
 	Edit Contents	Editar conteúdo
@@ -712,6 +721,7 @@
 	Minimum…	Mínimo…
 	Offset…	Deslocamento…
 	Plug-ins	Plug-ins
+	Plugins	Plug-ins
 	Proof Setup	Configuração de prova
 	Proof Colors	Cores de prova
 	Gamut Warning	Aviso de gama
@@ -720,9 +730,9 @@
 	Working Magenta Plate	Chapa magenta de trabalho
 	Working Yellow Plate	Chapa amarela de trabalho
 	Working Black Plate	Chapa preta de trabalho
-	Working CMY Plate	Chapa CMY de trabalho
-	Legacy Macintosh RGB	RGB Macintosh legado
-	Internet Standard RGB	RGB padrão da Internet
+	Working CMY Plates	Chapas CMY de trabalho
+	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh legado (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB padrão da Internet (sRGB)
 	Monitor RGB	RGB do monitor
 	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
 	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
@@ -814,7 +824,6 @@
 	Consolidate All to Tabs	Consolidar tudo em guias
 	Float in Window	Flutuar na janela
 	Float All in Windows	Flutuar tudo em janelas
-	New Window for Document	Nova janela para o documento
 	Workspace	Espaço de trabalho
 	Essentials	Essenciais
 	Graphic and Web	Gráficos e Web
@@ -876,6 +885,12 @@
 	Timeline	Linha do tempo
 	Tool Presets	Predefinições de ferramentas
 	Tools	Ferramentas
+	Contextual Task Bar	Barra de tarefas contextual
+	Hide bar	Ocultar barra
+	Reset bar position	Redefinir posição da barra
+	Pin bar position	Fixar posição da barra
+	Move bar	Mover barra
+	More options	Mais opções
 	About PhotoCraft	Sobre o PhotoCraft
 	PhotoCraft Website	Site do PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft no GitHub
@@ -1819,6 +1834,7 @@
 	Move Tool	Ferramenta Mover
 	Could not use the move tool because the layer is locked.	Não foi possível usar a ferramenta Mover porque a camada está bloqueada.
 	Could not complete the Free Transform command because the layer is locked.	Não foi possível concluir o comando Transformação livre porque a camada está bloqueada.
+	Could not transform because the layer is locked.	Não foi possível transformar porque a camada está bloqueada.
 	Multiply	Multiplicação
 	My Brushes	Meus pincéis
 	Neutrals	Neutros
@@ -1973,6 +1989,11 @@
 	Show canvas dots	Mostrar pontos da tela de pintura
 	Clip thumbnails to layer bounds	Recortar miniaturas aos limites da camada
 	Clip Thumbnails to Layer Bounds	Recortar miniaturas aos limites da camada
+	No Thumbnails	Sem miniaturas
+	Small Thumbnails	Miniaturas pequenas
+	Medium Thumbnails	Miniaturas médias
+	Large Thumbnails	Miniaturas grandes
+	Clip Thumbnails to Document Bounds	Recortar miniaturas aos limites do documento
 	Canvas color	Cor da tela de pintura
 	Canvas custom color	Cor personalizada da tela de pintura
 	Color picker	Seletor de cores
@@ -2090,7 +2111,6 @@
 	Show only crosshair while painting	Mostrar apenas a mira ao pintar
 	Show slice numbers	Mostrar números das fatias
 	Show tooltips	Mostrar dicas de ferramentas
-	Enable animations	Ativar animações
 	Show highlight on rollover	Mostrar realce ao passar o mouse
 	Show transformation values	Mostrar valores de transformação
 	Slice color	Cor das fatias
@@ -2474,6 +2494,7 @@
 	Path to Illustrator…	Demarcador para o Illustrator…
 	Make Work Path	Criar demarcador de trabalho
 	Make Selection	Fazer seleção
+	Make Shape	Fazer forma
 	Fill Path	Preencher demarcador
 	Stroke Path	Traçar demarcador
 	Clipping Path	Demarcador de corte
