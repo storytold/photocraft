@@ -404,10 +404,14 @@ fn issue_11807_cancel_button_records_no_step_then_undo_and_tools_resume() {
 
 fn undo_with_released_frame_modifiers(h: &mut App) {
     let before = pending(h);
-    h.event(Event::ModifiersChanged(command(false)));
-    h.event(Event::Key { key: Key::Z, physical_key: Some(Key::Z), pressed: true, repeat: false, modifiers: command(false) });
-    // The modifier was released later in the same native input batch.
-    h.event(Event::ModifiersChanged(Modifiers::NONE));
+    // Bypass Harness::event's per-event queue: these events must share one native input batch.
+    let input = h.input_mut();
+    input.modifiers = Modifiers::NONE;
+    input.events.extend([
+        Event::ModifiersChanged(command(false)),
+        Event::Key { key: Key::Z, physical_key: Some(Key::Z), pressed: true, repeat: false, modifiers: command(false) },
+        Event::ModifiersChanged(Modifiers::NONE),
+    ]);
     h.step();
     assert_eq!(pending(h), before, "the actual Ctrl+Z event still belongs to the quad");
     key_frame(h, Key::Z, false, false, Modifiers::NONE);
