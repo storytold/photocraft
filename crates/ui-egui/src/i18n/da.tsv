@@ -4816,3 +4816,12 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Pick a different document for each channel.	Vælg et andet dokument til hver kanal.
 	A picked document is no longer open.	Et af de valgte dokumenter er ikke længere åbent.
 	A picked document is no longer a grayscale document of the same size.	Et af de valgte dokumenter er ikke længere et dokument i gråtoner i samme størrelse.
+# Move tool options bar (#11381)
+	Align top edges	Juster øverste kanter
+	Align vertical centers	Juster lodrette midter
+	Align bottom edges	Juster nederste kanter
+	Distribute vertically	Fordel lodret
+	Distribute horizontally	Fordel vandret
+	Show layer bounds on hover	Vis lagets grænser ved svæv
+	Expand layer group on click	Udvid lagergruppe ved klik
+	Show hover bounds from Layers	Vis svævegrænser fra Lag

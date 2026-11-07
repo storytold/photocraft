@@ -111,11 +111,12 @@ use tabs::{dots, paint_dots};
 use tabs::{main_canvas_document, move_target_after_filter};
 #[cfg(test)]
 pub(crate) use textures::detail_plan;
+pub(crate) use textures::visible_doc_rect;
 pub(crate) use textures::{DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
 pub use textures::{MAX_TEXTURE, ensure_texture};
 #[cfg(test)]
 use textures::{clamp_texture_side, preview_bounds, texture_factor};
-use textures::{ensure_gpu, redraw_focus, visible_doc_rect};
+use textures::{ensure_gpu, redraw_focus};
 pub use tool_input::{ToolEvent, selection_drag_kind, tool_event};
 pub(crate) use tool_input::{command_guide_at, command_moves_layer, event_tool};
 pub(crate) use transform_controls::ControlsPress;
@@ -525,6 +526,11 @@ fn paint_canvas(
             painter.image(tex, xf.doc_rect(a), uv, Color32::WHITE);
         }
     }
+    // Image › Adjustments › Levels: Alt-drag on the black / white Input slider (levels_clipping.rs).
+    // The main canvas only: the display keeps one cache, sized to that view.
+    if primary {
+        crate::levels_clipping::paint(app, ctx, painter, &xf, idx);
+    }
     crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
@@ -764,7 +770,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             if curves_picking {
                 crate::adjust_dialog::sample_at(app, d[0], d[1]);
             } else if replace_picking {
-                crate::filter_dialog::color_eyedropper_sample(app, d[0], d[1]);
+                crate::filter_dialog::color_eyedropper_sample(app, d[0], d[1], input.ctx.input(|i| i.modifiers));
             } else {
                 crate::color_picker_ui::sample_at(app, d[0], d[1]);
             }
@@ -912,10 +918,14 @@ fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>
             crate::canvas_tool_menu::open_pasteboard(app, ctx, tool, [p.x, p.y]);
         }
     }
+    // A Magnetic Lasso border being drawn: no menu over it, and the border stays live, as in
+    // Photoshop (#11689).
+    let magnetic_drawing = crate::canvas_tool_menu::magnetic_drawing(app);
     if right_click
         && !lasso_retracted
         && !transforming
         && !guide_menu
+        && !magnetic_drawing
         && !crate::layer_pick_ui::is_gesture(tool, mods)
         && let Some(p) = right_at
     {
