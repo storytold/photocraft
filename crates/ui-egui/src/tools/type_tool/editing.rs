@@ -446,6 +446,10 @@ pub(super) fn edit_home(app: &PhotocraftApp, ed: &TextEdit) -> Option<usize> {
 
 /// [`commit_with`] in the active document, which is the edit's own.
 fn commit_here(app: &mut PhotocraftApp, mods: egui::Modifiers) {
+    // Read before the tool and the layer move on below: #12050 measures the commits the user
+    // makes, and an unchanged edit that ends because a tool switch or another layer took the
+    // work over (#6483) keeps today's behaviour of recording nothing.
+    let ends_an_edit = user_ends_the_edit(app);
     if app.ui.tool.is_type() {
         crate::type_transform::finish(app);
     }
@@ -478,7 +482,28 @@ fn commit_here(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     } else if ed.created {
         let name = photocraft_engine::type_cmds::layer_name(&text);
         let _ = app.run("type.edit", json!({"layer": ed.layer, "name": name, "coalesce": ed.session}));
+    } else if ends_an_edit && worked_on_layer(app, &ed) {
+        // Ending an edit of an existing layer is a step of its own even when the session changed
+        // nothing (#12050), so the History list shows the edit the user just ended. It carries the
+        // session's own coalesce key, which keeps it to the one step: `type.edit` under the key of
+        // the state the session already opened joins that state instead of adding a second one.
+        // The Cancel button ends through `cancel`, which never runs this.
+        let _ = app.run("type.edit", json!({"layer": ed.layer, "coalesce": ed.session}));
     }
+}
+
+/// Is a Type tool still the tool holding this session? The frame commits the edit when a tool
+/// switch takes the work on (#6483), also between the Type tools and the Type Mask tools; that is
+/// not an edit of the layer, so #12050's state is not opened for it.
+fn user_ends_the_edit(app: &PhotocraftApp) -> bool {
+    app.ui.tool.is_type() && app.ui.text_edit.as_ref().is_some_and(|ed| ed.mask == app.ui.tool.is_type_mask())
+}
+
+/// Is the session's layer still the one worked on? Selecting another layer or document commits the
+/// session (#6483); #12050 does not measure that, so it records nothing. A background document's
+/// edit is checked in its own document, where `commit_with` has just made it active.
+fn worked_on_layer(app: &PhotocraftApp, ed: &TextEdit) -> bool {
+    app.session.active().is_some_and(|st| st.active_layer == Some(LayerId(ed.layer)))
 }
 
 /// Commit the edit once its layer is no longer the one worked on (#6483): another layer became

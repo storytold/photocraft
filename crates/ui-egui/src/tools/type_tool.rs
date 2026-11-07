@@ -146,3 +146,6 @@ mod commit_tests;
 
 #[cfg(test)]
 mod ime_tests;
+
+#[cfg(test)]
+mod unchanged_edit_history_tests;
