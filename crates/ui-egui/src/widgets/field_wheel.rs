@@ -125,11 +125,14 @@ pub fn begin_frame(ctx: &Context) {
     }
 }
 
-/// This frame's time, whether it has wheel events and whether the pointer moved.
+/// This frame's time, whether it has wheel events and whether the pointer moved: with wheel,
+/// only a move before the first wheel event counts, since a move after it can't have led the
+/// wheel anywhere.
 fn frame_input(ctx: &Context) -> (f64, bool, bool) {
     ctx.input(|i| {
-        let wheel = i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }));
-        (i.time, wheel, i.events.iter().any(|e| matches!(e, Event::PointerMoved(_))))
+        let first_wheel = i.events.iter().position(|e| matches!(e, Event::MouseWheel { .. }));
+        let before = &i.events[..first_wheel.unwrap_or(i.events.len())];
+        (i.time, first_wheel.is_some(), before.iter().any(|e| matches!(e, Event::PointerMoved(_))))
     })
 }
 
