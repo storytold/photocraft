@@ -2033,3 +2033,159 @@ fn touches_covers_every_pixel_with_coverage() {
     assert!(r.touches(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX)), "huge, without a huge scan");
     assert!(!r.touches(Rect::new(1_000_000, 1_000_000, i32::MAX, i32::MAX)));
 }
+
+/// The sharpest turn, in degrees, between consecutive dab-to-dab steps.
+fn sharpest_turn(dabs: &[Dab]) -> f64 {
+    let steps: Vec<(f64, f64)> =
+        dabs.windows(2).map(|w| (w[1].center.x - w[0].center.x, w[1].center.y - w[0].center.y)).filter(|(x, y)| x.hypot(*y) > 1e-6).collect();
+    steps.windows(2).map(|w| (w[0].0 * w[1].1 - w[0].1 * w[1].0).atan2(w[0].0 * w[1].0 + w[0].1 * w[1].1).abs().to_degrees()).fold(0.0, f64::max)
+}
+
+/// A fast circle the pointer reported only 12 times (8 ms apart, 30° per sample).
+fn fast_circle() -> Vec<StrokePoint> {
+    (0..=12)
+        .map(|i| {
+            let a = f64::from(i) * std::f64::consts::TAU / 12.0;
+            StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(100.0 + 80.0 * a.cos(), 100.0 + 80.0 * a.sin(), 1.0) }
+        })
+        .collect()
+}
+
+#[test]
+fn smoothing_rounds_the_corners_of_a_fast_stroke() {
+    // #2138: with Smoothing on, a fast curve is drawn as a curve, not a polygon through the
+    // pointer samples. Off, the samples are still joined by straight lines.
+    let b = |enabled, amount, catch_up_on_end| BrushSettings {
+        size: 10.0,
+        spacing: 0.1,
+        smoothing: Smoothing { enabled, amount, catch_up_on_end, ..Default::default() },
+        ..brush()
+    };
+    let polygon = sharpest_turn(&dabs_of(&b(false, 0.1, true), &fast_circle()));
+    assert!(polygon > 25.0, "smoothing off keeps the corners ({polygon:.1}°)");
+    for amount in [0.05, 0.2, 0.5] {
+        // Without the end catch-up, which jumps straight to the last pointer position.
+        let d = dabs_of(&b(true, amount, false), &fast_circle());
+        let drawn: f64 = d.windows(2).map(|w| (w[1].center.x - w[0].center.x).hypot(w[1].center.y - w[0].center.y)).sum();
+        assert!(drawn > 200.0, "Smoothing {amount}: only {drawn:.0} px of the ~497 px circle drawn");
+        let turn = sharpest_turn(&d);
+        assert!(turn < 6.0, "Smoothing {amount}: the sharpest turn between dabs is {turn:.1}°");
+        // With it, the stroke still ends at the last pointer position.
+        let (end, last) = (dabs_of(&b(true, amount, true), &fast_circle()).last().map(|d| d.center), fast_circle()[12]);
+        assert!(end.is_some_and(|c| (c.x - last.x).hypot(c.y - last.y) < 1.0), "Smoothing {amount}: ends at {end:?}");
+    }
+}
+
+#[test]
+fn rounded_corners_keep_a_straight_stroke_straight_and_evenly_spaced() {
+    let pts: Vec<_> = (0..=10).map(|i| StrokePoint { time: f64::from(i) * 8.0, ..StrokePoint::new(f64::from(i) * 20.0, 50.0, 1.0) }).collect();
+    let on = BrushSettings { size: 10.0, spacing: 0.25, smoothing: Smoothing { amount: 0.5, ..Default::default() }, ..brush() };
+    let d = dabs_of(&on, &pts);
+    assert!(d.iter().all(|d| (d.center.y - 50.0).abs() < 1e-4), "dabs stay on the line");
+    let gaps: Vec<f64> = d.windows(2).map(|w| w[1].center.x - w[0].center.x).collect();
+    assert!(gaps.iter().all(|g| (g - 2.5).abs() < 1e-6), "spacing is kept: {gaps:?}");
+    assert!((d.last().map_or(0.0, |d| d.center.x) - 200.0).abs() < 2.5, "reaches the end");
+}
+
+#[test]
+fn rounded_corners_are_the_same_however_the_points_arrive() {
+    // The live stroke feeds points in frame-sized batches; the commit feeds them all at once.
+    let b = BrushSettings { size: 10.0, spacing: 0.1, smoothing: Smoothing { amount: 0.4, ..Default::default() }, ..brush() };
+    let pts = fast_circle();
+    let whole = dabs_of(&b, &pts);
+    for chunk in [1, 2, 5] {
+        let mut g = crate::dynamics::DabGenerator::new(&b, 1.0);
+        let (mut d, mut dual) = (Vec::new(), Vec::new());
+        for c in pts.chunks(chunk) {
+            g.push(c, &mut d, &mut dual);
+        }
+        g.finish(&mut d, &mut dual);
+        assert_eq!(d.len(), whole.len(), "chunks of {chunk}");
+        assert!(d.iter().zip(&whole).all(|(a, b)| a.center == b.center), "chunks of {chunk}");
+    }
+}
+
+#[test]
+fn rounded_corners_do_not_replay_a_long_build_up_pause() {
+    // A long pause between two samples on a turn is one gap, which the airbrush's stalled-backlog
+    // guard drops, not many arc pieces that each replay their share of it as Build-up dabs.
+    let pts = [
+        StrokePoint { time: 0.0, ..StrokePoint::new(0.0, 0.0, 1.0) },
+        StrokePoint { time: 8.0, ..StrokePoint::new(60.0, 0.0, 1.0) },
+        StrokePoint { time: 60_000.0, ..StrokePoint::new(60.0, 60.0, 1.0) },
+    ];
+    let b = |smooth| BrushSettings {
+        size: 10.0,
+        spacing: 0.25,
+        build_up: true,
+        build_up_rate: 20.0,
+        smoothing: Smoothing { enabled: smooth, amount: 0.05, ..Default::default() },
+        ..brush()
+    };
+    let (off, on) = (dabs_of(&b(false), &pts).len(), dabs_of(&b(true), &pts).len());
+    assert!(on < off * 2, "smoothing on: {on} dabs, off: {off}");
+}
+
+#[test]
+fn rounded_corners_survive_hostile_points() {
+    let b = BrushSettings { size: 10.0, spacing: 0.1, smoothing: Smoothing { amount: 0.5, ..Default::default() }, ..brush() };
+    let pts = [
+        StrokePoint::new(0.0, 0.0, 1.0),
+        StrokePoint::new(f64::NAN, 5.0, 1.0),
+        StrokePoint::new(1e300, -1e300, 1.0),
+        StrokePoint::new(f64::INFINITY, 0.0, 1.0),
+        StrokePoint::new(3.0, 3.0, 1.0),
+        StrokePoint::new(3.0, 3.0, 1.0),
+    ];
+    let _ = dabs_of(&b, &pts);
+}
+
+#[test]
+fn rounded_corners_settle_back_onto_a_straight_line() {
+    // A sharp corner, then a long straight run sampled every 20 px: the arc's overshoot past the
+    // corner dies out instead of swinging the line from side to side.
+    let mut pts = vec![StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(60.0, 0.0, 1.0)];
+    pts.extend((1..=10).map(|i| StrokePoint::new(60.0, f64::from(i) * 20.0, 1.0)));
+    let pts: Vec<_> = pts.into_iter().enumerate().map(|(i, p)| StrokePoint { time: i as f64 * 8.0, ..p }).collect();
+    let b = BrushSettings { size: 10.0, spacing: 0.1, smoothing: Smoothing { amount: 0.05, ..Default::default() }, ..brush() };
+    let d = dabs_of(&b, &pts);
+    assert!(d.iter().any(|d| d.center.y >= 120.0), "the stroke reaches the straight tail");
+    let off = |from: f64| d.iter().filter(|d| d.center.y >= from).map(|d| (d.center.x - 60.0).abs()).fold(0.0, f64::max);
+    assert!(off(120.0) < 0.5, "the line is straight again after a few samples ({:.2} px off)", off(120.0));
+}
+
+#[test]
+fn rounded_corners_bend_only_one_way_round_a_touchpad_circle() {
+    // A fast circle drawn on a laptop touchpad, as the canvas recorded it: samples 6 to 16 ms and
+    // 45 to 230 px apart, every one turning the same way. The stroke must too. Guessing the
+    // heading at the newest sample put S-bends into the arcs, and the circle came out lumpy.
+    let recorded = [
+        (0.0, 459.0, 919.7),
+        (6.2, 502.4, 792.2),
+        (12.5, 620.5, 634.8),
+        (28.9, 813.4, 467.6),
+        (45.6, 1026.7, 361.0),
+        (62.4, 1214.6, 319.6),
+        (79.1, 1345.2, 345.1),
+        (95.7, 1421.3, 418.5),
+        (112.4, 1464.9, 549.3),
+        (129.0, 1451.3, 722.8),
+        (145.8, 1360.8, 911.2),
+        (154.1, 1193.8, 1095.0),
+        (162.3, 972.4, 1253.1),
+        (178.9, 756.0, 1325.2),
+        (195.6, 612.1, 1331.9),
+        (212.3, 536.6, 1301.7),
+    ];
+    let pts: Vec<StrokePoint> = recorded.iter().map(|&(time, x, y)| StrokePoint { time, ..StrokePoint::new(x, y, 1.0) }).collect();
+    for amount in [0.05, 0.1, 0.5] {
+        let b = BrushSettings { size: 10.0, spacing: 0.1, smoothing: Smoothing { amount, catch_up_on_end: false, ..Default::default() }, ..brush() };
+        let d = dabs_of(&b, &pts);
+        let steps: Vec<(f64, f64)> =
+            d.windows(2).map(|w| (w[1].center.x - w[0].center.x, w[1].center.y - w[0].center.y)).filter(|(x, y)| x.hypot(*y) > 1e-6).collect();
+        // The samples turn clockwise on screen (y down): a positive cross product.
+        let against =
+            steps.windows(2).map(|w| (w[0].0 * w[1].1 - w[0].1 * w[1].0).atan2(w[0].0 * w[1].0 + w[0].1 * w[1].1).to_degrees()).fold(0.0, |m: f64, t| m.min(t));
+        assert!(against > -0.05, "Smoothing {amount}: a step turns {against:.2}° against the circle");
+    }
+}
