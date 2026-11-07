@@ -1082,14 +1082,28 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         s.spacing.icon_width = 14.0;
         s.visuals.indent_has_left_vline = false;
         s.interaction.tooltip_delay = TOOLTIP_DELAY;
-        // Thin overlay scrollbars that appear on hover (Photoshop/macOS style).
-        // Thin bars stay visible, including while the pointer is on them. The stock thin
-        // style fades the handle to the same opacity as the track, so the thumb disappears (#4611).
-        let mut scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
-        if scroll.floating {
-            scroll.interact_handle_opacity = 1.0;
-            scroll.interact_background_opacity = 0.4;
-            scroll.floating_width = 4.0;
+        // Thin scroll bars over the content (Photoshop/macOS style). The thumb is drawn in the
+        // text colour: egui's background colour for it is the field colour the track has too, so
+        // it only showed under the pointer (#1383). It always shows where the list is, a little
+        // stronger with the pointer over the list and opaque under it, also while it is grabbed
+        // (the stock thin style faded it to the track's opacity there, #4611).
+        let mut scroll = egui::style::ScrollStyle::thin();
+        scroll.foreground_color = true;
+        scroll.dormant_handle_opacity = 0.3;
+        scroll.active_handle_opacity = 0.45;
+        scroll.interact_handle_opacity = 1.0;
+        scroll.interact_background_opacity = 0.4;
+        scroll.floating_width = 4.0;
+        if t.bevel {
+            // Classic keeps its full-width bars beside the content, as a solid style lays them out,
+            // but with the thin style's fades, so its black text colour gives a grey thumb.
+            let solid = egui::style::ScrollStyle::solid();
+            scroll.bar_width = solid.bar_width;
+            scroll.floating_width = solid.bar_width;
+            // The room a solid bar takes beside the content, margins included.
+            scroll.floating_allocated_width = solid.allocated_width();
+            scroll.dormant_handle_opacity = 0.45;
+            scroll.active_handle_opacity = 0.6;
         }
         s.spacing.scroll = scroll;
         s.spacing.tooltip_width = 280.0;

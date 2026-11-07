@@ -62,6 +62,55 @@ fn scrollbar_thumb_stays_more_visible_than_its_track_in_every_theme() {
     }
 }
 
+/// `top` (premultiplied) painted over the opaque `under`.
+fn over(top: egui::Color32, under: egui::Color32) -> egui::Color32 {
+    let a = u16::from(top.a());
+    let mix = |t: u8, u: u8| (u16::from(t) + u16::from(u) * (255 - a) / 255).min(255) as u8;
+    egui::Color32::from_rgb(mix(top.r(), under.r()), mix(top.g(), under.g()), mix(top.b(), under.b()))
+}
+
+fn luma(c: egui::Color32) -> f32 {
+    0.2126 * f32::from(c.r()) + 0.7152 * f32::from(c.g()) + 0.0722 * f32::from(c.b())
+}
+
+/// #1383: an overflowing list's scroll bar shows where it is without the pointer on it. With the
+/// pointer away the thumb is painted in a colour that stands out from its track in every theme
+/// (it was the track's own field colour, so only hovering showed it), and hovering or dragging it
+/// makes it stronger still.
+#[test]
+fn resting_scrollbar_thumb_stands_out_from_its_track_in_every_theme() {
+    for kind in ThemeKind::ALL {
+        let ctx = egui::Context::default();
+        apply(&ctx, kind);
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            let style = ctx.style_of(theme);
+            let (scroll, v) = (style.spacing.scroll, &style.visuals);
+            // What egui's scroll area paints (`ScrollArea::show_viewport_dyn`): the track in
+            // `extreme_bg_color`, the thumb in the widget state's foreground or background colour.
+            let thumb_in = |w: &egui::style::WidgetVisuals| if scroll.foreground_color { w.fg_stroke.color } else { w.bg_fill };
+            let floating = |o: f32| if scroll.floating { o } else { 1.0 };
+            let track = over(v.extreme_bg_color.gamma_multiply(floating(scroll.dormant_background_opacity)), v.panel_fill);
+            let rest = over(thumb_in(&v.widgets.inactive).gamma_multiply(floating(scroll.dormant_handle_opacity)), track);
+            let gap = (luma(rest) - luma(track)).abs();
+            assert!(gap >= 24.0, "{kind:?}/{theme:?}: resting thumb {rest:?} on track {track:?} differs by {gap:.1}");
+            if scroll.floating {
+                let hover = over(thumb_in(&v.widgets.hovered).gamma_multiply(scroll.interact_handle_opacity), track);
+                assert!((luma(hover) - luma(track)).abs() > gap, "{kind:?}/{theme:?}: hovering makes the thumb stronger");
+                let list_hover = over(thumb_in(&v.widgets.inactive).gamma_multiply(scroll.active_handle_opacity), track);
+                assert!((luma(list_hover) - luma(track)).abs() > gap, "{kind:?}/{theme:?}: the pointer over the list makes the thumb stronger");
+            }
+            // Classic keeps the room and width a solid bar has beside the content; its bar floats
+            // only so the thumb can fade (a solid style always paints it opaque).
+            if kind == ThemeKind::Classic {
+                let solid = egui::style::ScrollStyle::solid();
+                assert!(scroll.floating, "{theme:?}: Classic's thumb fades");
+                assert_eq!(scroll.allocated_width(), solid.allocated_width(), "{theme:?}: Classic reserves a solid bar's room");
+                assert_eq!((scroll.bar_width, scroll.floating_width), (solid.bar_width, solid.bar_width), "{theme:?}: at a solid bar's width");
+            }
+        }
+    }
+}
+
 /// The desktop app installs fonts and loads the saved UI Font Size in its first frame, while
 /// egui's default fonts are still active. Any size but Small then panicked on the next pass
 /// ("FontFamily::Name("medium") is not bound to any fonts") because the plugin rescaled a
