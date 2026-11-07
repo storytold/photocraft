@@ -1255,6 +1255,27 @@ mod tests {
     }
 
     #[test]
+    fn a_level_of_a_rect_ending_at_i32_max_does_not_overflow() {
+        // The last band of a rectangle that ends at the edge of the coordinate range starts within
+        // 2^level of `i32::MAX`: its bottom edge (`y0 + 2^level`) and its pieces' right edges
+        // (`x0 + piece`) must clip to the rectangle, not overflow. Both a transparent default
+        // (bands without tiles are skipped) and an opaque one (every band is read).
+        let edge = i32::MAX;
+        let r = Rect::new(edge - 6, edge - 6, edge, edge);
+        for c in [[0.0f32; 4], [0.2, 0.4, 0.6, 1.0]] {
+            let src = Surface::with_default(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), &c);
+            let lv = Level::build(&src, r, 2, 4, &Interrupt::NONE).unwrap();
+            assert_eq!((lv.w, lv.h), (2, 2));
+            // Block (0, 0) is whole; block (1, 1) holds 2 × 2 of its 4 × 4 pixels, the rest
+            // past the rectangle counting as transparent.
+            let premul = |cover: f32| [c[0] * c[3] * cover, c[1] * c[3] * cover, c[2] * c[3] * cover, c[3] * cover];
+            for (got, want) in [(&lv.px[..4], premul(1.0)), (&lv.px[12..], premul(0.25))] {
+                assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?} vs {want:?}");
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "benchmark"]
     fn mip_bench() {
         let src = textured(8192, 4096, 11);
