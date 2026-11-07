@@ -230,3 +230,17 @@ fn at_the_ten_point_limit_a_drag_off_a_point_previews_no_new_marker() {
     up(&mut app, 60.0, 80.0);
     assert_eq!(samplers(&app).len(), 10);
 }
+
+#[test]
+fn a_sampler_drag_whose_release_went_to_another_tool_leaves_escape_alone() {
+    let mut app = app();
+    app.run("select.all", json!({})).unwrap();
+    down(&mut app, 40.0, 40.0, NONE);
+    mv(&mut app, 60.0, 50.0);
+    // A tool letter mid-drag: the release goes to the new tool.
+    crate::tool_memory::select(&mut app, Tool::Hand);
+    up(&mut app, 60.0, 50.0);
+    escape(&mut app);
+    assert_eq!(app.ui.analysis.drag, None, "the stale drag is dropped");
+    assert!(app.session.active().unwrap().doc.selection.is_none(), "Escape reached Deselect, not the stale sampler drag");
+}

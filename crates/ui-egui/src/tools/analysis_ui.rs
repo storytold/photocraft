@@ -1086,11 +1086,14 @@ pub fn confirm_delete_note(app: &mut PhotocraftApp, fields: &Map<String, Value>)
 pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     use crate::shortcut_dispatch::Focus;
     // Escape during a Color Sampler drag cancels it: no new point, or the dragged one stays (#11729).
-    if matches!(app.ui.analysis.drag, Some(Drag::Sampler(..) | Drag::SamplerNew(_)))
-        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
-    {
-        app.ui.analysis.drag = None;
-        return true;
+    // A tool picked mid-drag gets the release, so the drag is over: drop it and leave Escape alone.
+    if matches!(app.ui.analysis.drag, Some(Drag::Sampler(..) | Drag::SamplerNew(_))) {
+        if app.ui.tool != Tool::ColorSampler {
+            app.ui.analysis.drag = None;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            app.ui.analysis.drag = None;
+            return true;
+        }
     }
     let Some(index) = app.ui.analysis.note_selected else { return false };
     if app.ui.tool != Tool::Note || app.ui.text_edit.is_some() || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget) {
