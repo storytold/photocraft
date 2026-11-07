@@ -1058,7 +1058,7 @@ impl Default for TypePrefs {
         Self {
             smart_quotes: true,
             missing_glyph_protection: true,
-            show_font_names_in_english: true,
+            show_font_names_in_english: false,
             use_esc_to_commit: true,
             text_engine: TextEngine::WorldReady,
             font_preview: FontPreview::Medium,
@@ -1636,6 +1636,15 @@ impl Session {
             interface.insert("appearanceMode".into(), json!(mode));
             // A partially migrated file may already contain a newer theme selection (#5139).
             interface.entry(slot).or_insert_with(|| json!(theme.name()));
+        }
+        // Files before version 3 kept Show Font Names in English on (the default then). Font
+        // menus list a family's localized name when it is off, so Chinese fonts read "微软雅黑",
+        // "宋体" instead of Microsoft YaHei, SimSun; a choice made since is saved as version 3.
+        if v.get("version").and_then(Value::as_u64).unwrap_or(0) < 3
+            && let Some(t) = v.get_mut("type").and_then(Value::as_object_mut)
+            && t.get("showFontNamesInEnglish") == Some(&json!(true))
+        {
+            t.remove("showFontNamesInEnglish");
         }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));

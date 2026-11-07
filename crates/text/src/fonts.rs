@@ -1000,19 +1000,31 @@ pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
 
 /// A platform-private family (macOS names its UI faces with a leading '.'): never listed or
 /// picked by default.
-/// The localized family name among a font's `(name, language)` family-name records: the first
-/// one in a language other than English that differs from `english` (the name the font menus
-/// store). `None` when the font only names itself in English (most fonts).
+/// The localized family name among a font's `(name, language)` family-name records: one in a
+/// language other than English that differs from `english` (the name the font menus store).
+/// `None` when the font only names itself in English (most fonts). Where a family names itself
+/// in several languages, Simplified Chinese wins (Microsoft YaHei is both "微软雅黑" and
+/// "微軟雅黑"), then Traditional Chinese, then any other non-English name, so a Chinese-language
+/// interface reads the label in its own script.
 pub fn localized_name(english: &str, names: &[(String, Option<String>)]) -> Option<String> {
     let is_english = |lang: &str| {
         let primary = lang.split(['-', '_']).next().unwrap_or(lang);
         primary.eq_ignore_ascii_case("en")
     };
+    let script = |lang: &str| -> u8 {
+        let lower = lang.to_ascii_lowercase();
+        if lower.starts_with("zh") {
+            if lower.contains("cn") || lower.contains("hans") || lower.contains("sg") { 0 } else { 1 }
+        } else {
+            2
+        }
+    };
     names
         .iter()
         .filter(|(name, lang)| lang.as_deref().is_some_and(|l| !l.is_empty() && !is_english(l)) && !name.trim().is_empty() && name != english)
-        .map(|(name, _)| name.clone())
-        .next()
+        .map(|(name, lang)| (script(lang.as_deref().unwrap_or("")), name.clone()))
+        .min_by_key(|(s, _)| *s)
+        .map(|(_, name)| name)
 }
 
 pub fn is_hidden_family(name: &str) -> bool {
@@ -1097,6 +1109,12 @@ mod tests {
         assert_eq!(super::localized_name("MS Gothic", &ms_gothic).as_deref(), Some("ＭＳ ゴシック"));
         let yahei = names(&[("Microsoft YaHei", Some("en")), ("微软雅黑", Some("zh-CN")), ("微軟雅黑", Some("zh-TW"))]);
         assert_eq!(super::localized_name("Microsoft YaHei", &yahei).as_deref(), Some("微软雅黑"));
+        // A family named in both scripts reads as Simplified Chinese even when the Traditional
+        // record comes first in the name table.
+        let simsun = names(&[("SimSun", Some("en")), ("宋体", Some("zh-Hant")), ("宋體", Some("zh-CN"))]);
+        assert_eq!(super::localized_name("SimSun", &simsun).as_deref(), Some("宋體"));
+        let ja = names(&[("Gothic Test", Some("en")), ("ゴシック テスト", Some("ja-JP")), ("哥特体测试", Some("zh-CN"))]);
+        assert_eq!(super::localized_name("Gothic Test", &ja).as_deref(), Some("哥特体测试"));
         // English-only fonts, other English locales, unknown languages and copies of the English
         // name give no localized name.
         assert_eq!(super::localized_name("Arial", &names(&[("Arial", Some("en-US"))])), None);
