@@ -123,7 +123,7 @@ pub fn polygon_surface(points: &[(f32, f32)], clip: Rect) -> Option<Surface> {
     let crossings = |e: &[&Edge], y: f32, xs: &mut Vec<f32>| {
         xs.clear();
         xs.extend(e.iter().map(|&&Edge { a, b, .. }| a.0 + (y - a.1) / (b.1 - a.1) * (b.0 - a.0)));
-        xs.sort_by(|a, b| a.total_cmp(b));
+        xs.sort_by(f32::total_cmp);
     };
     let full = s.solid_tile(&[1.0]);
     let blank = s.solid_tile(&[0.0]);
@@ -202,7 +202,8 @@ pub fn polygon_surface(points: &[(f32, f32)], clip: Rect) -> Option<Surface> {
             }
             for ((r, tile), row) in spans.iter().zip(&mut tiles).zip(acc.as_chunks::<TS>().0) {
                 let base = y.rem_euclid(TILE_SIZE) as usize * TS + r.x0.rem_euclid(TILE_SIZE) as usize;
-                let Some(dst) = tile.bytes_mut().get_mut(base..base + r.width() as usize) else { continue };
+                let mut data = tile.bytes_mut();
+                let Some(dst) = data.get_mut(base..base + r.width() as usize) else { continue };
                 for (d, v) in dst.iter_mut().zip(row) {
                     *d = (v.min(1.0).clamp(0.0, 1.0) * 255.0).round() as u8;
                 }

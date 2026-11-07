@@ -16,18 +16,113 @@
 # stay as they are; the trailing "…" of dialog commands is kept.
 
 # Layer Mask Display Options (the layer mask rubylith's colour and opacity)
-	Mask Options…	Opções de máscara…
-	Layer Mask Display Options…	Opções de exibição de máscara de camada…
 
 # Channel Options and New Spot Channel (#3761)
-	Channel Color	Cor do canal
-	Color Indicates:	A cor indica:
-	Solidity:	Solidez:
-	Ink Characteristics	Características da tinta
 
 # Guide layout dialog
 
 # Custom print paper (#3820)
+
+# Select and Mask dialog labels
+# Field Blur pins (#3373)
+
+# Layers-panel trash confirmation
+
+# Gradient Editor window, opened from the options bar's gradient swatch.
+
+# Layer Style dialog: style presets and per-effect defaults
+
+# About ▸ Contributors / Models (credits)
+
+# Swatches panel
+# Layer Style > Blending Options (Advanced Blending)
+
+# Shared screen eyedropper and text Color Picker (#1128).
+
+# Fill dialog, layer style contours and Image Size
+
+
+
+# Layer colour labels.
+
+# Pattern Stamp tool
+
+# Painting symmetry presets.
+
+# Eyedropper Sample Size and Sample (#1649).
+
+# Color Picker warnings
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Edit › Content-Aware Fill workspace
+
+
+# Smart Filter editors
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+
+# History panel menu (#2966)
+# History panel › History Options… (#2966)
+# Print dialog (#2697)
+# Counted status messages and labels (#3454; adapted from PR #3821)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+# Batch / Image Processor
+
+# Native Windows printing qualification
+# PhotoCraft release checks.
+# History panel › History Brush source (#2966)
+# Bevel & Emboss shading controls.
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+# Bevel & Emboss Technique.
+
+# View › Guides › right-click a guide
+
+# Image › Mode › Bitmap (#5559)
+# Free Transform: a new layer while the box is open (#5859)
+# Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
+
+# DDS Options (#1327)
+
+# Color Table (.act) dialog
+
+# Graphics Adapter preference (#1885)
+
+# Styles panel: Import / Export Styles (.asl)
+# Actions: a step dialog holds a suspended recording (#7365)
+# Channels panel menu: channel commands, spot channels, Quick Mask, Color Indicates
+# Layer Style › Blending Options: advanced blending and Blend If
+# Canvas right-click menus: pasteboard color, paths and shapes
+# Color Picker titles
+# Rasterize prompts
+# GPU and display status (status bar, System Info)
+# Status messages
+# Panels and small controls
+# Liquify tools (tooltips)
+# Paragraph direction (TYPE-218-2)
+# Print preview image (#8236)
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+
+# Pen draft after a refused commit (#7648)
+# Art History Brush (#213).
+# Smart Filter row actions (#1265)
+
+	Mask Options…	Opções de máscara…
+	Layer Mask Display Options…	Opções de exibição de máscara de camada…
+	Channel Color	Cor do canal
+	Color Indicates:	A cor indica:
+	Solidity:	Solidez:
+	Ink Characteristics	Características da tinta
 	Paper Width	Largura do papel
 	Paper Height	Altura do papel
 	Rows	Linhas
@@ -46,7 +141,6 @@
 	5 Columns, 3 Rows	5 colunas, 3 linhas
 	8 Columns	8 colunas
 	12 Columns	12 colunas
-
 	File	Arquivo
 	Edit	Editar
 	Image	Imagem
@@ -74,6 +168,7 @@
 	Right	Direita
 	Open Recent	Abrir recentes
 	Clear Recent Files	Limpar arquivos recentes
+	Clear Recent File List	Limpar arquivos recentes
 	Remove from Recent	Remover dos recentes
 	Remove {name} from Recent	Remover {name} dos recentes
 	Close	Fechar
@@ -82,6 +177,10 @@
 	Restore	Restaurar
 	Close All	Fechar tudo
 	Close Others	Fechar outros
+	New Document…	Novo documento…
+	Open Document…	Abrir…
+	Consolidate All to Here	Consolidar tudo aqui
+	Move to New Window	Mover para nova janela
 	Save	Salvar
 	Save As…	Salvar como…
 	Save a Copy…	Salvar uma cópia…
@@ -133,6 +232,7 @@
 	Create Smart Object after Loading Layers	Criar objeto inteligente após carregar as camadas
 	Reveal in Finder	Mostrar no Finder
 	Show in Explorer	Mostrar no Explorador
+	Reveal in Explorer	Mostrar no Explorador
 	Show in Folder	Mostrar na pasta
 	File Info…	Informações do arquivo…
 	Print…	Imprimir…
@@ -219,6 +319,7 @@
 	Units & Rulers…	Unidades e réguas…
 	Guides, Grid & Slices…	Guias, grade e fatias…
 	Plug-ins…	Plug-ins…
+	Plugins…	Plug-ins…
 	Type…	Tipo…
 	Enhanced Controls…	Controles aprimorados…
 	Camera Raw…	Camera Raw…
@@ -267,6 +368,8 @@
 	Match Color…	Corresponder cores…
 	Replace Color…	Substituir cor…
 	Equalize	Equalizar
+	Equalize Selected Area Only	Equalizar somente a área selecionada
+	Equalize Entire Image Based On Selected Area	Equalizar a imagem inteira com base na área selecionada
 	Auto Tone	Tom automático
 	Auto Contrast	Contraste automático
 	Auto Color	Cor automática
@@ -299,6 +402,7 @@
 	Layer…	Camada…
 	Group…	Grupo…
 	Group from Layers…	Grupo a partir de camadas…
+	New Group from Layers…	Novo grupo a partir de camadas…
 	Artboard…	Prancheta…
 	Artboard from Group…	Prancheta a partir de grupo…
 	Artboard from Layers…	Prancheta a partir de camadas…
@@ -367,6 +471,8 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Converter em objeto inteligente
 	Convert to Embedded	Converter em incorporado
+	Embed Linked	Incorporar vinculado
+	Embed All Linked	Incorporar todos os vinculados
 	Convert to Layers	Converter em camadas
 	Convert to Linked…	Converter em vinculado…
 	Edit Contents	Editar conteúdo
@@ -436,6 +542,7 @@
 	Intersect Shape Areas	Fazer interseção das áreas de formas
 	Exclude Overlapping Shapes	Excluir formas sobrepostas
 	Merge Shape Components	Mesclar componentes de formas
+	Path operations	Operações de demarcador
 	Align	Alinhar
 	Top Edges	Bordas superiores
 	Vertical Centers	Centros verticais
@@ -510,12 +617,10 @@
 	Deselect	Desmarcar
 	Reselect	Selecionar novamente
 	Inverse	Inverter
-	Inverse Selection	Inverter seleção
 	Similar	Semelhante
 	Color Range…	Intervalo de cores…
 	Focus Area…	Área de foco…
 	Select and Mask…	Selecionar e mascarar…
-# Select and Mask dialog labels
 	Smart Radius	Raio inteligente
 	Shift Edge	Deslocar borda
 	Decontaminate	Descontaminar
@@ -541,7 +646,6 @@
 	Blur	Desfoque
 	Blur Gallery	Galeria de desfoque
 	Field Blur…	Desfoque de campo…
-# Field Blur pins (#3373)
 	No pin selected	Nenhum alfinete selecionado
 	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Clique na imagem para adicionar um alfinete; arraste um alfinete para movê-lo ou o anel dele para alterar o desfoque. Delete remove o alfinete selecionado.
 	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	Arraste as alças do contorno para redimensionar e girar, o quadrado para arredondar os cantos e os pontos internos para definir onde o desfoque começa.
@@ -618,6 +722,7 @@
 	Minimum…	Mínimo…
 	Offset…	Deslocamento…
 	Plug-ins	Plug-ins
+	Plugins	Plug-ins
 	Proof Setup	Configuração de prova
 	Proof Colors	Cores de prova
 	Gamut Warning	Aviso de gama
@@ -626,18 +731,22 @@
 	Working Magenta Plate	Chapa magenta de trabalho
 	Working Yellow Plate	Chapa amarela de trabalho
 	Working Black Plate	Chapa preta de trabalho
-	Working CMY Plate	Chapa CMY de trabalho
-	Legacy Macintosh RGB	RGB Macintosh legado
-	Internet Standard RGB	RGB padrão da Internet
+	Working CMY Plates	Chapas CMY de trabalho
+	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh legado (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB padrão da Internet (sRGB)
 	Monitor RGB	RGB do monitor
-	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
-	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
+	Color Blindness - Protanopia-type	Daltonismo - tipo protanopia
+	Color Blindness - Deuteranopia-type	Daltonismo - tipo deuteranopia
 	Zoom In	Aumentar zoom
 	Zoom Out	Diminuir zoom
 	Fit on Screen	Ajustar à tela
 	Fit Layer(s) on Screen	Ajustar camada(s) à tela
 	Fit Artboard on Screen	Ajustar prancheta à tela
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -716,7 +825,6 @@
 	Consolidate All to Tabs	Consolidar tudo em guias
 	Float in Window	Flutuar na janela
 	Float All in Windows	Flutuar tudo em janelas
-	New Window for Document	Nova janela para o documento
 	Workspace	Espaço de trabalho
 	Essentials	Essenciais
 	Graphic and Web	Gráficos e Web
@@ -778,6 +886,12 @@
 	Timeline	Linha do tempo
 	Tool Presets	Predefinições de ferramentas
 	Tools	Ferramentas
+	Contextual Task Bar	Barra de tarefas contextual
+	Hide bar	Ocultar barra
+	Reset bar position	Redefinir posição da barra
+	Pin bar position	Fixar posição da barra
+	Move bar	Mover barra
+	More options	Mais opções
 	About PhotoCraft	Sobre o PhotoCraft
 	PhotoCraft Website	Site do PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft no GitHub
@@ -815,6 +929,9 @@
 	Add Layer Mask	Adicionar máscara de camada
 	Add Stop	Adicionar parada
 	Add a layer style	Adicionar um estilo de camada
+	Move effect up	Mover efeito para cima
+	Move effect down	Mover efeito para baixo
+	Delete effect	Excluir efeito
 	Add a mask  (from the selection; {key} inverts)	Adicionar uma máscara  (a partir da seleção; {key} inverte)
 	Add an adjustment	Adicionar um ajuste
 	Add disk	Adicionar disco
@@ -938,7 +1055,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	Clique para adicionar um ponto · arraste para fora, {key}-clique ou Delete para remover
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Clique para aplicar, {key}-clique para limpar substituições, clique duplo para Opções de estilo
 	Click to edit the gradient	Clique para editar o degradê
-	Click to restore the current colour	Clique para restaurar a cor atual
+	Click to restore the current color	Clique para restaurar a cor atual
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Clique para aumentar o zoom  ·  {key}-clique para diminuir  ·  arraste para a direita/esquerda para aumentar/diminuir
 	Click with the Note tool to add a note.	Clique com a ferramenta Anotação para adicionar uma anotação.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Clique: canto · Arrastar: suave · Clique no primeiro ponto: fechar · {key}: concluir · Esc: cancelar
@@ -1001,6 +1118,9 @@
 	Create new pattern from the selection	Criar novo padrão a partir da seleção
 	Create new shape from the current path	Criar nova forma a partir do demarcador atual
 	Create new snapshot	Criar novo instantâneo
+	From:	De:
+	Full Document	Documento inteiro
+	Merged Layers	Camadas mescladas
 	Create new style (from the selected type)	Criar novo estilo (a partir do texto selecionado)
 	Create new style from the selected layer	Criar novo estilo a partir da camada selecionada
 	Create new tool preset	Criar nova predefinição de ferramenta
@@ -1020,7 +1140,7 @@
 	Darks	Escuros
 	Data Sets	Conjuntos de dados
 	Default	Padrão
-	Default colours (D)	Cores padrão (D)
+	Default Foreground and Background Colors (D)	Cores padrão de primeiro plano e plano de fundo (D)
 	Default printer	Impressora padrão
 	Default restored.	Padrão restaurado.
 	Define	Definir
@@ -1038,8 +1158,6 @@
 	Delete current channel	Excluir o canal atual
 	Delete current state	Excluir o estado atual
 	Delete effect layer	Excluir camada de efeito
-
-# Layers-panel trash confirmation
 	Delete layer ‘{name}’?	Excluir a camada “{name}”?
 	Delete {count} layers? {names}	Excluir {count} camadas? {names}
 	Delete layer?	Excluir camada?
@@ -1048,7 +1166,6 @@
 	Missing delete command	Comando de exclusão ausente
 	Invalid delete command	Comando de exclusão inválido
 	Layer deleted, but confirmation preference could not be saved: {error}	A camada foi excluída, mas não foi possível salvar a preferência de confirmação: {error}
-
 	Delete layer	Excluir camada
 	Delete layer comp	Excluir composição de camadas
 	Delete note	Excluir anotação
@@ -1081,7 +1198,6 @@
 	Dots	Pontos
 	Drag a rectangle around the object	Arraste um retângulo ao redor do objeto
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Arraste sobre a imagem para adicionar uma restrição; Shift para horizontal/vertical; clique direito em uma restrição para alterá-la ou excluí-la.
-	Drag to move the active shape's path or the Work Path	Arraste para mover o demarcador da forma ativa ou o demarcador de trabalho
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Clique: selecionar ponto · Arrastar: mover ponto, alça ou segmento · {shift}-clique: adicionar · {alt}-clique: subdemarcador inteiro
 	Draw with the Pen tool (P) or make a work path from a selection.	Desenhe com a ferramenta Caneta (P) ou crie um demarcador de trabalho a partir de uma seleção.
 	Drop an image or PSD anywhere to open it.	Solte uma imagem ou um PSD em qualquer lugar para abri-lo.
@@ -1300,7 +1416,7 @@
 	Opacity Jitter	Variação da opacidade
 	Opacity:	Opacidade:
 	Open a document to define variables.	Abra um documento para definir variáveis.
-	Open a document to select a colour range.	Abra um documento para selecionar um intervalo de cores.
+	Open a document to select a color range.	Abra um documento para selecionar um intervalo de cores.
 	Open a document to use the timeline.	Abra um documento para usar a linha do tempo.
 	Optical	Óptico
 	Optimized	Otimizado
@@ -1376,7 +1492,6 @@
 	Purity	Pureza
 	Quality	Qualidade
 	Quick Actions	Ações rápidas
-	Quick Export As PNG	Exportação rápida como PNG
 	Radial Gradient	Degradê radial
 	Radius	Raio
 	Radius:	Raio:
@@ -1517,7 +1632,7 @@
 	Subtract from Sample	Subtrair da amostra
 	Subtract from selection  ({key})	Subtrair da seleção  ({key})
 	Suggestions:	Sugestões:
-	Swap colours (X)	Trocar cores (X)
+	Switch Foreground and Background Colors (X)	Alternar cores de primeiro plano e plano de fundo (X)
 	Swaps height and width	Troca a altura e a largura
 	Switch between free transform and warp modes	Alternar entre os modos de transformação livre e deformação
 	Switch theme	Alternar tema
@@ -1618,7 +1733,7 @@
 	Choke	Contrair
 	Classic	Clássico
 	Click to add text	Clique para adicionar texto
-	Click to fill similar colours	Clique para preencher cores semelhantes
+	Click to fill similar colors	Clique para preencher cores semelhantes
 	Clone Stamp Tool	Ferramenta Carimbo
 	Color Burn	Superexposição de cores
 	Color Dodge	Subexposição de cores
@@ -1719,6 +1834,7 @@
 	Move Tool	Ferramenta Mover
 	Could not use the move tool because the layer is locked.	Não foi possível usar a ferramenta Mover porque a camada está bloqueada.
 	Could not complete the Free Transform command because the layer is locked.	Não foi possível concluir o comando Transformação livre porque a camada está bloqueada.
+	Could not transform because the layer is locked.	Não foi possível transformar porque a camada está bloqueada.
 	Multiply	Multiplicação
 	My Brushes	Meus pincéis
 	Neutrals	Neutros
@@ -1777,7 +1893,7 @@
 	Rectangular Marquee Tool	Ferramenta Letreiro retangular
 	Reds	Vermelhos
 	Reflected	Refletido
-	Sample: foreground colour	Amostra: cor de primeiro plano
+	Sample: foreground color	Amostra: cor de primeiro plano
 	Sampled Colors	Cores da amostra
 	Satin	Acetinado
 	Save Pixel Aspect Ratio	Salvar proporção de pixels
@@ -1798,6 +1914,7 @@
 	Soften	Suavizar
 	Source	Origem
 	Source: set	Origem: definida
+	Source: {name}	Origem: {name}
 	Sponge Tool	Ferramenta Esponja
 	Spot Healing Brush Tool	Ferramenta Pincel de recuperação para manchas
 	Spread	Propagação
@@ -1815,7 +1932,6 @@
 	Transfer	Transferência
 	Triangle Tool	Ferramenta Triângulo
 	Unsaved changes	Alterações não salvas
-	Uses the foreground and background colours.	Usa as cores de primeiro plano e de fundo.
 	Web	Web
 	Web Large	Web grande
 	Web Minimum	Web mínimo
@@ -1850,6 +1966,7 @@
 	Allow scripts to connect	Permitir conexão de scripts
 	Always	Sempre
 	Always create smart objects when placing	Sempre criar objetos inteligentes ao inserir
+	Skip transform when placing	Ignorar transformação ao inserir
 	Animated zoom	Zoom animado
 	Apply auto tone	Aplicar tom automático
 	Ask	Perguntar
@@ -1872,6 +1989,11 @@
 	Show canvas dots	Mostrar pontos da tela de pintura
 	Clip thumbnails to layer bounds	Recortar miniaturas aos limites da camada
 	Clip Thumbnails to Layer Bounds	Recortar miniaturas aos limites da camada
+	No Thumbnails	Sem miniaturas
+	Small Thumbnails	Miniaturas pequenas
+	Medium Thumbnails	Miniaturas médias
+	Large Thumbnails	Miniaturas grandes
+	Clip Thumbnails to Document Bounds	Recortar miniaturas aos limites do documento
 	Canvas color	Cor da tela de pintura
 	Canvas custom color	Cor personalizada da tela de pintura
 	Color picker	Seletor de cores
@@ -1909,7 +2031,7 @@
 	Full size tip	Ponta em tamanho real
 	Gamut warning color	Cor do aviso de gama
 	Gamut warning opacity	Opacidade do aviso de gama
-	Generator enabled	Gerador ativado
+	Enable Generator	Ativar gerador
 	Gif	GIF
 	Glossy	Brilhante
 	Grid color	Cor da grade
@@ -1989,7 +2111,6 @@
 	Show only crosshair while painting	Mostrar apenas a mira ao pintar
 	Show slice numbers	Mostrar números das fatias
 	Show tooltips	Mostrar dicas de ferramentas
-	Enable animations	Ativar animações
 	Show highlight on rollover	Mostrar realce ao passar o mouse
 	Show transformation values	Mostrar valores de transformação
 	Slice color	Cor das fatias
@@ -2079,7 +2200,7 @@
 	Graphics	Gráficos
 	Reset GPU Backend	Redefinir backend da GPU
 	Applies at next launch.	Aplica-se na próxima inicialização.
-	Click to sample the foreground colour  ·  {key}-click for background	Clique para obter a cor de primeiro plano  ·  {key}-clique para a cor de fundo
+	Click to sample the foreground color  ·  {key}-click for background	Clique para obter a cor de primeiro plano  ·  {key}-clique para a cor de fundo
 	{key}-click to set the source	{key}-clique para definir a origem
 	{key} to subtract	{key} para subtrair
 	Clone source {n} ({key}-click with Clone Stamp to set)	Origem da clonagem {n} ({key}-clique com o Carimbo para definir)
@@ -2137,8 +2258,7 @@
 	Gradient Options	Opções de degradê
 	Align with layer	Alinhar com a camada
 	Reset Alignment	Redefinir alinhamento
-	Centre the gradient (offset 0, 0)	Centralizar o degradê (deslocamento 0, 0)
-# Gradient Editor window, opened from the options bar's gradient swatch.
+	Center the gradient (offset 0, 0)	Centralizar o degradê (deslocamento 0, 0)
 	Gradient Editor	Editor de degradê
 	Gradient picker	Seletor de degradê
 	Gradient stops	Paradas do degradê
@@ -2172,7 +2292,7 @@
 	Alt-click to define a source point to clone from	Alt-clique para definir um ponto de origem da clonagem
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nenhum demarcador para criar a seleção: desenhe um com a ferramenta Caneta ou selecione um no painel Demarcadores.
 	Cancel opening	Cancelar abertura
-	Cancelled opening {name}	Abertura de {name} cancelada
+	Canceled opening {name}	Abertura de {name} cancelada
 	Damaged Photoshop document	Documento do Photoshop danificado
 	The document “{name}” may be damaged.	O documento “{name}” pode estar danificado.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Não foi possível ler algumas camadas, pixels ou máscaras. Deseja continuar abrindo?
@@ -2181,7 +2301,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	O documento “{name}” tem um perfil de cores incorporado que não corresponde ao espaço de trabalho {mode} atual.
 	Working: {working}	Espaço de trabalho: {working}
 	Developing {name}	Revelando {name}
-	Cancelled {label}	{label} cancelado
+	Canceled {label}	{label} cancelado
 	Esc to cancel	Esc para cancelar
 	Opened {name}	Aberto: {name}
 	Opening {name}	Abrindo {name}
@@ -2189,7 +2309,7 @@
 	Saving {name}	Salvando {name}
 	Saving {percent}	Salvando {percent}
 	A save to {name} is still running; try again when it finishes	Um salvamento em {name} ainda está em andamento; tente novamente quando terminar
-	{label} is writing the file and can no longer be cancelled	{label} está gravando o arquivo e não pode mais ser cancelado
+	{label} is writing the file and can no longer be canceled	{label} está gravando o arquivo e não pode mais ser cancelado
 	Opening {name}…	Abrindo {name}…
 	Opening…	Abrindo…
 	Reading…	Lendo…
@@ -2374,6 +2494,7 @@
 	Path to Illustrator…	Demarcador para o Illustrator…
 	Make Work Path	Criar demarcador de trabalho
 	Make Selection	Fazer seleção
+	Make Shape	Fazer forma
 	Fill Path	Preencher demarcador
 	Stroke Path	Traçar demarcador
 	Clipping Path	Demarcador de corte
@@ -2554,7 +2675,7 @@
 	Pixel	Pixel
 	Adjustment	Ajuste
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Arraste (laço) ou clique nos pontos (poligonal) · {add} adicionar · {sub} subtrair
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Arraste uma caixa de corte · arraste dentro para mover · as bordas redimensionam ({ratio} proporção, {centre} centro) · Espaço move durante o desenho · setas deslocam · X troca a orientação · {commit} confirma · Esc cancela
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Arraste uma caixa de corte · arraste dentro para mover · as bordas redimensionam ({ratio} proporção, {centre} centro) · Espaço move durante o desenho · setas deslocam · X troca a orientação · {commit} confirma · Esc cancela
 	{mode} Color · {bits} bit	Cor {mode} · {bits} bits
 	Drag to move the layer	Arraste para mover a camada
 	Scrubby Zoom	Zoom por arraste
@@ -2763,9 +2884,7 @@ cameraRaw	Whites	Brancos
 	Discard Layers and Save a Copy	Descartar camadas e salvar uma cópia
 	Don't show again	Não mostrar novamente
 	Save failed: {error}	Falha ao salvar: {error}
-	Save cancelled	Salvamento cancelado
-
-# Layer Style dialog: style presets and per-effect defaults
+	Save canceled	Salvamento cancelado
 	Style {name} saved	Estilo {name} salvo
 	Make Default	Definir como padrão
 	Reset to Default	Restaurar padrão
@@ -2774,8 +2893,6 @@ cameraRaw	Whites	Brancos
 	Magnetic Lasso Tool	Ferramenta Laço magnético
 	Frequency	Frequência
 	Use tablet pressure to change pen width	Usar a pressão da mesa digitalizadora para alterar a largura da caneta
-
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	Sobre
 	Contributors	Colaboradores
 	Models	Modelos
@@ -2806,8 +2923,6 @@ cameraRaw	Whites	Brancos
 	% of all commits	% de todos os commits
 	Lines +/−	Linhas +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} linhas (Δ {delta}), +{binAdded} / −{binDeleted} arquivos binários, {first} – {last}
-
-# Swatches panel
 	Create new swatch	Criar nova amostra
 	New Swatch…	Nova amostra…
 	New Swatch Group…	Novo grupo de amostras…
@@ -2817,13 +2932,12 @@ cameraRaw	Whites	Brancos
 	Export Swatches for Exchange…	Exportar amostras para troca…
 	Reset Swatches	Redefinir amostras
 	Add to Swatches	Adicionar às amostras
-# Layer Style > Blending Options (Advanced Blending)
 	Blend If:	Mesclar se:
+	Current Layer:	Camada atual:
+	Underlying Layer:	Camada subjacente:
 	Channels:	Canais:
 	Knockout	Vazado
 	Apply At Canvas Bounds	Aplicar efeito nos limites da tela
-
-# Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Seletor de cores (Cor do texto)
 	Color Picker ({name})	Seletor de cores ({name})
 	Color Picker (Fill Color)	Seletor de cores (Cor de preenchimento)
@@ -2840,8 +2954,6 @@ cameraRaw	Whites	Brancos
 	Show/Hide Panels	Mostrar/ocultar painéis
 	Could not open	Não foi possível abrir
 	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: o caminho não é Unicode válido; renomeie o arquivo e abra-o novamente.
-
-# Fill dialog, layer style contours and Image Size
 	Contents:	Conteúdo:
 	Custom Pattern:	Padrão personalizado:
 	Foreground Color	Cor de primeiro plano
@@ -2868,14 +2980,12 @@ cameraRaw	Whites	Brancos
 	Rolling Slope - Descending	Declive ondulado - descendente
 	Rounded Steps	Degraus arredondados
 	Sawtooth 1	Dente de serra 1
-
 	Red Eye Tool	Ferramenta Olhos vermelhos
 	Pupil Size	Tamanho da pupila
 	Darken Amount	Quantidade de escurecimento
 	Click a red pupil to neutralize it	Clique em uma pupila vermelha para corrigi-la
 	open source	código aberto
 	…and {n} more	…e mais {n}
-
 	Eyedroppers:	Conta-gotas:
 	Set Black Point	Definir ponto preto
 	Set Neutral Gray Point	Definir ponto cinza neutro
@@ -2884,8 +2994,6 @@ cameraRaw	Whites	Brancos
 	Selection Preview:	Visualização da seleção:
 	Black Matte	Fundo preto
 	White Matte	Fundo branco
-
-# Layer colour labels.
 	Seafoam	Espuma do mar
 	Indigo	Índigo
 	Fuchsia	Fúcsia
@@ -2905,20 +3013,14 @@ fontWeight	Bold	Negrito
 fontWeight	ExtraBold	Extranegrito
 fontWeight	Black	Ultranegrito
 fontWeight	Italic	Itálico
-
-# Pattern Stamp tool
 	Pattern Stamp Tool	Ferramenta Carimbo de padrão
 	Impressionist	Impressionista
 	Rotate View Tool	Ferramenta Girar visualização
 	Reset View	Redefinir visualização
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Arraste ao redor do centro para girar a visualização  ·  Shift restringe a 15°
-
-# Painting symmetry presets.
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Arraste ao redor do centro para girar a visualização  ·  Shift restringe a 15°
 	Dual Axis	Eixo duplo
 	Diagonal	Diagonal
 	Transform Symmetry	Transformar simetria
-
-# Eyedropper Sample Size and Sample (#1649).
 	Point Sample	Amostra pontual
 	3 by 3 Average	Média de 3 × 3
 	5 by 5 Average	Média de 5 × 5
@@ -2930,15 +3032,12 @@ fontWeight	Italic	Itálico
 	All Layers No Adjustments	Todas as camadas sem ajustes
 	Current & Below No Adjustments	Atual e abaixo sem ajustes
 	Show Sampling Ring	Mostrar anel de amostragem
-
-# Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Fora da gama de impressão: clique para a cor imprimível mais próxima
-	Not a web colour: click for the nearest web colour	Não é uma cor da Web: clique para a cor da Web mais próxima
+	Out of gamut for printing: click for the nearest printable color	Fora da gama de impressão: clique para a cor imprimível mais próxima
+	Not a web color: click for the nearest web color	Não é uma cor da Web: clique para a cor da Web mais próxima
 	Color to Alpha…	Cor para alfa…
 	Transparency Threshold	Limiar de transparência
 	Opacity Threshold	Limiar de opacidade
 	PhotoCraft — Screen Color Picker	PhotoCraft — Seletor de cor da tela
-
 	Rasterize svg groups deeper than	Rasterizar grupos SVG além desta profundidade
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 desativa este limite; grupos SVG aninhados em mais de 100 níveis são sempre rasterizados.
 	Rule of Thirds	Regra dos terços
@@ -2952,8 +3051,6 @@ fontWeight	Italic	Itálico
 	Cycle Orientation	Alternar orientação
 	Set the overlay options for the Crop tool	Definir as opções de sobreposição da ferramenta Corte demarcado
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	O Alt-clique foi para o desktop, que move janelas com Alt-arrastar. Mude a tecla de mover janelas dele para Super ou trave o Alt em Janela › Teclas modificadoras.
-
-# Shared Layer Style color picker
 	Color Picker (Layer Style Color)	Seletor de cores (cor do estilo de camada)
 	Auto Hide Notifications	Ocultar notificações automaticamente
 	Notification Duration (seconds)	Duração da notificação (segundos)
@@ -3029,7 +3126,6 @@ fontWeight	Italic	Itálico
 	Appearance Settings…	Configurações de aparência…
 	Add to favorites	Adicionar aos favoritos
 	Remove from favorites	Remover dos favoritos
-# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
 cameraData	Make	Fabricante
 cameraData	Model	Modelo
 cameraData	Date Taken	Data de captura
@@ -3039,7 +3135,6 @@ cameraData	ISO Speed	Sensibilidade ISO
 cameraData	Focal Length	Distância focal
 cameraData	Focal Length (35 mm)	Distância focal (35 mm)
 cameraData	Lens	Lente
-# Shared panel docking
 	Activate Panel	Ativar painel
 	Change Panel Group	Alterar grupo de painéis
 	Change Panel Layout	Alterar disposição dos painéis
@@ -3083,7 +3178,6 @@ cameraData	Lens	Lente
 	Snap to Origin	Ajustar à origem
 	Search settings…	Pesquisar configurações…
 	No matching settings	Nenhuma configuração encontrada
-# Edit › Content-Aware Fill workspace
 	Sampling Brush Tool	Ferramenta Pincel de amostragem
 	Sampling Area Overlay	Sobreposição da área de amostragem
 	Show Sampling Area	Mostrar área de amostragem
@@ -3102,7 +3196,6 @@ cameraData	Lens	Lente
 	New Layer	Nova camada
 	Duplicate Layer	Duplicar camada
 	Contract	Contrair
-
 	Animation Options	Opções de animação
 	Entire Document	Documento inteiro
 	Filter Options	Opções de filtro
@@ -3119,8 +3212,6 @@ cameraData	Lens	Lente
 	Add “copy” to Copied Layers and Groups	Adicionar “cópia” às camadas e grupos copiados
 	Preview on canvas when reordering layers	Pré-visualizar na tela ao reordenar camadas
 	Show layer mask badges	Mostrar emblemas de máscaras de camada
-
-# Smart Filter editors
 	Blending Options ({filter})	Opções de mesclagem ({filter})
 	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Ocultar efeitos da camada e Filtros Inteligentes  ({key}-clique: todas as camadas)
 	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Mostrar efeitos da camada e Filtros Inteligentes  ({key}-clique: todas as camadas)
@@ -3151,7 +3242,8 @@ curves	Smooth	Suavizar
 	Vanishing Point is not active	Ponto de fuga não está ativo
 	Apply Vanishing Point ({key})	Aplicar ponto de fuga ({key})
 	Fix the red plane first: its corners must form a convex quad	Corrija primeiro o plano vermelho: seus cantos devem formar um quadrilátero convexo
-# Select and Mask view modes (#1754)
+	Alt-click a plane to set the clone source	Clique com Alt em um plano para definir a origem da clonagem
+	Too many clone strokes: apply Vanishing Point first	Traços de clonagem demais: aplique Ponto de fuga primeiro
 	Onion Skin	Papel vegetal
 	Marching Ants	Formigas marchando
 	On Black	Sobre preto
@@ -3160,7 +3252,6 @@ curves	Smooth	Suavizar
 	Show Edge	Mostrar borda
 	Show Original	Mostrar original
 	F cycles the views; hold X to see the image	F alterna as visualizações; segure X para ver a imagem
-# Select and Mask Refine Edge Brush (#2972)
 	Refine Edge Brush (R)	Pincel de refinamento de borda (R)
 	Expand Detection Area	Expandir área de detecção
 	Restore Original Edge	Restaurar borda original
@@ -3168,8 +3259,6 @@ curves	Smooth	Suavizar
 	Clear Brush Strokes	Limpar traços do pincel
 	Show rulers	Mostrar réguas
 	Presentation	Apresentação
-
-# Color Sampler (added with the i18n coverage repair)
 	Click to place · Alt-click or drag off-canvas to remove	Clique para posicionar · Alt-clique ou arraste para fora da tela para remover
 	No document open	Nenhum documento aberto
 	{n} of {max} sample points	{n} de {max} pontos de amostragem
@@ -3939,11 +4028,10 @@ layerLabel	No Color	Sem cor
 	Set Colors	Definir cores
 	Switch Foreground and Background Colors	Alternar cores de primeiro plano e plano de fundo
 	Target	Alvo
-
-# History panel menu (#2966)
 	New Snapshot…	Novo instantâneo…
 	History Options…	Opções de histórico…
-# Print dialog (#2697)
+	Allow Non-Linear History	Permitir histórico não linear
+	Make Layer Visibility Changes Undoable	Permitir desfazer alterações de visibilidade das camadas
 	Emulsion Down	Emulsão para baixo
 	Functions	Funções
 	Print Resolution:	Resolução de impressão:
@@ -3955,7 +4043,6 @@ layerLabel	No Color	Sem cor
 	Apply mask to layer before removing?	Aplicar a máscara à camada antes de removê-la?
 	The layer or its mask changed. Drag the mask onto the Trash again.	A camada ou a máscara mudou. Arraste a máscara para a Lixeira novamente.
 	Delete the vector mask?	Excluir a máscara vetorial?
-# Counted status messages and labels (#3454; adapted from PR #3821)
 @plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} amostra exportada para {file}|{n} amostras exportadas para {file}
 @plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} pincel importado de {group}|{n} pincéis importados de {group}
 @plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} amostra importada de {file}|{n} amostras importadas de {file}
@@ -3970,7 +4057,6 @@ layerLabel	No Color	Sem cor
 @plural	{n} step|{n} steps	{n} etapa|{n} etapas
 @plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} outro aviso de predefinição de pincel)|{warning} (+{n} outros avisos de predefinição de pincel)
 @plural	{what} with {n} warning|{what} with {n} warnings	{what} com {n} aviso|{what} com {n} avisos
-# View › Guides › New Guide… › Color
 	Light Blue	Azul-claro
 	Light Red	Vermelho-claro
 	Medium Blue	Azul médio
@@ -3991,8 +4077,6 @@ layerLabel	No Color	Sem cor
 	Clear Brush Controls	Limpar controles de pincel
 	Reset All Locked Settings	Redefinir todas as configurações bloqueadas
 	Copy Texture to Other Tools	Copiar textura para outras ferramentas
-
-# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Carregar ações…
 	Save Actions…	Salvar ações…
 	New Action…	Nova ação…
@@ -4004,10 +4088,11 @@ layerLabel	No Color	Sem cor
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} etapa ainda não tem equivalente no PhotoCraft|{n} etapas ainda não têm equivalente no PhotoCraft
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	{n} ação salva em {file}|{n} ações salvas em {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} etapa sem equivalente no Photoshop foi omitida|{n} etapas sem equivalente no Photoshop foram omitidas
-
+@plural	{n} action file loaded|{n} action files loaded	{n} arquivo de ações carregado|{n} arquivos de ações carregados
+	{set} from {file} replaced the one from {earlier}	O conjunto {set} de {file} substituiu o de {earlier}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	Não foi possível carregar {n} arquivo: {errors}|Não foi possível carregar {n} arquivos: {errors}
 	File Naming	Nomenclatura de arquivos
 	Starting serial	Número de série inicial
-# Actions panel: set folders, dialog toggle, Insert Stop
 	Insert Stop…	Inserir parada…
 	Save Set…	Salvar conjunto…
 	Message:	Mensagem:
@@ -4018,59 +4103,81 @@ layerLabel	No Color	Sem cor
 	Step {step} is waiting for its dialog	A etapa {step} está aguardando sua caixa de diálogo
 @plural	{n} action|{n} actions	{n} ação|{n} ações
 	Background (Default)	Plano de fundo (padrão)
-# Batch / Image Processor
+	Background (default)	Plano de fundo (padrão)
+	Transparent (default)	Transparente (padrão)
 	Include All Subfolders	Incluir todas as subpastas
 	Auto Add/Delete	Adicionar/excluir automaticamente
-
-# Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Não ative também a imagem espelhada nas configurações de impressão: as duas inversões se anulam.
 	Print Settings…	Configurações de impressão…
-	Remember to turn off the printer's own colour management in Print Settings…	Lembre-se de desativar o gerenciamento de cores da própria impressora nas configurações de impressão…
+	Remember to turn off the printer's own color management in Print Settings…	Lembre-se de desativar o gerenciamento de cores da própria impressora nas configurações de impressão…
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
-# PhotoCraft release checks.
+	Memory usage percent	Uso de memória (%)
+	Show Favorite Fonts	Mostrar fontes favoritas
+	No favorite fonts yet: click the star beside a font to add it.	Ainda não há fontes favoritas: clique na estrela ao lado de uma fonte para adicioná-la.
+	Favorite fonts	Fontes favoritas
+	Add to Favorites	Adicionar aos favoritos
+	Remove from Favorites	Remover dos favoritos
+	Show All Fonts	Mostrar todas as fontes
+	All Classes	Todas as classes
+	Blackletter	Gótica
+	Decorative	Decorativa
+	Font preview:	Visualização da fonte:
+	Handwritten	Manuscrita
+	Hide Font Classes	Ocultar classes de fonte
+	Hide Styles	Ocultar estilos
+	Monospace	Monoespaçada
+	No fonts match these filters.	Nenhuma fonte corresponde a estes filtros.
+	No similar fonts: the current font doesn't say what it looks like.	Nenhuma fonte semelhante: a fonte atual não descreve sua aparência.
+	OpenType font	Fonte OpenType
+	Sans Serif	Sem serifa
+	Script	Cursiva
+	Serif	Com serifa
+	Show Font Classes	Mostrar classes de fonte
+	Show Similar Fonts	Mostrar fontes semelhantes
+	Show Styles	Mostrar estilos
+	Show Variable Fonts	Mostrar fontes variáveis
+	Slab Serif	Serifa egípcia
+	TrueType font	Fonte TrueType
+	Variable font	Fonte variável
+	Calibration	Calibração
+	Red Primary	Primária vermelha
+	Green Primary	Primária verde
+	Blue Primary	Primária azul
+	Write xmp sidecars	Gravar arquivos auxiliares XMP
+	Set the tone sliders from the image	Definir os controles de tom a partir da imagem
+	Settings from {name}	Configurações de {name}
+	Settings from {name}; {count} not supported: {names}	Configurações de {name}; {count} sem suporte: {names}
+	Could not write {name}: {error}	Não foi possível gravar {name}: {error}
+	Kept {name}: written by another application	{name} mantido: gravado por outro aplicativo
+	Shadow Tint	Matiz das sombras
 	Check for Updates…	Verificar atualizações…
-	PhotoCraft Updates	Atualizações do PhotoCraft
-	Checking for updates…	Verificando atualizações…
 	Open the release page to choose an installer for your system.	Abra a página da versão para escolher um instalador para o seu sistema.
-	Open Download Page	Abrir página de download
-	PhotoCraft is up to date.	O PhotoCraft está atualizado.
-	Could not check for updates.	Não foi possível verificar atualizações.
-	Updates have not been checked yet.	As atualizações ainda não foram verificadas.
-	Check Again	Verificar novamente
 	Automatically Check for Updates	Verificar atualizações automaticamente
-	Installed version: {version}	Versão instalada: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} está disponível.
-# History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Pinta a partir do estado de origem do painel Histórico
 	Sets the source for the history brush	Define a origem do pincel do histórico
-# Bevel & Emboss shading controls.
+	The History Brush source was deleted: set a new source in the History panel	A origem do pincel do histórico foi excluída: defina uma nova origem no painel Histórico
 	Highlight Mode	Modo de realces
 	Highlight Color	Cor dos realces
 	Highlight Opacity	Opacidade dos realces
 	Shadow Mode	Modo de sombras
 	Shadow Color	Cor das sombras
 	Shadow Opacity	Opacidade das sombras
-# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Usar o perfil incorporado ({profile})
 	Convert to the working space ({profile})	Converter para o espaço de trabalho ({profile})
 	Remember this choice for future images	Lembrar esta escolha para as próximas imagens
 	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Reative a pergunta com Ask On Mismatch em Editar › Configurações de cores.
 	Button Mode	Modo de botão
 	Button Mode On	Modo de botão ativado
-
-# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Escurecer interface
 	Lighten Interface	Clarear interface
-# Bevel & Emboss Technique.
 	Technique	Técnica
 	Chisel Hard	Cinzel duro
 	Chisel Soft	Cinzel suave
 	Open color-less EXR as ACEScg	Abrir EXR sem espaço de cor como ACEScg
 	Do not append "copy" to filename when saving a copy	Não acrescentar "copy" ao nome do arquivo ao salvar uma cópia
-
-# View › Guides › right-click a guide
+	Save Full-Size Composite in .pcraft Files	Salvar a imagem composta em tamanho real nos arquivos .pcraft
 	Edit Selected Guides	Editar guias selecionadas
 	Clear Selected Guides	Limpar guias selecionadas
 	Bicubic Automatic	Bicúbica automática
@@ -4095,8 +4202,6 @@ layerLabel	No Color	Sem cor
 	set name	nome do conjunto
 	{set} (modified)	{set} (modificado)
 	Show file name in title	Exibir nome do arquivo no título
-
-# Image › Mode › Bitmap (#5559)
 	50% Threshold	Limiar de 50%
 	Pattern Dither	Pontilhamento de padrão
 	Diffusion Dither	Pontilhamento de difusão
@@ -4114,10 +4219,8 @@ layerLabel	No Color	Sem cor
 	Undo Changes	Desfazer alterações
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} é reservado pelo sistema e não pode ser atribuído.
 	Low-Latency Drawing (vsync off, applies at next launch)	Desenho de baixa latência (sem sincronização vertical, aplicado na próxima inicialização)
-# Free Transform: a new layer while the box is open (#5859)
 	Free Transform is still being applied; try again when it has finished.	A Transformação livre ainda está sendo aplicada; tente novamente quando terminar.
 	The transform couldn't be applied.	Não foi possível aplicar a transformação.
-# Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	As camadas precisam de {needed} de memória da GPU; o orçamento lhes deixa {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	Ajuste Memória da GPU em Preferências › Desempenho para o que sua placa de vídeo comporta, no máximo 3/8 da memória dela. Automático segue Uso de memória, dentro de um quarto da memória deste computador e 3/8 da memória da placa, e não desconta o documento de uma placa cuja memória é conhecida. Enquanto não couberem, a barra de status mostra Memória da GPU cheia.
 	GPU Memory Full	Memória da GPU cheia
@@ -4127,6 +4230,7 @@ layerLabel	No Color	Sem cor
 	This document's layers: {needed} of {budget} for layers	Camadas deste documento: {needed} de {budget} para camadas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	As camadas deste documento precisam de {needed} mas podem ocupar {budget}: o documento inteiro é redesenhado na CPU
 	GPU Memory (MB, 0 = Automatic)	Memória da GPU (MB, 0 = Automático)
+	Scratch Size Limit (MB, 0 = No Limit)	Limite de tamanho do disco de rascunho (MB, 0 = sem limite)
 	{path}: the path is not valid Unicode; save under another name.	{path}: o caminho não é Unicode válido; salve com outro nome.
 	{name} was changed by another app after it was opened or saved here.	{name} foi alterado por outro app depois de ser aberto ou salvo aqui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Substitua-o por este documento, ou cancele e use Arquivo › Salvar como para manter os dois.
@@ -4135,16 +4239,14 @@ layerLabel	No Color	Sem cor
 	Decrease Brush Hardness	Diminuir dureza do pincel
 	Increase Brush Hardness	Aumentar dureza do pincel
 	Demosaic	Demosaico
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Como o mosaico do filtro de cor da câmera é preenchido. É aplicado ao abrir o arquivo; a visualização mostra o método com que ele foi aberto.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Como o mosaico do filtro de cor da câmera é preenchido. É aplicado ao abrir o arquivo; a visualização mostra o método com que ele foi aberto.
 	AHD (adaptive homogeneity)	AHD (homogeneidade adaptativa)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: as bordas mais limpas e o menor franjamento de cor; o mais lento.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolação com correção de gradiente: nítida e rápida, com algum franjamento de cor em detalhes finos.
-	The fastest and the softest, with colour fringing on fine detail.	O mais rápido e o mais suave, com franjamento de cor em detalhes finos.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: as bordas mais limpas e o menor franjamento de cor; o mais lento.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolação com correção de gradiente: nítida e rápida, com algum franjamento de cor em detalhes finos.
+	The fastest and the softest, with color fringing on fine detail.	O mais rápido e o mais suave, com franjamento de cor em detalhes finos.
 	“{name}” already exists. Replace it?	“{name}” já existe. Substituir?
 	The name in the save dialog was “{name}”.	O nome na caixa de diálogo Salvar era “{name}”.
-	Move Up	Mover para cima
-	Move Down	Mover para baixo
 	Previous Brush	Pincel anterior
 	Next Brush	Próximo pincel
 	First Brush	Primeiro pincel
@@ -4159,17 +4261,12 @@ layerLabel	No Color	Sem cor
 	Use	Usar
 	In Front	Na frente
 	Behind	Atrás
-
-# DDS Options (#1327)
 	DDS Options	Opções de DDS
 	Generate Mipmaps	Gerar mipmaps
-
-# Color Table (.act) dialog
 	There is no color table to save.	Não há tabela de cores para salvar.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} cor salva em {file}|{n} cores salvas em {file}
-
-# Graphics Adapter preference (#1885)
 	GPU adapter	Adaptador de GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	O conteúdo AI/PDF/EPS será editado como SVG. Salvar substitui a origem incorporada; recursos específicos do formato podem mudar.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importar estilos…
@@ -4178,9 +4275,7 @@ layerLabel	No Color	Sem cor
 	{file} is not a style library (.asl)	{file} não é uma biblioteca de estilos (.asl)
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{n} estilo importado de {file}|{n} estilos importados de {file}
 @plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} estilo exportado para {file}|{n} estilos exportados para {file}
-# Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Confirme ou cancele primeiro a caixa de diálogo aberta da etapa da ação
-# Channels panel menu: channel commands, spot channels, Quick Mask, Color Indicates
 	New Channel…	Novo canal…
 	Duplicate Channel	Duplicar canal
 	Delete Channel	Excluir canal
@@ -4193,7 +4288,6 @@ layerLabel	No Color	Sem cor
 	Exit Quick Mask	Sair da máscara rápida
 	Color Indicates Masked Areas	A cor indica áreas mascaradas
 	Color Indicates Selected Areas	A cor indica áreas selecionadas
-# Layer Style › Blending Options: advanced blending and Blend If
 	General Blending	Mesclagem geral
 	Shallow	Raso
 	Deep	Profundo
@@ -4203,8 +4297,6 @@ layerLabel	No Color	Sem cor
 	Layer Mask Hides Effects	A máscara de camada oculta os efeitos
 	Vector Mask Hides Effects	A máscara vetorial oculta os efeitos
 	This Layer:	Esta camada:
-	Underlying Layer:	Camada subjacente:
-# Canvas right-click menus: pasteboard color, paths and shapes
 	Dark Gray	Cinza-escuro
 	Medium Gray	Cinza médio
 	Select Custom Color…	Selecionar cor personalizada…
@@ -4223,17 +4315,14 @@ layerLabel	No Color	Sem cor
 	Paste Complete Stroke	Colar traçado completo
 	Make Symmetry Path	Criar demarcador de simetria
 	Disable Symmetry Path	Desativar demarcador de simetria
-# Color Picker titles
 	Color Picker (Foreground Color)	Seletor de cores (Cor de primeiro plano)
 	Color Picker (Background Color)	Seletor de cores (Cor de fundo)
 	Pick Color From Image	Escolher cor da imagem
-# Rasterize prompts
 	This layer must be rasterized before proceeding.	Esta camada precisa ser rasterizada antes de continuar.
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Esta camada de texto precisa ser rasterizada antes de continuar. O texto não poderá mais ser editado. Rasterizar o texto?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Esta camada de forma precisa ser rasterizada antes de continuar. Ela não poderá mais ser editada como forma. Rasterizar a forma?
 	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
-# GPU and display status (status bar, System Info)
 	Graphics adapter: {adapter}	Adaptador gráfico: {adapter}
 	Backend: {backend} ({type})	Backend: {backend} ({type})
 	Driver: {driver}	Driver: {driver}
@@ -4261,7 +4350,6 @@ layerLabel	No Color	Sem cor
 	previous reading kept; the last re-read failed: {reason}	leitura anterior mantida; a última releitura falhou: {reason}
 	The canvas is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	A tela de pintura é exibida como sRGB. Escolha um perfil de monitor em Editar › Configurações de cores.
 	The canvas on {display} is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	A tela de pintura em {display} é exibida como sRGB. Escolha um perfil de monitor em Editar › Configurações de cores.
-# Status messages
 	Nothing to paste: the clipboard holds no image	Nada para colar: a área de transferência não contém imagem
 	Opened {url}	Aberto: {url}
 	Preferences saved	Preferências salvas
@@ -4298,7 +4386,6 @@ layerLabel	No Color	Sem cor
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Este ajuste ({key}) é mantido como foi importado e ainda não pode ser editado.
 	{shortcut} assigned.	{shortcut} atribuído.
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} já está em uso por {commands} e será removido de lá quando você clicar em OK.
-# Panels and small controls
 	Grid view	Visualização em grade
 	List view	Visualização em lista
 	New Brush Preset	Nova predefinição de pincel
@@ -4311,7 +4398,6 @@ layerLabel	No Color	Sem cor
 	Apply {option}: {state}	Aplicar {option}: {state}
 	on	ativado
 	off	desativado
-# Liquify tools (tooltips)
 	Forward Warp	Deformação para frente
 	Twirl Clockwise	Torcer no sentido horário
 	Twirl Counterclockwise	Torcer no sentido anti-horário
@@ -4327,14 +4413,11 @@ layerLabel	No Color	Sem cor
 	Pro Light	Pro claro
 	Resize Windows to Fit	Redimensionar janelas para caber
 	EXR	EXR
-# Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Direção automática do parágrafo
 	Left-to-right paragraph direction	Direção do parágrafo da esquerda para a direita
 	Right-to-left paragraph direction	Direção do parágrafo da direita para a esquerda
 	Not rendered: this adjustment ({key}) is kept as imported.	Não renderizado: este ajuste ({key}) é mantido como foi importado.
-# Print preview image (#8236)
 	Print preview image	Print preview image
-# Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cubo de matiz
 	Brightness Cube	Cubo de brilho
 	Color Wheel	Roda de cores
@@ -4350,3 +4433,106 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+	The path was kept as the Work Path	O demarcador foi mantido como demarcador de trabalho
+	The path was discarded	O demarcador foi descartado
+	Art History Brush Tool	Ferramenta Pincel do histórico da arte
+	Tight Short	Curto cerrado
+	Tight Medium	Médio cerrado
+	Tight Long	Longo cerrado
+	Loose Medium	Médio solto
+	Loose Long	Longo solto
+	Dab	Toque
+	Tight Curl	Curva cerrada
+	Loose Curl	Curva solta
+	Stylized dabs from a history state	Toques estilizados a partir de um estado do histórico
+	Font size presets	Predefinições de tamanho da fonte
+	Leading presets	Predefinições de entrelinha
+	Tracking presets	Predefinições de tracking
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entrada numérica inválida. É necessário um número inteiro entre {min}% e {max}%. O valor anterior foi inserido.
+	Color Aware	Com reconhecimento de cor
+	Decontaminate Colors	Descontaminar cores
+	Edge Detection	Detecção de borda
+	Global Refinements	Refinamentos globais
+	High Quality Preview	Visualização de alta qualidade
+	Object Aware	Com reconhecimento de objeto
+	Real-Time Refinement	Refinamento em tempo real
+	Refine Edge Brush Tool	Ferramenta Pincel de refinamento de borda
+	Refine Hair	Refinar cabelo
+	Refine Mode	Modo de refinamento
+	Remember Settings	Lembrar configurações
+	View Mode	Modo de exibição
+	Object Aware needs a segmentation model, which isn't available yet	Com reconhecimento de objeto requer um modelo de segmentação, ainda não disponível
+	Refine Hair needs hair detection, which isn't available yet	Refinar cabelo requer detecção de cabelo, ainda não disponível
+	Select and Mask was closed: its document is no longer the active one	Selecionar e mascarar foi fechado: o documento dele não está mais ativo
+	Select and Mask was closed: another layer was selected	Selecionar e mascarar foi fechado: outra camada foi selecionada
+	Drag to move the selected path	Arraste para mover o demarcador selecionado
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Cores usadas recentemente
+	Stop Color	Cor da parada
+	Shapes can't use patterns yet	Formas ainda não podem usar padrões
+	Edit Brush…	Editar pincel…
+
+# Action Stop message (#8386)
+	Message	Mensagem
+# Playback Options (#5212)
+	Playback Options…	Opções de reprodução…
+	Playback Options	Opções de reprodução
+	Accelerated	Acelerada
+	Step by Step	Passo a passo
+	Pause For:	Pausar por:
+	Pause For	Pausar por
+	seconds	segundos
+	Create a single history state	Criar um único estado de histórico
+	Drag to move the active shape's path or the Work Path	Arraste para mover o demarcador da forma ativa ou o demarcador de trabalho
+	Generator enabled	Gerador ativado
+	Move Up	Mover para cima
+	Move Down	Mover para baixo
+	On your computer	No seu computador
+	New file	Novo arquivo
+	Learn	Aprender
+	Website	Site
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Uma moldura permite transformações afins; selecione sua imagem para transformações de perspectiva
+	A frame supports affine transforms; select its image to warp it	Uma moldura permite transformações afins; selecione sua imagem para deformá-la
+	Convert to Frame…	Converter em moldura…
+	Create a new custom frame	Criar nova moldura personalizada
+	Create a new polygonal frame	Criar nova moldura poligonal
+	Create a new triangular frame	Criar nova moldura triangular
+	Fit Content to Frame	Ajustar conteúdo à moldura
+	Fit Frame to Content	Ajustar moldura ao conteúdo
+	Frame coordinates must be finite and within 600000 pixels	As coordenadas da moldura devem ser finitas e estar dentro de 600000 pixels
+	Import Image…	Importar imagem…
+	Invalid frame transform	Transformação de moldura inválida
+	Invalid nested file drop	Soltura de arquivo aninhada inválida
+	New Frame	Nova moldura
+	Replace Image…	Substituir imagem…
+	The frame is locked	A moldura está bloqueada
+	The frame is unavailable	A moldura não está disponível
+
+# Channels panel menu (#11451)
+	Channel Options…	Opções de canal…
+	Specify Channels:	Especificar canais:
+	Not enough grayscale documents for this mode.	Não há documentos em tons de cinza suficientes para este modo.
+	Pick a different document for each channel.	Escolha um documento diferente para cada canal.
+	A picked document is no longer open.	Um dos documentos escolhidos não está mais aberto.
+	A picked document is no longer a grayscale document of the same size.	Um dos documentos escolhidos não é mais um documento em tons de cinza do mesmo tamanho.
+# Move tool options bar (#11381)
+	Align top edges	Alinhar bordas superiores
+	Align vertical centers	Alinhar centros verticais
+	Align bottom edges	Alinhar bordas inferiores
+	Distribute vertically	Distribuir verticalmente
+	Distribute horizontally	Distribuir horizontalmente
+	Show layer bounds on hover	Mostrar limites da camada ao passar o cursor
+	Expand layer group on click	Expandir grupo de camadas ao clicar
+	Show hover bounds from Layers	Mostrar limites ao passar o cursor em Camadas
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribuir larguras
+	Distribute Heights	Distribuir alturas
+	Auto-nest Layers	Aninhar camadas automaticamente
+	Auto-size Canvas	Ajustar tamanho da tela automaticamente
+	Keep Relative Position During Layer Reordering	Manter a posição relativa ao reordenar camadas
+	Shrinkwrap Canvas on Save	Reduzir a tela ao conteúdo ao salvar
