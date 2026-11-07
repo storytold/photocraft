@@ -3927,6 +3927,9 @@ navigator	Zoom	Zvětšení
 	Transparent (default)	Průhledné (výchozí)
 	Include All Subfolders	Zahrnout všechny podsložky
 	Auto Add/Delete	Automaticky přidat/odstranit
+	Install Plug-in	Instalovat zásuvný modul
+	Plug-in Installed	Zásuvný modul nainstalován
+	The plug-in is now available under Filter › Plug-ins.	Zásuvný modul je nyní dostupný v nabídce Filtr › Zásuvné moduly.
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nezapínejte současně zrcadlení v nastavení tisku: obě převrácení se navzájem zruší.
 	Print Settings…	Nastavení tisku…
 	Remember to turn off the printer's own colour management in Print Settings…	Nezapomeňte v nastavení tisku vypnout vlastní správu barev tiskárny…

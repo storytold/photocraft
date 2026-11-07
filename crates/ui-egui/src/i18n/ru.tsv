@@ -3273,6 +3273,9 @@ curves	Smooth	Сгладить
 	Content-Aware Fill	Заливка с учётом содержимого
 	Include All Subfolders	Включить все вложенные папки
 	Auto Add/Delete	Автодобавление/удаление
+	Install Plug-in	Установить плагин
+	Plug-in Installed	Плагин установлен
+	The plug-in is now available under Filter › Plug-ins.	Плагин теперь доступен в меню Фильтр › Плагины.
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Не включайте также зеркальное отражение в параметрах печати: два отражения отменяют друг друга.
 	Print Settings…	Параметры печати…
 	Remember to turn off the printer's own colour management in Print Settings…	Не забудьте отключить управление цветом самого принтера в параметрах печати…

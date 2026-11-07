@@ -68,10 +68,10 @@ fn open_regular(path: &std::path::Path) -> std::io::Result<std::fs::File> {
     std::fs::File::open(path)
 }
 
-/// Reads a `.wasm` file (refusing anything that isn't a regular file or exceeds the module limit)
-/// and loads it.
+/// Reads a `.wasm` file (refusing anything that isn't a regular file or exceeds the module limit),
+/// returning the loaded plug-in alongside its raw bytes.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
+pub fn load_file_with_bytes(path: &std::path::Path, limits: Limits) -> Result<(Plugin, Vec<u8>)> {
     use std::io::Read;
     // Open first, without blocking on a FIFO, and judge the file that was opened: a name checked
     // and then opened again can be swapped for a special file in between.
@@ -85,7 +85,15 @@ pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
     }
     let mut bytes = Vec::new();
     f.take(limits.max_module_bytes as u64 + 1).read_to_end(&mut bytes).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
-    Ok(Plugin::load(&bytes, limits)?.with_source(path.display().to_string()))
+    let plugin = Plugin::load(&bytes, limits)?.with_source(path.display().to_string());
+    Ok((plugin, bytes))
+}
+
+/// Reads a `.wasm` file (refusing anything that isn't a regular file or exceeds the module limit)
+/// and loads it.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
+    load_file_with_bytes(path, limits).map(|(p, _)| p)
 }
 
 /// What [`load_folder`] did.
@@ -93,24 +101,51 @@ pub fn load_file(path: &std::path::Path, limits: Limits) -> Result<Plugin> {
 pub struct FolderReport {
     /// Ids of the plug-ins installed.
     pub loaded: Vec<String>,
+    /// Ids of plug-ins previously loaded from this folder whose `.wasm` file was removed.
+    pub removed: Vec<String>,
     /// `(file, error)` for each `.wasm` that failed to load.
     pub failed: Vec<(String, String)>,
 }
 
-/// Installs every `*.wasm` directly in `dir` (not recursive), in file-name order. A bad module is
-/// reported and skipped; the others still load.
+/// Synchronizes `dir` with the registry: installs every `*.wasm` directly in `dir` (not recursive)
+/// in file-name order, and removes any previously installed plug-in whose source was directly in
+/// `dir` but is no longer present. A bad module is reported and skipped; the others still load.
+///
+/// Note: If a previously loaded plug-in whose `.wasm` file still exists in `dir` now fails to
+/// load (for example, following an invalid or broken update), it is unloaded from the active
+/// registry so broken modules cannot be executed, and is reported in both `failed` and `removed`.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
     let rd = std::fs::read_dir(dir).map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
-    let mut files: Vec<std::path::PathBuf> =
-        rd.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm"))).collect();
+    let mut files: Vec<std::path::PathBuf> = Vec::new();
+    for entry in rd {
+        let entry = entry.map_err(|e| Error::Io(format!("{}: {e}", dir.display())))?;
+        let p = entry.path();
+        if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("wasm")) {
+            files.push(p);
+        }
+    }
     files.sort();
     files.truncate(1000);
     let mut report = FolderReport::default();
-    for f in files {
-        match load_file(&f, Limits::default()) {
+    for f in &files {
+        match load_file(f, Limits::default()) {
             Ok(p) => report.loaded.push(install(p).id().to_string()),
             Err(e) => report.failed.push((f.display().to_string(), e.to_string())),
+        }
+    }
+    let canonical_dir = dir.canonicalize().ok();
+    for p in list() {
+        let from_dir = p
+            .source()
+            .and_then(|s| std::path::Path::new(s).parent())
+            .is_some_and(|parent| parent == dir || (canonical_dir.is_some() && parent.canonicalize().ok().as_deref() == canonical_dir.as_deref()));
+        if from_dir && !report.loaded.iter().any(|id| id == p.id()) {
+            let was_scanned = p.source().is_some_and(|src| files.iter().any(|f| f == std::path::Path::new(src)));
+            let still_exists = p.source().is_some_and(|src| std::path::Path::new(src).is_file());
+            if (was_scanned || !still_exists) && remove(p.id()) {
+                report.removed.push(p.id().to_string());
+            }
         }
     }
     Ok(report)

@@ -3316,6 +3316,9 @@ curves	Smooth	Lisser
 	Content-Aware Fill	Remplissage d'après le contenu
 	Include All Subfolders	Inclure tous les sous-dossiers
 	Auto Add/Delete	Ajout/suppr. auto
+	Install Plug-in	Installer une extension
+	Plug-in Installed	Module externe installé
+	The plug-in is now available under Filter › Plug-ins.	Le module externe est désormais disponible sous Filtre › Modules externes.
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Ne cochez pas aussi Image miroir dans les paramètres d’impression : les deux inversions s’annulent.
 	Print Settings…	Paramètres d’impression…
 	Remember to turn off the printer's own colour management in Print Settings…	Pensez à désactiver la gestion des couleurs de l’imprimante dans les paramètres d’impression…

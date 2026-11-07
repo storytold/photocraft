@@ -341,6 +341,8 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         }
         _ if crate::color_range_ui::owns(fields) => crate::color_range_ui::body(app, ui, fields),
         _ if crate::prefs_ui::owns(fields) => crate::prefs_ui::body(app, ui, fields),
+        _ if crate::plugin_ui::owns(fields) => first_field_focused(ui, id, |ui| crate::plugin_ui::body(app, ui, fields)),
+        _ if crate::plugin_ui::owns_installed_notice(fields) => crate::plugin_ui::installed_notice_body(ui, fields),
         _ if fields.contains_key("__export") => crate::export_dialog::body(app, ui, fields),
         // Image Size and Canvas Size open on Width, selected (#2329).
         _ if fields.contains_key("__sizing") => first_field_focused(ui, id, |ui| crate::sizing::body(ui, fields)),
@@ -454,7 +456,7 @@ fn button_row(
     if d.kind == DialogKind::Command && crate::actions::owns_stop_message(fields) {
         // A Stop step's message: Continue and Stop, or Stop alone.
         outcome = crate::actions::stop_message_buttons(ui, fields, interactive);
-    } else if matches!(d.kind, DialogKind::About | DialogKind::Error) {
+    } else if matches!(d.kind, DialogKind::About | DialogKind::Error) || crate::plugin_ui::owns_installed_notice(fields) {
         // ↩ is OK too, as on every other dialog (#4872), from the frame after the
         // alert appeared: the ↩ that raised it (committing a locked layer's Free
         // Transform, say) must not close it again at once.
@@ -468,7 +470,10 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields) && merge_channels_ui::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields)
+            && crate::stack_dialog::can_confirm(fields)
+            && merge_channels_ui::can_confirm(fields)
+            && crate::plugin_ui::can_confirm(fields);
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -1108,6 +1113,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         }
         _ if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         _ if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
+        _ if crate::plugin_ui::owns(&d.fields) => crate::plugin_ui::confirm(app, &d.fields),
         _ if d.fields.contains_key("__export") => crate::export_dialog::confirm(app, &d.fields),
         _ => confirm_generic_command(app, d),
     }
