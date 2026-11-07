@@ -2,7 +2,7 @@
 //!
 //! `cargo run --release -p photocraft-io --example big_psb_check -- <file.psb>...`
 //!
-//! The opt-in tests in `tests/large_files.rs` generate and check the same files.
+//! The opt-in tests in `tests/it/large_files.rs` generate and check the same files.
 
 use photocraft_psd::fixtures::sample;
 

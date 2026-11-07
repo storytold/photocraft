@@ -58,8 +58,9 @@ fn feather_matches_photoshops_ramp() {
         let r = row(&shape_doc(depth, 1.0, 10.0, None), 100);
         let ours: Vec<i32> = (0..15).map(|i| r[30 + 3 * i]).collect();
         let dev = ours.iter().zip(PS_FEATHER_10).map(|(a, b)| (a - i32::from(b)).abs()).max().unwrap_or(0);
-        // Same Gaussian (sigma = feather) as a vector mask: within 3 levels of Photoshop.
-        assert!(dev <= 3, "{depth:?}: ours {ours:?} vs Photoshop {PS_FEATHER_10:?} (max {dev})");
+        // Same Gaussian (sigma = feather) as a vector mask: within 1 level of Photoshop (as
+        // scorecard TOOL-214-12 claims; measured max deviation 1 at every depth).
+        assert!(dev <= 1, "{depth:?}: ours {ours:?} vs Photoshop {PS_FEATHER_10:?} (max {dev})");
         eprintln!("{depth:?}: ours {ours:?}, Photoshop {PS_FEATHER_10:?}, max deviation {dev}");
         // The path runs between pixels 49 and 50: their mean is half way.
         assert!((r[49] + r[50] - 255).abs() <= 2, "{depth:?}: half way on the path: {} {}", r[49], r[50]);
@@ -90,7 +91,8 @@ fn density_shows_the_fill_beyond_the_path() {
 /// mask break differently: 127 and 128, both what Photoshop's "127/128" allows.)
 #[test]
 fn soft_shape_matches_an_equal_vector_mask() {
-    for (density, feather) in [(1.0, 10.0), (0.45, 0.0), (0.3, 6.5), (0.0, 0.0), (1.0, 0.0), (0.5, 3.0)] {
+    // 40 px reaches past the canvas edge: both feather it the same way there (#9475).
+    for (density, feather) in [(1.0, 10.0), (0.45, 0.0), (0.3, 6.5), (0.0, 0.0), (1.0, 0.0), (0.5, 3.0), (1.0, 40.0)] {
         for depth in [SampleType::U8, SampleType::U16] {
             let (s, f) = (shape_doc(depth, density, feather, None), fill_doc(depth, density, feather));
             for y in [0, 45, 50, 100, 151, 199] {
@@ -113,7 +115,7 @@ fn soft_shape_matches_an_equal_vector_mask() {
 fn soft_shape_keeps_its_stroke_crisp() {
     let stroke = ShapeStroke { width: 4.0, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), ..ShapeStroke::default() };
     let d = shape_doc(SampleType::U8, 0.5, 10.0, Some(stroke));
-    let px = render(&d, Rect::new(0, 100, 200, 101)).px;
+    let px = render(&d, Rect::new(0, 100, 200, 101)).into_px();
     // Centred 4 px stroke over x = 48..52: opaque red.
     for x in [48, 49, 50, 51] {
         let p = px[x];
@@ -156,4 +158,43 @@ fn soft_shape_bounds_cover_the_fill() {
     let dense = shape_doc(SampleType::U8, 0.5, 0.0, None);
     assert_eq!(layer_bounds(&dense.layers[1], canvas), canvas);
     assert!(effect_outline(&dense.layers[1]).is_none(), "a soft fill's alpha is its outline");
+}
+
+/// A soft shape's frame is the hard shape's painted pixels, also where a subtracted subpath
+/// leaves most of the rasterizers' bounds empty (#5846), at every depth.
+#[test]
+fn soft_shape_frame_skips_a_subtracted_margin() {
+    let canvas = Rect::new(0, 0, 200, 200);
+    let mut cut = Subpath::polygon(&[(40.0, 40.0), (160.0, 40.0), (160.0, 140.0), (40.0, 140.0)]);
+    cut.op = photocraft_doc::vector::PathOp::Subtract;
+    let path = Path::new(vec![Subpath::polygon(&[(50.0, 50.0), (150.0, 50.0), (150.0, 150.0), (50.0, 150.0)]), cut]);
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let sh = ShapeLayer { path: path.clone(), fill: Some(Fill::Solid(Color::BLACK)), density: 0.5, feather: 4.0, ..ShapeLayer::default() };
+        assert_eq!(soft_shape_frame(&sh, doc(depth).pixel_format(), canvas), Some(Rect::new(50, 140, 150, 150)), "{depth:?}");
+    }
+}
+
+/// The frame scan renders a few strips per edge, not one per empty row or column: a 2-px
+/// painted spot in a 4000 × 3000 bounds takes a handful of renders and is found exactly.
+#[test]
+fn soft_shape_frame_scan_is_bounded() {
+    let spot = Rect::new(2500, 1700, 2502, 1702);
+    let mut calls = 0;
+    let got = trim_to_painted(Rect::new(0, 0, 4000, 3000), |strip| {
+        calls += 1;
+        strip.intersect(&spot)
+    });
+    assert_eq!(got, Some(spot));
+    assert!(calls <= 4 * 14, "{calls} renders");
+    let mut calls = 0;
+    assert_eq!(
+        trim_to_painted(Rect::new(0, 0, 4000, 3000), |_| {
+            calls += 1;
+            Rect::EMPTY
+        }),
+        None
+    );
+    assert!(calls <= 14, "an empty shape stops after the top edge: {calls} renders");
+    assert_eq!(trim_to_painted(Rect::EMPTY, |r| r), None);
+    assert_eq!(trim_to_painted(Rect::new(3, 4, 9, 7), |r| r), Some(Rect::new(3, 4, 9, 7)), "a full rect keeps its edges");
 }
