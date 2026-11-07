@@ -4346,3 +4346,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pro každý kanál vyberte jiný dokument.
 	A picked document is no longer open.	Jeden z vybraných dokumentů už není otevřený.
 	A picked document is no longer a grayscale document of the same size.	Jeden z vybraných dokumentů už není dokument ve stupních šedi stejné velikosti.
+# Move tool options bar (#11381)
+	Align top edges	Zarovnat horní okraje
+	Align vertical centers	Zarovnat svislé středy
+	Align bottom edges	Zarovnat dolní okraje
+	Distribute vertically	Rozmístit svisle
+	Distribute horizontally	Rozmístit vodorovně
+	Show layer bounds on hover	Zobrazit hranice vrstvy při najetí
+	Expand layer group on click	Rozbalit skupinu vrstev kliknutím
+	Show hover bounds from Layers	Zobrazit hranice při najetí z panelu Vrstvy
