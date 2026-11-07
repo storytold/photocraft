@@ -168,6 +168,10 @@ pub struct ToolOptions {
     /// transforms still turn and scale about it (#11098).
     #[serde(default)]
     pub transform_reference_point: bool,
+    /// Transform options bar: X and Y show the reference point's offset from where the box started
+    /// instead of its position (Photoshop's relative positioning, off by default, #11679).
+    #[serde(default)]
+    pub transform_relative_position: bool,
     /// Last interpolation selected in the Transform options bar; unset follows General's default.
     #[serde(default)]
     pub transform_interpolation: Option<photocraft_engine::prefs::Interpolation>,
@@ -478,6 +482,7 @@ impl Default for ToolOptions {
             move_expand_group_on_click: true,
             move_show_layers_hover_bounds: true,
             transform_reference_point: false,
+            transform_relative_position: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
             crop_custom_ratio_width: 0.0,
