@@ -1063,7 +1063,7 @@ pub fn working_bytes(params: &FilterParams, area: Rect, bounds: Rect, channels: 
             )
         }
     };
-    windows.saturating_add(shape_blur_bytes(params, bounds, tile, channels as u64, threads))
+    windows.saturating_add(shape_blur_bytes(params, bounds, tile, channels as u64, threads)).max(relight::prepared_bytes(params, area, bounds, channels as u64))
 }
 
 /// What Shape Blur holds beyond the float windows: each worker's f64 prefix sums over its
@@ -1143,6 +1143,9 @@ fn apply_tiled_with_impl(
     }
     #[cfg(not(target_arch = "wasm32"))]
     if prepare_fast_paths && let Some(result) = sharpen::fft::apply(surface, params, area, selection, extent, ctl) {
+        return result;
+    }
+    if prepare_fast_paths && let Some(result) = relight::prepared_apply(surface, params, area, bounds, selection, extent, ctl) {
         return result;
     }
     if let Some(boxes) = blur::box_widths(params) {

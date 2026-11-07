@@ -111,7 +111,7 @@ pub(crate) fn unpremul_px(px: &mut [f32], alpha: bool) {
 
 /// In-place running-sum box blur of every row of a `w × h × n` interleaved
 /// buffer with radius `r` (edges clamped). `scratch` must hold `w × n`.
-fn box_rows_n(buf: &mut [f32], w: usize, n: usize, r: usize, scratch: &mut Vec<f32>) {
+pub(crate) fn box_rows_n(buf: &mut [f32], w: usize, n: usize, r: usize, scratch: &mut Vec<f32>) {
     if r == 0 || w == 0 {
         return;
     }
