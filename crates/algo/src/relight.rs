@@ -3,8 +3,11 @@
 
 use photocraft_geom::Rect;
 
+mod prepared;
+pub(crate) use prepared::{apply as prepared_apply, working_bytes as prepared_bytes};
+
 use crate::Ctx;
-use crate::fxutil::{MAXC, rgba, set_rgba, xy};
+use crate::fxutil::{MAXC, rgba, set_rgba};
 use crate::image::Image;
 
 /// Softness maps onto this σ range; the halo is derived from the σ actually used.
@@ -227,19 +230,16 @@ fn copy_band(dst: &mut [f32], dst_rect: Rect, src: &[f32], src_rect: Rect, n: us
 }
 
 fn relight_rect(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i32) -> Vec<f32> {
-    let n = src.ch;
-    let mut res = src.crop(out);
     // Finite differences at the shading scale (`σ`), not 1 px: a 1 px step vanishes on
     // large documents and the lamp collapses to a flat multiply.
-    const SCALE: f32 = 2.0;
     let y_rect = out.inflate(read_radius(sig));
     if y_rect.is_empty() {
-        return res;
+        return src.crop(out);
     }
     let yw = y_rect.width() as usize;
     let yh = y_rect.height() as usize;
     let Some(n_px) = yw.checked_mul(yh).filter(|&count| count > 0) else {
-        return res;
+        return src.crop(out);
     };
     let mut ybuf = vec![0.5f32; n_px];
     for y in y_rect.y0..y_rect.y1 {
@@ -259,46 +259,68 @@ fn relight_rect(src: &Image, out: Rect, ctx: &Ctx, p: Params, sig: f32, step: i3
         }
     }
     let sbuf = blur_channel(&ybuf, yw, yh, sig);
+    shade(src, out, ctx, p, step, y_rect, &sbuf)
+}
+
+/// Apply the lamp to a prepared shading field. Preparation is independent of the lamp settings.
+fn shade(src: &Image, out: Rect, ctx: &Ctx, p: Params, step: i32, y_rect: Rect, sbuf: &[f32]) -> Vec<f32> {
+    let (yw, yh) = (y_rect.width() as usize, y_rect.height() as usize);
+    shade_with(src, out, ctx, p, step, |x, y| sample_y(sbuf, yw, yh, y_rect, x, y))
+}
+
+fn shade_with(src: &Image, out: Rect, ctx: &Ctx, p: Params, step: i32, sample: impl Fn(i32, i32) -> f32) -> Vec<f32> {
+    let mut res = src.crop(out);
+    shade_pixels(&mut res, out, ctx, p, step, sample);
+    res
+}
+
+/// The lamp only needs the current pixel and the shared shading field. In-place output lets
+/// streaming callers reuse a source strip instead of filling the scratch cache with copies.
+fn shade_pixels(res: &mut [f32], out: Rect, ctx: &Ctx, p: Params, step: i32, sample: impl Fn(i32, i32) -> f32) {
+    let n = crate::fxutil::fmt(ctx).channels();
+    const SCALE: f32 = 2.0;
     let ldir = light_dir(p.angle, p.elevation);
     let lcol = light_color(p.warmth);
     let amb = (if p.ambient.is_finite() { p.ambient } else { 0.0 }).clamp(0.0, 100.0) / 100.0;
     let inten = p.intensity.clamp(0.0, 100.0) / 100.0;
-    for (i, px) in res.chunks_exact_mut(n).enumerate() {
-        let (x, y) = xy(out, i);
-        if !finite_all(px) {
-            continue;
-        }
-        let a = if ctx.alpha { px[n - 1] } else { 1.0 };
-        if ctx.alpha && a <= 0.0 {
-            continue;
-        }
-        let c = rgba(ctx, px);
-        if !finite_all(&c) {
-            continue;
-        }
-        let s0 = sample_y(&sbuf, yw, yh, y_rect, x, y).max(0.04);
-        let nx = (sample_y(&sbuf, yw, yh, y_rect, x - step, y) - sample_y(&sbuf, yw, yh, y_rect, x + step, y)) * SCALE;
-        let ny = (sample_y(&sbuf, yw, yh, y_rect, x, y - step) - sample_y(&sbuf, yw, yh, y_rect, x, y + step)) * SCALE;
-        let nrm = norm3([nx, ny, 1.0]);
-        let ndl = (nrm[0] * ldir[0] + nrm[1] * ldir[1] + nrm[2] * ldir[2]).max(0.0);
-        let shade = amb + inten * ndl;
-        let mut out_c = c;
-        for (k, lc) in lcol.iter().enumerate() {
-            let Some(ch) = c.get(k).copied() else { continue };
-            let Some(slot) = out_c.get_mut(k) else { continue };
-            *slot = (ch / s0) * shade * *lc;
-        }
-        if !finite_all(&out_c) {
-            continue;
-        }
-        set_rgba(ctx, px, out_c);
-        if ctx.alpha
-            && let Some(slot) = px.get_mut(n - 1)
-        {
-            *slot = a;
+    for (row, pixels) in res.chunks_exact_mut(out.width() as usize * n).enumerate() {
+        let y = out.y0 + row as i32;
+        for (column, px) in pixels.chunks_exact_mut(n).enumerate() {
+            let x = out.x0 + column as i32;
+            if !finite_all(px) {
+                continue;
+            }
+            let a = if ctx.alpha { px[n - 1] } else { 1.0 };
+            if ctx.alpha && a <= 0.0 {
+                continue;
+            }
+            let c = rgba(ctx, px);
+            if !finite_all(&c) {
+                continue;
+            }
+            let s0 = sample(x, y).max(0.04);
+            let nx = (sample(x - step, y) - sample(x + step, y)) * SCALE;
+            let ny = (sample(x, y - step) - sample(x, y + step)) * SCALE;
+            let nrm = norm3([nx, ny, 1.0]);
+            let ndl = (nrm[0] * ldir[0] + nrm[1] * ldir[1] + nrm[2] * ldir[2]).max(0.0);
+            let shade = amb + inten * ndl;
+            let mut out_c = c;
+            for (k, lc) in lcol.iter().enumerate() {
+                let Some(ch) = c.get(k).copied() else { continue };
+                let Some(slot) = out_c.get_mut(k) else { continue };
+                *slot = (ch / s0) * shade * *lc;
+            }
+            if !finite_all(&out_c) {
+                continue;
+            }
+            set_rgba(ctx, px, out_c);
+            if ctx.alpha
+                && let Some(slot) = px.get_mut(n - 1)
+            {
+                *slot = a;
+            }
         }
     }
-    res
 }
 
 #[cfg(test)]
