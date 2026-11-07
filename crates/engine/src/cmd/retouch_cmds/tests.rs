@@ -2151,6 +2151,7 @@ fn spot_healing_keeps_film_grain_through_overlapping_strokes() {
     };
     for (depth, kind) in [(8u64, "contentAware"), (8, "proximityMatch"), (8, "createTexture"), (16, "createTexture")] {
         let mut s = session(400, 300, depth, "rgb");
+        s.execute("tools.setBrush", json!({"brush": {"smoothing": {"catchUpOnEnd": true}}})).unwrap();
         paint_layer(&mut s, film_grain);
         let (m0, sd0) = red(&s, 0, 100, 0, 100);
         for i in 0..8 {
@@ -2442,6 +2443,7 @@ fn periodic_clone_low_flow_revisits_accumulate_across_tile_aliases() {
     let setup = |width| {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":width,"height":24,"depth":32})).unwrap();
+        s.execute("tools.setBrush", json!({"brush": {"smoothing": {"catchUpOnEnd": true}}})).unwrap();
         for x in (8..width).step_by(32) {
             s.execute("paint.pencil", json!({"points":[[x,12]],"size":16,"color":"#ff0000"})).unwrap();
         }

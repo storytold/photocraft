@@ -2356,6 +2356,8 @@ fn drag_frames(smoothing: f32, xs: &[f64]) -> (std::sync::Arc<Document>, std::sy
     app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5}})).unwrap();
     // What the options bar's Smoothing field writes.
     app.session.tools.brush.smoothing.amount = smoothing;
+    // Catch-up on Stroke End starts off (#11887); these tests draw the catch-up tail.
+    app.session.tools.brush.smoothing.catch_up_on_end = true;
     app.ui.tool = Tool::Brush;
     ensure_texture(&mut app, &ctx, 0, None);
     let m = egui::Modifiers::NONE;
@@ -2427,7 +2429,7 @@ fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     // And the commit is what `paint.stroke` gives with that smoothing.
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 200, "height": 80, "background": "transparent"})).unwrap();
-    s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5}}})).unwrap();
+    s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5, "catchUpOnEnd": true}}})).unwrap();
     let mut pts = vec![json!([10.0, 40.0, 1.0])];
     pts.extend(xs.iter().map(|&x| json!([x, 40.0 + (x / 7.0).sin() * 8.0, 1.0])));
     // (Round tips without dynamics draw the same for any seed.)
