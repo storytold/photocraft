@@ -494,3 +494,67 @@ fn effects_switch() {
 fn tysh_garbage_is_none() {
     assert!(parse_tysh(&[0; 10]).is_none());
 }
+
+/// A `SoLd` whose warp is a custom envelope of `nu` × `nv` stored points (`pts`, u fastest) over
+/// the 50 × 25 source, placed by the corners `trnf`: how Photoshop saves presets like Inflate.
+fn sold_with_envelope(trnf: [f64; 8], nu: i32, nv: i32, pts: &[[f64; 2]]) -> Vec<u8> {
+    use photocraft_psd::descriptor::ObjectArray;
+    let e = |t: &str, v: &str| Value::Enumerated { type_id: Id::new(t), value: Id::new(v) };
+    let bounds = Descriptor::new("Rctn")
+        .with("Top ", Value::Double(0.0))
+        .with("Left", Value::Double(0.0))
+        .with("Btom", Value::Double(25.0))
+        .with("Rght", Value::Double(50.0));
+    let mesh = Descriptor::new("null")
+        .with("Hrzn", Value::UnitFloats { unit: *b"#Pxl", values: pts.iter().map(|p| p[0]).collect() })
+        .with("Vrtc", Value::UnitFloats { unit: *b"#Pxl", values: pts.iter().map(|p| p[1]).collect() });
+    let envelope = Descriptor::new("customEnvelopeWarp").with("meshPoints", Value::ObjectArray(ObjectArray { prefix: pts.len() as u32, body: mesh }));
+    let warp = Descriptor::new("warp")
+        .with("warpStyle", e("warpStyle", "warpCustom"))
+        .with("bounds", Value::Descriptor(bounds))
+        .with("uOrder", Value::Integer(nu))
+        .with("vOrder", Value::Integer(nv))
+        .with("customEnvelopeWarp", Value::Descriptor(envelope));
+    let d = Descriptor::new("null")
+        .with("Idnt", Value::Text(UnicodeString::new_nul("uuid-1")))
+        .with("Trnf", Value::List(trnf.map(Value::Double).to_vec()))
+        .with("Sz  ", Value::Descriptor(Descriptor::new("Pnt ").with("Wdth", Value::Double(50.0)).with("Hght", Value::Double(25.0))))
+        .with("warp", Value::Descriptor(warp));
+    let mut data = b"soLD".to_vec();
+    data.extend_from_slice(&4u32.to_be_bytes());
+    data.extend(VersionedDescriptor::new(d).to_bytes());
+    data
+}
+
+/// Presets such as Inflate are saved as 3 × 3 control points, and the placement's corners frame
+/// those points. Elevated to a 4 × 4 patch the surface is the same, but the middle points move
+/// two thirds of the way in, so framing the elevated points scaled the warp up (Inflate 50 by an
+/// eighth). Here the edge midpoints bulge 6 px out and the layer is only moved: the placement is
+/// that move, not a 62 / 58 stretch.
+#[test]
+fn a_three_point_warp_side_is_framed_by_its_stored_points() {
+    let pts = [[0.0, 0.0], [25.0, -6.0], [50.0, 0.0], [-6.0, 12.5], [25.0, 12.5], [56.0, 12.5], [0.0, 25.0], [25.0, 31.0], [50.0, 25.0]];
+    // The stored points' box (-6..56 × -6..31) moved by (100, 200).
+    let trnf = [94.0, 194.0, 156.0, 194.0, 156.0, 231.0, 94.0, 231.0];
+    let (_, affine) = parse_smart(b"SoLd", &sold_with_envelope(trnf, 3, 3, &pts));
+    let want = [1.0, 0.0, 0.0, 1.0, 100.0, 200.0];
+    assert!(affine.m.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "{:?}", affine.m);
+    // A 4 × 2 envelope is unaffected: elevating a straight side keeps its box.
+    let pts = [[0.0, -6.0], [16.0, -9.0], [34.0, -9.0], [50.0, -6.0], [0.0, 25.0], [16.0, 25.0], [34.0, 25.0], [50.0, 25.0]];
+    let trnf = [100.0, 191.0, 150.0, 191.0, 150.0, 225.0, 100.0, 225.0];
+    let (_, affine) = parse_smart(b"SoLd", &sold_with_envelope(trnf, 4, 2, &pts));
+    assert!(affine.m.iter().zip([1.0, 0.0, 0.0, 1.0, 100.0, 200.0]).all(|(a, b)| (a - b).abs() < 1e-9), "{:?}", affine.m);
+}
+
+/// The same 3 × 3 warp under perspective corners: the corners still frame the stored points.
+#[test]
+fn a_three_point_warp_side_under_perspective_is_framed_by_its_stored_points() {
+    let pts = [[0.0, 0.0], [25.0, -6.0], [50.0, 0.0], [-6.0, 12.5], [25.0, 12.5], [56.0, 12.5], [0.0, 25.0], [25.0, 31.0], [50.0, 25.0]];
+    let trnf = [94.0, 194.0, 170.0, 190.0, 156.0, 240.0, 90.0, 231.0];
+    let data = sold_with_envelope(trnf, 3, 3, &pts);
+    let h = photocraft_algo::transform::Homography(parse_smart_perspective(b"SoLd", &data).expect("projective"));
+    for ((x, y), (wx, wy)) in [((-6.0, -6.0), (94.0, 194.0)), ((56.0, -6.0), (170.0, 190.0)), ((56.0, 31.0), (156.0, 240.0)), ((-6.0, 31.0), (90.0, 231.0))] {
+        let (px, py) = h.apply(x, y);
+        assert!((px - wx).abs() < 1e-6 && (py - wy).abs() < 1e-6, "({x},{y}) -> ({px},{py}), want ({wx},{wy})");
+    }
+}

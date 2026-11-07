@@ -777,6 +777,56 @@ pub(crate) fn parse_prefix_versioned(data: &[u8]) -> Option<Descriptor> {
 }
 
 /// A warp's `bounds` as a placement frame, falling back to `rect` when degenerate.
+/// The box of a custom warp's control points as stored, when the file keeps fewer than 4 × 4
+/// (`uOrder`/`vOrder` below 4: presets such as Inflate, Squeeze and Wave are saved that way). The
+/// placement's corners frame these points; the 4 × 4 patch they are elevated to has the same
+/// surface but a smaller box wherever a side had 3 points, which framed Inflate 50 an eighth too
+/// big. `None` for a full 4 × 4 patch, a split grid, or anything unreadable.
+pub(crate) fn stored_mesh_frame(w: &Descriptor) -> Option<[f64; 4]> {
+    let env = get_desc(w, "customEnvelopeWarp")?;
+    if env.get("quiltSliceX").is_some() {
+        return None;
+    }
+    let order = |k: &str| num(w.get(k)).filter(|n| n.is_finite() && n.fract() == 0.0 && (2.0..=4.0).contains(n));
+    let (nu, nv) = (order("uOrder")?, order("vOrder")?);
+    if nu == 4.0 && nv == 4.0 {
+        return None;
+    }
+    let Some(Value::ObjectArray(arr)) = env.get("meshPoints") else { return None };
+    let vals = |k: &str| match arr.body.get(k) {
+        Some(Value::UnitFloats { values, .. }) => Some(values.clone()),
+        _ => None,
+    };
+    let (xs, ys) = (vals("Hrzn")?, vals("Vrtc")?);
+    if xs.len() != ys.len() || xs.len() as f64 != nu * nv {
+        return None;
+    }
+    let inf = f64::INFINITY;
+    let b = xs.iter().zip(&ys).fold([inf, inf, -inf, -inf], |b, (x, y)| [b[0].min(*x), b[1].min(*y), b[2].max(*x), b[3].max(*y)]);
+    (b.iter().all(|v| v.is_finite()) && b[2] - b[0] > 1e-9 && b[3] - b[1] > 1e-9).then_some(b)
+}
+
+/// [`placed_frame`] for a `SoLd` descriptor `d`: a custom warp stored with fewer than 4 × 4
+/// points is framed by those points ([`stored_mesh_frame`]).
+fn placed_frame_of(d: &Descriptor, warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    stored_custom_frame(d, warp).unwrap_or_else(|| placed_frame(warp, w, h))
+}
+
+/// [`perspective_frame`] for a `SoLd` descriptor `d`, with the same stored-points rule as
+/// [`placed_frame_of`] (a custom warp under perspective is framed by its control points too).
+fn perspective_frame_of(d: &Descriptor, warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    stored_custom_frame(d, warp).unwrap_or_else(|| perspective_frame(warp, w, h))
+}
+
+/// The [`stored_mesh_frame`] of `d`'s single-patch custom warp, if it has one.
+fn stored_custom_frame(d: &Descriptor, warp: Option<&photocraft_geom::warp::Warp>) -> Option<[f64; 4]> {
+    let custom = warp.is_some_and(|wp| wp.style == photocraft_geom::warp::WarpStyle::Custom);
+    if !custom || get_desc(d, "quiltWarp").is_some() {
+        return None;
+    }
+    get_desc(d, "warp").and_then(stored_mesh_frame)
+}
+
 fn warp_bounds_or(wp: &photocraft_geom::warp::Warp, rect: [f64; 4]) -> [f64; 4] {
     let [x0, y0, x1, y1] = wp.bounds;
     if wp.bounds.iter().all(|v| v.is_finite()) && x1 - x0 > 1e-9 && y1 - y0 > 1e-9 { wp.bounds } else { rect }
@@ -834,7 +884,7 @@ pub fn parse_smart(key: &[u8; 4], data: &[u8]) -> (String, Affine) {
         let p: Vec<f64> = pts.iter().filter_map(|v| num(Some(v))).collect();
         let (w, h) = (num(sz.get("Wdth")).unwrap_or(0.0), num(sz.get("Hght")).unwrap_or(0.0));
         if let (Ok(p), true) = (<[f64; 8]>::try_from(p), w > 0.0 && h > 0.0) {
-            affine = corners_affine(&p, placed_frame(parse_placed_warp(key, data).as_ref(), w, h)).unwrap_or(Affine::IDENTITY);
+            affine = corners_affine(&p, placed_frame_of(&d, parse_placed_warp(key, data).as_ref(), w, h)).unwrap_or(Affine::IDENTITY);
         }
     }
     (id, affine)
@@ -956,7 +1006,7 @@ pub fn parse_smart_perspective(key: &[u8; 4], data: &[u8]) -> Option<[f64; 9]> {
     let q = quad("nonAffineTransform").or_else(|| quad("Trnf"))?;
     // The warp `parse_placed_warp` reads: a split warp's `quiltWarp` comes first.
     let warp = get_desc(&d, "quiltWarp").or_else(|| get_desc(&d, "warp")).and_then(warp_of).flatten();
-    corners_perspective_in(q, perspective_frame(warp.as_ref(), w, h))
+    corners_perspective_in(q, perspective_frame_of(&d, warp.as_ref(), w, h))
 }
 
 /// The projective placement of a `w` × `h` source onto corners `q` that aren't a parallelogram;
