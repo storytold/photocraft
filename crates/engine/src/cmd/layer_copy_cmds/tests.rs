@@ -663,3 +663,69 @@ fn type_duplicated_to_a_new_document_keeps_the_sources_basic_paragraph() {
     s.execute("type.characterStyle.clearOverride", json!({"layer": id.0})).unwrap();
     assert!(close(text(&s, i, id).runs[0].style.size_pt, 30.0), "{}", text(&s, i, id).runs[0].style.size_pt);
 }
+
+#[test]
+fn copies_selected_pixels_to_destination_document_with_copy_and_cut() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    // Select half of the 10x10 red square (x: 4..9, y: 6..16)
+    s.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+
+    // 1. Copy without cut (cut: false)
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": false, "offset": [10, 5]})).unwrap();
+    let dest_id = copied(&r);
+    assert_eq!(s.active_index(), Some(1));
+    let d = doc(&s, 1);
+    assert_eq!(d.layers.len(), 2);
+    assert_eq!(bounds(&s, 1, dest_id), Rect::new(14, 11, 19, 21)); // moved by offset (10, 5)
+
+    // Source is intact
+    s.set_active(0);
+    assert_eq!(bounds(&s, 0, paint), Rect::new(4, 6, 14, 16));
+
+    // 2. Cut to destination (cut: true)
+    let r2 = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": true, "offset": [20, 0]})).unwrap();
+    let dest_id2 = copied(&r2);
+    assert_eq!(s.active_index(), Some(1));
+    assert_eq!(doc(&s, 1).layers.len(), 3);
+    assert_eq!(bounds(&s, 1, dest_id2), Rect::new(24, 6, 29, 16));
+
+    // Source layer now has the selected half cut out (remaining half: 9..14)
+    assert_eq!(bounds(&s, 0, paint), Rect::new(9, 6, 14, 16));
+
+    // 3. A moved floating selection in the source preserves its floating state and offset when copied
+    s.set_active(0);
+    s.execute("select.rect", json!({"x": 9, "y": 6, "width": 5, "height": 10})).unwrap();
+    s.execute("select.float", json!({"dx": 6, "dy": 4})).unwrap();
+    let r3 = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": false, "offset": [2, 3]})).unwrap();
+    let dest_id3 = copied(&r3);
+    assert_eq!(bounds(&s, 1, dest_id3), Rect::new(17, 13, 22, 23));
+    assert_eq!(s.documents()[0].floating.as_ref().map(|f| f.offset), Some((6, 4)));
+}
+
+#[test]
+fn copying_or_cutting_a_mask_selection_transfers_the_mask_without_touching_layer_pixels() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080", "target": "mask"})).unwrap();
+
+    // Unfloated mask target (as after arm_move_drag clears an unmoved float): copies mask gray, not red layer pixels.
+    let r1 = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": false, "target": "mask"})).unwrap();
+    let dest_id1 = copied(&r1);
+    let mut px1 = [0.0f32; 4];
+    doc(&s, 1).layer(dest_id1).unwrap().surface().unwrap().read_pixel(5, 8, &mut px1);
+    assert!((px1[0] - px1[1]).abs() < 0.02 && (px1[0] - 128.0 / 255.0).abs() < 0.02, "copied mask gray, not red: {px1:?}");
+
+    // Moved floating mask selection: copies moved mask piece and with cut: true leaves red layer pixels untouched.
+    s.set_active(0);
+    s.execute("select.float", json!({"dx": 6, "dy": 4, "target": "mask"})).unwrap();
+    let r2 = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": true, "offset": [2, 3]})).unwrap();
+    let dest_id2 = copied(&r2);
+    assert_eq!(bounds(&s, 1, dest_id2), Rect::new(12, 13, 17, 23));
+    let mut px2 = [0.0f32; 4];
+    doc(&s, 1).layer(dest_id2).unwrap().surface().unwrap().read_pixel(13, 15, &mut px2);
+    assert!((px2[0] - px2[1]).abs() < 0.02 && (px2[0] - 128.0 / 255.0).abs() < 0.02, "copied floating mask gray: {px2:?}");
+    let mut src_px = [0.0f32; 4];
+    doc(&s, 0).layer(paint).unwrap().surface().unwrap().read_pixel(5, 8, &mut src_px);
+    assert_eq!(src_px, [1.0, 0.0, 0.0, 1.0], "source layer image pixels were not cleared or altered");
+}

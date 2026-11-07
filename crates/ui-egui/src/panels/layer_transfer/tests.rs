@@ -130,3 +130,100 @@ fn dropping_back_on_the_source_copies_nothing() {
     assert_eq!((docs[0].doc.layers.len(), docs[1].doc.layers.len()), (2, 1));
     assert_eq!(h.state().session.active_index(), Some(0));
 }
+
+#[test]
+fn a_move_tool_selection_drag_onto_a_tab_copies_selected_pixels_to_destination() {
+    let (mut h, paint) = harness();
+    // Create a selection inside the red square
+    h.state_mut().session.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(2);
+
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
+    let grab_doc = ViewXform::active(h.state()).unwrap().to_doc(grab);
+    let over_tab = tab(&h, "dest-doc");
+    let drop = h.state().last_canvas_rect.center();
+    drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
+
+    // Destination now has the copied 5x10 selection layer placed at the drop point
+    let at = ViewXform::active(h.state()).unwrap().to_doc(drop);
+    let (_, r) = copy(&h);
+    assert_eq!(r.size(), vec2(5.0, 10.0), "only the 5x10 selected region is copied");
+    let want = egui::pos2((6.5 + at[0] - grab_doc[0]) as f32, (11.0 + at[1] - grab_doc[1]) as f32);
+    assert!((r.center() - want).length() <= 1.5, "{r:?} around {want:?}");
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
+    // Source layer keeps its pixels intact (not cut)
+    let src_bounds = source_square(&h, paint);
+    assert_eq!(src_bounds, photocraft_geom::Rect::new(4, 6, 14, 16), "source remains intact");
+}
+
+#[test]
+fn a_move_tool_mask_selection_drag_onto_a_tab_copies_the_mask_and_leaves_layer_pixels() {
+    let (mut h, paint) = harness();
+    h.state_mut().session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    h.state_mut().session.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    h.state_mut().session.execute("edit.fill", json!({"color": "#808080", "target": "mask"})).unwrap();
+    h.state_mut().ui.mask_target = true;
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(2);
+
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
+    let over_tab = tab(&h, "dest-doc");
+    let drop = h.state().last_canvas_rect.center();
+    drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
+
+    let (_, r) = copy(&h);
+    assert_eq!(r.size(), vec2(5.0, 10.0), "only the 5x10 selected mask region is copied");
+    let st = h.state().session.active().unwrap();
+    let dst_layer = st.active_layer.and_then(|id| st.doc.layer(id)).unwrap();
+    let mut sample = [0.0f32; 4];
+    dst_layer.surface().unwrap().read_pixel(r.min.x as i32 + 1, r.min.y as i32 + 1, &mut sample);
+    assert!((sample[0] - sample[1]).abs() < 0.02 && (sample[0] - 128.0 / 255.0).abs() < 0.02, "copied mask gray, not red layer pixels: {sample:?}");
+    assert_eq!(source_square(&h, paint), photocraft_geom::Rect::new(4, 6, 14, 16), "source layer pixels remain intact");
+}
+
+#[test]
+fn a_move_tool_selection_drag_in_arranged_view_transfers_directly_to_neighbour_cell() {
+    let (mut h, paint) = harness();
+    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    h.run_steps(4);
+
+    let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).unwrap();
+    assert_eq!(cells.len(), 2);
+    let (src_cell, dest_cell) = (cells[0].1, cells[1].1);
+
+    // Create selection on source
+    h.state_mut().session.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(2);
+
+    let view_src = h.state().ui.views[0].clone();
+    let xf_src =
+        crate::canvas::ViewXform { rect: src_cell, zoom: view_src.zoom / h.state().ppp, center: view_src.center, flip: false, rotation: 0.0, aspect: 1.0 };
+    let grab = xf_src.to_screen(6.0, 11.0);
+    let grab_doc = xf_src.to_doc(grab);
+    let view_dest = h.state().ui.views[1].clone();
+    let xf_dest = crate::canvas::ViewXform {
+        rect: crate::rulers::content_rect(h.state(), dest_cell),
+        zoom: view_dest.zoom / h.state().canvas_ppp(),
+        center: view_dest.center,
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let drop = dest_cell.center();
+    let at = xf_dest.to_doc(drop);
+
+    // Drag directly from src canvas to dest canvas (no tab hover!)
+    drag_along(&mut h, &[grab, drop], Modifiers::NONE);
+
+    // Destination now has the transferred 5x10 selection layer at the drop point!
+    let (_, r) = copy(&h);
+    assert_eq!(r.size(), vec2(5.0, 10.0), "only the 5x10 selected region is copied");
+    let want = egui::pos2((6.5 + at[0] - grab_doc[0]) as f32, (11.0 + at[1] - grab_doc[1]) as f32);
+    assert!((r.center() - want).length() <= 1.5, "{r:?} around {want:?}");
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
+    // Source layer keeps its pixels intact (not cut)
+    let src_bounds = source_square(&h, paint);
+    assert_eq!(src_bounds, photocraft_geom::Rect::new(4, 6, 14, 16), "source remains intact");
+}
