@@ -80,6 +80,7 @@ fn an_early_returning_pass_reinjects_the_batch_exactly_once() {
     assert!(hook(&mut app, &ctx).is_empty(), "then it is delivered once and done");
 }
 
+/// A document change before the queued input is delivered drops it and fails the waiting reply.
 #[test]
 fn a_document_change_before_injection_drops_the_batch_and_replies() {
     let ctx = Context::default();
@@ -98,6 +99,7 @@ fn a_document_change_before_injection_drops_the_batch_and_replies() {
     assert!(reply["error"].as_str().is_some_and(|e| e.contains("document or focus changed")));
 }
 
+/// A document change the input itself makes, inside its pass, doesn't cancel that input.
 #[test]
 fn a_document_change_inside_the_pass_is_delivered_and_not_reported_as_cancelled() {
     let ctx = Context::default();
@@ -133,6 +135,7 @@ fn a_preserved_batch_is_withdrawn_from_the_raw_input_on_a_document_change() {
     assert!(app.synthetic_batch.is_none());
 }
 
+/// An edit in the same document doesn't cancel the input queued for it.
 #[test]
 fn an_edit_in_the_same_document_does_not_cancel_the_queued_batch() {
     let ctx = Context::default();

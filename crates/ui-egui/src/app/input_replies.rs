@@ -49,6 +49,7 @@ pub(crate) struct InputReplies {
 }
 
 impl InputReplies {
+    /// No control reply is waiting for synthetic input.
     pub(crate) fn is_empty(&self) -> bool {
         self.waiters.is_empty()
     }
@@ -226,6 +227,7 @@ mod tests {
     use super::{InputReplies, PhotocraftApp};
     use serde_json::json;
 
+    /// No refusal replies `ok`; refusals reply the first as `error` and all of them as `errors`.
     #[test]
     fn no_refusal_replies_ok_and_refusals_reply_the_first_with_all() {
         assert_eq!(InputReplies::reply(&[]), json!({"ok": true, "result": null}));
@@ -233,6 +235,7 @@ mod tests {
         assert_eq!(InputReplies::reply(&errors), json!({"ok": false, "error": "a", "errors": ["a", "b"]}));
     }
 
+    /// The log drops blank refusals and a repeat right after itself, and stops at `MAX_ERRORS`.
     #[test]
     fn the_log_skips_blanks_and_back_to_back_repeats_and_is_capped() {
         let mut r = InputReplies::default();
@@ -248,6 +251,7 @@ mod tests {
         assert_eq!(r.errors.len(), super::MAX_ERRORS);
     }
 
+    /// A waiter whose log slice lies outside the log still gets a reply (`ok`), never none.
     #[test]
     fn a_waiter_out_of_range_of_the_log_still_gets_an_answer() {
         let mut r = InputReplies::default();
@@ -299,6 +303,7 @@ mod tests {
         assert!(r.waiters.is_empty() && r.errors.is_empty());
     }
 
+    /// An app with no document, for driving the refusal log directly.
     fn app() -> PhotocraftApp {
         PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
     }

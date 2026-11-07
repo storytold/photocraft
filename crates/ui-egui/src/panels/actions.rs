@@ -592,6 +592,9 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     }
 }
 
+/// Show the outcome of an Actions playback (`v`, the play command's result) in the status bar:
+/// stopped, paused at a step, failed at a step (an error, also reported to waiting synthetic
+/// input), or the number of steps played.
 pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
     if v.get("stopped").is_some_and(Value::is_object) {
         app.ui.status = tl!("Action playback stopped").to_string();

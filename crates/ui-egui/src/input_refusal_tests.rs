@@ -21,6 +21,7 @@ fn deny_files() -> Services {
     }
 }
 
+/// The whole app with a control channel, optionally with a 32×32 document, and the channel's sender.
 fn harness(services: Services, document: bool) -> (Harness<'static, PhotocraftApp>, Sender<ControlRequest>) {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
@@ -35,6 +36,7 @@ fn harness(services: Services, document: bool) -> (Harness<'static, PhotocraftAp
     (h, tx)
 }
 
+/// Send control request `method` with `params`, with no deadline; returns where its reply arrives.
 fn send(tx: &Sender<ControlRequest>, method: &str, params: Value) -> Receiver<ControlResponse> {
     let (mut req, reply) = ControlRequest::new(method, params);
     req.deadline = None;
@@ -53,6 +55,7 @@ fn pump(h: &mut Harness<'static, PhotocraftApp>, frames: usize) {
     }
 }
 
+/// Pump frames until the reply on `rx` arrives (at most 16 frames).
 fn reply(h: &mut Harness<'static, PhotocraftApp>, rx: &Receiver<ControlResponse>) -> ControlResponse {
     for _ in 0..16 {
         if let Ok(r) = rx.try_recv() {
@@ -63,6 +66,7 @@ fn reply(h: &mut Harness<'static, PhotocraftApp>, rx: &Receiver<ControlResponse>
     panic!("no reply after the input settled");
 }
 
+/// A Ctrl+S the automation policy refuses replies with that refusal, and the status bar still shows it.
 #[test]
 fn a_refused_ctrl_s_replies_with_the_refusal_and_keeps_the_status_bar() {
     let (mut h, tx) = harness(deny_files(), true);
@@ -75,6 +79,7 @@ fn a_refused_ctrl_s_replies_with_the_refusal_and_keeps_the_status_bar() {
     assert!(h.state().ui.status_error);
 }
 
+/// The same refusal a second time, already in the status bar, still fails the second request.
 #[test]
 fn a_repeated_refusal_is_reported_again() {
     // The status bar already shows the refusal: the second Ctrl+S must still be reported.
@@ -86,6 +91,7 @@ fn a_repeated_refusal_is_reported_again() {
     }
 }
 
+/// A shortcut for a disabled menu item replies with why it isn't available.
 #[test]
 fn a_disabled_menu_shortcut_replies_with_why() {
     // No document: File › Save is disabled, and its shortcut says so.
@@ -98,6 +104,7 @@ fn a_disabled_menu_shortcut_replies_with_why() {
     assert_eq!(h.state().ui.status, error);
 }
 
+/// A dialog OK the policy refuses replies with the refusal and leaves the dialog open.
 #[test]
 fn a_refused_dialog_ok_replies_with_the_refusal() {
     let (mut h, tx) = harness(deny_files(), true);
@@ -116,6 +123,7 @@ fn a_refused_dialog_ok_replies_with_the_refusal() {
     assert!(h.state().ui.dialogs.iter().any(|d| d.id == dialog), "a refused OK keeps the dialog open");
 }
 
+/// Input that works or triggers nothing (a tool key, a move, an unbound key, typing) replies `ok`.
 #[test]
 fn input_that_succeeds_or_does_nothing_still_replies_ok() {
     let (mut h, tx) = harness(deny_files(), true);
@@ -128,6 +136,7 @@ fn input_that_succeeds_or_does_nothing_still_replies_ok() {
     assert_eq!(h.state().ui.tool, crate::Tool::Move, "the V press was handled");
 }
 
+/// Refused, clean and refused requests queued in one frame each get only their own refusals.
 #[test]
 fn concurrent_requests_each_get_only_their_own_refusals() {
     let (mut h, tx) = harness(deny_files(), true);
@@ -144,6 +153,7 @@ fn concurrent_requests_each_get_only_their_own_refusals() {
     assert_eq!(first["errors"].as_array().map(Vec::len), Some(1), "{first}");
 }
 
+/// Input dropped before delivery still replies that it was cancelled, with no `errors`.
 #[test]
 fn cancelled_input_still_says_so() {
     let (mut h, tx) = harness(deny_files(), true);

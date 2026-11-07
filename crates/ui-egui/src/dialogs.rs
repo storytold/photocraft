@@ -559,6 +559,8 @@ fn default_max_width(d: &Dialog, compact: bool, curves: bool, about_tabs: bool, 
     }
 }
 
+/// Show the open dialogs for this frame and apply their OK, Cancel and Apply; a refused OK is
+/// reported to the synthetic input that pressed it (#11579).
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::guide_edit::sync(app) {
         ctx.request_repaint();
