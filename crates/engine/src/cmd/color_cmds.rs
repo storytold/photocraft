@@ -236,6 +236,23 @@ impl ColorState {
             .unwrap_or_else(|| working_profile(mode))
     }
 
+    /// Whether resolving `spec` (as [`Self::resolve`] does with `mode`; `None` is the mode's
+    /// working space, as for an Image › Mode conversion without a `profile`) would read a
+    /// working space from Color Settings that is not a built-in profile, i.e. a file. Automation
+    /// sessions refuse that: it is a path the caller's directory capabilities do not cover.
+    pub fn working_reads_file(&self, spec: Option<&str>, mode: ColorMode) -> bool {
+        let space = match spec {
+            None | Some("working" | "default") => mode_space(mode),
+            Some("working-rgb" | "workingRgb") => ColorSpace::Rgb,
+            Some("working-cmyk" | "workingCmyk") => ColorSpace::Cmyk,
+            Some("working-gray" | "workingGray") => ColorSpace::Gray,
+            Some(_) => return false,
+        };
+        // As `resolve_profile` reads it: a stale id that is neither built in nor a path reads
+        // nothing (`working` falls back to the built-in default).
+        self.settings.working_spec(space).is_some_and(|working| Builtin::from_id(working).is_none() && spec_is_path(working))
+    }
+
     /// Resolve a profile spec, reading "working…" specs from Color Settings.
     pub fn resolve(&self, spec: &str, doc: Option<&Document>, mode: Option<ColorMode>) -> Result<Arc<Profile>> {
         match spec {
@@ -573,6 +590,12 @@ pub fn composite_profile(doc: &Document) -> Arc<Profile> {
     }
 }
 
+/// Whether [`resolve_profile`] reads a spec that is not a built-in profile from the filesystem.
+fn spec_is_path(spec: &str) -> bool {
+    let lower = spec.to_ascii_lowercase();
+    lower.ends_with(".icc") || lower.ends_with(".icm") || spec.contains('/') || spec.contains('\\')
+}
+
 /// Resolves a profile parameter: a built-in id/alias/description, `"working"` (with `mode`),
 /// `"document"`, or a path to an `.icc`/`.icm` file.
 pub fn resolve_profile(spec: &str, doc: Option<&Document>, mode: Option<ColorMode>) -> Result<Arc<Profile>> {
@@ -590,8 +613,7 @@ pub fn resolve_profile(spec: &str, doc: Option<&Document>, mode: Option<ColorMod
     if let Some(b) = Builtin::from_id(spec) {
         return Ok(Arc::new(b.profile().clone()));
     }
-    let lower = spec.to_ascii_lowercase();
-    if lower.ends_with(".icc") || lower.ends_with(".icm") || spec.contains('/') || spec.contains('\\') {
+    if spec_is_path(spec) {
         // Regular files only: a device or FIFO path would be read until it ends, which it never does.
         let bytes = crate::file_cmds::read_file(spec).map_err(|e| EngineError::Other(format!("cannot read profile `{spec}`: {e}")))?;
         return Profile::parse(&bytes).map(Arc::new).map_err(cms_err);
@@ -908,7 +930,22 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     if doc.mode == mode && p.get("profile").is_none() {
         return Ok(Value::Null);
     }
-    let dst = match p.get("profile").and_then(Value::as_str) {
+    let spec = p.get("profile").and_then(Value::as_str);
+    // An automation gate means the caller only holds directory capabilities: a desktop working
+    // space stored as an .icc path is outside them (a fresh headless session's never is).
+    if s.authorize.is_some() && s.color.working_reads_file(spec, mode) {
+        let example = match mode_space(mode) {
+            ColorSpace::Cmyk => Builtin::CoatedCmyk,
+            ColorSpace::Gray => Builtin::DotGain20Compat,
+            ColorSpace::Lab => Builtin::LabD50,
+            _ => Builtin::Srgb,
+        };
+        return Err(EngineError::Other(format!(
+            "the working {mode:?} space in Color Settings is a profile file, which automation can't read; pass a built-in `profile` (for example `{}`)",
+            example.id()
+        )));
+    }
+    let dst = match spec {
         Some(spec) => s.color.resolve(spec, Some(doc), Some(mode))?,
         None => s.color.working(mode),
     };

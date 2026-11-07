@@ -5211,6 +5211,7 @@ dependencies = [
  "cap-std",
  "clap",
  "getrandom 0.3.4",
+ "photocraft-cms",
  "photocraft-codecs",
  "photocraft-color",
  "photocraft-compose",

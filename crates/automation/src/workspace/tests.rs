@@ -409,8 +409,8 @@ fn filesystem_command_paths_and_profiles_fail_closed() {
         assert!(authorize_desktop_engine_command(id, &serde_json::json!({})).is_ok(), "{id}");
     }
     assert!(authorize_engine_command("image.mode.cmyk", &serde_json::json!({})).is_ok());
-    assert!(authorize_desktop_engine_command("image.mode.cmyk", &serde_json::json!({})).is_err());
     assert!(authorize_engine_command("image.mode.rgb", &serde_json::json!({"profile": "/outside/profile.icc"})).is_err());
+    assert!(authorize_desktop_engine_command("image.mode.rgb", &serde_json::json!({"profile": "/outside/profile.icc"})).is_err());
     assert!(authorize_engine_command("image.mode.rgb", &serde_json::json!({"profile": "srgb"})).is_ok());
     assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "/outside/profile.icc"})).is_err());
     assert!(authorize_engine_command("file.new", &serde_json::json!({"profile": "adobe-rgb-compat"})).is_ok());
@@ -429,15 +429,128 @@ fn filesystem_command_paths_and_profiles_fail_closed() {
     assert!(authorize_engine_command("prefs.set", &serde_json::json!({"path": "colorSettings.workingRgb", "value": "outside.icc"})).is_err());
     assert!(authorize_engine_step("file.open", &serde_json::json!({})).is_err());
     assert!(authorize_engine_step("actions.play", &serde_json::json!({})).is_ok());
-    // An allowed command can't reach a denied one by running it on its own behalf.
+    // An allowed command can't reach a denied one by running it on its own behalf: here the
+    // Grayscale conversion it runs would read the desktop's working gray from a file.
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", serde_json::json!({"width": 4, "height": 4})).unwrap();
+    session.color.settings.working_gray = "/outside/gray.icc".into();
     session.authorize = Some(authorize_desktop_engine_step);
     let params = serde_json::json!({"to": "grayscale"});
     assert!(authorize_desktop_engine_command("file.automate.conditionalModeChange", &params).is_ok());
     assert!(session.execute("file.automate.conditionalModeChange", params).is_err());
     assert_eq!(session.active().unwrap().doc.mode, photocraft_engine::doc::ColorMode::Rgb);
     assert!(authorize_desktop_engine_step("file.saveACopy", &serde_json::json!({})).is_err());
+}
+
+#[test]
+fn desktop_mode_changes_are_refused_only_where_they_could_read_a_profile_file() {
+    let desktop = |id: &str, params: serde_json::Value| authorize_desktop_engine_command(id, &params);
+    // No profile involved.
+    for (id, params) in [
+        ("image.mode.bitmap", serde_json::json!({"method": "halftone", "frequency": 45, "angle": 22.5, "shape": "ellipse"})),
+        ("image.mode.indexedColor", serde_json::json!({})),
+        ("image.mode.colorTable", serde_json::json!({"table": "web"})),
+        ("image.mode.duotone", serde_json::json!({"type": "monotone"})),
+        ("image.mode.multichannel", serde_json::json!({})),
+        ("image.mode.bits8", serde_json::json!({})),
+        ("image.mode.bits16", serde_json::json!({})),
+        ("image.mode.bits32", serde_json::json!({})),
+    ] {
+        assert!(desktop(id, params.clone()).is_ok(), "{id}: {params}");
+    }
+    // The colour conversions pass the gate unless they name a path; the engine judges the rest.
+    for id in ["image.mode.rgb", "image.mode.grayscale", "image.mode.cmyk", "image.mode.lab"] {
+        for profile in ["adobe-rgb-compat", "srgb", "dot-gain-20-compat", "coated-cmyk", "working"] {
+            assert!(desktop(id, serde_json::json!({ "profile": profile })).is_ok(), "{id}: {profile}");
+        }
+        assert!(desktop(id, serde_json::json!({})).is_ok(), "{id}");
+        for path in ["/outside/profile.icc", "outside.icc", "outside.ICM", "C:\\outside\\profile", "../outside"] {
+            assert!(desktop(id, serde_json::json!({ "profile": path })).is_err(), "{id}: {path}");
+        }
+    }
+    // A mode command nobody has judged yet stays denied.
+    assert!(desktop("image.mode.someFutureMode", serde_json::json!({})).is_err());
+}
+
+#[test]
+fn desktop_mode_changes_never_read_a_working_space_file() {
+    // A synthetic working-space file outside any automation root: if the conversion read it,
+    // the document would come out tagged with this profile.
+    let outside = std::env::temp_dir().join(format!("photocraft-desktop-mode-{}", std::process::id()));
+    std::fs::create_dir_all(&outside).unwrap();
+    let icc = |name: &str, builtin: photocraft_cms::Builtin| {
+        let path = outside.join(name);
+        std::fs::write(&path, builtin.profile().to_bytes().as_slice()).unwrap();
+        path.to_string_lossy().into_owned()
+    };
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.working_rgb = icc("rgb.icc", photocraft_cms::Builtin::ProPhotoCompat);
+    session.color.settings.working_gray = icc("gray.icc", photocraft_cms::Builtin::GrayGamma22);
+    session.color.settings.working_cmyk = icc("cmyk.icc", photocraft_cms::Builtin::CoatedCmyk);
+    session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
+    session.authorize = Some(authorize_desktop_engine_step);
+    let mode = |session: &photocraft_engine::Session| session.active().unwrap().doc.mode;
+    let refused = |session: &mut photocraft_engine::Session, id: &str, params: serde_json::Value| {
+        let error = session.execute(id, params.clone()).unwrap_err().to_string();
+        assert!(error.contains("profile file"), "{id} {params}: {error}");
+    };
+    // Every way of asking for the working space is refused before the file is read.
+    for params in [
+        serde_json::json!({}),
+        serde_json::json!({"profile": "working"}),
+        serde_json::json!({"profile": "default"}),
+        serde_json::json!({"profile": "working-gray"}),
+        serde_json::json!({"profile": null}),
+        serde_json::json!({"profile": 7}),
+    ] {
+        refused(&mut session, "image.mode.grayscale", params);
+    }
+    refused(&mut session, "image.mode.cmyk", serde_json::json!({}));
+    assert_eq!(mode(&session), photocraft_engine::doc::ColorMode::Rgb);
+    // Halftone Preview's sequence with built-in profiles: Grayscale → Bitmap → Grayscale → RGB.
+    session.execute("image.mode.grayscale", serde_json::json!({"profile": "dot-gain-20-compat"})).unwrap();
+    session.execute("image.mode.bitmap", serde_json::json!({"method": "halftone", "frequency": 45, "angle": 22.5, "shape": "ellipse"})).unwrap();
+    session.execute("image.mode.grayscale", serde_json::json!({"profile": "sgray"})).unwrap();
+    let rgb = session.execute("image.mode.rgb", serde_json::json!({"profile": "adobe-rgb-compat"})).unwrap();
+    assert_eq!(rgb["profile"], photocraft_cms::Builtin::AdobeRgbCompat.description());
+    assert_eq!(mode(&session), photocraft_engine::doc::ColorMode::Rgb);
+    // Lab has no working space to read.
+    session.execute("image.mode.lab", serde_json::json!({})).unwrap();
+    // The trusted local UI (no gate) still uses the configured working space.
+    session.authorize = None;
+    let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
+    assert_eq!(gray["profile"], photocraft_cms::Builtin::GrayGamma22.description());
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+#[test]
+fn built_in_working_spaces_convert_without_a_profile_under_the_desktop_gate() {
+    // Desktop Color Settings that name built-in profiles (the usual case) read no file, so a
+    // mode change without `profile` converts to them, as Halftone Preview's Bitmap → Grayscale does.
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.working_rgb = "adobe-rgb-compat".into();
+    session.color.settings.working_gray = "dot-gain-20-compat".into();
+    session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
+    session.authorize = Some(authorize_desktop_engine_step);
+    session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
+    session.execute("image.mode.bitmap", serde_json::json!({"method": "halftone", "frequency": 45, "angle": 22.5, "shape": "ellipse"})).unwrap();
+    let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
+    assert_eq!(gray["profile"], photocraft_cms::Builtin::DotGain20Compat.description());
+    let rgb = session.execute("image.mode.rgb", serde_json::json!({})).unwrap();
+    assert_eq!(rgb["profile"], photocraft_cms::Builtin::AdobeRgbCompat.description());
+}
+
+#[test]
+fn a_stale_working_space_id_is_not_mistaken_for_a_profile_file() {
+    // Preferences are loaded without validation, so a working space can hold an id this build no
+    // longer knows. It names no file: the conversion uses the mode's built-in default.
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.working_gray = "obsolete-profile".into();
+    session.execute("file.new", serde_json::json!({"width": 16, "height": 16, "profile": "srgb"})).unwrap();
+    session.authorize = Some(authorize_desktop_engine_step);
+    let gray = session.execute("image.mode.grayscale", serde_json::json!({})).unwrap();
+    let default = photocraft_engine::color_cmds::working_profile(photocraft_engine::doc::ColorMode::Grayscale);
+    assert_eq!(gray["profile"], default.description.as_str());
 }
 
 // Regression test for #3763: `edit.installedProfiles` scans the OS and user ICC folders but

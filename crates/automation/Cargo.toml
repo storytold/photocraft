@@ -43,6 +43,8 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl"], o
 pollster = { version = "1", optional = true }
 
 [dev-dependencies]
+# Built-in profiles as synthetic working-space files for the desktop mode-change tests.
+photocraft-cms = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-geom = { workspace = true }
 # Synthetic camera raws (#7789).
