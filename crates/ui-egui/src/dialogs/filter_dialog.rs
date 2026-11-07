@@ -763,6 +763,26 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
     key == "angle" && ANGLE_DIAL.contains(&command)
 }
 
+/// Wide-range number fields that still show two decimals: the Rotate Canvas angle keeps
+/// hundredths of a degree, so the ruler's straightening angle reaches the dialog as 33.69 and
+/// not 33.7 (#12035). The arrow and drag step follow the shown precision, as elsewhere.
+fn wide_field_decimals(command: &str, key: &str) -> Option<u32> {
+    match (command, key) {
+        ("image.rotation.arbitrary", "angle") => Some(2),
+        _ => None,
+    }
+}
+
+/// The scale a drawn number field rounds to: two decimals for small ranges (0–1 thresholds and
+/// centres) and for the wide fields that show them (#12035), one decimal for the other wide ones.
+fn field_scale(command: &str, key: &str, min: f32, max: f32) -> f32 {
+    match wide_field_decimals(command, key) {
+        Some(d) => 10f32.powi(d.min(6) as i32),
+        None if max - min <= 10.0 => 100.0,
+        None => 10.0,
+    }
+}
+
 /// Replace Color (#4143): the dialog's "From" colour, sampled from the image with a canvas
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
@@ -924,11 +944,12 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     } else {
                         // A double-click on the slider puts it back to the filter's default.
                         let gestures = crate::widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
-                        crate::widgets::slider_row_with(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures);
+                        crate::widgets::slider_row_prec(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures, wide_field_decimals(&cmd, &p.key));
                     }
                 });
-                // Small ranges (0–1 thresholds and centres) keep the two decimals their field shows.
-                let scale = if max - min <= 10.0 { 100.0 } else { 10.0 };
+                // The field's shown precision: small ranges keep their two decimals, and so
+                // does the Arbitrary angle; the other wide fields round to one (#12035).
+                let scale = field_scale(&cmd, &p.key, min, max);
                 f.insert(p.key, json!((v * scale).round() / scale));
             }
             Kind::Choice { options, default } => {

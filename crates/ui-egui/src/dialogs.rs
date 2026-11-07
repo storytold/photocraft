@@ -1225,6 +1225,8 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 pub mod adjust_dialog;
 pub mod adjust_editors;
 pub mod adjust_preview;
+#[cfg(test)]
+mod arbitrary_ruler_prefill_tests;
 pub(crate) mod bitmap_dialog;
 pub mod blur_pins;
 pub mod brush_preset_dialog;
