@@ -300,9 +300,9 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
-        // The Paths panel selection belongs to the active document. Ordinary edits replace the
-        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
-        // reopened document, even with the same ID.
+        // The Paths panel selection and canvas context menu belong to the active document.
+        // Ordinary edits replace the snapshot and advance its revision; a replaced snapshot
+        // without a newer revision is a reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
         // Crop's Fill goes back to its default entry when another document that was already open
         // becomes active (a tab switch, or closing the active one), as in the reference
@@ -321,6 +321,7 @@ impl PhotocraftApp {
         };
         if !same_document {
             self.ui.selected_path = None;
+            self.ui.canvas_tool_menu = None;
         }
         self.path_document = document;
         // A shape box handle drag belongs to its document, revision and tool.

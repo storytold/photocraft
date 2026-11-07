@@ -1,13 +1,13 @@
 # Context-menu parity contract
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-21 · **Change:** minor (Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-04 · **Change:** minor (canvas menus close when the active document changes, #11325; Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
 
 Status: implementation contract, updated 2026-10-09. Scope: canvas, document tabs, and panels. “Right-click” means a secondary pointer click; macOS Control-click should also open the same menu where the platform sends a context-menu gesture. Photoshop changes a context menu with the active tool, selection, and panel item. Adobe documents that principle but does not publish a complete current menu catalog. **Documented** means an Adobe source explicitly names the gesture or action. **Inferred** means a PhotoCraft design target or an item known from a main menu whose presence in a Photoshop context menu still needs a current-product capture. Do not present inferred rows as exact Photoshop menus. [Adobe: panels and menus](https://helpx.adobe.com/photoshop/using/panels-menus.html), [Adobe: shortcuts and context menus](https://helpx.adobe.com/sa_en/photoshop/using/customizing-keyboard-shortcuts.html).
 
 ## Dispatch contract
 
 1. Hit-test the target before opening: modal operation/handle, text selection, canvas content, panel row or icon, tab, then empty workspace. A generic canvas menu must not swallow a more specific target.
-2. Snapshot the target and selection when the menu opens. A row in an existing multiselection acts on that set; a row outside it becomes the target before its command runs. Apply the same rule to layers, channels, paths, and presets.
+2. Snapshot the target and selection when the menu opens. A row in an existing multiselection acts on that set; a row outside it becomes the target before its command runs. Apply the same rule to layers, channels, paths, and presets. Canvas menus close when the active document changes, including when a closed tab leaves another document in its slot (#11325); ordinary edits in the same document keep the menu open.
 3. Resolve items from a pure menu model keyed by target kind, active tool, document state, platform, and active operation. The model supplies label, command id, params, enabled state, and reason. Every mutating item dispatches an engine command; view-only items may update shell state. An unavailable feature is disabled with a reason or omitted, never a clickable no-op.
 4. Preserve primary-button tool behavior. Secondary click only opens a menu unless a right-button drag gesture or the user's explicit right-erase preference owns the gesture. A drag must not briefly open a menu, and opening a menu must never paint, transform, sample, or commit.
 5. Anchor at the pointer and clamp to the viewport; support keyboard context-menu key/Shift+F10 where available, Escape/outside click, separators only between nonempty groups, checked/radio state, keyboard navigation, and screen-reader labels.
@@ -100,6 +100,7 @@ Each slice needs pure model tests (including every item dispatching a known comm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-04 | minor | Canvas menus close on an active-document change, so Zoom In/Out cannot reuse another document's clicked point (#11325) |
 | 2026-10-21 | minor | Crop tool menu on a pending crop (#6561) |
 | 2026-10-20 | trivial | Zoom tool menu order (#6005) |
 | 2026-10-18 | minor | Type tool menu over committed type (#7324) |
