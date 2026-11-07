@@ -83,6 +83,32 @@ fn bucket_sample_all_layers_uses_visible_boundaries_at_all_depths() {
     }
 }
 
+/// With Sample All Layers the soft edge of a line on a lower layer is covered too, in proportion,
+/// and only the empty target layer is written.
+#[test]
+fn bucket_sample_all_layers_covers_the_soft_edge_of_a_lower_layers_line() {
+    for depth in [8, 16, 32] {
+        let (mut s, bottom) = bucket_layers(depth);
+        // A ramp left of the black wall at x = 10: 75 % and 50 % white.
+        s.edit("ramp", |doc, _| {
+            let surf = doc.layer_mut(bottom).unwrap().surface_mut().unwrap();
+            surf.fill_rect(Rect::new(8, 0, 9, 10), &[0.75, 0.75, 0.75, 1.0]);
+            surf.fill_rect(Rect::new(9, 0, 10, 10), &[0.5, 0.5, 0.5, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.layer(bottom).unwrap().clone();
+        let p = json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": true, "sampleAllLayers": true});
+        assert_eq!(s.execute("paint.bucket", p).unwrap()["filled"], true);
+        assert_eq!(px(&s, 2, 5), vec![1.0, 0.0, 0.0, 1.0], "depth {depth}: flat white is filled");
+        let (a8, a9) = (px(&s, 8, 5)[3], px(&s, 9, 5)[3]);
+        assert!((a8 - 0.75).abs() < 0.08 && (a9 - 0.5).abs() < 0.08, "depth {depth}: the ramp is covered in proportion: {a8} {a9}");
+        assert_eq!(px(&s, 10, 5), vec![0.0; 4], "depth {depth}: the wall itself is untouched");
+        assert_eq!(px(&s, 15, 5), vec![0.0; 4], "depth {depth}: the far side is another region");
+        assert_eq!(s.active().unwrap().doc.layer(bottom).unwrap(), &before, "depth {depth}: only the target layer is written");
+    }
+}
+
 #[test]
 fn bucket_sample_all_layers_ignores_hidden_layers() {
     let (mut s, _) = bucket_layers(8);
@@ -326,5 +352,72 @@ fn bucket_and_gradient_reject_non_numeric_opacity_without_editing() {
         let mut s = white(8);
         s.execute(cmd, grey_fill(cmd, Value::Null)).unwrap();
         assert!((px(&s, 5, 5)[0] - 128.0 / 255.0).abs() < 0.01, "{cmd}: null opacity is 100%");
+    }
+}
+
+/// The Paint Bucket fills right up to a line whose edge is anti-aliased instead of leaving a
+/// light halo between the fill and the line (the soft pixels are filled in proportion to how
+/// much of them is the sheet's colour).
+#[test]
+fn bucket_fills_the_soft_edge_of_a_line_without_a_halo() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 20, "height": 6, "depth": depth, "background": "white"})).unwrap();
+        // A black line at x = 10 with a soft ramp: 75 %, 50 % white on its left.
+        for (x, grey) in [(8, "#bfbfbf"), (9, "#808080"), (10, "#000000")] {
+            s.execute("select.rect", json!({"x": x, "y": 0, "width": 1, "height": 6})).unwrap();
+            s.execute("edit.fill", json!({"color": grey})).unwrap();
+        }
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": true})).unwrap();
+        assert_eq!(&px(&s, 2, 2)[..3], &[1.0, 0.0, 0.0], "depth {depth}: flat white is filled");
+        // Green falls from 0.75 to 0.25 and from 0.5 to 0.25 of what it was: filled in proportion.
+        let (g8, g9) = (px(&s, 8, 2)[1], px(&s, 9, 2)[1]);
+        assert!(g8 < 0.35 && g9 < 0.35, "depth {depth}: the soft pixels next to the line are mostly filled: {g8} {g9}");
+        assert_eq!(&px(&s, 10, 2)[..3], &[0.0, 0.0, 0.0], "depth {depth}: the line is not painted");
+        assert_eq!(&px(&s, 15, 2)[..3], &[1.0, 1.0, 1.0], "depth {depth}: the other side of the line is another region");
+        // Without anti-alias the soft pixels are not touched.
+        let mut s2 = Session::new();
+        s2.execute("file.new", json!({"width": 20, "height": 6, "depth": depth, "background": "white"})).unwrap();
+        for (x, grey) in [(8, "#bfbfbf"), (9, "#808080"), (10, "#000000")] {
+            s2.execute("select.rect", json!({"x": x, "y": 0, "width": 1, "height": 6})).unwrap();
+            s2.execute("edit.fill", json!({"color": grey})).unwrap();
+        }
+        s2.execute("select.deselect", json!({})).unwrap();
+        s2.execute("paint.bucket", json!({"x": 2, "y": 2, "color": "#ff0000", "tolerance": 32, "antiAlias": false})).unwrap();
+        assert!((px(&s2, 9, 2)[1] - 128.0 / 255.0).abs() < 0.02, "depth {depth}: unchanged without anti-alias");
+    }
+}
+
+/// Release timing of `paint.bucket` on a 24 MP document, with and without Sample All Layers
+/// (`cargo test -p photocraft-engine --release --lib bucket_timing -- --ignored --nocapture`).
+#[test]
+#[ignore]
+fn bucket_timing_on_24_megapixels() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 6000, "height": 4000, "depth": 8, "background": "white"})).unwrap();
+    let bottom = s.active().unwrap().active_layer.unwrap();
+    s.edit("lines", |doc, _| {
+        let surf = doc.layer_mut(bottom).unwrap().surface_mut().unwrap();
+        for x in (40..6000).step_by(40) {
+            surf.fill_rect(Rect::new(x - 2, 0, x - 1, 4000), &[0.75, 0.75, 0.75, 1.0]);
+            surf.fill_rect(Rect::new(x - 1, 0, x, 4000), &[0.5, 0.5, 0.5, 1.0]);
+            surf.fill_rect(Rect::new(x, 0, x + 1, 4000), &[0.0, 0.0, 0.0, 1.0]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    // The lines stay on the active layer, so the layer-only and all-layer runs fill the same soft edges.
+    for all in [false, true] {
+        for (contiguous, aa) in [(true, false), (true, true), (false, false), (false, true)] {
+            let t = std::time::Instant::now();
+            s.execute(
+                "paint.bucket",
+                json!({"x": 5, "y": 5, "color": "#ff0000", "tolerance": 32, "antiAlias": aa, "contiguous": contiguous, "sampleAllLayers": all}),
+            )
+            .unwrap();
+            println!("paint.bucket sampleAllLayers={all} contiguous={contiguous} antiAlias={aa}: {:?}", t.elapsed());
+            assert!(s.undo());
+        }
     }
 }
