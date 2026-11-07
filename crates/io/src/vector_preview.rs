@@ -10,7 +10,7 @@ use photocraft_geom::Size;
 
 pub const PSD_KEY: [u8; 4] = *b"pcVP";
 const HEADER: &[u8; 8] = b"PCVP\0\0\0\x01";
-const MAX_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PIXELS: u64 = 24_000_000;
 const PREFIX: usize = 44;
 
@@ -190,14 +190,14 @@ impl ImportCache {
 
     /// The source callback borrows the first matching immutable linked-layer payload. No disk
     /// paths are followed, and an exhausted import does not hash additional unknown sources.
-    pub(crate) fn decode<'a>(&mut self, id: &str, block: &[u8], source: impl FnOnce() -> Option<&'a [u8]>) -> Option<VectorPreview> {
+    pub(crate) fn decode<'a>(&mut self, id: &str, block: &[u8], source: impl FnOnce() -> Option<std::borrow::Cow<'a, [u8]>>) -> Option<VectorPreview> {
         if block.len() > PREFIX + MAX_BYTES + 3 || block.get(..8)? != HEADER {
             return None;
         }
         if self.remaining_pixels == 0 && !self.source_hashes.contains_key(id) {
             return None;
         }
-        let hash = (*self.source_hashes.entry(id.to_string()).or_insert_with(|| source_hash(source()?)))?;
+        let hash = (*self.source_hashes.entry(id.to_string()).or_insert_with(|| source_hash(&source()?)))?;
         let key = (hash, *blake3::hash(block).as_bytes());
         if let Some(cached) = self.previews.get(&key) {
             return cached.clone();
@@ -508,7 +508,7 @@ mod tests {
             let mut drawing = preview();
             drawing.svg = Arc::new(String::from_utf8(SVG.to_vec()).unwrap().replace("red", &format!("#{n:06x}")).into_bytes());
             let block = block_bytes(&drawing).unwrap();
-            assert!(imports.decode("native", &block, || Some(SOURCE)).is_some());
+            assert!(imports.decode("native", &block, || Some(SOURCE.into())).is_some());
             assert!(exports.get(&drawing, &owner, owner.as_slice()).is_some());
             tiny.push((drawing, block));
         }
@@ -549,7 +549,7 @@ mod tests {
         // Two 8×6 previews would take 96 pixels; a 95-pixel import may validate only one.
         // This small budget exercises the production 96 MP policy without allocating 96 MP.
         let mut cache = ImportCache::new(95);
-        assert!(cache.decode("shared", &red_block, || Some(SOURCE)).is_some());
+        assert!(cache.decode("shared", &red_block, || Some(SOURCE.into())).is_some());
         assert_eq!(cache.remaining_pixels, 47);
         for _ in 0..100 {
             assert!(cache.decode("shared", &red_block, || panic!("cached source was read again")).is_some());
@@ -560,7 +560,7 @@ mod tests {
         assert!(cache.decode("new source", &blue_block, || panic!("exhausted import read another source")).is_none());
         assert!(cache.decode("shared", &red_block, || panic!("valid cache hit spent work")).is_some());
         let mut cache = ImportCache::new(96);
-        assert!(cache.decode("shared", &red_block, || Some(SOURCE)).is_some());
+        assert!(cache.decode("shared", &red_block, || Some(SOURCE.into())).is_some());
         assert!(cache.decode("shared", &blue_block, || None).is_some());
         assert_eq!(cache.remaining_pixels, 0);
     }

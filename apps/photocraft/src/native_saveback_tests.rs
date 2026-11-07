@@ -192,9 +192,9 @@ fn run_commands(editor: &Path, root: &Path, commands: Vec<(&str, Value)>) {
     }
 }
 
-fn embedded<'a>(doc: &'a Document, sm: &'a photocraft_doc::SmartObject) -> Option<(String, &'a [u8])> {
+fn embedded<'a>(doc: &'a Document, sm: &'a photocraft_doc::SmartObject) -> Option<(String, std::borrow::Cow<'a, [u8]>)> {
     match &sm.source {
-        SmartSource::Embedded { file_name, bytes } => Some((file_name.clone(), bytes)),
+        SmartSource::Embedded { file_name, bytes } => Some((file_name.clone(), bytes.as_slice().into())),
         SmartSource::Linked { path } => photocraft_io::linked::embedded_payload(&doc.metadata, path),
     }
 }
@@ -215,6 +215,7 @@ fn contains_source(doc: &Document, saved: &[u8], depth: usize) -> bool {
     doc.walk().into_iter().any(|(_, _, layer)| {
         let LayerContent::Smart(sm) = &layer.content else { return false };
         let Some((name, bytes)) = embedded(doc, sm) else { return false };
+        let bytes = &*bytes;
         bytes == saved
             || ((bytes.starts_with(b"8BPS") || photocraft_format::is_pcraft(bytes))
                 && photocraft_io::import(&name, bytes).is_ok_and(|child| contains_source(&child.document, saved, depth + 1)))

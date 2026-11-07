@@ -4,8 +4,6 @@
 //! the raw blocks verbatim while they still decode to the document's patterns (byte-exact round
 //! trips); otherwise they are replaced by one block written from the document.
 
-use std::sync::Arc;
-
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Pattern};
 use photocraft_geom::Rect;
@@ -180,7 +178,7 @@ pub fn try_from_global_blocks(doc: &Document) -> Result<Vec<Pattern>, String> {
     let mut budget = PatternBudget::default();
     let mut out = Vec::new();
     for (_, _, d) in doc.metadata.psd_global_blocks.iter().filter(|(_, k, _)| PATTERN_KEYS.contains(k)) {
-        let patterns = match parse_pattern_block_with(d, &mut budget) {
+        let patterns = match parse_pattern_block_with(d.resident(), &mut budget) {
             Ok(patterns) => patterns,
             Err(photocraft_psd::PsdError::OutOfMemory(error)) => return Err(error.to_string()),
             Err(_) => continue,
@@ -207,7 +205,7 @@ pub fn export_global_blocks(doc: &Document) -> Vec<photocraft_doc::PsdGlobalBloc
     for b in raw {
         if PATTERN_KEYS.contains(&b.1) {
             if !placed {
-                out.push((*b"8BIM", key, Arc::new(fresh.clone())));
+                out.push((*b"8BIM", key, photocraft_doc::Blob::new(fresh.clone())));
                 placed = true;
             }
         } else {
@@ -215,7 +213,7 @@ pub fn export_global_blocks(doc: &Document) -> Vec<photocraft_doc::PsdGlobalBloc
         }
     }
     if !placed && !doc.patterns.is_empty() {
-        out.push((*b"8BIM", key, Arc::new(fresh)));
+        out.push((*b"8BIM", key, photocraft_doc::Blob::new(fresh)));
     }
     out
 }
@@ -225,7 +223,7 @@ pub fn export_global_blocks(doc: &Document) -> Vec<photocraft_doc::PsdGlobalBloc
 /// unreadable pattern blocks included, is kept verbatim. Blocks are decoded in order with one
 /// shared budget, as [`from_global_blocks`] decodes them.
 fn repair_legacy_blocks(raw: &[photocraft_doc::PsdGlobalBlock]) -> Vec<photocraft_doc::PsdGlobalBlock> {
-    if !raw.iter().any(|(_, k, d)| PATTERN_KEYS.contains(k) && block_has_user_mask(d)) {
+    if !raw.iter().any(|(_, k, d)| PATTERN_KEYS.contains(k) && block_has_user_mask(d.resident())) {
         return raw.to_vec();
     }
     let mut budget = PatternBudget::default();
@@ -234,9 +232,9 @@ fn repair_legacy_blocks(raw: &[photocraft_doc::PsdGlobalBlock]) -> Vec<photocraf
             if !PATTERN_KEYS.contains(key) {
                 return b.clone();
             }
-            match parse_pattern_block_with(data, &mut budget) {
-                Ok(ps) if block_has_user_mask(data) => match write_pattern_block(&ps) {
-                    Ok(fresh) => (*sig, *key, Arc::new(fresh)),
+            match parse_pattern_block_with(data.resident(), &mut budget) {
+                Ok(ps) if block_has_user_mask(data.resident()) => match write_pattern_block(&ps) {
+                    Ok(fresh) => (*sig, *key, photocraft_doc::Blob::new(fresh)),
                     Err(_) => b.clone(),
                 },
                 _ => b.clone(),
@@ -298,7 +296,8 @@ mod tests {
         let mut d = Document::new("x", photocraft_geom::Size { width: 4, height: 4 }, ColorMode::Rgb, SampleType::U8);
         let p = pattern(ColorMode::Rgb, SampleType::U8, false);
         let raw = write_pattern_block(&[to_psd(&p)]).unwrap();
-        d.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", Arc::new(vec![1])), (*b"8BIM", *b"Patt", Arc::new(raw.clone()))];
+        d.metadata.psd_global_blocks =
+            vec![(*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(vec![1])), (*b"8BIM", *b"Patt", photocraft_doc::Blob::new(raw.clone()))];
         d.patterns = from_global_blocks(&d);
         assert_eq!(d.patterns.len(), 1);
         assert_eq!(export_global_blocks(&d), d.metadata.psd_global_blocks);
@@ -320,17 +319,17 @@ mod tests {
         d.patterns.push(pattern(ColorMode::Rgb, SampleType::U16, true));
         let out = export_global_blocks(&d);
         assert_eq!(out.len(), 1);
-        assert!(!block_has_user_mask(&out[0].2));
+        assert!(!block_has_user_mask(out[0].2.resident()));
         // Move the transparency into the user mask array, as older builds wrote it: a 16-bit
         // pattern's array is raw, so it is the last 8 + 23 + 5 × 3 × 2 bytes of the pattern.
-        let mut legacy = out[0].2.to_vec();
+        let mut legacy = out[0].2.resident().to_vec();
         let end = 4 + u32::from_be_bytes([legacy[0], legacy[1], legacy[2], legacy[3]]) as usize;
         legacy[end - (8 + 23 + 30) - 4..end].rotate_left(4);
         assert!(block_has_user_mask(&legacy));
         // A pattern block that doesn't decode (pattern version 2) sits beside it.
-        let unreadable = (*b"8BIM", *b"Patt", Arc::new(vec![0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 0]));
-        let other = (*b"8BIM", *b"Txt2", Arc::new(vec![1]));
-        d.metadata.psd_global_blocks = vec![other.clone(), (*b"8BIM", *b"Pat2", Arc::new(legacy)), unreadable.clone()];
+        let unreadable = (*b"8BIM", *b"Patt", photocraft_doc::Blob::new(vec![0, 0, 0, 8, 0, 0, 0, 2, 0, 0, 0, 0]));
+        let other = (*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(vec![1]));
+        d.metadata.psd_global_blocks = vec![other.clone(), (*b"8BIM", *b"Pat2", photocraft_doc::Blob::new(legacy)), unreadable.clone()];
         assert_eq!(from_global_blocks(&d), d.patterns, "older files still open");
         // The patterns are unchanged: only the legacy block is rewritten, in place; the other
         // blocks are kept verbatim.
@@ -338,7 +337,7 @@ mod tests {
         assert_eq!(out.len(), 3);
         assert_eq!((&out[0], &out[2]), (&other, &unreadable));
         assert_eq!(out[1].1, *b"Pat2");
-        assert!(!block_has_user_mask(&out[1].2));
+        assert!(!block_has_user_mask(out[1].2.resident()));
         let mut back = d.clone();
         back.metadata.psd_global_blocks = out;
         assert_eq!(from_global_blocks(&back), d.patterns);

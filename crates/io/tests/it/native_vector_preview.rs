@@ -130,7 +130,8 @@ fn one_hundred_shared_native_instances_keep_source_bytes_and_preview_through_psd
             assert_eq!(sm.vector_preview, smart(&doc).vector_preview);
             assert_eq!(sm.transform, smart(&doc).transform);
             let SmartSource::Linked { path } = &sm.source else { panic!("expected PSD embedded-table source") };
-            assert_eq!(linked::embedded_payload(&back.metadata, path).unwrap(), ("Artwork.ai".to_string(), PDF));
+            let (name, bytes) = linked::embedded_payload(&back.metadata, path).unwrap();
+            assert_eq!((name.as_str(), &*bytes), ("Artwork.ai", PDF));
         }
         back
     };

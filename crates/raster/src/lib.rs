@@ -290,11 +290,23 @@ impl PruneCursor {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Surface {
     format: PixelFormat,
     default_pixel: Box<[u8]>,
-    tiles: BTreeMap<TileCoord, Arc<Tile>>,
+    /// The tiles, unless `lazy` holds them.
+    ready: BTreeMap<TileCoord, Arc<Tile>>,
+    /// Tiles decoded on first use (see [`Surface::lazy`]), shared by clones so they decode once;
+    /// or why such a decode failed, kept once the surface holds its own (empty) tiles and carried
+    /// to surfaces made from it (moved, converted): a save must still refuse it. One pointer, so
+    /// every surface (and layer) stays as small as it was.
+    lazy: Option<Arc<LazyState>>,
+}
+
+/// What [`Surface::lazy`] holds.
+enum LazyState {
+    Tiles(LazyTiles),
+    Failed(String),
 }
 
 /// Use stack storage when it fits, otherwise reuse a dynamically sized sample buffer.
@@ -322,7 +334,7 @@ impl UniformTiles {
     fn window(&self, s: &Surface, r: Rect) -> Option<Arc<Tile>> {
         let mut found = None;
         for c in r.tiles() {
-            let t = s.tiles.get(&c)?;
+            let t = s.map().get(&c)?;
             let k = (*self.of.get(&(Arc::as_ptr(t) as usize))?)?;
             if found.is_some_and(|f| f != k) {
                 return None;
@@ -353,9 +365,77 @@ impl UniformTiles {
     }
 }
 
+/// Tiles a [`Surface::lazy`] surface decodes the first time anything reads or writes it.
+pub struct LazyTiles {
+    /// The format the decode must produce (the lazy surface's).
+    format: PixelFormat,
+    tiles: std::sync::OnceLock<Result<BTreeMap<TileCoord, Arc<Tile>>, String>>,
+    decode: std::sync::Mutex<Option<LazyDecode>>,
+    bounds: Rect,
+    preview: Option<(u32, Surface)>,
+}
+
+/// What decodes a lazy surface's tiles: a surface of the same format, or why it could not.
+pub type LazyDecode = Box<dyn FnOnce() -> Result<Surface, String> + Send>;
+
+/// The tiles of a surface that failed to decode: none.
+static NO_TILES: BTreeMap<TileCoord, Arc<Tile>> = BTreeMap::new();
+
+impl LazyTiles {
+    fn force(&self) -> &BTreeMap<TileCoord, Arc<Tile>> {
+        let r = self.tiles.get_or_init(|| {
+            let decode = self.decode.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            match decode {
+                // Tiles of another format (or read against another default pixel) would be read
+                // wrongly or out of bounds: such a decode fails instead.
+                Some(f) => f().and_then(|mut s| {
+                    if s.format != self.format || s.default_pixel.iter().any(|&b| b != 0) {
+                        return Err(format!(
+                            "the decode gave {:?} pixels with a non-zero default or of the wrong format ({:?} expected)",
+                            s.format, self.format
+                        ));
+                    }
+                    let tiles = std::mem::take(s.map_mut());
+                    // A decode that gave a lazy surface of its own which failed has failed too.
+                    match s.lazy_error() {
+                        Some(e) => Err(e.to_string()),
+                        None => Ok(tiles),
+                    }
+                }),
+                None => Err("the decode was already taken".into()),
+            }
+        });
+        r.as_ref().unwrap_or(&NO_TILES)
+    }
+}
+
+impl fmt::Debug for LazyTiles {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.tiles.get() {
+            None => write!(f, "LazyTiles(pending, bounds {:?})", self.bounds),
+            Some(Ok(t)) => write!(f, "LazyTiles({} tiles)", t.len()),
+            Some(Err(e)) => write!(f, "LazyTiles(failed: {e})"),
+        }
+    }
+}
+
+/// The tiles whoever holds them; a pending lazy surface prints as pending (printing it does not
+/// decode it).
+impl fmt::Debug for Surface {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut d = f.debug_struct("Surface");
+        d.field("format", &self.format).field("default_pixel", &self.default_pixel);
+        match self.pending_bounds() {
+            Some(b) => d.field("pending", &b),
+            None => d.field("tiles", self.map()),
+        };
+        d.finish()
+    }
+}
+
 impl PartialEq for Surface {
     fn eq(&self, other: &Self) -> bool {
-        self.format == other.format && self.default_pixel == other.default_pixel && self.tiles == other.tiles
+        self.format == other.format && self.default_pixel == other.default_pixel && self.map() == other.map()
     }
 }
 
@@ -566,7 +646,8 @@ impl Surface {
         if !spill::any_failed() {
             return Ok(());
         }
-        self.tiles.values().try_for_each(|t| t.scratch_health())
+        // A pending lazy surface holds no tiles yet: nothing to check, and nothing decoded.
+        self.loaded_tiles().try_for_each(|(_, t)| t.scratch_health())
     }
 
     /// [`Surface::scratch_health`] for the tiles overlapping `r` only.
@@ -574,7 +655,8 @@ impl Surface {
         if !spill::any_failed() {
             return Ok(());
         }
-        r.tiles().filter_map(|c| self.tiles.get(&c)).try_for_each(|t| t.scratch_health())
+        let loaded: BTreeMap<_, _> = self.loaded_tiles().filter(|(c, _)| !c.rect().intersect(&r).is_empty()).collect();
+        loaded.values().try_for_each(|t| t.scratch_health())
     }
 
     /// Reads a region as encoded interleaved bytes with fallible allocation.
@@ -590,7 +672,7 @@ impl Surface {
             let span = tr.width() as usize * bpp;
             for y in tr.y0..tr.y1 {
                 let dst = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
-                match self.tiles.get(&tc) {
+                match self.map().get(&tc) {
                     Some(t) => {
                         let src = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
                         out[dst..dst + span].copy_from_slice(&t.try_bytes().map_err(AllocationError::ScratchRead)?[src..src + span]);
@@ -606,9 +688,142 @@ impl Surface {
         Ok(out)
     }
 
+    /// A surface whose tiles are decoded by `decode` the first time anything reads or writes
+    /// them, from any clone (they decode once). Until then it holds no pixels: [`Self::is_pending`]
+    /// says so, [`Self::pending_bounds`] gives `bounds` (where its pixels will be) and
+    /// [`Self::read_preview_pixel`] samples `preview`, a copy reduced `k` times whose pixel
+    /// `(0, 0)` is `bounds`' corner, so a thumbnail needs no decode. A failed decode leaves the
+    /// surface empty and [`Self::lazy_error`] says why (callers saving it must check).
+    pub fn lazy(format: PixelFormat, bounds: Rect, preview: Option<(u32, Surface)>, decode: LazyDecode) -> Self {
+        let lazy = LazyTiles { format, tiles: std::sync::OnceLock::new(), decode: std::sync::Mutex::new(Some(decode)), bounds, preview };
+        Self {
+            format,
+            default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(),
+            ready: BTreeMap::new(),
+            lazy: Some(Arc::new(LazyState::Tiles(lazy))),
+        }
+    }
+
+    /// The lazy tiles this surface reads and their shared identity, if any.
+    #[inline]
+    fn lazy_tiles(&self) -> Option<(&Arc<LazyState>, &LazyTiles)> {
+        let state = self.lazy.as_ref()?;
+        match &**state {
+            LazyState::Tiles(l) => Some((state, l)),
+            LazyState::Failed(_) => None,
+        }
+    }
+
+    /// Records that a lazy decode this surface was made from failed (see [`Self::lazy_error`]).
+    fn set_failed(&mut self, error: Option<&str>) {
+        if let Some(e) = error {
+            self.lazy = Some(Arc::new(LazyState::Failed(e.to_string())));
+        }
+    }
+
+    /// The tiles, decoding a lazy surface's first.
+    #[inline]
+    fn map(&self) -> &BTreeMap<TileCoord, Arc<Tile>> {
+        match self.lazy_tiles() {
+            Some((_, l)) => l.force(),
+            None => &self.ready,
+        }
+    }
+
+    /// The tiles to change, decoding a lazy surface's first (this surface then holds its own).
+    #[inline]
+    fn map_mut(&mut self) -> &mut BTreeMap<TileCoord, Arc<Tile>> {
+        if let Some((_, l)) = self.lazy_tiles() {
+            let tiles = l.force().clone();
+            let failed = match l.tiles.get() {
+                Some(Err(e)) => Some(e.clone()),
+                _ => None,
+            };
+            self.ready = tiles;
+            self.lazy = failed.map(|e| Arc::new(LazyState::Failed(e)));
+        }
+        &mut self.ready
+    }
+
+    /// `true` while a [`Self::lazy`] surface has not been decoded.
+    pub fn is_pending(&self) -> bool {
+        self.lazy_tiles().is_some_and(|(_, l)| l.tiles.get().is_none())
+    }
+
+    /// Where a pending surface's pixels will be.
+    pub fn pending_bounds(&self) -> Option<Rect> {
+        self.lazy_tiles().filter(|(_, l)| l.tiles.get().is_none()).map(|(_, l)| l.bounds)
+    }
+
+    /// Reads pixel `(x, y)` of a pending surface from its reduced preview, without decoding it.
+    /// `false` when the surface is not pending or has no preview (`out` is then unchanged).
+    pub fn read_preview_pixel(&self, x: i32, y: i32, out: &mut [f32]) -> bool {
+        let Some((_, l)) = self.lazy_tiles().filter(|(_, l)| l.tiles.get().is_none()) else { return false };
+        let Some((k, p)) = &l.preview else { return false };
+        let k = (*k).max(1) as i32;
+        p.read_pixel((x - l.bounds.x0).div_euclid(k), (y - l.bounds.y0).div_euclid(k), out);
+        true
+    }
+
+    /// Why a lazy surface's decode failed, once it ran.
+    pub fn lazy_error(&self) -> Option<&str> {
+        match &**self.lazy.as_ref()? {
+            LazyState::Failed(e) => Some(e),
+            LazyState::Tiles(l) => match l.tiles.get()? {
+                Err(e) => Some(e),
+                Ok(_) => None,
+            },
+        }
+    }
+
+    /// The tiles held now, without decoding a pending surface (which holds none): for memory
+    /// accounting.
+    pub fn loaded_tiles(&self) -> impl Iterator<Item = (&TileCoord, &Arc<Tile>)> {
+        let map = match self.lazy_tiles() {
+            Some((_, l)) => match l.tiles.get() {
+                Some(Ok(t)) => t,
+                _ => &NO_TILES,
+            },
+            None => &self.ready,
+        };
+        map.iter()
+    }
+
+    /// The tiles this surface holds itself: none while its tiles are a lazy surface's (decoded
+    /// or not), which [`Self::lazy_decoded`] counts. A surface's own tiles never change while it
+    /// is shared, so counting them is symmetric across History states.
+    pub fn owned_tiles(&self) -> impl Iterator<Item = (&TileCoord, &Arc<Tile>)> {
+        match self.lazy_tiles() {
+            Some(_) => NO_TILES.iter(),
+            None => self.ready.iter(),
+        }
+    }
+
+    /// The decoded tiles of a lazy surface (shared by its clones), with an identity for them:
+    /// `None` for a surface with tiles of its own or still pending.
+    pub fn lazy_decoded(&self) -> Option<(usize, impl Iterator<Item = (&TileCoord, &Arc<Tile>)>)> {
+        let (state, l) = self.lazy_tiles()?;
+        match l.tiles.get()? {
+            Ok(t) => Some((Arc::as_ptr(state) as usize, t.iter())),
+            Err(_) => None,
+        }
+    }
+
+    /// An identity for the lazy tiles this surface reads (decoded or not; the same for its
+    /// clones): `None` once it holds tiles of its own.
+    pub fn lazy_identity(&self) -> Option<usize> {
+        self.lazy_tiles().map(|(state, _)| Arc::as_ptr(state) as usize)
+    }
+
+    /// An identity for a pending surface's tiles (the same for its clones), for caches keyed by
+    /// content that must not decode it.
+    pub fn pending_id(&self) -> Option<usize> {
+        self.lazy_tiles().filter(|(_, l)| l.tiles.get().is_none()).map(|(state, _)| Arc::as_ptr(state) as usize)
+    }
+
     /// Transparent/zero surface.
     pub fn new(format: PixelFormat) -> Self {
-        Self { format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), tiles: BTreeMap::new() }
+        Self { format, default_pixel: vec![0u8; format.bytes_per_pixel()].into_boxed_slice(), ready: BTreeMap::new(), lazy: None }
     }
 
     /// Surface whose untouched pixels read as `pixel` (normalised channel values).
@@ -625,13 +840,13 @@ impl Surface {
         self.format.channels()
     }
     pub fn tile_count(&self) -> usize {
-        self.tiles.len()
+        self.map().len()
     }
     pub fn tiles(&self) -> impl Iterator<Item = (&TileCoord, &Arc<Tile>)> {
-        self.tiles.iter()
+        self.map().iter()
     }
     pub fn tile(&self, c: TileCoord) -> Option<&Arc<Tile>> {
-        self.tiles.get(&c)
+        self.map().get(&c)
     }
     pub fn default_pixel(&self) -> Vec<f32> {
         decode_pixel(&self.format, &self.default_pixel)
@@ -649,36 +864,36 @@ impl Surface {
     /// Mutable access to a tile, allocating it (filled with the default pixel) or un-sharing it.
     pub fn tile_mut(&mut self, c: TileCoord) -> &mut Tile {
         let fmt = self.format;
-        let dp = &self.default_pixel;
-        let arc = self.tiles.entry(c).or_insert_with(|| Arc::new(Tile::filled(&fmt, dp)));
+        let dp = self.default_pixel.clone();
+        let arc = self.map_mut().entry(c).or_insert_with(|| Arc::new(Tile::filled(&fmt, &dp)));
         Arc::make_mut(arc)
     }
 
     /// Fallible counterpart to [`Surface::tile_mut`]. Pixel storage is reserved before changing
     /// the surface, and a shared tile is copied only after its replacement has been allocated.
     pub fn try_tile_mut(&mut self, c: TileCoord) -> Result<&mut Tile, AllocationError> {
-        if let Some(tile) = self.tiles.get(&c) {
+        if let Some(tile) = self.map().get(&c) {
             drop(tile.try_bytes().map_err(AllocationError::ScratchRead)?);
         }
-        if !self.tiles.contains_key(&c) {
+        if !self.map().contains_key(&c) {
             let tile = Arc::new(Tile::try_filled(&self.format, &self.default_pixel)?);
-            self.tiles.insert(c, tile);
-        } else if self.tiles.get_mut(&c).is_some_and(|t| Arc::get_mut(t).is_none()) {
-            let original = self.tiles.remove(&c).ok_or(AllocationError::SizeOverflow)?;
+            self.map_mut().insert(c, tile);
+        } else if self.map_mut().get_mut(&c).is_some_and(|t| Arc::get_mut(t).is_none()) {
+            let original = self.map_mut().remove(&c).ok_or(AllocationError::SizeOverflow)?;
             let tile = match Arc::try_unwrap(original) {
                 // Weak cache references must not force a pixel-buffer copy.
                 Ok(tile) => tile,
                 Err(original) => match original.try_clone() {
                     Ok(tile) => tile,
                     Err(error) => {
-                        self.tiles.insert(c, original);
+                        self.map_mut().insert(c, original);
                         return Err(error);
                     }
                 },
             };
-            self.tiles.insert(c, Arc::new(tile));
+            self.map_mut().insert(c, Arc::new(tile));
         }
-        self.tiles.get_mut(&c).and_then(Arc::get_mut).ok_or(AllocationError::SizeOverflow)
+        self.map_mut().get_mut(&c).and_then(Arc::get_mut).ok_or(AllocationError::SizeOverflow)
     }
 
     /// Writes a region using fallible pixel-tile allocations. Callers that need transactional
@@ -714,14 +929,20 @@ impl Surface {
         if self.format != other.format || self.default_pixel != other.default_pixel {
             return None;
         }
+        // Two surfaces reading the same lazy tiles (decoded or not) are the same: compared
+        // without decoding them.
+        if self.lazy_identity().is_some() && self.lazy_identity() == other.lazy_identity() {
+            return Some(Rect::EMPTY);
+        }
         let mut r = Rect::EMPTY;
-        for (c, t) in &self.tiles {
-            if other.tiles.get(c).is_none_or(|o| !Arc::ptr_eq(t, o)) {
+        let (mine, theirs) = (self.map(), other.map());
+        for (c, t) in mine {
+            if theirs.get(c).is_none_or(|o| !Arc::ptr_eq(t, o)) {
                 r = r.union(&c.rect());
             }
         }
-        for c in other.tiles.keys() {
-            if !self.tiles.contains_key(c) {
+        for c in theirs.keys() {
+            if !mine.contains_key(c) {
                 r = r.union(&c.rect());
             }
         }
@@ -730,22 +951,22 @@ impl Surface {
 
     /// Coarse bounds: union of allocated tile rects.
     pub fn tile_bounds(&self) -> Rect {
-        self.tiles.keys().fold(Rect::EMPTY, |r, c| r.union(&c.rect()))
+        self.map().keys().fold(Rect::EMPTY, |r, c| r.union(&c.rect()))
     }
 
     /// Exact bounds of pixels that differ from the default pixel.
     pub fn content_bounds(&self) -> Rect {
-        if self.tiles.is_empty() {
+        if self.map().is_empty() {
             return Rect::EMPTY;
         }
         // Scan tiles from the outside of the tile grid inwards; a tile lying entirely inside the
         // bounds found so far cannot extend them and is skipped (so a full-canvas selection scans
         // roughly its outer ring of tiles instead of every pixel).
         let (mut gx0, mut gy0, mut gx1, mut gy1) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-        for c in self.tiles.keys() {
+        for c in self.map().keys() {
             (gx0, gy0, gx1, gy1) = (gx0.min(c.tx), gy0.min(c.ty), gx1.max(c.tx), gy1.max(c.ty));
         }
-        let mut order: Vec<(&TileCoord, &Arc<Tile>)> = self.tiles.iter().collect();
+        let mut order: Vec<(&TileCoord, &Arc<Tile>)> = self.map().iter().collect();
         order.sort_by_key(|(c, _)| (c.tx - gx0).min(gx1 - c.tx).min(c.ty - gy0).min(gy1 - c.ty));
         let mut out = Rect::EMPTY;
         for (c, t) in order {
@@ -767,7 +988,7 @@ impl Surface {
     pub fn share_uniform_tiles(&mut self, interner: &mut TileInterner) -> usize {
         let bpp = self.format.bytes_per_pixel();
         let mut saved = 0;
-        for t in self.tiles.values_mut() {
+        for t in self.map_mut().values_mut() {
             let Ok(bytes) = t.try_bytes() else { continue };
             let mut px = bytes.chunks_exact(bpp);
             let Some(p0) = px.next() else { continue };
@@ -787,9 +1008,9 @@ impl Surface {
 
     /// Drop tiles that are entirely the default pixel.
     pub fn prune(&mut self) {
-        let dp = self.default_pixel.as_ref();
+        let dp = self.default_pixel.clone();
         let bpp = dp.len();
-        self.tiles.retain(|_, t| t.bytes().chunks_exact(bpp).any(|px| px != dp));
+        self.map_mut().retain(|_, t| t.bytes().chunks_exact(bpp).any(|px| *px != *dp));
     }
 
     /// A [`PruneCursor`] for [`Surface::prune_batch`], which drops the same tiles as [`Surface::prune`]
@@ -808,16 +1029,17 @@ impl Surface {
         if cursor.done {
             return true;
         }
-        let dp = self.default_pixel.as_ref();
+        let dp = self.default_pixel.clone();
         let bpp = dp.len();
         let max = max.max(1);
+        let tiles = self.map_mut();
         let keys: Vec<TileCoord> = match cursor.after {
-            None => self.tiles.keys().take(max).copied().collect(),
-            Some(after) => self.tiles.range((Bound::Excluded(after), Bound::Unbounded)).take(max).map(|(c, _)| *c).collect(),
+            None => tiles.keys().take(max).copied().collect(),
+            Some(after) => tiles.range((Bound::Excluded(after), Bound::Unbounded)).take(max).map(|(c, _)| *c).collect(),
         };
         for c in &keys {
-            if self.tiles.get(c).is_some_and(|t| !t.bytes().chunks_exact(bpp).any(|px| px != dp)) {
-                self.tiles.remove(c);
+            if tiles.get(c).is_some_and(|t| !t.bytes().chunks_exact(bpp).any(|px| *px != *dp)) {
+                tiles.remove(c);
             }
         }
         let Some(last) = keys.last().copied() else {
@@ -825,7 +1047,7 @@ impl Surface {
             return true;
         };
         cursor.after = Some(last);
-        cursor.done = keys.len() < max || self.tiles.range((Bound::Excluded(last), Bound::Unbounded)).next().is_none();
+        cursor.done = keys.len() < max || tiles.range((Bound::Excluded(last), Bound::Unbounded)).next().is_none();
         cursor.done
     }
 
@@ -847,7 +1069,7 @@ impl Surface {
     pub fn read_pixel(&self, x: i32, y: i32, out: &mut [f32]) {
         let (c, base) = self.locate(x, y);
         let n = self.channels();
-        match self.tiles.get(&c) {
+        match self.map().get(&c) {
             Some(t) => {
                 let data = t.bytes();
                 for (i, o) in out.iter_mut().enumerate().take(n) {
@@ -876,7 +1098,7 @@ impl Surface {
     #[inline]
     pub fn sample_channel(&self, x: i32, y: i32, c: usize) -> f32 {
         let (tc, base) = self.locate(x, y);
-        match self.tiles.get(&tc) {
+        match self.map().get(&tc) {
             Some(t) => read_sample(&t.bytes(), self.format.sample, base + c),
             None => read_sample(&self.default_pixel, self.format.sample, c),
         }
@@ -904,7 +1126,7 @@ impl Surface {
             let count = (((tile_end - x) + step - 1) / step).max(1) as usize;
             let count = count.min(out.len() - i);
             let end = i + count;
-            match self.tiles.get(&TileCoord { tx: tx as i32, ty }) {
+            match self.map().get(&TileCoord { tx: tx as i32, ty }) {
                 None => out[i..end].fill(dp),
                 Some(t) => {
                     let data = t.bytes();
@@ -938,7 +1160,7 @@ impl Surface {
         let zero = self.default_pixel.iter().all(|&b| b == 0);
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let guard = self.tiles.get(&tc).map(|t| t.bytes());
+            let guard = self.map().get(&tc).map(|t| t.bytes());
             if guard.is_none() && zero {
                 continue;
             }
@@ -978,7 +1200,7 @@ impl Surface {
         let mut row = Vec::new();
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let guard = self.tiles.get(&tc).map(|t| t.bytes());
+            let guard = self.map().get(&tc).map(|t| t.bytes());
             let tile = guard.as_deref();
             for y in tr.y0..tr.y1 {
                 let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
@@ -1008,7 +1230,7 @@ impl Surface {
         let mut px = [0.0f32; 8];
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
-            let guard = self.tiles.get(&tc).map(|t| t.bytes());
+            let guard = self.map().get(&tc).map(|t| t.bytes());
             let tile = guard.as_deref();
             for y in tr.y0..tr.y1 {
                 let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
@@ -1042,7 +1264,7 @@ impl Surface {
     /// `true` if any allocated tile intersects `r` (else `r` reads as the
     /// default pixel everywhere).
     pub fn has_tiles_in(&self, r: Rect) -> bool {
-        r.tiles().any(|tc| self.tiles.contains_key(&tc))
+        r.tiles().any(|tc| self.map().contains_key(&tc))
     }
 
     /// Read a rectangle as interleaved normalised floats (`w*h*channels`).
@@ -1095,7 +1317,7 @@ impl Surface {
         let mut blank: Option<Arc<Tile>> = None;
         r.tiles()
             .map(|c| {
-                let t = self.tiles.remove(&c).unwrap_or_else(|| blank.get_or_insert_with(|| Arc::new(Tile::filled(&fmt, &self.default_pixel))).clone());
+                let t = self.map_mut().remove(&c).unwrap_or_else(|| blank.get_or_insert_with(|| Arc::new(Tile::filled(&fmt, &self.default_pixel))).clone());
                 (c, t)
             })
             .collect()
@@ -1110,10 +1332,10 @@ impl Surface {
         let bytes = count.checked_mul(std::mem::size_of::<(TileCoord, Arc<Tile>)>()).ok_or(AllocationError::SizeOverflow)?;
         let mut out = Vec::new();
         out.try_reserve_exact(count).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
-        let has_missing = r.tiles().any(|c| !self.tiles.contains_key(&c));
+        let has_missing = r.tiles().any(|c| !self.map().contains_key(&c));
         let blank = if has_missing { Some(Arc::new(Tile::try_filled(&self.format, &self.default_pixel)?)) } else { None };
         for c in r.tiles() {
-            let tile = self.tiles.remove(&c).or_else(|| blank.clone());
+            let tile = self.map_mut().remove(&c).or_else(|| blank.clone());
             if let Some(tile) = tile {
                 out.push((c, tile));
             }
@@ -1124,7 +1346,7 @@ impl Surface {
     /// Put tiles back (see [`Surface::take_tiles`]); each replaces the tile at its coordinate.
     pub fn put_tiles(&mut self, tiles: impl IntoIterator<Item = (TileCoord, Arc<Tile>)>) {
         for (c, t) in tiles {
-            self.tiles.insert(c, t);
+            self.map_mut().insert(c, t);
         }
     }
 
@@ -1160,7 +1382,7 @@ impl Surface {
             if tr == tc.rect() {
                 let fmt = self.format;
                 let t = full.get_or_insert_with(|| Arc::new(Tile::filled(&fmt, &enc)));
-                self.tiles.insert(tc, t.clone());
+                self.map_mut().insert(tc, t.clone());
                 continue;
             }
             let mut t = self.tile_mut(tc).bytes_mut();
@@ -1260,14 +1482,16 @@ impl Surface {
         let bytes = count.checked_mul(std::mem::size_of::<(TileCoord, Option<Arc<Tile>>)>()).ok_or(AllocationError::SizeOverflow)?;
         let mut tiles: Vec<(TileCoord, Option<Arc<Tile>>)> = Vec::new();
         tiles.try_reserve_exact(count).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
-        tiles.extend(r.tiles().map(|c| (c, self.tiles.get(&c).cloned())));
+        let map = self.map_mut();
+        tiles.extend(r.tiles().map(|c| (c, map.get(&c).cloned())));
         prepare(&mut tiles, &self.format, &self.default_pixel)?;
+        let map = self.map_mut();
         for (c, tile) in tiles {
             if let Some(tile) = tile {
-                if let Some(existing) = self.tiles.get_mut(&c) {
+                if let Some(existing) = map.get_mut(&c) {
                     *existing = tile;
                 } else {
-                    self.tiles.insert(c, tile);
+                    map.insert(c, tile);
                 }
             }
         }
@@ -1284,7 +1508,7 @@ impl Surface {
             let span = tr.width() as usize * bpp;
             for y in tr.y0..tr.y1 {
                 let dst = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
-                match self.tiles.get(&tc).map(|t| t.bytes()) {
+                match self.map().get(&tc).map(|t| t.bytes()) {
                     Some(t) => {
                         let src = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
                         out[dst..dst + span].copy_from_slice(&t[src..src + span]);
@@ -1308,11 +1532,12 @@ impl Surface {
     /// `content` must hold every pixel that isn't the default one (`content_bounds`, say): only
     /// tiles it reaches are kept.
     pub fn translated(&self, dx: i32, dy: i32, content: Rect) -> Surface {
-        let mut out = Surface { format: self.format, default_pixel: self.default_pixel.clone(), tiles: BTreeMap::new() };
-        let sources = || self.tiles.iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty());
+        let mut out = Surface { format: self.format, default_pixel: self.default_pixel.clone(), ready: BTreeMap::new(), lazy: None };
+        let sources = || self.map().iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty());
         if dx % TILE_SIZE == 0 && dy % TILE_SIZE == 0 {
             let (tx, ty) = (dx / TILE_SIZE, dy / TILE_SIZE);
-            out.tiles = sources().map(|(c, t)| (TileCoord::new(c.tx.saturating_add(tx), c.ty.saturating_add(ty)), t.clone())).collect();
+            out.ready = sources().map(|(c, t)| (TileCoord::new(c.tx.saturating_add(tx), c.ty.saturating_add(ty)), t.clone())).collect();
+            out.set_failed(self.lazy_error());
             return out;
         }
         let mut builder = shift::ShiftBuilder::new(self, dx, dy, content);
@@ -1324,12 +1549,13 @@ impl Surface {
         #[cfg(not(target_arch = "wasm32"))]
         {
             use rayon::prelude::*;
-            out.tiles = targets.into_par_iter().filter_map(build_target).collect();
+            out.ready = targets.into_par_iter().filter_map(build_target).collect();
         }
         #[cfg(target_arch = "wasm32")]
         {
-            out.tiles = targets.into_iter().filter_map(build_target).collect();
+            out.ready = targets.into_iter().filter_map(build_target).collect();
         }
+        out.set_failed(self.lazy_error());
         out
     }
 
@@ -1344,16 +1570,16 @@ impl Surface {
             *v = f(*v);
         }
         encode_pixel(&format, &dp, &mut self.default_pixel);
-        let coords: Vec<TileCoord> = self.tiles.keys().copied().collect();
+        let coords: Vec<TileCoord> = self.map().keys().copied().collect();
         let px_count = (TILE_SIZE * TILE_SIZE) as usize;
         // A tile shared by several coordinates (a filled background) is mapped once and stays
         // shared (#4531). Keys are the original tiles, all alive until their coordinates are
         // reached, so a freed address can't be mistaken for another original.
         let mut done: std::collections::HashMap<*const Tile, Arc<Tile>> = std::collections::HashMap::new();
         for c in coords {
-            let Some(key) = self.tiles.get(&c).map(Arc::as_ptr) else { continue };
+            let Some(key) = self.map().get(&c).map(Arc::as_ptr) else { continue };
             if let Some(mapped) = done.get(&key) {
-                self.tiles.insert(c, mapped.clone());
+                self.map_mut().insert(c, mapped.clone());
                 continue;
             }
             let tile = self.tile_mut(c);
@@ -1366,7 +1592,7 @@ impl Surface {
                 }
             }
             drop(bytes);
-            if let Some(mapped) = self.tiles.get(&c) {
+            if let Some(mapped) = self.map().get(&c) {
                 done.insert(key, mapped.clone());
             }
         }
@@ -1379,9 +1605,9 @@ impl Surface {
         let mut src = vec![0.0f32; from_n];
         // Each distinct tile converts once; coordinates sharing it share the result (#4531).
         let mut done: std::collections::HashMap<*const Tile, Arc<Tile>> = std::collections::HashMap::new();
-        for (c, t) in &self.tiles {
+        for (c, t) in self.map() {
             if let Some(converted) = done.get(&Arc::as_ptr(t)) {
-                out.tiles.insert(*c, converted.clone());
+                out.ready.insert(*c, converted.clone());
                 continue;
             }
             let source = t.bytes();
@@ -1397,10 +1623,11 @@ impl Surface {
                 }
             }
             drop(dst);
-            if let Some(converted) = out.tiles.get(c) {
+            if let Some(converted) = out.ready.get(c) {
                 done.insert(Arc::as_ptr(t), converted.clone());
             }
         }
+        out.set_failed(self.lazy_error());
         out
     }
 
@@ -1412,9 +1639,9 @@ impl Surface {
         src.try_reserve_exact(from_n).map_err(|_| AllocationError::NotEnoughMemory { bytes: from_n * std::mem::size_of::<f32>() })?;
         src.resize(from_n, 0.0f32);
         let mut done: std::collections::HashMap<*const Tile, Arc<Tile>> = std::collections::HashMap::new();
-        for (c, t) in &self.tiles {
+        for (c, t) in self.map() {
             if let Some(converted) = done.get(&Arc::as_ptr(t)) {
-                out.tiles.insert(*c, converted.clone());
+                out.ready.insert(*c, converted.clone());
                 continue;
             }
             let dst = out.try_tile_mut(*c)?;
@@ -1431,10 +1658,11 @@ impl Surface {
                 }
             }
             drop(dest_bytes);
-            if let Some(converted) = out.tiles.get(c) {
+            if let Some(converted) = out.ready.get(c) {
                 done.insert(Arc::as_ptr(t), converted.clone());
             }
         }
+        out.set_failed(self.lazy_error());
         Ok(out)
     }
 

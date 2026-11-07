@@ -665,6 +665,7 @@ fn import_psd(
     ctl: &photocraft_raster::Interrupt,
     damaged: &mut bool,
     opts: &ImportOptions,
+    lazy_hidden: bool,
     parse: impl FnOnce(
         &dyn Fn(&PsdFile) -> photocraft_psd::Result<bool>,
         &dyn Fn(&PsdFile) -> bool,
@@ -754,7 +755,7 @@ fn import_psd(
 
     // Read before the conversion, which moves the global blocks into the document.
     let txt2 = file.global_blocks.iter().find(|b| &b.key == b"Txt2").and_then(|b| photocraft_text::psd::parse_txt2(&b.data));
-    let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged).ok_or(IoError::Cancelled)?;
+    let (mut document, warnings, psd_damaged, fatal_error) = psd_import::psd_to_document_owned(file, ctl, merged, lazy_hidden).ok_or(IoError::Cancelled)?;
     // Source reads and allocation failures fail the entire open; partial layers are discarded.
     if let Some(e) = fatal_error {
         return Err(e);
@@ -763,6 +764,14 @@ fn import_psd(
     document.name = name.to_string();
     text_import::prepare(&mut document, txt2.as_ref());
     Ok(ImportResult { document, warnings, source_read_only: false, preview_only: false })
+}
+
+/// Global blocks [`import_file_for_open_with`] leaves in the file: embedded smart-object files of
+/// at least a megabyte, read when a smart object's contents are (editing them, saving). Only where
+/// a save that replaces the file leaves the open one readable (Unix rename semantics); on Windows
+/// the open file would block that replace, so they are read at open there.
+fn defer_block(key: &[u8; 4], len: u64) -> bool {
+    cfg!(unix) && matches!(key, b"lnk2" | b"lnk3" | b"lnkD") && len >= 1 << 20
 }
 
 /// [`import_for_open_with`] for the file at `path`. A PSD/PSB is parsed from the open file
@@ -822,7 +831,8 @@ pub fn import_file_for_open_verified(
     let mut magic = [0u8; 4];
     let psd = !has_extension(name, photocraft_format::EXTENSION) && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && is_psd(&magic);
     let result = if psd {
-        import_source_with_options(name, photocraft_psd::Source::new(source), ctl, opts)
+        // Hidden layers are decoded when first used, from the open file (Unix: see `defer_block`).
+        import_source_deferring(name, photocraft_psd::Source::new(source), ctl, opts, defer_block, cfg!(unix))
     } else {
         // Read from the handle that was just identified, not by opening the path again.
         let mut file = source.file();
@@ -879,9 +889,21 @@ pub fn import_source_with_options(
     ctl: &photocraft_raster::Interrupt,
     opts: &ImportOptions,
 ) -> Result<(ImportResult, bool), IoError> {
+    import_source_deferring(name, source, ctl, opts, |_, _| false, false)
+}
+
+/// [`import_source_with_options`] leaving the global blocks `defer` accepts in the source.
+fn import_source_deferring(
+    name: &str,
+    source: photocraft_psd::Source,
+    ctl: &photocraft_raster::Interrupt,
+    opts: &ImportOptions,
+    defer: fn(&[u8; 4], u64) -> bool,
+    lazy_hidden: bool,
+) -> Result<(ImportResult, bool), IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut damaged = false;
-    let r = import_psd(name, ctl, &mut damaged, opts, |want, recover| PsdFile::from_source_and_merged_preflight(source, want, recover))?;
+    let r = import_psd(name, ctl, &mut damaged, opts, lazy_hidden, |want, recover| PsdFile::from_source_deferring(source, defer, want, recover))?;
     ctl.check().map_err(|_| IoError::Cancelled)?;
     ctl.progress(1.0);
     Ok((r, damaged))
@@ -980,7 +1002,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             let document = photocraft_format::load_from_bytes(bytes)?;
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
-        Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
+        Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, false, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
         Route::Affinity => affinity::import(name, bytes),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
@@ -1104,6 +1126,21 @@ fn checked_stages(
     Ok(r)
 }
 
+/// `doc` with its global blocks in memory: a copy with those left in the opened file read
+/// (`Blob::Deferred`), or `doc` itself when none is. A block that can't be read is an error.
+///
+/// Hidden layers still in the opened file (lazy surfaces) are decoded too: one that can't be read
+/// is an error, not an empty layer in the file written.
+pub(crate) fn with_blocks_loaded(doc: &Document) -> Result<std::borrow::Cow<'_, Document>, IoError> {
+    doc.decode_lazy_layers().map_err(IoError::Read)?;
+    if !doc.metadata.has_deferred_blocks() {
+        return Ok(std::borrow::Cow::Borrowed(doc));
+    }
+    let mut d = doc.clone();
+    d.metadata.load_deferred_blocks().map_err(|e| IoError::Read(format!("a smart object's embedded file could not be read: {e}")))?;
+    Ok(std::borrow::Cow::Owned(d))
+}
+
 /// Run `f` with an interrupt whose progress `0..=1` fills `lo..=hi` of `ctl`'s (same cancellation).
 pub(crate) fn with_span<R>(ctl: &photocraft_raster::Interrupt, lo: f32, hi: f32, f: impl FnOnce(&photocraft_raster::Interrupt) -> R) -> R {
     let cancelled = || ctl.cancelled();
@@ -1146,6 +1183,9 @@ fn export_stages_with_renderer(
         ));
     }
     if ext == "ora" {
+        // ORA writes every layer: hidden ones still in the opened file are read first (one that
+        // can't be is an error, not an empty layer).
+        doc.decode_lazy_layers().map_err(IoError::Read)?;
         let mut res = ora::export(doc)?;
         if let Some(r) = renderer {
             res.warnings.push("OpenRaster export uses CPU compositor; GPU rendering applies to flat formats".into());
@@ -1184,6 +1224,10 @@ fn export_stages_with_renderer(
         return Ok(ExportResult { bytes, warnings: Vec::new() }.into());
     }
     if ext == "psd" || ext == "psb" {
+        // Smart-object files left in the file the document was opened from are read for the save
+        // (the writer works on bytes in memory); a failed read fails it, never writes them empty.
+        // Only the formats that write the blocks read them: a flat export doesn't need them.
+        let doc = &*with_blocks_loaded(doc)?;
         let o = PsdExportOptions {
             force_psb: opts.force_psb || ext == "psb",
             maximize_compatibility: opts.psd_maximize_compatibility,
@@ -1222,7 +1266,9 @@ fn export_stages_with_renderer(
     }
     let format = photocraft_codecs::from_extension(&ext).ok_or_else(|| IoError::UnknownFormat(name_or_ext.to_string()))?;
     if format == photocraft_codecs::Format::Tiff && opts.tiff_layers && tiff_layers::would_write_layers(doc) {
-        let mut res = tiff_layers::export_layered(doc, opts, ctl)?;
+        // Its layer data is a PSD layer section, with the PSD's global blocks.
+        let loaded = with_blocks_loaded(doc)?;
+        let mut res = tiff_layers::export_layered(&loaded, opts, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("TIFF layered export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());

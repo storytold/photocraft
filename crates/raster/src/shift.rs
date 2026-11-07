@@ -58,7 +58,7 @@ impl ShiftBuilder {
 
     /// The source tiles that can hold content, in coordinate order.
     pub(super) fn sources(src: &Surface, content: Rect) -> impl Iterator<Item = (&TileCoord, &Arc<Tile>)> {
-        src.tiles.iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty())
+        src.map().iter().filter(move |(c, _)| !c.rect().intersect(&content).is_empty())
     }
 
     /// Notes whether source tile `t` is one solid value, so targets reading only such tiles share
@@ -86,7 +86,7 @@ impl ShiftBuilder {
             && sr.height() == TILE_SIZE.unsigned_abs()
             && sr.translate(dx, dy) == dr
             && content.contains_rect(&sr)
-            && sr.tiles().all(|sc| src.tiles.contains_key(&sc));
+            && sr.tiles().all(|sc| src.map().contains_key(&sc));
         if covered && let Some(shared) = uniform.window(src, sr) {
             // A tile of only the default pixel is left out, as `prune` would.
             let keep = shared.bytes().get(..bpp) != Some(&*self.default_pixel);
@@ -94,7 +94,7 @@ impl ShiftBuilder {
         }
         // The identities of the source tiles under a covered window (the offset is the same
         // for every target of this call).
-        let memo_key: Option<Vec<usize>> = covered.then(|| sr.tiles().map(|sc| src.tiles.get(&sc).map_or(0, |t| Arc::as_ptr(t) as usize)).collect());
+        let memo_key: Option<Vec<usize>> = covered.then(|| sr.tiles().map(|sc| src.map().get(&sc).map_or(0, |t| Arc::as_ptr(t) as usize)).collect());
         if let Some(k) = &memo_key
             && let Some(hit) = built.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(k)
         {
@@ -145,7 +145,7 @@ impl ShiftBuilder {
                 // zeros: fill the span from the default row instead of skipping it
                 // (echelon's white-mask-with-sparse-tiles case).
                 if !matches!(&cached, Some((ctx, cty, _)) if *ctx == tx && *cty == ty) {
-                    match src.tiles.get(&TileCoord::new(tx as i32, ty as i32)) {
+                    match src.map().get(&TileCoord::new(tx as i32, ty as i32)) {
                         Some(t) => cached = Some((tx, ty, t.bytes())),
                         None => {
                             let span_end = ((tx + 1) * i64::from(TILE_SIZE) + i64::from(dx)).min(x_end).max(x + 1);
@@ -221,7 +221,7 @@ impl TranslateSteps {
         let builder = ShiftBuilder::new(&src, dx, dy, content);
         let tiles: Vec<(TileCoord, Arc<Tile>)> =
             if whole_tiles { Vec::new() } else { ShiftBuilder::sources(&src, content).map(|(c, t)| (*c, Arc::clone(t))).collect() };
-        let out = Surface { format: src.format, default_pixel: src.default_pixel.clone(), tiles: Default::default() };
+        let out = Surface { format: src.format, default_pixel: src.default_pixel.clone(), ready: Default::default(), lazy: None };
         Self {
             sources: tiles.len(),
             scan: tiles.into_iter(),
@@ -268,14 +268,16 @@ impl TranslateSteps {
                 }
             } else if let Some(dc) = self.targets.as_mut().and_then(Iterator::next) {
                 if let Some((c, t)) = self.builder.build(&self.src, dc) {
-                    self.out.tiles.insert(c, t);
+                    self.out.ready.insert(c, t);
                 }
                 self.built += 1;
             } else {
-                return Some(std::mem::replace(
+                let mut out = std::mem::replace(
                     &mut self.out,
-                    Surface { format: self.src.format, default_pixel: self.src.default_pixel.clone(), tiles: Default::default() },
-                ));
+                    Surface { format: self.src.format, default_pixel: self.src.default_pixel.clone(), ready: Default::default(), lazy: None },
+                );
+                out.set_failed(self.src.lazy_error());
+                return Some(out);
             }
             if !more() {
                 return None;

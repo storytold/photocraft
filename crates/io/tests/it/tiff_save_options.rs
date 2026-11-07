@@ -127,7 +127,7 @@ fn on_keeps_transparency_ahead_of_spot_channels() {
                 assert_eq!(&isd.global_blocks[0].key, b"MTrn", "{case}");
                 // The marker is kept for the next save, as from Photoshop's own file.
                 let mut want = doc.clone();
-                want.metadata.psd_global_blocks = vec![(*b"8BIM", *b"MTrn", std::sync::Arc::new(Vec::new()))];
+                want.metadata.psd_global_blocks = vec![(*b"8BIM", *b"MTrn", photocraft_doc::Blob::new(Vec::new()))];
                 assert_docs_eq(&want, &back);
             }
         }

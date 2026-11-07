@@ -603,7 +603,7 @@ fn embedded_ai_link_table_handoff_preserves_source_until_saved_and_undo_restores
             file_name: "Logo.ai".into(),
             bytes: original.clone(),
         });
-        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(payload)));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(payload)));
         let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart") };
         sm.source = SmartSource::Linked { path: "embedded-ai".into() };
     }

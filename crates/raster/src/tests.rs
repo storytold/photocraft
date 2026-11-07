@@ -33,7 +33,7 @@ fn previous_read_region(surface: &Surface, r: Rect) -> Vec<f32> {
     let dp = surface.default_pixel();
     for tc in r.tiles() {
         let tr = tc.rect().intersect(&r);
-        let tile = surface.tiles.get(&tc);
+        let tile = surface.map().get(&tc);
         for y in tr.y0..tr.y1 {
             for x in tr.x0..tr.x1 {
                 let o = (((y - r.y0) as usize) * w + (x - r.x0) as usize) * n;
@@ -924,7 +924,7 @@ fn fallible_interleaved_writes_match_encoded_pixels_and_reject_bad_lengths() {
         let bytes: Vec<u8> = (0..rect.width() as usize * rect.height() as usize * format.bytes_per_pixel()).map(|i| (i % 251) as u8).collect();
         let mut surface = Surface::new(format);
         assert!(surface.try_write_interleaved(rect, &bytes[..bytes.len() - 1]).is_err());
-        assert!(surface.tiles.is_empty());
+        assert!(surface.map().is_empty());
         surface.try_write_interleaved(rect, &bytes).unwrap();
         assert_eq!(surface.to_interleaved(rect), bytes);
         let mut shared = surface.clone();
@@ -967,7 +967,7 @@ fn write_rows_overflowing_rect_is_an_error_not_a_panic() {
     assert!(s.try_write_rows_with(huge, |_, _, _| {}).is_err());
     assert_eq!(s.tile_count(), 1);
     assert_eq!(s.to_interleaved(r), vec![42]);
-    assert!(std::sync::Arc::ptr_eq(s.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
+    assert!(std::sync::Arc::ptr_eq(s.map().values().next().unwrap(), before.map().values().next().unwrap()));
 }
 
 #[test]
@@ -1031,7 +1031,7 @@ fn failed_row_preparation_preserves_existing_tiles() {
     assert!(matches!(result, Err(AllocationError::NotEnoughMemory { .. })));
     assert_eq!(surface.tile_count(), 1);
     assert_eq!(surface.to_interleaved(Rect::new(0, 0, 1, 1)), vec![42]);
-    assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
+    assert!(std::sync::Arc::ptr_eq(surface.map().values().next().unwrap(), before.map().values().next().unwrap()));
 }
 
 #[test]
@@ -1053,5 +1053,75 @@ fn cancelled_row_write_stops_during_tile_and_preserves_surface() {
     assert_eq!(result, Err(RowWriteError::Cancelled(Cancelled)));
     assert_eq!(rows.load(Ordering::SeqCst), 1);
     assert_eq!(surface.to_interleaved(r), before.to_interleaved(r));
-    assert!(std::sync::Arc::ptr_eq(surface.tiles.values().next().unwrap(), before.tiles.values().next().unwrap()));
+    assert!(std::sync::Arc::ptr_eq(surface.map().values().next().unwrap(), before.map().values().next().unwrap()));
+}
+
+/// A lazy surface decodes once, on first use by any clone; until then it holds no tiles and
+/// samples its preview; a failed decode leaves it empty with the reason.
+#[test]
+fn lazy_surfaces_decode_once_on_first_use() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let calls = Arc::new(AtomicUsize::new(0));
+    let c = calls.clone();
+    let r = Rect::new(256, 0, 512, 256);
+    let mut preview = Surface::new(PixelFormat::RGBA8);
+    preview.fill_rect(Rect::new(0, 0, 2, 2), &[0.0, 1.0, 0.0, 1.0]);
+    let s = Surface::lazy(
+        PixelFormat::RGBA8,
+        r,
+        Some((128, preview)),
+        Box::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+            let mut out = Surface::new(PixelFormat::RGBA8);
+            out.fill_rect(r, &[1.0, 0.0, 0.0, 1.0]);
+            Ok(out)
+        }),
+    );
+    let copy = s.clone();
+    assert!(s.is_pending() && copy.is_pending());
+    assert_eq!(s.pending_bounds(), Some(r));
+    assert_eq!(s.loaded_tiles().count(), 0);
+    let mut px = [0.0; 4];
+    assert!(s.read_preview_pixel(300, 10, &mut px));
+    assert_eq!(px, [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(copy.pixel(300, 10), vec![1.0, 0.0, 0.0, 1.0]);
+    assert!(!s.is_pending());
+    assert_eq!(s.tile_count(), 1);
+    assert_eq!(s.loaded_tiles().count(), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let mut edited = s.clone();
+    edited.write_pixel(300, 10, &[0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(s.pixel(300, 10), vec![1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(edited.pixel(300, 10), vec![0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(!s.read_preview_pixel(300, 10, &mut px));
+
+    // A decode of another format or default pixel is refused, not read wrongly.
+    let gray = PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false);
+    let wrong = Surface::lazy(PixelFormat::RGBA8, r, None, Box::new(move || Ok(Surface::new(gray))));
+    assert_eq!(wrong.tile_count(), 0);
+    assert!(wrong.lazy_error().is_some());
+    let white = Surface::lazy(PixelFormat::RGBA8, r, None, Box::new(|| Ok(Surface::with_default(PixelFormat::RGBA8, &[1.0; 4]))));
+    assert_eq!(white.pixel(0, 0), vec![0.0; 4]);
+    assert!(white.lazy_error().is_some());
+
+    // A decode giving a lazy surface that fails has failed too.
+    let nested = Surface::lazy(PixelFormat::RGBA8, r, None, Box::new(move || Ok(Surface::lazy(PixelFormat::RGBA8, r, None, Box::new(|| Err("inner".into()))))));
+    assert_eq!(nested.tile_count(), 0);
+    assert_eq!(nested.lazy_error(), Some("inner"));
+
+    let failed = Surface::lazy(PixelFormat::RGBA8, r, None, Box::new(|| Err("gone".into())));
+    assert_eq!(failed.lazy_error(), None);
+    assert_eq!(failed.tile_count(), 0);
+    assert_eq!(failed.lazy_error(), Some("gone"));
+    // The failure stays with the surface once it holds its own tiles, and with surfaces
+    // made from it: a save must still refuse them.
+    let mut edited = failed.clone();
+    edited.write_pixel(300, 10, &[1.0, 1.0, 1.0, 1.0]);
+    assert_eq!(edited.lazy_error(), Some("gone"));
+    for (dx, dy) in [(5, 0), (0, 0), (256, 0), (-256, 512)] {
+        assert_eq!(failed.translated(dx, dy, r).lazy_error(), Some("gone"), "{dx},{dy}");
+    }
+    assert_eq!(failed.convert(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, true)).lazy_error(), Some("gone"));
 }

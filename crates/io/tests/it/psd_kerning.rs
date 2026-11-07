@@ -271,7 +271,7 @@ fn add_type_layer(objects: &[(&str, &str)], kept: &[(&str, i32)], at: usize) -> 
         t.psd_raw = Some(std::sync::Arc::new(raw));
         doc.layers.push(Layer::new(*text, LayerContent::Text(t)));
     }
-    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(photoshop_txt2(objects)))];
+    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(photoshop_txt2(objects)))];
     let mut t = layer("Hi", &[(2, Kerning::Metrics, 0.0)]);
     t.runs[0].style.size_pt = 30.0;
     photocraft_text::TextEngine::new().render_layer(&mut t, doc.resolution_dpi, doc.pixel_format());
@@ -351,7 +351,7 @@ fn edited_text_layer_takes_its_own_style_runs() {
     let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
     t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
     doc.layers.push(Layer::new("edited", LayerContent::Text(t)));
-    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(photoshop_txt2(&[("Hello world", "/28 true")])))];
+    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(photoshop_txt2(&[("Hello world", "/28 true")])))];
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
     let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
     let LayerContent::Text(t) = &back.layers[0].content else { panic!("not text") };
@@ -373,7 +373,7 @@ fn edited_text_layer_keeps_its_stylistic_sets() {
     let raw = photocraft_text::psd::build_tysh(&t, doc.resolution_dpi, None);
     t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
     doc.layers.push(Layer::new("sets", LayerContent::Text(t)));
-    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", std::sync::Arc::new(photoshop_txt2(&[("Il36", "")])))];
+    doc.metadata.psd_global_blocks = vec![(*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(photoshop_txt2(&[("Il36", "")])))];
     let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
     let back = photocraft_io::import("k.psd", &bytes).unwrap().document;
     let LayerContent::Text(t) = &back.layers[0].content else { panic!("not text") };
@@ -432,7 +432,7 @@ fn txt2_extras_survive_a_resave_of_unchanged_text() {
         let raw = photocraft_text::psd::build_tysh(&r, doc.resolution_dpi, None);
         r.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&raw, 0).unwrap()));
         doc.layers.push(Layer::new("kept", LayerContent::Text(r)));
-        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", std::sync::Arc::new(prev.clone())));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", photocraft_doc::Blob::new(prev.clone())));
         let bytes = photocraft_io::export(&doc, "k.psd", &Default::default()).unwrap().bytes;
         let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
         photocraft_text::psd::parse_txt2(&file.global_blocks.iter().find(|b| &b.key == b"Txt2").unwrap().data).unwrap()
