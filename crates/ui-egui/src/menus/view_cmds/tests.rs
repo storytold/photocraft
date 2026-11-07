@@ -644,7 +644,9 @@ fn batch_runs_an_action_recorded_with_the_type_tool() {
     // CodeRabbit on #10730: all of it, as typed by hand: the document the action was recorded
     // on (the same image, with the text typed into it) has the pixels Batch wrote.
     let decoded = |path: std::path::PathBuf| photocraft_codecs::decode(&std::fs::read(path).unwrap()).unwrap().data().to_vec();
-    assert_eq!(decoded(dir.join("out").join("a.png")), decoded(dir.join("ref.png")), "Batch laid the whole text, as it was typed by hand");
+    for name in ["a.png", "b.png"] {
+        assert_eq!(decoded(dir.join("out").join(name)), decoded(dir.join("ref.png")), "{name}: Batch laid the whole text, as it was typed by hand");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
