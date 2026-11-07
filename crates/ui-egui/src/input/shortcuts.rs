@@ -745,6 +745,10 @@ fn handle_object_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool
     if crate::slice_ui::keys(app, ctx) {
         return true;
     }
+    // A note selected with the Note tool: ⌫/Delete asks to delete the note, not the layer (#11788).
+    if crate::analysis_ui::note_keys(app, ctx) {
+        return true;
+    }
     // A selected smart filter row: ⌫/Delete removes the filter, not its smart object (#4751).
     crate::smart_ui::keys(app, ctx)
 }
