@@ -349,12 +349,14 @@ pub fn hit(path: &Path, p: Point, tol: f64, handles: &[([usize; 2], Handle)]) ->
     if let Some(h) = nearest(&mut anchors.into_iter()) {
         return Some(h);
     }
-    // Segments: the nearest of 64 samples, refined once around it (plenty at screen tolerances).
-    const N: usize = 64;
+    // Sample each segment finely enough that a point on the curve is within `tol` of a sample.
+    // A fixed count misses the middle of a long segment once the gap exceeds the grab radius.
     let mut segs = path.subpaths.iter().enumerate().flat_map(|(s, sp)| {
         sp.segments().into_iter().enumerate().map(move |(k, seg)| {
-            let best = (0..=N).map(|i| i as f64 / N as f64).map(|t| (dist(eval(&seg, t), p), t)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap_or((f64::MAX, 0.5));
-            let step = 1.0 / N as f64;
+            let len = dist(seg[0], seg[1]) + dist(seg[1], seg[2]) + dist(seg[2], seg[3]);
+            let n = ((len / tol.max(0.5)).ceil() as usize).clamp(16, 4096);
+            let best = (0..=n).map(|i| i as f64 / n as f64).map(|t| (dist(eval(&seg, t), p), t)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap_or((f64::MAX, 0.5));
+            let step = 1.0 / n as f64;
             let fine = (0..=16)
                 .map(|i| (best.1 - step + 2.0 * step * i as f64 / 16.0).clamp(0.0, 1.0))
                 .map(|t| (dist(eval(&seg, t), p), t))
@@ -523,6 +525,17 @@ mod tests {
         assert_eq!(r, [0, 0]);
         assert!((t - 0.5).abs() < 0.02, "{t}");
         assert_eq!(hit(&tri(), Point::new(50.0, 40.0), 3.0, &[]), None);
+        // A long segment is sampled too coarsely for a fixed count: a click within the grab
+        // radius of its middle, but between the refined samples, used to miss it.
+        let long = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (2000.0, 0.0)])]);
+        let misses: Vec<f64> = (0..=400)
+            .map(|i| 0.4 + 0.2 * f64::from(i) / 400.0)
+            .filter(|&t| {
+                let on = eval(&long.subpaths[0].segments()[0], t);
+                !matches!(hit(&long, Point::new(on.x, on.y + 3.5), 4.0, &[]), Some(Hit::Segment([0, 0], _)))
+            })
+            .collect();
+        assert!(misses.is_empty(), "missed the segment at t = {misses:?}");
     }
 
     #[test]
