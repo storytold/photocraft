@@ -764,6 +764,12 @@ impl<'a> Planner<'a> {
         if !adjustment_on_gpu(adj, self.cx.mode) {
             return Err(Unsupported(format!("{} on CMYK/Lab channels (evaluated on the CPU)", adj.label())));
         }
+        if let Adjustment::ColorLookup { shaper: Some(_), .. } = adj {
+            // A `.3dl` shaper is a 1-D curve ahead of the table (#11452); the kernel samples the
+            // table alone, and baking the curve is only exact for an identity table. The CPU
+            // oracle applies the pre-step, so it composites the layer.
+            return Err(Unsupported("Color Lookup with a 3DL input shaper (composited on the CPU)".into()));
+        }
         if let Adjustment::GradientMap { stops, .. } = adj {
             check_gradient_stops(stops)?;
         }

@@ -769,7 +769,7 @@ fn lookup(n: usize, tetrahedral: bool, dither: bool) -> Adjustment {
             }
         }
     }
-    Adjustment::ColorLookup { name: "test".into(), lut: Some(std::sync::Arc::new(t)), size: n as u32, tetrahedral, dither, source: None }
+    Adjustment::ColorLookup { name: "test".into(), lut: Some(std::sync::Arc::new(t)), size: n as u32, shaper: None, tetrahedral, dither, source: None }
 }
 
 /// 32-bit Hue/Saturation on colours at and above HSL lightness 1 and with a negative channel,
@@ -3360,6 +3360,7 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
                             name: "half".into(),
                             lut: Some(std::sync::Arc::new(vec![0.5; 24])),
                             size: 2,
+                            shaper: None,
                             tetrahedral: false,
                             dither: false,
                             source: None,
@@ -3391,6 +3392,7 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
         name: "half".into(),
         lut: Some(std::sync::Arc::new(vec![0.5; 24])),
         size: 2,
+        shaper: None,
         tetrahedral: false,
         dither: false,
         source: None,

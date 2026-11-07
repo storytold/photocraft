@@ -272,6 +272,11 @@ pub enum Adjustment {
         name: String,
         lut: Option<Arc<Vec<f32>>>,
         size: u32,
+        /// A `.3dl` input shaper: its knots over 0..=1, applied to each input channel *ahead of*
+        /// the table (`photocraft_cms::lutfile::shape`), as Photoshop does (#8982, #11452). None
+        /// for every other format, and for an even ramp, which changes nothing.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        shaper: Option<Arc<Vec<f32>>>,
         /// Tetrahedral instead of trilinear interpolation.
         #[serde(default)]
         tetrahedral: bool,

@@ -36,8 +36,15 @@ fn unreadable_adjustments_warn_on_open() {
 #[test]
 fn readable_adjustments_open_without_warnings() {
     let lut: Vec<f32> = (0..8).flat_map(|i| [(i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32]).collect();
-    let lookup =
-        Adjustment::ColorLookup { name: "id.cube".into(), size: 2, lut: Some(std::sync::Arc::new(lut)), tetrahedral: false, dither: false, source: None };
+    let lookup = Adjustment::ColorLookup {
+        name: "id.cube".into(),
+        size: 2,
+        lut: Some(std::sync::Arc::new(lut)),
+        shaper: None,
+        tetrahedral: false,
+        dither: false,
+        source: None,
+    };
     for adj in [lookup, Adjustment::Invert] {
         let (doc, warnings) = reopen(adj, "x.psd", &ExportOptions::default());
         assert!(!matches!(&doc.layers[0].content, LayerContent::Adjustment(Adjustment::Unsupported { .. })));
@@ -115,8 +122,15 @@ fn photoshop_layout_color_lookup_round_trips_through_psb() {
     let opts = ExportOptions { force_psb: true, ..Default::default() };
     let (doc, warnings) = reopen(Adjustment::Unsupported { psd_key: "clrL".into(), raw: raw.as_slice().into() }, "x.psb", &opts);
     assert!(warnings.iter().all(|w| !w.contains("Teal Look")), "{warnings:?}");
-    let LayerContent::Adjustment(Adjustment::ColorLookup { name, size, lut: Some(table), tetrahedral: false, dither: false, source: Some(source) }) =
-        &doc.layers[0].content
+    let LayerContent::Adjustment(Adjustment::ColorLookup {
+        name,
+        size,
+        lut: Some(table),
+        shaper: None,
+        tetrahedral: false,
+        dither: false,
+        source: Some(source),
+    }) = &doc.layers[0].content
     else {
         panic!("{:?}", doc.layers[0].content)
     };
@@ -149,6 +163,7 @@ fn short_color_lookup_table_warns_on_open() {
         name: "t.cube".into(),
         size: 3,
         lut: Some(std::sync::Arc::new(vec![0.5; 7])),
+        shaper: None,
         tetrahedral: false,
         dither: false,
         source: None,
@@ -163,6 +178,7 @@ fn short_color_lookup_table_warns_on_open() {
         name: "t.cube".into(),
         size: 2,
         lut: Some(std::sync::Arc::new(vec![0.5; 24])),
+        shaper: None,
         tetrahedral: false,
         dither: false,
         source: None,
@@ -170,7 +186,7 @@ fn short_color_lookup_table_warns_on_open() {
     let (_, warnings) = reopen(ok, "x.pcraft", &ExportOptions::default());
     assert!(warnings.iter().all(|w| !w.contains("Teal Look")), "{warnings:?}");
     // A missing table renders as the identity too.
-    let none = Adjustment::ColorLookup { name: "t.cube".into(), size: 2, lut: None, tetrahedral: false, dither: false, source: None };
+    let none = Adjustment::ColorLookup { name: "t.cube".into(), size: 2, lut: None, shaper: None, tetrahedral: false, dither: false, source: None };
     let (_, warnings) = reopen(none, "x.pcraft", &ExportOptions::default());
     assert!(warnings.iter().any(|w| w.contains("Teal Look") && w.contains("no usable table")), "{warnings:?}");
 }

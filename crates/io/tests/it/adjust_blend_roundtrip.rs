@@ -87,13 +87,14 @@ fn adjustments() -> Vec<(Adjustment, bool)> {
                 source: Some(adjust::LutSource { format: adjust::LutFormat::Cube, bytes: Arc::new(photocraft_cms::lutfile::write_cube(&lut).into_bytes()) }),
                 lut: Some(Arc::new(lut.data)),
                 size: 5,
+                shaper: None,
                 tetrahedral: false,
                 dither: false,
             },
             true,
         ),
         // No table chosen: written as an identity cube (renders the same, comes back with a table).
-        (Adjustment::ColorLookup { name: String::new(), lut: None, size: 0, tetrahedral: false, dither: false, source: None }, false),
+        (Adjustment::ColorLookup { name: String::new(), lut: None, size: 0, shaper: None, tetrahedral: false, dither: false, source: None }, false),
         (Adjustment::Invert, true),
         (Adjustment::Posterize { levels: 4 }, true),
         (Adjustment::Threshold { level: g(140) }, true),
@@ -218,8 +219,15 @@ fn every_adjustment_kind_round_trips_16bit() {
 fn color_lookup_tetrahedral_warns_on_psd_save() {
     let lut = photocraft_cms::lutfile::LutFile::from_fn("t", 2, |c| if c == [1.0; 3] { [1.0; 3] } else { [0.0; 3] });
     for tetrahedral in [true, false] {
-        let adj =
-            Adjustment::ColorLookup { name: "test.cube".into(), lut: Some(Arc::new(lut.data.clone())), size: 2, tetrahedral, dither: false, source: None };
+        let adj = Adjustment::ColorLookup {
+            name: "test.cube".into(),
+            lut: Some(Arc::new(lut.data.clone())),
+            size: 2,
+            shaper: None,
+            tetrahedral,
+            dither: false,
+            source: None,
+        };
         let mut d = Document::new("lut", photocraft_geom::Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
         let fmt = d.pixel_format();
         d.layers.push(raster("Background", fmt, d.bounds(), 1, false));

@@ -954,17 +954,37 @@ fn color_lookup_lut_file_round_trips_and_old_files_load() {
     use photocraft_doc::adjust::{LutFormat, LutSource};
     let lut = Some(std::sync::Arc::new(vec![0.5f32; 24]));
     let source = Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"0 1023\n0 0 0\n".to_vec()) });
-    let adj = Adjustment::ColorLookup { name: "Film.3dl".into(), lut, size: 2, tetrahedral: false, dither: false, source };
+    // #11452: a `.3dl` is its shaper plus its table, so the curve travels through `.pcraft` too.
+    let shaper = Some(std::sync::Arc::new(vec![0.0, 512.0 / 1023.0, 1.0]));
+    let adj = Adjustment::ColorLookup { name: "Film.3dl".into(), lut, size: 2, shaper, tetrahedral: false, dither: false, source };
     let mut doc = Document::new("d", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
     doc.insert_above(None, Layer::new("lookup", LayerContent::Adjustment(adj.clone())));
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     assert_eq!(back, doc, "the LUT file survives a .pcraft round trip (#6544)");
+    let Adjustment::ColorLookup { shaper: Some(kept), .. } = layer_adjustment(&back).expect("the lookup layer") else {
+        panic!("the shaper must survive the round trip")
+    };
+    assert_eq!(kept.as_slice(), [0.0, 512.0 / 1023.0, 1.0]);
     // A .pcraft written before the field existed has no `source`: it loads as None.
     let mut v = serde_json::to_value(&adj).unwrap();
     let removed = v.as_object_mut().and_then(|o| o.values_mut().next()).and_then(|f| f.as_object_mut()).and_then(|f| f.remove("source"));
     assert!(removed.is_some(), "{v}");
     let Adjustment::ColorLookup { source: None, name, .. } = serde_json::from_value(v).unwrap() else { panic!("old lookup must load") };
     assert_eq!(name, "Film.3dl");
+    // Nor `shaper`: an old file loads with its table alone.
+    let mut v = serde_json::to_value(&adj).unwrap();
+    let removed = v.as_object_mut().and_then(|o| o.values_mut().next()).and_then(|f| f.as_object_mut()).and_then(|f| f.remove("shaper"));
+    assert!(removed.is_some(), "{v}");
+    let Adjustment::ColorLookup { shaper: None, name, .. } = serde_json::from_value(v).unwrap() else { panic!("a lookup without a shaper must load") };
+    assert_eq!(name, "Film.3dl");
+}
+
+/// The adjustment of the single adjustment layer of a document.
+fn layer_adjustment(doc: &Document) -> Option<photocraft_doc::Adjustment> {
+    doc.walk().into_iter().find_map(|(_, _, l)| match &l.content {
+        photocraft_doc::LayerContent::Adjustment(a) => Some(a.clone()),
+        _ => None,
+    })
 }
 
 /// Removing previews is post-commit housekeeping, not part of publishing the new document.
