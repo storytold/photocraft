@@ -605,6 +605,19 @@ fn crop_fill_param(p: &Value) -> std::result::Result<Option<bool>, String> {
 
 // -- panels: Histogram, masks targets, docking, Color panel --
 
+/// The `panels` patch with its `task_bar` merged into the bar's current place, so `{"at": [x, y]}`
+/// keeps a pin and `{"pinned": true}` keeps a dragged position (#10890).
+fn panels_patch(app: &PhotocraftApp, patch: Option<&Value>) -> std::result::Result<Option<Value>, String> {
+    let Some(mut patch) = patch.cloned() else { return Ok(None) };
+    if let Some(obj) = patch.as_object_mut()
+        && let Some(bar) = obj.get("task_bar")
+    {
+        let merged = merged_object(&app.ui.panels.task_bar, Some(bar), "panels.task_bar")?;
+        obj.insert("task_bar".into(), serde_json::to_value(merged).map_err(|e| e.to_string())?);
+    }
+    Ok(Some(patch))
+}
+
 struct PanelSet {
     histogram_panel: Option<crate::histogram_panel::HistogramPanelState>,
     histogram_range: Option<Option<[u8; 2]>>,
@@ -629,7 +642,7 @@ impl PanelSet {
             histogram_panel: merged_object(&app.ui.histogram_panel, p.get("histogramPanel"), "histogramPanel")?,
             histogram_range: histogram_range_param(p)?,
             histogram_refresh: bool_field(p, "histogramRefresh")?,
-            panels: merged_object(&app.ui.panels, p.get("panels"), "panels")?,
+            panels: merged_object(&app.ui.panels, panels_patch(app, p.get("panels"))?.as_ref(), "panels")?,
             mask_target: bool_field(p, "maskTarget")?,
             updates_open: bool_field(p, "updatesOpen")?,
             vector_mask_target: bool_field(p, "vectorMaskTarget")?,
@@ -1259,7 +1272,10 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
                 continue;
             }
             if app.ui.tool == Tool::Move && !gesture.secondary && !gesture.middle && !gesture.space && matches!(sample.ev, ToolEvent::Down { .. }) {
-                app.begin_move_transform_controls(ctx, sample.x, sample.y);
+                // A press the controls refused (the Background among the layers) goes nowhere else (#11101).
+                if app.begin_move_transform_controls(ctx, sample.x, sample.y) == crate::canvas::ControlsPress::Refused {
+                    continue;
+                }
             }
             forward_pointer_event(app, &gesture, sample);
         }

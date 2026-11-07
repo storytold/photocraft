@@ -851,7 +851,7 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // and inline type returned above, transform, pen, lasso and crop consumed it, and these own
     // theirs later in the frame: the palette, the canvas and layer menus, the brush picker,
     // Rotate View, Adaptive Wide Angle, the Filter Gallery, the TIFF prompt, any open egui popup
-    // and the toolbar tool flyout. A canvas drag in progress (a marquee being drawn) keeps it too.
+    // and the toolbar tool and "…" flyouts. A canvas drag in progress (a marquee being drawn) keeps it too.
     let esc_taken = app.drag.is_some()
         || app.ui.palette_open
         || app.ui.canvas_tool_menu.is_some()
@@ -863,7 +863,8 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
         || app.smart_svg.modal_open()
         || app.distort.gallery.is_some()
         || ctx.any_popup_open()
-        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some());
+        || ctx.data(|d| d.get_temp::<(egui::Id, egui::Rect)>(egui::Id::unique("tool-flyout")).is_some())
+        || crate::panels::toolbar::more_flyout_open(ctx);
     // Both full screen modes (with and without the menu bar) return to Standard, as in Photoshop
     // (#4116), through the menu command so the window and the Screen Mode check follow.
     if !esc_taken && app.ui.view.screen_mode != "standard" && pressed(Key::Escape) {

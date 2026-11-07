@@ -542,6 +542,12 @@
 	Timeline	Tidslinje
 	Tool Presets	Værktøjsforudindstillinger
 	Tools	Værktøjer
+	Contextual Task Bar	Kontekstafhængig opgavelinje
+	Hide bar	Skjul linjen
+	Reset bar position	Nulstil linjens placering
+	Pin bar position	Fastgør linjens placering
+	Move bar	Flyt linjen
+	More options	Flere indstillinger
 	Libraries	Biblioteker
 	3D	3D
 	Toolbars	Værktøjslinjer
@@ -1214,6 +1220,7 @@
 	Path to Illustrator…	Sti til Illustrator…
 	Make Work Path	Opret arbejdssti
 	Make Selection	Opret markering
+	Make Shape	Opret form
 	Fill Path	Udfyld sti
 	Stroke Path	Lav kontur på sti
 	Clipping Path	Udklipningssti
@@ -1631,6 +1638,7 @@
 	Move Tool	Flytteværktøj
 	Could not use the move tool because the layer is locked.	Kunne ikke bruge flytteværktøjet, fordi laget er låst.
 	Could not complete the Free Transform command because the layer is locked.	Kunne ikke fuldføre kommandoen Fri transformering, fordi laget er låst.
+	Could not transform because the layer is locked.	Kunne ikke transformere, fordi laget er låst.
 	Rectangular Marquee Tool	Rektangulært markeringsværktøj
 	Elliptical Marquee Tool	Elliptisk markeringsværktøj
 	Single Row Marquee Tool	Markeringsværktøj til enkelt række
@@ -2061,7 +2069,7 @@
 	Vertical Centers	Lodrette midtpunkter
 	Video Frames to Layers…	Videobilleder til lag…
 	WIA Support…	WIA-support…
-	Working CMY Plates	Arbejds-CMY-plade
+	Working CMY Plates	Arbejds-CMY-plader
 
 # tl! literals (third pass)
 	Absolute	Absolut
