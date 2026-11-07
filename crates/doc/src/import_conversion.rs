@@ -15,6 +15,11 @@ pub const MAX_CONVERSION_STRING: usize = 1 << 20;
 pub const MAX_CONVERSION_ENTRIES: usize = 65_536;
 pub const MAX_CONVERSION_ATTACHMENTS: usize = 4_096;
 const MAX_ITEM_PATH: usize = 64;
+// Schema-v1 accounting units, independent of pointer width and Rust layout. Keep
+// these conservative fixed costs so web and desktop accept the same reports.
+const ENTRY_BYTES: usize = 256;
+const TARGET_BYTES: usize = 128;
+const ATTACHMENT_BYTES: usize = 160;
 
 /// An optional future report is retained without interpreting its record or binary payloads.
 #[derive(Clone, Debug, PartialEq)]
@@ -208,7 +213,7 @@ impl ConversionReport {
             if entry.feature_code.is_empty() || entry.source.kind.is_empty() {
                 return Err(ConversionValidationError::Invalid("entry feature code or source kind is empty"));
             }
-            budget.charge(std::mem::size_of::<ConversionEntry>())?;
+            budget.charge(ENTRY_BYTES)?;
             budget.string(&entry.feature_code)?;
             budget.source(&entry.source)?;
             budget.string(&entry.source_description)?;
@@ -217,7 +222,7 @@ impl ConversionReport {
                 return Err(ConversionValidationError::Limit("too many item targets or attachment references"));
             }
             for target in &entry.targets {
-                budget.charge(std::mem::size_of::<NativeTargetRef>())?;
+                budget.charge(TARGET_BYTES)?;
                 budget.string(&target.label)?;
                 budget.path(&target.item_path)?;
             }
@@ -229,7 +234,7 @@ impl ConversionReport {
             }
         }
         for attachment in &self.attachments {
-            budget.charge(std::mem::size_of::<RetainedImportData>())?;
+            budget.charge(ATTACHMENT_BYTES)?;
             budget.source(&attachment.owner)?;
             budget.string(&attachment.kind)?;
             budget.string(&attachment.encoding)?;
@@ -295,6 +300,37 @@ fn item_path<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u32>, D::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Pin the schema's byte boundary to fixed units rather than the host's Rust struct layout.
+    #[test]
+    fn report_budget_is_identical_on_web_and_desktop() {
+        let mut report = ConversionReport {
+            source_format: "xcf".into(),
+            entries: vec![ConversionEntry {
+                feature_code: "f".into(),
+                source: SourceItemRef { kind: "layer".into(), item_path: vec![1, 2], ..Default::default() },
+                targets: vec![NativeTargetRef { item_path: vec![3], label: "t".into(), ..Default::default() }],
+                disposition: ConversionDisposition::RetainedUnapplied,
+                reason: ConversionReason::MissingMapping,
+                source_description: String::new(),
+                native_description: String::new(),
+                attachments: vec![0],
+            }],
+            attachments: vec![RetainedImportData {
+                owner: SourceItemRef::default(),
+                kind: "raw".into(),
+                encoding: "binary".into(),
+                bytes: Arc::new(Vec::new()),
+            }],
+            ..Default::default()
+        };
+        // Literal schema costs plus UTF-8 bytes, three u32 path components and one index.
+        let overhead = 256 + 128 + 160 + 3 + 1 + 5 + 1 + 3 + 6 + 12 + 4;
+        report.attachments[0].bytes = Arc::new(vec![0; MAX_CONVERSION_BYTES - overhead]);
+        assert_eq!(report.validate(), Ok(()));
+        Arc::make_mut(&mut report.attachments[0].bytes).push(0);
+        assert!(matches!(report.validate(), Err(ConversionValidationError::Limit(_))));
+    }
 
     #[test]
     /// Check absent-report defaults and ensure historical source/target references do not become live document
