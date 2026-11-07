@@ -315,7 +315,14 @@ pub(super) fn layer_row(
         actions.push(("select.loadSelection".into(), p));
     } else if let Some(cmd) = mask_toggle {
         actions.push(cmd);
-    } else if resp.clicked() && !frame_clicked && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
+    } else if resp.clicked()
+        && !frame_clicked
+        && !eye_resp.clicked()
+        && !toggled
+        && !fx_toggled
+        && !masks.clicked
+        && !photocraft_engine::channel_transform::locked(&app.session)
+    {
         if l.frame.is_some() {
             app.ui.frame_tool.selected = Some(l.id.0);
             app.ui.frame_tool.target =

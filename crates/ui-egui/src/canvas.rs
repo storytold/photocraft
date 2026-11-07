@@ -19,6 +19,8 @@ pub(crate) mod cam_preview;
 pub mod canvas_autoscroll;
 pub(super) mod canvas_popup;
 pub mod canvas_tool_menu;
+pub(crate) mod channel_transform_gpu;
+pub(crate) mod channel_transform_preview;
 pub mod channel_view;
 mod cursors;
 mod display;
@@ -376,6 +378,10 @@ fn paint_canvas(
     // Live adjustment previews on big documents use a downsampled proxy (see proxy.rs), unless
     // Preferences › Performance › Low Resolution Previews is off.
     let mut on_gpu = false;
+    let channel_texture = crate::channel_transform_preview::texture(app, ctx, idx, output).or_else(|| crate::move_ui::channel_texture(app, idx, output));
+    if app.gpu.as_ref().is_some_and(crate::channel_transform_gpu::poll_validation) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
     // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
     // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
     let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
@@ -386,7 +392,14 @@ fn paint_canvas(
             crate::render_path::view_cpu(app, doc.id.0);
         }
     }
-    if app.gpu.is_some()
+    if let Some(tex) = channel_texture {
+        let checkerboard = app.session.prefs().transparency_and_gamut.square().map(|square| (checker(app, ctx), square));
+        // Channel previews can change mask transparency, so they retain their own checker.
+        paint_cpu_document(painter, &xf, doc.bounds(), view.rotation.abs() > 0.05, checkerboard, Some(tex), false);
+        for &c in &pattern {
+            paint_cpu_document(painter, &pattern_xf(&xf, c, size), doc.bounds(), view.rotation.abs() > 0.05, checkerboard, Some(tex), false);
+        }
+    } else if app.gpu.is_some()
         && gpu_ok
         && let Some((k, key, preview_size)) =
             ensure_adjust_proxy(app, idx, render_zoom).or_else(|| ensure_filter_preview(app, idx, ctx)).or_else(|| ensure_proxy_preview(app, idx, render_zoom))
@@ -507,7 +520,9 @@ fn paint_canvas(
         }
     }
     // Channels panel: alpha / Quick Mask overlays and single-channel views (channel_view.rs).
-    if let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output) {
+    if channel_texture.is_none()
+        && let Some(tex) = crate::channel_view::ensure(app, ctx, idx, output)
+    {
         // Rendered from the live preview, so over the area the preview is shown in.
         let a = shown_area;
         if view.rotation.abs() > 0.05 {
@@ -566,8 +581,9 @@ fn paint_canvas(
         }
     }
 
-    // Pixel grid at high zoom, over pixels with content only (the GPU path draws its own).
-    if !on_gpu && pixel_grid && crate::pixel_grid::shows_at(view.zoom) {
+    // The GPU canvas draws its own grid. A channel texture already contains the preview,
+    // while the CPU grid samples the document, so leave the grid off over that texture.
+    if !on_gpu && channel_texture.is_none() && pixel_grid && crate::pixel_grid::shows_at(view.zoom) {
         crate::pixel_grid::paint(app, painter, &xf, idx, output, visible_doc_rect(&xf));
     }
 

@@ -564,6 +564,8 @@ pub struct LiveCommit {
     pub(crate) points: Vec<StrokePoint>,
     pub(crate) surface: Surface,
     pub(crate) bounds: Rect,
+    pub(crate) layer: Option<photocraft_doc::LayerId>,
+    pub(crate) colors: Option<crate::color_channels::ColorChannels>,
 }
 
 impl LiveCommit {
@@ -580,6 +582,8 @@ impl LiveCommit {
     pub(crate) fn matches(&self, s: &Session, cmd: &str, p: &Value, pts: &[StrokePoint]) -> bool {
         let base = s.active().map(|st| (st.doc.id, st.revision));
         self.cmd == cmd
+            && self.colors == crate::channel_cmds::color_restriction(s, cmd, p).map(|r| r.colors)
+            && self.layer == if crate::channel_cmds::is_channel_target(p) { None } else { crate::commands::layer_param(s, p).ok() }
             && base == Some(self.base)
             && p.get("seed").and_then(Value::as_u64) == self.seed
             && self.points == pts
@@ -661,6 +665,8 @@ impl LiveStroke {
             points: self.points,
             surface: surf.clone(),
             bounds,
+            layer: self.layer,
+            colors: self.colors,
         })
     }
 
@@ -691,7 +697,7 @@ impl LiveStroke {
         check_coords(pts, &self.cmd)?;
         self.points.extend_from_slice(pts);
         let cmyk = self.cmyk.clone();
-        let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
+        let damage = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
             self.renderer.push(pts);
             if let Some(symmetry) = &self.symmetry {
                 for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
@@ -721,9 +727,6 @@ impl LiveStroke {
                 dmg = dmg.union(&StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock));
                 self.tail = old.union(&live.bounds());
                 self.union_live = Some((live, passes));
-                if let Some(colors) = self.colors {
-                    crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
-                }
                 return Ok(dmg);
             }
             let mut dmg = Rect::EMPTY;
@@ -739,17 +742,18 @@ impl LiveStroke {
                 self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
                 dmg = dmg.union(&self.tail);
             }
-            if let Some(colors) = self.colors {
-                crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
-            }
             Ok(dmg)
         })?;
         // The preview shows the pixels the commit keeps (see `stroke_with`).
         if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
+            crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, damage);
         }
-        Ok(dmg)
+        if let Some(colors) = self.colors {
+            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+            crate::color_channels::restrict_region(&self.pre, surf, colors, damage)?;
+        }
+        Ok(damage)
     }
 }
 

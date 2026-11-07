@@ -431,8 +431,8 @@ impl eframe::App for WebShell {
                 dropped.iter().map(|f| f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into())).collect();
             // Decided now, where the drop landed: on the document's canvas the files are placed
             // as layers (as on the desktop), elsewhere opened.
-            let places = self.app.dropped_on_canvas(ctx, &names);
             let target_doc = self.app.session.active().map(|st| st.doc.id);
+            let places = self.app.dropped_on_canvas(ctx, &names);
             let files: Vec<_> = dropped.into_iter().zip(names).zip(places).map(|((f, name), place)| (f, name, place, target_doc)).collect();
             let (inbox, place_inbox) = (self.inbox.clone(), self.place_inbox.clone());
             let ctx = ctx.clone();

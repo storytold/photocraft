@@ -33,6 +33,155 @@ fn surface(s: &Session) -> Surface {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone()
 }
+
+#[test]
+fn implicit_move_of_viewed_mask_keeps_explicit_target_precedence_at_native_depths() {
+    for mode in ["rgb", "cmyk", "lab"] {
+        for depth in [8, 16, 32] {
+            for linked in [false, true] {
+                for view in ["gray", "overlay"] {
+                    for target in ["implicit", "pixels", "layer", "colors"] {
+                        let mut s = setup(mode, depth);
+                        s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+                        s.execute("layer.layerMask.linked", json!({"linked": linked})).unwrap();
+                        let id = s.active().unwrap().active_layer.unwrap();
+                        s.edit("mask patch", |doc, _| {
+                            let sample = doc.pixel_format().sample;
+                            let mask = doc.layer_mut(id).unwrap().mask.as_mut().unwrap();
+                            mask.surface = Surface::new(photocraft_color::PixelFormat::new(photocraft_color::ColorMode::Grayscale, sample, false));
+                            mask.surface.fill_rect(Rect::new(4, 6, 8, 10), &[1.0]);
+                            Ok(())
+                        })
+                        .unwrap();
+                        subset(&mut s);
+                        s.execute("view.layerMask", json!({"mode": view})).unwrap();
+                        let before = s.active().unwrap().doc.clone();
+                        let history = s.active().unwrap().history.past_len();
+                        let mut params = json!({"dx": 2, "dy": 1});
+                        let mut expected = photocraft_engine::layer_multi_cmds::moved_target(&before, &[id], 2, 1, target == "implicit").unwrap();
+                        match target {
+                            "pixels" => params["target"] = json!("pixels"),
+                            "layer" => params["layer"] = json!(id.0),
+                            "colors" => {
+                                params["target"] = json!({"colors": [0, 2]});
+                                expected = (*before).clone();
+                                photocraft_engine::channel_cmds::move_color_channels(
+                                    &mut expected,
+                                    id,
+                                    color_channels::ColorChannels::from_indices([0, 2], before.pixel_format().mode.color_channels()).unwrap(),
+                                    2,
+                                    1,
+                                    s.tools.background,
+                                )
+                                .unwrap();
+                            }
+                            _ => {}
+                        }
+                        s.execute("layer.translate", params).unwrap();
+                        let after = s.active().unwrap().doc.clone();
+                        assert!(after.layers == expected.layers, "{mode}/{depth}, linked {linked}, {view}, {target}");
+                        assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+                        assert!(s.undo());
+                        assert_eq!(s.active().unwrap().doc.layers, before.layers);
+                        assert!(s.redo());
+                        assert_eq!(s.active().unwrap().doc.layers, after.layers);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn implicit_move_preserves_alpha_and_quick_mask_precedence_over_a_layer_mask_view() {
+    for edit in ["alpha", "quick"] {
+        for view in ["gray", "overlay"] {
+            for explicit_mask in [false, true] {
+                let mut s = setup("rgb", 16);
+                s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+                s.execute("layer.layerMask.linked", json!({"linked": false})).unwrap();
+                let id = s.active().unwrap().active_layer.unwrap();
+                s.edit("mask patch", |doc, _| {
+                    doc.layer_mut(id).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(4, 6, 8, 10), &[0.0]);
+                    Ok(())
+                })
+                .unwrap();
+                if edit == "alpha" {
+                    s.execute("channel.new", json!({"name": "saved"})).unwrap();
+                    s.execute("channel.target", json!({"channel": "saved"})).unwrap();
+                } else {
+                    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+                }
+                s.execute("view.layerMask", json!({"mode": view})).unwrap();
+                let before = s.active().unwrap().doc.clone();
+                let expected = photocraft_engine::layer_multi_cmds::moved_target(&before, &[id], 2, 1, explicit_mask).unwrap();
+                let mut params = json!({"dx": 2, "dy": 1});
+                if explicit_mask {
+                    params["target"] = json!("mask");
+                }
+                s.execute("layer.translate", params).unwrap();
+                let after = &s.active().unwrap().doc;
+                assert!(after.layers == expected.layers, "{edit}, {view}, explicit mask {explicit_mask}: match existing Move scope");
+                assert!(after.channels == before.channels);
+                assert!(after.quick_mask == before.quick_mask);
+                assert!(s.undo());
+                assert!(s.active().unwrap().doc.layers == before.layers);
+            }
+        }
+    }
+}
+
+#[test]
+fn selected_background_colour_sets_move_without_bypassing_user_locks() {
+    for mode in ["rgb", "cmyk", "lab"] {
+        for depth in [8, 16, 32] {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 32, "height": 24, "mode": mode, "depth": depth})).unwrap();
+            let id = s.active().unwrap().active_layer.unwrap();
+            s.edit("background patch", |doc, _| {
+                let b = doc.bounds();
+                let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+                let mut base = vec![0.2; surf.channels()];
+                let mut patch = vec![0.8; surf.channels()];
+                if let Some(alpha) = base.get_mut(surf.format().mode.color_channels()) {
+                    *alpha = 1.0;
+                }
+                if let Some(alpha) = patch.get_mut(surf.format().mode.color_channels()) {
+                    *alpha = 1.0;
+                }
+                surf.fill_rect(b, &base);
+                surf.fill_rect(Rect::new(4, 6, 8, 10), &patch);
+                Ok(())
+            })
+            .unwrap();
+            s.execute("select.rect", json!({"x": 4, "y": 6, "width": 4, "height": 4})).unwrap();
+            subset(&mut s);
+            let before = s.active().unwrap().doc.clone();
+            let mut oracle = Session::new();
+            oracle.tools.background = s.tools.background;
+            oracle.add_document((*before).clone(), None);
+            oracle.execute("edit.transform", json!({"target": {"colors": [0, 2]}, "dx": 2, "dy": 1, "interpolation": "nearest"})).unwrap();
+            s.execute("layer.translate", json!({"dx": 2, "dy": 1})).unwrap();
+            assert_eq!(surface(&s), surface(&oracle), "{mode}/{depth}");
+            unchanged(before.layer(id).unwrap().surface().unwrap(), &surface(&s));
+            assert!(s.active().unwrap().doc.is_background(id));
+            assert!(s.undo());
+            assert!(s.active().unwrap().doc.layers == before.layers);
+            s.execute("select.deselect", json!({})).unwrap();
+            let no_selection = s.active().unwrap().doc.clone();
+            assert!(s.execute("layer.translate", json!({"dx": 2})).is_err(), "whole-Background movement remains locked");
+            assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &no_selection));
+            s.execute("select.rect", json!({"x": 4, "y": 6, "width": 4, "height": 4})).unwrap();
+            for field in ["pixels", "all"] {
+                s.execute("layer.lockLayers", json!({(field): true})).unwrap();
+                let locked = s.active().unwrap().doc.clone();
+                assert!(s.execute("layer.translate", json!({"dx": 2})).is_err());
+                assert!(std::sync::Arc::ptr_eq(&s.active().unwrap().doc, &locked));
+                s.execute("layer.lockLayers", json!({(field): false})).unwrap();
+            }
+        }
+    }
+}
 fn subset(s: &mut Session) {
     s.execute("channel.target", json!({"colors":[0,2]})).unwrap();
 }
@@ -209,16 +358,7 @@ fn live_mixer_captures_selected_components_and_matches_commit_and_replay() {
 fn unsupported_geometric_edits_and_camera_raw_fail_before_modification() {
     let mut s = setup("rgb", 8);
     subset(&mut s);
-    for cmd in [
-        "layer.translate",
-        "select.float",
-        "edit.transform",
-        "edit.transform.rotate90Cw",
-        "edit.contentAwareScale",
-        "edit.puppetWarp",
-        "edit.perspectiveWarp",
-        "filter.cameraRaw",
-    ] {
+    for cmd in ["select.float", "edit.contentAwareScale", "edit.puppetWarp", "edit.perspectiveWarp", "filter.cameraRaw"] {
         let before = surface(&s);
         assert!(!s.is_enabled(cmd), "{cmd}");
         assert!(s.execute(cmd, json!({"dx":2,"dy":3})).is_err(), "{cmd}");

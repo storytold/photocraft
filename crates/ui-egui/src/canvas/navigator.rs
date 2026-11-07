@@ -2,6 +2,7 @@ use super::display::{canvas_display, display_doc, display_image};
 use super::strokes::live_stroke;
 use super::textures::{effect_reach, ensure_texture};
 use super::{Document, PhotocraftApp, Rect, TextureOptions};
+use crate::state::Tool;
 
 /// Longest side of the Navigator panel's image (about twice the panel's width, for HiDPI).
 pub const NAVIGATOR_SIDE: u32 = 512;
@@ -77,6 +78,14 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     // Keyed by the document snapshot, not its revision: selecting a layer changes no pixels.
     let (snapshot, id, revision, last_damage) =
         app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.last_damage))?;
+    // Keep the last thumbnail during a Move drag. Asking display_doc first would build a
+    // full-resolution CPU Move preview even when the canvas uses the cached GPU source.
+    if app.session.active_index() == Some(idx)
+        && app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move && d.points.len() > 1)
+        && let Some((_, _, _, t)) = app.navigator_textures.get(&id)
+    {
+        return Some(t.id());
+    }
     let (doc, preview_key) = display_doc(app, idx);
     let (display, display_key) = canvas_display(app, &doc, None);
     let preview_key = preview_key ^ display_key;

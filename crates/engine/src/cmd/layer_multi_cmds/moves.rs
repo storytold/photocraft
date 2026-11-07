@@ -110,6 +110,18 @@ pub fn moves_mask_alone(l: &Layer) -> bool {
     l.mask.as_ref().is_some_and(|m| !m.linked)
 }
 
+/// Whether an implicit Move targets a viewed raster mask. The shell uses the same decision
+/// for its preview; Alpha, vector targets and Quick Mask keep their existing precedence.
+pub fn viewed_mask_is_target(s: &Session) -> bool {
+    use crate::channel_cmds::ChannelTarget;
+    let Some(st) = s.active() else { return false };
+    match st.channel_view.target {
+        ChannelTarget::Alpha(_) | ChannelTarget::VectorMask => false,
+        ChannelTarget::Composite | ChannelTarget::LayerMask if st.doc.quick_mask.is_some() => false,
+        ChannelTarget::Composite | ChannelTarget::LayerMask | ChannelTarget::Color(_) => crate::mask_view_cmds::current(st).is_some_and(|v| !v.filter),
+    }
+}
+
 /// `layer.translate`: the explicit layer, or every selected layer, plus their linked layers.
 /// With `"target":"mask"` a layer whose mask is unlinked moves that mask alone.
 pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
@@ -143,6 +155,22 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
+    // An explicit target wins. An explicit layer without one retains whole-layer movement,
+    // matching the other geometric commands; an implicit Move-tool command follows Channels.
+    let color = if p.get("target").is_some() {
+        crate::color_channels::target(s, p)?
+    } else if p.get("layer").is_none_or(Value::is_null) && crate::mask_view_cmds::current(s.active().ok_or(EngineError::NoDocument)?).is_none() {
+        if matches!(s.active().ok_or(EngineError::NoDocument)?.channel_view.target, crate::channel_cmds::ChannelTarget::Color(_)) {
+            Some(crate::color_channels::selected(s).ok_or_else(|| bad("layer.translate", "the selected colour set is invalid"))?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if let Some(colors) = color {
+        return translate_color_channel(s, p, colors, dx, dy, carry);
+    }
     let roots = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
         None => selected(s),
@@ -150,7 +178,10 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     if roots.is_empty() {
         return Err(EngineError::Other("no active layer".into()));
     }
-    let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
+    // Headless callers need the same viewed-mask routing as the shell's explicit injection.
+    // A viewed Smart Filter mask still moves its whole object, not the filter mask alone.
+    let mask_target = p.get("target").and_then(Value::as_str) == Some("mask")
+        || (p.get("target").is_none() && p.get("layer").is_none_or(Value::is_null) && viewed_mask_is_target(s));
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let nested = s.edit("Move", |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));
@@ -289,6 +320,34 @@ fn auto_nest(doc: &mut Document, ids: &[LayerId]) -> Vec<LayerId> {
     }
     crate::clip_group::settle(doc, &nested, &before, false);
     nested
+}
+
+/// Move the captured native components on the named or active layer in one history step.
+/// Linked layers stay put; selected pixels and their outline move together.
+fn translate_color_channel(s: &mut Session, p: &Value, colors: crate::color_channels::ColorChannels, dx: i32, dy: i32, carry: bool) -> Result<Value> {
+    let id = match crate::commands::explicit_layer(s, p)? {
+        Some(id) => id,
+        None => s.active().and_then(|d| d.active_layer).ok_or_else(|| EngineError::Other("no active layer".into()))?,
+    };
+    let background = s.tools.background;
+    s.edit("Move", |doc, _| {
+        let locks = doc.effective_locks(id);
+        let selected_background = colors.len() > 1 && doc.selection.is_some() && doc.is_background(id);
+        if (locks.position && !selected_background) || locks.all {
+            let name = doc.layer(id).map_or_else(String::new, |l| l.name.clone());
+            return Err(EngineError::Other(format!("layer \"{name}\" is position-locked")));
+        }
+        if locks.pixels {
+            return Err(EngineError::Other("the target layer is pixel-locked".into()));
+        }
+        let selected_pixels = colors.len() > 1 && doc.selection.is_some();
+        crate::channel_cmds::move_color_channels(doc, id, colors, dx, dy, background)?;
+        if carry && !selected_pixels {
+            doc.selection = doc.selection.as_ref().map(|sel| shift_surface(sel, dx, dy));
+        }
+        Ok(())
+    })?;
+    Ok(Value::Null)
 }
 
 /// The layers a move of `roots` takes along: their linked layers, without layers whose group

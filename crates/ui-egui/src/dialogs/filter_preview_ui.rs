@@ -65,7 +65,10 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let mut cache: Cache = ui.ctx().data_mut(|d| std::mem::take(d.get_temp_mut_or_default::<Cache>(cache_id)));
     // Channel visibility and the active mask can change without a document revision. Both the
     // original (press-and-hold) and filtered textures must follow the canvas's current view.
-    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer);
+    let (_, display_key) = crate::canvas::canvas_display(app, &st.doc, None);
+    let spot_key =
+        if crate::channel_view::prints_inks(&st.doc, &st.channel_view) { crate::channel_view::Screen::key(&app.session.color, &st.doc, None) } else { 0 };
+    let view = (st.channel_view.clone(), app.session.prefs().interface.show_channels_in_color, st.active_layer, display_key ^ spot_key.rotate_left(17));
     if cache.view.as_ref() != Some(&view) {
         cache = Cache { view: Some(view), ..Default::default() };
     }
@@ -232,16 +235,35 @@ fn upload(ctx: &egui::Context, app: &PhotocraftApp, name: &str, doc: &Document) 
     // The cached document and the window's document-pixel zoom coordinates stay at full size.
     let factor = texture_factor(doc.size.width, doc.size.height, ctx.input(|i| i.max_texture_side));
     let (width, height) = (doc.size.width.div_ceil(factor), doc.size.height.div_ceil(factor));
-    if let Some(st) = app.session.active()
-        && let Some(pixels) =
-            crate::channel_view::render(doc, &st.channel_view, doc.bounds(), factor, crate::channel_view::Look::of(&app.session), st.active_layer)
-    {
-        let image = egui::ColorImage::new([width as usize, height as usize], pixels);
-        return ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
-    }
-    let buf = if factor == 1 { photocraft_compose::flatten(doc) } else { photocraft_compose::render_reduced(doc, width, height) };
     let (display, _) = crate::canvas::canvas_display(app, doc, None);
-    let img = crate::canvas::display_image(display.as_deref(), &buf);
+    let overlay = app.session.active().and_then(|st| {
+        let screen = if crate::channel_view::prints_inks(doc, &st.channel_view) {
+            crate::channel_view::Screen::of(&app.session.color, doc, None)
+        } else {
+            crate::channel_view::Screen::default()
+        };
+        crate::channel_view::render_for_display(
+            doc,
+            &st.channel_view,
+            doc.bounds(),
+            factor,
+            crate::channel_view::Look::of(&app.session),
+            display.as_deref(),
+            &screen,
+        )
+    });
+    let overlay = match overlay {
+        Some(pixels) if pixels.iter().all(|p| p.a() == 255) => {
+            let image = egui::ColorImage::new([width as usize, height as usize], pixels);
+            return ctx.load_texture(name, image, egui::TextureOptions::LINEAR);
+        }
+        overlay => overlay,
+    };
+    let buf = if factor == 1 { photocraft_compose::flatten(doc) } else { photocraft_compose::render_reduced(doc, width, height) };
+    let mut img = crate::canvas::display_image(display.as_deref(), &buf);
+    if let Some(overlay) = overlay {
+        crate::channel_view::blend_overlay(&mut img.pixels, overlay);
+    }
     ctx.load_texture(name, img, egui::TextureOptions::LINEAR)
 }
 
@@ -271,12 +293,119 @@ struct CachedTex {
 struct Cache {
     filtered: Option<CachedTex>,
     original: Option<CachedTex>,
-    view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>)>,
+    view: Option<(photocraft_engine::channel_cmds::ChannelView, bool, Option<photocraft_doc::LayerId>, u64)>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn channel_filter_window_refreshes_when_its_display_profile_changes() {
+        use photocraft_engine::color_cmds::resolve_profile;
+        use photocraft_engine::display_color::Display;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":16,"height":16})).unwrap();
+        app.run("edit.fill", json!({"color":"#4080c0"})).unwrap();
+        app.run("prefs.set", json!({"values":{"interface.showChannelsInColor":true}})).unwrap();
+        app.run("channel.target", json!({"channel":"green"})).unwrap();
+        let revision = app.session.active().unwrap().revision;
+        let ctx = egui::Context::default();
+        let dialog = 78;
+        let id = egui::Id::unique(("filter-preview-ui", dialog));
+        let mut fields = json!({"__command":"filter.blur.gaussianBlur","__preview":false}).as_object().unwrap().clone();
+        let mut old = None;
+        let mut old_pixels = None;
+        for profile in ["srgb", "display-p3"] {
+            let icc = resolve_profile(profile, None, None).unwrap().to_bytes();
+            app.session.color.set_displays(Ok(vec![Display {
+                id: 4,
+                name: "Display".into(),
+                frame: [0.0, 0.0, 100.0, 100.0],
+                profile_name: None,
+                icc: Some(icc),
+            }]));
+            app.session.color.main_display = Some(4);
+            let mut output = ctx.run_ui(Default::default(), |ui| window(&app, dialog, ui, &mut fields));
+            let cache = ctx.data(|d| d.get_temp::<Cache>(id)).unwrap();
+            let tex = cache.original.unwrap().tex;
+            let actual = output.textures_delta.set.get(&tex.id()).and_then(|d| d.last()).map(|uploaded| {
+                let egui::ImageData::Color(image) = &uploaded.image;
+                image.pixels.clone()
+            });
+            output.textures_delta.clear();
+            let actual = actual.expect("the new preview must upload its pixels");
+            let st = app.session.active().unwrap();
+            let (display, _) = crate::canvas::canvas_display(&app, &st.doc, None);
+            let expected = crate::channel_view::render_for_display(
+                &st.doc,
+                &st.channel_view,
+                st.doc.bounds(),
+                1,
+                crate::channel_view::Look::of(&app.session),
+                display.as_deref(),
+                &crate::channel_view::Screen::default(),
+            )
+            .unwrap();
+            assert_eq!(actual, expected, "uploaded colours must use the new monitor profile");
+            if let Some(previous) = old_pixels {
+                assert_ne!(actual, previous, "the fixture must distinguish these profiles");
+            }
+            old_pixels = Some(actual);
+            if let Some(previous) = old {
+                assert_ne!(tex.id(), previous, "monitor changes must invalidate the retained channel preview");
+            }
+            old = Some(tex.id());
+            // Keep the previous allocation alive so a new texture cannot reuse its ID.
+            ctx.data_mut(|d| d.insert_temp(egui::Id::unique(profile), tex));
+            assert_eq!(app.session.active().unwrap().revision, revision);
+        }
+    }
+
+    #[test]
+    fn solo_channel_filter_preview_matches_the_colour_managed_canvas() {
+        use photocraft_engine::color_cmds::resolve_profile;
+        use photocraft_engine::display_color::Display;
+
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.run("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        let icc = resolve_profile("display-p3", None, None).unwrap().to_bytes();
+        app.session.color.set_displays(Ok(vec![Display {
+            id: 4,
+            name: "Display P3".into(),
+            frame: [0.0, 0.0, 100.0, 100.0],
+            profile_name: None,
+            icc: Some(icc),
+        }]));
+        app.session.color.main_display = Some(4);
+        app.run("prefs.set", json!({"values":{"interface.showChannelsInColor":true}})).unwrap();
+        app.run("channel.target", json!({"channel":"green"})).unwrap();
+        let ctx = egui::Context::default();
+        let canvas = crate::channel_view::ensure(&mut app, &ctx, 0, Some(4)).unwrap();
+        let doc = app.session.active().unwrap().doc.clone();
+        let dialog = upload(&ctx, &app, "solo-channel-filter-preview", &doc);
+        let mut delta = ctx.tex_manager().write().take_delta();
+        let image = |id| {
+            let egui::ImageData::Color(image) = &delta.set.get(&id).unwrap()[0].image;
+            image.pixels.clone()
+        };
+        let shown = image(canvas);
+        assert_eq!(shown, image(dialog.id()), "opening a filter must not change the channel colour");
+        assert_ne!(
+            shown,
+            crate::channel_view::render(
+                &doc,
+                &app.session.active().unwrap().channel_view,
+                doc.bounds(),
+                1,
+                crate::channel_view::Look { in_color: true, ..crate::channel_view::Look::default() },
+                app.session.active().unwrap().active_layer,
+            )
+            .unwrap()
+        );
+        delta.clear();
+    }
 
     #[test]
     fn full_resolution_preview_textures_respect_the_device_limit() {

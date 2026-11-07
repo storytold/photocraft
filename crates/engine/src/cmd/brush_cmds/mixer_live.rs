@@ -325,6 +325,8 @@ impl LiveMixer {
             surface,
             bounds,
             mixer: Some((self.original_state, after)),
+            layer: self.core.layer,
+            colors: self.core.color_restrict.map(|r| r.colors),
         });
         Ok(params)
     }

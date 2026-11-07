@@ -98,12 +98,16 @@ pub fn copying(app: &PhotocraftApp, alt: bool) -> bool {
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
     let before = past_len(app)?;
     // In place: the copy follows the pointer from the original, artboards too (#1531).
-    match app.run("layer.duplicate", json!({"inPlace": true})) {
+    match crate::move_ui::duplicate_for_geometry(app) {
         // The state just before the copy's: in non-linear history the copy's step also moved
         // the later states in front of it (`History::record`), and those must stay.
         Ok(_) => Some(past_len(app).and_then(|n| n.checked_sub(1)).unwrap_or(before).max(before)),
         Err(e) => {
             app.ui.status = e;
+            app.ui.status_error = true;
+            app.drag = None;
+            app.move_preview = None;
+            app.move_gpu_preview = None;
             None
         }
     }
@@ -125,7 +129,7 @@ fn fold_history(app: &mut PhotocraftApp, from: usize, label: &str) {
 /// Rewrites a Move-tool pointer event for the held modifiers: ⇧ locks it to an axis, and the
 /// first real movement of an ⌥-drag duplicates the layers being moved. Other tools pass through.
 pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> ToolEvent {
-    if app.active_tool() != Tool::Move || app.ui.transform.is_some() {
+    if (!moving(app) && crate::canvas::event_tool(app, mods) != Tool::Move) || app.ui.transform.is_some() {
         app.move_mods = MoveDrag::default();
         return ev;
     }
@@ -147,8 +151,20 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
 
 fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> [f64; 2] {
     let Some(start) = app.move_mods.start.filter(|_| moving(app)) else { return p };
-    // Selected pixels (`move_ui`): ⌥ copied them at the press.
-    let pixels = app.drag.as_ref().is_some_and(|d| d.sel_move.is_some());
+    if app.move_mods.alt && crate::move_ui::color_target(app).is_some_and(|colors| colors.len() > 1) {
+        // Check pending copy intent before selected-pixel classification can skip duplication.
+        // No copy has been made while `alt` is still armed, so cancellation needs no history edit.
+        app.move_mods = MoveDrag::default();
+        app.ui.status = crate::move_ui::COPY_SET_DRAG_UNSUPPORTED.into();
+        app.ui.status_error = true;
+        app.drag = None;
+        app.move_preview = None;
+        app.move_gpu_preview = None;
+        return p;
+    }
+    // Selected native colour sets do not float, but use the same 45° constraints. Their copy
+    // gesture is refused at the press; ordinary selected pixels were copied there already.
+    let pixels = app.drag.as_ref().is_some_and(|d| d.sel_move.is_some() || crate::move_ui::moves_selected_pixels_with(app, d.tool));
     let mut d = [p[0] - start[0], p[1] - start[1]];
     if mods.shift {
         d = constrain(d, app.move_mods.last, if pixels { TRANSFORM_DIRECTIONS } else { MOVE_DIRECTIONS });
@@ -286,11 +302,21 @@ pub fn nudge(app: &mut PhotocraftApp, dx: f64, dy: f64, duplicate_first: bool) {
     if app.drag.is_some() {
         return;
     }
-    if crate::move_ui::moves_selected_pixels_with(app, Tool::Move) {
+    if crate::move_ui::floats_selected_pixels_with(app, Tool::Move) {
         crate::move_ui::float_selected(app, duplicate_first, dx, dy);
         return;
     }
-    let from = if duplicate_first { duplicate(app) } else { None };
+    if duplicate_first && crate::move_ui::color_target(app).is_some_and(|c| c.len() > 1) {
+        app.ui.status = "Copy-nudging a colour set is not supported; use Copy and Paste into the selected channels".into();
+        app.ui.status_error = true;
+        return;
+    }
+    let from = if duplicate_first {
+        let Some(from) = duplicate(app) else { return };
+        Some(from)
+    } else {
+        None
+    };
     let revision = app.session.active().map(|st| st.revision);
     let moved = if duplicate_first {
         // A copy is a state of its own, folded with its move below.

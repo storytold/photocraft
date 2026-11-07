@@ -336,7 +336,8 @@ pub struct ExternalVectorSource {
 pub type OpenExternalSvgFn = Box<dyn FnMut(ExternalSvgEditor, ExternalVectorSource) -> Result<Box<dyn ExternalSvgSession>, String>>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
-/// Shared queue of browser canvas drops with the document captured at the drop event.
+
+/// Canvas drops keep their destination while the platform reads their bytes asynchronously.
 pub type PlaceInbox = std::sync::Arc<std::sync::Mutex<Vec<(photocraft_doc::DocId, String, Vec<u8>)>>>;
 
 /// Read the saved preferences text (`None` when there is none yet).

@@ -29,6 +29,13 @@ pub fn blocked(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: egui::Modifie
         })
     };
     if tool == Tool::Move {
+        if let Some(colors) = crate::move_ui::color_target(app) {
+            let selected_pixels = crate::move_ui::floats_selected_pixels_with(app, tool) || (colors.len() > 1 && st.doc.selection.is_some());
+            return st.active_layer.is_none_or(|id| {
+                let locks = st.doc.effective_locks(id);
+                (locks.position && !(selected_pixels && st.doc.is_background(id))) || locks.all || locks.pixels
+            });
+        }
         // `moves_selected_pixels_with` is false for a layer whose pixels can't float: then the Move tool
         // moves the layer, which its position lock refuses too.
         if crate::move_ui::moves_selected_pixels_with(app, tool) {

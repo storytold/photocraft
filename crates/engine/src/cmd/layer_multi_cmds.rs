@@ -28,7 +28,7 @@ use moves::link_groups;
 pub(crate) use moves::shift_surface;
 #[cfg(test)]
 pub(crate) use moves::with_links;
-pub use moves::{move_targets, move_to, moved, moved_target, moves_mask_alone, preview_move, translate};
+pub use moves::{move_targets, move_to, moved, moved_target, moves_mask_alone, preview_move, translate, viewed_mask_is_target};
 use selection::{doc_state, find_layers, select_all_layers, select_linked};
 pub(crate) use selection::{mask_targets, recorded_step, reselect, targets, top_level};
 pub use selection::{select, selected, set_selection};

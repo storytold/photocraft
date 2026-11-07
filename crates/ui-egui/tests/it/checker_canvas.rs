@@ -251,6 +251,38 @@ fn cpu_pixel_grid_is_not_drawn_over_empty_checker() {
     }
 }
 
+#[test]
+fn channel_transform_preview_hides_the_cached_pixel_grid_until_cancel() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut h) = harness_with(false) else { return };
+    h.run_steps(4);
+    let (before, x0, y0, _) = render_on(&mut h, false, 8.0, 24, true, true);
+    let (x, y) = (x0 + 8, y0 + 28);
+    assert!(!lit_columns(&before, x, y, 64).is_empty(), "the ordinary canvas draws the grid");
+
+    h.state_mut().run("channel.target", json!({"channel":"green"})).unwrap();
+    control(&mut h, "ui.menu.invoke", json!({"id":"edit.freeTransform"}));
+    assert!(h.state().ui.transform.is_some());
+    h.key_press(egui::Key::ArrowRight);
+    h.run_steps(4);
+    let with_grid = h.render().unwrap();
+
+    h.state_mut().ui.view.show.pixel_grid = false;
+    h.run_steps(4);
+    let without_grid = h.render().unwrap();
+    for x in x..x + 64 {
+        assert_eq!(with_grid.get_pixel(x, y), without_grid.get_pixel(x, y), "stale grid at ({x}, {y})");
+    }
+
+    h.state_mut().ui.view.show.pixel_grid = true;
+    photocraft_ui_egui::transform_tool::cancel(h.state_mut());
+    h.run_steps(4);
+    let after = h.render().unwrap();
+    for x in x..x + 64 {
+        assert_eq!(after.get_pixel(x, y).0, before.at(x, y), "the grid returns at ({x}, {y})");
+    }
+}
+
 /// The pixel grid over a flat `grey` document at 800%: the largest difference, in 8-bit levels,
 /// between a grid line and the pixel interior beside it.
 fn grid_line_contrast_over_grey(h: &mut Harness, grey: u8) -> i32 {

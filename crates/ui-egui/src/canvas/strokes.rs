@@ -727,7 +727,6 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
 }
 
 /// Colour rows can remain selected behind a viewed mask; restrictions follow what is edited.
-/// Several rows stop Move and transforms on any layer, which the engine refuses there too.
 pub(crate) fn multiple_color_target(app: &PhotocraftApp) -> bool {
     let Some(st) = app.session.active() else { return false };
     matches!(st.channel_view.target, photocraft_engine::channel_cmds::ChannelTarget::Color(_))

@@ -11,8 +11,10 @@
 //! solidity 1) over the sampled composite. A solo spot (all colour channels hidden) shows as its
 //! grayscale values instead. The texture is keyed by document revision, view state and display, and
 //! updated per damage rectangle while painting, so nothing is recomposited per frame.
+//! Output textures are per monitor; sampled composite pixels are shared.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use egui::{Color32, TextureOptions};
 use photocraft_doc::{AlphaChannel, ColorMode, Document};
@@ -40,22 +42,39 @@ struct SampledComposite {
 struct CompositeSource<'a> {
     cached: Option<&'a [[f32; 4]]>,
     fresh: &'a mut Option<Vec<[f32; 4]>>,
+    display: Option<&'a photocraft_engine::display_color::CanvasDisplay>,
+    band_rows: i32,
     /// What printed spot inks go through on their way to the screen.
     screen: &'a Screen,
 }
 
 pub struct Cache {
+    source: Option<SampledComposite>,
+    outputs: HashMap<Option<u32>, OutputCache>,
+}
+
+struct OutputCache {
     revision: u64,
     key: u64,
+    display_key: u64,
     /// The canvas document shown by a live stroke (0 is the committed document).
-    pub(crate) preview_key: u64,
+    preview_key: u64,
     factor: u32,
     /// False while the plain composite shows: the texture is kept (so toggling a view back on
     /// reuses its allocation) but its pixels are stale.
     valid: bool,
-    /// `None` while the view draws nothing over the canvas (visible spot channels without ink).
+    /// `None` when a spot overlay has no ink to draw.
     tex: Option<egui::TextureHandle>,
-    source: Option<SampledComposite>,
+}
+
+impl Cache {
+    pub(crate) fn shown_as_document(&mut self, was_preview: impl Fn(u64) -> bool) {
+        for output in self.outputs.values_mut() {
+            if was_preview(output.preview_key) {
+                output.preview_key = 0;
+            }
+        }
+    }
 }
 
 fn sample(s: &Surface, r: Rect, factor: u32) -> Vec<f32> {
@@ -111,8 +130,7 @@ pub struct Screen {
 
 impl Screen {
     /// How the canvas shows `doc` on `display` (`None`: the main window's).
-    pub fn of(app: &PhotocraftApp, doc: &Document, display: Option<u32>) -> Screen {
-        let color = &app.session.color;
+    pub fn of(color: &photocraft_engine::color_cmds::ColorState, doc: &Document, display: Option<u32>) -> Screen {
         let display = display.or(color.main_display);
         let Ok(d) = color.canvas_display_for(doc, display) else { return Screen::default() };
         let proof = color.proof_ref(doc.id).is_some_and(|p| p.enabled);
@@ -121,8 +139,7 @@ impl Screen {
     }
 
     /// A key that changes with [`Screen::of`].
-    pub fn key(app: &PhotocraftApp, doc: &Document, display: Option<u32>) -> u64 {
-        let color = &app.session.color;
+    pub fn key(color: &photocraft_engine::color_cmds::ColorState, doc: &Document, display: Option<u32>) -> u64 {
         color.display_signature_for(doc, display.or(color.main_display))
     }
 
@@ -143,11 +160,11 @@ impl Screen {
 
 /// Composite RGBA (over white, like Photoshop's channel views) at `factor` stride.
 /// Render in bands instead of allocating a full-resolution float composite to sample a preview.
-fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
+fn composite(doc: &Document, r: Rect, factor: u32, band_rows: i32) -> Vec<[f32; 4]> {
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     // A downsampled document (#10249): the whole canvas at `factor` from a proxy picks the same
     // pixels (`downsample` keeps every factor-th one) for ~1/factor² of the compositing.
-    if factor > 1 && r == doc.bounds() && proxy_matches(doc) {
+    if band_rows == 0 && factor > 1 && r == doc.bounds() && proxy_matches(doc) {
         // Only Multichannel composites read the extra channels; the selection and Quick Mask
         // never show in a composite. Left out, they cost nothing to shrink.
         let mut layers_only = doc.clone();
@@ -169,15 +186,15 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
             return out;
         }
     }
-    composite_sampled(doc, r, factor)
+    composite_sampled(doc, r, factor, band_rows)
 }
 
 /// [`composite`] sampled from the full-resolution composite, rendered in bands.
-fn composite_sampled(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
+fn composite_sampled(doc: &Document, r: Rect, factor: u32, band_rows: i32) -> Vec<[f32; 4]> {
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     let mut out = Vec::with_capacity((w * h) as usize);
     let f = factor as i32;
-    let _ = photocraft_compose::render_bands(doc, r, 0, |band| -> Result<(), ()> {
+    let _ = photocraft_compose::render_bands(doc, r, band_rows, |band| -> Result<(), ()> {
         let first = band.rect.y0 + (r.y0 - band.rect.y0).rem_euclid(f);
         for y in (first..band.rect.y1).step_by(factor as usize) {
             for x in (r.x0..r.x1).step_by(factor as usize) {
@@ -193,23 +210,35 @@ fn composite_sampled(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
 
 /// The samples of `r` (see [`composite`]): `cached` when it matches, else rendered, and kept in
 /// `computed` for the cache when that is not too big.
-fn composite_px<'a>(doc: &Document, r: Rect, factor: u32, cached: Option<&'a [[f32; 4]]>, computed: &mut Option<Vec<[f32; 4]>>) -> Cow<'a, [[f32; 4]]> {
+fn composite_px<'a>(
+    doc: &Document,
+    r: Rect,
+    factor: u32,
+    cached: Option<&'a [[f32; 4]]>,
+    computed: &'a mut Option<Vec<[f32; 4]>>,
+    band_rows: i32,
+) -> Cow<'a, [[f32; 4]]> {
     let n = r.width().div_ceil(factor) as usize * r.height().div_ceil(factor) as usize;
     if let Some(px) = cached.filter(|px| px.len() == n) {
         return Cow::Borrowed(px);
     }
-    let px = composite(doc, r, factor);
-    if n <= MAX_COMPOSITE_CACHE_PIXELS {
-        *computed = Some(px.clone());
-    }
-    Cow::Owned(px)
+    let px = composite(doc, r, factor, band_rows);
+    if n <= MAX_COMPOSITE_CACHE_PIXELS { Cow::Borrowed(computed.insert(px)) } else { Cow::Owned(px) }
 }
 
 /// The samples of `r` (see [`composite`]) at the grid indices `inked` (ascending), in that order.
 /// A few inked pixels of a big document render just their bounding box; when that costs no less
 /// than the whole composite (a proxy renders it at about 1/factor² of the pixels), the whole one
 /// is used, from `cached` or rendered and kept in `computed` for the cache.
-fn composite_at(doc: &Document, r: Rect, factor: u32, inked: &[usize], cached: Option<&[[f32; 4]]>, computed: &mut Option<Vec<[f32; 4]>>) -> Vec<[f32; 4]> {
+fn composite_at(
+    doc: &Document,
+    r: Rect,
+    factor: u32,
+    inked: &[usize],
+    cached: Option<&[[f32; 4]]>,
+    computed: &mut Option<Vec<[f32; 4]>>,
+    band_rows: i32,
+) -> Vec<[f32; 4]> {
     let w = r.width().div_ceil(factor) as usize;
     let n = w * r.height().div_ceil(factor) as usize;
     let pick = |px: &[[f32; 4]]| -> Vec<[f32; 4]> { inked.iter().filter_map(|&k| px.get(k).copied()).collect() };
@@ -226,17 +255,17 @@ fn composite_at(doc: &Document, r: Rect, factor: u32, inked: &[usize], cached: O
     let f = factor as usize;
     let at = |o: i32, s: usize| o.saturating_add((s * f) as i32);
     let area = Rect::new(at(r.x0, bx0), at(r.y0, by0), at(r.x0, bx1 - 1).saturating_add(1).min(r.x1), at(r.y0, by1 - 1).saturating_add(1).min(r.y1));
-    let proxy = factor > 1 && r == doc.bounds() && proxy_matches(doc);
+    let proxy = band_rows == 0 && factor > 1 && r == doc.bounds() && proxy_matches(doc);
     let whole_cost = r.size().area() / if proxy { u64::from(factor) * u64::from(factor) } else { 1 };
     if area.size().area() < whole_cost {
-        let (px, bw) = (composite_sampled(doc, area, factor), bx1 - bx0);
+        let (px, bw) = (composite_sampled(doc, area, factor, band_rows), bx1 - bx0);
         return inked.iter().filter_map(|&k| px.get((k / w - by0) * bw + k % w - bx0).copied()).collect();
     }
-    pick(&composite_px(doc, r, factor, None, computed))
+    pick(&composite_px(doc, r, factor, None, computed, band_rows))
 }
 
 /// Whether `v` prints spot inks of `doc` over its composite, through the [`Screen`].
-fn prints_inks(doc: &Document, v: &ChannelView) -> bool {
+pub(crate) fn prints_inks(doc: &Document, v: &ChannelView) -> bool {
     let colors = color_count(doc);
     v.visible_colors(colors) == colors && (0..doc.channels.len()).any(|i| v.alpha_shown(i) && photocraft_compose::multichannel::is_overprint_spot(doc, i))
 }
@@ -270,7 +299,44 @@ fn proxy_matches(doc: &Document) -> bool {
 /// or `None` when the plain composite is all there is to show.
 pub fn render(doc: &Document, v: &ChannelView, r: Rect, factor: u32, look: Look, active: Option<photocraft_doc::LayerId>) -> Option<Vec<Color32>> {
     let mut unused = None;
-    render_with_source(doc, v, r, factor, look, active, CompositeSource { cached: None, fresh: &mut unused, screen: &Screen::default() })
+    render_with_source(
+        doc,
+        v,
+        r,
+        factor,
+        look,
+        active,
+        CompositeSource { cached: None, fresh: &mut unused, display: None, band_rows: 0, screen: &Screen::default() },
+    )
+}
+
+/// As [`render`], but colour-manage the opaque colour-component base before screen-space alpha,
+/// Quick Mask and layer-mask overlays are composited onto it.
+pub(crate) fn render_for_display(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    look: Look,
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    screen: &Screen,
+) -> Option<Vec<Color32>> {
+    let mut unused = None;
+    render_with_source(doc, v, r, factor, look, None, CompositeSource { cached: None, fresh: &mut unused, display, band_rows: 0, screen })
+}
+
+/// Channel-transform previews bound native band storage even when sampling an unreduced document.
+pub(crate) fn render_for_display_bounded(
+    doc: &Document,
+    v: &ChannelView,
+    r: Rect,
+    factor: u32,
+    look: Look,
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+    screen: &Screen,
+) -> Option<Vec<Color32>> {
+    let mut unused = None;
+    render_with_source(doc, v, r, factor, look, None, CompositeSource { cached: None, fresh: &mut unused, display, band_rows: 1, screen })
 }
 
 fn render_with_source(
@@ -279,7 +345,7 @@ fn render_with_source(
     r: Rect,
     factor: u32,
     look: Look,
-    active: Option<photocraft_doc::LayerId>,
+    _active: Option<photocraft_doc::LayerId>,
     source: CompositeSource<'_>,
 ) -> Option<Vec<Color32>> {
     if v.is_plain(doc) || r.is_empty() {
@@ -291,15 +357,17 @@ fn render_with_source(
     // ⌥-click mask view (#196): the pixel mask alone, in grayscale (white reveals); ⇧⌥ with
     // nothing else shown: just the rubylith. Use the compositor's cached feather for the pixel
     // mask, but leave vector masks out: this view targets the pixel mask channel by itself.
-    let feathered_mask = v
-        .layer_mask
-        .and_then(|view| doc.layer(view.layer))
-        .filter(|layer| layer.mask.as_ref().is_some_and(|mask| mask.enabled && photocraft_compose::masks::feather_sigma(mask.feather) > 0.0))
-        .and_then(|layer| {
-            let mut pixel_mask_layer = layer.clone();
-            pixel_mask_layer.vector_mask = None;
-            photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
-        });
+    let feathered_mask = v.layer_mask.and_then(|view| {
+        let layer = doc.layer(view.layer)?;
+        let mask = photocraft_engine::mask_view_cmds::viewed_mask(layer, view.filter)?;
+        if !mask.enabled || photocraft_compose::masks::feather_sigma(mask.feather) <= 0.0 {
+            return None;
+        }
+        let mut pixel_mask_layer = layer.clone();
+        pixel_mask_layer.mask = Some(mask.clone());
+        pixel_mask_layer.vector_mask = None;
+        photocraft_compose::masks::combined_mask(&pixel_mask_layer, doc.bounds())
+    });
     let shown_mask = layer_mask.map(|(m, mode)| (feathered_mask.as_ref().unwrap_or(&m.surface), mode));
     let only_mask = ChannelView { layer_mask: None, ..v.clone() }.is_plain(doc);
     match shown_mask {
@@ -359,15 +427,15 @@ fn render_with_source(
             solo_mask = true;
             gray(m)
         } else {
-            let m = active.and_then(|id| doc.layer(id)).and_then(|l| l.mask.as_ref())?;
-            solo_mask = true;
-            gray(&m.surface)
+            // Every eye may be off during a channel transform and after commit/cancel.
+            // Cover the composite so hidden channels never leak through.
+            vec![[1.0; 4]; n]
         }
     } else if vis < colors {
         let fmt = doc.pixel_format();
         let mode = fmt.mode;
         let shown: Vec<usize> = (0..colors).filter(|k| v.color_visible(*k)).collect();
-        let pixels = composite_px(doc, r, factor, source.cached, &mut computed);
+        let pixels = composite_px(doc, r, factor, source.cached, &mut computed, source.band_rows);
         pixels
             .iter()
             .map(|&rgba| {
@@ -397,7 +465,7 @@ fn render_with_source(
         // The inked pixels become the opaque printed picture, the rest stay transparent so the
         // normal canvas (display LUT, proofing, full resolution) shows. Only the inked area of the
         // composite is rendered.
-        let mut printed = composite_at(doc, r, factor, &inked, source.cached, &mut computed);
+        let mut printed = composite_at(doc, r, factor, &inked, source.cached, &mut computed, source.band_rows);
         if printed.len() == inked.len() {
             for (ink, vals) in &spots {
                 ink.apply(&mut printed, inked.iter().map(|&k| vals.get(k).copied().unwrap_or(0.0)));
@@ -412,6 +480,19 @@ fn render_with_source(
     } else if vis < colors {
         for (ink, vals) in &spots {
             ink.apply(&mut out, vals.iter().copied());
+        }
+    }
+    if vis > 0
+        && vis < colors
+        && let Some(display) = source.display.filter(|display| !display.is_identity())
+    {
+        // Partial colour views are in the document's composite profile. Convert their base
+        // before adding channel/mask overlays, whose UI colours are screen-space values.
+        let converted = display.composite_pixels_to_rgba8(&out);
+        for (pixel, converted) in out.iter_mut().zip(converted) {
+            for (component, value) in pixel.iter_mut().zip(converted) {
+                *component = f32::from(value) / 255.0;
+            }
         }
     }
     *source.fresh = computed;
@@ -473,6 +554,17 @@ fn mask_px(s: &Surface, r: Rect, factor: u32, color: impl Fn(f32) -> Color32 + S
     px
 }
 
+/// Composite screen-space channel pixels over an already display-converted canvas.
+pub(crate) fn blend_overlay(base: &mut [Color32], overlay: Vec<Color32>) {
+    for (base, over) in base.iter_mut().zip(overlay) {
+        let weight = u32::from(255 - over.a());
+        let b = base.to_array();
+        let o = over.to_array();
+        let result = std::array::from_fn::<_, 4, _>(|i| (u32::from(o[i]) + (u32::from(b[i]) * weight + 127) / 255).min(255) as u8);
+        *base = Color32::from_rgba_premultiplied(result[0], result[1], result[2], result[3]);
+    }
+}
+
 /// A float in 0..=1 as an 8-bit channel value.
 fn q(x: f32) -> u8 {
     (x.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
@@ -483,9 +575,8 @@ fn view_key(v: &ChannelView, look: Look) -> u64 {
     s.bytes().fold(look.in_color as u64 + 1, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
 }
 
-/// Make the channel-view texture of document `idx`, shown on `display` (`None`: the main
-/// window's), current; `None` = nothing to draw.
-pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display: Option<u32>) -> Option<egui::TextureId> {
+/// Make the channel-view texture of document `idx` current on `output`.
+pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, output: Option<u32>) -> Option<egui::TextureId> {
     let st = app.session.documents().get(idx)?;
     let view = st.channel_view.clone();
     let active = st.active_layer;
@@ -494,7 +585,9 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     let id = st.doc.id.0;
     if view.is_plain(&st.doc) {
         if let Some(c) = app.channel_views.get_mut(&id) {
-            c.valid = false;
+            for output in c.outputs.values_mut() {
+                output.valid = false;
+            }
         }
         return None;
     }
@@ -502,13 +595,14 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     // otherwise an opaque grayscale mask hides the stroke until it is committed (#2078).
     // The plain-composite path above needs no preview work.
     let (doc, preview_key) = crate::canvas::filter_channel_preview(app, idx, ctx).unwrap_or_else(|| crate::canvas::display_doc(app, idx));
+    let (display, display_key) = crate::canvas::canvas_display(app, &doc, output);
     // Interface ▸ Show Channels in Color tints single colour channel views on the canvas too,
     // not just the panel thumbnails (#2385). The view key carries the flag and the Layer Mask
     // Display Options, so changing them rebuilds the texture.
     let look = Look::of(&app.session);
     // Printed spot inks go through the display transform, so its key is part of the view's.
     let inks = prints_inks(&doc, &view);
-    let screen_key = if inks { Screen::key(app, &doc, display) } else { 0 };
+    let screen_key = if inks { Screen::key(&app.session.color, &doc, output) } else { 0 };
     let key = view_key(&view, look) ^ screen_key.rotate_left(17);
     // Never exceed what the GPU accepts (egui panics on oversized textures).
     let max_side = (ctx.input(|i| i.max_texture_side) as u32).clamp(256, MAX_SIDE);
@@ -522,8 +616,9 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
             c.source = None;
         }
     }
-    if let Some(c) = app.channel_views.get(&id)
+    if let Some(c) = app.channel_views.get(&id).and_then(|c| c.outputs.get(&output))
         && c.key == key
+        && c.display_key == display_key
         && c.factor == factor
         && c.valid
         && c.revision == revision
@@ -531,12 +626,15 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     {
         return c.tex.as_ref().map(|t| t.id());
     }
-    // The display transform itself is looked up only when the view is redrawn.
-    let screen = if inks { Screen::of(app, &doc, display) } else { Screen::default() };
-    let damage =
-        app.channel_views.get(&id).and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage));
-    if let Some(c) = app.channel_views.get_mut(&id)
+    let screen = if inks { Screen::of(&app.session.color, &doc, output) } else { Screen::default() };
+    let damage = app
+        .channel_views
+        .get(&id)
+        .and_then(|c| c.outputs.get(&output))
+        .and_then(|c| crate::canvas::damage_since(app, idx, (c.revision, c.preview_key), (revision, preview_key), 0, last_damage));
+    if let Some(c) = app.channel_views.get_mut(&id).and_then(|c| c.outputs.get_mut(&output))
         && c.key == key
+        && c.display_key == display_key
         && c.factor == factor
         && c.valid
         && let Some(tex) = c.tex.as_mut()
@@ -550,8 +648,16 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
         if !r.is_empty() {
             let size = [r.width().div_ceil(factor) as usize, r.height().div_ceil(factor) as usize];
             // Nothing to draw there (the ink erased) still clears what the texture showed.
-            let px = render_with_source(&doc, &view, r, factor, look, active, CompositeSource { cached: None, fresh: &mut None, screen: &screen })
-                .unwrap_or_else(|| vec![Color32::TRANSPARENT; size[0] * size[1]]);
+            let px = render_with_source(
+                &doc,
+                &view,
+                r,
+                factor,
+                look,
+                active,
+                CompositeSource { cached: None, fresh: &mut None, display: display.as_deref(), band_rows: 0, screen: &screen },
+            )
+            .unwrap_or_else(|| vec![Color32::TRANSPARENT; size[0] * size[1]]);
             tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], egui::ColorImage::new(size, px), TextureOptions::LINEAR);
         }
         let tex_id = tex.id();
@@ -562,49 +668,32 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     let b = doc.bounds();
     let cached = app.channel_views.get(&id).and_then(|c| c.source.as_ref()).map(|s| s.pixels.as_slice());
     let mut fresh = None;
-    let px = render_with_source(&doc, &view, b, factor, look, active, CompositeSource { cached, fresh: &mut fresh, screen: &screen });
-    let Some(px) = px else {
-        // Nothing to draw (visible spot channels without ink): remembered, so the next frames
-        // don't look again, and the texture is dropped.
-        match app.channel_views.get_mut(&id) {
-            Some(c) => {
-                c.tex = None;
-                c.revision = revision;
-                c.preview_key = preview_key;
-                c.key = key;
-                c.factor = factor;
-                c.valid = true;
-            }
-            None => {
-                app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex: None, source: None });
-            }
-        }
-        return None;
-    };
+    let px = render_with_source(
+        &doc,
+        &view,
+        b,
+        factor,
+        look,
+        active,
+        CompositeSource { cached, fresh: &mut fresh, display: display.as_deref(), band_rows: 0, screen: &screen },
+    );
     let new_source = fresh.is_some();
-    let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
-    let img = egui::ColorImage::new(size, px);
-    match app.channel_views.get_mut(&id) {
-        Some(c) if c.tex.as_ref().is_some_and(|t| t.size() == size) => {
-            if let Some(t) = c.tex.as_mut() {
-                t.set(img, TextureOptions::LINEAR);
-            }
-            c.revision = revision;
-            c.preview_key = preview_key;
-            c.key = key;
-            c.factor = factor;
-            c.valid = true;
-            if let Some(pixels) = fresh.take() {
-                c.source = Some(SampledComposite { revision, content, preview_key, factor, pixels });
-            }
+    let cache = app.channel_views.entry(id).or_insert_with(|| Cache { source: None, outputs: HashMap::new() });
+    let previous = cache.outputs.remove(&output).and_then(|c| c.tex);
+    // An empty spot overlay is also a cached result, independently on each display.
+    let tex = px.map(|px| {
+        let size = [b.width().div_ceil(factor) as usize, b.height().div_ceil(factor) as usize];
+        let img = egui::ColorImage::new(size, px);
+        if let Some(mut tex) = previous.filter(|t| t.size() == size) {
+            tex.set(img, TextureOptions::LINEAR);
+            tex
+        } else {
+            ctx.load_texture(format!("channel-view-{id}-{output:?}"), img, TextureOptions::LINEAR)
         }
-        _ => {
-            let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
-            // A composite still current (checked above) is kept when none was rendered.
-            let kept = app.channel_views.remove(&id).and_then(|c| c.source);
-            let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, pixels }).or(kept);
-            app.channel_views.insert(id, Cache { revision, key, preview_key, factor, valid: true, tex: Some(tex), source });
-        }
+    });
+    cache.outputs.insert(output, OutputCache { revision, key, display_key, preview_key, factor, valid: true, tex });
+    if let Some(pixels) = fresh.take() {
+        cache.source = Some(SampledComposite { revision, content, preview_key, factor, pixels });
     }
     if new_source {
         for (other_id, c) in &mut app.channel_views {
@@ -613,7 +702,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
             }
         }
     }
-    app.channel_views.get(&id).and_then(|c| c.tex.as_ref()).map(|t| t.id())
+    app.channel_views.get(&id).and_then(|c| c.outputs.get(&output)).and_then(|c| c.tex.as_ref()).map(|t| t.id())
 }
 
 #[cfg(test)]

@@ -21,6 +21,69 @@ fn session() -> TransformSession {
 }
 
 #[test]
+fn colour_set_mask_view_is_preserved_by_transform_copy_and_cancel() {
+    for selected in [false, true] {
+        for linked in [false, true] {
+            for mode in ["gray", "overlay"] {
+                for landed in [false, true] {
+                    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+                    app.run("layer.layerMask.hideAll", json!({})).unwrap();
+                    app.run("layer.layerMask.linked", json!({"linked": linked})).unwrap();
+                    let source = app.session.active().unwrap().active_layer.unwrap();
+                    app.session
+                        .edit("mask patch", |doc, _| {
+                            doc.layer_mut(source).unwrap().mask.as_mut().unwrap().surface.fill_rect(photocraft_geom::Rect::new(8, 8, 24, 24), &[1.0]);
+                            Ok(())
+                        })
+                        .unwrap();
+                    if selected {
+                        app.run("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 16, "feather": 1})).unwrap();
+                    }
+                    app.run("channel.target", json!({"colors": [0, 2]})).unwrap();
+                    app.run("view.layerMask", json!({"mode": mode})).unwrap();
+                    let before = app.session.active().unwrap().doc.clone();
+                    let view = app.session.active().unwrap().channel_view.clone();
+                    let history = app.session.active().unwrap().history.past_len();
+                    begin_copy(&mut app, &egui::Context::default()).unwrap();
+                    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!("mask")), "{selected}/{linked}/{mode}: capture the original mask target");
+                    let copy = app.session.active().unwrap().active_layer.unwrap();
+                    assert_ne!(copy, source);
+                    assert_eq!(
+                        app.session.active().unwrap().doc.layer(copy).unwrap().surface(),
+                        before.layer(source).unwrap().surface(),
+                        "copying a mask must not crop its host pixels"
+                    );
+                    let mut expected_view = view.clone();
+                    expected_view.layer_mask.as_mut().unwrap().layer = copy;
+                    assert_eq!(app.session.active().unwrap().channel_view, expected_view, "start preserves channel eyes and the viewed mask");
+                    app.run("channel.setVisible", json!({"channel": "composite", "visible": false})).unwrap();
+                    expected_view = app.session.active().unwrap().channel_view.clone();
+                    crate::transform_tool::nudge(&mut app, 4.0, 0.0);
+                    if landed {
+                        commit(&mut app);
+                        let st = app.session.active().unwrap();
+                        assert!(st.doc.layer(source) == before.layer(source));
+                        assert_eq!(st.doc.layer(copy).unwrap().surface(), before.layer(source).unwrap().surface());
+                        assert_ne!(st.doc.layer(copy).unwrap().mask.as_ref().unwrap().surface, before.layer(source).unwrap().mask.as_ref().unwrap().surface);
+                        assert_eq!(st.history.past_len(), history + 1);
+                        assert_eq!(st.channel_view, expected_view);
+                        assert!(app.session.undo());
+                        assert!(app.session.active().unwrap().doc.layers == before.layers);
+                    } else {
+                        cancel(&mut app);
+                        expected_view.layer_mask.as_mut().unwrap().layer = source;
+                        let st = app.session.active().unwrap();
+                        assert!(Arc::ptr_eq(&st.doc, &before));
+                        assert_eq!(st.history.past_len(), history);
+                        assert_eq!(st.channel_view, expected_view, "cancel restores the source mask while retaining current eyes");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn a_plain_click_far_outside_accepts_transform_but_a_rotation_drag_does_not() {
     let context = egui::Context::default();
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
@@ -133,6 +196,14 @@ fn transform_bar_pins_warp_cancel_and_commit() {
     h.get_by_label("Cancel transform").click();
     h.run_steps(2);
     assert!(h.state().ui.transform.is_none());
+
+    let mut frame = session();
+    frame.target = Some(json!({"frame": frame.layer}));
+    h.state_mut().ui.transform = Some(frame);
+    h.run_steps(2);
+    assert!(h.query_by_label("Switch between free transform and warp modes").is_none());
+    assert!(h.query_by_label("Commit transform").is_some());
+    assert!(h.query_by_label("Cancel transform").is_some());
 }
 
 #[test]
@@ -2074,6 +2145,109 @@ fn right_click_menu_warp_row_enters_warp_mode() {
 }
 
 #[test]
+fn channel_transform_warp_is_enabled_in_both_menus_without_retargeting_or_committing() {
+    for target in [json!("green"), json!("mask"), json!(0), json!("quickMask")] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let expected = if target == "mask" {
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":"mask"})).unwrap();
+            app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+            json!("mask")
+        } else if target == 0 {
+            app.run("channel.new", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":0})).unwrap();
+            json!({"channel":0})
+        } else if target == "quickMask" {
+            app.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+            json!("quickMask")
+        } else {
+            app.run("channel.target", json!({"channel":"green"})).unwrap();
+            json!({"color":1})
+        };
+        app.run("select.rect", json!({"x":8,"y":8,"width":16,"height":16})).unwrap();
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap_or_else(|e| panic!("{target}: {e}"));
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 3.0, y + 2.0]);
+        let before = t.clone();
+        let st = app.session.active().unwrap();
+        let (source, eyes, history) = (st.doc.clone(), st.channel_view.clone(), st.history.past_len());
+        assert_eq!(before.target, Some(expected.clone()));
+        assert!(crate::menus::is_enabled(&app, "edit.transform.warp"), "main menu: {target}");
+        crate::canvas_tool_menu::open_transform(&mut app, &ctx, [10.0, 10.0]);
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"), "context menu: {target}");
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.warp");
+        let t = app.ui.transform.as_ref().unwrap();
+        assert!(t.warp.is_some(), "{target}");
+        assert_eq!((t.session, t.rect, t.quad, t.target.as_ref()), (before.session, before.rect, before.quad, before.target.as_ref()));
+        let [x, y] = before.quad[0];
+        let mapped = t.warp.as_ref().unwrap().map(before.rect[0], before.rect[1]);
+        assert!((mapped.0 - x).abs() < 1e-6 && (mapped.1 - y).abs() < 1e-6, "the prior drag carries into Warp");
+        let st = app.session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&source, &st.doc));
+        assert_eq!(st.channel_view, eyes);
+        assert_eq!(st.history.past_len(), history);
+        assert_eq!(st.channel_transform.as_ref().unwrap().target, expected);
+        assert!(!crate::menus::is_enabled(&app, "edit.transform.warp"));
+        assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+        cancel(&mut app);
+    }
+}
+
+#[test]
+fn selected_scalar_channel_transform_opens_over_distant_sparse_mask_samples() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+    for target in [json!("mask"), json!({"channel":0}), json!("quickMask")] {
+        let mut app = app_with_square(64, Rect::new(8, 8, 24, 24));
+        if target == "mask" {
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":"mask"})).unwrap();
+            app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+        } else if target == "quickMask" {
+            app.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+        } else {
+            app.run("channel.new", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":0})).unwrap();
+        }
+        app.session
+            .edit("distant scalar samples", |doc, layer| {
+                let surface = if target == "mask" {
+                    &mut doc.layer_mut(layer.unwrap()).unwrap().mask.as_mut().unwrap().surface
+                } else if target == "quickMask" {
+                    &mut doc.quick_mask.as_mut().unwrap().surface
+                } else {
+                    &mut doc.channels[0].surface
+                };
+                *surface = Surface::new(surface.format());
+                surface.write_pixel(8, 8, &[1.0]);
+                surface.write_pixel(20_000, 6_000, &[0.5]);
+                let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                selection.fill_rect(Rect::new(8, 8, 24, 24), &[1.0]);
+                doc.selection = Some(selection);
+                Ok(())
+            })
+            .unwrap();
+        let st = app.session.active().unwrap();
+        let (before, eyes) = (st.doc.clone(), st.channel_view.clone());
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap_or_else(|e| panic!("{target}: {e}"));
+        let transform = app.ui.transform.as_ref().unwrap();
+        assert_eq!(transform.rect, [8.0, 8.0, 24.0, 24.0]);
+        assert_eq!(transform.target, Some(target));
+        assert!(photocraft_engine::channel_transform::locked(&app.session));
+        enter_warp(&mut app, &ctx);
+        assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
+        cancel(&mut app);
+        assert!(Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().channel_view, eyes);
+        assert!(!photocraft_engine::channel_transform::locked(&app.session));
+    }
+}
+
+#[test]
 fn right_click_menu_offers_warp_for_a_path() {
     // Photoshop's Transform Path menu has Warp too (#3027).
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
@@ -2142,6 +2316,83 @@ fn free_transform_a_copy_of_a_linked_layer_boxes_the_link_group_without_a_copy()
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "an unlinked layer is copied");
     assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(MadeLayer::Copy));
     cancel(&mut app);
+}
+
+#[test]
+fn free_transform_a_copy_of_a_colour_on_a_linked_layer_stays_isolated() {
+    for selected in [false, true] {
+        for landed in [false, true] {
+            let (mut app, source, linked, _) = linked_layers_app();
+            app.session.tools.background = [0.0, 0.0, 0.0, 1.0];
+            app.run("channel.target", json!({"channel": "red"})).unwrap();
+            if selected {
+                app.run("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 16})).unwrap();
+            }
+            let before = app.session.active().unwrap().doc.clone();
+            begin_copy(&mut app, &egui::Context::default()).unwrap();
+            let copy = app.session.active().unwrap().active_layer.unwrap();
+            assert_ne!(copy, source, "a colour target makes a copy even on a linked host");
+            assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len() + 1);
+            let t = app.ui.transform.as_ref().unwrap();
+            assert_eq!(t.target, Some(json!({"color": 0})));
+            assert!(t.layers.is_empty(), "the linked group must not become the edit target");
+            let copied = app.session.active().unwrap().doc.layer(copy).unwrap().surface().unwrap().clone();
+            super::nudge(&mut app, 4.0, 0.0);
+            if landed {
+                commit(&mut app);
+                assert!(!app.ui.status_error, "{}", app.ui.status);
+                let doc = &app.session.active().unwrap().doc;
+                assert_eq!(doc.layer(source), before.layer(source));
+                assert_eq!(doc.layer(linked), before.layer(linked));
+                let result = doc.layer(copy).unwrap().surface().unwrap();
+                for y in 0..64 {
+                    for x in 0..64 {
+                        for component in [1, 2, 3] {
+                            assert_eq!(result.sample_channel(x, y, component), copied.sample_channel(x, y, component));
+                        }
+                    }
+                }
+                assert_ne!(result, &copied);
+                app.session.undo();
+            } else {
+                cancel(&mut app);
+            }
+            assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+        }
+    }
+}
+
+#[test]
+fn free_transform_a_copy_from_a_linked_filter_mask_view_boxes_the_link_group() {
+    for mode in ["gray", "overlay"] {
+        for colors in [vec![0], vec![0, 2]] {
+            let (mut app, _, linked, _) = linked_layers_app();
+            app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            let smart = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("filter mask", |doc, _| {
+                    let LayerContent::Smart(content) = &mut doc.layer_mut(smart).unwrap().content else { panic!("not a smart object") };
+                    content.filter_mask = Some(photocraft_doc::LayerMask::reveal_all());
+                    Ok(())
+                })
+                .unwrap();
+            app.run("layer.select", json!({"layer": linked.0, "mode": "add"})).unwrap();
+            app.run("layer.linkLayers", json!({"linked": true})).unwrap();
+            app.run("layer.select", json!({"layer": smart.0})).unwrap();
+            app.run("channel.target", json!({"colors": colors})).unwrap();
+            app.run("view.layerMask", json!({"mask": "filter", "mode": mode})).unwrap();
+            let before = app.session.active().unwrap().doc.clone();
+            begin_copy(&mut app, &egui::Context::default()).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len(), "a filter-mask view still transforms the whole object");
+            let t = app.ui.transform.as_ref().unwrap();
+            assert_eq!(t.made, None);
+            assert_eq!(t.layers.len(), 2);
+            assert!(t.layers.contains(&smart.0) && t.layers.contains(&linked.0));
+            assert!(app.transform_preview.as_ref().unwrap().channel.is_none());
+            cancel(&mut app);
+            assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+        }
+    }
 }
 
 /// #11217: the box over one selected linked layer frames, previews and commits its whole link
@@ -3257,14 +3508,15 @@ fn preview_of_a_clipped_smart_object_is_not_empty() {
 fn targeted_unlinked_mask_transforms_alone_through_the_box() {
     let mut app = masked_app(false);
     app.ui.mask_target = true;
+    app.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
     let ctx = egui::Context::default();
     begin(&mut app, &ctx).unwrap();
     let t = app.ui.transform.as_ref().unwrap();
     assert_eq!(t.target, Some(json!("mask")));
     assert_eq!(t.rect, [0.0, 0.0, 16.0, 64.0], "the box frames the mask's content");
-    // The preview document shows the mask vacated (revealed).
+    // The captured preview source stays immutable.
     let pd = &app.transform_preview.as_ref().unwrap().doc;
-    assert!(pd.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(4, 4, 0) > 0.99);
+    assert!(pd.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(4, 4, 0) < 0.01);
     // Move the box 20 px right and commit.
     let t = app.ui.transform.as_mut().unwrap();
     t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
@@ -3275,11 +3527,11 @@ fn targeted_unlinked_mask_transforms_alone_through_the_box() {
     let m = &l.mask.as_ref().unwrap().surface;
     assert!(m.sample_channel(4, 30, 0) > 0.99 && m.sample_channel(30, 30, 0) < 0.01, "mask moved 20 px right");
     assert_eq!(l.surface().unwrap().content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels untouched");
-    // Warp mode doesn't apply to a lone mask.
+    // Warp uses the same isolated mask target.
     app.ui.mask_target = true;
     begin(&mut app, &ctx).unwrap();
     enter_warp(&mut app, &egui::Context::default());
-    assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
 }
 
 #[test]
@@ -3318,30 +3570,77 @@ fn mask_view_keeps_move_and_transform_available_behind_a_colour_set() {
 /// layer's own pixels take the link group's box without a copy.
 #[test]
 fn free_transform_a_copy_of_a_targeted_mask_on_a_linked_layer_still_copies() {
-    let mut app = masked_app(false);
-    let a = app.session.active().unwrap().active_layer.unwrap();
-    app.session.execute("layer.new.layer", json!({})).unwrap();
-    let b = app.session.active().unwrap().active_layer.unwrap();
-    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
-    app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
-    assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
-    app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
-    app.ui.mask_target = true;
-    let layers = app.session.active().unwrap().doc.layers.len();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransformCopy", json!({})).unwrap();
-    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the layer is copied");
-    assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(MadeLayer::Copy));
-    cancel(&mut app);
+    for shown in [false, true] {
+        let mut app = masked_app(false);
+        let a = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        let b = app.session.active().unwrap().active_layer.unwrap();
+        app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+        app.session.execute("layer.select", json!({"layer": b.0, "mode": "add"})).unwrap();
+        assert_eq!(app.session.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+        app.session.execute("layer.select", json!({"layer": a.0})).unwrap();
+        // A refused hidden target must not create a duplicate or discard an existing redo branch.
+        app.session
+            .edit("redo marker", |doc, _| {
+                doc.layer_mut(a).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(40, 40, 44, 44), &[0.0, 1.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        assert!(app.session.undo());
+        app.ui.mask_target = true;
+        if shown {
+            app.run("view.layerMask", json!({"mode": "overlay"})).unwrap();
+        }
+        let before = app.session.active().unwrap().doc.clone();
+        let history = app.session.active().unwrap().history.entries();
+        let future: Vec<_> = app.session.active().unwrap().history.redo_labels().map(str::to_owned).collect();
+        let eyes = app.session.active().unwrap().channel_view.clone();
+        let layers = app.session.active().unwrap().doc.layers.len();
+        let result = crate::menus::invoke(&mut app, &egui::Context::default(), "edit.freeTransformCopy", json!({}));
+        if !shown {
+            assert!(result.unwrap_err().contains(photocraft_engine::channel_transform::HIDDEN));
+            let st = app.session.active().unwrap();
+            assert!(Arc::ptr_eq(&before, &st.doc));
+            assert_eq!(st.history.entries(), history);
+            assert_eq!(st.history.redo_labels().collect::<Vec<_>>(), future);
+            assert_eq!(st.channel_view, eyes);
+            assert!(app.ui.transform.is_none());
+            continue;
+        }
+        result.unwrap();
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the layer is copied");
+        assert_eq!(app.ui.transform.as_ref().unwrap().made, Some(MadeLayer::Copy));
+        cancel(&mut app);
+    }
 }
 
 #[test]
-fn linked_mask_target_transforms_the_layer() {
+fn linked_mask_target_transforms_alone() {
     let mut app = masked_app(true);
     app.ui.mask_target = true;
+    app.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
     let ctx = egui::Context::default();
     begin(&mut app, &ctx).unwrap();
-    assert_eq!(app.ui.transform.as_ref().unwrap().target, None);
-    assert_eq!(app.ui.transform.as_ref().unwrap().rect, [8.0, 8.0, 24.0, 24.0]);
+    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!("mask")));
+    assert_eq!(app.ui.transform.as_ref().unwrap().rect, [0.0, 0.0, 16.0, 64.0]);
+}
+
+#[test]
+fn free_transform_a_copy_of_a_path_keeps_priority_over_a_hidden_colour() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 20], [10, 20]]}]}})).unwrap();
+    app.ui.tool = Tool::PathSelection;
+    app.run("channel.target", json!({"channel": "red"})).unwrap();
+    app.run("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
+    let before = app.session.active().unwrap().doc.clone();
+    let eyes = app.session.active().unwrap().channel_view.clone();
+    begin_copy(&mut app, &egui::Context::default()).unwrap();
+    assert_eq!(app.ui.transform.as_ref().unwrap().path, Some(json!({"name": "work"})));
+    assert_eq!(app.session.active().unwrap().channel_view, eyes);
+    cancel(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.layers, before.layers);
+    assert_eq!(app.session.active().unwrap().doc.work_path, before.work_path);
+    assert_eq!(app.session.active().unwrap().channel_view, eyes);
 }
 
 /// ⌘T with Path Selection and a path transforms the path, not the layer's pixels, as one
@@ -3662,6 +3961,70 @@ fn several_layers_reuse_the_transform_interpolation_preference() {
     let transform = app.ui.transform.as_ref().unwrap();
     assert_eq!(transform.layers.len(), 2);
     assert_eq!(transform.interpolation, "nearest");
+}
+
+#[test]
+fn selected_layers_keep_a_channel_transform_isolated_and_warp_available() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let st = app.session.active_mut().unwrap();
+    let first = st.active_layer.unwrap();
+    let mut other = photocraft_doc::Layer::raster("other", photocraft_color::PixelFormat::RGBA8);
+    other.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0., 1., 0., 1.]);
+    let second = other.id;
+    Arc::make_mut(&mut st.doc).layers.push(other);
+    st.selected_layers = vec![first, second];
+    app.run("channel.target", json!({"channel":"green"})).unwrap();
+    app.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+    let before = app.session.active().unwrap().doc.layer(second).unwrap().surface().unwrap().to_interleaved(photocraft_geom::Rect::new(0, 0, 64, 64));
+    let ctx = egui::Context::default();
+    begin(&mut app, &ctx).unwrap();
+    assert!(app.ui.transform.as_ref().unwrap().layers.is_empty());
+    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!({"color":1})));
+    begin_warp(&mut app, &ctx).unwrap();
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
+    app.run("channel.setVisible", json!({"channel":"green","visible":false})).unwrap();
+    end_if_left(&mut app);
+    assert!(app.ui.transform.is_some());
+    cancel(&mut app);
+    assert!(!app.session.active().unwrap().channel_view.color_visible(1));
+    assert_eq!(app.session.active().unwrap().doc.layer(second).unwrap().surface().unwrap().to_interleaved(photocraft_geom::Rect::new(0, 0, 64, 64)), before);
+}
+
+#[test]
+fn channel_jobs_restore_the_guard_but_cancelled_jobs_close_the_box() {
+    use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
+    for cancelled in [false, true] {
+        let mut a = app_with_square(64, photocraft_geom::Rect::new(4, 4, 28, 28));
+        a.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        crate::transform_tool::begin(&mut a, &egui::Context::default()).unwrap();
+        let t = a.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 2.0, y]);
+        let geometry = t.clone();
+        let before = a.session.active().unwrap().doc.clone();
+        a.run("channel.setVisible", json!({"channel":"blue","visible":false})).unwrap();
+        let eyes = a.session.active().unwrap().channel_view.clone();
+        a.session.active_mut().unwrap().channel_transform = None;
+        a.transform_preview.as_mut().unwrap().committing = Some(JobId(123));
+        let event = JobEvent {
+            id: JobId(123),
+            command: "edit.transform.warp".into(),
+            label: "Warp".into(),
+            document: Some(before.id),
+            outcome: if cancelled { JobOutcome::Cancelled } else { JobOutcome::Failed("synthetic refusal".into()) },
+            error: (!cancelled).then(|| photocraft_engine::EngineError::Other("synthetic refusal".into())),
+        };
+        crate::transform_tool::on_job_event(&mut a, &event);
+        assert!(Arc::ptr_eq(&before, &a.session.active().unwrap().doc));
+        assert_eq!(a.session.active().unwrap().channel_view, eyes);
+        assert_eq!(a.ui.transform.is_none(), cancelled);
+        assert_eq!(photocraft_engine::channel_transform::locked(&a.session), !cancelled);
+        if !cancelled {
+            assert_eq!(a.ui.transform, Some(geometry));
+            assert!(a.run("channel.target", json!({"channel":"green"})).is_err());
+            crate::transform_tool::cancel(&mut a);
+            assert!(!photocraft_engine::channel_transform::locked(&a.session));
+        }
+    }
 }
 
 /// #9974: the click waiting for the commit acts on the layer selected when it was made: no other

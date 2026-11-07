@@ -1,4 +1,4 @@
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warps_type};
+use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warp_refusal, warps_type};
 use super::options_bar::{rotate_about_pivot, scale_about_pivot};
 use super::{
     Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession,
@@ -14,6 +14,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     if committing(app).is_some() {
         return;
     }
+    let background = app.transform_preview.as_ref().and_then(|pv| pv.channel.as_ref()).map(|pv| pv.background());
     let document = app.transform_preview.as_ref().map(|pv| pv.doc.id);
     if document.is_some_and(|id| app.session.active().is_none_or(|st| st.doc.id != id)) {
         cancel(app);
@@ -22,6 +23,7 @@ pub fn commit(app: &mut PhotocraftApp) {
     let type_layer = warps_type(app);
     let Some(t) = app.ui.transform.take() else { return };
     let mut preview = app.transform_preview.take();
+    release_channel_guard(app);
     if crate::frame_tool::frame_transform(&t) {
         app.frame_preview = None;
         if t.quad != corners(t.rect) {
@@ -71,16 +73,21 @@ pub fn commit(app: &mut PhotocraftApp) {
         return;
     }
     let made = t.made;
+    if t.warp.as_ref().is_some_and(|w| w.is_identity() && !type_layer) || (t.warp.is_none() && t.quad == corners(t.rect)) {
+        return;
+    }
+    let live_background = app.session.tools.background;
+    if let Some(background) = background {
+        app.session.tools.background = background;
+    }
     let r = if let Some(w) = &t.warp {
         // Type with a Warp Text can be warped back to None; the engine skips an unchanged style.
-        if w.is_identity() && !type_layer {
-            return;
+        let mut params = json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation});
+        if let Some(target) = &t.target {
+            params["target"] = target.clone();
         }
-        app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation}))
+        app.run("edit.transform.warp", params)
     } else {
-        if t.quad == corners(t.rect) {
-            return; // untouched: nothing to do and no history step; a ⌥⌘T copy or a place stays
-        }
         let mut p = json!({"rect": t.rect, "quad": t.quad, "interpolation": t.interpolation});
         if t.layers.is_empty() {
             p["layer"] = json!(t.layer);
@@ -92,6 +99,7 @@ pub fn commit(app: &mut PhotocraftApp) {
         }
         app.run("edit.transform", p)
     };
+    app.session.tools.background = live_background;
     // A large layer's warp runs in the background: the session stays until the job ends.
     if let Ok(v) = &r
         && let Some(job) = v.get("pending").and_then(serde_json::Value::as_bool).filter(|p| *p).and(v.get("job")).and_then(serde_json::Value::as_u64)
@@ -118,7 +126,7 @@ fn finish(app: &mut PhotocraftApp, document: Option<DocId>, layer: LayerId, made
     if landed {
         fold_made(app, document, layer, made);
     } else {
-        take_back_made(app, document, layer);
+        take_back_made(app, document, layer, made == MadeLayer::Copy);
     }
 }
 
@@ -145,6 +153,7 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
         }
         return;
     }
+    release_channel_guard(app);
     let document = pv.doc.id;
     let landed = matches!(e.outcome, JobOutcome::Done(_));
     finish(app, Some(document), LayerId(t.layer), t.made, landed);
@@ -161,6 +170,18 @@ pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
 /// was, with the reason in the status bar, so the transform can be changed or cancelled. A copy or
 /// a placed layer it made goes only when it is cancelled.
 fn keep_open(app: &mut PhotocraftApp, t: TransformSession, preview: Option<TransformPreview>, e: String) {
+    if let Some(pv) = preview.as_ref().filter(|pv| pv.channel.is_some()) {
+        if let Some(st) = app.session.active_mut().filter(|st| st.doc.id == pv.doc.id) {
+            if let (Some(channel), Some(target)) = (&pv.channel, &t.target) {
+                st.channel_transform = Some(channel.guard(target.clone()));
+            }
+        } else {
+            release_channel_guard(app);
+            finish(app, Some(pv.doc.id), LayerId(t.layer), t.made, false);
+            app.ui.status = e;
+            return;
+        }
+    }
     app.ui.transform = Some(t);
     app.transform_preview = preview;
     app.ui.status = e;
@@ -191,7 +212,10 @@ pub fn end_if_left(app: &mut PhotocraftApp) {
     if editing_placed_smart_object {
         app.ui.transform = None;
         app.transform_preview = None;
-    } else if switched_document || moving_layers(t).iter().any(|id| st.doc.layer(*id).is_none()) || st.doc.layer(layer).is_none() {
+    } else if switched_document
+        || t.layers.iter().any(|id| st.doc.layer(LayerId(*id)).is_none())
+        || (st.doc.layer(layer).is_none() && t.target.as_ref().is_none_or(|p| p != "quickMask" && p.get("channel").is_none()))
+    {
         cancel(app);
     } else if switched_away(app) {
         commit(app);
@@ -271,6 +295,10 @@ pub fn follow_edits(app: &mut PhotocraftApp) {
     pv.doc = Arc::new(pd);
 }
 
+fn release_channel_guard(app: &mut PhotocraftApp) {
+    app.session.clear_channel_transforms();
+}
+
 pub fn cancel(app: &mut PhotocraftApp) {
     if app.ui.transform.as_ref().is_some_and(crate::frame_tool::frame_transform) {
         app.frame_preview = None;
@@ -282,12 +310,13 @@ pub fn cancel(app: &mut PhotocraftApp) {
         crate::jobs_ui::cancel(app, job);
         return;
     }
+    release_channel_guard(app);
     let transform = app.ui.transform.take();
     let preview = app.transform_preview.take();
     if let (Some(t), Some(pv)) = (transform, preview)
         && t.made.is_some()
     {
-        take_back_made(app, pv.doc.id, LayerId(t.layer));
+        take_back_made(app, pv.doc.id, LayerId(t.layer), t.made == Some(MadeLayer::Copy));
     }
 }
 
@@ -329,10 +358,7 @@ pub(crate) const SAVE_FOR_WEB: &str = "file.export.saveForWebLegacy";
 /// While transforming, Undo and Redo apply to the box: `Some(enabled)` for those commands (and
 /// Toggle Last State, which would change the document under the box), `None` for the rest.
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
-    if (matches!(id, "edit.freeTransform" | "edit.freeTransformCopy") || id.starts_with("edit.transform."))
-        && crate::vector_ui::free_transform_path(app).is_none()
-        && crate::canvas::multiple_color_target(app)
-    {
+    if id == "edit.freeTransformCopy" && crate::canvas::multiple_color_target(app) && crate::vector_ui::free_transform_path(app).is_none() {
         return Some(false);
     }
     let t = app.ui.transform.as_ref()?;
@@ -344,18 +370,19 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         // Content-Aware Scale's box only scales: no switching it to another transform or Warp.
         "edit.freeTransform" | "edit.freeTransformCopy" if t.content_aware.is_some() => Some(false),
         i if i.starts_with("edit.transform.") && t.content_aware.is_some() => Some(false),
-        "edit.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
-        "edit.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
+        "edit.undo" | "history.undo" => Some(steps.is_some_and(|s| s.can_undo(&Step::of(t)))),
+        "edit.redo" | "history.redo" => Some(steps.is_some_and(|s| !s.redo.is_empty())),
         // No Toggle Last State or history jump under the box, and one box at a time.
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
+        // Switching the captured channel box to Warp edits the session, not document pixels.
+        "edit.transform.warp" => Some(t.warp.is_none() && warp_refusal(t).is_none()),
+        "layer.smartObjects.warp" if warp_refusal(t).is_some() => Some(false),
         // Save for Web exports the committed document and would ignore the pending box (#6737).
         SAVE_FOR_WEB => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if box_preset(id).is_some() => Some(t.warp.is_none()),
         // One box over several layers doesn't warp (#6501).
-        "edit.transform.warp"
-        | "layer.smartObjects.warp"
-        | "edit.transform.splitWarpCrosswise"
+        "edit.transform.splitWarpCrosswise"
         | "edit.transform.splitWarpHorizontally"
         | "edit.transform.splitWarpVertically"
         | "edit.transform.removeWarpSplit"
@@ -397,7 +424,18 @@ fn box_preset(id: &str) -> Option<(f64, f64, f64)> {
 /// `None` for other commands or when not transforming.
 /// The commands the open box answers itself ([`is_enabled`], [`intercept`]).
 fn box_command(id: &str) -> bool {
-    matches!(id, "edit.undo" | "edit.redo" | "edit.toggleLastState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB) || box_preset(id).is_some()
+    matches!(
+        id,
+        "edit.undo"
+            | "edit.redo"
+            | "history.undo"
+            | "history.redo"
+            | "edit.toggleLastState"
+            | "history.selectState"
+            | "edit.contentAwareScale"
+            | "edit.puppetWarp"
+            | SAVE_FOR_WEB
+    ) || box_preset(id).is_some()
 }
 
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
@@ -406,8 +444,8 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json:
         return box_command(id).then(|| Err(if warping { STILL_WARPING } else { STILL_APPLYING }.into()));
     }
     match id {
-        "edit.undo" => Some(Ok(step(app, false))),
-        "edit.redo" => Some(Ok(step(app, true))),
+        "edit.undo" | "history.undo" => Some(Ok(step(app, false))),
+        "edit.redo" | "history.redo" => Some(Ok(step(app, true))),
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" | SAVE_FOR_WEB => {
             Some(Err("Commit or cancel the transform first".into()))
         }

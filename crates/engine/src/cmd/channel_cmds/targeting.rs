@@ -223,6 +223,10 @@ pub(crate) fn routed(id: &str) -> bool {
 
 /// Fill in `"target"` from the targeted channel (or Quick Mask mode) when the caller gave none.
 pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
+    // Geometric edits resolve individual colour components as well as masks and saved channels.
+    if id.starts_with("edit.transform") {
+        return params;
+    }
     if !routed(id) || params.get("target").is_some() {
         return params;
     }
@@ -274,7 +278,7 @@ pub(crate) fn filter_mask_layer(s: &Session, id: &str, params: &Value) -> Option
 
 /// The colour channel pixel commands are limited to, if a single colour channel is targeted.
 pub(crate) fn color_restriction(s: &Session, id: &str, params: &Value) -> Option<crate::color_channels::Restriction> {
-    if !routed(id) || is_channel_target(params) || crate::commands::is_mask_target(params) {
+    if id.starts_with("edit.transform") || !routed(id) || is_channel_target(params) || crate::commands::is_mask_target(params) {
         return None;
     }
     // Native plane implementations already write only the selected encoded samples. Avoid a
@@ -296,6 +300,135 @@ pub(crate) fn restrict_to_color(before: &Document, after: &mut Document, id: Lay
     let Some(new) = after.layer_mut(id).and_then(Layer::surface_mut) else { return Ok(()) };
     let extent = before.bounds().union(&old.content_bounds()).union(&new.content_bounds());
     crate::color_channels::restrict_surface_in(old, new, colors, extent)
+}
+
+/// The Move tool with colour channel `k` targeted (#6068): shift that channel of layer `id` by
+/// (`dx`, `dy`) and leave the other channels and the layer's transparency where they are, as
+/// Photoshop moves one channel. Where the channel moves away from it takes the background colour's
+/// value for it, as Clear does with a channel targeted (#2720). Shifted samples may extend past
+/// the original content; transparency and other components remain stationary.
+pub fn move_color_channel(doc: &mut Document, id: LayerId, k: usize, dx: i32, dy: i32, background: [f32; 4]) -> Result<()> {
+    let count = doc.layer(id).and_then(Layer::surface).map_or_else(|| color_count(doc), |s| s.format().mode.color_channels());
+    let colors = crate::color_channels::ColorChannels::from_indices([k], count)?;
+    move_color_channels(doc, id, colors, dx, dy, background)
+}
+
+/// Shift a native colour set in one tile pass, preserving every other encoded sample.
+pub fn move_color_channels(
+    doc: &mut Document,
+    id: LayerId,
+    colors: crate::color_channels::ColorChannels,
+    dx: i32,
+    dy: i32,
+    background: [f32; 4],
+) -> Result<()> {
+    let generation = photocraft_raster::spill::read_error_generation();
+    crate::channel_transform::retry_capture(doc)?;
+    let result = move_color_channels_inner(doc, id, colors, dx, dy, background);
+    crate::channel_transform::check_capture(doc, generation)?;
+    result
+}
+
+fn move_color_channels_inner(
+    doc: &mut Document,
+    id: LayerId,
+    colors: crate::color_channels::ColorChannels,
+    dx: i32,
+    dy: i32,
+    background: [f32; 4],
+) -> Result<()> {
+    if (dx != 0 || dy != 0) && colors.len() > 1 && doc.selection.is_some() {
+        return crate::channel_transform::move_selected_colors(doc, id, colors, dx, dy, background);
+    }
+    let space = photocraft_compose::cmyk_space(doc);
+    let surf = crate::commands::paint_surface(doc, id, &Value::Null)?;
+    let fmt = surf.format();
+    if colors.indices().any(|k| k >= fmt.mode.color_channels()) {
+        return Err(EngineError::Other("colour channel index is out of range".into()));
+    }
+    let area = surf.content_bounds();
+    if area.is_empty() || (dx == 0 && dy == 0) {
+        return Ok(());
+    }
+    let destination = color_move_destination(area, dx, dy)?;
+    let work = area.union(&destination);
+    let native = photocraft_color::convert::with_cmyk_space(space.as_ref(), || from_rgba(&fmt, background));
+    let bpp = fmt.bytes_per_pixel();
+    let bytes = fmt.sample.bytes();
+    let offsets: Vec<_> = colors.indices().map(|k| k * bytes).collect();
+    let mut encoded = [0u8; 20];
+    let pixel = encoded.get_mut(..bpp).ok_or_else(|| bad("layer.translate", "invalid pixel format"))?;
+    photocraft_raster::encode_pixel(&fmt, &native, pixel);
+    let fill = pixel;
+    // The snapshot keeps source samples intact while changed tiles copy on write. Work a tile at
+    // a time so a large channel move never needs two full-document pixel buffers.
+    let source = surf.clone();
+    for tile in work.tiles() {
+        let tile_rect = tile.rect();
+        let r = tile_rect.intersect(&destination);
+        let cleared = tile_rect.intersect(&area);
+        if r.is_empty() && cleared.is_empty() {
+            continue;
+        }
+        // Widen before subtracting: a hostile command may provide i32::MIN as an offset.
+        let sx0 = (i64::from(r.x0) - i64::from(dx)).max(i64::from(area.x0));
+        let sy0 = (i64::from(r.y0) - i64::from(dy)).max(i64::from(area.y0));
+        let sx1 = (i64::from(r.x1) - i64::from(dx)).min(i64::from(area.x1));
+        let sy1 = (i64::from(r.y1) - i64::from(dy)).min(i64::from(area.y1));
+        let shifted = if sx0 < sx1 && sy0 < sy1 {
+            let src = Rect::new(sx0 as i32, sy0 as i32, sx1 as i32, sy1 as i32);
+            Some((src, source.try_to_interleaved(src)?))
+        } else {
+            None
+        };
+        let mut data = surf.try_tile_mut(tile)?.bytes_mut();
+        let tile_width = photocraft_geom::TILE_SIZE as usize;
+        let width = cleared.width() as usize;
+        for y in cleared.y0..cleared.y1 {
+            let base = (((y - tile_rect.y0) as usize) * tile_width + (cleared.x0 - tile_rect.x0) as usize) * bpp;
+            let row = data.get_mut(base..base + width * bpp).ok_or_else(|| bad("layer.translate", "missing destination row"))?;
+            for &offset in &offsets {
+                let end = offset + bytes;
+                let value = fill.get(offset..end).ok_or_else(|| bad("layer.translate", "missing background component"))?;
+                for pixel in row.chunks_exact_mut(bpp) {
+                    pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing colour component"))?.copy_from_slice(value);
+                }
+            }
+        }
+        if let Some((src, values)) = shifted {
+            let sw = src.width() as usize;
+            let ox = (sx0 + i64::from(dx) - i64::from(tile_rect.x0)) as usize;
+            let oy = (sy0 + i64::from(dy) - i64::from(tile_rect.y0)) as usize;
+            for (y, row) in values.chunks_exact(sw * bpp).enumerate() {
+                let base = ((oy + y) * tile_width + ox) * bpp;
+                let dest = data.get_mut(base..base + sw * bpp).ok_or_else(|| bad("layer.translate", "missing shifted destination row"))?;
+                for &offset in &offsets {
+                    let end = offset + bytes;
+                    for (pixel, from) in dest.chunks_exact_mut(bpp).zip(row.chunks_exact(bpp)) {
+                        let sample = from.get(offset..end).ok_or_else(|| bad("layer.translate", "missing source component"))?;
+                        pixel.get_mut(offset..end).ok_or_else(|| bad("layer.translate", "missing destination component"))?.copy_from_slice(sample);
+                    }
+                }
+            }
+        }
+    }
+    surf.prune();
+    Ok(())
+}
+
+/// Validate native Move reach and the complete writeback area before either preview or edit.
+pub fn color_move_destination(area: Rect, dx: i32, dy: i32) -> Result<Rect> {
+    crate::channel_transform::validate_area(area)?;
+    let shifted = |value: i32, offset: i32| value.checked_add(offset).ok_or_else(|| bad("layer.translate", "channel move coordinates are out of range"));
+    let destination = Rect::new(shifted(area.x0, dx)?, shifted(area.y0, dy)?, shifted(area.x1, dx)?, shifted(area.y1, dy)?);
+    if [area.x0, area.y0, area.x1, area.y1, destination.x0, destination.y0, destination.x1, destination.y1]
+        .iter()
+        .any(|v| i64::from(*v).unsigned_abs() > 1 << 28)
+    {
+        return Err(bad("layer.translate", "channel move coordinates are out of range"));
+    }
+    crate::channel_transform::validate_area(area.union(&destination))?;
+    Ok(destination)
 }
 
 /// Clear (Delete) with colour channel `k` of layer `id` targeted (#2720): fill the selected area
@@ -391,8 +524,8 @@ pub(super) fn target(s: &mut Session, t: ChannelTarget) {
                 v.alpha_visible = (0..n).map(|c| c == i).collect();
             }
         }
-        fix_view_now(st);
     }
+    fix_view_now(s);
     s.tools.target_mask(t == ChannelTarget::LayerMask);
 }
 
