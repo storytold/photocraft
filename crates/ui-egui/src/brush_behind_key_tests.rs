@@ -68,6 +68,27 @@ fn brush_and_pencil_select_behind_in_one_command() {
     }
 }
 
+/// A shortcut on the start screen must leave both the live brush and its owning tool alone.
+#[test]
+fn brush_and_pencil_do_not_select_behind_without_a_document() {
+    for (tool, brush_tool) in [(Tool::Brush, Tool::Pencil), (Tool::Pencil, Tool::Brush)] {
+        let mut app = PhotocraftApp::new(Session::new(), Default::default());
+        assert!(app.session.active().is_none());
+        app.ui.tool = tool;
+        app.ui.brush_tool = brush_tool;
+        app.ui.tool_options.brush_clear = true;
+        app.ui.tool_options.pencil_clear = true;
+        app.session.tools.brush.mode = BlendMode::Multiply;
+        let brush = app.session.execute("brush.get", json!({})).unwrap();
+        let before = app.session.journal.len();
+        press_behind(&mut app, &Context::default());
+        assert_eq!(app.session.journal.len(), before);
+        assert_eq!(app.session.execute("brush.get", json!({})).unwrap(), brush);
+        assert_eq!(app.ui.brush_tool, brush_tool);
+        assert!(app.ui.tool_options.brush_clear && app.ui.tool_options.pencil_clear);
+    }
+}
+
 /// The same Background restriction used by the menu applies before the shortcut changes settings.
 #[test]
 fn background_does_not_accept_behind() {

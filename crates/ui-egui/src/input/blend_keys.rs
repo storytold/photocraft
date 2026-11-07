@@ -267,7 +267,7 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
         Pick::Behind => {
             let item = crate::brush_mode_menu::Item::Behind;
             let tool = app.ui.tool;
-            if !crate::brush_mode_menu::enabled(app, item) {
+            if app.session.active().is_none() || !crate::brush_mode_menu::enabled(app, item) {
                 return;
             }
             let Some((id, params)) = crate::brush_mode_menu::engine_call(app, tool, item) else { return };
