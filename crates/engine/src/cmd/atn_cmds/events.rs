@@ -6,6 +6,7 @@ use super::descriptors::{
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
 use super::steps_artboard::{artboard_edit_from, artboard_edit_to, artboard_from, artboard_to};
 use super::steps_channels::{match_color_from, match_color_to, merge_spot_from, merge_spot_to, split_from, split_to, trap_from, trap_to};
+use super::steps_content_aware::{caf_from, caf_to};
 use super::steps_direct_adjustments::{gradient_from, gradient_to, replace_from, replace_to};
 use super::steps_distort::{PINCH, POLAR, SPHERIZE, TWIRL, ZIGZAG, keys_from, keys_to, shear_from, shear_to, wave_from, wave_to};
 use super::steps_doc::{
@@ -274,16 +275,22 @@ fn target_only_to(_: &str, p: &Value) -> Option<Descriptor> {
 
 const SHAPE_BLUR: &[F] = &[F("Rds ", "radius", Kind::Px)];
 
-/// Map the radius-only Shape Blur form; keep custom assets or extra keys unsupported.
+/// Dispatch the radius-only and installed custom-shape forms through one event.
 fn shape_blur_from(d: &Descriptor) -> Mapped {
+    if d.get("customShape").is_some() {
+        return super::steps_shape_blur::from(d);
+    }
     let unsupported = Mapped::Unsupported { harmless: false };
     let Some(p) = fields_from(d, SHAPE_BLUR) else { return unsupported };
     let p = Value::Object(p);
     if shape_blur_to("filter.blur.shapeBlur", &p).is_some_and(|expected| d.items == expected.items) { step("filter.blur.shapeBlur", p) } else { unsupported }
 }
 
-/// Write an optional finite 5–1000 pixel radius, refusing explicit shapes and other options.
-fn shape_blur_to(_: &str, p: &Value) -> Option<Descriptor> {
+/// Keep both represented forms; arbitrary native geometry and other options still refuse export.
+fn shape_blur_to(id: &str, p: &Value) -> Option<Descriptor> {
+    if ["shapeName", "shapeId", "shapeOriginType"].iter().any(|key| p.get(*key).is_some()) {
+        return super::steps_shape_blur::to(id, p);
+    }
     if !params(p, &["radius"]) {
         return None;
     }
@@ -657,6 +664,14 @@ pub(super) const EVENTS: &[Event] = &[
     // Adjustments (Image › Adjustments).
     Event {
         code: "",
+        name: "colorLookup",
+        label: "Color Lookup",
+        ids: &["image.adjustments.colorLookup"],
+        from: super::steps_lookup::from,
+        to: super::steps_lookup::to,
+    },
+    Event {
+        code: "",
         name: "adaptCorrect",
         label: "Shadows/Highlights",
         ids: &["image.adjustments.shadowsHighlights"],
@@ -771,6 +786,30 @@ pub(super) const EVENTS: &[Event] = &[
     target_event!("disableLayerStyle", "Clear Layer Style", "layer.layerStyle.clear"),
     target_event!("rasterizeAll", "Rasterize All Layers", "layer.rasterize.allLayers"),
     target_event!("addBlankVideoLayer", "New Blank Video Layer", "layer.videoLayers.newBlankVideoLayer"),
+    Event {
+        code: "",
+        name: "insertBlankFrame",
+        label: "Insert Blank Frame",
+        ids: &["layer.videoLayers.insertBlankFrame"],
+        from: |d| super::steps_video::from(d, "layer.videoLayers.insertBlankFrame"),
+        to: |_, p| super::steps_video::to(p),
+    },
+    Event {
+        code: "",
+        name: "duplicateFrame",
+        label: "Duplicate Frame",
+        ids: &["layer.videoLayers.duplicateFrame"],
+        from: |d| super::steps_video::from(d, "layer.videoLayers.duplicateFrame"),
+        to: |_, p| super::steps_video::to(p),
+    },
+    Event {
+        code: "",
+        name: "deleteFrame",
+        label: "Delete Frame",
+        ids: &["layer.videoLayers.deleteFrame"],
+        from: |d| super::steps_video::from(d, "layer.videoLayers.deleteFrame"),
+        to: |_, p| super::steps_video::to(p),
+    },
     target_event!("isolateLayers", "Isolate Layers", "select.isolateLayers"),
     target_event!("textLoadDefaultTypeStyles", "Load Default Type Styles", "type.loadDefaultTypeStyles"),
     target_event!("textSaveDefaultTypeStyles", "Save Default Type Styles", "type.saveDefaultTypeStyles"),
@@ -798,7 +837,9 @@ pub(super) const EVENTS: &[Event] = &[
         name: "make",
         label: "Make",
         ids: &[
+            "image.calculations",
             "type.convertToShape",
+            "type.createWorkPath",
             "layer.new.layer",
             "layer.layerStyle.createLayer",
             "layer.new.group",
@@ -808,6 +849,7 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.new.layerViaCut",
             "layer.newFillLayer.solidColor",
             "layer.newFillLayer.pattern",
+            "layer.newFillLayer.gradient",
             "layer.newAdjustmentLayer.levels",
             "layer.newAdjustmentLayer.curves",
             "layer.newAdjustmentLayer.hueSaturation",
@@ -852,6 +894,7 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.setLabelColor",
             "layer.setAdjustment",
             "layer.fill.pattern.set",
+            "gradient.fill.set",
             "layer.new.layerFromBackground",
             "layer.layerStyle.blendingOptions",
             "layer.smartFilter.blendingOptions",
@@ -914,6 +957,22 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("", "newPlacedLayer", "Convert to Smart Object", "layer.smartObjects.convertToSmartObject", &[]),
     ev!("", "placedLayerEditContents", "Edit Contents", "layer.smartObjects.editContents", &[]),
     ev!("", "updatePlacedLayer", "Update Smart Objects", "layer.smartObjects.updateModifiedContent", &[]),
+    Event {
+        code: "",
+        name: "applyImageStackPluginRenderer",
+        label: "Stack Mode",
+        ids: super::steps_stack::MODE_IDS,
+        from: super::steps_stack::mode_from,
+        to: super::steps_stack::mode_to,
+    },
+    Event {
+        code: "",
+        name: "imageStackConvertSmartObject",
+        label: "Stack Mode: None",
+        ids: &[super::steps_stack::NONE],
+        from: super::steps_stack::none_from,
+        to: super::steps_stack::none_to,
+    },
     target_event!("placedLayerMakeCopy", "New Smart Object via Copy", "layer.smartObjects.newSmartObjectViaCopy"),
     target_event!("placedLayerConvertToLayers", "Convert to Layers", "layer.smartObjects.convertToLayers"),
     target_event!("placedLayerConvertToEmbedded", "Convert to Embedded", "layer.smartObjects.convertToEmbedded"),
@@ -1051,6 +1110,22 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("", "autoCutout", "Select Subject", "select.subject", &[F("sampleAllLayers", "sampleAllLayers", Kind::Bool)]),
     Event { code: "ClrR", name: "colorRange", label: "Color Range", ids: &["select.colorRange"], from: color_range_from, to: color_range_to },
     // Edit.
+    Event {
+        code: "",
+        name: "perspectiveWarpTransform",
+        label: "Perspective Warp",
+        ids: &[crate::distort_cmds::PERSPECTIVE],
+        from: super::steps_perspective_warp::from,
+        to: super::steps_perspective_warp::to,
+    },
+    Event {
+        code: "Grdn",
+        name: "gradientClassEvent",
+        label: "Gradient",
+        ids: &["paint.gradient"],
+        from: super::steps_gradient::from,
+        to: super::steps_gradient::to,
+    },
     Event { code: "Fl  ", name: "fill", label: "Fill", ids: &["edit.fill", "paint.bucket"], from: fill_from, to: fill_to },
     Event {
         code: "Strk",
@@ -1094,6 +1169,7 @@ pub(super) const EVENTS: &[Event] = &[
         from: |d| profile_from(d, "edit.convertToProfile"),
         to: profile_to,
     },
+    Event { code: "", name: "cafWorkspace", label: "Content-Aware Fill", ids: &["edit.contentAwareFill"], from: caf_from, to: caf_to },
     // File and actions.
     Event { code: "Cls ", name: "close", label: "Close", ids: &["file.close"], from: close_from, to: close_to },
     Event { code: "Expr", name: "export", label: "Export", ids: &["file.export.saveForWebLegacy"], from: export_from, to: export_to },
@@ -1103,6 +1179,14 @@ pub(super) const EVENTS: &[Event] = &[
     Event { code: "save", name: "save", label: "Save", ids: &["file.save", "file.saveAs", "file.saveACopy"], from: save_from, to: save_to },
     ev!("Rvrt", "revert", "Revert", "file.revert", &[]),
     Event { code: "Ply ", name: "play", label: "Play", ids: &["actions.play"], from: play_from, to: play_to },
+    Event {
+        code: "Btch",
+        name: "batch",
+        label: "Batch",
+        ids: &["file.automate.batch"],
+        from: super::steps_batch::batch_from,
+        to: super::steps_batch::batch_to,
+    },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },
 ];
@@ -1126,6 +1210,7 @@ const LEGACY_CODES: &[(&str, &str)] = &[
 /// reference application reports `IntW` and `Dstr` as `interfaceWhite` and `distort` at run time.
 const NAME_ALIASES: &[(&str, &str)] = &[("interfaceWhite", "intersectWith"), ("distort", "distribute")];
 
+/// Match populated event identifiers, retaining legacy code aliases on import.
 pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
     let by_name = |name: &str| EVENTS.iter().find(|e| !e.name.is_empty() && e.name == name);
