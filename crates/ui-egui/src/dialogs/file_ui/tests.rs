@@ -1073,6 +1073,84 @@ fn print_dialog_does_not_inherit_scripted_send_override() {
     }
 }
 
+/// #9704: Width and Height take a fractional size, such as a 2.5 in card, and keep it as typed.
+#[test]
+fn print_size_keeps_a_typed_fractional_width() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    // 30 × 15 in: wide enough that a scale rounded to 0.01 % would move 2.5 in to 2.499 in.
+    app.run("file.new", json!({"width": 3000, "height": 1500, "resolution": 100})).unwrap();
+    app.session.printer_source =
+        Some(Arc::new(|| vec![craft_print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    // Opened once the fonts are set up: the harness draws a frame as it is built.
+    let id = open_print(h.state_mut());
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    f.insert("units".into(), json!("in"));
+    f.insert("dryRun".into(), json!(true));
+    h.run_steps(3);
+    h.get_by_role_and_label(Role::SpinButton, "Width").click();
+    h.run_steps(1);
+    for c in "2.5".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+    // Tab leaves the field (Enter would confirm the dialog).
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Width").value().as_deref(), Some("2.5"));
+    let app = h.state_mut();
+    let doc = app.session.active().unwrap().doc.clone();
+    let f = app.ui.dialog_mut(id).unwrap().fields.clone();
+    let l = photocraft_engine::print_cmds::layout(&doc, &print_params(&f), "file.print").unwrap();
+    assert!((l.rect.2 - 2.5 * 72.0).abs() < 1e-6, "printed width {} pt", l.rect.2);
+    assert!((l.rect.3 - 1.25 * 72.0).abs() < 1e-6, "printed height {} pt", l.rect.3);
+}
+
+/// Tabbing through the linked Width, which shows its exact value rounded to two decimals, leaves
+/// the typed Height as it is: only an edit writes the size back.
+#[test]
+fn print_size_survives_leaving_the_linked_field() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 120, "height": 168, "resolution": 72})).unwrap();
+    app.session.printer_source =
+        Some(Arc::new(|| vec![craft_print::Printer { name: "Test printer".into(), default: true, two_sided: None, description: String::new() }]));
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open_print(h.state_mut());
+    let f = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    f.insert("units".into(), json!("cm"));
+    f.insert("dryRun".into(), json!(true));
+    h.run_steps(3);
+    let height = |h: &mut Harness<'_, PhotocraftApp>| {
+        let app = h.state_mut();
+        let doc = app.session.active().unwrap().doc.clone();
+        let f = app.ui.dialog_mut(id).unwrap().fields.clone();
+        photocraft_engine::print_cmds::layout(&doc, &print_params(&f), "file.print").unwrap().rect.3
+    };
+    h.get_by_role_and_label(Role::SpinButton, "Height").click();
+    h.run_steps(1);
+    for c in "8".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    let typed = 8.0 * 72.0 / 2.54;
+    assert!((height(&mut h) - typed).abs() < 1e-6, "typed height {} pt", height(&mut h));
+    // In and out of Width (8 cm × 120/168 = 5.714… cm, shown as 5.71) without typing.
+    h.get_by_role_and_label(Role::SpinButton, "Width").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(h.get_by_role_and_label(Role::SpinButton, "Height").value().as_deref(), Some("8"));
+    assert!((height(&mut h) - typed).abs() < 1e-6, "height {} pt after leaving Width", height(&mut h));
+}
+
 /// The Orientation buttons show the driver paper's shape: landscape when it is wider than tall.
 #[test]
 fn orientation_follows_the_driver_paper() {
