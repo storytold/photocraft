@@ -332,6 +332,7 @@ impl FontDb {
         if added > 0 {
             self.ps_cache.clear();
             self.face_cache.clear();
+            self.traits_cache.clear();
             self.refresh_generics();
             self.bump_generation();
         }
@@ -1298,14 +1299,30 @@ mod tests {
         let g = super::generation();
         assert_eq!(db.add_system_font_files(vec![file.clone()]), 1);
         assert!(super::generation() > g, "an added file moves the generation");
-        let g = super::generation();
-        // The same file again, also spelled another way.
+        // The same file again, also spelled another way. (Not checked through the generation: it is
+        // process-wide, and tests running beside this one move it.)
         assert_eq!(db.add_system_font_files(vec![file.clone(), dir.join(".").join("Activated.ttf")]), 0);
-        assert_eq!(super::generation(), g, "nothing new, nothing moves");
         let after = db.system_fonts_seen().unwrap();
         assert_eq!(after.files.len(), before.files.len() + 1);
         assert!(after.files.contains(&file.canonicalize().unwrap()));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A family the font menu asked about before it was activated (no traits then) gets its traits
+    /// once a rescan adds it, instead of staying unknown until restart.
+    #[test]
+    fn a_rescanned_family_gets_its_traits() {
+        let mut db = super::FontDb::new();
+        db.load_system_fonts();
+        let dir = std::env::temp_dir().join(format!("photocraft-rescan-traits-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Activated.ttf");
+        std::fs::write(&file, super::font_names_tests::numeric_font(&super::INTER_REGULAR, "Rescan", "RescanPS")).unwrap();
+        assert!(db.family_traits("Numeric Test").is_none());
+        assert_eq!(db.add_system_font_files(vec![file]), 1);
+        let traits = db.family_traits("Numeric Test");
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(traits.is_some(), "the added family's traits are read, not the cached miss");
     }
 
     /// Right after the scan a rescan finds nothing new: the scan loaded every file the folders
