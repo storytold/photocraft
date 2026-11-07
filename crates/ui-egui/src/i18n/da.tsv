@@ -111,7 +111,6 @@
 	Export As…	Eksportér som…
 	Export	Eksportér
 	Export…	Eksportér…
-	Quick Export As PNG	Hurtig eksport som PNG
 	Quick Export as PNG	Hurtig eksport som PNG
 	Place Embedded…	Placér indlejret…
 	Place Linked…	Placér sammenkædet…
@@ -315,7 +314,6 @@
 	All	Alle
 	Deselect	Fjern markering
 	Reselect	Markér igen
-	Inverse Selection	Invertér markering
 	Inverse	Invertér
 	Color Range…	Farveområde…
 	Select and Mask…	Markér og maskér…
@@ -606,8 +604,8 @@
 	Background	Baggrund
 	Set foreground color	Angiv forgrundsfarve
 	Set background color	Angiv baggrundsfarve
-	Swap colours (X)	Ombyt farver (X)
-	Default colours (D)	Standardfarver (D)
+	Switch Foreground and Background Colors (X)	Byt om på forgrunds- og baggrundsfarver (X)
+	Default Foreground and Background Colors (D)	Standard forgrunds- og baggrundsfarver (D)
 	Brush Tool Options	Penselværktøjsindstillinger
 	Opacity	Opacitet
 	Flow	Gennemstrømning
@@ -1614,7 +1612,7 @@
 	Revert “{name}” to the last saved version? Your changes will be lost.	Gendan »{name}« til den sidst gemte version? Dine ændringer går tabt.
 	{key} to subtract	{key} for at trække fra
 	↑↓ navigate   {key} run   esc close	↑↓ navigér   {key} kør   esc luk
-	Click to restore the current colour	Klik for at gendanne den aktuelle farve
+	Click to restore the current color	Klik for at gendanne den aktuelle farve
 	Click with the Note tool to add a note.	Klik med noteværktøjet for at tilføje en note.
 	Drag a rectangle around the object	Træk et rektangel omkring objektet
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Træk på billedet for at tilføje en begrænsning; Shift for vandret/lodret; højreklik på en begrænsning for at ændre eller slette den.
@@ -1696,10 +1694,10 @@
 	Drag to move the active layer	Træk for at flytte det aktive lag
 	Drag to pan  ·  hold Space with any tool	Træk for at panorere  ·  hold mellemrumstasten nede med et hvilket som helst værktøj
 	Drag to draw a gradient	Træk for at tegne en gradient
-	Click to fill similar colours	Klik for at udfylde lignende farver
+	Click to fill similar colors	Klik for at udfylde lignende farver
 	Click to add text	Klik for at tilføje tekst
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Træk (lasso) eller klik på punkter (polygonalt) · {add} tilføj · {sub} træk fra
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Træk en beskæringsramme · træk inde i den for at flytte · kanter ændrer størrelse ({ratio}-forhold, {centre} centreret) · Mellemrumstasten flytter, mens du tegner · piletaster skubber · X bytter orientering · {commit} bekræfter · Esc annullerer
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Træk en beskæringsramme · træk inde i den for at flytte · kanter ændrer størrelse ({ratio}-forhold, {centre} centreret) · Mellemrumstasten flytter, mens du tegner · piletaster skubber · X bytter orientering · {commit} bekræfter · Esc annullerer
 	{mode} Color · {bits} bit	{mode}-farve · {bits} bit
 	Drag to move the layer	Træk for at flytte laget
 	Fit Screen	Tilpas til skærm
@@ -1731,7 +1729,7 @@
 	Appearance	Udseende
 	Text Position:	Tekstplacering:
 	Text color	Tekstfarve
-	Uses the foreground and background colours.	Bruger forgrundsfarven og baggrundsfarven.
+	Uses the foreground and background colors.	Bruger forgrundsfarven og baggrundsfarven.
 	Answer the unsaved-changes prompt first	Besvar først dialogen om ikke-gemte ændringer
 	Unsaved changes	Ugemte ændringer
 	Don't Save	Gem ikke
@@ -1751,7 +1749,7 @@
 	name	navn
 	new	ny
 	Go to Layer	Gå til lag
-	Open a document to select a colour range.	Åbn et dokument for at markere et farveområde.
+	Open a document to select a color range.	Åbn et dokument for at markere et farveområde.
 	Saved	Gemt
 	Reveal in Finder	Vis i Finder
 	Show in Explorer	Vis i Stifinder
@@ -1929,8 +1927,8 @@
 	Character Styles Panel	Tegnstilpanel
 	Clear Canvas Guides	Ryd lærredshjælpelinjer
 	Clear Selected Artboard Guides	Ryd hjælpelinjer på markeret tavle
-	Color Blindness — Deuteranopia-type	Farveblindhed — deuteranopi-type
-	Color Blindness — Protanopia-type	Farveblindhed — protanopi-type
+	Color Blindness - Deuteranopia-type	Farveblindhed — deuteranopi-type
+	Color Blindness - Protanopia-type	Farveblindhed — protanopi-type
 	Color Table…	Farvetabel…
 	Combine Shapes	Kombinér former
 	Contract…	Formindsk…
@@ -2104,7 +2102,7 @@
 	Canvas	Lærred
 	Capture	Optag
 	Center Crop Marks	Centrerede beskæringsmærker
-	Centre the gradient (offset 0, 0)	Centrér gradienten (forskydning 0, 0)
+	Center the gradient (offset 0, 0)	Centrér gradienten (forskydning 0, 0)
 	Change Screen Mode  (F)	Skift skærmtilstand  (F)
 	Change To:	Ændr til:
 	Clear All	Ryd alt
@@ -2256,7 +2254,7 @@
 	Roughness	Ruhed
 	Roundness	Rundhed
 	Rulers & Grids	Linealer og gitter
-	Sample: foreground colour	Prøve: forgrundsfarve
+	Sample: foreground color	Prøve: forgrundsfarve
 	Sampling: Background Swatch	Prøvetagning: baggrundsfarveprøve
 	Sampling: Continuous	Prøvetagning: fortløbende
 	Sampling: Once	Prøvetagning: én gang
@@ -2529,7 +2527,7 @@
 	Alt-click to define a source point to clone from	Alt-klik for at definere et kildepunkt at klone fra
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Ingen sti at lave en markering ud fra: tegn én med penværktøjet, eller markér én i panelet Stier.
 	Cancel opening	Annullér åbning
-	Cancelled opening {name}	Annullerede åbning af {name}
+	Canceled opening {name}	Annullerede åbning af {name}
 	Damaged Photoshop document	Beskadiget Photoshop-dokument
 	The document “{name}” may be damaged.	Dokumentet »{name}« er muligvis beskadiget.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Nogle lag, pixels eller masker kunne ikke læses. Vil du fortsætte med at åbne det?
@@ -2539,7 +2537,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokumentet »{name}« har en indlejret farveprofil, der ikke stemmer overens med det aktuelle {mode}-arbejdsfarverum.
 	Working: {working}	Arbejdsfarverum: {working}
 	Developing {name}	Fremkalder {name}
-	Cancelled {label}	Annullerede {label}
+	Canceled {label}	Annullerede {label}
 	Esc to cancel	Esc for at annullere
 	Opened {name}	Åbnede {name}
 	Opening {name}	Åbner {name}
@@ -2547,7 +2545,7 @@
 	Saving {name}	Gemmer {name}
 	Saving {percent}	Gemmer {percent}
 	A save to {name} is still running; try again when it finishes	Der gemmes stadig til {name}; prøv igen, når det er afsluttet
-	{label} is writing the file and can no longer be cancelled	{label} skriver filen og kan ikke længere annulleres
+	{label} is writing the file and can no longer be canceled	{label} skriver filen og kan ikke længere annulleres
 	Opening {name}…	Åbner {name}…
 	Opening…	Åbner…
 	Reading…	Læser…
@@ -2644,7 +2642,7 @@ cameraRaw	Roughness	Ruhed
 	Discard Layers and Save a Copy	Kassér lag, og gem en kopi
 	Don't show again	Vis ikke igen
 	Save failed: {error}	Kunne ikke gemme: {error}
-	Save cancelled	Gemning annulleret
+	Save canceled	Gemning annulleret
 	Couldn't place {name}: {error}	Kunne ikke placere {name}: {error}
 	Magnetic Lasso Tool	Magnetisk lassoværktøj
 	Frequency	Frekvens
@@ -2788,7 +2786,7 @@ fontWeight	Italic	Kursiv
 	Impressionist	Impressionistisk
 	Rotate View Tool	Værktøj til at rotere visningen
 	Reset View	Nulstil visning
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Træk rundt om midtpunktet for at rotere visningen  ·  Shift låser til 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Træk rundt om midtpunktet for at rotere visningen  ·  Shift låser til 15°
 
 # Painting symmetry presets.
 	Dual Axis	Dobbelt akse
@@ -2808,11 +2806,11 @@ fontWeight	Italic	Kursiv
 	All Layers No Adjustments	Alle lag uden justeringer
 	Current & Below No Adjustments	Aktuelt og nedenunder uden justeringer
 	Show Sampling Ring	Vis prøvetagningsring
-	Click to sample the foreground colour  ·  {key}-click for background	Klik for at tage prøve af forgrundsfarven  ·  {key}-klik for baggrundsfarven
+	Click to sample the foreground color  ·  {key}-click for background	Klik for at tage prøve af forgrundsfarven  ·  {key}-klik for baggrundsfarven
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Uden for gamut ved udskrivning: klik for at få den nærmeste udskrivbare farve
-	Not a web colour: click for the nearest web colour	Ikke en webfarve: klik for at få den nærmeste webfarve
+	Out of gamut for printing: click for the nearest printable color	Uden for gamut ved udskrivning: klik for at få den nærmeste udskrivbare farve
+	Not a web color: click for the nearest web color	Ikke en webfarve: klik for at få den nærmeste webfarve
 	Color to Alpha…	Farve til alfa…
 	Transparency Threshold	Grænseværdi for gennemsigtighed
 	Opacity Threshold	Grænseværdi for opacitet
@@ -3230,7 +3228,7 @@ curves	Smooth	Udjævn
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Kryds ikke også Spejlbillede af i Udskriftsindstillinger…: de to spejlvendinger ophæver hinanden.
 	Print Settings…	Udskriftsindstillinger…
-	Remember to turn off the printer's own colour management in Print Settings…	Husk at slå printerens egen farvestyring fra i Udskriftsindstillinger…
+	Remember to turn off the printer's own color management in Print Settings…	Husk at slå printerens egen farvestyring fra i Udskriftsindstillinger…
 	Sent to {printer}	Sendt til {printer}
 	set in Print Settings…	angivet i Udskriftsindstillinger…
 	ICO is limited to 256 × 256 pixels	ICO er begrænset til 256 × 256 pixels
@@ -3894,12 +3892,12 @@ curves	Smooth	Udjævn
 	In White	Input-hvid
 	Increase Brush Hardness	Forøg penselhårdheden
 	Demosaic	Demosaicering
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hvordan kameraets farvefiltermosaik udfyldes. Det anvendes, når filen åbnes; forhåndsvisningen viser den metode, den blev åbnet med.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hvordan kameraets farvefiltermosaik udfyldes. Det anvendes, når filen åbnes; forhåndsvisningen viser den metode, den blev åbnet med.
 	AHD (adaptive homogeneity)	AHD (adaptiv homogenitet)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: de reneste kanter og de mindste farvefrynser, men den langsomste.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Gradientkorrigeret interpolation: skarp og hurtig, med nogle farvefrynser i fine detaljer.
-	The fastest and the softest, with colour fringing on fine detail.	Den hurtigste og den blødeste, med farvefrynser i fine detaljer.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: de reneste kanter og de mindste farvefrynser, men den langsomste.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Gradientkorrigeret interpolation: skarp og hurtig, med nogle farvefrynser i fine detaljer.
+	The fastest and the softest, with color fringing on fine detail.	Den hurtigste og den blødeste, med farvefrynser i fine detaljer.
 	“{name}” already exists. Replace it?	»{name}« findes allerede. Vil du erstatte den?
 	The name in the save dialog was “{name}”.	Navnet i dialogen Gem var »{name}«.
 	Move Up	Flyt op
@@ -4550,7 +4548,6 @@ curves	Smooth	Udjævn
 	Use File › Open to open an image.	Brug Filer › Åbn for at åbne et billede.
 	Use Selection In Source	Brug markering i kilde
 	Use Selection In Target	Brug markering i mål
-	Uses the foreground and background colors.	Bruger forgrunds- og baggrundsfarverne.
 	Vanishing Point	Forsvindingspunkt
 	Variable Data Sets	Variable datasæt
 	Vector Mask Hides Effects	Vektormaske skjuler effekter
@@ -4760,8 +4757,8 @@ cameraRaw	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Camera Raw Filter ({layer})	Camera Raw-filter ({layer})
 cameraRaw	Camera Raw isn't open	Camera Raw er ikke åben
 cameraRaw	Cancel	Annullér
-cameraRaw	Cancelled opening {name}	Annullerede åbning af {name}
-cameraRaw	Cancelled {label}	Annullerede {label}
+cameraRaw	Canceled opening {name}	Annullerede åbning af {name}
+cameraRaw	Canceled {label}	Annullerede {label}
 cameraRaw	Color Priority	Farveprioritet
 cameraRaw	Developing {name}	Fremkalder {name}
 cameraRaw	Full-resolution preview unavailable	Forhåndsvisning i fuld opløsning er ikke tilgængelig
@@ -4816,3 +4813,19 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Pick a different document for each channel.	Vælg et andet dokument til hver kanal.
 	A picked document is no longer open.	Et af de valgte dokumenter er ikke længere åbent.
 	A picked document is no longer a grayscale document of the same size.	Et af de valgte dokumenter er ikke længere et dokument i gråtoner i samme størrelse.
+# Move tool options bar (#11381)
+	Align top edges	Juster øverste kanter
+	Align vertical centers	Juster lodrette midter
+	Align bottom edges	Juster nederste kanter
+	Distribute vertically	Fordel lodret
+	Distribute horizontally	Fordel vandret
+	Show layer bounds on hover	Vis lagets grænser ved svæv
+	Expand layer group on click	Udvid lagergruppe ved klik
+	Show hover bounds from Layers	Vis svævegrænser fra Lag
+# Artboard tool options bar (#11385)
+	Distribute Widths	Fordel bredder
+	Distribute Heights	Fordel højder
+	Auto-nest Layers	Indlejr lag automatisk
+	Auto-size Canvas	Tilpas lærredsstørrelse automatisk
+	Keep Relative Position During Layer Reordering	Bevar relativ placering ved omorganisering af lag
+	Shrinkwrap Canvas on Save	Beskær lærredet til indholdet ved lagring
