@@ -138,3 +138,36 @@ fn hard_edges_and_text_like_content_keep_their_structure() {
     assert!(wrong * 100 < total * 2, "{wrong} of {total} pixels flipped side of mid-gray");
     assert!(psnr(&img, &back) > 30.0, "{:.1}", psnr(&img, &back));
 }
+
+/// Keeps original encoder bytes for flat, gradient and mixed-mode images with padded edges.
+#[test]
+fn mixed_macroblocks_and_padded_edges_keep_their_encoded_bytes() {
+    for (w, h, quality, pattern, reference) in [
+        (49u32, 35u32, 0, 0, include_bytes!("fixtures/vp8-mixed.webp").as_slice()),
+        (17, 31, 100, 1, include_bytes!("fixtures/vp8-flat.webp").as_slice()),
+        (32, 32, 50, 2, include_bytes!("fixtures/vp8-gradient.webp").as_slice()),
+    ] {
+        let mut data = Vec::with_capacity((w * h * 3) as usize);
+        for y in 0..h {
+            for x in 0..w {
+                let v = match pattern {
+                    0 => {
+                        if (x / 16 + y / 16).is_multiple_of(2) {
+                            180
+                        } else {
+                            ((x * 19 + y * 31) % 256) as u8
+                        }
+                    }
+                    1 => 180,
+                    _ => ((x * 3 + y * 2) % 256) as u8,
+                };
+                data.extend_from_slice(&[v, v.saturating_add(12), v.saturating_sub(17)]);
+            }
+        }
+        let img = Image::from_u8(w, h, ChannelLayout::Rgb, data).unwrap();
+        let bytes = encode(&img, Format::WebP, &lossy(quality)).unwrap();
+        // References predate removal of the luma backup. The q0 mosaic selects both modes
+        // in adjacent rows/columns, exercising the reconstruction passed to the next block.
+        assert_eq!(bytes.as_slice(), reference, "{w}x{h} at quality {quality}");
+    }
+}
