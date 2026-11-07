@@ -344,8 +344,9 @@ fn spacing_row_has_one_label_and_a_shared_header_in_every_theme() {
             let mut h = section_harness(0, b.clone());
             crate::PhotocraftApp::setup_context(&h.ctx, kind);
             h.run_steps(3);
-            assert_eq!(h.query_all_by_label("Spacing").count(), 1, "{kind:?}: the checkbox is the single label");
-            let checkbox = h.get_by_label("Spacing").rect();
+            assert_eq!(h.query_all_by_role_and_label(Role::Label, "Spacing").count(), 0, "{kind:?}: the checkbox is the single label");
+            assert_eq!(h.query_all_by_role_and_label(Role::CheckBox, "Spacing").count(), 1);
+            let checkbox = h.get_by_role_and_label(Role::CheckBox, "Spacing").rect();
             let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
             assert!((checkbox.center().y - field.rect().center().y).abs() < 2.0, "{kind:?}: checkbox and percentage share a row");
             assert_eq!(field.accesskit_node().is_disabled(), !enabled);
@@ -368,7 +369,7 @@ fn spacing_row_retains_disabled_values_and_percentage_editing_limits() {
     h.run_steps(2);
     drag(&mut h, from, to);
     assert_eq!(h.state(), &before, "Off ignores both field input and a track drag");
-    let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    let checkbox = h.get_by_role_and_label(Role::CheckBox, "Spacing");
     checkbox.click();
     h.run_steps(2);
     assert!(h.state().spacing_enabled);

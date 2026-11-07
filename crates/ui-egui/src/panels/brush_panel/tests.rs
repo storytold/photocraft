@@ -1886,7 +1886,7 @@ fn spacing_row_edits_route_only_the_changed_fields_through_the_brush_command() {
     h.run_steps(2);
     let journal = h.state().session.journal.len();
     let spacing = h.state().session.tools.brush.spacing;
-    let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
     checkbox.click();
     h.run_steps(2);
     assert!(h.state().session.tools.brush.spacing_enabled);
@@ -1900,7 +1900,7 @@ fn spacing_row_edits_route_only_the_changed_fields_through_the_brush_command() {
     assert_eq!(h.state().session.tools.brush.spacing, 0.44);
     assert_eq!(last_journal(h.state()).unwrap().0, "tools.setBrush");
     assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacing": 0.44_f32}));
-    let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
     checkbox.click();
     h.run_steps(2);
     assert_eq!(last_journal(h.state()).unwrap().1["brush"], json!({"spacingEnabled": false}));
@@ -1911,7 +1911,7 @@ fn spacing_row_edits_route_only_the_changed_fields_through_the_brush_command() {
     h.run_steps(2);
     assert_eq!(h.state().session.tools.brush.spacing, 0.44);
     assert_eq!(h.state().session.journal.len(), journal + 3, "disabled input adds no command");
-    let checkbox = h.query_all_by_label("Spacing").min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap();
+    let checkbox = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Spacing");
     checkbox.click();
     h.run_steps(2);
     assert_eq!(h.state().session.tools.brush.spacing, 0.44);

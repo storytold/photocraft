@@ -61,7 +61,10 @@ fn spacing_row(ui: &mut egui::Ui, b: &mut BrushSettings) {
     ui.horizontal(|ui| {
         widgets::checkbox(ui, &mut b.spacing_enabled, tl!("Spacing")).on_hover_text(tl!("Off: the speed of the pointer sets the spacing"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            changed = ui.add_enabled_ui(b.spacing_enabled, |ui| widgets::value_field(ui, &mut percent, 1.0..=1000.0, "%", 74.0)).inner.changed();
+            changed = ui
+                .add_enabled_ui(b.spacing_enabled, |ui| widgets::value_field(ui, &mut percent, 1.0..=1000.0, "%", 74.0).accessible_name(tl!("Spacing")))
+                .inner
+                .changed();
         });
     });
     changed |= ui.add_enabled_ui(b.spacing_enabled, |ui| widgets::slider(ui, &mut percent, 1.0..=1000.0, None)).inner.changed();
