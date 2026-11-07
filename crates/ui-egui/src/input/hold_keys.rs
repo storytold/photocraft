@@ -14,7 +14,7 @@
 //!   Brush moves the layer, ⌘⌥-drag duplicates it first (`move_mods`), and a ⌘-click picks the
 //!   layer under the pointer, as with the Move tool itself; ⌘-arrows nudge ([`cmd_nudges`]). The
 //!   selection tools do their own ⌘ handling in `canvas` (⌘ inside the selection cuts the
-//!   selected pixels, outside it moves the layer, #896), and the Hand, Zoom, Crop, Slice, Path
+//!   selected pixels, outside it moves the layer, #896), and the Hand, Crop, Slice, Path
 //!   Selection, shape, Pen and Type tools keep ⌘ for themselves.
 //! - With the Hand tool selected, ⌘ (Ctrl off the Mac) is Zoom In while held and ⌥ (with or
 //!   without ⌘) Zoom Out ([`hand_zoom`], #6434).
@@ -67,11 +67,12 @@ impl Temporary {
 }
 
 /// Tools on which holding ⌘ (Ctrl off the Mac) is the Move tool. Photoshop excepts the Hand,
-/// Rotate View, Zoom, Slice, Path and Direct Selection, shape, Pen and Type tools (⌘ means
+/// Rotate View, Slice, Path and Direct Selection, shape, Pen and Type tools (⌘ means
 /// something else to each) and the Crop tool's frame; a Free Transform in progress keeps ⌘ for its
 /// distort handles. The selection tools are left out too: for them ⌘ is handled per press in
 /// `canvas::tool_event` (`selection_drag_kind`, `command_moves_layer`), which needs the selection
-/// tool to stay in effect.
+/// tool to stay in effect. The Zoom tool is not an exception (#9931): ⌘ means nothing else to it
+/// (⌘Space is a bound key, which wins over ⌘ alone).
 pub fn cmd_moves(t: Tool) -> bool {
     !t.is_type()
         && !matches!(
@@ -79,7 +80,6 @@ pub fn cmd_moves(t: Tool) -> bool {
             Tool::Move
                 | Tool::Hand
                 | Tool::RotateView
-                | Tool::Zoom
                 | Tool::Crop
                 | Tool::PerspectiveCrop
                 | Tool::Slice
@@ -115,9 +115,10 @@ pub fn cmd_nudges(app: &PhotocraftApp) -> bool {
         && !(selecting && (!app.ui.polygon.is_empty() || app.ui.magnetic.active()))
 }
 
-/// Is ⌘ alone (no other temporary key) making the Move tool now?
+/// Is ⌘ alone (no other temporary key) making the Move tool now? The Modifier Keys panel's
+/// latched ⌘ counts, as it does for the press itself (`canvas::event_tool`).
 fn cmd_move_held(app: &PhotocraftApp, i: &InputState) -> bool {
-    i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
+    crate::workspace_ui::sticky_mods(app, i.modifiers).command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
 }
 
 /// The Hand tool's own modifiers (#6434): ⌘ (Ctrl off the Mac) held is Zoom In, ⌥ (with or
