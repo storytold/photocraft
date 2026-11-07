@@ -126,7 +126,7 @@ what an agent can't finish alone.
 - **Done 2026-10-31 (#10606):** all twelve Stylize/Pixelate ATN events (Group D) load, play and save with measured defaults, documented clamping and strict export checks. The [event reference](atn.md) now lists 128 supported and 89 unmapped events. Other Actions/scripting gaps remain; no overall readiness percentage or estimate changed.
 - **2026-10-21 evidence (#8304):** Save Actions expands compound layer-property edits into
   separate Photoshop Set events, with rename last so named layer references remain valid.
-  Exported descriptors and native playback at RGB 8/16/32-bit have [regression coverage](../crates/engine/src/atn_cmds/layer_props_tests.rs);
+  Exported descriptors and native playback at RGB 8/16/32-bit have [regression coverage](../crates/engine/src/cmd/atn_cmds/layer_props_tests.rs);
   independent Photoshop replay of the fix is still pending. No readiness percentage or estimate changed.
 - **Done 2026-10-17 (#7101):** `.atn` Apply Layer Comp steps with a named `compsClass`
   reference import as `layerComp.apply` and export to the same Photoshop event. Names resolve

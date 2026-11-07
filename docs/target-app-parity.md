@@ -516,8 +516,8 @@ one undo step (`strokes`), Esc (or ⊘) drops them (#1750).
 2026-10-08: the tools update above is checked against the current toolbar groups in
 [`panels.rs`](../crates/ui-egui/src/panels.rs), the Pencil and tool-cycle tests in
 [`pencil_tests.rs`](../crates/ui-egui/src/pencil_tests.rs), Patch's live-preview test in
-[`patch_preview.rs`](../crates/ui-egui/src/patch_preview.rs), and Vertical Type's point/paragraph
-creation and undo test in [`type_tool_tests.rs`](../crates/ui-egui/src/type_tool_tests.rs).
+[`patch_preview.rs`](../crates/ui-egui/src/canvas/patch_preview.rs), and Vertical Type's point/paragraph
+creation and undo test in [`type_tool/canvas_tests.rs`](../crates/ui-egui/src/tools/type_tool/canvas_tests.rs).
 These implementations remove the tools from the missing list; they do not establish Photoshop
 behavioural parity. The historical estimates and corpus measurements in this assessment are
 unchanged; current measured floors remain in the scorecard.
