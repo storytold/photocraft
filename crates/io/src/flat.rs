@@ -61,6 +61,13 @@ fn decode_limits(opts: &crate::ImportOptions) -> codecs::Limits {
     limits
 }
 
+/// [`decode_limits`] for a TIFF page decoded whole (extra samples, Photoshop layers): the sides
+/// a banded TIFF opens (up to 300,000 px, past 2^30 pixels: large print files, #9336), still
+/// within the same byte budget.
+fn whole_tiff_limits(opts: &crate::ImportOptions) -> codecs::Limits {
+    codecs::Limits { max_alloc: decode_limits(opts).max_alloc, ..codecs::Limits::banded() }
+}
+
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_flat_with_options(name, bytes, &crate::ImportOptions::default(), &photocraft_raster::Interrupt::NONE)
 }
@@ -525,7 +532,7 @@ fn import_tiff_layered(
     before_composite_decode();
     // The orientation is applied after the layer check: rotating the composite but not the
     // layers would misalign them, so a layered TIFF keeps its stored orientation.
-    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts) };
+    let keep = codecs::DecodeOptions { keep_orientation: true, limits: whole_tiff_limits(opts) };
     let (mut img, orientation) = match page {
         None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
@@ -592,7 +599,7 @@ fn import_tiff_with_extras(
     ctl: &photocraft_raster::Interrupt,
 ) -> Result<ImportResult, IoError> {
     ctl.check().map_err(|_| IoError::Cancelled)?;
-    let keep = codecs::DecodeOptions { keep_orientation: true, limits: decode_limits(opts) };
+    let keep = codecs::DecodeOptions { keep_orientation: true, limits: whole_tiff_limits(opts) };
     let (img, orientation) = match page {
         None => (codecs::decode_with(bytes, &keep)?, codecs::tiff_orientation(bytes)),
         Some(p) => (codecs::decode_tiff_page(bytes, p, &keep)?, codecs::tiff_page_orientation(bytes, p)),
@@ -2455,6 +2462,21 @@ mod tiff_banded_tests {
             assert!(rounds.iter().all(|r| r.len() <= workers));
         }
         assert_eq!(conversion_rounds(5000, 3, 1 << 20).len(), 1, "a group under the budget is one round");
+    }
+
+    /// #9336: a TIFF decoded whole (extra samples, Photoshop layers) opens the sides a banded one
+    /// does, past 2^30 pixels, within the same byte budget; other formats keep the default cap.
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn whole_tiff_decodes_take_gigapixel_prints() {
+        use photocraft_codecs::{ChannelLayout, SampleType};
+        let opts = crate::ImportOptions::default();
+        let whole = super::whole_tiff_limits(&opts);
+        assert!(whole.check(64_000, 41_244, ChannelLayout::Rgb, SampleType::U8).is_ok(), "2.64 GP RGB 8-bit, 7.9 GB");
+        assert!(whole.check(64_000, 41_244, ChannelLayout::Rgba, SampleType::U16).is_err(), "past the byte budget");
+        assert!(super::decode_limits(&opts).check(64_000, 41_244, ChannelLayout::Rgb, SampleType::U8).is_err(), "default cap");
+        let capped = crate::ImportOptions { flat_max_pixel_bytes: 1 << 20, ..Default::default() };
+        assert!(super::whole_tiff_limits(&capped).check(1024, 1025, ChannelLayout::Gray, SampleType::U8).is_err(), "the import's own cap");
     }
 }
 
