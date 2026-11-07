@@ -20,18 +20,142 @@
 # dialog commands is kept.
 
 # Layer Mask Display Options (the layer mask rubylith's colour and opacity)
-	Mask Options…	Možnosti masky…
-	Layer Mask Display Options…	Možnosti zobrazení masky vrstvy…
 
 # Channel Options and New Spot Channel (#3761)
-	Channel Color	Barva kanálu
-	Color Indicates:	Barva označuje:
-	Solidity:	Plnost:
-	Ink Characteristics	Vlastnosti inkoustu
 
 # Guide layout dialog
 
 # Custom print paper (#3820)
+
+# Select and Mask dialog labels
+# Field Blur pins (#3373)
+
+# Command-id overrides: the same English label reads differently in Czech in these menus.
+
+
+# Dialogs and panels
+
+# Layers-panel trash confirmation
+
+
+# Tool names, brush and style option tables
+
+# Templates with placeholders
+
+# Preferences (labels are generated from the setting names)
+
+# Added with the rebase onto the dock / brush picker work
+
+# Strings added to the UI after this catalog was first written (rebase onto main, 2026-10).
+# Gradient Editor window, opened from the options bar's gradient swatch.
+# Rendering mode and recovery
+# Camera Raw: contextual controls and window title
+
+
+
+
+
+
+# About ▸ Contributors / Models (credits)
+
+# Swatches panel
+# Layer Style > Blending Options (Advanced Blending)
+
+# Shared screen eyedropper and text Color Picker (#1128).
+
+# Fill dialog, layer style contours and Image Size
+
+
+
+# Layer colour labels.
+
+# Pattern Stamp tool
+
+# Painting symmetry presets.
+
+# Eyedropper Sample Size and Sample (#1649).
+
+# Color Picker warnings
+
+
+# Shared Layer Style color picker
+# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
+# Shared panel docking
+# Edit › Content-Aware Fill workspace
+
+
+# Smart Filter editors
+
+# Dynamic labels the tl! literal scanner cannot see: filter and Filter Gallery parameter names and
+# choices (humanized from their keys), Camera Raw controls, render filters (Flame, Picture Frame, Tree),
+# measurement columns, file info fields and the macOS application menu. Translated the same way as
+# above, from the plain meaning of the English label.
+# Select and Mask view modes (#1754)
+# Select and Mask Refine Edge Brush (#2972)
+
+# Color Sampler (added with the i18n coverage repair)
+
+# History panel menu (#2966)
+# History panel › History Options… (#2966)
+# Canvas context menus, Channels panel menu, Layer Style blending page (labels rendered through a variable).
+
+# Status messages and notices
+
+# Menus, tooltips and hardware information
+
+# Composed labels and Navigator zoom context
+# Print dialog (#2697)
+# View › Guides › New Guide… › Color
+
+# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
+
+# Actions panel: set folders, dialog toggle, Insert Stop
+# Batch / Image Processor
+
+# Native Windows printing qualification
+# PhotoCraft release checks.
+# History panel › History Brush source (#2966)
+# Bevel & Emboss shading controls.
+# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
+
+# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
+# Bevel & Emboss Technique.
+
+# View › Guides › right-click a guide
+
+# Image › Mode › Bitmap (#5559)
+# Free Transform: a new layer while the box is open (#5859)
+# Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
+
+# Labels the UI looks up through a variable (tool, glyph-group, Liquify and warp names, command
+# parameters and choices humanized from their keys, history steps and contextual
+# Camera Raw / layer labels) that other catalogs already covered. Translated the same way as
+# above, from the plain meaning of the English label.
+
+# DDS Options (#1327)
+
+# Color Table (.act) dialog
+
+# Graphics Adapter preference (#1885)
+
+# Styles panel: Import / Export Styles (.asl)
+# Actions: a step dialog holds a suspended recording (#7365)
+# Paragraph direction (TYPE-218-2)
+# Print preview image (#8236)
+# Color panel menu: modes, copy commands and colour ramps (#6000)
+
+# Pen draft after a refused commit (#7648)
+# Art History Brush (#213).
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+# Smart Filter row actions (#1265)
+
+	Mask Options…	Možnosti masky…
+	Layer Mask Display Options…	Možnosti zobrazení masky vrstvy…
+	Channel Color	Barva kanálu
+	Color Indicates:	Barva označuje:
+	Solidity:	Plnost:
+	Ink Characteristics	Vlastnosti inkoustu
 	Paper Width	Šířka papíru
 	Paper Height	Výška papíru
 	Columns	Sloupce
@@ -51,7 +175,6 @@
 	5 Columns, 3 Rows	5 sloupců, 3 řádky
 	8 Columns	8 sloupců
 	12 Columns	12 sloupců
-
 	File	Soubor
 	Edit	Úpravy
 	Image	Obraz
@@ -80,6 +203,7 @@
 	Right	Vpravo
 	Open Recent	Otevřít nedávné
 	Clear Recent Files	Vymazat nedávné soubory
+	Clear Recent File List	Vymazat nedávné soubory
 	Remove from Recent	Odebrat z nedávných
 	Remove {name} from Recent	Odebrat {name} z nedávných
 	Close	Zavřít
@@ -88,6 +212,10 @@
 	Restore	Obnovit
 	Close All	Zavřít vše
 	Close Others	Zavřít ostatní
+	New Document…	Nový dokument…
+	Open Document…	Otevřít…
+	Consolidate All to Here	Sloučit vše sem
+	Move to New Window	Přesunout do nového okna
 	Save	Uložit
 	Save As…	Uložit jako…
 	Save a Copy…	Uložit kopii…
@@ -139,6 +267,7 @@
 	Create Smart Object after Loading Layers	Po načtení vrstev vytvořit chytrý objekt
 	Reveal in Finder	Zobrazit ve Finderu
 	Show in Explorer	Zobrazit v Průzkumníkovi
+	Reveal in Explorer	Zobrazit v Průzkumníkovi
 	Show in Folder	Zobrazit ve složce
 	File Info…	Informace o souboru…
 	Print…	Tisk…
@@ -227,6 +356,7 @@
 	Units & Rulers…	Jednotky a pravítka…
 	Guides, Grid & Slices…	Vodítka, mřížka a řezy…
 	Plug-ins…	Zásuvné moduly…
+	Plugins…	Zásuvné moduly…
 	Type…	Text…
 	Enhanced Controls…	Rozšířené ovládání…
 	Camera Raw…	Camera Raw…
@@ -280,6 +410,8 @@
 	Match Color…	Přizpůsobit barvy…
 	Replace Color…	Nahradit barvu…
 	Equalize	Vyrovnat
+	Equalize Selected Area Only	Vyrovnat pouze výběr
+	Equalize Entire Image Based On Selected Area	Vyrovnat celý obraz podle výběru
 	Auto Tone	Automatický tón
 	Auto Contrast	Automatický kontrast
 	Auto Color	Automatické barvy
@@ -312,6 +444,7 @@
 	Layer…	Vrstva…
 	Group…	Skupina…
 	Group from Layers…	Skupina z vrstev…
+	New Group from Layers…	Nová skupina z vrstev…
 	Artboard…	Kreslicí plocha…
 	Artboard from Group…	Kreslicí plocha ze skupiny…
 	Artboard from Layers…	Kreslicí plocha z vrstev…
@@ -383,6 +516,8 @@
 	Smart Object	Chytrý objekt
 	Convert to Smart Object	Převést na chytrý objekt
 	Convert to Embedded	Převést na vložený
+	Embed Linked	Vložit propojené
+	Embed All Linked	Vložit všechna propojená
 	Convert to Layers	Převést na vrstvy
 	Convert to Linked…	Převést na propojený…
 	Edit Contents	Upravit obsah
@@ -458,6 +593,7 @@
 	Intersect Shape Areas	Průnik oblastí tvarů
 	Exclude Overlapping Shapes	Vyloučit překrývající se tvary
 	Merge Shape Components	Sloučit součásti tvaru
+	Path operations	Operace s cestami
 	Align	Zarovnat
 	Top Edges	Horní okraje
 	Vertical Centers	Svislé středy
@@ -532,12 +668,10 @@
 	Deselect	Zrušit výběr
 	Reselect	Znovu vybrat
 	Inverse	Invertovat výběr
-	Inverse Selection	Invertovat výběr
 	Similar	Podobné
 	Color Range…	Rozsah barev…
 	Focus Area…	Oblast zaostření…
 	Select and Mask…	Vybrat a maskovat…
-# Select and Mask dialog labels
 	Smart Radius	Chytrý poloměr
 	Shift Edge	Posunout okraj
 	Decontaminate	Dekontaminovat
@@ -564,7 +698,6 @@
 	Blur	Rozostření
 	Blur Gallery	Galerie rozostření
 	Field Blur…	Rozostření pole…
-# Field Blur pins (#3373)
 	No pin selected	Není vybrán žádný špendlík
 	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	Kliknutím do obrazu přidáte špendlík; tažením špendlík přesunete, tažením jeho prstence změníte rozostření. Delete odstraní vybraný špendlík.
 	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	Tažením úchytů na obrysu ho změníte a otočíte, čtverečkem zaoblíte rohy a body uvnitř nastavíte, kde začíná rozostření.
@@ -641,6 +774,7 @@
 	Minimum…	Minimum…
 	Offset…	Posun…
 	Plug-ins	Zásuvné moduly
+	Plugins	Zásuvné moduly
 	Proof Setup	Nastavení nátisku
 	Proof Colors	Nátiskové barvy
 	Gamut Warning	Upozornění na gamut
@@ -649,18 +783,22 @@
 	Working Magenta Plate	Pracovní purpurový výtažek
 	Working Yellow Plate	Pracovní žlutý výtažek
 	Working Black Plate	Pracovní černý výtažek
-	Working CMY Plate	Pracovní výtažky CMY
-	Legacy Macintosh RGB	Starší Macintosh RGB
-	Internet Standard RGB	Internetový standard RGB
+	Working CMY Plates	Pracovní výtažky CMY
+	Legacy Macintosh RGB (Gamma 1.8)	Starší Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internetový standard RGB (sRGB)
 	Monitor RGB	RGB monitoru
-	Color Blindness — Protanopia-type	Barvoslepost — protanopie
-	Color Blindness — Deuteranopia-type	Barvoslepost — deuteranopie
+	Color Blindness - Protanopia-type	Barvoslepost - protanopie
+	Color Blindness - Deuteranopia-type	Barvoslepost - deuteranopie
 	Zoom In	Přiblížit
 	Zoom Out	Oddálit
 	Fit on Screen	Přizpůsobit obrazovce
 	Fit Layer(s) on Screen	Přizpůsobit vrstvy obrazovce
 	Fit Artboard on Screen	Přizpůsobit kreslicí plochu obrazovce
 	100%	100 %
+	105%	105 %
+	110%	110 %
+	115%	115 %
+	120%	120 %
 	200%	200 %
 	75%	75 %
 	80%	80 %
@@ -739,7 +877,7 @@
 	Consolidate All to Tabs	Sloučit vše do záložek
 	Float in Window	Uvolnit do plovoucího okna
 	Float All in Windows	Uvolnit vše do plovoucích oken
-	New Window for Document	Nové okno dokumentu
+	New Window	Nové okno
 	Workspace	Pracovní prostor
 	Essentials	Základy
 	Graphic and Web	Grafika a web
@@ -801,6 +939,12 @@
 	Timeline	Časová osa
 	Tool Presets	Přednastavení nástrojů
 	Tools	Nástroje
+	Contextual Task Bar	Kontextový panel úloh
+	Hide bar	Skrýt panel
+	Reset bar position	Obnovit polohu panelu
+	Pin bar position	Připnout polohu panelu
+	Move bar	Přesunout panel
+	More options	Další možnosti
 	About PhotoCraft	O aplikaci PhotoCraft
 	PhotoCraft Website	Web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft na GitHubu
@@ -825,15 +969,10 @@
 	Edits	Úpravy
 @plural	{n} item|{n} items	{n} položka|{n} položky|{n} položek
 	Auto	Automaticky
-
-# Command-id overrides: the same English label reads differently in Czech in these menus.
 @id	select.all	Vybrat vše
 @id	edit.stroke	Obtáhnout…
 @id	edit.transform.scale	Změnit velikost
 @id	edit.purge.undo	Historie kroků zpět
-
-
-# Dialogs and panels
 	(print to the printer)	(tisk na tiskárnu)
 	+ Add variable	+ Přidat proměnnou
 	30 frames @ 30 fps	30 snímků při 30 fps
@@ -847,6 +986,9 @@
 	Add Layer Mask	Přidat masku vrstvy
 	Add Stop	Přidat zarážku
 	Add a layer style	Přidat styl vrstvy
+	Move effect up	Posunout efekt nahoru
+	Move effect down	Posunout efekt dolů
+	Delete effect	Odstranit efekt
 	Add a mask  (from the selection; {key} inverts)	Přidat masku  (z výběru; {key} invertuje)
 	Add an adjustment	Přidat korekci
 	Add disk	Přidat disk
@@ -970,7 +1112,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	Kliknutím přidáte bod · odstraníte tažením ven, {key}+kliknutím nebo klávesou Delete
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kliknutím použijete, {key}+kliknutím zrušíte přepsání, dvojklikem otevřete možnosti stylu
 	Click to edit the gradient	Kliknutím upravíte přechod
-	Click to restore the current colour	Kliknutím obnovíte aktuální barvu
+	Click to restore the current color	Kliknutím obnovíte aktuální barvu
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Kliknutím přiblížíte  ·  {key}+kliknutím oddálíte  ·  tažením doprava/doleva přiblížíte/oddálíte
 	Click with the Note tool to add a note.	Poznámku přidáte kliknutím nástrojem poznámka.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Kliknutí: roh · tažení: hladký bod · kliknutí na první bod: uzavřít · {key} dokončit · Esc zrušit
@@ -1033,6 +1175,9 @@
 	Create new pattern from the selection	Vytvořit nový vzorek z výběru
 	Create new shape from the current path	Vytvořit nový tvar z aktuální cesty
 	Create new snapshot	Vytvořit nový snímek
+	From:	Z:
+	Full Document	Celý dokument
+	Merged Layers	Sloučené vrstvy
 	Create new tool preset	Vytvořit nové přednastavení nástroje
 	Crop Factor	Crop faktor
 	Ctrl	Ctrl
@@ -1050,7 +1195,7 @@
 	Darks	Tmavé tóny
 	Data Sets	Datové sady
 	Default	Výchozí
-	Default colours (D)	Výchozí barvy (D)
+	Default Foreground and Background Colors (D)	Výchozí barvy popředí a pozadí (D)
 	Default printer	Výchozí tiskárna
 	Default restored.	Výchozí hodnota obnovena.
 	Define	Definovat
@@ -1068,8 +1213,6 @@
 	Delete current channel	Odstranit aktuální kanál
 	Delete current state	Odstranit aktuální stav
 	Delete effect layer	Odstranit vrstvu efektu
-
-# Layers-panel trash confirmation
 	Delete layer ‘{name}’?	Smazat vrstvu „{name}“?
 	Delete {count} layers? {names}	Smazat vrstvy ({count})? {names}
 	Delete layer?	Smazat vrstvu?
@@ -1078,7 +1221,6 @@
 	Missing delete command	Chybí příkaz ke smazání
 	Invalid delete command	Neplatný příkaz ke smazání
 	Layer deleted, but confirmation preference could not be saved: {error}	Vrstva byla smazána, ale nastavení potvrzení se nepodařilo uložit: {error}
-
 	Delete layer	Odstranit vrstvu
 	Delete layer comp	Odstranit kompozici vrstev
 	Delete note	Odstranit poznámku
@@ -1111,7 +1253,6 @@
 	Dots	Tečky
 	Drag a rectangle around the object	Táhněte obdélník kolem objektu
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Tažením v obraze přidáte omezení; Shift pro vodorovné/svislé; pravým kliknutím na omezení ho změníte nebo odstraníte.
-	Drag to move the active shape's path or the Work Path	Tažením přesunete cestu aktivního tvaru nebo pracovní cestu
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Klik: vybrat bod · Tažení: přesunout bod, úchyt nebo segment · {shift}+klik: přidat · {alt}+klik: celá podcesta
 	Draw with the Pen tool (P) or make a work path from a selection.	Kreslete nástrojem pero (P) nebo vytvořte pracovní cestu z výběru.
 	Drop an image or PSD anywhere to open it.	Přetáhněte sem obrázek nebo PSD a otevře se.
@@ -1336,7 +1477,7 @@
 	Opacity Jitter	Kolísání krytí
 	Opacity:	Krytí:
 	Open a document to define variables.	Chcete-li definovat proměnné, otevřete dokument.
-	Open a document to select a colour range.	Chcete-li vybrat rozsah barev, otevřete dokument.
+	Open a document to select a color range.	Chcete-li vybrat rozsah barev, otevřete dokument.
 	Open a document to use the timeline.	Chcete-li použít časovou osu, otevřete dokument.
 	Optical	Optické
 	Optimized	Optimalizovaný
@@ -1412,7 +1553,6 @@
 	Purity	Čistota
 	Quality	Kvalita
 	Quick Actions	Rychlé akce
-	Quick Export As PNG	Rychlý export do PNG
 	Radial Gradient	Radiální přechod
 	Radius	Poloměr
 	Radius:	Poloměr:
@@ -1555,7 +1695,7 @@
 	Subtract from Sample	Odebrat ze vzorku
 	Subtract from selection  ({key})	Odebrat z výběru  ({key})
 	Suggestions:	Návrhy:
-	Swap colours (X)	Prohodit barvy (X)
+	Switch Foreground and Background Colors (X)	Prohodit barvy popředí a pozadí (X)
 	Swaps height and width	Prohodí výšku a šířku
 	Switch between free transform and warp modes	Přepnout mezi volnou transformací a deformací
 	Switch theme	Přepnout motiv
@@ -1635,8 +1775,6 @@
 	No saved presets yet.	Zatím nejsou uloženy žádné předvolby.
 	Error	Chyba
 	Command	Příkaz
-
-# Tool names, brush and style option tables
 	Adjustment layers have nothing to transform	Korekční vrstvy nemají co transformovat
 	Altitude	Elevace
 	Android 1080p	Android 1080p
@@ -1662,7 +1800,7 @@
 	Choke	Stažení
 	Classic	Klasický
 	Click to add text	Kliknutím přidáte text
-	Click to fill similar colours	Kliknutím vyplníte podobné barvy
+	Click to fill similar colors	Kliknutím vyplníte podobné barvy
 	Clone Stamp Tool	Nástroj klonovací razítko
 	Color Burn	Ztmavit barvy
 	Color Dodge	Zesvětlit barvy
@@ -1763,6 +1901,7 @@
 	Move Tool	Nástroj přesun
 	Could not use the move tool because the layer is locked.	Nástroj Přesun nelze použít, protože vrstva je zamčená.
 	Could not complete the Free Transform command because the layer is locked.	Příkaz Volná transformace nelze dokončit, protože vrstva je zamčená.
+	Could not transform because the layer is locked.	Transformaci nelze provést, protože vrstva je zamčená.
 	Multiply	Násobit
 	My Brushes	Moje štětce
 	Neutrals	Neutrální
@@ -1821,7 +1960,7 @@
 	Rectangular Marquee Tool	Nástroj obdélníkový výběr
 	Reds	Červené
 	Reflected	Zrcadlený
-	Sample: foreground colour	Vzorek: barva popředí
+	Sample: foreground color	Vzorek: barva popředí
 	Sampled Colors	Vzorkované barvy
 	Satin	Satén
 	Save Pixel Aspect Ratio	Uložit poměr stran pixelu
@@ -1842,6 +1981,7 @@
 	Soften	Změkčení
 	Source	Zdroj
 	Source: set	Zdroj: nastaven
+	Source: {name}	Zdroj: {name}
 	Sponge Tool	Nástroj houba
 	Spot Healing Brush Tool	Nástroj bodový retušovací štětec
 	Spread	Rozprostření
@@ -1859,7 +1999,7 @@
 	Transfer	Přenos
 	Triangle Tool	Nástroj trojúhelník
 	Unsaved changes	Neuložené změny
-	Uses the foreground and background colours.	Používá barvy popředí a pozadí.
+	Uses the foreground and background colors.	Používá barvy popředí a pozadí.
 	Web	Web
 	Web Large	Web velký
 	Web Minimum	Web minimální
@@ -1869,8 +2009,6 @@
 	Yellows	Žluté
 	Zoom Tool	Nástroj lupa
 	{name} Properties	Vlastnosti – {name}
-
-# Templates with placeholders
 	Revert “{name}” to the last saved version? Your changes will be lost.	Vrátit „{name}“ k poslední uložené verzi? Vaše změny budou ztraceny.
 	Do you want to save the changes you made to “{name}” before quitting?	Chcete před ukončením uložit změny v „{name}“?
 	Do you want to save the changes you made to “{name}” before closing?	Chcete před zavřením uložit změny v „{name}“?
@@ -1891,8 +2029,6 @@
 @plural	{n} Layer|{n} Layers	{n} vrstva|{n} vrstvy|{n} vrstev
 @plural	{n} layer|{n} layers	{n} vrstva|{n} vrstvy|{n} vrstev
 @plural	Group · {n} layer|Group · {n} layers	Skupina · {n} vrstva|Skupina · {n} vrstvy|Skupina · {n} vrstev
-
-# Preferences (labels are generated from the setting names)
 	Additional plugins folder	Složka dalších zásuvných modulů
 	Adobe	Adobe
 	Adobe rgb	Adobe RGB
@@ -1900,6 +2036,7 @@
 	Allow scripts to connect	Povolit připojení skriptů
 	Always	Vždy
 	Always create smart objects when placing	Při umísťování vždy vytvořit chytré objekty
+	Skip transform when placing	Při umísťování přeskočit transformaci
 	Animated zoom	Animované zvětšování
 	Apply auto tone	Použít automatický tón
 	Ask	Zeptat se
@@ -1922,6 +2059,11 @@
 	Show canvas dots	Zobrazit tečky plátna
 	Clip thumbnails to layer bounds	Oříznout miniatury na hranice vrstvy
 	Clip Thumbnails to Layer Bounds	Oříznout miniatury na hranice vrstvy
+	No Thumbnails	Bez miniatur
+	Small Thumbnails	Malé miniatury
+	Medium Thumbnails	Střední miniatury
+	Large Thumbnails	Velké miniatury
+	Clip Thumbnails to Document Bounds	Oříznout miniatury na hranice dokumentu
 	Canvas color	Barva plátna
 	Canvas custom color	Vlastní barva plátna
 	Color picker	Výběr barvy
@@ -1959,7 +2101,7 @@
 	Full size tip	Hrot v plné velikosti
 	Gamut warning color	Barva upozornění na gamut
 	Gamut warning opacity	Krytí upozornění na gamut
-	Generator enabled	Generátor zapnut
+	Enable Generator	Zapnout generátor
 	Gif	GIF
 	Glossy	Lesklý
 	Grid color	Barva mřížky
@@ -2039,7 +2181,6 @@
 	Show only crosshair while painting	Při malování zobrazit jen nitkový kříž
 	Show slice numbers	Zobrazit čísla řezů
 	Show tooltips	Zobrazit popisky nástrojů
-	Enable animations	Povolit animace
 	Show highlight on rollover	Zobrazit zvýraznění při přejetí
 	Show bounding box when dragging layer	Při přetahování vrstvy zobrazit ohraničovací rámeček
 	System title bar	Systémové záhlaví okna
@@ -2092,8 +2233,6 @@
 	Luminosity	Světlost
 @plural	{n} sample|{n} samples	{n} vzorek|{n} vzorky|{n} vzorků
 	{added}, {removed} subtracted	{added}, odebráno: {removed}
-
-# Added with the rebase onto the dock / brush picker work
 	Adjustment Preview	Náhled korekce
 	Airbrush: keeps depositing paint while the pointer rests.	Airbrush: nanáší barvu i tehdy, když ukazatel stojí.
 	Angle:	Úhel:
@@ -2125,8 +2264,6 @@
 	Brush picker	Výběr štětce
 	Erase	Gumovat
 	Right click with painting tools	Pravé tlačítko s malířskými nástroji
-
-# Strings added to the UI after this catalog was first written (rebase onto main, 2026-10).
 	System Info…	Informace o systému…
 	System Info	Informace o systému
 	More panels	Další panely
@@ -2135,7 +2272,7 @@
 	Graphics	Grafika
 	Reset GPU Backend	Obnovit grafický backend
 	Applies at next launch.	Projeví se při příštím spuštění.
-	Click to sample the foreground colour  ·  {key}-click for background	Kliknutím nasnímáte barvu popředí  ·  {key}+kliknutím barvu pozadí
+	Click to sample the foreground color  ·  {key}-click for background	Kliknutím nasnímáte barvu popředí  ·  {key}+kliknutím barvu pozadí
 	{key}-click to set the source	{key}+kliknutím nastavíte zdroj
 	{key} to subtract	{key} pro odebrání
 	Clone source {n} ({key}-click with Clone Stamp to set)	Zdroj klonování {n} (nastavíte {key}+kliknutím klonovacím razítkem)
@@ -2197,8 +2334,7 @@
 	Gradient Options	Možnosti přechodu
 	Align with layer	Zarovnat s vrstvou
 	Reset Alignment	Obnovit zarovnání
-	Centre the gradient (offset 0, 0)	Vystředit přechod (posun 0, 0)
-# Gradient Editor window, opened from the options bar's gradient swatch.
+	Center the gradient (offset 0, 0)	Vystředit přechod (posun 0, 0)
 	Gradient Editor	Editor přechodů
 	Gradient picker	Výběr přechodu
 	Save As Preset	Uložit jako preset
@@ -2231,7 +2367,7 @@
 	Alt-click to define a source point to clone from	Kliknutím s klávesou Alt určete zdrojový bod pro klonování
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Není k dispozici žádná cesta, ze které by šlo vytvořit výběr: nakreslete ji nástrojem Pero nebo ji vyberte na panelu Cesty.
 	Cancel opening	Zrušit otevírání
-	Cancelled opening {name}	Otevírání {name} zrušeno
+	Canceled opening {name}	Otevírání {name} zrušeno
 	Damaged Photoshop document	Poškozený dokument Photoshopu
 	The document “{name}” may be damaged.	Dokument „{name}“ může být poškozený.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Některé vrstvy, pixely nebo masky nebylo možné načíst. Chcete pokračovat v otevírání?
@@ -2240,7 +2376,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokument „{name}“ má vložený barevný profil, který neodpovídá aktuálnímu pracovnímu prostoru barev {mode}.
 	Working: {working}	Pracovní: {working}
 	Developing {name}	Vyvolávání {name}
-	Cancelled {label}	Zrušeno: {label}
+	Canceled {label}	Zrušeno: {label}
 	Esc to cancel	Esc pro zrušení
 	Opened {name}	Otevřeno: {name}
 	Opening {name}	Otevírání {name}
@@ -2248,7 +2384,7 @@
 	Saving {name}	Ukládání {name}
 	Saving {percent}	Ukládání {percent}
 	A save to {name} is still running; try again when it finishes	Ukládání do {name} stále probíhá; zkuste to znovu, až skončí
-	{label} is writing the file and can no longer be cancelled	{label} zapisuje soubor a už ho nelze zrušit
+	{label} is writing the file and can no longer be canceled	{label} zapisuje soubor a už ho nelze zrušit
 	Opening {name}…	Otevírání {name}…
 	Opening…	Otevírání…
 	Reading…	Načítání…
@@ -2257,7 +2393,6 @@
 	4 x 4	4 × 4
 	5 x 5	5 × 5
 	Grid:	Mřížka:
-# Rendering mode and recovery
 	Rendering Mode	Režim vykreslování
 	Automatic (recommended)	Automaticky (doporučeno)
 	CPU / Compatibility	CPU / Kompatibilita
@@ -2284,7 +2419,6 @@
 	Tone Histogram	Histogram tónů
 	Show Selected Region	Zobrazit vybranou oblast
 cameraRaw	Light	Světlo
-# Camera Raw: contextual controls and window title
 	Camera Raw Filter ({layer})	Filtr Camera Raw ({layer})
 	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Red	Červené
@@ -2306,14 +2440,10 @@ cameraRaw	Color	Barvy
 	Scale or rotate the moved area, then press {key}	Změňte velikost nebo otočte přesunutou oblast a pak stiskněte {key}
 	Now drag the selection onto another area	Nyní přetáhněte výběr na jiné místo
 	Edit Type	Upravit text
-
-
 	New Style…	Nový styl…
 	Style {name} saved	Styl {name} uložen
-
 	Create new style (from the selected type)	Vytvořit nový styl (z vybraného textu)
 	Create new style from the selected layer	Vytvořit nový styl z vybrané vrstvy
-
 	Make Default	Nastavit jako výchozí
 	Reset to Default	Obnovit výchozí
 	Full-resolution preview unavailable	Náhled v plném rozlišení není dostupný
@@ -2338,14 +2468,11 @@ cameraRaw	Color	Barvy
 	Discard Layers and Save a Copy	Zahodit vrstvy a uložit kopii
 	Don't show again	Příště nezobrazovat
 	Save failed: {error}	Uložení se nezdařilo: {error}
-	Save cancelled	Ukládání zrušeno
+	Save canceled	Ukládání zrušeno
 	Couldn't place {name}: {error}	Nelze umístit {name}: {error}
 	Magnetic Lasso Tool	Nástroj magnetické laso
 	Frequency	Frekvence
 	Use tablet pressure to change pen width	Měnit šířku pera přítlakem tabletu
-
-
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 	About	O aplikaci
 	Contributors	Přispěvatelé
 	Models	Modely
@@ -2377,8 +2504,6 @@ cameraRaw	Color	Barvy
 	% of all commits	% všech commitů
 	Lines +/−	Řádky +/−
 	@{login}: {prs} PRs, {commits} commits, +{added} / −{deleted} lines (Δ {delta}), +{binAdded} / −{binDeleted} binary assets, {first} – {last}	@{login}: PR: {prs}, commity: {commits}, řádky +{added} / −{deleted} (Δ {delta}), binární soubory +{binAdded} / −{binDeleted}, {first} – {last}
-
-# Swatches panel
 	Create new swatch	Vytvořit nový vzorek
 	New Swatch…	Nový vzorek…
 	New Swatch Group…	Nová skupina vzorků…
@@ -2388,13 +2513,10 @@ cameraRaw	Color	Barvy
 	Export Swatches for Exchange…	Exportovat vzorky pro výměnu…
 	Reset Swatches	Obnovit vzorky
 	Add to Swatches	Přidat do vzorníku
-# Layer Style > Blending Options (Advanced Blending)
 	Blend If:	Prolnout, pokud:
 	Channels:	Kanály:
 	Knockout	Vyřazení
 	Apply At Canvas Bounds	Použít efekt na hranicích plátna
-
-# Shared screen eyedropper and text Color Picker (#1128).
 	Color Picker (Text Color)	Výběr barvy (barva textu)
 	Color Picker ({name})	Výběr barvy ({name})
 	Color Picker (Fill Color)	Výběr barvy (barva výplně)
@@ -2411,8 +2533,6 @@ cameraRaw	Color	Barvy
 	Show/Hide Panels	Zobrazit/skrýt panely
 	Could not open	Nelze otevřít
 	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: cesta není platný Unicode; přejmenujte soubor a otevřete jej znovu.
-
-# Fill dialog, layer style contours and Image Size
 	Contents:	Obsah:
 	Custom Pattern:	Vlastní vzorek:
 	Foreground Color	Barva popředí
@@ -2440,7 +2560,6 @@ cameraRaw	Color	Barvy
 	Rolling Slope - Descending	Zvlněný svah - sestupný
 	Rounded Steps	Zaoblené stupně
 	Sawtooth 1	Pila 1
-
 	Red Eye Tool	Nástroj červené oči
 	Red Eye	Červené oči
 	Pupil Size	Velikost zornice
@@ -2448,7 +2567,6 @@ cameraRaw	Color	Barvy
 	Click a red pupil to neutralize it	Klepněte na červenou zornici
 	open source	otevřený zdrojový kód
 	…and {n} more	…a dalších {n}
-
 	Eyedroppers:	Kapátka:
 	Set Black Point	Nastavit černý bod
 	Set Neutral Gray Point	Nastavit neutrální šedý bod
@@ -2457,8 +2575,6 @@ cameraRaw	Color	Barvy
 	Selection Preview:	Náhled výběru:
 	Black Matte	Černý podklad
 	White Matte	Bílý podklad
-
-# Layer colour labels.
 	Seafoam	Mořská pěna
 	Indigo	Indigová
 	Fuchsia	Fuchsiová
@@ -2479,22 +2595,16 @@ fontWeight	Bold	Tučná
 fontWeight	ExtraBold	Extratučná
 fontWeight	Black	Černá
 fontWeight	Italic	Kurzíva
-
-# Pattern Stamp tool
 	Pattern Stamp Tool	Nástroj razítko vzorku
 	Pattern Stamp	Razítko vzorku
 	Impressionist	Impresionista
 	Rotate View	Otočit zobrazení
 	Rotate View Tool	Nástroj otočení zobrazení
 	Reset View	Obnovit zobrazení
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Tažením kolem středu otočíte zobrazení  ·  Shift omezí na 15°
-
-# Painting symmetry presets.
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Tažením kolem středu otočíte zobrazení  ·  Shift omezí na 15°
 	Dual Axis	Dvojitá osa
 	Diagonal	Diagonální
 	Transform Symmetry	Transformovat symetrii
-
-# Eyedropper Sample Size and Sample (#1649).
 	Point Sample	Bodový vzorek
 	3 by 3 Average	Průměr 3 × 3
 	5 by 5 Average	Průměr 5 × 5
@@ -2506,15 +2616,12 @@ fontWeight	Italic	Kurzíva
 	All Layers No Adjustments	Všechny vrstvy bez korekcí
 	Current & Below No Adjustments	Aktuální a pod ní bez korekcí
 	Show Sampling Ring	Zobrazit vzorkovací kroužek
-
-# Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Mimo gamut tisku: klepnutím zvolíte nejbližší tisknutelnou barvu
-	Not a web colour: click for the nearest web colour	Není webová barva: klepnutím zvolíte nejbližší webovou barvu
+	Out of gamut for printing: click for the nearest printable color	Mimo gamut tisku: klepnutím zvolíte nejbližší tisknutelnou barvu
+	Not a web color: click for the nearest web color	Není webová barva: klepnutím zvolíte nejbližší webovou barvu
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
 	PhotoCraft — Screen Color Picker	PhotoCraft — Výběr barvy obrazovky
-
 	Rasterize svg groups deeper than	Rasterizovat skupiny SVG hlubší než tato úroveň
 	0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized.	0 vypne tento práh; skupiny SVG vnořené hlouběji než 100 úrovní se rastrují vždy.
 	Rule of Thirds	Pravidlo třetin
@@ -2528,8 +2635,6 @@ fontWeight	Italic	Kurzíva
 	Cycle Orientation	Přepnout orientaci
 	Set the overlay options for the Crop tool	Nastavit volby překryvu pro nástroj Oříznutí
 	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+klik převzalo pracovní prostředí, které pomocí Alt+tažení přesouvá okna. Nastavte jeho klávesu pro přesun oken na Super, nebo zamkněte Alt v nabídce Okno › Modifikační klávesy.
-
-# Shared Layer Style color picker
 	Color Picker (Layer Style Color)	Výběr barvy (barva stylu vrstvy)
 	Auto Hide Notifications	Automaticky skrývat oznámení
 	Notification Duration (seconds)	Trvání oznámení (sekundy)
@@ -2606,11 +2711,10 @@ fontWeight	Italic	Kurzíva
 	How often fastening points are placed by themselves	Jak často se kotevní body umisťují samy
 	Scrubby Zoom	Plynulá lupa
 	{mode} Color · {bits} bit	Barva {mode} · {bits} bitů
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Tažením nakreslete ořez · tažením uvnitř posunete · okraje mění velikost ({ratio} poměr, {centre} střed) · Mezerník posouvá při kreslení · šipky posunují · X prohodí orientaci · {commit} potvrdí · Esc zruší
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Tažením nakreslete ořez · tažením uvnitř posunete · okraje mění velikost ({ratio} poměr, {centre} střed) · Mezerník posouvá při kreslení · šipky posunují · X prohodí orientaci · {commit} potvrdí · Esc zruší
 	Appearance Settings…	Nastavení vzhledu…
 	Add to favorites	Přidat do oblíbených
 	Remove from favorites	Odebrat z oblíbených
-# File Info ▸ Camera Data (read-only EXIF fields; "Make" is the camera maker, not the verb).
 	Camera Data	Údaje fotoaparátu
 cameraData	Make	Výrobce
 cameraData	Model	Model
@@ -2621,7 +2725,6 @@ cameraData	ISO Speed	Citlivost ISO
 cameraData	Focal Length	Ohnisková vzdálenost
 cameraData	Focal Length (35 mm)	Ohnisková vzdálenost (35 mm)
 cameraData	Lens	Objektiv
-# Shared panel docking
 	Activate Panel	Aktivovat panel
 	Change Panel Group	Změnit skupinu panelů
 	Change Panel Layout	Změnit rozložení panelů
@@ -2667,7 +2770,6 @@ cameraData	Lens	Objektiv
 	Snap to Origin	Přichytit k počátku
 	Search settings…	Hledat nastavení…
 	No matching settings	Žádná odpovídající nastavení
-# Edit › Content-Aware Fill workspace
 	Sampling Brush Tool	Nástroj štětec vzorkování
 	Sampling Area Overlay	Překrytí oblasti vzorkování
 	Show Sampling Area	Zobrazit oblast vzorkování
@@ -2687,7 +2789,6 @@ cameraData	Lens	Objektiv
 	Output To	Výstup do
 	Duplicate Layer	Duplikovat vrstvu
 	Contract	Zúžit
-
 	Animation Options	Možnosti animace
 	Entire Document	Celý dokument
 	Filter Options	Možnosti filtrování
@@ -2708,8 +2809,6 @@ cameraData	Lens	Objektiv
 	Add “copy” to Copied Layers and Groups	Přidávat „kopie“ ke kopírovaným vrstvám a skupinám
 	Preview on canvas when reordering layers	Zobrazovat náhled na plátně při změně pořadí vrstev
 	Show layer mask badges	Zobrazovat odznaky masek vrstev
-
-# Smart Filter editors
 	Blending Options ({filter})	Volby prolnutí ({filter})
 	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	Skrýt efekty vrstvy a inteligentní filtry  (kliknutí s {key}: všechny vrstvy)
 	Show the layer's effects and Smart Filters  ({key}-click: all layers)	Zobrazit efekty vrstvy a inteligentní filtry  (kliknutí s {key}: všechny vrstvy)
@@ -2717,11 +2816,6 @@ cameraData	Lens	Objektiv
 	The document or Smart Filter changed. Reopen its dialog.	Dokument nebo inteligentní filtr se změnil. Znovu otevřete jeho dialog.
 	Opacity must be between 0% and 100%.	Krytí musí být mezi 0% a 100%.
 	Dissolve is approximated: it blends without Photoshop's dither.	Režim Rozpustit je pouze aproximován: prolíná bez ditheringu Photoshopu.
-
-# Dynamic labels the tl! literal scanner cannot see: filter and Filter Gallery parameter names and
-# choices (humanized from their keys), Camera Raw controls, render filters (Flame, Picture Frame, Tree),
-# measurement columns, file info fields and the macOS application menu. Translated the same way as
-# above, from the plain meaning of the English label.
 	32-bit Preview Options	Možnosti 32bitového náhledu
 	3D	3D
 	About {app}	O aplikaci {app}
@@ -3153,6 +3247,7 @@ cameraData	Lens	Objektiv
 	Magnetic Lasso	Magnetické laso
 	Make	Výrobce
 	Make Selection	Vytvořit výběr
+	Make Shape	Vytvořit tvar
 	Make Work Path	Vytvořit pracovní cestu
 	Manual	Ručně
 	Map Document	Dokument mapy
@@ -3581,7 +3676,8 @@ curves	Smooth	Vyhladit
 	Vanishing Point is not active	Úběžník není aktivní
 	Apply Vanishing Point ({key})	Použít úběžník ({key})
 	Fix the red plane first: its corners must form a convex quad	Nejprve opravte červenou rovinu: její rohy musí tvořit konvexní čtyřúhelník
-# Select and Mask view modes (#1754)
+	Alt-click a plane to set the clone source	Klepnutím s Alt na rovinu nastavte zdroj klonování
+	Too many clone strokes: apply Vanishing Point first	Příliš mnoho tahů klonování: nejprve použijte Úběžník
 	Onion Skin	Cibulová slupka
 	Marching Ants	Pochodující mravenci
 	On Black	Na černé
@@ -3590,7 +3686,6 @@ curves	Smooth	Vyhladit
 	Show Edge	Zobrazit okraj
 	Show Original	Zobrazit originál
 	F cycles the views; hold X to see the image	F přepíná zobrazení; podržením X uvidíte obraz
-# Select and Mask Refine Edge Brush (#2972)
 	Refine Edge Brush (R)	Štětec pro upřesnění okraje (R)
 	Expand Detection Area	Rozšířit oblast detekce
 	Restore Original Edge	Obnovit původní okraj
@@ -3598,20 +3693,17 @@ curves	Smooth	Vyhladit
 	Clear Brush Strokes	Vymazat tahy štětce
 	Show rulers	Zobrazit pravítka
 	Presentation	Prezentace
-
-# Color Sampler (added with the i18n coverage repair)
 	Click to place · Alt-click or drag off-canvas to remove	Kliknutím umístíte · Alt-kliknutím nebo přetažením mimo plátno odeberete
 	No document open	Není otevřen žádný dokument
 	{n} of {max} sample points	{n} z {max} bodů měření
-
-# History panel menu (#2966)
 	Step Forward	Krok vpřed
 	Clear History	Vymazat historii
 	New Snapshot…	Nový snímek…
 	History Options…	Volby historie…
+	Allow Non-Linear History	Povolit nelineární historii
+	Make Layer Visibility Changes Undoable	Umožnit vrácení změn viditelnosti vrstev
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Táhněte (laso) nebo klikejte na body (mnohoúhelník) · {add} přidat · {sub} odečíst
 	The current gradient (pick one in Window › Gradients)	Aktuální přechod (vyberte v Okno › Přechody)
-# Canvas context menus, Channels panel menu, Layer Style blending page (labels rendered through a variable).
 	Make Work Path…	Vytvořit pracovní cestu…
 	Create Vector Mask	Vytvořit vektorovou masku
 	Make Selection…	Vytvořit výběr…
@@ -3656,10 +3748,8 @@ curves	Smooth	Vyhladit
 	Layer Mask Hides Effects	Maska vrstvy skrývá efekty
 	Vector Mask Hides Effects	Vektorová maska skrývá efekty
 	General Blending	Obecné prolnutí
-	This Layer:	Tato vrstva:
+	Current Layer:	Aktuální vrstva:
 	Underlying Layer:	Podkladová vrstva:
-
-# Status messages and notices
 	Nothing to paste: the clipboard holds no image	Není co vložit: schránka neobsahuje obraz
 	Preferences saved	Předvolby uloženy
 	Invalid panel layout; restored the default dock	Neplatné rozložení panelů; obnoveno výchozí ukotvení
@@ -3702,8 +3792,6 @@ curves	Smooth	Vyhladit
 	GPU error; using the CPU renderer.	Chyba GPU; používá se vykreslování pomocí CPU.
 @plural	{what} with {n} warning|{what} with {n} warnings	{what} ({n} upozornění)|{what} ({n} upozornění)|{what} ({n} upozornění)
 	Couldn't open {name}: {error}	Soubor {name} se nepodařilo otevřít: {error}
-
-# Menus, tooltips and hardware information
 	Toggle the Brush Settings panel	Zobrazit/skrýt panel Nastavení štětce
 	New Brush Preset	Nové přednastavení štětce
 	Grid view	Zobrazení mřížky
@@ -3757,8 +3845,6 @@ curves	Smooth	Vyhladit
 	Monitor profile on {display}: {profile}	Profil monitoru {display}: {profile}
 	manual	ruční
 	fallback	náhradní
-
-# Composed labels and Navigator zoom context
 	Importing {what} from {file}…	Importují se {what} ze souboru {file}…
 	brushes	štětce
 	gradients	přechody
@@ -3781,7 +3867,6 @@ navigator	Zoom	Zvětšení
 @plural	{n} step|{n} steps	{n} krok|{n} kroky|{n} kroků
 	{shortcut} assigned.	Zkratka {shortcut} přiřazena.
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	Zkratka {shortcut} se již používá pro {commands}. Kliknutím na OK původní přiřazení zrušíte.
-# Print dialog (#2697)
 	Emulsion Down	Emulze dolů
 	Functions	Funkce
 	Print Resolution:	Rozlišení tisku:
@@ -3793,7 +3878,6 @@ navigator	Zoom	Zvětšení
 	Apply mask to layer before removing?	Použít masku na vrstvu před odstraněním?
 	The layer or its mask changed. Drag the mask onto the Trash again.	Vrstva nebo její maska se změnila. Přetáhněte masku do koše znovu.
 	Delete the vector mask?	Odstranit vektorovou masku?
-# View › Guides › New Guide… › Color
 	Light Blue	Světle modrá
 	Light Red	Světle červená
 	Medium Blue	Středně modrá
@@ -3813,8 +3897,6 @@ navigator	Zoom	Zvětšení
 	Clear Brush Controls	Obnovit ovládací prvky stopy
 	Reset All Locked Settings	Obnovit všechna zamknutá nastavení
 	Copy Texture to Other Tools	Kopírovat texturu do jiných nástrojů
-
-# Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
 	Load Actions…	Načíst akce…
 	Save Actions…	Uložit akce…
 	New Action…	Nová akce…
@@ -3826,10 +3908,11 @@ navigator	Zoom	Zvětšení
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} krok zatím nemá v PhotoCraftu obdobu|{n} kroky zatím nemají v PhotoCraftu obdobu|{n} kroků zatím nemá v PhotoCraftu obdobu
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	Uložena {n} akce do souboru {file}|Uloženy {n} akce do souboru {file}|Uloženo {n} akcí do souboru {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Vynechán {n} krok bez obdoby v Photoshopu|Vynechány {n} kroky bez obdoby v Photoshopu|Vynecháno {n} kroků bez obdoby v Photoshopu
-
+@plural	{n} action file loaded|{n} action files loaded	Načten {n} soubor akcí|Načteny {n} soubory akcí|Načteno {n} souborů akcí
+	{set} from {file} replaced the one from {earlier}	Sada {set} ze souboru {file} nahradila sadu ze souboru {earlier}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} soubor nelze načíst: {errors}|{n} soubory nelze načíst: {errors}|{n} souborů nelze načíst: {errors}
 	File Naming	Pojmenování souborů
 	Starting serial	Počáteční pořadové číslo
-# Actions panel: set folders, dialog toggle, Insert Stop
 	Insert Stop…	Vložit zastavení…
 	Save Set…	Uložit sadu…
 	Message:	Zpráva:
@@ -3840,59 +3923,84 @@ navigator	Zoom	Zvětšení
 	Step {step} is waiting for its dialog	Krok {step} čeká na svůj dialog
 @plural	{n} action|{n} actions	{n} akce|{n} akce|{n} akcí
 	Background (Default)	Pozadí (výchozí)
-# Batch / Image Processor
+	Background (default)	Pozadí (výchozí)
+	Transparent (default)	Průhledné (výchozí)
 	Include All Subfolders	Zahrnout všechny podsložky
 	Auto Add/Delete	Automaticky přidat/odstranit
-
-# Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nezapínejte současně zrcadlení v nastavení tisku: obě převrácení se navzájem zruší.
 	Print Settings…	Nastavení tisku…
-	Remember to turn off the printer's own colour management in Print Settings…	Nezapomeňte v nastavení tisku vypnout vlastní správu barev tiskárny…
+	Remember to turn off the printer's own color management in Print Settings…	Nezapomeňte v nastavení tisku vypnout vlastní správu barev tiskárny…
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
-# PhotoCraft release checks.
+	Automatically Create First Snapshot	Automaticky vytvořit první snímek
+	Automatically Create New Snapshot When Saving	Automaticky vytvořit nový snímek při ukládání
+	Show New Snapshot Dialog by Default	Ve výchozím nastavení zobrazit dialog Nový snímek
+	Memory usage percent	Využití paměti (%)
+	Show Favorite Fonts	Zobrazit oblíbená písma
+	No favorite fonts yet: click the star beside a font to add it.	Zatím žádná oblíbená písma: přidejte písmo kliknutím na hvězdičku vedle něj.
+	Favorite fonts	Oblíbená písma
+	Add to Favorites	Přidat do oblíbených
+	Remove from Favorites	Odebrat z oblíbených
+	Show All Fonts	Zobrazit všechna písma
+	All Classes	Všechny třídy
+	Blackletter	Lomená písma
+	Decorative	Dekorativní
+	Font preview:	Náhled písma:
+	Handwritten	Ručně psaná
+	Hide Font Classes	Skrýt třídy písem
+	Hide Styles	Skrýt řezy
+	Monospace	Neproporcionální
+	No fonts match these filters.	Filtrům neodpovídají žádná písma.
+	No similar fonts: the current font doesn't say what it looks like.	Žádná podobná písma: u aktuálního písma chybí popis vzhledu.
+	OpenType font	Písmo OpenType
+	Sans Serif	Bezpatková
+	Script	Skriptová
+	Serif	Patková
+	Show Font Classes	Zobrazit třídy písem
+	Show Similar Fonts	Zobrazit podobná písma
+	Show Styles	Zobrazit řezy
+	Show Variable Fonts	Zobrazit variabilní písma
+	Slab Serif	Slabová patková
+	TrueType font	Písmo TrueType
+	Variable font	Variabilní písmo
+	Calibration	Kalibrace
+	Red Primary	Červená základní
+	Green Primary	Zelená základní
+	Blue Primary	Modrá základní
+	Write xmp sidecars	Zapisovat přidružené soubory XMP
+	Set the tone sliders from the image	Nastavit posuvníky tónů podle obrazu
+	Settings from {name}	Nastavení z {name}
+	Settings from {name}; {count} not supported: {names}	Nastavení z {name}; {count} nepodporováno: {names}
+	Could not write {name}: {error}	Nelze zapsat {name}: {error}
+	Kept {name}: written by another application	Soubor {name} ponechán: zapsala ho jiná aplikace
+	Shadow Tint	Odstín stínů
 	Check for Updates…	Zkontrolovat aktualizace…
-	PhotoCraft Updates	Aktualizace PhotoCraft
-	Checking for updates…	Kontrola aktualizací…
 	Open the release page to choose an installer for your system.	Otevřete stránku vydání a vyberte instalační program pro svůj systém.
-	Open Download Page	Otevřít stránku ke stažení
-	PhotoCraft is up to date.	PhotoCraft je aktuální.
-	Could not check for updates.	Aktualizace se nepodařilo zkontrolovat.
-	Updates have not been checked yet.	Aktualizace ještě nebyly zkontrolovány.
-	Check Again	Zkontrolovat znovu
 	Automatically Check for Updates	Automaticky kontrolovat aktualizace
-	Installed version: {version}	Nainstalovaná verze: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} je k dispozici.
-# History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Maluje ze zdrojového stavu panelu Historie
 	Sets the source for the history brush	Nastaví zdroj pro štětec historie
-# Bevel & Emboss shading controls.
+	The History Brush source was deleted: set a new source in the History panel	Zdroj štětce historie byl smazán: nastavte nový zdroj v panelu Historie
 	Highlight Mode	Režim světel
 	Highlight Color	Barva světel
 	Highlight Opacity	Krytí světel
 	Shadow Mode	Režim stínů
 	Shadow Color	Barva stínů
 	Shadow Opacity	Krytí stínů
-# Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Použít vložený profil ({profile})
 	Convert to the working space ({profile})	Převést do pracovního prostoru barev ({profile})
 	Remember this choice for future images	Zapamatovat si tuto volbu pro další obrázky
 	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	Dotaz znovu zapnete volbou „Ptát se při nesouladu profilů“ v nabídce Úpravy › Nastavení barev.
 	Button Mode	Režim tlačítka
 	Button Mode On	Režim tlačítka zapnutý
-
-# Darken / Lighten Interface (⇧⌘F1 / ⇧⌘F2)
 	Darken Interface	Ztmavit rozhraní
 	Lighten Interface	Zesvětlit rozhraní
-# Bevel & Emboss Technique.
 	Technique	Technika
 	Chisel Hard	Tvrdé tesání
 	Chisel Soft	Měkké tesání
 	Open color-less EXR as ACEScg	Otevřít EXR bez údaje o barevném prostoru jako ACEScg
 	Do not append "copy" to filename when saving a copy	Nepřidávat „copy“ k názvu souboru při ukládání kopie
-
-# View › Guides › right-click a guide
+	Save Full-Size Composite in .pcraft Files	Ukládat složený obraz v plné velikosti do souborů .pcraft
 	Edit Selected Guides	Upravit vybraná vodítka
 	Clear Selected Guides	Vymazat vybraná vodítka
 	Bicubic Automatic	Bikubická automatická
@@ -3917,8 +4025,6 @@ navigator	Zoom	Zvětšení
 	set name	název sady
 	{set} (modified)	{set} (změněno)
 	Show file name in title	Zobrazit název souboru v titulu
-
-# Image › Mode › Bitmap (#5559)
 	50% Threshold	50% práh
 	Pattern Dither	Rozptyl se vzorkem
 	Diffusion Dither	Difuzní rozptyl
@@ -3936,11 +4042,10 @@ navigator	Zoom	Zvětšení
 	Undo Changes	Vrátit změny
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} je vyhrazena systémem a nelze ji přiřadit.
 	Low-Latency Drawing (vsync off, applies at next launch)	Kreslení s nízkou latencí (bez vertikální synchronizace, platí po dalším spuštění)
-# Free Transform: a new layer while the box is open (#5859)
 	Reference point location	Umístění referenčního bodu
+	Toggle reference point	Zobrazit/skrýt referenční bod
 	Free Transform is still being applied; try again when it has finished.	Volná transformace se stále použije; zkuste to znovu, až skončí.
 	The transform couldn't be applied.	Transformaci nelze použít.
-# Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	Vrstvy potřebují {needed} paměti GPU; rozpočet jim ponechává {budget}.
 	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	V Předvolbách › Výkon nastavte Paměť GPU na tolik, kolik vaše grafická karta pojme, nejvýše 3/8 její paměti. Automaticky se řídí Využitím paměti, v rámci čtvrtiny paměti tohoto počítače a 3/8 paměti karty, a u karty se známou pamětí do ní dokument nezapočítává. Dokud se nevejdou, stavový řádek ukazuje Paměť GPU je plná.
 	GPU Memory Full	Paměť GPU je plná
@@ -3950,6 +4055,7 @@ navigator	Zoom	Zvětšení
 	This document's layers: {needed} of {budget} for layers	Vrstvy tohoto dokumentu: {needed} z {budget} pro vrstvy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Vrstvy tohoto dokumentu potřebují {needed}, ale mohou zabrat {budget}: překreslení celého dokumentu probíhá na CPU
 	GPU Memory (MB, 0 = Automatic)	Paměť GPU (MB, 0 = Automaticky)
+	Scratch Size Limit (MB, 0 = No Limit)	Limit velikosti odkládacího disku (MB, 0 = bez limitu)
 	{path}: the path is not valid Unicode; save under another name.	{path}: cesta není platný Unicode; uložte soubor pod jiným názvem.
 	{name} was changed by another app after it was opened or saved here.	Soubor {name} změnila jiná aplikace poté, co byl zde otevřen nebo uložen.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Nahraďte ho tímto dokumentem, nebo zrušte a použijte Soubor › Uložit jako, abyste zachovali obojí.
@@ -3958,19 +4064,14 @@ navigator	Zoom	Zvětšení
 	Decrease Brush Hardness	Snížit tvrdost štětce
 	Increase Brush Hardness	Zvýšit tvrdost štětce
 	Demosaic	Demozaikování
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jak se doplňuje mozaika barevného filtru fotoaparátu. Použije se při otevření souboru; náhled ukazuje metodu, se kterou byl otevřen.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jak se doplňuje mozaika barevného filtru fotoaparátu. Použije se při otevření souboru; náhled ukazuje metodu, se kterou byl otevřen.
 	AHD (adaptive homogeneity)	AHD (adaptivní homogenita)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: nejčistší hrany a nejméně barevných lemů, nejpomalejší.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolace s korekcí gradientu: ostrá a rychlá, s mírnými barevnými lemy v jemných detailech.
-	The fastest and the softest, with colour fringing on fine detail.	Nejrychlejší a nejměkčí, s barevnými lemy v jemných detailech.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: nejčistší hrany a nejméně barevných lemů, nejpomalejší.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolace s korekcí gradientu: ostrá a rychlá, s mírnými barevnými lemy v jemných detailech.
+	The fastest and the softest, with color fringing on fine detail.	Nejrychlejší a nejměkčí, s barevnými lemy v jemných detailech.
 	“{name}” already exists. Replace it?	„{name}“ již existuje. Nahradit?
 	The name in the save dialog was “{name}”.	Název v dialogu ukládání byl „{name}“.
-
-# Labels the UI looks up through a variable (tool, glyph-group, Liquify and warp names, command
-# parameters and choices humanized from their keys, history steps and contextual
-# Camera Raw / layer labels) that other catalogs already covered. Translated the same way as
-# above, from the plain meaning of the English label.
 	Export As: {name}	Exportovat jako: {name}
 	Tool	Nástroj
 	Arc Lower	Oblouk dole
@@ -4098,8 +4199,6 @@ navigator	Zoom	Zvětšení
 layers	Fill	Krytí výplně
 layers	Fill:	Krytí výplně:
 cameraRaw	Dehaze	Odstranění oparu
-	Move Up	Přesunout nahoru
-	Move Down	Přesunout dolů
 	Previous Brush	Předchozí štětec
 	Next Brush	Další štětec
 	First Brush	První štětec
@@ -4114,17 +4213,12 @@ cameraRaw	Dehaze	Odstranění oparu
 	Use	Použít
 	In Front	Vpředu
 	Behind	Vzadu
-
-# DDS Options (#1327)
 	DDS Options	Možnosti DDS
 	Generate Mipmaps	Generovat mipmapy
-
-# Color Table (.act) dialog
 	There is no color table to save.	Neexistuje žádná tabulka barev k uložení.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Uložena {n} barva do {file}|Uloženy {n} barvy do {file}|Uloženo {n} barev do {file}
-
-# Graphics Adapter preference (#1885)
 	GPU adapter	Adaptér GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Obsah AI/PDF/EPS se bude upravovat jako SVG. Uložení nahradí vložený zdroj; vlastnosti specifické pro formát se mohou změnit.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importovat styly…
@@ -4133,7 +4227,6 @@ cameraRaw	Dehaze	Odstranění oparu
 	{file} is not a style library (.asl)	{file} není knihovna stylů (.asl)
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	Importován {n} styl ze souboru {file}|Importovány {n} styly ze souboru {file}|Importováno {n} stylů ze souboru {file}
 @plural	Exported {n} style to {file}|Exported {n} styles to {file}	Exportován {n} styl do souboru {file}|Exportovány {n} styly do souboru {file}|Exportováno {n} stylů do souboru {file}
-# Actions: a step dialog holds a suspended recording (#7365)
 	Confirm or cancel the open action step dialog first	Nejprve potvrďte nebo zrušte otevřený dialog kroku akce
 	Pro Medium Gray	Pro (středně šedý)
 	Solarized	Solarized
@@ -4142,14 +4235,11 @@ cameraRaw	Dehaze	Odstranění oparu
 	Pro Light	Pro (světlý)
 	Resize Windows to Fit	Přizpůsobit velikost oken
 	EXR	EXR
-# Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Automatický směr odstavce
 	Left-to-right paragraph direction	Směr odstavce zleva doprava
 	Right-to-left paragraph direction	Směr odstavce zprava doleva
 	Not rendered: this adjustment ({key}) is kept as imported.	Nevykresleno: tato úprava ({key}) je ponechána tak, jak byla importována.
-# Print preview image (#8236)
 	Print preview image	Print preview image
-# Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Krychle odstínu
 	Brightness Cube	Krychle jasu
 	Color Wheel	Barevné kolo
@@ -4166,3 +4256,110 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+	The path was kept as the Work Path	Cesta byla zachována jako pracovní cesta
+	The path was discarded	Cesta byla zahozena
+	Art History Brush	Štětec umělecké historie
+	Art History Brush Tool	Nástroj štětec umělecké historie
+	Tight Short	Těsný krátký
+	Tight Medium	Těsný střední
+	Tight Long	Těsný dlouhý
+	Loose Medium	Volný střední
+	Loose Long	Volný dlouhý
+	Dab	Šmouha
+	Tight Curl	Těsná smyčka
+	Loose Curl	Volná smyčka
+	Stylized dabs from a history state	Stylizované šmouhy ze stavu historie
+	Aspect Ratio	Poměr stran
+	Font size presets	Předvolby velikosti písma
+	Leading presets	Předvolby prokladu
+	Tracking presets	Předvolby prostrkání
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Neplatná číselná hodnota. Je vyžadováno celé číslo mezi {min}% a {max}%. Byla vložena předchozí hodnota.
+	Color Aware	Podle barev
+	Decontaminate Colors	Dekontaminovat barvy
+	Edge Detection	Detekce okraje
+	Global Refinements	Globální upřesnění
+	High Quality Preview	Náhled ve vysoké kvalitě
+	Object Aware	Podle objektů
+	Real-Time Refinement	Upřesnění v reálném čase
+	Refine Edge Brush Tool	Nástroj štětec pro upřesnění okraje
+	Refine Hair	Upřesnit vlasy
+	Refine Mode	Režim upřesnění
+	Remember Settings	Zapamatovat nastavení
+	View Mode	Režim zobrazení
+	Object Aware needs a segmentation model, which isn't available yet	Režim Podle objektů vyžaduje segmentační model, který zatím není k dispozici
+	Refine Hair needs hair detection, which isn't available yet	Upřesnit vlasy vyžaduje detekci vlasů, která zatím není k dispozici
+	Select and Mask was closed: its document is no longer the active one	Vybrat a maskovat bylo zavřeno: jeho dokument již není aktivní
+	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
+	Drag to move the selected path	Tažením přesunete vybranou cestu
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Nedávno použité barvy
+	Stop Color	Barva zarážky
+	Shapes can't use patterns yet	Tvary zatím nemohou používat vzorky
+	Edit Brush…	Upravit štětec…
+
+# Action Stop message (#8386)
+	Message	Zpráva
+# Playback Options (#5212)
+	Playback Options…	Možnosti přehrávání…
+	Playback Options	Možnosti přehrávání
+	Accelerated	Zrychlené
+	Step by Step	Krok za krokem
+	Pause For:	Pozastavit na:
+	Pause For	Pozastavit na
+	seconds	sekund
+	Create a single history state	Vytvořit jeden stav historie
+	Drag to move the active shape's path or the Work Path	Tažením přesunete cestu aktivního tvaru nebo pracovní cestu
+	Generator enabled	Generátor zapnut
+	This Layer:	Tato vrstva:
+	Move Up	Přesunout nahoru
+	Move Down	Přesunout dolů
+	On your computer	V tomto počítači
+	New file	Nový soubor
+	Learn	Učit se
+	No recent files	Žádné nedávné soubory
+	Website	Web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Rámeček podporuje afinní transformace; pro perspektivní transformace vyberte jeho obrázek
+	A frame supports affine transforms; select its image to warp it	Rámeček podporuje afinní transformace; pro pokřivení vyberte jeho obrázek
+	Convert to Frame…	Převést na rámeček…
+	Create a new custom frame	Vytvořit nový vlastní rámeček
+	Create a new polygonal frame	Vytvořit nový mnohoúhelníkový rámeček
+	Create a new triangular frame	Vytvořit nový trojúhelníkový rámeček
+	Fit Content to Frame	Přizpůsobit obsah rámečku
+	Fit Frame to Content	Přizpůsobit rámeček obsahu
+	Frame coordinates must be finite and within 600000 pixels	Souřadnice rámečku musí být konečné a v rozsahu 600000 pixelů
+	Import Image…	Importovat obrázek…
+	Invalid frame transform	Neplatná transformace rámečku
+	Invalid nested file drop	Neplatné vnořené přetažení souboru
+	New Frame	Nový rámeček
+	Replace Image…	Nahradit obrázek…
+	The frame is locked	Rámeček je zamčený
+	The frame is unavailable	Rámeček není dostupný
+
+# Channels panel menu (#11451)
+	Channel Options…	Možnosti kanálu…
+	Specify Channels:	Určit kanály:
+	Not enough grayscale documents for this mode.	Pro tento režim není dost dokumentů ve stupních šedi.
+	Pick a different document for each channel.	Pro každý kanál vyberte jiný dokument.
+	A picked document is no longer open.	Jeden z vybraných dokumentů už není otevřený.
+	A picked document is no longer a grayscale document of the same size.	Jeden z vybraných dokumentů už není dokument ve stupních šedi stejné velikosti.
+# Move tool options bar (#11381)
+	Align top edges	Zarovnat horní okraje
+	Align vertical centers	Zarovnat svislé středy
+	Align bottom edges	Zarovnat dolní okraje
+	Distribute vertically	Rozmístit svisle
+	Distribute horizontally	Rozmístit vodorovně
+	Show layer bounds on hover	Zobrazit hranice vrstvy při najetí
+	Expand layer group on click	Rozbalit skupinu vrstev kliknutím
+	Show hover bounds from Layers	Zobrazit hranice při najetí z panelu Vrstvy
+# Artboard tool options bar (#11385)
+	Distribute Widths	Rozmístit šířky
+	Distribute Heights	Rozmístit výšky
+	Auto-nest Layers	Automaticky vnořovat vrstvy
+	Auto-size Canvas	Automaticky měnit velikost plátna
+	Keep Relative Position During Layer Reordering	Zachovat relativní polohu při změně pořadí vrstev
+	Shrinkwrap Canvas on Save	Při uložení zmenšit plátno na obsah
