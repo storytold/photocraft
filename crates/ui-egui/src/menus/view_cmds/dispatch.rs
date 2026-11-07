@@ -60,6 +60,7 @@ pub fn handles(id: &str) -> bool {
             | "window.panel.actions"
             | "window.panel.channels"
             | "window.panel.paths"
+            | "window.panel.luminosity"
             | "window.panel.character"
             | "window.panel.paragraph"
             | "window.panel.info"

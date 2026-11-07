@@ -720,7 +720,7 @@ fn tab_order_is_by_name_and_bad_saved_orders_fall_back() {
     let mut l = DockLayout::default();
     let names = |l: &DockLayout, g, pro| l.visible_tabs(g, pro).into_iter().map(|(_, n)| n).collect::<Vec<_>>();
     l.tab_order.insert(Group::Layers, vec!["Paths".into()]);
-    assert_eq!(l.visible_tabs(Group::Layers, true), vec![(2, "Paths"), (0, "Layers"), (1, "Channels")]);
+    assert_eq!(l.visible_tabs(Group::Layers, true), vec![(2, "Paths"), (0, "Layers"), (1, "Channels"), (3, "Luminosity")]);
     // Names, not positions: the order survives the Pro/Studio swap of Color and Swatches.
     l.tab_order.insert(Group::Color, vec!["Patterns".into(), "Color".into()]);
     assert_eq!(names(&l, Group::Color, true), ["Patterns", "Color", "Swatches", "Gradients"]);
@@ -741,11 +741,11 @@ fn tab_order_is_by_name_and_bad_saved_orders_fall_back() {
         let back: DockLayout = serde_json::from_value(json!({"order": ["layers"], "tabOrder": bad})).unwrap();
         assert_eq!(back.order().first(), Some(&Group::Layers), "{bad}");
         let layers = names(&back, Group::Layers, true);
-        assert!(layers == ["Layers", "Channels", "Paths"] || layers == ["Paths", "Layers", "Channels"], "{bad}: {layers:?}");
+        assert!(layers == ["Layers", "Channels", "Paths", "Luminosity"] || layers == ["Paths", "Layers", "Channels", "Luminosity"], "{bad}: {layers:?}");
         assert_eq!(back.visible_tabs(Group::Color, true).len(), 4);
     }
     let back: DockLayout = serde_json::from_value(json!({"tabOrder": {"layers": ["Channels"]}})).unwrap();
-    assert_eq!(names(&back, Group::Layers, true), ["Channels", "Layers", "Paths"], "missing tabs follow in their default order");
+    assert_eq!(names(&back, Group::Layers, true), ["Channels", "Layers", "Paths", "Luminosity"], "missing tabs follow in their default order");
 }
 
 /// #2272: a tab dragged along its strip reorders the group's tabs; the order persists in the
@@ -760,7 +760,7 @@ fn dragging_a_tab_reorders_the_group_and_the_order_persists() {
         let color = others(&h);
         let (paths, layers) = (tab(&h, "paths"), tab(&h, "layers"));
         drag(&mut h, paths.center(), layers.left_center() + vec2(layers.width() / 4.0, 0.0));
-        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels"], "{theme:?}: Paths moved before Layers");
+        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels", "luminosity"], "{theme:?}: Paths moved before Layers");
         assert_eq!(others(&h), color, "{theme:?}: a tab drag along the strip leaves the other groups put");
         assert_eq!(h.state().ui.dock_tabs.layers, 2, "{theme:?}: the dragged tab is selected");
 
@@ -768,7 +768,7 @@ fn dragging_a_tab_reorders_the_group_and_the_order_persists() {
         let layers = tab(&h, "layers").center();
         click(&mut h, layers);
         assert_eq!(h.state().ui.dock_tabs.layers, 0, "{theme:?}");
-        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels"]);
+        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels", "luminosity"]);
 
         let ctx = h.ctx.clone();
         // Remembered across launches (prefs panelLayout) ...
@@ -781,15 +781,15 @@ fn dragging_a_tab_reorders_the_group_and_the_order_persists() {
             p.panel_layout = saved.clone();
         });
         restore(&mut fresh);
-        assert_eq!(probe::group_of(&fresh, "layers"), ["paths", "layers", "channels"], "{theme:?}");
+        assert_eq!(probe::group_of(&fresh, "layers"), ["paths", "layers", "channels", "luminosity"], "{theme:?}");
 
         // ... and in a saved workspace, which Essentials resets and selecting brings back.
         crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.newWorkspace", json!({"name": "Paths First"})).unwrap();
         crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.essentials", json!({})).unwrap();
-        assert_eq!(probe::group_of(h.state(), "layers"), ["layers", "channels", "paths"]);
+        assert_eq!(probe::group_of(h.state(), "layers"), ["layers", "channels", "paths", "luminosity"]);
         crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.select", json!({"name": "Paths First"})).unwrap();
         h.run_steps(3);
-        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels"], "{theme:?}");
+        assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels", "luminosity"], "{theme:?}");
         assert!(tab(&h, "paths").left() < tab(&h, "layers").left());
     }
 }

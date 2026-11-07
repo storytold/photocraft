@@ -168,7 +168,7 @@ fn a_fresh_launch_draws_the_native_groups_beside_the_protected_canvas() {
     assert!(valid(&layout));
     assert_eq!(
         root_groups(&layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["layers", "channels", "paths"]]
+        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["layers", "channels", "paths", "luminosity"]]
     );
     assert!(in_dock_column(&layout, "layers"), "the groups are a dock column: {layout:?}");
     let canvas = canvas_rect(&h);
@@ -208,7 +208,12 @@ fn a_panel_never_laid_out_opens_in_its_default_group_and_side() {
     assert!(in_dock_column(layout, "navigator"), "{layout:?}");
     assert_eq!(
         root_groups(layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["navigator"], vec!["layers", "channels", "paths"]]
+        [
+            vec!["color", "swatches", "gradients", "patterns"],
+            vec!["properties", "adjustments"],
+            vec!["navigator"],
+            vec!["layers", "channels", "paths", "luminosity"]
+        ]
     );
     app.run("window.panel.activate", json!({"panel":"info"})).unwrap();
     app.run("window.panel.activate", json!({"panel":"histogram"})).unwrap();
@@ -898,7 +903,12 @@ fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     let layout = &workspace.layout;
     assert_eq!(
         root_groups(layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["history", "actions"], vec!["layers", "channels"]]
+        [
+            vec!["color", "swatches", "gradients", "patterns"],
+            vec!["properties", "adjustments"],
+            vec!["history", "actions"],
+            vec!["layers", "channels", "luminosity"]
+        ]
     );
     assert!(in_dock_column(layout, "layers") && panel_active(layout, "actions"));
     for (panel, _, _) in PANELS {

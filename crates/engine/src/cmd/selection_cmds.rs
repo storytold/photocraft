@@ -50,7 +50,7 @@ fn scope_color_range(mask: &mut [f32], doc: &Document, area: Rect, m: SelectionM
 }
 
 /// RGBA pixels the tools sample: the composite, or the active layer.
-fn sample_pixels(s: &Session, all_layers: bool, window: Option<Rect>) -> Result<(Rect, Vec<[f32; 4]>)> {
+pub(crate) fn sample_pixels(s: &Session, all_layers: bool, window: Option<Rect>) -> Result<(Rect, Vec<[f32; 4]>)> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let area = window.map_or(d.doc.bounds(), |r| r.intersect(&d.doc.bounds()));
     // Match the decoders' raster budget before either the layer or composite path allocates.

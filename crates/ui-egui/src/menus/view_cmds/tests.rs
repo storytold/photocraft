@@ -257,9 +257,16 @@ fn window_panels_select_dock_tabs() {
     // Again on the visible tab hides the panel.
     menu(&mut app, &ctx, "window.panel.paths", json!({})).unwrap();
     assert!(!app.ui.panels.layers);
+    // Luminosity is the Layers card's fourth tab.
+    menu(&mut app, &ctx, "window.panel.luminosity", json!({})).unwrap();
+    assert!(app.ui.panels.layers && app.ui.dock_tabs.layers == 3);
+    assert_eq!(checked(&app, "window.panel.luminosity"), Some(true));
+    assert_eq!(checked(&app, "window.panel.paths"), Some(false));
+    menu(&mut app, &ctx, "window.panel.luminosity", json!({})).unwrap();
+    assert!(!app.ui.panels.layers);
     menu(&mut app, &ctx, "type.panels.character", json!({})).unwrap();
     assert!(app.ui.panels.properties && app.ui.dock_tabs.properties == 0);
-    for id in ["window.panel.channels", "window.panel.swatches", "window.panel.adjustments", "window.panel.paragraph"] {
+    for id in ["window.panel.channels", "window.panel.luminosity", "window.panel.swatches", "window.panel.adjustments", "window.panel.paragraph"] {
         assert!(is_live(id), "{id}");
     }
 }

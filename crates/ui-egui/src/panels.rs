@@ -45,6 +45,7 @@ pub(super) mod layer_transfer;
 pub mod layer_tree_ui;
 mod layers;
 pub mod layers_panel_ui;
+pub mod luminosity_panel;
 pub(super) mod mask_props_ui;
 pub mod mask_thumbs_ui;
 mod navigator;

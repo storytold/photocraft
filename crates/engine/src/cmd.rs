@@ -106,6 +106,7 @@ mod layer_params;
 mod layer_references;
 pub mod layer_xmp_cmds;
 pub mod lens_cmds;
+pub mod luminosity_mask_cmds;
 pub mod magnetic_cmds;
 pub mod mask_view_cmds;
 pub(super) mod migrate_cmds;
@@ -1317,6 +1318,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::vector_cmds::specs());
     v.extend(crate::path_edit_cmds::specs());
     v.extend(crate::smartselect_cmds::specs());
+    v.extend(crate::luminosity_mask_cmds::specs());
     v.extend(crate::cutout_cmds::specs());
     v.extend(crate::symmetry_cmds::specs());
     v.extend(crate::edit_cmds::specs());
