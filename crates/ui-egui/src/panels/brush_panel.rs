@@ -551,7 +551,7 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             widgets::hairline(ui);
             ui.add_space(6.0);
             if app.ui.brush_tab == 1 {
-                crate::brushes_tab::show(app, ui);
+                crate::brushes_tab::show(app, ui, false);
             } else {
                 settings_tab(app, ui);
             }
