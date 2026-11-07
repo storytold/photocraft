@@ -387,6 +387,7 @@ mod tests {
         assert!(text_ops(&transparent, ColorMode::Rgb, 72.0).is_none());
     }
 
+    /// Ensures PDF text export rejects path text shapes and synthetic bold styles that cannot be represented natively.
     #[test]
     fn rejects_path_text_and_synthetic_bold() {
         let on_path = TextLayer {

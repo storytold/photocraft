@@ -184,6 +184,7 @@ fn q255(v: f32) -> u8 {
     (v.clamp(0.0, 1.0) * 255.0).round() as u8
 }
 
+/// Returns an export warning when a type layer has an explicit path end limit that cannot be represented in PSD.
 fn path_range_warning(layer: &Layer) -> Option<String> {
     let LayerContent::Text(text) = &layer.content else { return None };
     matches!(text.shape, photocraft_doc::text::TextShape::Path { end: Some(end), .. } if end.is_finite())

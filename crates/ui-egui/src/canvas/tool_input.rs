@@ -116,6 +116,7 @@ pub(crate) struct ToolViewContext<'a> {
 }
 
 impl<'a> ToolViewContext<'a> {
+    /// Creates a view context pairing the current canvas transform with an optional viewport identity.
     pub(crate) fn new(xf: &'a super::ViewXform, viewport: Option<egui::ViewportId>) -> Self {
         Self { xf, viewport }
     }
@@ -374,6 +375,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
     tool_event_with_view(app, ev, mods, None);
 }
 
+/// Dispatches a tool event through preflight, pre-tool overlays, and tool handlers within an explicit view context.
 pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, view: Option<ToolViewContext<'_>>) {
     if consumes_cancelled_vector_event(app, ev) {
         return;

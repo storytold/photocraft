@@ -93,6 +93,7 @@ impl Warp {
     }
 
     /// Path text with its logical line start and orientation.
+    /// Deforms text along a path with explicit line origin and vertical orientation support.
     pub fn on_path_oriented(shape: &TextShape, text_start: f64, vertical: bool) -> Option<Warp> {
         if !text_start.is_finite() {
             return None;
@@ -167,6 +168,7 @@ impl Warp {
     }
 
     /// Maps a text-space point.
+    /// Applies path deformation to map horizontal or vertical text coordinates onto the curved baseline.
     pub fn apply(&self, x: f64, y: f64) -> (f64, f64) {
         match &self.0 {
             Kind::Style(s) => s.apply(x, y),
@@ -214,6 +216,7 @@ impl PathGeometry {
     }
 
     /// Total path length.
+    /// Returns the total arc length of the flattened path frame.
     pub fn length(&self) -> f64 {
         self.frame.length()
     }
@@ -273,6 +276,7 @@ struct PathFrame {
 }
 
 impl PathFrame {
+    /// Flattens a cubic Bézier subpath into polyline approximations with cumulative arc lengths and optional range limits.
     fn new(path: &Subpath, start: f32, end: Option<f32>, flip: bool) -> Option<PathFrame> {
         let mut pts: Vec<(f64, f64)> = Vec::new();
         for seg in path.segments().iter().take(MAX_PATH_SEGMENTS) {
@@ -317,6 +321,7 @@ impl PathFrame {
         })
     }
 
+    /// Total arc length of the flattened frame polyline.
     fn length(&self) -> f64 {
         self.cum.last().copied().unwrap_or(0.0)
     }
@@ -342,6 +347,7 @@ impl PathFrame {
         self.project_with_dist(x, y).1
     }
 
+    /// Projects a point to the nearest path branch, resolving ties within 0.01 px by proximity to `previous`.
     fn project_near(&self, x: f64, y: f64, previous: f64) -> f64 {
         if self.pts.len() < 2 {
             return 0.0;
@@ -421,6 +427,7 @@ impl PathFrame {
         ((a.0 + t.0 * along, a.1 + t.1 * along), t)
     }
 
+    /// Maps horizontal or vertical line-space coordinates onto the deformed path baseline.
     fn apply(&self, x: f64, y: f64) -> (f64, f64) {
         if self.vertical {
             let (p, t) = self.at(self.start + y);
@@ -464,6 +471,7 @@ impl PathFrame {
 mod tests {
     use super::*;
 
+    /// Verifies sampling and perpendicular projection along linear and flipped path geometries, rejecting non-finite coordinates.
     #[test]
     fn path_geometry_samples_and_projects() {
         let line = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
@@ -483,6 +491,7 @@ mod tests {
         assert!(PathGeometry::new(&Subpath::polyline(&[(1.0, 1.0), (1.0, 1.0)]), false).is_none());
     }
 
+    /// Proves dragging across self-intersecting path crossings preserves branch continuity based on prior cursor arc length.
     #[test]
     fn path_geometry_project_near_crossings_stay_on_branch() {
         // Hourglass / bowtie shape with diagonal crossing at (50.0, 50.0).
@@ -502,6 +511,7 @@ mod tests {
         assert!((near_b2.0 - d2).abs() < 0.1, "should stay on branch 2: {}", near_b2.0);
     }
 
+    /// Verifies projection tracking remains continuous across sharp polygon corners, closed seams, and perpendicular flips.
     #[test]
     fn path_geometry_project_near_corners_seams_and_flips() {
         // Rectangle: (0, 0) -> (100, 0) -> (100, 100) -> (0, 100) -> (0, 0). Length = 400.
@@ -539,6 +549,7 @@ mod tests {
         assert!((dist_below - 10.0).abs() < 1e-6);
     }
 
+    /// Ensures off-path cursor drag gestures do not lag or stall across flattened segment boundaries on the same branch.
     #[test]
     fn path_geometry_project_near_off_path_drag_does_not_lag_on_segment_boundaries() {
         let path = Subpath::polyline(&[(0.0, 0.0), (160.0, 0.0)]);
@@ -550,6 +561,7 @@ mod tests {
         assert!((dist - -10.0).abs() < 1e-6);
     }
 
+    /// Proves sampling coordinates wrap modularly across the seam of a closed polygon path.
     #[test]
     fn path_geometry_closed_wraps() {
         let path = Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
@@ -558,11 +570,13 @@ mod tests {
         assert_eq!(geometry.sample(-2.0), geometry.sample(geometry.length() - 2.0));
     }
 
+    /// Test helper building a warp for style presets.
     fn warp(style: &str, value: f32) -> Warp {
         let w = TextWarp { style: psd_style(style).unwrap().into(), value, horizontal_distortion: 0.0, vertical_distortion: 0.0, horizontal: true };
         Warp::new(&w, [0.0, -40.0, 200.0, 10.0]).unwrap()
     }
 
+    /// Verifies text decoration clipping truncates at closed path seams and prevents overflow past a single lap.
     #[test]
     fn decoration_ranges_clip_at_closed_seam_and_one_lap() {
         let path = Subpath::polygon(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]);
@@ -579,6 +593,7 @@ mod tests {
         }
     }
 
+    /// Proves glyph frames are hidden when their centers fall outside the explicit start and end bounds of a path frame.
     #[test]
     fn explicit_path_ranges_clip_glyphs() {
         let line = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);

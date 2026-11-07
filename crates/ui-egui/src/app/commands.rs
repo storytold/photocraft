@@ -209,6 +209,7 @@ impl PhotocraftApp {
         self.tool_override.unwrap_or(self.ui.tool)
     }
 
+    /// Selects the newly attached type path on composite channel target so the path becomes immediately editable.
     fn select_attached_type_path(&mut self, command: &str, result: &Result<Value, String>) {
         if command != "type.attachToPath" {
             return;
@@ -224,6 +225,7 @@ impl PhotocraftApp {
         }
     }
 
+    /// Updates secondary UI state following command execution.
     fn sync_command_side_effects(
         &mut self,
         id: &str,
@@ -315,6 +317,7 @@ impl PhotocraftApp {
         }
     }
 
+    /// Reconciles canvas view state with open documents in the session.
     pub fn sync_views(&mut self) {
         crate::type_path_placement::cancel_stale(self);
         // The Paths panel selection belongs to the active document. Ordinary edits replace the

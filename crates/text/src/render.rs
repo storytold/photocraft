@@ -622,6 +622,7 @@ mod tests {
     use photocraft_color::SampleType;
     use photocraft_geom::Rect;
 
+    /// Verifies underline and strikethrough decoration drawing bounds clip strictly to the text shape's explicit path span.
     #[test]
     fn path_decorations_respect_explicit_range() {
         use super::{Bounds, DecorationRect, TextLayout, Warp, Xform, draw};

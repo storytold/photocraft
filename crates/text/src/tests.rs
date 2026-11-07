@@ -3671,6 +3671,7 @@ fn colour_passes_hold_each_glyph_once() {
     }
 }
 
+/// Verifies paragraph alignment offsets text along explicit path spans according to measured line advance and alignment factor.
 #[test]
 fn path_range_alignment_uses_measured_advance() {
     use photocraft_doc::vector::Subpath;
@@ -3698,6 +3699,7 @@ fn path_range_alignment_uses_measured_advance() {
     }
 }
 
+/// Proves `path_overflows` reports true if and only if any drawable glyph outline is hidden outside the path range.
 #[test]
 fn path_overflow_matches_visible_glyph_clipping() {
     use photocraft_doc::vector::Subpath;
@@ -3718,6 +3720,7 @@ fn path_overflow_matches_visible_glyph_clipping() {
     }
 }
 
+/// Ensures path decoration rasterization bounds clamp within explicit range endpoints across open and closed curves.
 #[test]
 fn path_decoration_draw_bounds_respect_explicit_ranges() {
     use crate::layout::DecorationRect;
@@ -3750,6 +3753,7 @@ fn path_decoration_draw_bounds_respect_explicit_ranges() {
     }
 }
 
+/// Verifies vertical path text aligns along the curve and advances progressively for left, center, and right alignments.
 #[test]
 fn vertical_path_range_alignment_renders_and_shifts_properly() {
     use photocraft_doc::text::{Orientation, ParagraphStyle, TextAlign};
@@ -3782,6 +3786,7 @@ fn vertical_path_range_alignment_renders_and_shifts_properly() {
     assert!(center_rect.y0 < right_rect.y0, "right text should be further along the path than center");
 }
 
+/// Verifies flipping vertical path text places glyphs beginning from the opposite curve endpoint.
 #[test]
 fn vertical_path_flip_reverses_placement() {
     use photocraft_doc::text::Orientation;
@@ -3810,6 +3815,7 @@ fn vertical_path_flip_reverses_placement() {
     assert!(rect_flipped.y0 > rect_normal.y0, "flipped text must start from opposite path end");
 }
 
+/// Proves vertical path text renders across closed seams and projects hit coordinates onto valid character indices.
 #[test]
 fn vertical_path_seam_and_caret_projection() {
     use photocraft_doc::text::Orientation;
@@ -3837,6 +3843,7 @@ fn vertical_path_seam_and_caret_projection() {
     assert!(char_idx <= text.text.len());
 }
 
+/// Verifies vertical path text decorations are properly deformed and clamped to the explicit placement interval.
 #[test]
 fn vertical_path_decoration_clipping_and_warp() {
     use crate::layout::DecorationRect;

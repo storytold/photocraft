@@ -554,6 +554,7 @@ fn photoshop_kerning_oracles() {
     }
 }
 
+/// Proves PSD export logs a warning when a text path end limit is dropped, and omits the warning when no limit is set.
 #[test]
 fn psd_export_warns_when_text_path_end_is_lost() {
     use photocraft_doc::text::TextShape;

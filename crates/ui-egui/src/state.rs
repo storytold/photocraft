@@ -560,6 +560,7 @@ pub struct UiState {
 }
 
 impl Default for UiState {
+    /// Creates the default UI state with default tools and empty drag state.
     fn default() -> Self {
         Self {
             tool: Tool::Move,

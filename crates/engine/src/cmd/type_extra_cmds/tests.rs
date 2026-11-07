@@ -840,6 +840,7 @@ fn a_document_without_type_never_waits_for_the_text_engine() {
     assert!(has_type_layers(&s.active().unwrap().doc));
 }
 
+/// Verifies `type.setPathPlacement` commits valid range updates with undo/redo and rejects inverted, infinite, or out-of-bounds inputs.
 #[test]
 fn path_placement_updates_and_rejects_invalid_inputs() {
     let mut empty = Session::new();
@@ -892,6 +893,7 @@ fn path_placement_updates_and_rejects_invalid_inputs() {
     assert!(s.execute("type.setPathPlacement", json!({"layer": id.0, "flip": true})).is_err());
 }
 
+/// Ensures command availability is restricted to path text layers and correctly handles legacy unconstrained endpoints or degenerate subpaths.
 #[test]
 fn path_placement_availability_and_legacy_ranges() {
     let mut s = session(8);
@@ -933,6 +935,7 @@ fn path_placement_availability_and_legacy_ranges() {
     assert!(matches!(text(&s, id).shape, TextShape::Path { start: 190.0, end: Some(210.0), .. }));
 }
 
+/// Proves path placement validation tolerates `f32` precision upward rounding at endpoints while rejecting true out-of-bounds spans.
 #[test]
 fn path_placement_noninteger_line_rounding_upward_and_zero_capacity() {
     let mut s = session(8);

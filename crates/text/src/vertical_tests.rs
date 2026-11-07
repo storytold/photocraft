@@ -313,6 +313,7 @@ fn nearest_face_is_not_synthetically_emboldened() {
     }
 }
 
+/// Verifies half-em punctuation squeeze adjustments between consecutive Japanese full-width quotation and punctuation marks.
 #[test]
 fn punctuation_squeeze_removes_half_em_between_marks() {
     use crate::layout::{ClusterInfo, squeeze_punctuation};

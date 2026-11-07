@@ -163,6 +163,7 @@ fn pen_custom_undo_binding_and_menu_retract_pending_points() {
     assert!(app.ui.pen.is_none());
 }
 
+/// Verifies pressing Escape with a custom undo shortcut cancels an active type path preview without popping document history.
 #[test]
 fn escape_rebound_to_undo_cancels_type_path_preview_before_dispatch() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());

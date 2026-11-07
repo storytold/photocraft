@@ -22,6 +22,7 @@ fn centre(m: [f64; 6], x: f64) -> (f64, f64) {
     (m[0] * x + m[4], m[1] * x + m[5])
 }
 
+/// Proves glyph positions on a closed rectangle wrap continuously past the top-left seam.
 #[test]
 fn closed_rectangle_left_edge_continues_past_the_top_left_seam() {
     let p = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
@@ -35,6 +36,7 @@ fn closed_rectangle_left_edge_continues_past_the_top_left_seam() {
     assert_eq!(f.apply(75.0, 0.0), q, "caret and glyph use the same wrapped parameter");
 }
 
+/// Verifies glyph frames remain visible across ellipse seams in both normal and flipped directions.
 #[test]
 fn closed_ellipse_upper_left_and_apex_cross_the_seam_in_both_directions() {
     for reverse in [false, true] {
@@ -66,6 +68,7 @@ fn closed_ellipse_upper_left_and_apex_cross_the_seam_in_both_directions() {
     }
 }
 
+/// Ensures text placed along closed curves renders at most one lap without duplicate glyph centers.
 #[test]
 fn closed_path_shows_one_lap_without_repeating_glyph_centres() {
     let p = ellipse();
@@ -84,6 +87,7 @@ fn closed_path_shows_one_lap_without_repeating_glyph_centres() {
     assert!(f.frame(length + 20.0).is_none());
 }
 
+/// Verifies open path frames clip out-of-range glyphs while preserving endpoint tangent vectors.
 #[test]
 fn open_path_clipping_offsets_and_end_tangents_stay_unchanged() {
     let p = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
@@ -98,6 +102,7 @@ fn open_path_clipping_offsets_and_end_tangents_stay_unchanged() {
     }
 }
 
+/// Proves alignment on closed paths restricts glyph placement to a single lap from the left edge.
 #[test]
 fn closed_path_alignment_uses_one_lap_from_the_text_left_edge() {
     let p = ellipse();
@@ -115,6 +120,7 @@ fn closed_path_alignment_uses_one_lap_from_the_text_left_edge() {
     }
 }
 
+/// Verifies start offsets wrap modularly on closed paths and non-finite coordinates are hidden.
 #[test]
 fn closed_path_start_offsets_wrap_and_invalid_coordinates_are_hidden() {
     let p = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
@@ -127,6 +133,7 @@ fn closed_path_start_offsets_wrap_and_invalid_coordinates_are_hidden() {
     }
 }
 
+/// Ensures caret hit projection round-trips coordinates across closed seams and open offsets.
 #[test]
 fn caret_projection_roundtrips_closed_seams_and_open_offsets() {
     let p = ellipse();
@@ -148,6 +155,7 @@ fn caret_projection_roundtrips_closed_seams_and_open_offsets() {
     }
 }
 
+/// Verifies caret hit testing projects onto the explicit range origin rather than jumping across closed path seams.
 #[test]
 fn explicit_range_caret_uses_range_origin_across_seam() {
     let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
@@ -166,6 +174,7 @@ fn explicit_range_caret_uses_range_origin_across_seam() {
     }
 }
 
+/// Ensures caret projections in the unoccupied interval of a closed path snap to the nearest visible endpoint across either side of the gap.
 #[test]
 fn explicit_range_caret_chooses_nearest_endpoint_across_both_sides_of_gap() {
     let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);

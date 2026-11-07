@@ -815,6 +815,7 @@ struct CanvasToolInput<'a> {
     display_zoom: f32,
 }
 
+/// Processes primary canvas pointer gestures, view transitions, and tool cancellations on focus loss.
 fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasToolInput<'_>) {
     let ctx = input.ctx;
     let response = input.response;
@@ -993,6 +994,7 @@ fn handle_canvas_tool_navigation(
     }
 }
 
+/// Routes continuous stroke dragging events for active painting and vector tools to tool handlers with view context.
 fn handle_canvas_tool_stroke(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1178,6 +1180,7 @@ fn handle_canvas_tool_stroke(
     }
 }
 
+/// Dispatches discrete pointer click and release events to active tools with view transform context.
 fn handle_canvas_tool_clicks(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1438,6 +1441,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     draw_canvas_tool_cursor(app, ui, input, resizing);
 }
 
+/// Renders custom canvas cursor overlays, including brush silhouettes and type path placement directional arrows.
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
     let ctx = input.ctx;
     let xf = input.xf;

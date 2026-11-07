@@ -297,6 +297,7 @@ pub struct TextWarp {
 
 #[cfg(test)]
 mod tests {
+    /// Ensures `TextShape::Path` serializes backward-compatibly without an `"end"` field when `end` is `None`.
     #[test]
     fn path_end_is_backward_compatible() {
         let shape = super::TextShape::Path { path: Default::default(), start: 2.0, end: None, flip: false };

@@ -369,6 +369,7 @@ fn path_source(doc: &Document, p: &Value) -> Result<Subpath> {
     Ok(sub.clone())
 }
 
+/// Attaches the active type layer to a target subpath with optional start offset and flip orientation.
 fn attach_to_path(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |m: &str| EngineError::BadParams { cmd: "type.attachToPath".into(), msg: m.into() };
     let start = match p.get("start") {
@@ -458,6 +459,7 @@ fn is_path_text(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Validates that the active layer contains path text eligible for placement adjustments.
 fn is_path_placement_text(s: &Session) -> std::result::Result<(), String> {
     match active_text(s)?.shape {
         TextShape::Path { .. } => Ok(()),
@@ -465,6 +467,7 @@ fn is_path_placement_text(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Updates the path text placement range (`start`, `end`) and `flip` orientation, validating boundaries against curve geometry.
 fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
     let bad = |msg: &str| EngineError::BadParams { cmd: "type.setPathPlacement".into(), msg: msg.into() };
     if !p.is_object() {
@@ -958,6 +961,7 @@ fn load_defaults(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Registers extra type commands including path attachment, detachment, rasterization, and path placement.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $params:expr, $enabled:expr, $run:expr) => {

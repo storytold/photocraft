@@ -10,6 +10,7 @@ use photocraft_doc::{Document, LayerContent, TextLayer, text::TextShape};
 use photocraft_geom::{Point, Rect};
 use photocraft_text::warp::PathGeometry;
 
+/// Returns the active text layer when a path selection tool is active and targeted at the type path.
 pub(crate) fn active_text(app: &PhotocraftApp) -> Option<&TextLayer> {
     if !matches!(app.ui.tool, Tool::PathSelection | Tool::DirectSelection)
         || app.ui.transform.is_some()
@@ -33,6 +34,7 @@ pub(crate) fn active_text(app: &PhotocraftApp) -> Option<&TextLayer> {
     }
 }
 
+/// Returns the normalized paragraph alignment weight (0.0 for left, 0.5 for center, 1.0 for right).
 fn alignment_factor(align: photocraft_doc::text::TextAlign) -> f64 {
     use photocraft_doc::text::TextAlign;
     match align {
@@ -42,6 +44,7 @@ fn alignment_factor(align: photocraft_doc::text::TextAlign) -> f64 {
     }
 }
 
+/// Computes the start and end arc-length interval of path text, converting legacy alignment anchors to explicit spans.
 fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]> {
     let TextShape::Path { path, start, end, .. } = &text.shape else { return None };
     let length = geometry.length();
@@ -88,6 +91,7 @@ fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]
     Some(range)
 }
 
+/// Computes screen-space positions and tangents for start and end placement markers.
 pub(crate) fn markers(text: &TextLayer, xf: &ViewXform) -> Option<[(Pos2, Vec2); 2]> {
     let TextShape::Path { path, flip, .. } = &text.shape else { return None };
     let geometry = PathGeometry::new(path, *flip)?;
@@ -104,11 +108,13 @@ pub(crate) fn markers(text: &TextLayer, xf: &ViewXform) -> Option<[(Pos2, Vec2);
     Some([sample(start)?, sample(finish)?])
 }
 
+/// Returns the tip position of a placement marker directed perpendicularly away from the path tangent.
 fn marker_tip(point: Pos2, tangent: Vec2, index: usize) -> Pos2 {
     let side = if index == 0 { -1.0 } else { 1.0 };
     point + Vec2::new(-tangent.y, tangent.x) * (10.0 * side)
 }
 
+/// Hit-tests a screen point against start and end marker tips within hit tolerance.
 fn marker_hit(ends: [(Pos2, Vec2); 2], p: Pos2) -> Option<(usize, f32)> {
     ends.into_iter()
         .enumerate()
@@ -117,6 +123,7 @@ fn marker_hit(ends: [(Pos2, Vec2); 2], p: Pos2) -> Option<(usize, f32)> {
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// Determines whether the path selection cursor should indicate start/body placement (true) or end marker movement (false).
 pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option<bool> {
     if let Some(drag) = app.ui.type_path_drag.as_ref().filter(|drag| drag.valid(app)) {
         return Some(drag.endpoint != Some(1));
@@ -139,6 +146,7 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
     (crate::type_tool::hit_layer(app, d[0], d[1]) == Some(layer)).then_some(true)
 }
 
+/// Draws the directional type path placement cursor overlay with a directional arrow indicator.
 pub(crate) fn draw_cursor(ctx: &egui::Context, p: Pos2, right: bool) {
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("type-path-cursor")));
     let sign = if right { 1.0 } else { -1.0 };
@@ -156,6 +164,7 @@ pub(crate) fn draw_cursor(ctx: &egui::Context, p: Pos2, right: bool) {
     }
 }
 
+/// Checks whether text glyphs exceed the current path range, caching by document snapshot, revision, and placement.
 fn overflows(app: &PhotocraftApp, ctx: &egui::Context, text: &TextLayer) -> bool {
     let Some(st) = app.session.active() else { return false };
     let TextShape::Path { start, end, flip, .. } = &text.shape else { return false };
@@ -175,6 +184,7 @@ fn overflows(app: &PhotocraftApp, ctx: &egui::Context, text: &TextLayer) -> bool
     value
 }
 
+/// Renders placement start/end markers and overflow indicators for the active type path.
 pub(crate) fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(text) = active_text(app) else { return };
     let mut preview = text.clone();
@@ -218,12 +228,14 @@ pub(crate) struct Damage {
     areas: VecDeque<(u64, Rect)>,
 }
 
+/// Calculates canvas invalidation damage bounding the union of preview text regions across display revisions.
 pub(crate) fn damage(app: &PhotocraftApp, doc: photocraft_doc::DocId, revision: u64, before: u64, after: u64) -> Option<Rect> {
     let p = app.type_path_damage.as_ref().filter(|p| p.document == doc && p.revision == revision)?;
     let area = |key| if key == 0 { Some(p.original_area) } else { p.areas.iter().find(|(k, _)| *k == key).map(|(_, r)| *r) };
     Some(area(before)?.union(&area(after)?))
 }
 
+/// Returns a transient document snapshot with live placement preview modifications and tracks damage bounding boxes.
 pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u64)> {
     let drag = app.ui.type_path_drag.as_ref()?;
     if !drag.valid(app) {
@@ -301,6 +313,7 @@ pub struct Drag {
 
 // Geometry is fixed by the source document revision; cached preview pixels are derived state.
 impl PartialEq for Drag {
+    /// Compares gesture state identity, ignoring transient preview cache artifacts.
     fn eq(&self, other: &Self) -> bool {
         self.source.ptr_eq(&other.source)
             && (self.document, self.layer, self.revision, self.tool) == (other.document, other.layer, other.revision, other.tool)
@@ -326,6 +339,7 @@ impl PartialEq for Drag {
 }
 
 impl Drag {
+    /// Checks whether the drag gesture remains bound to the active document revision, layer, and tool.
     fn valid(&self, app: &PhotocraftApp) -> bool {
         active_text(app).is_some()
             && app.ui.tool == self.tool
@@ -337,6 +351,7 @@ impl Drag {
             })
     }
 
+    /// Computes the proposed start and end arc lengths and flip state, remapping intervals when flipped across the path.
     fn placement(&self) -> ([f64; 2], bool) {
         let range = if self.flipped {
             let length = self.geometry.length();
@@ -349,6 +364,7 @@ impl Drag {
         (range, self.original_flip ^ self.flipped)
     }
 
+    /// Projects pointer motion onto the path geometry, updating proposed placement range and detecting flip crossings.
     fn update(&mut self, x: f64, y: f64) {
         let point = self.inverse.apply(Point::new(x, y));
         let Some((arc, distance)) = self.geometry.project_near(point.x, point.y, self.previous) else { return };
@@ -389,6 +405,7 @@ impl Drag {
 
 // Preserve the paragraph anchor when an open range reaches an endpoint. Keeping
 // the whole span fixed would prevent a range ending at the path endpoint from moving.
+/// Translates an open path range while preserving paragraph alignment anchor positions when hitting path endpoints.
 fn moved_open_range([start, end]: [f64; 2], delta: f64, alignment: f64, length: f64) -> [f64; 2] {
     let span = end - start;
     let anchor = (start + span * alignment + delta).clamp(0.0, length);
@@ -409,6 +426,7 @@ pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
     }
 }
 
+/// Cancels active path placement capture when the owning viewport loses focus or the primary button was released externally.
 pub(crate) fn cancel_missing_release(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some(drag) = &app.ui.type_path_drag else { return };
     if let Some(owner) = drag.viewport
@@ -421,20 +439,24 @@ pub(crate) fn cancel_missing_release(app: &mut PhotocraftApp, ctx: &egui::Contex
     }
 }
 
+/// Cancels any active type path placement drag gesture and discards live preview state.
 pub(crate) fn cancel(app: &mut PhotocraftApp) -> bool {
     app.ui.type_path_drag.take().is_some()
 }
 
+/// Helper entry point for pointer events without explicit view context in tests.
 #[cfg(test)]
 pub(crate) fn pointer(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent) -> bool {
     pointer_with_context(app, event, None, None)
 }
 
+/// Helper entry point for pointer events with an explicit view transform in tests.
 #[cfg(test)]
 pub(crate) fn pointer_with_view(app: &mut PhotocraftApp, event: crate::canvas::ToolEvent, view: Option<&ViewXform>) -> bool {
     pointer_with_context(app, event, view, None)
 }
 
+/// Handles canvas pointer events for type path marker and body drag gestures, managing capture and preview updates.
 pub(crate) fn pointer_with_context(
     app: &mut PhotocraftApp,
     event: crate::canvas::ToolEvent,
@@ -553,6 +575,7 @@ mod tests {
     use crate::canvas::ToolEvent;
     use serde_json::json;
 
+    /// Sets up a test harness with a document, path, and attached type layer for placement tests.
     fn app(tool: Tool) -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
@@ -567,6 +590,7 @@ mod tests {
         app
     }
 
+    /// Proves drag capture is preserved while the pointer is held and cancelled cleanly when release is lost during focus loss.
     #[test]
     fn missing_release_cleanup_preserves_held_capture_and_cancels_lost_release() {
         let mut app = app(Tool::PathSelection);
@@ -610,6 +634,7 @@ mod tests {
         ctx.end_pass().textures_delta.clear();
     }
 
+    /// Verifies switching tools cancels any in-progress marker drag capture before returning to selection tools.
     #[test]
     fn selecting_another_tool_cancels_capture_before_switching_back() {
         let mut app = app(Tool::PathSelection);
@@ -620,6 +645,7 @@ mod tests {
         assert!(app.ui.type_path_drag.is_none());
     }
 
+    /// Ensures attaching type to a work path targets the layer's path for editing without mutating the source work path.
     #[test]
     fn attaching_type_selects_its_path_and_preserves_the_source() {
         let mut app = app(Tool::PathSelection);
@@ -636,29 +662,36 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.work_path, source);
     }
 
+    /// Returns the text shape of the active text layer in test assertions.
     fn shape(app: &PhotocraftApp) -> TextShape {
         active_text(app).unwrap().shape.clone()
     }
 
+    /// Returns the (start, end, flip) placement parameters of the active path text layer.
     fn placement(app: &PhotocraftApp) -> (f32, Option<f32>, bool) {
         let TextShape::Path { start, end, flip, .. } = shape(app) else { panic!("expected path") };
         (start, end, flip)
     }
 
+    /// Returns the count of committed history entries in the active session.
     fn steps(app: &PhotocraftApp) -> usize {
         app.session.active().unwrap().history.entries().len()
     }
 
+    /// Dispatches a pointer down event at document coordinates.
     fn down(app: &mut PhotocraftApp, x: f64, y: f64) {
         assert!(pointer(app, ToolEvent::Down { x, y, pressure: 1.0 }));
     }
+    /// Dispatches a pointer move event to document coordinates.
     fn move_to(app: &mut PhotocraftApp, x: f64, y: f64) {
         assert!(pointer(app, ToolEvent::Move { x, y, pressure: 1.0 }));
     }
+    /// Dispatches a pointer up event at document coordinates.
     fn up(app: &mut PhotocraftApp, x: f64, y: f64) {
         assert!(pointer(app, ToolEvent::Up { x, y }));
     }
 
+    /// Verifies converting legacy single-point anchor alignment to explicit ranges preserves exact glyph rasterization coordinates.
     #[test]
     fn legacy_alignment_conversion_preserves_glyph_positions() {
         use photocraft_doc::text::{ParagraphStyle, TextAlign};
@@ -697,6 +730,7 @@ mod tests {
         }
     }
 
+    /// Ensures hidden text layers reject marker interactions and pointer gesture captures.
     #[test]
     fn hidden_active_layer_rejects_placement() {
         let mut app = app(Tool::PathSelection);
@@ -711,6 +745,7 @@ mod tests {
         assert!(!pointer(&mut app, ToolEvent::Down { x: 40.0, y: 90.0, pressure: 1.0 }));
     }
 
+    /// Proves clicking and releasing a placement marker without dragging preserves the document shape and appends no history step.
     #[test]
     fn legacy_click_and_release_preserves_model_and_history() {
         let mut app = app(Tool::PathSelection);
@@ -723,6 +758,7 @@ mod tests {
         assert_eq!(steps(&app), count);
     }
 
+    /// Verifies marker hit testing and cursor feedback match across rotated, zoomed, and non-uniformly scaled canvas views.
     #[test]
     fn marker_cursor_and_press_agree_in_transformed_views() {
         for rotation in [0.0, 37.0, 90.0] {
@@ -752,6 +788,7 @@ mod tests {
         }
     }
 
+    /// Proves marker drags routed through explicit view transforms correctly update placement start and end boundaries.
     #[test]
     fn explicit_view_routes_marker_gesture() {
         let mut app = app(Tool::DirectSelection);
@@ -771,6 +808,7 @@ mod tests {
         assert_eq!((end, flip), (Some(100.0), false));
     }
 
+    /// Verifies crossing threshold for flipping path text uses perpendicular screen distance under affine shears.
     #[test]
     fn shear_flip_uses_perpendicular_screen_distance() {
         let mut app = app(Tool::PathSelection);
@@ -813,6 +851,7 @@ mod tests {
         assert!(placement(&app).2);
     }
 
+    /// Ensures in-progress placement dragging caches transient preview snapshots without modifying committed history.
     #[test]
     fn preview_is_cached_and_does_not_change_history() {
         let mut app = app(Tool::PathSelection);
@@ -839,6 +878,7 @@ mod tests {
         assert!(display_doc(&mut app, 0).is_none());
     }
 
+    /// Proves preview damage calculations bound union regions across successive preview revisions and restore correctly on cancel.
     #[test]
     fn damage_tracks_preview_and_return() {
         let mut app = app(Tool::PathSelection);
@@ -866,6 +906,7 @@ mod tests {
         assert_eq!(damage(&app, doc, revision + 1, second, 0), None);
     }
 
+    /// Verifies dragging placement markers commits exactly one history step on release and cleanly rolls back on undo.
     #[test]
     fn marker_drags_commit_once_and_undo() {
         for tool in [Tool::PathSelection, Tool::DirectSelection] {
@@ -890,6 +931,7 @@ mod tests {
         }
     }
 
+    /// Locates an interior document point on the glyph baseline of the active path text.
     fn body_point(app: &mut PhotocraftApp) -> Point {
         let id = app.session.active().unwrap().active_layer.unwrap();
         let (layout, _, _) = crate::type_tool::layout(app, id).unwrap();
@@ -901,6 +943,7 @@ mod tests {
         text.transform.apply(Point::new(x, y))
     }
 
+    /// Proves dragging text body translates the placement range even when one boundary touches the open path endpoint.
     #[test]
     fn body_drag_can_move_text_when_range_reaches_the_open_endpoint() {
         let mut app = app(Tool::PathSelection);
@@ -915,6 +958,7 @@ mod tests {
         }
     }
 
+    /// Verifies dragging the text body shifts the entire range by delta and commits a single undoable command.
     #[test]
     fn body_drag_moves_range_once_and_undoes() {
         for tool in [Tool::PathSelection, Tool::DirectSelection] {
@@ -939,6 +983,7 @@ mod tests {
         }
     }
 
+    /// Ensures position locks on text layers reject marker drag gestures and command executions.
     #[test]
     fn position_lock_rejects_marker_and_command() {
         for tool in [Tool::PathSelection, Tool::DirectSelection] {
@@ -963,6 +1008,7 @@ mod tests {
         }
     }
 
+    /// Proves dragging past the curve flip threshold reverses side orientation and remaps start/end intervals.
     #[test]
     fn crossing_the_path_flips_and_remaps_the_interval() {
         for tool in [Tool::PathSelection, Tool::DirectSelection] {
@@ -974,6 +1020,7 @@ mod tests {
         }
     }
 
+    /// Verifies cancelling or switching documents cleanly clears active drag state without committing changes.
     #[test]
     fn cancel_and_document_switch_discard_the_gesture() {
         for switch in [false, true] {
@@ -998,6 +1045,7 @@ mod tests {
             }
         }
     }
+    /// Proves reallocating document instance memory invalidates stale weak pointers and cancels active drag gestures.
     #[test]
     fn replacing_snapshot_with_same_id_and_revision_cancels_capture() {
         let mut app = app(Tool::PathSelection);
@@ -1020,6 +1068,7 @@ mod tests {
         assert_eq!(steps(&app), count);
     }
 
+    /// Ensures clicking on a closed path range exceeding one lap preserves the full multi-lap span without truncation.
     #[test]
     fn closed_range_over_one_lap_click_preserves_range_and_history() {
         let mut app = app(Tool::PathSelection);
@@ -1046,6 +1095,7 @@ mod tests {
         assert_eq!(steps(&app), count);
     }
 
+    /// Proves dragging across self-intersecting path crossings stays locked to the current branch based on previous arc length.
     #[test]
     fn pointer_crossing_gesture_stays_on_branch() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -1076,6 +1126,7 @@ mod tests {
         assert!(!flip);
     }
 
+    /// Verifies that hiding an ancestor layer group excludes child path text from marker rendering and pointer captures.
     #[test]
     fn hidden_ancestor_excludes_markers_and_capture() {
         use photocraft_doc::LayerId;
@@ -1100,6 +1151,7 @@ mod tests {
         assert!(app.ui.type_path_drag.is_none());
     }
 
+    /// Proves overflow marker caches invalidate when a document Arc is replaced with modified content at the same revision.
     #[test]
     fn overflow_cache_invalidates_on_replacement_arc_with_same_id_and_revision() {
         let mut app = app(Tool::PathSelection);
@@ -1159,6 +1211,7 @@ mod tests {
         assert!(!wide_overflow, "overflow cache must invalidate on replacement Arc with expanded range");
     }
 
+    /// Ensures releasing a placement drag outside canvas bounds cleanly commits exactly once and updates placement.
     #[test]
     fn ordinary_offcanvas_up_commits_once() {
         let mut app = app(Tool::PathSelection);
@@ -1177,6 +1230,7 @@ mod tests {
         assert_eq!(shape(&app), before);
     }
 
+    /// Proves non-integer path lengths whose `f32` conversion rounds upward keep placement markers visible without clamping errors.
     #[test]
     fn type_path_placement_noninteger_line_rounding_upward_keeps_markers_visible() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -1220,6 +1274,7 @@ mod tests {
         assert!(markers(active_text(&app).unwrap(), &xf).is_some(), "markers must remain visible after actual drag release at endpoint");
     }
 
+    /// Verifies viewport ownership guards prevent secondary viewports from discarding an active drag belonging to another viewport.
     #[test]
     fn cancel_missing_release_viewport_ownership() {
         let mut app = app(Tool::PathSelection);
