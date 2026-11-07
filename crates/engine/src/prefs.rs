@@ -292,6 +292,9 @@ pub struct Interface {
     /// objects in a large document stay visible (Photoshop's Clip Thumbnails to Layer Bounds; #4281).
     pub clip_thumbnails_to_layer_bounds: bool,
     pub show_tooltips: bool,
+    /// A submenu stays open for longer while the pointer heads for it: it waits for a longer stop,
+    /// counts any movement as moving, and has no limit on staying on one row.
+    pub more_time_to_reach_submenus: bool,
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
@@ -332,6 +335,7 @@ impl Default for Interface {
             show_menu_colors: true,
             clip_thumbnails_to_layer_bounds: false,
             show_tooltips: true,
+            more_time_to_reach_submenus: false,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
             show_file_name_in_title: true,
