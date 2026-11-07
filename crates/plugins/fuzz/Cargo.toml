@@ -1,0 +1,36 @@
+[package]
+name = "photocraft-plugins-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace so the main workspace's `crates/*` glob and lints do not apply (cargo-fuzz
+# needs nightly + sanitizer flags).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-plugins = { path = ".." }
+photocraft-color = { path = "../../color" }
+photocraft-geom = { path = "../../geom" }
+photocraft-raster = { path = "../../raster" }
+# As the app builds it (photocraft-format turns the feature on), so floats read back exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+
+[[bin]]
+name = "manifest"
+path = "fuzz_targets/manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "module"
+path = "fuzz_targets/module.rs"
+test = false
+doc = false
+bench = false

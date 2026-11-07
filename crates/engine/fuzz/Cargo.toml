@@ -1,0 +1,50 @@
+[package]
+name = "photocraft-engine-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace so the main workspace's `crates/*` glob and lints do not apply (cargo-fuzz
+# needs nightly + sanitizer flags).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-engine = { path = ".." }
+photocraft-io = { path = "../../io" }
+# As the app builds it (photocraft-format turns the feature on), so floats read back exactly.
+serde_json = { version = "1", features = ["float_roundtrip"] }
+# The XML parser the engine uses, to tell a well-formed packet from a broken one.
+roxmltree = "0.21"
+
+[[bin]]
+name = "kys"
+path = "fuzz_targets/kys.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "prefs"
+path = "fuzz_targets/prefs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "layer_xmp"
+path = "fuzz_targets/layer_xmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "file_info"
+path = "fuzz_targets/file_info.rs"
+test = false
+doc = false
+bench = false

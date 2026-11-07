@@ -1,0 +1,72 @@
+[package]
+name = "photocraft-io-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-codecs = { path = "../../codecs" }
+photocraft-io = { path = ".." }
+photocraft-algo = { path = "../../algo" }
+photocraft-format = { path = "../../format" }
+
+# The seed generator (examples/seeds.rs) builds documents in code.
+[dev-dependencies]
+photocraft-doc = { path = "../../doc" }
+photocraft-raster = { path = "../../raster" }
+
+[[bin]]
+name = "import_xcf"
+path = "fuzz_targets/import_xcf.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_pdn"
+path = "fuzz_targets/import_pdn.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_kra"
+path = "fuzz_targets/import_kra.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_ora"
+path = "fuzz_targets/import_ora.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "import_svg"
+path = "fuzz_targets/import_svg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "camera_raw_xmp"
+path = "fuzz_targets/camera_raw_xmp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "export_roundtrip"
+path = "fuzz_targets/export_roundtrip.rs"
+test = false
+doc = false
+bench = false

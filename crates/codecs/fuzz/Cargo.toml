@@ -76,3 +76,66 @@ path = "fuzz_targets/decode_webp.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "decode_dds"
+path = "fuzz_targets/decode_dds.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_dicom"
+path = "fuzz_targets/decode_dicom.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_dpx"
+path = "fuzz_targets/decode_dpx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_fits"
+path = "fuzz_targets/decode_fits.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_iff"
+path = "fuzz_targets/decode_iff.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_pcx"
+path = "fuzz_targets/decode_pcx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_pnm"
+path = "fuzz_targets/decode_pnm.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_tga"
+path = "fuzz_targets/decode_tga.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_xpm"
+path = "fuzz_targets/decode_xpm.rs"
+test = false
+doc = false
+bench = false
