@@ -335,6 +335,12 @@ impl<'a> EffectPass<'a> {
         } else if self.maps.outline {
             let o = self.maps.crop(&self.maps.shape, big, 0.0);
             Map { w, h, v: o.v.iter().zip(&content.px).enumerate().map(|(i, (o, p))| o.max(self.union(i, p[3]))).collect() }
+        } else if crate::extents::fills_past_canvas(self.layer) {
+            // Past the canvas the content stops but the fill doesn't: the maps' shape goes on
+            // there (#9048), so an exterior effect isn't painted along the canvas border. The maps'
+            // shape is already masked and holds the stroke: joined after the union, as above.
+            let o = self.maps.crop(&self.maps.shape, big, 0.0);
+            Map { w, h, v: o.v.iter().zip(&content.px).enumerate().map(|(i, (o, p))| o.max(self.union(i, p[3]))).collect() }
         } else {
             Map { w, h, v: content.px.iter().enumerate().map(|(i, p)| self.union(i, p[3])).collect() }
         }
