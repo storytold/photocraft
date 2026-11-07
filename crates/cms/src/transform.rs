@@ -93,6 +93,8 @@ pub struct Transform {
     post: Option<Post>,
     /// Pre-located grid coordinates per 8-bit code: (offset contribution, fraction) per input.
     grid8: Vec<[(u32, f32); 256]>,
+    /// For an exact core: the first stage's curves at every 8-bit code.
+    exact8: Vec<[f32; 256]>,
 }
 
 impl Transform {
@@ -180,7 +182,13 @@ impl Transform {
                 .collect(),
             _ => Vec::new(),
         };
-        Transform { inputs, outputs, opts, pipeline, core, post, grid8 }
+        let exact8 = match (&core, pipeline.stages.first()) {
+            (Core::Exact, Some(Stage::Curves(cs))) if cs.len() == inputs && inputs <= 4 => {
+                cs.iter().map(|c| std::array::from_fn(|i| c.eval(i as f32 / 255.0))).collect()
+            }
+            _ => Vec::new(),
+        };
+        Transform { inputs, outputs, opts, pipeline, core, post, grid8, exact8 }
     }
 
     /// White preservation: the device-link node at the source's device white gets exactly the
@@ -400,6 +408,21 @@ impl Transform {
                     }
                     apply_matrix(matrix, &v, &mut mid, self.inputs);
                     self.finish(&mid, &mut out);
+                    for k in 0..self.outputs {
+                        dp[k] = q(out[k]);
+                    }
+                    for e in 0..extra {
+                        dp[self.outputs + e] = sp[self.inputs + e];
+                    }
+                }
+            }
+            Core::Exact if !self.exact8.is_empty() => {
+                for (sp, dp) in s.chunks_exact(ss).zip(d.chunks_exact_mut(ds)) {
+                    let mut v = [0.0f32; 16];
+                    for k in 0..self.inputs {
+                        v[k] = self.exact8[k][sp[k] as usize];
+                    }
+                    self.pipeline.eval_after_first(&mut v, &mut out);
                     for k in 0..self.outputs {
                         dp[k] = q(out[k]);
                     }
