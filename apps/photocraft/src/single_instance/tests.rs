@@ -128,9 +128,10 @@ fn a_launch_waiting_on_a_closing_instance_takes_over() {
     let waiting = launch(&dir, &["a.psd"], FAST);
     std::thread::sleep(Duration::from_millis(200));
     primary.shutdown();
-    assert!(matches!(waiting.join().unwrap(), Launch::Primary(_)), "the waiting launch becomes the primary");
-    // After shutdown new connections are refused too.
+    let Launch::Primary(next) = waiting.join().unwrap() else { panic!("the waiting launch becomes the primary") };
+    // After shutdown new connections are refused too. (Read before the drop, which removes the file.)
     let (endpoint, token) = read_info(&dir).unwrap();
+    drop(next);
     drop(primary);
     let short = Instant::now() + Duration::from_millis(300);
     assert!(send(&endpoint, &token, &["b.psd".into()], short).is_err());
@@ -220,6 +221,82 @@ fn the_token_file_is_private_to_the_user() {
     let mode = std::fs::metadata(dir.join(INFO_FILE)).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Follow-up to #3755, point 1: another local user can't open the lock, so can't hold it.
+#[cfg(unix)]
+#[test]
+fn the_lock_file_and_a_new_settings_folder_are_private_to_the_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let dir = temp_dir("lock-mode").join("photocraft");
+    let first = primary(&dir);
+    assert_eq!((mode(&dir), mode(&dir.join(LOCK_FILE))), (0o700, 0o600));
+    drop(first);
+    // A lock file an earlier version created 0644 is narrowed on the next start.
+    std::fs::set_permissions(dir.join(LOCK_FILE), std::fs::Permissions::from_mode(0o644)).unwrap();
+    let second = primary(&dir);
+    assert_eq!(mode(&dir.join(LOCK_FILE)), 0o600);
+    drop(second);
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap());
+}
+
+/// Follow-up to #3755, point 3: a primary that shuts down takes its `instance.json` with it,
+/// and a second `shutdown` (the drop) leaves the next primary's alone.
+#[test]
+fn shutdown_removes_the_instance_file_but_not_the_next_ones() {
+    let dir = temp_dir("info-cleanup");
+    let first = primary(&dir);
+    assert!(read_info(&dir).is_some());
+    first.shutdown();
+    assert!(read_info(&dir).is_none(), "no endpoint left behind for a later launch");
+    let second = primary(&dir);
+    let port = port_of(&dir);
+    drop(first);
+    assert_eq!(port_of(&dir), port, "the running primary's file stays");
+    drop(second);
+    assert!(read_info(&dir).is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Follow-up to #3755, point 2: the CPU-compatibility relaunch takes part in single-instance;
+/// `--safe-gpu` given by a person still gets its own process.
+#[test]
+fn the_cpu_relaunch_takes_part_in_single_instance() {
+    assert!(safe_gpu_is_launch_option(None));
+    assert!(!safe_gpu_is_launch_option(Some(std::ffi::OsStr::new("wgpu: no adapter"))));
+    // The relaunch sets the reason even when it is empty.
+    assert!(!safe_gpu_is_launch_option(Some(std::ffi::OsStr::new(""))));
+}
+
+/// The filtering `claim_single_instance` applies, through to `skip_reason`: the relaunch's own
+/// `--safe-gpu` takes part, a person's stays separate, and the relaunch keeps any other option.
+#[test]
+fn the_cpu_relaunch_filter_decides_who_takes_part() {
+    let check = |options: &[PerProcess], failure: Option<&str>| {
+        let launch_options = without_relaunch_safe_gpu(options.to_vec(), failure.map(std::ffi::OsStr::new));
+        let context = LaunchContext {
+            per_user_settings: true,
+            new_instance_flag: false,
+            new_instance_env: None,
+            control: false,
+            unreadable_paths: false,
+            launch_options: &launch_options,
+        };
+        (launch_options.clone(), skip_reason(&context))
+    };
+    // The CPU relaunch with no other options takes part, whatever its reason says.
+    for failure in ["wgpu: no adapter", ""] {
+        assert_eq!(check(&[PerProcess::SafeGpu], Some(failure)), (vec![], None));
+    }
+    // A person's `--safe-gpu` keeps its own process.
+    let (kept, reason) = check(&[PerProcess::SafeGpu], None);
+    assert_eq!(kept, [PerProcess::SafeGpu]);
+    assert!(reason.is_some());
+    // The relaunch drops only its own `--safe-gpu`: another option still keeps it separate.
+    let (kept, reason) = check(&[PerProcess::SafeGpu, PerProcess::GpuAdapterEnv], Some("wgpu: no adapter"));
+    assert_eq!(kept, [PerProcess::GpuAdapterEnv]);
+    assert!(reason.is_some());
 }
 
 #[test]
