@@ -23,9 +23,40 @@ pub fn exists(name: &str) -> bool {
     white_icons().contains(name)
 }
 
+/// Rasterize an embedded icon from the white icon set at exact pixel dimensions `[width, height]`.
+pub(crate) fn rasterize_svg(name: &str, width: u32, height: u32) -> Option<egui::ColorImage> {
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else {
+        return None;
+    };
+    egui_extras::image::load_svg_bytes_with_size(bytes.as_ref(), egui::load::SizeHint::Size { width, height, maintain_aspect_ratio: true }, &Default::default())
+        .ok()
+}
+
+/// Panel footer buttons share one glyph per action and one size, so the Layers footer and the
+/// Swatches, Gradients and Patterns footers read the same, as in Photoshop (#10656).
+pub const FOOTER_SIZE: f32 = 26.0;
+pub const FOOTER_NEW: &str = "square-plus";
+pub const FOOTER_NEW_GROUP: &str = "folder";
+pub const FOOTER_DELETE: &str = "trash";
+
 /// An egui image for an icon, tinted.
 pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::new(white_icons().source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
+}
+
+/// Rasterize the same styled SVG used by the toolbar for a composed native cursor.
+pub(crate) fn rasterize(name: &str, side: u32) -> Result<egui::ColorImage, String> {
+    if !white_icons().contains(name) {
+        return Err(format!("Cursor icon {name:?} is missing"));
+    }
+    let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else {
+        return Err(format!("Cursor icon {name:?} has no embedded SVG bytes"));
+    };
+    egui_extras::image::load_svg_bytes_with_size(&bytes, egui::load::SizeHint::Width(side), &Default::default())
+        .map_err(|error| format!("Could not rasterize cursor icon {name:?}: {error}"))
 }
 
 /// Paint an icon centred in `rect`.
@@ -39,54 +70,13 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
 /// cursor (`CursorIcon::None`).
 pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f32) {
     let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
-    let area = egui::Area::new(egui::Id::new("pc-icon-cursor")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    let area = egui::Area::new(egui::Id::unique("pc-icon-cursor")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image(name, size, Color32::from_black_alpha(200));
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
             outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
         }
         image(name, size, Color32::WHITE).paint_at(ui, rect);
-    });
-}
-
-/// Cursor badge shown alongside the Pen tool nib (Photoshop-style).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PenBadge {
-    None,
-    Close,
-    Resume,
-}
-
-/// The Pen tool cursor with its nib hotspot at `(2.0, 2.0) / 24.0`, displaying Photoshop's
-/// "Close Path" loop indicator circle `○` or "Resume Path" connection slash `/` when hovering endpoints.
-pub fn pen_cursor(ctx: &egui::Context, p: egui::Pos2, badge: PenBadge) {
-    let hot = egui::vec2(2.0, 2.0) / 24.0;
-    let size = 20.0;
-    let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
-    let area = egui::Area::new(egui::Id::new("pc-icon-cursor")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
-    area.show(ctx, |ui| {
-        let outline = image("pen-tool", size, Color32::from_black_alpha(200));
-        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
-            outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
-        }
-        image("pen-tool", size, Color32::WHITE).paint_at(ui, rect);
-
-        match badge {
-            PenBadge::Close => {
-                let circle_c = p + egui::vec2(14.0, 11.0);
-                let r = 3.2;
-                ui.painter().circle_stroke(circle_c, r, egui::Stroke::new(2.8, Color32::from_black_alpha(220)));
-                ui.painter().circle_stroke(circle_c, r, egui::Stroke::new(1.3, Color32::WHITE));
-            }
-            PenBadge::Resume => {
-                let c = p + egui::vec2(14.0, 11.0);
-                let h = 3.5;
-                let seg = [c + egui::vec2(-h, h), c + egui::vec2(h, -h)];
-                ui.painter().line_segment(seg, egui::Stroke::new(3.0, Color32::from_black_alpha(220)));
-                ui.painter().line_segment(seg, egui::Stroke::new(1.4, Color32::WHITE));
-            }
-            PenBadge::None => {}
-        }
     });
 }
 
@@ -105,7 +95,7 @@ pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
 fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
     const SIZE: f32 = 12.0;
     let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
-    let area = egui::Area::new(egui::Id::new("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    let area = egui::Area::new(egui::Id::unique("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image(name, SIZE, Color32::from_black_alpha(220));
         let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
@@ -128,7 +118,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Move => "move",
         Tool::Artboard => "artboard",
         Tool::RectMarquee => "square-dashed",
-        Tool::EllipseMarquee => "circle-dashed",
+        Tool::EllipseMarquee => "ellipse-dashed",
         Tool::SingleRowMarquee => "marquee-row",
         Tool::SingleColumnMarquee => "marquee-column",
         Tool::Brush => "brush",
@@ -150,7 +140,7 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::Crop => "crop",
         Tool::PerspectiveCrop => "perspective-crop",
         Tool::Slice => "slice-knife",
-        Tool::SliceSelect => "square-dashed-mouse-pointer",
+        Tool::SliceSelect => "slice-select",
         Tool::Frame => "frame-placeholder",
         Tool::Gradient => "gradient",
         Tool::PaintBucket => "paint-bucket",
@@ -167,7 +157,8 @@ pub fn tool_icon(t: Tool) -> &'static str {
         Tool::RedEye => "eye",
         Tool::CloneStamp => "stamp",
         Tool::PatternStamp => "grid-3x3",
-        Tool::HistoryBrush => "clock",
+        Tool::HistoryBrush => "history-brush",
+        Tool::ArtHistoryBrush => "sparkles",
         Tool::Blur => "droplet",
         Tool::Sharpen => "triangle",
         Tool::Smudge => "pointer",
@@ -252,7 +243,7 @@ pub fn rail_button(ui: &mut egui::Ui, name: &str, box_size: f32, on: bool, toolt
     }
     let tint = if on || resp.hovered() { t.text } else { t.text_faint };
     paint(ui, rect, name, (box_size * 0.52).round(), tint);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, ui.is_enabled(), on, tl!(tooltip)));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, tl!(tooltip)));
     resp.on_hover_text(tl!(tooltip))
 }
 
@@ -313,10 +304,62 @@ mod tests {
             assert!(union > 0, "icons must have ink at {size}px");
             let overlap = shared as f32 / union as f32;
             assert!(overlap < 0.5, "the two glyphs must read as distinct: {overlap:.2} of their ink overlaps at {size}px");
-            // The dashed selection arc must actually rasterize: more ink than the bare brush.
-            let brush = ink(tool_icon(Tool::Brush), size);
-            assert!(quick.iter().filter(|a| **a).count() > brush.iter().filter(|a| **a).count(), "the dashed arc is missing at {size}px");
+            // The dashed selection "C" must actually rasterize down the left edge, where the brush has no ink.
+            let s = size as usize;
+            assert!(quick.iter().enumerate().any(|(i, a)| *a && i % s < s / 5), "the dashed selection edge is missing at {size}px");
         }
+    }
+
+    #[test]
+    fn slice_select_icon_is_its_own() {
+        // #7859: Slice Select reused Object Selection's dashed square with a pointer. As in
+        // Photoshop it is the Slice knife with a pointer: unlike Object Selection, and the Slice
+        // tool's knife plus ink of its own (the pointer).
+        assert_ne!(tool_icon(Tool::SliceSelect), tool_icon(Tool::ObjectSelection));
+        assert_ne!(tool_icon(Tool::SliceSelect), tool_icon(Tool::Slice));
+        for size in [14_u32, 28] {
+            let select = ink(tool_icon(Tool::SliceSelect), size);
+            assert!(select.iter().any(|&pixel| pixel), "Slice Select must have ink at {size}px");
+            let object = ink(tool_icon(Tool::ObjectSelection), size);
+            let shared = select.iter().zip(&object).filter(|(a, b)| **a && **b).count();
+            let union = select.iter().zip(&object).filter(|(a, b)| **a || **b).count();
+            assert!(union > 0, "icons must have ink at {size}px");
+            let overlap = shared as f32 / union as f32;
+            assert!(overlap < 0.5, "Slice Select and Object Selection must read as distinct: {overlap:.2} of their ink overlaps at {size}px");
+            let slice = ink(tool_icon(Tool::Slice), size);
+            let own = select.iter().zip(&slice).filter(|(a, b)| **a && !**b).count();
+            let total = select.iter().filter(|a| **a).count();
+            assert!(own as f32 >= 0.3 * total as f32, "the pointer sets Slice Select apart from Slice: {own} of {total} pixels at {size}px");
+        }
+    }
+
+    /// Ink bounding box `(width, height)` of a rasterized mask.
+    fn ink_extent(mask: &[bool], size: u32) -> (usize, usize) {
+        let s = size as usize;
+        let (xs, ys): (Vec<usize>, Vec<usize>) = mask.iter().enumerate().filter(|(_, a)| **a).map(|(i, _)| (i % s, i / s)).unzip();
+        let span = |v: &[usize]| v.iter().max().zip(v.iter().min()).map_or(0, |(hi, lo)| hi - lo + 1);
+        (span(&xs), span(&ys))
+    }
+
+    #[test]
+    fn ellipse_marquee_icon_is_a_wide_ellipse() {
+        // #6875: Photoshop's Elliptical Marquee glyph is a horizontal ellipse, not a circle.
+        assert_ne!(tool_icon(Tool::EllipseMarquee), "circle-dashed");
+        for size in [14_u32, 28] {
+            let (w, h) = ink_extent(&ink(tool_icon(Tool::EllipseMarquee), size), size);
+            assert!(w as f32 >= h as f32 * 1.15, "ellipse marquee ink is {w}x{h} at {size}px: not wider than tall");
+        }
+    }
+
+    #[test]
+    fn quick_selection_icon_is_a_tall_selection_with_a_brush() {
+        // #6875: Photoshop's Quick Selection glyph is a dashed, upright rounded "C" with a brush.
+        let size = 28_u32;
+        let s = size as usize;
+        let quick = ink(tool_icon(Tool::QuickSelection), size);
+        // The left edge of the selection runs most of the icon's height.
+        let left_rows = (0..s).filter(|y| (0..s / 5).any(|x| quick.get(y * s + x).copied().unwrap_or(false))).count();
+        assert!(left_rows * 5 > s * 2, "left selection edge covers only {left_rows} of {s} rows");
     }
 
     #[test]
@@ -330,6 +373,14 @@ mod tests {
             assert_eq!(uri.as_ref(), format!("bytes://icons/{name}.svg"));
             assert_eq!(bytes.as_ref(), expected.as_bytes(), "{name}");
             assert!(!std::str::from_utf8(&bytes).unwrap().contains("currentColor"), "{name}");
+        }
+    }
+
+    /// #10656: a misspelt footer glyph would silently draw the fallback square.
+    #[test]
+    fn footer_glyphs_are_bundled() {
+        for name in [FOOTER_NEW, FOOTER_NEW_GROUP, FOOTER_DELETE] {
+            assert!(exists(name), "{name}");
         }
     }
 
