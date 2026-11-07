@@ -338,12 +338,7 @@ fn color_sampler_limit_opens_alert_dialog_instead_of_status_note() {
     assert_eq!(app.ui.status, "");
     assert!(!app.ui.status_error);
 
-    let alerts: Vec<_> = app
-        .ui
-        .dialogs
-        .iter()
-        .filter(|d| d.kind == crate::state::DialogKind::Error)
-        .filter_map(|d| d.fields.get("message")?.as_str())
-        .collect();
+    let alerts: Vec<_> =
+        app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str()).collect();
     assert_eq!(alerts, [MAX_SAMPLERS_ALERT]);
 }

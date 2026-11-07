@@ -365,10 +365,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                         Err(e) if e.contains("Color Sampler limit reached") => {
                             app.ui.status.clear();
                             app.ui.status_error = false;
-                            app.ui.open_dialog(
-                                DialogKind::Error,
-                                json!({"message": tl!(MAX_SAMPLERS_ALERT)}).as_object().cloned().unwrap_or_default(),
-                            );
+                            app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(MAX_SAMPLERS_ALERT)}).as_object().cloned().unwrap_or_default());
                         }
                         Err(e) => status_on_err(app, Err(e)),
                     }
