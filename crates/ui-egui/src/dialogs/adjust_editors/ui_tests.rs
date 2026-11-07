@@ -871,6 +871,31 @@ fn levels_properties_white_point_eyedropper_edits_the_layer() {
     properties_white_point_eyedropper_edits_the_layer("levels");
 }
 
+/// In the Properties panel ⌥3 shows the Red channel of a Levels or Curves layer (Adobe's key for
+/// choosing an adjustment's channel), while ⌘3 targets the Red channel in the Channels panel, as in
+/// Photoshop, and leaves the editor's popup alone (#11283).
+#[test]
+fn option_digits_pick_the_properties_channel_and_command_digits_target_the_channels_panel() {
+    for kind in ["levels", "curves"] {
+        let mut h = app_harness(kind, "rgb", 8);
+        let popup = |h: &mut Harness<'_, PhotocraftApp>| -> Vec<String> {
+            h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()
+        };
+        let targeted =
+            |h: &Harness<'_, PhotocraftApp>| photocraft_engine::color_channels::selected(&h.state().session).map(|c| c.indices().collect::<Vec<_>>());
+        assert!(popup(&mut h).iter().any(|v| v == "RGB"), "{kind}: the popup starts on the composite");
+        assert_eq!(targeted(&h), None, "{kind}: every channel targeted to begin with");
+        key_with(&mut h, egui::Key::Num3, egui::Modifiers::ALT);
+        assert!(popup(&mut h).iter().any(|v| v == "Red"), "{kind}: ⌥3 shows Red");
+        assert_eq!(targeted(&h), None, "{kind}: ⌥3 targets nothing in the Channels panel");
+        key_with(&mut h, egui::Key::Num3, egui::Modifiers::COMMAND);
+        assert_eq!(targeted(&h), Some(vec![0]), "{kind}: ⌘3 targets Red in the Channels panel");
+        assert!(popup(&mut h).iter().any(|v| v == "Red"), "{kind}: and leaves the popup as it was");
+        key_with(&mut h, egui::Key::Num2, egui::Modifiers::ALT);
+        assert!(popup(&mut h).iter().any(|v| v == "RGB"), "{kind}: ⌥2 shows the composite again");
+    }
+}
+
 fn properties_white_point_eyedropper_edits_the_layer(kind: &str) {
     let mut h = app_harness(kind, "rgb", 8);
     let (_, before) = layer(&h);
