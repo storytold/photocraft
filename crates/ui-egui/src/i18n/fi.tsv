@@ -87,6 +87,7 @@
 	Right	Oikea
 	Open Recent	Viimeksi avatut
 	Clear Recent Files	Tyhjennä viimeisimmät tiedostot
+	Clear Recent File List	Tyhjennä viimeisimmät tiedostot
 	Remove from Recent	Poista viimeisimmistä
 	Remove {name} from Recent	Poista {name} viimeisimmistä
 	Close	Sulje
@@ -95,6 +96,10 @@
 	Restore	Palauta
 	Close All	Sulje kaikki
 	Close Others	Sulje muut
+	New Document…	Uusi asiakirja…
+	Open Document…	Avaa…
+	Consolidate All to Here	Kokoa kaikki tähän
+	Move to New Window	Siirrä uuteen ikkunaan
 	Save	Tallenna
 	Save As…	Tallenna nimellä…
 	Save a Copy…	Tallenna kopio…
@@ -107,7 +112,6 @@
 	Export As…	Vie nimellä…
 	Export	Vie
 	Export…	Vie…
-	Quick Export As PNG	Pikavienti PNG-muodossa
 	Quick Export as PNG	Pikavienti PNG-muotoon
 	Place Embedded…	Sijoita upotettuna…
 	Place Linked…	Sijoita linkitettynä…
@@ -311,7 +315,6 @@
 	All	Kaikki
 	Deselect	Poista valinta
 	Reselect	Valitse uudelleen
-	Inverse Selection	Käänteinen valinta
 	Inverse	Käännä valinta
 	Color Range…	Värialue…
 	Select and Mask…	Valitse ja maskaa…
@@ -509,7 +512,6 @@
 	Match Location	Täsmäytä sijainti
 	Match Rotation	Täsmäytä kierto
 	Match All	Täsmäytä kaikki
-	New Window for Document	Uusi ikkuna asiakirjalle
 	Workspace	Työtila
 	Extensions	Laajennukset
 	Panels	Paneelit
@@ -539,6 +541,12 @@
 	Timeline	Aikajana
 	Tool Presets	Työkalujen esiasetukset
 	Tools	Työkalut
+	Contextual Task Bar	Kontekstuaalinen tehtäväpalkki
+	Hide bar	Piilota palkki
+	Reset bar position	Palauta palkin sijainti
+	Pin bar position	Kiinnitä palkin sijainti
+	Move bar	Siirrä palkkia
+	More options	Lisää vaihtoehtoja
 	Libraries	Kirjastot
 	3D	3D
 	Toolbars	Työkalurivit
@@ -597,8 +605,8 @@
 	Background	Tausta
 	Set foreground color	Aseta edustaväri
 	Set background color	Aseta taustaväri
-	Swap colours (X)	Vaihda värit (X)
-	Default colours (D)	Oletusvärit (D)
+	Switch Foreground and Background Colors (X)	Vaihda edusta- ja taustaväri keskenään (X)
+	Default Foreground and Background Colors (D)	Oletusarvoiset edusta- ja taustavärit (D)
 	Brush Tool Options	Sivellintyökalun asetukset
 	Opacity	Peittävyys
 	Flow	Virtaus
@@ -687,6 +695,7 @@
 	Units & Rulers…	Yksiköt ja viivaimet…
 	Guides, Grid & Slices…	Apuviivat, ruudukko ja viipaleet…
 	Plug-ins…	Laajennukset…
+	Plugins…	Laajennukset…
 	Technology Previews	Teknologian esikatselut
 	Scratch Disks…	Työlevyt…
 	Export Preferences…	Vientiasetukset…
@@ -921,8 +930,8 @@
 	ACES	ACES
 	Industry Standard	Alan standardi
 	Web	Verkko
-	Internet Standard RGB	Internetin standardi-RGB
-	Legacy Macintosh RGB	Vanha Macintosh RGB
+	Internet Standard RGB (sRGB)	Internetin standardi-RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Vanha Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Näytön RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	CMYK, päällystetty paperi
@@ -1210,6 +1219,7 @@
 	Path to Illustrator…	Polku Illustratoriin…
 	Make Work Path	Luo työpolku
 	Make Selection	Luo valinta
+	Make Shape	Luo muoto
 	Fill Path	Täytä polku
 	Stroke Path	Piirrä polun reunaviiva
 	Clipping Path	Leikkauspolku
@@ -1603,7 +1613,7 @@
 	Revert “{name}” to the last saved version? Your changes will be lost.	Palautetaanko ”{name}” viimeksi tallennettuun versioon? Muutokset menetetään.
 	{key} to subtract	{key}: vähennä
 	↑↓ navigate   {key} run   esc close	↑↓ siirry   {key} suorita   esc sulje
-	Click to restore the current colour	Palauta nykyinen väri napsauttamalla
+	Click to restore the current color	Palauta nykyinen väri napsauttamalla
 	Click with the Note tool to add a note.	Lisää muistiinpano napsauttamalla Muistiinpano-työkalulla.
 	Drag a rectangle around the object	Vedä suorakulmio kohteen ympärille
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Lisää rajoite vetämällä kuvassa; Shift vaaka-/pystysuunnalle; muuta tai poista rajoite napsauttamalla sitä hiiren kakkospainikkeella.
@@ -1627,6 +1637,7 @@
 	Move Tool	Siirtotyökalu
 	Could not use the move tool because the layer is locked.	Siirtotyökalua ei voitu käyttää, koska taso on lukittu.
 	Could not complete the Free Transform command because the layer is locked.	Vapaa muunnos -komentoa ei voitu suorittaa, koska taso on lukittu.
+	Could not transform because the layer is locked.	Muuntaminen ei onnistunut, koska taso on lukittu.
 	Rectangular Marquee Tool	Suorakulmainen valintakehys
 	Elliptical Marquee Tool	Elliptinen valintakehys
 	Single Row Marquee Tool	Yhden rivin valintakehys
@@ -1684,10 +1695,10 @@
 	Drag to move the active layer	Siirrä aktiivista tasoa vetämällä
 	Drag to pan  ·  hold Space with any tool	Panoroi vetämällä  ·  tai pidä Välilyöntiä painettuna millä tahansa työkalulla
 	Drag to draw a gradient	Piirrä liukuväri vetämällä
-	Click to fill similar colours	Täytä samankaltaiset värit napsauttamalla
+	Click to fill similar colors	Täytä samankaltaiset värit napsauttamalla
 	Click to add text	Lisää teksti napsauttamalla
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Vedä (lasso) tai napsauta pisteitä (monikulmio) · {add} lisää · {sub} vähennä
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Vedä rajauslaatikko · siirrä vetämällä sisältä · reunat muuttavat kokoa ({ratio} suhde, {centre} keskeltä) · Välilyönti siirtää piirrettäessä · nuolet siirtävät · X vaihtaa suunnan · {commit} vahvistaa · Esc peruuttaa
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Vedä rajauslaatikko · siirrä vetämällä sisältä · reunat muuttavat kokoa ({ratio} suhde, {centre} keskeltä) · Välilyönti siirtää piirrettäessä · nuolet siirtävät · X vaihtaa suunnan · {commit} vahvistaa · Esc peruuttaa
 	{mode} Color · {bits} bit	{mode}-väri · {bits}-bittinen
 	Drag to move the layer	Siirrä tasoa vetämällä
 	Fit Screen	Sovita näyttöön
@@ -1719,7 +1730,7 @@
 	Appearance	Ulkoasu
 	Text Position:	Tekstin sijainti:
 	Text color	Tekstin väri
-	Uses the foreground and background colours.	Käyttää edusta- ja taustaväriä.
+	Uses the foreground and background colors.	Käyttää edusta- ja taustaväriä.
 	Answer the unsaved-changes prompt first	Vastaa ensin tallentamattomien muutosten kyselyyn
 	Unsaved changes	Tallentamattomat muutokset
 	Don't Save	Älä tallenna
@@ -1739,10 +1750,11 @@
 	name	nimi
 	new	uusi
 	Go to Layer	Siirry tasoon
-	Open a document to select a colour range.	Avaa asiakirja valitaksesi värialueen.
+	Open a document to select a color range.	Avaa asiakirja valitaksesi värialueen.
 	Saved	Tallennettu
 	Reveal in Finder	Näytä Finderissa
 	Show in Explorer	Näytä Resurssienhallinnassa
+	Reveal in Explorer	Näytä Resurssienhallinnassa
 	Show in Folder	Näytä kansiossa
 	Before (Y)	Ennen (Y)
 	Save Settings…	Tallenna asetukset…
@@ -1916,12 +1928,14 @@
 	Character Styles Panel	Merkkityylipaneeli
 	Clear Canvas Guides	Poista kankaan apuviivat
 	Clear Selected Artboard Guides	Poista valitun piirtoalustan apuviivat
-	Color Blindness — Deuteranopia-type	Värisokeus — deuteranopia
-	Color Blindness — Protanopia-type	Värisokeus — protanopia
+	Color Blindness - Deuteranopia-type	Värisokeus — deuteranopia
+	Color Blindness - Protanopia-type	Värisokeus — protanopia
 	Color Table…	Väritaulukko…
 	Combine Shapes	Yhdistä muodot
 	Contract…	Supista…
 	Convert to Embedded	Muunna upotetuksi
+	Embed Linked	Upota linkitetty
+	Embed All Linked	Upota kaikki linkitetyt
 	Convert to Layers	Muunna tasoiksi
 	Convert to Linked…	Muunna linkitetyksi…
 	Count	Laskuri
@@ -2009,6 +2023,7 @@
 	Pixelate	Pikselöinti
 	Place Scale Marker…	Sijoita mittakaavamerkki…
 	Plug-ins	Laajennukset
+	Plugins	Laajennukset
 	Print One Copy	Tulosta yksi kopio
 	Print…	Tulosta…
 	Range	Alue
@@ -2053,7 +2068,7 @@
 	Vertical Centers	Pystykeskikohdat
 	Video Frames to Layers…	Videoruudut tasoiksi…
 	WIA Support…	WIA-tuki…
-	Working CMY Plate	Työ-CMY-levy
+	Working CMY Plates	Työ-CMY-levyt
 
 # tl! literals (third pass)
 	Absolute	Absoluuttinen
@@ -2088,7 +2103,7 @@
 	Canvas	Kangas
 	Capture	Kaappaa
 	Center Crop Marks	Keskikohdan rajausmerkit
-	Centre the gradient (offset 0, 0)	Keskitä liukuväri (siirtymä 0, 0)
+	Center the gradient (offset 0, 0)	Keskitä liukuväri (siirtymä 0, 0)
 	Change Screen Mode  (F)	Vaihda näyttötilaa  (F)
 	Change To:	Muuta muotoon:
 	Clear All	Tyhjennä kaikki
@@ -2240,7 +2255,7 @@
 	Roughness	Karheus
 	Roundness	Pyöreys
 	Rulers & Grids	Viivaimet ja ruudukot
-	Sample: foreground colour	Näyte: edustaväri
+	Sample: foreground color	Näyte: edustaväri
 	Sampling: Background Swatch	Näytteistys: taustan värimalli
 	Sampling: Continuous	Näytteistys: jatkuva
 	Sampling: Once	Näytteistys: kerran
@@ -2339,6 +2354,11 @@
 	Show canvas dots	Näytä kankaan pisteet
 	Clip thumbnails to layer bounds	Rajaa pikkukuvat tason rajoihin
 	Clip Thumbnails to Layer Bounds	Rajaa pikkukuvat tason rajoihin
+	No Thumbnails	Ei pikkukuvia
+	Small Thumbnails	Pienet pikkukuvat
+	Medium Thumbnails	Keskikokoiset pikkukuvat
+	Large Thumbnails	Suuret pikkukuvat
+	Clip Thumbnails to Document Bounds	Rajaa pikkukuvat asiakirjan rajoihin
 	Canvas color	Kankaan väri
 	Canvas custom color	Kankaan mukautettu väri
 	Classic	Klassinen
@@ -2465,7 +2485,6 @@
 	Show only crosshair while painting	Näytä vain hiusristikko maalattaessa
 	Show slice numbers	Näytä viipaleiden numerot
 	Show tooltips	Näytä työkaluvihjeet
-	Enable animations	Ota animaatiot käyttöön
 	Show highlight on rollover	Korosta kohde osoittimen alla
 	Show bounding box when dragging layer	Näytä rajauslaatikko tasoa vedettäessä
 	System title bar	Järjestelmän otsikkorivi
@@ -2509,7 +2528,7 @@
 	Alt-click to define a source point to clone from	Määritä kloonauksen lähdepiste Alt-napsautuksella
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Ei polkua, josta luoda valinta: piirrä polku kynätyökalulla tai valitse polku Polut-paneelissa.
 	Cancel opening	Peruuta avaaminen
-	Cancelled opening {name}	Tiedoston {name} avaaminen peruutettu
+	Canceled opening {name}	Tiedoston {name} avaaminen peruutettu
 	Damaged Photoshop document	Vioittunut Photoshop-asiakirja
 	The document “{name}” may be damaged.	Asiakirja ”{name}” saattaa olla vioittunut.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Joitakin tasoja, pikseleitä tai maskeja ei voitu lukea. Haluatko jatkaa avaamista?
@@ -2519,7 +2538,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Asiakirjassa ”{name}” on upotettu väriprofiili, joka ei vastaa nykyistä {mode}-työavaruutta.
 	Working: {working}	Työavaruus: {working}
 	Developing {name}	Kehitetään tiedostoa {name}
-	Cancelled {label}	Peruutettu: {label}
+	Canceled {label}	Peruutettu: {label}
 	Esc to cancel	Peruuta painamalla Esc
 	Opened {name}	Avattu {name}
 	Opening {name}	Avataan tiedostoa {name}
@@ -2527,7 +2546,7 @@
 	Saving {name}	Tallennetaan tiedostoa {name}
 	Saving {percent}	Tallennetaan {percent}
 	A save to {name} is still running; try again when it finishes	Tallennus tiedostoon {name} on vielä käynnissä; yritä uudelleen sen päätyttyä
-	{label} is writing the file and can no longer be cancelled	{label}: tiedostoa kirjoitetaan, eikä toimintoa voi enää peruuttaa
+	{label} is writing the file and can no longer be canceled	{label}: tiedostoa kirjoitetaan, eikä toimintoa voi enää peruuttaa
 	Opening {name}…	Avataan tiedostoa {name}…
 	Opening…	Avataan…
 	Reading…	Luetaan…
@@ -2624,13 +2643,13 @@ cameraRaw	Roughness	Karheus
 	Discard Layers and Save a Copy	Hylkää tasot ja tallenna kopio
 	Don't show again	Älä näytä uudelleen
 	Save failed: {error}	Tallennus epäonnistui: {error}
-	Save cancelled	Tallennus peruutettu
+	Save canceled	Tallennus peruutettu
 	Couldn't place {name}: {error}	Kohteen {name} sijoittaminen epäonnistui: {error}
 	Magnetic Lasso Tool	Magneettinen lassotyökalu
 	Frequency	Taajuus
 	Use tablet pressure to change pen width	Muuta kynän leveyttä piirtopöydän paineella
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 	About	Tietoja
 	Contributors	Tekijät
 	Models	Mallit
@@ -2768,7 +2787,7 @@ fontWeight	Italic	Kursivoitu
 	Impressionist	Impressionistinen
 	Rotate View Tool	Näkymän kiertotyökalu
 	Reset View	Palauta näkymä
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Kierrä näkymää vetämällä keskipisteen ympäri  ·  Shift rajoittaa 15°:n välein
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Kierrä näkymää vetämällä keskipisteen ympäri  ·  Shift rajoittaa 15°:n välein
 
 # Painting symmetry presets.
 	Dual Axis	Kaksi akselia
@@ -2788,11 +2807,11 @@ fontWeight	Italic	Kursivoitu
 	All Layers No Adjustments	Kaikki tasot ilman säätöjä
 	Current & Below No Adjustments	Nykyinen ja alemmat ilman säätöjä
 	Show Sampling Ring	Näytä näytteenottorengas
-	Click to sample the foreground colour  ·  {key}-click for background	Ota edustavärin näyte napsauttamalla  ·  {key}-napsautus taustavärille
+	Click to sample the foreground color  ·  {key}-click for background	Ota edustavärin näyte napsauttamalla  ·  {key}-napsautus taustavärille
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Tulostusvärialueen ulkopuolella: napsauta valitaksesi lähimmän tulostettavan värin
-	Not a web colour: click for the nearest web colour	Ei verkkoväri: napsauta valitaksesi lähimmän verkkovärin
+	Out of gamut for printing: click for the nearest printable color	Tulostusvärialueen ulkopuolella: napsauta valitaksesi lähimmän tulostettavan värin
+	Not a web color: click for the nearest web color	Ei verkkoväri: napsauta valitaksesi lähimmän verkkovärin
 	Color to Alpha…	Väri alfaksi…
 	Transparency Threshold	Läpinäkyvyyskynnys
 	Opacity Threshold	Peittävyyskynnys
@@ -3183,6 +3202,9 @@ curves	Smooth	Tasoita
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} vaiheella ei ole vielä vastaavuutta PhotoCraftissa|{n} vaiheella ei ole vielä vastaavuutta PhotoCraftissa
 @plural	Saved {n} action to {file}|Saved {n} actions to {file}	Tallennettu {n} toiminto tiedostoon {file}|Tallennettu {n} toimintoa tiedostoon {file}
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} vaihe jätettiin pois, koska sillä ei ole Photoshop-vastinetta|{n} vaihetta jätettiin pois, koska niillä ei ole Photoshop-vastinetta
+@plural	{n} action file loaded|{n} action files loaded	Ladattu {n} toimintotiedosto|Ladattu {n} toimintotiedostoa
+	{set} from {file} replaced the one from {earlier}	Sarja {set} tiedostosta {file} korvasi sarjan tiedostosta {earlier}
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} tiedoston lataaminen epäonnistui: {errors}|{n} tiedoston lataaminen epäonnistui: {errors}
 
 	File Naming	Tiedostojen nimeäminen
 	Starting serial	Aloitusnumero
@@ -3197,6 +3219,8 @@ curves	Smooth	Tasoita
 	Step {step} is waiting for its dialog	Vaihe {step} odottaa valintaikkunaansa
 @plural	{n} action|{n} actions	{n} toiminto|{n} toimintoa
 	Background (Default)	Tausta (oletus)
+	Background (default)	Tausta (oletus)
+	Transparent (default)	Läpinäkyvä (oletus)
 	Content-Aware Fill	Sisältötietoinen täyttö
 # Batch / Image Processor
 	Include All Subfolders	Sisällytä kaikki alikansiot
@@ -3205,21 +3229,21 @@ curves	Smooth	Tasoita
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Älä valitse myös Peilikuva-asetusta kohdassa Tulostusasetukset…: kaksi peilausta kumoaa toisensa.
 	Print Settings…	Tulostusasetukset…
-	Remember to turn off the printer's own colour management in Print Settings…	Muista poistaa tulostimen oma värinhallinta käytöstä kohdassa Tulostusasetukset…
+	Remember to turn off the printer's own color management in Print Settings…	Muista poistaa tulostimen oma värinhallinta käytöstä kohdassa Tulostusasetukset…
 	Sent to {printer}	Lähetetty tulostimelle {printer}
 	set in Print Settings…	asetetaan kohdassa Tulostusasetukset…
 	ICO is limited to 256 × 256 pixels	ICO-tiedosto on rajoitettu kokoon 256 × 256 pikseliä
 	Calibration	Kalibrointi
-	Red Primary	Punainen pääväri
-	Green Primary	Vihreä pääväri
-	Blue Primary	Sininen pääväri
+	Red Primary	Punainen perusväri
+	Green Primary	Vihreä perusväri
+	Blue Primary	Sininen perusväri
 	Write xmp sidecars	Kirjoita XMP-sivutiedostot
-	Set the tone sliders from the image	Aseta sävysäätimet kuvan perusteella
-	Settings from {name}	Asetukset tiedostosta {name}
-	Settings from {name}; {count} not supported: {names}	Asetukset tiedostosta {name}; {count} tukematonta: {names}
-	Could not write {name}: {error}	Tiedostoa {name} ei voitu kirjoittaa: {error}
-	Kept {name}: written by another application	Tiedosto {name} säilytettiin: sen on kirjoittanut toinen ohjelma
-	Shadow Tint	Varjojen sävytys
+	Set the tone sliders from the image	Aseta sävyliukusäätimet kuvan perusteella
+	Settings from {name}	Asetukset kohteesta {name}
+	Settings from {name}; {count} not supported: {names}	Asetukset kohteesta {name}; {count} ei tuettu: {names}
+	Could not write {name}: {error}	Kohdetta {name} ei voitu kirjoittaa: {error}
+	Kept {name}: written by another application	{name} säilytettiin: toisen sovelluksen kirjoittama
+	Shadow Tint	Varjojen sävy
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Maalaa Historia-paneelin lähdetilasta
 	Sets the source for the history brush	Asettaa historiasiveltimen lähteen
@@ -3251,7 +3275,7 @@ curves	Smooth	Tasoita
 	Show All Fonts	Näytä kaikki fontit
 	All Classes	Kaikki luokat
 	Blackletter	Fraktuura
-	Decorative	Koristefontti
+	Decorative	Koriste
 	Font preview:	Fontin esikatselu:
 	Handwritten	Käsinkirjoitettu
 	Hide Font Classes	Piilota fonttiluokat
@@ -3260,14 +3284,14 @@ curves	Smooth	Tasoita
 	No fonts match these filters.	Mikään fontti ei vastaa näitä suodattimia.
 	No similar fonts: the current font doesn't say what it looks like.	Ei samankaltaisia fontteja: nykyinen fontti ei kerro, miltä se näyttää.
 	OpenType font	OpenType-fontti
-	Sans Serif	Groteski
+	Sans Serif	Pääteviivaton
 	Script	Kaunokirjoitus
-	Serif	Antiikva
+	Serif	Pääteviivallinen
 	Show Font Classes	Näytä fonttiluokat
 	Show Similar Fonts	Näytä samankaltaiset fontit
 	Show Styles	Näytä tyylit
 	Show Variable Fonts	Näytä muuttuvat fontit
-	Slab Serif	Egyptienne
+	Slab Serif	Laattapäätteinen
 	TrueType font	TrueType-fontti
 	Variable font	Muuttuva fontti
 # Bevel & Emboss shading controls.
@@ -3279,17 +3303,8 @@ curves	Smooth	Tasoita
 	Shadow Opacity	Varjon peittävyys
 # PhotoCraft release checks.
 	Check for Updates…	Tarkista päivitykset…
-	PhotoCraft Updates	PhotoCraftin päivitykset
-	Checking for updates…	Tarkistetaan päivityksiä…
 	Open the release page to choose an installer for your system.	Avaa julkaisusivu ja valitse järjestelmällesi sopiva asennusohjelma.
-	Open Download Page	Avaa lataussivu
-	PhotoCraft is up to date.	PhotoCraft on ajan tasalla.
-	Could not check for updates.	Päivityksiä ei voitu tarkistaa.
-	Updates have not been checked yet.	Päivityksiä ei ole vielä tarkistettu.
-	Check Again	Tarkista uudelleen
 	Automatically Check for Updates	Tarkista päivitykset automaattisesti
-	Installed version: {version}	Asennettu versio: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} on saatavilla.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Käytä upotettua profiilia ({profile})
 	Convert to the working space ({profile})	Muunna työavaruuteen ({profile})
@@ -3368,6 +3383,7 @@ curves	Smooth	Tasoita
 	This document's layers: {needed} of {budget} for layers	Tämän asiakirjan tasot: {needed} / {budget} tasoille
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Tämän asiakirjan tasot tarvitsevat {needed}, mutta saavat käyttää {budget}: koko asiakirjan uudelleenpiirrot käyttävät suoritinta
 	GPU Memory (MB, 0 = Automatic)	GPU-muisti (Mt, 0 = automaattinen)
+	Scratch Size Limit (MB, 0 = No Limit)	Työlevyn kokoraja (Mt, 0 = ei rajaa)
 	{path}: the path is not valid Unicode; save under another name.	{path}: polku ei ole kelvollista Unicodea; tallenna toisella nimellä.
 	Replace	Korvaa
 	{name} was changed by another app after it was opened or saved here.	Toinen ohjelma on muuttanut tiedostoa {name} sen jälkeen, kun se avattiin tai tallennettiin täällä.
@@ -3877,12 +3893,12 @@ curves	Smooth	Tasoita
 	In White	Tulon valkoinen
 	Increase Brush Hardness	Lisää siveltimen kovuutta
 	Demosaic	Mosaiikin purku
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Miten kameran värisuodatinmosaiikki täydennetään. Menetelmä otetaan käyttöön tiedostoa avattaessa; esikatselu näyttää menetelmän, jolla tiedosto avattiin.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Miten kameran värisuodatinmosaiikki täydennetään. Menetelmä otetaan käyttöön tiedostoa avattaessa; esikatselu näyttää menetelmän, jolla tiedosto avattiin.
 	AHD (adaptive homogeneity)	AHD (adaptiivinen homogeenisuus)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: siisteimmät reunat ja vähiten värireunuksia, hitain.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Gradienttikorjattu interpolointi: terävä ja nopea, hienoissa yksityiskohdissa jonkin verran värireunuksia.
-	The fastest and the softest, with colour fringing on fine detail.	Nopein ja pehmein, hienoissa yksityiskohdissa värireunuksia.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: siisteimmät reunat ja vähiten värireunuksia, hitain.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Gradienttikorjattu interpolointi: terävä ja nopea, hienoissa yksityiskohdissa jonkin verran värireunuksia.
+	The fastest and the softest, with color fringing on fine detail.	Nopein ja pehmein, hienoissa yksityiskohdissa värireunuksia.
 	“{name}” already exists. Replace it?	”{name}” on jo olemassa. Korvataanko se?
 	The name in the save dialog was “{name}”.	Tallennusikkunassa nimi oli ”{name}”.
 	Move Up	Siirrä ylös
@@ -4324,17 +4340,17 @@ curves	Smooth	Tasoita
 	Select Data Points	Valitse datapisteet
 	Select Layer	Valitse taso
 	Select and Mask	Valitse ja maskaa
-	Color Aware	Värit huomioiva
+	Color Aware	Väritietoinen
 	Decontaminate Colors	Puhdista värit
-	Edge Detection	Reunojen tunnistus
+	Edge Detection	Reunantunnistus
 	Global Refinements	Yleiset tarkennukset
-	High Quality Preview	Korkealaatuinen esikatselu
-	Object Aware	Objektit huomioiva
-	Object Aware needs a segmentation model, which isn't available yet	Objektit huomioiva -tila vaatii segmentointimallin, joka ei ole vielä käytettävissä
+	High Quality Preview	Laadukas esikatselu
+	Object Aware	Objektitietoinen
+	Object Aware needs a segmentation model, which isn't available yet	Objektitietoinen tila tarvitsee segmentointimallin, jota ei vielä ole saatavilla
 	Real-Time Refinement	Reaaliaikainen tarkennus
-	Refine Edge Brush Tool	Reunan tarkennussivellin
+	Refine Edge Brush Tool	Reunan tarkennussivellintyökalu
 	Refine Hair	Tarkenna hiuksia
-	Refine Hair needs hair detection, which isn't available yet	Tarkenna hiuksia -toiminto vaatii hiusten tunnistuksen, joka ei ole vielä käytettävissä
+	Refine Hair needs hair detection, which isn't available yet	Tarkenna hiuksia tarvitsee hiusten tunnistuksen, jota ei vielä ole saatavilla
 	Refine Mode	Tarkennustila
 	Select and Mask was closed: another layer was selected	Valitse ja maskaa suljettiin: toinen taso valittiin
 	Select and Mask was closed: its document is no longer the active one	Valitse ja maskaa suljettiin: sen asiakirja ei ole enää aktiivinen
@@ -4533,7 +4549,6 @@ curves	Smooth	Tasoita
 	Use File › Open to open an image.	Avaa kuva komennolla Tiedosto › Avaa.
 	Use Selection In Source	Käytä valintaa lähteessä
 	Use Selection In Target	Käytä valintaa kohteessa
-	Uses the foreground and background colors.	Käyttää edusta- ja taustaväriä.
 	Vanishing Point	Pakopiste
 	Variable Data Sets	Muuttuvat tietojoukot
 	Vector Mask Hides Effects	Vektorimaski piilottaa tehosteet
@@ -4693,23 +4708,23 @@ shape	Appearance	Ulkoasu
 	Make Ramp Web Safe	Rajoita liukuma verkkoturvallisiin väreihin
 # Art History Brush (#213).
 	Art History Brush Tool	Taidehistoriasivellintyökalu
-	Tight Short	Tiukka lyhyt
-	Tight Medium	Tiukka keskipitkä
-	Tight Long	Tiukka pitkä
-	Loose Medium	Löysä keskipitkä
-	Loose Long	Löysä pitkä
+	Tight Short	Tiivis lyhyt
+	Tight Medium	Tiivis keskipitkä
+	Tight Long	Tiivis pitkä
+	Loose Medium	Väljä keskipitkä
+	Loose Long	Väljä pitkä
 	Dab	Täplä
-	Tight Curl	Tiukka kihara
-	Loose Curl	Löysä kihara
-	Stylized dabs from a history state	Tyylitellyt täplät historiatilasta
+	Tight Curl	Tiivis kiehkura
+	Loose Curl	Väljä kiehkura
+	Stylized dabs from a history state	Tyyliteltyjä täpliä historiatilasta
 	Font size presets	Fonttikoon esiasetukset
 	Leading presets	Rivivälin esiasetukset
 	Tracking presets	Kirjainvälin esiasetukset
 
 # Recent labels (histogram statistics, self-update, Artboards and others)
-	CPU Rendering	CPU-renderöinti
+	CPU Rendering	Suoritinpiirto
 	Calculating…	Lasketaan…
-	Click to refresh histogram with uncached data	Napsauta päivittääksesi histogrammin ilman välimuistia
+	Click to refresh histogram with uncached data	Päivitä histogrammi ilman välimuistia napsauttamalla
 	Convert to Shape…	Muunna muodoksi…
 	Cooling Filter (80)	Viilennyssuodatin (80)
 	Cooling Filter (82)	Viilennyssuodatin (82)
@@ -4717,14 +4732,13 @@ shape	Appearance	Ulkoasu
 	Count:	Määrä:
 	Delete Hidden Layers	Poista piilotetut tasot
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Lisää rajoite vetämällä kuvassa; Shift vaaka-/pystysuunnalle; poista napsauttamalla hiiren kakkospainikkeella.
-	Drawn on the CPU: {reason}. Click for System Info.	Piirretään suorittimella: {reason}. Avaa järjestelmän tiedot napsauttamalla.
+	Drawn on the CPU: {reason}. Click for System Info.	Piirretty suorittimella: {reason}. Avaa järjestelmän tiedot napsauttamalla.
 	Exported {n} files	Vietiin {n} tiedostoa
 	Fit Layer on Screen	Sovita taso näyttöön
 	Flow:	Virtaus:
 	Level:	Sävytaso:
-	Percentile:	Persentiili:
+	Percentile:	Prosenttipiste:
 	Refine Edge…	Tarkenna reunaa…
-	Release Notes	Julkaisutiedot
 	Remember Settings	Muista asetukset
 	Reset Essentials	Nollaa Perusteet
 	Rounded Rectangle Tool	Pyöristetyn suorakulmion työkalu
@@ -4735,7 +4749,6 @@ shape	Appearance	Ulkoasu
 	Tile Horizontally	Allekkain
 	Tile Vertically	Rinnakkain
 	Uncached Refresh	Päivitä ilman välimuistia
-	Update and Restart	Päivitä ja käynnistä uudelleen
 	Warming Filter (81)	Lämmityssuodatin (81)
 	Warming Filter (LBA)	Lämmityssuodatin (LBA)
 @plural	{n} document|{n} documents	{n} asiakirja|{n} asiakirjaa
@@ -4745,8 +4758,8 @@ cameraRaw	Camera Raw ({name})	Camera Raw ({name})
 cameraRaw	Camera Raw Filter ({layer})	Camera Raw -suodatin ({layer})
 cameraRaw	Camera Raw isn't open	Camera Raw ei ole auki
 cameraRaw	Cancel	Peruuta
-cameraRaw	Cancelled opening {name}	Tiedoston {name} avaaminen peruutettu
-cameraRaw	Cancelled {label}	Peruutettu: {label}
+cameraRaw	Canceled opening {name}	Tiedoston {name} avaaminen peruutettu
+cameraRaw	Canceled {label}	Peruutettu: {label}
 cameraRaw	Color Priority	Väriprioriteetti
 cameraRaw	Developing {name}	Kehitetään tiedostoa {name}
 cameraRaw	Full-resolution preview unavailable	Täyden resoluution esikatselu ei ole käytettävissä
@@ -4780,3 +4793,40 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Path operations	Polkutoiminnot
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
+	Edit Brush…	Muokkaa sivellintä…
+
+# Action Stop message (#8386)
+	Message	Viesti
+# Playback Options (#5212)
+	Playback Options…	Toistoasetukset…
+	Playback Options	Toistoasetukset
+	Accelerated	Kiihdytetty
+	Step by Step	Vaihe kerrallaan
+	Pause For:	Tauko:
+	Pause For	Tauko
+	seconds	sekuntia
+	Create a single history state	Luo yksi historiatila
+
+# Channels panel menu (#11451)
+	Channel Options…	Kanavan asetukset…
+	Specify Channels:	Määritä kanavat:
+	Not enough grayscale documents for this mode.	Harmaasävyasiakirjoja ei ole tarpeeksi tähän tilaan.
+	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.
+	A picked document is no longer open.	Yksi valituista asiakirjoista ei ole enää auki.
+	A picked document is no longer a grayscale document of the same size.	Yksi valituista asiakirjoista ei ole enää samankokoinen harmaasävyasiakirja.
+# Move tool options bar (#11381)
+	Align top edges	Tasaa yläreunat
+	Align vertical centers	Tasaa pystykeskikohdat
+	Align bottom edges	Tasaa alareunat
+	Distribute vertically	Jaa pystysuunnassa
+	Distribute horizontally	Jaa vaakasuunnassa
+	Show layer bounds on hover	Näytä tason rajat osoitettaessa
+	Expand layer group on click	Laajenna tasoryhmä napsautuksella
+	Show hover bounds from Layers	Näytä rajat osoitettaessa Tasot-paneelista
+# Artboard tool options bar (#11385)
+	Distribute Widths	Jaa leveydet tasaisesti
+	Distribute Heights	Jaa korkeudet tasaisesti
+	Auto-nest Layers	Sisäkkäistä tasot automaattisesti
+	Auto-size Canvas	Muuta kankaan kokoa automaattisesti
+	Keep Relative Position During Layer Reordering	Säilytä suhteellinen sijainti tasojen järjestystä muutettaessa
+	Shrinkwrap Canvas on Save	Pienennä kangas sisältöön tallennettaessa
