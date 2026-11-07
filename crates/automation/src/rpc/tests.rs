@@ -539,6 +539,77 @@ fn doc_replace_smart_object_reads_through_the_read_root_and_never_outside_it() {
 }
 
 #[test]
+fn doc_replace_smart_object_fits_a_file_of_another_size() {
+    let base = std::env::temp_dir().join(format!("pc-doc-replace-fit-{}", std::process::id()));
+    std::fs::create_dir_all(&base).unwrap();
+    let png = |w: u32, h: u32, v: u8| {
+        let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgb, vec![v; (w * h * 3) as usize]).unwrap();
+        photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()
+    };
+    std::fs::write(base.join("logo.png"), png(8, 6, 42)).unwrap();
+    std::fs::write(base.join("design.png"), png(4, 3, 200)).unwrap();
+    std::fs::write(base.join("tall.png"), png(2, 6, 7)).unwrap();
+    std::fs::write(base.join("wide.png"), png(80, 60, 90)).unwrap();
+    let bounds = |h: &mut Headless, layer: &Value| {
+        let inspected = h.handle("doc.inspect", json!({})).unwrap();
+        inspected["layers"].as_array().unwrap().iter().find(|l| l["id"] == *layer).unwrap()["bounds"].clone()
+    };
+    for trusted in [false, true] {
+        let mut h =
+            if trusted { Headless::trusted_local() } else { Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap()) };
+        // The trusted session reads ambient paths, the workspace one paths beneath its root.
+        let path = |name: &str| if trusted { base.join(name).to_string_lossy().into_owned() } else { name.to_owned() };
+        h.handle("doc.new", json!({"width": 40, "height": 30})).unwrap();
+        let layer = h.handle("doc.place", json!({"path": path("logo.png"), "scale": 100, "fit": false})).unwrap()["layer"].clone();
+        let placed = bounds(&mut h, &layer);
+        // `fit: "stretch"` lands the 4 × 3 file on the 8 × 6 placement.
+        let replaced = h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("design.png"), "fit": "stretch"})).unwrap();
+        assert_eq!(replaced["layer"], layer, "{replaced}");
+        assert_eq!(bounds(&mut h, &layer), placed, "trusted: {trusted}");
+        // One undo step restores the old contents.
+        h.handle("engine.execute", json!({"command": "edit.undo"})).unwrap();
+        assert_eq!(bounds(&mut h, &layer), placed);
+        // `fit: "contain"` fits a 2 × 6 file inside the 8 × 6 placement: same size, centred
+        // (bounds are x, y, width, height).
+        h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("tall.png"), "fit": "contain"})).unwrap();
+        let p = |i: usize| placed[i].as_i64().unwrap();
+        assert_eq!(bounds(&mut h, &layer), json!([p(0) + 3, p(1), 2, 6]), "trusted: {trusted}");
+        h.handle("engine.execute", json!({"command": "edit.undo"})).unwrap();
+        // Without `fit` the file keeps its pixel size.
+        h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("design.png")})).unwrap();
+        let kept = bounds(&mut h, &layer);
+        assert_eq!((kept[2].as_i64(), kept[3].as_i64()), (Some(4), Some(3)), "{kept}");
+        // An unknown or non-string `fit` is refused, as the engine command refuses it, rather
+        // than taken as keep; nothing changes.
+        for fit in [json!("cover"), json!(true), json!(1)] {
+            let refused = h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("tall.png"), "fit": fit})).unwrap_err().to_string();
+            assert!(refused.contains("`fit`"), "{refused}");
+            assert_eq!(bounds(&mut h, &layer), kept);
+        }
+        // `clipToCanvas` reaches the command (an unwarped placement is drawn whole either way); a
+        // value that is not a boolean is refused.
+        let clipped = h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("design.png"), "fit": "stretch", "clipToCanvas": true})).unwrap();
+        assert_eq!(clipped["layer"], layer, "{clipped}");
+        let refused = h.handle("doc.replaceSmartObject", json!({"layer": layer, "path": path("tall.png"), "clipToCanvas": "yes"})).unwrap_err().to_string();
+        assert!(refused.contains("clipToCanvas"), "{refused}");
+        // A warped placement larger than the canvas: clipped, the layer holds only the canvas.
+        h.handle("doc.new", json!({"width": 40, "height": 30})).unwrap();
+        let wide = h.handle("doc.place", json!({"path": path("wide.png"), "scale": 100, "fit": false})).unwrap()["layer"].clone();
+        h.handle("engine.execute", json!({"command": "edit.transform.warp", "params": {"layer": wide, "style": "arc", "bend": 30}})).unwrap();
+        for clip in [false, true] {
+            h.handle("doc.replaceSmartObject", json!({"layer": wide, "path": path("design.png"), "fit": "stretch", "clipToCanvas": clip})).unwrap();
+            let b = bounds(&mut h, &wide);
+            let (x, y, w, ht) = (b[0].as_i64().unwrap(), b[1].as_i64().unwrap(), b[2].as_i64().unwrap(), b[3].as_i64().unwrap());
+            let inside = x >= 0 && y >= 0 && x + w <= 40 && y + ht <= 30;
+            assert_eq!(inside, clip, "clip {clip}: bounds {b}");
+            h.handle("engine.execute", json!({"command": "edit.undo"})).unwrap();
+        }
+        drop(h);
+    }
+    std::fs::remove_dir_all(base).unwrap();
+}
+
+#[test]
 fn doc_export_layers_reports_skips_in_workspace_and_trusted_sessions() {
     for trusted in [false, true] {
         let base = std::env::temp_dir().join(format!("pc-export-skips-{}-{trusted}", std::process::id()));
