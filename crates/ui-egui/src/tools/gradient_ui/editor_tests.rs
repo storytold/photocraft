@@ -278,17 +278,19 @@ fn an_opacity_stop_dragged_up_off_the_bar_is_removed() {
     }
 }
 
-/// Only the stop's own direction takes it off: an opacity stop dragged down over the ramp and a
-/// colour stop dragged up over it are kept, however far they go.
+/// Either way off the bar takes a stop off, as in the reference application: an opacity stop
+/// dragged down past the colour stops and a colour stop dragged up past the opacity stops are
+/// removed too.
 #[test]
-fn a_stop_dragged_the_other_way_is_kept() {
+fn a_stop_dragged_the_other_way_comes_off_too() {
     for layer in [true, false] {
-        let (mut h, sink) = editor(layer);
         for opacity in [true, false] {
+            let (mut h, sink) = editor(layer);
             let from = marker(&h, 0.5, opacity);
             let to = from + vec2(0.0, if opacity { 70.0 } else { -70.0 });
-            drag_through(&mut h, &[from, to], |h| assert_eq!(shown(h, sink), (3, 3), "layer {layer} opacity {opacity}: still shown"));
-            assert_eq!(counts(&h, sink), (3, 3), "layer {layer} opacity {opacity}: the stop is kept");
+            let gone = if opacity { (3, 2) } else { (2, 3) };
+            drag_through(&mut h, &[from, to], |h| assert_eq!(shown(h, sink), gone, "layer {layer} opacity {opacity}: gone from the preview"));
+            assert_eq!(counts(&h, sink), gone, "layer {layer} opacity {opacity}: the stop is removed");
         }
     }
 }
