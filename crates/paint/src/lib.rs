@@ -407,4 +407,6 @@ mod tests {
 }
 
 #[cfg(test)]
+mod airbrush_rate_tests;
+#[cfg(test)]
 mod brush_tests;

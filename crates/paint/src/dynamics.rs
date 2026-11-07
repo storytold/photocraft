@@ -338,6 +338,15 @@ impl PathWalker {
         self
     }
 
+    /// The stroke's first point. With the airbrush on it lays two dabs, so a plain click builds
+    /// up as Photoshop's does (#11886).
+    fn emit_first(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
+        self.emit(point, out);
+        if self.interval.is_some() {
+            self.emit(point, out);
+        }
+    }
+
     fn emit(&mut self, point: StrokePoint, out: &mut impl FnMut(StepInput)) {
         if let Some(g) = self.grid {
             self.cell = Some((grid_cell(point.x, g), grid_cell(point.y, g)));
@@ -363,7 +372,7 @@ impl PathWalker {
             }
         }
         if let Some(f) = self.pending_first.take() {
-            self.emit(f, out);
+            self.emit_first(f, out);
         }
         if len > 1e-9 {
             // Speed spacing needs the segment's duration; without timestamps (a straight ⇧-click
@@ -426,7 +435,7 @@ impl PathWalker {
 
     pub fn finish(&mut self, out: &mut impl FnMut(StepInput)) {
         if let Some(f) = self.pending_first.take() {
-            self.emit(f, out);
+            self.emit_first(f, out);
         }
     }
 }
