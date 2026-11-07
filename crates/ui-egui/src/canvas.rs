@@ -111,11 +111,12 @@ use tabs::{dots, paint_dots};
 use tabs::{main_canvas_document, move_target_after_filter};
 #[cfg(test)]
 pub(crate) use textures::detail_plan;
+pub(crate) use textures::visible_doc_rect;
 pub(crate) use textures::{DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
 pub use textures::{MAX_TEXTURE, ensure_texture};
 #[cfg(test)]
 use textures::{clamp_texture_side, preview_bounds, texture_factor};
-use textures::{ensure_gpu, redraw_focus, visible_doc_rect};
+use textures::{ensure_gpu, redraw_focus};
 pub use tool_input::{ToolEvent, selection_drag_kind, tool_event};
 pub(crate) use tool_input::{command_guide_at, command_moves_layer, event_tool};
 pub(crate) use transform_controls::ControlsPress;
@@ -524,6 +525,11 @@ fn paint_canvas(
             let uv = if flip { Rect::from_min_max(pos2(1.0, 0.0), pos2(0.0, 1.0)) } else { Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)) };
             painter.image(tex, xf.doc_rect(a), uv, Color32::WHITE);
         }
+    }
+    // Image › Adjustments › Levels: Alt-drag on the black / white Input slider (levels_clipping.rs).
+    // The main canvas only: the display keeps one cache, sized to that view.
+    if primary {
+        crate::levels_clipping::paint(app, ctx, painter, &xf, idx);
     }
     crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
