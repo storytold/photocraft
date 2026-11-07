@@ -40,17 +40,29 @@ fn with_unit(value: &str, unit: Unit) -> String {
     format!("{value} {}", unit.suffix())
 }
 
-/// Document pixels in the active document's ruler unit: "14.11 cm", "0.5 in", "20 px".
+/// Decimals the reference application's guide layout fields show in every unit, trailing zeros
+/// dropped: 20 px at 72 ppi opens as "0.706 cm", a typed "13.5 px" stays "13.5 px".
+const FIELD_DECIMALS: usize = 3;
+
+/// Document pixels in the active document's ruler unit: "0.706 cm", "0.278 in", "20 px".
 pub(crate) fn in_ruler_unit(app: &PhotocraftApp, px: f64, along_x: bool) -> String {
     let units = &app.session.prefs().units_and_rulers;
     let (dpi, extent) = app.session.active().map_or((72.0, 1.0), |st| {
         let d = &st.doc;
         (f64::from(d.resolution_dpi.max(1.0)), f64::from(if along_x { d.size.width } else { d.size.height }))
     });
-    with_unit(&units.format(px, dpi, extent), units.rulers)
+    let v = units.rulers.from_px(px, dpi, extent, units.point_size.per_inch());
+    with_unit(&photocraft_engine::prefs::fmt_decimals(v, FIELD_DECIMALS), units.rulers)
 }
 
-fn normalize_field_text(text: &str, app: &PhotocraftApp, along_x: bool, optional: bool) -> Option<String> {
+/// The unit a field's text names, or `fallback` when it names none.
+fn text_unit(text: &str, fallback: Unit) -> Unit {
+    Unit::parse_length(text).and_then(|(_, unit)| unit).unwrap_or(fallback)
+}
+
+/// The text a field settles on when it loses focus. A bare number takes `unit`, the unit the
+/// field showed when it got focus (after "2 mm", a typed "5" becomes "5 mm").
+fn normalize_field_text(text: &str, app: &PhotocraftApp, along_x: bool, optional: bool, unit: Unit) -> Option<String> {
     let t = text.trim();
     if t.is_empty() {
         if optional {
@@ -59,17 +71,11 @@ fn normalize_field_text(text: &str, app: &PhotocraftApp, along_x: bool, optional
             return Some(in_ruler_unit(app, 0.0, along_x));
         }
     }
-    let ruler = ruler_unit(app);
-    if let Some((v, unit)) = Unit::parse_length(t) {
-        let u = unit.unwrap_or(ruler);
-        let s = photocraft_engine::prefs::fmt_decimals(v, u.decimals());
-        Some(with_unit(&s, u))
-    } else if let Some(v) = widgets::parse_num(t) {
-        let s = photocraft_engine::prefs::fmt_decimals(v, ruler.decimals());
-        Some(with_unit(&s, ruler))
-    } else {
-        None
-    }
+    let (v, unit) = match Unit::parse_length(t) {
+        Some((v, typed)) => (v, typed.unwrap_or(unit)),
+        None => (widgets::parse_num(t)?, unit),
+    };
+    Some(with_unit(&photocraft_engine::prefs::fmt_decimals(v, FIELD_DECIMALS), unit))
 }
 
 fn parse_length_str(text: &str, app: &PhotocraftApp, along_x: bool) -> Option<f64> {
@@ -380,53 +386,37 @@ fn should_select_all(response: &egui::Response, ui: &egui::Ui) -> bool {
     response.gained_focus() && !response.clicked() && !response.dragged() && !ui.input(|i| i.pointer.any_click() || i.pointer.any_down())
 }
 
-#[allow(clippy::too_many_arguments)]
-fn length_field(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egui::Id, width: f32, optional: bool, along_x: bool) -> egui::Response {
-    let mut text = match f.get(key) {
-        Some(Value::String(s)) => s.clone(),
-        Some(Value::Number(n)) => {
-            let px = n.as_f64().unwrap_or(0.0);
-            if optional && px <= 0.0 { String::new() } else { in_ruler_unit(app, px, along_x) }
-        }
-        _ => String::new(),
-    };
-    let t = Tokens::get(ui.ctx());
-    let response = ui
-        .add(egui::TextEdit::singleline(&mut text).id_salt(key).desired_width(width).font(crate::theme::mono(12.0)).background_color(t.field))
-        .labelled_by(label);
-    if ui.is_enabled() {
-        crate::field_tab::register(ui.ctx(), response.id);
+fn length_field(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egui::Id, optional: bool, along_x: bool) {
+    let mut value = f.get(key).cloned().unwrap_or(Value::Null);
+    let response = unit_edit(app, ui, key, &mut value, optional, along_x, 68.0).labelled_by(label);
+    if f.get(key).unwrap_or(&Value::Null) != &value {
+        f.insert(key.into(), value);
     }
-    if should_select_all(&response, ui) {
-        crate::field_tab::select_all(ui.ctx(), response.id, &text);
+    if optional {
+        response.on_hover_text(tl!("Leave empty for automatic size"));
     }
-    if response.changed() {
-        f.insert(key.into(), json!(text));
-    }
-    if response.lost_focus()
-        && let Some(normalized) = normalize_field_text(&text, app, along_x, optional)
-    {
-        text = normalized;
-        f.insert(key.into(), json!(text));
-    }
-    if optional { response.on_hover_text(tl!("Leave empty for automatic size")) } else { response }
 }
 
-fn margin_field(app: &PhotocraftApp, ui: &mut egui::Ui, id_salt: &str, value: &mut Value, name: &str, width: f32, along_x: bool) -> egui::Response {
+/// A length field that takes any unit. Its text is stored as typed and settles on lost focus.
+fn unit_edit(app: &PhotocraftApp, ui: &mut egui::Ui, id_salt: &str, value: &mut Value, optional: bool, along_x: bool, width: f32) -> egui::Response {
     let mut text = match value {
         Value::String(s) => s.clone(),
         Value::Number(n) => {
             let px = n.as_f64().unwrap_or(0.0);
-            in_ruler_unit(app, px, along_x)
+            if optional && px <= 0.0 { String::new() } else { in_ruler_unit(app, px, along_x) }
         }
+        _ if optional => String::new(),
         _ => in_ruler_unit(app, 0.0, along_x),
     };
     let t = Tokens::get(ui.ctx());
-    let response = ui
-        .add(egui::TextEdit::singleline(&mut text).id_salt(id_salt).desired_width(width).font(crate::theme::mono(12.0)).background_color(t.field))
-        .accessible_name(name);
+    let response = ui.add(egui::TextEdit::singleline(&mut text).id_salt(id_salt).desired_width(width).font(crate::theme::mono(12.0)).background_color(t.field));
     if ui.is_enabled() {
         crate::field_tab::register(ui.ctx(), response.id);
+    }
+    let ruler = ruler_unit(app);
+    if response.gained_focus() {
+        let unit = text_unit(&text, ruler);
+        ui.ctx().data_mut(|d| d.insert_temp(response.id, unit));
     }
     if should_select_all(&response, ui) {
         crate::field_tab::select_all(ui.ctx(), response.id, &text);
@@ -434,11 +424,11 @@ fn margin_field(app: &PhotocraftApp, ui: &mut egui::Ui, id_salt: &str, value: &m
     if response.changed() {
         *value = json!(text);
     }
-    if response.lost_focus()
-        && let Some(normalized) = normalize_field_text(&text, app, along_x, false)
-    {
-        text = normalized;
-        *value = json!(text);
+    if response.lost_focus() {
+        let unit = ui.ctx().data_mut(|d| d.remove_temp::<Unit>(response.id)).unwrap_or(ruler);
+        if let Some(normalized) = normalize_field_text(&text, app, along_x, optional, unit) {
+            *value = json!(normalized);
+        }
     }
     response
 }
@@ -466,10 +456,10 @@ fn axis(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, rows
                 count_field(ui, f, count, "Number");
                 ui.end_row();
                 let size_label_resp = ui.label(size_label);
-                length_field(app, ui, f, size, size_label_resp.id, 68.0, true, !rows);
+                length_field(app, ui, f, size, size_label_resp.id, true, !rows);
                 ui.end_row();
                 let gap_label_resp = ui.label(tl!("Spacing"));
-                length_field(app, ui, f, gap, gap_label_resp.id, 68.0, false, !rows);
+                length_field(app, ui, f, gap, gap_label_resp.id, false, !rows);
                 ui.end_row();
             });
         });
@@ -577,7 +567,7 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
                 for (value, (label, id_salt, along_x)) in margins.iter_mut().zip(items) {
                     ui.vertical(|ui| {
                         ui.label(label);
-                        margin_field(app, ui, id_salt, value, label, 64.0, along_x);
+                        unit_edit(app, ui, id_salt, value, false, along_x, 64.0).accessible_name(label);
                     });
                 }
             });

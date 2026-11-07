@@ -356,16 +356,55 @@ fn units_can_be_typed_and_convert_on_reopen() {
 }
 
 #[test]
-fn normalization_appends_ruler_unit_and_ensures_space() {
+fn normalization_appends_the_field_unit_and_ensures_space() {
+    use photocraft_engine::prefs::Unit;
     let mut app = app();
-    assert_eq!(normalize_field_text("10", &app, true, false), Some("10 px".into()));
-    assert_eq!(normalize_field_text("10px", &app, true, false), Some("10 px".into()));
-    assert_eq!(normalize_field_text("10cm", &app, true, false), Some("10 cm".into()));
-    assert_eq!(normalize_field_text("2in", &app, true, false), Some("2 in".into()));
-    assert_eq!(normalize_field_text("5mm", &app, false, false), Some("5 mm".into()));
+    let px = Unit::Pixels;
+    assert_eq!(normalize_field_text("10", &app, true, false, px), Some("10 px".into()));
+    assert_eq!(normalize_field_text("10px", &app, true, false, px), Some("10 px".into()));
+    assert_eq!(normalize_field_text("10cm", &app, true, false, px), Some("10 cm".into()));
+    assert_eq!(normalize_field_text("2in", &app, true, false, px), Some("2 in".into()));
+    assert_eq!(normalize_field_text("5mm", &app, false, false, px), Some("5 mm".into()));
 
-    app.session.prefs.edit(|p| p.units_and_rulers.rulers = photocraft_engine::prefs::Unit::Centimeters);
-    assert_eq!(normalize_field_text("10", &app, true, false), Some("10 cm".into()));
-    assert_eq!(normalize_field_text("2.5", &app, true, false), Some("2.5 cm".into()));
-    assert_eq!(normalize_field_text("20px", &app, true, false), Some("20 px".into()));
+    app.session.prefs.edit(|p| p.units_and_rulers.rulers = Unit::Centimeters);
+    assert_eq!(normalize_field_text("10", &app, true, false, Unit::Centimeters), Some("10 cm".into()));
+    assert_eq!(normalize_field_text("2.5", &app, true, false, Unit::Centimeters), Some("2.5 cm".into()));
+    assert_eq!(normalize_field_text("20px", &app, true, false, Unit::Centimeters), Some("20 px".into()));
+}
+
+/// The reference application keeps three decimals in every unit: a typed "13.5 px" stays, it is
+/// not rounded to whole pixels, and 20 px at 72 ppi opens as "0.706 cm".
+#[test]
+fn fields_keep_three_decimals_in_every_unit() {
+    use photocraft_engine::prefs::Unit;
+    let mut app = app();
+    assert_eq!(normalize_field_text("13.5 px", &app, true, false, Unit::Pixels), Some("13.5 px".into()));
+    assert_eq!(normalize_field_text("5.123456", &app, true, false, Unit::Millimeters), Some("5.123 mm".into()));
+    app.session.prefs.edit(|p| p.units_and_rulers.rulers = Unit::Centimeters);
+    let dpi = f64::from(app.session.active().unwrap().doc.resolution_dpi);
+    assert_eq!(in_ruler_unit(&app, dpi * 0.70556 / 2.54, true), "0.706 cm");
+}
+
+/// After "2 mm", a bare number typed into the field is in millimetres, not the ruler unit.
+#[test]
+fn a_bare_number_takes_the_unit_the_field_showed() {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("columns".into(), json!(2));
+    f.insert("__rowsEnabled".into(), json!(false));
+    f.insert("__marginEnabled".into(), json!(false));
+    f.insert("gutter".into(), json!("2 mm"));
+    let mut h = harness(app);
+    h.run_steps(3);
+    // Number, Width, then Spacing (gutter).
+    for _ in 0..3 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    h.event(egui::Event::Text("5".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs.first().unwrap().fields["gutter"], "5 mm");
 }
