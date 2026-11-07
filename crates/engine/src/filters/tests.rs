@@ -588,25 +588,31 @@ fn displace_on_a_smart_object_embeds_its_map() {
     assert_eq!(first_value(&sm.smart_filters[1].params), 0.0, "the black map, not the passed-back white one");
 }
 
-/// Distinguish cancellation, invalid native samples and rejected legacy working data.
+/// Registered legacy filters still report rejected geometry as failure rather than cancellation.
 #[test]
-fn filter_errors_keep_the_kernel_diagnostic() {
-    assert!(matches!(filter_error(algo::ApplyError::Cancelled), EngineError::Cancelled));
-    assert!(matches!(filter_error(algo::ApplyError::Native(algo::coverage::Error::Cancelled)), EngineError::Cancelled));
-    let failure = filter_error(algo::ApplyError::WorkingData);
-    assert!(failure.to_string().contains("could not prepare"), "{failure}");
-    let failure = filter_error(algo::ApplyError::Native(algo::coverage::Error::NonFiniteSample));
-    assert!(failure.to_string().contains("finite"), "{failure}");
-    assert!(!failure.to_string().contains("could not prepare"));
+fn filter_diagnostics_legacy_geometry_failure() {
+    let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
+    surface.write_pixel(0, 0, &[0.5, 0.5, 0.5, 1.]);
+    let oversized = photocraft_geom::Rect::new(0, 0, 1_000_001, 1);
+    let error = apply_filter_to_surface("filter.sharpen.unsharpMask", &json!({}), &surface, oversized, None, oversized).unwrap_err();
+    assert!(!matches!(error, EngineError::Cancelled));
+    assert!(error.to_string().contains("could not prepare"), "{error}");
 }
 
-/// Replayed checked filters expose bad samples instead of a misleading generic allocation error.
+/// Checked library filters retain their specific sample error through the engine's shared conversion.
 #[test]
-fn replayed_average_reports_nonfinite_samples() {
+fn filter_diagnostics_native_nonfinite_samples() {
     let area = photocraft_geom::Rect::new(0, 0, 1, 1);
     let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA32F);
     surface.write_pixel(0, 0, &[f32::NAN, 0., 0., 1.]);
-    let error = apply_filter_to_surface("filter.blur.average", &json!({}), &surface, area, None, area).unwrap_err();
+    let error = algo::try_apply_in_with(&surface, &FilterParams::Average, area, area, None, area, &photocraft_raster::Interrupt::NONE)
+        .map_err(filter_error)
+        .unwrap_err();
     assert!(error.to_string().contains("finite"), "{error}");
     assert!(!error.to_string().contains("could not prepare"));
+    let checks = std::sync::atomic::AtomicUsize::new(0);
+    let cancelled = || checks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) >= 1;
+    let result = algo::try_apply_in_with(&surface, &FilterParams::Average, area, area, None, area, &photocraft_raster::Interrupt::cancel_only(&cancelled))
+        .map_err(filter_error);
+    assert!(matches!(result, Err(EngineError::Cancelled)));
 }
