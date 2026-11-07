@@ -86,10 +86,47 @@ struct FxEntry {
 /// with `set`, never `get_or_init`: nothing may block on a build (see `cached_effect_maps`).
 type FxSlot = std::sync::Arc<std::sync::OnceLock<FxEntry>>;
 
+#[derive(Default)]
 struct FxCache {
     map: std::collections::HashMap<u64, FxSlot>,
     order: Recency,
     bytes: usize,
+}
+
+impl FxCache {
+    /// The slot of `key`, made the most recently used: the cached one, or a new empty one.
+    fn slot(&mut self, key: u64) -> FxSlot {
+        let s = self.map.entry(key).or_default().clone();
+        self.order.touch(key);
+        s
+    }
+
+    /// Counts `bytes` for `slot`, just filled by a build, while it is still the slot of `key`
+    /// (eviction may have dropped it meanwhile).
+    fn admit(&mut self, key: u64, slot: &FxSlot, bytes: usize) {
+        if self.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, slot)) {
+            self.bytes += bytes;
+        }
+    }
+
+    /// Drops the least recently used entries until the cache is within `budget`, never `keep`
+    /// (the one a render is using now), so a single entry over the budget stays.
+    fn evict_over(&mut self, budget: usize, keep: u64) {
+        while self.bytes > budget && self.order.len() > 1 {
+            let Some(old) = self.order.oldest_except(keep) else { break };
+            self.order.remove(old);
+            if let Some(s) = self.map.remove(&old) {
+                self.bytes = self.bytes.saturating_sub(s.get().map_or(0, |e| e.bytes));
+            }
+        }
+    }
+
+    /// Drops every entry. Returns the bytes released.
+    fn purge(&mut self) -> usize {
+        self.map.clear();
+        self.order.clear();
+        std::mem::take(&mut self.bytes)
+    }
 }
 
 /// Default effect-cache budget (Preferences › Performance can change it).
@@ -115,12 +152,7 @@ pub fn effect_cache_bytes() -> usize {
 
 /// Drop every cached effect map (Edit › Purge › All). Returns the bytes released.
 pub fn purge_effect_cache() -> usize {
-    let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-    let freed = c.bytes;
-    c.map.clear();
-    c.order.clear();
-    c.bytes = 0;
-    freed
+    fx_cache().lock().unwrap_or_else(|e| e.into_inner()).purge()
 }
 
 /// Discard derived pixels and their source pins once after each new scratch read failure.
@@ -140,7 +172,7 @@ pub fn discard_unreadable_pixel_caches() {
 
 fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
     static C: std::sync::OnceLock<std::sync::Mutex<FxCache>> = std::sync::OnceLock::new();
-    C.get_or_init(|| std::sync::Mutex::new(FxCache { map: Default::default(), order: Recency::default(), bytes: 0 }))
+    C.get_or_init(|| std::sync::Mutex::new(FxCache::default()))
 }
 
 /// Where `layer`'s effect maps are built (see [`effect_maps`]) and whether that is clipped to the
@@ -251,27 +283,15 @@ fn build_fx_slot_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx, slot: &Fx
         return maps;
     }
     if slot.set(FxEntry { maps: maps.clone(), _pin: pin, bytes }).is_ok() {
-        // Counted exactly once, by the build that filled the slot, and only while the
-        // slot is still cached (eviction may have dropped it meanwhile).
-        let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-        if c.map.get(&key).is_some_and(|s| std::sync::Arc::ptr_eq(s, slot)) {
-            c.bytes += bytes;
-        }
+        // Counted exactly once, by the build that filled the slot.
+        fx_cache().lock().unwrap_or_else(|e| e.into_inner()).admit(key, slot, bytes);
     }
     // A concurrent build that finished first wins, so every tile shares one map.
     slot.get().map_or(maps, |e| e.maps.clone())
 }
 
 fn evict_fx_cache_over_budget(key: u64) {
-    let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-    let budget = effect_cache_budget();
-    while c.bytes > budget && c.order.len() > 1 {
-        let Some(old) = c.order.oldest_except(key) else { break };
-        c.order.remove(old);
-        if let Some(s) = c.map.remove(&old) {
-            c.bytes = c.bytes.saturating_sub(s.get().map_or(0, |e| e.bytes));
-        }
-    }
+    fx_cache().lock().unwrap_or_else(|e| e.into_inner()).evict_over(effect_cache_budget(), key);
 }
 
 /// The layer's effect maps from the global cache, built on a miss.
@@ -282,19 +302,7 @@ fn evict_fx_cache_over_budget(key: u64) {
 /// Instead a miss builds the maps here and the first finished build is kept. Renders build every
 /// layer's maps before their parallel tiles (`prepare_effects`), so tiles rarely miss.
 fn cached_effect_maps(layer: &Layer, region: Rect, key: u64, cx: &Ctx) -> std::sync::Arc<effects::FxMaps> {
-    let slot = {
-        let mut c = fx_cache().lock().unwrap_or_else(|e| e.into_inner());
-        let s = match c.map.get(&key) {
-            Some(s) => s.clone(),
-            None => {
-                let s: FxSlot = Default::default();
-                c.map.insert(key, s.clone());
-                s
-            }
-        };
-        c.order.touch(key);
-        s
-    };
+    let slot = fx_cache().lock().unwrap_or_else(|e| e.into_inner()).slot(key);
     let maps = match slot.get() {
         Some(e) => e.maps.clone(),
         None => build_fx_slot_maps(layer, region, key, cx, &slot),
@@ -340,7 +348,90 @@ impl Recency {
 
 #[cfg(test)]
 mod tests {
-    use super::Recency;
+    use super::{FxCache, FxEntry, Recency};
+    use crate::{Layer, LayerContent, Rect, Surface, effects};
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+
+    /// Each test builds its own cache: the global one is shared by every test running at once.
+    /// `fill` goes through the same steps as a miss in `cached_effect_maps`: take the slot, fill
+    /// it as `build_fx_slot_maps` does, count it, evict over `budget`.
+    fn fill(c: &mut FxCache, key: u64, bytes: usize, budget: usize) {
+        let slot = c.slot(key);
+        let layer = Layer::new("fx", LayerContent::Raster(Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true))));
+        let tex = effects::TextureCtx { rect: Rect::EMPTY, patterns: &[], anchor: (0.0, 0.0) };
+        let maps = std::sync::Arc::new(effects::build_maps(&layer, Vec::new(), Rect::EMPTY, &photocraft_doc::GlobalLight::default(), &tex));
+        assert!(slot.set(FxEntry { maps, _pin: Vec::new(), bytes }).is_ok());
+        c.admit(key, &slot, bytes);
+        c.evict_over(budget, key);
+    }
+
+    fn hit(c: &mut FxCache, key: u64, budget: usize) {
+        assert!(c.slot(key).get().is_some(), "{key} is cached");
+        c.evict_over(budget, key);
+    }
+
+    fn keys(c: &FxCache) -> Vec<u64> {
+        let mut k: Vec<u64> = c.map.keys().copied().collect();
+        k.sort_unstable();
+        k
+    }
+
+    #[test]
+    fn a_hit_keeps_an_entry_from_eviction() {
+        let mut c = FxCache::default();
+        for k in [1, 2, 3] {
+            fill(&mut c, k, 10, 30);
+        }
+        hit(&mut c, 1, 30);
+        fill(&mut c, 4, 10, 30);
+        assert_eq!(keys(&c), [1, 3, 4], "2, not 1 (just used), is the least recently used");
+        assert_eq!(c.bytes, 30);
+        assert_eq!(c.order.len(), 3);
+    }
+
+    #[test]
+    fn eviction_drops_as_many_entries_as_it_takes_and_counts_their_bytes() {
+        let mut c = FxCache::default();
+        for k in [1, 2, 3, 4] {
+            fill(&mut c, k, 10, 100);
+        }
+        fill(&mut c, 5, 25, 40);
+        assert_eq!(keys(&c), [4, 5], "1, 2 and 3 go in one call");
+        assert_eq!((c.bytes, c.order.len()), (35, 2));
+    }
+
+    #[test]
+    fn the_entry_in_use_is_never_evicted_even_when_oldest_or_alone() {
+        let mut c = FxCache::default();
+        fill(&mut c, 1, 50, 10);
+        assert_eq!((keys(&c), c.bytes), (vec![1], 50), "a single entry over the budget stays");
+        fill(&mut c, 2, 5, 100);
+        // 1 is the oldest, but it is the one in use: 2 goes, and 1 stays over the budget.
+        hit(&mut c, 1, 10);
+        assert_eq!((keys(&c), c.bytes, c.order.len()), (vec![1], 50, 1));
+    }
+
+    #[test]
+    fn purging_clears_the_recency_with_the_entries() {
+        let mut c = FxCache::default();
+        for k in [1, 2] {
+            fill(&mut c, k, 10, 100);
+        }
+        assert_eq!(c.purge(), 20);
+        assert_eq!((c.map.len(), c.order.len(), c.bytes), (0, 0, 0));
+        // Nothing left behind: a later fill over the budget has nothing older to evict.
+        fill(&mut c, 3, 10, 5);
+        assert_eq!((keys(&c), c.order.len()), (vec![3], 1));
+    }
+
+    #[test]
+    fn a_slot_dropped_before_its_build_finished_is_not_counted() {
+        let mut c = FxCache::default();
+        let slot = c.slot(1);
+        c.purge();
+        c.admit(1, &slot, 10);
+        assert_eq!(c.bytes, 0);
+    }
 
     /// Eviction takes the oldest first: maps used by every render (layers a render server never
     /// changes) must outlive maps of layers that changed and will not be asked for again.
