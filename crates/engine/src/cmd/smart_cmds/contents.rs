@@ -1,7 +1,7 @@
 use super::filters::{smart, smart_mut};
-use super::placing::detach_psd;
-use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
-use super::source::{authorized_source_bytes, source_bytes};
+use super::placing::{contain_box, detach_psd, stretch_placement};
+use super::rendering::{refresh, refresh_or_fail, source_box, unapplied_filters};
+use super::source::{authorize_source, authorized_source_bytes, source_bytes, source_image};
 use super::{
     Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
     decode_source, encode_source, json, layer_param, other,
@@ -32,11 +32,31 @@ pub(super) fn set_source(
 
 // Keep the shared-instance transaction out of the per-command source-builder instantiations.
 fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource) -> Result<Value> {
+    set_shared_source_fit(s, id, label, keep_psd, new, None)
+}
+
+/// Stretching new contents over the old: the new source's box, and each instance's old box (see
+/// [`authored_boxes`]). With `contain`, the new box is first grown to each old box's aspect
+/// around its centre (see [`contain_box`]), so the new contents keep theirs.
+struct Stretch {
+    to: [f64; 4],
+    from: Vec<(LayerId, [f64; 4])>,
+    contain: bool,
+}
+
+/// [`set_shared_source`]; with `stretch`, re-aiming every instance's placement so the new
+/// source's box lands where its old box did.
+fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, new: SmartSource, stretch: Option<Stretch>) -> Result<Value> {
     let (parent, contents_id, changed, warnings) = s.edit(label, |doc, _| {
         let contents_id = smart(doc, id)?.contents_id;
         let changed = instances(doc, contents_id);
         let mut warnings = std::collections::BTreeSet::new();
         for &instance in &changed {
+            if let Some(st) = &stretch {
+                let old_box = st.from.iter().find(|(l, _)| *l == instance).map(|(_, b)| *b).ok_or(EngineError::NoLayer(instance))?;
+                let to = if st.contain { contain_box(old_box, st.to) } else { st.to };
+                stretch_placement(smart_mut(doc, instance)?, old_box, to);
+            }
             smart_mut(doc, instance)?.source = new.clone();
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
@@ -56,23 +76,102 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
 }
 
 pub(super) fn replace_contents(s: &mut Session, p: &Value) -> Result<Value> {
+    let fit = fit_param(p)?;
     let path = path_param("layer.smartObjects.replaceContents", p)?.to_string();
     let bytes = photocraft_format::read_file(std::path::Path::new(&path)).map_err(|e| other(format!("can't read {path}: {e}")))?;
     let id = layer_param(s, p)?;
-    replace_contents_bytes(s, id, &base_name(&path), bytes)
+    replace_contents_fit(s, id, &base_name(&path), bytes, fit)
 }
 
 /// Replace Contents with a file the caller already read, for the smart object `p` names (`layer`,
-/// else the active layer): the body of the command minus its ambient path read (#8061).
+/// else the active layer) and with its `fit`: the body of the command minus its ambient path
+/// read (#8061).
 pub fn replace_contents_from_bytes(s: &mut Session, p: &Value, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
+    let fit = fit_param(p)?;
     let id = layer_param(s, p)?;
-    replace_contents_bytes(s, id, file_name, bytes)
+    replace_contents_fit(s, id, file_name, bytes, fit)
+}
+
+/// How Replace Contents places a file of another size than the old contents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fit {
+    /// The new file keeps its own pixel size through the old placement (the default).
+    Keep,
+    /// The new file fills the old contents' box, whatever its size (what mockup templates expect).
+    Stretch,
+    /// The new file is scaled to fit inside the old contents' box, keeping its aspect ratio, and
+    /// centred in it; the rest of the box stays empty.
+    Contain,
+}
+
+impl Fit {
+    /// A request's `fit` option: absent or null is [`Fit::Keep`]; `None` for anything but
+    /// `"keep"`, `"stretch"` or `"contain"`.
+    pub fn from_param(v: Option<&Value>) -> Option<Fit> {
+        match v {
+            None | Some(Value::Null) => Some(Fit::Keep),
+            Some(Value::String(f)) if f == "keep" => Some(Fit::Keep),
+            Some(Value::String(f)) if f == "stretch" => Some(Fit::Stretch),
+            Some(Value::String(f)) if f == "contain" => Some(Fit::Contain),
+            Some(_) => None,
+        }
+    }
+}
+
+/// The `fit` of command params `p`; anything [`Fit::from_param`] doesn't take is a bad parameter.
+fn fit_param(p: &Value) -> Result<Fit> {
+    Fit::from_param(p.get("fit"))
+        .ok_or_else(|| bad("layer.smartObjects.replaceContents", format!("`fit` must be \"keep\", \"stretch\" or \"contain\", not {}", p["fit"])))
 }
 
 /// Replace Contents from a file's name and bytes: what the desktop and web file pickers hand over.
 pub fn replace_contents_bytes(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>) -> Result<Value> {
-    decode_source(file_name, &bytes)?; // fail before touching the document
-    set_shared_source(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) })
+    replace_contents_fit(s, id, file_name, bytes, Fit::Keep)
+}
+
+/// [`replace_contents_bytes`] with a [`Fit`].
+pub fn replace_contents_fit(s: &mut Session, id: LayerId, file_name: &str, bytes: Vec<u8>, fit: Fit) -> Result<Value> {
+    let stretch = match fit {
+        Fit::Keep => {
+            decode_source(file_name, &bytes)?; // fail before touching the document
+            None
+        }
+        Fit::Stretch | Fit::Contain => {
+            let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+            // The old boxes first: without a stored size they decode the old contents.
+            let from = authored_boxes(s, doc, id)?;
+            // Decode now, failing before touching the document; the re-render finds the image in
+            // the source cache.
+            let b = source_image(file_name, &bytes, doc.pixel_format())?.bounds;
+            let to = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
+            Some(Stretch { to, from, contain: fit == Fit::Contain })
+        }
+    };
+    set_shared_source_fit(s, id, "Replace Contents", false, SmartSource::Embedded { file_name: file_name.to_string(), bytes: Arc::new(bytes) }, stretch)
+}
+
+/// The box (source pixels) each instance of `id`'s contents was authored for: its `soLD` stored
+/// size when the layer came from a PSD (cheap), else the box of the decoded contents, which the
+/// instances share (decoded once). A linked file's path comes from the document, so the
+/// session's gate sees it before it is read, as for Replace Contents' own path.
+fn authored_boxes(s: &Session, doc: &Document, id: LayerId) -> Result<Vec<(LayerId, [f64; 4])>> {
+    let mut decoded = None;
+    instances(doc, smart(doc, id)?.contents_id)
+        .into_iter()
+        .map(|l| {
+            let sm = smart(doc, l)?;
+            let stored =
+                sm.psd_raw.as_deref().and_then(|d| photocraft_io::smart_map::parse_sold(d)).and_then(|p| photocraft_io::smart_map::stored_size(&p.descriptor));
+            let b = match stored {
+                Some((w, h)) => Some([0.0, 0.0, w, h]),
+                None => {
+                    authorize_source(s, "layer.smartObjects.replaceContents", doc, &sm.source)?;
+                    *decoded.get_or_insert_with(|| source_box(doc, sm))
+                }
+            };
+            Ok((l, b.ok_or_else(|| other("the smart object's contents are unavailable, so their box is unknown"))?))
+        })
+        .collect()
 }
 
 /// The file name and bytes of smart object `id`'s contents.
