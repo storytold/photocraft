@@ -142,6 +142,19 @@ fn preferences_search_matches_editable_fields_across_sections() {
     assert_eq!(preference_sections(&values, "").len(), SECTIONS.len());
 }
 
+/// The preview language controls translated search; English schema paths keep their aliases.
+#[test]
+fn azerbaijani_preferences_search_keeps_dotted_i_and_schema_aliases() {
+    let az = crate::i18n::Lang::from_code("az").unwrap();
+    crate::i18n::with_language(az, || {
+        let values = prefs::Preferences::default().to_json();
+        assert!(preference_sections(&values, "İNTERFEYS").iter().any(|(id, _)| *id == "interface"));
+        assert!(super::fields::preference_matches("interface", "language", "DİL"));
+        assert!(!super::fields::preference_matches("interface", "language", "DIL"));
+        assert!(super::fields::preference_matches("interface", "uiScale", "INTERFACE.UISCALE"));
+    });
+}
+
 #[test]
 fn preferences_dialog_width_follows_its_resizable_area() {
     let prefs = serde_json::json!({"__prefsui": "prefs"});
@@ -1126,6 +1139,125 @@ fn selected_tool_excludes_temporary_switches() {
     assert_eq!(stored(&store)["selectedTool"], json!("PolygonLasso"));
 }
 
+/// #3569: a restart keeps the last tool of every group, not only the selected tool's.
+#[test]
+fn group_tools_survive_a_restart() {
+    use crate::state::Tool;
+    let (mut app, store) = app_with_store();
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+    for tool in [Tool::Brush, Tool::Pencil, Tool::PaintBucket, Tool::PolygonLasso, Tool::Pencil, Tool::Zoom] {
+        app.ui.tool = tool;
+        crate::tool_memory::persist(&mut app, &ctx);
+        tick(&mut app, &ctx);
+    }
+    assert_eq!(stored(&store)["groupTools"], json!(["Zoom", "Pencil", "PolygonLasso", "PaintBucket", "Brush", "Move"]), "most recent first, each once");
+    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+    assert_eq!(app2.ui.tool, Tool::Zoom);
+    assert_eq!(app2.ui.group_tools, app.ui.group_tools);
+    assert_eq!(app2.ui.group_tool('B'), Some(Tool::Pencil), "the group's latest tool");
+    assert_eq!(app2.ui.group_tool('G'), Some(Tool::PaintBucket));
+    assert_eq!(app2.ui.group_tool('L'), Some(Tool::PolygonLasso));
+}
+
+#[test]
+fn group_tools_are_flushed_on_exit_without_another_frame() {
+    use crate::state::Tool;
+    let (mut app, store) = app_with_store();
+    app.ui.tool = Tool::Pencil;
+    crate::tool_memory::persist(&mut app, &egui::Context::default());
+    app.ui.tool = Tool::PaintBucket;
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+    assert_eq!(app2.ui.group_tool('B'), Some(Tool::Pencil));
+    assert_eq!(app2.ui.group_tool('G'), Some(Tool::PaintBucket));
+}
+
+/// A frame as far as the tools go: the key handling, then what is remembered.
+fn tool_frame(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) {
+    ctx.begin_pass(egui::RawInput { events, ..Default::default() });
+    crate::shortcuts::handle(app, ctx);
+    ctx.end_pass().textures_delta.clear();
+    crate::tool_memory::persist(app, ctx);
+    tick(app, ctx);
+}
+
+/// A tool picked during a drag that ends on the tool it began with: the selected tool never
+/// changed, but that tool's group did.
+#[test]
+fn group_tools_are_saved_when_the_selected_tool_stays_the_same() {
+    use crate::state::Tool;
+    let (mut app, store) = app_with_store();
+    let ctx = egui::Context::default();
+    let pointer = |pressed| egui::Event::PointerButton { pos: egui::Pos2::ZERO, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+    app.ui.tool = Tool::Brush;
+    tool_frame(&mut app, &ctx, vec![]);
+    tool_frame(&mut app, &ctx, vec![pointer(true)]);
+    app.ui.tool = Tool::PaintBucket;
+    tool_frame(&mut app, &ctx, vec![]);
+    app.ui.tool = Tool::Brush;
+    tool_frame(&mut app, &ctx, vec![]);
+    tool_frame(&mut app, &ctx, vec![pointer(false)]);
+    assert_eq!(stored(&store)["selectedTool"], json!("Brush"));
+    let (app2, _) = app_with_saved(store.lock().unwrap().clone());
+    assert_eq!(app2.ui.group_tool('G'), Some(Tool::PaintBucket));
+}
+
+/// The pen's eraser end and a held tool letter don't change what a group shows or brings back,
+/// neither during the session nor when quitting while they are in use.
+#[test]
+fn group_tools_exclude_temporary_switches() {
+    use crate::state::Tool;
+    let (mut app, store) = app_with_store();
+    let ctx = egui::Context::default();
+    for tool in [Tool::MagicEraser, Tool::Brush] {
+        app.ui.tool = tool;
+        tool_frame(&mut app, &ctx, vec![]);
+    }
+    app.stylus.tool_before_eraser = Some(Tool::Brush);
+    app.ui.tool = Tool::Eraser;
+    tool_frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.ui.group_tool('E'), Some(Tool::MagicEraser), "the pen's eraser end");
+    app.stylus.tool_before_eraser = None;
+    app.ui.tool = Tool::Brush;
+    let press = egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() };
+    tool_frame(&mut app, &ctx, vec![press]);
+    tool_frame(&mut app, &ctx, vec![]);
+    assert_eq!(app.ui.tool, Tool::Zoom, "Z is still down");
+    assert_eq!(app.ui.group_tool('Z'), None, "a held letter");
+    crate::tool_memory::save_on_exit(&mut app).unwrap();
+    assert_eq!(stored(&store)["groupTools"], json!(["Brush", "MagicEraser", "Move"]));
+}
+
+/// A selected tool this version doesn't know starts on the default tool. The saved list stays as
+/// it is, names this version doesn't know included, until the next tool is picked.
+#[test]
+fn a_launch_alone_saves_no_group_tools() {
+    use crate::state::Tool;
+    let saved = json!({"selectedTool": "FutureTool", "groupTools": ["Pencil", "FutureTool", "PaintBucket"]});
+    let (mut app, store) = app_with_saved(Some(saved.to_string()));
+    let ctx = egui::Context::default();
+    tool_frame(&mut app, &ctx, vec![]);
+    assert_eq!(stored(&store)["groupTools"], saved["groupTools"]);
+    app.ui.tool = Tool::Brush;
+    tool_frame(&mut app, &ctx, vec![]);
+    assert_eq!(stored(&store)["groupTools"], json!(["Brush", "Move", "Pencil", "PaintBucket"]));
+}
+
+/// A damaged or hand-edited `groupTools` costs no other preference, and what reads back counts.
+#[test]
+fn damaged_group_tools_keep_what_reads_back() {
+    use crate::state::Tool;
+    for bad in [json!(null), json!("Pencil"), json!(42), json!({"B": "Pencil"})] {
+        let (app, _) = app_with_saved(Some(json!({"groupTools": bad, "toolOptions": {"feather": 12.0}}).to_string()));
+        assert_eq!(app.ui.group_tools, [Tool::Move], "{bad}");
+        assert_eq!(app.ui.tool_options.feather, 12.0);
+    }
+    let saved = json!({"groupTools": ["FutureTool", "Pencil", 7, null, {}, "PaintBucket", "Pencil"]});
+    let (app, _) = app_with_saved(Some(saved.to_string()));
+    assert_eq!(app.ui.group_tools, [Tool::Move, Tool::Pencil, Tool::PaintBucket]);
+}
+
 #[test]
 fn tool_options_survive_a_restart() {
     let (mut app, store) = app_with_store();
@@ -1415,28 +1547,27 @@ fn show_tooltips_preferences_turn_tooltips_off() {
 }
 
 #[test]
-fn enable_animations_off_stops_fades_and_scroll_glides_and_is_remembered() {
-    let on = egui::Style::default().animation_time;
-    let both = |ctx: &egui::Context| [egui::Theme::Dark, egui::Theme::Light].map(|t| ctx.style_of(t).animation_time);
-    // Saved off: the first frame after a restart applies it to both appearance styles.
-    let (mut app, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": false}}).to_string()));
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    assert_eq!(both(&ctx), [0.0, 0.0]);
-    assert_eq!(ctx.global_style().scroll_animation.duration.max, 0.0);
-    // A theme change rebuilds the style; the next frame turns animations off again.
-    app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
-    tick(&mut app, &ctx);
-    assert_eq!(both(&ctx), [0.0, 0.0]);
-    app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).unwrap();
-    tick(&mut app, &ctx);
-    assert_eq!(both(&ctx), [on, on]);
-    assert!(on > 0.0 && ctx.global_style().scroll_animation.duration.max > 0.0);
-    // A hand-edited value of the wrong type doesn't crash: the defaults (animations on) stay.
-    let (mut bad, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": "nope"}}).to_string()));
-    let ctx2 = egui::Context::default();
-    tick(&mut bad, &ctx2);
-    assert_eq!(both(&ctx2), [on, on]);
+fn a_saved_enable_animations_loads_and_leaves_egui_animating() {
+    // #9479: Interface › Enable animations is gone (Photoshop has none). A file saved with it
+    // off still loads whole, and egui's fades and scroll glides keep their defaults.
+    let style = egui::Style::default();
+    let both =
+        |ctx: &egui::Context| [egui::Theme::Dark, egui::Theme::Light].map(|t| (ctx.style_of(t).animation_time, ctx.style_of(t).scroll_animation.duration.max));
+    let expected = (style.animation_time, style.scroll_animation.duration.max);
+    assert!(expected.0 > 0.0 && expected.1 > 0.0);
+    for value in [json!(false), json!(true), json!("nope")] {
+        let saved = json!({"version": 2, "interface": {"enableAnimations": value, "showTooltips": false}});
+        let (mut app, _) = app_with_saved(Some(saved.to_string()));
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert!(app.ui.status.is_empty(), "{value}: {}", app.ui.status);
+        assert!(!app.session.prefs().interface.show_tooltips, "{value}: the rest of the file loads");
+        assert_eq!(both(&ctx), [expected, expected], "{value}");
+        app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
+        tick(&mut app, &ctx);
+        assert_eq!(both(&ctx), [expected, expected], "{value}: after a theme change");
+        assert!(app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).is_err());
+    }
 }
 
 #[test]
