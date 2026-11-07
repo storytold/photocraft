@@ -110,6 +110,13 @@ pub struct ExportLayersParams {
     /// Export only the layers that are visible (default true).
     #[serde(default, rename = "visible_only")]
     pub visible_only: Option<bool>,
+    /// What a group produces: `merged`/`single` (default) exports it as one file; `layers` walks
+    /// into it and exports each visible child as its own file.
+    #[serde(default)]
+    pub groups: Option<String>,
+    /// Filenames: `numbered`/`index` (default) or `layer` for the bare sanitized layer names.
+    #[serde(default)]
+    pub naming: Option<String>,
     /// Encoder quality, 0..12, for the formats that take one.
     #[serde(default)]
     pub quality: Option<f64>,
@@ -794,7 +801,7 @@ impl PhotocraftMcp {
     }
 
     #[tool(
-        description = "Export top-level layers as files (groups merged). Returns files and skipped: [{layer, name, reason}] for hidden layers (visible_only) and adjustments with no pixels of their own. Workspace exports resolve beneath the write root, also return count of written files, and reject existing files instead of overwriting them. Trusted-local/bridge exports use the engine command's file access policy."
+        description = "Export layers as files. By default top-level layers are exported with groups merged; groups: \"layers\" walks into groups and exports each visible child, and naming: \"layer\" writes bare sanitized layer names instead of prefix_index_name. Returns files and skipped: [{layer, name, reason}] for hidden layers (visible_only) and adjustments with no pixels of their own. Workspace exports resolve beneath the write root, also return count of written files, and reject existing files instead of overwriting them. Trusted-local/bridge exports use the engine command's file access policy."
     )]
     async fn doc_export_layers(&self, Parameters(p): Parameters<ExportLayersParams>) -> Result<CallToolResult, McpError> {
         let mut opts = serde_json::Map::new();
@@ -806,6 +813,12 @@ impl PhotocraftMcp {
         }
         if let Some(v) = p.visible_only {
             opts.insert("visibleOnly".into(), json!(v));
+        }
+        if let Some(v) = p.groups {
+            opts.insert("groups".into(), json!(v));
+        }
+        if let Some(v) = p.naming {
+            opts.insert("naming".into(), json!(v));
         }
         if let Some(v) = p.quality {
             opts.insert("quality".into(), json!(v));
