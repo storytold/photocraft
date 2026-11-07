@@ -265,21 +265,22 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
 /// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
 fn average(s: &mut Session, p: &Value) -> Result<Value> {
     map_pixels(s, "Average", p, |_, px, cover| {
-        let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
+        let (mut sum, mut wsum) = ([0f64; 3], 0f64);
         for (p, &k) in px.iter().zip(cover) {
-            let w = (p[3] * k) as f64;
+            // Average changes colour, not transparency; hidden RGB contributes too.
+            let w = k as f64;
             for c in 0..3 {
                 sum[c] += p[c] as f64 * w;
             }
             wsum += w;
-            asum += (p[3] * k) as f64;
-            n += k as f64;
         }
         if wsum <= 0.0 {
             return;
         }
-        let avg = [(sum[0] / wsum) as f32, (sum[1] / wsum) as f32, (sum[2] / wsum) as f32, (asum / n.max(1e-9)) as f32];
-        px.fill(avg);
+        let avg = sum.map(|v| (v / wsum) as f32);
+        for p in px {
+            p[..3].copy_from_slice(&avg);
+        }
     })
 }
 

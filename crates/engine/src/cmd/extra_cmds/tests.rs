@@ -499,6 +499,52 @@ fn clouds_in_a_selection_are_the_canvas_clouds() {
 }
 
 #[test]
+fn average_preserves_transparency_and_averages_hidden_colours() {
+    // Photoshop 26.6.1, RGB8 PNG with opaque red and transparent blue halves:
+    // Average produces (128, 0, 128), retaining each pixel's original alpha.
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        paint_square(&mut s, Rect::new(0, 0, 20, 30), [1.0, 0.0, 0.0, 1.0]);
+        paint_square(&mut s, Rect::new(20, 0, 40, 30), [0.0, 0.0, 1.0, 0.0]);
+        let bounds = Rect::new(0, 0, 40, 30);
+        let before = active(&s).surface().unwrap().read_region(bounds);
+        let steps = s.active().unwrap().history.past_len();
+        s.execute("filter.blur.average", json!({})).unwrap();
+        let after = active(&s).surface().unwrap().read_region(bounds);
+        for (old, new) in before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0) {
+            assert_eq!(new[3], old[3], "depth {depth}: Average must preserve alpha");
+            assert!((new[0] - 0.5).abs() < 0.003 && new[1] == 0.0 && (new[2] - 0.5).abs() < 0.003, "{depth}: {new:?}");
+        }
+        assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+        s.undo();
+        assert_eq!(active(&s).surface().unwrap().read_region(bounds), before);
+        s.redo();
+        assert_eq!(active(&s).surface().unwrap().read_region(bounds), after);
+    }
+}
+
+#[test]
+fn average_preserves_partial_alpha_and_pixels_outside_selection() {
+    for depth in [8, 16, 32] {
+        let mut s = session(depth);
+        paint_square(&mut s, Rect::new(0, 0, 20, 30), [1.0, 0.0, 0.0, 0.25]);
+        paint_square(&mut s, Rect::new(20, 0, 40, 30), [0.0, 0.0, 1.0, 0.75]);
+        s.execute("select.rect", json!({"x": 10, "y": 0, "width": 15, "height": 30})).unwrap();
+        let before: Vec<_> = (0..40).map(|x| pixel(&s, x, 15)).collect();
+        s.execute("filter.blur.average", json!({})).unwrap();
+        for x in 0..40 {
+            let p = pixel(&s, x, 15);
+            assert_eq!(p[3], before[x as usize][3], "depth {depth}, x {x}");
+            if (10..25).contains(&x) {
+                assert!((p[0] - 2.0 / 3.0).abs() < 0.003 && (p[2] - 1.0 / 3.0).abs() < 0.003, "{depth}: {p:?}");
+            } else {
+                assert_eq!(p, before[x as usize]);
+            }
+        }
+    }
+}
+
+#[test]
 fn average_and_clouds() {
     let mut s = session(8);
     paint_square(&mut s, Rect::new(0, 0, 20, 30), [1.0, 0.0, 0.0, 1.0]);
