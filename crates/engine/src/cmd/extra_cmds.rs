@@ -76,12 +76,18 @@ pub(crate) fn step_key(s: &Session, what: &str) -> String {
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
 /// grayscale surface is rewritten instead, as the core filters do (#935).
 fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
+    map_pixels_in(s, label, p, false, f)
+}
+
+/// [`map_pixels`], or with `whole` the whole canvas: `f` still gets the selection coverage, and
+/// every pixel takes its result in full.
+fn map_pixels_in(s: &mut Session, label: &str, p: &Value, whole: bool, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, p)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
-        let area = selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+        let area = if whole { canvas } else { selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas)) };
         let (surf, lock_alpha) = if channel {
             let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
             (surf, false)
@@ -109,7 +115,7 @@ fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut
         f(area, &mut px, &cover);
         let mut enc = [0.0f32; 8];
         for (i, out) in raw.chunks_exact_mut(n).enumerate() {
-            let k = cover[i];
+            let k = if whole { 1.0 } else { cover[i] };
             if k <= 0.0 {
                 continue;
             }
@@ -230,9 +236,16 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Histogram equalization, like Photoshop's: one CDF over the R, G and B values of
-/// the selected pixels, applied to every channel.
+/// the selected pixels, applied to every channel. With a selection, `selectedAreaOnly: false`
+/// applies the selection's mapping to the layer within the canvas (Photoshop's Equalize Entire
+/// Image Based On Selected Area).
 fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Equalize", p, |_, px, cover| {
+    let whole = match p.get("selectedAreaOnly") {
+        None => false,
+        Some(Value::Bool(only)) => !only,
+        Some(_) => return Err(EngineError::BadParams { cmd: "image.adjustments.equalize".into(), msg: "selectedAreaOnly must be true or false".into() }),
+    };
+    map_pixels_in(s, "Equalize", p, whole, |_, px, cover| {
         let mut hist = [0f64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
@@ -440,7 +453,7 @@ fn visible_bounds(s: &photocraft_raster::Surface, canvas: Rect) -> Rect {
         }
         out
     };
-    tiles.par_iter().map(|(c, t)| tile_bounds(c.rect(), t.bytes())).reduce(|| Rect::EMPTY, |a, b| a.union(&b))
+    tiles.par_iter().map(|(c, t)| tile_bounds(c.rect(), &t.bytes())).reduce(|| Rect::EMPTY, |a, b| a.union(&b))
 }
 
 // ---------- layers ----------
@@ -556,6 +569,10 @@ fn is_empty_layer(l: &Layer) -> bool {
     }
 }
 
+/// Layer › Ungroup Layers: replace the selected group with its children in place, the topmost
+/// child becoming active. Ungrouping an empty group next to other layers simply removes it;
+/// when it is the only root layer the edit is refused, as `layer.delete` refuses to drop the
+/// last layer (#11118).
 fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     s.edit("Ungroup Layers", |doc, active| {
@@ -566,6 +583,12 @@ fn ungroup(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let children = group.children.clone();
         let (&idx, parent) = path.split_last().ok_or(EngineError::NoLayer(id))?;
+        // Ungrouping the only root layer when it is an empty group would leave the document
+        // with no layers at all; `layer.delete` refuses to drop the last layer, so refuse here
+        // too instead (#11118).
+        if parent.is_empty() && children.is_empty() && doc.layers.len() == 1 {
+            return Err(EngineError::Other("a document must keep at least one layer".into()));
+        }
         let sib = if parent.is_empty() { &mut doc.layers } else { doc.layer_at_mut(parent).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(id))? };
         sib.remove(idx);
         let top = children.last().map(|l| l.id);
@@ -752,6 +775,8 @@ fn rasterize_content(s: &mut Session, id: LayerId, only: Option<&str>, key: &str
                 let px = content_pixels(doc, &snap);
                 let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
                 l.content = LayerContent::Raster(px);
+                l.frame = None;
+                l.psd_blocks.retain(|(k, _)| k != b"pcFr");
                 l.fill_cache = None;
                 // The PSD fill or placed-layer blocks no longer describe the layer: kept, they
                 // would reopen it as a fill layer or smart object and drop these pixels.
@@ -870,16 +895,30 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"selected": true}))
         }),
-        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, equalize),
+        spec!(
+            "image.adjustments.equalize",
+            "Equalize",
+            &["Image", "Adjustments"],
+            None,
+            r#"{"selectedAreaOnly":bool=true (with a selection, false equalizes the layer within the canvas by the selection's histogram)}"#,
+            has_pixels,
+            equalize
+        ),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let all = reveal_all_bounds(&d.doc);
             if all == d.doc.bounds() {
                 return Ok(json!({"changed": false}));
             }
-            // One History step named as in Photoshop, not the crop's "Crop".
+            // One History step named as in Photoshop, not the crop's "Crop". The Background stays a
+            // Background, unlike a Crop tool crop with Delete Cropped Pixels off (#10867).
             let p = json!({"x": all.x0, "y": all.y0, "width": all.width(), "height": all.height(), "deleteCroppedPixels": false});
-            crate::analysis_cmds::compound(s, "Reveal All", |s| s.execute("image.crop", p))?;
+            // The crop runs without `Session::execute`, so it passes the session's gate here, as a
+            // command run on Reveal All's behalf would.
+            if let Some(gate) = s.authorize {
+                gate("image.crop", &p)?;
+            }
+            crate::analysis_cmds::compound(s, "Reveal All", |s| crate::image_cmds::crop_keeping_background(s, &p))?;
             Ok(json!({"changed": true}))
         }),
         spec!(
@@ -912,13 +951,31 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Layer Style",
             &["Layer", "Layer Style"],
             None,
-            r##"{"layer":id?} (no layer: every selected layer but the Background)"##,
+            r##"{"layer":id?,"allowGroups":bool=true} (no layer: every selected layer but the Background; false skips groups, refusing if none remain)"##,
             |s| {
                 has_layer(s)?;
                 s.style_clipboard.as_ref().map(|_| ()).ok_or_else(|| "no layer style has been copied".into())
             },
             |s, p| {
-                let ids = style_targets(s, p, |_| true)?;
+                let allow_groups = match p.get("allowGroups") {
+                    None | Some(Value::Null) => true,
+                    Some(Value::Bool(value)) => *value,
+                    Some(_) => {
+                        return Err(EngineError::BadParams {
+                            cmd: "layer.layerStyle.pasteLayerStyle".into(),
+                            msg: "`allowGroups` must be true or false".into(),
+                        });
+                    }
+                };
+                let mut ids = style_targets(s, p, |_| true)?;
+                if !allow_groups {
+                    // Apply this after resolution: the shared helper keeps single targets verbatim.
+                    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+                    ids.retain(|id| doc.layer(*id).is_some_and(|layer| !layer.is_group()));
+                    if ids.is_empty() {
+                        return Err(EngineError::Other("none of the selected layers can take this layer style change".into()));
+                    }
+                }
                 let style = s.style_clipboard.clone().ok_or(EngineError::Other("no layer style has been copied".into()))?;
                 let mut fx = style.effects;
                 s.edit("Paste Layer Style", |doc, _| {

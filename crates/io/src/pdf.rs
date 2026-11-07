@@ -5,15 +5,20 @@
 //! (File › Save a Copy / Save As › PDF, #3401) and [`print_pdf`] are its one-page uses, and the
 //! engine's File › Export › Artboards to PDF writes one page per board through it. A page holds
 //! a Flate- or JPEG-compressed image XObject, optional printer marks as vector operators and
-//! optional Helvetica text; an embedded ICC profile rides in an ICCBased colour space.
-//! Layer-preserving PDF, vector/text output and PDF import stay open (FILE-215-10).
+//! optional Helvetica text; an embedded ICC profile rides in an ICCBased colour space. [`export`]
+//! also draws simple top shape and text layers as vectors over the image (with a selection font
+//! for their text). Layer-preserving PDF and PDF import stay open (FILE-215-10).
 
-use std::io::Write as _;
+use std::io::Write;
 
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::Document;
 
 use crate::{ExportResult, IoError};
+
+mod selection;
+mod shapes;
+mod text;
 
 /// How [`PrintImage::data`] is stored.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -54,7 +59,7 @@ pub struct PrintPage {
     pub label: Option<String>,
 }
 
-fn pdf_string(s: &str) -> String {
+pub(super) fn pdf_string(s: &str) -> String {
     let mut o = String::from("(");
     for c in s.chars() {
         match c {
@@ -265,13 +270,24 @@ pub struct Presentation {
     pub transition: Transition,
 }
 
-/// A PDF built page by page. Objects 1–3 are the catalog and the page tree (both written by
-/// [`PdfWriter::finish`], once every page is known) and the shared Helvetica; each page then
-/// adds its page, contents, image and optional ICC profile objects.
-pub struct PdfWriter {
-    out: Vec<u8>,
+/// Largest file [`PdfWriter`] writes. The cross-reference table gives every object's offset in
+/// exactly ten digits (ISO 32000-1 §7.5.4), so nothing may start at 10,000,000,000 bytes or
+/// later; this stops a little before, leaving room for what [`PdfWriter::finish`] appends.
+pub const MAX_BYTES: u64 = 9_900_000_000;
+
+/// A PDF built page by page into `W` (a `Vec<u8>`, or the temporary file of an atomic save, so a
+/// long document is never held in memory). Objects 1–3 are the catalog and the page tree (both
+/// written by [`PdfWriter::finish`], once every page is known) and the shared Helvetica; each
+/// page then adds its page, contents, image and optional ICC profile objects, and the selection
+/// font of its live text if it has any.
+pub struct PdfWriter<W: Write = Vec<u8>> {
+    out: W,
+    /// Bytes written so far.
+    pos: u64,
+    /// Largest file this writer writes ([`MAX_BYTES`]).
+    limit: u64,
     /// Byte offset of object `i + 1`.
-    offsets: Vec<usize>,
+    offsets: Vec<u64>,
     kids: Vec<usize>,
     presentation: Option<Presentation>,
 }
@@ -283,22 +299,38 @@ impl Default for PdfWriter {
 }
 
 impl PdfWriter {
+    /// A writer that builds the file in memory.
     pub fn new() -> Self {
-        let mut w = Self { out: b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec(), offsets: vec![0, 0], kids: Vec::new(), presentation: None };
-        // 1 and 2 (catalog, page tree) are patched in by `finish`.
-        w.obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>");
+        #[allow(clippy::expect_used, clippy::let_and_return)]
+        let w = Self::to(Vec::new()).expect("a Vec takes the header and the font object, far below MAX_BYTES");
         w
     }
 
-    /// A writer whose file is a full-screen presentation. An `advance` that isn't a positive
-    /// number of seconds up to [`MAX_ADVANCE`] is refused.
+    /// An in-memory writer whose file is a full-screen presentation (see [`PdfWriter::presentation_to`]).
     pub fn presentation(p: Presentation) -> std::result::Result<Self, IoError> {
+        Self::presentation_to(Vec::new(), p)
+    }
+}
+
+impl<W: Write> PdfWriter<W> {
+    /// A writer that streams the file into `out` as pages arrive.
+    pub fn to(out: W) -> std::result::Result<Self, IoError> {
+        let mut w = Self { out, pos: 0, limit: MAX_BYTES, offsets: vec![0, 0], kids: Vec::new(), presentation: None };
+        w.put(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n")?;
+        // 1 and 2 (catalog, page tree) are written by `finish`.
+        w.obj(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>")?;
+        Ok(w)
+    }
+
+    /// A streaming writer whose file is a full-screen presentation. An `advance` that isn't a
+    /// positive number of seconds up to [`MAX_ADVANCE`] is refused.
+    pub fn presentation_to(out: W, p: Presentation) -> std::result::Result<Self, IoError> {
         if let Some(s) = p.advance
             && !(s.is_finite() && s > 0.0 && s <= MAX_ADVANCE)
         {
             return Err(IoError::Unsupported(format!("Advance Every takes more than 0 and at most {MAX_ADVANCE} seconds, not {s}")));
         }
-        let mut w = Self::new();
+        let mut w = Self::to(out)?;
         w.presentation = Some(p);
         Ok(w)
     }
@@ -308,37 +340,63 @@ impl PdfWriter {
         self.kids.len()
     }
 
+    /// Append `bytes`, refusing to grow the file past its limit ([`MAX_BYTES`]).
+    fn put(&mut self, bytes: &[u8]) -> std::result::Result<(), IoError> {
+        let end = self.pos.saturating_add(bytes.len() as u64);
+        if end > self.limit {
+            return Err(IoError::Unsupported(format!("the PDF would be larger than {} bytes, the most its cross-reference table can address", self.limit)));
+        }
+        self.out.write_all(bytes).map_err(|e| IoError::Unsupported(format!("writing the PDF failed: {e}")))?;
+        self.pos = end;
+        Ok(())
+    }
+
     /// Write `body` as the next object; returns its number.
-    fn obj(&mut self, body: &[u8]) -> usize {
-        self.offsets.push(self.out.len());
+    fn obj(&mut self, body: &[u8]) -> std::result::Result<usize, IoError> {
+        self.offsets.push(self.pos);
         let n = self.offsets.len();
-        self.write_obj(n, body);
-        n
+        self.write_obj(n, body)?;
+        Ok(n)
     }
 
     /// Write object `n`, whose number was reserved earlier, here.
-    fn write_at(&mut self, n: usize, body: &[u8]) {
+    fn write_at(&mut self, n: usize, body: &[u8]) -> std::result::Result<(), IoError> {
+        let pos = self.pos;
         if let Some(slot) = n.checked_sub(1).and_then(|i| self.offsets.get_mut(i)) {
-            *slot = self.out.len();
+            *slot = pos;
         }
-        self.write_obj(n, body);
+        self.write_obj(n, body)
     }
 
-    fn write_obj(&mut self, n: usize, body: &[u8]) {
-        self.out.extend_from_slice(format!("{n} 0 obj\n").as_bytes());
-        self.out.extend_from_slice(body);
-        self.out.extend_from_slice(b"\nendobj\n");
+    fn write_obj(&mut self, n: usize, body: &[u8]) -> std::result::Result<(), IoError> {
+        self.put(format!("{n} 0 obj\n").as_bytes())?;
+        self.put(body)?;
+        self.put(b"\nendobj\n")
     }
 
-    fn stream(&mut self, dict: &str, data: &[u8]) -> usize {
-        let mut body = format!("<< {dict} /Length {} >>\nstream\n", data.len()).into_bytes();
-        body.extend_from_slice(data);
-        body.extend_from_slice(b"\nendstream");
-        self.obj(&body)
+    fn stream(&mut self, dict: &str, data: &[u8]) -> std::result::Result<usize, IoError> {
+        self.offsets.push(self.pos);
+        let n = self.offsets.len();
+        self.put(format!("{n} 0 obj\n<< {dict} /Length {} >>\nstream\n", data.len()).as_bytes())?;
+        self.put(data)?;
+        self.put(b"\nendstream\nendobj\n")?;
+        Ok(n)
     }
 
-    /// Append `page`. Its samples are compressed here, so the caller can drop them right after.
+    /// Append `page`. Its samples are compressed and written here, so the caller can drop them
+    /// right after.
     pub fn add_page(&mut self, page: &PrintPage) -> std::result::Result<(), IoError> {
+        self.add_page_with_vectors(page, "", None)
+    }
+
+    /// [`PdfWriter::add_page`] with vector operators drawn over the image (live shapes and text,
+    /// see [`collect_vectors`]) and the selection font their text uses.
+    fn add_page_with_vectors(
+        &mut self,
+        page: &PrintPage,
+        vectors: &str,
+        selection_font: Option<&selection::SelectionFont>,
+    ) -> std::result::Result<(), IoError> {
         let img = &page.image;
         if self.kids.len() >= MAX_PAGES {
             return Err(IoError::Unsupported(format!("a PDF holds at most {MAX_PAGES} pages")));
@@ -352,9 +410,11 @@ impl PdfWriter {
         }
         let (pw, ph) = page.paper;
         let (x, y, w, h) = page.rect;
-        // Numbers are known before writing: page, contents, image, then the profile if any.
+        // Numbers are known before writing: page, contents, image, then the profile if any, then
+        // the selection font's three objects.
         let n = self.offsets.len() + 1;
         let (contents, image, icc) = (n + 1, n + 2, n + 3);
+        let selection_base = if img.icc.is_some() { n + 4 } else { n + 3 };
         let mut show = String::new();
         if let Some(p) = self.presentation {
             if let Some(s) = p.advance {
@@ -364,15 +424,17 @@ impl PdfWriter {
                 show.push_str(&format!(" /Trans {t}"));
             }
         }
+        let select = if selection_font.is_some() { format!(" /FSelect {selection_base} 0 R") } else { String::new() };
         self.obj(
             format!(
-                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 {image} 0 R >> /Font << /F1 3 0 R >> >> /Contents {contents} 0 R{show} >>"
+                "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw:.2} {ph:.2}] /Resources << /XObject << /Im0 {image} 0 R >> /Font << /F1 3 0 R{select} >> >> /Contents {contents} 0 R{show} >>"
             )
             .as_bytes(),
-        );
+        )?;
         self.kids.push(n);
         // An explicit white page, so every viewer (and rasteriser) shows paper, not transparency.
         let mut content = format!("q 1 g 0 0 {pw:.2} {ph:.2} re f Q\nq {w:.3} 0 0 {h:.3} {x:.3} {y:.3} cm /Im0 Do Q\n");
+        content.push_str(vectors);
         content.push_str(&marks_ops(page.marks, page.rect));
         let any_marks = page.marks.corner_crop || page.marks.center_crop || page.marks.registration;
         let pad = if any_marks { 30.0 } else { 6.0 };
@@ -382,7 +444,7 @@ impl PdfWriter {
         if let Some(d) = page.description.as_deref().filter(|d| !d.is_empty()) {
             content.push_str(&format!("BT /F1 8 Tf 0 g {:.2} {:.2} Td {} Tj ET\n", x, y - pad - 8.0, pdf_string(d)));
         }
-        self.stream("/Filter /FlateDecode", &deflate(content.as_bytes()));
+        self.stream("/Filter /FlateDecode", &deflate(content.as_bytes()))?;
         let device = match img.channels {
             1 => "/DeviceGray",
             4 => "/DeviceCMYK",
@@ -391,39 +453,47 @@ impl PdfWriter {
         let cs = if img.icc.is_some() { format!("[/ICCBased {icc} 0 R]") } else { device.to_string() };
         let dict = format!("/Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace {cs} /BitsPerComponent 8", img.width, img.height);
         match img.encoding {
-            ImageEncoding::Flate => self.stream(&format!("{dict} /Filter /FlateDecode"), &deflate(&img.data)),
-            ImageEncoding::Jpeg => self.stream(&format!("{dict} /Filter /DCTDecode"), &img.data),
+            ImageEncoding::Flate => self.stream(&format!("{dict} /Filter /FlateDecode"), &deflate(&img.data))?,
+            ImageEncoding::Jpeg => self.stream(&format!("{dict} /Filter /DCTDecode"), &img.data)?,
         };
         if let Some(profile) = &img.icc {
-            self.stream(&format!("/N {} /Alternate {device} /Filter /FlateDecode", img.channels), &deflate(profile));
+            self.stream(&format!("/N {} /Alternate {device} /Filter /FlateDecode", img.channels), &deflate(profile))?;
+        }
+        if let Some(font) = selection_font {
+            for body in font.objects(selection_base) {
+                self.obj(&body)?;
+            }
         }
         Ok(())
     }
 
-    /// The finished file: the page tree, the cross-reference table and the trailer.
-    pub fn finish(mut self) -> Vec<u8> {
+    /// The finished file: the page tree, the cross-reference table and the trailer. Returns the
+    /// sink (the bytes, for a `Vec`).
+    pub fn finish(mut self) -> std::result::Result<W, IoError> {
         let kids: Vec<String> = self.kids.iter().map(|k| format!("{k} 0 R")).collect();
         let tree = format!("<< /Type /Pages /Kids [{}] /Count {} >>", kids.join(" "), self.kids.len());
-        self.write_at(2, tree.as_bytes());
+        self.write_at(2, tree.as_bytes())?;
         let mut catalog = String::from("<< /Type /Catalog /Pages 2 0 R");
         if let Some(p) = self.presentation {
             catalog.push_str(" /PageMode /FullScreen");
             if p.loop_after_last {
-                let script = self.obj(b"<< /S /JavaScript /JS (app.fs.loop = true;) >>");
-                let names = self.obj(format!("<< /Names [(PhotoCraft Presentation) {script} 0 R] >>").as_bytes());
+                let script = self.obj(b"<< /S /JavaScript /JS (app.fs.loop = true;) >>")?;
+                let names = self.obj(format!("<< /Names [(PhotoCraft Presentation) {script} 0 R] >>").as_bytes())?;
                 catalog.push_str(&format!(" /Names << /JavaScript {names} 0 R >>"));
             }
         }
         catalog.push_str(" >>");
-        self.write_at(1, catalog.as_bytes());
-        let mut out = self.out;
-        let xref = out.len();
-        out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", self.offsets.len() + 1).as_bytes());
+        self.write_at(1, catalog.as_bytes())?;
+        let xref = self.pos;
+        let mut table = format!("xref\n0 {}\n0000000000 65535 f \n", self.offsets.len() + 1);
         for o in &self.offsets {
-            out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+            table.push_str(&format!("{o:010} 00000 n \n"));
         }
-        out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", self.offsets.len() + 1).as_bytes());
-        out
+        table.push_str(&format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", self.offsets.len() + 1));
+        // The table may pass MAX_BYTES: every offset in it is already below it.
+        self.out.write_all(table.as_bytes()).map_err(|e| IoError::Unsupported(format!("writing the PDF failed: {e}")))?;
+        self.out.flush().map_err(|e| IoError::Unsupported(format!("writing the PDF failed: {e}")))?;
+        Ok(self.out)
     }
 }
 
@@ -431,7 +501,7 @@ impl PdfWriter {
 pub fn print_pdf(page: &PrintPage) -> std::result::Result<Vec<u8>, IoError> {
     let mut w = PdfWriter::new();
     w.add_page(page)?;
-    Ok(w.finish())
+    w.finish()
 }
 
 /// What [`flat_page`] does with a mode PDF has no device space for (Lab, Indexed, Duotone,
@@ -493,16 +563,107 @@ pub fn print_size(doc: &Document) -> (f64, f64) {
     (f64::from(doc.size.width) * 72.0 / dpi, f64::from(doc.size.height) * 72.0 / dpi)
 }
 
+/// The vector operators for the contiguous visible top prefix of `doc`, top to bottom, with the
+/// indices of the layers they replace, and the selection font covering their text (plus, when a
+/// lower candidate is rejected during emission, that layer's unused characters).
+/// Hidden and blocked layers contribute no characters, so they cannot exhaust the font's codes.
+fn collect_vectors(doc: &Document) -> (Vec<(usize, String)>, selection::SelectionFont) {
+    enum Candidate<'a> {
+        Ops(String),
+        Text(text::PreparedText<'a>),
+    }
+    let mut candidates = Vec::new();
+    if doc.icc_profile.is_none() {
+        let mut repertoire = std::collections::BTreeSet::new();
+        for (index, layer) in doc.layers.iter().enumerate().rev() {
+            if !layer.visible {
+                continue;
+            }
+            if layer.blend != photocraft_color::BlendMode::Normal
+                || layer.opacity != 1.0
+                || layer.fill_opacity != 1.0
+                || layer.clipped
+                || layer.mask.is_some()
+                || layer.vector_mask.is_some()
+                || (layer.effects.enabled && !layer.effects.items.is_empty())
+                || layer.excluded_channels != 0
+                || layer.blend_if != Default::default()
+                || layer.advanced != Default::default()
+                || layer.video.is_some()
+            {
+                break;
+            }
+            let candidate = match &layer.content {
+                photocraft_doc::LayerContent::Shape(shape) => match shapes::shape_path(shape, doc.mode) {
+                    Some(ops) => Candidate::Ops(ops),
+                    None => break,
+                },
+                photocraft_doc::LayerContent::Text(text_layer) => {
+                    let Some(prepared) = text::prepare(text_layer, doc.mode, doc.resolution_dpi) else { break };
+                    for ch in text_layer.text.chars() {
+                        repertoire.insert(ch);
+                        if repertoire.len() > 255 {
+                            break;
+                        }
+                    }
+                    if repertoire.len() > 255 {
+                        break;
+                    }
+                    Candidate::Text(prepared)
+                }
+                _ => break,
+            };
+            candidates.push((index, candidate));
+        }
+    }
+    let selection_font = selection::SelectionFont::new(candidates.iter().filter_map(|(_, candidate)| match candidate {
+        Candidate::Text(prepared) => Some(prepared.text()),
+        Candidate::Ops(_) => None,
+    }));
+    let mut layers = Vec::with_capacity(candidates.len());
+    for (index, candidate) in candidates {
+        let ops = match candidate {
+            Candidate::Ops(ops) => ops,
+            Candidate::Text(prepared) => match text::ops(&prepared, doc.mode, &selection_font) {
+                Some(ops) => ops,
+                // Keep the successful upper vectors; this layer and everything below stay raster.
+                None => break,
+            },
+        };
+        layers.push((index, ops));
+    }
+    (layers, selection_font)
+}
+
 /// File › Save As / Save a Copy › PDF (#3401): the flattened document, at its print size
 /// (pixels ÷ resolution × 72 pt), as a one-page PDF. Layers and transparency are dropped — the
 /// warning says so — and the embedded profile travels with the image.
 pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
-    let page = flat_page(doc, OtherModes::Refuse)?;
+    // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
+    // compositing. Stop at the first unsupported visible layer, since it may depend on the
+    // backdrop (adjustments, blend modes, masks, effects, or clipping).
+    let (vector_layers, selection_font) = collect_vectors(doc);
+    let mut backdrop = doc.clone();
+    for (index, _) in &vector_layers {
+        if let Some(layer) = backdrop.layers.get_mut(*index) {
+            layer.visible = false;
+        }
+    }
+    let page = flat_page(&backdrop, OtherModes::Refuse)?;
     let mut warnings = vec!["PDF was saved flattened: layers, masks-as-editable and transparency are not preserved (#3401)".into()];
     if !doc.metadata.text.is_empty() {
         warnings.push("free-form text metadata is not supported by PDF; it will be dropped".into());
     }
-    Ok(ExportResult { bytes: print_pdf(&page)?, warnings })
+    let scale = 72.0 / f64::from(doc.resolution_dpi.max(1.0));
+    let (_, ph) = page.paper;
+    let mut vectors = format!("q {scale} 0 0 -{scale} 0 {ph} cm\n");
+    for (_, ops) in vector_layers.iter().rev() {
+        vectors.push_str(ops);
+    }
+    vectors.push_str("Q\n");
+    let mut w = PdfWriter::new();
+    w.add_page_with_vectors(&page, &vectors, Some(&selection_font))?;
+    Ok(ExportResult { bytes: w.finish()?, warnings })
 }
 
 #[cfg(test)]

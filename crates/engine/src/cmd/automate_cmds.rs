@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, import, import_opened, join, list_images, read_file, stem, str_param, write_file};
+use crate::file_cmds::{file_name, import, import_opened_noted, join, list_images, read_file, stem, str_param, write_file, write_file_stream};
 use crate::{EngineError, Result, Session};
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -125,11 +125,7 @@ fn check_known(steps: &[(String, Value)], cmd: &str) -> Result<()> {
 const MAX_SCRIPT_DEPTH: u8 = 16;
 pub(crate) const MAX_SCRIPT_STEPS: u64 = crate::actions_cmds::MAX_PLAYBACK_STEPS;
 
-/// A script run from a script reports its own failure inside an `Ok`; it stops the caller too.
-fn nested_script_failure(id: &str, r: &Value) -> Option<String> {
-    (id == "file.scripts.browse" && r.get("ok") == Some(&Value::Bool(false))).then(|| "a script it runs failed".to_string())
-}
-
+/// Direct Batch file errors remain script results; called action failures stop later script steps.
 fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
     let mut results = Vec::new();
     for (id, params) in steps {
@@ -139,14 +135,18 @@ fn run_steps(s: &mut Session, steps: &[(String, Value)]) -> Vec<Value> {
             break;
         }
         match s.execute(id, params.clone()) {
-            // A called action reports a failed step inside an `Ok`; it stops the script too.
-            Ok(r) => match crate::actions_cmds::nested_failure(id, &r).or_else(|| nested_script_failure(id, &r)) {
-                Some(error) => {
-                    results.push(json!({"command": id, "result": r, "error": error}));
-                    break;
+            Ok(r) => {
+                // Direct Batch calls report file errors successfully to scripts, but running out of
+                // script steps, a cancel or a failed error log stops it. Called actions still fail it.
+                let failure = if id == "file.automate.batch" { crate::actions_cmds::batch_stop(&r) } else { crate::actions_cmds::nested_failure(id, &r) };
+                match failure {
+                    Some(error) => {
+                        results.push(json!({"command": id, "result": r, "error": error}));
+                        break;
+                    }
+                    None => results.push(json!({"command": id, "result": r})),
                 }
-                None => results.push(json!({"command": id, "result": r})),
-            },
+            }
             Err(e) => {
                 results.push(json!({"command": id, "error": e.to_string()}));
                 break;
@@ -325,19 +325,45 @@ pub fn document_opened(s: &mut Session) {
     fire_event(s, "openDocument");
 }
 
-/// After the shell saved document `index`: Save Document scripts and Image Assets.
-pub fn document_saved(s: &mut Session, index: usize) -> Option<Value> {
+/// After the shell saved document `doc`: Save Document scripts and Image Assets.
+/// The script runs first and may close or reorder tabs, so asset generation resolves the saved
+/// document's identity again: a script that closed a different tab must not skip its assets, and
+/// one that closed the saved document must not generate a replacement tab's (#11121).
+pub fn document_saved(s: &mut Session, doc: photocraft_doc::DocId) -> Option<Value> {
     fire_event(s, "saveDocument");
+    let index = s.documents().iter().position(|st| st.doc.id == doc)?;
     crate::web_cmds::on_saved(s, index)
 }
 
 // ---------- Create Droplet ----------
 
+/// Resolve the enabled steps of the saved action chosen for a droplet: by name within `set` when
+/// one is given (a loaded library can hold one name in two sets), else by name or index.
+pub(crate) fn named_action_steps(s: &Session, p: &Value, cmd: &str) -> Result<Vec<(String, Value)>> {
+    let index = match p.get("set").filter(|v| !v.is_null()) {
+        Some(set) => {
+            let set = set.as_str().ok_or_else(|| bad(cmd, "\"set\" must be a string"))?;
+            let name = p.get("action").and_then(Value::as_str).ok_or_else(|| bad(cmd, "a set needs a named action"))?;
+            s.actions
+                .list
+                .iter()
+                .position(|a| a.name == name && a.set.as_deref() == Some(set))
+                .ok_or_else(|| bad(cmd, format!("no action named `{name}` in set `{set}`")))?
+        }
+        None => crate::actions_cmds::resolve(&s.actions.list, p, cmd)?,
+    };
+    let action = s.actions.list.get(index).ok_or_else(|| bad(cmd, "the selected action no longer exists"))?;
+    Ok(action.enabled_steps().map(|(_, step)| step.clone()).collect())
+}
+
+/// Save the chosen action's enabled steps and dependencies as a runnable droplet.
 fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.createDroplet";
     let path = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or_else(|| bad(cmd, "missing \"path\" (where to save the droplet)"))?;
-    let steps_v = p.get("steps").or_else(|| p.get("action")).ok_or_else(|| bad(cmd, "missing \"steps\" (the action to run)"))?;
-    let mut steps = parse_steps(steps_v, cmd)?;
+    let mut steps = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {
+        Some(steps) => parse_steps(steps, cmd)?,
+        None => named_action_steps(s, p, cmd)?,
+    };
     // As in batch, the droplet's output folder replaces recorded saves, which are kept to mark the
     // result, and view steps don't apply.
     steps.retain(|(id, _)| crate::file_cmds::batch_keeps_step(id));
@@ -432,8 +458,14 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
         join(&first.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default(), "droplet-output")
     });
     let mut bp = json!({"steps": steps, "input": inputs, "output": output, "format": opts.get("format").cloned().unwrap_or(json!("same"))});
-    if let Some(q) = opts.get("quality") {
-        bp["quality"] = q.clone();
+    if let Some(name) = v.get("action").and_then(|action| action.get("name")).or_else(|| v.get("name")) {
+        bp["action"] = name.clone();
+    }
+    // Override Open is saved with the droplet: a recorded Open then reads each dropped input.
+    for key in ["quality", "overrideOpen"] {
+        if let Some(value) = opts.get(key) {
+            bp[key] = value.clone();
+        }
     }
     if let Some(called) = v.get("calledActions") {
         bp["calledActions"] = called.clone();
@@ -610,9 +642,6 @@ fn pdf_presentation(s: &mut Session, p: &Value) -> Result<Value> {
     if files.is_empty() {
         return Err(bad(cmd, "no files to place"));
     }
-    if files.len() > pdf::MAX_PAGES {
-        return Err(bad(cmd, format!("{} files; a PDF presentation holds at most {}", files.len(), pdf::MAX_PAGES)));
-    }
     // The presentation options only apply to a presentation, as in the dialog.
     let show = match p.get("saveAs").and_then(Value::as_str).unwrap_or("multiPage") {
         "multiPage" => None,
@@ -625,29 +654,52 @@ fn pdf_presentation(s: &mut Session, p: &Value) -> Result<Value> {
         "black" => 0.0,
         other => return Err(bad(cmd, format!("\"background\" must be \"white\", \"gray\" or \"black\", not {other:?}"))),
     };
-    let mut out = match show {
-        Some(show) => PdfWriter::presentation(show).map_err(|e| bad(cmd, e.to_string()))?,
-        None => PdfWriter::new(),
-    };
-    let mut errors = Vec::new();
-    for file in &files {
-        let page = (|| -> Result<pdf::PrintPage> {
-            let bytes = read_file(file)?;
-            let doc = import_opened(s, &file_name(file), &bytes)?;
-            pdf::flat_page_over(&doc, OtherModes::AsRgb, paper).map_err(|e| EngineError::Other(format!("{file}: {e}")))
-        })();
-        match page {
-            Ok(page) => out.add_page(&page).map_err(|e| bad(cmd, e.to_string()))?,
-            Err(e) => errors.push(json!({"file": file, "error": e.to_string()})),
+    let (mut errors, mut warnings, mut pages) = (Vec::new(), Vec::new(), 0);
+    // A refusal of ours (not the disk's) that stopped the write, returned as is.
+    let mut refused: Option<EngineError> = None;
+    let s = &*s;
+    // Each page goes straight into the save's temporary file, so a long list never sits in
+    // memory; nothing replaces `path` unless the whole file was written.
+    let written = write_file_stream(&path, &mut |w| {
+        let stop = |e: EngineError, refused: &mut Option<EngineError>| {
+            let msg = e.to_string();
+            *refused = Some(e);
+            std::io::Error::other(msg)
+        };
+        (errors, warnings, pages) = (Vec::new(), Vec::new(), 0);
+        let mut out = match show {
+            Some(show) => PdfWriter::presentation_to(w, show),
+            None => PdfWriter::to(w),
         }
+        .map_err(|e| stop(bad(cmd, e.to_string()), &mut refused))?;
+        for file in &files {
+            let page = (|| -> Result<(pdf::PrintPage, Vec<String>)> {
+                let bytes = read_file(file)?;
+                let (doc, notes) = import_opened_noted(s, &file_name(file), &bytes)?;
+                let page = pdf::flat_page_over(&doc, OtherModes::AsRgb, paper).map_err(|e| EngineError::Other(format!("{file}: {e}")))?;
+                Ok((page, notes))
+            })();
+            match page {
+                Ok((page, notes)) => {
+                    out.add_page(&page).map_err(|e| stop(bad(cmd, e.to_string()), &mut refused))?;
+                    warnings.extend(notes.into_iter().map(|w| json!({"file": file, "warning": w})));
+                }
+                Err(e) => errors.push(json!({"file": file, "error": e.to_string()})),
+            }
+        }
+        pages = out.pages();
+        if pages == 0 {
+            let first = errors.first().and_then(|e| e["error"].as_str()).unwrap_or_default().to_string();
+            return Err(stop(bad(cmd, format!("none of the {} files could be placed; first: {first}", files.len())), &mut refused));
+        }
+        out.finish().map_err(|e| stop(bad(cmd, e.to_string()), &mut refused))?;
+        Ok(())
+    });
+    if let Some(e) = refused {
+        return Err(e);
     }
-    let pages = out.pages();
-    if pages == 0 {
-        let first = errors.first().and_then(|e| e["error"].as_str()).unwrap_or_default().to_string();
-        return Err(bad(cmd, format!("none of the {} files could be placed; first: {first}", files.len())));
-    }
-    write_file(&path, &out.finish())?;
-    Ok(json!({"path": path, "pages": pages, "errors": errors}))
+    written?;
+    Ok(json!({"path": path, "pages": pages, "errors": errors, "warnings": warnings}))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -670,7 +722,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.pdfPresentation",
             "PDF Presentation…",
             &["File", "Automate"],
-            r##"{"files":[paths] (page order; repeats allowed)|folder,"path":str (.pdf),"saveAs":"multiPage|presentation"="multiPage","background":"white|gray|black"="white","advance":seconds? (presentation: Advance Every; 0 < s ≤ 3600),"loop":bool=false (presentation: Loop after Last Page; Acrobat/Reader only),"transition":"none|blindsHorizontal|blindsVertical|boxIn|boxOut|dissolve|glitterDown|glitterRight|glitterRightDown|random|splitHorizontalIn|splitHorizontalOut|splitVerticalIn|splitVerticalOut|wipeDown|wipeLeft|wipeRight|wipeUp"="none" (presentation)} → {path, pages, errors} (one flattened page per file at its print size; Gray/RGB/CMYK and the profile kept, other modes as RGB; a presentation opens full screen)"##,
+            r##"{"files":[paths] (page order; repeats allowed)|folder,"path":str (.pdf),"saveAs":"multiPage|presentation"="multiPage","background":"white|gray|black"="white","advance":seconds? (presentation: Advance Every; 0 < s ≤ 3600),"loop":bool=false (presentation: Loop after Last Page; Acrobat/Reader only),"transition":"none|blindsHorizontal|blindsVertical|boxIn|boxOut|dissolve|glitterDown|glitterRight|glitterRightDown|random|splitHorizontalIn|splitHorizontalOut|splitVerticalIn|splitVerticalOut|wipeDown|wipeLeft|wipeRight|wipeUp"="none" (presentation)} → {path, pages, errors, warnings} (one flattened page per file at its print size; Gray/RGB/CMYK and the profile kept, other modes as RGB; a presentation opens full screen)"##,
             native,
             pdf_presentation
         ),
@@ -678,7 +730,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "file.automate.createDroplet",
             "Create Droplet…",
             &["File", "Automate"],
-            r##"{"path":str (.pcdroplet),"steps":[[id,params]…] (the action),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
+            r##"{"path":str (.pcdroplet),"steps":[[id,params]…]?,"action":name|index|[steps]? (used only when steps is absent; named actions exclude disabled steps),"set":str? (with a named action: that set's action of the name),"name":str?,"output":folder?,"format":"same|png|jpg|…"?,"quality":0..12?,"shim":bool=true on Unix (writes <name>.command calling `photocraft-cli droplet`)} → {path, shim} (the actions its Play Action and Conditional steps call are saved in the droplet)"##,
             native,
             create_droplet
         ),
