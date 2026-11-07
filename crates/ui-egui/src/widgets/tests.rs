@@ -2,6 +2,80 @@ use super::{hue_color, hue_stops};
 use egui::{Color32, Key, Modifiers};
 
 #[test]
+fn slider_outer_bands_accept_clicks_and_drags() {
+    use egui::{Event, PointerButton, Rect, pos2, vec2};
+    use egui_kittest::Harness;
+    for scale in [1.0, 1.25, 2.0] {
+        for gradient in [false, true] {
+            for dy in [-11.0, 11.0] {
+                for enabled in [true, false] {
+                    let mut h = Harness::builder().with_size(vec2(300.0, 140.0)).with_pixels_per_point(scale).build_ui_state(
+                        |ui, (value, rect): &mut (f32, Rect)| {
+                            // Neighbors prevent egui's nearest-widget fallback from hiding missed hits.
+                            ui.spacing_mut().item_spacing.y = 0.0;
+                            ui.add_space(20.0);
+                            ui.add_sized(egui::vec2(ui.available_width(), 24.0), egui::Button::new("Above"));
+                            let colors = [Color32::BLACK, Color32::WHITE];
+                            ui.add_enabled_ui(enabled, |ui| {
+                                *rect = super::slider(ui, value, 0.0..=100.0, gradient.then_some(colors.as_slice())).rect;
+                            });
+                            ui.add_sized(egui::vec2(ui.available_width(), 24.0), egui::Button::new("Below"));
+                        },
+                        (50.0, Rect::NOTHING),
+                    );
+                    h.run();
+                    let rect = h.state().1;
+                    let at = pos2(rect.left() + 7.0 + (rect.width() - 14.0) * 0.75, rect.center().y + dy);
+                    h.hover_at(at);
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                    h.run();
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                    h.run();
+                    assert!(
+                        (h.state().0 - if enabled { 75.0 } else { 50.0 }).abs() < 0.01,
+                        "click: scale {scale}, gradient {gradient}, dy {dy}, enabled {enabled}"
+                    );
+                    h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                    h.run();
+                    let to = pos2(rect.left() + 7.0 + (rect.width() - 14.0) * 0.25, at.y);
+                    h.hover_at(to);
+                    h.run();
+                    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                    h.run();
+                    assert!(
+                        (h.state().0 - if enabled { 25.0 } else { 50.0 }).abs() < 0.01,
+                        "drag: scale {scale}, gradient {gradient}, dy {dy}, enabled {enabled}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn slider_hit_area_does_not_take_neighboring_controls() {
+    use egui::{Rect, vec2};
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut h = Harness::builder().with_size(vec2(300.0, 160.0)).build_ui_state(
+        |ui, (value, rect, clicked): &mut (f32, Rect, bool)| {
+            ui.add_space(20.0);
+            *rect = super::slider(ui, value, 0.0..=100.0, None).rect;
+            *clicked |= ui.button("Neighbor").clicked();
+        },
+        (50.0, Rect::NOTHING, false),
+    );
+    h.run();
+    let at = h.get_by_label("Neighbor").rect().center_top() + vec2(0.0, 1.0);
+    h.hover_at(at);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run();
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.state().2);
+    assert_eq!(h.state().0, 50.0);
+}
+
+#[test]
 fn hue_stops_are_pure_and_evenly_spaced() {
     let c = |r, g, b| Color32::from_rgb(r, g, b);
     let want = [c(255, 0, 0), c(255, 255, 0), c(0, 255, 0), c(0, 255, 255), c(0, 0, 255), c(255, 0, 255), c(255, 0, 0)];
@@ -1441,6 +1515,23 @@ fn the_wheel_leaves_a_plain_dropdown_alone() {
     let mut h = mode_dropdown(false);
     wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
     assert_eq!(*h.state(), 0);
+}
+
+#[test]
+fn brush_picker_footer_slider_stays_inside_the_dragged_height() {
+    use egui::vec2;
+    use egui_kittest::Harness;
+    let size = vec2(crate::brush_picker::DEFAULT_SIZE[0], crate::brush_picker::DEFAULT_SIZE[1]);
+    let mut h = Harness::builder().with_size(vec2(600.0, 700.0)).build_ui_state(
+        |ui, height: &mut f32| {
+            let mut brush = photocraft_engine::BrushSettings::default();
+            let mut list = crate::brush_picker::list_state();
+            *height = ui.scope(|ui| crate::brush_picker::body(ui, &mut brush, &[], None, &mut list, size)).response.rect.height();
+        },
+        0.0,
+    );
+    h.run();
+    assert!((*h.state() - size.y).abs() < 0.5, "picker {} tall for a {} drag", h.state(), size.y);
 }
 
 /// [`MODES`] in a wheel dropdown whose list draws a line above each option `starts_group` picks,
