@@ -1,7 +1,8 @@
 use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warps_type};
 use super::options_bar::{rotate_about_pivot, scale_about_pivot};
 use super::{
-    Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession, json,
+    Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession,
+    corners, json,
 };
 
 /// Undo and Redo while the commit runs in the background (Free Transform, or Warp).

@@ -3900,8 +3900,9 @@ fn dragging_a_distorted_smart_objects_warp_commits_what_it_shows() {
 
 /// #8927: a smart object of stripes with gaps, its middle pulled far out in each direction so the
 /// picture folds over itself. The applied warp stacks the fold's layers as Warp mode's preview
-/// does (the part dragged furthest on top, gaps showing what is behind), whichever way it was
-/// pulled: row order disagreed with the preview for some pulls. Only edge pixels differ.
+/// does (a part the fold turns over on top, else the part dragged furthest, gaps showing what is
+/// behind), whichever way it was pulled: row order disagreed with the preview for some pulls. Only
+/// edge pixels differ.
 #[test]
 fn a_fold_is_applied_as_previewed_in_every_direction() {
     for (dx, dy) in [(-140.0, -140.0), (140.0, -140.0), (-140.0, 140.0), (140.0, 140.0)] {
@@ -3948,12 +3949,21 @@ fn a_fold_is_applied_as_previewed_in_every_direction() {
                 if sp[o + sn - 1] < 0.5 {
                     continue;
                 }
-                samples.push(((q[0] - r[0]).hypot(q[1] - r[1]), q, [sp[o], sp[o + 1], sp[o + 2]]));
+                // Turned over where the warp mirrors the picture locally (its Jacobian's sign flips
+                // against the placement's), as `cell_order` tells a folded-back cell.
+                let h = 0.5 / 800.0;
+                let det = |f: &dyn Fn(f64, f64) -> [f64; 2]| {
+                    let (a, b, c, d) = (f(u + h, v), f(u - h, v), f(u, v + h), f(u, v - h));
+                    (a[0] - b[0]) * (c[1] - d[1]) - (a[1] - b[1]) * (c[0] - d[0])
+                };
+                let turned = det(&|u, v| t.warp_to_doc(m.eval(u, v))) * det(&|u, v| t.warp_to_doc([u * 100.0, v * 100.0])) < 0.0;
+                samples.push((turned, (q[0] - r[0]).hypot(q[1] - r[1]), q, [sp[o], sp[o + 1], sp[o + 2]]));
             }
         }
-        // Least moved first: the part dragged furthest is drawn last, on top.
-        samples.sort_by(|a, b| a.0.total_cmp(&b.0));
-        for (_, q, c) in samples {
+        // A part the fold turns over goes on top, then the least moved first: within each, the part
+        // dragged furthest is drawn last, on top (`photocraft_algo::warp::cell_order`).
+        samples.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)));
+        for (_, _, q, c) in samples {
             let (x, y) = (q[0].floor() as i64, q[1].floor() as i64);
             if (0..400).contains(&x) && (0..400).contains(&y) {
                 fwd[y as usize * 400 + x as usize] = c;

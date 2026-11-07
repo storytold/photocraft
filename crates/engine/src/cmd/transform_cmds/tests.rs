@@ -952,7 +952,6 @@ fn from_transforms_from_where_the_box_started() {
         assert!((b.0 - a.0 - 20.0).abs() < 1e-6 && (b.1 - a.1).abs() < 1e-6, "again ({x}, {y}): {a:?} -> {b:?}");
     }
 }
-}
 
 /// Free Transform of a layer's own transparency (⌘-click its thumbnail) takes all of it and leaves
 /// no ghost where it was, as Photoshop does and as Move already did (#5595). Photoshop 2025, an
