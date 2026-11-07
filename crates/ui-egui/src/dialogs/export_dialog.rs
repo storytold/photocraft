@@ -1167,7 +1167,12 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
 fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     let r = app.run("file.export.quickExport", p)?;
     let template = "Exported {path}";
-    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", r["path"].as_str().unwrap_or_default())]);
+    let path = r["path"].as_str().unwrap_or_default();
+    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", path)]);
+    // Metadata a JPEG couldn't hold is said so, as Export As says it (#11330).
+    let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(path))]);
+    let warnings: Vec<String> = r["warnings"].as_array().map(|w| w.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default();
+    crate::notices::io_warnings(app, &what, &warnings);
     Ok(r)
 }
 

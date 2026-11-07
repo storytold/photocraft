@@ -546,6 +546,41 @@ fn save_for_web_downloads_images_and_html_through_the_platform_writer() {
     assert_eq!(download_for_web(&mut app, json!({"path": "missing.png"})).unwrap_err(), "no download service");
 }
 
+/// #11330: XMP a JPEG couldn't hold is reported in the status bar and a notice, as Export As
+/// reports it; a packet that fits says nothing.
+#[test]
+fn save_for_web_reports_the_xmp_it_left_out() {
+    let (mut app, _) = app();
+    let dir = std::env::temp_dir().join(format!("pc-sfw-xmp-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let big = format!("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><!-- {} --></x:xmpmeta>", "x".repeat(70_000));
+    let bytes = big.len();
+    app.session
+        .edit("xmp", |doc, _| {
+            doc.metadata.xmp = Some(Arc::from(big.as_str()));
+            Ok(())
+        })
+        .unwrap();
+    let path = dir.join("big.jpg").to_string_lossy().into_owned();
+    web::save_for_web(&mut app, json!({"path": path, "format": "jpeg", "metadata": "all"})).unwrap();
+    assert_eq!(app.ui.status, format!("Saved for Web: 1 file: XMP ({bytes} bytes) is too large for the format; it will be dropped"));
+    assert!(app.ui.status_error);
+    assert!(app.ui.notices.last().is_some_and(|n| n.lines.iter().any(|l| l.contains("XMP"))), "a notice lists it");
+    let notices = app.ui.notices.len();
+    app.session
+        .edit("xmp", |doc, _| {
+            doc.metadata.xmp = Some(Arc::from("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>"));
+            Ok(())
+        })
+        .unwrap();
+    let path = dir.join("small.jpg").to_string_lossy().into_owned();
+    web::save_for_web(&mut app, json!({"path": path, "format": "jpeg", "metadata": "all"})).unwrap();
+    assert_eq!(app.ui.status, "Saved for Web: 1 file");
+    assert!(!app.ui.status_error);
+    assert_eq!(app.ui.notices.len(), notices, "nothing to say about a packet that fits");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn save_for_web_authorizes_before_opening_a_picker() {
     fn deny(_: &str, _: &Value) -> photocraft_engine::Result<()> {
