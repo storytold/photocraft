@@ -271,7 +271,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Sample Color",
         menu: &[],
         shortcut: None,
-        params: r##"{"x":f64,"y":f64,"size":"point"|1|3|5|11|31|51|101=1,"sampleLayer":"current"|"currentAndBelow"|"all"|"allNoAdjustments"|"currentAndBelowNoAdjustments"="all","zoom":f64? (the view zoom, 1 = 100 %: at 100 % and below an N by N Average covers (N+1)×(N+1) screen pixels, as in Photoshop; missing: the centred square)} → [r,g,b,a] (the Eyedropper's Sample Size and Sample: the composite pixel, or the average of the size×size square centred on it, clipped to the canvas; transparent off the canvas)"##,
+        params: r##"{"x":f64,"y":f64,"size":"point"|1|3|5|11|31|51|101=1,"sampleLayer":"current"|"currentAndBelow"|"all"|"allNoAdjustments"|"currentAndBelowNoAdjustments"="all","zoom":f64? (the view zoom, 1 = 100 %: at 100 % and below an N by N Average covers (N+1)×(N+1) screen pixels, as in Photoshop; missing: the centred square)} → [r,g,b,a] (the Eyedropper's Sample Size and Sample: the composite pixel, or the average of the size×size square centred on it (without `zoom`; with it, the zoom-dependent box above), clipped to the canvas; transparent off the canvas)"##,
         enabled: |s| s.active().map(|_| ()).ok_or_else(|| "no document open".into()),
         run: |s: &mut Session, p: &Value| {
             const CMD: &str = "document.sampleColor";
