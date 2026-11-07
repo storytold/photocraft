@@ -43,6 +43,10 @@ pub struct Keys {
     alt_down: bool,
     /// Alt went down and nothing else was pressed since: releasing it is a tap.
     alt_tap: bool,
+    /// The window got the focus and no Alt key event of its own came since: the Alt that egui's
+    /// modifiers may still report was held for the window switcher, whose release this window
+    /// never hears, so it underlines nothing (#9763).
+    alt_at_focus: bool,
     /// The mouse buttons that are down, one bit each, from the button events in order (the
     /// frame's pointer state is its end state, which a whole click within one frame doesn't show).
     buttons_held: u8,
@@ -282,7 +286,7 @@ impl Keys {
 
     /// Underline the mnemonics this frame?
     pub fn show_underlines(&self, ctx: &egui::Context) -> bool {
-        self.underline || self.focus.is_some() || self.alt_down || ctx.input(|i| i.modifiers.alt)
+        self.underline || self.focus.is_some() || self.alt_down || (!self.alt_at_focus && ctx.input(|i| i.modifiers.alt))
     }
 
     /// A menu just opened from the keyboard: light its first row (once, when it is drawn).
@@ -307,20 +311,35 @@ impl Keys {
         // trace in `events`, and releasing Alt counted as a tap that put the keyboard on the bar;
         // Enter then opened File instead of confirming the dialog (#7481).
         let raw = ctx.input(|i| i.raw.events.clone());
+        // Letters pressed while the Alt egui reports is still the window switcher's, judged where
+        // each press comes in the frame's events: a release later in the same frame does not
+        // make an earlier press an Alt+letter (#9763, CodeRabbit on #10383).
+        let mut switcher_letters: Vec<Key> = Vec::new();
         for e in &raw {
+            if let Event::Key { key, pressed: true, modifiers, .. } = e
+                && modifiers.alt
+                && self.alt_at_focus
+            {
+                switcher_letters.push(*key);
+            }
             match e {
                 // A held Alt auto-repeats (after about half a second on Windows): only its first
                 // press starts a tap. A repeat must neither re-arm a tap that Alt+wheel or a key
                 // already spent, nor spend one itself (holding Alt alone is still a tap).
-                Event::Key { key: Key::AltLeft | Key::AltRight, pressed: true, repeat: true, .. } => self.alt_down = true,
+                Event::Key { key: Key::AltLeft | Key::AltRight, pressed: true, repeat: true, .. } => {
+                    self.alt_down = true;
+                    self.alt_at_focus = false;
+                }
                 Event::Key { key: Key::AltLeft | Key::AltRight, pressed: true, .. } => {
                     self.alt_down = true;
+                    self.alt_at_focus = false;
                     // Alt pressed while a mouse button is down is a modifier for that drag
                     // (Free Transform's scale-from-centre), never a tap (#8113).
                     self.alt_tap = self.buttons_held == 0;
                 }
                 Event::Key { key: Key::AltLeft | Key::AltRight, pressed: false, .. } => {
                     self.alt_down = false;
+                    self.alt_at_focus = false;
                     tap |= std::mem::take(&mut self.alt_tap);
                 }
                 // A click or the end of a drag while Alt is held is no tap. It also cancels a tap
@@ -340,6 +359,21 @@ impl Keys {
                 Event::WindowFocused(false) => {
                     self.alt_tap = false;
                     self.buttons_held = 0;
+                }
+                // Back from Alt+Tab, Windows sends Alt's press but its release only as a modifier
+                // change: Alt is up then, whether or not a key event follows (#9763). The tap is
+                // left to the key release, which comes after this change when there is one.
+                Event::ModifiersChanged(m) if !m.alt => {
+                    self.alt_down = false;
+                    self.alt_at_focus = false;
+                }
+                // Back from Alt+Tab, the window can get the focus with Alt reported down and then
+                // never hear of its release, which went to the window switcher (#9763).
+                // An Alt this window did see pressed is no longer ours either: its release can go
+                // to the switcher, and no modifier change need follow (#9763).
+                Event::WindowFocused(true) => {
+                    self.alt_down = false;
+                    self.alt_at_focus = true;
                 }
                 // Alt+wheel (zoom, brush size…) is no tap either.
                 Event::Key { pressed: true, .. } | Event::Text(_) | Event::MouseWheel { .. } => self.alt_tap = false,
@@ -368,9 +402,20 @@ impl Keys {
             }
         };
         let consume = |m: Modifiers, k: Key| ctx.input_mut(|i| i.consume_key(m, k));
-        // Alt+letter opens that menu, open or not (an open one switches), as on Windows.
-        let alt_letter = events.iter().find_map(|e| match e {
-            Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl => key_char(*key).map(|c| (*key, c)),
+        // Alt+letter opens that menu, open or not (an open one switches), as on Windows. Not with
+        // the window switcher's Alt, still reported after the focus came back with no Alt key
+        // event of this window's own: that press is an ordinary key (#9763, CodeRabbit on #10383).
+        // Each switcher press is skipped once, in order, so a real Alt+letter of the same key
+        // later in the frame still opens its menu (CodeRabbit on #10383).
+        let mut skip = switcher_letters;
+        let alt_letter = events.iter().filter(|_| !self.alt_at_focus).find_map(|e| match e {
+            Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl => {
+                if let Some(i) = skip.iter().position(|k| k == key) {
+                    skip.remove(i);
+                    return None;
+                }
+                key_char(*key).map(|c| (*key, c))
+            }
             _ => None,
         });
         if let Some((key, c)) = alt_letter
