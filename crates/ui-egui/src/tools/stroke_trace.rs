@@ -232,10 +232,11 @@ mod tests {
         StrokeTrace { output: Output::Stderr, ..Default::default() }
     }
 
+    /// A frame's stage record at `now`, stroking or not.
     fn stages(now: f64, cpu: f32, stroking: bool) -> FrameStages {
         let mut s = FrameStages::default();
-        s.start(now, 3);
-        s.ui_start(now, Some(cpu / 1000.0));
+        s.start(now);
+        s.ui_start(now, Some(cpu / 1000.0), 3);
         if stroking {
             s.stroke_ms = 1.0;
             s.refresh("rect", 10, 1.5, 0.5);
