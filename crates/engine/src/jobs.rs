@@ -1240,6 +1240,7 @@ impl Session {
         let mut opts = import_options(self.prefs());
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
+        opts.svg_scale = self.svg_open_scale.unwrap_or(1.0);
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),

@@ -606,6 +606,8 @@ pub struct ImportOptions {
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
     /// the fresh preflight estimate does not exceed this amount.
     pub psd_approved_estimate: Option<u64>,
+    /// An SVG opens at this × its drawing's own size (1; File › Open asks, #8910).
+    pub svg_scale: f32,
 }
 
 impl Default for ImportOptions {
@@ -617,6 +619,7 @@ impl Default for ImportOptions {
             flat_max_pixel_bytes: 0,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
+            svg_scale: 1.0,
         }
     }
 }
@@ -988,7 +991,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
         Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
         Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
-        Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
+        Route::Svg => svg::import_svg_scaled(name, bytes, opts.max_group_depth, opts.svg_scale),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
 }

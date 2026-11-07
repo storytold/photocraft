@@ -336,6 +336,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        _ if crate::svg_open_ui::owns(fields) => crate::svg_open_ui::body(ui, fields),
         _ if fields.contains_key("__form") => {
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
@@ -880,6 +881,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::variables_ui::owns,
     crate::file_ui::owns,
     crate::new_guide_ui::owns,
+    crate::svg_open_ui::owns,
     crate::color_picker_ui::owns,
     crate::color_range_ui::owns,
     crate::prefs_ui::owns,
@@ -1061,6 +1063,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if merge_channels_ui::owns(&d.fields) => merge_channels_ui::confirm(app, &d.fields),
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
+        _ if crate::svg_open_ui::owns(&d.fields) => crate::svg_open_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => {
             // OK sets the target as it was before the live preview showed the colour in it.
             crate::color_picker_ui::live_preview::end(app, d.id);
@@ -1239,6 +1242,7 @@ pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod stack_dialog;
 pub mod stroke_ui;
+pub mod svg_open_ui;
 pub mod targa_options_ui;
 #[cfg(test)]
 mod tests;

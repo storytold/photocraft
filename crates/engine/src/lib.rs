@@ -201,6 +201,10 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// An SVG opened by [`Session::start_open`] and its variants draws at this × its own size
+    /// (the Open SVG dialog's answer, #8910); `None` is its own size. The UI sets it around the
+    /// one open it answers.
+    pub svg_open_scale: Option<f32>,
     /// Override Open belongs only to one Batch scratch session, never to caller preferences.
     pub(crate) batch_open: Option<file_cmds::BatchOpen>,
     /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.
