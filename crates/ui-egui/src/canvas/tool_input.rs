@@ -254,7 +254,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 return true;
             }
             if multiple_color_target(app) {
-                app.ui.status = "Move and transforms on several colour channels are not implemented yet".into();
+                app.ui.status = "Move and transforms on several color channels are not implemented yet".into();
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
@@ -550,6 +550,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             drag.capture_vector_owners(app);
             drag.history_params = crate::retouch_ui::history_params_at_press(app, tool, mods.alt);
             drag.capture_selection_at_press(app);
+            drag.document = super::drag::DragDocument::capture(app);
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();
