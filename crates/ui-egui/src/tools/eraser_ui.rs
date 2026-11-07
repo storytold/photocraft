@@ -151,8 +151,11 @@ pub const TOLERANCE_RANGE_ALERT: &str = "An integer between 1% and 100% is requi
 fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
     // A restored setting (an older 0, a fraction) shows and erases as the field would store it.
     *value = stored_tolerance(*value);
+    // While the field has the keyboard it gets back what was typed, not the stored value, so
+    // its text is left alone mid-entry (`0` on the way to `05` must not turn into `1`).
+    let draft_id = ui.make_persistent_id(egui::IdSalt::new("bg-eraser-tolerance-typed"));
     // The field's own range is wide, so the typed value reaches here unclamped.
-    let mut typed = *value;
+    let mut typed = ui.ctx().data(|d| d.get_temp::<f32>(draft_id)).unwrap_or(*value);
     let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(tl!("Erase range of similar colors"));
     let out_id = r.id.with("out-of-range");
     // An edit the field never got to finish (the options bar was hidden while it had the
@@ -168,6 +171,14 @@ fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
         let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
         let out = typing && !(1.0..=100.0).contains(&typed);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+        if typing && r.has_focus() {
+            ui.ctx().data_mut(|d| d.insert_temp(draft_id, typed));
+        } else {
+            ui.ctx().data_mut(|d| d.remove_temp::<f32>(draft_id));
+        }
+    }
+    if !r.has_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<f32>(draft_id));
     }
     r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false)
 }

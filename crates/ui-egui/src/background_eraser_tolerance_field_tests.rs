@@ -94,6 +94,25 @@ fn tolerance_in_range_stores_a_whole_number_without_an_alert() {
 }
 
 #[test]
+fn a_leading_zero_typed_key_by_key_keeps_the_text() {
+    let mut h = app_harness();
+    h.query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
+        .expect("the Tolerance field")
+        .click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    for c in ["0", "5"] {
+        h.event(egui::Event::Text(c.into()));
+        h.run_steps(2);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(tolerance(&h), 5.0, "0 then 5 is 05, not 15");
+    assert_eq!(alert(&h), None, "05 is in range");
+}
+
+#[test]
 fn an_expression_committed_with_enter_past_the_range_alerts() {
     let mut h = app_harness();
     h.query_all_by_role(egui::accesskit::Role::SpinButton)
