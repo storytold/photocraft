@@ -157,7 +157,7 @@ fn fx_cache() -> &'static std::sync::Mutex<FxCache> {
 /// (or anything else rendering children over a wider area) gets the whole region.
 pub(crate) fn effect_region(layer: &Layer, rect: Rect, cx: &Ctx) -> (Rect, bool) {
     let m = effects::margin(layer);
-    let region = effect_source_bounds(layer, cx.canvas).inflate(m).intersect(&cx.canvas.inflate(m));
+    let region = whole_effect_region(layer, cx.canvas, m);
     let clip = *cx.fx_clip.lock().unwrap_or_else(|e| e.into_inner());
     match clip {
         Some(c) if c.contains_rect(&rect) && (advanced::shapeless(layer) || cx.fx_over_budget) && effects::maps_are_local(layer) => {
@@ -166,6 +166,10 @@ pub(crate) fn effect_region(layer: &Layer, rect: Rect, cx: &Ctx) -> (Rect, bool)
         }
         _ => (region, false),
     }
+}
+
+fn whole_effect_region(layer: &Layer, canvas: Rect, margin: i32) -> Rect {
+    effect_source_bounds(layer, canvas).inflate(margin).intersect(&canvas.inflate(margin))
 }
 
 /// Whether the effect maps of the visible layers of `layers` (groups included), each over its
@@ -179,25 +183,39 @@ pub(crate) fn fx_over_budget(layers: &[Layer], canvas: Rect) -> bool {
 
 /// The bytes [`fx_over_budget`] compares with the budget.
 pub(crate) fn fx_region_bytes(layers: &[Layer], canvas: Rect) -> u64 {
-    fn bytes(layers: &[Layer], canvas: Rect, depth: u32) -> u64 {
-        let mut total = 0u64;
-        for l in layers.iter().filter(|l| l.visible) {
-            if effects::has_effects(l) {
-                let m = effects::margin(l);
-                let region = effect_source_bounds(l, canvas).inflate(m).intersect(&canvas.inflate(m));
-                let maps = effects::map_count(l) as u64;
-                let px = u64::from(region.width()) * u64::from(region.height());
-                total = total.saturating_add(maps.saturating_mul(px).saturating_mul(4));
+    effect_map_bytes(layers, canvas, None, PREPARE_DEPTH as usize)
+}
+
+/// Estimates the effect maps a render can retain, including maps built on demand in deep groups.
+/// A group may read a child's whole map even when drawing that child into the render rectangle
+/// uses a clipped map, so reserve both versions when their regions differ.
+pub fn estimated_effect_map_bytes(layers: &[Layer], canvas: Rect, render: Rect) -> u64 {
+    effect_map_bytes(layers, canvas, Some(render), photocraft_doc::MAX_GROUP_DEPTH)
+}
+
+fn effect_map_bytes(layers: &[Layer], canvas: Rect, render: Option<Rect>, depth_left: usize) -> u64 {
+    let mut total = 0u64;
+    for l in layers.iter().filter(|l| l.visible) {
+        if effects::has_effects(l) {
+            let m = effects::margin(l);
+            let region = whole_effect_region(l, canvas, m);
+            let mut pixels = region.size().area();
+            if let Some(render) = render.filter(|_| effects::maps_are_local(l)) {
+                let clipped = region.intersect(&render.inflate(m.saturating_mul(2)));
+                if clipped != region {
+                    pixels = pixels.saturating_add(clipped.size().area());
+                }
             }
-            if let LayerContent::Group(g) = &l.content
-                && depth < PREPARE_DEPTH
-            {
-                total = total.saturating_add(bytes(&g.children, canvas, depth + 1));
-            }
+            let maps = effects::map_count(l) as u64;
+            total = total.saturating_add(maps.saturating_mul(pixels).saturating_mul(std::mem::size_of::<f32>() as u64));
         }
-        total
+        if let LayerContent::Group(g) = &l.content
+            && depth_left > 0
+        {
+            total = total.saturating_add(effect_map_bytes(&g.children, canvas, render, depth_left - 1));
+        }
     }
-    bytes(layers, canvas, 0)
+    total
 }
 
 /// Most bytes one layer's effect maps and source may take to build, whatever the cache budget.

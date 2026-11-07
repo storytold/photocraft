@@ -250,11 +250,11 @@ what an agent can't finish alone.
 
 ### G3. User-reported bug backlog
 - **2026-11-07 evidence (#9740):** Smart Object conversion preserves off-canvas shadows,
-  strokes on transparent-filled shapes and the layer's own off-canvas pixels. The
-  RGB8/16/32 tests cover conversion, native reopen and Save Contents. Conversion checks
-  the renderer's pixel limit and estimates the extra working memory beyond the canvas,
-  including full tiles. A 36 MP RGB8 canvas converts, and a region above the limit
-  leaves the document intact.
+  strokes on transparent-filled shapes, and effects on empty masked groups. The RGB8/16/32
+  tests cover conversion, native reopen and Save Contents. Conversion writes cropped pixels
+  directly into tiles. Its preflight checks renderer size, the cost of extending beyond the
+  canvas, and available memory for the render, tiled cache and retained effect maps. The
+  regression covers a full 36 MP RGB8 layer with a long shadow. A refusal preserves the document.
 - **2026-10-23 (#8864):** Frame Tool placeholders and handles persist after release; existing frames can be selected, moved/resized/rotated, filled/replaced and edited independently of their image. Shape/type conversion, solid strokes and two Layers thumbnails are available. [Behavior, evidence and remaining native Photoshop frame-file limits](frame-tool.md); no estimate or percentage changed.
 - **Missing:** fixes for 579 open issues (2026-10-10), filed mostly by 0.5/0.6 users. By title:
   ~150 UI/panels/menus/shortcuts, 94 file/format, 87 layers, 54 painting, 54 selection,

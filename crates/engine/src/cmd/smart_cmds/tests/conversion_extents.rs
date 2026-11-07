@@ -1,6 +1,6 @@
 use super::*;
 use photocraft_color::Color;
-use photocraft_doc::{Effect, FxCommon, FxPaint, Knockout, StrokeFx, StrokePosition};
+use photocraft_doc::{Effect, FxCommon, FxPaint, Knockout, LayerMask, StrokeFx, StrokePosition};
 
 fn shadow_fixture(depth: u64, distance: u64, angle: u64, width: i32) -> Session {
     let mut s = Session::new();
@@ -157,10 +157,46 @@ fn conversion_preserves_off_canvas_pixels_of_a_shapeless_knockout() {
 }
 
 #[test]
+fn conversion_preserves_effects_from_an_empty_groups_mask() {
+    let mut s = session(8);
+    let mut group = Layer::group("Masked effects", Vec::new());
+    group.blend = BlendMode::Normal;
+    group.advanced.transparency_shapes = false;
+    let mut mask = LayerMask::hide_all();
+    mask.surface.fill_rect(Rect::new(12, 16, 20, 24), &[1.0]);
+    group.mask = Some(mask);
+    let id = group.id;
+    s.edit("Add masked group", |doc, _| {
+        doc.layers.push(group);
+        Ok(())
+    })
+    .unwrap();
+    s.select_layer(id).unwrap();
+    s.execute("layer.layerStyle.colorOverlay", json!({"color": "#00ff00", "opacity": 100, "blend": "normal"})).unwrap();
+    s.execute(
+        "layer.layerStyle.dropShadow",
+        json!({"color": "#ff0000", "opacity": 100, "blend": "normal", "useGlobalLight": false,
+            "angle": 180, "distance": 400, "size": 0, "spread": 0}),
+    )
+    .unwrap();
+
+    let region = Rect::new(0, 0, 432, H);
+    let before = photocraft_compose::render(&s.active().unwrap().doc, region);
+    assert_eq!(before.get(12, 16), [0.0, 1.0, 0.0, 1.0]);
+    assert_eq!(before.get(412, 16), [1.0, 0.0, 0.0, 1.0]);
+    convert(&mut s);
+    let after = photocraft_compose::render(&s.active().unwrap().doc, region);
+    assert_eq!(after.get(12, 16), before.get(12, 16));
+    assert_eq!(after.get(412, 16), before.get(412, 16));
+}
+
+#[test]
 fn conversion_accepts_a_36_megapixel_rgb8_canvas() {
     let mut s = shadow_fixture(8, 400, 180, 128);
-    s.edit("36 MP canvas", |doc, _| {
+    s.edit("Paint a 36 MP layer", |doc, active| {
         doc.size = Size::new(6_000, 6_000);
+        let bounds = doc.bounds();
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(bounds, &[0.0, 0.0, 0.0, 1.0]);
         Ok(())
     })
     .unwrap();
@@ -168,7 +204,7 @@ fn conversion_accepts_a_36_megapixel_rgb8_canvas() {
     let sm = active_smart(&s);
     let cache = sm.cache.as_ref().unwrap();
     assert_eq!(cache.pixel(12, 16), [0.0, 0.0, 0.0, 1.0]);
-    assert_eq!(cache.pixel(412, 16), [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(cache.pixel(6_399, 16), [1.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]
@@ -191,7 +227,7 @@ fn conversion_rejects_nested_effect_working_memory_before_rendering() {
     let mut s = shadow_fixture(8, 400, 180, 128);
     let mut layer = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().clone();
     let effects = layer.effects.clone();
-    for _ in 0..7 {
+    for _ in 0..10 {
         layer = Layer::group("nested shadow", vec![layer]);
         layer.blend = BlendMode::Normal;
         layer.effects = effects.clone();
