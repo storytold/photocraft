@@ -1399,3 +1399,46 @@ fn crop_menu_rows_act_like_the_options_bar() {
     assert_eq!(app.ui.crop_rect, None);
     assert_eq!(app.session.active().unwrap().doc.size, size);
 }
+
+/// #10851: Fill… from the canvas menu on an adjustment layer whose mask thumbnail is targeted
+/// opens the Fill dialog (the row's check targets the mask), and OK fills the mask, not a layer.
+#[test]
+fn fill_menu_opens_and_fills_an_adjustment_layers_targeted_mask() {
+    let mut app = app();
+    app.run("edit.fill", json!({"contents": "color", "color": "#3366cc"})).unwrap();
+    let background_before = background_samples(&app);
+    app.run("layer.newAdjustmentLayer.brightnessContrast", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 2, "y": 2, "width": 10, "height": 10})).unwrap();
+    // Clicking the mask thumbnail targets it: the Layers panel's ui.maskTarget. Each target
+    // brings back its own colour pair (#2166), so the mask pair's foreground is set after.
+    let ctx = Context::default();
+    let (req, _) = crate::control::ControlRequest::new("ui.set", json!({"maskTarget": true}));
+    assert!(
+        matches!(crate::control::handle(&mut app, &ctx, &req), crate::control::Outcome::Done(v) if v["ok"] != false),
+        "the mask thumbnail targets the mask"
+    );
+    assert!(app.layer_mask_targeted());
+    app.run("tools.setColors", json!({"foreground": [0.0, 0.0, 0.0, 1.0]})).unwrap();
+
+    // The right-click row runs `edit.fill` through the menu invoke: the dialog opens, no error.
+    crate::menus::invoke(&mut app, &ctx, "edit.fill", json!({})).unwrap();
+    let fields = app.ui.dialogs.last().expect("the Fill dialog opened").fields.clone();
+    assert!(crate::fill_ui::owns(&fields), "the Fill dialog's fields are open");
+
+    // OK fills the mask inside the selection; the background's pixels stay.
+    crate::fill_ui::confirm(&mut app, &fields).unwrap();
+    let st = app.session.active().unwrap();
+    let mask = &st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().expect("the adjustment layer has a mask").surface;
+    let inside = mask.read_region(photocraft_geom::Rect::new(3, 3, 11, 11));
+    assert!(inside.iter().all(|v| *v < 1e-3), "the mask is filled black inside the selection: {inside:?}");
+    let outside = mask.read_region(photocraft_geom::Rect::new(20, 20, 30, 30));
+    assert!(outside.iter().all(|v| (v - 1.0).abs() < 1e-3), "the rest of the mask stays white: {outside:?}");
+    assert_eq!(background_before, background_samples(&app), "the background's pixels are untouched");
+}
+
+/// The stored samples of the bottom layer inside the later fill's selection.
+fn background_samples(app: &PhotocraftApp) -> Vec<f32> {
+    let st = app.session.active().unwrap();
+    let id = st.doc.layers.first().expect("a background layer").id;
+    st.doc.layer(id).unwrap().surface().unwrap().read_region(photocraft_geom::Rect::new(3, 3, 11, 11))
+}
