@@ -48,7 +48,7 @@ fn unknown_adjustment_key_opens_as_unsupported_and_saves_verbatim() {
         let (d, warnings) = open(&f);
         let k = String::from_utf8_lossy(&key).into_owned();
         assert!(
-            matches!(content(&d, "Mystery"), LayerContent::Adjustment(Adjustment::Unsupported { psd_key, raw }) if *psd_key == k && *raw == data),
+            matches!(content(&d, "Mystery"), LayerContent::Adjustment(Adjustment::Unsupported { psd_key, raw }) if *psd_key == k && **raw == data[..]),
             "{k}: {:?}",
             content(&d, "Mystery")
         );
@@ -77,7 +77,7 @@ fn pixel_layers_with_unknown_blocks_stay_pixel_layers() {
     // A normal pixel layer (pixels, flag clear) carrying an unknown block.
     f.layers_mut()[0].blocks.push(extra());
     // Flagged but with pixels: never dropped for an adjustment.
-    let plane = |id: i16| ChannelData { id, compression: Some(Compression::Raw), data: vec![200; 4] };
+    let plane = |id: i16| ChannelData::new(id, Some(Compression::Raw), vec![200; 4]);
     let mut painted = adjustment_record("painted", vec![extra()]);
     painted.rect = Rect::from_xywh(0, 0, 2, 2);
     painted.channels = (-1..3).map(plane).collect();

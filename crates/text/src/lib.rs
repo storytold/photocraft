@@ -17,14 +17,18 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod area;
 pub mod cjk;
 pub mod craft_fonts;
+mod embolden;
 pub mod engine_data;
+pub mod font_class;
 pub mod fonts;
 pub mod glyphs;
 pub mod layout;
 pub mod optical;
 pub mod psd;
+mod psd_path;
 pub mod psd_styles;
 pub mod raster;
 pub mod render;
@@ -37,6 +41,7 @@ use photocraft_color::PixelFormat;
 use photocraft_doc::TextLayer;
 
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
+pub use font_class::{FamilyTraits, FontClass, FontFormat};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
 pub use layout::{
     ClusterInfo, LineInfo, PlacedGlyph, TextLayout, byte_index, char_index, hit_char, line_edge, line_index, line_step, text_point_inside, word_boundary,

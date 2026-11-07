@@ -63,3 +63,39 @@ fn install_plugin_path_is_chosen_with_browse() {
     }
     assert_eq!(field(&h, "path"), Some(json!("/tmp/blur.wasm")));
 }
+
+/// #9357: Image Processor's source and destination folders are chosen with Browse…, as
+/// Photoshop's Select Folder… buttons choose them, instead of being typed.
+#[test]
+fn image_processor_folders_are_chosen_with_browse() {
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/shoot".into())), Some(FileDialogAnswer::FolderTo("/tmp/web".into()))]);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.scripts.imageProcessor", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.query_all_by_label("Browse…").count(), 2, "one Browse… for the source and one for the destination");
+    h.query_all_by_label("Browse…").next().unwrap().click();
+    h.run_steps(4);
+    assert_eq!(field(&h, "input"), Some(json!("/tmp/shoot")));
+    h.query_all_by_label("Browse…").nth(1).unwrap().click();
+    h.run_steps(4);
+    assert_eq!(field(&h, "output"), Some(json!("/tmp/web")));
+    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }, FileDialogRequest::Folder { .. }]));
+}
+
+#[test]
+fn data_sets_as_files_folder_is_chosen_with_browse() {
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/dataset-exports".into()))]);
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.export.dataSetsAsFiles", json!({})).unwrap();
+    h.run_steps(4);
+    assert!(field(&h, "dir").is_some(), "the dialog has a Dir field");
+    assert_eq!(field(&h, "naming"), Some(json!("{name}")));
+    assert_eq!(field(&h, "format"), Some(json!("png")));
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }]));
+    assert_eq!(field(&h, "dir"), Some(json!("/tmp/dataset-exports")));
+}
