@@ -379,6 +379,90 @@ fn fallible_tile_edits_move_weakly_cached_pixels_and_copy_shared_pixels() {
     }
 }
 
+/// Check encoded defaults across formats and keep cloned tiles isolated during edits.
+#[test]
+fn fallible_default_tiles_preserve_every_encoded_pixel() {
+    for mode in [
+        ColorMode::Bitmap,
+        ColorMode::Grayscale,
+        ColorMode::Indexed,
+        ColorMode::Rgb,
+        ColorMode::Cmyk,
+        ColorMode::Lab,
+        ColorMode::Multichannel,
+        ColorMode::Duotone,
+    ] {
+        for sample in SampleType::ALL {
+            for alpha in [false, true] {
+                let fmt = PixelFormat::new(mode, sample, alpha);
+                let channels = fmt.channels();
+                let defaults = [
+                    ("zero", vec![0.0; channels]),
+                    ("mixed channels", (1..=channels).map(|i| i as f32 / 8.0).collect()),
+                    ("negative zero", vec![-0.0; channels]),
+                ];
+                for (name, values) in defaults {
+                    let mut surface = Surface::with_default(fmt, &values);
+                    let expected = surface.default_pixel.repeat((TILE_SIZE * TILE_SIZE) as usize);
+                    assert_eq!(surface.try_default_tile().unwrap().bytes(), expected, "{fmt:?}, {name}");
+                    let coord = TileCoord::new(-1, 2);
+                    assert_eq!(surface.try_tile_mut(coord).unwrap().bytes(), expected);
+                    let snapshot = surface.clone();
+                    surface.try_tile_mut(coord).unwrap().bytes_mut()[0] ^= 0xff;
+                    assert_eq!(snapshot.tile(coord).unwrap().bytes(), expected, "copy-on-write: {fmt:?}");
+                    assert_ne!(surface.tile(coord).unwrap().bytes(), expected);
+                }
+            }
+        }
+    }
+}
+
+/// Tile initialization only: 384 tiles cover a 6000 x 4000 image. Each tile is dropped before
+/// allocating the next, so this is not an end-to-end image-open or peak-memory measurement.
+#[test]
+#[ignore = "manual 24 MP release benchmark"]
+fn benchmark_fallible_default_tiles() {
+    use std::{hint::black_box, time::Instant};
+    // Isolate the unchanged float-zero control from the other cases' different CPU loads.
+    let zero_only = std::env::var_os("PHOTOCRAFT_TILE_FILL_ZERO_ONLY").is_some();
+    let count = Rect::new(0, 0, 6000, 4000).tile_count();
+    for fmt in [PixelFormat::GRAY8, PixelFormat::RGBA8, PixelFormat::CMYKA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        if zero_only && fmt != PixelFormat::RGBA32F {
+            continue;
+        }
+        for value in [0.0, 0.25] {
+            if zero_only && value != 0.0 {
+                continue;
+            }
+            let values: Vec<f32> = (0..fmt.channels()).map(|i| value * (i + 1) as f32).collect();
+            let surface = Surface::with_default(fmt, &values);
+            for trial in 0..7 {
+                let start = Instant::now();
+                for _ in 0..count {
+                    black_box(black_box(&surface).try_default_tile().unwrap());
+                }
+                println!("tile_fill,{fmt:?},{value},{trial},{:.6}", start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+    }
+    if zero_only {
+        return;
+    }
+    // A fallible region write also converts and stores the incoming samples. Measure that
+    // caller separately so tile-initialization gains are not presented as editing speedups.
+    let rect = Rect::new(0, 0, 6000, 4000);
+    let samples = vec![0.75; 6000 * 4000];
+    for trial in 0..7 {
+        let mut mask = Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+        let start = Instant::now();
+        mask.try_write_region(rect, black_box(&samples)).unwrap();
+        let elapsed = start.elapsed().as_secs_f64() * 1000.0;
+        assert!(mask.to_interleaved(rect).iter().all(|&b| b == 191));
+        black_box(&mask);
+        println!("tile_write,Gray8 mask,1,{trial},{elapsed:.6}");
+    }
+}
+
 #[test]
 fn fill_rect_shares_covered_tiles_and_edits_stay_local() {
     // A 300000² background used to materialize ~360 GB of tiles (#705).
