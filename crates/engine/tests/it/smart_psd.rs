@@ -309,6 +309,44 @@ fn smart_filters_survive_psd_in_every_colour_model() {
     }
 }
 
+/// Desaturate, Equalize and Replace Color stay editable after PSD export and reopen (#3606).
+#[test]
+fn desaturate_equalize_and_replace_color_survive_psd() {
+    let cmds = [
+        ("image.adjustments.desaturate", json!({})),
+        ("image.adjustments.equalize", json!({})),
+        ("image.adjustments.replaceColor", json!({"color": [0.4, 0.5, 0.8, 1.0], "fuzziness": 180, "hue": 40, "saturation": 10, "lightness": -5})),
+    ];
+    for (cmd, params) in cmds {
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute(cmd, params).unwrap();
+        let native = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+        let native_back = photocraft_format::load_from_bytes(&native).unwrap();
+        let before = smart(&native_back).1.smart_filters;
+        assert_eq!(before.len(), 1, "{cmd}");
+        assert_eq!(before[0].command, cmd);
+
+        let out = photocraft_io::export(&native_back, "psd", &Default::default()).unwrap();
+        assert!(!out.warnings.iter().any(|w| w.contains("smart filter")), "{cmd}: {:?}", out.warnings);
+        assert_eq!(structure_errors(&out.bytes), Vec::<String>::new());
+        keep(&format!("{}.psd", cmd.replace('.', "-")), &out.bytes);
+
+        let back = photocraft_io::import("x.psd", &out.bytes).unwrap().document;
+        let after = smart(&back).1.smart_filters;
+        assert_eq!(after.len(), 1, "{cmd} dropped on PSD reopen");
+        assert_eq!(after[0].command, cmd);
+        for (k, v) in before[0].params.as_object().unwrap() {
+            let w = &after[0].params[k];
+            assert!(w == v || w.as_f64().zip(v.as_f64()).is_some_and(|(x, y)| x == y), "{cmd}: {k} {v} came back as {w}");
+        }
+
+        let native2 = photocraft_format::save_to_bytes(&back, &Default::default()).unwrap();
+        let native2_back = photocraft_format::load_from_bytes(&native2).unwrap();
+        assert_eq!(smart(&native2_back).1.smart_filters[0].command, cmd);
+    }
+}
+
 /// Writes sample files for checking in Photoshop (`PHOTOCRAFT_SMART_PSD_OUT`): per depth, a
 /// plain layer, a smart object without filters, and one with filters.
 #[test]

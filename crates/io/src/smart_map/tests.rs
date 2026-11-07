@@ -69,6 +69,9 @@ fn modelled_filters_round_trip() {
         sf("image.adjustments.levels", json!({"inBlack": 20, "inWhite": 220, "gamma": 1.4, "red": {"inBlack": 0, "inWhite": 255, "gamma": 0.8}})),
         sf("image.adjustments.curves", json!({"points": [[0.0, 0.0], [64.0, 40.0], [255.0, 255.0]], "blue": [[0.0, 20.0], [255.0, 235.0]]})),
         sf("image.adjustments.shadowsHighlights", json!({})),
+        sf("image.adjustments.desaturate", json!({})),
+        sf("image.adjustments.equalize", json!({})),
+        sf("image.adjustments.replaceColor", json!({"color": [0.4, 0.5, 0.8, 1.0], "fuzziness": 180, "hue": 40, "saturation": 10, "lightness": -5})),
         sf("filter.sharpen.sharpen", json!({})),
         // Photoshop stores Dust & Scratches' radius in whole pixels (a `long`).
         sf("filter.noise.dustAndScratches", json!({"radius": 4, "threshold": 12})),
@@ -1718,12 +1721,13 @@ fn unwritable_filters_are_reported_not_fatal() {
             sf(UNSUPPORTED_FILTER, json!({"psd": "zz"})),
             sf("image.adjustments.levels", json!({"cyan": {"gamma": 2.0}})),
             sf("image.adjustments.shadowsHighlights", json!({"shadowAmount": 50})),
+            sf("image.adjustments.replaceColor", json!({"localized": true, "color": [1.0, 0.0, 0.0, 1.0]})),
         ],
         ..Default::default()
     };
     let mut w = Vec::new();
     let d = filter_fx(&stack, "L", &mut w);
-    assert_eq!(w.len(), 4, "{w:?}");
+    assert_eq!(w.len(), 5, "{w:?}");
     let back = filter_stack(&d);
     assert_eq!(back.filters, vec![stack.filters[1].clone()]);
 }
