@@ -17,8 +17,7 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
 }
 
 fn hex(c: [f32; 4]) -> String {
-    let to_byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", to_byte(c[0]), to_byte(c[1]), to_byte(c[2]))
+    crate::color_picker_ui::hex([c[0], c[1], c[2]])
 }
 
 fn valid(key: &str, v: &Value) -> bool {
