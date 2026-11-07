@@ -13,6 +13,7 @@ mod clipboard;
 mod commands;
 mod control;
 mod files;
+pub(crate) use files::ensure_memory_to_save;
 mod frame;
 mod gpu;
 mod ime;
@@ -89,6 +90,7 @@ impl PhotocraftApp {
             live_adjust: None,
             frame: 0,
             notices_hovered: false,
+            low_memory: crate::memory_warning::Watch::default(),
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
@@ -171,6 +173,7 @@ impl PhotocraftApp {
             dialog_edits: Default::default(),
             color_picker_live: Vec::new(),
             pending_after_prompt: None,
+            after_transform_commit: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,
@@ -242,8 +245,12 @@ impl eframe::App for PhotocraftApp {
         self.finish_type_reset_logic(ctx);
     }
 
+    /// Drain the platform's optional WinTab queue before the frame's input is processed.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
+        if let Some(tablet_poll) = self.services.tablet_poll.as_mut() {
+            tablet_poll(raw_input.focused);
+        }
         // An undecorated window gets its caption back when the toolkit changes its flags
         // (maximize, restore, …): take it off again before the frame is laid out (#2246).
         if let Some(window_frame) = self.services.window_frame.as_mut() {

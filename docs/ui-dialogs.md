@@ -104,7 +104,6 @@ even if it matches that original readout. Confirming an unchanged guide preserve
 | Key | Module |
 |---|---|
 | `__guideLayout` | `guide_layout_ui` |
-| `__newGuide` | `new_guide_ui` |
 | `__fill` | `fill_ui` |
 | `__patternFill` | `pattern_fill_ui` |
 | `__stroke` | `stroke_ui` |
