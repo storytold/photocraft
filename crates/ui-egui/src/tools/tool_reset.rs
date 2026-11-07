@@ -74,7 +74,8 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
         app.ui.frame_tool = Default::default();
     }
     reset_options(&mut app.ui.tool_options, tool);
-    if is_selection_tool(tool) {
+    // Patch and Content-Aware Move lasso in the shared selection mode their bars show (#11024).
+    if is_selection_tool(tool) || matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
         app.ui.selection_mode = 0;
     }
     if crate::paint_mouse::has_brush_picker(tool) {
@@ -162,7 +163,16 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         }};
     }
     match tool {
-        Tool::Move => reset!(move_auto_select, move_target, move_show_transform, transform_interpolation, transform_reference_point),
+        Tool::Move => reset!(
+            move_auto_select,
+            move_target,
+            move_show_transform,
+            move_show_hover_bounds,
+            move_expand_group_on_click,
+            move_show_layers_hover_bounds,
+            transform_interpolation,
+            transform_reference_point
+        ),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height, marquee_unit),
         // The single-pixel marquees are never anti-aliased: Feather is their only option.
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
@@ -304,6 +314,20 @@ mod tests {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         assert_eq!(app.ui.tool_options, ToolOptions::default());
         assert!(app.ui.dialogs.is_empty());
+    }
+
+    /// The Patch and Content-Aware Move bars show the shared selection mode, so Reset Tool on
+    /// either sets it back to New, as on the selection tools (#11024).
+    #[test]
+    fn reset_tool_resets_the_patch_selection_mode() {
+        let ctx = egui::Context::default();
+        for tool in [Tool::Patch, Tool::ContentAwareMove] {
+            let mut app = app();
+            app.ui.selection_mode = 2;
+            app.ui.tool = tool;
+            crate::menus::invoke(&mut app, &ctx, RESET, json!({})).unwrap();
+            assert_eq!(app.ui.selection_mode, 0, "{tool:?}");
+        }
     }
 
     /// Sample All Layers is per tool (#5524): resetting Blur turns off only Blur's.

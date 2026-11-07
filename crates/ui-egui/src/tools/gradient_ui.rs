@@ -995,7 +995,7 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
     let dragging: Option<Marker> = ui.data(|d| d.get_temp(key));
     let mut preview = None;
     if let (Some(m), Some(pos)) = (dragging, resp.interact_pointer_pos()) {
-        let off = if pos.y > bar.bottom() + 28.0 || pos.y < bar.top() - 26.0 { 1.0 } else { 0.0 };
+        let off = if off_strip(pos, bar) { 1.0 } else { 0.0 };
         let loc = loc_of(pos.x);
         let edit = match m {
             Marker::Color(i) if off > 0.0 && stops.len() > 2 => json!({"action": "delete", "index": i}),
@@ -1038,3 +1038,9 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
 
 #[cfg(test)]
 mod tests;
+
+/// A stop dragged to `pos` is off the gradient strip `bar` and comes off (removed on release):
+/// below the stops or above the strip, by the same distance in every gradient editor.
+pub(crate) fn off_strip(pos: egui::Pos2, bar: egui::Rect) -> bool {
+    pos.y > bar.bottom() + 28.0 || pos.y < bar.top() - 26.0
+}
