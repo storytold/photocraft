@@ -635,7 +635,8 @@ fn shift_constrains_polygonal_lasso_segments_but_unmodified_clicks_remain_free()
     ev(&mut app, "up", 140.0, 120.0, Modifiers::SHIFT);
     let diagonal = app.ui.polygon[1];
     assert!((diagonal[0] - diagonal[1]).abs() < 1e-8, "45-degree direction: {diagonal:?}");
-    assert!((diagonal[0] - 100.0 - 40.0_f64.hypot(20.0) / 2.0_f64.sqrt()).abs() < 1e-8);
+    // The diagonal keeps the shorter offset (20) on both axes (#11393).
+    assert!((diagonal[0] - 120.0).abs() < 1e-8, "{diagonal:?}");
     // Releasing Shift restores free placement rather than constraining subsequent points.
     ev(&mut app, "down", 155.0, 175.0, Modifiers::NONE);
     ev(&mut app, "up", 155.0, 175.0, Modifiers::NONE);
@@ -652,7 +653,9 @@ fn shift_polygonal_lasso_snap_has_all_eight_directions_and_handles_zero_length()
         let dy = end[1] - origin[1];
         let angle = dy.atan2(dx) / std::f64::consts::FRAC_PI_4;
         assert!((angle - angle.round()).abs() < 1e-9, "{delta:?} → {end:?}");
-        assert!((dx.hypot(dy) - delta[0].hypot(delta[1])).abs() < 1e-8);
+        // Axis snaps keep the length; diagonals keep the shorter offset on both axes (#11393).
+        let kept = if angle.round().rem_euclid(2.0) == 1.0 { delta[0].abs().min(delta[1].abs()) * std::f64::consts::SQRT_2 } else { delta[0].hypot(delta[1]) };
+        assert!((dx.hypot(dy) - kept).abs() < 1e-8, "{delta:?} → {end:?}");
     }
     assert_eq!(crate::canvas::constrained_polygon_point(origin, origin), origin);
 }

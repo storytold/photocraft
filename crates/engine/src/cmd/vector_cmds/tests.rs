@@ -404,6 +404,114 @@ fn path_to_selection_matches_analytic_shape() {
 }
 
 #[test]
+fn path_to_shape_makes_a_shape_layer_from_the_work_path_in_one_step() {
+    let mut s = session(80, 80, 8);
+    let square = json!({"subpaths": [{"knots": [[10, 10], [50, 10], [50, 50], [10, 50]]}]});
+    s.execute("path.set", json!({"path": square})).unwrap();
+    let history = s.active().unwrap().history.past_len();
+    let info = s.execute("path.toShape", json!({"fill": "#ff0000"})).unwrap();
+    let id = LayerId(info["layer"].as_u64().unwrap());
+    let d = doc(&s);
+    let LayerContent::Shape(sh) = &d.layer(id).unwrap().content else { panic!("not a shape layer") };
+    assert_eq!(sh.path.subpaths[0].knots.len(), 4);
+    assert_eq!(sh.fill, Some(Fill::Solid(Color::rgba(1.0, 0.0, 0.0, 1.0))));
+    // The Work Path became the shape's path.
+    assert!(d.work_path.is_none());
+    assert_eq!(s.active().unwrap().active_layer, Some(id));
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    s.undo();
+    assert!(doc(&s).layer(id).is_none());
+    assert!(doc(&s).work_path.is_some());
+}
+
+#[test]
+fn path_to_shape_keeps_a_saved_path() {
+    let mut s = session(80, 80, 8);
+    let tri = json!({"subpaths": [{"knots": [[10, 10], [50, 10], [30, 50]]}]});
+    s.execute("path.set", json!({"name": "Tri", "path": tri})).unwrap();
+    let info = s.execute("path.toShape", json!({"name": "Tri", "layerName": "Roof"})).unwrap();
+    assert_eq!(info["name"], "Roof");
+    assert_eq!(doc(&s).paths[0].name, "Tri");
+}
+
+#[test]
+fn path_to_shape_rejects_bad_input_without_changing_history() {
+    let mut s = session(80, 80, 8);
+    assert!(s.execute("path.toShape", json!({})).is_err(), "no path");
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60]]}]}})).unwrap();
+    let before = doc(&s).clone();
+    let history = s.active().unwrap().history.past_len();
+    for p in [
+        json!({"name": "missing"}),
+        json!({"name": 42}),
+        json!({"name": ["work"]}),
+        json!({"fill": "not a colour"}),
+        json!({"fill": 42}),
+        json!({"stroke": {"width": -1}}),
+        json!({"stroke": {"width": 1e100}}),
+        json!({"stroke": true}),
+    ] {
+        assert!(s.execute("path.toShape", p.clone()).is_err(), "accepted {p}");
+        assert_eq!(*doc(&s), before, "{p} modified the document");
+        assert_eq!(s.active().unwrap().history.past_len(), history, "{p} changed history");
+    }
+}
+
+/// With no Work Path, `path.toShape` doesn't take the active shape layer's path: that would only
+/// duplicate the shape.
+#[test]
+fn path_to_shape_without_a_work_path_does_not_copy_the_active_shape() {
+    let mut s = session(80, 80, 8);
+    s.execute("shape.create", json!({"rect": [10, 10, 30, 30]})).unwrap();
+    let layers = doc(&s).layers.len();
+    for p in [json!({}), json!({"name": "work"})] {
+        assert!(s.execute("path.toShape", p.clone()).is_err(), "{p} made a shape");
+    }
+    assert_eq!(doc(&s).layers.len(), layers);
+}
+
+/// An inline `path` (a Pen path still being drawn) makes the shape and leaves the Work Path alone,
+/// unless it was drawn into the Work Path (`consumeWorkPath`).
+#[test]
+fn path_to_shape_takes_an_inline_path() {
+    let mut s = session(80, 80, 8);
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60]]}]}})).unwrap();
+    let drawn = json!({"subpaths": [{"knots": [[5, 5], [30, 5], [30, 30]]}]});
+    let history = s.active().unwrap().history.past_len();
+    let info = s.execute("path.toShape", json!({"path": drawn})).unwrap();
+    let id = LayerId(info["layer"].as_u64().unwrap());
+    let LayerContent::Shape(sh) = &doc(&s).layer(id).unwrap().content else { panic!("not a shape layer") };
+    assert_eq!(sh.path.subpaths[0].knots[0].anchor, Point::new(5.0, 5.0));
+    assert!(doc(&s).work_path.is_some(), "the Work Path stays");
+    assert_eq!(s.active().unwrap().history.past_len(), history + 1);
+    s.execute("path.toShape", json!({"path": drawn, "consumeWorkPath": true})).unwrap();
+    assert!(doc(&s).work_path.is_none());
+}
+
+#[test]
+fn path_to_shape_rejects_paths_and_names_it_cannot_use() {
+    let mut s = session(80, 80, 8);
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60]]}]}})).unwrap();
+    let before = doc(&s).clone();
+    let drawn = json!({"subpaths": [{"knots": [[5, 5], [30, 5], [30, 30]]}]});
+    for p in [
+        json!({"path": {"subpaths": [{"knots": [[5, 5]]}]}}),
+        json!({"path": {"subpaths": []}}),
+        json!({"path": 42}),
+        json!({"path": drawn, "name": "work"}),
+        json!({"path": drawn, "consumeWorkPath": "yes"}),
+        json!({"layerName": 5}),
+        json!({"layerName": ""}),
+        json!({"layerName": "   "}),
+    ] {
+        assert!(s.execute("path.toShape", p.clone()).is_err(), "accepted {p}");
+        assert_eq!(*doc(&s), before, "{p} modified the document");
+    }
+    s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12]]}]}})).unwrap();
+    assert!(s.execute("path.toShape", json!({})).is_err(), "a one-anchor Work Path");
+}
+
+#[test]
 fn path_make_selection_rejects_invalid_options_without_changing_history() {
     let mut s = session(80, 80, 8);
     s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[12, 12], [60, 12], [60, 60], [12, 60]]}]}})).unwrap();
@@ -1237,4 +1345,148 @@ fn triangles_and_polygons_take_a_corner_radius_kept_through_edits_and_scaling() 
     s.execute("shape.edit", json!({"layer": id, "cornerRadius": 10})).unwrap();
     s.execute("shape.edit", json!({"layer": id, "transform": [0.5, 0, 0, 0.5, 0, 0]})).unwrap();
     assert!(matches!(live(&s), Some(LiveShape::Polygon { corner_radius, .. }) if (corner_radius - 5.0).abs() < 1e-9));
+}
+
+#[test]
+fn arrowhead_flags_reject_wrong_types_without_mutation() {
+    let mut s = session(160, 120, 8);
+    let id = s
+        .execute(
+            "shape.create",
+            json!({
+                "kind": "line",
+                "from": [10, 20],
+                "to": [120, 20],
+                "arrowStart": true,
+                "arrowEnd": false
+            }),
+        )
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+
+    let original_doc = s.active().unwrap().doc.clone();
+    let original_history = s.active().unwrap().history.past_len();
+
+    for key in ["arrowStart", "arrowEnd"] {
+        for invalid in [json!("true"), json!(null), json!(1), json!([])] {
+            let mut create = json!({
+                "kind": "line",
+                "from": [10, 40],
+                "to": [120, 40]
+            });
+            create[key] = invalid.clone();
+
+            assert!(s.execute("shape.create", create).is_err(), "{key} must reject {invalid}");
+
+            let mut edit = json!({"layer": id});
+            edit[key] = invalid.clone();
+
+            assert!(s.execute("shape.edit", edit).is_err(), "{key} edit must reject {invalid}");
+
+            assert_eq!(s.active().unwrap().doc, original_doc);
+            assert_eq!(s.active().unwrap().history.past_len(), original_history);
+        }
+    }
+
+    // Valid boolean values remain accepted.
+    s.execute(
+        "shape.edit",
+        json!({
+            "layer": id,
+            "arrowStart": false,
+            "arrowEnd": true
+        }),
+    )
+    .unwrap();
+}
+
+#[test]
+fn arrowhead_dimensions_reject_invalid_values_without_mutation() {
+    let mut s = session(160, 120, 8);
+    let id = s
+        .execute(
+            "shape.create",
+            json!({
+                "kind": "line",
+                "from": [10, 20],
+                "to": [120, 20],
+                "arrowEnd": true
+            }),
+        )
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+
+    let original_doc = s.active().unwrap().doc.clone();
+    let original_history = s.active().unwrap().history.past_len();
+
+    for (key, invalids) in [
+        ("arrowWidth", [json!("52"), json!(null), json!([]), json!(0), json!(4097)]),
+        ("arrowLength", [json!("50"), json!(null), json!([]), json!(0), json!(4097)]),
+        ("arrowConcavity", [json!("0"), json!(null), json!([]), json!(-1), json!(101)]),
+    ] {
+        for invalid in invalids {
+            let mut create = json!({
+                "kind": "line",
+                "from": [10, 40],
+                "to": [120, 40]
+            });
+            create[key] = invalid.clone();
+            assert!(s.execute("shape.create", create).is_err(), "{key} create must reject {invalid}");
+            assert_eq!(s.active().unwrap().doc, original_doc, "{key} create changed document");
+            assert_eq!(s.active().unwrap().history.past_len(), original_history, "{key} create changed history");
+
+            let mut edit = json!({"layer": id});
+            edit[key] = invalid.clone();
+            assert!(s.execute("shape.edit", edit).is_err(), "{key} edit must reject {invalid}");
+            assert_eq!(s.active().unwrap().doc, original_doc, "{key} edit changed document");
+            assert_eq!(s.active().unwrap().history.past_len(), original_history, "{key} edit changed history");
+        }
+    }
+}
+
+#[test]
+fn headless_diagonal_arrow_preserves_geometry_after_nonuniform_scale() {
+    let mut s = session(400, 400, 8);
+
+    let created = s
+        .execute(
+            "shape.create",
+            json!({
+                "kind": "line",
+                "from": [40.0, 40.0],
+                "to": [140.0, 140.0],
+                "weight": 5.0,
+                "arrowStart": false,
+                "arrowEnd": false
+            }),
+        )
+        .unwrap();
+
+    let id = created["layer"].as_u64().unwrap();
+
+    let transformed = s
+        .execute(
+            "shape.edit",
+            json!({
+                "layer": id,
+                "transform": [2.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+            }),
+        )
+        .unwrap();
+
+    assert_ne!(transformed["path"], created["path"]);
+    assert!(transformed["live"].is_null());
+
+    let before = s.active().unwrap().doc.clone();
+
+    // Editing live parameters must not regenerate a different shape.
+    assert!(s.execute("shape.edit", json!({"layer": id, "weight": 8.0}),).is_err());
+
+    assert_eq!(s.active().unwrap().doc, before);
+
+    let info = s.execute("shape.info", json!({"layer": id})).unwrap();
+
+    assert_eq!(info["path"], transformed["path"]);
 }

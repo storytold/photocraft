@@ -1,6 +1,6 @@
-use super::content::{channel_weights, empty_in, recycle_buffer, render_content, restore_channels, scratch_buffer, surface_to_buffer};
+use super::content::{channel_weights, empty_in, render_content, restore_channels, surface_to_buffer};
 use super::ctx::Ctx;
-use super::extents::{effects_frame, mask_k, mask_vals, shapeless_stroke_bounds};
+use super::extents::{effects_frame, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps;
 use super::{BlendMode, Buffer, Fill, Layer, LayerContent, Rect, Surface, advanced, blend, effects, psblend, shape_split};
 
@@ -339,6 +339,7 @@ pub(crate) fn composite_pixel_layer(layer: &Layer, surf: &Surface, backdrop: &mu
         }
         blend_span_fill(dst, &row, rect.x0, y, layer.blend, layer.opacity, layer.fill_opacity, gamma);
     }
+    recycle_mask(mv);
 }
 
 pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
@@ -362,6 +363,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
     let clip_base_adjusts = clipped.iter().any(|c| c.visible)
         && matches!(&layer.content, LayerContent::Group(g) if g.children.iter().any(|c| c.visible && matches!(c.content, LayerContent::Adjustment(_))));
     if let LayerContent::Group(g) = &layer.content
+        && layer.frame.is_none()
         && layer.blend == BlendMode::PassThrough
         && layer.fill_opacity >= 1.0
         && !effects::has_effects(layer)
@@ -389,6 +391,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
                     [0.0; 4]
                 };
             }
+            recycle_mask(mv);
         }
         // A Frame's stroke over the frame's content, at the group's opacity.
         if let Some(stroke) = shape_split::frame_stroke(layer, cx.canvas, cx.depth) {
@@ -425,9 +428,10 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
     if let LayerContent::Adjustment(adj) = &layer.content {
         let mv = mask_vals(layer, rect, cx);
         if mv.as_ref().is_some_and(|values| values.iter().all(|&value| opacity * value <= 0.0)) {
+            recycle_mask(mv);
             return;
         }
-        let mut adjusted = scratch_buffer(rect);
+        let mut adjusted = Buffer::transparent(rect);
         adjusted.px.copy_from_slice(&backdrop.px);
         cx.apply_adjustment(adj, &mut adjusted);
         // Clipped layers onto an adjustment are uncommon; they composite atop the adjusted result.
@@ -455,7 +459,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
                 None => blend_back(&mut backdrop.px, &adjusted.px, std::iter::repeat(k), layer.blend, fill),
             }
         }
-        recycle_buffer(adjusted);
+        recycle_mask(mv);
         return;
     }
 
@@ -469,6 +473,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
         if let (Some(m), Some(b)) = (&hide, &before) {
             advanced::apply_hiding_mask(backdrop, b, m);
         }
+        recycle_mask(hide);
         return;
     }
     if let Some((mut content, stroke, mask)) = shape_parts(layer, clipped, rect, cx) {
@@ -478,6 +483,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
             p[3] *= mask_k(&mask, i);
         }
         blend_layer_into(backdrop, &content, layer, cx, 1.0);
+        recycle_mask(mask);
         return;
     }
     if !matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_))
@@ -512,7 +518,6 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
     let Some(mut content) = render_content(layer, rect, cx) else { return };
     advanced::composite_clipped(clipped, &mut content, cx);
     blend_layer_into(backdrop, &content, layer, cx, text_gamma(layer));
-    recycle_buffer(content);
 }
 
 /// A layer with effects (and its clipping group) onto `backdrop`.
@@ -521,7 +526,7 @@ fn composite_layer_effects(layer: &Layer, clipped: &[Layer], backdrop: &mut Buff
     // Neighbourhoods are already captured by the full-region effect maps;
     // content and effect application only need the output rectangle.
     // A stroked shape's vector stroke stays above its clipped layers and interior effects.
-    let (mut content, vstroke) = match split_parts(layer, rect, cx) {
+    let (mut content, parts) = match split_parts(layer, rect, cx) {
         Some((fill, stroke, mask)) => (fill, Some((stroke, mask))),
         None => {
             let Some(content) = render_content(layer, rect, cx) else { return };
@@ -529,9 +534,12 @@ fn composite_layer_effects(layer: &Layer, clipped: &[Layer], backdrop: &mut Buff
         }
     };
     advanced::composite_clipped(clipped, &mut content, cx);
-    let vstroke = vstroke.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
+    let vstroke = parts.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
     let maps = effect_maps(layer, rect, cx);
     effects::composite_with_effects_prepared(layer, &content, backdrop, &maps, effects_frame(layer, cx.canvas), cx.patterns, vstroke);
+    if let Some((_, mask)) = parts {
+        recycle_mask(mask);
+    }
 }
 
 /// The coverage-mixing gamma of a layer: the text blending gamma
@@ -605,6 +613,7 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
                 p[c] += (bl[c] - p[c]) * k;
             }
         }
+        recycle_mask(mv);
         return;
     }
     if effects::has_effects(layer) {
@@ -615,21 +624,28 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         let hide = advanced::hiding_mask(layer, rect, cx);
         let src = advanced::effects_source(layer);
         let layer = src.as_ref();
-        let (content, vstroke) = match split_parts(layer, rect, cx) {
+        let (content, parts) = match split_parts(layer, rect, cx) {
             Some((fill, stroke, mask)) => (fill, Some((stroke, mask))),
             None => {
-                let Some(content) = render_content(layer, rect, cx) else { return };
+                let Some(content) = render_content(layer, rect, cx) else {
+                    recycle_mask(hide);
+                    return;
+                };
                 (content, None)
             }
         };
-        let vstroke = vstroke.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
+        let vstroke = parts.as_ref().map(|(s, m)| effects::VectorStroke { stroke: s, mask: m.as_deref() });
         let mut opaque = Buffer { rect, px: base.px.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect() };
         let maps = effect_maps(layer, rect, cx);
         effects::composite_with_effects_prepared(layer, &content, &mut opaque, &maps, effects_frame(layer, cx.canvas), cx.patterns, vstroke);
+        if let Some((_, mask)) = parts {
+            recycle_mask(mask);
+        }
         if let Some(m) = &hide {
             let plain = Buffer { rect, px: base.px.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect() };
             advanced::apply_hiding_mask(&mut opaque, &plain, m);
         }
+        recycle_mask(hide);
         for (p, o) in base.px.iter_mut().zip(&opaque.px) {
             if p[3] > 0.0 {
                 *p = [o[0], o[1], o[2], p[3]];
@@ -640,9 +656,6 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
     let Some(content) = render_content(layer, rect, cx) else { return };
     let opacity = layer.opacity * layer.fill_opacity;
     let gamma = text_gamma(layer);
-    if try_blit_rgba32f(&mut base.px, &content.px, layer.blend, opacity, gamma, craft_blitter::CompositeOp::SourceAtop) {
-        return;
-    }
     for (i, p) in base.px.iter_mut().enumerate() {
         let alpha = p[3];
         if alpha <= 0.0 {
@@ -663,53 +676,6 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
         *p = [r[0], r[1], r[2], alpha];
     }
-}
-
-/// Dispatches straight-alpha `RGBA32F` blits to `craft-blitter` (8-pixel SoA vectorization and
-/// Rayon parallelization at >= 4,096 pixels) when coverage mixes in encoded space (`gamma == 1.0`),
-/// outside CIELAB (`!LAB_MIX`), with an in-range opacity (`0.0..=1.0`), for modes and alpha
-/// configurations where `craft-blitter` produces bit-identical IEEE-754 output to
-/// [`psblend::composite`] and [`composite_atop_any`].
-#[inline]
-fn try_blit_rgba32f(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode: BlendMode, opacity: f32, gamma: f32, op: craft_blitter::CompositeOp) -> bool {
-    if gamma != 1.0 || !(0.0..=1.0).contains(&opacity) || psblend::LAB_MIX.with(|l| l.get()) {
-        return false;
-    }
-    let hdr = psblend::HDR.with(|h| h.get());
-    let Some(bm) = psblend::to_blitter_mode(mode, hdr) else {
-        return false;
-    };
-    let n = dst.len().min(src.len());
-    let (d_slice, s_slice) = (&dst[..n], &src[..n]);
-    // Guarantee bit-identical IEEE-754 output (`f32::to_bits`) with the local scalar reference:
-    // - `Normal` already multiplies by `1.0 / ao` in `psblend::normal_rgb` / `normal_lanes`,
-    //   matching `craft-blitter` bit-for-bit for all finite alphas.
-    // - Non-`Normal` `SourceOver` in `psblend::composite` divides by `ao`, whereas `craft-blitter`
-    //   multiplies by `1.0 / ao`; those produce identical bits whenever every active pixel has
-    //   `ao == 1.0` (an opaque backdrop with finite `s[3] <= 1.0`, or `opacity == 1.0` with finite
-    //   `s[3]` in `{<= 0.0, 1.0}` over non-negative finite `d[3]`).
-    // - `SourceAtop` matches `composite_atop_any` bit-for-bit when channels are finite non-negative
-    //   (no `-0.0` sign flip from `0.0 * cs`) and `s[3] <= 1.0`.
-    let exact = match op {
-        craft_blitter::CompositeOp::SourceOver if mode == BlendMode::Normal => {
-            s_slice.iter().all(|s| s[3].is_finite()) && d_slice.iter().all(|d| d[3].is_finite())
-        }
-        craft_blitter::CompositeOp::SourceOver => {
-            (d_slice.iter().all(|d| d[3] == 1.0) && s_slice.iter().all(|s| s[3].is_finite() && s[3] <= 1.0))
-                || (opacity == 1.0
-                    && d_slice.iter().all(|d| d[3] >= 0.0 && d[3].is_finite())
-                    && s_slice.iter().all(|s| s[3].is_finite() && (s[3] <= 0.0 || s[3] == 1.0)))
-        }
-        craft_blitter::CompositeOp::SourceAtop => {
-            d_slice.iter().all(|d| d.iter().all(|&v| v >= 0.0 && v.is_finite() && v.to_bits() != (-0.0f32).to_bits()))
-                && s_slice.iter().all(|s| s.iter().all(|&v| v >= 0.0 && v.is_finite()) && s[3] <= 1.0)
-        }
-    };
-    if !exact {
-        return false;
-    }
-    craft_blitter::blit_rgba32f_opts(dst, src, bm, opacity, hdr, craft_blitter::AlphaMode::Straight, op);
-    true
 }
 
 /// Blend an isolated layer buffer into the backdrop.
@@ -739,24 +705,17 @@ fn blend_layer_into(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx
         let alpha = (s[3] / m).clamp(0.0, 1.0);
         *b = psblend::composite_fill(mode, *b, [s[0], s[1], s[2], m], opacity, fill * alpha, gamma);
     }
+    recycle_mask(mv);
 }
 
 /// [`blend_into_g`] for a layer's own `opacity` and `fill`: Fill is part of the blend for
 /// Photoshop's special eight ([`psblend::composite_fill`]), plain coverage otherwise.
 pub(crate) fn blend_into_fill(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32, fill: f32, gamma: f32) {
-    if (fill >= 1.0 || !psblend::fill_is_special(mode))
-        && try_blit_rgba32f(&mut backdrop.px, &src.px, mode, opacity * fill.clamp(0.0, 1.0), gamma, craft_blitter::CompositeOp::SourceOver)
-    {
-        return;
-    }
     for_rows(backdrop, src, |dst, s, x0, y| blend_span_fill(dst, s, x0, y, mode, opacity, fill, gamma));
 }
 
 /// [`blend_into`] mixing coverage in a `gamma` space (type layers).
 pub(crate) fn blend_into_g(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32, gamma: f32) {
-    if try_blit_rgba32f(&mut backdrop.px, &src.px, mode, opacity, gamma, craft_blitter::CompositeOp::SourceOver) {
-        return;
-    }
     for_rows(backdrop, src, |dst, s, x0, y| blend_span_g(dst, s, x0, y, mode, opacity, gamma));
 }
 
@@ -788,9 +747,6 @@ fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B
     // boolean read, so select the common Normal kernel once instead of once per pixel.
     if mode == BlendMode::Normal && gamma == 1.0 && !psblend::LAB_MIX.with(|l| l.get()) {
         return psblend::composite_normal_rgb_span(dst, src, opacity);
-    }
-    if try_blit_rgba32f(dst, src, mode, opacity, gamma, craft_blitter::CompositeOp::SourceOver) {
-        return;
     }
     for (x, (b, s)) in (x0..).zip(dst.iter_mut().zip(src)) {
         let mut s = *s;
