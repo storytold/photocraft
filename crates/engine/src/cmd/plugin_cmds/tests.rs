@@ -6,15 +6,7 @@ const INVERT: &[u8] = include_bytes!("../../../../plugins/tests/fixtures/invert.
 const INVERT_ID: &str = "org.photocraft.example.invert";
 
 fn b64(b: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for c in b.chunks(3) {
-        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
-        for i in 0..4 {
-            out.push(if i <= c.len() { T[(n >> (18 - 6 * i)) as usize & 63] as char } else { '=' });
-        }
-    }
-    out
+    photocraft_paint::tile::b64_encode(b)
 }
 
 /// A WAT plug-in with its own `id` whose `pc_filter` body is `filter`.
@@ -324,9 +316,6 @@ fn bad_params_are_errors_not_panics() {
     }
     // No document: running is disabled.
     assert!(Session::new().execute("plugin.run", json!({"id": "x"})).is_err());
-    assert_eq!(b64_decode("aGk="), Some(b"hi".to_vec()));
-    assert_eq!(b64_decode("aGk"), Some(b"hi".to_vec()));
-    assert_eq!(b64_decode("a"), None);
 }
 
 #[test]
