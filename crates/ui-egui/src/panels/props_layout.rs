@@ -17,6 +17,33 @@ pub const LABEL_GAP: f32 = 4.0;
 /// Horizontal gap between two label+field columns.
 pub const COL_GAP: f32 = 8.0;
 
+/// Maximum width of a Properties form; headers and separators keep the dock width.
+pub const CONTROL_MAX_W: f32 = 360.0;
+
+/// Consistent inset and row spacing for every Properties target.
+pub fn panel<R>(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
+        egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 4)).show(ui, contents).inner
+    })
+    .inner
+}
+
+/// Bound a section's controls without narrowing its header or separator.
+pub fn control_group<R>(ui: &mut egui::Ui, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.scope(|ui| {
+        ui.set_max_width(ui.available_width().min(CONTROL_MAX_W));
+        ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
+        contents(ui)
+    })
+    .inner
+}
+
+/// Use two action columns only when both translated captions fit their equal-width cells.
+pub fn action_columns(ui: &egui::Ui, labels: &[&str]) -> usize {
+    if labels.len() > 1 && widgets::button_width(ui, labels) * 2.0 + COL_GAP <= ui.available_width() { 2 } else { 1 }
+}
+
 /// A one-letter field label ("W", "H", "X", "Y") in a `w`-wide column, ending `pad` before its field. The letters
 /// stacked in one column share a centre (#7314): the widest of `column` stays flush right, and the narrower ones
 /// are centred on it rather than pushed against its right edge.
@@ -172,25 +199,28 @@ pub fn quick_actions_ui(app: &PhotocraftApp, ui: &mut egui::Ui, content: &LayerC
     if actions.is_empty() || !section(ui, "quick", "Quick Actions") {
         return None;
     }
-    let avail = ui.available_width();
-    let cols = if avail >= 360.0 { 2 } else { 1 };
-    let mut out = None;
-    for row in actions.chunks(cols) {
-        // A short last row (or a lone action) still spans the panel.
-        let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = COL_GAP;
-            for (label, id) in row {
-                let resp = widgets::secondary_button(ui, label, w);
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *label));
-                if resp.clicked() {
-                    out = Some(*id);
+    crate::props_layout::control_group(ui, |ui| {
+        let avail = ui.available_width();
+        let labels: Vec<_> = actions.iter().map(|(label, _)| *label).collect();
+        let cols = action_columns(ui, &labels);
+        let mut out = None;
+        for row in actions.chunks(cols) {
+            // A short last row (or a lone action) still spans the panel.
+            let w = ((avail - (row.len() - 1) as f32 * COL_GAP) / row.len() as f32).floor();
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = COL_GAP;
+                for (label, id) in row {
+                    let resp = widgets::fitted_secondary_button(ui, label, w);
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *label));
+                    if resp.clicked() {
+                        out = Some(*id);
+                    }
                 }
-            }
-        });
-        ui.add_space(theme::ROW_GAP);
-    }
-    out
+            });
+            ui.add_space(theme::ROW_GAP);
+        }
+        out
+    })
 }
 
 #[cfg(test)]

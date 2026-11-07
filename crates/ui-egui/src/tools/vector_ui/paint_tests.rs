@@ -85,6 +85,44 @@ fn stroke_width(h: &mut Harness<'_, PhotocraftApp>, width: &str) {
     h.run_steps(3);
 }
 
+#[test]
+fn live_shape_numeric_labels_wrap_with_their_fields() {
+    for width in [210.0, 260.0, 360.0] {
+        let mut app = app("rgb", 8);
+        app.run("shape.create", json!({"kind": "polygon", "rect": [10, 10, 80, 60], "sides": 5, "starRatio": 0.5})).unwrap();
+        let original = shape(&app).live.clone();
+        let history = app.session.active().unwrap().history.past_len();
+        let mut h = Harness::builder().with_size(vec2(500.0, 700.0)).build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                ui.set_max_width(width);
+                let id = app.session.active().unwrap().active_layer.unwrap();
+                shape_properties(app, ui, id);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.run_steps(4);
+        for label in ["W", "H", "Corner radius", "Sides", "Star ratio"] {
+            let caption = h.get_by_role_and_label(egui::Role::Label, label).rect();
+            let field = h.get_by_role_and_label(egui::Role::SpinButton, label).rect();
+            assert!((caption.center().y - field.center().y).abs() < 1.0, "{width}pt: {label} must stay beside its field");
+            assert!(field.left() >= caption.right(), "{width}pt: {label} must precede its field");
+        }
+        let sides = h.get_by_role_and_label(egui::Role::SpinButton, "Sides").rect();
+        let ratio = h.get_by_role_and_label(egui::Role::SpinButton, "Star ratio").rect();
+        if width == 210.0 {
+            assert!(ratio.top() > sides.bottom(), "the narrow panel wraps the whole Star ratio pair");
+        } else if width == 360.0 {
+            assert!((ratio.center().y - sides.center().y).abs() < 1.0, "pairs share a row when they fit");
+        }
+        assert_eq!(shape(h.state()).live, original);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+    }
+}
+
 /// #6191: passing through zero hides the stroke without discarding its paint or style.
 #[test]
 fn zero_width_preserves_selected_shape_stroke_and_restores_it() {

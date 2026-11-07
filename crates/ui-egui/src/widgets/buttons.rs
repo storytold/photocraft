@@ -47,6 +47,16 @@ pub fn secondary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
     button_impl(ui, label, min_width, t.field, t.text, false)
 }
 
+/// A secondary button constrained to its column, with the full caption on hover.
+pub fn fitted_secondary_button(ui: &mut Ui, label: &str, width: f32) -> Response {
+    let t = Tokens::get(ui.ctx());
+    let width = width.max(28.0);
+    let mut job = egui::text::LayoutJob::simple_singleline(tl!(label).to_owned(), theme::medium(13.0), t.text);
+    job.wrap = egui::text::TextWrapping::truncate_at_width((width - 28.0).max(0.0));
+    let galley = ui.painter().layout_job(job);
+    paint_button(ui, label, t.field, t.text, false, galley, vec2(width, button_height(ui.ctx()))).on_hover_text(tl!(label)).on_disabled_hover_text(tl!(label))
+}
+
 /// A [`secondary_button`] `height` points tall, for slim bars such as the status bar (#2823).
 pub fn compact_button(ui: &mut Ui, label: &str, height: f32) -> Response {
     let t = Tokens::get(ui.ctx());
@@ -163,8 +173,13 @@ fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color3
 
 /// [`button_impl`] with an explicit `height` (`None`: the theme's button height).
 fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, bg: Color32, fg: Color32, primary: bool) -> Response {
-    let t = Tokens::get(ui.ctx());
     let (galley, size) = button_layout(ui, label, min_width, height, fg);
+    paint_button(ui, label, bg, fg, primary, galley, size)
+}
+
+/// Paint shared button chrome around an already measured or elided caption.
+fn paint_button(ui: &mut Ui, label: &str, bg: Color32, fg: Color32, primary: bool, galley: std::sync::Arc<egui::Galley>, size: Vec2) -> Response {
+    let t = Tokens::get(ui.ctx());
     let h = size.y;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     // Painted text: name the button for accessibility (and so tests and agents can find it).

@@ -17,62 +17,69 @@ const STYLES: [(GradientStyle, &str); 5] = [
 pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let document = app.session.active().map(|s| s.doc.id);
     ui.push_id(("gradient-properties", document, layer.id.0), |ui| {
-        layer_controls(app, ui, layer);
+        layer_controls(app, ui, layer, true);
     });
 }
 
 pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     let document = app.session.active().map(|s| s.doc.id);
     ui.push_id(("gradient-editor-layer", document, layer.id.0), |ui| {
-        layer_controls(app, ui, layer);
+        layer_controls(app, ui, layer, false);
     });
 }
 
-fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, compact: bool) {
     if props_layout::section(ui, "gradient-fill-stops", "Gradient")
         && let Some(fill) = current_fill(app, layer.id)
     {
-        stops_editor_for(app, ui, Sink::Layer(layer.id), fill);
+        control_group(ui, compact, |ui| stops_editor_for(app, ui, Sink::Layer(layer.id), fill));
     }
-    options(app, ui, layer);
+    options(app, ui, layer, compact);
 }
 
-fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
+/// Only the docked Properties form is bounded; the separate editor follows its resized window.
+fn control_group<R>(ui: &mut egui::Ui, compact: bool, contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if compact { props_layout::control_group(ui, contents) } else { contents(ui) }
+}
+
+fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer, compact: bool) {
     let Some(Fill::Gradient { angle, scale, style, reverse, dither, align, .. }) = fill_of(layer).cloned() else { return };
     if props_layout::section(ui, "gradient-fill-options", "Gradient Options") {
-        ui.horizontal(|ui| {
-            row_label(ui, "Style");
-            ui.spacing_mut().item_spacing.x = 3.0;
-            for (value, name) in STYLES {
-                if style_button(ui, value, value == style, name).clicked() {
-                    let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "style": cmds::style_name(value)}));
+        control_group(ui, compact, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                row_label(ui, "Style");
+                ui.spacing_mut().item_spacing.x = 3.0;
+                for (value, name) in STYLES {
+                    if style_button(ui, value, value == style, name).clicked() {
+                        let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "style": cmds::style_name(value)}));
+                    }
                 }
+            });
+            if let Some(value) = numeric_row(ui, "angle", "Angle", angle, -180.0..=180.0, "°") {
+                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "angle": value}));
+            }
+            let (min, max) = cmds::SCALE_RANGE;
+            if let Some(value) = numeric_row(ui, "scale", "Scale", scale * 100.0, min * 100.0..=max * 100.0, "%") {
+                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "scale": value}));
+            }
+            ui.horizontal_wrapped(|ui| {
+                let mut value = reverse;
+                if widgets::checkbox(ui, &mut value, "Reverse").changed() {
+                    let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "reverse": value}));
+                }
+                let mut value = dither;
+                if widgets::checkbox(ui, &mut value, "Dither").changed() {
+                    let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "dither": value}));
+                }
+            });
+            let mut value = align;
+            if widgets::checkbox(ui, &mut value, "Align with layer").changed() {
+                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "align": value}));
+            }
+            if widgets::fitted_secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Centre the gradient (offset 0, 0)")).clicked() {
+                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "offset": [0, 0]}));
             }
         });
-        if let Some(value) = numeric_row(ui, "angle", "Angle", angle, -180.0..=180.0, "°") {
-            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "angle": value}));
-        }
-        let (min, max) = cmds::SCALE_RANGE;
-        if let Some(value) = numeric_row(ui, "scale", "Scale", scale * 100.0, min * 100.0..=max * 100.0, "%") {
-            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "scale": value}));
-        }
-        ui.horizontal_wrapped(|ui| {
-            let mut value = reverse;
-            if widgets::checkbox(ui, &mut value, "Reverse").changed() {
-                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "reverse": value}));
-            }
-            let mut value = dither;
-            if widgets::checkbox(ui, &mut value, "Dither").changed() {
-                let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "dither": value}));
-            }
-        });
-        let mut value = align;
-        if widgets::checkbox(ui, &mut value, "Align with layer").changed() {
-            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "align": value}));
-        }
-        if widgets::secondary_button(ui, "Reset Alignment", ui.available_width()).on_hover_text(tl!("Centre the gradient (offset 0, 0)")).clicked() {
-            let _ = app.run(cmds::SET, json!({"layer": layer.id.0, "offset": [0, 0]}));
-        }
     }
 }
 

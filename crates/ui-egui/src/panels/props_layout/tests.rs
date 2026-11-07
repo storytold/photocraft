@@ -137,7 +137,7 @@ fn other_kinds_use_the_same_headers() {
 }
 
 #[test]
-fn type_controls_fill_the_panel_at_every_width_and_scale() {
+fn type_controls_fit_a_bounded_form_at_every_width_and_scale() {
     for ppp in [1.0, 2.0] {
         for dw in [250.0, 380.0, 520.0] {
             let (s, layers) = kinds();
@@ -145,7 +145,8 @@ fn type_controls_fill_the_panel_at_every_width_and_scale() {
             let mut h = harness(s, ppp, dw);
             select(&mut h, ty);
             let hs = headers(&h);
-            let header = hs.iter().find(|(n, _)| n == "Character").unwrap().1;
+            let mut header = hs.iter().find(|(n, _)| n == "Character").unwrap().1;
+            header.max.x = header.left() + header.width().min(CONTROL_MAX_W);
             let what = format!("{ppp}x @ {dw}");
             // The editable family field and the style dropdown span the section.
             let name = h
@@ -224,6 +225,54 @@ fn field_width_divides_the_row() {
     }
     assert_eq!(field_width(10.0, 3, LABEL_W), 36.0);
     assert_eq!(field_width(f32::NAN, 0, LABEL_W), 36.0);
+}
+
+/// Elided captions stay inside their button and remain readable even when disabled.
+#[test]
+fn fitted_action_caption_fits_and_has_a_tooltip_when_disabled() {
+    const LABEL: &str = "Convert to Paragraph Text";
+    let lang = crate::i18n::Lang::from_pref("fr");
+    let caption = crate::i18n::with_language(lang, || tl!(LABEL).to_owned());
+    fn check_caption(shape: &egui::Shape, caption: &str, button: Rect) -> usize {
+        match shape {
+            egui::Shape::Text(text) if text.galley.job.text == caption => {
+                assert!(text.galley.elided, "the fixture must exercise a truncated caption");
+                let painted = text.visual_bounding_rect();
+                assert!(button.expand(0.5).contains_rect(painted), "caption {painted:?} exceeds button {button:?}");
+                1
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().map(|shape| check_caption(shape, caption, button)).sum(),
+            _ => 0,
+        }
+    }
+    for enabled in [false, true] {
+        for ppp in [1.0, 2.0] {
+            let mut h = Harness::builder().with_size(vec2(400.0, 160.0)).with_pixels_per_point(ppp).build_ui_state(
+                move |ui, clicks: &mut usize| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        crate::i18n::with_language(lang, || {
+                            if ui.add_enabled_ui(enabled, |ui| widgets::fitted_secondary_button(ui, LABEL, 120.0).clicked()).inner {
+                                *clicks += 1;
+                            }
+                        });
+                    }
+                },
+                0,
+            );
+            PhotocraftApp::setup_context(&h.ctx, theme::ThemeKind::Pro);
+            h.ctx.global_style_mut(|s| s.interaction.tooltip_delay = 0.0);
+            h.run_steps(5);
+            let button = h.get_by_role_and_label(egui::Role::Button, LABEL).rect();
+            let painted: usize = h.output().shapes.iter().map(|s| check_caption(&s.shape, &caption, button)).sum();
+            assert_eq!(painted, 1, "check the actual painted caption, not just the accessible button bounds");
+            h.get_by_role_and_label(egui::Role::Button, LABEL).hover();
+            h.run_steps(4);
+            assert!(h.query_by_role_and_label(egui::Role::Label, &caption).is_some(), "enabled={enabled}, scale={ppp}");
+            h.get_by_role_and_label(egui::Role::Button, LABEL).click();
+            h.run_steps(3);
+            assert_eq!(*h.state(), usize::from(enabled), "disabled tooltips must not enable the action");
+        }
+    }
 }
 
 #[test]

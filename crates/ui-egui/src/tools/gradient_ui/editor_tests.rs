@@ -6,7 +6,7 @@ use egui_kittest::{
     kittest::{NodeT, Queryable},
 };
 
-fn editor(layer: bool) -> (Harness<'static, PhotocraftApp>, Sink) {
+fn editor_app(layer: bool) -> (PhotocraftApp, Sink) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 200, "height": 120})).unwrap();
     let mut params = json!({"stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]], "transparency": [[0, 25], [0.5, 60], [1, 100]]});
@@ -19,6 +19,11 @@ fn editor(layer: bool) -> (Harness<'static, PhotocraftApp>, Sink) {
         app.run("gradient.presets.select", params).unwrap();
         Sink::Preset
     };
+    (app, sink)
+}
+
+fn editor(layer: bool) -> (Harness<'static, PhotocraftApp>, Sink) {
+    let (app, sink) = editor_app(layer);
     let mut h = Harness::builder().with_size(vec2(1000.0, 900.0)).build_ui_state(|ui, app: &mut PhotocraftApp| editor_window(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.run_steps(2);
@@ -50,6 +55,50 @@ fn type_number(h: &mut Harness<PhotocraftApp>, index: usize, value: &str, commit
     if commit {
         h.key_press(egui::Key::Enter);
         h.run_steps(3);
+    }
+}
+
+#[test]
+fn layer_editor_ramp_and_options_expand_with_the_window() {
+    let (mut h, sink) = editor(true);
+    let fill = sink.fill(h.state()).unwrap();
+    let history = h.state().session.active().unwrap().history.past_len();
+    let before = h.get_by_label("Gradient stops").rect().width();
+    let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique("gradient-editor"))).unwrap();
+    let grip = pos2(window.right() - 1.0, window.center().y);
+    let end = grip + vec2(250.0, 0.0);
+    h.drag_at(grip);
+    h.run_steps(2);
+    h.event(egui::Event::PointerMoved(end));
+    h.run_steps(3);
+    h.drop_at(end);
+    h.run_steps(3);
+    let after = h.get_by_label("Gradient stops").rect().width();
+    assert!(after > before + 200.0, "resizing the editor must widen its ramp: {before} -> {after}");
+    assert!((h.get_by_label("Reset Alignment").rect().width() - after).abs() < 1.0, "options follow the editor width too");
+    assert_eq!(sink.fill(h.state()).unwrap(), fill, "resizing does not change the gradient");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), history);
+}
+
+#[test]
+fn gradient_properties_ramp_and_options_remain_bounded_in_a_wide_panel() {
+    let (app, _) = editor_app(true);
+    let mut h = Harness::builder().with_size(vec2(1000.0, 900.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique("gradient-properties-ready")).unwrap_or(false)) {
+                return;
+            }
+            let layer = selected_gradient(app).unwrap();
+            properties_panel::show(app, ui, &layer);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("gradient-properties-ready"), true));
+    h.run_steps(4);
+    for label in ["Gradient stops", "Reset Alignment"] {
+        let width = h.get_by_label(label).rect().width();
+        assert!((width - crate::props_layout::CONTROL_MAX_W).abs() < 1.0, "Properties {label} stays bounded: {width}");
     }
 }
 

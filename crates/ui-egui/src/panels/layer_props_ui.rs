@@ -176,34 +176,36 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
         let (dw, dh) = app.session.active().map_or((1.0, 1.0), |s| (f64::from(s.doc.size.width), f64::from(s.doc.size.height)));
         let (tw, th) = (edit_tolerance(layer, u, dw), edit_tolerance(layer, u, dh));
         if section(ui, "transform", tl!("Transform")) {
-            let link_key = egui::Id::unique("layer-props-link");
-            let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
-            // Two label+field columns with the link toggle between them, filling the panel.
-            let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw, bb[2] - bb[0]), tw) {
-                    run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
-                }
-                if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
-                    ui.data_mut(|d| d.insert_temp(link_key, !linked));
-                }
-                if let Some(v) = field(ui, "h", ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh, bb[3] - bb[1]), th) {
-                    run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
-                }
+            crate::props_layout::control_group(ui, |ui| {
+                let link_key = egui::Id::unique("layer-props-link");
+                let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(true);
+                // Two label+field columns with the link toggle between them, filling the panel.
+                let w = ((ui.available_width() - 2.0 * (LABEL_W + LABEL_GAP) - LINK_W - 2.0 * LABEL_GAP) / 2.0).max(36.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = LABEL_GAP;
+                    if let Some(v) = field(ui, "w", ("W", "X"), "Width", (bb[2] - bb[0]) as f32, w, (u, dw, bb[2] - bb[0]), tw) {
+                        run.extend(transform_params(layer.id.0, bb, Some(v), None, linked, tw).map(|p| ("edit.transform".to_string(), p)));
+                    }
+                    if crate::icons::button(ui, if linked { "link" } else { "unlink" }, LINK_W, linked, tl!("Link width and height")).clicked() {
+                        ui.data_mut(|d| d.insert_temp(link_key, !linked));
+                    }
+                    if let Some(v) = field(ui, "h", ("H", "Y"), "Height", (bb[3] - bb[1]) as f32, w, (u, dh, bb[3] - bb[1]), th) {
+                        run.extend(transform_params(layer.id.0, bb, None, Some(v), linked, th).map(|p| ("edit.transform".to_string(), p)));
+                    }
+                });
+                ui.add_space(ROW_GAP);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = LABEL_GAP;
+                    if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw, dw), 0.5) {
+                        run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
+                    }
+                    ui.add_space(LINK_W + LABEL_GAP);
+                    if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh, dh), 0.5) {
+                        run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
+                    }
+                });
+                ui.add_space(ROW_GAP);
             });
-            ui.add_space(ROW_GAP);
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = LABEL_GAP;
-                if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw, dw), 0.5) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
-                }
-                ui.add_space(LINK_W + LABEL_GAP);
-                if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh, dh), 0.5) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
-                }
-            });
-            ui.add_space(ROW_GAP);
         }
     }
     // Gradient fills: their gradient first, as in Photoshop's Properties panel.
@@ -246,39 +248,41 @@ fn align_and_distribute(app: &PhotocraftApp, ui: &mut egui::Ui, run: &mut Vec<(S
     if !section(ui, "align", tl!("Align and Distribute")) {
         return;
     }
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        for (i, kind) in ["leftEdges", "horizontalCenters", "rightEdges", "topEdges", "verticalCenters", "bottomEdges"].into_iter().enumerate() {
-            if i == 3 {
-                ui.add_space(8.0);
+    crate::props_layout::control_group(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            for (i, kind) in ["leftEdges", "horizontalCenters", "rightEdges", "topEdges", "verticalCenters", "bottomEdges"].into_iter().enumerate() {
+                if i == 3 {
+                    ui.add_space(8.0);
+                }
+                let id = format!("layer.align.{kind}");
+                let on = app.session.is_enabled(&id);
+                let label = photocraft_engine::commands::find(&id).map_or(kind, |c| c.label);
+                let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), if on { Sense::click() } else { Sense::hover() });
+                if resp.hovered() && on {
+                    ui.painter().rect_filled(r, t.radius_sm, t.hover);
+                }
+                align_glyph(ui, r, kind, if on { t.icon } else { t.text_faint });
+                let tip = crate::i18n::fmt(tl!("Align {what}"), &[("what", tl!(&label))]);
+                resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &tip));
+                if resp.on_hover_text(tip).clicked() {
+                    run.push((id, json!({})));
+                }
             }
-            let id = format!("layer.align.{kind}");
-            let on = app.session.is_enabled(&id);
-            let label = photocraft_engine::commands::find(&id).map_or(kind, |c| c.label);
-            let (r, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), if on { Sense::click() } else { Sense::hover() });
-            if resp.hovered() && on {
-                ui.painter().rect_filled(r, t.radius_sm, t.hover);
+        });
+        // The engine already supports equal-gap distribution in both axes. Make those
+        // existing commands discoverable here as well as through Layer > Distribute (#2349).
+        // Three or more selected layers are required; the engine remains authoritative.
+        ui.horizontal_wrapped(|ui| {
+            for (kind, text) in [("horizontally", tl!("Horizontally")), ("vertically", tl!("Vertically"))] {
+                let id = format!("layer.distribute.{kind}");
+                if ui.add_enabled(app.session.is_enabled(&id), egui::Button::new(text)).clicked() {
+                    run.push((id, json!({})));
+                }
             }
-            align_glyph(ui, r, kind, if on { t.icon } else { t.text_faint });
-            let tip = crate::i18n::fmt(tl!("Align {what}"), &[("what", tl!(&label))]);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &tip));
-            if resp.on_hover_text(tip).clicked() {
-                run.push((id, json!({})));
-            }
-        }
+        });
+        ui.add_space(ROW_GAP);
     });
-    // The engine already supports equal-gap distribution in both axes. Make those
-    // existing commands discoverable here as well as through Layer > Distribute (#2349).
-    // Three or more selected layers are required; the engine remains authoritative.
-    ui.horizontal_wrapped(|ui| {
-        for (kind, text) in [("horizontally", tl!("Horizontally")), ("vertically", tl!("Vertically"))] {
-            let id = format!("layer.distribute.{kind}");
-            if ui.add_enabled(app.session.is_enabled(&id), egui::Button::new(text)).clicked() {
-                run.push((id, json!({})));
-            }
-        }
-    });
-    ui.add_space(ROW_GAP);
 }
 
 /// Several layers selected with the Background active: Photoshop's Properties keeps Align and
