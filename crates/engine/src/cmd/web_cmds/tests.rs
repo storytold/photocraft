@@ -357,6 +357,57 @@ fn webp_too_large_is_an_error() {
 }
 
 #[test]
+fn selected_slice_format_limits_are_checked_before_any_write() {
+    for (format, lossless, limit) in [("webp", false, 16_383_u32), ("webp", true, 16_384), ("gif", false, 65_535), ("jpeg", false, 65_535)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": limit + 2, "height": 1})).unwrap();
+        s.execute("slice.new", json!({"rect": [0, 0, 1, 1], "name": "small"})).unwrap();
+        let wide = s.execute("slice.new", json!({"rect": [1, 0, limit + 1, 1], "name": "wide"})).unwrap()["slice"].clone();
+        let mut params = json!({"format": format, "lossless": lossless, "dir": "downloads", "html": false});
+        for mode in ["all", "user", "selected"] {
+            params["slices"] = json!(mode);
+            if mode == "selected" {
+                params["numbers"] = json!([1, 2]);
+            }
+            let mut writes = 0;
+            let result = save_for_web_with_writer(&mut s, &params, &mut |_, _| {
+                writes += 1;
+                Ok(())
+            });
+            assert!(result.is_err(), "{format}/{lossless}/{mode}: the wide slice exceeds its codec limit");
+            assert_eq!(writes, 0, "{format}/{lossless}/{mode}: refuse before writing the small slice");
+            assert!(s.file_menu.last_web.is_none());
+        }
+        params["numbers"] = json!([1]);
+        let mut sizes = Vec::new();
+        save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+            sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sizes, [(1, 1)], "unselected oversized slices do not reject a valid export");
+
+        s.execute("slice.set", json!({"slice": wide, "rect": [1, 0, limit, 1]})).unwrap();
+        params["numbers"] = json!([2]);
+        sizes.clear();
+        save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+            if format == "webp" && lossless {
+                // image-webp 0.2.4 misreads valid 16,384-pixel VP8L dimensions as zero.
+                assert_eq!(&bytes[12..16], b"VP8L");
+                assert_eq!(bytes[20], 0x2f);
+                let header = u32::from_le_bytes(bytes[21..25].try_into().unwrap());
+                sizes.push(((header & 0x3fff) + 1, ((header >> 14) & 0x3fff) + 1));
+            } else {
+                sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sizes, [(limit, 1)], "{format}/{lossless}: the exact codec boundary remains valid");
+    }
+}
+
+#[test]
 fn platform_writer_checks_settings_before_dropping_floating_pixels() {
     let mut s = session(8);
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
