@@ -362,3 +362,79 @@ fn background_in_a_multiple_selection_keeps_align_and_distribute() {
     assert_eq!((b.x0 + b.x1) / 2, 150, "centred on the Background, which spans the canvas: {b:?}");
     assert_eq!(b.y0, 30, "only horizontally");
 }
+
+#[test]
+fn shape_properties_uses_vector_shape_icon() {
+    let (session, layers) = kinds();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+
+    assert!(crate::icons::exists("vector-shape"));
+
+    for (kind, id) in layers {
+        let layer = layer_of(&app, id);
+        let icon = kind_icon(&layer.content);
+
+        let expected_icon = match kind {
+            "pixel" => "image",
+            "shape" => "vector-shape",
+            "type" => "type",
+            _ => panic!("Unexpected layer kind: {kind}"),
+        };
+
+        assert_eq!(icon, expected_icon, "{kind}: Properties icon");
+    }
+}
+
+#[test]
+fn shape_header_paints_correct_icon() {
+    let (session, layers) = kinds();
+    let app = PhotocraftApp::new(session, crate::Services::default());
+
+    for (kind, id) in layers {
+        let layer = layer_of(&app, id);
+        let icon = kind_icon(&layer.content);
+        let mut ready = false;
+        let mut h = Harness::new_ui(move |ui| {
+            if !ready {
+                crate::theme::install_fonts(ui.ctx());
+                egui_extras::install_image_loaders(ui.ctx());
+                ready = true;
+                return;
+            }
+            header(ui, &layer);
+        });
+        h.run_steps(4);
+
+        let icon_sizes: Vec<_> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.brush.is_some() => Some(rect.rect.size()),
+                _ => None,
+            })
+            .collect();
+
+        let expected = 15.0;
+
+        assert_eq!(icon_sizes, vec![vec2(expected, expected)], "{kind}: Properties header icon size");
+
+        let expected_texture = h
+            .ctx
+            .try_load_texture(
+                &format!("bytes://icons/{icon}.svg"),
+                Default::default(),
+                egui::load::SizeHint::Size { width: expected as u32, height: expected as u32, maintain_aspect_ratio: false },
+            )
+            .unwrap()
+            .texture_id()
+            .expect("icon texture loaded");
+
+        let painted_texture = h.output().shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Rect(rect) => rect.brush.as_ref().map(|brush| brush.fill_texture_id),
+            _ => None,
+        });
+
+        assert_eq!(painted_texture, Some(expected_texture), "{kind}: Properties header must paint {icon}");
+    }
+}
