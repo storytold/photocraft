@@ -178,7 +178,8 @@ impl Headless {
         self.open_with_options(path, &opts)
     }
 
-    /// Open a file with custom import options and make it the active document.
+    /// Open a file with custom import options (a DDS texture's alpha, mip chain and flip
+    /// choices; a high-memory approval) and make it the active document.
     pub fn open_with_options(&mut self, path: &Path, opts: &photocraft_io::ImportOptions) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut o = match &self.filesystem {

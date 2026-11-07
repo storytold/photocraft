@@ -52,6 +52,16 @@ pub struct DocIndex {
 pub struct OpenParams {
     /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
+    /// DDS: the texture's alpha opens as an "Alpha 1" document channel, not the layer's
+    /// transparency.
+    #[serde(default, rename = "ddsAlphaChannel")]
+    pub dds_alpha_channel: Option<bool>,
+    /// DDS: each mip level opens as a layer.
+    #[serde(default, rename = "ddsMipmaps")]
+    pub dds_mipmaps: Option<bool>,
+    /// DDS: the rows open bottom-up.
+    #[serde(default, rename = "ddsFlip")]
+    pub dds_flip: Option<bool>,
     /// Explicitly approve high-memory PSD/PSB imports that fit within the hard memory budget.
     #[serde(default)]
     pub approve_high_memory: bool,
@@ -723,16 +733,34 @@ impl PhotocraftMcp {
 
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
+        let mut opts = photocraft_io::ImportOptions { psd_high_memory_approved: p.approve_high_memory, ..Default::default() };
+        if let Some(a) = p.dds_alpha_channel {
+            opts.dds.alpha_as_channel = a;
+        }
+        if let Some(m) = p.dds_mipmaps {
+            opts.dds.mips_as_layers = m;
+        }
+        if let Some(f) = p.dds_flip {
+            opts.dds.flip = f;
+        }
         let path = PathBuf::from(&p.path);
-        let approve = p.approve_high_memory;
-        if let Some(r) = self.headless_op(move |h| h.open_with_approval(&path, approve)).await {
+        if let Some(r) = self.headless_op(move |h| h.open_with_options(&path, &opts)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
         let mut params = json!({"path": p.path});
-        if approve {
+        if let Some(a) = p.dds_alpha_channel {
+            params["ddsAlphaChannel"] = json!(a);
+        }
+        if let Some(m) = p.dds_mipmaps {
+            params["ddsMipmaps"] = json!(m);
+        }
+        if let Some(f) = p.dds_flip {
+            params["ddsFlip"] = json!(f);
+        }
+        if p.approve_high_memory {
             params["approveHighMemory"] = json!(true);
         }
         to_result(b.call("app.open", params).await)

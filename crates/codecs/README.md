@@ -88,8 +88,10 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 * **DDS.** The top mip level of a 2D texture: uncompressed pixels described by channel masks
   (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha) or BC1/BC2/BC3 (DXT1/DXT3/DXT5),
   with the legacy header or the DX10 one. Uncompressed row padding follows the header's
-  `DDSD_PITCH` stride; without that flag, rows are tightly packed. Everything opens as U8; the
-  other mip levels are ignored. Cubemaps, texture arrays, volume textures, premultiplied DXT2/DXT4 and other formats
+  `DDSD_PITCH` stride; without that flag, rows are tightly packed. Everything opens as U8;
+  `decode_dds_levels` reads every mip level (for the File › Open "mipmaps as layers" choice)
+  and `dds_info` reports the texture's size, mip count, alpha and compression from its header
+  without decoding. Cubemaps, texture arrays, volume textures, premultiplied DXT2/DXT4 and other formats
   (BC4–BC7, float) are refused with `CodecError::Unsupported`. Writing (`EncodeOptions::dds`) makes
   a 2D texture with the legacy header: uncompressed by default (BGRA, BGRX, or luminance with or
   without alpha, so it reads back exactly), or BC1/BC2/BC3. The block encoder is our own, from

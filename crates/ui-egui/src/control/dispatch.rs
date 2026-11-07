@@ -1512,10 +1512,13 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     let p = &req.params;
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
-            Some(path) => match p.get("approveHighMemory") {
-                None | Some(Value::Null) => app_open(app, path, false),
-                Some(Value::Bool(approved)) => app_open(app, path, *approved),
-                Some(_) => err("expected boolean for `approveHighMemory`"),
+            Some(path) => match crate::dds_import_ui::params(p) {
+                Ok(dds) => match p.get("approveHighMemory") {
+                    None | Some(Value::Null) => app_open(app, path, dds, false),
+                    Some(Value::Bool(approved)) => app_open(app, path, dds, *approved),
+                    Some(_) => err("expected boolean for `approveHighMemory`"),
+                },
+                Err(e) => err(e),
             },
             None => err("missing `path`"),
         },
@@ -1536,8 +1539,8 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
 }
 
 /// The `app.open` control method: opens a path through the configured automation read
-/// capability, with optional high-memory approval.
-fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
+/// capability, with optional high-memory approval and DDS import answers.
+fn app_open(app: &mut PhotocraftApp, path: &str, dds: Option<photocraft_io::DdsImport>, approved: bool) -> Outcome {
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1547,7 +1550,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str, approved: bool) -> Outcome {
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes_with_approval(&name, &bytes, approved)?;
+        let warnings = app.open_automation_bytes_opts(&name, &bytes, approved, dds)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

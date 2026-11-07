@@ -47,7 +47,7 @@ pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
 pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_batch_open};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
+pub use open::{PLACE_EMBEDDED, dds_import_param, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
 use paths::is_file;
@@ -281,7 +281,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage),"ddsAlphaChannel":bool=false (DDS: the texture's alpha opens as an "Alpha 1" channel, not the layer's transparency),"ddsMipmaps":bool=false (DDS: each mip level a layer),"ddsFlip":bool=false (DDS: open the rows bottom-up)}"##,
             native,
             open_as
         ),

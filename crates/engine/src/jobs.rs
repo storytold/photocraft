@@ -1176,7 +1176,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background)
+        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1189,7 +1189,7 @@ impl Session {
     /// result is `{held, name, warnings, color}` (`color` the question): take it with
     /// [`Session::take_held_open`] once answered.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true)
+        self.start_open_inner(name, source, false, false, None, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
@@ -1202,7 +1202,13 @@ impl Session {
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background)
+        self.start_open_inner(name, source, true, false, None, None, background, None)
+    }
+
+    /// [`Self::start_open_for_user_with_background`] with `opts` as the import options: File ›
+    /// Open's DDS prompt answers go through here, replacing the preferences' DDS defaults.
+    pub fn start_open_with_options(&mut self, name: &str, source: OpenSource, opts: photocraft_io::ImportOptions, background: bool) -> Result<Started> {
+        self.start_open_inner(name, source, true, false, None, None, background, Some(opts.dds))
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1236,6 +1242,7 @@ impl Session {
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
+        dds: Option<photocraft_io::DdsImport>,
     ) -> Result<Started> {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
@@ -1243,6 +1250,9 @@ impl Session {
         let mut opts = import_options(self.prefs());
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
+        if let Some(dds) = dds {
+            opts.dds = dds;
+        }
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),

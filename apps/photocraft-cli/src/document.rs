@@ -5,7 +5,7 @@ use photocraft_automation::{Headless, files};
 use serde_json::{Value, json};
 
 use photocraft_engine::type_extra_cmds::missing_font_warnings;
-use photocraft_io::ExportOptions;
+use photocraft_io::{ExportOptions, ImportOptions};
 
 use crate::{
     CliError, Result,
@@ -30,7 +30,8 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
-    let import_opts = photocraft_io::ImportOptions { psd_high_memory_approved: a.approve_high_memory, ..Default::default() };
+    let mut import_opts = ImportOptions::from(&a.import);
+    import_opts.psd_high_memory_approved = a.approve_high_memory;
     let mut o = files::open_with_options(input, &import_opts)?;
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
@@ -107,7 +108,9 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         if let Some(out) = &a.out {
             refuse_overwriting_input(a.in_place, file, out)?;
         }
-        let o = h.open_with_approval(file, a.approve_high_memory)?;
+        let mut import_opts = ImportOptions::from(&a.import);
+        import_opts.psd_high_memory_approved = a.approve_high_memory;
+        let o = h.open_with_options(file, &import_opts)?;
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);

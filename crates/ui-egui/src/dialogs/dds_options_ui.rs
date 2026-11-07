@@ -56,7 +56,7 @@ pub fn park(app: &mut PhotocraftApp, path: String, copy: bool, record: &'static 
 
 /// The block compressions go by their format names, which stay untranslated like other
 /// technology names.
-fn label(c: DdsCompression) -> &'static str {
+pub(crate) fn compression_label(c: DdsCompression) -> &'static str {
     match c {
         DdsCompression::None => tl!("None"),
         DdsCompression::Bc1 => "BC1 / DXT1",
@@ -77,7 +77,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         crate::widgets::section_label(ui, tl!("Compression"));
         for c in DdsCompression::ALL {
-            ui.radio_value(&mut options.compression, c, label(c));
+            ui.radio_value(&mut options.compression, c, compression_label(c));
         }
         ui.add_space(8.0);
         crate::widgets::checkbox(ui, &mut options.mipmaps, tl!("Generate Mipmaps"));

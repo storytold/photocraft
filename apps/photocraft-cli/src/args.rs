@@ -89,6 +89,21 @@ pub(crate) struct ExportArgs {
     pub(crate) pcraft_full_composite: bool,
 }
 
+// How a DDS input is opened: shared by `convert`, `run` and `batch`, which all read files.
+#[derive(Args)]
+pub(crate) struct ImportArgs {
+    /// Open a DDS texture's alpha as an "Alpha 1" document channel rather than transparency
+    /// (game textures often carry data, such as specular maps, in it)
+    #[arg(long)]
+    pub(crate) dds_alpha_channel: bool,
+    /// Open each mip level of a DDS texture as a layer
+    #[arg(long)]
+    pub(crate) dds_mips_as_layers: bool,
+    /// Open a DDS's rows flipped vertically
+    #[arg(long)]
+    pub(crate) dds_load_flip: bool,
+}
+
 /// Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …)
 ///
 /// An <OUT> that is the <IN> file is refused, as the result would replace the original;
@@ -109,6 +124,8 @@ pub(crate) struct ConvertArgs {
     pub(crate) approve_high_memory: bool,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
 }
@@ -159,6 +176,8 @@ pub(crate) struct RunArgs {
     pub(crate) approve_high_memory: bool,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
     /// `--cmd` and `--params` values in command-line order, set by [`parse`].
@@ -219,6 +238,8 @@ pub(crate) struct BatchArgs {
     pub(crate) approve_high_memory: bool,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
+    #[command(flatten)]
+    pub(crate) import: ImportArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
 }

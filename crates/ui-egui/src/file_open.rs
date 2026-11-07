@@ -139,27 +139,33 @@ impl PhotocraftApp {
     /// `path` for File › Save unless it is a derivative preview, and `path` goes to the top of Open Recent. Returns the import
     /// warnings (also shown to the user).
     pub fn open_file(&mut self, path: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
-        self.open_file_placed(path, bytes, None, None)
+        self.open_file_placed(path, bytes, None, None, None)
     }
 
-    /// [`Self::open_file`] for a file dropped on a tab slot or opened as one of a set.
+    /// [`Self::open_file`] for a file dropped on a tab slot or opened as one of a set; `dds`
+    /// carries the DDS import answers (`None` parks a texture with choices behind the prompt,
+    /// #8632).
     pub(crate) fn open_file_placed(
         &mut self,
         path: &str,
         bytes: &[u8],
         slot: Option<usize>,
         order: Option<crate::jobs_ui::OpenOrder>,
+        dds: Option<photocraft_io::DdsImport>,
     ) -> Result<Vec<String>, String> {
         // Brushes/gradients go to the preset libraries (no document, no Open Recent entry).
         if let Some(r) = crate::preset_files_ui::open(self, path, bytes) {
             return r.map(|()| Vec::new());
         }
         if self.background_jobs {
+            if dds.is_none() && crate::dds_import_ui::park_bytes(self, display_name(path), Some(path.to_string()), bytes, slot, order) {
+                return Ok(Vec::new());
+            }
             // The path and Open Recent are recorded when the background open finishes.
-            crate::jobs_ui::start_open(self, &display_name(path), Some(path.to_string()), crate::jobs_ui::bytes(bytes), slot, order)?;
+            crate::jobs_ui::start_open_opts(self, &display_name(path), Some(path.to_string()), crate::jobs_ui::bytes(bytes), slot, order, dds)?;
             return Ok(Vec::new());
         }
-        self.open_bytes_placed(&display_name(path), bytes, Some(path), slot, order)
+        self.open_bytes_placed(&display_name(path), bytes, Some(path), slot, order, dds)
     }
 
     /// Record that the active document was just opened from `path`: File › Save writes back to it
@@ -188,13 +194,27 @@ impl PhotocraftApp {
     /// Read and open the file at `path` (see [`open_file`](Self::open_file)).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
-        self.open_path_placed(path, None, None)
+        self.open_path_placed(path, None, None, None)
+    }
+
+    /// [`Self::open_path`] with the DDS import answers; `None` asks the DDS Import prompt first
+    /// when the texture has a mip chain or an alpha channel.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_path_opts(&mut self, path: &str, dds: Option<photocraft_io::DdsImport>) -> Result<Vec<String>, String> {
+        self.open_path_placed(path, None, None, dds)
     }
 
     /// [`Self::open_path`] for a file dropped on a tab slot or opened as one of a set: the slot
-    /// and order survive an inline memory/profile prompt and the document's final placement.
+    /// and order survive an inline memory/profile prompt, a parked DDS Import prompt and the
+    /// document's final placement.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_path_placed(&mut self, path: &str, slot: Option<usize>, order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
+    fn open_path_placed(
+        &mut self,
+        path: &str,
+        slot: Option<usize>,
+        order: Option<crate::jobs_ui::OpenOrder>,
+        dds: Option<photocraft_io::DdsImport>,
+    ) -> Result<Vec<String>, String> {
         if self.show_if_open(path) {
             return Ok(Vec::new());
         }
@@ -202,18 +222,33 @@ impl PhotocraftApp {
         // would block the window). Preset files (brushes, gradients) go the usual way.
         let ext = std::path::Path::new(path).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         if self.background_jobs && !crate::preset_files_ui::PRESET_EXTS.contains(&ext.as_str()) {
-            crate::jobs_ui::start_open(
+            if dds.is_none()
+                && let Some(info) = crate::dds_import_ui::wants_path(path)
+            {
+                crate::dds_import_ui::park(
+                    self,
+                    display_name(path),
+                    Some(path.to_string()),
+                    photocraft_engine::jobs::OpenSource::Path(path.to_string()),
+                    info,
+                    slot,
+                    order,
+                );
+                return Ok(Vec::new());
+            }
+            crate::jobs_ui::start_open_opts(
                 self,
                 &display_name(path),
                 Some(path.to_string()),
                 photocraft_engine::jobs::OpenSource::Path(path.to_string()),
                 slot,
                 order,
+                dds,
             )?;
             return Ok(Vec::new());
         }
         let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| format!("{path}: {e}"))?;
-        self.open_file_placed(path, &bytes, slot, order)
+        self.open_file_placed(path, &bytes, slot, order, dds)
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -221,9 +256,21 @@ impl PhotocraftApp {
         Err(format!("cannot open paths on the web: {path}"))
     }
 
+    /// [`Self::open_path_opts`]'s stub: the web build can't read paths.
+    #[cfg(target_arch = "wasm32")]
+    pub fn open_path_opts(&mut self, path: &str, _dds: Option<photocraft_io::DdsImport>) -> Result<Vec<String>, String> {
+        self.open_path(path)
+    }
+
     /// The web has no filesystem paths: a drop read by the shell arrives as bytes.
     #[cfg(target_arch = "wasm32")]
-    fn open_path_placed(&mut self, path: &str, _slot: Option<usize>, _order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
+    fn open_path_placed(
+        &mut self,
+        path: &str,
+        _slot: Option<usize>,
+        _order: Option<crate::jobs_ui::OpenOrder>,
+        _dds: Option<photocraft_io::DdsImport>,
+    ) -> Result<Vec<String>, String> {
         Err(format!("cannot open paths on the web: {path}"))
     }
 
@@ -235,6 +282,11 @@ impl PhotocraftApp {
         // The command line's files open before the first frame, which otherwise applies the
         // interface language: their status lines and notices would come out in English.
         crate::i18n::set_current(crate::i18n::Lang::from_pref(&self.session.prefs().interface.language));
+        self.open_paths_opts(paths, None)
+    }
+
+    /// [`Self::open_paths`] with the DDS import answers `file.open` was scripted.
+    pub(crate) fn open_paths_opts(&mut self, paths: &[String], dds: Option<photocraft_io::DdsImport>) -> usize {
         let mut paths: Vec<String> = paths.iter().map(|p| absolute(p)).collect();
         paths.sort_by(|a, b| natural_cmp(a, b));
         let batch = crate::jobs_ui::begin_batch(self);
@@ -245,9 +297,10 @@ impl PhotocraftApp {
                 continue;
             }
             let order = crate::jobs_ui::OpenOrder { batch, seq };
-            // The order travels with the open: a background tab, an inline document, or a memory
-            // prompt that is answered later all place the file at its place in the set.
-            match self.open_path_placed(abs, None, Some(order)) {
+            // The order travels with the open: a background tab, an inline document, a parked DDS
+            // Import prompt, or a memory prompt that is answered later all place the file at its
+            // place in the set.
+            match self.open_path_placed(abs, None, Some(order), dds) {
                 Ok(_) => opened += 1,
                 Err(e) => self.open_failed(&display_name(abs), &e),
             }
@@ -275,7 +328,8 @@ impl PhotocraftApp {
             crate::open_prompt::advance_memory(self);
             self.ui.chrome.home = None;
             return true;
-        } else {
+        // Parked behind the DDS Import prompt: its modal shows once earlier parked opens are answered.
+        } else if !self.dds_imports.iter().any(|p| p.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
             return false;
         }
         // The document count didn't change, so the Home screen wouldn't give way by itself.
@@ -375,18 +429,23 @@ impl PhotocraftApp {
     /// answered). True when it took the slot.
     fn open_dropped_file(&mut self, f: &egui::DroppedFileHandle, name: &str, slot: Option<usize>) -> Result<bool, String> {
         let (docs, opens) = (self.session.documents().len(), self.jobs.opens.len());
+        let parked = self.dds_imports.len();
         let held = self.held_opens.len() + self.held_memory_prompts.len();
-        // The slot travels with the open through the inline document, a background tab and a
-        // memory/profile prompt, so no separate move here can land on another document.
+        // The slot travels with the open through the inline document, a background tab, a parked
+        // DDS Import prompt and a memory/profile prompt, so no separate move here can land on
+        // another document.
         if f.path().is_absolute() {
-            self.open_path_placed(&path_text(f.path(), false)?, slot, None)?;
+            self.open_path_placed(&path_text(f.path(), false)?, slot, None, None)?;
         } else {
-            self.open_bytes_placed(name, &crate::read_dropped(&**f)?, None, slot, None)?;
+            self.open_bytes_placed(name, &crate::read_dropped(&**f)?, None, slot, None, None)?;
         }
         if slot.is_none() {
             return Ok(false);
         }
-        let took = self.jobs.opens.len() > opens || self.session.documents().len() > docs || self.held_opens.len() + self.held_memory_prompts.len() > held;
+        let took = self.jobs.opens.len() > opens
+            || self.session.documents().len() > docs
+            || self.dds_imports.len() > parked
+            || self.held_opens.len() + self.held_memory_prompts.len() > held;
         Ok(took)
     }
 
