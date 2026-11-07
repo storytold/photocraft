@@ -1,7 +1,6 @@
 use super::panel::chevron_icon;
 use super::scrub::take_label_scrub_name;
-use super::slider::wheel_notches_of;
-use super::{Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, Vec2, pos2, type_ahead, vec2};
+use super::{Pos2, Rect, Response, Sense, Stroke, Tokens, Ui, pos2, type_ahead, vec2};
 
 /// A compact labelled dropdown in the studio style.
 pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
@@ -23,8 +22,9 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str,
 
 /// [`dropdown_hovered`] whose value also steps with the wheel over its button or open list: down
 /// picks the next option, up the previous one, one per notch (Shift too), stopping at the ends
-/// (Photoshop's Layers panel blend modes, #1747). The wheel then scrolls neither the list, which
-/// follows the value instead, nor what the dropdown is in. Returns every option chosen this frame
+/// (Photoshop's Layers panel blend modes, #1747), for a wheel gesture that starts over either
+/// (#11353). The wheel then scrolls neither the list, which follows the value instead, nor what
+/// the dropdown is in. Returns every option chosen this frame
 /// in order (one per notch; the last is `current`) and the option under the pointer in the open
 /// list, none while the pointer rests where the wheel last stepped.
 pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
@@ -91,10 +91,12 @@ fn dropdown_with<T: PartialEq + Clone>(
                 reveal = true;
                 keyed = true;
             }
-            // Over the open list the wheel steps the value too, instead of scrolling the list.
+            // Over the open list the wheel steps the value too, instead of scrolling the list: a
+            // gesture that started over the list or the button, not one scrolling the panel that
+            // carried the list under the pointer (#11353).
             over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
             if over_list {
-                let stepped = wheel_steps(ui, wheel_id, true, current, options);
+                let stepped = wheel_steps(crate::field_wheel::hover_notches(ui, wheel_id, ui.clip_rect(), 1.0), current, options);
                 wheeled = !stepped.is_empty();
                 reveal |= wheeled;
                 chosen.extend(stepped);
@@ -140,7 +142,10 @@ fn dropdown_with<T: PartialEq + Clone>(
         chosen.push(current.clone());
     }
     if wheel && !over_list {
-        let stepped = wheel_steps(ui, wheel_id, response.hovered(), current, options);
+        // A gesture that started over the button or the open list, not one scrolling the panel
+        // past it (#11353). Asked off them too, so a gesture that leaves them is the panel's.
+        let notches = crate::field_wheel::hover_notches(ui, wheel_id, response.rect, 1.0);
+        let stepped = wheel_steps(notches, current, options);
         wheeled = !stepped.is_empty();
         if wheeled && craft_ui::ComboBox::is_open(ui.ctx(), response.id) {
             ui.data_mut(|d| d.insert_temp(reveal_id, true));
@@ -188,14 +193,9 @@ fn wheel_rests(ui: &Ui, id: egui::Id, wheeled: bool) -> bool {
     rests
 }
 
-/// The options the wheel over dropdown `id` (while `hovered`) steps `current` through this frame,
-/// one per notch, in order; the last is the new `current`. While the pointer is over it the wheel
-/// scrolls nothing else.
-fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
-    if hovered {
-        ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
-    }
-    let notches = wheel_notches_of(ui, id, hovered, 1.0);
+/// The options `notches` wheel notches step `current` through, one per notch, in order; the last
+/// is the new `current`.
+fn wheel_steps<T: PartialEq + Clone>(notches: f32, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
     let Some(mut index) = options.iter().position(|(v, _)| v == current) else { return Vec::new() };
     let mut chosen = Vec::new();
     // Down (negative) is the next option. No more steps than there are options.

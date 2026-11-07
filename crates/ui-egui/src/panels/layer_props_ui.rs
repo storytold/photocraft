@@ -410,7 +410,6 @@ mod tests {
                     PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
                     return;
                 }
-                crate::field_wheel::begin_frame(ui.ctx());
                 let state = app.session.active().unwrap();
                 let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
                 properties(app, ui, &layer);
@@ -468,7 +467,6 @@ mod tests {
                     PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
                     return;
                 }
-                crate::field_wheel::begin_frame(ui.ctx());
                 let state = app.session.active().unwrap();
                 let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
                 properties(app, ui, &layer);
@@ -524,7 +522,6 @@ mod tests {
                     PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
                     return;
                 }
-                crate::field_wheel::begin_frame(ui.ctx());
                 if ui.data(|d| d.get_temp::<bool>(hide)).unwrap_or(false) {
                     return;
                 }
@@ -586,7 +583,6 @@ mod tests {
                     PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
                     return;
                 }
-                crate::field_wheel::begin_frame(ui.ctx());
                 let state = app.session.active().unwrap();
                 let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
                 properties(app, ui, &layer);
@@ -635,7 +631,6 @@ mod tests {
                     PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
                     return;
                 }
-                crate::field_wheel::begin_frame(ui.ctx());
                 let state = app.session.active().unwrap();
                 let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
                 properties(app, ui, &layer);
@@ -687,7 +682,6 @@ mod tests {
                     PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
                     return;
                 }
-                crate::field_wheel::begin_frame(ui.ctx());
                 let state = app.session.active().unwrap();
                 let layer = state.doc.layer(state.active_layer.unwrap()).unwrap().clone();
                 properties(app, ui, &layer);
