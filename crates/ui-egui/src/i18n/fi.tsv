@@ -4817,3 +4817,12 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.
 	A picked document is no longer open.	Yksi valituista asiakirjoista ei ole enää auki.
 	A picked document is no longer a grayscale document of the same size.	Yksi valituista asiakirjoista ei ole enää samankokoinen harmaasävyasiakirja.
+# Move tool options bar (#11381)
+	Align top edges	Tasaa yläreunat
+	Align vertical centers	Tasaa pystykeskikohdat
+	Align bottom edges	Tasaa alareunat
+	Distribute vertically	Jaa pystysuunnassa
+	Distribute horizontally	Jaa vaakasuunnassa
+	Show layer bounds on hover	Näytä tason rajat osoitettaessa
+	Expand layer group on click	Laajenna tasoryhmä napsautuksella
+	Show hover bounds from Layers	Näytä rajat osoitettaessa Tasot-paneelista
