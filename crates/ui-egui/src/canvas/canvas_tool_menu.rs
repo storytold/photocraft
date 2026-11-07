@@ -69,6 +69,12 @@ pub struct NotesMenu {
     pub at: [f64; 2],
     /// Opened with the Note tool (the Move tool gets the menu only on a note).
     pub note_tool: bool,
+    /// The document, and the note right-clicked, as they were when the menu opened: once either
+    /// changes, Open, Close and Delete Note grey, so a shifted index never reaches another note.
+    #[serde(default)]
+    pub document: u64,
+    #[serde(default)]
+    pub was: Option<photocraft_doc::Note>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -461,15 +467,23 @@ pub const NOTES_MENU: &[Row] = &[
 /// Notes panel, Open Note greys and Close Note comes alive (with the Note tool it stays grey).
 fn notes_enabled(app: &PhotocraftApp, n: &NotesMenu, command: &str) -> bool {
     let any = app.session.active().is_some_and(|d| !d.doc.notes.is_empty());
-    let open = n.note.is_some_and(|i| crate::analysis_ui::note_open(app, i));
+    let note = menu_note(app, n);
+    let open = note.is_some_and(|i| crate::analysis_ui::note_open(app, i));
     match command {
         NOTE_NEW | "file.import.notes" => n.note.is_none(),
-        NOTE_OPEN => n.note.is_some() && (n.note_tool || !open),
-        NOTE_CLOSE => n.note.is_some() && !n.note_tool && open,
-        NOTE_DELETE => n.note.is_some(),
+        NOTE_OPEN => note.is_some() && (n.note_tool || !open),
+        NOTE_CLOSE => note.is_some() && !n.note_tool && open,
+        NOTE_DELETE => note.is_some(),
         NOTE_DELETE_ALL => any,
         _ => false,
     }
+}
+
+/// The right-clicked note's index while it is still that note, in the same document.
+fn menu_note(app: &PhotocraftApp, n: &NotesMenu) -> Option<usize> {
+    let i = n.note?;
+    let st = app.session.active()?;
+    (st.doc.id.0 == n.document && st.doc.notes.get(i) == n.was.as_ref()).then_some(i)
 }
 
 /// A notes-menu row: New Note at the right-clicked point (history "New Note"), Import Notes… as
@@ -1029,7 +1043,8 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let note = if matches!(tool, Tool::Note | Tool::Move) { doc.and_then(|d| crate::analysis_ui::note_at(app, d)) } else { None };
     if tool == Tool::Note || note.is_some() {
         // No document: no menu, as before (its New Note and Import Notes… would have nothing to add to).
-        let Some(at) = doc.filter(|_| app.session.active().is_some()) else { return false };
+        let Some((at, st)) = doc.zip(app.session.active()) else { return false };
+        let (document, was) = (st.doc.id.0, note.and_then(|i| st.doc.notes.get(i).cloned()));
         app.ui.brush_picker = None;
         app.ui.layer_menu = None;
         app.ui.canvas_tool_menu = Some(CanvasToolMenu {
@@ -1048,7 +1063,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
             crop: None,
             sampler: None,
             sampler_at: None,
-            notes: Some(NotesMenu { note, at, note_tool: tool == Tool::Note }),
+            notes: Some(NotesMenu { note, at, note_tool: tool == Tool::Note, document, was }),
         });
         crate::canvas_popup::mark_open(ctx, menu_id());
         return true;

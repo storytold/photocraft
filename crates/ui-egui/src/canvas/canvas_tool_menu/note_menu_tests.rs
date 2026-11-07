@@ -173,3 +173,19 @@ fn no_notes_menu_without_a_document() {
     assert!(!open_at(&mut app, &ctx, Tool::Note, [10.0, 10.0], Some([20.0, 20.0])), "no document: no menu, so no Import Notes… or New Note to choose");
     assert!(app.ui.canvas_tool_menu.is_none());
 }
+
+#[test]
+fn a_menu_whose_note_moved_acts_on_no_other_note() {
+    let (mut shifted, ctx) = app();
+    let menu = right_click(&mut shifted, &ctx, Tool::Note, [24.0, 25.0]);
+    // Note 0 goes while the menu is open (another client, say): note 0 is now "two".
+    shifted.run("notes.delete", json!({"index": 0})).unwrap();
+    assert!(!entry_enabled(&shifted, &menu, NOTE_OPEN) && !entry_enabled(&shifted, &menu, NOTE_DELETE), "Open and Delete grey: their note is gone");
+    choose(&mut shifted, &ctx, NOTE_DELETE);
+    assert!(!shifted.ui.dialogs.iter().any(|d| crate::analysis_ui::owns_delete_note(&d.fields)), "no alert to delete another note");
+    // Out of range: the menu on note 1, then note 0 goes.
+    let (mut app, ctx) = app();
+    let menu = right_click(&mut app, &ctx, Tool::Note, [124.0, 55.0]);
+    app.run("notes.delete", json!({"index": 0})).unwrap();
+    assert!(!entry_enabled(&app, &menu, NOTE_OPEN), "Open Note greys for a note that is gone");
+}
