@@ -618,6 +618,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             widgets::checkbox(ui, &mut o.move_show_transform, tl!("Show Transform Controls"));
             widgets::vline(ui, 22.0);
             crate::align_bar::options(app, ui);
+            crate::align_bar::gear(app, ui);
         }
         Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
         Tool::Zoom => {
