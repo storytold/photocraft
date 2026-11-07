@@ -294,7 +294,10 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 Some((g, i)) => app.ui.analysis.drag = Some(Drag::Count(g, i, [x, y])),
                 None if !mods.alt => {
-                    let _ = app.run("count.add", json!({"x": x, "y": y}));
+                    // A new marker turns View › Show › Count back on (no history state), so it and
+                    // the older ones show (#11770); a hidden group's own eye stays off.
+                    let added = app.run("count.add", json!({"x": x, "y": y})).is_ok();
+                    app.ui.view.show.count |= added;
                 }
                 None => {}
             }
@@ -988,3 +991,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+#[path = "count_show_extras_tests.rs"]
+mod count_show_extras_tests;
