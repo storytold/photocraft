@@ -85,6 +85,9 @@ pub fn warp_mesh_surface_with(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f6
 }
 
 fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp, ctl: &Interrupt) -> Surface {
+    // Clear pixels carry no colour once premultiplied, so they are not content whatever colour they are stored in
+    // (white and black copies of one shape must warp alike, #10639): only the covered part of the rect is warped.
+    let src_rect = src_rect.intersect(&src.covered_bounds());
     if src_rect.is_empty() {
         let fmt = src.format();
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
@@ -616,6 +619,110 @@ mod tests {
         }
     }
 
+    #[test]
+    fn white_and_black_clear_pixels_warp_alike() {
+        let mut white = Surface::new(PixelFormat::RGBA8);
+        white.fill_rect(Rect::new(0, 0, 96, 96), &[1.0, 1.0, 1.0, 0.0]);
+        let mut black = Surface::new(PixelFormat::RGBA8);
+        black.fill_rect(Rect::new(0, 0, 96, 96), &[0.0, 0.0, 0.0, 0.0]);
+        for src in [&mut white, &mut black] {
+            src.fill_rect(Rect::new(32, 32, 64, 64), &[0.2, 0.4, 0.6, 1.0]);
+        }
+        assert_eq!(white.content_bounds(), Rect::new(0, 0, 96, 96));
+        assert_eq!(black.content_bounds(), Rect::new(32, 32, 64, 64));
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let rotate = |x: f64, y: f64| (48.0 + 0.6 * ((x - 48.0) * cos - (y - 48.0) * sin), 48.0 + 0.6 * ((x - 48.0) * sin + (y - 48.0) * cos));
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let a = warp_mesh_surface(&white, white.content_bounds(), &rotate, interp);
+            let b = warp_mesh_surface(&black, black.content_bounds(), &rotate, interp);
+            let bounds = a.tile_bounds().union(&b.tile_bounds()).inflate(8);
+            for y in bounds.y0..bounds.y1 {
+                for x in bounds.x0..bounds.x1 {
+                    let aa = a.sample_channel(x, y, 3);
+                    let ba = b.sample_channel(x, y, 3);
+                    assert!((aa - ba).abs() <= 1e-4, "{interp:?} ({x}, {y}): white {aa}, black {ba}");
+                }
+            }
+        }
+    }
+
+    fn clear_surfaces() -> (Surface, Surface) {
+        let mut white = Surface::new(PixelFormat::RGBA8);
+        white.fill_rect(Rect::new(0, 0, 96, 96), &[1.0, 1.0, 1.0, 0.0]);
+        let mut black = Surface::new(PixelFormat::RGBA8);
+        black.fill_rect(Rect::new(0, 0, 96, 96), &[0.0, 0.0, 0.0, 0.0]);
+        for src in [&mut white, &mut black] {
+            src.fill_rect(Rect::new(32, 32, 64, 64), &[0.2, 0.4, 0.6, 1.0]);
+        }
+        (white, black)
+    }
+
+    fn assert_alpha_alike(a: &Surface, b: &Surface, what: &str) {
+        let bounds = a.tile_bounds().union(&b.tile_bounds()).inflate(8);
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                let (aa, ba) = (a.sample_channel(x, y, 3), b.sample_channel(x, y, 3));
+                assert!((aa - ba).abs() <= 1e-4, "{what} ({x}, {y}): {aa} vs {ba}");
+            }
+        }
+    }
+
+    #[test]
+    fn white_and_black_clear_pixels_transform_alike() {
+        use crate::transform::{Homography, warp_surface};
+        let (white, black) = clear_surfaces();
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let (a, b, c, d) = (0.6 * cos, -0.6 * sin, 0.6 * sin, 0.6 * cos);
+        let h = Homography([a, b, 48.0 - a * 48.0 - b * 48.0, c, d, 48.0 - c * 48.0 - d * 48.0, 0.0, 0.0, 1.0]);
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let (Ok(x), Ok(y)) = (warp_surface(&white, white.content_bounds(), &h, interp), warp_surface(&black, black.content_bounds(), &h, interp)) else {
+                panic!("allocation");
+            };
+            assert_alpha_alike(&x, &y, &format!("{interp:?}"));
+        }
+    }
+
+    #[test]
+    fn tight_and_padded_source_rects_warp_alike() {
+        let (_, black) = clear_surfaces();
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let rotate = |x: f64, y: f64| (48.0 + 0.6 * ((x - 48.0) * cos - (y - 48.0) * sin), 48.0 + 0.6 * ((x - 48.0) * sin + (y - 48.0) * cos));
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let tight = warp_mesh_surface(&black, black.content_bounds(), &rotate, interp);
+            let padded = warp_mesh_surface(&black, black.content_bounds().inflate(8), &rotate, interp);
+            assert_alpha_alike(&tight, &padded, &format!("{interp:?}"));
+        }
+    }
+
+    #[test]
+    fn a_selection_rect_keeps_a_hard_edge() {
+        use crate::transform::{Homography, warp_surface};
+        // Opaque red all over; the source rect cuts it. Nothing outside the rect may be pulled in.
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 64, 64), &[1.0, 0.0, 0.0, 1.0]);
+        let rect = Rect::new(16, 16, 48, 48);
+        let (sin, cos) = 15.0_f64.to_radians().sin_cos();
+        let rotate = |x: f64, y: f64| (32.0 + (x - 32.0) * cos - (y - 32.0) * sin, 32.0 + (x - 32.0) * sin + (y - 32.0) * cos);
+        let h = Homography([cos, -sin, 32.0 - 32.0 * cos + 32.0 * sin, sin, cos, 32.0 - 32.0 * sin - 32.0 * cos, 0.0, 0.0, 1.0]);
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let mesh = warp_mesh_surface(&src, rect, &rotate, interp);
+            let Ok(hom) = warp_surface(&src, rect, &h, interp) else { panic!("allocation") };
+            for (name, out) in [("mesh", &mesh), ("homography", &hom)] {
+                for y in -10..80 {
+                    for x in -10..80 {
+                        // Where this output pixel's centre comes from in the source.
+                        let (px, py) = (f64::from(x) + 0.5 - 32.0, f64::from(y) + 0.5 - 32.0);
+                        let (u, v) = (32.0 + px * cos + py * sin, 32.0 - px * sin + py * cos);
+                        let outside = (16.0 - u).max(u - 48.0).max(16.0 - v).max(v - 48.0);
+                        if outside >= 1.5 {
+                            let a = out.sample_channel(x, y, 3);
+                            assert!(a < 1e-4, "{name} {interp:?} ({x}, {y}): alpha {a}, {outside:.2} px outside the rect");
+                        }
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn a_rotated_soft_edged_sprite_keeps_its_colour() {
         // #6203, as in Free Transform: the bicubic alpha overshoots past 1 next to the half

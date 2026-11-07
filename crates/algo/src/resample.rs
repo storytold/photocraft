@@ -312,7 +312,9 @@ pub fn resize_surface(s: &Surface, sx: f64, sy: f64, filter: Resample) -> Surfac
 /// [`resize_surface`] for a layer, mask or channel of a document whose canvas is `canvas`
 /// (Image Size): at the canvas edges the pixels repeat outwards, so content that reaches an edge
 /// keeps it (an opaque layer stays opaque to the border) instead of fading into the default pixel.
-/// Pixels beyond the canvas count as the surface's own, and inside the canvas nothing changes.
+/// Pixels beyond the canvas that are not clear count as the surface's own; clear ones are empty
+/// whatever their stored colour, so a shape touching the canvas edge repeats outwards the same way
+/// whether its transparent pixels are stored white or black. Inside the canvas nothing changes.
 pub fn resize_surface_in_canvas(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Rect) -> Surface {
     resize(s, sx, sy, filter, Some(canvas))
 }
@@ -402,7 +404,7 @@ fn resize_controlled(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Op
 /// nothing).
 fn preserve_details(mut out: Surface, filter: Resample, sx: f64, sy: f64) -> Surface {
     if filter == Resample::PreserveDetails && (sx > 1.0 || sy > 1.0) {
-        let dst = out.content_bounds();
+        let dst = out.covered_bounds();
         let p = crate::FilterParams::UnsharpMask { amount: 30.0, radius: 0.6 * sx.max(sy) as f32, threshold: 0.0 };
         let area = crate::output_area(&p, dst, dst, None);
         out = crate::apply(&out, &p, area, dst, None);
@@ -438,9 +440,12 @@ impl PassState {
     /// the canvas repeat their edge outwards (see [`resize_surface_in_canvas`]).
     fn new(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> Option<Self> {
         let Pass { sx, sy, kx, ky } = pass;
-        let edge = canvas.map(|c| s.content_bounds().union(&c)).filter(|a| !a.is_empty());
+        // Covered, not content, bounds: a clear pixel carries no colour once premultiplied, so it is the
+        // default pixel whatever its stored colour. Otherwise white and black copies of one shape
+        // reached different distances past it, and the white one kept ringing alpha the black one lost (#10639).
+        let src = s.covered_bounds();
+        let edge = canvas.map(|c| src.union(&c)).filter(|a| !a.is_empty());
         let fmt = s.format();
-        let src = s.content_bounds();
         let dst = scaled_rect(src, sx, sy);
         if dst.is_empty() {
             return None;
@@ -550,12 +555,15 @@ impl PassState {
                 *dv += sv * t.outside;
             }
         }
+        // The colour is divided by the alpha the filter produced, then the alpha is clipped: clipping
+        // an overshoot first left the colour at its overshoot, which the next pass weighed against a
+        // smaller alpha and darkened the edge of a white shape on transparency (#10639).
+        unpremultiply(&mut res, n, alpha);
         if alpha {
             for px in res.chunks_exact_mut(n) {
                 px[n - 1] = px[n - 1].clamp(0.0, 1.0);
             }
         }
-        unpremultiply(&mut res, n, alpha);
         (Rect::new(dst.x0, dst.y0 + b0 as i32, dst.x1, dst.y0 + b1 as i32), res)
     }
 }

@@ -312,6 +312,9 @@ fn warp(
         &converted
     };
     let out = Surface::new(fmt);
+    // Clear pixels carry no colour once premultiplied, so they are not content whatever colour they are stored in
+    // (white and black copies of one shape must warp alike, #10639): only the covered part of the rect is warped.
+    let src_rect = src_rect.intersect(&src.covered_bounds());
     if src_rect.is_empty() || clip.is_some_and(|c| c.is_empty()) {
         return Ok(out);
     }

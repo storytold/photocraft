@@ -198,6 +198,34 @@ impl Tile {
         }
         (x0 != usize::MAX).then_some((x0 as u16, y0 as u16, x1 as u16, y1 as u16))
     }
+
+    /// Tile-local half-open bounds of the pixels whose alpha (the last `alpha_bytes` bytes of each
+    /// `bpp`-byte pixel) is not all zero bytes, or `None` when every pixel is clear. Works on the
+    /// raw bytes. A negative-zero f32 alpha has a non-zero byte, so it counts as covered: that is
+    /// conservative, never too tight. A layout that cannot describe the tile's pixels gives the
+    /// whole tile, for the same reason.
+    pub fn alpha_bounds(&self, bpp: usize, alpha_bytes: usize) -> Option<(u16, u16, u16, u16)> {
+        let bytes = self.bytes();
+        let ts = TILE_SIZE as usize;
+        if bpp == 0 || alpha_bytes == 0 || alpha_bytes > bpp || ts.checked_mul(ts).and_then(|n| n.checked_mul(bpp)) != Some(bytes.len()) {
+            return Some((0, 0, ts as u16, ts as u16));
+        }
+        let covered = |px: &[u8]| px.get(bpp - alpha_bytes..).is_some_and(|a| a.iter().any(|&b| b != 0));
+        let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+        for (y, row) in bytes.chunks_exact(ts * bpp).enumerate() {
+            // An untouched row of a clear tile is all zero bytes.
+            if row.iter().all(|&b| b == 0) {
+                continue;
+            }
+            let Some(first) = row.chunks_exact(bpp).position(covered) else { continue };
+            let Some(last) = row.chunks_exact(bpp).rposition(covered) else { continue };
+            x0 = x0.min(first);
+            x1 = x1.max(last + 1);
+            y0 = y0.min(y);
+            y1 = y + 1;
+        }
+        (x0 != usize::MAX).then_some((x0 as u16, y0 as u16, x1 as u16, y1 as u16))
+    }
     /// Byte length, without touching the pixels (they may be on disk).
     pub fn len(&self) -> usize {
         self.cell.len()
@@ -735,6 +763,25 @@ impl Surface {
 
     /// Exact bounds of pixels that differ from the default pixel.
     pub fn content_bounds(&self) -> Rect {
+        self.scan_bounds(|t| t.content_bounds(&self.default_pixel))
+    }
+
+    /// Bounds of the pixels that are not clear. When the default pixel is clear (it has alpha 0), a
+    /// clear pixel is empty whatever its stored colour, so this can be tighter than
+    /// `content_bounds`. Otherwise it equals `content_bounds`.
+    pub fn covered_bounds(&self) -> Rect {
+        let sample_bytes = self.format.sample.bytes();
+        let default_clear =
+            self.default_pixel.len().checked_sub(sample_bytes).and_then(|i| self.default_pixel.get(i..)).is_some_and(|a| a.iter().all(|&b| b == 0));
+        if !self.format.alpha || !default_clear {
+            return self.content_bounds();
+        }
+        let bpp = self.format.bytes_per_pixel();
+        self.scan_bounds(|t| t.alpha_bounds(bpp, sample_bytes))
+    }
+
+    /// Union of the per-tile bounds `f` finds, in surface coordinates.
+    fn scan_bounds(&self, f: impl Fn(&Tile) -> Option<(u16, u16, u16, u16)>) -> Rect {
         if self.tiles.is_empty() {
             return Rect::EMPTY;
         }
@@ -753,7 +800,7 @@ impl Surface {
             if !out.is_empty() && out.contains_rect(&origin) {
                 continue;
             }
-            if let Some((x0, y0, x1, y1)) = t.content_bounds(&self.default_pixel) {
+            if let Some((x0, y0, x1, y1)) = f(t) {
                 out = out.union(&Rect::new(x0.into(), y0.into(), x1.into(), y1.into()).translate(origin.x0, origin.y0));
             }
         }
