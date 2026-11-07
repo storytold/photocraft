@@ -176,12 +176,15 @@ struct HistoryPaint {
     src: Surface,
     /// The tiles of `src` converted so far, when its format isn't the layer's.
     converted: Option<Surface>,
+    /// The box `converted` covers: every tile of `src` inside it is converted. A read inside it
+    /// converts nothing and walks no tiles (`src` never changes during the stroke).
+    covered: Rect,
 }
 
 impl HistoryPaint {
     fn new(src: Surface, fmt: photocraft_color::PixelFormat) -> Self {
         let converted = (src.format() != fmt).then(|| super::heal::convert_source(&src, fmt, Rect::EMPTY));
-        Self { src, converted }
+        Self { src, converted, covered: Rect::EMPTY }
     }
 
     /// The source over `r`, in the layer's format.
@@ -189,7 +192,12 @@ impl HistoryPaint {
         match &mut self.converted {
             None => Region::read(&self.src, r),
             Some(c) => {
-                self.src.convert_region_into(c, r);
+                if !self.covered.contains_rect(&r) {
+                    // Grow to the box around the stroke so far, so `covered` stays exact; the
+                    // commit reads that box anyway.
+                    self.covered = self.covered.union(&r);
+                    self.src.convert_region_into(c, self.covered);
+                }
                 Region::read(c, r)
             }
         }
@@ -249,7 +257,7 @@ impl LiveRetouch {
                     cmd: if cmd == "paint.healingBrush" { "paint.healingBrush" } else { "paint.cloneStamp" },
                 }
             }
-            "paint.historyBrush" => LivePaint::History(HistoryPaint { src: history_source(s, id, p, cmd)?, converted: None }),
+            "paint.historyBrush" => LivePaint::History(HistoryPaint { src: history_source(s, id, p, cmd)?, converted: None, covered: Rect::EMPTY }),
             other => return Err(bad(other, "live retouching strokes are the Clone Stamp, Healing Brush, History Brush and Pattern Stamp")),
         };
         Self::with_paint(s, cmd, p, stroke, id, paint, mode)
