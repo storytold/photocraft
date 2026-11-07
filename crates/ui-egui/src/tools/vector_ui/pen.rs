@@ -34,6 +34,12 @@ pub fn closes_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
     }
 }
 
+/// Would a Pen click at `(x, y)` carry on an open path from its endpoint there (#6593)? The canvas
+/// shows the continue-path pointer there (#9356), as the endpoints look like any anchor.
+pub fn continues_path_at(app: &PhotocraftApp, tool: Tool, x: f64, y: f64) -> bool {
+    tool == Tool::Pen && app.ui.pen.as_ref().is_none_or(|p| p.knots.is_empty()) && resume_at(app, x, y, 6.0 / app.point_zoom().max(0.01) as f64).is_some()
+}
+
 /// Pen press: close on the first anchor, reshape the last anchor's outgoing handle,
 /// or add a new anchor (dragging a new anchor pulls symmetrical handles). With ⇧ a new anchor
 /// lands on the nearest 45° ray from the previous one, at the pointer's projection onto it.
