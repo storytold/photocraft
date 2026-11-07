@@ -197,6 +197,9 @@ impl Stylus {
         }
         self.frame = self.feed.drain();
         self.current = None;
+        // A zero from a touch contact that is still down is real pressure, not hover/lift. Keep
+        // the latest such sample per contact so the trailing-zero filter can preserve it.
+        let mut active_zero_samples: [Option<(egui::TouchId, usize)>; 16] = [None; 16];
         for e in events {
             if let egui::Event::Touch { id, phase, force, .. } = e {
                 let force = force.filter(|f| f.is_finite()).map(|f| f.clamp(0.0, 1.0));
@@ -227,7 +230,17 @@ impl Stylus {
                         let force = force.or((down && self.touch_pen && (start || self.touch.is_none())).then_some(0.0));
                         if let Some(f) = force {
                             self.touch = Some(f);
+                            let sample_index = self.frame.len();
                             self.frame.push(PenSample { pressure: f, ..Default::default() });
+                            if f == 0.0 {
+                                let slot = active_zero_samples
+                                    .iter()
+                                    .position(|slot| slot.as_ref().is_some_and(|(contact, _)| contact == id))
+                                    .or_else(|| active_zero_samples.iter().position(|slot| slot.is_none()));
+                                if let Some(slot) = slot {
+                                    active_zero_samples[slot] = Some((*id, sample_index));
+                                }
+                            }
                         }
                     }
                     egui::TouchPhase::End | egui::TouchPhase::Cancel => {
@@ -237,11 +250,13 @@ impl Stylus {
                 }
             }
         }
-        // A pen reports pressure 0 while it hovers and as it lifts (X11, macOS): that is no
-        // contact, so a frame that also touched keeps only its contact samples. A stroke's last
-        // moves then keep the pressure the pen left with, and a tap its own (#1798).
-        if self.frame.iter().any(|s| s.pressure > 0.0) {
-            self.frame.retain(|s| s.pressure > 0.0);
+        // A pen reports pressure 0 while hovering and as it lifts (X11, macOS). Preserve zeroes
+        // before/between contact samples and a terminal zero from a touch contact that is still
+        // down; only trailing hover/lift zeroes may be discarded (#1798).
+        let last_positive = self.frame.iter().rposition(|s| s.pressure > 0.0);
+        let last_active_zero = active_zero_samples.iter().flatten().filter(|(id, _)| self.contacts.contains(id)).map(|(_, index)| *index).max();
+        if let Some(last_contact) = last_positive.into_iter().chain(last_active_zero).max() {
+            self.frame.truncate(last_contact + 1);
         }
         self.peak = self.frame.iter().fold(self.peak, |m, s| m.max(s.pressure));
     }

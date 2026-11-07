@@ -114,6 +114,68 @@ fn each_move_takes_its_share_of_the_frames_pen_samples() {
 }
 
 #[test]
+fn zero_and_contact_samples_keep_the_frames_pressure_timeline() {
+    let mut s = Stylus::default();
+    s.feed.set(Some(pen(0.0)));
+    s.update(&[]);
+    s.begin_stroke();
+    for p in [0.0, 0.05, 0.10, 0.15] {
+        s.feed.set(Some(pen(p)));
+    }
+    s.update(&[]);
+    let got: Vec<f32> = (0..8)
+        .map(|k| {
+            s.select(k, 8);
+            s.pressure()
+        })
+        .collect();
+    let want = [0.0, 0.0, 0.025, 0.05, 0.075, 0.10, 0.125, 0.15];
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
+}
+
+#[test]
+fn lift_zeroes_do_not_stretch_the_contact_timeline() {
+    let mut s = Stylus::default();
+    for p in [0.0, 0.05, 0.10, 0.0, 0.0] {
+        s.feed.set(Some(pen(p)));
+    }
+    s.update(&[]);
+    assert_eq!(s.frame.iter().map(|p| p.pressure).collect::<Vec<_>>(), vec![0.0, 0.05, 0.10]);
+}
+
+#[test]
+fn a_contact_between_zeroes_keeps_its_leading_zero_but_drops_lift_zero() {
+    let mut s = Stylus::default();
+    for p in [0.0, 0.25, 0.0] {
+        s.feed.set(Some(pen(p)));
+    }
+    s.update(&[]);
+    assert_eq!(s.frame.iter().map(|p| p.pressure).collect::<Vec<_>>(), vec![0.0, 0.25]);
+}
+
+#[test]
+fn an_interior_zero_pressure_sample_keeps_its_place_in_the_timeline() {
+    let mut s = Stylus::default();
+    for p in [0.10, 0.0, 0.20] {
+        s.feed.set(Some(pen(p)));
+    }
+    s.update(&[]);
+    assert_eq!(s.frame.iter().map(|p| p.pressure).collect::<Vec<_>>(), vec![0.10, 0.0, 0.20]);
+}
+
+#[test]
+fn active_touch_zero_starts_the_next_frames_interpolation_at_zero() {
+    use egui::TouchPhase::{Move, Start};
+    let mut s = Stylus::default();
+    s.update(&[touch_id(5, Start, Some(0.2)), touch_id(5, Move, Some(0.0))]);
+    assert_eq!(s.frame.iter().map(|p| p.pressure).collect::<Vec<_>>(), vec![0.2, 0.0]);
+
+    s.update(&[touch_id(5, Move, Some(0.4))]);
+    s.select(0, 2);
+    assert!((s.pressure() - 0.2).abs() < 1e-6, "{}", s.pressure());
+}
+
+#[test]
 fn the_pressure_curve_reshapes_pen_pressure_but_not_the_mouse() {
     let mut s = Stylus::default();
     s.set_pressure_curve(&[[0.0, 0.0], [0.3, 0.6], [1.0, 1.0]]);
