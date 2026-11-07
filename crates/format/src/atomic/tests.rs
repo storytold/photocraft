@@ -130,6 +130,36 @@ fn replaces_and_creates() {
     assert_no_temp(&d.0);
 }
 
+#[test]
+fn temp_names_fit_byte_limits_for_unicode_filenames() {
+    let name = format!("{}.pcraft", "🚀".repeat(60));
+    assert_eq!(name.len(), 247, "the target fits a 255-byte file-name limit");
+    for name in [name.clone(), format!("a{name}")] {
+        let tmp = temp_name(&name);
+        assert!(tmp.len() <= 255, "temporary name is {} bytes: {tmp}", tmp.len());
+        assert!(tmp.starts_with('.') && tmp.ends_with(".pcsave.tmp"));
+    }
+}
+
+#[test]
+fn temp_names_keep_short_names_and_remain_unique() {
+    let first = temp_name("doc.pcraft");
+    let second = temp_name("doc.pcraft");
+    assert!(first.starts_with(".doc.pcraft.") && first.ends_with(".pcsave.tmp"));
+    assert_ne!(first, second);
+}
+
+#[test]
+fn replaces_and_creates_long_unicode_filename() {
+    let d = TempDir::new("unicode");
+    let p = d.0.join(format!("{}.pcraft", "🚀".repeat(60)));
+    atomic_write(&p, b"first").unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), b"first");
+    atomic_write(&p, b"second, longer").unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), b"second, longer");
+    assert_no_temp(&d.0);
+}
+
 /// #3389: a large write reports how far it has got, chunk by chunk, up to 1.0, and writes the
 /// same bytes as a plain atomic write.
 #[test]
