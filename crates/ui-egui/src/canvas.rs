@@ -1262,6 +1262,13 @@ fn handle_canvas_tool_clicks(
     if tool == Tool::Crop && response.double_clicked() && response.interact_pointer_pos().is_some_and(|p| crate::crop_ui::commits_at(app, xf.to_doc(p))) {
         commit_crop(app);
     }
+    // Perspective Crop: a double-click inside the quad commits it too (#11806).
+    if tool == Tool::PerspectiveCrop
+        && response.double_clicked()
+        && response.interact_pointer_pos().is_some_and(|p| crate::perspective_crop_ui::commits_at(app, xf.to_doc(p)))
+    {
+        crate::perspective_crop_ui::commit(app);
+    }
     // Type: 2 clicks select a word, 3 the line, 4 the paragraph, 5 all text (Photoshop).
     if tool.is_type()
         && response.clicked()

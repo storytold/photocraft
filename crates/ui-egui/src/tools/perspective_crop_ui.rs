@@ -105,6 +105,13 @@ fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
     })
 }
 
+/// Whether a double-click at `p` commits the pending quad (#11806): inside it, off its corner
+/// handles (a double-click on a handle or outside keeps today's behaviour, nothing).
+pub fn commits_at(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    let tol = crate::distort_ui::tolerance(app);
+    app.ui.perspective_crop.is_some_and(|q| inside(&q, p) && q.iter().all(|c| (c[0] - p[0]).hypot(c[1] - p[1]) > tol))
+}
+
 /// Pointer events (document px) with the tool. True when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
     if app.ui.tool != Tool::PerspectiveCrop {
@@ -618,3 +625,7 @@ mod tests {
         assert!(app.pcrop.drag.is_none() && app.pcrop.clicks.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "perspective_crop_double_click_tests.rs"]
+mod perspective_crop_double_click_tests;
