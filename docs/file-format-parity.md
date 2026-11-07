@@ -73,7 +73,8 @@ supports many more, including CR3).
 | Panasonic RW2, Pentax PEF | yes | |
 | Olympus ORF | uncompressed only | |
 | Fujifilm RAF (Bayer and X-Trans) | uncompressed only; no Fuji colour calibration | |
-| Others (CRW, 3FR, IIQ, X3F, SRW, MRW, ERF…) | embedded preview only | |
+| Hasselblad 3FR/FFF | uncompressed only; compressed (lossless-JPEG) files: embedded preview only | X2D II 100C uses a measured Bayer phase; other bodies assume it with a warning (`crates/raw/src/hasselblad.rs`) |
+| Others (CRW, IIQ, X3F, SRW, MRW, ERF…) | embedded preview only | |
 | .xmp sidecars, highlight modes, raw preferences | missing | FILE-215-11 |
 | Camera Raw as a PSD smart filter | partial | 2026-10-07: WB, Light/Presence, curves, HSL, grading, detail, grain, vignette mapped (FILE-215-12) |
 

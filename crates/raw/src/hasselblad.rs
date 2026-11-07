@@ -57,11 +57,21 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         ));
     }
     let full = Rect::new(0, 0, plane.width, plane.height);
-    // DNG-style DefaultCropOrigin / DefaultCropSize in the raw IFD.
-    let mut crop = full;
+    // DNG-style ActiveArea (top, left, bottom, right) in the raw IFD; an absent,
+    // inverted or out-of-plane one leaves the whole plane active.
+    let active = match t.tag_uints(&raw, tag::ACTIVE_AREA).as_slice() {
+        [top, left, bottom, right] if bottom > top && right > left => {
+            Rect::new(*left as usize, *top as usize, (*right - *left) as usize, (*bottom - *top) as usize).intersect(&full)
+        }
+        _ => full,
+    };
+    let active = if active.is_empty() { full } else { active };
+    // DNG-style DefaultCropOrigin / DefaultCropSize in the raw IFD, relative to
+    // the active area as in DNG.
+    let mut crop = active;
     if let ([ox, oy], [cw, ch]) = (t.tag_floats(&raw, tag::DEFAULT_CROP_ORIGIN).as_slice(), t.tag_floats(&raw, tag::DEFAULT_CROP_SIZE).as_slice()) {
         let f = |v: f64| if v.is_finite() && v >= 0.0 { v.round() as usize } else { 0 };
-        let r = Rect::new(f(*ox), f(*oy), f(*cw), f(*ch)).intersect(&full);
+        let r = Rect::new(active.x.saturating_add(f(*ox)), active.y.saturating_add(f(*oy)), f(*cw), f(*ch)).intersect(&active);
         if !r.is_empty() {
             crop = r;
         }
@@ -104,7 +114,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         linearization: None,
         black,
         white: [white; 3],
-        active: full,
+        active,
         crop,
         color: Default::default(),
         camera_wb,

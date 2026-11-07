@@ -23,6 +23,8 @@ pub struct Hasselblad3frSpec {
     pub as_shot_neutral: Option<[f64; 3]>,
     /// DefaultCropOrigin (x, y) and DefaultCropSize (w, h); `None` leaves both out.
     pub crop: Option<([u16; 2], [u16; 2])>,
+    /// ActiveArea (top, left, bottom, right); `None` leaves the tag out.
+    pub active_area: Option<[u32; 4]>,
     pub make: String,
     pub model: String,
 }
@@ -41,6 +43,7 @@ impl Hasselblad3frSpec {
             white: Some(64763),
             as_shot_neutral: Some([0.375, 1.0, 0.617]),
             crop: None,
+            active_area: None,
             make: "Hasselblad".into(),
             model: "X2D II 100C".into(),
         }
@@ -71,6 +74,9 @@ impl Hasselblad3frSpec {
         if let Some((origin, size)) = &self.crop {
             raw.push((50719, Val::Short(origin.to_vec())));
             raw.push((50720, Val::Short(size.to_vec())));
+        }
+        if let Some(area) = self.active_area {
+            raw.push((50829, Val::Long(area.to_vec())));
         }
         let raw_ifd = t.ifd(raw);
         let thumb = t.blob(vec![128; 12]);

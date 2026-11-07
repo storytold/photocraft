@@ -105,6 +105,29 @@ fn a_crop_outside_the_plane_is_dropped() {
 }
 
 #[test]
+fn active_area_bounds_the_image_and_the_crop() {
+    let mut s = spec();
+    s.active_area = Some([1, 2, 11, 14]);
+    let sensor = decode(&s.build(), &Limits::default()).unwrap();
+    assert_eq!(sensor.active, Rect::new(2, 1, 12, 10));
+    assert_eq!(sensor.crop, Rect::new(2, 1, 12, 10), "no default crop: the active area");
+    let d = develop(&s.build(), &DevelopOptions::default()).unwrap();
+    assert_eq!((d.width, d.height), (12, 10));
+    // The default crop is relative to the active area, as in DNG.
+    s.crop = Some(([1, 1], [8, 6]));
+    let sensor = decode(&s.build(), &Limits::default()).unwrap();
+    assert_eq!(sensor.crop, Rect::new(3, 2, 8, 6));
+}
+
+#[test]
+fn an_active_area_outside_the_plane_is_ignored() {
+    let mut s = spec();
+    s.active_area = Some([100, 100, 200, 200]);
+    let sensor = decode(&s.build(), &Limits::default()).unwrap();
+    assert_eq!((sensor.active, sensor.crop), (Rect::new(0, 0, 16, 12), Rect::new(0, 0, 16, 12)));
+}
+
+#[test]
 fn truncated_strip_is_malformed() {
     let mut b = spec().build();
     // The preview blob sits past the strip; cutting 60 bytes eats into the strip.
