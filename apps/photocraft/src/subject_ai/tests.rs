@@ -26,6 +26,23 @@ fn picture(width: u32, height: u32) -> SubjectImage {
     SubjectImage { width, height, rgb }
 }
 
+/// An 8-bit picture's pixels as RGB: a gray picture repeats its one value, colour keeps its first
+/// three channels, and alpha is left out.
+fn rgb_of(image: &Image) -> Vec<u8> {
+    let channels = image.layout().channels();
+    image.data().chunks_exact(channels).flat_map(|px| if channels >= 3 { [px[0], px[1], px[2]] } else { [px[0]; 3] }).collect()
+}
+
+#[test]
+fn gray_and_colour_test_pictures_become_rgb() {
+    let gray = Image::from_u8(2, 1, ChannelLayout::Gray, vec![10, 200]).unwrap();
+    assert_eq!(rgb_of(&gray), vec![10, 10, 10, 200, 200, 200]);
+    let gray_alpha = Image::from_u8(2, 1, ChannelLayout::GrayA, vec![10, 255, 200, 0]).unwrap();
+    assert_eq!(rgb_of(&gray_alpha), vec![10, 10, 10, 200, 200, 200]);
+    let rgba = Image::from_u8(1, 1, ChannelLayout::Rgba, vec![1, 2, 3, 4]).unwrap();
+    assert_eq!(rgb_of(&rgba), vec![1, 2, 3]);
+}
+
 fn gray_png(width: u32, height: u32) -> Vec<u8> {
     let image = Image::from_u8(width, height, ChannelLayout::Gray, vec![200; (width * height) as usize]).unwrap();
     photocraft_codecs::encode(&image, Format::Png, &EncodeOptions::default()).unwrap()
@@ -147,10 +164,8 @@ fn the_real_model_downloads_and_answers() {
 
     let decoded = photocraft_codecs::decode(&std::fs::read(picture_path).unwrap()).unwrap();
     let (width, height) = (decoded.width(), decoded.height());
-    let channels = decoded.layout().channels();
     assert_eq!(decoded.sample_type(), SampleType::U8);
-    // A gray picture repeats its one value; colour keeps its first three channels.
-    let rgb = decoded.data().chunks_exact(channels).flat_map(|px| if channels >= 3 { [px[0], px[1], px[2]] } else { [px[0]; 3] }).collect();
+    let rgb = rgb_of(&decoded);
     let image = SubjectImage { width, height, rgb };
     for run in 1..=2 {
         let started = std::time::Instant::now();
