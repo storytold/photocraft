@@ -29,3 +29,18 @@ fn samples_are_little_endian_and_keep_finite_bit_patterns() {
     let decoded = load_lut("hash", &mut Blob(bytes)).unwrap();
     assert_eq!(decoded.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), samples.map(f32::to_bits));
 }
+
+/// The adjustment load path admits decoded memory before decoding and shares cache hits.
+#[test]
+fn shared_lut_enforces_decoded_quota_before_decoding() {
+    let opts = crate::LoadOptions { max_total_bytes: 4, max_blob_bytes: 4, ..Default::default() };
+    let mut cache = LutCache::new(&opts);
+    let mut fetch = Blob(0.5f32.to_le_bytes().to_vec());
+    let first = shared_lut("first", &mut fetch, &mut cache).unwrap();
+    let repeated = shared_lut("first", &mut fetch, &mut cache).unwrap();
+    assert!(Arc::ptr_eq(&first, &repeated));
+    // An over-budget malformed table must fail admission, before sample validation.
+    fetch.0 = f32::NAN.to_le_bytes().to_vec();
+    assert!(matches!(shared_lut("second", &mut fetch, &mut cache), Err(FormatError::LimitExceeded(_))));
+    assert!(cache.get("second").is_none());
+}

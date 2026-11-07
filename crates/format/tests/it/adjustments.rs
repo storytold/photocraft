@@ -99,7 +99,7 @@ fn unsupported_adjustment_bytes_use_blobs() {
 /// Reject payloads beyond the load budgets and malformed or missing blob hashes.
 #[test]
 fn lookup_blobs_obey_load_budgets_and_require_valid_hashes() {
-    let doc = document(lookup(), SampleType::U8);
+    let doc = document(blob_lookup(), SampleType::U8);
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     for limits in [LoadOptions { max_blob_bytes: 16, ..Default::default() }, LoadOptions { max_total_bytes: 16, ..Default::default() }] {
         assert!(matches!(load_from_bytes_with(&bytes, &limits), Err(FormatError::LimitExceeded(_))));
@@ -122,51 +122,6 @@ fn nonfinite_lookup_samples_cannot_be_saved() {
     }
 }
 
-/// Preserve the existing schema and values of every other adjustment type.
-#[test]
-fn other_adjustments_keep_their_json_schema_and_roundtrip() {
-    use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, ToneSpace};
-    let points = vec![CurvePoint { input: 0.0, output: 0.1 }, CurvePoint { input: 1.0, output: 0.9 }];
-    let adjustments = vec![
-        Adjustment::BrightnessContrast { brightness: 0.2, contrast: 0.3, legacy: false },
-        Adjustment::Levels {
-            master: LevelsChannel::default(),
-            per_channel: std::array::from_fn(|_| LevelsChannel::default()),
-            space: ToneSpace::Cmyk,
-            black: LevelsChannel::default(),
-        },
-        Adjustment::Curves {
-            master: points.clone(),
-            per_channel: std::array::from_fn(|_| points.clone()),
-            space: ToneSpace::Cmyk,
-            black: points,
-            pencil: true,
-        },
-        Adjustment::Exposure { exposure: 0.5, offset: -0.1, gamma: 1.2 },
-        Adjustment::Vibrance { vibrance: 0.3, saturation: 0.1 },
-        Adjustment::HueSaturation { hue: 0.2, saturation: 0.3, lightness: -0.1, colorize: true, ranges: HueRange::defaults() },
-        Adjustment::ColorBalance { shadows: [0.1; 3], midtones: [0.2; 3], highlights: [0.3; 3], preserve_luminosity: true },
-        Adjustment::BlackWhite { weights: [0.3; 6], tint: Some([0.1, 0.2, 0.3]) },
-        Adjustment::PhotoFilter { color: [0.1, 0.2, 0.3], density: 0.5, preserve_luminosity: true },
-        Adjustment::ChannelMixer { matrix: [[0.1; 4]; 3], monochrome: true },
-        Adjustment::Invert,
-        Adjustment::Posterize { levels: 8 },
-        Adjustment::Threshold { level: 0.4 },
-        Adjustment::GradientMap { stops: vec![(0.0, [0.1; 3]), (1.0, [0.9; 3])], reverse: true, dither: true },
-        Adjustment::SelectiveColor { relative: true, adjustments: [[0.1; 4]; 9] },
-    ];
-    for adjustment in adjustments {
-        let doc = document(adjustment.clone(), SampleType::U8);
-        let (bytes, stats) = PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap();
-        assert_eq!(stats.blobs_total, 0, "{}", adjustment.label());
-        assert_eq!(
-            manifest(&bytes)["document"]["layers"][0]["content"]["adjustment"],
-            serde_json::from_str::<serde_json::Value>(&serde_json::to_string(&adjustment).unwrap()).unwrap()
-        );
-        assert_eq!(load_from_bytes(&bytes).unwrap(), doc, "{}", adjustment.label());
-    }
-}
-
 /// Preserve profile lookups that do not contain a decoded LUT or source file.
 #[test]
 fn profile_lookup_without_a_table_or_source_roundtrips() {
@@ -178,7 +133,7 @@ fn profile_lookup_without_a_table_or_source_roundtrips() {
 /// Charge shared blobs once and reuse both decoded samples and original source bytes.
 #[test]
 fn shared_lookup_tables_obey_distinct_blob_budget() {
-    let adjustment = lookup();
+    let adjustment = blob_lookup();
     let Adjustment::ColorLookup { lut: Some(lut), source: Some(source), .. } = &adjustment else { unreachable!() };
     let budget = (lut.len() * 4 + source.bytes.len()) as u64;
     let mut doc = document(adjustment.clone(), SampleType::U8);
@@ -198,3 +153,14 @@ fn shared_lookup_tables_obey_distinct_blob_budget() {
     assert!(Arc::ptr_eq(tables[0].1, tables[1].1));
     assert!(matches!(load_from_bytes_with(&bytes, &LoadOptions { max_total_bytes: budget - 1, ..Default::default() }), Err(FormatError::LimitExceeded(_))));
 }
+
+/// Force blob storage while keeping the budget regressions inexpensive.
+fn blob_lookup() -> Adjustment {
+    let mut adjustment = lookup();
+    let Adjustment::ColorLookup { source: Some(source), .. } = &mut adjustment else { unreachable!() };
+    source.bytes = Arc::new(vec![42; 4097]);
+    adjustment
+}
+
+#[path = "adjustment_compatibility.rs"]
+mod compatibility;

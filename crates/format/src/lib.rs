@@ -27,6 +27,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod adjustment;
+mod adjustment_cache;
 pub mod atomic;
 pub mod autosave;
 mod convert;
@@ -115,7 +116,8 @@ pub struct LoadOptions {
     pub max_manifest_bytes: usize,
     /// Maximum size of one decompressed blob.
     pub max_blob_bytes: usize,
-    /// Maximum total decompressed tile + blob bytes.
+    /// Maximum total decompressed tile + blob bytes. Also bounds a separate decoded LUT
+    /// sample quota; the two allocations may together use twice this byte budget.
     pub max_total_bytes: u64,
     /// Keep document and layer ids from the file (the id counter is advanced
     /// past them). When `false`, fresh ids are assigned.

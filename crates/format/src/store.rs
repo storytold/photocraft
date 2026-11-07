@@ -436,7 +436,7 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
     let mut loader = Loader {
-        luts: HashMap::new(),
+        luts: crate::adjustment_cache::LutCache::new(opts),
         fetch: &mut fetch,
         preserve_ids: opts.preserve_ids,
         id_map: HashMap::new(),
@@ -1088,6 +1088,7 @@ impl PcraftWriter {
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c)?;
         let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
+        model.format_version = adjustment_version(&model.document.layers);
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
         model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
         let full_composite = opts.full_composite.is_some();
@@ -1760,4 +1761,16 @@ fn an_incompressible_blob_at_its_limit_still_loads() {
     assert!(spent(9 * data.len() as u64).blob_bounded(&hash, usize::MAX).is_ok());
     let e = spent(9 * data.len() as u64 + 1).blob_bounded(&hash, usize::MAX).unwrap_err();
     assert!(matches!(e, FormatError::LimitExceeded(ref m) if m.contains(&format!("exceeds {} bytes", data.len() - 1))), "{e}");
+}
+
+/// A blob adjustment anywhere in the bounded layer tree requires the version 2 reader.
+fn adjustment_version(layers: &[LayerM]) -> u32 {
+    for layer in layers {
+        match &layer.content {
+            ContentM::Adjustment { adjustment: crate::adjustment::AdjustmentM::Stored(_) } => return FORMAT_VERSION,
+            ContentM::Group { children, .. } if adjustment_version(children) == FORMAT_VERSION => return FORMAT_VERSION,
+            _ => {}
+        }
+    }
+    1
 }

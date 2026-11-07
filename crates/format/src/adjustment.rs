@@ -1,11 +1,11 @@
 //! Large adjustment payloads use the bundle's bounded, content-addressed blob storage.
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use photocraft_doc::Adjustment;
 use photocraft_doc::adjust::{LutFormat, LutSource};
 use serde::{Deserialize, Serialize};
 
+use crate::adjustment_cache::LutCache;
 use crate::convert::{Fetch, Sink};
 use crate::manifest::Hash;
 use crate::{FormatError, Result};
@@ -48,6 +48,9 @@ pub struct LutSourceM {
 impl AdjustmentM {
     /// Move large payloads to blobs while preserving small adjustment schemas.
     pub(crate) fn store(adjustment: &Adjustment, sink: &mut dyn Sink) -> Result<Self> {
+        if !needs_blobs(adjustment) {
+            return Ok(Self::Inline(adjustment.clone()));
+        }
         let stored = match adjustment {
             Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source } => StoredAdjustment::ColorLookup {
                 name: name.clone(),
@@ -64,7 +67,7 @@ impl AdjustmentM {
     }
 
     /// Restore an adjustment, sharing each decoded LUT across all references in this load.
-    pub(crate) fn load(&self, fetch: &mut dyn Fetch, luts: &mut HashMap<Hash, Arc<Vec<f32>>>) -> Result<Adjustment> {
+    pub(crate) fn load(&self, fetch: &mut dyn Fetch, luts: &mut LutCache) -> Result<Adjustment> {
         match self {
             Self::Inline(adjustment) => Ok(adjustment.clone()),
             Self::Stored(StoredAdjustment::Unsupported { psd_key, raw }) => {
@@ -99,19 +102,39 @@ fn store_lut(values: &[f32], sink: &mut dyn Sink) -> Result<Hash> {
     Ok(sink.blob(&Arc::new(bytes)))
 }
 
-/// Decode a distinct LUT once; repeated references retain the same sample allocation.
-fn shared_lut(hash: &str, fetch: &mut dyn Fetch, luts: &mut HashMap<Hash, Arc<Vec<f32>>>) -> Result<Arc<Vec<f32>>> {
+/// Decode each distinct LUT within the load's decoded allocation quota.
+fn shared_lut(hash: &str, fetch: &mut dyn Fetch, luts: &mut LutCache) -> Result<Arc<Vec<f32>>> {
     if let Some(lut) = luts.get(hash) {
-        return Ok(lut.clone());
+        return Ok(lut);
     }
-    let lut = load_lut(hash, fetch)?;
-    luts.insert(hash.to_owned(), lut.clone());
+    let bytes = fetch.blob(hash)?;
+    luts.admit(bytes.len())?;
+    let lut = decode_lut(&bytes)?;
+    luts.insert(hash, lut.clone());
     Ok(lut)
 }
 
+/// Small payloads keep the legacy schema; the threshold counts JSON array elements.
+fn needs_blobs(adjustment: &Adjustment) -> bool {
+    const INLINE_VALUES: usize = 4096;
+    match adjustment {
+        Adjustment::ColorLookup { lut, source, .. } => {
+            lut.as_ref().map_or(0, |v| v.len()).saturating_add(source.as_ref().map_or(0, |s| s.bytes.len())) > INLINE_VALUES
+        }
+        Adjustment::Unsupported { raw, .. } => raw.len() > INLINE_VALUES,
+        _ => false,
+    }
+}
+
 /// Validate and decode a bounded, hash-verified blob into finite native f32 samples.
+#[cfg(test)]
 fn load_lut(hash: &str, fetch: &mut dyn Fetch) -> Result<Arc<Vec<f32>>> {
     let bytes = fetch.blob(hash)?;
+    decode_lut(&bytes)
+}
+
+/// Decode a validated allocation into finite native samples.
+fn decode_lut(bytes: &[u8]) -> Result<Arc<Vec<f32>>> {
     let (samples, remainder) = bytes.as_chunks::<4>();
     if !remainder.is_empty() {
         return Err(FormatError::corrupt("Color Lookup blob is not a sequence of f32 samples"));

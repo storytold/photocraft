@@ -12,7 +12,10 @@ use photocraft_doc::{ClippingPath, Effect, Fill, GlobalLight, Guides, LabelColor
 use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
 
-pub use craft_pcraft_format::{FORMAT_VERSION, Hash, TileRef};
+pub use craft_pcraft_format::{Hash, TileRef};
+
+/// Version 2 adds blob-backed adjustments. Inline-only saves retain version 1.
+pub const FORMAT_VERSION: u32 = 2;
 
 /// The manifest: craft-pcraft-format's envelope (`format_version`, `generator`, the optional
 /// `thumbnail` and `composite` previews) around the document [`DocM`]. A save with the full-size

@@ -415,14 +415,18 @@ psd/src/
   - `thumb.png` and `composite/` mips for quick look and previews.
 - **Saving is incremental.** Tiles are content-addressed, so a save writes only new tiles plus the manifest, and garbage-collects unreferenced ones.
 - **Autosave and crash recovery** reuse the same writer into a recovery directory, reading from a snapshot on a background thread.
-- **Adjustment payloads:** `.pcraft` stores Color Lookup samples as little-endian f32
-  blobs and original LUT files and unsupported adjustment bytes as separate compressed,
-  content-addressed blobs. Decoded tables are shared by hash within a load; blob byte
-  limits still apply once per distinct payload. Other adjustment schemas are unchanged.
-  Current readers also accept the earlier inline adjustment representation. The envelope
-  remains `format_version` 1: builds predating blob-backed adjustments cannot open the
-  new Color Lookup or Unsupported records and report a manifest JSON deserialization
-  error rather than `TooNew`. Use a current build to reopen these saves.
+- **Данные корректировок:** небольшие Color Lookup и Unsupported сохраняются в прежнем
+  inline-представлении (до 4096 элементов суммарно в LUT и исходных байтах либо в raw).
+  Более крупные данные сохраняются в content-addressed blobs; LUT — как little-endian f32.
+  Файлы с blob-корректировками получают `format_version: 2`, включая корректировки внутри групп;
+  остальные сохраняют версию 1. Старый reader проверяет версию до разбора документа и возвращает
+  `FormatError::TooNew { found: 2, supported: 1 }`, предлагая обновить приложение.
+  Новые readers принимают обе версии и прежние inline-записи без преобразования данных.
+  Уже созданные экспериментальные blob-файлы с версией 1 также читаются текущей сборкой.
+  Декодированные LUT разделяются по хешу в рамках загрузки. Кеш ограничен 65 536 записями,
+  `max_blob_bytes` на таблицу и `max_total_bytes` суммарно; превышение возвращает
+  `FormatError::LimitExceeded` до декодирования. Это отдельный бюджет декодированных таблиц
+  сверх существующего бюджета tile/blob-байтов; повторные ссылки не расходуют квоту.
 - **PSD is the interchange format,** and `.pcraft` is the lossless native one.
 
 ---

@@ -332,7 +332,7 @@ fn comp_m(c: &LayerComp, sink: &mut dyn Sink) -> LayerCompM {
 
 pub(crate) struct Loader<'a> {
     /// Decoded LUT samples shared by content hash for the lifetime of this load.
-    pub luts: std::collections::HashMap<Hash, Arc<Vec<f32>>>,
+    pub luts: crate::adjustment_cache::LutCache,
     pub fetch: &'a mut dyn Fetch,
     pub preserve_ids: bool,
     /// Stored layer id → loaded id (differs when ids are remapped), for layer comp states.
