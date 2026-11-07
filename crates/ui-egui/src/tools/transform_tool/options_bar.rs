@@ -280,8 +280,31 @@ fn reference_point_origin(rect: [f64; 4], quad: [[f64; 2]; 4], pivot: [f64; 2]) 
             return [x, y];
         }
     }
-    // A flattened box has no inverse: count how far its top-left corner moved.
-    [pivot[0] - (quad[0][0] - rect[0]), pivot[1] - (quad[0][1] - rect[1])]
+    // A flattened box has no inverse. Fit the map's linear part about the box's centre and use
+    // its pseudo-inverse: the collapsed direction adds nothing, so a box squashed about its
+    // reference point reads no offset and one squashed toward an edge reads how far it moved.
+    let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
+    let centre = [(rect[0] + rect[2]) / 2.0, (rect[1] + rect[3]) / 2.0];
+    let mid = [quad.iter().map(|q| q[0]).sum::<f64>() / 4.0, quad.iter().map(|q| q[1]).sum::<f64>() / 4.0];
+    let d = [pivot[0] - mid[0], pivot[1] - mid[1]];
+    if !(w.abs() > f64::EPSILON && h.abs() > f64::EPSILON) {
+        return [centre[0] + d[0], centre[1] + d[1]];
+    }
+    // Columns: where a unit step along the box's width and height goes.
+    let ex = [(quad[1][0] - quad[0][0] + quad[2][0] - quad[3][0]) / (2.0 * w), (quad[1][1] - quad[0][1] + quad[2][1] - quad[3][1]) / (2.0 * w)];
+    let ey = [(quad[3][0] - quad[0][0] + quad[2][0] - quad[1][0]) / (2.0 * h), (quad[3][1] - quad[0][1] + quad[2][1] - quad[1][1]) / (2.0 * h)];
+    let det = ex[0] * ey[1] - ey[0] * ex[1];
+    let norm2 = ex[0] * ex[0] + ex[1] * ex[1] + ey[0] * ey[0] + ey[1] * ey[1];
+    let back = if det.abs() > 1e-9 * norm2.max(1e-12) {
+        [(ey[1] * d[0] - ey[0] * d[1]) / det, (ex[0] * d[1] - ex[1] * d[0]) / det]
+    } else if norm2 > 1e-12 {
+        // Rank one: the pseudo-inverse is the transpose over the squared norm.
+        [(ex[0] * d[0] + ex[1] * d[1]) / norm2, (ey[0] * d[0] + ey[1] * d[1]) / norm2]
+    } else {
+        [0.0, 0.0]
+    };
+    let o = [centre[0] + back[0], centre[1] + back[1]];
+    if o[0].is_finite() && o[1].is_finite() { o } else { pivot }
 }
 
 fn shown_at(rect: [f64; 4], quad: [[f64; 2]; 4], pivot: [f64; 2], relative: bool) -> [f64; 2] {

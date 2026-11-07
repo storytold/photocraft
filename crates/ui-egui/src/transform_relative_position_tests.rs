@@ -154,3 +154,22 @@ fn a_typed_x_leaves_a_fractional_y_exactly_where_it_was() {
     assert_eq!(after.map(|p| p[1]), before.map(|p| p[1]), "Y is untouched");
     assert_eq!(h.state().ui.transform.as_ref().unwrap().pivot[1], pivot_y);
 }
+
+/// A box squashed flat has no inverse map, so the offset comes from the map's pseudo-inverse: a
+/// box squashed to zero width about its reference point reads 0 / 0, and one squashed onto its
+/// left edge, carrying the reference point with it, reads -30 / 0 (CodeRabbit pre-merge check).
+#[test]
+fn a_flattened_box_reads_the_reference_points_own_offset() {
+    let mut app = transforming();
+    app.ui.tool_options.transform_relative_position = true;
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = [[70.0, 20.0], [70.0, 20.0], [70.0, 60.0], [70.0, 60.0]];
+    t.pivot = [70.0, 40.0];
+    let mut h = harness(app);
+    assert_eq!(shown(&h), (0.0, 0.0), "squashed about the reference point");
+    let t = h.state_mut().ui.transform.as_mut().unwrap();
+    t.quad = [[40.0, 20.0], [40.0, 20.0], [40.0, 60.0], [40.0, 60.0]];
+    t.pivot = [40.0, 40.0];
+    h.run_steps(2);
+    assert_eq!(shown(&h), (-30.0, 0.0), "squashed onto the left edge");
+}
