@@ -1687,6 +1687,111 @@ fn automation_confirming_a_file_writing_dialog_is_judged_as_its_file_command() {
     assert!(r.is_err_and(|e| e.contains("file.save")));
 }
 
+/// The desktop policy's verdict on file commands (crates/automation/src/workspace.rs): automation
+/// may close documents, but every file command that reads or writes a file, File › Save
+/// included, is refused.
+fn desktop_file_policy(id: &str, _: &Value) -> photocraft_engine::Result<()> {
+    if id.starts_with("file.") && !matches!(id, "file.new" | "file.close" | "file.closeAll" | "file.closeOthers") {
+        Err(photocraft_engine::EngineError::Other(format!("automation command `{id}` is disabled")))
+    } else {
+        Ok(())
+    }
+}
+
+/// An app under the desktop file policy whose dirty document (its own file outside any
+/// automation root) a control request asked to close: the unsaved-changes prompt is up.
+/// Returns the app, its context, the paths written so far and the document's own file.
+fn dirty_close_prompted() -> (PhotocraftApp, egui::Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>, String) {
+    let (mut app, ctx, written, _) = gated_app_recording_writes();
+    app.services.automation_authorize = Some(desktop_file_policy);
+    app.services.automation_command = Some(Box::new(|id, params| desktop_file_policy(id, params).map_err(|e| e.to_string())));
+    let own_file = std::env::temp_dir().join("outside").join("x.psd").to_string_lossy().into_owned();
+    app.session.active_mut().unwrap().path = Some(own_file.clone());
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    let r = call(&mut app, &ctx, "ui.menu.invoke", json!({"command": "file.close"}));
+    assert!(app.discard.is_some(), "closing a dirty document asks first: {r}");
+    (app, ctx, written, own_file)
+}
+
+/// Answers the open unsaved-changes prompt with Save, as synthetic input (the drawn prompt's
+/// answer with `automation_input` set) or as a control client's `ui.dialog.confirm`. Returns
+/// the refusal, if any.
+fn answer_save(app: &mut PhotocraftApp, ctx: &egui::Context, synthetic: bool) -> Result<(), String> {
+    if synthetic {
+        app.automation_input = true;
+        let r = crate::discard_ui::answer_choice(app, ctx, "save", false);
+        app.automation_input = false;
+        return r.map(|_| ());
+    }
+    let r = call(app, ctx, "ui.dialog.confirm", json!({"dialog": crate::discard_ui::CONTROL_ID, "choice": "save"}));
+    match r["error"].as_str() {
+        Some(e) => Err(e.to_string()),
+        None => Ok(()),
+    }
+}
+
+/// Answering the unsaved-changes prompt with Save writes the document back like File › Save,
+/// so automation is judged for `file.save` there too, through a control request or synthetic
+/// input alike: a client allowed to close a document can't write it over its own file. A
+/// policy that allows the Save lets it write and close, and a user's Save still writes and
+/// closes.
+#[test]
+fn automation_saving_from_the_unsaved_changes_prompt_is_judged_as_file_save() {
+    for synthetic in [false, true] {
+        let (mut app, ctx, written, _) = dirty_close_prompted();
+        let error = answer_save(&mut app, &ctx, synthetic).err().unwrap_or_default();
+        assert!(written.borrow().is_empty(), "synthetic={synthetic}: nothing is written: {:?}", written.borrow());
+        assert!(error.contains("file.save"), "synthetic={synthetic}: {error:?}");
+        assert!(app.discard.is_some(), "synthetic={synthetic}: the prompt stays up");
+        assert_eq!(app.session.documents().len(), 1, "synthetic={synthetic}: the document stays open");
+    }
+    // A policy that allows `file.save` lets the automation Save write the document and close it.
+    /// A policy that allows every command.
+    fn allow(_: &str, _: &Value) -> photocraft_engine::Result<()> {
+        Ok(())
+    }
+    for synthetic in [false, true] {
+        let (mut app, ctx, written, own_file) = dirty_close_prompted();
+        app.services.automation_authorize = Some(allow);
+        app.services.automation_command = Some(Box::new(|id, params| allow(id, params).map_err(|e| e.to_string())));
+        let r = answer_save(&mut app, &ctx, synthetic);
+        assert!(r.is_ok(), "synthetic={synthetic}: {r:?}");
+        assert_eq!(*written.borrow(), vec![own_file], "synthetic={synthetic}: the document is written back");
+        assert!(app.discard.is_none() && app.session.documents().is_empty(), "synthetic={synthetic}: the prompt and the document close");
+    }
+    // The user answering Save writes the document back and closes it.
+    let (mut app, ctx, written, own_file) = dirty_close_prompted();
+    crate::discard_ui::answer_choice(&mut app, &ctx, "save", false).unwrap();
+    assert_eq!(*written.borrow(), vec![own_file]);
+    assert!(app.discard.is_none());
+    assert!(app.session.documents().is_empty());
+}
+
+/// A control client's Save on the unsaved-changes prompt is judged as `file.save` whatever part
+/// of the automation policy its services carry: only the gate, or only the command callback
+/// (which installs no session gate for the request). With no policy at all, synthetic input and
+/// a control answer alike fail closed. Nothing is written, and the prompt and document stay.
+#[test]
+fn automation_saving_from_the_unsaved_changes_prompt_needs_a_policy_to_judge_it() {
+    for (gate, callback) in [(true, false), (false, true), (false, false)] {
+        for synthetic in [false, true] {
+            let (mut app, ctx, written, _) = dirty_close_prompted();
+            if !gate {
+                app.services.automation_authorize = None;
+            }
+            if !callback {
+                app.services.automation_command = None;
+            }
+            let error = answer_save(&mut app, &ctx, synthetic).err().unwrap_or_default();
+            let case = format!("gate={gate} callback={callback} synthetic={synthetic}");
+            assert!(error.contains("file.save"), "{case}: {error:?}");
+            assert!(written.borrow().is_empty(), "{case}: nothing is written: {:?}", written.borrow());
+            assert!(app.discard.is_some(), "{case}: the prompt stays up");
+            assert_eq!(app.session.documents().len(), 1, "{case}: the document stays open");
+        }
+    }
+}
+
 #[test]
 fn app_open_opens_a_directory_pcraft_and_falls_back_for_the_zip_form() {
     use photocraft_doc::Document;

@@ -256,6 +256,8 @@ fn couldnt_save(e: String) -> String {
     if e == crate::file_dialog::CANCELLED { e } else { format!("Couldn't save: {e}") }
 }
 
+/// Draws the unsaved-changes (or Revert) prompt while one is pending and acts on the button the
+/// user picks; a refused or failed answer is reported in the status bar and the prompt stays.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Save can ask for a path and then TIFF or Targa Options, and then write in the background.
     // Wait for all three; cancellation or a failed save brings us back.
@@ -334,18 +336,51 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if answer.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)) {
         answer = buttons.iter().find(|b| b.0 == ButtonRole::Default).map(|b| b.4);
     }
-    if let Some(answer) = answer {
-        apply(app, ctx, doc, answer);
+    if let Some(answer) = answer
+        && let Err(e) = apply(app, ctx, doc, answer, false)
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
-/// Acts on the answer about `doc`, the document the prompt is asking about.
-fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer) {
+/// Acts on the answer about `doc`, the document the prompt is asking about. `from_control` says
+/// a control client gave it (`ui.dialog.confirm`). Save is refused when automation may not run
+/// File › Save (see [`authorize_save`]); the prompt stays up.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer, from_control: bool) -> Result<(), String> {
     match answer {
         Answer::Cancel => app.discard = None,
         Answer::Discard => advance(app, ctx),
-        Answer::Save if save(app, ctx, doc) => advance(app, ctx),
-        Answer::Save => {}
+        Answer::Save => {
+            authorize_save(app, from_control)?;
+            if save(app, ctx, doc) {
+                advance(app, ctx);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Save writes the document back over its own file, as File › Save does, so automation (a
+/// control client's answer, a control request's gate or synthetic input) is judged for
+/// `file.save` before it runs: a client allowed to close a document can't use the prompt to
+/// write a file its policy keeps it from. A control answer counts as automation even when its
+/// services install no session gate (only the command callback). The installed gate (or the
+/// services' policy) and the command callback both judge it, and with neither available the
+/// Save is refused rather than run unjudged.
+fn authorize_save(app: &PhotocraftApp, from_control: bool) -> Result<(), String> {
+    if !(from_control || app.automation_input || app.session.authorize.is_some()) {
+        return Ok(());
+    }
+    let params = json!({});
+    let gate = app.session.authorize.or(app.services.automation_authorize);
+    if let Some(gate) = gate {
+        gate("file.save", &params).map_err(|e| e.to_string())?;
+    }
+    match app.services.automation_command.as_ref() {
+        Some(authorize) => authorize("file.save", &params),
+        None if gate.is_some() => Ok(()),
+        None => Err("automation command `file.save` is refused: no automation policy is available to judge it".into()),
     }
 }
 
@@ -377,7 +412,14 @@ pub fn pending_command(app: &PhotocraftApp) -> Option<(String, Value)> {
 
 /// Answers the prompt for a control client: `save`, `dontSave` or `cancel` (Revert takes
 /// `dontSave` or `cancel`). Like the buttons, Save may first ask for a path in the save dialog.
+/// Save is always judged as automation for `file.save`, whatever gate the request installed.
 pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str) -> Result<Value, String> {
+    answer_choice(app, ctx, choice, true)
+}
+
+/// Answers the prompt with `choice` (see [`answer_control`]); `from_control` says a control
+/// client chose it, so its Save is judged as automation even without a session gate.
+pub(crate) fn answer_choice(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str, from_control: bool) -> Result<Value, String> {
     let Some(doc) = app.discard.as_ref().and_then(|p| p.docs.first().copied()) else {
         return Err("no unsaved-changes prompt is open".into());
     };
@@ -394,7 +436,7 @@ pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str
             return Err(format!("unknown choice `{other}`: {choices}"));
         }
     };
-    apply(app, ctx, doc, answer);
+    apply(app, ctx, doc, answer, from_control)?;
     Ok(json!({"open": app.discard.is_some(), "fileDialog": app.file_dialog_open()}))
 }
 
