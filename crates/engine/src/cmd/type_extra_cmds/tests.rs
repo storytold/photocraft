@@ -967,11 +967,11 @@ fn path_placement_availability_and_legacy_ranges() {
     assert!(matches!(text(&s, id).shape, TextShape::Path { start: 30.0, end: None, .. }));
 
     // Position-locked and fully locked layers are rejected upfront.
-    s.execute("layer.lock", json!({"position": true})).unwrap();
+    s.execute("layer.lockLayers", json!({"position": true})).unwrap();
     assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_err());
-    s.execute("layer.lock", json!({"position": false, "all": true})).unwrap();
+    s.execute("layer.lockLayers", json!({"position": false, "all": true})).unwrap();
     assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_err());
-    s.execute("layer.lock", json!({"all": false})).unwrap();
+    s.execute("layer.lockLayers", json!({"all": false})).unwrap();
     assert!(s.execute("type.setPathPlacement", json!({"start": 10.0})).is_ok());
 }
 

@@ -211,7 +211,7 @@ fn tool_shortcut_cancels_type_path_placement_and_release_does_not_commit() {
     app.run("type.setPathPlacement", json!({"end": 100})).unwrap();
     app.ui.views[0].zoom = 1.0;
 
-    let xf = ViewXform::active(&app).unwrap();
+    let xf = crate::canvas::ViewXform::active(&app).unwrap();
     assert!(crate::type_path_placement::pointer(&mut app, crate::canvas::ToolEvent::Down { x: 40.0, y: 90.0, pressure: 1.0 }));
     assert!(crate::type_path_placement::pointer(&mut app, crate::canvas::ToolEvent::Move { x: 50.0, y: 90.0, pressure: 1.0 }));
     assert!(app.ui.type_path_drag.is_some(), "type path placement drag must be active");

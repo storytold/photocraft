@@ -151,6 +151,7 @@ pub(crate) fn active_path_geometry(app: &PhotocraftApp, text: &TextLayer) -> Opt
 }
 
 /// Computes screen-space positions and tangents for start and end placement markers.
+#[cfg(test)]
 pub(crate) fn markers(text: &TextLayer, xf: &ViewXform) -> Option<[(Pos2, Vec2); 2]> {
     let TextShape::Path { path, flip, .. } = &text.shape else { return None };
     let geometry = PathGeometry::new(path, *flip)?;
