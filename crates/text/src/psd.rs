@@ -81,6 +81,25 @@ pub fn parse_tysh(data: &[u8]) -> Option<TySh> {
     Some(TySh { transform: Affine { m }, text: text.descriptor, warp, bounds })
 }
 
+/// `tysh` transformed by `a` (document space to document space): its transform becomes `a`
+/// times the one it holds. The text, its styles, the warp and the trailing bounds (all in text
+/// space) stay byte for byte, so a type layer transformed as pixels (its font missing) keeps the
+/// boxes the file measured with the real font, and a `Txt2` frame import folded into the layer's
+/// transform still lines up with the record. `None` when the block is too short.
+pub fn transform_tysh(tysh: &[u8], a: &Affine) -> Option<Vec<u8>> {
+    let mut out = tysh.to_vec();
+    // Version (2 bytes), then xx, xy, yx, yy, tx, ty as big-endian f64.
+    let (bytes, _) = out.get_mut(2..50)?.as_chunks_mut::<8>();
+    let mut m = [0.0; 6];
+    for (v, b) in m.iter_mut().zip(bytes.iter()) {
+        *v = f64::from_be_bytes(*b);
+    }
+    for (v, b) in a.mul(&Affine { m }).m.iter().zip(bytes.iter_mut()) {
+        *b = v.to_be_bytes();
+    }
+    Some(out)
+}
+
 /// `tysh` moved by (`dx`, `dy`): only the transform's translation changes. The text, its styles,
 /// the warp and the trailing bounds (which are in text space) stay byte for byte, so a moved
 /// Photoshop type layer keeps everything Photoshop wrote. `None` when the block is too short.

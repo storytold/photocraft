@@ -133,6 +133,34 @@ fn a_scale_past_the_pixel_budget_is_refused_and_changes_nothing() {
     assert_eq!(active_bounds(&s), Rect::new(0, 2, 10_000, 10));
 }
 
+/// #7278 review: a type layer whose font is missing warps its pixels, so that warp is priced
+/// too, and one past the budget is refused before anything changes.
+#[test]
+fn a_missing_font_type_layer_past_the_pixel_budget_is_refused_and_changes_nothing() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    let r = s.execute("type.create", json!({"x": 2, "y": 10, "text": "Hi", "size": 8, "font": "NoSuchFamily7278"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    s.edit("psd pixels", |doc, _| {
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+        let mut c = Surface::new(t.cache.as_ref().unwrap().format());
+        c.fill_rect(Rect::new(10, 2, 11, 10), &[1.0, 0.0, 0.0, 1.0]);
+        t.cache = Some(c);
+        Ok(())
+    })
+    .unwrap();
+    let st = s.active().unwrap();
+    let (before, revision, steps) = (st.doc.clone(), st.revision, st.history.past_len());
+    // About 1000000 x 8 px of 8-bit RGBA output: past the 20 MB test budget.
+    let mut p = stretch(1e6);
+    p["layer"] = json!(id.0);
+    let err = s.execute("edit.transform", p).unwrap_err().to_string();
+    assert!(err.starts_with("too large to transform: the transformed layer") && err.ends_with("the document was not changed"), "{err}");
+    let st = s.active().unwrap();
+    assert!(st.doc == before, "the document is untouched");
+    assert_eq!((st.revision, st.history.past_len()), (revision, steps));
+}
+
 #[test]
 fn a_group_with_one_layer_past_the_budget_is_not_half_transformed() {
     let mut s = column();
@@ -308,6 +336,150 @@ fn type_layers_transform_as_vectors() {
     assert!((t.transform.m[0] - 2.0).abs() < 1e-9);
     // Perspective on type is refused, like Photoshop.
     assert!(s.execute("edit.transform", json!({"layer": id, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]})).is_err());
+}
+
+/// #7659 review: the saved type record of a missing-font layer keeps what the file wrote (its
+/// layout and ink boxes, measured with the real font); only its transform follows.
+#[test]
+fn a_missing_font_type_record_keeps_its_descriptors_through_a_transform() {
+    let mut s = session();
+    let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20, "font": "NoSuchFamily7278"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    // The record a PSD brings: boxes from the real font, unlike the fallback face's.
+    s.edit("psd record", |doc, _| {
+        let dpi = doc.resolution_dpi;
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+        t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::build_tysh(t, dpi, Some([-3.0, -61.0, 517.0, 19.0]))));
+        Ok(())
+    })
+    .unwrap();
+    let before = {
+        let LayerContent::Text(t) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!() };
+        photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap()
+    };
+    s.execute("edit.transform", json!({"layer": id.0, "matrix": [1, 0, 0, 1, 25, 5]})).unwrap();
+    let LayerContent::Text(t) = &s.active().unwrap().doc.layer(id).unwrap().content else { panic!("still a type layer") };
+    let after = photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap();
+    assert_eq!(after.transform.m, t.transform.m, "the transform follows");
+    assert!(after.text == before.text && after.warp == before.warp && after.bounds == before.bounds, "the descriptors are the file's");
+}
+
+/// #7659 review: the warp of a missing-font type layer's pixels stops when the transform is
+/// cancelled, as a raster layer's does.
+#[test]
+fn a_cancelled_transform_stops_the_missing_font_pixel_warp() {
+    let mut s = session();
+    let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20, "font": "NoSuchFamily7278"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    s.edit("psd pixels", |doc, _| {
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+        let mut c = Surface::new(t.cache.as_ref().unwrap().format());
+        c.fill_rect(Rect::new(20, 30, 40, 40), &[1.0, 0.0, 0.0, 1.0]);
+        t.cache = Some(c);
+        Ok(())
+    })
+    .unwrap();
+    let mut l = s.active().unwrap().doc.layer(id).unwrap().clone();
+    let a = Affine { m: [1.0, 0.0, 0.0, 1.0, 25.0, 5.0] };
+    let h = Homography([1.0, 0.0, 25.0, 0.0, 1.0, 5.0, 0.0, 0.0, 1.0]);
+    let (cancel, progress) = (|| true, |_: f32| {});
+    let ctl = Interrupt::new(&cancel, &progress);
+    let r = transform_layer_with(None, Locks::default(), &mut l, &h, Some(a), Interp::Bilinear, &ctl);
+    assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+}
+
+/// #7278: a type layer whose font is missing keeps the pixels it shows through a transform,
+/// as Photoshop does, instead of being set again in a substitute font. It stays a type layer.
+#[test]
+fn a_type_layer_with_a_missing_font_transforms_its_pixels() {
+    let mut s = session();
+    let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20, "font": "NoSuchFamily7278"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    // The pixels a PSD brings, set in the real font: a block the fallback face would never draw.
+    s.edit("psd pixels", |doc, _| {
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+        let mut c = Surface::new(t.cache.as_ref().unwrap().format());
+        c.fill_rect(Rect::new(20, 30, 40, 40), &[1.0, 0.0, 0.0, 1.0]);
+        t.cache = Some(c);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("edit.transform", json!({"layer": id.0, "matrix": [1, 0, 0, 1, 25, 5]})).unwrap();
+    let st = s.active().unwrap();
+    let LayerContent::Text(t) = &st.doc.layer(id).unwrap().content else { panic!("still a type layer") };
+    assert!((t.transform.m[4] - 35.0).abs() < 1e-9 && (t.transform.m[5] - 55.0).abs() < 1e-9, "{:?}", t.transform);
+    let c = t.cache.as_ref().unwrap();
+    assert_eq!(c.content_bounds(), Rect::new(45, 35, 65, 45));
+    assert!(c.pixel(55, 40)[0] > 0.99);
+    let saved = photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap().transform;
+    assert!((saved.m[4] - 35.0).abs() < 1e-9 && (saved.m[5] - 55.0).abs() < 1e-9, "the saved TySh follows: {saved:?}");
+}
+
+/// A `Txt2` block whose one text object, `text`, is drawn in a frame anchored at `point` with
+/// the frame-to-text-space `matrix` (as Photoshop keeps a point text's position, #1317).
+fn txt2_with_point_frame(text: &str, point: [f64; 2], matrix: [f64; 6]) -> Vec<u8> {
+    let [x, y] = point;
+    let m = matrix.map(|v| format!("{v:.5}")).join(" ");
+    let mut v =
+        format!("\n\n/98 << /0 14 >> /0 << /8 << /0 [ << /0 << /0 [ {x:.5} {y:.5} ] /2 << /2 [ {m} ] >> >> >> ] >> >> /1 << /1 [ << /0 << /0 (").into_bytes();
+    v.extend_from_slice(&[0xfe, 0xff]);
+    v.extend(format!("{text}\r").encode_utf16().flat_map(u16::to_be_bytes));
+    let len = text.encode_utf16().count() + 1;
+    v.extend_from_slice(
+        format!(") /6 << /0 [ << /0 << /0 << /0 (\u{fe}\u{ff}) /6 << /0 0 /11 1 >> >> >> /1 {len} >> ] >> >> /1 << /2 [ << /6 [ << /10 0 >> ] >> ] >> >> ] >>")
+            .as_bytes(),
+    );
+    v
+}
+
+/// #7659 review (CodeRabbit): a Photoshop type layer whose position lives partly in its `Txt2`
+/// frame opens with the frame folded into its transform, so its model transform differs from
+/// the one in its `TySh`. Transformed with its font missing, the record keeps that frame, so it
+/// must take the change, not the model transform: reopened, the frame is applied again and the
+/// type must land where its kept pixels are.
+#[test]
+fn a_missing_font_type_layer_with_a_txt2_frame_reopens_on_its_transformed_pixels() {
+    let mut s = session();
+    let r = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hi", "size": 20, "font": "NoSuchFamily7278"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    // As Photoshop saves it: the transform far away, the anchor (100, 50) only in the frame.
+    s.edit("psd record", |doc, _| {
+        let dpi = doc.resolution_dpi;
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+        let mut file = t.clone();
+        file.transform = Affine::translate(-1000.0, -2000.0);
+        let tysh = photocraft_text::psd::build_tysh(&file, dpi, Some([1100.0, 1980.0, 1160.0, 2050.0]));
+        t.psd_raw = Some(std::sync::Arc::new(photocraft_text::psd::set_text_index(&tysh, 0).unwrap()));
+        let mut c = Surface::new(t.cache.as_ref().unwrap().format());
+        c.fill_rect(Rect::new(20, 30, 40, 40), &[1.0, 0.0, 0.0, 1.0]);
+        t.cache = Some(c);
+        let txt2 = txt2_with_point_frame("Hi", [1000.0, 2100.0], [1.0, 0.0, 0.0, 1.0, 100.0, -50.0]);
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"Txt2", std::sync::Arc::new(txt2)));
+        Ok(())
+    })
+    .unwrap();
+    let reopen = |doc: &Document| {
+        let bytes = photocraft_io::export(doc, "x.psd", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+        photocraft_io::import("x.psd", &bytes).unwrap().document
+    };
+    let text_of = |doc: &Document| {
+        doc.layers.iter().find_map(|l| if let LayerContent::Text(t) = &l.content { Some((l.id, t.clone())) } else { None }).expect("a type layer")
+    };
+    let opened = reopen(&s.active().unwrap().doc);
+    let (id, t) = text_of(&opened);
+    let raw = photocraft_text::psd::parse_tysh(t.psd_raw.as_ref().unwrap()).unwrap().transform;
+    let at = |t: &photocraft_doc::TextLayer| t.transform.apply(photocraft_geom::Point::new(0.0, 0.0));
+    assert!(keeps_pixels(&t), "the font is missing and the file's pixels are kept");
+    assert!((at(&t).x - 100.0).abs() < 1e-6 && (at(&t).y - 50.0).abs() < 1e-6, "opened at the frame's anchor: {:?}", t.transform);
+    assert_ne!(raw.m, t.transform.m, "the model transform has the frame folded in, the TySh's has not");
+    s.add_document(opened, None);
+    s.execute("edit.transform", json!({"layer": id.0, "matrix": [1, 0, 0, 1, 25, 5]})).unwrap();
+    let (_, moved) = text_of(&s.active().unwrap().doc);
+    assert_eq!(moved.cache.as_ref().unwrap().content_bounds(), Rect::new(45, 35, 65, 45), "the pixels moved");
+    let (_, back) = text_of(&reopen(&s.active().unwrap().doc));
+    assert_eq!(back.cache.as_ref().unwrap().content_bounds(), Rect::new(45, 35, 65, 45), "the pixels are kept");
+    let p = at(&back);
+    assert!((p.x - 125.0).abs() < 1e-6 && (p.y - 55.0).abs() < 1e-6, "reopened with the pixels, at (125, 55): {p:?} ({:?})", back.transform);
 }
 
 #[test]
