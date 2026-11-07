@@ -738,7 +738,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             Some(("export", rows)) => {
                 let ids: Vec<u64> = rows.as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
-                if let Err(e) = export_log(app, (!ids.is_empty()).then_some(ids))
+                if let Err(e) = export_log(app, Some(ids))
                     && e != "cancelled"
                 {
                     app.ui.status = e;
