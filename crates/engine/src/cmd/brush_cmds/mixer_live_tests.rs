@@ -45,8 +45,9 @@ fn mixer_live_empty_layer_exact_commit_undo_source_preservation_and_chunking() {
         assert!(live.doc.layer(id).unwrap().surface().unwrap().rgba(40, 48)[3] > 0.0);
         assert_eq!(target(&s).rgba(40, 48)[3], 0.0, "preview must not edit the session");
         let mut points = vec![StrokePoint::new(40.0, 48.0, 1.0)];
-        for x in [56.0, 72.0, 88.0, 104.0, 120.0, 136.0, 152.0] {
-            let p = StrokePoint::new(x, 48.0, 1.0);
+        // Non-collinear input also exercises the path choice when live state is replayed.
+        for (x, y) in [(56.0, 40.0), (72.0, 36.0), (88.0, 40.0), (104.0, 48.0), (120.0, 56.0), (136.0, 60.0), (152.0, 56.0)] {
+            let p = StrokePoint::new(x, y, 1.0);
             live.push(&[p]).unwrap();
             points.push(p);
         }
