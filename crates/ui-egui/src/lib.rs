@@ -60,6 +60,8 @@ pub mod theme;
 pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
 pub(crate) mod tool_memory;
 pub mod updates_ui;
+pub mod web_capture;
+pub mod web_preview;
 pub mod widgets;
 pub mod work_area;
 
@@ -310,6 +312,7 @@ use tools::path_components;
 pub use tools::perspective_crop_ui;
 pub use tools::perspective_ui;
 pub use tools::puppet_ui;
+pub use tools::qr_ui;
 pub use tools::retouch_ui;
 pub use tools::shape_bounds_box;
 use tools::shape_gradient_ui;
@@ -416,6 +419,8 @@ pub struct PhotocraftApp {
     pub(crate) patch_preview: Option<patch_preview::PatchPreview>,
     /// Content-Aware Move drag or box shown with its result (`cam_preview`).
     pub(crate) cam_preview: Option<cam_preview::CamPreview>,
+    /// A link opened inside PhotoCraft: the WebView2 child window over the preview panel.
+    pub(crate) web_preview: Option<web_preview::Preview>,
     /// The pixels a Magnetic Lasso border follows (`magnetic_lasso_ui`).
     pub(crate) magnetic: magnetic_lasso_ui::Runtime,
     /// The next tool `Down` is a right-button drag that erases (see `paint_mouse`).

@@ -35,6 +35,8 @@ photocraft-format = { workspace = true }
 photocraft-plugins = { workspace = true }
 base64 = "0.22"
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
+# QR decoding for `qr.scan` (recognize QR codes in the document; pure Rust, no native deps).
+rqrr = "0.7"
 photocraft-codecs = { workspace = true }
 flate2 = { workspace = true }
 craft-print = { workspace = true }
@@ -73,3 +75,5 @@ photocraft-testkit = { workspace = true }
 wat = "1.228"
 # Synthetic multi-part EXR fixtures for the parts-commands tests.
 exr = { version = "1.73", default-features = false }
+# Encode QR codes in the `qr.scan` tests (the decoder under test is rqrr; dev-only).
+qrcode = "0.14"

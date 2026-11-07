@@ -36,6 +36,7 @@ pub mod path_components;
 pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod puppet_ui;
+pub mod qr_ui;
 pub mod retouch_ui;
 pub mod shape_bounds_box;
 pub(super) mod shape_gradient_ui;

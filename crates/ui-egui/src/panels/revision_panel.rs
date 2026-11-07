@@ -17,7 +17,7 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let n = st.doc.revision_markers.len();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.button(tl!("Add from Selection")).clicked() {
             add_from_selection(app);
         }
@@ -30,6 +30,10 @@ pub(super) fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         // Undo (Ctrl+Z) restores the previous snapshots and green state.
         if ui.add_enabled(can, egui::Button::new(tl!("Reset All to Red"))).clicked() {
             let _ = app.run("revision.snapshot", json!({}));
+        }
+        // One undo step for the whole list; the per-row Delete removes a single marker.
+        if ui.add_enabled(can, egui::Button::new(tl!("Clear All"))).clicked() {
+            let _ = app.run("revision.clear", json!({}));
         }
     });
     if n == 0 {
@@ -62,38 +66,43 @@ fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, i: usize, t: &Tokens) {
     let color = if done { DONE } else { TODO };
     ui.horizontal(|ui| {
         ui.colored_label(color, if done { "✓" } else { "●" });
-        let mut name = name.clone();
-        let edited = ui.add(egui::TextEdit::singleline(&mut name).desired_width(90.0));
-        if edited.changed() {
-            let _ = app.run("revision.set", json!({"index": i, "name": name}));
-        }
-        if let Some(name) = &bound_name {
-            ui.label(RichText::new(format!("↔ {name}")).size(11.0).color(t.text_dim));
-            if ui.small_button(tl!("Unbind")).clicked() {
-                let _ = app.run("revision.set", json!({"index": i, "layerId": null}));
+        // The row's controls are laid out from the right edge inwards, Delete first: in a narrow
+        // dock the row used to push the ✕ out of sight, which read as "markers cannot be deleted".
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let del = ui.add(egui::Button::new(RichText::new(tl!("Delete")).size(11.5)).small());
+            if del.on_hover_text(tl!("Remove this marker")).clicked() {
+                let _ = app.run("revision.remove", json!({"index": i}));
             }
-        } else if ui.small_button(tl!("Bind Layer")).clicked() {
-            // Bind the layer under the marker's own frame, not whatever layer happens to be
-            // selected: each marker follows the content it actually frames.
-            let id = layer_at_point(app, [pos[0] + size[0] / 2.0, pos[1] + size[1] / 2.0]);
-            match id {
-                Some(id) => {
-                    let _ = app.run("revision.set", json!({"index": i, "layerId": id}));
+            if ui.add(egui::Button::new(RichText::new(tl!("Reset")).size(11.5)).small()).clicked() {
+                // Re-snapshot just this marker: its box turns red again (undo with Ctrl+Z).
+                let _ = app.run("revision.snapshot", json!({"index": i}));
+            }
+            if let Some(name) = &bound_name {
+                if ui.add(egui::Button::new(RichText::new(tl!("Unbind")).size(11.5)).small()).clicked() {
+                    let _ = app.run("revision.set", json!({"index": i, "layerId": null}));
                 }
-                None => {
-                    app.ui.status = tl!("No layer found under this marker; select a layer and bind it manually.").into();
-                    app.ui.status_error = true;
+                ui.label(RichText::new(format!("↔ {name}")).size(10.5).color(t.text_dim));
+            } else if ui.add(egui::Button::new(RichText::new(tl!("Bind Layer")).size(11.5)).small()).clicked() {
+                // Bind the layer under the marker's own frame, not whatever layer happens to be
+                // selected: each marker follows the content it actually frames.
+                let id = layer_at_point(app, [pos[0] + size[0] / 2.0, pos[1] + size[1] / 2.0]);
+                match id {
+                    Some(id) => {
+                        let _ = app.run("revision.set", json!({"index": i, "layerId": id}));
+                    }
+                    None => {
+                        app.ui.status = tl!("No layer found under this marker; select a layer and bind it manually.").into();
+                        app.ui.status_error = true;
+                    }
                 }
             }
-        }
-        if ui.small_button(tl!("Reset")).clicked() {
-            // Re-snapshot just this marker: its box turns red again (undo with Ctrl+Z).
-            let _ = app.run("revision.snapshot", json!({"index": i}));
-        }
-        if ui.small_button("✕").clicked() {
-            let _ = app.run("revision.remove", json!({"index": i}));
-            return;
-        }
+            // Whatever is left of the row is the marker's name.
+            let mut name = name.clone();
+            let edited = ui.add(egui::TextEdit::singleline(&mut name).desired_width(ui.available_width().max(48.0)));
+            if edited.changed() {
+                let _ = app.run("revision.set", json!({"index": i, "name": name}));
+            }
+        });
     });
     let pos = format!(
         "x {}  y {}  {} × {}",

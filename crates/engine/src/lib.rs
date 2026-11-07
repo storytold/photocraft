@@ -134,6 +134,7 @@ pub use cmd::pick_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
+pub use cmd::qr_cmds;
 pub use cmd::rasterize_style_cmds;
 pub use cmd::redeye_cmds;
 pub use cmd::revision_cmds;

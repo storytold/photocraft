@@ -3332,3 +3332,27 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Marker	标记
 	Select the content to change with the Rectangular Marquee, then press Add from Selection.	用矩形选框框住要修改的内容，然后点击「从选区添加」。红框表示内容尚未修改，检测到改动后变绿框。
 	No layer found under this marker; select a layer and bind it manually.	该标记框内没有找到对应图层，请先在图层面板选中图层再绑定。
+
+# QR code recognition (Tools › Scan QR Code… / 识别二维码).
+	Scan QR Code…	识别二维码…
+	QR Code Results	二维码识别结果
+	Scan Document	扫描全图
+	Scan Selection	扫描选区
+	Open Link	打开链接
+	the document	文档
+	the selection	选区
+	No QR code found in {scope}	在{scope}中未找到二维码
+	1 QR code found	找到 1 个二维码
+	{n} QR codes found	找到 {n} 个二维码
+	Found in {scope}: {n_label}	在{scope}中找到：{n_label}
+	({x}, {y}) · {w}×{h} px	({x}, {y}) · {w}×{h} 像素
+	Scan a document to recognize QR codes; scan a selection to recognize only the codes inside it.	扫描文档可识别其中的二维码；先框选再点「扫描选区」，则只识别选区内的二维码。
+	Web Preview	网页预览
+	Open in Browser	在浏览器中打开
+	Screenshot	截图到选区
+	Shot placed into the selection	截图已填充到选框
+	Screenshot placed on the canvas	截图已放到画布（框选后点截图会贴合选框）
+	Remove this marker	删除这个修订标记
+	Draw the box with the Marquee tool first	请先用矩形选框工具在画布上画出要填充的框
+	QR	二维码
+	Could not open the preview window	预览窗口没能打开

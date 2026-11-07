@@ -193,6 +193,19 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// Remove every marker in one undo step (the panel's "Clear All").
+fn clear(s: &mut Session, _: &Value) -> Result<Value> {
+    let n = s.active().ok_or(EngineError::NoDocument)?.doc.revision_markers.len();
+    if n == 0 {
+        return Ok(json!({ "removed": 0 }));
+    }
+    s.edit("Delete All Revision Markers", |d, _| {
+        d.revision_markers.clear();
+        Ok(())
+    })?;
+    Ok(json!({ "removed": n }))
+}
+
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "revision.set";
     let i = index_of(s, p, CMD)?;
@@ -370,6 +383,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"index":n}"##,
             enabled: has_markers,
             run: remove,
+            journal: true,
+        },
+        CommandSpec {
+            id: "revision.clear",
+            label: "Delete All Revision Markers",
+            menu: &[],
+            shortcut: None,
+            params: r##"{} → {removed}"##,
+            enabled: has_markers,
+            run: clear,
             journal: true,
         },
         CommandSpec {

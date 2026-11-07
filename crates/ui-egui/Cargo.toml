@@ -61,6 +61,12 @@ sys-locale = "=0.3.2"
 # uses, pinned to the same version.
 [target.'cfg(target_os = "windows")'.dependencies]
 winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi", "advapi"] }
+# Screenshots of that preview (`web_capture.rs`): `wry` has no capture API, so the page is taken
+# from the screen.
+xcap = "=0.9.8"
+# The preview's own OS window (`web_preview.rs`): the window handle and its WebView2 child live in
+# this crate, which is allowed the two `unsafe` calls they need (`this crate forbids unsafe`).
+photocraft-webwin = { path = "../webwin" }
 
 [dev-dependencies]
 photocraft-io = { workspace = true, features = ["testgen"] }

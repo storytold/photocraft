@@ -361,6 +361,9 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             app.ui.palette_open = !app.ui.palette_open;
             Ok(Value::Null)
         }
+        // Tools › Scan QR Code… (and any control-channel call): run the engine's read-only
+        // query, keep the codes in the UI and open the result window.
+        "qr.scan" => crate::qr_ui::scan(app, params.get("selectionOnly").and_then(Value::as_bool).unwrap_or(false)),
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
         "help.systemInfo" => {
             let mut fields = serde_json::Map::new();

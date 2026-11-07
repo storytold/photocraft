@@ -41,6 +41,7 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("channels", "Channels", Group::Layers),
     ("paths", "Paths", Group::Layers),
     ("revision", "Revision", Group::Layers),
+    ("qr", "QR", Group::Layers),
     ("brushes", "Brushes", Group::Brushes),
 ];
 
