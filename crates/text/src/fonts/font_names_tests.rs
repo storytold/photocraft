@@ -2,7 +2,7 @@
 use super::*;
 use photocraft_doc::text::CharStyle;
 
-fn numeric_font(source: &[u8], style: &str, ps: &str) -> Vec<u8> {
+pub(super) fn numeric_font(source: &[u8], style: &str, ps: &str) -> Vec<u8> {
     let mut bytes = source.to_vec();
     let count = u16::from_be_bytes(bytes[4..6].try_into().unwrap()) as usize;
     let mut name_record = 0;

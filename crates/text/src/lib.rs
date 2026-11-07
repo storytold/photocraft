@@ -210,6 +210,75 @@ pub fn set_shared_missing_glyph_protection(on: bool) {
     }
 }
 
+/// A [`rescan_shared_system_fonts`] is running.
+#[cfg(not(target_arch = "wasm32"))]
+static RESCANNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Clears [`RESCANNING`] however the rescan ends (a panic in a dependency included).
+#[cfg(not(target_arch = "wasm32"))]
+struct RescanGuard;
+
+#[cfg(not(target_arch = "wasm32"))]
+impl Drop for RescanGuard {
+    fn drop(&mut self) {
+        RESCANNING.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Re-lists the installed fonts on a background thread and adds to [`shared`] the ones that
+/// appeared since its scan: fonts installed, or activated by a font manager such as FontBase,
+/// while PhotoCraft runs. Font menus follow through [`fonts::shared_generation`]; `on_change`
+/// runs (on that thread) when fonts were added, e.g. to wake the UI. The engine is locked only
+/// to read what it has and to add the new files, not while folders are read.
+///
+/// Does nothing on the web and in tests, before the first scan has finished (it will see the new
+/// fonts itself), or while another rescan runs. Returns whether a rescan started.
+pub fn rescan_shared_system_fonts(on_change: impl FnOnce() + Send + 'static) -> bool {
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = on_change;
+        false
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use std::sync::atomic::Ordering;
+        if !uses_system_fonts() {
+            return false;
+        }
+        let Some(engine) = SHARED.get() else {
+            return false;
+        };
+        if RESCANNING.swap(true, Ordering::SeqCst) {
+            return false;
+        }
+        let spawned = std::thread::Builder::new().name("photocraft-font-rescan".into()).spawn(move || {
+            let _guard = RescanGuard;
+            if rescan_system_fonts(engine) > 0 {
+                on_change();
+            }
+        });
+        if spawned.is_err() {
+            RESCANNING.store(false, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+}
+
+/// One rescan of `engine`'s system fonts: returns how many font files were added.
+#[cfg(not(target_arch = "wasm32"))]
+fn rescan_system_fonts(engine: &std::sync::Mutex<TextEngine>) -> usize {
+    let lock = || engine.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some(seen) = lock().fonts.system_fonts_seen() else {
+        return 0;
+    };
+    let new = fonts::new_system_font_files(&seen);
+    if new.is_empty() {
+        return 0;
+    }
+    lock().fonts.add_system_font_files(new)
+}
+
 /// Starts building [`shared`] (the system font scan) on a background thread, so the Type tool's
 /// font menus don't stall the UI when they first draw. Call once at startup; calling again does
 /// nothing.
@@ -230,6 +299,12 @@ mod warm {
     impl<T: Send + Sync + 'static> Warm<T> {
         pub(crate) const fn new() -> Self {
             Self { cell: OnceLock::new(), scan: Mutex::new(None) }
+        }
+
+        /// The value if it is built, without building it.
+        #[cfg(not(target_arch = "wasm32"))]
+        pub(crate) fn get(&'static self) -> Option<&'static T> {
+            self.cell.get()
         }
 
         /// The value, building it on this thread (or waiting for the background build).

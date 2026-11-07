@@ -10,6 +10,10 @@
 //! read runs at a time; the automatic triggers start at most one every [`REREAD_SECS`] (a
 //! trigger inside that window is deferred, not dropped).
 //!
+//! Coming back to the front also re-lists the installed fonts in the background
+//! (`photocraft_text::rescan_shared_system_fonts`): fonts a font manager activated in the
+//! meantime, or that were just installed, then appear in the font menus without a restart.
+//!
 //! There is deliberately no periodic re-read (#569 decision): a read costs about 0.2 s of CPU,
 //! and a profile reassigned while PhotoCraft stays in front with no window moving practically
 //! doesn't happen; it is picked up at the next return to the front or Color Settings.
@@ -106,6 +110,12 @@ fn poll_with_output_name(app: &mut PhotocraftApp, ctx: &egui::Context, output_na
     let focused = ctx.input(|i| i.focused) || std::mem::take(&mut app.monitors.window_focused);
     let regained = focused && app.monitors.focused == Some(false);
     app.monitors.focused = Some(focused);
+    if regained {
+        // Coming back to the front is also when fonts activated meanwhile (a font manager such as
+        // FontBase, in another app) or just installed should join the font menus.
+        let ctx = ctx.clone();
+        photocraft_text::rescan_shared_system_fonts(move || ctx.request_repaint());
+    }
     if regained || displays_changed(app, ctx) {
         app.monitors.again = true;
     }
