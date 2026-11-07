@@ -54,11 +54,11 @@ fn display_color(c: [f32; 3]) -> Color32 {
     Color32::from_rgb(b(c[0]), b(c[1]), b(c[2]))
 }
 
-/// The Eyedropper ring's two colours at document point (x, y): the targeted raster mask or
-/// image colour under the pointer, and the current foreground. Returns `None` when the
-/// selected source has no sample (#213).
+/// The Eyedropper ring's two colours at document point (x, y): the colour under the pointer
+/// (what a click would pick) and the current foreground, or `None` where there is no colour
+/// to sample (#213).
 pub(crate) fn eyedropper_ring_colors(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<(Color32, Color32)> {
-    let new = sample_eyedropper_target(app, x, y, eyedropper_color)?;
+    let new = eyedropper_color(app, x, y)?;
     let fg = app.session.tools.foreground;
     Some((display_color(new), display_color([fg[0], fg[1], fg[2]])))
 }
@@ -203,30 +203,15 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
     true
 }
 
-/// Write the picked colour to the foreground, or to the background while Alt is held.
-/// Image samples are converted to grey when the active paint target requires it.
 pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    let rgb = sample_eyedropper_target(app, x, y, |app, x, y| {
+    let rgb = if let Some((surface, canvas)) = eyedropper_mask_source(app) {
+        sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)
+    } else {
         eyedropper_color(app, x, y).map(|rgb| if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] })
-    });
+    };
     if let Some(rgb) = rgb {
         let key = if mods.alt { "background" } else { "foreground" };
         let _ = app.run("tools.setColors", json!({ key: [rgb[0],rgb[1],rgb[2],1.0] }));
-    }
-}
-
-/// Share the raster-mask sample between the click and ring, with each caller choosing how
-/// to use image samples. An unavailable sample from a targeted mask stays unavailable.
-fn sample_eyedropper_target(
-    app: &mut PhotocraftApp,
-    x: f64,
-    y: f64,
-    sample_image: impl FnOnce(&mut PhotocraftApp, f64, f64) -> Option<[f32; 3]>,
-) -> Option<[f32; 3]> {
-    if let Some((surface, canvas)) = eyedropper_mask_source(app) {
-        sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)
-    } else {
-        sample_image(app, x, y)
     }
 }
 
