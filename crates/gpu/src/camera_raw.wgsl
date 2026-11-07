@@ -1,6 +1,7 @@
 // Camera Raw's per-pixel develop stages (`photocraft_algo::camera_raw::develop`, constants from
 // `camera_raw::per_pixel`), one fragment per pixel. Each function mirrors the CPU code it is
-// named after, in the same order of operations; `camera_raw.rs` holds the bindings.
+// named after, in the same order of operations; `camera_raw.rs` holds the bindings. Shadows and
+// Highlights (`camera_raw_tone.wgsl`) start from `fs_log` and end here as a gain per pixel.
 
 struct Params {
     size: vec2<u32>,
@@ -23,12 +24,21 @@ struct Params {
     grain: vec4<f32>,
     // The two octaves' seeds as (low, high) words.
     seeds: vec4<u32>,
+    // Shadows and Highlights: the last pass's statistics slots (input, output); the Whites and
+    // Blacks cells' edge.
+    tone: vec4<u32>,
+    // The log luminance's floor.
+    floor_: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> P: Params;
 @group(0) @binding(1) var src: texture_2d<f32>;
 // R32Float rows of `LUT_WIDTH`: parametric, master, red, green, blue curves; Whites, Blacks rows.
 @group(0) @binding(2) var luts: texture_2d<f32>;
+// Shadows and Highlights: the log luminance before and after, and the order statistics.
+@group(0) @binding(3) var log_in: texture_2d<f32>;
+@group(0) @binding(4) var log_out: texture_2d<f32>;
+@group(0) @binding(5) var stats: texture_2d<u32>;
 
 const GAINS: u32 = 0u;
 const CONTRAST: u32 = 1u;
@@ -44,6 +54,7 @@ const GRADE: u32 = 12u;
 const VIGNETTE: u32 = 13u;
 const GRAIN: u32 = 14u;
 const CLAMP: u32 = 15u;
+const LOCAL_TONE: u32 = 16u;
 
 const CURVE_LUT: i32 = 1024;
 const WB_STEPS: i32 = 33;
@@ -279,16 +290,34 @@ fn value_noise(x: f32, y: f32, seed: vec2<u32>) -> f32 {
     return top + (bot - top) * sy;
 }
 
-@fragment
-fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
-    let p = vec2<i32>(floor(pos.xy));
-    let q = textureLoad(src, p, 0);
-    var c = q.rgb;
-    // 1. White balance and exposure.
+fn gained(v: f32, g: f32) -> f32 {
+    return linear_to_srgb(max(srgb_to_linear(v) * g, 0.0));
+}
+
+// 1. White balance and exposure. (Whole vectors: FXC unrolls any loop around a component written
+// by index, and `fs_points` loops over this.)
+fn balance(q: vec3<f32>) -> vec3<f32> {
     if on(GAINS) {
-        for (var i = 0; i < 3; i++) {
-            c[i] = linear_to_srgb(max(srgb_to_linear(c[i]) * P.gains[i], 0.0));
-        }
+        return vec3(gained(q.x, P.gains.x), gained(q.y, P.gains.y), gained(q.z, P.gains.z));
+    }
+    return q;
+}
+
+// `camera_raw_tone.wgsl`'s `unkey`.
+fn unkey(k: u32) -> f32 {
+    return bitcast<f32>(select(~k, k ^ 0x80000000u, (k & 0x80000000u) != 0u));
+}
+
+// Stages 1 to 3 on the pixel at `p`: what Whites and Blacks measure and apply to.
+fn tonal(p: vec2<i32>, q: vec3<f32>) -> vec3<f32> {
+    var c = balance(q);
+    // 3. Shadows and Highlights: the light scaled by the change of the log luminance, the last
+    // pass's kept quantile put back.
+    if on(LOCAL_TONE) {
+        let shift = unkey(textureLoad(stats, vec2(i32(P.tone.x), 0), 0).y) - unkey(textureLoad(stats, vec2(i32(P.tone.y), 0), 0).x);
+        let change = (textureLoad(log_out, p, 0).r + shift) - textureLoad(log_in, p, 0).r;
+        let gain = exp2(change);
+        c = vec3(encode(decode(c.x) * gain), encode(decode(c.y) * gain), encode(decode(c.z) * gain));
     }
     // 3. Contrast (without Texture and Clarity).
     if on(CONTRAST) {
@@ -304,6 +333,40 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
             c = c + vec3(lv - l0);
         }
     }
+    return c;
+}
+
+// The log luminance Shadows and Highlights filter (`local_tone::apply`).
+@fragment
+fn fs_log(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let c = balance(textureLoad(src, vec2<i32>(floor(pos.xy)), 0).rgb);
+    let l = max(luma(vec3(decode(c.x), decode(c.y), decode(c.z))), 0.0);
+    return vec4(log2(l + P.floor_.x), 0.0, 0.0, 1.0);
+}
+
+// `luminance_points`' cells after Shadows and Highlights: the luminance and the brightest
+// channel of each `edge × edge` block's mean light (clipped to 0 … 1).
+@fragment
+fn fs_points(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let t = vec2<i32>(floor(pos.xy));
+    let f = i32(P.tone.z);
+    let end = min((t + vec2(1)) * f, vec2<i32>(P.size));
+    var sum = vec3(0.0);
+    for (var y = t.y * f; y < end.y; y++) {
+        for (var x = t.x * f; x < end.x; x++) {
+            let c = tonal(vec2(x, y), textureLoad(src, vec2(x, y), 0).rgb);
+            sum += clamp(vec3(decode(c.x), decode(c.y), decode(c.z)), vec3(0.0), vec3(1.0));
+        }
+    }
+    let m = sum / f32((end.x - t.x * f) * (end.y - t.y * f));
+    return vec4(luma(m), max(max(m.x, m.y), m.z), 0.0, 1.0);
+}
+
+@fragment
+fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
+    let p = vec2<i32>(floor(pos.xy));
+    let q = textureLoad(src, p, 0);
+    var c = tonal(p, q.rgb);
     // 3b. Whites and Blacks.
     if on(WHITES) || on(BLACKS) {
         c = whites_blacks(c);
