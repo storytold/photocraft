@@ -459,7 +459,7 @@ pub(crate) fn apply_place(s: &mut Session, p: Prepared) -> Result<Value> {
     Ok(json!({"layer": id.0, "frame": frame.map(|f| f.0), "scale": scale * 100.0, "bounds": bounds, "smartObject": smart}))
 }
 
-pub(super) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
+pub(crate) fn place(s: &mut Session, p: &Value, linked: bool) -> Result<Value> {
     let cmd = if linked { "file.placeLinked" } else { "file.placeEmbedded" };
     if p.get("approveHighMemory").is_some_and(|v| !v.is_null() && !v.is_boolean()) {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: "expected boolean for approveHighMemory".into() });
