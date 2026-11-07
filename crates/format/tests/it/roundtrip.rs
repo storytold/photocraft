@@ -38,6 +38,26 @@ fn gradient_overlay_interpolation_roundtrips_in_native_documents() {
     }
 }
 
+/// #8351: a Gradient Map layer keeps Photoshop's own gradient (stops, midpoints, Smoothness,
+/// method) through a native save, and a file without one still loads.
+#[test]
+fn gradient_map_source_roundtrips_in_native_documents() {
+    use photocraft_doc::Adjustment;
+    use photocraft_doc::adjust::GradientSource;
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let source =
+        GradientSource { stops: vec![(0.0, [0.1, 0.2, 0.6]), (1.0, [1.0, 0.8, 0.2])], midpoints: vec![0.3], smoothness: 0.8, method: "perceptual".into() };
+    let map = Adjustment::GradientMap {
+        stops: vec![(0.0, [0.1, 0.2, 0.6]), (0.5, [0.7, 0.4, 0.4]), (1.0, [1.0, 0.8, 0.2])],
+        reverse: false,
+        dither: true,
+        source: Some(source),
+    };
+    doc.insert_above(None, Layer::new("map", LayerContent::Adjustment(map)));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+}
+
 #[test]
 fn old_effect_snapshots_need_no_interpolation_record() {
     let effect = photocraft_doc::Effect::GradientOverlay {

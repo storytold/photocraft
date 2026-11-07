@@ -50,7 +50,7 @@ pub mod export_estimate;
 mod exr_native;
 pub mod exr_parts;
 mod flat;
-mod gradient_bake;
+pub mod gradient_bake;
 pub mod guides_map;
 mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
