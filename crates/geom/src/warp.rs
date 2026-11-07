@@ -536,10 +536,14 @@ pub struct BezierMesh {
 }
 
 impl BezierMesh {
+    /// Maximum patch count per axis, shared by construction, split editing and
+    /// validation of meshes loaded from serialized data.
+    pub const MAX_PATCHES_PER_AXIS: usize = 64;
+
     /// The identity mesh over `bounds` with `cols × rows` patches (Photoshop's default is 1 × 1,
     /// a 4 × 4 control grid).
     pub fn identity(bounds: [f64; 4], cols: usize, rows: usize) -> BezierMesh {
-        let (cols, rows) = (cols.clamp(1, 64), rows.clamp(1, 64));
+        let (cols, rows) = (cols.clamp(1, Self::MAX_PATCHES_PER_AXIS), rows.clamp(1, Self::MAX_PATCHES_PER_AXIS));
         let us: Vec<f64> = (0..=cols).map(|i| i as f64 / cols as f64).collect();
         let vs: Vec<f64> = (0..=rows).map(|i| i as f64 / rows as f64).collect();
         Self::fit(&|s, t| [bounds[0] + s * (bounds[2] - bounds[0]), bounds[1] + t * (bounds[3] - bounds[1])], us, vs)
@@ -593,7 +597,8 @@ impl BezierMesh {
 
     /// Checks the invariants (knots and point count); malformed data from files is rejected.
     pub fn is_valid(&self) -> bool {
-        let knots_ok = |k: &[f64]| (2..=65).contains(&k.len()) && k[0] == 0.0 && k[k.len() - 1] == 1.0 && k.windows(2).all(|w| w[1] > w[0]);
+        let knots_ok =
+            |k: &[f64]| (2..=Self::MAX_PATCHES_PER_AXIS + 1).contains(&k.len()) && k[0] == 0.0 && k[k.len() - 1] == 1.0 && k.windows(2).all(|w| w[1] > w[0]);
         if !knots_ok(&self.us) || !knots_ok(&self.vs) {
             return false;
         }
@@ -645,8 +650,13 @@ impl BezierMesh {
     }
 
     /// Splits the patch column containing `s` at `s` (a vertical split line). Exact: the surface
-    /// is unchanged. Returns false when `s` is on or too close to an existing boundary.
+    /// is unchanged. Returns false when `s` is on or too close to an existing boundary, or the
+    /// mesh already has [`Self::MAX_PATCHES_PER_AXIS`] patch columns.
     pub fn split_u(&mut self, s: f64) -> bool {
+        // A successful split must remain valid for the next edit and for serialization.
+        if self.us.len() > Self::MAX_PATCHES_PER_AXIS {
+            return false;
+        }
         let (pi, a) = Self::locate(&self.us, s);
         if !(0.01..=0.99).contains(&a) {
             return false;
@@ -666,7 +676,11 @@ impl BezierMesh {
     }
 
     /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact.
+    /// Returns false at [`Self::MAX_PATCHES_PER_AXIS`] patch rows or too close to an existing boundary.
     pub fn split_v(&mut self, t: f64) -> bool {
+        if self.vs.len() > Self::MAX_PATCHES_PER_AXIS {
+            return false;
+        }
         self.transpose();
         let ok = self.split_u(t);
         self.transpose();
