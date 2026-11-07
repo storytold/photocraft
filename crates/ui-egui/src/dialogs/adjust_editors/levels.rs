@@ -77,7 +77,7 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut ch = 0;
     let mut auto = false;
     ui.horizontal(|ui| {
-        ch = editor_channel_picker(ui, cx, space, cx.mem.with("levels-ch"), &channels, true);
+        ch = editor_channel_picker(ui, cx, cx.mem.with("levels-ch"), &channels);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
         });

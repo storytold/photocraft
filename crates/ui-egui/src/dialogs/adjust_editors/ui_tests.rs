@@ -871,13 +871,12 @@ fn levels_properties_white_point_eyedropper_edits_the_layer() {
     properties_white_point_eyedropper_edits_the_layer("levels");
 }
 
-/// In the Properties panel ⌥3 shows the Red channel of a Levels layer (Adobe's key for
+/// In the Properties panel ⌥3 shows the Red channel of a Levels or Curves layer (Adobe's key for
 /// choosing an adjustment's channel), while ⌘3 targets the Red channel in the Channels panel, as in
 /// Photoshop, and leaves the editor's popup alone (#11283).
 #[test]
 fn option_digits_pick_the_properties_channel_and_command_digits_target_the_channels_panel() {
-    {
-        let kind = "levels";
+    for kind in ["levels", "curves"] {
         let mut h = app_harness(kind, "rgb", 8);
         let popup = |h: &mut Harness<'_, PhotocraftApp>| -> Vec<String> {
             h.query_all_by_role(egui::accesskit::Role::ComboBox).filter_map(|n| n.value().map(|s| s.to_string())).collect()

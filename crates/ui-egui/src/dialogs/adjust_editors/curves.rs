@@ -63,32 +63,25 @@ pub(super) fn editor_channels(cx: &EditorCx, space: ToneSpace) -> Vec<(ToneChann
     channels.iter().enumerate().map(|(i, c)| (*c, tl!(c.label).to_owned(), i)).collect()
 }
 
-/// The Channel popup of Levels and Curves; with `keys` (Levels only, Curves has its own Alt keys, #7325) it takes Photoshop's keys (#11283): ⌥2 picks the
-/// composite and ⌥3, ⌥4… the components, numbered as the Channels panel numbers them (Adobe's
-/// keys for choosing an adjustment's channel, in the dialog and the Properties panel alike), and
-/// in the dialog ⌘2, ⌘3… do the same, as the report asks: a dialog holds the Channels panel's
-/// own ⌘ digits (`shortcuts::handle_modal_canvas_keys`), so they are free there. In the
-/// Properties panel ⌘3 still targets the Red channel, as in Photoshop; it never gets here.
-pub(super) fn editor_channel_picker(
-    ui: &mut egui::Ui,
-    cx: &EditorCx,
-    space: ToneSpace,
-    id: egui::Id,
-    channels: &[(ToneChannel, String, usize)],
-    keys: bool,
-) -> usize {
-    if keys && let Some(pick) = channel_digit(ui, cx.dialog, space, channels) {
+/// The Channel popup of Levels and Curves, with Photoshop's keys (#11283, #7325): ⌥2 picks the
+/// first entry (the composite for RGB and CMYK, Lightness in Lab) and ⌥3, ⌥4… the entries after
+/// it, in the dialog and the Properties panel alike, and in the dialog ⌘2, ⌘3… do the same, as
+/// the report asks: a dialog holds the Channels panel's own ⌘ digits
+/// (`shortcuts::handle_modal_canvas_keys`), so they are free there. In the Properties panel ⌘3
+/// still targets the Red channel, as in Photoshop; it never gets here.
+pub(super) fn editor_channel_picker(ui: &mut egui::Ui, cx: &EditorCx, id: egui::Id, channels: &[(ToneChannel, String, usize)]) -> usize {
+    if let Some(pick) = channel_digit(ui, cx.dialog, channels.len()) {
         ui.data_mut(|d| d.insert_temp(id, pick));
     }
     let options: Vec<_> = channels.iter().enumerate().map(|(i, (_, name, _))| (i, name.as_str())).collect();
     channel_picker_opts(ui, id, &options, tl!("Channel:"), false)
 }
 
-/// The option of `channels` named by a ⌥ digit (or, in the dialog, a ⌘ digit) pressed this frame:
-/// 2 the composite, 3 onwards the components in the space's order, as the Channels panel numbers
-/// them. A digit with no channel behind it (⌘6 in RGB) is consumed and picks nothing. Nothing
-/// while a mouse button is held, and nothing for ⌥ while a text field has focus.
-fn channel_digit(ui: &egui::Ui, dialog: bool, space: ToneSpace, channels: &[(ToneChannel, String, usize)]) -> Option<usize> {
+/// The position in the popup named by a ⌥ digit (or, in the dialog, a ⌘ digit) pressed this
+/// frame: 2 the first entry, 3 the next, and so on. A digit with no entry behind it (⌘6 in RGB)
+/// is consumed and picks nothing. Nothing while a mouse button is held, and nothing for ⌥ while
+/// a text field has focus.
+fn channel_digit(ui: &egui::Ui, dialog: bool, count: usize) -> Option<usize> {
     use egui::{Key, Modifiers};
     const DIGITS: [Key; 8] = [Key::Num2, Key::Num3, Key::Num4, Key::Num5, Key::Num6, Key::Num7, Key::Num8, Key::Num9];
     // A held mouse button keeps its channel: a Levels handle being dragged or a Curves pencil
@@ -98,13 +91,9 @@ fn channel_digit(ui: &egui::Ui, dialog: bool, space: ToneSpace, channels: &[(Ton
     if ui.input(|i| i.pointer.any_down()) {
         return None;
     }
-    let typing = ui.ctx().text_edit_focused();
-    let pressed =
-        ui.input_mut(|i| DIGITS.iter().position(|&k| (!typing && i.consume_key(Modifiers::ALT, k)) || (dialog && i.consume_key(Modifiers::COMMAND, k))));
-    let slot = pressed? + 2;
-    let slot_of =
-        |ch: &ToneChannel| if ch.key.is_empty() { Some(2) } else { adjust_params::channel_keys(space).iter().position(|k| *k == ch.key).map(|p| p + 3) };
-    channels.iter().position(|(ch, _, _)| slot_of(ch) == Some(slot))
+    let alt = if ui.ctx().text_edit_focused() { None } else { take_alt_digit(ui) };
+    let command = if dialog { ui.input_mut(|i| DIGITS.iter().position(|&k| i.consume_key(Modifiers::COMMAND, k))) } else { None };
+    alt.or(command).filter(|&n| n < count)
 }
 
 /// The popup, with `translate` for whether the built-in labels follow the interface language;
@@ -356,9 +345,9 @@ fn channel_for_key(event: &egui::Event) -> Option<usize> {
 }
 
 /// Consumes this frame's Alt/Option+2..6 presses, and the character Option types right after
-/// each one on macOS, and selects that entry of the channel popup.
-fn select_channel_by_key(ui: &egui::Ui, id: egui::Id, count: usize) {
-    let picked = ui.input_mut(|i| {
+/// each one on macOS, and returns the position the last of them names.
+fn take_alt_digit(ui: &egui::Ui) -> Option<usize> {
+    ui.input_mut(|i| {
         let mut last = None;
         let mut typed = false;
         i.events.retain(|e| match (channel_for_key(e), e) {
@@ -377,10 +366,7 @@ fn select_channel_by_key(ui: &egui::Ui, id: egui::Id, count: usize) {
             }
         });
         last
-    });
-    if let Some(n) = picked.filter(|&n| n < count) {
-        ui.data_mut(|d| d.insert_temp(id, n));
-    }
+    })
 }
 
 pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
@@ -390,10 +376,7 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let state_id = cx.mem.with("curves");
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let isolated = cx.isolated_curve.as_ref();
-    if cx.dialog {
-        select_channel_by_key(ui, cx.mem.with("curves-ch"), channels.len());
-    }
-    let ch = editor_channel_picker(ui, cx, space, cx.mem.with("curves-ch"), &channels, false);
+    let ch = editor_channel_picker(ui, cx, cx.mem.with("curves-ch"), &channels);
     if ch != st.channel {
         st = CurveUi { channel: ch, ..Default::default() };
     }
@@ -907,16 +890,21 @@ mod channel_key_tests {
     }
 
     #[test]
-    fn other_modifiers_and_the_properties_panel_leave_the_keys_alone() {
+    fn other_modifiers_leave_the_keys_alone_and_the_properties_panel_takes_alt() {
         let ctx = egui::Context::default();
         let dialog = cx(true, false);
-        for m in [Modifiers::NONE, Modifiers::COMMAND, Modifiers::ALT | Modifiers::SHIFT, Modifiers::ALT | Modifiers::COMMAND] {
+        for m in [Modifiers::NONE, Modifiers::ALT | Modifiers::SHIFT] {
             let (ch, left) = frame(&ctx, &mut json!({}), &dialog, vec![press(Key::Num3, m)]);
             assert_eq!((ch, left), (0, 1), "{m:?}");
         }
+        // The Properties panel takes the Alt keys too (#11283), but not Cmd, which targets the Channels panel.
         let panel = cx(false, false);
-        let (ch, left) = frame(&ctx, &mut json!({}), &panel, vec![press(Key::Num3, Modifiers::ALT)]);
+        let (ch, left) = frame(&ctx, &mut json!({}), &panel, vec![press(Key::Num3, Modifiers::COMMAND)]);
         assert_eq!((ch, left), (0, 1));
+        let (ch, left) = frame(&ctx, &mut json!({}), &panel, vec![press(Key::Num3, Modifiers::ALT)]);
+        assert_eq!((ch, left), (1, 0));
+        let (ch, _) = frame(&ctx, &mut json!({}), &panel, vec![press(Key::Num2, Modifiers::ALT)]);
+        assert_eq!(ch, 0);
     }
 
     #[test]
@@ -927,6 +915,20 @@ mod channel_key_tests {
         assert_eq!(frame(&ctx, &mut json!({}), &cx, vec![remapped]), (0, 1));
         let logical_only = Event::Key { key: Key::Num3, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT };
         assert_eq!(frame(&ctx, &mut json!({}), &cx, vec![logical_only]), (1, 0));
+    }
+
+    /// The Curves dialog also takes Cmd+digits (#11283), and its digits wait while a pencil
+    /// stroke holds the mouse button down.
+    #[test]
+    fn command_digits_pick_in_the_dialog_and_digits_wait_for_a_held_button() {
+        let dialog = cx(true, false);
+        let (ch, left) = frame(&egui::Context::default(), &mut json!({}), &dialog, vec![press(Key::Num3, Modifiers::COMMAND)]);
+        assert_eq!((ch, left), (1, 0));
+        let down = Event::PointerButton { pos: pos2(5.0, 5.0), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE };
+        for m in [Modifiers::ALT, Modifiers::COMMAND] {
+            let (ch, left) = frame(&egui::Context::default(), &mut json!({}), &dialog, vec![down.clone(), press(Key::Num3, m)]);
+            assert_eq!((ch, left), (0, 1), "{m:?} waits while the button is held");
+        }
     }
 
     #[test]
