@@ -184,9 +184,9 @@ const ENDS_TYPE_EDIT: [&str; 5] =
 pub const PASTEBOARD_PICK: &str = "pasteboard.selectCustomColor";
 
 /// The guide menu's Edit Selected Guides row: New Guide's dialog on the selected guide.
-pub const GUIDE_EDIT: &str = "guides.editSelected";
+pub const GUIDE_EDIT: &str = "view.editSelectedGuides";
 /// The guide menu's Clear Selected Guides row.
-pub const GUIDE_CLEAR: &str = "guides.clearSelected";
+pub const GUIDE_CLEAR: &str = "view.clearSelectedGuides";
 
 /// Photoshop's guide menu (right-click on a guide), in its order. Its two Selected Guides rows act
 /// on the guide the right-click selected; the rest are the View menu's.
@@ -313,7 +313,7 @@ fn choose_crop(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) ->
     use crate::crop_overlay::{CropOverlay, OverlayShow};
     use crate::crop_presets::{Choice, apply_choice};
     match command {
-        CROP_CANCEL => crate::crop_ui::cancel(app),
+        CROP_CANCEL => crate::crop_ui::dismiss(app),
         CROP_COMMIT => crate::canvas::commit_crop(app),
         CROP_NEW => apply_choice(app, Choice::New),
         CROP_DELETE => apply_choice(app, Choice::Delete),
@@ -462,6 +462,16 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
     ) || path_menu(tool)
+}
+
+/// A Magnetic Lasso border is being drawn on the document in front: a right-click opens no menu
+/// over it, and the border stays live, as in Photoshop (#11689). A border left on another
+/// document doesn't count, even before `magnetic_lasso_ui::frame` drops it: the control
+/// channel's events run no frame. Nor does an ⌥-drag's freehand segment: that case wasn't
+/// measured, so it keeps the menu it had.
+pub fn magnetic_drawing(app: &PhotocraftApp) -> bool {
+    let m = &app.ui.magnetic;
+    m.active() && !m.freehand && app.ui.tool == Tool::MagneticLasso && app.session.active().map(|d| d.doc.id.0) == Some(m.doc)
 }
 
 /// Tools whose canvas right-click opens the path menu ([`PEN_MENU`]): the Pen, and the Path
@@ -753,14 +763,9 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
     true
 }
 
-/// A guide row: the two Selected Guides rows act on the selected guide; the rest are the View
-/// menu's commands.
+/// A guide row: every row is a View › Guides command, the two Selected Guides ones included.
 fn choose_guide(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result<(), String> {
-    match command {
-        GUIDE_EDIT => crate::new_guide_ui::open_edit(app).map(|_| ()),
-        GUIDE_CLEAR => crate::guide_select::delete_selected(app).map(|_| ()),
-        _ => crate::menus::invoke(app, ctx, command, json!({})).map(|_| ()),
-    }
+    crate::menus::invoke(app, ctx, command, json!({})).map(|_| ())
 }
 
 /// A pasteboard row: set the colour, or open the Color Picker on the custom one.
@@ -1188,7 +1193,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         continue;
                     };
                     let text = if crop_label_is_ui(&command) { tl!(&label).to_string() } else { label };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), text).min_size(egui::vec2(200.0, 20.0));
+                    // The overlay rows carry their own glyph (#10889); the rest stay text-only.
+                    let mut atoms = egui::Atoms::default();
+                    if let Some(kind) = command.strip_prefix(CROP_OVERLAY).and_then(crate::crop_overlay::CropOverlay::from_id) {
+                        atoms.push_right(crate::icons::image(kind.icon(), 14.0, t.icon));
+                    }
+                    atoms.push_right(text);
+                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), atoms).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, &command), item).clicked() {
                         selected = Some(command);
                     }

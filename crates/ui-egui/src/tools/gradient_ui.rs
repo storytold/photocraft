@@ -516,19 +516,6 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
 }
 
-/// How far past the gradient bar's edge (in points) a dragged stop comes off it: the stop marker
-/// (about 15 pt) plus roughly its height again, as in Photoshop's Gradient Editor.
-pub(crate) const STOP_OFF_BAR: f32 = 26.0;
-
-/// Whether a stop dragged to `pos` is pulled off `bar`, as in Photoshop's Gradient Editor: a
-/// colour stop (under the bar) dragged down, an opacity stop (above it) dragged up, about a
-/// marker's height past the marker. Every stop strip uses this, so the gesture is the same in
-/// the Gradient Editor, Properties, the shape gradient popover, Gradient Map and Layer Style.
-/// The caller removes the stop only while more than two of its kind remain.
-pub(crate) fn stop_dragged_off(bar: Rect, pos: Pos2, opacity: bool) -> bool {
-    if opacity { pos.y < bar.top() - STOP_OFF_BAR } else { pos.y > bar.bottom() + STOP_OFF_BAR }
-}
-
 // ---------------------------------------------------------------- options bar
 
 /// A ramp of RGBA stops over a checkerboard in `r`.
@@ -1011,9 +998,9 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
     let dragging: Option<Marker> = ui.data(|d| d.get_temp(key));
     let mut preview = None;
     if let (Some(m), Some(pos)) = (dragging, resp.interact_pointer_pos()) {
-        // Pulled off the bar, the stop is deleted (the preview shows it gone; dragging back
-        // cancels), while at least two of its kind remain.
-        let off = stop_dragged_off(bar, pos, matches!(m, Marker::Opacity(_)));
+        // Pulled off the bar, up or down, the stop is deleted (the preview shows it gone;
+        // dragging back cancels), while at least two of its kind remain.
+        let off = off_strip(pos, bar);
         let loc = loc_of(pos.x);
         let edit = match m {
             Marker::Color(i) if off && stops.len() > 2 => json!({"action": "delete", "index": i}),
@@ -1057,3 +1044,9 @@ fn stop_strip(ui: &mut egui::Ui, key: egui::Id, f: &Fill, midpoints: bool, pendi
 
 #[cfg(test)]
 mod tests;
+
+/// A stop dragged to `pos` is off the gradient strip `bar` and comes off (removed on release):
+/// below the stops or above the strip, by the same distance in every gradient editor.
+pub(crate) fn off_strip(pos: egui::Pos2, bar: egui::Rect) -> bool {
+    pos.y > bar.bottom() + 28.0 || pos.y < bar.top() - 26.0
+}

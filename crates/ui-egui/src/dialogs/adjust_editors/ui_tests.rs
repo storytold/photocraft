@@ -532,6 +532,107 @@ fn gradient_map_handle_drag_previews_and_commits_once_after_crossing_stops() {
     }
 }
 
+/// #10742: a stop dragged off the strip goes as the Gradient tool's does, with a live preview, and
+/// comes back if the drag returns. Two stops always stay.
+#[test]
+fn gradient_map_stop_dragged_off_the_strip_is_removed_in_one_step() {
+    for depth in [8, 16, 32] {
+        let mut h = app_harness("gradientMap", "rgb", depth);
+        let (id, _) = layer(&h);
+        let four = json!({"layer": id.0, "stops": [[0, "#000000"], [0.25, "#ff0000"], [0.5, "#00ff00"], [1, "#ffffff"]]});
+        h.state_mut().run("layer.setAdjustment", four).unwrap();
+        h.run_steps(3);
+        let before = layer(&h).1;
+        let steps = h.state().session.active().unwrap().history.past_len();
+        let start = map_handle(&h, 0.25);
+        let away = start + vec2(0.0, 90.0);
+        h.hover_at(start);
+        h.run_steps(1);
+        h.drag_at(start);
+        h.run_steps(1);
+        h.hover_at(away);
+        h.run_steps(1);
+        let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
+        assert_eq!(preview, Some(Some(3)), "{depth}: the preview drops the stop");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "{depth}: dragging records no history");
+        h.drop_at(away);
+        h.run_steps(3);
+        assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: the stop is gone");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{depth}: one history step");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        h.run_steps(3);
+        assert_eq!(layer(&h).1, before, "{depth}: undo brings it back");
+
+        // Off the strip and back: the stop stays, with its colour, where the drag ends.
+        let back = map_handle(&h, 0.4);
+        h.hover_at(start);
+        h.run_steps(1);
+        h.drag_at(start);
+        h.run_steps(1);
+        h.hover_at(away);
+        h.run_steps(1);
+        h.hover_at(back);
+        h.run_steps(1);
+        let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
+        assert_eq!(preview, Some(Some(4)), "{depth}: the preview has the stop back while it's held");
+        h.drop_at(back);
+        h.run_steps(3);
+        assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (0.4, [255, 0, 0]), (0.5, [0, 255, 0]), (1.0, [255, 255, 255])], "{depth}: kept");
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "{depth}: the move is one step");
+    }
+}
+
+/// A drag that ends without its release reaching the strip (the drag taken away: focus lost, the
+/// pointer let go elsewhere) still commits what the preview shows: a stop taken off the strip isn't
+/// left removed with no History step.
+#[test]
+fn gradient_map_stop_drag_that_ends_elsewhere_still_commits() {
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    let (id, _) = layer(&h);
+    let four = json!({"layer": id.0, "stops": [[0, "#000000"], [0.25, "#ff0000"], [0.5, "#00ff00"], [1, "#ffffff"]]});
+    h.state_mut().run("layer.setAdjustment", four).unwrap();
+    h.run_steps(3);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let start = map_handle(&h, 0.25);
+    let away = start + vec2(0.0, 90.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(away);
+    h.run_steps(1);
+    // The drag ends without reaching the strip's response, then the button comes up.
+    h.ctx.stop_dragging();
+    h.run_steps(1);
+    h.drop_at(away);
+    h.run_steps(3);
+    assert_eq!(map_stops(&layer(&h).1).len(), 3, "the stop the preview dropped is gone from the layer");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "in one History step");
+}
+
+#[test]
+fn gradient_map_last_two_stops_cant_be_dragged_off_the_strip() {
+    let mut h = app_harness("gradientMap", "rgb", 8);
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [1, "#ffffff"]]})).unwrap();
+    h.run_steps(3);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let start = map_handle(&h, 0.0);
+    let away = start + vec2(0.0, 90.0);
+    h.hover_at(start);
+    h.run_steps(1);
+    h.drag_at(start);
+    h.run_steps(1);
+    h.hover_at(away);
+    h.run_steps(1);
+    let preview = h.state().live_adjust.as_ref().map(|(_, v)| v["stops"].as_array().map(Vec::len));
+    assert!(preview.is_none_or(|n| n == Some(2)), "the preview keeps both: {preview:?}");
+    h.drop_at(away);
+    h.run_steps(3);
+    assert_eq!(map_stops(&layer(&h).1), vec![(0.0, [0, 0, 0]), (1.0, [255, 255, 255])], "both stay where they were");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps, "nothing to record");
+}
+
 #[test]
 fn gradient_map_strip_adds_selects_and_removes_stops_without_deleting_the_last_pair() {
     let mut h = app_harness("gradientMap", "rgb", 8);
@@ -1045,4 +1146,76 @@ fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
         assert_eq!(steps(&h), history, "{button}: no history step");
         assert!(h.state().live_adjust.is_none());
     }
+}
+
+/// Selective Color in Properties: the Colors dropdown's choice lives in editor memory, so
+/// switching colour commits nothing, and each colour keeps its own row.
+#[test]
+fn selective_color_properties_switch_colour_without_committing() {
+    let mut h = app_harness("selectiveColor", "rgb", 8);
+    let (_, before) = layer(&h);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let nudge = |h: &mut Harness<'static, PhotocraftApp>| {
+        let r =
+            h.query_all_by_role(egui::accesskit::Role::Slider).rfind(|n| n.accesskit_node().label().as_deref() == Some("Cyan")).expect("Cyan slider").rect();
+        drag(h, r.center(), Pos2::new(r.right() + 40.0, r.center().y));
+    };
+    nudge(&mut h);
+    let (_, reds) = layer(&h);
+    assert_ne!(reds, before);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    // Switch to Blues through the Colors dropdown: press it, drag onto the option, release.
+    let named = |n: &egui_kittest::Node<'_>| {
+        let a = n.accesskit_node();
+        a.value().as_deref() == Some("Reds") || a.label().as_deref() == Some("Reds")
+    };
+    let at = h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| named(n)).expect("the Colors dropdown").rect().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(3);
+    let blues = h.query_by_label("Blues").expect("the list opened on the press").rect().center();
+    for k in 1..=6 {
+        h.hover_at(at + (blues - at) * (k as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(blues);
+    h.run_steps(4);
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| {
+            let a = n.accesskit_node();
+            a.value().as_deref() == Some("Blues") || a.label().as_deref() == Some("Blues")
+        }),
+        "the dropdown keeps its choice"
+    );
+    assert_eq!(layer(&h).1, reds, "switching colour changes nothing");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    assert!(h.state().live_adjust.is_none());
+    nudge(&mut h);
+    let (Adjustment::SelectiveColor { adjustments: first, .. }, (_, Adjustment::SelectiveColor { adjustments: now, .. })) = (&reds, layer(&h)) else {
+        panic!("Selective Color layer")
+    };
+    assert_eq!(now[0], first[0], "Reds untouched by editing Blues");
+    assert_ne!(now[4], [0.0; 4], "Blues edited");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 2);
+}
+
+/// The Method radios in Properties commit through the real controls; the current one is a no-op.
+#[test]
+fn selective_color_properties_method_radios_commit() {
+    let mut h = app_harness("selectiveColor", "rgb", 8);
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let start = steps(&h);
+    let radio = |h: &mut Harness<'static, PhotocraftApp>, text: &str| {
+        let at = h.query_all_by_role_and_label(egui::accesskit::Role::RadioButton, text).last().expect("method radio").rect().center();
+        click(h, at);
+    };
+    radio(&mut h, "Absolute");
+    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: false, .. }));
+    assert_eq!(steps(&h), start + 1);
+    radio(&mut h, "Absolute");
+    assert_eq!(steps(&h), start + 1, "the current method is no step");
+    radio(&mut h, "Relative");
+    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: true, .. }));
+    assert_eq!(steps(&h), start + 2);
 }

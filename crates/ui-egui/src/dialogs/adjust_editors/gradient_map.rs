@@ -57,8 +57,7 @@ struct MapStopDrag {
     index: usize,
     offset: f32,
     changed: bool,
-    /// The dragged stop while it is pulled off the bar (removed from the stops, so the preview
-    /// shows it gone); dragging back onto the bar puts it back.
+    /// Dragged off the strip: out of the gradient, kept to come back if the drag returns.
     removed: Option<Stop>,
 }
 
@@ -97,45 +96,38 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
             && let Some(pos) = resp.interact_pointer_pos()
         {
             let location = round(loc_of(pos.x - drag.offset), 0.001);
-            // Pulled down off the bar, the stop is removed while at least two remain, as in
-            // Photoshop; released there it stays deleted, dragged back it returns.
-            let off = crate::gradient_ui::stop_dragged_off(bar, pos, false);
-            match drag.removed {
-                None if off && stops.len() > 2 && drag.index < stops.len() => {
-                    drag.removed = Some(stops.remove(drag.index));
-                    *selected = drag.index.min(stops.len().saturating_sub(1));
-                    drag.changed = true;
-                    edit.changed = true;
-                }
-                Some(stop) if !off => {
-                    stops.push(stop);
-                    let index = stops.len() - 1;
-                    drag.removed = None;
-                    if let Some(index) = move_map_stop(stops, index, location) {
-                        drag.index = index;
-                        *selected = index;
-                    }
-                    edit.changed = true;
-                }
-                Some(_) => {}
-                None => {
-                    let changed = stops.get(drag.index).is_some_and(|s| s.0 != location);
-                    if let Some(index) = move_map_stop(stops, drag.index, location) {
-                        drag.index = index;
-                        drag.changed |= changed;
-                        *selected = index;
-                        edit.changed |= changed;
-                    }
+            // As far off the strip as the Gradient tool's; two stops always stay.
+            let off = crate::gradient_ui::off_strip(pos, bar);
+            if off && drag.removed.is_none() && stops.len() > 2 && drag.index < stops.len() {
+                drag.removed = Some(stops.remove(drag.index));
+                *selected = drag.index.min(stops.len() - 1);
+                drag.changed = true;
+                edit.changed = true;
+            } else if let Some(stop) = drag.removed.filter(|_| !off) {
+                drag.removed = None;
+                stops.push((location, stop.1));
+                drag.index = stops.len() - 1;
+                // Changed, wherever it lands: the preview had it removed.
+                edit.changed = true;
+            }
+            if drag.removed.is_none() {
+                let changed = stops.get(drag.index).is_some_and(|s| s.0 != location);
+                if let Some(index) = move_map_stop(stops, drag.index, location) {
+                    drag.index = index;
+                    drag.changed |= changed;
+                    *selected = index;
+                    edit.changed |= changed;
                 }
             }
         }
-        if resp.drag_stopped() {
+        // A drag can also end without `drag_stopped` (released outside the window, focus lost):
+        // either way what the preview shows is committed, so a stop taken off the strip isn't left
+        // removed with no History step.
+        if resp.drag_stopped() || !ui.input(|i| i.pointer.primary_down()) {
             edit.commit = drag.changed;
             ui.data_mut(|d| d.remove::<MapStopDrag>(key));
-        } else if ui.input(|i| i.pointer.primary_down()) {
-            ui.data_mut(|d| d.insert_temp(key, drag));
         } else {
-            ui.data_mut(|d| d.remove::<MapStopDrag>(key));
+            ui.data_mut(|d| d.insert_temp(key, drag));
         }
     }
     if resp.clicked()

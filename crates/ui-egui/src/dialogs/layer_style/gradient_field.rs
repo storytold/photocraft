@@ -233,7 +233,7 @@ pub(super) fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     }
     let dragging: Option<StopDrag> = ui.data(|d| d.get_temp(drag_key));
     if let (Some(mut drag), Some(p)) = (dragging, resp.interact_pointer_pos()) {
-        let off = crate::gradient_ui::stop_dragged_off(bar, p, false);
+        let off = crate::gradient_ui::off_strip(p, bar);
         let loc = loc_of(p.x);
         // The release frame applies the same rule (its last move may cross the edge), then ends
         // the drag.
