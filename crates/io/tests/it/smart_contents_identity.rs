@@ -55,6 +55,91 @@ fn gaussian(radius: f64) -> SmartFilter {
     }
 }
 
+/// Imported layers may reference one FEid item while retaining separate filter-mask switches.
+/// Construct the shared placement in the file: the native exporter uniquifies placed IDs.
+#[test]
+fn shared_filter_mask_cache_keeps_each_layers_switches_in_both_orders() {
+    let switches = [(true, false), (false, false), (true, true), (false, true)];
+    for extension in ["psd", "psb"] {
+        for nonwhite in [false, true] {
+            let mut source = fixture();
+            let sm = smart_mut(&mut source.layers[0]);
+            sm.smart_filters.push(gaussian(1.0));
+            let mut mask = photocraft_doc::LayerMask::reveal_all();
+            if nonwhite {
+                mask.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 1, 1), &[0.0]);
+            }
+            sm.filter_mask = Some(mask);
+            let (file, _) = round_trip(&source, extension);
+            let placed = sold(&file, "original");
+            for reversed in [false, true] {
+                let mut shared = file.clone();
+                let mut records = Vec::new();
+                for (index, (enabled, linked)) in switches.into_iter().enumerate() {
+                    let mut record = file.layers()[0].clone();
+                    record.name = format!("switches{index}").into_bytes();
+                    record.blocks.retain(|b| !matches!(&b.key, b"luni" | b"lyid" | b"SoLd" | b"SoLE" | b"PlLd"));
+                    let mut stack = placed.stack.clone().unwrap();
+                    stack.mask_enabled = enabled;
+                    stack.mask_linked = linked;
+                    let fx = smart_map::filter_fx(&stack, "fixture", &mut Vec::new());
+                    let spec = smart_map::PlacedSpec {
+                        idnt: &placed.idnt,
+                        placed: &placed.placed,
+                        transform: placed.transform,
+                        perspective: None,
+                        size: (2.0, 2.0),
+                        dpi: 72.0,
+                        warp: None,
+                        filter_fx: Some(fx),
+                    };
+                    record.blocks.push(TaggedBlock::new(*b"SoLd", smart_map::sold_bytes(Some(&placed.descriptor), &spec, &mut Vec::new())));
+                    records.push(record);
+                }
+                if reversed {
+                    records.reverse();
+                }
+                *shared.layers_mut() = records;
+                let bytes = shared.to_bytes().unwrap();
+                let mut doc = import(extension, &bytes).unwrap().document;
+                if nonwhite {
+                    let first = &smart(&doc, "switches0").filter_mask.as_ref().unwrap().surface;
+                    assert!(first.tile_count() > 0, "the sharing witness must contain stored mask pixels");
+                    for index in 1..switches.len() {
+                        let other = &smart(&doc, &format!("switches{index}")).filter_mask.as_ref().unwrap().surface;
+                        for (coord, tile) in first.tiles() {
+                            assert!(Arc::ptr_eq(tile, other.tile(*coord).unwrap()), "one placed ID must share mask pixel storage across switches");
+                        }
+                    }
+                }
+                for save in 0..2 {
+                    for (index, (enabled, linked)) in switches.into_iter().enumerate() {
+                        let name = format!("switches{index}");
+                        let got = smart(&doc, &name).filter_mask.as_ref();
+                        let context = format!("{extension} nonwhite={nonwhite} reversed={reversed} save={save} {name}");
+                        if !nonwhite && enabled && !linked {
+                            assert!(got.is_none(), "default white mask remains implicit: {context}");
+                        } else {
+                            let got = got.unwrap_or_else(|| panic!("mask lost: {context}"));
+                            assert_eq!((got.enabled, got.linked), (enabled, linked), "{context}");
+                            assert_eq!(got.surface.sample_channel(0, 0, 0), if nonwhite { 0.0 } else { 1.0 }, "{context}");
+                            assert_eq!(got.surface.sample_channel(1, 1, 0), 1.0, "{context}");
+                        }
+                    }
+                    if save == 0 {
+                        let (resaved, back) = round_trip(&doc, extension);
+                        for (index, expected) in switches.into_iter().enumerate() {
+                            let stack = sold(&resaved, &format!("switches{index}")).stack.unwrap();
+                            assert_eq!((stack.mask_enabled, stack.mask_linked), expected);
+                        }
+                        doc = back;
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn psd_and_psb_keep_shared_contents_and_identical_independent_copies_distinct() {
     let mut doc = fixture();

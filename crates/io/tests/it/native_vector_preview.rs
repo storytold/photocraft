@@ -113,6 +113,71 @@ fn native_preview_supplies_unfiltered_pixels_for_psd_smart_filter_masks() {
     assert_eq!(smart(&back).smart_filters.len(), 1);
 }
 
+/// White coverage may be implicit, but a disabled or linked filter mask must retain its switches.
+#[test]
+fn smart_filter_mask_switches_survive_white_and_nonwhite_psd_resaves() {
+    for extension in ["psd", "psb", "tif"] {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for nonwhite in [false, true] {
+                for (enabled, linked) in [(true, false), (false, false), (true, true), (false, true)] {
+                    let mut doc = Document::new("mask switches", Size::new(8, 6), ColorMode::Rgb, sample);
+                    let mut cache = Surface::new(doc.pixel_format());
+                    cache.fill_rect(doc.bounds(), &[1.0, 0.0, 0.0, 1.0]);
+                    let mut sm = SmartObject::new(
+                        SmartSource::Embedded { file_name: "source.svg".into(), bytes: Arc::new(SVG.to_vec()) },
+                        Affine::IDENTITY,
+                        Some(cache),
+                    );
+                    sm.smart_filters.push(photocraft_doc::SmartFilter {
+                        command: "filter.blur.gaussianBlur".into(),
+                        params: serde_json::json!({"radius": 1.0}),
+                        blend: photocraft_color::BlendMode::Normal,
+                        opacity: 1.0,
+                        visible: true,
+                    });
+                    let mut mask = photocraft_doc::LayerMask::reveal_all();
+                    mask.enabled = enabled;
+                    mask.linked = linked;
+                    if nonwhite {
+                        mask.surface.fill_rect(photocraft_geom::Rect::new(2, 2, 4, 4), &[0.0]);
+                    }
+                    sm.filter_mask = Some(mask);
+                    doc.layers.push(Layer::new("smart", LayerContent::Smart(sm)));
+                    for save in 0..2 {
+                        let output = export(&doc, extension, &ExportOptions { tiff_layers: true, ..Default::default() }).unwrap();
+                        let (records, globals) = if extension == "tif" {
+                            let (_, data) = photocraft_codecs::tiff_photoshop_tags(&output.bytes);
+                            let (isd, warnings) = photocraft_psd::tiff::ImageSourceData::from_bytes(data.unwrap()).unwrap();
+                            assert!(warnings.is_empty(), "{warnings:?}");
+                            (isd.layer_info.unwrap().layers, isd.global_blocks)
+                        } else {
+                            let file = PsdFile::from_bytes(&output.bytes).unwrap();
+                            (file.layers().to_vec(), file.global_blocks)
+                        };
+                        let placed = smart_map::parse_sold(&records[0].block(b"SoLd").unwrap().data).unwrap();
+                        let stack = placed.stack.unwrap();
+                        assert_eq!((stack.mask_enabled, stack.mask_linked), (enabled, linked), "{extension} {sample:?} save {save}");
+                        assert!(globals.iter().any(|block| &block.key == b"FEid"));
+                        doc = import(extension, &output.bytes).unwrap().document;
+                        let got = smart(&doc).filter_mask.as_ref();
+                        if !nonwhite && enabled && !linked {
+                            assert!(got.is_none(), "default white mask remains implicit");
+                        } else {
+                            let got = got.expect("filter mask switches were lost on reopen");
+                            assert_eq!((got.enabled, got.linked), (enabled, linked));
+                            assert_eq!(got.surface.sample_channel(2, 2, 0), if nonwhite { 0.0 } else { 1.0 });
+                            assert_eq!(got.surface.sample_channel(0, 0, 0), 1.0);
+                            if !nonwhite {
+                                assert!(got.surface.content_bounds().is_empty(), "white masks remain tile-sparse");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn one_hundred_shared_native_instances_keep_source_bytes_and_preview_through_psd_resaves() {
     let mut doc = fixture("Artwork.ai", PDF);
