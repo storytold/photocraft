@@ -69,6 +69,54 @@ impl CanvasDisplay {
         img
     }
 
+    /// Final display encoding: premultiplied working-space floats → premultiplied RGBA8 monitor
+    /// values in the matching `out` slice. Working samples stay float until this texture boundary.
+    /// Unpremultiply before the same straight-alpha encoding and transform as [`Self::to_rgba8`];
+    /// quantising a translucent working sample first would lose colour precision. CMS dispatch is
+    /// batched with fixed stack scratch, independent of the preview or dirty rectangle size.
+    pub fn premultiplied_rgba8(&self, rgba: &[[f32; 4]], out: &mut [[u8; 4]]) {
+        let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        let identity = self.is_identity();
+        let table = self.encode_srgb.then(encode_table);
+        let code = |v| table.map_or_else(|| q(v), |t| linear_code(t, v));
+        const BATCH: usize = 256;
+        let mut source = [[0u8; 4]; BATCH];
+        for (samples, dest) in rgba.chunks(BATCH).zip(out.chunks_mut(BATCH)) {
+            let count = samples.len().min(dest.len());
+            let dest = &mut dest[..count];
+            let mut visible = false;
+            for (rgba, pixel) in samples.iter().zip(dest.iter_mut()) {
+                let alpha = q(rgba[3]);
+                visible |= alpha != 0;
+                *pixel = if alpha == 0 {
+                    [0; 4]
+                } else if identity && rgba[3] <= 1.0 && rgba[..3].iter().all(|v| *v >= 0.0 && *v <= rgba[3]) {
+                    // Keep the original identity rounding for valid premultiplied samples.
+                    rgba.map(q)
+                } else {
+                    [code(rgba[0] / rgba[3]), code(rgba[1] / rgba[3]), code(rgba[2] / rgba[3]), alpha]
+                };
+            }
+            // Match the scalar transparent fast path, including alpha that rounds to zero.
+            if !visible {
+                continue;
+            }
+            if let Some(transform) = &self.transform {
+                source[..count].copy_from_slice(dest);
+                transform.convert_u8(source[..count].as_flattened(), 4, dest.as_flattened_mut(), 4, true);
+            }
+            for (rgba, pixel) in samples.iter().zip(dest.iter_mut()) {
+                if identity && rgba[3] <= 1.0 && rgba[..3].iter().all(|v| *v >= 0.0 && *v <= rgba[3]) {
+                    continue;
+                }
+                let alpha = u16::from(pixel[3]);
+                for channel in &mut pixel[..3] {
+                    *channel = ((u16::from(*channel) * alpha + 127) / 255) as u8;
+                }
+            }
+        }
+    }
+
     /// GPU canvas: a CPU composite as the texture stores it (sRGB-encoded for linear
     /// composites; the display LUT does the rest). Values above 1.0 are encoded too (the sRGB
     /// curve extended), for the float canvas texture of 32-bit documents.
@@ -94,13 +142,17 @@ fn encode_table() -> &'static [u8] {
     T.get_or_init(|| (0..=65535u32).map(|i| (photocraft_color::convert::linear_to_srgb(i as f32 / 65535.0) * 255.0 + 0.5) as u8).collect())
 }
 
+fn linear_code(t: &[u8], v: f32) -> u8 {
+    t.get((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize).copied().unwrap_or(255)
+}
+
+/// Encode straight linear-light RGB through the shared lookup table, keeping alpha linear.
 fn encode_rgba8(buf: &Buffer) -> Rgba8Image {
     let t = encode_table();
     let mut img = Rgba8Image::new(buf.rect.width(), buf.rect.height());
-    let code = |v: f32| t.get((v.clamp(0.0, 1.0) * 65535.0 + 0.5) as usize).copied().unwrap_or(255);
     par_pixels(img.pixels.as_chunks_mut::<4>().0, &buf.px, |out, src| {
         for (o, p) in out.iter_mut().zip(src) {
-            *o = [code(p[0]), code(p[1]), code(p[2]), (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8];
+            *o = [linear_code(t, p[0]), linear_code(t, p[1]), linear_code(t, p[2]), (p[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8];
         }
     });
     img

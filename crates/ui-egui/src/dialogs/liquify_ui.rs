@@ -3,8 +3,8 @@
 //!
 //! The preview is a CPU proxy: the layer box-downsampled once to at most 1600 px
 //! (`ProxyImage`), re-rendered through the displacement field only where a dab changed it
-//! (bilinear field and source), and uploaded with a partial texture update. A dab plus its
-//! update costs well under a millisecond on a 24 MP layer (see `bench_liquify`). Strokes are
+//! (bilinear field and source), and uploaded with a partial texture update. `bench_liquify`
+//! measures the sampler; display conversion additionally depends on the document profile. Strokes are
 //! recorded exactly as the engine replays them (`stroke_begin` + `stroke_segment` per point), so
 //! OK runs `filter.liquify` with the same strokes and gets the same field.
 
@@ -27,6 +27,17 @@ const LEFT_W: f32 = 48.0;
 const RIGHT_W: f32 = 292.0;
 const REDO_STACK_LIMIT: usize = 100;
 
+/// Final texture encoding of sampled working floats, with the canvas's raw fallback.
+fn encode_preview(display: Option<&photocraft_engine::display_color::CanvasDisplay>, samples: &[[f32; 4]], out: &mut [[u8; 4]]) {
+    if let Some(display) = display {
+        display.premultiplied_rgba8(samples, out);
+    } else {
+        for (rgba, pixel) in samples.iter().zip(out) {
+            *pixel = rgba.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+        }
+    }
+}
+
 /// Native component sampling keeps the other components and opacity at the destination. Work
 /// stays bounded by the dirty proxy/viewport rectangle; a dab never scans the full source.
 #[allow(clippy::too_many_arguments)]
@@ -39,6 +50,7 @@ fn render_components(
     bounds: Rect,
     dirty: Rect,
     out: &mut [[u8; 4]],
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
 ) -> bool {
     let Ok(Some(colors)) = photocraft_engine::color_channels::explicit(&json!({"target":target}), source.format().mode.color_channels()) else { return false };
     let width = bounds.width() as usize;
@@ -48,42 +60,47 @@ fn render_components(
     let fmt = source.format();
     let mut native = vec![0.0; fmt.channels()];
     let dirty = dirty.intersect(&bounds);
+    // The native-channel path uses the same bounded display batches as the RGB samplers.
+    const BATCH: usize = 256;
+    let mut samples = [[0.0; 4]; BATCH];
     for y in dirty.y0..dirty.y1 {
-        for x in dirty.x0..dirty.x1 {
-            let px = f64::from(field.bounds.x0) + (f64::from(x.saturating_sub(source_bounds.x0)) + 0.5) * scale;
-            let py = f64::from(field.bounds.y0) + (f64::from(y.saturating_sub(source_bounds.y0)) + 0.5) * scale;
-            let displacement = field.sample(px, py);
-            let sx = (f64::from(x) + displacement[0] / scale).clamp(f64::from(source_bounds.x0), f64::from(source_bounds.x1 - 1));
-            let sy = (f64::from(y) + displacement[1] / scale).clamp(f64::from(source_bounds.y0), f64::from(source_bounds.y1 - 1));
-            let (x0, y0) = (sx.floor() as i32, sy.floor() as i32);
-            let (fx, fy) = ((sx - f64::from(x0)) as f32, (sy - f64::from(y0)) as f32);
-            let taps = [
-                (x0, y0, (1.0 - fx) * (1.0 - fy)),
-                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0, fx * (1.0 - fy)),
-                (x0, y0.saturating_add(1).min(source_bounds.y1 - 1), (1.0 - fx) * fy),
-                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0.saturating_add(1).min(source_bounds.y1 - 1), fx * fy),
-            ];
-            let alpha_index = fmt.mode.color_channels();
-            let alpha = |tx, ty| if fmt.alpha { source.sample_channel(tx, ty, alpha_index) } else { 1.0 };
-            let warped_alpha: f32 = taps.iter().map(|(tx, ty, w)| alpha(*tx, *ty) * w).sum();
-            for (channel, value) in native.iter_mut().enumerate() {
-                *value = if colors.contains(channel) {
-                    if warped_alpha > 0.0 {
-                        taps.iter().map(|(tx, ty, w)| source.sample_channel(*tx, *ty, channel) * alpha(*tx, *ty) * w).sum::<f32>() / warped_alpha
+        let start = (y - bounds.y0) as usize * width + (dirty.x0 - bounds.x0) as usize;
+        let Some(row) = out.get_mut(start..start + dirty.width() as usize) else { return false };
+        for (batch, dest) in row.chunks_mut(BATCH).enumerate() {
+            for (offset, sample) in samples.iter_mut().take(dest.len()).enumerate() {
+                let x = dirty.x0 + (batch * BATCH + offset) as i32;
+                let px = f64::from(field.bounds.x0) + (f64::from(x.saturating_sub(source_bounds.x0)) + 0.5) * scale;
+                let py = f64::from(field.bounds.y0) + (f64::from(y.saturating_sub(source_bounds.y0)) + 0.5) * scale;
+                let displacement = field.sample(px, py);
+                let sx = (f64::from(x) + displacement[0] / scale).clamp(f64::from(source_bounds.x0), f64::from(source_bounds.x1 - 1));
+                let sy = (f64::from(y) + displacement[1] / scale).clamp(f64::from(source_bounds.y0), f64::from(source_bounds.y1 - 1));
+                let (x0, y0) = (sx.floor() as i32, sy.floor() as i32);
+                let (fx, fy) = ((sx - f64::from(x0)) as f32, (sy - f64::from(y0)) as f32);
+                let taps = [
+                    (x0, y0, (1.0 - fx) * (1.0 - fy)),
+                    (x0.saturating_add(1).min(source_bounds.x1 - 1), y0, fx * (1.0 - fy)),
+                    (x0, y0.saturating_add(1).min(source_bounds.y1 - 1), (1.0 - fx) * fy),
+                    (x0.saturating_add(1).min(source_bounds.x1 - 1), y0.saturating_add(1).min(source_bounds.y1 - 1), fx * fy),
+                ];
+                let alpha_index = fmt.mode.color_channels();
+                let alpha = |tx, ty| if fmt.alpha { source.sample_channel(tx, ty, alpha_index) } else { 1.0 };
+                let warped_alpha: f32 = taps.iter().map(|(tx, ty, w)| alpha(*tx, *ty) * w).sum();
+                for (channel, value) in native.iter_mut().enumerate() {
+                    *value = if colors.contains(channel) {
+                        if warped_alpha > 0.0 {
+                            taps.iter().map(|(tx, ty, w)| source.sample_channel(*tx, *ty, channel) * alpha(*tx, *ty) * w).sum::<f32>() / warped_alpha
+                        } else {
+                            0.0
+                        }
                     } else {
-                        0.0
-                    }
-                } else {
-                    source.sample_channel(x, y, channel)
-                };
+                        source.sample_channel(x, y, channel)
+                    };
+                }
+                let rgba = photocraft_raster::to_rgba(&fmt, &native);
+                let a = rgba[3].clamp(0.0, 1.0);
+                *sample = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a];
             }
-            let rgba = photocraft_raster::to_rgba(&fmt, &native);
-            let a = rgba[3].clamp(0.0, 1.0);
-            let encoded = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-            let index = (y - bounds.y0) as usize * width + (x - bounds.x0) as usize;
-            if let Some(pixel) = out.get_mut(index) {
-                *pixel = encoded;
-            }
+            encode_preview(display, &samples[..dest.len()], dest);
         }
     }
     true
@@ -240,6 +257,7 @@ pub struct LiquifyDialog {
     source: Surface,
     target: Value,
     native_proxy: Option<Surface>,
+    display: Option<std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>>,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
@@ -444,9 +462,9 @@ impl LiquifyDialog {
             if let Some(source) = &self.native_proxy {
                 let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
                 let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
-                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
+                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out, self.display.as_deref());
             } else {
-                self.proxy.render(&self.field, r, &mut self.out);
+                self.proxy.render_mapped(&self.field, r, &mut self.out, |samples, out| encode_preview(self.display.as_deref(), samples, out));
             }
         }
     }
@@ -498,9 +516,19 @@ impl LiquifyDialog {
         }
         let started = crate::gpu_canvas::now_ms();
         let rendered = if self.native_proxy.is_some() {
-            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
+            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, bounds, dirty, &mut self.view_out, self.display.as_deref())
         } else {
-            ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
+            ProxyImage::render_full_resolution_mapped(
+                &self.source,
+                &self.field,
+                bounds,
+                dirty,
+                &mut self.view_out,
+                &mut self.view_source_scratch,
+                |samples, out| {
+                    encode_preview(self.display.as_deref(), samples, out);
+                },
+            )
         };
         if !rendered {
             self.view_bounds = None;
@@ -601,6 +629,7 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
     open_on(app, ctx, layer, surf, strokes, cell, Some(index))
 }
 
+/// Open a captured layer or Smart Filter source with the canvas's display conversion and fallback.
 fn open_on(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
@@ -612,6 +641,7 @@ fn open_on(
 ) -> Result<(), String> {
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
+    let (display, _) = crate::canvas::canvas_display(app, &st.doc, None);
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
@@ -634,6 +664,7 @@ fn open_on(
         source: surf,
         target,
         native_proxy,
+        display,
         out,
         tex: None,
         dirty: None,
@@ -922,10 +953,16 @@ fn shortcut(t: LiquifyTool) -> &'static str {
 fn load_backdrop(app: &PhotocraftApp, ctx: &egui::Context, of: Option<u64>, canvas: Rect) -> Option<TextureHandle> {
     let st = app.session.active()?;
     let buf = photocraft_compose::render(&backdrop_doc(&st.doc, of), canvas);
-    let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
-    let flat: Vec<f32> = buf.px.iter().flat_map(|p| *p).collect();
-    s.write_region(canvas, &flat);
-    Some(ctx.load_texture("liquify-backdrop", crate::distort_ui::surface_image(&s, canvas, PROXY_SIDE), egui::TextureOptions::LINEAR))
+    let (display, _) = crate::canvas::canvas_display(app, &st.doc, None);
+    // Preserve the existing nearest-sampled proxy size, without an RGBA8 working-space round trip.
+    let scale = (canvas.width().max(canvas.height()) as usize).div_ceil(PROXY_SIDE).max(1);
+    let (width, height) = ((canvas.width() as usize).div_ceil(scale), (canvas.height() as usize).div_ceil(scale));
+    let pixels = (0..height)
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
+        .map(|(x, y)| buf.get(canvas.x0 + (x * scale) as i32, canvas.y0 + (y * scale) as i32))
+        .collect();
+    let reduced = photocraft_compose::Buffer { rect: Rect::new(0, 0, width as i32, height as i32), px: pixels };
+    Some(ctx.load_texture("liquify-backdrop", crate::canvas::display_image(display.as_deref(), &reduced), egui::TextureOptions::LINEAR))
 }
 
 /// The document [`load_backdrop`] renders for Use `of`.
@@ -1042,10 +1079,30 @@ fn apply_preview_wheel(
     }
 }
 
+/// Resolve the same full display key as the CPU canvas before using retained preview textures.
+/// A monitor-only change also invalidates the detail crop and the display-converted backdrop.
+fn refresh_display(app: &mut PhotocraftApp) {
+    let Some(dialog) = app.distort.liquify.as_ref() else { return };
+    let Some(st) = app.session.active().filter(|st| st.doc.id == dialog.document) else { return };
+    let (display, _) = crate::canvas::canvas_display(app, &st.doc, None);
+    if dialog.display.as_ref().map(|d| d.key) == display.as_ref().map(|d| d.key) {
+        return;
+    }
+    if let Some(dialog) = app.distort.liquify.as_mut() {
+        dialog.display = display;
+        dialog.tex = None;
+        dialog.view_tex = None;
+        dialog.view_dirty = dialog.view_bounds;
+        dialog.backdrop = None;
+    }
+}
+
+/// Draw the modal workspace, refresh its display textures and handle the current frame's controls.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    refresh_display(app);
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
-    // The backdrop is built when it's first shown and again when its Use changes.
+    // Rebuild on first use, a changed Use, or display invalidation above.
     let wanted = app.distort.liquify.as_ref().filter(|d| d.opts.show_backdrop && d.backdrop.as_ref().is_none_or(|(of, _)| *of != d.opts.backdrop_layer));
     if let Some((of, canvas)) = wanted.map(|d| (d.opts.backdrop_layer, d.canvas)) {
         let tex = load_backdrop(app, ctx, of, canvas);
