@@ -181,8 +181,8 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `PHOTOCRAFT_AUTOMATION_WRITE_ROOT` | Desktop app only: automation write root (`--automation-write-root`). Headless CLI modes require the flag |
 | `PHOTOCRAFT_IN_WINDOW_MENUS=1` (or `--in-window-menus`) | macOS: keep the menus inside the window instead of the menu bar. `0`, `false`, `no`, `off` or empty is off |
 | `PHOTOCRAFT_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
-| `PHOTOCRAFT_NATIVE_WAYLAND=1` | Linux: stay on native Wayland when a pen is attached even if the compositor has no tablet protocol. The Xwayland fallback otherwise needs a detected pen, a nonempty `DISPLAY`, and the X11 libraries; without them the window stays on native Wayland even though the pen then has no input (#639). With the tablet protocol (`zwp_tablet_manager_v2`) the window stays on native Wayland anyway and reads the pen itself (#79). A pen is an input device with `BTN_TOOL_PEN` and the `ABS_X`/`ABS_Y` axes; virtual keyboards that claim every key are not pens (#1072) |
-| `PHOTOCRAFT_XWAYLAND_PEN=1` | Linux: open the window through Xwayland when a pen is attached even if the compositor has the tablet protocol (the behaviour before native Wayland pens, #79). `PHOTOCRAFT_NATIVE_WAYLAND=1` takes precedence; unset it or set it to `0` to use this |
+| `PHOTOCRAFT_NATIVE_WAYLAND=1` | Linux: stay on native Wayland when a pen is attached even if the compositor has no tablet protocol. The Xwayland fallback otherwise needs a detected pen, a nonempty `DISPLAY`, and the X11 libraries; without them the window stays on native Wayland even though the pen then has no input (#639). With the tablet protocol (`zwp_tablet_manager_v2`) the window stays on native Wayland anyway and reads the pen itself (#79). Preferences › Performance › Linux display server = X11 overrides this. A pen is an input device with `BTN_TOOL_PEN` and the `ABS_X`/`ABS_Y` axes; virtual keyboards that claim every key are not pens (#1072) |
+| `PHOTOCRAFT_XWAYLAND_PEN=1` | Linux: open the window through Xwayland when a pen is attached even if the compositor has the tablet protocol (the behaviour before native Wayland pens, #79). `PHOTOCRAFT_NATIVE_WAYLAND=1` takes precedence; unset it or set it to `0` to use this. It applies to a new process: quit PhotoCraft or pass `--new-instance`, or the launch is forwarded to the running instance. Preferences › Performance › Linux display server = X11 also selects Xwayland; set it back to Auto to use native Wayland |
 | `PHOTOCRAFT_GPU_ADAPTER=nvidia` | Linux: use the graphics adapter whose name contains this (case-insensitive); overrides `performance.gpuAdapter` for one launch |
 | `WGPU_BACKEND=dx12` | Pick the wgpu backend(s) (`vulkan`, `dx12`, `metal`, `gl`); overrides `performance.gpuBackend` and the startup fallback. Tests read it too: on Windows with an Intel GPU, run them with `WGPU_BACKEND=dx12`, since loading the Intel Vulkan driver crashes the test process with `STATUS_ACCESS_VIOLATION` (#4) |
 | `WGPU_DX12_COMPILER=fxc` | DX12 shader compiler (`fxc`, `dxc`, `auto`); `dxc` and `auto` look `dxcompiler.dll` up through the DLL search path |
@@ -206,9 +206,14 @@ on Wayland; it prints `tablet: reading the pen through the Wayland tablet protoc
 cursor movement, clicks, drag, context menus, mouse/pen switching and interaction with the rest
 of the UI are hardware-verified on KDE Plasma 6.8.2 with a Wacom One (CTL-472). Compositors
 without the protocol keep the Xwayland fallback; it needs a detected pen, a nonempty `DISPLAY`,
-and the X11 libraries, otherwise the window stays on native Wayland. `PHOTOCRAFT_XWAYLAND_PEN=1`
-forces Xwayland even with tablet-v2, and `PHOTOCRAFT_NATIVE_WAYLAND=1` takes precedence over it;
-unset it or set it to `0` first. Eraser, tilt and rotation need a pen that reports them;
+and the X11 libraries, otherwise the window stays on native Wayland. The probe also fails when
+`WAYLAND_SOCKET` is set, so the fallback can apply even when the compositor has tablet-v2.
+`PHOTOCRAFT_XWAYLAND_PEN=1` forces Xwayland, and `PHOTOCRAFT_NATIVE_WAYLAND=1` takes precedence
+over it; unset it or set it to `0` first. Both variables apply to a new process: quit PhotoCraft
+or pass `--new-instance`, or the launch is forwarded to the running instance. Preferences ›
+Performance › Linux display server = X11 also selects Xwayland and overrides
+`PHOTOCRAFT_NATIVE_WAYLAND`; set it back to Auto to use native Wayland. Eraser, tilt and rotation
+need a pen that reports them;
 [wl.rs](../crates/tablet/src/wl.rs) tests that mapping with synthetic protocol events.
 
 ### Live design tokens
