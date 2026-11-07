@@ -6,9 +6,15 @@
 //! `PDFIUM_DIR`, no DLL beside the test binary) the test prints an explicit SKIPPED line and
 //! returns instead of pretending the end-to-end wiring passed.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
+
 use lopdf::{Document as PdfDocument, Object, Stream, dictionary};
+use pdfium_render::prelude::{PdfRenderConfig, Pdfium};
 use photocraft_doc::{Color, Document, Layer, LayerContent, ShapeLayer, TextLayer};
-use photocraft_io::{ImportOptions, IoError, import_with_options_and_interrupt};
+use photocraft_geom::Rect;
+use photocraft_io::{ImportOptions, ImportResult, IoError, import_with_options_and_interrupt};
+use photocraft_raster::Interrupt;
 
 const PAGE_W: f64 = 200.0;
 const PAGE_H: f64 = 100.0;
@@ -205,4 +211,151 @@ fn assert_red(color: &Color, what: &str) {
 /// Asserts `color` is the fixture's green ink.
 fn assert_green(color: &Color, what: &str) {
     assert!(color.c[1] > 0.8 && color.c[0] < 0.2 && color.c[2] < 0.2, "{what} should be green, got {:?}", color.c);
+}
+
+/// Imports `bytes`, or prints SKIPPED and returns `None` when PDFium cannot load. The Windows
+/// integration leg sets `PHOTOCRAFT_REQUIRE_PDFIUM`, where a missing library must fail.
+fn imported_or_skipped(bytes: &[u8], options: &ImportOptions, ctl: &Interrupt<'_>, what: &str) -> Option<ImportResult> {
+    match import_with_options_and_interrupt("probe.pdf", bytes, options, ctl) {
+        Ok(result) => Some(result),
+        Err(IoError::Unsupported(message)) if message.contains("cannot load PDFium") => {
+            eprintln!("SKIPPED {what}: PDFium is unavailable ({message})");
+            assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_PDFIUM").is_none(), "PDFium is required for {what} but could not load: {message}");
+            None
+        }
+        Err(error) => panic!("{what} failed: {error}"),
+    }
+}
+
+/// Six one-page variants for the cancellation and fidelity probes: plain, a CropBox offset to
+/// (10, 20, 210, 120), rotations of 90, 180 and 270 degrees, and an oversized CropBox
+/// (-50, -50, 250, 150) around the 200 x 100 MediaBox. Each page draws a 40 x 40 blue rectangle
+/// and a 10 x 10 red one at (20, 30).
+fn variant_pdf() -> Vec<u8> {
+    let mut pdf = PdfDocument::with_version("1.5");
+    let pages_id = pdf.new_object_id();
+    let pages: [(Option<i64>, Option<[f32; 4]>); 6] = [
+        (None, None),
+        (None, Some([10.0, 20.0, 210.0, 120.0])),
+        (Some(90), None),
+        (Some(180), None),
+        (Some(270), None),
+        (None, Some([-50.0, -50.0, 250.0, 150.0])),
+    ];
+    let mut kids = Vec::new();
+    for (rotate, crop) in pages {
+        let content = b"0 0 1 rg 20 30 40 40 re f 1 0 0 rg 20 30 10 10 re f";
+        let content_id = pdf.add_object(Stream::new(dictionary! {}, content.to_vec()));
+        let mut page = dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => Object::Array(vec![Object::Real(0.0), Object::Real(0.0), Object::Real(PAGE_W as f32), Object::Real(PAGE_H as f32)]),
+            "Contents" => content_id,
+            "Resources" => dictionary! {},
+        };
+        if let Some(rotate) = rotate {
+            page.set("Rotate", rotate);
+        }
+        if let Some([left, bottom, right, top]) = crop {
+            page.set("CropBox", Object::Array(vec![Object::Real(left), Object::Real(bottom), Object::Real(right), Object::Real(top)]));
+        }
+        kids.push(Object::Reference(pdf.add_object(page)));
+    }
+    let count = kids.len() as i64;
+    pdf.objects.insert(
+        pages_id,
+        Object::Dictionary(dictionary! {
+            "Type" => "Pages",
+            "Kids" => Object::Array(kids),
+            "Count" => count,
+        }),
+    );
+    let catalog = pdf.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+    pdf.trailer.set("Root", catalog);
+    let mut bytes = Vec::new();
+    pdf.save_to(&mut bytes).expect("writing the variant PDF");
+    bytes
+}
+
+/// A cancel that lands on the last object's check, or on the public boundary after
+/// `import_stages`, must be reported as `Cancelled` rather than returning a document.
+#[test]
+fn cancelling_on_the_last_checks_is_reported() {
+    let pdf = variant_pdf();
+    let options = ImportOptions { pdf_dpi: 72.0, ..Default::default() };
+    let count = AtomicUsize::new(0);
+    let cancel = || {
+        count.fetch_add(1, Ordering::SeqCst);
+        false
+    };
+    let ctl = Interrupt::cancel_only(&cancel);
+    if imported_or_skipped(&pdf, &options, &ctl, "the last-check cancellation test").is_none() {
+        return;
+    }
+    let total = count.load(Ordering::SeqCst);
+    assert!(total >= 3, "a complete import should check cancellation at least three times, got {total}");
+    for (label, threshold) in [("the last per-object check", total - 1), ("the public boundary check", total)] {
+        let seen = AtomicUsize::new(0);
+        let cancel = || seen.fetch_add(1, Ordering::SeqCst) + 1 >= threshold;
+        let ctl = Interrupt::cancel_only(&cancel);
+        let started = Instant::now();
+        let result = import_with_options_and_interrupt("probe.pdf", &pdf, &options, &ctl);
+        let elapsed = started.elapsed();
+        assert_eq!(seen.load(Ordering::SeqCst), threshold, "cancelling on {label} should stop at check {threshold} of {total}");
+        match result {
+            Err(IoError::Cancelled) => {}
+            Ok(_) => panic!("cancelling on {label} returned a document"),
+            Err(error) => panic!("cancelling on {label} returned {error:?}"),
+        }
+        assert!(elapsed < Duration::from_secs(10), "cancelling on {label} took {elapsed:?}");
+    }
+}
+
+/// Every imported page's stored raster must equal a direct PDFium render of the same page at the
+/// same target width: crop intersection, rotation and the strip placement may not move or resample
+/// a pixel. At 72, 150 and 300 DPI over the six variants that is 18 page renders.
+#[test]
+fn raster_matches_a_direct_pdfium_render() {
+    let pdf = variant_pdf();
+    let mut compared = 0;
+    for dpi in [72.0f32, 150.0, 300.0] {
+        let options = ImportOptions { pdf_dpi: dpi, ..Default::default() };
+        let Some(result) = imported_or_skipped(&pdf, &options, &Interrupt::NONE, "the raster fidelity matrix") else {
+            return;
+        };
+        let pdfium = Pdfium::default();
+        let reference = pdfium.load_pdf_from_byte_slice(&pdf, None).expect("reference PDF");
+        assert_eq!(reference.pages().len() as usize, result.document.layers.len(), "page count at {dpi} dpi");
+        for (index, layer) in result.document.layers.iter().enumerate() {
+            let group = match &layer.content {
+                LayerContent::Group(group) => group,
+                _ => panic!("page layer {} is not a group", layer.name),
+            };
+            let artboard = group.artboard.as_ref().expect("page artboard").rect;
+            let raster = group.children.first().and_then(|layer| layer.surface()).expect("page raster layer");
+            let (width, height) = (artboard.width(), artboard.height());
+            let mut got = vec![[0u8; 4]; (width as usize) * (height as usize)];
+            raster.read_rgba8_into(Rect::from_xywh(artboard.x0, artboard.y0, width, height), &mut got);
+
+            let page = reference.pages().get(index as i32).expect("reference page");
+            let bitmap = page.render_with_config(&PdfRenderConfig::new().set_target_width(width as i32)).expect("reference render");
+            assert_eq!((bitmap.width() as u32, bitmap.height() as u32), (width, height), "page {} size at {dpi} dpi", index + 1);
+            let want = bitmap.as_rgba_bytes();
+
+            let mut max_diff = 0u32;
+            let mut sum = 0u64;
+            for (pixel, reference) in got.iter().zip(want.as_chunks::<4>().0.iter()) {
+                for channel in 0..4 {
+                    let diff = (pixel[channel] as i32 - reference[channel] as i32).unsigned_abs();
+                    sum += u64::from(diff);
+                    max_diff = max_diff.max(diff);
+                }
+            }
+            let channels = u64::from(width) * u64::from(height) * 4;
+            let mean = sum as f64 / channels as f64;
+            assert!(max_diff <= 1, "page {} at {dpi} dpi differs from the direct render: max channel diff {max_diff}, mean {mean:.4}", index + 1);
+            compared += 1;
+        }
+    }
+    assert_eq!(compared, 18, "six pages at three DPIs should all be compared");
 }
