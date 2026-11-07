@@ -131,13 +131,21 @@ pub(crate) struct InfoArgs {
 /// Open a file (or start a new document), run engine commands in order, save the result
 ///
 /// Prints each command's JSON result. Give exactly one of <FILE> or --new, and at least one --cmd
-/// or --out. An --out that is the <FILE> is refused, as the result would replace the original;
+/// or --out. With --control, <FILE> is a JSON-lines script and local execution/export flags are
+/// refused. An --out that is the <FILE> is refused, as the result would replace the original;
 /// --in-place allows it.
 #[derive(Args)]
 #[command(group(ArgGroup::new("source").args(["file", "new"]).required(true)))]
-#[command(group(ArgGroup::new("work").args(["cmd", "out"]).required(true).multiple(true)))]
+#[command(group(ArgGroup::new("work").args(["cmd", "out", "control"]).required(true).multiple(true)))]
 pub(crate) struct RunArgs {
-    /// The document to open
+    /// Run a JSON-lines command file against the app on 127.0.0.1:PORT
+    #[arg(long, value_name = "PORT", value_parser = clap::value_parser!(u16).range(1..), requires = "file",
+          conflicts_with_all = ["new", "cmd", "params", "out", "in_place", "approve_high_memory", "ExportArgs", "GpuArgs"])]
+    pub(crate) control: Option<u16>,
+    /// Read the running app's control token from this file; requires --control
+    #[arg(long, visible_alias = "token-file", value_name = "PATH", requires = "control")]
+    pub(crate) control_token_file: Option<PathBuf>,
+    /// The document to open, or the JSON-lines script when --control is given
     pub(crate) file: Option<PathBuf>,
     /// Start from a new document with these JSON parameters instead of opening a file
     #[arg(long, value_name = "JSON", value_parser = json)]
@@ -447,7 +455,9 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
     match (&mut cli.command, matches.subcommand()) {
         (Command::Run(r), Some((_, m))) => {
             r.steps = steps(m);
-            check_gpu_env(&mut cmd, m)?;
+            if r.control.is_none() {
+                check_gpu_env(&mut cmd, m)?;
+            }
         }
         (Command::Mcp(a), Some((name, m))) => {
             a.bridge_from_env = from_env(m, "bridge");
