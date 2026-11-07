@@ -49,9 +49,10 @@ get neutral tilt and rotation). The default Windows Ink path still lacks tilt an
 rotation; its eraser end comes from the pointer hooks (#2285).
 
 A compositor that offers tablet-v2 can still be forced through Xwayland with
-`PHOTOCRAFT_XWAYLAND_PEN=1`, unless `PHOTOCRAFT_NATIVE_WAYLAND=1` is set. The fallback needs a
-detected pen, a nonempty `DISPLAY` and the X11 libraries; without them the window stays on
-native Wayland.
+`PHOTOCRAFT_XWAYLAND_PEN=1`, unless `PHOTOCRAFT_NATIVE_WAYLAND=1` is set. The tablet probe also
+fails when `WAYLAND_SOCKET` is set (PhotoCraft cannot open its own probe connection), so such a
+compositor takes the fallback even when it offers tablet-v2. The fallback needs a detected pen,
+a nonempty `DISPLAY` and the X11 libraries; without them the window stays on native Wayland.
 
 ## Displays and colour
 

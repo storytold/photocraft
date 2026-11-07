@@ -189,7 +189,7 @@ Xwayland when a pen is attached and the compositor has no tablet protocol (#639,
 when a pen is detected, `DISPLAY` is set and the X11 libraries are installed; without them it
 stays on native Wayland. `PHOTOCRAFT_XWAYLAND_PEN=1` forces the fallback and
 `PHOTOCRAFT_NATIVE_WAYLAND=1` takes precedence over it. Preferences › Performance › Linux display
-server = X11, or `WAYLAND_DISPLAY=` cleared, also select it; those are also the ways to get file
+server = X11 (which overrides `PHOTOCRAFT_NATIVE_WAYLAND`), or `WAYLAND_DISPLAY=` cleared, also select it; those are also the ways to get file
 drag and drop, which
 native Wayland lacks (#386). Sharp text or drag and drop: on such a desktop it is one or the other
 until winit supports Wayland drops.
