@@ -1,7 +1,10 @@
 //! Selected-range font acceptance, caret typing styles and focused global commit.
 use crate::{PhotocraftApp, Services};
 use egui::{Key, Modifiers, accesskit::Role, vec2};
-use egui_kittest::{Harness, kittest::Queryable};
+use egui_kittest::{
+    Harness,
+    kittest::{NodeT, Queryable},
+};
 use photocraft_doc::{Document, LayerContent, LayerId};
 use serde_json::{Value, json};
 
@@ -102,7 +105,10 @@ fn fixture_renderer(new: bool, pattern: usize, character: bool, content: &str, g
     (h, id)
 }
 
-fn choose(h: &mut Harness<'_, Probe>, font: &str, accept: &str) {
+/// Drives the actual picker without assuming that Down accepts an exact-name query.
+/// Arrow acceptance must highlight the requested row and show its caption before Enter;
+/// query, hover, Tab and Escape retain their distinct non-accepting behavior.
+fn choose<S>(h: &mut Harness<'_, S>, font: &str, accept: &str) {
     h.query_all_by_role(Role::TextInput).next().unwrap().click();
     h.run();
     h.query_all_by_role(Role::TextInput).next().unwrap().type_text(font);
@@ -110,8 +116,23 @@ fn choose(h: &mut Harness<'_, Probe>, font: &str, accept: &str) {
     match accept {
         "enter" => h.key_press(Key::Enter),
         "arrow-enter" => {
-            h.key_press(Key::ArrowDown);
-            h.run();
+            // Start with a real Down, then search in both directions using only menu input.
+            // The rendered selectable rows bound the walk, including substring siblings
+            // before or after the exact name; no host font ordering is assumed.
+            let rows = h.query_all_by_role(Role::Button).filter(|n| n.accesskit_node().toggled().is_some()).count();
+            let keys = std::iter::once(Key::ArrowDown).chain(std::iter::repeat_n(Key::ArrowUp, rows)).chain(std::iter::repeat_n(Key::ArrowDown, rows));
+            let mut reached = false;
+            for key in keys {
+                h.key_press(key);
+                h.run();
+                if h.query_by_role_and_label(Role::Button, font).is_some_and(|n| n.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True)) {
+                    reached = true;
+                    break;
+                }
+            }
+            let caption = h.query_all_by_role(Role::TextInput).next().unwrap().value();
+            assert!(reached, "keyboard walk did not select {font:?} among {rows} selectable controls; caption: {caption:?}");
+            assert_eq!(caption.as_deref(), Some(font), "keyboard-selected family caption before Enter");
             h.key_press(Key::Enter);
         }
         "click" => h.get_by_label(font).click(),
@@ -122,6 +143,73 @@ fn choose(h: &mut Harness<'_, Probe>, font: &str, accept: &str) {
         _ => panic!("unknown acceptance"),
     }
     h.run();
+    if matches!(accept, "enter" | "click" | "arrow-enter") {
+        assert_eq!(h.query_all_by_role(Role::TextInput).next().unwrap().value().as_deref(), Some(font), "accepted family caption: {accept}");
+    }
+}
+
+/// Supplies same-prefix rows locally through the existing picker seam, without registering
+/// fonts or changing the process-wide catalog. The bundled faces supply ordinary rendering.
+fn neighboring_family_picker(current: &str, families: &[&str]) -> Harness<'static, String> {
+    let families: Vec<String> = families.iter().map(|f| (*f).to_string()).collect();
+    let mut h = Harness::builder().with_size(vec2(900.0, 800.0)).with_max_steps(64).build_ui_state(
+        move |ui, current| {
+            super::font_picker_in(ui, current, 170.0, &families, photocraft_engine::prefs::FontPreview::Off, &[]);
+        },
+        current.to_string(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run();
+    h
+}
+
+/// An exact query can leave a same-prefix sibling after the current row. The shared helper
+/// must deliberately return to the requested family, and also make real family changes.
+#[test]
+fn arrow_acceptance_reaches_the_requested_family_with_same_prefix_neighbors() {
+    let families = ["A Inter", "Inter", "Inter Display", "JetBrains Mono"];
+    for (current, target) in [("Inter", "Inter"), ("Inter Display", "Inter"), ("JetBrains Mono", "Inter"), ("Inter", "JetBrains Mono")] {
+        let mut h = neighboring_family_picker(current, &families);
+        choose(&mut h, target, "arrow-enter");
+        assert_eq!(h.state(), target, "catalog: {families:?}, starting family: {current}");
+        assert!(h.query_by_role_and_label(Role::Button, target).is_none(), "Enter closes the menu");
+    }
+}
+
+/// A filtered list longer than its viewport must remain keyboard-searchable from either
+/// end: clipped matching rows must not make the helper stop before the exact family.
+#[test]
+fn arrow_acceptance_reaches_the_requested_family_in_a_scrolled_catalog() {
+    let mut families: Vec<String> = (0..80).map(|i| format!("Before {i:02} Inter")).collect();
+    families.push("Inter".into());
+    families.extend((0..80).map(|i| format!("Inter Display {i:02}")));
+    let names: Vec<&str> = families.iter().map(String::as_str).collect();
+    for current in ["Before 00 Inter", "Inter Display 79"] {
+        let mut h = neighboring_family_picker(current, &names);
+        choose(&mut h, "Inter", "arrow-enter");
+        assert_eq!(h.state(), "Inter", "starting family: {current}");
+        assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("Inter"));
+        assert!(h.query_by_role_and_label(Role::Button, "Inter").is_none(), "Enter closes the menu");
+    }
+}
+
+/// Ordinary Down from Inter is still supposed to select Inter Display. Correcting the
+/// acceptance helper must not change this valid user gesture into exact-query acceptance.
+#[test]
+fn ordinary_down_selects_the_same_prefix_neighbor() {
+    let mut h = neighboring_family_picker("Inter", &["Inter", "Inter Display", "JetBrains Mono"]);
+    choose(&mut h, "Inter", "query");
+    assert_eq!(h.state(), "Inter", "typing alone only filters");
+    assert!(h.query_by_role_and_label(Role::Button, "Inter Display").is_some());
+    h.key_press(Key::ArrowDown);
+    h.run();
+    assert_eq!(h.state(), "Inter Display");
+    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("Inter Display"));
+    assert_eq!(h.get_by_role_and_label(Role::Button, "Inter Display").accesskit_node().toggled(), Some(egui::accesskit::Toggled::True));
+    h.key_press(Key::Enter);
+    h.run();
+    assert_eq!(h.state(), "Inter Display");
+    assert!(h.query_by_role_and_label(Role::Button, "Inter Display").is_none());
 }
 
 fn commit(h: &mut Harness<'_, Probe>, method: &str) {
