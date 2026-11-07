@@ -46,7 +46,9 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                 // egui's menu_button toggles on release; these titles open on the press (one
                 // gesture can press, drag to an item and release), so each drives its popup.
                 // The title the keyboard is on (Alt / F10) is lit like a hovered one.
-                let focused = keys.focus == Some(if rtl { TOP_MENUS.len() - 1 - k } else { k });
+                // So is the open menu's, however it was opened.
+                let on_screen = if rtl { TOP_MENUS.len() - 1 - k } else { k };
+                let focused = keys.focus == Some(on_screen) || nav.top == Some(on_screen);
                 let label = if nav.underline {
                     crate::menu_keys::mnemonic_text(ui, "", &top_labels[k], top_mnemonics[k], Some(t.text_dim))
                 } else {
@@ -56,7 +58,13 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                 if focused {
                     button = button.fill(ui.visuals().widgets.hovered.weak_bg_fill);
                 }
+                // The keys have the highlight: a pointer left resting on a title doesn't light it.
+                let hover_fill = ui.visuals().widgets.hovered.weak_bg_fill;
+                if nav.keyboard() && !focused {
+                    ui.visuals_mut().widgets.hovered.weak_bg_fill = ui.visuals().widgets.inactive.weak_bg_fill;
+                }
                 let title = ui.add(button);
+                ui.visuals_mut().widgets.hovered.weak_bg_fill = hover_fill;
                 // The bar's close behaviour and style, as a menu (not bar) config so submenus inside
                 // render as submenus.
                 let bar = egui::containers::menu::MenuConfig::find(ui);

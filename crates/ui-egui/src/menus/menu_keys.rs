@@ -376,6 +376,21 @@ impl Keys {
         if let Some((key, c)) = alt_letter
             && let Some(i) = mnemonics.iter().position(|m| *m == Some(c))
         {
+            // Each letter comes as text too, right after its key: a focused field isn't to type it,
+            // nor a second Alt+letter's in the same frame (only the first opens its menu).
+            ctx.input_mut(|i| {
+                let mnemonic = |e: &Event| match e {
+                    Event::Key { key, pressed: true, modifiers, .. } if modifiers.alt && !modifiers.command && !modifiers.ctrl => {
+                        key_char(*key).is_some_and(|c| mnemonics.contains(&Some(c)))
+                    }
+                    _ => false,
+                };
+                let texts: Vec<usize> =
+                    (1..i.events.len()).filter(|&n| matches!(i.events.get(n), Some(Event::Text(_))) && i.events.get(n - 1).is_some_and(mnemonic)).collect();
+                for n in texts.into_iter().rev() {
+                    i.events.remove(n);
+                }
+            });
             consume(Modifiers::ALT, key);
             self.alt_tap = false;
             open_top(i, self);
@@ -426,6 +441,10 @@ impl Keys {
         let press = |k: Key| consume(Modifiers::NONE, k);
         if press(Key::Escape) {
             self.focus = None;
+            // egui dropped a text field's focus on this Esc, which was for the bar.
+            if let Some(field) = nav.field_was() {
+                ctx.memory_mut(|m| m.request_focus(field));
+            }
         } else if press(Key::ArrowRight) {
             self.focus = Some((focus + 1) % n);
         } else if press(Key::ArrowLeft) {
