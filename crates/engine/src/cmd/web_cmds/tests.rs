@@ -1396,6 +1396,71 @@ fn embed_color_profile_tags_an_untagged_document_srgb() {
     }
 }
 
+/// Keep the picker-selected name across formats without restamping or replacing earlier exports.
+#[test]
+fn prepared_timestamp_quick_export_keeps_picker_name_and_publishes_exclusively() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = session(8);
+    s.execute("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
+    for ext in ["png", "jpg", "gif", "webp", "exr"] {
+        let path = dir.path().join(format!("photo_20261106-120000-007.{ext}"));
+        let first = s.execute("file.export.quickExport", json!({"path": path, "preparedPath": true})).unwrap();
+        assert_eq!(first["path"], path.to_str().unwrap());
+        let bytes = std::fs::read(&path).unwrap();
+        let second = s.execute("file.export.quickExport", json!({"path": path, "preparedPath": true})).unwrap();
+        assert_eq!(second["path"], dir.path().join(format!("photo_20261106-120000-007_1.{ext}")).to_str().unwrap());
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+    }
+}
+
+/// Reject malformed or inapplicable prepared paths before any output is written.
+#[test]
+fn prepared_quick_export_requires_timestamp_naming_and_an_explicit_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("photo.png");
+    let mut s = session(8);
+    assert!(s.execute("file.export.quickExport", json!({"path": path, "preparedPath": true})).is_err());
+    s.execute("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
+    for params in [json!({"preparedPath": true}), json!({"path": "", "preparedPath": true}), json!({"path": path, "preparedPath": "yes"})] {
+        assert!(s.execute("file.export.quickExport", params).is_err());
+    }
+    assert!(!path.exists());
+}
+
+/// Export every supported format to distinct paths while preserving the source and earlier outputs.
+#[test]
+fn timestamp_quick_export_preserves_source_and_all_formats() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let own = dir.path().join("写真.edit_2.png");
+    std::fs::write(&own, b"original").unwrap();
+    let mut s = session(8);
+    s.active_mut().unwrap().path = Some(own.to_str().unwrap().into());
+    s.execute("file.export.exportPreferences", json!({"quickExportNaming": "timestamp", "quickExportLocation": "sameFolder"})).unwrap();
+    for ext in ["png", "jpg", "gif", "webp", "exr"] {
+        s.execute("prefs.set", json!({"path": "export.quickExportFormat", "value": ext})).unwrap();
+        let mut kept: Vec<(std::path::PathBuf, Vec<u8>)> = Vec::new();
+        for destination in [None, Some(dir.path()), Some(other.path())] {
+            let base = destination.unwrap_or(dir.path()).join(format!("写真.edit_2.{ext}"));
+            let params = if destination.is_some() { json!({"path": base}) } else { json!({}) };
+            let result = s.execute("file.export.quickExport", params).unwrap();
+            let out = std::path::Path::new(result["path"].as_str().unwrap());
+            assert_eq!(out.parent(), base.parent());
+            assert_ne!(out, base);
+            assert_eq!(out.extension().unwrap(), ext);
+            assert!(out.file_stem().unwrap().to_str().unwrap().starts_with("写真.edit_2_"));
+            let bytes = std::fs::read(out).unwrap();
+            assert!(!bytes.is_empty());
+            for (earlier, earlier_bytes) in &kept {
+                assert_ne!(out, earlier.as_path());
+                assert_eq!(std::fs::read(earlier).unwrap(), *earlier_bytes);
+            }
+            kept.push((out.to_path_buf(), bytes));
+        }
+    }
+    assert_eq!(std::fs::read(own).unwrap(), b"original");
+}
+
 /// #5305: `folder` writes the whole image there under the document's own name, so an action
 /// recorded with the suggested name saves each document it is played on under that name; it is
 /// a destination, never a remembered setting.

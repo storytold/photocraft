@@ -1039,6 +1039,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 /// Export with the dialog's settings: choose a path, render, encode, write.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    confirm_document(app, f, false)
+}
+
+/// Confirm a document export, optionally timestamping the filename returned by the save picker.
+fn confirm_document(app: &mut PhotocraftApp, f: &Map<String, Value>, timestamp: bool) -> Result<Value, String> {
     remember(app, f);
     if let Some(layers) = f.get("__layers").and_then(Value::as_array) {
         let ids: Vec<_> = layers.iter().filter_map(Value::as_u64).map(photocraft_doc::LayerId).collect();
@@ -1051,6 +1056,15 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let suggested = format!("{stem}.{ext}");
     let f = f.clone();
     app.pick_save(&suggested, move |app, path| {
+        let path = if timestamp {
+            photocraft_engine::quick_export_naming::timestamped_path(std::path::Path::new(&path))
+                .map_err(|e| e.to_string())?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| "Quick Export path is not valid Unicode")?
+        } else {
+            path
+        };
         let r = write_export(app, &doc, &f, &path, &source_profile)?;
         // An action being recorded keeps a whole-document export with its destination and
         // settings (#7207). A layer's export isn't recorded: its layer is this document's.
@@ -1145,22 +1159,42 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         // Same Folder writes beside the document's file without asking, except when that would
         // replace the file itself (a document opened from photo.png): then the save dialog asks,
         // so replacing it is the user's choice (#6599).
-        if same && saved && !photocraft_engine::web_cmds::quick_export_target_is_own_file(&app.session) {
+        if same
+            && saved
+            && (prefs.quick_export_naming == photocraft_engine::prefs::QuickExportNaming::Timestamp
+                || !photocraft_engine::web_cmds::quick_export_target_is_own_file(&app.session))
+        {
             return quick_export(app, json!({}));
         }
         let st = app.session.active().ok_or("no document")?;
         let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
-        let (suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);
+        let (mut suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);
+        let prepared_path = prefs.quick_export_naming == photocraft_engine::prefs::QuickExportNaming::Timestamp;
+        if prepared_path {
+            // Native pickers confirm replacement before their callback runs. Offer the final
+            // timestamped name now; the engine must publish it exclusively without stamping twice.
+            suggested = photocraft_engine::quick_export_naming::timestamped_path(std::path::Path::new(&suggested))
+                .map_err(|e| e.to_string())?
+                .into_os_string()
+                .into_string()
+                .map_err(|_| "Quick Export path is not valid Unicode")?;
+        }
         return app.pick_save(&suggested, move |app, path| {
             app.refocus(doc)?;
-            quick_export(app, json!({"path": path}))
+            quick_export(app, json!({"path": path, "preparedPath": prepared_path}))
         });
     }
     let mut f = Map::new();
     f.insert("format".into(), json!("png"));
     f.insert("transparency".into(), json!(true));
     f.insert("scale".into(), json!(100));
-    confirm(app, &f)
+    quick_export_download(app, &f)
+}
+
+/// Download Quick Export using the naming preference; the browser handles filesystem collisions.
+fn quick_export_download(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    let timestamp = app.session.prefs().export.quick_export_naming == photocraft_engine::prefs::QuickExportNaming::Timestamp;
+    confirm_document(app, f, timestamp)
 }
 
 /// Runs Quick Export with `p` (an explicit `path`, or none for the document's folder).

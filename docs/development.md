@@ -1105,3 +1105,33 @@ backend command without submitting; it writes a PDF only when `output` is explic
 without an output requires `dryRun: true`. Remembered print settings omit `output`, `dryRun` and
 `send`, so Print One Copy derives submission from its own output choice. Shared spooler transport
 files are automatically removed on Windows; CUPS needs none.
+
+## Quick Export filename publication
+
+Document Quick Export's `export.quickExportNaming` preference is `default` or `timestamp`.
+The shared engine formatter uses chrono local time on native platforms and its `wasmbind`
+local-time implementation in the browser. No filesystem access is required for browser naming.
+Native filesystem helpers remain separate from browser downloads.
+
+Timestamp exports stage and flush encoded bytes beside the destination, then publish with a
+non-replacing hard link. Where hard links fail, staging is removed before writing with exclusive
+`create_new`. This avoids keeping two on-disk copies and protects existing files without a
+check-then-write race. This fallback exposes the newly created file during writing;
+a crash or write/flush failure can leave it incomplete. Failed fallback outputs are not deleted:
+another process may have replaced the pathname. The error reports the affected path without retrying.
+Failures after publication also report the written path without retrying. Directory flushing
+follows the ordinary atomic writer's platform policy. Existing save/replacement APIs are unchanged.
+A finite 100,000-candidate bound prevents an unbounded collision search. Invalid names and
+filesystem length limits produce errors; names are never truncated or converted lossily.
+Existing UI/command Unicode path restrictions remain.
+Empty names and final separators, `.` or `..` components are rejected before filesystem writes.
+
+Preferences missing the field select Default. Older builds following the current Serde convention
+ignore this unknown field and may discard it when saving settings; a newer build then uses Default.
+The Ask picker receives a timestamped suggestion before its replacement checks, so accepting
+that suggestion does not ask to replace the unsuffixed source. The engine's `preparedPath: true`
+option publishes the selected name exclusively without appending another timestamp. User edits
+to the suggestion are honoured; explicitly selecting an existing file can still trigger the
+native picker's confirmation, but publication never replaces it.
+The browser retains its PNG Quick Export service and lets the browser manage filesystem collisions.
+Its final download name may differ from the name PhotoCraft requested.

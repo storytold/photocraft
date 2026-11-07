@@ -1115,6 +1115,34 @@ fn the_web_build_caps_memory_usage() {
     }
 }
 
+/// Preserve old preferences while validating, persisting and resetting the naming choice.
+#[test]
+fn quick_export_naming_defaults_persists_validates_and_resets() {
+    for (old, quality) in [(json!({}), Export::default().jpeg_quality), (json!({"export": {"jpegQuality": 42}}), 42)] {
+        let mut restored = Session::new();
+        restored.load_prefs_json(&old.to_string()).unwrap();
+        assert_eq!(restored.prefs().export.quick_export_naming, QuickExportNaming::Default);
+        assert_eq!(restored.prefs().export.jpeg_quality, quality);
+    }
+    let mut s = session();
+    assert_eq!(s.prefs().export.quick_export_naming, QuickExportNaming::Default);
+    s.execute("file.export.exportPreferences", json!({"quickExportNaming": "timestamp"})).unwrap();
+    assert_eq!(s.execute("prefs.get", json!({"path": "export.quickExportNaming"})).unwrap(), "timestamp");
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restored.prefs().export.quick_export_naming, QuickExportNaming::Timestamp);
+    let before = s.prefs().to_json();
+    for bad in [json!("incremental"), json!(true), json!(3)] {
+        assert!(s.execute("prefs.set", json!({"values": {"export.jpegQuality": 12, "export.quickExportNaming": bad}})).is_err());
+        assert_eq!(s.prefs().to_json(), before);
+    }
+    for path in ["export.quickExportNaming", "export", ""] {
+        s.execute("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
+        s.execute("prefs.reset", json!({"path": path})).unwrap();
+        assert_eq!(s.prefs().export.quick_export_naming, QuickExportNaming::Default);
+    }
+}
+
 /// The effect cache budget is the stored MB in bytes, at least 16 MB (a hand-edited 0 included),
 /// at most 1536 MB on a 32-bit address space (the web, 32-bit Windows) and 65536 MB elsewhere,
 /// and never wraps: on wasm32 an uncapped 4096 MB shifted into `usize` was 0. Both kinds of
