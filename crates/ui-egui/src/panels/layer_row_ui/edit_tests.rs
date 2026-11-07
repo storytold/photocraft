@@ -209,3 +209,22 @@ fn layer_reselection_commits_type_edit_and_cancel_preserves_committed_text() {
     let LayerContent::Text(t) = &st.doc.layer(LayerId(id)).unwrap().content else { panic!("text") };
     assert_eq!(t.cache.as_ref().unwrap().content_bounds(), cached.content_bounds());
 }
+
+/// #10255 review: the real double-click on an adjustment layer's thumbnail opens Properties, and
+/// a second one does not toggle it shut again — it reopens what is already open.
+#[test]
+fn double_clicking_an_adjustment_thumbnail_opens_properties_and_keeps_it_open() {
+    let mut s = session();
+    let id = s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let mut h = harness(s, 1.0);
+    assert!(h.state().ui.dock.collapsed.contains(&crate::dock::Group::Properties), "Properties starts collapsed");
+    let at = thumbnail(&h, id);
+    double_click(&mut h, at);
+    let open = |h: &Harness<'_, PhotocraftApp>| {
+        h.state().ui.panels.properties && h.state().ui.dock_tabs.properties == 0 && !h.state().ui.dock.collapsed.contains(&crate::dock::Group::Properties)
+    };
+    assert!(open(&h), "the first double-click opens Properties on its own tab");
+    // Again on the same thumbnail: still open, not toggled shut.
+    double_click(&mut h, at);
+    assert!(open(&h), "the second double-click leaves it open");
+}
