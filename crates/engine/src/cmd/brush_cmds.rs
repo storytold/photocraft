@@ -270,6 +270,27 @@ pub(crate) fn doc_cmyk_space(s: &Session) -> Option<std::sync::Arc<photocraft_co
 }
 
 /// Stroke with a resolved brush onto the target layer (pixels or mask).
+/// View › Pattern Preview's painting (#8883): with `"wrap": true` a stroke that leaves one edge of
+/// the canvas comes back at the opposite one, as the repeated tiles show. The shifts a pass may
+/// also be painted at: a canvas width and/or height each way.
+fn wrap_shifts(p: &Value, canvas: Rect) -> Vec<(i32, i32)> {
+    if !flag(p, "wrap", false) || canvas.is_empty() {
+        return Vec::new();
+    }
+    let (w, h) = (canvas.x1 - canvas.x0, canvas.y1 - canvas.y0);
+    [-1, 0, 1].into_iter().flat_map(|i| [-1, 0, 1].map(move |j| (i * w, j * h))).filter(|d| *d != (0, 0)).collect()
+}
+
+/// Whether a pass that painted `bounds`, moved by `d`, paints any of `canvas`: a copy that can't
+/// is never rendered, so a stroke away from the edges costs nothing extra.
+fn wrap_reaches(bounds: Rect, (dx, dy): (i32, i32), canvas: Rect) -> bool {
+    !bounds.translate(dx, dy).intersect(&canvas).is_empty()
+}
+
+fn shifted(pts: &[StrokePoint], (dx, dy): (i32, i32)) -> Vec<StrokePoint> {
+    pts.iter().map(|q| StrokePoint { x: q.x + f64::from(dx), y: q.y + f64::from(dy), ..*q }).collect()
+}
+
 fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushSettings, pts: Vec<StrokePoint>, auto_erase: bool) -> Result<Value> {
     let bg = s.tools.background;
     let fg = brush.color;
@@ -288,6 +309,7 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 return Ok(l.bounds);
             }
             let sel = doc.selection.clone();
+            let doc_bounds = doc.bounds();
             let table = crate::mode_cmds::paint_color_table(doc, p);
             let (surf, lock) = crate::channel_cmds::target_surface(doc, id, p)?;
             let mut brush = brush;
@@ -298,29 +320,35 @@ fn stroke_with(s: &mut Session, cmd: &str, p: &Value, label: &str, brush: BrushS
                 apply_auto_erase(&mut brush, surf, pts.first(), fg, bg);
             }
             let unpainted = table.as_ref().map(|_| surf.clone());
-            let damage = if let Some(axis) = &symmetry {
-                let reflected = axis.reflected_passes(&pts);
-                let copies: Vec<_> = reflected
-                    .iter()
-                    .filter(|p| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, p))
-                    .map(|p| {
-                        let mut renderer = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-                        renderer.push(p);
-                        renderer.finish();
-                        renderer
-                    })
-                    .collect();
-                if copies.is_empty() {
-                    render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
-                } else {
-                    let pre = surf.clone();
-                    let mut original = StrokeRenderer::new(&brush, Some(surf.format()), zoom);
-                    original.push(&pts);
-                    original.finish();
-                    original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
-                }
-            } else {
+            let canvas = doc_bounds;
+            let shifts = wrap_shifts(p, canvas);
+            let reflected: Vec<Vec<StrokePoint>> = symmetry
+                .as_ref()
+                .map(|axis| axis.reflected_passes(&pts).into_iter().filter(|r| crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(&pts, r)).collect())
+                .unwrap_or_default();
+            let damage = if reflected.is_empty() && shifts.is_empty() {
                 render_stroke(surf, &brush, &pts, sel.as_ref(), lock, zoom)
+            } else {
+                let fmt = surf.format();
+                let render = |pass: &[StrokePoint]| {
+                    let mut renderer = StrokeRenderer::new(&brush, Some(fmt), zoom);
+                    renderer.push(pass);
+                    renderer.finish();
+                    renderer
+                };
+                let original = render(&pts);
+                let mut copies: Vec<StrokeRenderer> = reflected.iter().map(|r| render(r)).collect();
+                // Each pass again at every shift its painted bounds reach the canvas from.
+                let passes: Vec<(&[StrokePoint], Rect)> = std::iter::once((pts.as_slice(), original.bounds()))
+                    .chain(reflected.iter().map(Vec::as_slice).zip(copies.iter().map(StrokeRenderer::bounds)))
+                    .collect();
+                let wrapped: Vec<StrokeRenderer> = passes
+                    .iter()
+                    .flat_map(|(pass, bounds)| shifts.iter().filter(|d| wrap_reaches(*bounds, **d, canvas)).map(|d| render(&shifted(pass, *d))))
+                    .collect();
+                copies.extend(wrapped);
+                let pre = surf.clone();
+                original.composite_union_many(&copies, &pre, surf, sel.as_ref(), lock)
             };
             if let (Some(table), Some(pre)) = (&table, &unpainted) {
                 crate::mode_cmds::keep_in_color_table(table, pre, surf, damage);
@@ -529,6 +557,15 @@ pub struct LiveStroke {
     symmetry: Option<crate::symmetry_cmds::PaintingSymmetry>,
     mirrors: Vec<StrokeRenderer>,
     mirror_distinct: Vec<bool>,
+    /// Pattern Preview ([`wrap_shifts`]): the shifts a pass may also paint at, the canvas, and the
+    /// copies started so far: (pass, 0 the stroke and then its mirrors; shift; renderer). A copy
+    /// starts once its pass reaches the canvas from that shift, with the points so far.
+    shifts: Vec<(i32, i32)>,
+    canvas: Rect,
+    wrapped: Vec<(usize, (i32, i32), StrokeRenderer)>,
+    /// What a wrapped copy is started with.
+    brush: BrushSettings,
+    zoom: f32,
     /// What the symmetric preview drew last, once a mirror differs from the stroke, and how many
     /// passes it merged (a mirror joining redraws every tile).
     union_live: Option<(photocraft_paint::UnionLive, usize)>,
@@ -613,6 +650,7 @@ impl LiveStroke {
         let mut doc = (*st.doc).clone();
         let sel = doc.selection.clone();
         let table = crate::mode_cmds::paint_color_table(&doc, p);
+        let canvas = doc.bounds();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, layer, p)?;
         erase_locked(&mut brush, lock, s.tools.background);
         if pencil && flag(p, "autoErase", false) {
@@ -632,6 +670,11 @@ impl LiveStroke {
             symmetry,
             mirrors,
             mirror_distinct,
+            shifts: wrap_shifts(p, canvas),
+            canvas,
+            wrapped: Vec::new(),
+            brush: brush.clone(),
+            zoom,
             union_live: None,
             pre,
             colors: crate::color_channels::target(s, p)?,
@@ -667,7 +710,45 @@ impl LiveStroke {
     /// Everything the stroke has touched so far.
     pub fn bounds(&self) -> Rect {
         let bounds = self.renderer.bounds().union(&self.tail);
+        let bounds = self.wrapped.iter().fold(bounds, |b, (.., r)| b.union(&r.bounds()));
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
+    }
+
+    /// Pattern Preview: `pts` (and their `reflected` passes) go to the wrapped copies already
+    /// started, then a copy starts for each pass and shift that now reaches the canvas, as the
+    /// commit renders one ([`wrap_reaches`]), with that pass's points so far.
+    fn push_wrapped(&mut self, pts: &[StrokePoint], reflected: &[Vec<StrokePoint>]) {
+        if self.shifts.is_empty() {
+            return;
+        }
+        let pass_of = |k: usize| if k == 0 { Some(pts) } else { reflected.get(k - 1).map(Vec::as_slice) };
+        for (k, d, r) in &mut self.wrapped {
+            if let Some(pass) = pass_of(*k) {
+                r.push(&shifted(pass, *d));
+            }
+        }
+        let fmt = self.pre.format();
+        let mut history: Option<Vec<Vec<StrokePoint>>> = None;
+        for k in 0..=self.mirrors.len() {
+            let bounds = match k.checked_sub(1) {
+                None => self.renderer.bounds(),
+                Some(m) if self.mirror_distinct.get(m).copied().unwrap_or(false) => self.mirrors.get(m).map_or(Rect::EMPTY, StrokeRenderer::bounds),
+                Some(_) => continue,
+            };
+            for d in self.shifts.clone() {
+                if !wrap_reaches(bounds, d, self.canvas) || self.wrapped.iter().any(|(j, e, _)| *j == k && *e == d) {
+                    continue;
+                }
+                let passes = history.get_or_insert_with(|| {
+                    std::iter::once(self.points.clone()).chain(self.symmetry.as_ref().map(|s| s.reflected_passes(&self.points)).unwrap_or_default()).collect()
+                });
+                let mut r = StrokeRenderer::new(&self.brush, Some(fmt), self.zoom);
+                if let Some(pass) = passes.get(k) {
+                    r.push(&shifted(pass, d));
+                }
+                self.wrapped.push((k, d, r));
+            }
+        }
     }
 
     /// `(brush, pointer)` document positions while smoothing holds the brush back from the
@@ -693,18 +774,18 @@ impl LiveStroke {
         let cmyk = self.cmyk.clone();
         let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
             self.renderer.push(pts);
-            if let Some(symmetry) = &self.symmetry {
-                for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
-                    *distinct |= crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(pts, &reflected);
-                    mirror.push(&reflected);
-                }
+            let reflected = self.symmetry.as_ref().map(|s| s.reflected_passes(pts)).unwrap_or_default();
+            for ((mirror, distinct), r) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(&reflected) {
+                *distinct |= crate::symmetry_cmds::SymmetryAxis::has_distinct_mirror(pts, r);
+                mirror.push(r);
             }
+            self.push_wrapped(pts, &reflected);
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            if self.mirror_distinct.iter().any(|d| *d) {
+            if self.mirror_distinct.iter().any(|d| *d) || !self.wrapped.is_empty() {
                 // The stroke and its distinct mirrors composite as one stroke, as the commit
                 // merges them; only the tiles that changed are redrawn.
                 let old = self.tail;
-                let passes = 1 + self.mirror_distinct.iter().filter(|d| **d).count();
+                let passes = 1 + self.mirror_distinct.iter().filter(|d| **d).count() + self.wrapped.len();
                 let (mut live, full, mut dmg) = match self.union_live.take() {
                     Some((live, merged)) => (live, merged != passes, Rect::EMPTY),
                     None => {
@@ -717,6 +798,7 @@ impl LiveStroke {
                 };
                 let mut renderers: Vec<&mut StrokeRenderer> = std::iter::once(&mut self.renderer)
                     .chain(self.mirrors.iter_mut().zip(&self.mirror_distinct).filter(|(_, d)| **d).map(|(r, _)| r))
+                    .chain(self.wrapped.iter_mut().map(|(.., r)| r))
                     .collect();
                 dmg = dmg.union(&StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock));
                 self.tail = old.union(&live.bounds());
@@ -1310,7 +1392,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.pencil",
             "Pencil",
-            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…|behind (paints beneath existing pixels)|clear (erases with this brush)"="normal","erase":bool?,"block":bool=false (a hard 16×16 screen-px square, 16/zoom doc px; size, opacity, flow, hardness and dynamics ignored: the Eraser's Block mode),"zoom":view zoom=1,"autoErase":bool=false,"seed":u64?,"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
+            r##"{"points":[[x,y,pressure?,tiltX?,tiltY?,rotation?,timeMs?,wheel?],…],"brush":{…}?,"preset":name?,"size":0.5..5000 px?,"opacity":0..1?,"color":"#rrggbb"?=foreground,"mode":"normal|multiply|screen|…|behind (paints beneath existing pixels)|clear (erases with this brush)"="normal","erase":bool?,"block":bool=false (a hard 16×16 screen-px square, 16/zoom doc px; size, opacity, flow, hardness and dynamics ignored: the Eraser's Block mode),"zoom":view zoom=1,"autoErase":bool=false,"seed":u64?,"wrap":bool=false (View › Pattern Preview: the stroke also comes back at the opposite edge of the canvas),"target":"pixels"|"mask"|"filterMask"|"quickMask"|{"channel":i}=Channels panel target}"##,
             has_paintable,
             pencil,
             true

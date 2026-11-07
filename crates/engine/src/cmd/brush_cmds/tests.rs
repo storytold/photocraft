@@ -1474,3 +1474,57 @@ fn mixer_load_fills_the_reservoir_from_the_canvas_and_keeps_the_foreground() {
     assert_eq!(s.tools.foreground, foreground);
     assert_eq!(s.active().unwrap().revision, revision);
 }
+
+/// #8883: with View › Pattern Preview (`"wrap": true`) a stroke that leaves one edge of the
+/// canvas comes back at the opposite one, as the repeated tiles show; one away from the edges
+/// paints once; the live preview shows what the commit paints.
+#[test]
+fn pattern_preview_strokes_wrap_round_the_canvas() {
+    let new = || {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 60, "height": 40, "background": "transparent"})).unwrap();
+        s
+    };
+    let alpha = |s: &Session, x, y| surface(s).rgba(x, y)[3];
+    let edge = json!({"points": [[1, 20], [1, 21]], "size": 10, "hardness": 1.0, "smoothing": 0.0});
+    for wrap in [false, true] {
+        let mut s = new();
+        let mut p = edge.clone();
+        p["wrap"] = json!(wrap);
+        s.execute("paint.stroke", p).unwrap();
+        assert!(alpha(&s, 1, 20) > 0.99);
+        assert_eq!(alpha(&s, 58, 20) > 0.99, wrap, "wrap {wrap}: the far edge");
+    }
+    // A corner comes back at all four corners.
+    let mut s = new();
+    s.execute("paint.stroke", json!({"points": [[1, 1], [2, 2]], "size": 10, "hardness": 1.0, "wrap": true})).unwrap();
+    for (x, y) in [(1, 1), (58, 1), (1, 38), (58, 38)] {
+        assert!(alpha(&s, x, y) > 0.99, "corner ({x}, {y})");
+    }
+    // Away from the edges nothing is copied: the layer holds the stroke alone.
+    let centre = json!({"points": [[30, 20], [31, 20]], "size": 6, "hardness": 1.0});
+    let (mut a, mut b) = (new(), new());
+    a.execute("paint.stroke", centre.clone()).unwrap();
+    let mut wrapped = centre;
+    wrapped["wrap"] = json!(true);
+    b.execute("paint.stroke", wrapped).unwrap();
+    assert_eq!(surface(&a).content_bounds(), surface(&b).content_bounds());
+    // A live stroke away from the edges starts no wrapped copy, so it costs nothing extra; one
+    // that comes near an edge starts the copies that reach the canvas.
+    let away = json!({"points": [[30, 20], [31, 20]], "size": 6, "hardness": 1.0, "wrap": true, "target": "pixels"});
+    let mut live = LiveStroke::begin(&b, &away).unwrap();
+    assert!(live.wrapped.is_empty());
+    live.push(&[StrokePoint::new(58.0, 20.0, 1.0)]).unwrap();
+    assert_eq!(live.wrapped.iter().map(|(k, d, _)| (*k, *d)).collect::<Vec<_>>(), [(0, (-60, 0))]);
+    // The live stroke previews the wrapped copies the commit paints.
+    let mut s = new();
+    let mut p = json!({"points": [[1, 20]], "size": 10, "hardness": 0.5, "smoothing": 0.0, "wrap": true, "target": "pixels"});
+    let mut live = LiveStroke::begin(&s, &p).unwrap();
+    live.push(&[StrokePoint::new(3.0, 24.0, 1.0), StrokePoint::new(5.0, 28.0, 1.0)]).unwrap();
+    p["points"] = json!([[1, 20], [3, 24], [5, 28]]);
+    p["seed"] = json!(live.seed);
+    s.execute("paint.stroke", p).unwrap();
+    let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+    assert!(same_pixels(&shown, &surface(&s), Rect::new(-10, -10, 70, 50)));
+    assert!(shown.rgba(58, 24)[3] > 0.1, "the preview wraps too");
+}
