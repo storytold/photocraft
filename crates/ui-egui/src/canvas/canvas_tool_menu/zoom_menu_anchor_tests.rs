@@ -110,3 +110,37 @@ fn held_zoom_keys_still_open_no_view_menu() {
         }
     }
 }
+
+#[test]
+fn held_z_menu_keeps_its_existing_pressed_point_anchor() {
+    for label in ["Zoom In", "Zoom Out"] {
+        let mut app = zoom_app(400, 300);
+        app.ui.tool = Tool::Brush;
+        let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::shortcuts::handle(app, &ctx);
+                egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.run_steps(4);
+        h.event(egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+        h.step();
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
+        assert!(h.state().ui.spring.as_ref().is_some_and(|s| s.previous == Tool::Brush));
+        let doc = [300.0, 100.0];
+        let p = screen_of(h.state(), doc);
+        right_click(&mut h, p, Modifiers::NONE);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        assert!(screen_of(h.state(), doc).distance(p) < 1.0, "{label}: a held Z keeps today's anchor");
+        h.event(egui::Event::Key { key: egui::Key::Z, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        assert_eq!(h.state().ui.tool, Tool::Brush);
+    }
+}

@@ -916,7 +916,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
     true
 }
 
-/// A view menu row. The selected Zoom tool's steps keep the view centre unless clicked-point
+/// A view menu row. The non-temporary Zoom tool's steps keep the view centre unless clicked-point
 /// centring is enabled. Other view-tool cases retain their pressed-point anchoring.
 fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
     let i = app.session.active_index().ok_or("no document")?;
@@ -935,7 +935,7 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
     }
     let (Some((zoom0, c)), Some(d)) = (before, menu.anchor) else { return Ok(()) };
     let center_on_point = app.session.prefs().tools.zoom_clicked_point_to_center;
-    if menu.tool == Tool::Zoom && app.ui.tool == Tool::Zoom && !center_on_point {
+    if menu.tool == Tool::Zoom && app.ui.tool == Tool::Zoom && app.ui.spring.is_none() && !center_on_point {
         return Ok(());
     }
     let Some(v) = app.ui.views.get_mut(i) else { return Ok(()) };
