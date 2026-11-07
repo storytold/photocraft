@@ -375,6 +375,8 @@ fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
         }
         out
     });
+    // The bands own the vertical results; release the horizontal plane before assembly.
+    drop(tmp);
     let mut out = vec![0.0f32; w * h];
     for (b, band) in bands.iter().enumerate() {
         let (x0, x1) = (b * BAND, ((b + 1) * BAND).min(w));
@@ -445,17 +447,23 @@ fn guided_fast(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> 
 }
 
 /// Guided filter of `p` guided by `i` (He et al. 2010).
+/// Release intermediate planes after use so later phases do not retain their storage.
 fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
     let mi = box_mean(i, w, h, r);
     let mp = box_mean(p, w, h, r);
     let ip: Vec<f32> = i.iter().zip(p).map(|(a, b)| a * b).collect();
     let ii: Vec<f32> = i.iter().map(|a| a * a).collect();
     let mip = box_mean(&ip, w, h, r);
+    drop(ip);
     let mii = box_mean(&ii, w, h, r);
+    drop(ii);
     let a: Vec<f32> = (0..w * h).map(|k| (mip[k] - mi[k] * mp[k]) / (mii[k] - mi[k] * mi[k] + eps)).collect();
     let b: Vec<f32> = (0..w * h).map(|k| mp[k] - a[k] * mi[k]).collect();
+    drop((mi, mp, mip, mii));
     let ma = box_mean(&a, w, h, r);
+    drop(a);
     let mb = box_mean(&b, w, h, r);
+    drop(b);
     (0..w * h).map(|k| ma[k] * i[k] + mb[k]).collect()
 }
 
@@ -1004,15 +1012,19 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
     });
 }
 
+/// Apply luminance/chroma noise reduction and sharpening to RGB while preserving alpha.
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
     // Work in Y + chroma (BT.709 luma, B−Y, R−Y).
     let mut y: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
-    let mut cb: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[2] - l).collect();
-    let mut cr: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[0] - l).collect();
-    if p.noise_luminance > 0.0 {
+    // Smooth before allocating chroma; both chroma planes still use the original luminance.
+    let smooth = (p.noise_luminance > 0.0).then(|| {
         let n = p.noise_luminance / 100.0;
         let r = ((1.0 + 3.0 * n) * ps).round().max(1.0) as usize;
-        let smooth = guided(&y, &y, w, h, r, (n * 0.06).powi(2) + 1e-6);
+        guided(&y, &y, w, h, r, (n * 0.06).powi(2) + 1e-6)
+    });
+    let mut cb: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[2] - l).collect();
+    let mut cr: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[0] - l).collect();
+    if let Some(smooth) = smooth {
         let keep = p.noise_luminance_detail / 100.0 * 0.5;
         for i in 0..w * h {
             y[i] = smooth[i] + (y[i] - smooth[i]) * keep;
