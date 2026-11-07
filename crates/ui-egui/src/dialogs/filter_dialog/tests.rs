@@ -1642,3 +1642,28 @@ fn replace_color_localized_color_clusters() {
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
 }
+
+#[test]
+fn selective_color_keeps_each_colours_sliders_and_ok_applies_them_all() {
+    // #11463: the nine colours shared one set of sliders, and OK applied them to the colour shown.
+    let mut f = Map::new();
+    f.insert("colors".into(), json!("reds"));
+    f.insert("cyan".into(), json!(30.0));
+    switch_selective_color(&mut f, "blues");
+    f.insert("colors".into(), json!("blues"));
+    assert_eq!(SELECTIVE_INKS.map(|k| f[k].as_f64()), [Some(0.0); 4], "Blues starts at 0, not at Reds' values");
+    f.insert("yellow".into(), json!(-20.0));
+    switch_selective_color(&mut f, "reds");
+    f.insert("colors".into(), json!("reds"));
+    assert_eq!(f["cyan"].as_f64(), Some(30.0), "Reds shows its own edit again");
+    assert_eq!(f["yellow"].as_f64(), Some(0.0));
+    // Choosing the colour already shown changes nothing.
+    switch_selective_color(&mut f, "reds");
+    assert_eq!(f["cyan"].as_f64(), Some(30.0));
+
+    let adj = photocraft_engine::adjust_cmds::selective_from_params(&params_of(&f), None).expect("the dialog's params are accepted");
+    let photocraft_doc::adjust::Adjustment::SelectiveColor { adjustments, .. } = adj else { panic!("{adj:?}") };
+    assert_eq!(adjustments[0], [30.0, 0.0, 0.0, 0.0], "Reds");
+    assert_eq!(adjustments[4], [0.0, 0.0, -20.0, 0.0], "Blues");
+    assert!(adjustments.iter().enumerate().all(|(i, row)| i == 0 || i == 4 || *row == [0.0; 4]));
+}
