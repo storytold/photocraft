@@ -86,14 +86,22 @@ fn plain_brackets_still_step_by_one_and_stop_at_the_limits() {
 }
 
 #[test]
-fn curly_bracket_keys_set_the_limits_with_and_without_shift() {
+fn shifted_curly_bracket_keys_set_the_limits() {
     with_and_without_border(|app| {
-        for mods in [Modifiers::SHIFT, Modifiers::NONE] {
-            app.ui.tool_options.magnetic_width = 10.0;
-            assert!(press(app, Key::OpenCurlyBracket, mods));
-            assert_eq!(width(app), 1.0, "{{ with {mods:?}");
-            assert!(press(app, Key::CloseCurlyBracket, mods));
-            assert_eq!(width(app), 256.0, "}} with {mods:?}");
-        }
+        app.ui.tool_options.magnetic_width = 10.0;
+        assert!(press(app, Key::OpenCurlyBracket, Modifiers::SHIFT));
+        assert_eq!(width(app), 1.0, "Shift+{{");
+        assert!(press(app, Key::CloseCurlyBracket, Modifiers::SHIFT));
+        assert_eq!(width(app), 256.0, "Shift+}}");
+    });
+}
+
+#[test]
+fn a_bare_curly_bracket_key_is_left_alone() {
+    with_and_without_border(|app| {
+        app.ui.tool_options.magnetic_width = 10.0;
+        assert!(!press(app, Key::OpenCurlyBracket, Modifiers::NONE), "a bare {{ is not taken");
+        assert!(!press(app, Key::CloseCurlyBracket, Modifiers::NONE), "a bare }} is not taken");
+        assert_eq!(width(app), 10.0);
     });
 }

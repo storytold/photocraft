@@ -401,12 +401,12 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     // Shift+[ / Shift+] jump to the limits; they come first because the plain keys match with Shift held too.
     let w = &mut app.ui.tool_options.magnetic_width;
-    // On a US layout the backend may report Shift+[ as the logical `{` key (egui's `OpenCurlyBracket`), with or without the Shift flag; `NONE` matches both.
-    if pressed(Modifiers::SHIFT, Key::OpenBracket) || pressed(Modifiers::NONE, Key::OpenCurlyBracket) {
+    // On a US layout the backend may report Shift+[ as the logical `{` key (egui's `OpenCurlyBracket`) with Shift set; a bare `{` (Programmer Dvorak) is left alone.
+    if pressed(Modifiers::SHIFT, Key::OpenBracket) || pressed(Modifiers::SHIFT, Key::OpenCurlyBracket) {
         *w = 1.0;
         return true;
     }
-    if pressed(Modifiers::SHIFT, Key::CloseBracket) || pressed(Modifiers::NONE, Key::CloseCurlyBracket) {
+    if pressed(Modifiers::SHIFT, Key::CloseBracket) || pressed(Modifiers::SHIFT, Key::CloseCurlyBracket) {
         *w = 256.0;
         return true;
     }
