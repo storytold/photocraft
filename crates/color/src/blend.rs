@@ -448,6 +448,16 @@ pub fn blend_rgb_hdr(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
 /// `αo·Co = (1−αs)·αb·Cb + (1−αb)·αs·Cs + αs·αb·B(Cb,Cs)`.
 /// Dissolve must be resolved by the caller (per-pixel coverage decision) before calling.
 pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_by(blend_rgb, mode, backdrop, source, opacity)
+}
+
+/// [`composite`] for 32-bit float documents: the blend is [`blend_rgb_hdr`], so Linear Dodge and
+/// Divide aren't clipped at 1.
+pub fn composite_hdr(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_by(blend_rgb_hdr, mode, backdrop, source, opacity)
+}
+
+fn composite_by(blend: fn(BlendMode, [f32; 3], [f32; 3]) -> [f32; 3], mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
     let ab = backdrop[3];
     let as_ = source[3] * opacity;
     if as_ <= 0.0 {
@@ -455,7 +465,7 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
     }
     let cb = [backdrop[0], backdrop[1], backdrop[2]];
     let cs = [source[0], source[1], source[2]];
-    let b = blend_rgb(mode, cb, cs);
+    let b = blend(mode, cb, cs);
     let ao = as_ + ab * (1.0 - as_);
     if ao <= 0.0 {
         return [0.0; 4];
@@ -473,11 +483,20 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
 /// Transparency): "source atop", `Co = (1−αs)·Cb + αs·B(Cb,Cs)`, `αo = αb`. Unlike source-over
 /// followed by restoring the alpha, a half-transparent backdrop takes the new colour by `αs` alone.
 pub fn composite_atop(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_atop_by(blend_rgb, mode, backdrop, source, opacity)
+}
+
+/// [`composite_atop`] for 32-bit float documents, blending with [`blend_rgb_hdr`].
+pub fn composite_atop_hdr(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
+    composite_atop_by(blend_rgb_hdr, mode, backdrop, source, opacity)
+}
+
+fn composite_atop_by(blend: fn(BlendMode, [f32; 3], [f32; 3]) -> [f32; 3], mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
     let as_ = source[3] * opacity;
     if as_ <= 0.0 {
         return backdrop;
     }
-    let b = blend_rgb(mode, [backdrop[0], backdrop[1], backdrop[2]], [source[0], source[1], source[2]]);
+    let b = blend(mode, [backdrop[0], backdrop[1], backdrop[2]], [source[0], source[1], source[2]]);
     let mut out = backdrop;
     for i in 0..3 {
         out[i] = (1.0 - as_) * backdrop[i] + as_ * b[i];
