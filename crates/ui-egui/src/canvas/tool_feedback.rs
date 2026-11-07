@@ -54,12 +54,36 @@ pub fn is_selection_tool(tool: Tool) -> bool {
 /// 2 Subtract, 3 Intersect) and the held modifiers: exactly what the tool's gesture will use.
 pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
     match tool {
-        // Quick Selection always adds (⌥ subtracts), like Photoshop's after the first stroke.
+        // Quick Selection: options bar has New (0), Add (1, default), Subtract (2).
         Tool::QuickSelection => {
-            if m.alt {
-                "subtract"
-            } else {
-                "add"
+            let eff_bar = match bar {
+                0..=2 => bar,
+                _ => 1,
+            };
+            match eff_bar {
+                2 => {
+                    if m.alt {
+                        "add"
+                    } else {
+                        "subtract"
+                    }
+                }
+                0 => {
+                    if m.alt {
+                        "subtract"
+                    } else if m.shift {
+                        "add"
+                    } else {
+                        "replace"
+                    }
+                }
+                _ => {
+                    if m.alt {
+                        "subtract"
+                    } else {
+                        "add"
+                    }
+                }
             }
         }
         // Object Selection: ⌥ subtracts, ⇧ adds (see `retouch_ui::finish_object_selection`).
@@ -90,9 +114,10 @@ pub fn selection_mode(tool: Tool, bar: u8, m: egui::Modifiers) -> &'static str {
 /// subtract from or intersect with, so it draws a new selection, as in Photoshop (where ⌥ then
 /// only draws a marquee from its centre). An options-bar Subtract or Intersect is kept (#1106).
 pub fn document_selection_mode(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> &'static str {
-    let mode = selection_mode(tool, app.ui.selection_mode, m);
+    let bar = if tool == Tool::QuickSelection { app.ui.tool_options.quick_selection_mode } else { app.ui.selection_mode };
+    let mode = selection_mode(tool, bar, m);
     let selected = app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|s| !s.content_bounds().is_empty());
-    if m.alt && !selected && matches!(mode, "subtract" | "intersect") && selection_mode(tool, app.ui.selection_mode, egui::Modifiers::NONE) == "replace" {
+    if m.alt && !selected && matches!(mode, "subtract" | "intersect") && selection_mode(tool, bar, egui::Modifiers::NONE) == "replace" {
         "replace"
     } else {
         mode
@@ -129,7 +154,8 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     if matches!(tool, Tool::Lasso | Tool::PolygonLasso) && app.drag.is_none() && app.session.active().is_none_or(|st| st.doc.selection.is_none()) {
         m.alt = false;
     }
-    Badge::from_mode(selection_mode(tool, app.ui.selection_mode, m))
+    let bar = if tool == Tool::QuickSelection { app.ui.tool_options.quick_selection_mode } else { app.ui.selection_mode };
+    Badge::from_mode(selection_mode(tool, bar, m))
 }
 
 /// The badge's glyph as line segments around `c` (half-size `h`).
