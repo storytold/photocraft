@@ -113,6 +113,35 @@ fn a_leading_zero_typed_key_by_key_keeps_the_text() {
 }
 
 #[test]
+fn a_tolerance_set_elsewhere_during_an_edit_wins_over_the_typed_text() {
+    let mut h = app_harness();
+    h.query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
+        .expect("the Tolerance field")
+        .click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("150".into()));
+    h.run_steps(1);
+    // The bar goes away mid-edit and a preset sets the Tolerance meanwhile.
+    h.state_mut().ui.panels.options_bar = false;
+    h.run_steps(2);
+    h.state_mut().ui.tool_options.bg_tolerance = 30.0;
+    h.state_mut().ui.panels.options_bar = true;
+    h.run_steps(1);
+    // From the first frame back, the field shows the preset's value.
+    let shown = h
+        .query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
+        .expect("the Tolerance field")
+        .accesskit_node()
+        .numeric_value();
+    assert_eq!(shown, Some(30.0), "the field shows the preset's value, not the typed 150");
+    h.run_steps(2);
+    assert_eq!(tolerance(&h), 30.0, "the preset's value, not the typed 150");
+}
+
+#[test]
 fn an_expression_committed_with_enter_past_the_range_alerts() {
     let mut h = app_harness();
     h.query_all_by_role(egui::accesskit::Role::SpinButton)
