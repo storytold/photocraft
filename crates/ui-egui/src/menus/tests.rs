@@ -310,6 +310,19 @@ fn help_search_matches_the_ui_language_and_english() {
     assert!(ids("zzzzqqq").is_empty());
 }
 
+/// Azerbaijani menu text and paths keep dotted I distinct; English aliases still work.
+#[test]
+fn azerbaijani_help_search_uses_the_language_of_each_alias() {
+    let az = crate::i18n::Lang::from_code("az").unwrap();
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let items = menu_items(&app);
+    let hits = |query: &str| search_items(&items, query, az).iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    assert!(!hits("ŞƏKİL").is_empty(), "uppercase dotted I matches Şəkil paths");
+    assert_eq!(hits("ŞƏKİL"), hits("şəkil"));
+    assert!(hits("ŞƏKIL").is_empty(), "dotless I must not match dotted i");
+    assert!(hits("DISTORT").contains(&"edit.transform.distort".to_string()), "English aliases keep English casing");
+}
+
 /// #1447, #1438: a click on Help leaves its search field focused, so typing searches at once,
 /// and clicking into the field and typing keeps the menu open. Whole app, real clicks (press
 /// and release in separate frames), with the custom title bar (Windows, Linux) and without.

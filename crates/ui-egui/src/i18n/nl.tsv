@@ -128,6 +128,7 @@
 	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
+	Clear Recent File List	Recente bestanden wissen
 	Remove from Recent	Verwijderen uit recente bestanden
 	Remove {name} from Recent	{name} verwijderen uit recente bestanden
 	Close	Sluiten
@@ -136,6 +137,10 @@
 	Restore	Herstellen
 	Close All	Alles sluiten
 	Close Others	Andere sluiten
+	New Document…	Nieuw document…
+	Open Document…	Openen…
+	Consolidate All to Here	Alles hier samenvoegen
+	Move to New Window	Verplaatsen naar nieuw venster
 	Save	Opslaan
 	Save As…	Opslaan als…
 	Save a Copy…	Kopie opslaan…
@@ -187,6 +192,7 @@
 	Create Smart Object after Loading Layers	Slim object maken na laden van lagen
 	Reveal in Finder	Weergeven in Finder
 	Show in Explorer	Weergeven in Verkenner
+	Reveal in Explorer	Weergeven in Verkenner
 	Show in Folder	Weergeven in map
 	File Info…	Bestandsinformatie…
 	Print…	Afdrukken…
@@ -275,6 +281,7 @@
 	Units & Rulers…	Eenheden en linialen…
 	Guides, Grid & Slices…	Hulplijnen, raster en segmenten…
 	Plug-ins…	Plug-ins…
+	Plugins…	Plug-ins…
 	Type…	Tekst…
 	Enhanced Controls…	Uitgebreide bediening…
 	Camera Raw…	Camera Raw…
@@ -431,6 +438,8 @@
 	Smart Object	Slim object
 	Convert to Smart Object	Omzetten naar slim object
 	Convert to Embedded	Omzetten naar ingesloten
+	Embed Linked	Gekoppeld insluiten
+	Embed All Linked	Alles gekoppeld insluiten
 	Convert to Layers	Omzetten naar lagen
 	Convert to Linked…	Omzetten naar gekoppeld…
 	Edit Contents	Inhoud bewerken
@@ -504,7 +513,9 @@
 	Unite Shapes	Vormen verenigen
 	Subtract Front Shape	Voorste vorm aftrekken
 	Intersect Shape Areas	Overlappende vormgebieden
+	Unite Shapes at Overlap	Overlappende vormgebieden
 	Exclude Overlapping Shapes	Overlappende vormen uitsluiten
+	Subtract Shapes at Overlap	Overlappende vormen uitsluiten
 	Merge Shape Components	Vormcomponenten samenvoegen
 	Path operations	Padbewerkingen
 	Align	Uitlijnen
@@ -687,6 +698,7 @@
 	Minimum…	Minimum…
 	Offset…	Verschuiving…
 	Plug-ins	Plug-ins
+	Plugins	Plug-ins
 	Proof Setup	Proefinstellingen
 	Proof Colors	Proefkleuren
 	Gamut Warning	Waarschuwing kleurbereik
@@ -695,9 +707,9 @@
 	Working Magenta Plate	Werkplaat magenta
 	Working Yellow Plate	Werkplaat geel
 	Working Black Plate	Werkplaat zwart
-	Working CMY Plate	Werkplaat CMY
-	Legacy Macintosh RGB	Verouderde Macintosh RGB
-	Internet Standard RGB	Internetstandaard RGB
+	Working CMY Plates	CMY-werkplaten
+	Legacy Macintosh RGB (Gamma 1.8)	Verouderde Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internetstandaard RGB (sRGB)
 	Monitor RGB	Monitor-RGB
 	Color Blindness — Protanopia-type	Kleurenblindheid — type protanopie
 	Color Blindness — Deuteranopia-type	Kleurenblindheid — type deuteranopie
@@ -779,7 +791,6 @@
 	Consolidate All to Tabs	Alles samenvoegen in tabbladen
 	Float in Window	Zwevend in venster
 	Float All in Windows	Alles zwevend in vensters
-	New Window for Document	Nieuw venster voor document
 	Workspace	Werkruimte
 	Essentials	Basis
 	Graphic and Web	Grafisch en web
@@ -843,6 +854,12 @@
 	Timeline	Tijdlijn
 	Tool Presets	Gereedschapsvoorinstellingen
 	Tools	Gereedschappen
+	Contextual Task Bar	Contextuele taakbalk
+	Hide bar	Balk verbergen
+	Reset bar position	Balkpositie herstellen
+	Pin bar position	Balkpositie vastzetten
+	Move bar	Balk verplaatsen
+	More options	Meer opties
 	About PhotoCraft	Over PhotoCraft
 	PhotoCraft Website	Website van PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft op GitHub
@@ -1792,6 +1809,7 @@
 	Move Tool	Verplaatsgereedschap
 	Could not use the move tool because the layer is locked.	Kan het verplaatsgereedschap niet gebruiken omdat de laag is vergrendeld.
 	Could not complete the Free Transform command because the layer is locked.	Kan de opdracht Vrije transformatie niet voltooien omdat de laag is vergrendeld.
+	Could not transform because the layer is locked.	Kan niet transformeren omdat de laag is vergrendeld.
 	Multiply	Vermenigvuldigen
 	My Brushes	Mijn penselen
 	Neutrals	Neutrale tinten
@@ -1871,6 +1889,7 @@
 	Soften	Verzachten
 	Source	Bron
 	Source: set	Bron: ingesteld
+	Source: {name}	Bron: {name}
 	Sponge Tool	Sponsgereedschap
 	Spot Healing Brush Tool	Snel herstelpenseel
 	Spread	Spreiden
@@ -1947,6 +1966,11 @@
 	Show canvas dots	Canvasstippen tonen
 	Clip thumbnails to layer bounds	Miniaturen bijsnijden tot laaggrenzen
 	Clip Thumbnails to Layer Bounds	Miniaturen bijsnijden tot laaggrenzen
+	No Thumbnails	Geen miniaturen
+	Small Thumbnails	Kleine miniaturen
+	Medium Thumbnails	Middelgrote miniaturen
+	Large Thumbnails	Grote miniaturen
+	Clip Thumbnails to Document Bounds	Miniaturen bijsnijden tot documentgrenzen
 	Canvas color	Canvaskleur
 	Canvas custom color	Aangepaste canvaskleur
 	Color picker	Kleurkiezer
@@ -2064,7 +2088,6 @@
 	Show only crosshair while painting	Alleen dradenkruis tonen tijdens schilderen
 	Show slice numbers	Segmentnummers tonen
 	Show tooltips	Knopinfo tonen
-	Enable animations	Animaties inschakelen
 	Show highlight on rollover	Markering bij aanwijzen tonen
 	Show bounding box when dragging layer	Selectiekader tonen bij slepen van laag
 	System title bar	Titelbalk van systeem
@@ -2307,6 +2330,7 @@
 	Punctuation	Interpunctie
 	Make Work Path	Werkpad maken
 	Make Selection	Selectie maken
+	Make Shape	Vorm maken
 	Fill Path	Pad vullen
 	Stroke Path	Pad omlijnen
 	Delete Path	Pad verwijderen
@@ -4041,6 +4065,8 @@ curves	Smooth	Vloeiend maken
 	Step {step} is waiting for its dialog	Stap {step} wacht op zijn dialoogvenster
 @plural	{n} action|{n} actions	{n} handeling|{n} handelingen
 	Background (Default)	Achtergrond (standaard)
+	Background (default)	Achtergrond (standaard)
+	Transparent (default)	Transparant (standaard)
 	Include All Subfolders	Alle submappen opnemen
 	Auto Add/Delete	Automatisch toevoegen/verwijderen
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Schakel niet ook Spiegelbeeld in bij de afdrukinstellingen: de twee spiegelingen heffen elkaar op.
@@ -4093,6 +4119,7 @@ curves	Smooth	Vloeiend maken
 	Automatically Check for Updates	Automatisch op updates controleren
 	Paints from the History panel's source state	Schildert vanuit de bronstatus van het deelvenster Geschiedenis
 	Sets the source for the history brush	Stelt de bron voor het historiepenseel in
+	The History Brush source was deleted: set a new source in the History panel	De bron voor het historiepenseel is verwijderd: stel een nieuwe bron in het deelvenster Geschiedenis in
 	Highlight Mode	Hooglichtmodus
 	Highlight Color	Hooglichtkleur
 	Highlight Opacity	Hooglichtdekking
@@ -4253,6 +4280,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Ongeldige numerieke invoer. Er is een geheel getal tussen {min}% en {max}% vereist. De vorige waarde is ingevoegd.
 	Color Aware	Kleurbewust
 	Decontaminate Colors	Kleuren zuiveren
@@ -4277,3 +4306,57 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kleur van het punt
 	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken
 	Edit Brush…	Penseel bewerken…
+
+# Action Stop message (#8386)
+	Message	Bericht
+# Playback Options (#5212)
+	Playback Options…	Afspeelopties…
+	Playback Options	Afspeelopties
+	Accelerated	Versneld
+	Step by Step	Stap voor stap
+	Pause For:	Pauzeren gedurende:
+	Pause For	Pauzeren gedurende
+	seconds	seconden
+	Create a single history state	Eén historiestatus maken
+	Generator enabled	Generator ingeschakeld
+	Move Up	Omhoog
+	Move Down	Omlaag
+	Grid view	Rasterweergave
+	List view	Lijstweergave
+	On your computer	Op je computer
+	New file	Nieuw bestand
+	Learn	Leren
+	Website	Website
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Een kader ondersteunt affiene transformaties; selecteer de afbeelding voor perspectieftransformaties
+	A frame supports affine transforms; select its image to warp it	Een kader ondersteunt affiene transformaties; selecteer de afbeelding om deze te verdraaien
+	Convert to Frame…	Omzetten naar kader…
+	Create a new custom frame	Nieuw aangepast kader maken
+	Create a new polygonal frame	Nieuw veelhoekig kader maken
+	Create a new triangular frame	Nieuw driehoekig kader maken
+	Fit Content to Frame	Inhoud aanpassen aan kader
+	Fit Frame to Content	Kader aanpassen aan inhoud
+	Frame coordinates must be finite and within 600000 pixels	Kadercoördinaten moeten eindig zijn en binnen 600000 pixels liggen
+	Import Image…	Afbeelding importeren…
+	Invalid frame transform	Ongeldige kadertransformatie
+	Invalid nested file drop	Ongeldige geneste bestandsneerzetting
+	New Frame	Nieuw kader
+	Replace Image…	Afbeelding vervangen…
+	The frame is locked	Het kader is vergrendeld
+	The frame is unavailable	Het kader is niet beschikbaar
+
+# Channels panel menu (#11451)
+	New Channel…	Nieuw kanaal…
+	Duplicate Channel	Kanaal dupliceren
+	Delete Channel	Kanaal verwijderen
+	New Spot Channel…	Nieuw steunkleurkanaal…
+	Merge Spot Channel	Steunkleurkanaal samenvoegen
+	Channel Options…	Kanaalopties…
+	Split Channels	Kanalen splitsen
+	Merge Channels…	Kanalen samenvoegen…
+	Specify Channels:	Kanalen opgeven:
+	Not enough grayscale documents for this mode.	Niet genoeg grijswaardendocumenten voor deze modus.
+	Pick a different document for each channel.	Kies voor elk kanaal een ander document.
+	A picked document is no longer open.	Een gekozen document is niet meer geopend.
+	A picked document is no longer a grayscale document of the same size.	Een gekozen document is geen grijswaardendocument van hetzelfde formaat meer.

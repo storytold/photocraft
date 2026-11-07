@@ -188,6 +188,17 @@ fn mnemonic_labels_bracket_the_key() {
     assert_eq!(button_label(false, "保存", Some(Key::S)), "保存 (S)");
 }
 
+/// Fixed ASCII access keys do not mistake a dotted Azerbaijani i for dotless I.
+#[test]
+fn azerbaijani_dialog_button_mnemonics_use_locale_casing() {
+    let az = crate::i18n::Lang::from_code("az").unwrap();
+    crate::i18n::with_language(az, || {
+        assert_eq!(button_label(false, "i", Some(Key::I)), "i (I)");
+        assert_eq!(button_label(false, "ı", Some(Key::I)), "(ı)");
+        assert_eq!(button_label(false, "İ", Some(Key::I)), "İ (I)");
+    });
+}
+
 type Prompted = egui_kittest::Harness<'static, PhotocraftApp>;
 
 /// The unsaved-changes prompt for `command` over `app`'s dirty documents, as `os` draws it (with
@@ -577,6 +588,9 @@ fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
 
 #[path = "tests/tiff_tests.rs"]
 mod tiff_tests;
+
+#[path = "tests/tiff_options_tests.rs"]
+mod tiff_options_tests;
 
 #[path = "tests/targa_tests.rs"]
 mod targa_tests;

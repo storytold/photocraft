@@ -355,15 +355,19 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     // on the encoded file size is not used here: PSB-style data is written only past 30000 px,
     // when asked for, or when a length really overflows 32 bits.
     let user_channels = !doc.channels.is_empty() || doc.quick_mask.is_some();
+    // Save Transparency (see `ExportOptions::tiff_transparency`): off, the composite is matted.
+    let save_transparency = opts.tiff_transparency.unwrap_or(!user_channels);
     let force_psb = opts.force_psb || big;
     let psd_opts = PsdExportOptions {
         force_psb,
         size_limit_psb: false,
-        merged_matte: user_channels,
+        merged_matte: !save_transparency,
         merged_compression: Compression::Raw,
         maximize_compatibility: true,
         document_path: opts.document_path.clone(),
         read_linked_files: opts.read_linked_files,
+        // The layered TIFF reads the merged image's bytes directly: they stay in memory.
+        stage_on_scratch_from: None,
     };
     // TIFF has no palette, bitmap or duotone layout: the PSD model of an Indexed Color, Bitmap
     // or Duotone document is made in its pixel format (RGB or Grayscale), which the PSD exporter
@@ -384,7 +388,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     let mut has_alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
     // The layers move out of the model rather than being copied, and are freed once written
     // (#6607); the model keeps its header, resources and composite for the image below.
-    let (layers, w) = match tiff_image_source(doc, &mut file).into_bytes(order) {
+    let (layers, w) = match tiff_image_source(doc, &mut file, save_transparency && has_alpha).into_bytes(order) {
         Err(photocraft_psd::PsdError::LimitExceeded(_)) if !force_psb => {
             let psb_opts = PsdExportOptions { force_psb: true, ..psd_opts };
             let (psb, w) = crate::with_span(ctl, 0.0, TIFF_MODEL_DONE, |ctl| crate::psd_export::document_to_psd_interruptible(doc, &psb_opts, ctl));
@@ -393,7 +397,7 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
             warnings.push("layer data exceeds 4 GB; written with PSB-sized lengths, which some readers do not open".into());
             file = psb;
             has_alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
-            tiff_image_source(doc, &mut file).into_bytes(order)?
+            tiff_image_source(doc, &mut file, save_transparency && has_alpha).into_bytes(order)?
         }
         r => r?,
     };
@@ -413,19 +417,22 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     if extra_n > kept {
         warnings.push(format!("{extra_n} extra channels; TIFF keeps the first {kept}"));
     }
-    // With spot or alpha channels, the IFD image is colour + those channels. The merged
-    // transparency plane stays out of the IFD (see above); a file with no extra channels keeps
-    // it, so a plain transparent TIFF still opens with alpha.
-    let write_alpha = has_alpha && kept == 0;
+    // The IFD image is colour, then the transparency with Save Transparency on, then the spot and
+    // alpha channels. With it on, the samples are the PSD merged image's channels in order, so
+    // the PSD model's channel resources (which list the transparency first) are kept as they are.
+    let write_alpha = has_alpha && save_transparency;
     // One identifier per extra sample actually stored. The PSD model's 1053 lists the merged
-    // transparency too, which the IFD leaves out next to extra samples, so it is not copied.
-    resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS);
-    if kept > 0 {
-        resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, crate::channel_map::alpha_identifiers(false, kept)));
+    // transparency too, which the IFD leaves out without it, so it is not copied then.
+    if !write_alpha {
+        resources.retain(|r| r.id != crate::channel_map::ALPHA_IDENTIFIERS);
+        if kept > 0 {
+            resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, crate::channel_map::alpha_identifiers(false, kept)));
+        }
     }
     // Resource 1022 names a channel of the PSD merged image, which counts the transparency plane.
-    // The IFD below does not, so the id moves back by one.
+    // An IFD without it does not, so the id moves back by one.
     if has_alpha
+        && !write_alpha
         && kept > 0
         && let Some(r) = resources.iter_mut().find(|r| r.id == crate::channel_map::QUICK_MASK_INFO)
         && r.data.len() >= 2
@@ -443,8 +450,10 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
     }
     // Past MAX_EXTRA_SAMPLES the TIFF stores only the first `kept` channels: the name and
     // DisplayInfo resources describe just those, and a Quick Mask among the rest is dropped.
+    // With the transparency written, those lists hold it ahead of the channels, and the
+    // channels sit one sample later in the IFD.
     if extra_n > kept {
-        keep_first_channels(&mut resources, kept, cc);
+        keep_first_channels(&mut resources, kept + usize::from(write_alpha), cc);
     }
     let resources = resources_to_bytes(&resources)?;
     let ifd_channels = cc + usize::from(write_alpha);
@@ -478,26 +487,34 @@ pub(crate) fn export_layered(doc: &Document, opts: &ExportOptions, ctl: &photocr
 
 /// The layer data (`ImageSourceData`) of a layered TIFF saved from `file`, adjusted the way
 /// Photoshop writes it. The layers, global mask and global blocks move out of `file` (the
-/// export's own model), which keeps its header, resources and merged image.
-fn tiff_image_source(doc: &Document, file: &mut photocraft_psd::PsdFile) -> ImageSourceData {
+/// export's own model), which keeps its header, resources and merged image. `ifd_alpha`: the
+/// composite in the IFD keeps its transparency as the first extra sample (Save Transparency).
+fn tiff_image_source(doc: &Document, file: &mut photocraft_psd::PsdFile, ifd_alpha: bool) -> ImageSourceData {
     // Photoshop pairs alpha-name resources with samples past the colour channels and ignores
-    // the ExtraSamples kind. The merged transparency must not occupy that first slot when a
-    // spot is also stored. Layer transparency stays in each layer's channel −1.
+    // the ExtraSamples kind. Layer transparency stays in each layer's channel −1.
     let spot_extras = file.header.channels as usize > {
         let cc = doc.pixel_format().mode.color_channels();
         let alpha = file.layer_info.as_ref().is_some_and(|l| l.merged_alpha);
         cc + usize::from(alpha)
     };
     let mut isd = ImageSourceData::take_from_psd(file);
-    // Positive layer count: the merged image's first extra sample is not transparency
-    // (Photoshop's own spot TIFF does this; a negative count would claim the spot plane is alpha).
-    if spot_extras && let Some(info) = &mut isd.layer_info {
-        info.merged_alpha = false;
-    }
-    // A merged-transparency marker kept from an opened file (Photoshop's `MTrn`) would make the
-    // first spot read back as transparency. The PSD export already drops it over an opaque
-    // composite; a transparent one keeps it there, but the TIFF leaves that sample out here.
-    if spot_extras {
+    if ifd_alpha && spot_extras {
+        // Save Transparency next to spot or alpha channels, as Photoshop (27.11) writes it: a
+        // positive layer count and an `MTrn` block first in the layer data mark the first extra
+        // sample as the merged transparency.
+        if let Some(info) = &mut isd.layer_info {
+            info.merged_alpha = false;
+        }
+    } else if !ifd_alpha {
+        // Positive layer count: the merged image's first extra sample, if any, is not
+        // transparency (Photoshop's own spot TIFF does this; a negative count would claim the
+        // spot plane is alpha).
+        if let Some(info) = &mut isd.layer_info {
+            info.merged_alpha = false;
+        }
+        // A merged-transparency marker kept from an opened file (Photoshop's `MTrn`) would make
+        // the first spot read back as transparency. The PSD export already drops it over an
+        // opaque composite; a transparent one keeps it there, but the IFD leaves that sample out.
         isd.global_blocks.retain(|b| !b.is_merged_transparency_marker());
     }
     if let Some(info) = &mut isd.layer_info {
@@ -522,6 +539,10 @@ fn tiff_image_source(doc: &Document, file: &mut photocraft_psd::PsdFile) -> Imag
     }
     if !isd.global_blocks.iter().any(|b| &b.key == b"FMsk") {
         isd.global_blocks.push(photocraft_psd::TaggedBlock::new(*b"FMsk", FILTER_MASK_DEFAULT.to_vec()));
+    }
+    // Photoshop writes the marker first, ahead of `Patt`.
+    if ifd_alpha && spot_extras && !isd.global_blocks.iter().any(|b| b.is_merged_transparency_marker()) {
+        isd.global_blocks.insert(0, photocraft_psd::TaggedBlock::new(*b"MTrn", Vec::new()));
     }
     isd
 }
@@ -796,7 +817,11 @@ fn matte_and_drop_alpha(img: &mut Image) -> bool {
     let white_f: f32 = if cmyk { 0.0 } else { 1.0 };
     // Lab's white is L* 100 with a* and b* 0, which PhotoCraft holds mid-range (`(0 + 128) / 255`).
     let lab = img.layout().is_lab();
-    let mut out = Vec::with_capacity(img.data().len() / stride * keep);
+    // Out of memory keeps the transparency (the caller warns) rather than aborting the app.
+    let mut out = Vec::new();
+    if out.try_reserve_exact(img.data().len() / stride * keep).is_err() {
+        return false;
+    }
     for px in img.data().chunks_exact(stride) {
         let Some(color) = px.get(..keep) else { return false };
         let Some(alpha) = px.get(keep..keep.saturating_add(bps)) else { return false };
@@ -905,21 +930,55 @@ fn ne_f32(b: &[u8]) -> Option<f32> {
     Some(f32::from_ne_bytes(arr))
 }
 
+/// A flat TIFF's composite under Save Transparency (`ExportOptions::tiff_transparency`), then
+/// its alpha and spot channels ([`stamp_flat_channels`]). Off, the image is matted over white
+/// and keeps no transparency; on, it keeps it next to the channels; unset, it keeps it only
+/// when there are no channels.
+pub(crate) fn flat_transparency_and_channels(
+    doc: &Document,
+    img: &mut Image,
+    save_transparency: Option<bool>,
+    preserve_alpha: bool,
+) -> Result<Vec<String>, IoError> {
+    let mut warnings = Vec::new();
+    if save_transparency == Some(false) && img.layout().has_alpha() {
+        require_flat_transparency(preserve_alpha)?;
+        if !matte_and_drop_alpha(img) {
+            warnings.push("the image transparency could not be composited over white and was kept".into());
+        }
+    }
+    warnings.extend(stamp_flat_channels(doc, img, save_transparency == Some(true), preserve_alpha)?);
+    Ok(warnings)
+}
+
+/// In-place writes refuse the same matting decision the flat encoder is about to take.
+fn require_flat_transparency(preserve_alpha: bool) -> Result<(), IoError> {
+    if preserve_alpha {
+        Err(IoError::Unsupported(
+            "Save and Close cannot discard TIFF composite transparency; enable tiffTransparency or save to a separate output folder".into(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 /// Writes alpha and spot channels (and a Quick Mask) into a flat TIFF: extra samples in the
 /// IFD, plus Photoshop resources for the name, ink colour and solidity. At most
 /// [`codecs::MAX_EXTRA_SAMPLES`] are kept. A TIFF with no extra channels is left unchanged.
 /// When any are written, the composite's own transparency is left out of the IFD: readers pair
 /// the channel resources with every sample past the colour channels, in order.
-pub(crate) fn stamp_flat_channels(doc: &Document, img: &mut Image) -> Vec<String> {
+/// `keep_transparency` (Save Transparency on) keeps the composite's transparency as the first
+/// extra sample, ahead of the channels; off, the image is matted over white first.
+pub(crate) fn stamp_flat_channels(doc: &Document, img: &mut Image, keep_transparency: bool, preserve_alpha: bool) -> Result<Vec<String>, IoError> {
     let total = doc.channels.len().saturating_add(usize::from(doc.quick_mask.is_some()));
     if total == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let mut warnings = Vec::new();
     let (w, h) = img.dimensions();
     if w != doc.size.width || h != doc.size.height {
         warnings.push("extra channels were not written: the image size differs from the document".into());
-        return warnings;
+        return Ok(warnings);
     }
     let max = codecs::MAX_EXTRA_SAMPLES;
     let mut picked: Vec<&AlphaChannel> = doc.channels.iter().take(max).collect();
@@ -944,7 +1003,7 @@ pub(crate) fn stamp_flat_channels(doc: &Document, img: &mut Image) -> Vec<String
     }
     picked.truncate(planes.len());
     if picked.is_empty() {
-        return warnings;
+        return Ok(warnings);
     }
     let names: Vec<&str> = picked.iter().map(|c| c.name.as_str()).collect();
     let quick_last = matches!((picked.last(), doc.quick_mask.as_ref()), (Some(p), Some(q)) if std::ptr::eq(*p, q));
@@ -953,27 +1012,40 @@ pub(crate) fn stamp_flat_channels(doc: &Document, img: &mut Image) -> Vec<String
     // alpha plane is not an extra sample (it would be named as the first spot). The
     // composite transparency is gone after this; say so, because the user did not pick
     // that option themselves.
-    if img.layout().has_alpha() {
+    if img.layout().has_alpha() && !keep_transparency {
+        require_flat_transparency(preserve_alpha)?;
         if !matte_and_drop_alpha(img) {
             warnings.push("extra channels were not written: the composite transparency could not be separated from them".into());
-            return warnings;
+            return Ok(warnings);
         }
         warnings.push(
             "transparency composited over white; a TIFF with alpha or spot channels stores them as extra samples and drops image transparency (Save Transparency off)"
                 .into(),
         );
     }
-    let quick_id = if quick_last { u16::try_from(color_channels.saturating_add(picked.len()).saturating_sub(1)).ok() } else { None };
-    match channel_resources(img.meta.photoshop_resources.as_deref(), &names, &picked, quick_id) {
+    // Resource 1022 counts every sample past the colour channels, the transparency included.
+    let first = color_channels.saturating_add(usize::from(img.layout().has_alpha()));
+    let quick_id = if quick_last { u16::try_from(first.saturating_add(picked.len()).saturating_sub(1)).ok() } else { None };
+    // Save Transparency on: the transparency is the first extra sample, and Photoshop pairs the
+    // channel resources with every sample past the colour channels, so they list it first
+    // ("Transparency"), as the layered path and the PSD writer do.
+    let transparency = img.layout().has_alpha();
+    match channel_resources(img.meta.photoshop_resources.as_deref(), &names, &picked, quick_id, transparency) {
         Ok(bytes) => img.meta.photoshop_resources = Some(bytes),
         Err(e) => warnings.push(format!("spot channel options were not written to the TIFF: {e}")),
     }
     img.meta.extra_samples = planes.into_iter().map(|data| codecs::ExtraSample { kind: 0, data }).collect();
-    warnings
+    Ok(warnings)
 }
 
 /// Existing Photoshop resources with the channel-name, display-info and quick-mask blocks replaced.
-fn channel_resources(existing: Option<&[u8]>, names: &[&str], channels: &[&AlphaChannel], quick_id: Option<u16>) -> Result<Vec<u8>, IoError> {
+fn channel_resources(
+    existing: Option<&[u8]>,
+    names: &[&str],
+    channels: &[&AlphaChannel],
+    quick_id: Option<u16>,
+    transparency: bool,
+) -> Result<Vec<u8>, IoError> {
     let mut resources = match existing.filter(|b| !b.is_empty()) {
         Some(b) => resources_from_bytes(b)?.0,
         None => Vec::new(),
@@ -981,10 +1053,11 @@ fn channel_resources(existing: Option<&[u8]>, names: &[&str], channels: &[&Alpha
     resources.retain(|r| {
         !matches!(r.id, 1006 | 1045 | crate::channel_map::DISPLAY_INFO | crate::channel_map::QUICK_MASK_INFO | crate::channel_map::ALPHA_IDENTIFIERS)
     });
-    resources.push(ImageResource::new(1006, crate::psd_export::pascal_names_resource(names)));
-    resources.push(ImageResource::new(1045, crate::psd_export::unicode_names_resource(names)));
-    resources.push(ImageResource::new(crate::channel_map::DISPLAY_INFO, crate::channel_map::display_info(channels, false)));
-    resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, crate::channel_map::alpha_identifiers(false, names.len())));
+    let listed: Vec<&str> = transparency.then_some("Transparency").into_iter().chain(names.iter().copied()).collect();
+    resources.push(ImageResource::new(1006, crate::psd_export::pascal_names_resource(&listed)));
+    resources.push(ImageResource::new(1045, crate::psd_export::unicode_names_resource(&listed)));
+    resources.push(ImageResource::new(crate::channel_map::DISPLAY_INFO, crate::channel_map::display_info(channels, transparency)));
+    resources.push(ImageResource::new(crate::channel_map::ALPHA_IDENTIFIERS, crate::channel_map::alpha_identifiers(transparency, names.len())));
     if let Some(id) = quick_id {
         let mut data = id.to_be_bytes().to_vec();
         data.push(0);
@@ -1096,6 +1169,33 @@ mod tests {
     use photocraft_raster::Surface;
 
     use crate::{ExportOptions, ImportOptions, IoError, export};
+
+    /// The in-place guard follows actual writable planes, including Quick Mask and early exits.
+    #[test]
+    fn flat_alpha_guard_uses_the_prepared_image_and_written_planes() {
+        use photocraft_codecs::{ChannelLayout, Image};
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        use photocraft_doc::AlphaChannel;
+        let mut doc = Document::new("guard", photocraft_geom::Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
+        let image = || Image::from_u8(2, 2, ChannelLayout::Rgba, vec![0; 16]).unwrap();
+        let mut no_planes = image();
+        super::stamp_flat_channels(&doc, &mut no_planes, false, true).unwrap();
+        assert!(no_planes.layout().has_alpha());
+        let channel = || AlphaChannel::new("Mask", Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false)));
+        doc.channels.push(channel());
+        let mut mismatch = Image::from_u8(1, 1, ChannelLayout::Rgba, vec![0; 4]).unwrap();
+        let warnings = super::stamp_flat_channels(&doc, &mut mismatch, false, true).unwrap();
+        assert!(warnings.iter().any(|warning| warning.contains("size differs")));
+        assert!(mismatch.layout().has_alpha());
+        assert!(super::stamp_flat_channels(&doc, &mut image(), false, true).is_err());
+        let mut kept = image();
+        super::stamp_flat_channels(&doc, &mut kept, true, true).unwrap();
+        assert!(kept.layout().has_alpha());
+        assert_eq!(kept.meta.extra_samples.len(), 1);
+        doc.channels.clear();
+        doc.quick_mask = Some(channel());
+        assert!(super::stamp_flat_channels(&doc, &mut image(), false, true).is_err());
+    }
 
     /// Hidden solid fills on a 2048² canvas: counted as canvas-sized planes (16 MiB each at 8
     /// bits), 140 of them pass 2 GB, while their real pixels (the cached rendering, pruned to
@@ -1219,7 +1319,7 @@ mod tests {
                 let lowered = ImportOptions { psd_high_memory_approved: true, psd_max_pixel_bytes: required - 1, ..Default::default() };
                 assert!(matches!(
                     crate::import_with_options("l.tif", &bytes, &lowered),
-                    Err(IoError::PsdImportBudget { required: r, limit: l }) if r == required && l == required - 1
+                    Err(IoError::PsdImportBudget { required: r, limit: l, .. }) if r == required && l == required - 1
                 ));
             });
         });
@@ -1251,7 +1351,7 @@ mod tests {
         // remaining allowance is untouched.
         crate::psd_gate::set_active_attempt_budget(charged - 1);
         match crate::import_with_options_and_interrupt("charge.tif", &bytes, &ImportOptions::default(), &ctl) {
-            Err(IoError::PsdImportBudget { required, limit }) => assert_eq!((required, limit), (charged, charged - 1)),
+            Err(IoError::PsdImportBudget { required, limit, .. }) => assert_eq!((required, limit), (charged, charged - 1)),
             other => panic!("expected an import-budget refusal, got {other:?}"),
         }
         assert_eq!(crate::psd_gate::active_attempt_remaining(), Some(charged - 1), "a failed nested import leaves the allowance as it was");
@@ -1362,7 +1462,7 @@ mod tests {
         crate::memory::with_mock_memory(zero, || {
             crate::flat::with_before_composite_decode(hook(&decoded), || {
                 match crate::import_with_options("bogus.tif", &bytes, &ImportOptions::default()) {
-                    Err(IoError::PsdImportBudget { limit: 0, required }) => assert!(required > 0),
+                    Err(IoError::PsdImportBudget { limit: 0, required, .. }) => assert!(required > 0),
                     other => panic!("expected an import-budget refusal, got {other:?}"),
                 }
                 assert_eq!(decoded.get(), 0, "a refused file must not decode its composite");
@@ -1404,7 +1504,7 @@ mod tests {
         crate::memory::with_mock_memory(zero, || {
             crate::flat::with_before_composite_decode(hook(&decoded), || {
                 match crate::import_with_options("zero.tif", &bytes, &ImportOptions::default()) {
-                    Err(IoError::PsdImportBudget { limit: 0, required }) => assert!(required > 0),
+                    Err(IoError::PsdImportBudget { limit: 0, required, .. }) => assert!(required > 0),
                     other => panic!("expected an import-budget refusal, got {other:?}"),
                 }
                 assert_eq!(decoded.get(), 0, "a refused file must not decode its composite");
@@ -1489,7 +1589,7 @@ mod tests {
 
         let result = rx.recv_timeout(Duration::from_secs(10)).expect("the post-gate recheck must refuse instead of decoding");
         match result {
-            Err(IoError::PsdImportBudget { limit: 0, required }) => assert!(required > 0),
+            Err(IoError::PsdImportBudget { limit: 0, required, .. }) => assert!(required > 0),
             other => panic!("expected the post-gate recheck to refuse with a zero budget, got {other:?}"),
         }
         assert!(!decoded.load(Ordering::SeqCst), "the composite must not be decoded after the post-gate refusal");
