@@ -4617,6 +4617,12 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 # Strings main added after this catalog was written (integration batch 20).
 	Background (default)	Fon (defolt)
 	Transparent (default)	Şəffaf (defolt)
+	HSL Color	HSL Rəngi
+	Spot Channels	Spot Kanalları
+	Alpha Channels	Alfa Kanalları
+	Info Panel Options	Məlumat Paneli Seçimləri
+	Readouts	Oxunuşlar
+	Total Spot Ink	Ümumi Spot Mürəkkəbi
 # Move tool options bar (#11381)
 	Align top edges	Üst kənarları hizalayın
 	Align vertical centers	Şaquli mərkəzləri hizalayın
