@@ -537,8 +537,8 @@ fn components4(mask: &[bool], w: usize, h: usize) -> (Vec<u32>, Vec<usize>) {
     (lab, sizes)
 }
 
-/// Softens a hard 0/255 mask's edges: edge pixels blend with their 3×3 neighbourhood (the same
-/// rule as the magic wand's anti-aliasing).
+/// Softens a hard 0/255 mask's edges: edge pixels blend with their 3×3 neighbourhood. The
+/// segmentation tools and the 8-bit magic wand ([`crate::selection::wand_region`]) finish with it.
 pub fn antialias_u8(mask: &mut [u8], w: usize, h: usize) {
     let src = mask.to_vec();
     // A span whose 3×3 neighbourhood holds one value has no edge pixel, so it is only compared:
