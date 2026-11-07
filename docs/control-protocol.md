@@ -441,6 +441,13 @@ variable, not the flag, turns on TCP, `serve` says so on standard error; an empt
 stdio, and a value that is not a port is a usage error naming the variable. Implementation:
 `crates/automation/src/rpc.rs`.
 
+`--color-settings <json>` applies `edit.colorSettings` params before the first request, for example
+`{"workingCmyk": "/profiles/swop.icc"}` so that CMYK files saved without a profile are read in that
+space. Clients cannot run `edit.colorSettings` themselves (it reads ambient profile paths), so the
+operator who starts the server chooses the working spaces. An unknown key or a value of the wrong type stops the server, naming the flag, rather than being skipped. `doc.open` applies Color Settings as the
+app does when it opens a file: an untagged file takes a configured working space, and an embedded
+profile follows the open policy.
+
 | Method | Params |
 |---|---|
 | `engine.execute` | `{command, params?, wait?}`: any engine command (`wait: false` starts a long one as a background job: `{job, pending}`) |
