@@ -145,18 +145,33 @@ impl PhotocraftApp {
     ///
     /// A bare file name (export dialogs, an untitled document) starts in the folder the active
     /// document was last saved or exported to through a dialog, else beside the document
-    /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered for
-    /// the document the dialog was asked for.
+    /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered, once
+    /// the write succeeded, for the document the dialog was asked for. With Preferences ▸ File
+    /// Handling › Save As to Original Folder off, a bare name starts in the folder last saved or exported to for any
+    /// document instead, else beside the document (#9656).
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.pick_save_for(suggested, false, then)
+    }
+
+    /// [`Self::pick_save`]. `own_file` marks the suggestion as the active document's own file
+    /// (File › Save of a flat file asking for a name): a relative one stays where it is instead
+    /// of moving to the last folder saved to when Save As to Original Folder is off.
+    pub(crate) fn pick_save_for(&mut self, suggested: &str, own_file: bool, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
         let mut suggested = std::path::PathBuf::from(suggested);
         let doc = self.session.active().map(|d| d.doc.id);
         // Closed documents' folders are no longer needed.
         let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
         self.save_dirs.retain(|id, _| open.contains(id));
+        let beside_document = || self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf);
+        let remembered = if self.session.prefs().file_handling.save_as_to_original_folder {
+            doc.and_then(|d| self.save_dirs.get(&d).cloned())
+        } else if own_file {
+            None
+        } else {
+            self.last_save_dir()
+        };
         if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
-            && let Some(dir) = doc
-                .and_then(|d| self.save_dirs.get(&d).cloned())
-                .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf))
+            && let Some(dir) = remembered.or_else(beside_document)
         {
             suggested = dir.join(suggested);
         }
@@ -168,13 +183,18 @@ impl PhotocraftApp {
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
+                // Remember the folder only once the write was accepted: a failed or refused
+                // export must not move where the next dialog starts (#9656).
+                let done = then(app, path.clone())?;
                 // The web answers a download name, which has no folder to remember.
-                if let Some(doc) = doc
-                    && let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty())
-                {
-                    app.save_dirs.insert(doc, dir.to_path_buf());
+                if let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()) {
+                    if let Some(doc) = doc {
+                        app.save_dirs.insert(doc, dir.to_path_buf());
+                    }
+                    let dir = dir.to_string_lossy().into_owned();
+                    app.session.prefs.edit(|p| p.file_handling.last_save_folder = dir);
                 }
-                then(app, path)
+                Ok(done)
             }
             _ => Err(UNEXPECTED.into()),
         })?;
@@ -182,6 +202,14 @@ impl PhotocraftApp {
             p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
         }
         Ok(asked)
+    }
+
+    /// The folder the last save or export succeeded in, for any document, when Preferences ▸ File
+    /// Handling › Save As to Original Folder is off (#9656). None when nothing is remembered or the
+    /// folder is gone (deleted, renamed, a drive unplugged), so callers fall back to beside the
+    /// document.
+    pub(crate) fn last_save_dir(&self) -> Option<std::path::PathBuf> {
+        Some(self.session.prefs().file_handling.last_save_folder.as_str()).filter(|d| !d.is_empty()).map(std::path::PathBuf::from).filter(|d| d.is_dir())
     }
 
     /// Whether a save to `path` replaces a file the save dialog didn't ask about: the dialog
