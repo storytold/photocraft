@@ -144,6 +144,41 @@ pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon 
 
 /// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
 /// OS cursor to set (hidden).
+/// The Color Sampler's cursor over an existing sampler point: the arrow with the sampler target,
+/// or with Alt the arrow with scissors (#11744).
+pub(crate) fn sampler_hover_cursor(ctx: &egui::Context, p: Pos2, alt: bool) -> egui::CursorIcon {
+    if alt {
+        crate::icons::cursor_badge(ctx, "scissors", p);
+    } else {
+        crate::icons::cursor_badge(ctx, "sampler", p);
+    }
+    egui::CursorIcon::Default
+}
+
+/// The Color Sampler's cursor: an eyedropper with a small sampler target at its top-left,
+/// hotspot at the pipette tip (#11744).
+pub(crate) fn color_sampler_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    pipette_cursor(ctx, p);
+    let size = 11.0;
+    // The pipette tip is at (2, 22) in its 24-unit box of size 20.0. The top-left region is
+    // around (5, 5), which is offset by (3, -17) * (20/24) = (2.5, -14.17) from the tip.
+    let target_center = p + vec2(2.5, -14.0);
+    let rect = Rect::from_center_size(target_center, egui::Vec2::splat(size));
+    let area = egui::Area::new(egui::Id::unique("pc-sampler-badge"))
+        .order(egui::Order::Tooltip)
+        .fixed_pos(rect.min)
+        .constrain(false)
+        .interactable(false);
+    area.show(ctx, |ui| {
+        let outline = crate::icons::image("sampler", size, Color32::from_black_alpha(200));
+        for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
+            outline.paint_at(ui, rect.translate(vec2(dx, dy)));
+        }
+        crate::icons::image("sampler", size, Color32::WHITE).paint_at(ui, rect);
+    });
+    egui::CursorIcon::None
+}
+
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
     crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);
