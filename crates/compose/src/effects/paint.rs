@@ -72,7 +72,7 @@ pub fn glow_lut(g: &Glow) -> Option<Vec<f32>> {
 /// - coverage 0 always paints 0, for any contour (nothing beyond the reach);
 /// - a high contour is solid up to the edge's knee, then follows it down: one soft pixel for
 ///   Precise, a fade over the outer pixels for Softer;
-/// - it never paints less than the Linear contour would, so a contour that already follows or
+/// - the reach cap is never below the Linear contour, so a contour that already follows or
 ///   stays under the falloff (Linear, or a custom curve with `contour(0) = 0` rising no faster
 ///   than the reach edge) is unchanged. The reach does not depend on Range: Range stretches the
 ///   contour over the falloff, the falloff still ends where it ends.

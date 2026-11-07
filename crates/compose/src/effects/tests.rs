@@ -1127,6 +1127,18 @@ fn flat_contour_glow_table_is_linear_up_to_a_knee_on_an_entry() {
     }
 }
 
+#[test]
+fn precise_flat_contour_slope_depends_on_size_and_spread() {
+    for size in [4.0f32, 10.0] {
+        for spread in [0.0f32, 0.5] {
+            let g = Glow { spread, ..contour_glow(GlowTechnique::Precise, size, &FLAT) };
+            let Some(f) = glow_paint_lut(&g, false) else { panic!("a flat contour has a table") };
+            let want = 2.0 * (size + 1.0 - size * spread) / 4095.0;
+            assert!((f[1] - want).abs() < want * 0.005, "size {size} spread {spread}: {} vs {want}", f[1]);
+        }
+    }
+}
+
 /// #11361's regression guard: the reach cap never paints below what the Linear contour does, so
 /// Linear glows (None, or a custom straight line as PSDs store it) and inner glows keep their
 /// transfer.
