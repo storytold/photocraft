@@ -763,7 +763,8 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     (app.discard.is_some(), app.camera_raw.is_some(), crate::distort_ui::modal_workspace(app)).hash(&mut h);
     // Edit / Clear Selected Guides are enabled only while a guide is selected.
     crate::guide_select::selected(app).hash(&mut h);
-    serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool)).unwrap_or_default().hash(&mut h);
+    // Saved pixel aspect ratios are View menu items of their own.
+    serde_json::to_string(&(&ui.panels, &ui.extras, &ui.view, ui.theme, ui.tool, &ui.shell.custom_pars)).unwrap_or_default().hash(&mut h);
     s.prefs().interface.language.hash(&mut h);
     h.finish()
 }

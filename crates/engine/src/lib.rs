@@ -173,7 +173,7 @@ pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState};
 pub use error::{EngineError, Result};
 pub use session::move_item;
 use session::restore_target;
-pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
+pub(crate) use session::{carry_outside_history, carry_visibility, fix_selection, visibility_changes};
 
 /// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
 /// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against

@@ -185,10 +185,10 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
     let coalesce = st.coalesce.clone();
     let was_clean = !st.is_dirty();
     let journal = s.journal.len();
-    // Color Sampler points are view state a step may move (crop, rotation): roll them back too, so
-    // a failed second step can't leave them pinned to pixels the restored document no longer has.
-    let samplers = st.color_samplers.clone();
-    // So is the painting symmetry, which a rotation moves with the pixels.
+    // Color Sampler points may move with a step (crop, rotation): restoring `before` rolls them
+    // back with it, so a failed second step can't leave them pinned to pixels the restored
+    // document no longer has. The painting symmetry is view state a rotation moves with the
+    // pixels: roll it back too.
     let symmetry = st.symmetry.clone();
     let r = f(s);
     if r.is_err() {
@@ -213,7 +213,6 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             st.layer_anchor = anchor;
             st.channel_view = channel_view;
             st.coalesce = coalesce;
-            st.color_samplers = samplers;
             st.symmetry = symmetry;
             st.revision += 1;
             // A failed compound does not make an otherwise untouched document dirty.

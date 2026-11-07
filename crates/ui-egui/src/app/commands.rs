@@ -372,6 +372,7 @@ impl PhotocraftApp {
         // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
         self.streams.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
+        self.sync_window_toggles();
         self.prune_thumbs();
         self.sync_mask_targets();
         // Channel-view textures outlive a hidden view (cheap re-show), not their document.

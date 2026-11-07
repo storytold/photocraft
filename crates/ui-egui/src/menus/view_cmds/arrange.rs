@@ -44,6 +44,9 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     view.zoom_transition = None;
     view.display_camera = None;
     view.fit_pending = offset > 0 || view.fit_pending;
+    // From the window it is opened in when that shows the document, else the document's own
+    // (each one's, when all are floated).
+    view.toggles = Some(app.new_window_toggles(doc));
     app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating, focused: false, position: None });
     wid
 }

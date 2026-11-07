@@ -30,7 +30,10 @@ use document::document_to_psd_sized;
 pub use document::{document_to_psd, document_to_psd_with};
 use document::{document_to_psd_nested, mask_parameters};
 pub(crate) use estimate::{fit_psd_size, psd_version, sign_global_blocks};
-pub(crate) use resources::{global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, unicode_names_resource};
+pub(crate) use resources::{
+    color_sampler_resources, global_block, guides_resource, keep_imported_resource, legacy_name, pascal_names_resource, path_resources, pixel_aspect_resource,
+    readable_pixel_aspect, unicode_names_resource,
+};
 use smart::{LINK_KEYS, SmartOut, Source, contents_uuid, effects_unchanged, embed_source_hash, masked, size_from_layer, smart_keys, upsert};
 
 /// Blocks that define a layer's content as something other than pixels: fill (`SoCo`, `GdFl`,

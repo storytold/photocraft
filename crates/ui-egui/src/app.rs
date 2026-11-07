@@ -22,7 +22,7 @@ mod prefs;
 mod screenshot;
 mod targets;
 mod thumbs;
-mod view;
+pub(crate) mod view;
 mod window;
 
 pub(crate) use files::remember_new_document;
@@ -107,6 +107,7 @@ impl PhotocraftApp {
             drop_places: Default::default(),
             view_docs: Vec::new(),
             path_document: None,
+            toggles_owner: None,
             fps: 0.0,
             last_frame_time: 0.0,
             thumbs: HashMap::new(),
