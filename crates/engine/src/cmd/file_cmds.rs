@@ -24,6 +24,7 @@ mod batch_run;
 mod export;
 mod info;
 mod open;
+mod open_as_smart_object;
 mod paths;
 mod place_steps;
 mod processing;
@@ -50,6 +51,7 @@ pub(crate) use open::{BatchOpen, batch_open_notice, batch_open_params, remember_
 pub use open::{PLACE_EMBEDDED, open_bytes_as, open_bytes_as_with_options, place_bytes, raw_defaults};
 pub(crate) use open::{PlaceInput, apply_place, import, import_with_options, tag_exr_colorspace};
 use open::{approve_memory, close_all, close_others, open_as, place, revert};
+use open_as_smart_object::open_as_smart_object;
 use paths::is_file;
 #[cfg(test)]
 use paths::openable_name;
@@ -284,6 +286,15 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"approveHighMemory":bool=false (explicitly approve high memory usage)}"##,
             native,
             open_as
+        ),
+        spec!(
+            "file.openAsSmartObject",
+            "Open as Smart Object…",
+            &["File"],
+            None,
+            r##"{"path":str (or "paths":[str], one document each)} (opens the file as a new untitled document named "<file name without its last extension>-N" with the file's size, resolution, colour mode, bit depth and profile, holding one embedded smart object layer named after the file) → {document, name, layer} ({documents:[…]} for paths)"##,
+            native,
+            open_as_smart_object
         ),
         // One-shot permission for one file, not something to replay later: never journaled or
         // recorded in an action, since replaying it in another session/on another file would
