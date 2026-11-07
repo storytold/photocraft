@@ -408,7 +408,11 @@ mod web_playback_tests {
             let mut h = harness(app, fields);
             h.run_steps(2);
             assert_eq!(h.query_all_by_label("Metadata").next().is_some(), offered, "{format}");
-            assert_eq!(h.query_by_label("The preview shows the image before compression. AVIF files carry no color profile or metadata.").is_some(), !offered, "{format}");
+            assert_eq!(
+                h.query_by_label("The preview shows the image before compression. AVIF files carry no color profile or metadata.").is_some(),
+                !offered,
+                "{format}"
+            );
         }
     }
 
