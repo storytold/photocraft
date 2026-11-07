@@ -19,13 +19,49 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
     let mut align = None;
     let mut total = 0usize;
     let mut placeholders = false;
-    for block in s.objs(story, b"Blok") {
+    // Shared structures are traversed once per occurrence: charge the raw slots (nulls and empty
+    // blocks included) before collecting them, against a document-wide budget.
+    if !r.charge_text(s.array_len(story, b"Blok").unwrap_or(0)) {
+        r.warn("text beyond the document text budget (left out)");
+        return None;
+    }
+    'blocks: for block in s.objs(story, b"Blok") {
         let glyphs = s.obj(block, b"Glyp")?;
+        let runs_n = s.obj(block, b"GAtt").and_then(|g| s.array_len(g, b"Runs")).unwrap_or(0);
+        if !r.charge_text(1 + runs_n + s.array_len(glyphs, b"Mixd").unwrap_or(0)) {
+            r.warn("text beyond the document text budget (truncated)");
+            break;
+        }
+        // Applied to `align` only once this block passes the character limit below, so a discarded
+        // block does not set the alignment of the text kept from earlier blocks.
+        // Scanning the paragraph runs (null slots included) is charged before it is done.
+        let mut block_align = None;
+        if align.is_none()
+            && let Some(p) = s.obj(block, b"PAtt")
+        {
+            if r.charge_text(s.array_len(p, b"Runs").unwrap_or(0)) {
+                block_align = s.objs(p, b"Runs").first().copied().and_then(|run| s.obj(run, b"Item")).map(|p| paragraph_align(r, p));
+            } else {
+                r.warn("text beyond the document text budget (paragraph alignment left out)");
+            }
+        }
+        // `block_chars` scans the `Utf8` string, or walks each segment's `Glys` slots (nulls included): charge the scan first.
+        let slots = match s.str(glyphs, b"Utf8") {
+            Some(text) => text.len(),
+            None => s.objs(glyphs, b"Mixd").iter().fold(0usize, |n, seg| n.saturating_add(s.array_len(*seg, b"Glys").unwrap_or(0))),
+        };
+        if !r.charge_text(slots) {
+            r.warn("text beyond the document text budget (truncated)");
+            break;
+        }
         let chars = block_chars(s, glyphs, total, &mut placeholders);
         total = total.checked_add(chars.len())?;
         if total > MAX_CHARS {
             r.warn("text longer than a million characters (truncated)");
             break;
+        }
+        if align.is_none() {
+            align = block_align;
         }
         let mut start = 0usize;
         for run in s.obj(block, b"GAtt").map(|g| s.objs(g, b"Runs")).unwrap_or_default() {
@@ -37,11 +73,12 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
             start = end;
             let Some(attrs) = s.obj(run, b"Item") else { continue };
             if !text.is_empty() {
+                if !r.charge_text(text.len()) {
+                    r.warn("text beyond the document text budget (truncated)");
+                    break 'blocks;
+                }
                 runs.push(run_attrs(r, attrs, text, world));
             }
-        }
-        if align.is_none() {
-            align = s.obj(block, b"PAtt").and_then(|p| s.objs(p, b"Runs").first().copied()).and_then(|run| s.obj(run, b"Item")).map(|p| paragraph_align(r, p));
         }
     }
     if placeholders {
