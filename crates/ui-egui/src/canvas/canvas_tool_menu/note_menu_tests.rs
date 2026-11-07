@@ -164,3 +164,12 @@ fn tools_not_measured_on_a_note_keep_their_own_menus() {
         assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.notes.is_none()), "{tool:?} on a note: not the notes menu");
     }
 }
+
+#[test]
+fn no_notes_menu_without_a_document() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.ui.tool = Tool::Note;
+    let ctx = egui::Context::default();
+    assert!(!open_at(&mut app, &ctx, Tool::Note, [10.0, 10.0], Some([20.0, 20.0])), "no document: no menu, so no Import Notes… or New Note to choose");
+    assert!(app.ui.canvas_tool_menu.is_none());
+}
