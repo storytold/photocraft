@@ -30,8 +30,9 @@ pub(crate) fn map_count(layer: &Layer) -> usize {
     let has_stroke = items.iter().any(|e| matches!(e, Effect::Stroke(_)));
     let outside = usize::from(out_widths.iter().any(|&w| !stroke_outside_exact(w))) + usize::from(out_widths.iter().any(|&w| stroke_outside_exact(w)));
     let stroke = if has_stroke { 1 + outside } else { 0 };
-    let vector_outline =
-        if has_stroke && matches!(layer.content, photocraft_doc::LayerContent::Shape(_)) && crate::effect_outline(layer).is_none() { outside } else { 0 };
+    // An unfilled shape's vector outline: its distance fields and its estimated edge coverage.
+    let needs_vector_coverage = has_stroke && matches!(layer.content, photocraft_doc::LayerContent::Shape(_)) && crate::effect_outline(layer).is_none();
+    let vector_outline = if needs_vector_coverage { outside + 1 } else { 0 };
     1 + per + stroke + vector_outline
 }
 
@@ -88,11 +89,11 @@ pub(crate) fn build_maps_prepared(
     // Without an outline (unfilled shapes), estimate the vector outline from local coverage; it
     // picks the chamfer or the exact transform the same way.
     let outline = crate::effect_outline(layer).is_some();
-    let (vdout, vdout_exact) = if has_stroke && vector_shape && !outline {
+    let (vdout, vdout_exact, vcov) = if has_stroke && vector_shape && !outline {
         let lc = local_coverage(&shape);
-        (chamfer_out.then(|| dist_outside_by(&lc, Metric::Chamfer)), exact_out.then(|| dist_outside_by(&lc, Metric::Euclidean)))
+        (chamfer_out.then(|| dist_outside_by(&lc, Metric::Chamfer)), exact_out.then(|| dist_outside_by(&lc, Metric::Euclidean)), Some(lc.v))
     } else {
-        (None, None)
+        (None, None, None)
     };
     let mut frames: Vec<(u32, Rect)> = Vec::new();
     for e in &items {
@@ -105,7 +106,7 @@ pub(crate) fn build_maps_prepared(
             }
         }
     }
-    FxMaps { rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, outline, frames }
+    FxMaps { rect, shape, per, bevel_paint, din, dout, dout_exact, vdout, vdout_exact, vcov, outline, frames }
 }
 
 /// Far outside any shape (distance fill for cropped distance fields).
@@ -252,6 +253,8 @@ struct StrokeFields {
     dout_exact: Option<Vec<f32>>,
     vdout: Option<Vec<f32>>,
     vdout_exact: Option<Vec<f32>>,
+    /// An unfilled shape's estimated edge coverage (it has no path to measure against).
+    vcov: Option<Vec<f32>>,
 }
 
 /// What compositing one layer's effects shares between its stages.
@@ -462,6 +465,7 @@ impl<'a> EffectPass<'a> {
             dout_exact: crop_out(&maps.dout_exact),
             vdout: crop_out(&maps.vdout),
             vdout_exact: crop_out(&maps.vdout_exact),
+            vcov: maps.vcov.as_ref().map(|c| maps.crop_vec(c, big, 1.0)),
         }
     }
 
@@ -568,10 +572,19 @@ impl<'a> EffectPass<'a> {
             (false, false) => fields.dout.as_deref(),
         }
         .unwrap_or_default();
+        let estimated = if vector_outline { fields.vcov.as_deref() } else { None };
         let mut share = vec![0.0f32; w * self.h];
         for (i, sh) in share.iter_mut().enumerate() {
             let band = (out_w + 0.5 - d[i]).clamp(0.0, 1.0);
-            let k = if inside(shape.v[i]) { if vector_outline { 0.0 } else { band * outline_share(shape.v[i], lay.px[i][3]) } } else { band };
+            // An unfilled outline has no path to measure an edge pixel against: its coverage is
+            // estimated from its neighbours, so the stroke fills the rest of the pixel beneath
+            // the edge (a hard 0 here let the backdrop show between a line and its stroke).
+            let k = if inside(shape.v[i]) {
+                let cov = estimated.and_then(|c| c.get(i)).copied().unwrap_or(shape.v[i]);
+                band * outline_share(cov, lay.px[i][3])
+            } else {
+                band
+            };
             let mut k = k * st.common.opacity;
             if st.common.blend == BlendMode::Dissolve {
                 let (x, y) = (i64::from(big.x0) + (i % w) as i64, i64::from(big.y0) + (i / w) as i64);
