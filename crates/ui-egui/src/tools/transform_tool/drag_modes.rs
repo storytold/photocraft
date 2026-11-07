@@ -366,8 +366,17 @@ pub(crate) fn apply_drag(s: &mut TransformSession, g: Gesture, p: [f64; 2], mods
                 }
             }
             if corner && !mods.shift {
-                let k = ku.abs().max(kv.abs());
-                (ku, kv) = (k * ku.signum(), k * kv.signum());
+                // The corner follows the pointer's projection onto the diagonal from the anchor
+                // to the dragged corner (#11096), measured in the box's physical lengths so the
+                // aspect ratio is kept. Past the anchor `k` is negative and the box flips.
+                let (hu, hv) = (if mu.0 { 0.0 } else { 1.0 }, if mv.0 { 0.0 } else { 1.0 });
+                let w = (g.quad0[1][0] - g.quad0[0][0]).hypot(g.quad0[1][1] - g.quad0[0][1]);
+                let hgt = (g.quad0[3][0] - g.quad0[0][0]).hypot(g.quad0[3][1] - g.quad0[0][1]);
+                let (dw, dh) = ((hu - au) * w, (hv - av) * hgt);
+                let len2 = dw * dw + dh * dh;
+                let k = if len2 > 1e-12 { ((u - au) * w * dw + (v - av) * hgt * dh) / len2 } else { 1.0 };
+                let k = if k.is_finite() { k } else { 1.0 };
+                (ku, kv) = (k, k);
             }
             let r = [au - au * ku, av - av * kv, au + (1.0 - au) * ku, av + (1.0 - av) * kv];
             let map = |a: f64, b: f64| {
