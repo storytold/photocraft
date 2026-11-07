@@ -17,7 +17,22 @@
 //!    column's own top and length, plain Bicubic, no averaging.
 //! 5. **Clip:** the corners' rounded bounding box.
 //!
-//! General quads (both directions converging, as Distort makes) are not handled here.
+//! **Both directions converging** (Perspective dragged sideways *and* up or down, no scale, skew or
+//! rotation) is drawn in two such stages, measured byte for byte on four impulse probes and two
+//! renders. In coordinates centred on the contents' centre the map is `x ↦ x / (1 + g·x + h·y)`,
+//! which is the horizontal one-way perspective `g` followed by the vertical one `h` (they
+//! commute). The one with the larger coefficient goes first, into an intermediate image that is
+//! stretched so the second stage never magnifies along its walk: along the second stage's walk
+//! axis by the second stage's largest walk magnification (`1 / (1 + h·y)` at the far row of the
+//! first quad), along its projective axis by the ratio of the final quad's extent to the first
+//! quad's. The intermediate's far edge along the walk axis lands on the whole pixel below the
+//! final quad's edge; along the projective axis it lands exactly on the final quad's edge. The
+//! second stage then draws the intermediate with the same one-way rules. The two kernels compose
+//! into the wide, two-humped weights the reference shows, and the first kernel's phase-dependent
+//! centroid, averaged by the second, into its 1/20-pixel ripples.
+//!
+//! Quads with an affine part as well (scale, skew or rotation with a two-way perspective) are not
+//! handled here.
 
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -179,6 +194,9 @@ pub fn render(src: &Surface, bounds: Rect, h: [f64; 9]) -> Option<Surface> {
     let flat = |v: f64| v.abs() <= FLAT;
     let side = !flat(h[6]) && flat(h[7]) && flat(h[1] / h[0].abs().max(FLAT));
     let down = !flat(h[7]) && flat(h[6]) && flat(h[3] / h[4].abs().max(FLAT));
+    if !flat(h[6]) && !flat(h[7]) {
+        return two_way(src, bounds, &h);
+    }
     if !(side || down) {
         return None;
     }
@@ -214,6 +232,130 @@ pub fn render(src: &Surface, bounds: Rect, h: [f64; 9]) -> Option<Surface> {
     Some(surface)
 }
 
+fn mul(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
+    let mut m = [0.0; 9];
+    for r in 0..3 {
+        for c in 0..3 {
+            m[r * 3 + c] = (0..3).map(|k| a[r * 3 + k] * b[k * 3 + c]).sum();
+        }
+    }
+    m
+}
+
+fn inverse(m: &[f64; 9]) -> Option<[f64; 9]> {
+    let [a, b, c, d, e, f, g, h, i] = *m;
+    let det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+    if !det.is_finite() || det.abs() < 1e-300 {
+        return None;
+    }
+    let inv = [e * i - f * h, c * h - b * i, b * f - c * e, f * g - d * i, a * i - c * g, c * d - a * f, d * h - e * g, b * g - a * h, a * e - b * d];
+    Some(inv.map(|v| v / det))
+}
+
+fn translation(x: f64, y: f64) -> [f64; 9] {
+    [1.0, 0.0, x, 0.0, 1.0, y, 0.0, 0.0, 1.0]
+}
+
+/// The map's image of the box `w × h`: the four corners, or `None` past the horizon.
+fn corners(m: &[f64; 9], w: f64, h: f64) -> Option<[(f64, f64); 4]> {
+    let mut out = [(0.0, 0.0); 4];
+    for (o, (x, y)) in out.iter_mut().zip([(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]) {
+        let d = m[6] * x + m[7] * y + m[8];
+        if !d.is_finite() || d <= 0.0 {
+            return None;
+        }
+        *o = ((m[0] * x + m[1] * y + m[2]) / d, (m[3] * x + m[4] * y + m[5]) / d);
+    }
+    out.iter().all(|c| c.0.is_finite() && c.1.is_finite()).then_some(out)
+}
+
+/// `[x0, y0, x1, y1]` around the corners.
+fn extent(c: &[(f64, f64); 4]) -> [f64; 4] {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for &(x, y) in c {
+        (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+    }
+    [x0, y0, x1, y1]
+}
+
+/// The smallest rectangle holding every pixel of `s` with any coverage.
+fn alpha_bounds(s: &Surface) -> Option<Rect> {
+    let r = s.content_bounds();
+    if r.is_empty() {
+        return None;
+    }
+    let nc = s.channels();
+    let px = s.read_region(r);
+    let w = r.width() as usize;
+    let (mut x0, mut y0, mut x1, mut y1) = (usize::MAX, usize::MAX, 0usize, 0usize);
+    for (i, p) in px.chunks_exact(nc).enumerate() {
+        if p.get(nc - 1).is_some_and(|a| *a > 0.0) {
+            let (x, y) = (i % w, i / w);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    (x1 > 0).then(|| Rect::new(r.x0 + x0 as i32, r.y0 + y0 as i32, r.x0 + x1 as i32, r.y0 + y1 as i32))
+}
+
+/// A perspective converging both ways, with no affine part: two one-way stages (see the module
+/// docs). `h` is normalised and measured from `bounds`' corner.
+fn two_way(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
+    let flat = |v: f64| v.abs() <= FLAT;
+    let (w, hgt) = (f64::from(bounds.width()), f64::from(bounds.height()));
+    // In coordinates centred on the contents' centre and on its image: x ↦ (A x + t) / (1 + p·x).
+    let (cx, cy) = (w / 2.0, hgt / 2.0);
+    let dc = h[6] * cx + h[7] * cy + h[8];
+    if !dc.is_finite() || dc <= FLAT {
+        return None;
+    }
+    let (tx, ty) = ((h[0] * cx + h[1] * cy + h[2]) / dc, (h[3] * cx + h[4] * cy + h[5]) / dc);
+    let hc = mul(&mul(&translation(-tx, -ty), h), &translation(cx, cy));
+    if hc[8].abs() < FLAT {
+        return None;
+    }
+    let hc = hc.map(|v| v / hc[8]);
+    let (g, p) = (hc[6], hc[7]);
+    if !(flat(hc[0] - 1.0) && flat(hc[1]) && flat(hc[3]) && flat(hc[4] - 1.0) && flat(hc[2]) && flat(hc[5])) {
+        return None; // an affine part as well: not measured yet
+    }
+    let to_doc = translation(tx, ty);
+    let to_centre = translation(-w / 2.0, -hgt / 2.0);
+    // The larger coefficient goes first; a tie (within float noise of corners read from a file) goes
+    // horizontal.
+    let hfirst = g.abs() >= p.abs() * (1.0 - 1e-3);
+    let first: [f64; 9] = if hfirst { [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, g, 0.0, 1.0] } else { [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, p, 1.0] };
+    let m1 = mul(&mul(&to_doc, &first), &to_centre);
+    let q1 = corners(&m1, w, hgt)?;
+    let fb = extent(&q1);
+    let b = extent(&corners(h, w, hgt)?);
+    // The stretch: the second stage's largest walk magnification along its walk axis, the extent
+    // ratio along its projective axis; placed with the far edge on the pixel below the final edge
+    // along the walk axis and exactly on it along the other.
+    let snap = |edges: [f64; 2], targets: [f64; 2]| {
+        let k = usize::from((edges[1] - targets[1]).abs() < (edges[0] - targets[0]).abs());
+        targets[k].floor() - edges[k]
+    };
+    let s = if hfirst {
+        let sx = q1.iter().map(|c| 1.0 / (1.0 + p * (c.1 - ty))).fold(f64::NEG_INFINITY, f64::max);
+        let sy = (b[3] - b[1]) / (fb[3] - fb[1]);
+        let shift = snap([tx + sx * (fb[0] - tx), tx + sx * (fb[2] - tx)], [b[0], b[2]]);
+        [sx, 0.0, tx - sx * tx + shift, 0.0, sy, b[1] - sy * fb[1], 0.0, 0.0, 1.0]
+    } else {
+        let sy = q1.iter().map(|c| 1.0 / (1.0 + g * (c.0 - tx))).fold(f64::NEG_INFINITY, f64::max);
+        let sx = (b[2] - b[0]) / (fb[2] - fb[0]);
+        let shift = snap([ty + sy * (fb[1] - ty), ty + sy * (fb[3] - ty)], [b[1], b[3]]);
+        [sx, 0.0, b[0] - sx * fb[0], 0.0, sy, ty - sy * ty + shift, 0.0, 0.0, 1.0]
+    };
+    if s.iter().any(|v| !v.is_finite()) || s[0] <= 0.0 || s[4] <= 0.0 {
+        return None;
+    }
+    let m1s = mul(&s, &m1);
+    let inter = render(src, bounds, m1s)?;
+    let ib = alpha_bounds(&inter)?;
+    let m2 = mul(&mul(h, &inverse(&m1s)?), &translation(f64::from(ib.x0), f64::from(ib.y0)));
+    render(&inter, ib, m2)
+}
+
 /// `h` (row-major, in the contents' own coordinates) measured instead from the point `(x, y)`, the
 /// corner of the box [`render`] takes.
 pub fn from_corner(h: [f64; 9], x: f64, y: f64) -> [f64; 9] {
@@ -241,7 +383,11 @@ mod tests {
         s.write_region(Rect::new(0, 0, 4, 4), &[1.0; 64]);
         let r = Rect::new(0, 0, 4, 4);
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_none());
+        // Converging both ways about a point other than the contents' centre (an affine part): not drawn.
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.01, 1.0]).is_none());
+        // The same about the centre: the two-stage path.
+        let about_centre = mul(&mul(&translation(10.0, 10.0), &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.005, 1.0]), &translation(-2.0, -2.0));
+        assert!(render(&s, r, about_centre).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.0, 1.0]).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.01, 1.0]).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, f64::NAN, 0.0, 1.0]).is_none());
@@ -257,8 +403,7 @@ mod tests {
     #[ignore]
     fn dump_reference_cases() {
         use photocraft_color::{ColorMode, PixelFormat, SampleType};
-        let cases = std::env::var("PERSP_CASES").expect("PERSP_CASES");
-        let out = std::env::var("PERSP_OUT").expect("PERSP_OUT");
+        let (Ok(cases), Ok(out)) = (std::env::var("PERSP_CASES"), std::env::var("PERSP_OUT")) else { return };
         for line in std::fs::read_to_string(cases).expect("cases").lines() {
             let f: Vec<&str> = line.split_whitespace().collect();
             let bytes = std::fs::read(f[1]).expect("source");
@@ -284,8 +429,7 @@ mod tests {
     fn dump_general_cases() {
         use crate::transform::{Homography, Interp, warp_surface};
         use photocraft_color::{ColorMode, PixelFormat, SampleType};
-        let cases = std::env::var("GEN_CASES").expect("GEN_CASES");
-        let out = std::env::var("GEN_OUT").expect("GEN_OUT");
+        let (Ok(cases), Ok(out)) = (std::env::var("GEN_CASES"), std::env::var("GEN_OUT")) else { return };
         for line in std::fs::read_to_string(cases).expect("cases").lines() {
             let f: Vec<&str> = line.split_whitespace().collect();
             let bytes = std::fs::read(f[1]).expect("source");
