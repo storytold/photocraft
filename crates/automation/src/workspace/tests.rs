@@ -732,6 +732,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.info"
             | "path.addToSelection"
             | "path.subtractFromSelection"
+            | "path.intersectWithSelection"
             | "path.set"
             | "path.transform"
             | "path.moveAnchors"
@@ -745,6 +746,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.clippingPath.set"
             | "path.rename"
             | "path.stroke"
+            | "path.toShape"
             | "type.attachToPath"
             | "type.fillPath"
             | "type.detachFromPath"
@@ -762,6 +764,8 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "layer.combineShapes.excludeOverlappingShapes"
             | "layer.combineShapes.mergeShapeComponents"
             | "layer.new.frame"
+            // `"stepName":"Transform Path"` names the History step, not a host file.
+            | "edit.transform"
     ) || id.starts_with("layer.newFillLayer.")
         || id.starts_with("layer.newAdjustmentLayer.")
     {
