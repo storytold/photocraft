@@ -3344,6 +3344,10 @@ fn dissolve_clipped_adjustment_matches_cpu() {
     }
 }
 
+// Layer operators (#5772), with the helpers above.
+#[path = "operator.rs"]
+mod operator;
+
 /// Integration of #9509 and #9512: coverage endpoints, Fill, masks and clipping share the CPU oracle.
 #[test]
 fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
