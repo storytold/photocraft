@@ -1579,8 +1579,8 @@ mod tests {
         let doc1 = xf.to_doc(tip1);
         down(&mut app, doc1[0], doc1[1]);
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
-        move_to(&mut app, 70.0, doc1[1]);
-        up(&mut app, 70.0, doc1[1]);
+        move_to(&mut app, doc1[0] - 10.0, doc1[1]);
+        up(&mut app, doc1[0] - 10.0, doc1[1]);
         assert_eq!(steps(&app), initial_steps + 1);
         let (new_start, new_end, new_flip) = placement(&app);
         assert_eq!(new_start, 20.0);
@@ -1639,8 +1639,8 @@ mod tests {
         // Dragging start marker backward brings start onto the path and commits valid endpoints.
         down(&mut app, doc0[0], doc0[1]);
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
-        move_to(&mut app, 35.0, doc0[1]);
-        up(&mut app, 35.0, doc0[1]);
+        move_to(&mut app, doc0[0] - 25.0, doc0[1]);
+        up(&mut app, doc0[0] - 25.0, doc0[1]);
         assert_eq!(steps(&app), initial_steps + 1);
         let (new_start, new_end, new_flip) = placement(&app);
         assert_eq!(new_start, 15.0);
