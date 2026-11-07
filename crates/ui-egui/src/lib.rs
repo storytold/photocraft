@@ -150,6 +150,7 @@ pub use dialogs::disk_change_prompt;
 pub use dialogs::distort_ui;
 pub use dialogs::duplicate_layer_ui;
 pub use dialogs::edit_history;
+pub use dialogs::equalize_ui;
 pub use dialogs::export_dialog;
 pub use dialogs::file_ui;
 pub use dialogs::fill_ui;
@@ -770,6 +771,8 @@ impl SyntheticTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod brush_options_tooltips_tests;
+#[cfg(test)]
 mod brush_picker_escape_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
@@ -991,6 +994,8 @@ mod menu_item_labels_tests;
 #[cfg(test)]
 mod pen_path_ownership_tests;
 
+#[cfg(test)]
+mod artboard_options_bar_tests;
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
