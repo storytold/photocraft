@@ -53,7 +53,7 @@ struct Cached {
 /// Pen variants retain at most one bitmap each; large brush bitmaps stay in the single-entry cache.
 #[derive(Clone, Default)]
 struct PenCache {
-    entries: [Option<(f32, CustomCursorImage)>; 6],
+    entries: [Option<(f32, CustomCursorImage)>; PenVariant::all().len()],
 }
 
 /// The image is sticky in egui's platform output. Clear it every pass, including when a
@@ -316,7 +316,11 @@ pub fn rasterize_pen(variant: PenVariant, scale: f32) -> Option<CustomCursorImag
 /// cursor bitmap where supported so its movement tracks hardware input without waiting for canvas
 /// frames (#9122); returns `None` when unsupported or unrasterizable so the caller can paint the fallback.
 pub fn pen(ctx: &egui::Context, tool: Tool) -> Option<CursorIcon> {
-    let variant = PenVariant::from_tool(tool)?;
+    pen_variant(ctx, PenVariant::from_tool(tool)?)
+}
+
+/// A Pen cursor `variant` as an OS cursor bitmap; `None` where unsupported, as [`pen`].
+pub fn pen_variant(ctx: &egui::Context, variant: PenVariant) -> Option<CursorIcon> {
     if !native(ctx) {
         return None;
     }

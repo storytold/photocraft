@@ -24,7 +24,7 @@ pub fn reset_pen_rasterization_count() {
     RASTERIZATION_COUNT.store(0, Ordering::Relaxed);
 }
 
-/// The six Pen tool cursor variants.
+/// The Pen tool cursor variants: one per pen tool, plus the Pen over an open path's endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PenVariant {
     Standard,
@@ -33,6 +33,8 @@ pub enum PenVariant {
     AddAnchor,
     DeleteAnchor,
     ConvertPoint,
+    /// The Pen over an endpoint of an open path, where a click carries it on (#10638).
+    Continue,
 }
 
 impl PenVariant {
@@ -58,6 +60,7 @@ impl PenVariant {
             Self::AddAnchor => "pen-add-anchor",
             Self::DeleteAnchor => "pen-delete-anchor",
             Self::ConvertPoint => "convert-point",
+            Self::Continue => "pen-continue",
         }
     }
 
@@ -71,9 +74,9 @@ impl PenVariant {
         }
     }
 
-    /// All six variants for iteration and testing.
-    pub const fn all() -> [Self; 6] {
-        [Self::Standard, Self::Freeform, Self::Curvature, Self::AddAnchor, Self::DeleteAnchor, Self::ConvertPoint]
+    /// All variants for iteration and testing.
+    pub const fn all() -> [Self; 7] {
+        [Self::Standard, Self::Freeform, Self::Curvature, Self::AddAnchor, Self::DeleteAnchor, Self::ConvertPoint, Self::Continue]
     }
 }
 

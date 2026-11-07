@@ -123,6 +123,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("pen-add-anchor", include_bytes!("../../../assets/icons/pen-add-anchor.svg")),
     ("pen-delete-anchor", include_bytes!("../../../assets/icons/pen-delete-anchor.svg")),
     ("pen-tool", include_bytes!("../../../assets/icons/pen-tool.svg")),
+    ("pen-continue", include_bytes!("../../../assets/icons/pen-continue.svg")),
     ("pencil", include_bytes!("../../../assets/icons/pencil.svg")),
     ("pentagon", include_bytes!("../../../assets/icons/pentagon.svg")),
     ("perspective-crop", include_bytes!("../../../assets/icons/perspective-crop.svg")),

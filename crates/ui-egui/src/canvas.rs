@@ -62,7 +62,9 @@ pub mod zoom_window_fit;
 
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
-pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
+pub(crate) use cursors::{
+    alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_continue_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor,
+};
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
@@ -1635,6 +1637,15 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             } =>
         {
             crate::tool_cursor::close_path(painter, p)
+        }
+        // Over an open path's endpoint, the pen with the continue-path badge (#10638).
+        Tool::Pen
+            if !precise_other_cursor(app) && {
+                let [x, y] = xf.to_doc(p);
+                crate::vector_ui::continues_path_at(app, tool, x, y)
+            } =>
+        {
+            pen_continue_cursor(ui.ctx(), p)
         }
         // The pen tools: their own icon with its nib on the point, or the crosshair for
         // precise Other Cursors (#4639).
