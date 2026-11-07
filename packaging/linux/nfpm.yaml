@@ -27,9 +27,11 @@ description: |-
 # the package tools can't find them: list them here. winit 0.30 loads, for X11: libX11,
 # libX11-xcb, libxcb, libXcursor, libXi, libxkbcommon and libxkbcommon-x11 (missing
 # libxkbcommon-x11 panicked in #201); for Wayland: libwayland-client and libxkbcommon. wgpu needs
-# libvulkan or libEGL. RandR goes through x11rb's protocol code and fonts are found by scanning
-# directories, so libXrandr and fontconfig aren't loaded. The app also checks for these at start
-# (apps/photocraft/src/linux_libs.rs) and names the missing package instead of crashing.
+# libvulkan or libEGL. rfd (the Open/Save dialogs) loads libdbus-1 to reach the file-chooser
+# portal; without it those dialogs fail. RandR goes through x11rb's protocol code and fonts are
+# found by scanning directories, so libXrandr and fontconfig aren't loaded. The app also checks
+# for the windowing and GPU libraries at start (apps/photocraft/src/linux_libs.rs) and names the
+# missing package instead of crashing.
 overrides:
   deb:
     depends:
@@ -43,6 +45,7 @@ overrides:
       - libxcb1
       - libxcursor1
       - libxi6
+      - libdbus-1-3
       - libvulkan1 | libegl1
     recommends:
       - mesa-vulkan-drivers
@@ -60,6 +63,7 @@ overrides:
       - libxcb.so.1()(64bit)
       - libXcursor.so.1()(64bit)
       - libXi.so.6()(64bit)
+      - libdbus-1.so.3()(64bit)
       - (libvulkan.so.1()(64bit) or libEGL.so.1()(64bit))
     recommends:
       - mesa-vulkan-drivers
