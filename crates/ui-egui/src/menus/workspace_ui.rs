@@ -66,6 +66,37 @@ fn saved_name(app: &PhotocraftApp, id: &str) -> Option<String> {
     app.session.prefs().workspaces.keys().nth(i).cloned()
 }
 
+const SAVED_MARK: &str = " (saved)";
+const SAVED_LAYOUT_MARK: &str = " (saved layout)";
+
+/// Menu and switcher label. A saved layout that already uses a bundled sample's name is
+/// listed beside that sample. `"{name} (saved layout)"` is used when `"{name} (saved)"` is
+/// itself the name of a saved workspace.
+pub fn saved_menu_label(app: &PhotocraftApp, name: &str) -> String {
+    if !super::workspace_files::is_bundled(name) {
+        return name.to_string();
+    }
+    let alias = format!("{name}{SAVED_MARK}");
+    if app.session.prefs().workspaces.contains_key(&alias) { format!("{name}{SAVED_LAYOUT_MARK}") } else { alias }
+}
+
+/// Preferences key for a menu label. An exact saved name wins. Otherwise the sample's
+/// saved copy is addressed as `"{sample} (saved)"` or `"{sample} (saved layout)"`.
+fn stored_saved_name<'a>(app: &'a PhotocraftApp, name: &'a str) -> &'a str {
+    if app.session.prefs().workspaces.contains_key(name) {
+        return name;
+    }
+    for suffix in [SAVED_LAYOUT_MARK, SAVED_MARK] {
+        if let Some(stem) = name.strip_suffix(suffix)
+            && super::workspace_files::is_bundled(stem)
+            && app.session.prefs().workspaces.contains_key(stem)
+        {
+            return stem;
+        }
+    }
+    name
+}
+
 /// The top-bar workspace switcher's options as (key, label): the presets, then saved workspaces.
 pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
     // Keys stay English (`apply_workspace` matches them); the dropdown shows the preset labels
@@ -80,13 +111,16 @@ pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
     ];
     let mut opts: Vec<(String, String)> = presets.iter().map(|(k, l)| ((*k).to_string(), (*l).to_string())).collect();
     opts.extend(super::workspace_files::bundled_names().into_iter().map(|name| (name.clone(), name)));
-    opts.extend(saved_names(app).into_iter().filter(|name| !super::workspace_files::is_bundled(name)).map(|name| (name.clone(), name)));
+    opts.extend(saved_names(app).into_iter().map(|name| {
+        let label = saved_menu_label(app, &name);
+        (label.clone(), label)
+    }));
     opts
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     match id {
-        i if i.starts_with(SAVED) => Some(saved_name(app, i).is_some_and(|n| n == app.ui.workspace)),
+        i if i.starts_with(SAVED) => Some(saved_name(app, i).is_some_and(|name| saved_menu_label(app, &name) == app.ui.workspace)),
         i if i.starts_with(super::workspace_files::PREFIX) => Some(super::workspace_files::bundled_name(i).is_some_and(|n| n == app.ui.workspace)),
         "window.panel.modifierKeys" => Some(app.ui.shell.modifier_keys),
         "window.workspace.lockWorkspace" => Some(app.session.prefs().workspace_locked),
@@ -186,7 +220,7 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
             None => Err(format!("no workspace for `{i}`")),
         },
         i if i.starts_with(SAVED) => match saved_name(app, i) {
-            Some(name) => select_workspace(app, &json!({"name": name})),
+            Some(name) => select_workspace(app, &json!({"name": saved_menu_label(app, &name)})),
             None => Err(format!("no saved workspace for `{i}`")),
         },
         "view.pixelAspectRatio.custom" if no_params(params) => open(app, "customPar", json!({"name": "", "ratio": 1.0})),
@@ -251,8 +285,9 @@ fn delete_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
     if !app.session.prefs().workspaces.contains_key(&name) {
         return Err(format!("no saved workspace \"{name}\""));
     }
-    // Like Photoshop, the current workspace can't be deleted.
-    if app.ui.workspace == name {
+    // Like Photoshop, the current workspace can't be deleted. A saved copy of a bundled
+    // sample is current under its "{name} (saved)" label.
+    if app.ui.workspace == name || stored_saved_name(app, &app.ui.workspace) == name {
         return Err(format!("\"{name}\" is the current workspace; switch to another first"));
     }
     app.session.prefs.edit(|pr| pr.workspaces.remove(&name));
@@ -270,18 +305,21 @@ fn select_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
         let theme = super::workspace_files::bundled_theme(&name).and_then(|theme| theme);
         return Ok(super::workspace_files::reply_for(&name, theme.as_deref()));
     }
-    let Some(stored) = app.session.prefs().workspaces.get(&name).cloned() else {
+    let key = stored_saved_name(app, &name).to_string();
+    let Some(stored) = app.session.prefs().workspaces.get(&key).cloned() else {
         return Err(format!("no workspace \"{name}\""));
     };
-    app.ui.workspace = name.clone();
+    let display = saved_menu_label(app, &key);
+    app.ui.workspace = display.clone();
     apply_custom(app);
     let theme = stored.get("theme").and_then(Value::as_str).filter(|id| crate::theme::ThemeKind::ALL.iter().any(|kind| kind.id() == *id));
-    Ok(super::workspace_files::reply_for(&name, theme))
+    Ok(super::workspace_files::reply_for(&display, theme))
 }
 
 /// Apply the current workspace when it is a saved one. Returns false for the built-in presets.
 pub fn apply_custom(app: &mut PhotocraftApp) -> bool {
-    let Some(ws) = app.session.prefs().workspaces.get(&app.ui.workspace).cloned() else { return false };
+    let key = stored_saved_name(app, &app.ui.workspace).to_string();
+    let Some(ws) = app.session.prefs().workspaces.get(&key).cloned() else { return false };
     // Workspaces saved before the dock layout existed get the default heights.
     app.ui.dock = Default::default();
     crate::dock::apply(app, &ws);
@@ -704,6 +742,54 @@ mod tests {
         assert_eq!(&keys[6..8], ["CS4", "CS5"]);
         assert_eq!(&keys[8..], ["Comp", "Retouch"]);
         assert!(keys.contains(&app.ui.workspace));
+    }
+
+    #[test]
+    fn a_saved_copy_of_a_bundled_name_keeps_its_index_and_stays_selectable() {
+        let (mut app, ctx) = app();
+        app.ui.panels.history = true;
+        app.ui.panels.navigator = false;
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name": "Retouch"})).unwrap();
+        let legacy = app.session.prefs().workspaces["Retouch"].clone();
+        app.session.prefs.edit(|prefs| {
+            prefs.workspaces.insert("CS4".into(), legacy);
+            prefs.workspaces.get_mut("CS4").unwrap()["panels"]["navigator"] = json!(false);
+            prefs.workspaces.get_mut("CS4").unwrap()["panels"]["history"] = json!(true);
+            prefs.workspaces.get_mut("Retouch").unwrap()["panels"]["navigator"] = json!(true);
+            prefs.workspaces.get_mut("Retouch").unwrap()["panels"]["history"] = json!(false);
+        });
+        let items = |app: &PhotocraftApp| {
+            crate::menus::menu_items(app).into_iter().filter(|item| item.path == ["Window", "Workspace"] && item.id != "---").collect::<Vec<_>>()
+        };
+        let saved_cs4 = items(&app).into_iter().find(|item| item.label == "CS4 (saved)").unwrap();
+        let retouch = items(&app).into_iter().find(|item| item.label == "Retouch").unwrap();
+        let bundled = items(&app).into_iter().find(|item| item.id == "window.workspace.bundled.0").unwrap();
+        assert_eq!(saved_cs4.id, "window.workspace.saved.0");
+        assert_eq!(retouch.id, "window.workspace.saved.1");
+        assert_eq!(bundled.label, "CS4");
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.painting", json!({})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, &retouch.id, json!({})).unwrap();
+        assert_eq!(app.ui.workspace, "Retouch");
+        assert!(app.ui.panels.navigator && !app.ui.panels.history);
+        crate::menus::invoke(&mut app, &ctx, &saved_cs4.id, json!({})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4 (saved)");
+        assert!(!app.ui.panels.navigator && app.ui.panels.history);
+        assert!(crate::menus::invoke(&mut app, &ctx, "window.workspace.deleteWorkspace", json!({"name": "CS4"})).is_err());
+        crate::menus::invoke(&mut app, &ctx, &bundled.id, json!({})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4");
+        assert!(app.ui.panels.navigator);
+        assert_eq!(app.ui.theme.id(), "cs4");
+        app.ui.panels.navigator = false;
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
+        assert!(app.ui.panels.navigator, "reset of the sample reapplies the sample");
+        crate::menus::invoke(&mut app, &ctx, &saved_cs4.id, json!({})).unwrap();
+        app.ui.panels.history = false;
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.resetWorkspace", json!({})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4 (saved)");
+        assert!(!app.ui.panels.navigator && app.ui.panels.history, "reset of the saved copy reapplies that copy");
+        let keys: Vec<String> = switcher_options(&app).into_iter().map(|(key, _)| key).collect();
+        assert!(keys.iter().any(|key| key == "CS4"));
+        assert!(keys.iter().any(|key| key == "CS4 (saved)"));
     }
 
     #[test]

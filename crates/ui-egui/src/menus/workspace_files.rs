@@ -11,8 +11,10 @@
 //! Files under `crates/ui-egui/workspaces/` ship with the app. Register each one in
 //! [`BUNDLED`] (one line). A bundled name is reserved: importing it applies the file and
 //! does not add a second copy to the saved workspaces. Give a custom file its own name to
-//! keep it. Built-in preset names (Essentials, Photography, …) are rejected. Reset and
-//! those presets do not change the theme; a file changes it only when it has `theme`.
+//! keep it. A preferences entry that already uses a bundled name stays in the menu as
+//! "{name} (saved)" and does not replace the sample. Built-in preset names (Essentials,
+//! Photography, …) are rejected. Reset and those presets do not change the theme; a file
+//! changes it only when it has `theme`.
 
 use std::sync::OnceLock;
 
@@ -128,7 +130,7 @@ pub(crate) fn export(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            write_bytes(app, path, &bytes)?;
+            write_export_path(app, path, &bytes)?;
             return Ok(json!({"path": path, "workspace": name}));
         }
     }
@@ -209,12 +211,38 @@ fn parse(bytes: &[u8]) -> Result<WorkspaceFile, String> {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn import_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
+    let bytes = read_workspace_bytes(app, path)?;
+    import_bytes(app, &bytes)
+}
+
+/// A path on a control request goes through the authorized roots. The file dialog keeps
+/// [`write_bytes`].
+#[cfg(not(target_arch = "wasm32"))]
+fn read_workspace_bytes(app: &mut PhotocraftApp, path: &str) -> Result<Vec<u8>, String> {
+    let automated = app.automation_input || app.services.automation_read.is_some();
+    if automated {
+        let read = app.services.automation_read.as_mut().ok_or_else(|| "automation read authority is not configured".to_string())?;
+        let (_name, bytes) = read(path)?;
+        if bytes.len() > MAX_BYTES {
+            return Err("the workspace file is too large".into());
+        }
+        return Ok(bytes);
+    }
     let meta = std::fs::metadata(path).map_err(|err| err.to_string())?;
     if meta.len() > MAX_BYTES as u64 {
         return Err("the workspace file is too large".into());
     }
-    let bytes = std::fs::read(path).map_err(|err| err.to_string())?;
-    import_bytes(app, &bytes)
+    std::fs::read(path).map_err(|err| err.to_string())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn write_export_path(app: &mut PhotocraftApp, path: &str, bytes: &[u8]) -> Result<(), String> {
+    let automated = app.automation_input || app.services.automation_write.is_some();
+    if automated {
+        let write = app.services.automation_write.as_mut().ok_or_else(|| "automation write authority is not configured".to_string())?;
+        return write(path, bytes);
+    }
+    write_bytes(app, path, bytes)
 }
 
 fn import_bytes(app: &mut PhotocraftApp, bytes: &[u8]) -> Result<Value, String> {
@@ -483,5 +511,41 @@ mod tests {
         assert!(!app.session.prefs().workspaces.contains_key("CS4"));
         assert!(app.ui.panels.navigator);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_control_path_uses_the_automation_roots() {
+        let (mut app, ctx) = app();
+        app.automation_input = true;
+        let missing = crate::menus::invoke(&mut app, &ctx, "window.workspace.importWorkspace", json!({"path": "mine.pcraft-workspace"})).unwrap_err();
+        assert!(missing.contains("automation read authority"), "{missing}");
+        let refused = crate::menus::invoke(&mut app, &ctx, "window.workspace.exportWorkspace", json!({"name": "Retouch Desk", "path": "out.pcraft-workspace"}))
+            .unwrap_err();
+        assert!(refused.contains("automation write authority"), "{refused}");
+
+        let bytes = BUNDLED[0].1.as_bytes().to_vec();
+        app.services.automation_read = Some(Box::new(move |path| {
+            assert_eq!(path, "cs4.pcraft-workspace");
+            Ok(("cs4.pcraft-workspace".into(), bytes.clone()))
+        }));
+        let imported = crate::menus::invoke(&mut app, &ctx, "window.workspace.importWorkspace", json!({"path": "cs4.pcraft-workspace"})).unwrap();
+        assert_eq!(imported["workspace"], "CS4");
+        assert_eq!(imported["theme"], "cs4");
+        assert_eq!(app.ui.theme, ThemeKind::Cs4);
+        assert!(!app.session.prefs().workspaces.contains_key("CS4"));
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot = std::sync::Arc::clone(&seen);
+        app.services.automation_write = Some(Box::new(move |path, bytes| {
+            assert_eq!(path, "out.pcraft-workspace");
+            *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(bytes.to_vec());
+            Ok(())
+        }));
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.exportWorkspace", json!({"name": "Retouch Desk", "path": "out.pcraft-workspace"})).unwrap();
+        let saved = seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone().expect("written");
+        let parsed = parse(&saved).unwrap();
+        assert_eq!(parsed.name, "Retouch Desk");
+        assert_eq!(parsed.theme.as_deref(), Some("cs4"));
     }
 }
