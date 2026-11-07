@@ -4231,3 +4231,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Pokaż granice warstwy po najechaniu
 	Expand layer group on click	Rozwiń grupę warstw po kliknięciu
 	Show hover bounds from Layers	Pokaż granice po najechaniu z panelu Warstwy
+# Artboard tool options bar (#11385)
+	Distribute Widths	Rozmieść szerokości równomiernie
+	Distribute Heights	Rozmieść wysokości równomiernie
+	Auto-nest Layers	Automatycznie zagnieżdżaj warstwy
+	Auto-size Canvas	Automatycznie zmieniaj rozmiar płótna
+	Keep Relative Position During Layer Reordering	Zachowaj położenie względne przy zmianie kolejności warstw
+	Shrinkwrap Canvas on Save	Przytnij płótno do zawartości przy zapisie

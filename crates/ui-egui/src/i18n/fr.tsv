@@ -4636,3 +4636,10 @@ shape	Appearance	Apparence
 	Show layer bounds on hover	Afficher les limites du calque au survol
 	Expand layer group on click	Développer le groupe de calques au clic
 	Show hover bounds from Layers	Afficher les limites au survol depuis Calques
+# Artboard tool options bar (#11385)
+	Distribute Widths	Répartir les largeurs
+	Distribute Heights	Répartir les hauteurs
+	Auto-nest Layers	Imbriquer les calques automatiquement
+	Auto-size Canvas	Redimensionner le canevas automatiquement
+	Keep Relative Position During Layer Reordering	Conserver la position relative lors de la réorganisation des calques
+	Shrinkwrap Canvas on Save	Réduire le canevas au contenu à l'enregistrement

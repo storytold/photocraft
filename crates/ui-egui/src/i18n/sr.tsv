@@ -4679,3 +4679,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
 	Expand layer group on click	Proširi grupu slojeva klikom
 	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi
+# Artboard tool options bar (#11385)
+	Distribute Widths	Raspodeli širine
+	Distribute Heights	Raspodeli visine
+	Auto-nest Layers	Automatski ugnezdi slojeve
+	Auto-size Canvas	Automatski promeni veličinu platna
+	Keep Relative Position During Layer Reordering	Zadrži relativni položaj pri promeni redosleda slojeva
+	Shrinkwrap Canvas on Save	Smanji platno na sadržaj pri čuvanju

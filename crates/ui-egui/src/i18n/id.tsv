@@ -3636,3 +3636,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Tampilkan batas layer saat kursor di atasnya
 	Expand layer group on click	Perluas grup layer saat diklik
 	Show hover bounds from Layers	Tampilkan batas saat kursor di atas dari Layer
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribusi lebar
+	Distribute Heights	Distribusi tinggi
+	Auto-nest Layers	Sarangkan layer secara otomatis
+	Auto-size Canvas	Ubah ukuran kanvas otomatis
+	Keep Relative Position During Layer Reordering	Pertahankan posisi relatif saat mengurutkan ulang layer
+	Shrinkwrap Canvas on Save	Kecilkan kanvas sesuai konten saat menyimpan

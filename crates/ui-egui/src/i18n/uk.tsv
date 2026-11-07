@@ -4324,3 +4324,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Показувати межі шару під час наведення
 	Expand layer group on click	Розгортати групу шарів за клацанням
 	Show hover bounds from Layers	Показувати межі під час наведення з панелі «Шари»
+# Artboard tool options bar (#11385)
+	Distribute Widths	Розподілити ширину
+	Distribute Heights	Розподілити висоту
+	Auto-nest Layers	Автоматично вкладати шари
+	Auto-size Canvas	Автоматично змінювати розмір полотна
+	Keep Relative Position During Layer Reordering	Зберігати відносне положення під час зміни порядку шарів
+	Shrinkwrap Canvas on Save	Зменшувати полотно до вмісту під час збереження

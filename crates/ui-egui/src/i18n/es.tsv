@@ -4513,3 +4513,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar límites de capa al pasar el puntero
 	Expand layer group on click	Expandir grupo de capas al hacer clic
 	Show hover bounds from Layers	Mostrar límites al pasar el puntero desde Capas
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribuir anchos
+	Distribute Heights	Distribuir alturas
+	Auto-nest Layers	Anidar capas automáticamente
+	Auto-size Canvas	Ajustar tamaño de lienzo automáticamente
+	Keep Relative Position During Layer Reordering	Mantener la posición relativa al reordenar capas
+	Shrinkwrap Canvas on Save	Reducir el lienzo al contenido al guardar

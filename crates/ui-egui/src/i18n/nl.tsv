@@ -4367,3 +4367,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Laaggrenzen tonen bij aanwijzen
 	Expand layer group on click	Laaggroep uitvouwen bij klikken
 	Show hover bounds from Layers	Aanwijsgrenzen tonen vanuit Lagen
+# Artboard tool options bar (#11385)
+	Distribute Widths	Breedtes verdelen
+	Distribute Heights	Hoogtes verdelen
+	Auto-nest Layers	Lagen automatisch nesten
+	Auto-size Canvas	Canvasgrootte automatisch aanpassen
+	Keep Relative Position During Layer Reordering	Relatieve positie behouden bij het wijzigen van de laagvolgorde
+	Shrinkwrap Canvas on Save	Canvas bij opslaan verkleinen tot de inhoud
