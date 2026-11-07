@@ -148,7 +148,7 @@ fn jpeg_options_writes_the_choice_or_cancels() {
     h.run_steps(3);
     assert!(h.state().jpeg_options.is_none());
     assert_eq!(writes.borrow().len(), 1, "cancelled: nothing more written");
-    assert_eq!(h.state().ui.status, "Save cancelled");
+    assert_eq!(h.state().ui.status, "Save canceled");
 }
 
 /// Scripts choose with `quality` or `jpegFormat` and are never asked; a bad value writes nothing;
