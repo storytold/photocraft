@@ -33,3 +33,80 @@ fn zoom_menu_steps_keep_the_view_centre_and_history() {
         }
     }
 }
+
+#[test]
+fn clicked_point_preference_and_hand_menu_keep_their_existing_anchors() {
+    for (tool, center_on_point) in [(Tool::Zoom, true), (Tool::Hand, true), (Tool::Hand, false)] {
+        for (command, direction) in [("view.zoomIn", 1), ("view.zoomOut", -1)] {
+            let mut app = zoom_app(400, 300);
+            app.ui.tool = tool;
+            app.run("prefs.set", json!({"values": {"tools.zoomClickedPointToCenter": center_on_point, "tools.overscroll": true}})).unwrap();
+            let mut h = harness(app);
+            let before = h.state().ui.views[0].clone();
+            let p = screen_of(h.state(), [300.0, 100.0]);
+            right_click(&mut h, p, Modifiers::NONE);
+            let doc = h.state().ui.canvas_tool_menu.as_ref().unwrap().anchor.unwrap().map(|n| n as f32);
+            let ctx = h.ctx.clone();
+            choose(h.state_mut(), &ctx, command);
+            let v = &h.state().ui.views[0];
+            assert_eq!(v.zoom, crate::zoom_levels::step(before.zoom, direction, [400, 300]));
+            let expected = if center_on_point { doc } else { std::array::from_fn(|i| doc[i] - (doc[i] - before.center[i]) * before.zoom / v.zoom) };
+            assert_eq!(v.center, expected, "{tool:?}: {command}");
+            assert!(v.zoom_animating);
+            assert_eq!(v.zoom_anchor.is_some(), !center_on_point);
+        }
+    }
+}
+
+#[test]
+fn zoom_click_and_alt_click_still_anchor_at_the_pointer() {
+    for animated in [false, true] {
+        for (modifiers, direction) in [(Modifiers::NONE, 1), (Modifiers::ALT, -1)] {
+            let mut app = zoom_app(400, 300);
+            app.ui.tool = Tool::Zoom;
+            app.run("prefs.set", json!({"values": {"general.animatedZoom": animated, "tools.zoomClickedPointToCenter": false, "tools.overscroll": true}}))
+                .unwrap();
+            let mut h = harness(app);
+            let zoom = h.state().ui.views[0].zoom;
+            let doc = [300.0, 100.0];
+            let p = screen_of(h.state(), doc);
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            h.event(egui::Event::PointerMoved(p));
+            h.step();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers });
+                h.step();
+            }
+            h.input_mut().time = Some(h.ctx.input(|i| i.time) + 0.3);
+            h.step();
+            assert_eq!(h.state().ui.views[0].zoom, crate::zoom_levels::step(zoom, direction, [400, 300]));
+            assert!(screen_of(h.state(), doc).distance(p) < 1.0);
+            assert!(h.state().ui.canvas_tool_menu.is_none());
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), 0);
+        }
+    }
+}
+
+#[test]
+fn held_zoom_keys_still_open_no_view_menu() {
+    for tool in [Tool::Brush, Tool::Hand] {
+        for modifiers in [Modifiers::COMMAND, Modifiers::ALT] {
+            let mut app = zoom_app(400, 300);
+            app.ui.tool = tool;
+            let mut h = harness(app);
+            let modifiers =
+                Modifiers { mac_cmd: cfg!(target_os = "macos") && modifiers.command, ctrl: !cfg!(target_os = "macos") && modifiers.command, ..modifiers };
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            h.event(egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed: true, repeat: false, modifiers });
+            h.step();
+            assert!(matches!(crate::hold_keys::held_tool(h.state(), &h.ctx), Some(crate::hold_keys::Temporary::ZoomIn | crate::hold_keys::Temporary::ZoomOut)));
+            let before = h.state().ui.views[0].clone();
+            let p = screen_of(h.state(), [300.0, 100.0]);
+            right_click(&mut h, p, modifiers);
+            assert!(h.state().ui.canvas_tool_menu.is_none());
+            assert_eq!(h.state().ui.tool, tool);
+            let v = &h.state().ui.views[0];
+            assert_eq!((v.zoom, v.center), (before.zoom, before.center));
+        }
+    }
+}
