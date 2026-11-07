@@ -290,7 +290,12 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 /// Options bar: W, ⇄, H, the resolution (the Crop tool's fields), Front Image, Clear, Show Grid,
 /// and cancel / commit.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    crate::crop_size::fields(&mut app.ui.tool_options, ui);
+    let doc_dpi = app.session.active().map_or(72.0, |st| f64::from(st.doc.resolution_dpi));
+    let pt_per_in = app.session.prefs().units_and_rulers.point_size.per_inch();
+    // Out-of-range numbers and text get the reference application's alerts (#11977).
+    if let Some(message) = crate::crop_size::perspective_fields(&mut app.ui.tool_options, ui, doc_dpi, pt_per_in) {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
     if crate::widgets::secondary_button(ui, tl!("Front Image"), 0.0).clicked()
         && let Some((size, dpi)) = app.session.active().map(|st| (st.doc.size, f64::from(st.doc.resolution_dpi)))
     {
@@ -302,6 +307,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if crate::widgets::secondary_button(ui, tl!("Clear"), 0.0).clicked() {
         crate::crop_size::clear(&mut app.ui.tool_options);
+        // Clear also puts the resolution unit back to px/in (#11977).
+        app.ui.tool_options.crop_resolution_unit = crate::crop_size::PX_PER_IN.into();
     }
     crate::widgets::vline(ui, 22.0);
     crate::widgets::checkbox(ui, &mut app.ui.tool_options.perspective_crop_grid, tl!("Show Grid"));
@@ -315,6 +322,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
 }
+
+#[cfg(test)]
+#[path = "perspective_crop_fields_tests.rs"]
+mod perspective_crop_fields_tests;
 
 #[cfg(test)]
 mod tests {
