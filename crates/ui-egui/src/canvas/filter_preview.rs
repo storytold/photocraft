@@ -44,6 +44,11 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) {
         return None;
     }
+    // A dialog bound to one document (HDR Toning) never previews on another (#10329).
+    if crate::hdr_flatten_prompt::check_dialog(app, &d.fields).is_err() {
+        app.filter_preview = None;
+        return None;
+    }
     let cmd = d.fields.get("__command")?.as_str()?.to_string();
     // Previews edit what the command will: a targeted layer mask included (#780).
     let (cmd, mut params) = if d.fields.contains_key("__smartFilter") {
