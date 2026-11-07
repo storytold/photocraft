@@ -1673,6 +1673,10 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         points: vec![Cp { input: 0.0, output: 1.0 }, Cp { input: 0.4, output: 0.4 }, Cp { input: 1.0, output: 0.0 }],
         corners: vec![],
     };
+    // The same contour under a high light, deep (altitude 69, 358 %): the unmapped flat shading
+    // stays the neutral, so only the slope facing away glints, on both renderers.
+    let mut bevel_gloss_high_alt = bevel_gloss_high.clone();
+    (bevel_gloss_high_alt.use_global_light, bevel_gloss_high_alt.angle, bevel_gloss_high_alt.altitude, bevel_gloss_high_alt.depth) = (false, 146.0, 69.0, 3.58);
     vec![
         ("drop shadow", vec![Effect::DropShadow(shadow(BlendMode::Multiply, 0.75, 120.0, 6.0, 8.0, 0.0))]),
         ("drop shadow spread contour", vec![Effect::DropShadow(ds_contour)]),
@@ -1763,6 +1767,7 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
         ),
         ("bevel contour own light", vec![Effect::BevelEmboss(bevel_contour)]),
         ("bevel gloss starting high", vec![Effect::BevelEmboss(bevel_gloss_high)]),
+        ("bevel gloss starting high, high light", vec![Effect::BevelEmboss(bevel_gloss_high_alt)]),
         ("satin", vec![Effect::Satin(satin)]),
         ("satin inverted contour", vec![Effect::Satin(satin_inv)]),
         ("stroke outside colour", vec![Effect::Stroke(stroke(4.0, StrokePosition::Outside, FxPaint::Color(Color::rgb(0.95, 0.85, 0.1))))]),
