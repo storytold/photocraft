@@ -218,12 +218,13 @@ fn a_wrong_sized_plane_is_refused_before_a_sample_type_conversion() {
 }
 
 /// Extra samples count against `max_alloc` with the image (their interleaved buffer and the
-/// planes split from it): a budget that holds the RGB image but not sixteen extra planes opens
-/// the image without them, with a warning, instead of allocating past it.
+/// planes split from it): a budget that holds the RGB image and one strip's decode scratch but not
+/// sixteen extra planes opens the image without them, with a warning, instead of allocating past
+/// it.
 #[test]
 fn extra_samples_count_against_the_allocation_limit() {
-    // Big enough for several strips (about 1 MB each): one strip of all 19 samples fits the budget
-    // of the image alone, as in real files.
+    // Big enough for several strips (about 1 MB each). Each strip of all 19 samples is decoded
+    // through a scratch buffer that counts against the budget too: 1 MiB more than the image.
     let (w, h) = (1024u32, 1024u32);
     let n = (w * h) as usize;
     let mut img = synth(w, h, ChannelLayout::Rgb, SampleType::U8, 1, 0.0);
@@ -232,18 +233,21 @@ fn extra_samples_count_against_the_allocation_limit() {
     let with = |max_alloc: u64| decode_with(&bytes, &DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..DecodeOptions::default() });
     // RGB is 3 bytes a pixel; the extra samples add 2 x 16 more.
     let image_only = 3 * n as u64;
+    let strip_room = 1u64 << 20;
     let with_extras = (3 + 2 * MAX_EXTRA_SAMPLES as u64) * n as u64;
     let back = with(with_extras).expect("everything fits");
     assert_eq!(back.meta.extra_samples.len(), MAX_EXTRA_SAMPLES);
     assert!(back.warnings.is_empty());
     // The image fits, its extra samples don't: it opens as before they were read, with a warning.
-    for max_alloc in [image_only, with_extras - 1] {
+    for max_alloc in [image_only + strip_room, with_extras - 1] {
         let only = with(max_alloc).expect("the image alone fits");
         assert!(only.meta.extra_samples.is_empty());
         assert_eq!(only.warnings, vec![DecodeWarning::ExtraSamplesDropped { format: Format::Tiff, count: MAX_EXTRA_SAMPLES as u32 }]);
         assert_eq!(only.data(), back.data());
     }
     assert!(matches!(with(image_only - 1), Err(CodecError::LimitExceeded(_))), "the image itself must still fit");
+    // The image fits but a strip's scratch beside it doesn't: refused, not decoded past the budget.
+    assert!(matches!(with(image_only), Err(CodecError::LimitExceeded(_))), "the strip scratch counts too");
 }
 
 /// The value field of a little-endian classic TIFF's ExtraSamples entry (tag 338, SHORT) holding
