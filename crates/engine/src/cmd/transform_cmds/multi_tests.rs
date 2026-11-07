@@ -110,33 +110,39 @@ fn rotate_and_flip_presets_use_the_frame_of_the_layers_they_transform() {
 }
 
 #[test]
-fn preset_frames_keep_explicit_layer_targets_and_exclude_a_selected_background() {
-    for mode in 0..3 {
+fn preset_frames_keep_explicit_layer_targets_with_a_selected_background() {
+    for list in [false, true] {
         let (mut s, ids) = preset_layers(SampleType::U16);
         let before = s.active().unwrap().doc.clone();
         let bg = before.layers[0].id;
-        let params = match mode {
-            0 => json!({"layer":ids[1].0}),
-            1 => json!({"layers":[ids[0].0]}),
-            _ => {
-                s.execute("layer.select", json!({"layer":bg.0,"mode":"add"})).unwrap();
-                json!({})
-            }
-        };
+        s.execute("layer.select", json!({"layer":bg.0,"mode":"add"})).unwrap();
+        let params = if list { json!({"layers":[ids[0].0]}) } else { json!({"layer":ids[1].0}) };
         s.execute("edit.transform.flipHorizontal", params).unwrap();
-        let expected = if mode < 2 { [Rect::new(2, 4, 6, 8), Rect::new(18, 12, 22, 16)] } else { [Rect::new(18, 4, 22, 8), Rect::new(2, 12, 6, 16)] };
-        assert_eq!(ids.map(|id| bounds(&s, id)), expected);
+        assert_eq!(ids.map(|id| bounds(&s, id)), [Rect::new(2, 4, 6, 8), Rect::new(18, 12, 22, 16)]);
         let after = &s.active().unwrap().doc;
         assert!(after.layer(bg) == before.layer(bg));
-        if mode == 1 {
+        let untouched = ids[usize::from(list)];
+        assert!(after.layer(untouched) == before.layer(untouched));
+        if list {
             let target = after.layer(ids[0]).unwrap().surface().unwrap();
             assert_eq!(target.sample_channel(5, 4, 2), 1.0, "the blue marker must actually flip");
             assert_eq!(target.sample_channel(2, 4, 2), 0.0);
         }
-        if mode < 2 {
-            let untouched = ids[usize::from(mode == 1)];
-            assert!(after.layer(untouched) == before.layer(untouched));
-        }
+    }
+}
+
+#[test]
+fn whole_layer_presets_refuse_a_background_selected_with_other_layers() {
+    let (mut s, _) = preset_layers(SampleType::U16);
+    let bg = s.active().unwrap().doc.layers[0].id;
+    s.execute("layer.select", json!({"layer":bg.0,"mode":"add"})).unwrap();
+    let st = s.active().unwrap();
+    let (before, revision, steps) = (st.doc.clone(), st.revision, st.history.past_len());
+    for command in ["edit.transform.flipHorizontal", "edit.transform.rotate90Cw"] {
+        let error = s.execute(command, json!({})).unwrap_err().to_string();
+        assert!(error.contains("\"Background\" is locked"), "{command}: {error}");
+        let st = s.active().unwrap();
+        assert!(st.doc == before && st.revision == revision && st.history.past_len() == steps);
     }
 }
 
