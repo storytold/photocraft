@@ -637,11 +637,14 @@ fn level_for(key: &Surface, src: &Surface, r: Rect, level: usize, n: usize, ctl:
     }
     let built = std::sync::Arc::new(Level::build(src, r, level, n, ctl)?);
     LEVELS.with(|l| {
-        if let Some(v) = l.borrow_mut().as_mut()
-            && v.iter().map(|e| e.level.px.len()).sum::<usize>().saturating_add(built.px.len()) <= scope_floats()
-        {
-            let tiles = key.tiles().map(|(c, t)| (*c, std::sync::Arc::downgrade(t))).collect();
-            v.push(SharedLevel { tiles, default: key.default_bytes().to_vec(), format: key.format(), rect: r, n, level: built.clone() });
+        if let Some(v) = l.borrow_mut().as_mut() {
+            // A level whose source was freed can never match again (its tile addresses stay
+            // reserved): drop it, so it doesn't hold budget a live source could reuse.
+            v.retain(|e| e.tiles.iter().all(|(_, t)| t.strong_count() > 0));
+            if v.iter().map(|e| e.level.px.len()).sum::<usize>().saturating_add(built.px.len()) <= scope_floats() {
+                let tiles = key.tiles().map(|(c, t)| (*c, std::sync::Arc::downgrade(t))).collect();
+                v.push(SharedLevel { tiles, default: key.default_bytes().to_vec(), format: key.format(), rect: r, n, level: built.clone() });
+            }
         }
     });
     Some(built)
@@ -1252,6 +1255,24 @@ mod tests {
             let _ = warp_mesh_surface(&src, r, &f, Interp::Bicubic);
         }
         assert_eq!(reduced_levels_built() - before, 1);
+    }
+
+    #[test]
+    fn a_dropped_source_level_makes_room_for_a_live_one() {
+        // With room for one level, the level of a source dropped earlier in the scope must not
+        // keep a live source's level out: it is pruned, and the live one is reused.
+        let r = Rect::new(0, 0, 1024, 512);
+        let f = |x: f64, y: f64| (x / 9.0, y / 9.0);
+        let _scope = reuse_levels();
+        let _ = warp_mesh_surface(&textured(1024, 512, 8), r, &f, Interp::Bicubic);
+        let one = LEVELS.with(|l| l.borrow().as_ref().map_or(0, |v| v.iter().map(|e| e.level.px.len()).sum::<usize>()));
+        assert!(one > 0, "the dropped source's level was kept");
+        SCOPE_FLOATS_OVERRIDE.with(|o| o.set(Some(one)));
+        let live = textured(1024, 512, 9);
+        let before = reduced_levels_built();
+        let _ = [warp_mesh_surface(&live, r, &f, Interp::Bicubic), warp_mesh_surface(&live, r, &f, Interp::Bicubic)];
+        SCOPE_FLOATS_OVERRIDE.with(|o| o.set(None));
+        assert_eq!(reduced_levels_built() - before, 1, "the live source's level is kept and reused");
     }
 
     #[test]
