@@ -90,6 +90,26 @@ fn default_width(pro: bool) -> f32 {
     if pro { 290.0 } else { 300.0 }
 }
 
+/// The end dock of `layout`: follow only the second child of horizontal splits, as craft-ui
+/// keeps a side's dock at its window edge. `None` when the layout has no end dock.
+fn end_dock_node(node: &Node<String>) -> Option<&Node<String>> {
+    match node {
+        Node::Dock { .. } => Some(node),
+        Node::Split { second, .. } => end_dock_node(second),
+        _ => None,
+    }
+}
+
+/// The end dock's stored width (all its columns), or the native default when the layout is
+/// built from the native dock.
+pub(crate) fn dock_width(app: &PhotocraftApp) -> f32 {
+    let width = app.ui.docking.as_ref().and_then(|workspace| match workspace.layout.root.as_ref().and_then(end_dock_node) {
+        Some(Node::Dock { columns, .. }) if !columns.is_empty() => Some(columns.iter().map(|column| column.width).sum::<f32>()),
+        _ => None,
+    });
+    width.unwrap_or_else(|| default_width(app.ui.theme.is_pro()))
+}
+
 /// The window id of the Studio themes' floating Properties group in a layout built each frame:
 /// the same every time, with the top bit set, where craft-ui's fresh ids never reach.
 const PROPERTIES_WINDOW: u64 = (1 << 63) | 0x5052_4f50;
@@ -524,6 +544,66 @@ fn app_owned(app: &mut PhotocraftApp, command: DockCommand<String>) -> Result<Va
     crate::workspace_ui::menu(app, id, &params).unwrap_or_else(|| Err(format!("`{id}` is not available")))
 }
 
+thread_local! {
+    /// `show_dock` draws the dock without a canvas, so the toolbox can sit between them.
+    static DOCK_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Draw only the dock column, for the right-hand toolbox layout: the canvas is drawn separately
+/// to the toolbox's left.
+pub(crate) fn show_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let previous = DOCK_ONLY.with(|flag| {
+        let previous = flag.get();
+        flag.set(true);
+        previous
+    });
+    let _guard = DockOnlyGuard(previous);
+    show(app, ui);
+}
+
+/// Restores the previous dock-only flag when [`show_dock`] returns or unwinds.
+struct DockOnlyGuard(bool);
+
+impl Drop for DockOnlyGuard {
+    /// Restores the flag value `show_dock` found before it set it.
+    fn drop(&mut self) {
+        DOCK_ONLY.with(|flag| flag.set(self.0));
+    }
+}
+
+/// The dock column of a canvas-plus-dock layout, with the canvas removed.
+fn without_canvas(layout: Layout<String>) -> Layout<String> {
+    match layout.root {
+        Some(Node::Split { second, .. }) => Layout { root: Some(*second), floating: layout.floating },
+        _ => layout,
+    }
+}
+
+/// True when the layout's canvas side holds nothing but the canvas.
+///
+/// The dock-edge toolbox layout presents the dock column without its canvas so the toolbox can sit
+/// between them. That presentation drops the canvas side of the root split, so it is only safe
+/// while the canvas is alone there: a panel docked beside the canvas keeps the standard layout,
+/// where craft-ui draws it and accepts drops beside it.
+pub(crate) fn canvas_alone(app: &PhotocraftApp) -> bool {
+    match &app.ui.docking {
+        Some(workspace) => canvas_alone_layout(&workspace.layout),
+        // The layout built from the native dock always has the canvas alone on its side.
+        None => true,
+    }
+}
+
+/// True when the layout is the canvas-beside-dock shape: a horizontal root split whose first
+/// child holds only the canvas.
+fn canvas_alone_layout(layout: &Layout<String>) -> bool {
+    match &layout.root {
+        Some(Node::Split { axis: SplitAxis::Horizontal, first, .. }) => {
+            matches!(first.as_ref(), Node::Tabs { panels, .. } if panels.len() == 1 && panels[0] == CANVAS)
+        }
+        _ => false,
+    }
+}
+
 /// Draw the layout, the canvas included, in the space `ui` has left: the customized workspace,
 /// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -551,6 +631,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some(workspace) => workspace.layout.clone(),
         None => legacy(app),
     };
+    let layout = if DOCK_ONLY.with(|flag| flag.get()) { without_canvas(layout) } else { layout };
     let collapsed = collapsed_members(app, &layout);
     let layout = presented(layout, &collapsed);
     let fillers = fillers(&layout);
@@ -748,25 +829,81 @@ fn pin_group_heights(ctx: &egui::Context, layout: &Layout<String>, actions: &mut
     actions.splice(0..0, pins);
 }
 
-/// `ui.set {dockWidth}`: the width of the end dock's outer column.
-fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
+/// `ui.set {dockWidth}`: the width of the end dock, keeping its other columns' widths.
+/// An empty end dock has no column to store the width in; the request is a no-op until the
+/// dock gets a column.
+pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
     let Ok(mut workspace) = workspace_of(app) else { return };
-    let outer = match workspace.layout.root.as_ref() {
-        Some(Node::Split { second, .. }) => match second.as_ref() {
-            Node::Dock { columns, .. } => columns.first().map(|column| (column.width, column.groups.iter().flat_map(|g| g.panels.first()).next().cloned())),
-            _ => None,
-        },
+    let outer = match workspace.layout.root.as_ref().and_then(end_dock_node) {
+        Some(Node::Dock { columns, .. }) => {
+            let total: f32 = columns.iter().map(|column| column.width).sum();
+            columns.first().map(|column| (column.width, total, column.groups.iter().flat_map(|g| g.panels.first()).next().cloned()))
+        }
         _ => None,
     };
-    let Some((current, Some(panel))) = outer else { return };
-    if current == width {
+    let Some((current, total, Some(panel))) = outer else { return };
+    let min = (total - current).max(0.0) + 1.0;
+    let next = (current + (width.max(min) - total)).max(1.0);
+    if next == current {
         return;
     }
     workspace.locked = false;
-    if workspace.apply(Action::ResizeColumn { panel, width }, permissions).is_ok() {
+    if workspace.apply(Action::ResizeColumn { panel, width: next }, permissions).is_ok() {
         workspace.locked = app.session.prefs().workspace_locked;
+        let mut actual = next;
+        if let Some(root) = workspace.layout.root.as_mut() {
+            resize_end_dock(root, width.max(min), &mut actual);
+        }
         let returns = app.ui.docking_returns.clone();
         commit(app, workspace, returns);
+    }
+}
+
+/// Set the end dock's total width in place, keeping its columns' proportions and the horizontal
+/// split that holds the dock at its edge in step. Creates the custom workspace from the legacy
+/// dock the first time. `false` when there is no end dock.
+pub(crate) fn set_end_dock_total(app: &mut PhotocraftApp, total: f32) -> bool {
+    if !total.is_finite() || total <= 0.0 {
+        return false;
+    }
+    if app.ui.docking.is_none() {
+        set_dock_width(app, total);
+    }
+    let Some(workspace) = app.ui.docking.as_mut() else { return false };
+    let Some(root) = workspace.layout.root.as_mut() else { return false };
+    let mut actual = total;
+    resize_end_dock(root, total, &mut actual)
+}
+
+/// The end dock's columns at `total`, and the split that holds the dock at its window edge.
+fn resize_end_dock(node: &mut Node<String>, total: f32, actual: &mut f32) -> bool {
+    match node {
+        Node::Dock { columns, .. } => {
+            if columns.is_empty() {
+                return false;
+            }
+            let current: f32 = columns.iter().map(|column| column.width).sum();
+            if (current - total).abs() >= 0.5 {
+                if columns.len() == 1 {
+                    columns[0].width = total.max(1.0);
+                } else {
+                    let scale = total.max(1.0) / current.max(1.0);
+                    for column in columns.iter_mut() {
+                        column.width = (column.width * scale).max(1.0);
+                    }
+                }
+            }
+            *actual = columns.iter().map(|column| column.width).sum();
+            true
+        }
+        Node::Split { second, size, .. } => {
+            let found = resize_end_dock(second, total, actual);
+            if found && matches!(&**second, Node::Dock { .. }) {
+                *size = SplitSize::FixedSecond(*actual);
+            }
+            found
+        }
+        _ => false,
     }
 }
 
