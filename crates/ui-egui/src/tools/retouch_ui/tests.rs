@@ -29,24 +29,26 @@ fn stripes(app: &mut PhotocraftApp, step: usize, target: &str) {
 }
 
 #[test]
-fn every_retouching_stroke_wraps_in_pattern_preview() {
-    // View › Pattern Preview (#8883): a stroke across the right edge asks its command to go
-    // on at the opposite one, and only then.
+fn only_clone_stamp_and_healing_brush_wrap_in_pattern_preview() {
+    // View › Pattern Preview (#8883): a Clone Stamp or Healing Brush stroke across the right edge
+    // asks its command to go on at the opposite one, and only then. The reference application's
+    // other retouching tools stop at the edge.
     let tools = [
-        (Tool::Blur, "paint.blur"),
-        (Tool::Sharpen, "paint.sharpen"),
-        (Tool::Smudge, "paint.smudge"),
-        (Tool::Dodge, "paint.dodge"),
-        (Tool::Burn, "paint.burn"),
-        (Tool::Sponge, "paint.sponge"),
-        (Tool::ColorReplacement, "paint.colorReplacement"),
-        (Tool::PatternStamp, "paint.patternStamp"),
-        (Tool::Healing, "paint.healingBrush"),
-        (Tool::HistoryBrush, "paint.historyBrush"),
-        (Tool::SpotHealing, "paint.spotHealing"),
-        (Tool::BackgroundEraser, "paint.backgroundEraser"),
+        (Tool::CloneStamp, "paint.cloneStamp", true),
+        (Tool::Healing, "paint.healingBrush", true),
+        (Tool::Blur, "paint.blur", false),
+        (Tool::Sharpen, "paint.sharpen", false),
+        (Tool::Smudge, "paint.smudge", false),
+        (Tool::Dodge, "paint.dodge", false),
+        (Tool::Burn, "paint.burn", false),
+        (Tool::Sponge, "paint.sponge", false),
+        (Tool::ColorReplacement, "paint.colorReplacement", false),
+        (Tool::PatternStamp, "paint.patternStamp", false),
+        (Tool::HistoryBrush, "paint.historyBrush", false),
+        (Tool::SpotHealing, "paint.spotHealing", false),
+        (Tool::BackgroundEraser, "paint.backgroundEraser", false),
     ];
-    for (tool, cmd) in tools {
+    for (tool, cmd, wraps) in tools {
         for pattern_preview in [false, true] {
             let mut app = app();
             stripes(&mut app, 8, "pixels");
@@ -59,7 +61,7 @@ fn every_retouching_stroke_wraps_in_pattern_preview() {
             tool_event(&mut app, ToolEvent::Up { x: 112.0, y: 30.0 }, m);
             assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
             let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == cmd).cloned().unwrap_or_else(|| panic!("{tool:?}: no {cmd}"));
-            assert_eq!(p.get("wrap").and_then(Value::as_bool).unwrap_or(false), pattern_preview, "{tool:?}: {p}");
+            assert_eq!(p.get("wrap").and_then(Value::as_bool).unwrap_or(false), wraps && pattern_preview, "{tool:?}: {p}");
         }
     }
 }

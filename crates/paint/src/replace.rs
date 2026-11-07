@@ -8,8 +8,7 @@ use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde::{Deserialize, Serialize};
 
 use crate::Stroke;
-use crate::retouch::{Footprint, Region, apply_dab_stroke_wrapped};
-use crate::wrap::wrap_coord;
+use crate::retouch::{Footprint, Region, apply_dab_stroke};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -80,29 +79,14 @@ fn dist(a: &[f32; 4], b: [f32; 3]) -> f32 {
 
 /// Replace colours along a stroke. Returns the damaged rectangle.
 pub fn apply_color_replacement(target: &mut Surface, stroke: &Stroke, rs: &ReplaceSettings, selection: Option<&Surface>, lock_transparency: bool) -> Rect {
-    apply_color_replacement_wrapped(target, stroke, rs, selection, lock_transparency, None)
-}
-
-/// [`apply_color_replacement`] wrapped around `wrap` (View › Pattern Preview): the stroke samples
-/// and recolours where its pixels lie on that canvas, so it carries on across the edges.
-pub fn apply_color_replacement_wrapped(
-    target: &mut Surface,
-    stroke: &Stroke,
-    rs: &ReplaceSettings,
-    selection: Option<&Surface>,
-    lock_transparency: bool,
-    wrap: Option<Rect>,
-) -> Rect {
-    let effect = color_replacement_effect(target.clone(), rs.clone(), wrap);
-    apply_dab_stroke_wrapped(target, stroke, selection, lock_transparency, 0, wrap, effect)
+    let effect = color_replacement_effect(target.clone(), rs.clone());
+    apply_dab_stroke(target, stroke, selection, lock_transparency, 0, effect)
 }
 
 /// One Color Replacement dab's edit of a working copy, matching against `pre` (the target before
 /// the stroke). Shared by [`apply_color_replacement`] and live previews that run the dabs as they
-/// come, so both recolour the same pixels. In a stroke wrapped around `wrap` (View › Pattern
-/// Preview), `pre` is read where the dab's pixels lie on that canvas.
-pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings, wrap: Option<Rect>) -> impl FnMut(&mut Region, &Footprint) {
-    let wrap = wrap.filter(|t| !t.is_empty());
+/// come, so both recolour the same pixels.
+pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut(&mut Region, &Footprint) {
     let fmt = pre.format();
     let n = fmt.channels();
     let mode = match rs.mode {
@@ -127,14 +111,13 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings, wrap: Option<
     };
     move |work: &mut Region, fp: &Footprint| {
         let (cx, cy) = (fp.dab.center.x.floor() as i32, fp.dab.center.y.floor() as i32);
-        let (sx, sy) = wrap.map_or((cx, cy), |t| (wrap_coord(cx, t.x0, t.x1), wrap_coord(cy, t.y0, t.y1)));
         let sampled = match rs.sampling {
             Sampling::Continuous => {
-                let c = pre.rgba(sx, sy);
+                let c = pre.rgba(cx, cy);
                 [c[0], c[1], c[2]]
             }
             Sampling::Once => *once.get_or_insert_with(|| {
-                let c = pre.rgba(sx, sy);
+                let c = pre.rgba(cx, cy);
                 [c[0], c[1], c[2]]
             }),
             Sampling::BackgroundSwatch => [rs.background[0], rs.background[1], rs.background[2]],
@@ -144,15 +127,8 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings, wrap: Option<
             return;
         }
         let (w, h) = (r.width() as usize, r.height() as usize);
-        let read = |q: Rect| {
-            let mut px = vec![[0.0f32; 4]; q.width() as usize * q.height() as usize];
-            pre.read_rgba_into(q, &mut px);
-            px
-        };
-        let pre_px = match wrap {
-            Some(t) => crate::wrap::read(r, t, 1, read),
-            None => read(r),
-        };
+        let mut pre_px = vec![[0.0f32; 4]; w * h];
+        pre.read_rgba_into(r, &mut pre_px);
         // Per-pixel match weight.
         let mut weight = vec![0.0f32; w * h];
         for y in r.y0..r.y1 {

@@ -265,7 +265,14 @@ impl LiveRetouch {
     /// Everything the stroke has touched so far.
     pub fn bounds(&self) -> Rect {
         let bounds = self.renderer.bounds().union(&self.tail);
-        if flag(&self.params, "wrap", false) { periodic::project(bounds, self.pre.bounds()).into_iter().fold(Rect::EMPTY, |a, b| a.union(&b)) } else { bounds }
+        if self.wraps() { periodic::project(bounds, self.pre.bounds()).into_iter().fold(Rect::EMPTY, |a, b| a.union(&b)) } else { bounds }
+    }
+
+    /// Whether the stroke repeats across the canvas edges (View › Pattern Preview). Only the Clone
+    /// Stamp and the Healing Brush do: the reference application's other retouching tools stop
+    /// at the edge.
+    fn wraps(&self) -> bool {
+        matches!(self.cmd.as_str(), "paint.cloneStamp" | "paint.healingBrush") && flag(&self.params, "wrap", false)
     }
 
     /// Every point rendered so far, in order.
@@ -317,7 +324,7 @@ impl LiveRetouch {
         let pts: Vec<_> = pts.iter().map(|q| StrokePoint::new(q.x, q.y, q.pressure)).collect();
         self.points.extend_from_slice(&pts);
         self.renderer.push(&pts);
-        if flag(&self.params, "wrap", false) {
+        if self.wraps() {
             return self.push_periodic();
         }
         let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
@@ -346,13 +353,11 @@ impl LiveRetouch {
         let mut tail = self.renderer.tail_preview();
         self.tail = tail.as_mut().map_or(Rect::EMPTY, |t| t.take_dirty_rect());
         dirty = dirty.union(&self.tail);
-        let (pre, id, pre_surf, live_paint, live_cmd) = (&self.pre, self.id, &self.pre_surf, &self.paint, self.cmd.as_str());
-        let fmt = pre_surf.format();
-        let paint = |r| match live_paint {
-            LivePaint::Clone { which, map, cmd } => clone_sample(pre, id, pre_surf, *which, r, map, true, cmd),
-            LivePaint::History(src) => periodic::sample(pre, id, src, SampleLayers::Current, r, live_cmd),
-            LivePaint::Pattern { tile, place } => Ok(pattern_stamp::paint_region(tile, place, &fmt, r)),
+        let LivePaint::Clone { which, map, cmd } = &self.paint else {
+            return Err(bad(&self.cmd, "periodic painting requires a clone source"));
         };
+        let (pre, id, pre_surf, live_cmd) = (&self.pre, self.id, &self.pre_surf, self.cmd.as_str());
+        let paint = |r| clone_sample(pre, id, pre_surf, *which, r, map, true, cmd);
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         periodic::Composite {
             target: surf,
