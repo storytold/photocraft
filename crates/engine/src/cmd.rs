@@ -37,7 +37,7 @@ fn turn(s: &mut Session, label: &str, t: crate::canvas_geom::Turn) -> Result<Val
         s.set_canvas_map(a, half.then(&a).then(&photocraft_geom::Affine::translate(-0.5, -0.5)));
     }
     s.edit(label, |doc, _| {
-        crate::canvas_geom::turn_canvas(doc, t);
+        crate::canvas_geom::keeping_count_points(doc, |doc| crate::canvas_geom::turn_canvas(doc, t));
         Ok(())
     })?;
     Ok(Value::Null)
@@ -67,6 +67,8 @@ pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
+#[cfg(test)]
+mod count_resize_tests;
 pub mod cutout_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
