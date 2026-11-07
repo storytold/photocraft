@@ -356,3 +356,5 @@ mod tests;
 mod fx_mode_tests;
 
 pub mod command_hints;
+#[cfg(test)]
+mod pencil_auto_erase_exact_tests;
