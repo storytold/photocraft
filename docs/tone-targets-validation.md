@@ -222,12 +222,11 @@ Evidence is retained in `plan/merge-main-20261104/` (gitignored).
 
 ## Main integration (2026-11-07)
 
-Integrated upstream main `8df2b7a2e`, then `048ae7977` after three more upstream PRs landed. The Smart Filter conflicts preserve captured tone targets and precision while adopting main's replacement of adjustment parameters. Consumed aliases and smoothing counts disappear when the filter saves. Both sides' regressions are retained, with additional fractional Lab Levels and Curves records in the round-trip test. The Action dialog setup moved into a helper to keep playback within Clippy's complexity limit and preserve the authorization and receiver checks.
+Current upstream main integrated is `e6ba4aca4293093dc803d6db8ad899ba3beea681`. The Levels conflict retains upstream input-handle tracking for the clipping display together with this PR's channel-specific record, histogram and Auto routing. The Action playback conflict retains Equalize's selection-choice dialog alongside target-aware Levels/Curves initialization and captured receiver checks.
 
-- Full Linux engine/UI suite at `8df2b7a2e` with pinned CI fonts and the full serial sweep: **9,486 passed, 0 failed, 46 normally ignored**, including doctest builds.
-- At `048ae7977`, **1,222 focused tests passed, 0 failed, 6 normally ignored**. They cover tone targets, Smart Filters, Actions, transforms, crop, marquee, lasso, and localization.
-- Strict all-target Clippy, formatting, layering, wasm, and the ignored full-registry adversarial command test passed at `048ae7977`. Changed-corpus checking skipped because the PR diff contains no corpus-critical paths.
-- Offscreen captures verified both addressed and unavailable mask targets for Action dialogs. Lab Smart Filters reopened with Lightness selected and their recorded settings while an alpha channel was selected. The three Smart Filter captures were byte-identical on the final snapshot.
+- Full Linux engine/UI `cargo test` with pinned CI fonts and the full serial sweep passed **9,772 tests, with 0 failures and 47 normally ignored**, including doctest builds.
+- Strict all-target Clippy, formatting, layering, wasm, and the ignored full-registry adversarial command test passed. Changed-corpus checking skipped because the PR diff contains no corpus-critical paths.
+- Six fresh offscreen captures were inspected. Addressed Levels/Curves Actions show `Receiver Mask`, unavailable targets show their error, Equalize opens with its recorded entire-image choice, and the normal RGB Levels clipping display shows the expected black/white result. Both the Equalize Action regression and the real Alt-drag clipping regression passed in the full suite.
 
 ## 24 MP release comparison
 

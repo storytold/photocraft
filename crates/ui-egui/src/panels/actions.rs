@@ -442,7 +442,12 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
         }
         // The dialog toggle: show the step's dialog with its recorded values and continue
         // from the next step when it is confirmed (`resume`). Agents play headlessly.
-        if action.dialogs.contains(&i) && !app.automation_input && (crate::filter_dialog::has_dialog(id) || crate::adjust_dialog::has_dialog(id)) {
+        if action.dialogs.contains(&i)
+            && !app.automation_input
+            && (crate::filter_dialog::has_dialog(id)
+                || crate::adjust_dialog::has_dialog(id)
+                || (id == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app)))
+        {
             match pause_for_dialog(app, &action, i, id, p) {
                 Ok(dialog) => paused = Some(json!({"step": i, "id": id, "dialog": dialog})),
                 Err(error) => failed = Some(json!({"step": i, "id": id, "error": error})),
