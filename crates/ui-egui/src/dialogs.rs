@@ -1113,6 +1113,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
     }
 }
 
+/// Confirm an open dialog (`id`) and execute its associated command or action.
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
@@ -1125,7 +1126,9 @@ pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
             if r.is_ok() {
                 crate::remember_new_document(app, &d.fields);
                 // File › New › Recent. Best effort: the document exists either way.
-                let _ = app.run("document.recent.add", json!({"settings": crate::new_doc_ui::document_settings(&d.fields)}));
+                if crate::new_doc_ui::records_recent(&d.fields) {
+                    let _ = app.run("document.recent.add", json!({"settings": crate::new_doc_ui::document_settings(&d.fields)}));
+                }
             }
             r
         }
