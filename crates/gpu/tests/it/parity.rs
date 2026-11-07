@@ -1641,8 +1641,9 @@ fn effect_cases() -> Vec<(&'static str, Vec<Effect>)> {
     ds_global.use_global_light = true;
     let mut og_contour = glow(FxPaint::Color(Color::rgb(1.0, 0.9, 0.2)), GlowTechnique::Softer, 9.0, 0.0, GlowSource::Edge);
     og_contour.contour = contour();
-    // #11361: a flat "always 100 %" contour paints a solid band up to the glow's reach on both
-    // renderers, not the whole effect rectangle.
+    // #11361: a flat "always 100 %" contour paints a band up to the glow's reach on both
+    // renderers, not the whole effect rectangle (solid with one soft pixel for Precise, fading
+    // over its outer pixels for Softer, #11651).
     let flat = Contour::Custom { name: "flat".into(), points: vec![Cp { input: 0.0, output: 1.0 }, Cp { input: 1.0, output: 1.0 }], corners: vec![] };
     let og_flat_precise = Glow { contour: flat.clone(), ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Precise, 4.0, 0.0, GlowSource::Edge) };
     let og_flat_softer = Glow { contour: flat, ..glow(FxPaint::Color(Color::rgb(0.2, 0.9, 1.0)), GlowTechnique::Softer, 10.0, 0.0, GlowSource::Edge) };
