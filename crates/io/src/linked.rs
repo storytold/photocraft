@@ -234,8 +234,15 @@ fn jpeg_size(bytes: &[u8]) -> Option<(f64, f64)> {
         match code {
             // SOF0..SOF15, except DHT (C4), JPG (C8) and DAC (CC).
             0xC0..=0xCF if !matches!(code, 0xC4 | 0xC8 | 0xCC) => {
-                let h = bytes.get(at + 5..at + 7)?;
-                let w = bytes.get(at + 7..at + 9)?;
+                // The SOF segment length includes its two length bytes. Do not
+                // read dimensions outside a malformed or truncated segment.
+                let len = bytes.get(at + 2..at + 4).map(|b| usize::from(u16::from_be_bytes([b[0], b[1]])))?;
+                if len < 8 {
+                    return None;
+                }
+                let frame = bytes.get(at..at.checked_add(2)?.checked_add(len)?)?;
+                let h = frame.get(5..7)?;
+                let w = frame.get(7..9)?;
                 return Some((f64::from(u16::from_be_bytes([w[0], w[1]])), f64::from(u16::from_be_bytes([h[0], h[1]]))));
             }
             // Standalone markers have no length.
@@ -487,7 +494,8 @@ mod tests {
     /// Malformed JPEG marker walks end without a size and without panicking or looping.
     #[test]
     fn jpeg_size_rejects_malformed_marker_walks() {
-        let sof = [0xFF, 0xC0, 0, 17, 8, 0, 5, 0, 7];
+        // A complete 3-component SOF0 segment (length 17, including its length field).
+        let sof = [0xFF, 0xC0, 0, 17, 8, 0, 5, 0, 7, 3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0];
         let ok: Vec<u8> = [&[0xFF, 0xD8][..], &[0xFF, 0xE0, 0, 4, 1, 2], &[0xFF, 0xFF, 0xD0], &sof].concat();
         assert_eq!(jpeg_size(&ok), Some((7.0, 5.0)), "APP0, a fill byte and a standalone marker are skipped");
         for bad in [
@@ -497,6 +505,8 @@ mod tests {
             vec![0xFF, 0xD8, 0x00, 0x00],             // not a marker
             vec![0xFF, 0xD8, 0xFF, 0xDA, 0, 2],       // scan before any frame header
             vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8],   // truncated frame header
+            vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 7, 8, 0, 5, 0, 7, 3], // SOF length cannot contain dimensions
+            vec![0xFF, 0xD8, 0xFF, 0xC0, 0, 17, 8, 0, 5, 0, 7, 3], // dimensions present, but SOF is truncated
             [&[0xFF, 0xD8][..], &[0xFF; 64]].concat(),
         ] {
             assert_eq!(jpeg_size(&bad), None, "{bad:?}");
