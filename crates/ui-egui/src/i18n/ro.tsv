@@ -4614,3 +4614,49 @@ navigator	Zoom	Zoom
 @plural	{n} action file loaded|{n} action files loaded	{n} fișier de acțiuni încărcat|{n} fișiere de acțiuni încărcate|{n} de fișiere de acțiuni încărcate
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} fișier nu a putut fi încărcat: {errors}|{n} fișiere nu au putut fi încărcate: {errors}|{n} de fișiere nu au putut fi încărcate: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} ieșire Resurse imagine a eșuat|{what}: {n} ieșiri Resurse imagine au eșuat|{what}: {n} de ieșiri Resurse imagine au eșuat
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	O margine de tăiere (bleed) de {bleed} mm nu lasă nicio zonă de format final pe această pagină de {width} × {height} mm.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Nu este instalat niciun profil CMYK. Instalați profilul tipografiei (de exemplu ISO Coated v2 sau Coated FOGRA39) pe acest computer și salvați din nou.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 necesită un profil ICC versiunea 2 sau 4. Alegeți profilul tipografiei (de exemplu PSO Coated v3 sau Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} necesită un profil ICC versiunea 2. Alegeți profilul tipografiei (de exemplu ISO Coated v2 sau Coated FOGRA39) sau salvați ca PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Profilul documentului ({profile}) este ICC versiunea {version}, pe care {standard} nu îl poate încorpora. Convertiți la profilul de ieșire sau salvați ca PDF/X-4.
+	Document: {profile}	Document: {profile}
+	Working CMYK: {profile}	CMYK de lucru: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Un PDF simplu, pentru vizualizare și pentru imprimantele care nu cer PDF/X. Imaginea își păstrează culorile și profilul încorporat.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) pentru tipar: toate culorile sunt CMYK sau gri, convertite la condiția de ieșire a tipografiei. Majoritatea tipografiilor îl acceptă. PDF 1.3, un profil de ieșire ICC versiunea 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) pentru tipar: ca PDF/X-1a, dar culorile își pot păstra și propriul profil ICC, pentru ca tipografia să le convertească. PDF 1.3, profiluri ICC versiunea 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), standardul actual de tipar: culorile sunt convertite la condiția de ieșire sau păstrate în propriul profil, profiluri ICC versiunea 2 sau 4, metadate XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Imaginea este salvată aplatizată: straturile, textul și transparența nu se păstrează ca atare. Păstrați documentul ca .psd sau .pcraft pentru a-l edita mai târziu.
+	Images	Imagini
+	Downsampling:	Reducere rezoluție:
+	Do Not Downsample	Fără reducere rezoluție
+	Compression:	Compresie:
+	ZIP (lossless)	ZIP (fără pierderi)
+	Image Quality:	Calitate imagine:
+	8 bits per channel	8 biți pe canal
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	PDF-urile pentru tipar se scriu la rezoluție completă, cu compresie fără pierderi, astfel încât nimic nu se pierde pe drumul spre tipar.
+	Color Conversion:	Conversie culori:
+	Convert to Destination	Conversie la destinație
+	No Conversion	Fără conversie
+	Destination:	Destinație:
+	N/A	Indisponibil
+	Profile Inclusion Policy:	Politică de includere a profilurilor:
+	Include Tagged Source Profiles	Includere profiluri sursă etichetate
+	Don't Include Profiles	Fără includere profiluri
+	Include Destination Profile	Includere profil destinație
+	The CMYK numbers are kept.	Valorile CMYK se păstrează.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Culorile păstrează profilul documentului, încorporat în PDF; tipografia le convertește.
+	The colours are converted to this profile in the PDF; the document is not changed.	Culorile sunt convertite la acest profil în PDF; documentul nu se modifică.
+	Output Intent Profile Name:	Nume profil intenție de ieșire:
+	Output Condition Identifier:	Identificator condiție de ieșire:
+	Bleed:	Margine de tăiere:
+	already in the document	deja în document
+	Standard:	Standard:
+	Compatibility:	Compatibilitate:
+	Page:	Pagină:
+	Trim:	Format final:
+	Warnings	Avertismente
+	PDF Preset:	Presetare PDF:
+	[High Quality Print]	[Tipar de calitate înaltă]
+	Save PDF	Salvare PDF

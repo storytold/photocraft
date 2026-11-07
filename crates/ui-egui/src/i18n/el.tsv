@@ -4316,3 +4316,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Εμφάνιση ορίων στρώσης στο πέρασμα του δείκτη
 	Expand layer group on click	Ανάπτυξη ομάδας στρώσεων με κλικ
 	Show hover bounds from Layers	Εμφάνιση ορίων στο πέρασμα από τις Στρώσεις
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Περιθώριο ξακρίσματος {bleed} mm δεν αφήνει τελικό μέγεθος σε αυτή τη σελίδα {width} × {height} mm.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Δεν είναι εγκατεστημένο κανένα προφίλ CMYK. Εγκαταστήστε το προφίλ του τυπογραφείου (για παράδειγμα ISO Coated v2 ή Coated FOGRA39) σε αυτόν τον υπολογιστή και αποθηκεύστε ξανά.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	Το PDF/X-4 απαιτεί προφίλ ICC έκδοσης 2 ή 4. Επιλέξτε το προφίλ του τυπογραφείου (για παράδειγμα PSO Coated v3 ή Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	Το {standard} απαιτεί προφίλ ICC έκδοσης 2. Επιλέξτε το προφίλ του τυπογραφείου (για παράδειγμα ISO Coated v2 ή Coated FOGRA39) ή αποθηκεύστε ως PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Το προφίλ του εγγράφου ({profile}) είναι ICC έκδοσης {version}, την οποία το {standard} δεν μπορεί να ενσωματώσει. Μετατρέψτε στο προφίλ εξόδου ή αποθηκεύστε ως PDF/X-4.
+	Document: {profile}	Έγγραφο: {profile}
+	Working CMYK: {profile}	Χώρος εργασίας CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Ένα απλό PDF για προβολή και για εκτυπωτές που δεν ζητούν PDF/X. Η εικόνα διατηρεί το χρώμα της και το ενσωματωμένο προφίλ της.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) για εκτύπωση: όλο το χρώμα είναι CMYK ή γκρι, μετατρεπόμενο στη συνθήκη εξόδου του τυπογραφείου. Τα περισσότερα τυπογραφεία το δέχονται. PDF 1.3, προφίλ εξόδου ICC έκδοσης 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) για εκτύπωση: όπως το PDF/X-1a, αλλά το χρώμα μπορεί επίσης να διατηρεί το δικό του προφίλ ICC, ώστε να το μετατρέψει το τυπογραφείο. PDF 1.3, προφίλ ICC έκδοσης 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), το τρέχον πρότυπο εκτύπωσης: το χρώμα μετατρέπεται στη συνθήκη εξόδου ή διατηρείται στο δικό του προφίλ, προφίλ ICC έκδοσης 2 ή 4, μεταδεδομένα XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Η εικόνα αποθηκεύεται ισοπεδωμένη: τα επίπεδα, το κείμενο και η διαφάνεια δεν διατηρούνται ως έχουν. Κρατήστε το έγγραφο ως .psd ή .pcraft για να το επεξεργαστείτε αργότερα.
+	Images	Εικόνες
+	Downsampling:	Υποδειγματοληψία:
+	Do Not Downsample	Χωρίς υποδειγματοληψία
+	Compression:	Συμπίεση:
+	ZIP (lossless)	ZIP (χωρίς απώλειες)
+	Image Quality:	Ποιότητα εικόνας:
+	8 bits per channel	8 bit ανά κανάλι
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	Τα PDF εκτύπωσης γράφονται σε πλήρη ανάλυση με συμπίεση χωρίς απώλειες, ώστε να μη χάνεται τίποτα μέχρι το πιεστήριο.
+	Color Conversion:	Μετατροπή χρωμάτων:
+	Convert to Destination	Μετατροπή στον προορισμό
+	No Conversion	Χωρίς μετατροπή
+	Destination:	Προορισμός:
+	N/A	Δ/Ε
+	Profile Inclusion Policy:	Πολιτική συμπερίληψης προφίλ:
+	Include Tagged Source Profiles	Συμπερίληψη επισημασμένων προφίλ προέλευσης
+	Don't Include Profiles	Χωρίς συμπερίληψη προφίλ
+	Include Destination Profile	Συμπερίληψη προφίλ προορισμού
+	The CMYK numbers are kept.	Οι τιμές CMYK διατηρούνται.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Τα χρώματα διατηρούν το προφίλ του εγγράφου, ενσωματωμένο στο PDF· το τυπογραφείο τα μετατρέπει.
+	The colours are converted to this profile in the PDF; the document is not changed.	Τα χρώματα μετατρέπονται σε αυτό το προφίλ μέσα στο PDF· το έγγραφο δεν αλλάζει.
+	Output Intent Profile Name:	Όνομα προφίλ πρόθεσης εξόδου:
+	Output Condition Identifier:	Αναγνωριστικό συνθήκης εξόδου:
+	Bleed:	Περιθώριο ξακρίσματος:
+	already in the document	ήδη στο έγγραφο
+	Standard:	Πρότυπο:
+	Compatibility:	Συμβατότητα:
+	Page:	Σελίδα:
+	Trim:	Τελικό μέγεθος:
+	Warnings	Προειδοποιήσεις
+	PDF Preset:	Προεπιλογή PDF:
+	[High Quality Print]	[Εκτύπωση υψηλής ποιότητας]
+	Save PDF	Αποθήκευση PDF

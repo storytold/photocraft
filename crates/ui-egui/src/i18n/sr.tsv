@@ -4682,3 +4682,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
 	Expand layer group on click	Proširi grupu slojeva klikom
 	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Napust od {bleed} mm ne ostavlja obrezani format na ovoj stranici od {width} × {height} mm.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Nijedan CMYK profil nije instaliran. Instalirajte profil štamparije (na primer ISO Coated v2 ili Coated FOGRA39) na ovaj računar i ponovo sačuvajte.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 zahteva ICC profil verzije 2 ili 4. Izaberite profil štamparije (na primer PSO Coated v3 ili Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} zahteva ICC profil verzije 2. Izaberite profil štamparije (na primer ISO Coated v2 ili Coated FOGRA39) ili sačuvajte kao PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Profil dokumenta ({profile}) je ICC verzije {version}, koju {standard} ne može da ugradi. Pretvorite u izlazni profil ili sačuvajte kao PDF/X-4.
+	Document: {profile}	Dokument: {profile}
+	Working CMYK: {profile}	Radni CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Običan PDF za pregled i za štampače koji ne traže PDF/X. Slika zadržava svoje boje i ugrađeni profil.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) za štampu: sve boje su CMYK ili sive, pretvorene u izlazni uslov štamparije. Većina štamparija ga prihvata. PDF 1.3, izlazni profil ICC verzije 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) za štampu: kao PDF/X-1a, ali boje mogu i da zadrže sopstveni ICC profil, pa ih pretvara štamparija. PDF 1.3, ICC profili verzije 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), aktuelni standard za štampu: boje su pretvorene u izlazni uslov ili zadržane u sopstvenom profilu, ICC profili verzije 2 ili 4, XMP metapodaci. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Slika se čuva spljoštena: slojevi, tekst i providnost se ne zadržavaju kao takvi. Sačuvajte dokument kao .psd ili .pcraft da biste ga kasnije uređivali.
+	Images	Slike
+	Downsampling:	Smanjenje rezolucije:
+	Do Not Downsample	Bez smanjenja rezolucije
+	Compression:	Kompresija:
+	ZIP (lossless)	ZIP (bez gubitaka)
+	Image Quality:	Kvalitet slike:
+	8 bits per channel	8 bita po kanalu
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	PDF-ovi za štampu se zapisuju u punoj rezoluciji sa kompresijom bez gubitaka, pa se ništa ne gubi na putu do štampe.
+	Color Conversion:	Konverzija boja:
+	Convert to Destination	Pretvori u odredište
+	No Conversion	Bez konverzije
+	Destination:	Odredište:
+	N/A	N/D
+	Profile Inclusion Policy:	Pravilo uključivanja profila:
+	Include Tagged Source Profiles	Uključi označene izvorne profile
+	Don't Include Profiles	Ne uključuj profile
+	Include Destination Profile	Uključi profil odredišta
+	The CMYK numbers are kept.	CMYK vrednosti se zadržavaju.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Boje zadržavaju profil dokumenta, ugrađen u PDF; štamparija ih pretvara.
+	The colours are converted to this profile in the PDF; the document is not changed.	Boje se u PDF-u pretvaraju u ovaj profil; dokument se ne menja.
+	Output Intent Profile Name:	Ime profila izlazne namere:
+	Output Condition Identifier:	Identifikator izlaznog uslova:
+	Bleed:	Napust:
+	already in the document	već u dokumentu
+	Standard:	Standard:
+	Compatibility:	Kompatibilnost:
+	Page:	Stranica:
+	Trim:	Obrezani format:
+	Warnings	Upozorenja
+	PDF Preset:	PDF šablon:
+	[High Quality Print]	[Visokokvalitetna štampa]
+	Save PDF	Sačuvaj PDF

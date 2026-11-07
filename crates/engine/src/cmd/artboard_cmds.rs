@@ -635,7 +635,7 @@ fn artboards_to_files(s: &mut Session, p: &Value) -> Result<Value> {
         // Names may be identical, or collide after sanitizing or filesystem case folding.
         let name = if prefix.is_empty() { format!("{i:04}_{}", sanitize(&one.name)) } else { format!("{}_{i:04}_{}", sanitize(&prefix), sanitize(&one.name)) };
         let path = join(&dir, &format!("{name}.{format}"));
-        save_doc(&one, &path, save)?;
+        save_doc(&one, &path, save.clone())?;
         files.push(path);
     }
     if files.is_empty() {

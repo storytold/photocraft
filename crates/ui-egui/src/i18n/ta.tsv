@@ -4273,3 +4273,49 @@ navigator	Zoom	பெரிதாக்கல்
 	Transparent (default)	ஒளிஊடுருவும் (இயல்புநிலை)
 	The path was kept as the Work Path	பாதை பணிப் பாதையாக வைக்கப்பட்டது
 	The path was discarded	பாதை நிராகரிக்கப்பட்டது
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm ப்ளீட் வைத்தால், இந்த {width} × {height} mm பக்கத்தில் வெட்டு அளவுக்கு எதுவும் மிஞ்சாது.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	CMYK சுயவிவரம் எதுவும் நிறுவப்படவில்லை. அச்சகத்தின் சுயவிவரத்தை (எடுத்துக்காட்டாக ISO Coated v2 அல்லது Coated FOGRA39) இந்தக் கணினியில் நிறுவி மீண்டும் சேமிக்கவும்.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4-க்கு ICC பதிப்பு 2 அல்லது 4 சுயவிவரம் தேவை. அச்சகத்தின் சுயவிவரத்தைத் தேர்ந்தெடுக்கவும் (எடுத்துக்காட்டாக PSO Coated v3 அல்லது Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard}-க்கு ICC பதிப்பு 2 சுயவிவரம் தேவை. அச்சகத்தின் சுயவிவரத்தைத் தேர்ந்தெடுக்கவும் (எடுத்துக்காட்டாக ISO Coated v2 அல்லது Coated FOGRA39), அல்லது PDF/X-4 ஆகச் சேமிக்கவும்.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	ஆவணத்தின் சுயவிவரம் ({profile}) ICC பதிப்பு {version}; இதை {standard} உட்பொதிக்க முடியாது. வெளியீட்டுச் சுயவிவரமாக மாற்றவும், அல்லது PDF/X-4 ஆகச் சேமிக்கவும்.
+	Document: {profile}	ஆவணம்: {profile}
+	Working CMYK: {profile}	பணி CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	பார்வையிடுவதற்கும் PDF/X கேட்காத அச்சகங்களுக்குமான சாதாரண PDF. படம் அதன் நிறத்தையும் உட்பொதிக்கப்பட்ட சுயவிவரத்தையும் தக்கவைக்கும்.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	அச்சுக்கான PDF/X-1a:2001 (ISO 15930-1): எல்லா நிறமும் CMYK அல்லது சாம்பல், அச்சகத்தின் வெளியீட்டு நிலைக்கு மாற்றப்படும். பெரும்பாலான அச்சகங்கள் இதை ஏற்கின்றன. PDF 1.3, ICC பதிப்பு 2 வெளியீட்டுச் சுயவிவரம்.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	அச்சுக்கான PDF/X-3:2002 (ISO 15930-3): PDF/X-1a போன்றது, ஆனால் அச்சகம் மாற்றுவதற்காக நிறம் தனது சொந்த ICC சுயவிவரத்தையும் வைத்திருக்கலாம். PDF 1.3, ICC பதிப்பு 2 சுயவிவரங்கள்.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), தற்போதைய அச்சுத் தரநிலை: நிறம் வெளியீட்டு நிலைக்கு மாற்றப்படும் அல்லது தனது சொந்தச் சுயவிவரத்தில் வைக்கப்படும், ICC பதிப்பு 2 அல்லது 4 சுயவிவரங்கள், XMP மெட்டாடேட்டா. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	படம் தட்டையாக்கப்பட்டுச் சேமிக்கப்படுகிறது: அடுக்குகள், உரை, ஒளிஊடுருவல் ஆகியவை அப்படியே வைக்கப்படுவதில்லை. பின்னர் திருத்த, ஆவணத்தை .psd அல்லது .pcraft ஆக வைத்திருக்கவும்.
+	Images	படங்கள்
+	Downsampling:	மாதிரிக் குறைப்பு:
+	Do Not Downsample	மாதிரிக் குறைப்பு செய்ய வேண்டாம்
+	Compression:	சுருக்கம்:
+	ZIP (lossless)	ZIP (இழப்பற்றது)
+	Image Quality:	படத் தரம்:
+	8 bits per channel	ஒரு சேனலுக்கு 8 பிட்கள்
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	அச்சு PDF-கள் முழுத் தெளிவுத்திறனில் இழப்பற்ற சுருக்கத்துடன் எழுதப்படுகின்றன, எனவே அச்சு இயந்திரத்துக்குச் செல்லும் வழியில் எதுவும் இழக்கப்படுவதில்லை.
+	Color Conversion:	நிற மாற்றம்:
+	Convert to Destination	இலக்குக்கு மாற்று
+	No Conversion	மாற்றம் இல்லை
+	Destination:	இலக்கு:
+	N/A	பொருந்தாது
+	Profile Inclusion Policy:	சுயவிவரச் சேர்ப்புக் கொள்கை:
+	Include Tagged Source Profiles	குறியிடப்பட்ட மூலச் சுயவிவரங்களைச் சேர்
+	Don't Include Profiles	சுயவிவரங்களைச் சேர்க்காதே
+	Include Destination Profile	இலக்குச் சுயவிவரத்தைச் சேர்
+	The CMYK numbers are kept.	CMYK எண்கள் அப்படியே வைக்கப்படுகின்றன.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	நிறங்கள் ஆவணத்தின் சுயவிவரத்தை வைத்திருக்கும், அது PDF-இல் உட்பொதிக்கப்படும்; அச்சகம் அவற்றை மாற்றும்.
+	The colours are converted to this profile in the PDF; the document is not changed.	PDF-இல் நிறங்கள் இந்தச் சுயவிவரத்துக்கு மாற்றப்படுகின்றன; ஆவணம் மாற்றப்படுவதில்லை.
+	Output Intent Profile Name:	வெளியீட்டு நோக்கச் சுயவிவரப் பெயர்:
+	Output Condition Identifier:	வெளியீட்டு நிலை அடையாளங்காட்டி:
+	Bleed:	ப்ளீட்:
+	already in the document	ஏற்கெனவே ஆவணத்தில் உள்ளது
+	Standard:	தரநிலை:
+	Compatibility:	இணக்கத்தன்மை:
+	Page:	பக்கம்:
+	Trim:	வெட்டு அளவு:
+	Warnings	எச்சரிக்கைகள்
+	PDF Preset:	PDF முன்னமைவு:
+	[High Quality Print]	[உயர் தர அச்சு]
+	Save PDF	PDF-ஐச் சேமி

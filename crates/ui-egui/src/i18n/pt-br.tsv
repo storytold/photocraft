@@ -4530,3 +4530,56 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar limites da camada ao passar o cursor
 	Expand layer group on click	Expandir grupo de camadas ao clicar
 	Show hover bounds from Layers	Mostrar limites ao passar o cursor em Camadas
+
+
+# PDF Options (PDF/X-1a)
+	PDF Options	Opções de PDF
+	Output Condition	Condição de saída
+	Document: {profile}	Documento: {profile}
+	Working CMYK: {profile}	CMYK de trabalho: {profile}
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Nenhum perfil CMYK instalado. Instale neste computador o perfil da gráfica (por exemplo ISO Coated v2 ou Coated FOGRA39) e salve de novo.
+	PDF/X-1a:2001 needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39).	O PDF/X-1a:2001 precisa de um perfil ICC versão 2. Escolha o perfil da gráfica (por exemplo ISO Coated v2 ou Coated FOGRA39).
+	The CMYK numbers are kept.	Os valores CMYK são mantidos.
+	The colours are converted to this profile in the PDF; the document is not changed.	As cores são convertidas para este perfil no PDF; o documento não é alterado.
+	Bleed:	Sangria:
+	The bleed already in the document: the trim box sits this far inside the page.	A sangria que já está no documento: a linha de corte fica essa distância para dentro da página.
+	Save PDF	Salvar PDF
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Uma sangria de {bleed} mm não deixa formato final nesta página de {width} × {height} mm.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	O PDF/X-4 precisa de um perfil ICC versão 2 ou 4. Escolha o perfil da gráfica (por exemplo PSO Coated v3 ou Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	O {standard} precisa de um perfil ICC versão 2. Escolha o perfil da gráfica (por exemplo ISO Coated v2 ou Coated FOGRA39) ou salve em PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	O perfil do documento ({profile}) é ICC versão {version}, que o {standard} não consegue incorporar. Converta para o perfil de saída ou salve em PDF/X-4.
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Um PDF simples para visualização e para gráficas que não pedem PDF/X. A imagem mantém suas cores e seu perfil incorporado.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) para impressão: todas as cores são CMYK ou cinza, convertidas para a condição de saída da gráfica. A maioria das gráficas aceita. PDF 1.3, um perfil de saída ICC versão 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) para impressão: como o PDF/X-1a, mas as cores também podem manter o próprio perfil ICC para a gráfica converter. PDF 1.3, perfis ICC versão 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), o padrão de impressão atual: cores convertidas para a condição de saída ou mantidas no próprio perfil, perfis ICC versão 2 ou 4, metadados XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	A imagem é salva achatada: camadas, texto e transparência não são mantidos como tais. Mantenha o documento como .psd ou .pcraft para editá-lo depois.
+	Images	Imagens
+	Downsampling:	Redução de resolução:
+	Do Not Downsample	Não reduzir a resolução
+	Compression:	Compressão:
+	ZIP (lossless)	ZIP (sem perdas)
+	Image Quality:	Qualidade da imagem:
+	8 bits per channel	8 bits por canal
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	PDFs para impressão são gravados em resolução total com compressão sem perdas, então nada se perde no caminho até a impressão.
+	Color Conversion:	Conversão de cores:
+	Convert to Destination	Converter para o destino
+	No Conversion	Sem conversão
+	Destination:	Destino:
+	N/A	N/D
+	Profile Inclusion Policy:	Política de inclusão de perfis:
+	Include Tagged Source Profiles	Incluir perfis de origem marcados
+	Don't Include Profiles	Não incluir perfis
+	Include Destination Profile	Incluir perfil de destino
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	As cores mantêm o perfil do documento, incorporado no PDF; a gráfica faz a conversão.
+	Output Intent Profile Name:	Nome do perfil de intenção de saída:
+	Output Condition Identifier:	Identificador da condição de saída:
+	already in the document	já no documento
+	Standard:	Padrão:
+	Compatibility:	Compatibilidade:
+	Page:	Página:
+	Trim:	Formato final:
+	Warnings	Avisos
+	PDF Preset:	Predefinição de PDF:
+	[High Quality Print]	[Impressão de alta qualidade]

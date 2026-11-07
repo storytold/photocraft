@@ -3264,3 +3264,51 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	滑過時顯示圖層邊界
 	Expand layer group on click	按一下時展開圖層群組
 	Show hover bounds from Layers	顯示來自圖層面板的滑過邊界
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm 出血會使這個 {width} × {height} mm 的頁面裁切後不剩任何範圍。
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	未安裝 CMYK 描述檔。請在這部電腦上安裝印刷廠的描述檔 (例如 ISO Coated v2 或 Coated FOGRA39)，然後再儲存一次。
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 需要 ICC 第 2 或第 4 版的描述檔。請選擇印刷廠的描述檔 (例如 PSO Coated v3 或 Coated FOGRA39)。
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} 需要 ICC 第 2 版的描述檔。請選擇印刷廠的描述檔 (例如 ISO Coated v2 或 Coated FOGRA39)，或儲存為 PDF/X-4。
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	文件的描述檔 ({profile}) 為 ICC 第 {version} 版，{standard} 無法嵌入。請轉換為輸出描述檔，或儲存為 PDF/X-4。
+	Document: {profile}	文件：{profile}
+	Working CMYK: {profile}	使用中的 CMYK：{profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	供螢幕檢視及不要求 PDF/X 的印刷廠使用的一般 PDF。影像保留其色彩與嵌入的描述檔。
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1)，供印刷使用：所有色彩皆為 CMYK 或灰階，並轉換為印刷廠的輸出條件。大多數印刷廠都接受。PDF 1.3，ICC 第 2 版輸出描述檔。
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3)，供印刷使用：與 PDF/X-1a 相似，但色彩也可保留自己的 ICC 描述檔，交由印刷廠轉換。PDF 1.3，ICC 第 2 版描述檔。
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7)，目前的印刷標準：色彩轉換為輸出條件或保留在自己的描述檔中，ICC 第 2 或第 4 版描述檔，XMP 中繼資料。PDF 1.6。
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	影像會平面化後儲存：圖層、文字與透明度不會原樣保留。若要日後編輯，請將文件保留為 .psd 或 .pcraft。
+	Images	影像
+	Downsampling:	縮減取樣：
+	Do Not Downsample	不縮減取樣
+	Compression:	壓縮：
+	ZIP (lossless)	ZIP (無損)
+	Image Quality:	影像品質：
+	8 bits per channel	每色版 8 位元
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	印刷用 PDF 以完整解析度與無損壓縮寫入，因此送印過程中不會有任何損失。
+	Color Conversion:	色彩轉換：
+	Convert to Destination	轉換為目的地
+	No Conversion	不轉換
+	Destination:	目的地：
+	N/A	不適用
+	Profile Inclusion Policy:	描述檔內含原則：
+	Include Tagged Source Profiles	包含已標記的來源描述檔
+	Don't Include Profiles	不包含描述檔
+	Include Destination Profile	包含目的地描述檔
+	The CMYK numbers are kept.	CMYK 數值保持不變。
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	色彩保留文件的描述檔，並嵌入 PDF 中；由印刷廠進行轉換。
+	The colours are converted to this profile in the PDF; the document is not changed.	色彩在 PDF 中轉換為此描述檔；文件本身不會變更。
+	Output Intent Profile Name:	輸出意圖描述檔名稱：
+	Output Condition Identifier:	輸出條件識別碼：
+	Bleed:	出血：
+	already in the document	已包含在文件中
+	Standard:	標準：
+	Compatibility:	相容性：
+	Page:	頁面：
+	Trim:	完成尺寸：
+	Settings	設定
+	Warnings	警告
+	PDF Preset:	PDF 預設集：
+	[High Quality Print]	[高品質列印]
+	Save PDF	儲存 PDF

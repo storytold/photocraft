@@ -4825,3 +4825,50 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Show layer bounds on hover	Vis lagets grænser ved svæv
 	Expand layer group on click	Udvid lagergruppe ved klik
 	Show hover bounds from Layers	Vis svævegrænser fra Lag
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Et beskæringstillæg på {bleed} mm efterlader intet færdigformat på denne side på {width} × {height} mm.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Der er ikke installeret nogen CMYK-profil. Installer trykkeriets profil (for eksempel ISO Coated v2 eller Coated FOGRA39) på denne computer, og gem igen.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 kræver en ICC-profil i version 2 eller 4. Vælg trykkeriets profil (for eksempel PSO Coated v3 eller Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} kræver en ICC-profil i version 2. Vælg trykkeriets profil (for eksempel ISO Coated v2 eller Coated FOGRA39), eller gem som PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Dokumentets profil ({profile}) er ICC version {version}, som {standard} ikke kan indlejre. Konvertér til outputprofilen, eller gem som PDF/X-4.
+	Document: {profile}	Dokument: {profile}
+	Working CMYK: {profile}	Arbejds-CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	En almindelig PDF til visning og til printere, der ikke kræver PDF/X. Billedet beholder sine farver og sin indlejrede profil.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) til tryk: alle farver er CMYK eller grå, konverteret til trykkeriets outputbetingelse. De fleste trykkerier accepterer det. PDF 1.3, en outputprofil i ICC version 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) til tryk: som PDF/X-1a, men farver kan også beholde deres egen ICC-profil, så trykkeriet konverterer dem. PDF 1.3, profiler i ICC version 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), den aktuelle trykstandard: farver konverteres til outputbetingelsen eller beholdes i deres egen profil, profiler i ICC version 2 eller 4, XMP-metadata. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Billedet gemmes fladgjort: lag, tekst og gennemsigtighed bevares ikke som sådan. Behold dokumentet som .psd eller .pcraft for at redigere det senere.
+	Images	Billeder
+	Downsampling:	Nedsampling:
+	Do Not Downsample	Ingen nedsampling
+	Compression:	Komprimering:
+	ZIP (lossless)	ZIP (tabsfri)
+	Image Quality:	Billedkvalitet:
+	8 bits per channel	8 bit pr. kanal
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	Tryk-PDF'er skrives i fuld opløsning med tabsfri komprimering, så intet går tabt på vej til trykken.
+	Color Conversion:	Farvekonvertering:
+	Convert to Destination	Konvertér til destination
+	No Conversion	Ingen konvertering
+	Destination:	Destination:
+	N/A	I/R
+	Profile Inclusion Policy:	Politik for inkludering af profiler:
+	Include Tagged Source Profiles	Inkluder mærkede kildeprofiler
+	Don't Include Profiles	Inkluder ikke profiler
+	Include Destination Profile	Inkluder destinationsprofil
+	The CMYK numbers are kept.	CMYK-værdierne bevares.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Farverne beholder dokumentets profil, indlejret i PDF'en; trykkeriet konverterer dem.
+	The colours are converted to this profile in the PDF; the document is not changed.	Farverne konverteres til denne profil i PDF'en; dokumentet ændres ikke.
+	Output Intent Profile Name:	Profilnavn for outputhensigt:
+	Output Condition Identifier:	Id for outputbetingelse:
+	Bleed:	Beskæringstillæg:
+	already in the document	allerede i dokumentet
+	Standard:	Standard:
+	Compatibility:	Kompatibilitet:
+	Page:	Side:
+	Trim:	Færdigformat:
+	Warnings	Advarsler
+	PDF Preset:	PDF-forudindstilling:
+	[High Quality Print]	[Tryk i høj kvalitet]
+	Save PDF	Gem PDF

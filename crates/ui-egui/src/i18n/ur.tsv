@@ -4572,3 +4572,49 @@ navigator	Zoom	زوم
 @plural	{n} action file loaded|{n} action files loaded	{n} ایکشن فائل لوڈ ہوئی|{n} ایکشن فائلیں لوڈ ہوئیں
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} فائل لوڈ نہیں ہو سکی: {errors}|{n} فائلیں لوڈ نہیں ہو سکیں: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} تصویری اثاثہ آؤٹ پٹ ناکام ہوا|{what}: {n} تصویری اثاثے آؤٹ پٹس ناکام ہوئے
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm بلیڈ کے بعد اس {width} × {height} mm صفحے پر تراش کے لیے کچھ نہیں بچتا۔
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	کوئی CMYK پروفائل انسٹال نہیں ہے۔ پرنٹر کی پروفائل (مثال کے طور پر ISO Coated v2 یا Coated FOGRA39) اس کمپیوٹر پر انسٹال کریں اور دوبارہ محفوظ کریں۔
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 کو ICC ورژن 2 یا 4 کی پروفائل درکار ہے۔ پرنٹر کی پروفائل منتخب کریں (مثال کے طور پر PSO Coated v3 یا Coated FOGRA39)۔
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} کو ICC ورژن 2 کی پروفائل درکار ہے۔ پرنٹر کی پروفائل منتخب کریں (مثال کے طور پر ISO Coated v2 یا Coated FOGRA39)، یا PDF/X-4 کے طور پر محفوظ کریں۔
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	دستاویز کی پروفائل ({profile}) ICC ورژن {version} کی ہے، جسے {standard} ایمبیڈ نہیں کر سکتا۔ آؤٹ پٹ پروفائل میں تبدیل کریں، یا PDF/X-4 کے طور پر محفوظ کریں۔
+	Document: {profile}	دستاویز: {profile}
+	Working CMYK: {profile}	ورکنگ CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	دیکھنے کے لیے اور اُن پرنٹرز کے لیے سادہ PDF جو PDF/X نہیں مانگتے۔ تصویر اپنا رنگ اور ایمبیڈ کی ہوئی پروفائل برقرار رکھتی ہے۔
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	پرنٹ کے لیے PDF/X-1a:2001 (ISO 15930-1): تمام رنگ CMYK یا سرمئی ہوتا ہے، جسے پرنٹر کی آؤٹ پٹ کنڈیشن میں تبدیل کیا جاتا ہے۔ زیادہ تر پرنٹ شاپس اسے قبول کرتی ہیں۔ PDF 1.3، ICC ورژن 2 آؤٹ پٹ پروفائل۔
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	پرنٹ کے لیے PDF/X-3:2002 (ISO 15930-3): PDF/X-1a جیسا، لیکن رنگ اپنی ICC پروفائل بھی رکھ سکتا ہے تاکہ پرنٹر اسے تبدیل کرے۔ PDF 1.3، ICC ورژن 2 پروفائلز۔
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7)، موجودہ پرنٹ معیار: رنگ آؤٹ پٹ کنڈیشن میں تبدیل کیا جاتا ہے یا اپنی پروفائل میں رکھا جاتا ہے، ICC ورژن 2 یا 4 پروفائلز، XMP میٹا ڈیٹا۔ PDF 1.6۔
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	تصویر چپٹی کر کے محفوظ کی جاتی ہے: تہیں، متن اور شفافیت جوں کی توں نہیں رکھی جاتیں۔ بعد میں ترمیم کے لیے دستاویز کو .psd یا .pcraft کے طور پر رکھیں۔
+	Images	تصاویر
+	Downsampling:	ڈاؤن سیمپلنگ:
+	Do Not Downsample	ڈاؤن سیمپل نہ کریں
+	Compression:	کمپریشن:
+	ZIP (lossless)	ZIP (بے نقصان)
+	Image Quality:	تصویر کا معیار:
+	8 bits per channel	فی چینل 8 بٹ
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	پرنٹ PDF مکمل ریزولوشن پر بے نقصان کمپریشن کے ساتھ لکھی جاتی ہیں، اس لیے پریس تک پہنچنے میں کچھ ضائع نہیں ہوتا۔
+	Color Conversion:	رنگ کی تبدیلی:
+	Convert to Destination	منزل میں تبدیل کریں
+	No Conversion	کوئی تبدیلی نہیں
+	Destination:	منزل:
+	N/A	لاگو نہیں
+	Profile Inclusion Policy:	پروفائل شامل کرنے کی پالیسی:
+	Include Tagged Source Profiles	ٹیگ شدہ ماخذ پروفائلز شامل کریں
+	Don't Include Profiles	پروفائلز شامل نہ کریں
+	Include Destination Profile	منزل کی پروفائل شامل کریں
+	The CMYK numbers are kept.	CMYK اقدار جوں کی توں رکھی جاتی ہیں۔
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	رنگ دستاویز کی پروفائل برقرار رکھتے ہیں، جو PDF میں ایمبیڈ ہوتی ہے؛ پرنٹر انہیں تبدیل کرتا ہے۔
+	The colours are converted to this profile in the PDF; the document is not changed.	PDF میں رنگ اس پروفائل میں تبدیل کیے جاتے ہیں؛ دستاویز تبدیل نہیں ہوتی۔
+	Output Intent Profile Name:	آؤٹ پٹ انٹینٹ پروفائل کا نام:
+	Output Condition Identifier:	آؤٹ پٹ کنڈیشن شناخت کنندہ:
+	Bleed:	بلیڈ:
+	already in the document	دستاویز میں پہلے سے موجود
+	Standard:	معیار:
+	Compatibility:	مطابقت:
+	Page:	صفحہ:
+	Trim:	تراش:
+	Warnings	تنبیہات
+	PDF Preset:	PDF پری سیٹ:
+	[High Quality Print]	[اعلیٰ معیار پرنٹ]
+	Save PDF	PDF محفوظ کریں

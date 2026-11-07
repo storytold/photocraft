@@ -4715,3 +4715,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostra i limiti del livello al passaggio del mouse
 	Expand layer group on click	Espandi il gruppo di livelli al clic
 	Show hover bounds from Layers	Mostra i limiti al passaggio dal pannello Livelli
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Un'abbondanza di {bleed} mm non lascia alcun formato rifilato su questa pagina di {width} × {height} mm.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Nessun profilo CMYK installato. Installa su questo computer il profilo della tipografia (per esempio ISO Coated v2 o Coated FOGRA39) e salva di nuovo.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 richiede un profilo ICC versione 2 o 4. Scegli il profilo della tipografia (per esempio PSO Coated v3 o Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} richiede un profilo ICC versione 2. Scegli il profilo della tipografia (per esempio ISO Coated v2 o Coated FOGRA39), oppure salva in PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Il profilo del documento ({profile}) è ICC versione {version}, che {standard} non può incorporare. Converti nel profilo di output, oppure salva in PDF/X-4.
+	Document: {profile}	Documento: {profile}
+	Working CMYK: {profile}	CMYK di lavoro: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Un PDF semplice per la visualizzazione e per le tipografie che non richiedono PDF/X. L'immagine mantiene il suo colore e il profilo incorporato.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) per la stampa: tutto il colore è CMYK o grigio, convertito nella condizione di output della tipografia. È accettato dalla maggior parte delle tipografie. PDF 1.3, un profilo di output ICC versione 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) per la stampa: come PDF/X-1a, ma il colore può anche mantenere il proprio profilo ICC, che la tipografia convertirà. PDF 1.3, profili ICC versione 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), lo standard di stampa attuale: colore convertito nella condizione di output o mantenuto nel proprio profilo, profili ICC versione 2 o 4, metadati XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	L'immagine viene salvata unita: livelli, testo e trasparenza non vengono mantenuti come tali. Conserva il documento come .psd o .pcraft per modificarlo in seguito.
+	Images	Immagini
+	Downsampling:	Sottocampionamento:
+	Do Not Downsample	Non sottocampionare
+	Compression:	Compressione:
+	ZIP (lossless)	ZIP (senza perdita)
+	Image Quality:	Qualità immagine:
+	8 bits per channel	8 bit per canale
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	I PDF per la stampa vengono scritti a piena risoluzione con compressione senza perdita, così nulla va perso nel percorso verso la stampa.
+	Color Conversion:	Conversione colore:
+	Convert to Destination	Converti in destinazione
+	No Conversion	Nessuna conversione
+	Destination:	Destinazione:
+	N/A	N/D
+	Profile Inclusion Policy:	Criterio di inclusione profili:
+	Include Tagged Source Profiles	Includi profili di origine con tag
+	Don't Include Profiles	Non includere profili
+	Include Destination Profile	Includi profilo di destinazione
+	The CMYK numbers are kept.	I valori CMYK vengono mantenuti.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	I colori mantengono il profilo del documento, incorporato nel PDF; la tipografia li converte.
+	The colours are converted to this profile in the PDF; the document is not changed.	I colori vengono convertiti in questo profilo nel PDF; il documento non viene modificato.
+	Output Intent Profile Name:	Nome profilo intento di output:
+	Output Condition Identifier:	Identificatore condizione di output:
+	Bleed:	Abbondanza:
+	already in the document	già nel documento
+	Standard:	Standard:
+	Compatibility:	Compatibilità:
+	Page:	Pagina:
+	Trim:	Formato rifilato:
+	Warnings	Avvisi
+	PDF Preset:	Predefinito PDF:
+	[High Quality Print]	[Stampa di alta qualità]
+	Save PDF	Salva PDF

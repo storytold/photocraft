@@ -4327,3 +4327,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Показувати межі шару під час наведення
 	Expand layer group on click	Розгортати групу шарів за клацанням
 	Show hover bounds from Layers	Показувати межі під час наведення з панелі «Шари»
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	За випуску {bleed} мм на цій сторінці {width} × {height} мм не лишається обрізного формату.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Профіль CMYK не встановлено. Встановіть на цей комп’ютер профіль друкарні (наприклад, ISO Coated v2 або Coated FOGRA39) і збережіть знову.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	Для PDF/X-4 потрібен профіль ICC версії 2 або 4. Виберіть профіль друкарні (наприклад, PSO Coated v3 або Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	Для {standard} потрібен профіль ICC версії 2. Виберіть профіль друкарні (наприклад, ISO Coated v2 або Coated FOGRA39) або збережіть у PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Профіль документа ({profile}) має ICC версії {version}, яку {standard} не може вбудувати. Перетворіть на вихідний профіль або збережіть у PDF/X-4.
+	Document: {profile}	Документ: {profile}
+	Working CMYK: {profile}	Робочий CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Звичайний PDF для перегляду та для друкарень, які не вимагають PDF/X. Зображення зберігає свої кольори та вбудований профіль.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) для друку: усі кольори в CMYK або відтінках сірого, перетворені на вихідні умови друкарні. Його приймає більшість друкарень. PDF 1.3, вихідний профіль ICC версії 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) для друку: як PDF/X-1a, але кольори можуть також зберігати власний профіль ICC, а перетворює їх друкарня. PDF 1.3, профілі ICC версії 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), чинний стандарт друку: кольори перетворені на вихідні умови або збережені у власному профілі, профілі ICC версії 2 або 4, метадані XMP. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Зображення зберігається зведеним: шари, текст і прозорість як такі не зберігаються. Щоб редагувати його пізніше, збережіть документ у .psd або .pcraft.
+	Images	Зображення
+	Downsampling:	Зниження роздільності:
+	Do Not Downsample	Не знижувати роздільність
+	Compression:	Стиснення:
+	ZIP (lossless)	ZIP (без втрат)
+	Image Quality:	Якість зображення:
+	8 bits per channel	8 біт на канал
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	PDF для друку записуються в повній роздільності зі стисненням без втрат, тож дорогою до друкарні нічого не губиться.
+	Color Conversion:	Перетворення кольорів:
+	Convert to Destination	Перетворити на цільовий
+	No Conversion	Без перетворення
+	Destination:	Призначення:
+	N/A	Н/Д
+	Profile Inclusion Policy:	Правило включення профілів:
+	Include Tagged Source Profiles	Включати профілі позначених джерел
+	Don't Include Profiles	Не включати профілі
+	Include Destination Profile	Включити цільовий профіль
+	The CMYK numbers are kept.	Значення CMYK зберігаються.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Кольори зберігають профіль документа, вбудований у PDF; перетворює їх друкарня.
+	The colours are converted to this profile in the PDF; the document is not changed.	Кольори перетворюються на цей профіль у PDF; документ не змінюється.
+	Output Intent Profile Name:	Назва профілю вихідних умов:
+	Output Condition Identifier:	Ідентифікатор вихідних умов:
+	Bleed:	Випуск під обріз:
+	already in the document	уже є в документі
+	Standard:	Стандарт:
+	Compatibility:	Сумісність:
+	Page:	Сторінка:
+	Trim:	Обрізний формат:
+	Warnings	Попередження
+	PDF Preset:	Набір PDF:
+	[High Quality Print]	[Високоякісний друк]
+	Save PDF	Зберегти PDF

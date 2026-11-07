@@ -4626,3 +4626,50 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Show layer bounds on hover	Üzərinə gətirəndə qat sərhədlərini göstərin
 	Expand layer group on click	Klikləyəndə qat qrupunu genişləndirin
 	Show hover bounds from Layers	Üzərinə gətirmə sərhədlərini Qatlardan göstərin
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	{bleed} mm kənar payı bu {width} × {height} mm səhifədə kəsim sahəsi qoymur.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Heç bir CMYK profili quraşdırılmayıb. Mətbəənin profilini (məsələn, ISO Coated v2 və ya Coated FOGRA39) bu kompüterə quraşdırın və yenidən saxlayın.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 üçün ICC versiya 2 və ya 4 profili lazımdır. Mətbəənin profilini seçin (məsələn, PSO Coated v3 və ya Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} üçün ICC versiya 2 profili lazımdır. Mətbəənin profilini seçin (məsələn, ISO Coated v2 və ya Coated FOGRA39) və ya PDF/X-4 kimi saxlayın.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Sənədin profili ({profile}) ICC versiya {version}-dir və {standard} onu daxil edə bilmir. Çıxış profilinə çevirin və ya PDF/X-4 kimi saxlayın.
+	Document: {profile}	Sənəd: {profile}
+	Working CMYK: {profile}	İşçi CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Baxış və PDF/X tələb etməyən printerlər üçün adi PDF. Təsvir öz rəngini və daxil edilmiş profilini saxlayır.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	Çap üçün PDF/X-1a:2001 (ISO 15930-1): bütün rənglər CMYK və ya boz olur, mətbəənin çıxış şərtinə çevrilir. Əksər mətbəələr bunu qəbul edir. PDF 1.3, ICC versiya 2 çıxış profili.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	Çap üçün PDF/X-3:2002 (ISO 15930-3): PDF/X-1a kimi, lakin rənglər mətbəənin çevirməsi üçün öz ICC profilini də saxlaya bilər. PDF 1.3, ICC versiya 2 profilləri.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), cari çap standartı: rənglər çıxış şərtinə çevrilir və ya öz profilində saxlanılır, ICC versiya 2 və ya 4 profilləri, XMP metaməlumatları. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	Təsvir birləşdirilmiş şəkildə saxlanılır: laylar, mətn və şəffaflıq olduğu kimi saxlanılmır. Sonra redaktə etmək üçün sənədi .psd və ya .pcraft kimi saxlayın.
+	Images	Təsvirlər
+	Downsampling:	Ayırdetməni azaltma:
+	Do Not Downsample	Ayırdetməni azaltma
+	Compression:	Sıxılma:
+	ZIP (lossless)	ZIP (itkisiz)
+	Image Quality:	Təsvir keyfiyyəti:
+	8 bits per channel	Kanal başına 8 bit
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	Çap PDF-ləri tam ayırdetmə ilə və itkisiz sıxılma ilə yazılır, beləliklə mətbəəyə gedən yolda heç nə itmir.
+	Color Conversion:	Rəng çevrilməsi:
+	Convert to Destination	Təyinata çevir
+	No Conversion	Çevrilmə yoxdur
+	Destination:	Təyinat:
+	N/A	Yoxdur
+	Profile Inclusion Policy:	Profil daxiletmə qaydası:
+	Include Tagged Source Profiles	Etiketli mənbə profillərini daxil et
+	Don't Include Profiles	Profilləri daxil etmə
+	Include Destination Profile	Təyinat profilini daxil et
+	The CMYK numbers are kept.	CMYK dəyərləri saxlanılır.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	Rənglər PDF-ə daxil edilmiş sənəd profilini saxlayır; çevirməni mətbəə edir.
+	The colours are converted to this profile in the PDF; the document is not changed.	Rənglər PDF-də bu profilə çevrilir; sənəd dəyişmir.
+	Output Intent Profile Name:	Çıxış məqsədi profilinin adı:
+	Output Condition Identifier:	Çıxış şərti identifikatoru:
+	Bleed:	Kənar payı:
+	already in the document	artıq sənəddədir
+	Standard:	Standart:
+	Compatibility:	Uyğunluq:
+	Page:	Səhifə:
+	Trim:	Kəsim ölçüsü:
+	Warnings	Xəbərdarlıqlar
+	PDF Preset:	PDF hazır ayarı:
+	[High Quality Print]	[Yüksək keyfiyyətli çap]
+	Save PDF	PDF-i saxla

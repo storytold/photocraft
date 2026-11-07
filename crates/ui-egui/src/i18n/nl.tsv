@@ -4370,3 +4370,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Laaggrenzen tonen bij aanwijzen
 	Expand layer group on click	Laaggroep uitvouwen bij klikken
 	Show hover bounds from Layers	Aanwijsgrenzen tonen vanuit Lagen
+
+
+# PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
+	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Een afloop van {bleed} mm laat op deze pagina van {width} × {height} mm geen eindformaat over.
+	No CMYK profile is installed. Install the printer's profile (for example ISO Coated v2 or Coated FOGRA39) on this computer and save again.	Er is geen CMYK-profiel geïnstalleerd. Installeer het profiel van de drukker (bijvoorbeeld ISO Coated v2 of Coated FOGRA39) op deze computer en sla opnieuw op.
+	PDF/X-4 needs an ICC version 2 or 4 profile. Choose the printer's profile (for example PSO Coated v3 or Coated FOGRA39).	PDF/X-4 heeft een ICC-profiel versie 2 of 4 nodig. Kies het profiel van de drukker (bijvoorbeeld PSO Coated v3 of Coated FOGRA39).
+	{standard} needs an ICC version 2 profile. Choose the printer's profile (for example ISO Coated v2 or Coated FOGRA39), or save PDF/X-4.	{standard} heeft een ICC-profiel versie 2 nodig. Kies het profiel van de drukker (bijvoorbeeld ISO Coated v2 of Coated FOGRA39), of sla op als PDF/X-4.
+	The document's profile ({profile}) is ICC version {version}, which {standard} can't embed. Convert to the output profile, or save PDF/X-4.	Het documentprofiel ({profile}) is ICC versie {version}, dat {standard} niet kan insluiten. Zet om naar het uitvoerprofiel, of sla op als PDF/X-4.
+	Document: {profile}	Document: {profile}
+	Working CMYK: {profile}	Werk-CMYK: {profile}
+	A plain PDF for viewing and for printers that don't ask for PDF/X. The image keeps its colour and its embedded profile.	Een gewone PDF om te bekijken en voor drukkers die niet om PDF/X vragen. De afbeelding behoudt haar kleuren en haar ingesloten profiel.
+	PDF/X-1a:2001 (ISO 15930-1) for print: all colour is CMYK or gray, converted to the printer's output condition. Most print shops accept it. PDF 1.3, an ICC version 2 output profile.	PDF/X-1a:2001 (ISO 15930-1) voor drukwerk: alle kleur is CMYK of grijs, omgezet naar de uitvoerconditie van de drukker. De meeste drukkerijen accepteren het. PDF 1.3, een ICC-uitvoerprofiel versie 2.
+	PDF/X-3:2002 (ISO 15930-3) for print: like PDF/X-1a, but colour may also keep its own ICC profile for the printer to convert. PDF 1.3, ICC version 2 profiles.	PDF/X-3:2002 (ISO 15930-3) voor drukwerk: zoals PDF/X-1a, maar kleur mag ook een eigen ICC-profiel houden dat de drukker omzet. PDF 1.3, ICC-profielen versie 2.
+	PDF/X-4:2008 (ISO 15930-7), the current print standard: colour converted to the output condition or kept in its own profile, ICC version 2 or 4 profiles, XMP metadata. PDF 1.6.	PDF/X-4:2008 (ISO 15930-7), de huidige drukwerkstandaard: kleur omgezet naar de uitvoerconditie of behouden in een eigen profiel, ICC-profielen versie 2 of 4, XMP-metadata. PDF 1.6.
+	The image is saved flattened: layers, type and transparency are not kept as such. Keep the document as .psd or .pcraft to edit it later.	De afbeelding wordt afgevlakt opgeslagen: lagen, tekst en transparantie blijven niet als zodanig behouden. Bewaar het document als .psd of .pcraft om het later te bewerken.
+	Images	Afbeeldingen
+	Downsampling:	Downsampling:
+	Do Not Downsample	Geen downsampling
+	Compression:	Compressie:
+	ZIP (lossless)	ZIP (verliesvrij)
+	Image Quality:	Afbeeldingskwaliteit:
+	8 bits per channel	8 bits per kanaal
+	Print PDFs are written at full resolution with lossless compression, so nothing is lost on the way to the press.	Drukwerk-PDF's worden op volledige resolutie met verliesvrije compressie geschreven, zodat er onderweg naar de pers niets verloren gaat.
+	Color Conversion:	Kleuromzetting:
+	Convert to Destination	Omzetten naar bestemming
+	No Conversion	Geen omzetting
+	Destination:	Bestemming:
+	N/A	n.v.t.
+	Profile Inclusion Policy:	Beleid voor opnemen van profielen:
+	Include Tagged Source Profiles	Gelabelde bronprofielen opnemen
+	Don't Include Profiles	Geen profielen opnemen
+	Include Destination Profile	Bestemmingsprofiel opnemen
+	The CMYK numbers are kept.	De CMYK-waarden blijven behouden.
+	The colours keep the document's profile, embedded in the PDF; the printer converts them.	De kleuren houden het documentprofiel, ingesloten in de PDF; de drukker zet ze om.
+	The colours are converted to this profile in the PDF; the document is not changed.	De kleuren worden in de PDF naar dit profiel omgezet; het document verandert niet.
+	Output Intent Profile Name:	Naam uitvoerintentieprofiel:
+	Output Condition Identifier:	ID uitvoerconditie:
+	Bleed:	Afloop:
+	already in the document	al in het document
+	Standard:	Standaard:
+	Compatibility:	Compatibiliteit:
+	Page:	Pagina:
+	Trim:	Eindformaat:
+	Warnings	Waarschuwingen
+	PDF Preset:	PDF-voorinstelling:
+	[High Quality Print]	[Drukwerk van hoge kwaliteit]
+	Save PDF	PDF opslaan
