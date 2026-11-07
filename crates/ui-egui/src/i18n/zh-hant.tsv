@@ -853,7 +853,7 @@
 	Consolidate All to Tabs	全部合併至標籤頁
 	Float in Window	在視窗中浮動
 	Float All in Windows	全部在視窗中浮動
-	New Window	為文件新增視窗
+	New Window	新增視窗
 	Workspace	工作區
 	Essentials	基本功能
 	Graphic and Web	繪圖和網頁
@@ -916,6 +916,12 @@
 	Timeline	時間軸
 	Tool Presets	工具預設集
 	Tools	工具
+	Contextual Task Bar	內容相關工作列
+	Hide bar	隱藏工作列
+	Reset bar position	重設工作列位置
+	Pin bar position	固定工作列位置
+	Move bar	移動工作列
+	More options	更多選項
 	About PhotoCraft	關於 PhotoCraft
 	PhotoCraft Website	PhotoCraft 網站
 	PhotoCraft on GitHub	GitHub 上的 PhotoCraft
@@ -1876,6 +1882,7 @@
 	Move Tool	移動工具
 	Could not use the move tool because the layer is locked.	無法使用移動工具，因為圖層已鎖定。
 	Could not complete the Free Transform command because the layer is locked.	無法完成「任意變形」指令，因為圖層已鎖定。
+	Could not transform because the layer is locked.	無法變形，因為圖層已鎖定。
 	Multiply	色彩增值
 	My Brushes	我的筆刷
 	Neutrals	中間色
@@ -2154,7 +2161,6 @@
 	Show only crosshair while painting	繪圖時僅顯示十字線
 	Show slice numbers	顯示切片編號
 	Show tooltips	顯示工具提示
-	Enable animations	啟用動畫
 	Show highlight on rollover	滑鼠懸停時顯示醒目提示
 	Show bounding box when dragging layer	拖曳圖層時顯示邊界框
 	System title bar	系統標題列
@@ -3001,6 +3007,7 @@ curves	Smooth	平滑
 	Edit Selected Guides	編輯所選參考線
 	Clear Selected Guides	清除所選參考線
 	Make Selection	建立選取範圍
+	Make Shape	建立形狀
 	Bicubic Automatic	雙三次 (自動)
 	Bicubic Smoother	雙三次 (較平滑)
 	Bicubic Sharper	雙三次 (較銳利)
@@ -3247,3 +3254,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	請為每個色版選擇不同的文件。
 	A picked document is no longer open.	所選的一個文件已不再開啟。
 	A picked document is no longer a grayscale document of the same size.	所選的一個文件已不再是相同大小的灰階文件。
+# Move tool options bar (#11381)
+	Align top edges	對齊頂端
+	Align vertical centers	垂直置中對齊
+	Align bottom edges	對齊底端
+	Distribute vertically	垂直分佈
+	Distribute horizontally	水平分佈
+	Show layer bounds on hover	滑過時顯示圖層邊界
+	Expand layer group on click	按一下時展開圖層群組
+	Show hover bounds from Layers	顯示來自圖層面板的滑過邊界

@@ -672,7 +672,7 @@
 	Working Magenta Plate	Çalışma Macenta Plakası
 	Working Yellow Plate	Çalışma Sarı Plakası
 	Working Black Plate	Çalışma Siyah Plakası
-	Working CMY Plates	Çalışma CMY Plakası
+	Working CMY Plates	Çalışma CMY Plakaları
 	Legacy Macintosh RGB (Gamma 1.8)	Eski Macintosh RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	İnternet Standardı RGB (sRGB)
 	Monitor RGB	Monitör RGB
@@ -821,6 +821,12 @@
 	Timeline	Zaman Çizelgesi
 	Tool Presets	Araç Ön Ayarları
 	Tools	Araçlar
+	Contextual Task Bar	Bağlamsal Görev Çubuğu
+	Hide bar	Çubuğu gizle
+	Reset bar position	Çubuk konumunu sıfırla
+	Pin bar position	Çubuk konumunu sabitle
+	Move bar	Çubuğu taşı
+	More options	Diğer seçenekler
 	About PhotoCraft	PhotoCraft Hakkında
 	PhotoCraft Website	PhotoCraft Web Sitesi
 	PhotoCraft on GitHub	GitHub'da PhotoCraft
@@ -1756,6 +1762,7 @@
 	Move Tool	Taşıma Aracı
 	Could not use the move tool because the layer is locked.	Katman kilitli olduğundan taşıma aracı kullanılamadı.
 	Could not complete the Free Transform command because the layer is locked.	Katman kilitli olduğundan Serbest Dönüştürme komutu tamamlanamadı.
+	Could not transform because the layer is locked.	Katman kilitli olduğundan dönüştürme yapılamadı.
 	Multiply	Çoğalt
 	My Brushes	Fırçalarım
 	Neutrals	Nötrler
@@ -2278,6 +2285,7 @@
 	Punctuation	Noktalama işaretleri
 	Make Work Path	Çalışma Yolu Oluştur
 	Make Selection	Seçim Yap
+	Make Shape	Şekil Yap
 	Fill Path	Yolu Doldur
 	Stroke Path	Kontur Yolu
 	Delete Path	Yolu Sil
@@ -2556,7 +2564,6 @@ cameraRaw	Color	Renk
 	Remove All	Tümünü Kaldır
 	Unlock	Kilidi Aç
 	Enable	Etkinleştir
-	Enable animations	Animasyonları etkinleştir
 	Disable	Devre dışı bırak
 	On	Açık
 	Selected	Seçilen
@@ -4330,3 +4337,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Her kanal için farklı bir belge seçin.
 	A picked document is no longer open.	Seçilen belgelerden biri artık açık değil.
 	A picked document is no longer a grayscale document of the same size.	Seçilen belgelerden biri artık aynı boyutta gri tonlamalı bir belge değil.
+# Move tool options bar (#11381)
+	Align top edges	Üst kenarları hizala
+	Align vertical centers	Dikey merkezleri hizala
+	Align bottom edges	Alt kenarları hizala
+	Distribute vertically	Dikey olarak dağıt
+	Distribute horizontally	Yatay olarak dağıt
+	Show layer bounds on hover	Üzerine gelince katman sınırlarını göster
+	Expand layer group on click	Tıklayınca katman grubunu genişlet
+	Show hover bounds from Layers	Katmanlar'dan üzerine gelme sınırlarını göster

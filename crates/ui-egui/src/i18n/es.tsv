@@ -720,7 +720,7 @@
 	Working Magenta Plate	Placa magenta de trabajo
 	Working Yellow Plate	Placa amarilla de trabajo
 	Working Black Plate	Placa negra de trabajo
-	Working CMY Plates	Placa CMY de trabajo
+	Working CMY Plates	Placas CMY de trabajo
 	Legacy Macintosh RGB (Gamma 1.8)	RGB heredado de Macintosh (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RGB estándar de Internet (sRGB)
 	Monitor RGB	RGB del monitor
@@ -875,6 +875,12 @@
 	Timeline	Línea de tiempo
 	Tool Presets	Ajustes preestablecidos de herramienta
 	Tools	Herramientas
+	Contextual Task Bar	Barra de tareas contextual
+	Hide bar	Ocultar barra
+	Reset bar position	Restablecer posición de la barra
+	Pin bar position	Fijar posición de la barra
+	Move bar	Mover barra
+	More options	Más opciones
 	About PhotoCraft	Acerca de PhotoCraft
 	PhotoCraft Website	Sitio web de PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft en GitHub
@@ -1826,6 +1832,7 @@
 	Move Tool	Herramienta Mover
 	Could not use the move tool because the layer is locked.	No se pudo usar la herramienta Mover porque la capa está bloqueada.
 	Could not complete the Free Transform command because the layer is locked.	No se pudo completar el comando Transformación libre porque la capa está bloqueada.
+	Could not transform because the layer is locked.	No se pudo transformar porque la capa está bloqueada.
 	Multiply	Multiplicar
 	My Brushes	Mis pinceles
 	Neutrals	Neutros
@@ -2104,7 +2111,6 @@
 	Show only crosshair while painting	Mostrar solo la retícula al pintar
 	Show slice numbers	Mostrar los números de sector
 	Show tooltips	Mostrar las descripciones emergentes
-	Enable animations	Activar las animaciones
 	Show highlight on rollover	Mostrar resaltado al pasar el cursor
 	Show bounding box when dragging layer	Mostrar el cuadro delimitador al arrastrar la capa
 	System title bar	Barra de título del sistema
@@ -2354,6 +2360,7 @@
 	Punctuation	Puntuación
 	Make Work Path	Crear trazado de trabajo
 	Make Selection	Crear selección
+	Make Shape	Crear forma
 	Fill Path	Rellenar trazado
 	Stroke Path	Contornear trazado
 	Delete Path	Eliminar trazado
@@ -4499,3 +4506,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Elija un documento distinto para cada canal.
 	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
 	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.
+# Move tool options bar (#11381)
+	Align top edges	Alinear bordes superiores
+	Align vertical centers	Alinear centros verticales
+	Align bottom edges	Alinear bordes inferiores
+	Distribute vertically	Distribuir verticalmente
+	Distribute horizontally	Distribuir horizontalmente
+	Show layer bounds on hover	Mostrar límites de capa al pasar el puntero
+	Expand layer group on click	Expandir grupo de capas al hacer clic
+	Show hover bounds from Layers	Mostrar límites al pasar el puntero desde Capas
