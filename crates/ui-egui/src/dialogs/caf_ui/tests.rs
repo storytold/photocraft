@@ -505,3 +505,247 @@ fn keys_wait_while_the_overlay_colour_picker_is_open() {
     press(&mut app, &ctx, Key::Z, Modifiers::COMMAND);
     assert_eq!(ws(&app).describe()["sampledProxyPixels"].as_u64(), Some(all));
 }
+
+/// Picking Custom before anything is painted is how Photoshop starts it: the preview shows the
+/// image unfilled and the panel a hint to paint with the Sampling Brush, not the fill's
+/// "custom sampling needs `area`…" refusal (#10621). The first added stroke previews the fill.
+#[test]
+fn custom_sampling_with_nothing_painted_hints_instead_of_failing() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    let d = control(&mut app, &json!({"sampling": "custom", "waitPreview": true})).unwrap();
+    assert!(d["previewError"].is_null(), "{d}");
+    assert!(d["error"].is_null(), "{d}");
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    assert!(ws(&app).preview.pending_image.is_none() && ws(&app).preview.tex.is_none(), "the image is shown unfilled");
+    // A subtracting stroke paints nothing in an empty area: still the hint.
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0]], "size": 8, "alt": true}, "waitPreview": true})).unwrap();
+    assert!(d["previewError"].is_null() && d["previewHint"] == json!(CUSTOM_HINT), "{d}");
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}, "waitPreview": true})).unwrap();
+    assert!(d["previewHint"].is_null(), "{d}");
+    assert!(d["previewError"].is_null(), "{d}");
+    assert!(ws(&app).preview.pending_image.is_some(), "the fill previews");
+}
+
+/// Erasing everything the Sampling Brush added in Custom leaves the area as empty as before
+/// anything was painted: the same hint, the image unfilled, and Apply and OK say so too instead of
+/// running the fill into "nothing to sample from" (or, with nothing painted at all, the fill's
+/// "custom sampling needs `area`…" refusal).
+#[test]
+fn custom_sampling_erased_again_hints_and_apply_and_ok_do_not_run_the_fill() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply with nothing painted");
+    control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}})).unwrap();
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8, "alt": true}, "waitPreview": true})).unwrap();
+    assert_eq!(d["sampledProxyPixels"].as_u64(), Some(0), "{d}");
+    assert!(d["previewError"].is_null(), "{d}");
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    assert!(ws(&app).preview.pending_image.is_none() && ws(&app).preview.tex.is_none(), "the image is shown unfilled");
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply");
+    assert_eq!(control(&mut app, &json!({"commit": true})).unwrap_err(), CUSTOM_HINT, "OK");
+    commit(&mut app);
+    assert!(app.distort.caf.is_some(), "OK keeps the workspace open");
+    assert!(ws(&app).error.is_none() && ws(&app).awaiting_custom_area(), "the panel keeps the hint");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing was filled");
+    // Painting again previews the fill.
+    let d = control(&mut app, &json!({"stroke": {"points": [[20.0, 120.0], [60.0, 120.0]], "size": 8}, "waitPreview": true})).unwrap();
+    assert!(d["previewHint"].is_null() && d["previewError"].is_null() && d["error"].is_null(), "{d}");
+    assert!(ws(&app).preview.pending_image.is_some(), "the fill previews");
+}
+
+/// Apply and OK with nothing to sample in Custom leave the panel's hint as it is, in the hint's
+/// style, and the status bar says the same in the UI's language: not the English hint as an
+/// error, in the error colour, that replaces it in the panel (#10621). An earlier Apply's error
+/// gives way to the hint too.
+#[test]
+fn custom_apply_and_ok_with_nothing_painted_show_the_translated_hint_not_an_error() {
+    let ja = crate::i18n::Lang::from_code("ja").unwrap();
+    let hint = crate::i18n::tr(ja, CUSTOM_HINT);
+    assert_ne!(hint, CUSTOM_HINT, "the catalog translates the hint");
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    for ok in [false, true] {
+        app.distort.caf.as_mut().unwrap().error = Some("an earlier Apply's error".into());
+        crate::i18n::with_language(ja, || {
+            if ok {
+                commit(&mut app);
+            } else if let Err(e) = apply(&mut app) {
+                lifecycle::report(&mut app, e);
+            }
+        });
+        let what = if ok { "OK" } else { "Apply" };
+        assert!(app.distort.caf.is_some(), "{what} keeps the workspace open");
+        assert!(ws(&app).error.is_none() && ws(&app).awaiting_custom_area(), "{what}: the panel shows the hint");
+        assert_eq!(app.ui.status, hint, "{what}");
+        assert!(!app.ui.status_error, "{what}: not an error");
+    }
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps, "nothing was filled");
+}
+
+/// Custom's hint follows the fill area as well as the strokes: a lasso or Expand that covers
+/// everything painted brings it back, and one that uncovers a stroke (Contract, or undoing the
+/// lasso) takes it away, without anything being painted again.
+#[test]
+fn custom_hint_follows_fill_area_changes_under_the_strokes() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let hint = |d: &Value| d["previewHint"] == json!(CUSTOM_HINT);
+    // A stroke inside the fill area (90..110) samples nothing; Contract uncovers it.
+    let d = control(&mut app, &json!({"stroke": {"points": [[92.0, 76.0], [92.0, 84.0]], "size": 2}})).unwrap();
+    assert!(hint(&d), "{d}");
+    let d = control(&mut app, &json!({"contract": 5})).unwrap();
+    assert!(!hint(&d) && d["error"].is_null(), "contracted off the stroke: {d}");
+    let d = control(&mut app, &json!({"undo": true})).unwrap();
+    assert!(hint(&d), "the fill area covers the stroke again: {d}");
+    // A stroke just right of it samples; a lasso over it covers it, Expand too.
+    let d = control(&mut app, &json!({"undo": true})).unwrap();
+    assert_eq!(d["strokes"].as_u64(), Some(0), "{d}");
+    let d = control(&mut app, &json!({"stroke": {"points": [[112.0, 76.0], [112.0, 84.0]], "size": 2}})).unwrap();
+    assert!(!hint(&d), "{d}");
+    let d = control(&mut app, &json!({"lasso": {"op": "add", "points": [[105.0, 70.0], [125.0, 70.0], [125.0, 90.0], [105.0, 90.0]]}})).unwrap();
+    assert!(hint(&d) && d["error"].is_null(), "the lasso covers the stroke: {d}");
+    assert_eq!(d["strokes"].as_u64(), Some(1), "the stroke is kept: {d}");
+    let d = control(&mut app, &json!({"undo": true})).unwrap();
+    assert!(!hint(&d), "undoing the lasso uncovers it: {d}");
+    let d = control(&mut app, &json!({"expand": 4})).unwrap();
+    assert!(hint(&d) && d["error"].is_null(), "Expand covers the stroke: {d}");
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply");
+}
+
+/// Picking Custom shows the image unfilled straight away, even while the preview of the
+/// previous state is still winding down: its fill (or error) isn't left on view until the
+/// superseded worker exits.
+#[test]
+fn picking_custom_clears_the_preview_while_a_superseded_one_still_runs() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"waitPreview": true})).unwrap();
+    assert!(ws(&app).preview.pending_image.is_some());
+    // A worker for that state that hasn't answered yet.
+    let (_tx, rx) = std::sync::mpsc::sync_channel(1);
+    let w = app.distort.caf.as_mut().unwrap();
+    w.preview.running = Some((w.preview.want, rx, photocraft_engine::jobs::JobCtx::new()));
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    preview::drive_preview(&mut app, &egui::Context::default(), false);
+    let pv = &ws(&app).preview;
+    assert!(pv.pending_image.is_none() && pv.tex.is_none() && pv.error.is_none(), "the image is shown unfilled");
+    assert_eq!(pv.shown, pv.want);
+    assert!(pv.running.is_some(), "the superseded worker is still winding down");
+}
+
+/// Custom's "nothing painted yet" follows what the fill samples, the full-resolution area,
+/// not the proxy (2 document px per proxy px here): a 1 px stroke on the fill area's left edge
+/// keeps a column outside it that the proxy, sampling every other column, doesn't see, and one
+/// just past the canvas's right edge marks the proxy's last column (half of it off the canvas)
+/// while the fill has nothing there.
+#[test]
+fn custom_hint_follows_the_full_resolution_area_not_the_proxy() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 2201, "height": 40, "depth": 8})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            let s = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            s.fill_rect(Rect::new(0, 0, 2201, 40), &[0.2, 0.6, 0.4, 1.0]);
+            s.fill_rect(Rect::new(1091, 10, 1111, 30), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("select.rect", json!({"x": 1091, "y": 10, "width": 20, "height": 20})).unwrap();
+    app.sync_views();
+    open(&mut app).unwrap();
+    assert_eq!(ws(&app).k, 2);
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let steps = app.session.active().unwrap().history.past_len();
+    // Column 1090 is sampled; the proxy's column 545 (document column 1091) is in the fill area.
+    let d = control(&mut app, &json!({"stroke": {"points": [[1091.0, 15.0], [1091.0, 25.0]], "size": 1}})).unwrap();
+    assert_eq!(d["sampledProxyPixels"].as_u64(), Some(0), "{d}");
+    assert!(d["previewHint"].is_null(), "{d}");
+    let (_, source, hole) = engine_source(&app);
+    assert!(source.iter().zip(&hole).any(|(s, h)| *s && !*h), "the fill samples column 1090");
+    control(&mut app, &json!({"apply": true})).unwrap();
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "Apply fills");
+    // Past the canvas: the proxy's column 1100 (document column 2201) is marked, the fill
+    // samples nothing.
+    control(&mut app, &json!({"undo": true})).unwrap();
+    let d = control(&mut app, &json!({"stroke": {"points": [[2202.0, 5.0], [2202.0, 35.0]], "size": 1}})).unwrap();
+    assert!(d["sampledProxyPixels"].as_u64().unwrap() > 0, "{d}");
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    assert_eq!(control(&mut app, &json!({"apply": true})).unwrap_err(), CUSTOM_HINT, "Apply");
+}
+
+/// A big Sampling Brush stroke kept inside the fill area can't sample anything, so working that
+/// out paints nothing: each segment of it would otherwise paint its whole brush (here 100 px
+/// across, up to 25 million px at the largest size) at full resolution, again and again while the
+/// area stays empty. One that reaches past the fill area paints only the pixels outside it.
+#[test]
+fn custom_hint_paints_nothing_for_a_stroke_inside_the_fill_area() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", json!({"width": 300, "height": 200, "depth": 8})).unwrap();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 300, 200), &[0.2, 0.6, 0.4, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.session.execute("select.rect", json!({"x": 50, "y": 40, "width": 200, "height": 120})).unwrap();
+    app.sync_views();
+    open(&mut app).unwrap();
+    control(&mut app, &json!({"sampling": "custom"})).unwrap();
+    let inside = SamplingStroke { add: true, size: 100.0, points: vec![[120.0, 100.0], [180.0, 100.0]] };
+    assert!(!inside.bounds().is_empty() && Rect::new(50, 40, 250, 160).contains_rect(&inside.bounds()));
+    assert_eq!(ws(&app).sampling_reach(std::slice::from_ref(&inside)), Rect::EMPTY);
+    let d = control(&mut app, &json!({"stroke": {"points": [[120.0, 100.0], [180.0, 100.0]], "size": 100}})).unwrap();
+    assert_eq!(d["previewHint"], json!(CUSTOM_HINT), "{d}");
+    // 10 px past the fill area's right edge: only those columns.
+    let past = SamplingStroke { add: true, size: 100.0, points: vec![[160.0, 100.0], [210.0, 100.0]] };
+    assert_eq!(ws(&app).sampling_reach(std::slice::from_ref(&past)), Rect::new(250, 50, 261, 151));
+    let d = control(&mut app, &json!({"stroke": {"points": [[160.0, 100.0], [210.0, 100.0]], "size": 100}})).unwrap();
+    assert!(d["previewHint"].is_null(), "{d}");
+}
+
+/// The pixels outside the fill area are found pixel by pixel, not from its bounds: a gap in it
+/// is found, and anything past the fill area's rectangle is outside it.
+#[test]
+fn outside_fill_bounds_follow_the_fill_area_pixel_by_pixel() {
+    let rect = Rect::new(10, 10, 20, 20);
+    let mut hole = vec![true; 100];
+    let b = |hole: &Vec<bool>| preview::Base::new(rect, rect, hole.clone(), vec![false; 100]);
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(12, 12, 18, 18)), Rect::EMPTY);
+    assert_eq!(b(&hole).outside_fill_bounds(rect), Rect::EMPTY);
+    hole[3 * 10 + 6] = false; // (16, 13)
+    hole[7 * 10 + 4] = false; // (14, 17)
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(12, 12, 18, 18)), Rect::new(14, 13, 17, 18));
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(10, 10, 16, 16)), Rect::EMPTY);
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(15, 5, 18, 12)), Rect::new(15, 5, 18, 10));
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(0, 0, 5, 5)), Rect::new(0, 0, 5, 5));
+    assert_eq!(b(&hole).outside_fill_bounds(Rect::new(18, 16, 25, 18)), Rect::new(20, 16, 25, 18));
+}
+
+/// The pixels outside the fill area are looked up row by row in an index built with the base,
+/// not scanned under each Sampling Brush segment: a big brush over a fill area in the middle of
+/// the window (rows with pixels outside it on both sides) would otherwise check every pixel it
+/// covers, again and again while Custom's area stays empty. With the pixels dropped once the
+/// index is built (a missing pixel counts as outside), the answers stay the same.
+#[test]
+fn outside_fill_bounds_look_rows_up_instead_of_scanning_pixels() {
+    let rect = Rect::new(0, 0, 1000, 1000);
+    let mut hole = vec![false; 1000 * 1000];
+    for y in 100..900 {
+        hole[y * 1000 + 100..y * 1000 + 900].fill(true);
+    }
+    hole[300 * 1000 + 500] = false; // (500, 300)
+    let mut b = preview::Base::new(rect, rect, hole, vec![false; 1000 * 1000]);
+    b.hole = Vec::new();
+    assert_eq!(b.outside_fill_bounds(Rect::new(200, 400, 800, 800)), Rect::EMPTY, "all inside");
+    assert_eq!(b.outside_fill_bounds(Rect::new(200, 200, 800, 800)), Rect::new(500, 300, 501, 301), "the gap");
+    assert_eq!(b.outside_fill_bounds(Rect::new(50, 400, 150, 450)), Rect::new(50, 400, 100, 450), "left of it");
+    assert_eq!(b.outside_fill_bounds(Rect::new(850, 880, 1100, 900)), Rect::new(900, 880, 1100, 900), "right of it and past the window");
+}
