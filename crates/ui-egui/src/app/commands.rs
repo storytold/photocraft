@@ -264,6 +264,7 @@ impl PhotocraftApp {
                     | "path.toSelection"
                     | "path.addToSelection"
                     | "path.subtractFromSelection"
+                    | "path.intersectWithSelection"
             )
             && self.session.active().is_some_and(|st| st.doc.selection.is_some())
         {
