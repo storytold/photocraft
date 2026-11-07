@@ -121,6 +121,48 @@ fn a_restored_tolerance_out_of_range_shows_as_the_field_stores_it() {
     }
 }
 
+#[test]
+fn a_restored_fraction_reaches_the_stroke_as_a_whole_number() {
+    // The options bar need not have drawn: the stroke's params round it themselves.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for (saved, want) in [(23.6, 24.0), (0.0, 1.0), (f32::NAN, 50.0)] {
+        app.ui.tool_options.bg_tolerance = saved;
+        let p = crate::eraser_ui::background_eraser_params(&app, &[[1.0, 1.0, 1.0]]);
+        assert_eq!(p["tolerance"].as_f64(), Some(want), "{saved}");
+    }
+}
+
+#[test]
+fn a_label_scrub_past_100_does_not_alert() {
+    let mut h = app_harness();
+    type_tolerance(&mut h, "100");
+    // The field keeps the keyboard while the caption is scrubbed past the end.
+    let field = h
+        .query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
+        .expect("the Tolerance field");
+    let rect = field.rect();
+    field.click();
+    h.run_steps(1);
+    // The caption sits just left of the field.
+    let from = egui::pos2(rect.left() - 25.0, rect.center().y);
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    for k in 1..=6 {
+        h.event(egui::Event::PointerMoved(from + vec2(50.0 * k as f32, 0.0)));
+        h.run_steps(1);
+    }
+    let to = from + vec2(300.0, 0.0);
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(tolerance(&h), 100.0);
+    assert_eq!(alert(&h), None, "a scrub stops at 100 without an alert");
+}
+
 /// The accessible descriptions (tooltips) of the widgets of `role` named `label`.
 fn descriptions(h: &Harness<'static, PhotocraftApp>, role: Option<egui::accesskit::Role>, label: &str) -> Vec<String> {
     let of = |n: egui_kittest::Node<'_>| n.accesskit_node().description().map(|d| d.to_string());

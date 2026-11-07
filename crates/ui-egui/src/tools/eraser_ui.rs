@@ -53,7 +53,7 @@ pub(crate) fn background_eraser_params(app: &PhotocraftApp, points: &[[f64; 3]])
         "points": points,
         "sampling": o.bg_sampling,
         "limits": o.bg_limits,
-        "tolerance": o.bg_tolerance,
+        "tolerance": stored_tolerance(o.bg_tolerance),
         "protectForegroundColor": o.bg_protect_fg,
         "seed": crate::retouch_ui::stroke_seed(points),
     })
@@ -150,7 +150,7 @@ pub const TOLERANCE_RANGE_ALERT: &str = "An integer between 1% and 100% is requi
 /// caller shows [`TOLERANCE_RANGE_ALERT`].
 fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
     // A restored setting (an older 0, a fraction) shows and erases as the field would store it.
-    *value = if value.is_finite() { value.round().clamp(1.0, 100.0) } else { 50.0 };
+    *value = stored_tolerance(*value);
     // The field's own range is wide, so the typed value reaches here unclamped.
     let mut typed = *value;
     let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(tl!("Erase range of similar colors"));
@@ -158,11 +158,20 @@ fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
     if r.changed() && typed.is_finite() {
         *value = typed.round().clamp(1.0, 100.0);
         // Only what was typed alerts, also an expression committed as the field is left
-        // (`50*4` and Enter); a scrub past the ends just stops there.
-        let out = (r.has_focus() || r.lost_focus()) && !(1.0..=100.0).contains(&typed);
+        // (`50*4` and Enter); a scrub past the ends (the field's or its caption's, even while
+        // the field has the keyboard) just stops there.
+        let typing = (r.has_focus() || r.lost_focus()) && ui.ctx().dragged_id().is_none();
+        let out = typing && !(1.0..=100.0).contains(&typed);
         ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
     }
     r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false)
+}
+
+/// A Tolerance as the field stores it: a whole number in 1..=100, the default 50 for a value
+/// that is no number. Strokes use it too, so a restored setting erases the same before and after
+/// the options bar shows it.
+fn stored_tolerance(v: f32) -> f32 {
+    if v.is_finite() { v.round().clamp(1.0, 100.0) } else { 50.0 }
 }
 
 /// Shows [`TOLERANCE_RANGE_ALERT`]: a modal with OK, once even if more than one pass asks.
