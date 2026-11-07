@@ -55,19 +55,19 @@ fn mods(h: &mut Harness<'static, PhotocraftApp>, m: Modifiers) {
     h.run_steps(1);
 }
 
-fn button(h: &mut Harness<'static, PhotocraftApp>, p: Pos2, down: bool, m: Modifiers) {
-    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: down, modifiers: m });
+fn button(h: &mut Harness<'static, PhotocraftApp>, b: PointerButton, p: Pos2, down: bool, m: Modifiers) {
+    h.event(egui::Event::PointerButton { pos: p, button: b, pressed: down, modifiers: m });
     h.run_steps(1);
 }
 
-/// A drag between document points with `m` held from before the press until after the
-/// release; `from == to` is a click.
-fn drag(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2], m: Modifiers) {
+/// Press `b` at document point `from` with `m` held from before the press, and move to `to`;
+/// the button stays down.
+fn press_and_move(h: &mut Harness<'static, PhotocraftApp>, b: PointerButton, from: [f32; 2], to: [f32; 2], m: Modifiers) {
     let p = screen(h, from[0], from[1]);
     mods(h, m);
     h.event(egui::Event::PointerMoved(p));
     h.run_steps(1);
-    button(h, p, true, m);
+    button(h, b, p, true, m);
     if from != to {
         for i in 1..=8 {
             let t = i as f32 / 8.0;
@@ -76,9 +76,20 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2], m
             h.run_steps(1);
         }
     }
-    button(h, screen(h, to[0], to[1]), false, m);
+}
+
+/// Release `b` at document point `at`, then let go of the modifiers.
+fn release(h: &mut Harness<'static, PhotocraftApp>, b: PointerButton, at: [f32; 2], m: Modifiers) {
+    button(h, b, screen(h, at[0], at[1]), false, m);
     h.run_steps(2);
     mods(h, Modifiers::NONE);
+}
+
+/// A drag between document points with `m` held from before the press until after the
+/// release; `from == to` is a click.
+fn drag(h: &mut Harness<'static, PhotocraftApp>, from: [f32; 2], to: [f32; 2], m: Modifiers) {
+    press_and_move(h, PointerButton::Primary, from, to, m);
+    release(h, PointerButton::Primary, to, m);
 }
 
 /// Red on the left, green on the right of an unlocked layer, Background Eraser active, blue
@@ -127,7 +138,9 @@ fn alt_click_sets_the_foreground_without_erasing() {
 fn alt_drag_follows_the_pointer_without_erasing() {
     let mut h = background_eraser();
     let before = snapshot(&h);
-    drag(&mut h, [150.0, 50.0], [40.0, 50.0], Modifiers::ALT);
+    press_and_move(&mut h, PointerButton::Primary, [150.0, 50.0], [40.0, 50.0], Modifiers::ALT);
+    assert_eq!(h.state().session.tools.foreground, RED, "⌥-drag samples while the button is held");
+    release(&mut h, PointerButton::Primary, [40.0, 50.0], Modifiers::ALT);
     assert_eq!(h.state().session.tools.foreground, RED, "⌥-drag ends on red");
     unchanged(&h, &before, "⌥-drag");
 }
@@ -140,6 +153,9 @@ fn a_click_without_alt_still_erases() {
     drag(&mut h, [150.0, 50.0], [150.0, 50.0], Modifiers::NONE);
     assert_eq!(h.state().session.tools.foreground, BLUE);
     assert_eq!(snapshot(&h).1, steps + 1, "the stroke added a history state");
+    let st = h.state().session.active().unwrap();
+    let layer = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
+    assert_eq!(layer.rgba(150, 50)[3], 0.0, "the clicked pixel was erased");
 }
 
 /// While ⌥ is held the cursor is the Eyedropper's pipette (`pipette_cursor`), where the
@@ -168,8 +184,24 @@ fn ctrl_alt_drag_resizes_instead_of_sampling() {
     assert!(crate::canvas::alt_samples(Tool::BackgroundEraser, Modifiers::ALT));
     assert!(!crate::canvas::alt_samples(Tool::BackgroundEraser, Modifiers::ALT | Modifiers::CTRL));
     let mut h = background_eraser();
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40}})).unwrap();
     let before = snapshot(&h);
     drag(&mut h, [150.0, 50.0], [40.0, 50.0], Modifiers::ALT | Modifiers::CTRL);
     assert_eq!(h.state().session.tools.foreground, BLUE, "Control+⌥ sampled nothing");
     unchanged(&h, &before, "Control+⌥-drag");
+    assert_ne!(h.state().session.tools.brush.size, 40.0, "Control+⌥-drag resized the brush");
+}
+
+/// ⌥+right-drag (not measured in the reference application) keeps today's meaning, the brush
+/// resize: it samples nothing and erases nothing.
+#[test]
+fn alt_right_drag_resizes_instead_of_sampling() {
+    let mut h = background_eraser();
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 40}})).unwrap();
+    let before = snapshot(&h);
+    press_and_move(&mut h, PointerButton::Secondary, [150.0, 50.0], [40.0, 50.0], Modifiers::ALT);
+    release(&mut h, PointerButton::Secondary, [40.0, 50.0], Modifiers::ALT);
+    assert_eq!(h.state().session.tools.foreground, BLUE, "⌥+right-drag sampled nothing");
+    unchanged(&h, &before, "⌥+right-drag");
+    assert_ne!(h.state().session.tools.brush.size, 40.0, "⌥+right-drag resized the brush");
 }
