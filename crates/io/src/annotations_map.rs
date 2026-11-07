@@ -396,18 +396,26 @@ pub(crate) fn import_count_resource(doc: &mut Document) {
     }
 }
 
-/// Resource 1080 from the current groups, including groups with no markers yet.
-pub(crate) fn fresh_count_resource(doc: &Document) -> Option<ImageResource> {
+/// Resource 1080 from the current groups, warning when PSD cannot represent a size.
+pub(crate) fn fresh_count_resource(doc: &Document, warnings: &mut Vec<String>) -> Option<ImageResource> {
     if doc.measurement.count_groups.is_empty() {
         return None;
     }
-    let groups = doc.measurement.count_groups.iter().map(count_group_descriptor).collect();
+    let groups = doc.measurement.count_groups.iter().map(|group| count_group_descriptor(group, warnings)).collect();
     let d = Descriptor::new("Cnt ").with("Vrsn", Value::Integer(1)).with("countGroupList", Value::List(groups));
     Some(ImageResource::new(COUNT_INFO, VersionedDescriptor::new(d).to_bytes()))
 }
 
 /// Write the measured group layout and preserve marker order.
-fn count_group_descriptor(group: &CountGroup) -> Value {
+fn count_group_descriptor(group: &CountGroup, warnings: &mut Vec<String>) -> Value {
+    let marker_size = group.marker_size.clamp(1, 10);
+    let label_size = group.label_size.clamp(8, 72);
+    if marker_size != group.marker_size || label_size != group.label_size {
+        warnings.push(format!(
+            "Count group {:?} sizes adjusted for PSD (marker {} to {marker_size}, label {} to {label_size})",
+            group.name, group.marker_size, group.label_size
+        ));
+    }
     let [r, g, b, _] = group.color.to_rgba8();
     let objects = group
         .points
@@ -421,8 +429,8 @@ fn count_group_descriptor(group: &CountGroup) -> Value {
             .with("Grn ", Value::Integer(i32::from(g)))
             .with("Bl  ", Value::Integer(i32::from(b)))
             .with("Nm  ", Value::Text(UnicodeString::new_nul(&group.name)))
-            .with("Rds ", Value::Integer(group.marker_size.clamp(1, 10) as i32))
-            .with("fontSize", Value::Integer(group.label_size.clamp(8, 72) as i32))
+            .with("Rds ", Value::Integer(marker_size as i32))
+            .with("fontSize", Value::Integer(label_size as i32))
             .with("Vsbl", Value::Boolean(group.visible))
             .with("countObjectList", Value::List(objects)),
     )

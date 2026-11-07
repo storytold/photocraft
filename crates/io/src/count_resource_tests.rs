@@ -1,5 +1,5 @@
 use photocraft_color::{ColorMode, SampleType};
-use photocraft_doc::{Color, CountGroup, Document};
+use photocraft_doc::{Color, ColorTable, CountGroup, Document};
 use photocraft_geom::Size;
 use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
 use photocraft_psd::{ColorMode as PsdMode, ImageResource, PsdFile};
@@ -83,7 +83,9 @@ fn count_groups_round_trip_through_psd() {
     for (mode, wire_mode) in [(ColorMode::Rgb, PsdMode::Rgb), (ColorMode::Bitmap, PsdMode::Bitmap), (ColorMode::Multichannel, PsdMode::Multichannel)] {
         let mut doc = document(mode);
         doc.measurement.count_groups = groups();
-        let bytes = to_psd(&doc);
+        let exported = crate::export(&doc, "counts.psd", &crate::ExportOptions::default()).unwrap();
+        assert!(!exported.warnings.iter().any(|warning| warning.starts_with("Count group ")));
+        let bytes = exported.bytes;
         let file = PsdFile::from_bytes(&bytes).unwrap();
         assert_eq!(file.header.color_mode, wire_mode);
         let resources: Vec<_> = file.resources.iter().filter(|r| r.id == COUNT_INFO).collect();
@@ -92,6 +94,39 @@ fn count_groups_round_trip_through_psd() {
         let reopened = crate::import("counts.psd", &bytes).unwrap().document;
         assert_eq!(reopened.measurement.count_groups, doc.measurement.count_groups);
         assert!(!reopened.metadata.psd_resources.iter().any(|(id, _, _)| *id == COUNT_INFO));
+    }
+}
+
+/// Both export routes report clamped sizes and preserve the original Count groups.
+#[test]
+fn count_size_clamps_warn_without_changing_source_groups() {
+    for mode in [ColorMode::Rgb, ColorMode::Bitmap] {
+        let mut doc = document(mode);
+        let mut original = groups();
+        original[0].marker_size = 0;
+        original[0].label_size = 73;
+        original[1].marker_size = 11;
+        original[1].label_size = 7;
+        doc.measurement.count_groups = original.clone();
+
+        let exported = crate::export(&doc, "counts.psd", &crate::ExportOptions::default()).unwrap();
+        let warnings: Vec<_> = exported.warnings.iter().filter(|warning| warning.starts_with("Count group ")).map(String::as_str).collect();
+        assert_eq!(
+            warnings,
+            [
+                "Count group \"Cells\" sizes adjusted for PSD (marker 0 to 1, label 73 to 72)",
+                "Count group \"Café\" sizes adjusted for PSD (marker 11 to 10, label 7 to 8)",
+            ]
+        );
+        assert_eq!(doc.measurement.count_groups, original);
+
+        let reopened = crate::import("counts.psd", &exported.bytes).unwrap().document;
+        let mut expected = original;
+        expected[0].marker_size = 1;
+        expected[0].label_size = 72;
+        expected[1].marker_size = 10;
+        expected[1].label_size = 8;
+        assert_eq!(reopened.measurement.count_groups, expected);
     }
 }
 
@@ -124,4 +159,28 @@ fn deleting_all_readable_count_groups_writes_no_resource() {
     doc.measurement.count_groups.clear();
     let file = PsdFile::from_bytes(&to_psd(&doc)).unwrap();
     assert!(file.resource(COUNT_INFO).is_none());
+}
+
+/// Indexed export uses the shared layerless writer and keeps exactly one Count resource.
+#[test]
+fn indexed_count_groups_round_trip_through_psd() {
+    let mut doc = document(ColorMode::Indexed);
+    doc.color_table = Some(ColorTable { colors: vec![[0, 0, 0], [255, 255, 255]], transparent: None });
+    let opaque = vec![0, 0, 0, 16, 0];
+    doc.metadata.psd_resources.push((COUNT_INFO, String::new(), std::sync::Arc::new(opaque.clone())));
+    let file = PsdFile::from_bytes(&to_psd(&doc)).unwrap();
+    assert_eq!(file.header.color_mode, PsdMode::Indexed);
+    assert_eq!(file.resource(COUNT_INFO).unwrap().data, opaque);
+
+    doc.measurement.count_groups = groups();
+    let bytes = to_psd(&doc);
+    let file = PsdFile::from_bytes(&bytes).unwrap();
+    assert_eq!(file.header.color_mode, PsdMode::Indexed);
+    assert!(file.layer_info.is_none());
+    let resources: Vec<_> = file.resources.iter().filter(|r| r.id == COUNT_INFO).collect();
+    assert_eq!(resources.len(), 1);
+    assert_eq!(resources[0].data, measured_resource(2.75));
+    let reopened = crate::import("counts.psd", &bytes).unwrap().document;
+    assert_eq!(reopened.color_table, doc.color_table);
+    assert_eq!(reopened.measurement.count_groups, doc.measurement.count_groups);
 }

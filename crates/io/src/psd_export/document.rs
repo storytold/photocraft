@@ -36,25 +36,11 @@ pub(super) fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, de
 /// Export with a caller-selected PSD size limit; the test suite lowers it to exercise promotion.
 pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, depth: u32, ctl: &Interrupt, size_limit: u64) -> (PsdFile, Vec<String>) {
     let layerless_limit = opts.size_limit_psb.then_some(size_limit);
-    // The layerless builders do not write Count groups. With groups present, size the file
-    // after adding the resource so it counts toward the PSD limit.
-    let early_limit = layerless_limit.filter(|_| doc.measurement.count_groups.is_empty());
-    let layerless = if doc.mode == ColorMode::Multichannel {
-        Some(crate::multichannel_map::document_to_psd(doc, opts.force_psb, early_limit))
-    } else {
-        crate::palette_map::document_to_psd(doc, opts.force_psb, early_limit)
-    };
-    if let Some((mut file, mut warnings)) = layerless {
-        if let Some(resource) = crate::annotations_map::fresh_count_resource(doc) {
-            file.resources.push(resource);
-            if let Some(limit) = layerless_limit
-                && let Some(warning) = fit_psd_size(&mut file, limit)
-            {
-                warnings.push(warning);
-                sign_global_blocks(&mut file);
-            }
-        }
-        return (file, warnings);
+    if doc.mode == ColorMode::Multichannel {
+        return crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit);
+    }
+    if let Some(file) = crate::palette_map::document_to_psd(doc, opts.force_psb, layerless_limit) {
+        return file;
     }
     let fmt = doc.pixel_format();
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
@@ -249,7 +235,7 @@ fn export_supported_document(
     if let Some(data) = crate::annotations_map::fresh_scale_resource(doc) {
         resources.push(ImageResource::new(crate::annotations_map::MEASUREMENT_SCALE, data));
     }
-    resources.extend(crate::annotations_map::fresh_count_resource(doc));
+    resources.extend(crate::annotations_map::fresh_count_resource(doc, &mut ex.warnings));
     if let Some(Some(data)) = comps_resource {
         resources.push(ImageResource::new(crate::comps_map::LAYER_COMPS, data));
     }
