@@ -1792,10 +1792,7 @@ impl Session {
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;
-        #[cfg(any(test, debug_assertions))]
-        {
-            self.hint_before = None;
-        }
+        self.hint_before = None;
         let pending = self.jobs.pending.take();
         // Shape Blur by an installed shape's id or name records the geometry it ran with, as the
         // filter's own prepared params carry it: the journal (Last Filter, recorded actions)
@@ -2033,6 +2030,7 @@ impl Session {
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;
+        self.hint_before = None;
         // Finish successful command bookkeeping on the document the job edited.
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.

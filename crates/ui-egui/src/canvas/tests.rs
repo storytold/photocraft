@@ -3021,6 +3021,92 @@ fn damage_grows_by_nested_effect_reach() {
     assert_eq!(effect_reach(&[group]), 0);
 }
 
+/// #11351: the canvas redraws a live Brush stroke step by step, each step's dab rect grown by
+/// [`effect_reach`] (`damage_since`). Painted into a feathered layer mask, the dabs blur past their
+/// rects, so the reach must include the feather: without it the canvas showed the stroke clipped to
+/// hard-edged blocks until a full redraw (moving the Feather slider), and the commit, which takes
+/// the live pixels, redrew nothing more.
+#[test]
+fn live_strokes_into_a_feathered_mask_redraw_the_feathers_halo() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 320, "height": 200, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 320, "height": 200})).unwrap();
+    app.run("edit.fill", json!({"color": "#3070a0"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.run("layer.layerMask.edit", json!({"feather": 10})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_mask_targets();
+    assert_eq!(paint_target(&app), json!("mask"));
+    app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
+    app.run("tools.setBrush", json!({"brush": {"size": 16, "hardness": 1.0}})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let before = app.session.documents()[0].doc.clone();
+    let reach = effect_reach(&before.layers);
+    assert!(reach > 0, "a feathered mask reaches past the dabs");
+    let rev = app.session.documents()[0].revision;
+    let bounds = before.bounds();
+    let dk = canvas_display(&app, &before, None).1;
+    let mut seen = (rev, dk);
+    let m = egui::Modifiers::NONE;
+    // Drive the stroke through the canvas, taking each step's redraw rect from
+    // damage_since itself — the production path whose live-stroke branch grows the
+    // dab by effect_reach — so losing the feather term there fails this test.
+    let mut steps = Vec::new();
+    tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 100.0, pressure: 1.0 }, m);
+    for x in std::iter::once(60.0).chain((70..=260).step_by(10).map(f64::from)) {
+        if x > 60.0 {
+            tool_event(&mut app, ToolEvent::Move { x, y: 100.0, pressure: 1.0 }, m);
+        }
+        let (shown_doc, key) = display_doc(&mut app, 0);
+        if let Some(d) = damage_since(&app, 0, seen, (rev, key), dk, None)
+            && !d.is_empty()
+        {
+            steps.push((d, shown_doc));
+        }
+        seen = (rev, key);
+    }
+    assert!(!steps.is_empty(), "the live stroke produced damage");
+    let doc = steps.last().unwrap().1.clone();
+    assert_eq!(effect_reach(&doc.layers), reach, "the reach is the mask's, before and during the stroke");
+    // What the canvas shows: the document before the stroke, with each step's damage redrawn.
+    let w = bounds.width() as usize;
+    let mut shown = photocraft_compose::render(&before, bounds);
+    for (d, step_doc) in &steps {
+        let r = d.intersect(&bounds);
+        if r.is_empty() {
+            continue;
+        }
+        let patch = photocraft_compose::render(step_doc, r);
+        for y in 0..r.height() as usize {
+            let at = (r.y0 as usize + y) * w + r.x0 as usize;
+            shown.px[at..at + r.width() as usize].copy_from_slice(&patch.px[y * r.width() as usize..][..r.width() as usize]);
+        }
+    }
+    let full = photocraft_compose::render(&doc, bounds);
+    let stale = shown.px.iter().zip(&full.px).filter(|(a, b)| a != b).count();
+    assert_eq!(stale, 0, "{stale} pixels of the feathered stroke were never redrawn (reach {reach})");
+}
+
+#[test]
+fn damage_grows_by_a_feathered_masks_reach() {
+    use photocraft_doc::{Effect, Layer, LayerMask};
+    let fmt = photocraft_color::PixelFormat::RGBA8;
+    let mut l = Layer::raster("masked", fmt);
+    l.mask = Some(LayerMask { feather: 10.0, ..LayerMask::reveal_all() });
+    let f = photocraft_compose::masks::pixel_feather_reach(&l);
+    assert!(f > 30, "three sigmas of a 10 px feather: {f}");
+    assert_eq!(effect_reach(std::slice::from_ref(&l)), f);
+    // Effects are drawn from the masked layer: they reach past the feather's halo.
+    l.effects.items.push(Effect::default_drop_shadow());
+    assert_eq!(effect_reach(std::slice::from_ref(&l)), f + photocraft_compose::effects::margin(&l));
+    // An unfeathered or disabled mask adds nothing.
+    l.effects.items.clear();
+    l.mask.as_mut().unwrap().enabled = false;
+    assert_eq!(effect_reach(std::slice::from_ref(&l)), 0);
+}
+
 #[test]
 fn tab_reorder_keeps_floating_documents_in_place() {
     let visible = [0, 2];
