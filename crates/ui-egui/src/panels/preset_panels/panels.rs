@@ -3,6 +3,12 @@ use super::{
     browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
 };
 
+/// The height a Gradients or Patterns list may grow to: the whole panel above its 40 px footer,
+/// with no upper cap, so a tall dock shows more rows (#10339).
+pub(super) fn list_max_h(available: f32) -> f32 {
+    (available - 40.0).max(90.0)
+}
+
 // ------------------------------------------------------------------ Gradients
 
 pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -20,7 +26,7 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .collect();
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
-    let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
+    let max_h = list_max_h(ui.available_height());
     let events =
         browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient"), flush: false }, &mut |ui, r, gi, ii| {
             let stops = groups_src[gi].items[ii].resolve(fg, bg);
@@ -72,7 +78,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.session.presets.pattern_groups.iter().map(|g| g.items.iter().filter_map(|id| lib.iter().find(|p| &p.id == id).cloned()).collect()).collect();
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
-    let max_h = (ui.available_height() - 40.0).clamp(90.0, 280.0);
+    let max_h = list_max_h(ui.available_height());
     let ctx = ui.ctx().clone();
     let events = browser(
         ui,
