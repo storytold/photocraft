@@ -67,10 +67,19 @@ fn session_fields(current: &BrushSettings, brush: &BrushSettings) -> BrushSettin
     BrushSettings { color: current.color, background: current.background, erase: current.erase, seed: current.seed, ..brush.clone() }
 }
 
-/// A tool's brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
-/// smoothing, with the session's own fields of `current`.
-pub(crate) fn fresh_brush(current: &BrushSettings) -> BrushSettings {
-    session_fields(current, &BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() })
+/// The Brush tool's tip after Reset Tool, as the reference measures it (#11810): size, hardness
+/// and spacing of a 13 px soft round at 25 % spacing.
+const BRUSH_TOOL_TIP: (f32, f32, f32) = (13.0, 0.0, 0.25);
+
+/// `tool`'s brush as it starts out (Reset Tool, #2825): the default brush at Photoshop's
+/// smoothing, with the session's own fields of `current`. The Brush tool's tip is
+/// [`BRUSH_TOOL_TIP`]; the other tools keep the default tip.
+pub(crate) fn fresh_brush(tool: Tool, current: &BrushSettings) -> BrushSettings {
+    let mut brush = BrushSettings { smoothing: first_smoothing(), ..BrushSettings::default() };
+    if tool == Tool::Brush {
+        (brush.size, brush.hardness, brush.spacing) = BRUSH_TOOL_TIP;
+    }
+    session_fields(current, &brush)
 }
 
 /// Photoshop's 10 % stroke smoothing, what a tool's brush starts at.
