@@ -731,6 +731,20 @@ fn erase_to_history_refuses_a_new_layer_from_a_state_holding_only_a_group() {
 }
 
 #[test]
+fn erase_to_history_on_a_new_layer_without_pixels_names_the_target_not_the_document() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20, "background": "transparent"})).unwrap();
+    s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+    // An adjustment layer has a mask, so the command is available, but this targets its pixels.
+    s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    let err = s
+        .execute("paint.historyBrush", json!({"points": [[15, 10], [25, 10]], "size": 6, "hardness": 100, "state": 1, "eraseToHistory": true}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("did not exist"), "{err}");
+}
+
+#[test]
 fn erase_to_history_paints_a_single_solid_shapes_colour_past_its_path() {
     for depth in [8u64, 16, 32] {
         let mut s = Session::new();

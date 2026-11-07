@@ -85,7 +85,7 @@ pub(super) fn history_source(s: &Session, id: Option<LayerId>, p: &Value, cmd: &
         Err(_)
             if flag(p, "eraseToHistory", false) && crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Pixels && source_doc.layers.len() == 1 =>
         {
-            let fmt = id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(Surface::format).ok_or(EngineError::NoDocument)?;
+            let fmt = id.and_then(|id| st.doc.layer(id)).and_then(|l| l.surface()).map(Surface::format).ok_or_else(missing)?;
             let only = source_doc.layers.first().ok_or_else(missing)?;
             // A shape paints past its path, as in Photoshop: a solid fill its colour, and a gradient,
             // a pattern or no fill plain white, whatever its outline.

@@ -418,3 +418,27 @@ fn a_tool_key_during_an_erase_to_history_stroke_keeps_the_stroke_as_it_began() {
         assert!(after[3] > 0.99 && (0..3).all(|i| (after[i] - before[i]).abs() < 0.01), "{mode}: {after:?} vs {before:?}");
     }
 }
+
+#[test]
+fn a_tool_key_during_a_history_brush_stroke_keeps_the_brush_it_began_with() {
+    let mut app = app();
+    app.run("paint.pencil", json!({"points": [[60.0, 40.0]], "size": 400})).unwrap();
+    app.run("history.setSource", json!({"state": 1})).unwrap();
+    app.ui.tool = Tool::HistoryBrush;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush": {"size": 15, "hardness": 0.5, "spacing": 0.3, "smoothing": {"amount": 0.0}}})).unwrap();
+    tool_event(&mut app, ToolEvent::Down { x: 55.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+    // What pressing a tool's letter does (`shortcuts`): the drag is not cancelled.
+    app.ui.tool = Tool::Brush;
+    crate::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush": {"size": 90, "hardness": 1.0, "spacing": 0.1}})).unwrap();
+    tool_event(&mut app, ToolEvent::Move { x: 65.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: 65.0, y: 40.0 }, Modifiers::NONE);
+    let (id, p) = last(&app);
+    assert_eq!(id, "paint.historyBrush", "{p}");
+    assert_eq!(p["size"], json!(15.0), "{p}");
+    assert_eq!(p["hardness"].as_f64().map(f64::round), Some(50.0), "{p}");
+    assert_eq!(p["spacing"].as_f64().map(f64::round), Some(30.0), "{p}");
+    assert_eq!(p.get("eraseToHistory"), None, "{p}");
+}
