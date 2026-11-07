@@ -190,6 +190,8 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     false
 }
 
+/// Pointer moved with the Type tool, at document `x`, `y`: resizes the text box while a handle is
+/// held, or extends the selection while dragging, by whole words after a double-click (#11280).
 pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
     if let Some(r) = ed.resize {

@@ -987,6 +987,8 @@ fn handle_canvas_tool_navigation(
     }
 }
 
+/// The canvas tool's press, drag and release this frame: sends the active tool its Down, Move and
+/// Up events (a Type press also notes whether it starts a word drag, #11280).
 fn handle_canvas_tool_stroke(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1155,6 +1157,8 @@ fn handle_canvas_tool_stroke(
     }
 }
 
+/// The canvas tool's clicks this frame (single, double and triple), after the
+/// press and drag handling of [`handle_canvas_tool_stroke`].
 fn handle_canvas_tool_clicks(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
