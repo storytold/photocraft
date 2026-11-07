@@ -191,3 +191,43 @@ fn a_slider_or_dropdown_takes_the_wheel_with_alt_or_ctrl() {
         }
     }
 }
+
+/// A wheel over the panel, `idle` frames (1/30 s each) later the pointer moves onto `control`,
+/// and a frame after that a whole notch down: both within one gesture's 0.3 s.
+fn move_then_wheel(control: Control, idle: usize) -> State {
+    let mut h = harness(control);
+    h.hover_at(rect(&h, control).center() - vec2(0.0, 30.0));
+    h.run_steps(1);
+    // Up, at the top already: the panel doesn't move, the gesture is the panel's.
+    swipe(&mut h, 40.0);
+    h.run_steps(1 + idle);
+    h.hover_at(rect(&h, control).center());
+    h.run_steps(1);
+    swipe(&mut h, -40.0);
+    h.run_steps(18);
+    *h.state()
+}
+
+/// Moving the pointer more than 100 ms after the panel's last wheel is going somewhere: the
+/// control it reaches takes the next wheel, though that comes within the gesture's 0.3 s.
+#[test]
+fn a_move_after_100_ms_lets_the_control_take_the_next_wheel() {
+    for control in ALL {
+        // The move 133 ms after the wheel, the next wheel at 167 ms.
+        let s = move_then_wheel(control, 3);
+        assert!(!untouched(&s), "{control:?}: the control under the moved pointer stepped: {s:?}");
+        assert_eq!(s.offset, 0.0, "{control:?}: the panel didn't scroll");
+    }
+}
+
+/// A move within 100 ms of the panel's last wheel is the hand drifting as it scrolls: the panel
+/// keeps the wheel over the control the pointer drifted onto.
+#[test]
+fn a_move_within_100_ms_of_the_wheel_keeps_the_panel_scrolling() {
+    for control in ALL {
+        // The move 33 ms after the wheel, the next wheel at 67 ms.
+        let s = move_then_wheel(control, 0);
+        assert!(untouched(&s), "{control:?}: {s:?}");
+        assert!(s.offset > 0.0, "{control:?}: the panel scrolled");
+    }
+}

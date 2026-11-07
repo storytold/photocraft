@@ -23,6 +23,12 @@ pub(crate) const GESTURE_GAP: f64 = 0.3;
 /// 1.5 s, ended by moving the mouse). Moving the pointer ends it at once.
 const SCROLL_LATCH: f64 = 1.5;
 
+/// A pointer move this soon (seconds) after the last wheel event is the hand drifting while it
+/// scrolls, not going somewhere: it neither ends a panel's gesture nor its [`SCROLL_LATCH`].
+/// A later move does, even within [`GESTURE_GAP`], so the control it reaches takes the next
+/// wheel (Firefox's `ui.mousewheel.transaction.ignoremovedelay`, 100 ms).
+const MOVE_IGNORE: f64 = 0.1;
+
 /// Who a wheel gesture belongs to.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Owner {
@@ -37,7 +43,8 @@ enum Owner {
 struct Gesture {
     last: f64,
     owner: Owner,
-    /// The pointer moved since the last wheel event: the [`SCROLL_LATCH`] is over.
+    /// The pointer moved more than [`MOVE_IGNORE`] after the last wheel event: a panel's gesture
+    /// (and its [`SCROLL_LATCH`]) is over.
     moved: bool,
 }
 
@@ -48,6 +55,9 @@ impl Gesture {
         let gap = now - self.last;
         // A gesture still `New` here started where no control took it: a panel or the view's.
         let scrolling = matches!(self.owner, Owner::Elsewhere | Owner::New);
+        if scrolling && self.moved {
+            return false;
+        }
         gap <= GESTURE_GAP || (scrolling && !self.moved && !moved && gap <= SCROLL_LATCH)
     }
 }
@@ -91,7 +101,7 @@ pub fn begin_frame(ctx: &Context) {
     ctx.data_mut(|d| d.insert_temp(tracked_id(), pass));
     let (now, wheel, moved) = frame_input(ctx);
     if moved && !wheel {
-        mark_moved(ctx);
+        mark_moved(ctx, now);
     }
     let (taken, view_wheel): (Vec<Event>, bool) = ctx.input_mut(|i| {
         let (taken, rest) = std::mem::take(&mut i.events).into_iter().partition(for_field);
@@ -121,9 +131,10 @@ fn frame_input(ctx: &Context) -> (f64, bool, bool) {
     })
 }
 
-fn mark_moved(ctx: &Context) {
+/// The pointer moved at `now` without wheel: past [`MOVE_IGNORE`], the gesture's pointer has moved.
+fn mark_moved(ctx: &Context, now: f64) {
     ctx.data_mut(|d| {
-        if let Some(g) = d.get_temp::<Gesture>(gesture_id()) {
+        if let Some(g) = d.get_temp::<Gesture>(gesture_id()).filter(|g| now - g.last > MOVE_IGNORE) {
             d.insert_temp(gesture_id(), Gesture { moved: true, ..g });
         }
     });
@@ -140,7 +151,7 @@ fn track(ctx: &Context) {
     let (now, wheel, moved) = frame_input(ctx);
     if !wheel {
         if moved {
-            mark_moved(ctx);
+            mark_moved(ctx, now);
         }
         return;
     }
