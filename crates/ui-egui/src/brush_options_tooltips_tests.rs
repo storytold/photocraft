@@ -4,7 +4,7 @@
 
 use egui::vec2;
 use egui_kittest::Harness;
-use egui_kittest::kittest::{NodeT, Queryable};
+use egui_kittest::kittest::{NodeT, Queryable, by};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -12,11 +12,15 @@ use crate::state::Tool;
 use crate::theme::ThemeKind;
 
 fn bar(tool: Tool) -> Harness<'static, PhotocraftApp> {
+    bar_in(tool, ThemeKind::ProMedium)
+}
+
+fn bar_in(tool: Tool, theme: ThemeKind) -> Harness<'static, PhotocraftApp> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
     app.ui.tool = tool;
     let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
-    PhotocraftApp::setup_context(&h.ctx, ThemeKind::ProMedium);
+    PhotocraftApp::setup_context(&h.ctx, theme);
     h.run_steps(4);
     h
 }
@@ -31,6 +35,10 @@ fn descriptions(h: &Harness<'static, PhotocraftApp>, label: &str) -> Vec<String>
     // The fields too are named by the caption before them.
     if ["Opacity", "Flow", "Smoothing"].contains(&label) {
         return h.query_all_by_role(egui::accesskit::Role::SpinButton).filter_map(of).collect();
+    }
+    // The non-Pro pressure switches are unnamed nodes: every description in the bar.
+    if label.starts_with("Pressure for") {
+        return h.query_all(by().predicate(|n| n.description().is_some())).filter_map(of).collect();
     }
     h.query_all_by_label(label).filter_map(of).collect()
 }
@@ -61,6 +69,39 @@ fn the_eraser_keeps_its_texts() {
     for (label, tip) in BRUSH {
         assert!(!descriptions(&h, label).iter().any(|d| d == tip), "{label} changed on the Eraser");
     }
+}
+
+/// The non-Pro themes' Brush bar: the same texts where it has the same controls (its pressure
+/// switches are named "Pressure for Size" and "Pressure for Opacity").
+const BRUSH_CLASSIC: [(&str, &str); 6] = [
+    ("Mode", "Painting Mode"),
+    ("Opacity", "Set opacity for stroke"),
+    ("Flow", "Set flow rate for stroke"),
+    ("Smoothing", "Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"),
+    ("Pressure for Size", "Always use Pressure for Size. When off, Brush Preset controls pressure"),
+    ("Pressure for Opacity", "Always use Pressure for Opacity. When off, Brush Preset controls pressure"),
+];
+
+#[test]
+fn the_brush_has_the_reference_tooltips_in_other_themes_too() {
+    let h = bar_in(Tool::Brush, ThemeKind::Classic);
+    for (label, tip) in BRUSH_CLASSIC {
+        let found = descriptions(&h, label);
+        assert!(found.iter().any(|d| d == tip), "{label}: {found:?}");
+    }
+    let h = bar_in(Tool::Eraser, ThemeKind::Classic);
+    for (label, tip) in BRUSH_CLASSIC {
+        assert!(!descriptions(&h, label).iter().any(|d| d == tip), "{label} changed on the Eraser");
+    }
+}
+
+#[test]
+fn the_erasers_smoothing_popup_keeps_no_title() {
+    let mut h = bar(Tool::Eraser);
+    h.get_by_label("Set additional smoothing options").click();
+    h.run_steps(3);
+    assert!(h.query_by_label("Pulled String Mode").is_some());
+    assert!(h.query_by_label("Smoothing Options").is_none());
 }
 
 #[test]

@@ -48,12 +48,15 @@ pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::Brus
 
 /// Options-bar gear beside Smoothing: Photoshop's smoothing options popup, edited on the brush
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
-pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
+/// `brush` adds the Brush's "Smoothing Options" title (#11813); the Eraser keeps its popup as it was.
+pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, brush: bool) {
     let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
     let resp = crate::brush_picker::named(resp, "Set additional smoothing options");
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let s = &mut b.smoothing;
-        ui.label(egui::RichText::new(tl!("Smoothing Options")).strong());
+        if brush {
+            ui.label(egui::RichText::new(tl!("Smoothing Options")).strong());
+        }
         widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
         widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
         widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));

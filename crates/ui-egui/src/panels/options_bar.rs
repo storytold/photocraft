@@ -195,7 +195,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             });
             opt_label(ui, tl!("Smoothing"));
             tip(smoothing_field(ui, b, 58.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
-            smoothing_options(ui, b);
+            smoothing_options(ui, b, brush);
             widgets::vline(ui, 22.0);
             let pressure = pressure_button(ui, b.pressure_size, tl!("Always use pressure for size"), brush);
             if tip(pressure, tl!("Always use Pressure for Size. When off, Brush Preset controls pressure")).clicked() {
@@ -232,23 +232,37 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 widgets::value_field(ui, &mut b.size, 1.0..=photocraft_engine::paint::MAX_BRUSH_SIZE, "px", 76.0);
             });
             widgets::vline(ui, 22.0);
+            // The Brush's own tooltips here too (#11813); the Eraser keeps its texts.
+            let brush = app.ui.tool == Tool::Brush;
+            let tip = |r: egui::Response, text: &str| if brush { r.on_hover_text(text) } else { r };
             if app.ui.tool == Tool::Eraser {
                 crate::eraser_ui::mode_dropdown(ui, &mut app.ui.tool_options.eraser_mode);
             } else {
                 opt_label(ui, tl!("Mode"));
                 let held = app.held_erase;
                 paint_mode_dropdown(ui, "brush-mode", b, &mut app.ui.tool_options.brush_clear, held);
+                if let Some(mode) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("brush-mode"))) {
+                    tip(mode, tl!("Painting Mode"));
+                }
             }
             // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
             let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
             ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
-            ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0));
-            ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
+            let opacity = ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0)).inner;
+            tip(opacity, tl!("Set opacity for stroke"));
+            let flow = ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0)).inner;
+            tip(flow, tl!("Set flow rate for stroke"));
             opt_label(ui, tl!("Smoothing"));
-            smoothing_field(ui, b, 66.0);
+            tip(smoothing_field(ui, b, 66.0), tl!("Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes"));
             widgets::vline(ui, 22.0);
-            widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size"));
-            widgets::toggle(ui, &mut b.pressure_opacity, tl!("Pressure for Opacity"));
+            tip(
+                widgets::toggle(ui, &mut b.pressure_size, tl!("Pressure for Size")),
+                tl!("Always use Pressure for Size. When off, Brush Preset controls pressure"),
+            );
+            tip(
+                widgets::toggle(ui, &mut b.pressure_opacity, tl!("Pressure for Opacity")),
+                tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure"),
+            );
         }
         Tool::MixerBrush => {
             brush_preset_chip(ui, b, &mut app.ui);
