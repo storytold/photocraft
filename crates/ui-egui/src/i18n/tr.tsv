@@ -1762,6 +1762,7 @@
 	Move Tool	Taşıma Aracı
 	Could not use the move tool because the layer is locked.	Katman kilitli olduğundan taşıma aracı kullanılamadı.
 	Could not complete the Free Transform command because the layer is locked.	Katman kilitli olduğundan Serbest Dönüştürme komutu tamamlanamadı.
+	Could not transform because the layer is locked.	Katman kilitli olduğundan dönüştürme yapılamadı.
 	Multiply	Çoğalt
 	My Brushes	Fırçalarım
 	Neutrals	Nötrler

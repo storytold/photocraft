@@ -849,6 +849,9 @@ mod transform_reference_point_tests;
 mod transform_several_tests;
 
 #[cfg(test)]
+mod transform_selection_rules_tests;
+
+#[cfg(test)]
 mod psd_open_tests;
 #[cfg(test)]
 mod save_identity_tests;
