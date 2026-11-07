@@ -819,3 +819,40 @@ fn device_links_parse_and_are_reported_unsupported() {
     // The output space still bounds the tag: a CMYK→CMYK link with a 4→3 table is malformed.
     assert!(matches!(Profile::parse(&device_link(b"CMYK", b"CMYK", 4, 3)), Err(photocraft_cms::CmsError::Invalid(_))));
 }
+
+/// The blocked matrix/TRC path (64 pixels at a time) must match the per-pixel evaluation for
+/// every pixel count around the block size, with and without extra channels.
+#[test]
+fn matrix_trc_blocks_match_per_pixel_eval() {
+    let pairs = [(Builtin::Srgb, Builtin::DisplayP3), (Builtin::ProPhotoCompat, Builtin::Srgb), (Builtin::AdobeRgbCompat, Builtin::Rec2020)];
+    for (a, b) in pairs {
+        let t = Transform::new(a.profile(), b.profile(), Intent::RelativeColorimetric, true).unwrap();
+        for &(ss, ds, copy) in &[(3usize, 3usize, false), (4, 4, true), (5, 4, true)] {
+            let max = 20011;
+            let seed = |i: usize| (i.wrapping_mul(2654435761) >> 7) as u32;
+            let src16: Vec<u16> = (0..max * ss).map(|i| (seed(i) >> 3) as u16).collect();
+            let src8: Vec<u8> = (0..max * ss).map(|i| (seed(i) >> 11) as u8).collect();
+            let mut full8 = vec![0u8; max * ds];
+            t.convert_u8(&src8, ss, &mut full8, ds, copy);
+            for px in [1usize, 2, 63, 64, 65, 127, 128, 129, 1000] {
+                let mut o16 = vec![0u16; px * ds];
+                t.convert_u16(&src16[..px * ss], ss, &mut o16, ds, copy);
+                let mut o8 = vec![0u8; px * ds];
+                t.convert_u8(&src8[..px * ss], ss, &mut o8, ds, copy);
+                assert_eq!(o8[..], full8[..px * ds], "u8 prefix of a longer buffer, {px} px");
+                for p in 0..px {
+                    let inp: Vec<f32> = (0..3).map(|k| src16[p * ss + k] as f32 / 65535.0).collect();
+                    let mut want = [0.0f32; 3];
+                    t.eval_fast(&inp, &mut want);
+                    for k in 0..3 {
+                        assert_eq!(o16[p * ds + k], (want[k].clamp(0.0, 1.0) * 65535.0 + 0.5) as u16, "u16 px {p} ch {k} of {px}");
+                    }
+                    if copy && ds > 3 {
+                        assert_eq!(o16[p * ds + 3], src16[p * ss + 3]);
+                        assert_eq!(o8[p * ds + 3], src8[p * ss + 3]);
+                    }
+                }
+            }
+        }
+    }
+}
