@@ -112,6 +112,8 @@ pub(crate) fn inside_box(app: &mut PhotocraftApp, id: LayerId, x: f64, y: f64) -
 
 /// Pointer down with the Type tool. Returns true when the press was consumed (no box drag).
 pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) -> bool {
+    app.type_word_drag = None;
+    let word_press = std::mem::take(&mut app.type_word_press);
     if let Some(ed) = app.ui.text_edit.clone() {
         let id = LayerId(ed.layer);
         if let Some(i) = box_handle_at(app, id, x, y) {
@@ -128,6 +130,19 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
         // (left of a line's start, below the last line); only a click outside it commits.
         if hit_layer(app, x, y) == Some(id) || inside_box(app, id, x, y) {
             let off = hit_offset(app, id, x, y);
+            // A double-click's second press held to drag selects by whole words (#11280).
+            if word_press
+                && !mods.shift
+                && let Some(text) = current_text(app, id)
+            {
+                let (a, b) = click_selection(None, &text, off, None, 2);
+                app.type_word_drag = Some((a, b));
+                if let Some(e) = app.ui.text_edit.as_mut() {
+                    (e.anchor, e.caret) = (a, b);
+                    e.dragging = true;
+                }
+                return true;
+            }
             if off != ed.caret || (!mods.shift && off != ed.anchor) {
                 app.ui.type_insertion_style = None;
             }
@@ -175,6 +190,8 @@ pub fn pointer_down(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     false
 }
 
+/// Pointer moved with the Type tool, at document `x`, `y`: resizes the text box while a handle is
+/// held, or extends the selection while dragging, by whole words after a double-click (#11280).
 pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
     if let Some(r) = ed.resize {
@@ -183,13 +200,27 @@ pub fn pointer_move(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifie
     }
     if ed.dragging {
         let off = hit_offset(app, LayerId(ed.layer), x, y);
-        if off != ed.caret {
+        // A word drag keeps the pressed word and grows by whole words toward the pointer.
+        let (anchor, caret) = match (app.type_word_drag, current_text(app, LayerId(ed.layer))) {
+            (Some((a, b)), Some(text)) => word_drag_selection(&text, (a, b), off),
+            _ => (ed.anchor, off),
+        };
+        if caret != ed.caret || anchor != ed.anchor {
             app.ui.type_insertion_style = None;
         }
         if let Some(e) = app.ui.text_edit.as_mut() {
-            e.caret = off;
+            (e.anchor, e.caret) = (anchor, caret);
         }
     }
+}
+
+/// The (anchor, caret) of a drag by whole words that started on the word `pressed` (its start
+/// and end), with the pointer at character `off`: from the pressed word to the whole word under
+/// the pointer, either way (#11280). The caret sits at the pointer's end, as Photoshop shows it.
+pub(crate) fn word_drag_selection(text: &str, pressed: (usize, usize), off: usize) -> (usize, usize) {
+    let (a, b) = pressed;
+    let (wa, wb) = click_selection(None, text, off, None, 2);
+    if off < a { (b, wa) } else { (a, wb.max(b)) }
 }
 
 /// What a Type tool click on a path does, like Photoshop: inside a closed path, area type;
@@ -297,6 +328,7 @@ fn makes_box(app: &PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> bool {
 
 /// Pointer up. `rect` is the dragged box (document px) when no edit session consumed the press.
 pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
+    app.type_word_drag = None;
     if let Some(e) = app.ui.text_edit.as_mut() {
         e.dragging = false;
         e.resize = None;

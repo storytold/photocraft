@@ -648,6 +648,13 @@ pub struct PhotocraftApp {
     pub(crate) type_layout: Option<((u64, u64, u64), std::sync::Arc<photocraft_text::TextLayout>)>,
     /// Type tool: (layer, clicks in the current run) for word / line / paragraph / all selection.
     pub(crate) type_clicks: Option<(u64, u32)>,
+    /// Type tool: when (egui input time) and where (screen point) the last click landed, so the
+    /// press of a double-click held and dragged is known before egui counts it (#11280).
+    pub(crate) type_last_click: Option<(f64, egui::Pos2)>,
+    /// Type tool: the next press is a double-click's second press, held to drag (#11280).
+    pub(crate) type_word_press: bool,
+    /// Type tool: a drag by whole words, with the (start, end) of the word first pressed.
+    pub(crate) type_word_drag: Option<(usize, usize)>,
     pub(crate) type_transform_preview: Option<type_transform::Preview>,
     /// A font hovered in the Type tool's font picker, shown live (`type_font_preview`).
     pub(crate) type_font_preview: Option<type_font_preview::TypeFontPreview>,

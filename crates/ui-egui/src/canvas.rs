@@ -987,6 +987,8 @@ fn handle_canvas_tool_navigation(
     }
 }
 
+/// The canvas tool's press, drag and release this frame: sends the active tool its Down, Move and
+/// Up events (a Type press also notes whether it starts a word drag, #11280).
 fn handle_canvas_tool_stroke(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1042,6 +1044,14 @@ fn handle_canvas_tool_stroke(
         if !refused {
             let d = xf.to_doc(p);
             let press_mods = if capture_press { ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods) } else { mods };
+            // Type: a drag whose press came quickly, at the last click's spot, is a double-click held
+            // and dragged, which selects by whole words (#11280). egui only counts clicks on release.
+            app.type_word_press = tool.is_type()
+                && app.type_last_click.is_some_and(|(at, spot)| {
+                    let pressed = ctx.input(|i| i.pointer.press_start_time());
+                    let (delay, dist) = ctx.options(|o| (o.input_options.max_double_click_delay, o.input_options.max_click_dist));
+                    pressed.is_some_and(|t| t >= at && t - at <= delay) && spot.distance(p) <= dist
+                });
             tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
         }
     }
@@ -1147,6 +1157,8 @@ fn handle_canvas_tool_stroke(
     }
 }
 
+/// The canvas tool's clicks this frame (single, double and triple), after the
+/// press and drag handling of [`handle_canvas_tool_stroke`].
 fn handle_canvas_tool_clicks(
     app: &mut PhotocraftApp,
     ui: &mut egui::Ui,
@@ -1279,6 +1291,9 @@ fn handle_canvas_tool_clicks(
             };
             let d = xf.to_doc(p);
             crate::type_tool::multi_click(app, n, d[0], d[1]);
+            // Only a single click arms the word drag: the press after a double-click is a third
+            // click, not a double-click's second press.
+            app.type_last_click = (n == 1).then(|| (ctx.input(|i| i.time), p));
         }
     }
 }

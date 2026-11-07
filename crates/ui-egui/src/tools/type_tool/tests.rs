@@ -585,3 +585,18 @@ fn closed_path_aligned_selection_highlights_every_visible_cluster() {
         assert_eq!(highlights, visible, "{align}: every visible selected cluster needs its highlight");
     }
 }
+
+/// #11280: a word drag keeps the pressed word and takes whole words toward the pointer.
+#[test]
+fn word_drag_selection_grows_by_whole_words() {
+    use super::pointer::word_drag_selection as sel;
+    let text = "alpha beta gamma delta";
+    let beta = (6, 10);
+    assert_eq!(sel(text, beta, 8), (6, 10), "inside the pressed word: just that word");
+    assert_eq!(sel(text, beta, 13), (6, 16), "into gamma: through its end");
+    assert_eq!(sel(text, beta, 20), (6, 22), "into delta");
+    assert_eq!(sel(text, beta, 2), (10, 0), "back into alpha: from beta's end to alpha's start");
+    assert_eq!(sel(text, beta, 10), (6, 10), "at the word's end");
+    assert_eq!(sel(text, beta, 99), (6, 22), "past the text is clamped");
+    assert_eq!(sel("", (0, 0), 3), (0, 0), "empty text");
+}
