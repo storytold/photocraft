@@ -466,7 +466,18 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 Tool::MagicWand => {
                     let o = app.ui.tool_options.clone();
                     let mode = selection_mode(app, mods);
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+                    let group_target = app
+                        .run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}))
+                        .err()
+                        .is_some_and(|e| e == photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR);
+                    // A group targeted with Sample All Layers off: the reference shows that
+                    // refusal in an error dialog with an OK button, not only in the status bar
+                    // (#11784). The engine already left the selection and the history alone; a
+                    // refused Move is shown the same way (`move_lock::prompt`).
+                    if group_target {
+                        let message = tl!(photocraft_engine::selection_cmds::WAND_GROUP_TARGET_ERROR);
+                        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": message}).as_object().cloned().unwrap_or_default());
+                    }
                     return;
                 }
                 Tool::MagicEraser => {
