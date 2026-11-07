@@ -234,6 +234,10 @@ pub type FileStampFn = Box<dyn Fn(&str) -> Option<FileStamp>>;
 /// Whether two paths name one entry in one folder on disk; false when either can't be read.
 pub type SameFileFn = Box<dyn Fn(&str, &str) -> bool>;
 
+/// Whether a write of the document is waiting for the platform to confirm it (see
+/// [`Services::write_pending`]).
+pub type WritePendingFn = Box<dyn Fn(photocraft_doc::DocId) -> bool>;
+
 /// Encode a document and write it to a path, reporting the stage to the job; returns the export
 /// warnings. Runs on a worker thread (see [`Services::save_file`]). It must call
 /// [`jobs_ui::SaveCtl::commit`] right before replacing the file, and write nothing if that fails.
@@ -405,6 +409,37 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// A menu item the host app adds ([`HostMenu`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostMenuItem {
+    /// Its id: one PhotoCraft doesn't have, so only [`HostMenu::run`] runs it.
+    pub id: String,
+    /// Its label, shown as it is.
+    pub label: String,
+    /// The id of the item it follows; it joins that item's submenu (left out when there is none).
+    pub after: String,
+}
+
+/// Whether a [`HostMenu`] item can run now.
+pub type HostEnabledFn = Box<dyn Fn(&crate::PhotocraftApp, &str) -> bool>;
+
+/// [`HostMenu::run`]: `Some` with the outcome when the host ran the command, `None` to let
+/// PhotoCraft run it.
+pub type HostRunFn = Box<dyn FnMut(&mut crate::PhotocraftApp, &egui::Context, &str, &Value) -> Option<Result<Value, String>>>;
+
+/// What the host app brings to the menus: items of its own (a tablet shell's File › Share…), and
+/// the first say over every command run through [`crate::menus::invoke`] (menus, shortcuts, the
+/// command palette), so it can run one its own way (Edit › Paste reading a clipboard that answers
+/// later). A command the host runs from `run` through `invoke` is PhotoCraft's own.
+pub struct HostMenu {
+    /// The items, each after the item it names.
+    pub items: Vec<HostMenuItem>,
+    /// Whether one of [`Self::items`] can run now.
+    pub enabled: HostEnabledFn,
+    /// Runs a command first: every one of [`Self::items`], and any other it takes over.
+    pub run: HostRunFn,
+}
+
 /// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
 pub type TabletPollFn = Box<dyn FnMut(bool)>;
@@ -440,6 +475,26 @@ pub struct Services {
     /// cancel and which reports nothing back), so a save through it names the document but
     /// leaves its changes unsaved and the leave-page guard armed (#4962).
     pub write_unconfirmed: bool,
+    /// With `write_unconfirmed`, where the platform confirms some writes later (iPadOS and
+    /// Android writing a file back where it came from): whether a write of the document is
+    /// still waiting for its answer. Then an unconfirmed save doesn't count as saved for closing:
+    /// the unsaved-changes prompt waits while the write is pending, goes on once the document is
+    /// saved, and otherwise asks again, so closing without a saved copy takes Don't Save. Without
+    /// it (a browser download, which never answers) the write counts, as it always has (#6414).
+    pub write_pending: Option<WritePendingFn>,
+    /// File › Save writes a flat file (PNG, JPEG…) back without asking while it keeps the whole
+    /// document: a single plain layer in a format PhotoCraft writes. The desktop asks for the
+    /// name first, its own file suggested; where there is no such dialog to confirm (iPadOS and
+    /// Android, whose exporter can only make a new file), it goes back where it came from, as
+    /// long as its format stores the document as it is (a JPEG has no transparency); otherwise
+    /// Save asks for a name, suggesting a PSD.
+    pub save_flat_in_place: bool,
+    /// Plug-ins come only with the app: Install Plug-in… and the Plug-ins preference folder are
+    /// left out, and installing or loading one is refused. For stores that don't allow
+    /// installing code (App Store guideline 2.5.2); the sandboxed plug-ins already loaded run as
+    /// before. Read when the app is made, which also holds the engine to it
+    /// (`plugin_cmds::set_bundled_only`, process-wide), so no script or action step gets round it.
+    pub bundled_plugins_only: bool,
     /// Encode and write in one step on a worker thread, so a large save doesn't freeze the
     /// window (#2017). With background jobs on, saves use it instead of `export` and `write`.
     pub save_file: Option<SaveFileFn>,
@@ -547,4 +602,6 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// Menu items and command handling the host app adds (a tablet shell's Photos and share sheet).
+    pub host_menu: Option<HostMenu>,
 }

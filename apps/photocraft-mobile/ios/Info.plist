@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key><string>en</string>
+	<key>CFBundleDisplayName</key><string>PhotoCraft</string>
+	<key>CFBundleExecutable</key><string>PhotoCraft</string>
+	<key>CFBundleIdentifier</key><string>dev.craft.photocraft</string>
+	<key>CFBundleName</key><string>PhotoCraft</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleShortVersionString</key><string>0.1</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<!-- Liquid Glass (CraftKit's toolbar) needs iPadOS 26. -->
+	<key>MinimumOSVersion</key><string>26.0</string>
+	<!-- iPad only: tablets are the target for now. -->
+	<key>UIDeviceFamily</key><array><integer>2</integer></array>
+	<!-- SwiftUI's scene life cycle (required with the iOS 27 SDK). -->
+	<key>UIApplicationSceneManifest</key>
+	<dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
+	<!-- Trackpad and mouse clicks arrive as pointer touches (hover, secondary click, scroll). -->
+	<key>UIApplicationSupportsIndirectInputEvents</key><true/>
+	<!-- Save to Photos (image exports): add-only access, never reading the library. -->
+	<key>NSPhotoLibraryAddUsageDescription</key><string>PhotoCraft adds the images you export to your photo library.</string>
+	<key>UIRequiresFullScreen</key><true/>
+	<!-- Without a launch screen iPadOS runs the app letterboxed at a legacy size. -->
+	<key>UILaunchScreen</key><dict/>
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
+	</array>
+
+	<!-- Files: documents open in place (Files hands over the original, not a copy in the app's
+	     Inbox), so File › Save writes them back where they are. Files and the Share sheet offer
+	     PhotoCraft for these types. -->
+	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key><string>PhotoCraft Document</string>
+			<key>CFBundleTypeRole</key><string>Editor</string>
+			<key>LSHandlerRank</key><string>Owner</string>
+			<key>LSItemContentTypes</key><array><string>dev.craft.photocraft.document</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key><string>Photoshop Document</string>
+			<key>CFBundleTypeRole</key><string>Editor</string>
+			<key>LSHandlerRank</key><string>Alternate</string>
+			<key>LSItemContentTypes</key><array><string>com.adobe.photoshop-image</string></array>
+		</dict>
+		<dict>
+			<key>CFBundleTypeName</key><string>Image</string>
+			<key>CFBundleTypeRole</key><string>Editor</string>
+			<key>LSHandlerRank</key><string>Alternate</string>
+			<key>LSItemContentTypes</key><array><string>public.image</string></array>
+		</dict>
+	</array>
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key><string>dev.craft.photocraft.document</string>
+			<key>UTTypeDescription</key><string>PhotoCraft Document</string>
+			<key>UTTypeConformsTo</key><array><string>public.data</string><string>public.content</string></array>
+			<key>UTTypeTagSpecification</key>
+			<dict><key>public.filename-extension</key><array><string>pcraft</string></array></dict>
+		</dict>
+	</array>
+</dict>
+</plist>

@@ -431,6 +431,71 @@ fn step_until(h: &mut Harness<'_, PhotocraftApp>, done: impl Fn(&PhotocraftApp) 
     h.run_steps(2);
 }
 
+/// Save a Copy and Export As encode on the save worker too (#2017), the export made from the
+/// document there (here at half size); the document keeps its path and unsaved changes.
+#[test]
+fn copies_and_exports_run_on_the_save_worker_and_leave_the_document_alone() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let written: Arc<std::sync::Mutex<Vec<(String, u32)>>> = Arc::default();
+    let (g, w) = (gate.clone(), written.clone());
+    h.state_mut().services.save_file = Some(Arc::new(move |doc, path, _, ctl| {
+        while !g.load(Ordering::Relaxed) {
+            ctl.check()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        ctl.commit()?;
+        w.lock().unwrap().push((path.to_string(), doc.size.width));
+        Ok(Vec::new())
+    }));
+    let doc = h.state().session.active().unwrap().doc.clone();
+    let r = crate::view_cmds::write_copy(h.state_mut(), &doc, "/tmp/photocraft-test/copy.psd", crate::FormatChoices::default()).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    assert!(h.state().saving());
+    let (frames, _) = frames_for_at_least(&mut h, 200, 3);
+    assert!(frames >= 3, "only {frames} frames while copying");
+    gate.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    let r = crate::export_dialog::replay(h.state_mut(), &json!({"path": "/tmp/photocraft-test/export.png", "format": "png", "scale": 50})).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(*written.lock().unwrap(), [("/tmp/photocraft-test/copy.psd".to_string(), 320), ("/tmp/photocraft-test/export.png".to_string(), 160)]);
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty() && st.path.is_none(), "copies leave the document's file and unsaved state alone");
+}
+
+/// A Save a Copy that starts after the user moved to another tab (the save dialog was up
+/// meanwhile) locks the document it copies, not the tab in view, and a copy over that document's
+/// own file leaves the document on its file.
+#[test]
+fn a_copy_started_from_another_tab_locks_and_keeps_its_own_document() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let g = gate.clone();
+    h.state_mut().services.save_file = Some(Arc::new(move |_, _, _, ctl| {
+        while !g.load(Ordering::Relaxed) {
+            ctl.check()?;
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        ctl.commit()?;
+        Ok(Vec::new())
+    }));
+    let path = "/tmp/photocraft-test/source.psd";
+    h.state_mut().session.active_mut().unwrap().saved_to(path.into());
+    let source = h.state().session.active().unwrap().doc.clone();
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let other = h.state().session.active().unwrap().doc.id;
+    let r = crate::view_cmds::write_copy(h.state_mut(), &source, path, crate::FormatChoices::default()).unwrap();
+    assert_eq!(r["pending"], true, "{r}");
+    assert_eq!(h.state().session.active().unwrap().doc.id, other, "the tab in view stays in view");
+    assert!(h.state().session.job_on(source.id).is_some(), "the copied document is locked");
+    assert!(h.state().session.job_on(other).is_none(), "the tab in view isn't");
+    gate.store(true, Ordering::Relaxed);
+    step_until(&mut h, |a| !a.saving());
+    let st = h.state().session.documents().iter().find(|st| st.doc.id == source.id).unwrap();
+    assert_eq!(st.path.as_deref(), Some(path), "the document stays on its file");
+}
+
 #[test]
 fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     let mut h = app_harness();
@@ -467,6 +532,39 @@ fn saves_run_in_the_background_and_are_recorded_when_they_end() {
     assert_eq!(h.state().ui.status, "Saved big.psd: a warning");
     assert!(noticed(h.state(), "a warning"), "the export warnings are shown");
     assert!(h.state_mut().run("layer.new.layer", json!({})).is_ok(), "unlocked again");
+}
+
+/// A writer that can't confirm the bytes were stored (a mobile exporter the user may cancel)
+/// leaves the document unsaved after a background save, as after an inline one (#4962).
+#[test]
+fn an_unconfirmed_background_save_leaves_the_document_unsaved() {
+    let mut h = app_harness();
+    let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().services.write_unconfirmed = true;
+    h.state_mut().save_as(Some("/tmp/photocraft-test/unconfirmed.psd".into())).unwrap();
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(gates.written(), ["/tmp/photocraft-test/unconfirmed.psd"]);
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty(), "not saved until the writer confirms");
+    assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/unconfirmed.psd"), "but it is the document's file now");
+}
+
+/// The same where the save runs inline because the session has no worker threads (cooperative
+/// jobs, as on the web).
+#[test]
+fn an_unconfirmed_inline_save_leaves_the_document_unsaved() {
+    let mut h = app_harness();
+    h.state_mut().session.set_cooperative_jobs(true);
+    let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.save_file = Some(gates.save(None));
+    h.state_mut().services.write_unconfirmed = true;
+    let r = h.state_mut().save_as(Some("/tmp/photocraft-test/unconfirmed-inline.psd".into())).unwrap();
+    assert!(r.get("pending").is_none(), "ran inline: {r}");
+    assert_eq!(gates.written(), ["/tmp/photocraft-test/unconfirmed-inline.psd"]);
+    let st = h.state().session.active().unwrap();
+    assert!(st.is_dirty(), "not saved until the writer confirms");
+    assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/unconfirmed-inline.psd"), "but it is the document's file now");
 }
 
 /// Save in Background off (#6207): the same worker writes the file, but the app waits for it

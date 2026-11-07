@@ -586,6 +586,62 @@ fn saving_from_the_prompt_closes_after_an_unconfirmed_write() {
     assert!(h.state().session.documents().is_empty(), "closed after one write");
 }
 
+/// Where the platform confirms a write later (iPadOS and Android writing a file back), Save in
+/// the prompt closes the document only once the write is confirmed: the prompt waits while it
+/// is pending and moves on when the document is saved.
+#[test]
+fn saving_from_the_prompt_waits_for_a_write_the_platform_confirms_later() {
+    use egui_kittest::kittest::Queryable;
+    use std::{cell::Cell, rc::Rc};
+    let pending = Rc::new(Cell::new(false));
+    let mut app = app_with_docs(1);
+    make_dirty(&mut app, 0);
+    app.session.active_mut().unwrap().path = Some("/pics/kept.psd".into());
+    app.services.write_unconfirmed = true;
+    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+    let p = pending.clone();
+    app.services.write = Some(Box::new(move |_: &str, _: &[u8]| {
+        p.set(true);
+        Ok(())
+    }));
+    let p = pending.clone();
+    app.services.write_pending = Some(Box::new(move |_| p.get()));
+    let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
+    h.key_press(Key::Y);
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 1, "not closed before the write is confirmed");
+    assert!(h.query_by_label_contains("Do you want to save").is_none(), "the prompt waits meanwhile");
+    // Confirmed: the document is saved, and the close goes ahead.
+    pending.set(false);
+    let st = h.state_mut().session.active_mut().unwrap();
+    st.saved_revision = st.revision;
+    h.run_steps(3);
+    assert!(h.state().discard.is_none());
+    assert!(h.state().session.documents().is_empty(), "closed once the write is confirmed");
+}
+
+/// A write there that is never confirmed (the exporter, which the user can cancel) or that
+/// fails leaves the document open and asks again: closing without a saved copy takes Don't Save.
+#[test]
+fn an_unconfirmed_save_from_the_prompt_asks_again_where_writes_are_confirmed_later() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app_with_docs(1);
+    make_dirty(&mut app, 0);
+    app.session.active_mut().unwrap().path = Some("kept.psd".into());
+    app.services.write_unconfirmed = true;
+    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+    app.services.write = Some(Box::new(|_: &str, _: &[u8]| Ok(())));
+    app.services.write_pending = Some(Box::new(|_| false));
+    let mut h = prompt_for(app, "file.close", egui::os::OperatingSystem::Windows);
+    h.key_press(Key::Y);
+    h.run_steps(3);
+    assert_eq!(h.state().session.documents().len(), 1, "still open: nothing confirmed the save");
+    h.get_by_label_contains("Do you want to save");
+    h.key_press(Key::N);
+    h.run_steps(3);
+    assert!(h.state().session.documents().is_empty(), "Don't Save closes it");
+}
+
 #[path = "tests/tiff_tests.rs"]
 mod tiff_tests;
 

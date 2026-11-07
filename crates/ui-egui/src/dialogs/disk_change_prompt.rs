@@ -55,7 +55,9 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
             app.journal_as_plain_save(&path, from);
             Ok(r)
         } else {
-            app.save_in_place(path, crate::FormatChoices::default())
+            // A file written back in place keeps the answers too (a flat file with
+            // `Services::save_flat_in_place`); a layered file's Save records none.
+            app.save_in_place(path, choices)
         }
     })
 }

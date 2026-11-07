@@ -6,6 +6,7 @@
 //! is installed). Runs respect the selection and are one undo step.
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use photocraft_doc::{LayerContent, SmartFilter};
 use photocraft_plugins::{Plugin, registry};
@@ -189,6 +190,7 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
 
 fn install(_s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plugin.install";
+    refuse_unless_open()?;
     let plugin = if let Some(data) = p.get("data") {
         let data = data.as_str().ok_or_else(|| bad(CMD, "`data` must be a base64 string"))?;
         if data.len() > MAX_DATA_CHARS {
@@ -219,6 +221,25 @@ fn load_path(_: &str) -> Result<Plugin> {
     Err(EngineError::Other("installing from a path is not available on the web; pass the module as base64 `data`".into()))
 }
 
+/// Why adding a plug-in is refused under [`set_bundled_only`].
+pub const BUNDLED_ONLY: &str = "Plug-ins come with the app in this build; others can't be installed";
+
+/// Whether plug-ins are limited to the ones the app brings ([`set_bundled_only`]).
+static BUNDLED: AtomicBool = AtomicBool::new(false);
+
+/// Limit plug-ins to the ones the app brings, for stores that don't allow installing code (App
+/// Store guideline 2.5.2): `plugin.install` and `plugin.reload` are refused and the Plug-ins
+/// preference folder isn't loaded, whatever runs them (a menu, a script's or an action's steps,
+/// a control client). Process-wide, as the plug-in registry is; plug-ins already loaded stay.
+pub fn set_bundled_only(on: bool) {
+    BUNDLED.store(on, Ordering::SeqCst);
+}
+
+/// `Err` while plug-ins are limited to the ones the app brings ([`set_bundled_only`]).
+fn refuse_unless_open() -> Result<()> {
+    if BUNDLED.load(Ordering::SeqCst) { Err(EngineError::Other(BUNDLED_ONLY.into())) } else { Ok(()) }
+}
+
 /// The plug-in folder last loaded from the preferences, and what happened.
 static FOLDER: Mutex<Option<(String, Value)>> = Mutex::new(None);
 
@@ -227,7 +248,7 @@ static FOLDER: Mutex<Option<(String, Value)>> = Mutex::new(None);
 pub(crate) fn sync_prefs(s: &Session) {
     let pi = &s.prefs().plug_ins;
     let folder = pi.additional_plugins_folder.trim();
-    if !pi.use_additional_plugins_folder || folder.is_empty() {
+    if !pi.use_additional_plugins_folder || folder.is_empty() || BUNDLED.load(Ordering::SeqCst) {
         return;
     }
     let mut last = FOLDER.lock().unwrap_or_else(|e| e.into_inner());
@@ -251,6 +272,7 @@ fn load_folder(folder: &str) -> Value {
 }
 
 fn reload(s: &mut Session, p: &Value) -> Result<Value> {
+    refuse_unless_open()?;
     let folder = match p.get("path") {
         Some(v) => v.as_str().filter(|f| !f.trim().is_empty()).ok_or_else(|| bad("plugin.reload", "`path` must be a folder"))?.trim().to_string(),
         None => s.prefs().plug_ins.additional_plugins_folder.trim().to_string(),

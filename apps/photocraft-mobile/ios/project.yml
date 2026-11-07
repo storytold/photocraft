@@ -1,0 +1,67 @@
+# PhotoCraft for iPad as an Xcode project, for running on a device (signing) and debugging:
+#   apps/photocraft-mobile/ios/build.sh xcode && open apps/photocraft-mobile/ios/PhotoCraft.xcodeproj
+# build.sh runs XcodeGen with CRAFT_MOBILE_DIR set: CraftKit comes from craft-libs (crates/mobile),
+# checked out beside the Craft repos unless CRAFT_MOBILE_DIR says otherwise. Pick your team under
+# Signing & Capabilities (or set DEVELOPMENT_TEAM when generating). build.sh sim still builds the
+# simulator app without Xcode. The Rust library is built by the "Build Rust" phase;
+# CRAFT_TARGET_DIR overrides its target directory (default: the workspace's target/).
+name: PhotoCraft
+options:
+  bundleIdPrefix: dev.craft
+  deploymentTarget:
+    iOS: "26.0"
+settings:
+  base:
+    CRAFT_MOBILE_DIR: ${CRAFT_MOBILE_DIR}
+    CRAFT_TARGET_DIR: $(SRCROOT)/../../../target
+    "CRAFT_RUST_TARGET[sdk=iphoneos*]": aarch64-apple-ios
+    "CRAFT_RUST_TARGET[sdk=iphonesimulator*]": aarch64-apple-ios-sim
+targets:
+  PhotoCraft:
+    type: application
+    platform: iOS
+    sources:
+      - path: PhotoCraftApp.swift
+      # The Liquid Glass app icon (Icon Composer), with the other icon files.
+      - path: ../../../assets/app-icon/PhotoCraft.icon
+        buildPhase: resources
+      - path: ${CRAFT_MOBILE_DIR}/swift/CraftKit/Sources
+        group: CraftKit
+    settings:
+      base:
+        # The hand-written Info.plist, used as is: XcodeGen's `info:` would regenerate it and drop
+        # the document types, Files and Photos keys.
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        PRODUCT_BUNDLE_IDENTIFIER: dev.craft.photocraft
+        PRODUCT_NAME: PhotoCraft
+        ASSETCATALOG_COMPILER_APPICON_NAME: PhotoCraft
+        TARGETED_DEVICE_FAMILY: "2"
+        SWIFT_VERSION: "6.0"
+        SWIFT_OBJC_BRIDGING_HEADER: $(CRAFT_MOBILE_DIR)/swift/CraftKit/include/CraftMobile.h
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+        # The Rust static library by path (-l would pick the cdylib built beside it).
+        OTHER_LDFLAGS: $(CRAFT_TARGET_DIR)/$(CRAFT_RUST_TARGET)/release/libphotocraft_mobile.a -lc++
+        # Rust code has no bitcode/dSYM of its own here; the Swift side keeps the defaults.
+        ENABLE_USER_SCRIPT_SANDBOXING: NO
+    dependencies:
+      - sdk: SwiftUI.framework
+      - sdk: Metal.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreText.framework
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+      - sdk: UniformTypeIdentifiers.framework
+      - sdk: PhotosUI.framework
+      - sdk: Photos.framework
+    preBuildScripts:
+      - name: Build Rust
+        basedOnDependencyAnalysis: false
+        script: |
+          set -eu
+          export PATH="$HOME/.cargo/bin:$PATH"
+          # C code in dependencies (ring, ...) must target the same minimum iOS as the Swift.
+          export IPHONEOS_DEPLOYMENT_TARGET=26.0
+          cd "$SRCROOT/../../.."
+          CARGO_TARGET_DIR="$CRAFT_TARGET_DIR" cargo build --release -p photocraft-mobile --target "$CRAFT_RUST_TARGET"

@@ -1517,3 +1517,92 @@ fn import_variable_data_sets_menu_asks_for_a_csv_and_imports_it() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.active().map(|d| d.doc.variables.data_sets.len()), Some(2));
 }
+
+/// Where no save dialog could confirm a flat file's own name (`Services::save_flat_in_place`: the
+/// iPadOS and Android builds), File › Save writes a PNG that keeps the document straight back.
+/// Once the document needs layers it asks for a name, as the desktop always does for a flat file.
+#[test]
+fn save_flat_in_place_writes_a_plain_png_back_until_it_needs_layers() {
+    let ctx = egui::Context::default();
+    let (mut app, open, written) = app();
+    app.session.active_mut().unwrap().path = Some("/pics/photo.png".into());
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(open.borrow().len(), 1, "the desktop asks, its own file suggested");
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+
+    app.services.save_flat_in_place = true;
+    app.run("edit.fill", json!({"color": "#3366cc"})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(open.borrow().is_empty() && !app.file_dialog_open(), "written without asking");
+    assert_eq!(*written.borrow(), ["/pics/photo.png"]);
+    let st = app.session.active().unwrap();
+    assert!(!st.is_dirty());
+    assert_eq!(st.path.as_deref(), Some("/pics/photo.png"));
+
+    app.run("layer.new.layer", json!({})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(open.borrow().len(), 1, "two layers: a PNG can't keep them");
+    assert_eq!(*written.borrow(), ["/pics/photo.png"]);
+}
+
+/// A flat file is written back in place only while its format stores the document as it is: a
+/// JPEG keeps an opaque Background, but not a layer with transparency (it would be matted over
+/// white) or 16 bits per channel. Those ask for a name, suggesting a format that keeps them.
+#[test]
+fn save_flat_in_place_asks_when_the_format_would_lose_transparency_or_depth() {
+    let ctx = egui::Context::default();
+    for (new, kept) in [
+        (json!({"width": 4, "height": 4}), true),
+        (json!({"width": 4, "height": 4, "background": "transparent"}), false),
+        (json!({"width": 4, "height": 4, "depth": 16}), false),
+    ] {
+        let (mut app, open, written) = app();
+        app.services.save_flat_in_place = true;
+        app.run("file.new", new.clone()).unwrap();
+        app.session.active_mut().unwrap().path = Some("/pics/photo.jpg".into());
+        menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        if kept {
+            assert_eq!(*written.borrow(), ["/pics/photo.jpg"], "{new}: written back");
+        } else {
+            assert!(written.borrow().is_empty(), "{new}: the JPEG is not overwritten");
+            assert!(
+                matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if !suggested.ends_with(".jpg")),
+                "{new}: asks for a name in a format that keeps it: {:?}",
+                open.borrow().iter().map(|(r, _)| r.clone()).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+/// A flat file written back in place (`Services::save_flat_in_place`) that another app changed
+/// keeps a script's JPEG Options answer through the changed-on-disk prompt: Replace writes with
+/// it, not with the defaults.
+#[test]
+fn save_flat_in_place_keeps_a_scripted_quality_through_the_changed_on_disk_prompt() {
+    let ctx = egui::Context::default();
+    let path = "/pics/photo.jpg";
+    let (mut app, _open, written) = jpeg_app(Some(path), false);
+    app.services.save_flat_in_place = true;
+    let qualities: Rc<RefCell<Vec<Option<u8>>>> = Rc::default();
+    let q = qualities.clone();
+    app.services.export = Some(Box::new(move |_: &photocraft_doc::Document, _: &str, s: &crate::ExportSettings| {
+        q.borrow_mut().push(s.jpeg_quality);
+        Ok((b"out".to_vec(), Vec::new()))
+    }));
+    let disk = on_disk(&mut app);
+    changed_by_another_app(&disk, path);
+    app.opened_from(path);
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    changed_by_another_app(&disk, path);
+    menus::invoke(&mut app, &ctx, "file.save", json!({"quality": 5})).unwrap();
+    assert!(written.borrow().is_empty(), "the changed file is not replaced before the answer");
+    let id = disk_prompt(&app).expect("Save asks first").id;
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(*written.borrow(), [path]);
+    assert_eq!(qualities.borrow().last().copied().flatten(), Some(photocraft_engine::file_cmds::jpeg_quality(5.0)));
+}

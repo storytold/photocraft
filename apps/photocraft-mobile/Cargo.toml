@@ -1,0 +1,48 @@
+[package]
+name = "photocraft-mobile"
+description = "PhotoCraft on iPadOS/iOS and Android: the shared app behind a thin native shell"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+# staticlib: linked into the Swift shell (iOS). cdylib: loaded by the Compose shell (Android).
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+# Not the workspace table: the workspace forbids unsafe_code, and the exported start symbols
+# (`#[unsafe(no_mangle)]`, from `craft_mobile::export!`) are the one thing a native shell needs.
+# Everything else stays denied.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+cognitive_complexity = "deny"
+wildcard_imports = "deny"
+
+[features]
+# Open HEIC/HEIF photos (the optional photocraft-heif crate, pure Rust), as the desktop apps'
+# `heif` feature does. On by default here, unlike the desktop apps: the photo pickers hand photos
+# over in their own encoding, usually HEIC, and the shells' build scripts take no features. A
+# build without it: `--no-default-features`.
+default = ["heif"]
+heif = ["photocraft-codecs/heif"]
+
+[dependencies]
+# The shared native-shell host (craft-libs `crates/mobile`).
+craft-mobile = { workspace = true }
+serde_json = { workspace = true }
+photocraft-engine = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-codecs = { workspace = true }
+photocraft-doc = { workspace = true }
+photocraft-format = { workspace = true }
+photocraft-raster = { workspace = true }
+photocraft-ui-egui = { workspace = true }
+egui = { workspace = true }
+eframe = { workspace = true, features = ["wgpu", "accesskit"] }
+log = { workspace = true }
+

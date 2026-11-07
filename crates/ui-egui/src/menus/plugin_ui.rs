@@ -9,6 +9,14 @@ use crate::menus::MenuItem;
 /// Menu ids of installed plug-ins: `plugin.filter.<plug-in id>`.
 const PREFIX: &str = "plugin.filter.";
 
+/// Why installing a plug-in is refused under [`crate::Services::bundled_plugins_only`].
+pub const BUNDLED_ONLY: &str = photocraft_engine::plugin_cmds::BUNDLED_ONLY;
+
+/// Commands that install plug-ins from a file, a folder or data.
+fn installs(id: &str) -> bool {
+    matches!(id, "plugin.install" | "plugin.reload")
+}
+
 /// Inserts the installed plug-ins into Filter › Plug-ins, above "Install Plug-in…".
 pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
     let plugins = photocraft_plugins::registry::list();
@@ -18,6 +26,9 @@ pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
     // plug-in rows under a path no menu node matched, so under any non-English language they were
     // never drawn (#2540). Borrow the path of "Install Plug-in…", the item we sit above.
     let Some(path) = items.get(at).map(|i| i.path.clone()) else { return };
+    if app.services.bundled_plugins_only {
+        items.remove(at);
+    }
     let enabled = app.session.is_enabled("plugin.run");
     let mut extra: Vec<MenuItem> = plugins
         .iter()
@@ -45,6 +56,9 @@ pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
 
 /// Enabled state of a plug-in menu item (`None` for other ids).
 pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
+    if installs(id) && app.services.bundled_plugins_only {
+        return Some(false);
+    }
     let pid = id.strip_prefix(PREFIX)?;
     Some(photocraft_plugins::registry::get(pid).is_some() && app.session.is_enabled("plugin.run"))
 }
@@ -52,6 +66,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 /// Runs a plug-in menu item: straight away when it has no parameters (or params were given),
 /// else through its dialog. "Install Plug-in…" without params opens its path dialog.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if installs(id) && app.services.bundled_plugins_only {
+        return Some(Err(BUNDLED_ONLY.into()));
+    }
     let given = params.as_object().is_some_and(|o| !o.is_empty());
     if id == "plugin.install" && !given {
         return Some(Ok(json!({"dialog": crate::filter_dialog::open(app, "plugin.install")})));
@@ -96,6 +113,28 @@ mod tests {
         // Install Plug-in… without params opens its dialog instead of failing.
         let r = crate::menus::invoke(&mut app, &ctx, "plugin.install", json!({})).unwrap();
         assert!(r.get("dialog").is_some());
+    }
+
+    /// Plug-ins bundled-only (App Store guideline 2.5.2): the plug-ins already loaded stay in
+    /// Filter › Plug-ins and run, but Install Plug-in… is gone and installing is refused.
+    #[test]
+    fn bundled_plugins_only_leaves_out_install_and_keeps_the_loaded_ones() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
+        app.run("plugin.install", json!({"path": path})).unwrap();
+        app.services.bundled_plugins_only = true;
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let items = crate::menus::menu_items(&app);
+        assert!(!items.iter().any(|i| i.id == "plugin.install"), "no Install Plug-in…");
+        let me = items.iter().find(|i| i.id == "plugin.filter.org.photocraft.example.invert").expect("loaded plug-in still listed");
+        assert_eq!(me.path, ["Filter", "Plug-ins"]);
+        assert!(crate::menus::invoke(&mut app, &ctx, "plugin.filter.org.photocraft.example.invert", json!({})).is_ok());
+        for id in ["plugin.install", "plugin.reload"] {
+            assert!(!crate::menus::is_enabled(&app, id), "{id}");
+            assert_eq!(crate::menus::invoke(&mut app, &ctx, id, json!({})).err().as_deref(), Some(BUNDLED_ONLY), "{id}");
+            assert_eq!(crate::menus::invoke(&mut app, &ctx, id, json!({"path": path})).err().as_deref(), Some(BUNDLED_ONLY), "{id}");
+        }
     }
 
     /// Plug-in rows carry the untranslated English menu path like every other item, so they still

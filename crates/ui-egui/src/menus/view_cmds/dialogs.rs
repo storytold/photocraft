@@ -697,9 +697,23 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 
 /// Writes `doc` to `path` as a copy (Save a Copy, and its replayed action step): the document's
 /// path and saved state are untouched. `choices` are the Targa, DDS and JPEG answers, when there
-/// are any.
-pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
+/// are any. With background jobs it encodes on the save worker, as File › Save does (#2017).
+pub(crate) fn write_copy(
+    app: &mut PhotocraftApp,
+    doc: &std::sync::Arc<photocraft_doc::Document>,
+    path: &str,
+    choices: crate::FormatChoices,
+) -> Result<Value, String> {
     let settings = choices.apply(app.save_settings());
+    if app.background_jobs
+        && let Some(save) = app.services.save_file.clone()
+    {
+        let snapshot = std::sync::Arc::clone(doc);
+        return Ok(match crate::jobs_ui::start_copy(app, doc.id, path.to_string(), settings, save, move || Ok(snapshot))? {
+            Some((path, warnings)) => json!({"path": path, "warnings": warnings}),
+            None => json!({"path": path, "warnings": [], "pending": true, "job": app.jobs.last_started.map(|j| j.0)}),
+        });
+    }
     crate::app::ensure_memory_to_save(doc, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;

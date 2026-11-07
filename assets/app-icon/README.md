@@ -34,6 +34,10 @@ vectorised. License: see `LICENSE.txt`.
 - `photocraft.ico`: Windows icon, 16–256 px, embedded in the `.exe` by `apps/photocraft/build.rs`.
 - `hicolor/<size>/apps/ai.storyteller.photocraft.png` (16–512) and `hicolor/scalable/...svg`:
   Linux icon theme.
+- `PhotoCraft.icon`: the iPadOS Liquid Glass icon (Icon Composer), from the same artwork: the fox
+  (paper and ink) as layers over the PhotoCraft blue. Used by `apps/photocraft-mobile/ios/project.yml`.
+- The Android adaptive launcher icon (`apps/photocraft-mobile/android/app/src/main/res/mipmap-*`)
+  is the same fox, as foreground and monochrome layers over the PhotoCraft blue.
 
 The app also sets the window icon and Wayland app ID at runtime (`apps/photocraft/src/app_icon.rs`,
 `main.rs`). On Windows the taskbar shows the icon of the Start Menu shortcut that launches the

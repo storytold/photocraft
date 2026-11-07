@@ -224,7 +224,9 @@ impl PhotocraftApp {
         // Other files keep their format only when it can retain their layers. A plain raster
         // (including an unlocked transparent PNG) can keep its flat format; editable contents,
         // masks and layer appearance settings need a layered format even with just one layer.
-        let flat = plain_raster(&st.doc).is_some();
+        // Where a flat file is written back without asking (`Services::save_flat_in_place`), the
+        // dialog can't change the format: only one that stores the document as it is is offered.
+        let flat = plain_raster(&st.doc).is_some() && (!self.services.save_flat_in_place || st.path.as_deref().is_some_and(|p| flat_format_keeps(&st.doc, p)));
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
@@ -448,12 +450,7 @@ impl PhotocraftApp {
             // DDS or JPEG answer writes the same way, without asking.
             let choices = FormatChoices::from_step(params, id)?;
             let st = self.session.active().ok_or("no document")?;
-            let flat_own = |p: &str| {
-                !photocraft_engine::file_cmds::saves_in_place(p)
-                    && plain_raster(&st.doc).is_some()
-                    && photocraft_engine::file_cmds::extension(p).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
-            };
-            let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
+            let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_file_keeps(&st.doc, p)).ok_or(
                 "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
             )?;
             return self.save_in_place(path, choices);
@@ -807,6 +804,41 @@ impl PhotocraftApp {
     }
 }
 
+/// Whether the flat file at `path` keeps the whole of `doc`: a single plain layer, in a flat format
+/// PhotoCraft writes. A layered file is [`photocraft_engine::file_cmds::holds_at`]'s question.
+pub fn flat_file_keeps(doc: &photocraft_doc::Document, path: &str) -> bool {
+    !photocraft_engine::file_cmds::saves_in_place(path)
+        && plain_raster(doc).is_some()
+        && photocraft_engine::file_cmds::extension(path).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
+}
+
+/// Whether the flat format at `path` stores `doc`'s pixels as they are: its colour model, its bit
+/// depth and its transparency (a Background has none). A JPEG keeps an opaque 8-bit RGB photo,
+/// but not the transparency a layer gained (it would be matted over white) or 16 bits per
+/// channel. Anything else than RGB, gray, CMYK or Lab counts as not kept.
+pub(crate) fn flat_format_keeps(doc: &photocraft_doc::Document, path: &str) -> bool {
+    use photocraft_codecs::{ChannelLayout, SampleType as Stored};
+    use photocraft_doc::{ColorMode, SampleType};
+    let Some(caps) = photocraft_engine::file_cmds::extension(path).and_then(|e| photocraft_codecs::from_extension(&e)).map(photocraft_codecs::Format::caps)
+    else {
+        return false;
+    };
+    let depth = match doc.depth {
+        SampleType::U8 => Stored::U8,
+        SampleType::U16 => Stored::U16,
+        SampleType::F32 => Stored::F32,
+    };
+    let model = |layout: &ChannelLayout| match doc.mode {
+        ColorMode::Rgb => layout.is_rgb(),
+        ColorMode::Grayscale => layout.is_gray(),
+        ColorMode::Cmyk => layout.is_cmyk(),
+        ColorMode::Lab => layout.is_lab(),
+        ColorMode::Bitmap | ColorMode::Indexed | ColorMode::Multichannel | ColorMode::Duotone => false,
+    };
+    let opaque = plain_raster(doc).is_some_and(|layer| doc.is_background(layer.id));
+    caps.depths.contains(&depth) && caps.layouts.iter().any(model) && (caps.alpha || opaque)
+}
+
 /// The New Document dialog's key in the preferences' `dialogs` map.
 const NEW_DOCUMENT: &str = "file.new";
 
@@ -928,5 +960,22 @@ mod tests {
         assert!(!app.ui.status_error);
         assert!(app.ui.status.contains("image assets: 2 in"), "{}", app.ui.status);
         let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod flat_file_keeps_tests {
+    use photocraft_doc::{Color, ColorMode, Document, Layer, SampleType, Size};
+
+    /// A host app asks it too (which file a share or a copy should be): one plain layer keeps a
+    /// flat file PhotoCraft writes; two layers, or a layered format, are other questions.
+    #[test]
+    fn a_plain_layer_keeps_a_flat_file_and_two_layers_dont() {
+        let mut doc = Document::with_background("a", Size::new(4, 4), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        assert!(crate::flat_file_keeps(&doc, "inplace://0123/a.png"));
+        assert!(!crate::flat_file_keeps(&doc, "a.psd"), "a layered file is `holds_at`'s question");
+        assert!(!crate::flat_file_keeps(&doc, "a.unknown"));
+        doc.layers.push(Layer::group("G", vec![]));
+        assert!(!crate::flat_file_keeps(&doc, "a.png"));
     }
 }
