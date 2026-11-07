@@ -135,6 +135,88 @@ fn explicit_pixel_paste_still_reads_raster_clipboards() {
     assert!(app.session.clipboard.as_ref().unwrap().svg.is_none());
 }
 
+/// An early intercept return must not leave the menu's one-shot clipboard read for the next
+/// command. This intercept returns directly, without a nested run that could consume the flag.
+#[test]
+fn an_early_intercept_return_clears_the_clipboard_read_flag() {
+    let mut app = PhotocraftApp::new(Session::new(), Services::default());
+    app.clip_read_for_paste = true;
+    assert!(app.run("window.panel.group", json!({})).is_err());
+    assert!(!app.clip_read_for_paste);
+}
+
+/// An SVG import hashes one bitmap read and reads the SVG once, even for a large clipboard.
+#[test]
+fn svg_import_reads_each_os_representation_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let bitmap_reads = Arc::new(AtomicUsize::new(0));
+    let svg_reads = Arc::new(AtomicUsize::new(0));
+    let (b, s) = (bitmap_reads.clone(), svg_reads.clone());
+    let services = Services {
+        clipboard_get_image: Some(Box::new(move || {
+            b.fetch_add(1, Ordering::SeqCst);
+            Ok(Some((1, 1, vec![255; 4])))
+        })),
+        clipboard_get_svg: Some(Box::new(move || {
+            s.fetch_add(1, Ordering::SeqCst);
+            Ok(Some(CLIP_SVG.as_bytes().to_vec()))
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    assert!(app.import_os_svg_clipboard().unwrap());
+    assert_eq!(bitmap_reads.load(Ordering::SeqCst), 1, "one bitmap read, hence one full-byte hash");
+    assert_eq!(svg_reads.load(Ordering::SeqCst), 1, "one SVG read");
+}
+
+/// The bitmap changes after its read, while the SVG is being read, with the SVG unchanged or
+/// changed: the SVG import must not record that newer bitmap as already observed, or the next
+/// Paste beside a newer path clip would skip it. One bitmap is exactly the SVG's raster mirror.
+#[test]
+fn an_svg_import_does_not_learn_a_bitmap_from_a_newer_clipboard() {
+    let mirror = photocraft_engine::edit_cmds::Clip::from_svg(CLIP_SVG.as_bytes()).unwrap();
+    let bounds = mirror.bounds;
+    let mut pixels = vec![[0; 4]; bounds.size().area() as usize];
+    mirror.surface.read_rgba8_into(bounds, &mut pixels);
+    let mirror_image = (bounds.width(), bounds.height(), pixels.into_iter().flatten().collect::<Vec<u8>>());
+    for (svg_changes, bitmap_is_mirror) in [(false, false), (true, false), (false, true)] {
+        let svg = Arc::new(Mutex::new(CLIP_SVG.as_bytes().to_vec()));
+        let image = OsClip::default();
+        let first_read = Arc::new(Mutex::new(true));
+        let (s, i, first) = (svg.clone(), image.clone(), first_read.clone());
+        let read_image = image.clone();
+        let mirror_image = mirror_image.clone();
+        let services = Services {
+            clipboard_get_svg: Some(Box::new(move || {
+                let source = s.lock().unwrap().clone();
+                let mut first = first.lock().unwrap();
+                if *first {
+                    *first = false;
+                    if svg_changes {
+                        *s.lock().unwrap() = CLIP_SVG.replace("<path", "<!-- newer clipboard --><path").into_bytes();
+                    }
+                    *i.lock().unwrap() = if bitmap_is_mirror { Some(mirror_image.clone()) } else { Some((2, 1, vec![0, 255, 0, 255, 0, 255, 0, 255])) };
+                }
+                Ok(Some(source))
+            })),
+            clipboard_get_image: Some(Box::new(move || Ok(read_image.lock().unwrap().clone()))),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(Session::new(), services);
+        app.run("file.new", json!({"width": 24, "height": 20})).unwrap();
+        app.run("edit.paste", json!({"as": "shape"})).unwrap();
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[1, 1], [3, 1], [3, 3], [1, 3]]}]}})).unwrap();
+        app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
+        app.run("edit.paste", json!({})).unwrap();
+        assert!(app.session.clipboard.is_some(), "svg_changes={svg_changes}, bitmap_is_mirror={bitmap_is_mirror}: the newer OS bitmap was skipped");
+        let clip = app.session.clipboard.as_ref().unwrap();
+        assert!(clip.svg.is_none(), "the imported clipboard is the bitmap, not the older SVG");
+        assert!(app.session.path_clipboard.is_none(), "the imported bitmap displaced the path clip");
+        let expected = if bitmap_is_mirror { mirror.surface.rgba(0, 0) } else { [0.0, 1.0, 0.0, 1.0] };
+        assert_eq!(clip.surface.rgba(0, 0), expected);
+    }
+}
+
 #[test]
 fn newer_internal_copies_survive_an_unchanged_external_svg() {
     const SOURCE: &str =
@@ -149,15 +231,15 @@ fn newer_internal_copies_survive_an_unchanged_external_svg() {
         };
         let mut app = PhotocraftApp::new(Session::new(), services);
         app.run("file.new", json!({"width":64,"height":64})).unwrap();
-        app.import_os_svg_clipboard().unwrap();
-        let clip = app.session.clipboard.as_ref().unwrap();
-        let b = clip.bounds;
+        let mirror = photocraft_engine::edit_cmds::Clip::from_svg(SOURCE.as_bytes()).unwrap();
+        let b = mirror.bounds;
         let mut pixels = vec![[0; 4]; b.size().area() as usize];
-        clip.surface.read_rgba8_into(b, &mut pixels);
+        mirror.surface.read_rgba8_into(b, &mut pixels);
         let bytes: Vec<_> = pixels.into_iter().flatten().collect();
-        let signature = bytes.iter().step_by(997).fold((u64::from(b.width()) << 32) | u64::from(b.height()), |sig, byte| sig.rotate_left(5) ^ u64::from(*byte));
-        assert_eq!(app.os_clip_sig, Some(signature), "match the image signature across all four RGBA components");
-        *image.lock().unwrap() = Some((b.width(), b.height(), bytes));
+        *image.lock().unwrap() = Some((b.width(), b.height(), bytes.clone()));
+        app.import_os_svg_clipboard().unwrap();
+        let signature = clipboard::clip_signature(b.width(), b.height(), &bytes);
+        assert_eq!(app.os_clip_sig, Some(OsClipSignature::Bitmap(signature)), "stable reads record the actual OS bitmap signature");
         app.session.edit_prefs(|prefs| prefs.general.export_clipboard = false);
         app.run("file.new", json!({"width":8,"height":6})).unwrap();
         app.run("edit.fill", json!({"color":"#0000ff"})).unwrap();
@@ -579,6 +661,86 @@ fn targeting_a_mask_swaps_to_its_own_colour_pair() {
     assert_eq!(pair(&app), (WHITE, BLACK));
     app.run("layer.layerMask.delete", json!({})).unwrap();
     assert_eq!(pair(&app), (GREEN, BLUE), "deleting the targeted mask goes back to the pixels");
+}
+
+/// One clipboard: importing OS pixels (an app image pasted in) replaces a path clip, like a
+/// path clip replaces the pixel clipboard — Paste must not resurrect the stale path. Once the
+/// app has a baseline, a changed OS image wins.
+#[test]
+fn os_clipboard_import_replaces_the_path_clipboard() {
+    let os: OsClip = Arc::new(Mutex::new(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))));
+    let (a, b) = (os.clone(), os.clone());
+    let services = Services { clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+    app.run("path.set", serde_json::json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}}))
+        .unwrap();
+    // The first import establishes the baseline (no internal clip competes yet).
+    assert!(app.import_os_clipboard().unwrap());
+    app.run("path.copy", serde_json::json!({"name": "work", "subpaths": [0]})).unwrap();
+    assert!(app.session.path_clipboard.is_some());
+    // Another app copies a new image: with the baseline, the import replaces the path clip.
+    *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
+    assert!(app.import_os_clipboard().unwrap());
+    assert!(app.session.clipboard.is_some(), "the OS image is the pixel clipboard");
+    assert!(app.session.path_clipboard.is_none(), "one clipboard: the import replaced the path clip");
+    drop(a);
+}
+
+/// Clipboard freshness both ways: an unchanged OS image must not discard a newer path clip
+/// (it superseded the mirrored pixels), while genuinely new OS pixels replace it.
+#[test]
+fn os_clipboard_import_respects_a_newer_path_clip() {
+    let os: OsClip = Arc::new(Mutex::new(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))));
+    let (a, b) = (os.clone(), os.clone());
+    let services = Services { clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+    // Mirror pixels to the OS clipboard…
+    app.run("select.rect", serde_json::json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    app.run("edit.copy", serde_json::json!({})).unwrap();
+    assert!(app.import_os_clipboard().unwrap());
+    assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none());
+    // …then a path component takes the clipboard's place.
+    app.run("path.set", serde_json::json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}}))
+        .unwrap();
+    app.run("path.copy", serde_json::json!({"name": "work", "subpaths": [0]})).unwrap();
+    assert!(app.session.path_clipboard.is_some() && app.session.clipboard.is_none());
+    // The OS clipboard still holds the old image: importing it must keep the newer path clip.
+    assert!(!app.import_os_clipboard().unwrap(), "the unchanged OS image is stale");
+    assert!(app.session.path_clipboard.is_some(), "the path clip survives the stale import");
+    assert!(app.session.clipboard.is_none());
+    // Genuinely new OS pixels win, as any newer clip does.
+    *os.lock().unwrap() = Some((2, 2, [0u8, 255u8, 0, 255].repeat(4)));
+    assert!(app.import_os_clipboard().unwrap());
+    assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none(), "newer OS pixels replace the path clip");
+    drop(a);
+}
+
+/// The freshness signature covers every byte: a change to any byte of even a tiny OS image
+/// must read as a new clipboard (the old every-997th-byte sampling looked at one byte of a
+/// 3×2 image, so a greener pixel left the signature unchanged and a newer clip looked stale).
+#[test]
+fn clip_signature_covers_every_byte() {
+    let a = [0u8; 24];
+    let mut b = a;
+    b[7] = 200;
+    assert_ne!(clipboard::clip_signature(3, 2, &a), clipboard::clip_signature(3, 2, &b), "a changed byte anywhere changes the signature");
+    b[7] = 0;
+    b[23] = 1;
+    assert_ne!(clipboard::clip_signature(3, 2, &a), clipboard::clip_signature(3, 2, &b), "even the last byte counts");
+}
+
+/// Malformed OS clipboard metadata (huge dimensions, short buffer) must be rejected by the
+/// checked-arithmetic validation, never panic on an overflowing byte-length multiply —
+/// in calibration and in the import alike.
+#[test]
+fn clipboard_rejects_overflowing_dimensions_without_panicking() {
+    let services = Services { clipboard_get_image: Some(Box::new(|| Ok(Some((u32::MAX, u32::MAX, vec![0u8; 4]))))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    assert!(!app.import_os_clipboard().unwrap(), "the malformed image is rejected");
+    assert!(app.session.clipboard.is_none());
 }
 
 type SvgClip = Arc<Mutex<Result<Option<Vec<u8>>, String>>>;

@@ -284,6 +284,9 @@ fn merged_surface(doc: &Document) -> Surface {
     photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None)
 }
 
+/// Edit › Copy of pixels: the merged canvas (`merged`) or the active layer / the selected
+/// layers, honouring the selection and linked layers' sources. The pixel clip replaces a
+/// path clip on the one clipboard, and is replaced by one.
 fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
@@ -320,6 +323,8 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     let b = clip.bounds;
     let board = source_board(d, merged, b);
     let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), board, ..clip };
+    // One clipboard: a pixel clip replaces a path clip, as a path clip replaces it.
+    s.path_clipboard = None;
     s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
 }
@@ -451,6 +456,7 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     }
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
+    s.path_clipboard = None;
     s.clipboard = Some(Clip { svg: None, components: None, surface, bounds: b, layers: None, resolution, source, board: None });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }

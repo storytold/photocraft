@@ -34,13 +34,20 @@ impl PhotocraftApp {
         result
     }
 
+    /// Run a command through the app shell (prompts, intercepts, status reporting), counting
+    /// the nesting depth so a nested run doesn't prompt or catch panics twice.
     pub(crate) fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.run_depth += 1;
         let r = self.run_command_at_depth(id, params);
         self.run_depth -= 1;
+        // One-shot state must not survive an early intercept/authorization return either.
+        self.clip_read_for_paste = false;
         r
     }
 
+    /// [`run_command`]'s body at the current depth: stale-gesture cancellation, automation
+    /// authorization, the UI intercepts (prompts, tool routing, the path clipboard), the
+    /// engine dispatch and the post-command state fixes.
     fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
@@ -48,7 +55,6 @@ impl PhotocraftApp {
         if matches!(id, "paint.setSymmetry" | "paint.symmetryFromPath" | "paint.symmetryDisable") {
             self.ui.symmetry_transform = None;
         }
-        let clip_read = std::mem::take(&mut self.clip_read_for_paste);
         if self.automation_input
             && let Some(authorize) = self.services.automation_command.as_ref()
         {
@@ -91,6 +97,13 @@ impl PhotocraftApp {
         if let Some(r) = crate::crop_ui::intercept(self, id) {
             return r;
         }
+        // Path Selection's component clipboard: Edit › Copy/Cut take the selected components,
+        // Edit › Paste lays the path clipboard down (before the OS-clipboard import below).
+        if let Some(r) = vector_ui::path_clip_intercept(self, id, &params) {
+            return r;
+        }
+        // After the intercepts: a refresh there (or the menu) read the OS clipboard already.
+        let clip_read = std::mem::take(&mut self.clip_read_for_paste);
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
         if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {
@@ -106,11 +119,28 @@ impl PhotocraftApp {
                 None
             };
             if let Some(mode) = paste_as {
+                // Reject options the engine's explicit-mode validation rejects before an OS
+                // import can replace the current clip and then have the command fail.
+                if ["inPlace", "clampToCanvas", "document", "layer", "layers", "path"].iter().any(|key| params.get(key).is_some()) {
+                    return Err("explicit Paste modes do not support these placement or target options".into());
+                }
+                if params.get("target").is_some_and(|target| target.as_str() != Some("pixels")) {
+                    return Err("explicit Paste requires the layer composite target".into());
+                }
                 // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
-                let (imported, svg_error) = match self.import_os_svg_clipboard() {
-                    Ok(imported) => (imported, None),
-                    Err(error) if mode == "pixels" => (false, Some(error)),
-                    Err(error) => return Err(error),
+                // A refresh above (the path clipboard's intercept or the menu) already read the
+                // OS clipboard: for pixels its import stands, and an unchanged older SVG must
+                // not replace the clip it installed. Vectors still read the OS SVG — a changed
+                // OS bitmap installed by the refresh carries none, while the clipboard may
+                // still hold the vector source this mode asks for.
+                let (imported, svg_error) = if clip_read && mode == "pixels" {
+                    (true, None)
+                } else {
+                    match self.import_os_svg_clipboard() {
+                        Ok(imported) => (imported, None),
+                        Err(error) if mode == "pixels" => (false, Some(error)),
+                        Err(error) => return Err(error),
+                    }
                 };
                 if mode == "pixels"
                     && !imported

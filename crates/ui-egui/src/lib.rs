@@ -618,8 +618,9 @@ pub struct PhotocraftApp {
     pub(crate) pending_after_prompt: Option<(String, serde_json::Value)>,
     /// A command clicked while Free Transform commits in the background, run when it lands.
     pub(crate) after_transform_commit: Option<(String, serde_json::Value)>,
-    /// Last mirrored or imported OS image; this can predate the current internal copy.
-    os_clip_sig: Option<u64>,
+    /// Last mirrored or imported OS image; this can predate the current internal copy. An SVG
+    /// import records `Unknown` when no bitmap signature could be read.
+    os_clip_sig: Option<app::OsClipSignature>,
     /// Last observed SVG bytes, to distinguish an unchanged OS source from a newer internal copy.
     os_clip_svg: Option<std::sync::Arc<Vec<u8>>>,
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
