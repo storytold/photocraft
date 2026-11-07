@@ -73,7 +73,10 @@ fn tab_includes_optional_sizes_and_shift_tab_selects_their_text() {
     assert_eq!((f["columns"].as_u64(), f["rows"].as_u64()), (Some(4), Some(2)));
     assert_eq!(params(f)["width"], 120.0);
     assert_eq!(params(f)["height"], 90.0);
-    assert_eq!(f["gutter"], 12.0);
+    // Spacing is a typed length now: the field keeps the typed text, params() turns
+    // a bare number into pixels.
+    assert_eq!(f["gutter"], json!("12"));
+    assert_eq!(params(f)["gutter"], 12.0);
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     h.run_steps(2);
     h.event(egui::Event::Text("3".into()));
@@ -101,7 +104,8 @@ fn tab_skips_disabled_rows_and_margins() {
     let f = &h.state().ui.dialogs.first().unwrap().fields;
     assert_eq!(f["columns"], 6, "Tab wraps after column spacing, skipping disabled row and margin fields");
     assert_eq!(params(f)["width"], 100.0);
-    assert_eq!(f["gutter"], 4.0);
+    assert_eq!(f["gutter"], json!("4"));
+    assert_eq!(params(f)["gutter"], 4.0);
 }
 
 /// The disabled Number field must not clamp a zero count to 1 and so switch its axis on (#5625).
@@ -331,7 +335,7 @@ fn preview_cache_tracks_document_revision() {
 fn the_first_layout_starts_from_the_units_and_rulers_gutter() {
     let mut app = app();
     let id = open(&mut app);
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"].as_f64(), Some(12.0), "the preference's default");
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"], json!("12 pt"), "the preference's default, in points");
     app.session.prefs.edit(|p| p.units_and_rulers.gutter = 8.0);
     // The dialog has been used: its remembered values win, not the new preference.
     // Directly priming the remembered layout stands in for a confirmed dialog, so the
@@ -361,7 +365,62 @@ fn an_unsaved_default_layout_still_starts_from_the_gutter_preference() {
     let mut app = app();
     app.session.prefs.edit(|p| p.units_and_rulers.gutter = 8.0);
     let id = open(&mut app);
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"].as_f64(), Some(8.0), "first use seeds from the preference");
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"], json!("8 pt"), "first use seeds from the preference");
+}
+
+/// A typed gutter converts at the document's resolution: the "12 pt" seeded from the
+/// preference is 50 px at 300 dpi and 12 px at 72 dpi (option B, #3549 review).
+#[test]
+fn a_typed_gutter_converts_at_the_documents_resolution() {
+    for (resolution, gap) in [(300.0, 50.0), (72.0, 12.0)] {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 1200, "height": 800, "resolution": resolution})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        let id = open(&mut app);
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"], json!("12 pt"), "seeded from the preference");
+        let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+        f.insert("columns".into(), json!(2));
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        // Two columns across 1200 px with the gutter between them.
+        let col = (1200.0 - gap) / 2.0;
+        assert_eq!(app.session.active().unwrap().doc.guides.vertical, vec![0.0, col, col + gap, 1200.0], "at {resolution} dpi");
+    }
+}
+
+/// params() keeps a typed gutter as text for the engine, turns a bare number into
+/// pixels, and treats an empty gutter as no spacing.
+#[test]
+fn typed_gutters_survive_params_and_plain_numbers_stay_numbers() {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("columns".into(), json!(2));
+    f.insert("rows".into(), json!(1));
+    f.insert("gutter".into(), json!("12 pt"));
+    f.insert("rowGutter".into(), json!("2 cm"));
+    let p = params(f);
+    assert_eq!(p["gutter"], json!("12 pt"));
+    assert_eq!(p["rowGutter"], json!("2 cm"));
+    f.insert("gutter".into(), json!("20"));
+    f.insert("rowGutter".into(), json!(""));
+    let p = params(f);
+    assert_eq!(p["gutter"], 20.0);
+    assert_eq!(p["rowGutter"], Value::Null);
+}
+
+/// An unparseable gutter is rejected on confirm, not silently treated as zero.
+#[test]
+fn an_unparseable_gutter_keeps_the_dialog_open() {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("columns".into(), json!(2));
+    f.insert("gutter".into(), json!("banana"));
+    assert!(crate::dialogs::confirm(&mut app, id).is_err());
+    assert!(app.ui.dialog_mut(id).is_some(), "the dialog stays open");
+    // A valid typed value confirms fine from the same state.
+    app.ui.dialog_mut(id).unwrap().fields.insert("gutter".into(), json!("12 pt"));
+    crate::dialogs::confirm(&mut app, id).unwrap();
 }
 
 /// Confirming marks the layout saved, so the values confirmed on first open win over
@@ -370,10 +429,10 @@ fn an_unsaved_default_layout_still_starts_from_the_gutter_preference() {
 fn confirming_marks_the_layout_saved() {
     let mut app = app();
     let id = open(&mut app);
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"].as_f64(), Some(12.0), "first open seeds from the preference default");
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"], json!("12 pt"), "first open seeds from the preference default");
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert!(app.ui.view.guide_layout_saved, "confirming marks the layout saved");
     app.session.prefs.edit(|p| p.units_and_rulers.gutter = 8.0);
     let id = open(&mut app);
-    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"].as_f64(), Some(12.0), "the confirmed gutter wins over the changed preference");
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["gutter"], json!("12 pt"), "the confirmed gutter wins over the changed preference");
 }
