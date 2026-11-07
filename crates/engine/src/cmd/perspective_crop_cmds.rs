@@ -8,9 +8,11 @@
 //! Background over the background colour where the quad reaches past the image, and pixels outside
 //! the quad are deleted (Photoshop's Perspective Crop has no Delete Cropped Pixels option).
 //!
-//! Type, shape, fill and smart object layers are rasterized first: a projective map has no
-//! editable equivalent for them. Vector masks, paths, notes, slices and guides follow the affine
-//! map closest to the homography (exact when the quad is a parallelogram).
+//! Type and smart object layers are rasterized first: a projective map has no editable equivalent
+//! for them. Shape and fill layers stay shape and fill layers when the quad is a rectangle, whose
+//! map is affine (#11800), and are rasterized for any other quad. Vector masks, paths, shapes,
+//! notes, slices and guides follow the affine map closest to the homography (exact when the quad
+//! is a parallelogram).
 
 use photocraft_algo::transform::{Homography, Interp, convex_quad, quad_size, quad_to_rect, warp_surface_clipped};
 use photocraft_color::PixelFormat;
@@ -105,6 +107,16 @@ fn interpolation(p: &Value) -> Result<Interp> {
         Some(Value::String(s)) if ["nearest", "nearestNeighbor", "bilinear", "bicubic"].contains(&s.as_str()) => Ok(Interp::parse(s)),
         Some(v) => Err(bad(format!("`interpolation` = {v} must be \"bicubic\", \"bilinear\" or \"nearest\""))),
     }
+}
+
+/// Whether the quad (TL, TR, BR, BL) is a rectangle, at any angle: its map is then affine, so
+/// shape and fill layers can follow it as they are.
+fn is_rectangle(q: &[[f64; 2]; 4]) -> bool {
+    let [tl, tr, br, bl] = *q;
+    let (u, v) = ([tr[0] - tl[0], tr[1] - tl[1]], [bl[0] - tl[0], bl[1] - tl[1]]);
+    let scale = (u[0].hypot(u[1]) * v[0].hypot(v[1])).max(1e-9);
+    let parallelogram = (tl[0] + br[0] - tr[0] - bl[0]).abs() < 1e-6 && (tl[1] + br[1] - tr[1] - bl[1]).abs() < 1e-6;
+    parallelogram && ((u[0] * v[0] + u[1] * v[1]) / scale).abs() < 1e-9
 }
 
 /// The affine map closest to the crop for geometry that can't take a homography (vector masks,
@@ -221,11 +233,19 @@ fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
     let interp = interpolation(p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     crate::image_cmds::check_resample_budget(CMD, &d.doc, w, h, "")?;
-    let rasterize = d
+    // Shape and fill layers follow a rectangle's affine map as they are (#11800).
+    let keeps_vectors = is_rectangle(&q);
+    let rasterize: Vec<LayerId> = d
         .doc
         .walk()
         .iter()
-        .any(|(_, _, l)| matches!(l.content, LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Fill(_) | LayerContent::Smart(_)));
+        .filter(|(_, _, l)| match l.content {
+            LayerContent::Text(_) | LayerContent::Smart(_) => true,
+            LayerContent::Shape(_) | LayerContent::Fill(_) => !keeps_vectors,
+            _ => false,
+        })
+        .map(|(_, _, l)| l.id)
+        .collect();
     let map = quad_to_rect(&q, f64::from(w), f64::from(h)).ok_or_else(|| bad("the corners don't define a perspective"))?;
     let bg = s.tools.background;
     // The Color Sampler points follow their pixels through the homography, which the edit's
@@ -233,8 +253,12 @@ fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
     let samplers = s.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     let removed = s.samplers_removed;
     crate::analysis_cmds::compound(s, "Perspective Crop", |s| {
-        if rasterize {
-            crate::extra_cmds::rasterize_all(s)?;
+        if !rasterize.is_empty() {
+            // One history entry for every layer, as Rasterize All Layers makes.
+            let key = crate::extra_cmds::step_key(s, "rasterizeAll");
+            for id in rasterize {
+                crate::extra_cmds::rasterize_one(s, id, None, &key)?;
+            }
         }
         s.edit("Perspective Crop", |doc, _| {
             apply(doc, &q, &map, (w, h), interp, bg)?;
@@ -259,7 +283,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Perspective Crop",
         menu: &[],
         shortcut: None,
-        params: r##"{"corners":[[x,y],[x,y],[x,y],[x,y]] (top-left, top-right, bottom-right, bottom-left; a convex quad, document px),"width":px,"height":px,"resolution":ppi,"interpolation":"bicubic|bilinear|nearest"="bicubic"} → {width,height,resolution,corners} (the quad is mapped onto an upright width x height canvas, all layers, one undo step; no width/height: the quad's mean side lengths, one alone keeps its proportions; type, shape, fill and smart object layers are rasterized)"##,
+        params: r##"{"corners":[[x,y],[x,y],[x,y],[x,y]] (top-left, top-right, bottom-right, bottom-left; a convex quad, document px),"width":px,"height":px,"resolution":ppi,"interpolation":"bicubic|bilinear|nearest"="bicubic"} → {width,height,resolution,corners} (the quad is mapped onto an upright width x height canvas, all layers, one undo step; no width/height: the quad's mean side lengths, one alone keeps its proportions; type and smart object layers are rasterized, and shape and fill layers too unless the quad is a rectangle)"##,
         enabled: has_doc,
         run: perspective_crop,
         journal: true,
