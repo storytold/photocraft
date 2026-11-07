@@ -2,7 +2,7 @@
 //! live star shape layer with PhotoCraft's star defaults (5 points, star ratio 0.5).
 
 use egui::{Key, Modifiers};
-use photocraft_doc::{LayerContent, LiveShape};
+use photocraft_doc::{Color, Fill, LayerContent, LiveShape, ShapeLayer};
 use serde_json::json;
 
 use crate::PhotocraftApp;
@@ -37,12 +37,16 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], mods: Modifiers) 
     tool_event(app, ToolEvent::Up { x: to[0], y: to[1] }, mods);
 }
 
-fn live_shape(app: &PhotocraftApp) -> Option<LiveShape> {
+fn shape_layer(app: &PhotocraftApp) -> Option<ShapeLayer> {
     let st = app.session.active()?;
     match &st.doc.layer(st.active_layer?)?.content {
-        LayerContent::Shape(s) => s.live.clone(),
+        LayerContent::Shape(s) => Some(s.clone()),
         _ => None,
     }
+}
+
+fn live_shape(app: &PhotocraftApp) -> Option<LiveShape> {
+    shape_layer(app)?.live
 }
 
 #[test]
@@ -77,6 +81,9 @@ fn shift_u_steps_from_polygon_to_star_to_line() {
 fn a_drag_makes_a_live_star_shape_layer_with_one_undo_step() {
     let mut app = app();
     app.ui.tool = Tool::Star;
+    app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    app.ui.tool_options.shape_fill = true;
+    app.ui.tool_options.stroke_width = 5.0;
     let before = app.session.active().unwrap().history.past_len();
     drag(&mut app, [20.0, 30.0], [120.0, 90.0], Modifiers::NONE);
     match live_shape(&app) {
@@ -86,6 +93,11 @@ fn a_drag_makes_a_live_star_shape_layer_with_one_undo_step() {
         }
         other => panic!("a live star shape, got {other:?}"),
     }
+    let shape = shape_layer(&app).expect("a star shape layer");
+    let solid = |r, g, b| Fill::Solid(Color::rgba(r, g, b, 1.0));
+    assert_eq!(shape.fill, Some(solid(1.0, 0.0, 0.0)), "filled with the foreground colour");
+    let stroke = shape.stroke.expect("the star keeps the tool's stroke");
+    assert_eq!((stroke.paint, stroke.width), (solid(0.0, 0.0, 1.0), 5.0), "stroked with the background colour at the tool's width");
     assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "one history step");
     app.run("edit.undo", json!({})).unwrap();
     assert!(live_shape(&app).is_none(), "undo takes the star away");
