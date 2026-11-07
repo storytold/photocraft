@@ -49,6 +49,13 @@ enum Planned<'a> {
 fn plan_layer<'a>(layer: &'a Layer, split_groups: bool, visible_only: bool, plan: &mut Vec<Planned<'a>>) {
     if !layer.visible && visible_only {
         plan.push(Planned::Hidden(layer));
+        // A hidden group stops traversal, but its descendants are still omitted: report them so
+        // the export explains every layer it did not write.
+        if split_groups && let LayerContent::Group(group) = &layer.content {
+            for child in group.children.iter().rev() {
+                plan_hidden(child, plan);
+            }
+        }
         return;
     }
     if let LayerContent::Group(group) = &layer.content
@@ -66,6 +73,16 @@ fn plan_layer<'a>(layer: &'a Layer, split_groups: bool, visible_only: bool, plan
     }
 }
 
+/// Reports a hidden layer and every descendant as hidden, without exporting any of them.
+fn plan_hidden<'a>(layer: &'a Layer, plan: &mut Vec<Planned<'a>>) {
+    plan.push(Planned::Hidden(layer));
+    if let LayerContent::Group(group) = &layer.content {
+        for child in group.children.iter().rev() {
+            plan_hidden(child, plan);
+        }
+    }
+}
+
 /// The same export as [`export_layers_with`], with an explanation for every omitted layer.
 ///
 /// `groups` chooses what a group produces: `"merged"` (the default) exports the group as one
@@ -80,24 +97,26 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let split_groups = match p.get("groups") {
         None => false,
         Some(Value::String(value)) => match value.as_str() {
-            "merged" => false,
+            // `single` is the name earlier docs used for the same non-splitting mode.
+            "merged" | "single" => false,
             "layers" => true,
             other => {
-                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("groups must be \"merged\" or \"layers\", not {other:?}") });
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("groups must be \"merged\", \"single\" or \"layers\", not {other:?}") });
             }
         },
-        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "groups must be a string: \"merged\" or \"layers\"".into() }),
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "groups must be a string: \"merged\", \"single\" or \"layers\"".into() }),
     };
     let layer_names = match p.get("naming") {
         None => false,
         Some(Value::String(value)) => match value.to_ascii_lowercase().as_str() {
-            "numbered" => false,
+            // `index` is the name earlier docs used for the numbered mode.
+            "numbered" | "index" => false,
             "layer" => true,
             other => {
-                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("naming must be \"numbered\" or \"layer\", not {other:?}") });
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("naming must be \"numbered\", \"index\" or \"layer\", not {other:?}") });
             }
         },
-        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "naming must be a string: \"numbered\" or \"layer\"".into() }),
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "naming must be a string: \"numbered\", \"index\" or \"layer\"".into() }),
     };
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
     // into `encode`, so a PSD embeds no file a linked smart object names.
@@ -156,9 +175,10 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
                     let base = sanitize(&l.name);
                     let mut name = format!("{base}.{format}");
                     let mut n = 2;
-                    // Destinations are case-insensitive on Windows: `Logo.png` and `logo.png`
-                    // would overwrite each other, so track the folded name.
-                    while !used.insert(name.to_ascii_lowercase()) {
+                    // Destinations are case-insensitive on Windows, and Unicode case folding
+                    // (É/é) matters as much as ASCII: `Logo.png` and `logo.png` would overwrite
+                    // each other, so track the folded name.
+                    while !used.insert(name.to_lowercase()) {
                         name = format!("{base}-{n}.{format}");
                         n += 1;
                     }
