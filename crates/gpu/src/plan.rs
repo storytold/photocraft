@@ -13,6 +13,8 @@
 //! opacity. Effect passes are clipped to the layer's effect region and the result is copied
 //! back into the backdrop in place, so a small text layer costs only its own pixels.
 
+use std::collections::HashSet;
+
 use photocraft_color::BlendMode;
 use photocraft_compose::adjust::{self, Transfer};
 use photocraft_compose::effects::has_effects;
@@ -55,10 +57,18 @@ pub struct Plan<'a> {
 
 /// Build the pass list for `doc`.
 pub fn plan(doc: &Document) -> Result<Plan<'_>, Unsupported> {
+    plan_with(doc, HashSet::new())
+}
+
+/// [`plan`] with layer operators on the layers in `ops` (`operator.rs`): their content is the
+/// operator's output, which can reach past their own pixels, so neither they nor a group holding
+/// one is composited over its own bounds only.
+pub fn plan_with(doc: &Document, ops: HashSet<LayerId>) -> Result<Plan<'_>, Unsupported> {
     if doc.mode == photocraft_color::ColorMode::Multichannel {
         return Err(Unsupported("Multichannel inks (printed on the CPU)".into()));
     }
     let mut p = Planner::new(DocCtx::of(doc));
+    p.ops = ops;
     let root = p.clear();
     // Start at the topmost layer that hides everything beneath it (an opaque fill layer): the
     // layers below can't change the result, so they cost no passes or uploads.
