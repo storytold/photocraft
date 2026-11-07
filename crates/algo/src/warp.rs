@@ -101,11 +101,9 @@ pub fn snapped_scale(bounds: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Option<[f64; 4
 }
 
 /// `src` scaled and moved by `t` the way the reference application draws a smart object with
-/// the box `bounds` ([`snapped_scale`]): resized to fill the snapped box with Image Size's Bicubic
-/// Automatic, Bicubic Sharper where it shrinks and Smoother where it grows. Past the pixels the
-/// filter reads transparency. Measured against the reference application at 16 scales from 10 %
-/// to 200 %: within 0.02 levels. Shared with Convert to Layers, so the layers it makes look as
-/// the smart object did.
+/// the box `bounds` ([`snapped_scale`], [`crate::smart_scale`]): resized to fill the snapped box.
+/// Shared with Convert to Layers, so the layers it makes look as the smart object did. `None`
+/// where [`snapped_scale`] or [`crate::smart_scale::scale`] take no part.
 pub fn scale_snapped(src: &Surface, bounds: Rect, t: [f64; 4]) -> Option<Surface> {
     let [kx, ky, dx, dy] = snapped_scale(bounds, t)?;
     let fmt = src.format();
@@ -116,14 +114,14 @@ pub fn scale_snapped(src: &Surface, bounds: Rect, t: [f64; 4]) -> Option<Surface
         with_alpha = src.convert(PixelFormat::new(fmt.mode, fmt.sample, true));
         &with_alpha
     };
-    // At the box's origin the resize (about the origin) fills [0, width) x [0, height) exactly.
-    let (bx, by) = (bounds.x0, bounds.y0);
-    let at_origin = src.translated(-bx, -by, src.content_bounds());
-    let resized =
-        if kx == 1.0 && ky == 1.0 { at_origin } else { crate::resample::resize_surface(&at_origin, kx, ky, crate::resample::Resample::BicubicAutomatic) };
-    // The snapped box's corner: whole pixels by construction.
-    let (x0, y0) = ((dx + kx * f64::from(bx)).round() as i32, (dy + ky * f64::from(by)).round() as i32);
-    Some(crate::resample::translate_surface(&resized, x0, y0))
+    // The snapped box: whole pixels by construction.
+    let (bx, by) = (f64::from(bounds.x0), f64::from(bounds.y0));
+    let (x0, y0) = ((dx + kx * bx).round() as i32, (dy + ky * by).round() as i32);
+    let (w, h) = ((kx * f64::from(bounds.width())).round() as u32, (ky * f64::from(bounds.height())).round() as u32);
+    if kx == 1.0 && ky == 1.0 {
+        return Some(crate::resample::translate_surface(&crate::resample::crop_surface(src, bounds), x0 - bounds.x0, y0 - bounds.y0));
+    }
+    crate::smart_scale::scale(src, bounds, w, h, (x0, y0))
 }
 
 /// [`place_source`] through a projective map `h` (source → document; Distort, Perspective): the
