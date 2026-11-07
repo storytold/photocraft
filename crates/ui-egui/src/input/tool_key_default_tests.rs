@@ -21,6 +21,7 @@ fn press(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modi
     ctx.end_pass().textures_delta.clear();
 }
 
+/// A fresh app enters each default letter group at its first toolbar tool under either preference.
 #[test]
 fn fresh_tool_letters_pick_the_first_tool_in_toolbar_order() {
     for shift_switch in [true, false] {
@@ -43,6 +44,7 @@ fn fresh_tool_letters_pick_the_first_tool_in_toolbar_order() {
     }
 }
 
+/// A remembered Magic Wand takes precedence over the fresh W default, even when hidden.
 #[test]
 fn plain_w_returns_to_the_remembered_magic_wand() {
     for hidden in [false, true] {
@@ -59,6 +61,8 @@ fn plain_w_returns_to_the_remembered_magic_wand() {
     }
 }
 
+/// Shift+W follows the flyout order and wraps. With the default preference, plain W keeps
+/// the current tool when it already belongs to the group.
 #[test]
 fn shift_w_cycles_in_toolbar_order() {
     let mut app = app();

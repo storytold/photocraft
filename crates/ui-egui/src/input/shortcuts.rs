@@ -903,8 +903,9 @@ fn handle_escape_and_view_keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
     crate::opacity_keys::handle(app, ctx);
 }
 
-/// Selects a tool from its letter key. Pressing the key of the current group cycles within it; with
-/// the Shift-switch preference only ⇧+key cycles. Returns true when a tool key was handled.
+/// Selects a tool from its letter key. Entering a group uses its remembered eligible tool or the
+/// first eligible tool in toolbar order. Pressing the key of the current group cycles within it.
+/// With the Shift-switch preference, only ⇧+key cycles. Returns true when a tool key was handled.
 fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &impl Fn(Key) -> bool) -> bool {
     let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
     for t in Tool::ALL {
