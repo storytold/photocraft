@@ -98,8 +98,34 @@ pub struct ListLayout {
 /// The Brushes tab's list.
 pub const PANEL_LIST: ListLayout = ListLayout { id: "brush-presets", max_height: 400.0, cell: 52.0, indent: 20.0, cards: false };
 
-fn responsive_list_layout(ui: &egui::Ui) -> ListLayout {
-    let height = ui.available_height().clamp(180.0, 640.0);
+/// The tab's bottom section: the gap above its line, the line, the gap below it and the 24 pt
+/// button row, with a little slack. `show` draws it at exactly this height, and
+/// [`responsive_list_layout`] gives the list only what the panel leaves after it, so the footer is
+/// part of the panel and stays in view however short the docked group is (#11709).
+const FOOTER_HEIGHT: f32 = 36.0;
+
+/// The rename bar's height while one is open ([`rename_bar`]): its row of dialog buttons, the gap
+/// after it and slack. It sits above the list, so it is reserved like the footer.
+fn rename_bar_height(ui: &egui::Ui) -> f32 {
+    widgets::button_height(ui.ctx()) + 8.0
+}
+
+/// The list's height bounds: it shrinks to what is left after the footer (a couple of rows at the
+/// least, as the Swatches panel's does), and never outgrows the tall group it fills.
+const MIN_LIST_HEIGHT: f32 = 60.0;
+const MAX_LIST_HEIGHT: f32 = 640.0;
+
+/// The list layout for a panel of the height `ui` has left. `docked` is the panel in the dock,
+/// whose group gives it a fixed height: the bottom section belongs to the panel, not to the list,
+/// so the list takes only what is left after it (and after the rename bar, while one is open).
+/// Asking for the whole remaining height made the body taller than its group by about the footer's
+/// height, and the dock's scroll area answered with a second, outer bar that only scrolled the
+/// footer out of view (#11709). The floating Brush Settings window is not bounded like that (it
+/// grows with its content), so there the list keeps its own height.
+fn responsive_list_layout(ui: &egui::Ui, docked: bool, renaming: bool) -> ListLayout {
+    let gap = ui.spacing().item_spacing.y;
+    let reserved = if docked { FOOTER_HEIGHT + gap + if renaming { rename_bar_height(ui) + gap } else { 0.0 } } else { 0.0 };
+    let height = (ui.available_height() - reserved).clamp(MIN_LIST_HEIGHT, MAX_LIST_HEIGHT);
     ListLayout { max_height: height, ..PANEL_LIST }
 }
 
@@ -985,8 +1011,10 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
     view_actions(st, acts)
 }
 
-/// The Brushes tab.
-pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+/// The Brushes tab. `docked` is whether it fills a dock group, which bounds the panel's height: the
+/// list then leaves room for the bottom section below it (#11709). The floating Brush Settings
+/// window takes the size its content asks for, so there the list keeps its full height.
+pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, docked: bool) {
     let t = Tokens::get(ui.ctx());
     let inner_w = ui.available_width().max(180.0);
     // Size of the current brush (Photoshop's Brushes panel slider).
@@ -1042,30 +1070,38 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     });
     ui.add_space(6.0);
-    let acts = preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, responsive_list_layout(ui));
+    let layout = responsive_list_layout(ui, docked, app.ui.brushes_panel.renaming.is_some());
+    let acts = preset_list(ui, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), &mut app.ui.brushes_panel, layout);
     apply(app, acts);
-    ui.add_space(4.0);
-    widgets::hairline(ui);
-    ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new(crate::i18n::trn(crate::i18n::current(), app.session.tools.presets.len() as u64, "{n} preset", "{n} presets")).color(t.text_faint),
-        );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // The current preset by identity: editing the brush after picking must not deselect it.
-            let current = app.session.tools.current_preset.clone().filter(|n| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n)));
-            if ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "trash", 24.0, false, "Delete brush")).inner.clicked()
-                && let Some(name) = current
-            {
-                run_or_status(app, "brush.presets.delete", json!({ "name": name }));
-            }
-            let new = icons::button(ui, "square-plus", 24.0, false, "Create new brush from the current settings");
-            if crate::brush_picker::named(new, "Create new brush from the current settings").clicked() {
-                crate::brush_preset_dialog::open(app, None);
-            }
-            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr or image)").clicked() {
-                let _ = crate::preset_files_ui::import_brushes(app);
-            }
+    // Exactly FOOTER_HEIGHT tall, and last in the body: a docked panel bounds the list by what is
+    // left after it, so this stays visible and the body is never taller than its group (#11709).
+    let footer_w = ui.available_width();
+    ui.allocate_ui_with_layout(vec2(footer_w, FOOTER_HEIGHT), egui::Layout::top_down(egui::Align::LEFT), |ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        ui.add_space(4.0);
+        widgets::hairline(ui);
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(crate::i18n::trn(crate::i18n::current(), app.session.tools.presets.len() as u64, "{n} preset", "{n} presets"))
+                    .color(t.text_faint),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                // The current preset by identity: editing the brush after picking must not deselect it.
+                let current = app.session.tools.current_preset.clone().filter(|n| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n)));
+                if ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "trash", 24.0, false, "Delete brush")).inner.clicked()
+                    && let Some(name) = current
+                {
+                    run_or_status(app, "brush.presets.delete", json!({ "name": name }));
+                }
+                let new = icons::button(ui, "square-plus", 24.0, false, "Create new brush from the current settings");
+                if crate::brush_picker::named(new, "Create new brush from the current settings").clicked() {
+                    crate::brush_preset_dialog::open(app, None);
+                }
+                if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr or image)").clicked() {
+                    let _ = crate::preset_files_ui::import_brushes(app);
+                }
+            });
         });
     });
     // Forget previews of presets that no longer exist.
