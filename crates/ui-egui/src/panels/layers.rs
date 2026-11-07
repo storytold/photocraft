@@ -106,6 +106,8 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
     ui.add_space(2.0);
 }
 
+/// Draw the active document's layer controls, tree, and footer actions.
+/// The fx menu opens the requested Layer Style page, including Blending Options.
 pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());
@@ -512,7 +514,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         crate::press_menu::show(&fx, |ui, menu| {
             ui.set_min_width(180.0);
             if menu.item(ui, tl!("Blending Options…")) {
-                crate::layer_style::open(app, None);
+                crate::layer_style::open(app, Some(crate::layer_style::BLENDING));
             }
             ui.separator();
             for &(kind, label) in crate::layer_style::KINDS {

@@ -579,6 +579,48 @@ fn press_drag_release_on_the_fx_button_opens_that_style() {
     assert!(effects.iter().any(|e| e["kind"] == json!("dropShadow")), "on Drop Shadow: {effects:?}");
 }
 
+/// Opening Blending Options shows its controls immediately for unstyled layers and layers
+/// with disabled effects; cancelling preserves the original effects in both cases.
+#[test]
+fn fx_menu_blending_options_opens_the_blending_page_without_changing_effects() {
+    for with_effect in [false, true] {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        if with_effect {
+            s.execute("layer.layerStyle.stroke", json!({"size": 7, "color": "#123456"})).unwrap();
+            s.execute("layer.setEffectsVisible", json!({"index": 0, "visible": false})).unwrap();
+        }
+        let st = s.active().unwrap();
+        let layer = st.active_layer.unwrap();
+        let effects_before = st.doc.layer(layer).unwrap().effects.clone();
+        let mut h = harness(s, 1.0, "promedium", 290.0);
+
+        h.get_by_label("Add a layer style").click();
+        h.run_steps(3);
+        h.get_by_label("Blending Options…").click();
+        h.run_steps(4);
+
+        let dialogs = &h.state().ui.dialogs;
+        assert_eq!(dialogs.len(), 1);
+        assert_eq!(dialogs[0].kind, crate::state::DialogKind::LayerStyle);
+        assert_eq!(dialogs[0].fields["selected"], crate::layer_style::BLENDING, "with_effect={with_effect}");
+        for label in ["General Blending", "Advanced Blending", "Blend If:"] {
+            assert!(h.query_all_by_label(label).next().is_some(), "{label} is visible immediately; with_effect={with_effect}");
+        }
+        let effects = dialogs[0].fields["effects"].as_array().unwrap();
+        assert_eq!(effects.len(), usize::from(with_effect));
+        if with_effect {
+            assert_eq!(effects[0]["on"], false, "opening the page does not enable an existing effect");
+        }
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty());
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layer(layer).unwrap().effects, effects_before);
+    }
+}
+
 /// Integration regression: a display preference must resize the *actual painted*
 /// thumbnails and row hitboxes, not only its Preview dialog.
 #[test]
