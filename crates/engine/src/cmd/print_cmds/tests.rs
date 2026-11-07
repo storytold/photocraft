@@ -496,6 +496,29 @@ fn package_copies_links_and_relinks() {
     );
 }
 
+/// A packaged document's design timeline keeps the relinks, so a replay doesn't point its links
+/// back at the originals.
+#[test]
+fn package_records_its_relinks_in_the_design_timeline() {
+    let dir = tmp("package-timeline");
+    let link = format!("{dir}/art.png");
+    let mut src = Session::new();
+    src.execute("file.new", json!({"width": 20, "height": 20, "background": "#ff0000"})).unwrap();
+    crate::file_cmds::save_doc(&src.active().unwrap().doc, &link, None).unwrap();
+    let mut s = session("rgb", 8);
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("file.placeLinked", json!({"path": link})).unwrap();
+    let r = s.execute("file.package", json!({"dir": format!("{dir}/pkg")})).unwrap();
+    let back = photocraft_format::load_from_bytes(&std::fs::read(r["document"].as_str().unwrap()).unwrap()).unwrap();
+    let tl = back.design_timeline.clone().unwrap();
+    let last = tl.steps.last().unwrap();
+    assert_eq!(last.command, "layer.smartObjects.relinkToFile", "{:?}", tl.steps.iter().map(|st| &st.command).collect::<Vec<_>>());
+    assert!(last.baked.is_some(), "a relink reaches outside the document, so it is kept as it came out");
+    // The open document's own timeline is untouched by the package's copy.
+    let open = s.active().unwrap().doc.design_timeline.clone().unwrap();
+    assert_eq!(open.steps.last().unwrap().command, "file.placeLinked");
+}
+
 /// Links whose names collide get distinct copies, even when a renamed copy's name is already
 /// another link's name (`b/2-x.png` copied before the third `x.png` would be renamed to it).
 #[test]

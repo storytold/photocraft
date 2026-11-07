@@ -27,6 +27,7 @@ macro_rules! tl {
 mod brush_mode_menu;
 pub mod canvas;
 pub mod control;
+mod design_timeline_ui;
 pub mod dialogs;
 pub mod dock;
 pub(crate) mod edit_session;
@@ -525,6 +526,9 @@ pub struct PhotocraftApp {
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) guide_edit: Option<guide_edit::Draft>,
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    /// Edit Parameters: (dialog, size) of the canvas texture left as it was before the rollback,
+    /// shown until the worker's first preview for that dialog lands.
+    pub(crate) filter_preview_hold: Option<(u64, [u32; 2])>,
     pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: crate::dialogs::filter_preview_worker::Worker,

@@ -771,6 +771,7 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let recording = begin_playback(s, &action)?;
+    // Each command it runs is a design-timeline step of its own (`Session::dispatch`).
     let (ran, failed) = run_recorded(s, &action, from);
     finish_playback(s, recording, &action, from);
     Ok(match failed {

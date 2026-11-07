@@ -248,6 +248,9 @@ fn smart_filters_are_re_editable() {
     for depth in [8, 16] {
         let mut s = session(depth);
         paint(&mut s);
+        // The decode count below is per source bytes, process-wide: a name no other test uses keeps
+        // their identical conversions out of it.
+        s.execute("layer.setProps", json!({"name": "re-editable"})).unwrap();
         let original = flat(&s);
         s.execute("filter.convertForSmartFilters", json!({})).unwrap();
         assert!(!s.is_enabled("filter.convertForSmartFilters"), "already smart");
@@ -1433,4 +1436,28 @@ fn set_params_replace_drops_a_shape_blur_radius_it_leaves_out() {
 
     s.execute("layer.smartFilter.setParams", json!({"params": {"shape": "circle"}, "replace": true})).unwrap();
     assert!(params(&s).get("radius").is_none(), "replaced: {}", params(&s));
+}
+
+/// Contents saved in another session can hold ids the parent already uses (step-keyed ids
+/// repeat across sessions): unpacked, every id in the parent is still unique.
+#[test]
+fn converting_to_layers_never_reuses_a_parent_id() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    s.execute("layer.new.layer", json!({"name": "Sibling"})).unwrap();
+    s.execute("layer.select", json!({"layer": id})).unwrap();
+    let taken: Vec<LayerId> = s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id).collect();
+    // Contents whose two layers carry ids the parent already has.
+    let mut inner = Document::new("inner", Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    inner.layers = taken.iter().take(2).map(|&t| Layer { id: t, ..Layer::raster("copy", inner.pixel_format()) }).collect();
+    let bytes = Arc::new(encode_source(&inner).unwrap());
+    s.edit("collide", |doc, _| {
+        smart_mut(doc, LayerId(id))?.source = SmartSource::Embedded { file_name: "inner.pcraft".into(), bytes };
+        Ok(())
+    })
+    .unwrap();
+    convert_to_layers(&mut s);
+    let ids: Vec<LayerId> = s.active().unwrap().doc.walk().iter().map(|(_, _, l)| l.id).collect();
+    assert_eq!(ids.len(), ids.iter().collect::<std::collections::HashSet<_>>().len(), "{ids:?}");
 }

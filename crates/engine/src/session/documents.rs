@@ -169,6 +169,7 @@ impl Session {
         while self.docs.iter().any(|st| st.doc.id == doc.id) {
             doc.id = photocraft_doc::DocId::fresh();
         }
+        self.next_step = self.next_step.max(photocraft_doc::next_step_after(&doc));
         self.open_document_order.push(doc.id);
         let mut st = DocState::new(doc, path);
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
