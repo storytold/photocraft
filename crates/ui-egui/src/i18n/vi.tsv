@@ -411,6 +411,8 @@
 	Enable Vector Mask	Bật mặt nạ vector
 	Entropy	Entropy
 	Equalize	Cân bằng histogram
+	Equalize Entire Image Based On Selected Area	Cân bằng histogram toàn bộ hình ảnh theo vùng chọn
+	Equalize Selected Area Only	Chỉ cân bằng histogram vùng chọn
 	Exclude Overlapping Shapes	Loại phần chồng hình
 	Subtract Shapes at Overlap	Loại phần chồng hình
 	Export Contents…	Xuất nội dung…
@@ -4118,3 +4120,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Hiện ranh giới lớp khi di chuột
 	Expand layer group on click	Mở rộng nhóm lớp khi nhấp
 	Show hover bounds from Layers	Hiện ranh giới khi di chuột từ bảng Lớp
+# Artboard tool options bar (#11385)
+	Distribute Widths	Phân bố chiều rộng
+	Distribute Heights	Phân bố chiều cao
+	Auto-nest Layers	Tự động lồng các lớp
+	Auto-size Canvas	Tự động đổi kích thước vùng vẽ
+	Keep Relative Position During Layer Reordering	Giữ vị trí tương đối khi sắp xếp lại lớp
+	Shrinkwrap Canvas on Save	Thu nhỏ vùng vẽ theo nội dung khi lưu

@@ -228,7 +228,7 @@ tool's 28, including Fit Content to Frame):
 - Brazilian Portuguese (`pt-br`), complete, with two plural forms (0 and 1 use the singular).
 - German (`de`), Greek (`el`), Dutch (`nl`), Italian (`it`), Swedish (`sv`), Finnish (`fi`),
   Danish (`da`), Norwegian Bokmål (`nb`) and Tamil (`ta`), complete, with two plural forms.
-- Hungarian (`hu`), Turkish (`tr`), Vietnamese (`vi`) and Thai (`th`), complete, with one plural form.
+- Hungarian (`hu`), Turkish (`tr`), Vietnamese (`vi`), Thai (`th`) and Georgian (`ka`), complete, with one plural form.
 - Arabic (`ar`), complete, with six plural forms; the shell mirrors right to left.
 - Hebrew (`he`) and Urdu (`ur`), complete, with two plural forms; the shell mirrors right to left.
 - Romanian (`ro`), complete, with three plural forms (`one|few|other`, see `plural_romanian`).

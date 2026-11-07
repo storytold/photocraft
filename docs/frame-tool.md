@@ -56,7 +56,7 @@ parity floor is raised by this change.
 
 ## Validation
 
-Frame Tool UI strings are provided in 23 of the 33 translated catalogs; Hindi lacks one, Azerbaijani
+Frame Tool UI strings are provided in 24 of the 34 translated catalogs; Hindi lacks one, Azerbaijani
 nine, and Arabic, Bosnian, Danish, Finnish, Norwegian Bokmål, Swedish, Tamil and Thai about half of them. Empty placeholders schedule no
 frame-sized compositor mask until content or a visible stroke is added.
 
