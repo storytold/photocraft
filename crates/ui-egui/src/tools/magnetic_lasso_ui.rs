@@ -451,9 +451,10 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, hover:
 }
 
 /// The cursor over the canvas: a crosshair; Preferences › Cursors › Other Cursors › Precise also
-/// shows the detection width around it.
+/// shows the detection width around it, and Caps Lock swaps the preference either way, as in
+/// Photoshop (#11690).
 pub fn cursor(app: &PhotocraftApp, painter: &egui::Painter, p: Pos2, zoom: f32) -> egui::CursorIcon {
-    if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+    if crate::canvas::precise_other_cursor(app) {
         let r = (app.ui.tool_options.magnetic_width.clamp(1.0, 256.0) * zoom).max(2.0);
         painter.circle_stroke(p, r + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
         painter.circle_stroke(p, r, Stroke::new(1.0, Color32::from_white_alpha(220)));
@@ -463,3 +464,6 @@ pub fn cursor(app: &PhotocraftApp, painter: &egui::Painter, p: Pos2, zoom: f32) 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod caps_lock_cursor_tests;
