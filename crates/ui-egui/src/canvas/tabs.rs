@@ -200,7 +200,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let natural_w = natural.get(i).copied().unwrap_or(0.0);
             let meta_g = ui.painter().layout_no_wrap(meta, meta_font.clone(), t.text_faint);
             let name_max = (r.width() - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x).max(1.0);
-            let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
+            let name_g = crate::tab_strip::elided(ui, &cut_name(ui, &name, &st.doc.name, &font, name_max), font.clone(), t.text, name_max);
             // The title was cut: the tooltip has the rest of it.
             let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
             let resp = ui.interact(r, ui.scope_id().with(("dtab", doc)), Sense::click_and_drag());
@@ -269,6 +269,10 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
                 ui.painter().rect_filled(xr, 4.0, t.hover);
             }
             crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
+            // A name cut to the maximum width has all of it in the tooltip, as a document tab does.
+            // The natural width carries the gap between tabs; the tab's rect doesn't.
+            let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + STUDIO_TAB_GAP + 0.5;
+            let resp = if cut { resp.on_hover_text(name.as_str()) } else { resp };
             if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
                 cancel_open = Some(*job);
             } else if resp.clicked() {
@@ -479,6 +483,9 @@ fn open_tab_clicks(
 /// Document tabs: the chrome around a title (the × and its gaps).
 const DOC_TAB_PAD: f32 = 42.0;
 
+/// The widest a document tab grows: a longer name is cut with '…' and the tooltip has all of it (#11131).
+pub(super) const MAX_DOC_TAB_W: f32 = 320.0;
+
 /// The Studio strip's tabs carried 4 pt of spacing between them and 44 pt of chrome; `fit` sees
 /// one number per tab, so the gap rides in the natural width and comes back out when painted.
 const STUDIO_TAB_PAD: f32 = 48.0;
@@ -486,11 +493,37 @@ const STUDIO_TAB_PAD: f32 = 48.0;
 const STUDIO_TAB_GAP: f32 = 4.0;
 
 /// Fit document tabs as Photoshop does (#4487): a tab never shrinks below its whole title, so the
-/// tabs that don't fit move into the » menu instead. Only the active tab, when it alone is wider
-/// than the strip, is cut.
+/// tabs that don't fit move into the » menu instead. A title longer than [`MAX_DOC_TAB_W`] is cut
+/// to that width (#11131), and only the active tab, when it alone is wider than the strip, is cut
+/// further.
 fn fit_doc_tabs(natural: &[f32], selected: usize, avail: f32) -> crate::tab_strip::TabFit {
-    let widest = natural.iter().copied().filter(|w| w.is_finite()).fold(0.0, f32::max);
-    crate::tab_strip::fit(natural, selected, avail, widest, crate::tab_strip::CHEVRON_W)
+    let capped: Vec<f32> = natural.iter().map(|w| w.min(MAX_DOC_TAB_W)).collect();
+    let widest = capped.iter().copied().filter(|w| w.is_finite()).fold(0.0, f32::max);
+    crate::tab_strip::fit(&capped, selected, avail, widest, crate::tab_strip::CHEVRON_W)
+}
+
+/// `title` within `max_w`, cut the way Photoshop cuts a tab: `name`, which starts the title, loses
+/// its end and gets '…', while the rest of the title (the zoom, the mode, the unsaved '*', a save's
+/// progress) stays whole (#11131). A title that doesn't start with `name`, or that fits, is
+/// returned as it is; the caller's [`crate::tab_strip::elided`] cuts whatever is still too wide.
+fn cut_name(ui: &egui::Ui, title: &str, name: &str, font: &egui::FontId, max_w: f32) -> String {
+    let width = |text: String| ui.painter().layout_no_wrap(text, font.clone(), egui::Color32::WHITE).size().x;
+    let Some(rest) = title.strip_prefix(name).filter(|_| !name.is_empty()) else { return title.to_owned() };
+    if width(title.to_owned()) <= max_w {
+        return title.to_owned();
+    }
+    let cut = |keep: usize| format!("{}…{rest}", name.chars().take(keep).collect::<String>());
+    // The most characters of the name that still fit, found by bisection.
+    let (mut lo, mut hi) = (0, name.chars().count());
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if width(cut(mid)) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    cut(lo)
 }
 
 /// Photoshop's tab title: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask
@@ -528,8 +561,9 @@ fn studio_tab_name(app: &PhotocraftApp, st: &photocraft_engine::DocState) -> Str
 }
 
 /// Photoshop document tabs: "name @ 33.3% (RGB/8)" on a dark strip; active tab matches panels.
-/// Tabs keep their whole titles, and the ones that don't fit move into a » menu at the end of the
-/// strip; the active document's tab always stays on the strip (#1276, #4487).
+/// Tabs keep their whole titles up to [`MAX_DOC_TAB_W`] (a longer name is cut, #11131), and the
+/// ones that don't fit move into a » menu at the end of the strip; the active document's tab
+/// always stays on the strip (#1276, #4487).
 fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let t = crate::theme::Tokens::get(ui.ctx());
     let documents = docked_document_indices(app);
@@ -570,7 +604,9 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
         let Some(&doc) = documents.get(i) else { continue };
         let Some(title) = titles.get(i) else { continue };
-        let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
+        let name = app.session.documents().get(doc).map_or("", |st| st.doc.name.as_str());
+        let max_w = (r.width() - DOC_TAB_PAD).max(1.0);
+        let g = crate::tab_strip::elided(ui, &cut_name(ui, title, name, &font, max_w), font.clone(), t.text, max_w);
         let resp = ui.interact(r, ui.scope_id().with(("ptab", doc)), Sense::click_and_drag());
         let sel = Some(i) == active;
         if sel {
@@ -586,7 +622,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         let (xr, at) = pro_tab_layout(r, g.size().y, mac);
         let xresp = ui.interact(xr, ui.scope_id().with(("ptabx", doc)), Sense::click());
         // Painted: name the tab and its × for accessibility (and so tests and agents can find them).
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, g.text()));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, title.as_str()));
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
@@ -609,9 +645,10 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         doc_tabs.push((doc, r));
     }
     for &(i, r) in placed.iter().filter(|(i, _)| *i >= tab_count) {
-        let Some((job, _, frac)) = opening.get(i - tab_count) else { continue };
+        let Some((job, name, frac)) = opening.get(i - tab_count) else { continue };
         let Some(title) = titles.get(i) else { continue };
-        let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
+        let max_w = (r.width() - DOC_TAB_PAD).max(1.0);
+        let g = crate::tab_strip::elided(ui, &cut_name(ui, title, name, &font, max_w), font.clone(), t.text, max_w);
         let resp = ui.interact(r, ui.scope_id().with(("ptabjob", job.0)), Sense::click());
         let sel = app.jobs.focus == Some(*job);
         if sel {
@@ -626,6 +663,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
+        let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
+        let resp = if cut { resp.on_hover_text(title.as_str()) } else { resp };
         if xresp.on_hover_text(tl!("Cancel opening")).clicked() {
             cancel_open = Some(*job);
         } else if resp.clicked() {
