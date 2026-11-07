@@ -9,6 +9,23 @@ use photocraft_engine::{
 };
 
 pub type Batch = BTreeMap<String, Option<Arc<[u8]>>>;
+
+/// Whether committing `batch` on top of `stored` (every record's name and size, as read inside
+/// the write transaction) keeps the store within `max` bytes. Records the batch replaces or
+/// deletes are not counted twice. A batch that does not grow the store always fits, so a store
+/// another tab pushed over the cap can still be shrunk or cleaned up.
+pub fn fits_total(stored: impl IntoIterator<Item = (String, u64)>, batch: &Batch, max: u64) -> bool {
+    let (mut current, mut kept) = (0u64, 0u64);
+    for (name, size) in stored {
+        current = current.saturating_add(size);
+        if !batch.contains_key(&name) {
+            kept = kept.saturating_add(size);
+        }
+    }
+    let added = batch.values().flatten().fold(0u64, |sum, bytes| sum.saturating_add(bytes.len() as u64));
+    let next = kept.saturating_add(added);
+    next <= max || next <= current
+}
 /// Three sampled images per preset (tip, dual tip, texture), plus group/index/action/pattern records.
 pub const MAX_RECORDS: usize = MAX_GROUPS + MAX_PRESETS_PER_GROUP * 3 + 3;
 
@@ -183,6 +200,35 @@ mod tests {
     use super::*;
     use photocraft_psd::abr::{AbrSample, LegacyBrush, LegacyTip, write_v12};
     use serde_json::json;
+
+    fn put(len: usize) -> Option<Arc<[u8]>> {
+        Some(vec![0u8; len].into())
+    }
+
+    #[test]
+    fn total_cap_is_checked_against_what_is_stored_not_what_this_tab_knows() {
+        // Another tab already stored 700 bytes; this tab adds 200 against a 768-byte cap.
+        let stored = [("web-other-1.pcraft".to_string(), 700u64)];
+        let batch = Batch::from([("web-mine-2.pcraft".to_string(), put(200))]);
+        assert!(!fits_total(stored.clone(), &batch, 768));
+        assert!(fits_total(stored, &batch, 900));
+    }
+
+    #[test]
+    fn total_cap_does_not_count_replaced_records_twice_and_never_blocks_shrinking() {
+        let stored = [("a".to_string(), 500u64), ("b".to_string(), 400u64)];
+        // Replacing `a` with 300 bytes: 300 + 400 fits 768.
+        assert!(fits_total(stored.clone(), &Batch::from([("a".to_string(), put(300))]), 768));
+        // The store is already over the cap (900 > 768): a replacement that shrinks it (800) is
+        // allowed, one that grows it (1000) is refused.
+        assert!(fits_total(stored.clone(), &Batch::from([("a".to_string(), put(400))]), 768));
+        assert!(!fits_total(stored.clone(), &Batch::from([("a".to_string(), put(600))]), 768));
+        // Under the cap, growing past it is refused (300 + 400 stored, `a` becomes 500).
+        let under = [("a".to_string(), 300u64), ("b".to_string(), 400u64)];
+        assert!(!fits_total(under, &Batch::from([("a".to_string(), put(500))]), 768));
+        // Deleting always fits.
+        assert!(fits_total(stored, &Batch::from([("a".to_string(), None), ("b".to_string(), None)]), 768));
+    }
 
     fn import(s: &mut Session) {
         let abr = write_v12(
