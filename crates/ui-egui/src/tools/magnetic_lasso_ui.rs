@@ -378,7 +378,7 @@ pub fn frame(app: &mut PhotocraftApp) {
 
 /// Keys while the Magnetic Lasso is the tool: ↩ closes the border along the edges (⌥↩ straight),
 /// Esc cancels it, ⌫ / Delete remove the last fastening point, and [ / ] change the detection width
-/// by 1 px. Returns whether a key was taken.
+/// by 1 px (Shift+[ / Shift+] jump to 1 / 256 px). Returns whether a key was taken.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.tool != Tool::MagneticLasso {
         return false;
@@ -402,6 +402,17 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
             return true;
         }
     }
+    // Shift+[ / Shift+] jump to the limits; they come first because the plain keys match with Shift held too.
+    let w = &mut app.ui.tool_options.magnetic_width;
+    // On a US layout the backend may report Shift+[ as the logical `{` key (egui's `OpenCurlyBracket`) with Shift set; a bare `{` (Programmer Dvorak) is left alone.
+    if pressed(Modifiers::SHIFT, Key::OpenBracket) || pressed(Modifiers::SHIFT, Key::OpenCurlyBracket) {
+        *w = 1.0;
+        return true;
+    }
+    if pressed(Modifiers::SHIFT, Key::CloseBracket) || pressed(Modifiers::SHIFT, Key::CloseCurlyBracket) {
+        *w = 256.0;
+        return true;
+    }
     let step = if pressed(Modifiers::NONE, Key::OpenBracket) {
         -1.0
     } else if pressed(Modifiers::NONE, Key::CloseBracket) {
@@ -409,7 +420,6 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     } else {
         return false;
     };
-    let w = &mut app.ui.tool_options.magnetic_width;
     *w = if w.is_finite() { (w.round() + step).clamp(1.0, 256.0) } else { 10.0 };
     true
 }
