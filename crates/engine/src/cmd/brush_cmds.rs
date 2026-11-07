@@ -547,6 +547,8 @@ pub struct LiveStroke {
     points: Vec<StrokePoint>,
     /// The document and revision the stroke started on.
     base: (photocraft_doc::DocId, u64),
+    gradient_damage: Option<live_damage::Tracker>,
+    initial_damage: Rect,
 }
 
 /// A finished live stroke offered to its own commit ([`Session::offer_live_stroke`],
@@ -624,6 +626,7 @@ impl LiveStroke {
         let mirrors: Vec<_> = (0..symmetry.as_ref().map_or(0, |s| s.mirror_count())).map(|_| StrokeRenderer::new(&brush, Some(surf.format()), zoom)).collect();
         let mirror_distinct = vec![false; mirrors.len()];
         let pre = surf.clone();
+        let gradient_damage = live_damage::Tracker::new(&doc, layer);
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
             seed,
@@ -643,8 +646,10 @@ impl LiveStroke {
             cmyk: doc_cmyk_space(s),
             points: Vec::new(),
             base,
+            gradient_damage,
+            initial_damage: Rect::EMPTY,
         };
-        live.push(&pts)?;
+        live.initial_damage = live.push(&pts)?;
         Ok(live)
     }
 
@@ -670,6 +675,12 @@ impl LiveStroke {
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
     }
 
+    /// Composite damage of the points rendered by begin, including a changed gradient frame.
+    /// Kept separate from bounds(), which describes the painted pixels taken by the commit.
+    pub fn initial_damage(&self) -> Rect {
+        self.initial_damage
+    }
+
     /// `(brush, pointer)` document positions while smoothing holds the brush back from the
     /// pointer: the canvas draws a line between them.
     pub fn smoothing_string(&self) -> Option<([f64; 2], [f64; 2])> {
@@ -691,7 +702,7 @@ impl LiveStroke {
         check_coords(pts, &self.cmd)?;
         self.points.extend_from_slice(pts);
         let cmyk = self.cmyk.clone();
-        let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
+        let mut dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || -> Result<Rect> {
             self.renderer.push(pts);
             if let Some(symmetry) = &self.symmetry {
                 for ((mirror, distinct), reflected) in self.mirrors.iter_mut().zip(&mut self.mirror_distinct).zip(symmetry.reflected_passes(pts)) {
@@ -749,6 +760,9 @@ impl LiveStroke {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
             crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
         }
+        if let Some(tracker) = &mut self.gradient_damage {
+            dmg = dmg.union(&tracker.damage(&self.doc));
+        }
         Ok(dmg)
     }
 }
@@ -764,6 +778,7 @@ fn pct(p: &Value, k: &str, d: f32) -> f32 {
     num(p, k).unwrap_or(d).clamp(0.0, 100.0) / 100.0
 }
 
+mod live_damage;
 pub mod mixer_live;
 fn mixer_brush(s: &mut Session, p: &Value) -> Result<Value> {
     mixer_live::run(s, p)
