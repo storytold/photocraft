@@ -1076,3 +1076,23 @@ fn fit_layers_on_screen_fits_the_floating_window() {
     assert_ne!(fit(area, ppp), fit(egui::vec2(3000.0, 2000.0), app.canvas_ppp()), "the test needs two different fits");
     assert!((zoom - fit(area, ppp)).abs() < 1e-4, "fits the window's canvas {area:?}: {zoom} vs {}", fit(area, ppp));
 }
+
+/// Float All in Windows and Cascade keep a floating document's own window instead of adding a
+/// second one, and leave second views alone (CodeRabbit on #11664).
+#[test]
+fn float_all_in_windows_reuses_a_documents_own_window() {
+    let (mut app, ctx) = app_with(3);
+    let own = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap()["window"].as_u64().unwrap();
+    app.session.set_active(2);
+    menu(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
+    let owning = |app: &PhotocraftApp, d: usize| app.ui.windows.iter().filter(|w| w.floating && w.document == d).map(|w| w.id).collect::<Vec<_>>();
+    for command in ["window.arrange.floatAllInWindows", "window.arrange.cascade"] {
+        let ids = menu(&mut app, &ctx, command, json!({})).unwrap()["windows"].clone();
+        assert_eq!(owning(&app, 0), [own], "{command}: document 0 keeps its window");
+        assert_eq!(ids[0], json!(own), "{command} reports the window it kept");
+        for d in 0..3 {
+            assert_eq!(owning(&app, d).len(), 1, "{command}: one window of its own for document {d}");
+        }
+        assert_eq!(app.ui.windows.iter().filter(|w| !w.floating).count(), 1, "{command}: the second view stays");
+    }
+}

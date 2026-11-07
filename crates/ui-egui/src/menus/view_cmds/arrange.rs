@@ -101,8 +101,16 @@ pub(super) fn arrange(app: &mut PhotocraftApp, k: &str, p: &Value) -> Result<Val
             Ok(json!({"window": wid}))
         }
         "floatAllInWindows" | "cascade" => {
+            // A document that already floats keeps its window (Open Documents as Tabs off, an
+            // earlier Float in Window): a second owning window would show it twice. Second views
+            // (New Window for Document) don't count; they stay as they are.
             let n = app.session.documents().len();
-            let ids: Vec<u64> = (0..n).map(|d| float_window(app, d, d, true)).collect();
+            let ids: Vec<u64> = (0..n)
+                .map(|d| match app.ui.windows.iter().find(|w| w.open && w.floating && w.document == d) {
+                    Some(w) => w.id,
+                    None => float_window(app, d, d, true),
+                })
+                .collect();
             Ok(json!({"windows": ids}))
         }
         "matchZoom" | "matchLocation" | "matchRotation" | "matchAll" => {
