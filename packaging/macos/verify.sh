@@ -131,12 +131,21 @@ else
   printf '%s\n' "$gk"
   fail "Gatekeeper rejects photocraft-cli (not notarized?)"
 fi
+# Run the CLI only once every trust check has passed: a rejected binary must not execute.
+if [[ "$FAILED" != 0 ]]; then
+  echo "error: photocraft-cli failed verification; not running it" >&2
+  exit 1
+fi
 "$CLI" --version
 
 # ---- DMG ---------------------------------------------------------------------------------------
 echo "==> $(basename "$DMG")"
 codesign --verify --strict --verbose=2 "$DMG"
 if [[ "$STRICT" = 1 ]]; then
+  # A valid, notarized signature from any other developer must not pass: the DMG's signer is ours.
+  dmg_details="$(codesign -d --verbose=2 "$DMG" 2>&1)"
+  printf '%s\n' "$dmg_details" | grep -qx "TeamIdentifier=$APPLE_TEAM_ID" \
+    || fail "the DMG is not signed by team $APPLE_TEAM_ID"
   validate_staple "$DMG" || fail "no notarization ticket stapled to the DMG"
   assess --assess --type open --context context:primary-signature -vv "$DMG" \
     || fail "Gatekeeper rejects the DMG"
