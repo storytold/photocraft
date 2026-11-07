@@ -4317,3 +4317,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Виберіть окремий документ для кожного каналу.
 	A picked document is no longer open.	Один із вибраних документів більше не відкрито.
 	A picked document is no longer a grayscale document of the same size.	Один із вибраних документів більше не є документом у градаціях сірого того самого розміру.
+# Move tool options bar (#11381)
+	Align top edges	Вирівняти верхні краї
+	Align vertical centers	Вирівняти центри по вертикалі
+	Align bottom edges	Вирівняти нижні краї
+	Distribute vertically	Розподілити по вертикалі
+	Distribute horizontally	Розподілити по горизонталі
+	Show layer bounds on hover	Показувати межі шару під час наведення
+	Expand layer group on click	Розгортати групу шарів за клацанням
+	Show hover bounds from Layers	Показувати межі під час наведення з панелі «Шари»

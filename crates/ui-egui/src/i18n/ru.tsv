@@ -4791,3 +4791,12 @@ shape	Appearance	Оформление
 	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
 	A picked document is no longer open.	Один из выбранных документов больше не открыт.
 	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.
+# Move tool options bar (#11381)
+	Align top edges	Выровнять верхние края
+	Align vertical centers	Выровнять центры по вертикали
+	Align bottom edges	Выровнять нижние края
+	Distribute vertically	Распределить по вертикали
+	Distribute horizontally	Распределить по горизонтали
+	Show layer bounds on hover	Показывать границы слоя при наведении
+	Expand layer group on click	Раскрывать группу слоёв по щелчку
+	Show hover bounds from Layers	Показывать границы при наведении из панели «Слои»
