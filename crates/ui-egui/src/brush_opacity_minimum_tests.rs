@@ -117,3 +117,30 @@ fn set_brush_floors_opacity_at_one_percent() {
     a.run("tools.setBrush", json!({"brush": {"opacity": 0.37}})).unwrap();
     assert!((a.session.tools.brush.opacity - 0.37).abs() < 1e-6, "values above the floor are kept");
 }
+
+/// The Pencil's `00` is 100 % too (the Pencil has no Flow, so ⇧ digits are not involved).
+#[test]
+fn double_zero_sets_the_pencil_to_100_percent() {
+    let mut a = app(Tool::Pencil);
+    a.run("tools.setBrush", json!({"brush": {"opacity": 0.3}})).unwrap();
+    press(&mut a, 0, false, 0.0);
+    press(&mut a, 0, false, 100.0);
+    assert_eq!(a.session.tools.brush.opacity, 1.0, "00 = 100%");
+}
+
+/// An opacity set outside the field (a `tools.setBrush` fraction, an older saved 0) shows as the
+/// whole percent in 1-100 the field can hold.
+#[test]
+fn the_opacity_field_shows_outside_values_as_whole_percents() {
+    let mut h = options_bar(Tool::Brush, crate::theme::ThemeKind::ProMedium);
+    for (stored, shown) in [(0.337, 34.0), (0.0, 1.0), (0.004, 1.0)] {
+        h.state_mut().session.tools.brush.opacity = stored;
+        h.run_steps(2);
+        let value = h
+            .query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::SpinButton))
+            .find(|n| n.accesskit_node().label().is_some_and(|l| l.trim_end_matches(':') == "Opacity"))
+            .and_then(|n| n.accesskit_node().numeric_value());
+        assert_eq!(value, Some(shown), "stored {stored}");
+        assert_eq!(h.state().session.tools.brush.opacity, stored, "showing it does not change it");
+    }
+}

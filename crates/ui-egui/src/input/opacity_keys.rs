@@ -1,5 +1,5 @@
 //! Number keys set opacity (#352): 1 = 10% … 9 = 90%, 0 = 100%; two digits
-//! typed quickly set an exact value (4 then 5 = 45%; 0 then 0 = 100% for the Brush, #11812). With the Brush, Pencil or
+//! typed quickly set an exact value (4 then 5 = 45%; 0 then 0 = 100% for the Brush and the Pencil, #11812). With the Brush, Pencil or
 //! Eraser they set the brush's Opacity (⇧: Flow; swapped while airbrush build-up is on); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
 //! active layer's Opacity (⇧: Fill). Tools whose number is a strength or exposure are left alone.
@@ -108,10 +108,10 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
     match (target(app.ui.tool), shift) {
         (Target::Brush { .. }, false) => {
             // The painting tools' Opacity fields (and `tools.setBrush`) start at 1%, so `00` sets the
-            // 1% they actually paint with rather than a 0% they can't do. The Brush's `00` is 100%,
-            // as in Photoshop (#11812); only `00` gives 0 here.
+            // 1% they actually paint with rather than a 0% they can't do. The Brush's and the
+            // Pencil's `00` is 100%, as in Photoshop (#11812); only `00` gives 0 here.
             let v = match tool {
-                Tool::Brush if v <= 0.0 => 1.0,
+                Tool::Brush | Tool::Pencil if v <= 0.0 => 1.0,
                 _ => v.max(0.01),
             };
             let _ = app.run("tools.setBrush", json!({ "brush": { "opacity": v } }));

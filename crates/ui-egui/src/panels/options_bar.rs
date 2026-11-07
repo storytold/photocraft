@@ -804,10 +804,11 @@ fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::op
     }
 }
 
-/// [`percent_field`] that keeps whole percents (`33.7` becomes 34 %).
+/// [`percent_field`] that keeps whole percents (`33.7` becomes 34 %). A value set elsewhere (a
+/// `tools.setBrush` fraction, an older saved 0) shows as the whole percent in range.
 fn whole_percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) {
     opt_label(ui, label);
-    let mut percent = *value * 100.0;
+    let mut percent = (*value * 100.0).round().max(*range.start()).min(*range.end());
     if widgets::value_field_named(ui, label, &mut percent, range.clone(), "%", width).changed() {
         *value = percent.round().max(*range.start()).min(*range.end()) / 100.0;
     }
