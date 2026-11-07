@@ -28,8 +28,10 @@
 //!   message naming the job (queries and document-independent commands still run).
 
 use std::any::Any;
+use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU8, AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
+use std::time::Instant;
 
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_raster::Interrupt;
@@ -37,6 +39,27 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{EngineError, Result, Session};
+
+// Wraps a closure as `StepWork` that runs it once and returns the result.
+struct ClosureWork<T, F> {
+    work: Option<F>,
+    _phantom: PhantomData<T>,
+}
+
+impl<T, F> StepWork<T> for ClosureWork<T, F>
+where
+    T: Send + 'static,
+    F: FnOnce(&JobCtx) -> Result<T> + Send + 'static,
+{
+    fn step(&mut self, _ctx: &JobCtx, _deadline: Instant) -> Result<Option<T>> {
+        if let Some(work) = self.work.take() {
+            let result = work(&JobCtx::default())?;
+            Ok(Some(result))
+        } else {
+            Ok(None)
+        }
+    }
+}
 
 const MAX_BACKGROUND_JOBS: usize = 16;
 
@@ -758,8 +781,36 @@ pub fn run<T: Send + 'static>(
     let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
     let _document = crate::doc_path::scope(document.as_deref());
     if !s.jobs.threaded() {
-        let t = work(&s.jobs.inline.clone().unwrap_or_default())?;
-        return apply(s, t);
+        if s.jobs.cooperative {
+            // In cooperative mode, run as a stepped job on the UI thread
+            let work = ClosureWork {
+                work: Some(Box::new(work)),
+                _phantom: PhantomData,
+            };
+            let authorization = s.authorize.or_else(|| RENDER_AUTHORIZATION.with(std::cell::Cell::get));
+            let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
+            let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
+            let (label_w, mut work) = (label.to_string(), work);
+            // The slices run under the requesting session's authority and document, as a worker would.
+            let label_w = label_w.clone();
+            let authorization = authorization;
+            let document = document;
+            job.stepper = Some(Box::new(move |ctx, deadline| {
+                let _authorization = AuthorizationScope::enter(authorization);
+                let _document = crate::doc_path::scope(document.as_deref());
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.step(ctx, deadline)));
+                result.unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))))
+                    .map(|done| done.map(|t| Box::new(t) as Payload))
+            }));
+            let id = job.id;
+            s.jobs.pending = Some(job);
+            let json_str = String::from("{\"job\":") + &id.0.to_string() + "}";
+            let result = serde_json::from_str(&json_str).unwrap();
+            return Ok(result);
+        } else {
+            let t = work(&s.jobs.inline.clone().unwrap_or_default())?;
+            return apply(s, t);
+        }
     }
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
@@ -803,24 +854,53 @@ pub fn run_stepped<T: Send + 'static>(
     work: impl StepWork<T>,
     apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
 ) -> Result<Value> {
-    if !(s.jobs.spawn && s.jobs.cooperative) {
+    // If in cooperative mode, run as a stepped job on the UI thread (not a worker)
+    if s.jobs.cooperative {
+        let authorization = s.authorize.or_else(|| RENDER_AUTHORIZATION.with(std::cell::Cell::get));
+        let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
+        let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
+        let (label_w, mut work) = (label.to_string(), work);
+        // The slices run under the requesting session's authority and document, as a worker would.
+        let label_w = label_w.clone();
+        let authorization = authorization;
+        let document = document;
+        job.stepper = Some(Box::new(move |ctx, deadline| {
+            let _authorization = AuthorizationScope::enter(authorization);
+            let _document = crate::doc_path::scope(document.as_deref());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.step(ctx, deadline)));
+            result.unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))))
+                .map(|done| done.map(|t| Box::new(t) as Payload))
+        }));
+        let id = job.id;
+        s.jobs.pending = Some(job);
+        let json_str = String::from("{\"job\":") + &id.0.to_string() + "}";
+        let result = serde_json::from_str(&json_str).unwrap();
+        return Ok(result);
+    } else if !s.jobs.spawn {
+        // No worker threads, run inline
         return run(s, label, lock_document, move |ctx| drive(work, ctx), apply);
     }
+    // Spawn on worker thread
     let authorization = s.authorize.or_else(|| RENDER_AUTHORIZATION.with(std::cell::Cell::get));
     let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
     let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
     let (label_w, mut work) = (label.to_string(), work);
     // The slices run under the requesting session's authority and document, as a worker would.
+    let label_w = label_w.clone();
+    let authorization = authorization;
+    let document = document;
     job.stepper = Some(Box::new(move |ctx, deadline| {
         let _authorization = AuthorizationScope::enter(authorization);
         let _document = crate::doc_path::scope(document.as_deref());
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.step(ctx, deadline)))
-            .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))))
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.step(ctx, deadline)));
+        result.unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))))
             .map(|done| done.map(|t| Box::new(t) as Payload))
     }));
     let id = job.id;
     s.jobs.pending = Some(job);
-    Ok(json!({"job": id.0}))
+    let json_str = String::from("{\"job\":") + &id.0.to_string() + "}";
+    let result = serde_json::from_str(&json_str).unwrap();
+    Ok(result)
 }
 
 /// A job for [`run`] and [`run_stepped`] to start, without its worker.
