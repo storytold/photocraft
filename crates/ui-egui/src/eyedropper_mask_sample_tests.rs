@@ -1,13 +1,15 @@
-use egui::Modifiers;
+use egui::{Color32, Modifiers};
 use photocraft_geom::Rect;
 use serde_json::json;
 
+use super::{display_color, eyedropper_color, eyedropper_ring_colors};
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
 use crate::{PhotocraftApp, Services};
 
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
+/// Put a fully revealed raster mask over red image content and select the mask and Eyedropper.
 fn app_with_mask(adjustment: bool) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 8, "height": 8, "background": "transparent"})).unwrap();
@@ -25,6 +27,7 @@ fn app_with_mask(adjustment: bool) -> PhotocraftApp {
     app
 }
 
+/// Set the stored mask channel directly while leaving the image pixels unchanged.
 fn paint_mask(app: &mut PhotocraftApp, rect: Rect, gray: f32) {
     let layer = app.session.active().unwrap().active_layer.unwrap();
     app.session
@@ -35,11 +38,13 @@ fn paint_mask(app: &mut PhotocraftApp, rect: Rect, gray: f32) {
         .unwrap();
 }
 
+/// Use the canvas tool events so swatch assertions exercise the normal click path.
 fn click(app: &mut PhotocraftApp, x: f64, y: f64, mods: Modifiers) {
     tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
     tool_event(app, ToolEvent::Up { x, y }, mods);
 }
 
+/// The opaque greyscale RGBA value stored in a swatch after a mask sample.
 fn gray(value: f32) -> [f32; 4] {
     [value, value, value, 1.0]
 }
@@ -58,6 +63,24 @@ fn targeted_pixel_and_adjustment_masks_supply_point_samples() {
             click(&mut app, 2.5, 2.5, Modifiers::NONE);
             assert_eq!(app.session.tools.foreground, gray(128.0 / 255.0), "adjustment={adjustment} {mode}");
         }
+    }
+}
+
+/// The held ring previews the same adjustment-mask value that the click writes in both modes.
+#[test]
+fn targeted_mask_ring_previews_the_click_sample() {
+    let mut app = app_with_mask(true);
+    paint_mask(&mut app, Rect::new(0, 0, 1, 2), 0.0);
+    app.ui.tool_options.eyedropper_sample = "current".into();
+    assert!(eyedropper_color(&mut app, 4.5, 4.5).is_none(), "the adjustment alone has no image pixels");
+
+    for (mode, size, point, ring, swatch) in [("current", 1, 4.5, Color32::WHITE, gray(1.0)), ("currentAndBelow", 3, 0.5, Color32::from_gray(128), gray(0.5))] {
+        app.ui.tool_options.eyedropper_sample = mode.into();
+        app.ui.tool_options.eyedropper_size = size;
+        app.run("tools.setColors", json!({"foreground": "#222222"})).unwrap();
+        assert_eq!(eyedropper_ring_colors(&mut app, point, point), Some((ring, Color32::from_gray(34))), "{mode}");
+        click(&mut app, point, point, Modifiers::NONE);
+        assert_eq!(app.session.tools.foreground, swatch, "{mode}");
     }
 }
 
@@ -83,6 +106,7 @@ fn composite_modes_and_pixel_targets_still_sample_the_image() {
         app.ui.tool_options.eyedropper_sample = mode.into();
         let sample = app.run("document.sampleColor", json!({"x": 4.5, "y": 4.5, "sampleLayer": mode})).unwrap();
         let [r, g, b, _]: [f32; 4] = serde_json::from_value(sample).unwrap();
+        assert_eq!(eyedropper_ring_colors(&mut app, 4.5, 4.5).map(|(sample, _)| sample), Some(display_color([r, g, b])), "{mode}");
         click(&mut app, 4.5, 4.5, Modifiers::NONE);
         assert_eq!(app.session.tools.foreground, gray(photocraft_color::convert::rgb_to_gray([r, g, b])), "{mode}");
     }
@@ -162,16 +186,19 @@ fn invalid_mask_samples_leave_both_swatches_unchanged() {
     let before = (app.session.tools.foreground, app.session.tools.background);
     let assert_unchanged = |app: &PhotocraftApp| assert_eq!((app.session.tools.foreground, app.session.tools.background), before);
     for (x, y) in [(-0.1, 1.0), (1.0, 8.0), (f64::NAN, 1.0), (1.0, f64::INFINITY)] {
+        assert!(eyedropper_ring_colors(&mut app, x, y).is_none());
         for mods in [Modifiers::NONE, Modifiers::ALT] {
             click(&mut app, x, y, mods);
             assert_unchanged(&app);
         }
     }
     app.ui.tool_options.eyedropper_size = 2;
+    assert!(eyedropper_ring_colors(&mut app, 1.0, 1.0).is_none());
     click(&mut app, 1.0, 1.0, Modifiers::NONE);
     assert_unchanged(&app);
     app.ui.tool_options.eyedropper_size = 1;
     app.ui.tool_options.eyedropper_sample = "invalid".into();
+    assert!(eyedropper_ring_colors(&mut app, 1.0, 1.0).is_none());
     click(&mut app, 1.0, 1.0, Modifiers::ALT);
     assert_unchanged(&app);
 }
