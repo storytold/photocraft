@@ -374,12 +374,12 @@ fn breeze_themes_parse_and_meet_text_contrast() {
 }
 
 #[test]
-fn action_tiles_match_the_default_pro_palettes() {
+fn action_tiles_use_photocraft_pro_palettes_in_atn_order() {
     let defaults = [
-        (ThemeKind::Pro, [0x323232, 0x8d2d2d, 0x935202, 0x967c00, 0x3f6335, 0x3e4f85, 0x5d4682, 0x535353, 0x006662, 0x3236a8, 0xaa2f64, 0x862587]),
-        (ThemeKind::ProMedium, [0x535353, 0xb0423f, 0xa5620a, 0x9e7f09, 0x5f823c, 0x526f99, 0x7155a0, 0x6a6a6a, 0x006662, 0x4649a0, 0xaa2f64, 0x862587]),
-        (ThemeKind::ProLightGray, [0xb8b8b8, 0xeb726a, 0xe79e62, 0xdad665, 0x8fc665, 0x8da2d7, 0x9983c9, 0x979797, 0x00a19a, 0x8487ee, 0xdb6d9c, 0xca72cb]),
-        (ThemeKind::ProLight, [0xf0f0f0, 0xff8881, 0xfbb767, 0xe9e380, 0xabdb80, 0xa6bdf4, 0xb29ede, 0xacacac, 0x01c1b9, 0x8e92f2, 0xdc6d9d, 0xc97dca]),
+        (ThemeKind::Pro, [0x323232, 0x913633, 0x904d2a, 0x7e692a, 0x36674b, 0x305c86, 0x5d4c87, 0x5b5b5b, 0x286a6c, 0x344599, 0x8a3967, 0x713e8f]),
+        (ThemeKind::ProMedium, [0x535353, 0xb0494a, 0xa15e35, 0x957a2f, 0x477b53, 0x42709d, 0x715e9e, 0x6e6e6e, 0x327c78, 0x4457a9, 0xa44878, 0x834ba2]),
+        (ThemeKind::ProLightGray, [0xb8b8b8, 0xd87073, 0xe29b6a, 0xddc468, 0x85b590, 0x7badda, 0xa192d2, 0x9d9d9d, 0x69afae, 0x778cdb, 0xd27eab, 0xb484cf]),
+        (ThemeKind::ProLight, [0xf0f0f0, 0xed9999, 0xf4b58b, 0xefd886, 0xa0cda3, 0x9dc3e6, 0xbba9e0, 0xbcbcbc, 0x84cac4, 0x97a6e6, 0xe59dc1, 0xcf9fe1]),
     ];
     for (kind, expected) in defaults {
         let actual = Tokens::for_kind(kind).action_tiles.map(|fill| u32::from_be_bytes([0, fill.r(), fill.g(), fill.b()]));
@@ -406,7 +406,7 @@ fn action_glyph_uses_theme_family_ink_and_meets_tile_contrast() {
             let ratio = contrast(blended, fill);
             assert!(ratio >= 3.0, "{kind:?}: tile {index} has contrast {ratio}");
             if kind == ThemeKind::ProLight && index == 3 {
-                assert_eq!(blended, Color32::from_rgb(47, 45, 26));
+                assert_eq!(blended, Color32::from_rgb(48, 43, 27));
             }
         }
     }

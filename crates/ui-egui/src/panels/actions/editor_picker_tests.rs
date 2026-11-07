@@ -171,18 +171,18 @@ fn two_by_six_colour_grid_keeps_classic_blue_and_new_blue_distinct() {
 
 #[test]
 fn picker_colours_are_fixed_and_unknown_metadata_stays_neutral() {
-    let measured = [
-        ("red", 0xff756e),
-        ("orange", 0xfaa855),
-        ("yellow", 0xe3db5d),
-        ("green", 0x94df7d),
-        ("blue", 0x89bdf8),
-        ("violet", 0xa38ddd),
-        ("gray", 0xacacac),
-        ("teal", 0x1b959a),
-        ("blue2", 0x6767ec),
-        ("magenta", 0xd83790),
-        ("purple", 0xc038cc),
+    let expected = [
+        ("red", 0xe75459),
+        ("orange", 0xf4944b),
+        ("yellow", 0xefcd4f),
+        ("green", 0x69bf7c),
+        ("blue", 0x5ba7e4),
+        ("violet", 0x9d7fe1),
+        ("gray", 0xa5a5a5),
+        ("teal", 0x2fa3a3),
+        ("blue2", 0x4d68d5),
+        ("magenta", 0xd8599c),
+        ("purple", 0xb15dd2),
     ];
     for kind in ThemeKind::ALL {
         let tokens = Tokens::for_kind(kind);
@@ -190,7 +190,7 @@ fn picker_colours_are_fixed_and_unknown_metadata_stays_neutral() {
             assert_eq!(tokens.action_tile_fill(unknown_or_none), tokens.card);
             assert_eq!(swatch_style(unknown_or_none, &tokens), (tokens.card, tokens.text));
         }
-        for (name, rgb) in measured {
+        for (name, rgb) in expected {
             let (fill, _) = swatch_style(name, &tokens);
             assert_eq!(u32::from_be_bytes([0, fill.r(), fill.g(), fill.b()]), rgb, "{kind:?}: {name}");
         }
