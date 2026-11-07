@@ -828,7 +828,7 @@ fn the_pointer_belongs_to_another_window_from_its_report_until_this_one_hears_it
 
 /// Check glyph bounds, contrast and the fixed Convert Point apex across display scales.
 #[test]
-fn pen_bitmaps_render_all_six_variants_with_exact_outline_and_hotspots_at_each_scale() {
+fn pen_bitmaps_render_all_variants_with_exact_outline_and_hotspots_at_each_scale() {
     let anchor = convert_point_anchor_centre();
     assert_eq!(super::PenVariant::Standard.hotspot_in_box(), vec2(2.3, 2.3), "the full-size pen nib is at (2.3, 2.3)");
     assert_eq!(super::PenVariant::ConvertPoint.hotspot_in_box(), vec2(12.0, 7.0), "match the painted Convert Point apex");
@@ -948,7 +948,7 @@ fn pen_cursor_bounded_cache_reuses_uploads_and_bounds_memory() {
     let a2 = super::cached_pen_image(&ctx, shape_a, 1.0).unwrap();
     assert!(Arc::ptr_eq(&a1.rgba, &a2.rgba), "pointer movement reuses cached bitmap");
 
-    // All six variants can be cached concurrently without thrashing
+    // Every variant can be cached concurrently without thrashing
     let mut images = Vec::new();
     for v in super::PenVariant::all() {
         let img = super::cached_pen_image(&ctx, v, 1.0).unwrap();

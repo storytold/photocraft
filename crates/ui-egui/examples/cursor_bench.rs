@@ -1,7 +1,7 @@
 //! Release benchmark harness measuring cold rasterization, warm movement lookup, and painted fallback
 //! baseline for native Pen tool cursors (#9122).
 //!
-//! Evaluates all six standard Pen tool cursor variants across multiple display scales, measuring:
+//! Evaluates every Pen tool cursor variant across multiple display scales, measuring:
 //! 1. Cold rasterization latency and bitmap dimensions/hotspots.
 //! 2. Warm-cache lookup latency during steady pointer movements across frames.
 //! 3. Painted fallback baseline latency using identical pointer moves and harness.
@@ -28,7 +28,9 @@ use base64::Engine as _;
 use egui::{Context, pos2};
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType, encode};
 use photocraft_testkit::gpu_lock;
-use photocraft_ui_egui::canvas::tool_cursor::{PenVariant, native_scale, pen, pen_rasterization_count, rasterize_pen, reset_pen_rasterization_count};
+use photocraft_ui_egui::canvas::tool_cursor::{
+    PenVariant, native_scale, pen, pen_rasterization_count, pen_variant, rasterize_pen, reset_pen_rasterization_count,
+};
 use photocraft_ui_egui::icons;
 use photocraft_ui_egui::state::Tool;
 
@@ -94,10 +96,11 @@ struct PerfReport {
     contact_sheet_png_base64: Option<String>,
 }
 
-/// Map each benchmark variant to the tool used by the production dispatcher.
+/// Map each benchmark variant to the tool used by the production dispatcher; the continue-path
+/// pointer is the Pen's, shown over an open path's endpoint.
 fn tool_for_variant(variant: PenVariant) -> Tool {
     match variant {
-        PenVariant::Standard => Tool::Pen,
+        PenVariant::Standard | PenVariant::Continue => Tool::Pen,
         PenVariant::Freeform => Tool::FreeformPen,
         PenVariant::Curvature => Tool::CurvaturePen,
         PenVariant::AddAnchor => Tool::AddAnchorPoint,
@@ -139,7 +142,7 @@ fn cursor_frame(ctx: &Context, tool: Tool, variant: PenVariant, at: egui::Pos2, 
         let start = Instant::now();
         if painted {
             icons::cursor(ctx, variant.icon_name(), at, variant.hotspot_in_box() / 24.0, 22.0);
-        } else if let Some(icon) = pen(ctx, tool) {
+        } else if let Some(icon) = if variant == PenVariant::Continue { pen_variant(ctx, variant) } else { pen(ctx, tool) } {
             ctx.set_cursor_icon(icon);
         }
         elapsed_us = start.elapsed().as_secs_f64() * 1_000_000.0;
