@@ -27,10 +27,20 @@ pub struct Drag {
     /// `Some(false)` moves the outline, `Some(true)` moves the floating piece (`select.float`), as
     /// every Move-tool drag with a selection does (`move_ui::moves_selected_pixels_with`).
     pub sel_move: Option<bool>,
+    /// The pointer, before snapping, has been half a pixel or more from the press: the gesture is
+    /// not a click even if it comes back there (`tool_input::selection_release`, #11392).
+    pub left_press: bool,
     /// The last ⇧-locked offset of a selection-tool drag of the selection (`move_mods`, #6231);
     /// keeps the locked direction stable between events. The Move tool's own drags use `move_mods`.
     pub sel_axis: Option<[f64; 2]>,
     pub lasso: Option<crate::lasso_ui::Lasso>,
+    /// Freeform Pen and Path Selection gestures belong to their source document and target.
+    pub(super) vector_owner: Option<VectorGestureOwner>,
+    pub(super) pen_owner: Option<crate::vector_ui::PenOwner>,
+    /// The document had a selection (one with content) when the drag was pressed. A modifier held
+    /// at the press picks the selection mode only then; without one it constrains the shape from
+    /// the first move (#11389). `true` until recorded, which keeps that rule for drags that don't.
+    pub selection_at_press: bool,
 }
 
 impl Drag {
@@ -47,8 +57,29 @@ impl Drag {
             released: egui::Modifiers::NONE,
             reposition: false,
             sel_move: None,
+            left_press: false,
             sel_axis: None,
             lasso: None,
+            vector_owner: None,
+            pen_owner: None,
+            selection_at_press: true,
+        }
+    }
+
+    /// Record whether the document has a selection at the press; an empty one counts as none, as
+    /// `tool_feedback::document_selection_mode` counts it (#11389).
+    pub(crate) fn capture_selection_at_press(&mut self, app: &PhotocraftApp) {
+        self.selection_at_press = app.session.active().and_then(|st| st.doc.selection.as_ref()).is_some_and(|s| !s.content_bounds().is_empty());
+    }
+
+    /// Vector drags capture their owner at the press, the Freeform Pen also its destination, before
+    /// later ⌥-clicks or a temporary Direct Selection can finish them.
+    pub(crate) fn capture_vector_owners(&mut self, app: &PhotocraftApp) {
+        if matches!(self.tool, Tool::FreeformPen | Tool::PathSelection) {
+            self.vector_owner = VectorGestureOwner::capture(app);
+        }
+        if self.tool == Tool::FreeformPen {
+            self.pen_owner = crate::vector_ui::capture_pen_owner(app);
         }
     }
 
@@ -76,12 +107,21 @@ impl Drag {
         self.released.alt |= !mods.alt;
     }
 
-    /// ⇧ (square / circle) and ⌥ (from the centre) for a marquee drag. A modifier held at the press
-    /// picks the selection mode instead (add / subtract, #188) until it is released and pressed
-    /// again, as in Photoshop.
+    /// ⇧ (square / circle) and ⌥ (from the centre) for a marquee drag. With a selection at the
+    /// press, a modifier held at the press picks the selection mode instead (add / subtract, #188)
+    /// until it is released and pressed again, as in Photoshop; without one it constrains the
+    /// shape from the first move (#11389).
     pub fn marquee_mods(&self) -> (bool, bool) {
-        let fresh = |now: bool, at_press: bool, released: bool| now && (!at_press || released);
+        let picks_mode = self.selection_at_press;
+        let fresh = |now: bool, at_press: bool, released: bool| now && (!at_press || released || !picks_mode);
         (fresh(self.live.shift, self.modifiers.shift, self.released.shift), fresh(self.live.alt, self.modifiers.alt, self.released.alt))
+    }
+
+    /// ⇧ held since the press with no selection: the square takes the drag's shorter side, as the
+    /// reference application does (a 200 × 100 drag selects 100 × 100, #11389). ⇧ pressed during
+    /// the drag keeps the longer side (not measured, so as before).
+    fn square_from_press(&self) -> bool {
+        !self.selection_at_press && self.modifiers.shift && !self.released.shift && self.live.shift
     }
 }
 
@@ -97,7 +137,13 @@ pub fn marquee_corners(o: &crate::state::ToolOptions, d: &Drag, end: [f64; 2]) -
         let a = if alt { [end[0] - w / 2.0, end[1] - h / 2.0] } else { end };
         return (a, [a[0] + w, a[1] + h]);
     }
-    let e = crate::chrome_ui::marquee_end(&o.marquee_style, o.marquee_width as f64, o.marquee_height as f64, shift, d.start, end);
+    let e = if shift && d.square_from_press() && !matches!(o.marquee_style.as_str(), "fixedRatio" | "fixedSize") {
+        let (dx, dy) = (end[0] - d.start[0], end[1] - d.start[1]);
+        let m = dx.abs().min(dy.abs());
+        [d.start[0] + m.copysign(dx), d.start[1] + m.copysign(dy)]
+    } else {
+        crate::chrome_ui::marquee_end(&o.marquee_style, o.marquee_width as f64, o.marquee_height as f64, shift, d.start, end)
+    };
     if !alt {
         return (d.start, e);
     }
@@ -248,6 +294,15 @@ pub(crate) fn marquee_drag_ants(d: &Drag, xf: &ViewXform, marquee: Option<[f64; 
     marquee_ants(xf, d.tool, a, b)
 }
 
+/// The corners on screen of the document-axis box dragged from `a` to `b`, clockwise from its
+/// top-left: a turned parallelogram in a rotated view, as the box the release creates (the Type
+/// tools' text box, the Move tool's layer marquee).
+pub(crate) fn doc_box_corners(xf: &ViewXform, a: [f64; 2], b: [f64; 2]) -> [Pos2; 4] {
+    let (x0, x1) = (a[0].min(b[0]) as f32, a[0].max(b[0]) as f32);
+    let (y0, y1) = (a[1].min(b[1]) as f32, a[1].max(b[1]) as f32);
+    [xf.to_screen(x0, y0), xf.to_screen(x1, y0), xf.to_screen(x1, y1), xf.to_screen(x0, y1)]
+}
+
 /// The size readout shown beside the cursor while dragging a marquee: the width and height values.
 pub fn marquee_readout(r: [f64; 4]) -> [String; 2] {
     [format!("{} px", r[2] - r[0]), format!("{} px", r[3] - r[1])]
@@ -326,3 +381,58 @@ pub(crate) fn draw_readout<const N: usize>(ctx: &egui::Context, id: &str, cursor
         },
     );
 }
+
+/// The document, revision and target a vector drag started on.
+#[derive(Clone, Debug)]
+pub(super) struct VectorGestureOwner {
+    doc: photocraft_doc::DocId,
+    document: std::sync::Weak<Document>,
+    revision: u64,
+    layer: Option<photocraft_doc::LayerId>,
+    selected_path: Option<String>,
+    vector_mask: bool,
+    mode: String,
+    tool: Tool,
+}
+
+/// Cancel a vector drag before it can preview or finish on another document or target; the rest of
+/// its pointer events go nowhere. True when one was cancelled.
+pub(crate) fn cancel_stale_vector_drag(app: &mut PhotocraftApp) -> bool {
+    let stale = app.drag.as_ref().and_then(|d| d.vector_owner.as_ref()).is_some_and(|owner| !owner.valid(app));
+    if stale {
+        app.drag = None;
+        app.cancelled_vector_drag = true;
+    }
+    stale
+}
+
+impl VectorGestureOwner {
+    fn capture(app: &PhotocraftApp) -> Option<Self> {
+        let st = app.session.active()?;
+        Some(Self {
+            doc: st.doc.id,
+            document: std::sync::Arc::downgrade(&st.doc),
+            revision: st.revision,
+            layer: st.active_layer,
+            selected_path: app.ui.selected_path.clone(),
+            vector_mask: app.ui.vector_mask_target,
+            mode: app.ui.tool_options.vector_mode.clone(),
+            tool: app.active_tool(),
+        })
+    }
+
+    pub(super) fn valid(&self, app: &PhotocraftApp) -> bool {
+        Self::capture(app).is_some_and(|now| {
+            self.doc == now.doc
+                && self.document.ptr_eq(&now.document)
+                && self.revision == now.revision
+                && self.layer == now.layer
+                && self.selected_path == now.selected_path
+                && self.vector_mask == now.vector_mask
+                && self.mode == now.mode
+                && self.tool == now.tool
+        })
+    }
+}
+
+use photocraft_doc::Document;

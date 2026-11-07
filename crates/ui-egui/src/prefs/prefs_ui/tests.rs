@@ -28,8 +28,6 @@ fn the_generator_checkbox_reads_enable_generator() {
     h.get_by_label("Enable Generator").click();
     h.run_steps(2);
     assert_eq!(h.state()["generatorEnabled"], true);
-    let de = crate::i18n::Lang::from_code("de").unwrap();
-    assert_eq!(crate::i18n::tr(de, "Enable Generator"), "Generator aktivieren");
 }
 
 #[test]
@@ -142,6 +140,19 @@ fn preferences_search_matches_editable_fields_across_sections() {
     assert!(contains("interface.uiScale", "interface"));
     assert!(preference_sections(&values, "this setting does not exist").is_empty());
     assert_eq!(preference_sections(&values, "").len(), SECTIONS.len());
+}
+
+/// The preview language controls translated search; English schema paths keep their aliases.
+#[test]
+fn azerbaijani_preferences_search_keeps_dotted_i_and_schema_aliases() {
+    let az = crate::i18n::Lang::from_code("az").unwrap();
+    crate::i18n::with_language(az, || {
+        let values = prefs::Preferences::default().to_json();
+        assert!(preference_sections(&values, "İNTERFEYS").iter().any(|(id, _)| *id == "interface"));
+        assert!(super::fields::preference_matches("interface", "language", "DİL"));
+        assert!(!super::fields::preference_matches("interface", "language", "DIL"));
+        assert!(super::fields::preference_matches("interface", "uiScale", "INTERFACE.UISCALE"));
+    });
 }
 
 #[test]
@@ -1025,10 +1036,15 @@ fn selected_tool_survives_a_restart_without_option_changes() {
     let (mut app, store) = app_with_store();
     let ctx = egui::Context::default();
     tick(&mut app, &ctx);
-    assert_eq!(app.ui.tool, Tool::Brush);
-    // Every tool, including flyout-only tools, can be restored. Return to Brush last to
+    assert_eq!(app.ui.tool, Tool::Move);
+    // Start from a non-default tool so selecting every tool (including Move) is an
+    // explicit change that gets persisted.
+    app.ui.tool = Tool::Brush;
+    crate::tool_memory::persist(&mut app, &ctx);
+    tick(&mut app, &ctx);
+    // Every tool, including flyout-only tools, can be restored. Return to Move last to
     // prove selecting the default overwrites a previously remembered nondefault tool.
-    for tool in Tool::ALL.into_iter().chain([Tool::Brush]) {
+    for tool in Tool::ALL.into_iter().chain([Tool::Move]) {
         app.ui.tool = tool;
         crate::tool_memory::persist(&mut app, &ctx);
         tick(&mut app, &ctx);
@@ -1043,10 +1059,10 @@ fn selected_tool_survives_a_restart_without_option_changes() {
 #[test]
 fn selected_tool_is_flushed_on_exit_without_another_frame() {
     let (mut app, store) = app_with_store();
-    app.ui.tool = crate::state::Tool::Move;
+    app.ui.tool = crate::state::Tool::Brush;
     crate::tool_memory::save_on_exit(&mut app).unwrap();
     let (app2, _) = app_with_saved(store.lock().unwrap().clone());
-    assert_eq!(app2.ui.tool, crate::state::Tool::Move);
+    assert_eq!(app2.ui.tool, crate::state::Tool::Brush);
 }
 
 #[test]
@@ -1083,7 +1099,7 @@ fn invalid_selected_tool_preserves_other_preferences() {
             })
             .to_string(),
         ));
-        assert_eq!(app.ui.tool, crate::state::Tool::Brush, "{bad}");
+        assert_eq!(app.ui.tool, crate::state::Tool::Move, "{bad}");
         assert_eq!(app.ui.tool_options.feather, 12.0);
     }
 }
@@ -1093,19 +1109,19 @@ fn selected_tool_excludes_temporary_switches() {
     use crate::state::Tool;
     let (mut app, store) = app_with_store();
     let ctx = egui::Context::default();
-    app.ui.tool = Tool::Move;
+    app.ui.tool = Tool::Brush;
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     app.tool_override = Some(Tool::Hand);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
-    assert_eq!(stored(&store)["selectedTool"], json!("Move"));
+    assert_eq!(stored(&store)["selectedTool"], json!("Brush"));
     app.tool_override = None;
     app.ui.tool = Tool::Zoom;
-    crate::spring_tools::pressed(&mut app, 'Z', Tool::Move, true, 0.0);
+    crate::spring_tools::pressed(&mut app, 'Z', Tool::Brush, true, 0.0);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
-    assert_eq!(stored(&store)["selectedTool"], json!("Move"));
+    assert_eq!(stored(&store)["selectedTool"], json!("Brush"));
     // A quick tap commits the choice after spring_tools clears the pending switch.
     crate::spring_tools::tick(&mut app, &ctx);
     crate::tool_memory::persist(&mut app, &ctx);
@@ -1130,15 +1146,17 @@ fn tool_options_survive_a_restart() {
     tick(&mut app, &ctx);
     app.ui.tool_options.move_auto_select = false;
     app.ui.tool_options.feather = 12.0;
+    app.ui.tool_options.transform_interpolation = Some(photocraft_engine::prefs::Interpolation::Nearest);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     // Only what differs from the defaults is stored.
-    assert_eq!(stored(&store)["toolOptions"], json!({"move_auto_select": false, "feather": 12.0}));
+    assert_eq!(stored(&store)["toolOptions"], json!({"move_auto_select": false, "feather": 12.0, "transform_interpolation": "nearestNeighbor"}));
     let saved = store.lock().unwrap().clone().unwrap();
     let (mut app2, _) = app_with_saved(Some(saved));
     tick(&mut app2, &ctx);
     assert!(!app2.ui.tool_options.move_auto_select);
     assert_eq!(app2.ui.tool_options.feather, 12.0);
+    assert_eq!(app2.ui.tool_options.transform_interpolation, Some(photocraft_engine::prefs::Interpolation::Nearest));
     assert_eq!(app2.ui.tool_options.tolerance, crate::state::ToolOptions::default().tolerance);
     // A hand-edited file: unreadable fields keep their defaults, the good ones still load.
     for bad in [json!("junk"), json!({"move_auto_select": "no", "feather": 1e300, "tolerance": 5.0, "unknown": 1})] {
@@ -1410,28 +1428,27 @@ fn show_tooltips_preferences_turn_tooltips_off() {
 }
 
 #[test]
-fn enable_animations_off_stops_fades_and_scroll_glides_and_is_remembered() {
-    let on = egui::Style::default().animation_time;
-    let both = |ctx: &egui::Context| [egui::Theme::Dark, egui::Theme::Light].map(|t| ctx.style_of(t).animation_time);
-    // Saved off: the first frame after a restart applies it to both appearance styles.
-    let (mut app, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": false}}).to_string()));
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    assert_eq!(both(&ctx), [0.0, 0.0]);
-    assert_eq!(ctx.global_style().scroll_animation.duration.max, 0.0);
-    // A theme change rebuilds the style; the next frame turns animations off again.
-    app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
-    tick(&mut app, &ctx);
-    assert_eq!(both(&ctx), [0.0, 0.0]);
-    app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).unwrap();
-    tick(&mut app, &ctx);
-    assert_eq!(both(&ctx), [on, on]);
-    assert!(on > 0.0 && ctx.global_style().scroll_animation.duration.max > 0.0);
-    // A hand-edited value of the wrong type doesn't crash: the defaults (animations on) stay.
-    let (mut bad, _) = app_with_saved(Some(json!({"interface": {"enableAnimations": "nope"}}).to_string()));
-    let ctx2 = egui::Context::default();
-    tick(&mut bad, &ctx2);
-    assert_eq!(both(&ctx2), [on, on]);
+fn a_saved_enable_animations_loads_and_leaves_egui_animating() {
+    // #9479: Interface › Enable animations is gone (Photoshop has none). A file saved with it
+    // off still loads whole, and egui's fades and scroll glides keep their defaults.
+    let style = egui::Style::default();
+    let both =
+        |ctx: &egui::Context| [egui::Theme::Dark, egui::Theme::Light].map(|t| (ctx.style_of(t).animation_time, ctx.style_of(t).scroll_animation.duration.max));
+    let expected = (style.animation_time, style.scroll_animation.duration.max);
+    assert!(expected.0 > 0.0 && expected.1 > 0.0);
+    for value in [json!(false), json!(true), json!("nope")] {
+        let saved = json!({"version": 2, "interface": {"enableAnimations": value, "showTooltips": false}});
+        let (mut app, _) = app_with_saved(Some(saved.to_string()));
+        let ctx = egui::Context::default();
+        tick(&mut app, &ctx);
+        assert!(app.ui.status.is_empty(), "{value}: {}", app.ui.status);
+        assert!(!app.session.prefs().interface.show_tooltips, "{value}: the rest of the file loads");
+        assert_eq!(both(&ctx), [expected, expected], "{value}");
+        app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
+        tick(&mut app, &ctx);
+        assert_eq!(both(&ctx), [expected, expected], "{value}: after a theme change");
+        assert!(app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).is_err());
+    }
 }
 
 #[test]
@@ -1439,8 +1456,8 @@ fn unimplemented_preferences_are_hidden_from_the_dialog() {
     let values = prefs::Preferences::default().to_json();
     assert!(has_visible_fields(&values, "general"));
     assert!(has_visible_fields(&values, "fileHandling"));
-    // Every setting of this section is still unimplemented.
-    assert!(!has_visible_fields(&values, "scratchDisks"), "scratchDisks");
+    assert!(has_visible_fields(&values, "scratchDisks"));
+    assert!(!prefs::is_hidden("scratchDisks.disks"));
     // Allow Agent Control and Control Port are read at launch (apps/photocraft main.rs).
     assert!(has_visible_fields(&values, "integrations"));
     assert!(!prefs::is_hidden("integrations.allowAgentControl"));

@@ -1,6 +1,6 @@
 use super::{
-    DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking, state,
-    transform_tool, type_transform, vector_ui,
+    DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking,
+    smart_svg_ui, state, transform_tool, type_transform, vector_ui,
 };
 
 impl PhotocraftApp {
@@ -35,6 +35,13 @@ impl PhotocraftApp {
     }
 
     pub(crate) fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_depth += 1;
+        let r = self.run_command_at_depth(id, params);
+        self.run_depth -= 1;
+        r
+    }
+
+    fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
@@ -56,7 +63,16 @@ impl PhotocraftApp {
             self.session.precheck(id, &params).map_err(|e| e.to_string())?;
             transform_tool::commit(self);
             if transform_tool::committing(self).is_some() {
-                return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                // A click stays a click: it runs when the commit lands (#9974). Only a click in the
+                // committing document, one at a time: a script, a control request or an action step
+                // needs its answer now, and a click in another tab wasn't meant for this one.
+                let committing_here = self.transform_preview.as_ref().is_some_and(|pv| self.session.active().is_some_and(|st| st.doc.id == pv.doc.id));
+                let click = !self.automation_input && self.session.authorize.is_none() && self.run_depth == 1;
+                if !click || !committing_here || self.after_transform_commit.is_some() {
+                    return Err(tl!("Free Transform is still being applied; try again when it has finished.").into());
+                }
+                self.after_transform_commit = Some((id.to_string(), params));
+                return Ok(Value::Null);
             }
             if self.ui.transform.is_some() {
                 return Err(if self.ui.status.is_empty() { tl!("The transform couldn't be applied.").into() } else { self.ui.status.clone() });
@@ -64,6 +80,9 @@ impl PhotocraftApp {
         }
         actions::suspended_guard(self, id)?;
         if let Some(result) = panel_docking::command(self, id, &params) {
+            return result;
+        }
+        if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
         }
         if let Some(r) = transform_tool::intercept(self, id) {
@@ -75,10 +94,42 @@ impl PhotocraftApp {
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
         if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {
-            if !clip_read {
+            let paste_as = if id == "edit.paste" {
+                match params.get("as") {
+                    None => None,
+                    Some(value) => match value.as_str() {
+                        Some(mode @ ("pixels" | "path" | "shape")) => Some(mode),
+                        _ => return Err("`as` must be pixels, path or shape".into()),
+                    },
+                }
+            } else {
+                None
+            };
+            if let Some(mode) = paste_as {
+                // Pixels can come from the bitmap when the SVG can't be read; vectors can't.
+                let (imported, svg_error) = match self.import_os_svg_clipboard() {
+                    Ok(imported) => (imported, None),
+                    Err(error) if mode == "pixels" => (false, Some(error)),
+                    Err(error) => return Err(error),
+                };
+                if mode == "pixels"
+                    && !imported
+                    && !clip_read
+                    && let Err(error) = self.import_os_clipboard()
+                {
+                    return Err(svg_error.unwrap_or(error));
+                }
+                if let Some(error) = svg_error {
+                    if self.session.clipboard.is_none() {
+                        return Err(error);
+                    }
+                    self.ui.status.clear();
+                    self.ui.status_error = false;
+                }
+            } else if !clip_read {
                 self.import_os_clipboard()?;
             }
-            if self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
+            if paste_as.is_none() && self.session.clipboard.is_none() && self.services.clipboard_get_image.is_some() {
                 if self.services.clipboard_unreadable.as_ref().is_some_and(|unreadable| unreadable()) {
                     // The clipboard may well hold an image that can't be reached: say why.
                     notices::clipboard_unreadable(self);
@@ -121,6 +172,9 @@ impl PhotocraftApp {
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
+        if self.run_depth == 1 {
+            self.perf.stage.command(id, self.perf.command_ms);
+        }
         match &r {
             Ok(_) => {
                 if self.ui.status_error {
@@ -208,6 +262,8 @@ impl PhotocraftApp {
                     | "select.loadSelection"
                     | "select.loadLuminosity"
                     | "path.toSelection"
+                    | "path.addToSelection"
+                    | "path.subtractFromSelection"
             )
             && self.session.active().is_some_and(|st| st.doc.selection.is_some())
         {
@@ -226,6 +282,7 @@ impl PhotocraftApp {
             // Adding a mask selects its thumbnail: the next brush or footer Delete targets it.
             self.ui.mask_target = true;
             self.ui.vector_mask_target = false;
+            self.target_mask_over_colour_rows();
         }
         if result.is_ok() && creates_active_vector_mask {
             // Likewise a new vector mask (#4728): Properties shows its Density and Feather, and a
@@ -243,6 +300,34 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
+        // The Paths panel selection belongs to the active document. Ordinary edits replace the
+        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
+        // reopened document, even with the same ID.
+        let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        // Crop's Fill goes back to its default entry when another document that was already open
+        // becomes active (a tab switch, or closing the active one), as in the reference
+        // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
+        // as do tool switches, commits and cancels, which leave the active document alone (#10894).
+        if let (Some((id, ..)), Some((old_id, ..))) = (&document, &self.path_document)
+            && id != old_id
+            && self.view_docs.contains(id)
+        {
+            self.ui.tool_options.crop_content_aware = false;
+        }
+        let same_document = match (&self.path_document, &document) {
+            (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_document {
+            self.ui.selected_path = None;
+        }
+        self.path_document = document;
+        // A shape box handle drag belongs to its document, revision and tool.
+        crate::shape_bounds_box::cancel_stale(self);
+        vector_ui::cancel_stale_pen(self);
+        crate::direct_select::cancel_stale(self);
+        canvas::cancel_stale_vector_drag(self);
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
@@ -276,12 +361,15 @@ impl PhotocraftApp {
             let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
             for &idx in &new_docs {
                 if !self.ui.windows.iter().any(|w| w.document == idx) {
-                    crate::view_cmds::float_window(self, idx, idx);
+                    crate::view_cmds::float_window(self, idx, idx, false);
                 }
             }
         }
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
+        self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
+        // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
+        self.streams.retain(|doc, _| ids.contains(doc));
         self.view_docs = ids;
         self.prune_thumbs();
         self.sync_mask_targets();

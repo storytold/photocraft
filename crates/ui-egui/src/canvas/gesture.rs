@@ -7,19 +7,35 @@ use super::textures::shown_as_document;
 use super::{PhotocraftApp, Tool, json};
 
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
+    finish(app, d, None);
+}
+
+/// [`finish_gesture`] for a pointer release. `click`: the release, before snapping, came back
+/// within half a pixel of the press (`tool_input`). A selection drag that snapping pulled back onto
+/// its press point is not one (#11392).
+pub(crate) fn finish_release(app: &mut PhotocraftApp, d: Drag, click: bool) {
+    finish(app, d, Some(click));
+}
+
+/// `click`: whether the gesture was a click, when the caller saw the release before snapping;
+/// otherwise the end point decides.
+fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
     // Control can select a different tool and release before the next frame cancels the drag.
     // Cancel before even recording a Shift-stroke anchor, including the preview fallback paths.
     if d.tool == Tool::MixerBrush && app.ui.tool != Tool::MixerBrush {
         app.live_stroke = None;
         return;
     }
+    if d.vector_owner.as_ref().is_some_and(|owner| !owner.valid(app)) {
+        return;
+    }
     let mut end = d.points.last().copied().unwrap_or([d.start[0], d.start[1], 1.0]);
     let (sx, sy) = snap_aliased_tip(app, d.tool, end[0], end[1]);
     end[0] = sx;
     end[1] = sy;
-    if let Some(floating) = d.sel_move {
-        finish_selection_drag(app, floating, d.start, [end[0], end[1]]);
-        return;
+    if d.sel_move.is_some() {
+        let Some(line) = finish_selection_release(app, &mut d, end, click) else { return };
+        end = line;
     }
     // Where the next ⇧-click line starts.
     if crate::stroke_constraint::connects(d.tool)
@@ -78,11 +94,17 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     }
     match d.tool {
         Tool::ObjectSelection => crate::retouch_ui::finish_object_selection(app, d.start, [end[0], end[1]], d.modifiers),
-        Tool::FreeformPen => crate::vector_ui::freeform_finish(app, &d.points, d.lasso.as_ref().map_or(&[], |l| l.straight())),
-        // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead.
+        Tool::FreeformPen => {
+            if let Some(owner) = d.pen_owner {
+                crate::vector_ui::freeform_finish_owned(app, &d.points, d.lasso.as_ref().map_or(&[], |l| l.straight()), owner);
+            }
+        }
+        // Photoshop: a click without dragging opens Create Rectangle / Ellipse / … instead. In Path
+        // mode a click adds nothing: the dialog makes a shape layer, which Path mode never draws,
+        // and the click's few pixels of travel would add a speck of a subpath to the work path.
         t if crate::vector_ui::is_shape_tool(t)
             && crate::shape_dialog::is_click(d.start, &d.points, app.point_zoom())
-            && crate::shape_dialog::open(app, t, d.start).is_some() => {}
+            && (crate::vector_ui::draws_path(&app.ui.tool_options) || crate::shape_dialog::open(app, t, d.start).is_some()) => {}
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
@@ -146,6 +168,41 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
     }
 }
 
+/// The release of selection drag `d` at `end` (`click`: see [`finish`]). A Single Row / Single
+/// Column click inside the selection or on a floating piece selects a line, as it does elsewhere,
+/// instead of deselecting or dropping as other marquees do (#11392): the point it selects at, for
+/// the tool's own release to go on with. `None`: the release is done. A click ends here unsnapped
+/// (`tool_input`), so it is never a move; the line snaps as a click outside the selection does (its
+/// press began as a move, which keeps the press point).
+fn finish_selection_release(app: &mut PhotocraftApp, d: &mut Drag, end: [f64; 3], click: Option<bool>) -> Option<[f64; 3]> {
+    let floating = d.sel_move?;
+    let unmoved = (end[0] - d.start[0]).round() == 0.0 && (end[1] - d.start[1]).round() == 0.0;
+    let click = click.unwrap_or(unmoved);
+    if unmoved && !click {
+        // A drag that snapping pulled back where it started leaves the selection as it was. Its
+        // preview of a floating piece goes too: nothing changed for it to go stale with, and a
+        // Move-tool drag's release (`move_ui::finish`) is not reached. It is rebuilt as needed.
+        app.move_preview = None;
+        return None;
+    }
+    if !click || !matches!(d.tool, Tool::SingleRowMarquee | Tool::SingleColumnMarquee) {
+        finish_selection_drag(app, floating, d.start, [end[0], end[1]]);
+        return None;
+    }
+    // The piece drops where it is first, as a press off it drops it (`tool_input`).
+    if floating
+        && app.session.active().and_then(photocraft_engine::float_cmds::floating).is_some()
+        && let Err(e) = app.run("select.drop", json!({}))
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+        return None;
+    }
+    let [x, y] = crate::snap_ui::snap_click(app, d.start, d.live);
+    d.points.push([x, y, end[2]]);
+    Some([x, y, end[2]])
+}
+
 /// Selection mode from the options bar, overridden by modifier keys (⇧ add, ⌥ subtract, ⇧⌥ intersect).
 /// The cursor badge announces the same mode (`tool_feedback`).
 pub(crate) fn selection_mode(app: &PhotocraftApp, m: egui::Modifiers) -> &'static str {
@@ -154,6 +211,8 @@ pub(crate) fn selection_mode(app: &PhotocraftApp, m: egui::Modifiers) -> &'stati
 
 /// Shift constrains a Polygonal Lasso segment to Photoshop's 45° directions.
 /// Work in document coordinates so zoom, view rotation and mirroring cannot skew it.
+/// A diagonal keeps the shorter of the two offsets on both axes, as Photoshop does (#11393);
+/// a horizontal or vertical snap keeps the segment's length.
 pub(crate) fn constrained_polygon_point(from: [f64; 2], point: [f64; 2]) -> [f64; 2] {
     let dx = point[0] - from[0];
     let dy = point[1] - from[1];
@@ -164,7 +223,12 @@ pub(crate) fn constrained_polygon_point(from: [f64; 2], point: [f64; 2]) -> [f64
     if length == 0.0 {
         return point;
     }
-    let angle = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
+    let octant = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round();
+    let angle = octant * std::f64::consts::FRAC_PI_4;
+    if octant.rem_euclid(2.0) == 1.0 {
+        let m = dx.abs().min(dy.abs());
+        return [from[0] + m * angle.cos().signum(), from[1] + m * angle.sin().signum()];
+    }
     [from[0] + length * angle.cos(), from[1] + length * angle.sin()]
 }
 
@@ -172,6 +236,7 @@ pub(crate) fn constrained_polygon_point(from: [f64; 2], point: [f64; 2]) -> [f64
 /// first click fixes the selection mode; a new-selection polygon hides the old outline while it is
 /// drawn, and replaces it in one history step when it closes.
 pub(super) fn polygon_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    polygon_cancel_stale(app);
     let close = app
         .ui
         .polygon
@@ -202,6 +267,7 @@ pub fn polygon_retract(app: &mut PhotocraftApp) -> bool {
     }
     if app.ui.polygon.is_empty() {
         app.ui.polygon_mode.clear();
+        app.ui.polygon_doc = None;
     }
     true
 }
@@ -209,13 +275,13 @@ pub fn polygon_retract(app: &mut PhotocraftApp) -> bool {
 /// The polygon in progress belongs to the document it was started on (`UiState::polygon_doc`):
 /// once another document becomes active it is dropped, so its outline doesn't show on (or get
 /// committed to) the other document, and the selection it would have replaced is shown again.
-/// Switching tools is handled in `PhotocraftApp::sync_views`. Like the Lasso's
+/// Runs before canvas input and shortcuts as well as in `PhotocraftApp::sync_views`. Like the Lasso's
 /// ([`crate::lasso_ui::cancel_stale`]) and the Magnetic Lasso's ([`crate::magnetic_lasso_ui::frame`]).
 pub fn polygon_cancel_stale(app: &mut PhotocraftApp) {
     let active = app.session.active().map(|st| st.doc.id);
     if app.ui.polygon.is_empty() {
         app.ui.polygon_doc = None;
-    } else if app.ui.polygon_doc.is_some_and(|d| Some(d) != active) {
+    } else if app.ui.tool != Tool::PolygonLasso || app.ui.polygon_doc.is_some_and(|d| Some(d) != active) {
         app.ui.polygon.clear();
         app.ui.polygon_mode.clear();
         app.ui.polygon_doc = None;
@@ -230,12 +296,14 @@ pub fn polygon_replaces_selection(app: &PhotocraftApp) -> bool {
 
 /// Close the polygonal lasso and make the selection in the mode it started in.
 pub fn commit_polygon(app: &mut PhotocraftApp) {
+    polygon_cancel_stale(app);
     let pts = std::mem::take(&mut app.ui.polygon);
     let mode = std::mem::take(&mut app.ui.polygon_mode);
+    app.ui.polygon_doc = None;
     if pts.len() >= 3 {
         let mode = if mode.is_empty() { selection_mode(app, egui::Modifiers::NONE).to_owned() } else { mode };
         let o = &app.ui.tool_options;
-        let _ = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": o.feather}));
+        let _ = app.run("select.lasso", json!({"points": pts, "mode": mode, "antiAlias": o.anti_alias, "feather": o.feather, "polygonal": true}));
     }
 }
 
@@ -282,5 +350,6 @@ pub fn commit_crop(app: &mut PhotocraftApp) {
         crate::crop_ui::restore(app, kept);
     } else if let Some(i) = app.session.active_index() {
         app.ui.views[i].fit_pending = true;
+        crate::crop_ui::hide_frame(app);
     }
 }

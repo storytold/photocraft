@@ -17,6 +17,37 @@
 # (`plural_one_other` in i18n/mod.rs).
 
 # Top-level Menus
+
+# File Menu
+
+# Edit Menu
+
+# Image Menu
+
+# Layer Menu
+
+# Select Menu
+
+# View Menu
+
+# Window Menu & Panels
+
+# Tools (Toolbox)
+
+# Common Dialogs and Buttons
+
+# Plurals
+
+# Tool and Scope strings
+
+# Camera Raw
+
+# Coverage-test keys (English until translated)
+
+# Pen draft after a refused commit (#7648)
+# Art History Brush (#213).
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	File	फ़ाइल
 	Edit	एडिट
 	Image	इमेज
@@ -28,14 +59,16 @@
 	View	व्यू
 	Window	विंडो
 	Help	सहायता
-
-# File Menu
 	New…	नया…
 	Open…	खोलें…
 	Open Recent	हाल ही में खोले गए
 	Close	बंद करें
 	Close All	सभी बंद करें
 	Close Others	अन्य सभी बंद करें
+	New Document…	New Document…
+	Open Document…	खोलें…
+	Consolidate All to Here	सभी को यहाँ समेकित करें
+	Move to New Window	नई विंडो में ले जाएँ
 	Save	सहेजें
 	Save As…	इस रूप में सहेजें…
 	Save a Copy…	एक प्रति सहेजें…
@@ -48,8 +81,6 @@
 	Print…	प्रिंट करें…
 	Print One Copy	एक प्रति प्रिंट करें
 	Exit	बाहर निकलें
-
-# Edit Menu
 	Undo	पूर्ववत करें
 	Redo	फिर से करें
 	Cut	काटें
@@ -79,8 +110,6 @@
 	Workspace…	कार्यस्थान…
 	Tools…	टूल्स…
 	Performance…	परफॉरमेंस…
-
-# Image Menu
 	Mode	मोड
 	RGB Color	RGB रंग
 	CMYK Color	CMYK रंग
@@ -113,8 +142,6 @@
 	Trim…	ट्रिम करें…
 	Reveal All	सभी दिखाएँ
 	Duplicate…	डुप्लीकेट…
-
-# Layer Menu
 	New	नया
 	Layer…	लेयर…
 	Layer from Background	बैकग्राउंड से लेयर
@@ -133,6 +160,8 @@
 	Layer Mask	लेयर मास्क
 	Hide All	सभी छिपाएँ
 	Reveal Selection	चयन दिखाएँ
+	Reveal in Finder	Finder में दिखाएँ
+	Reveal in Explorer	Explorer में दिखाएँ
 	Hide Selection	चयन छिपाएँ
 	From Transparency	पारदर्शिता से
 	Apply	लागू करें
@@ -141,8 +170,6 @@
 	Merge Down	नीचे मर्ज करें
 	Merge Visible	दृश्यमान मर्ज करें
 	Flatten Image	इमेज फ़्लैट करें
-
-# Select Menu
 	All	सभी
 	Deselect	अचयनित करें
 	Reselect	पुनः चयन करें
@@ -163,8 +190,6 @@
 	Transform Selection	चयन रूपांतरित करें
 	Load Selection…	चयन लोड करें…
 	Save Selection…	चयन सहेजें…
-
-# View Menu
 	Proof Setup	प्रूफ़ सेटअप
 	Proof Colors	प्रूफ़ रंग
 	Zoom In	ज़ूम इन
@@ -187,8 +212,6 @@
 	New Guide…	नई गाइड…
 	Lock Slices	स्लाइस लॉक करें
 	Clear Slices	स्लाइस हटाएं
-
-# Window Menu & Panels
 	Arrange	व्यवस्थित करें
 	Tile Horizontally	क्षैतिज टाइल
 	Tile Vertically	लंबवत टाइल
@@ -214,10 +237,14 @@
 	Info	जानकारी
 	Timeline	टाइमलाइन
 	Tools	टूल्स
+	Contextual Task Bar	प्रासंगिक कार्य पट्टी
+	Hide bar	पट्टी छिपाएँ
+	Reset bar position	पट्टी की स्थिति रीसेट करें
+	Pin bar position	पट्टी की स्थिति पिन करें
+	Move bar	पट्टी खिसकाएँ
+	More options	अधिक विकल्प
 	Options	विकल्प
 	Status Bar	स्टेटस बार
-
-# Tools (Toolbox)
 	Move Tool	मूव टूल
 	Artboard Tool	आर्टबोर्ड टूल
 	Rectangular Marquee Tool	रेक्टेंगुलर मार्की टूल
@@ -286,8 +313,6 @@
 	Hand Tool	हैंड टूल
 	Rotate View Tool	रोटेट व्यू टूल
 	Zoom Tool	ज़ूम टूल
-
-# Common Dialogs and Buttons
 	OK	ठीक है
 	Cancel	रद्द करें
 	Reset	रीसेट करें
@@ -316,14 +341,10 @@
 	Presets:	प्रीसेट्स:
 	Language	भाषा
 	Auto	स्वचालित
-
-# Plurals
 @plural	{n} layer|{n} layers	{n} लेयर|{n} लेयर्स
 @plural	{n} item|{n} items	{n} आइटम|{n} आइटम्स
 @plural	{n} document|{n} documents	{n} दस्तावेज़|{n} दस्तावेज़
 @plural	{n} pixel|{n} pixels	{n} पिक्सेल|{n} पिक्सेल्स
-
-# Tool and Scope strings
 	Scope	दायरा
 	Selected	चयनित
 	Mixer Brush	मिक्सर ब्रश
@@ -337,8 +358,7 @@
 	Aligned	संरेखित
 	Fit in View	दृश्य में फ़िट करें
 	Camera Raw	Camera Raw
-
-# Camera Raw
+	Camera Raw…	Camera Raw…
 cameraRaw	Amount	मात्रा
 	Amount	मात्रा
 cameraRaw	Aqua	एक्वा
@@ -493,8 +513,6 @@ cameraRaw	Whites	व्हाइट्स
 	Whites	व्हाइट्स
 cameraRaw	Yellow	पीला
 	Yellow	पीला
-
-# Coverage-test keys (English until translated)
 	Black Point Compensation	Black Point Compensation
 	Apply At Canvas Bounds	Apply At Canvas Bounds
 	Convert to Shape…	Convert to Shape…
@@ -539,7 +557,8 @@ cameraRaw	Yellow	पीला
 	Missing delete command	हटाने का कमांड नहीं मिला
 	Invalid delete command	हटाने का कमांड अमान्य है
 	Layer deleted, but confirmation preference could not be saved: {error}	लेयर हटा दी गई, लेकिन पुष्टि की प्राथमिकता सहेजी नहीं जा सकी: {error}
-# Art History Brush (#213).
+	The path was kept as the Work Path	पथ को कार्य पथ के रूप में रखा गया
+	The path was discarded	पथ हटा दिया गया
 	Art History Brush	आर्ट हिस्ट्री ब्रश
 	Style	शैली
 	Area	क्षेत्र
@@ -552,8 +571,6 @@ cameraRaw	Yellow	पीला
 	Tight Curl	सघन घुमाव
 	Loose Curl	ढीला घुमाव
 	Stylized dabs from a history state	इतिहास स्थिति से शैलीबद्ध थपके
-
-# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	पहलू अनुपात
 	Category	श्रेणी
 	Color Table	रंग तालिका
@@ -563,3 +580,98 @@ cameraRaw	Yellow	पीला
 	Target	लक्ष्य
 	Units	इकाइयाँ
 	Demosaic	डिमोज़ेक
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
+	Clear Selection	चयन साफ़ करें
+	Color Aware	रंग-आधारित
+	Decontaminate Colors	रंग शुद्ध करें
+	Edge Detection	किनारा पहचान
+	Global Refinements	वैश्विक परिशोधन
+	High Quality Preview	उच्च गुणवत्ता पूर्वावलोकन
+	Object Aware	ऑब्जेक्ट-आधारित
+	Real-Time Refinement	रियल-टाइम परिशोधन
+	Refine Edge Brush Tool	किनारा परिशोधन ब्रश टूल
+	Refine Hair	बाल परिशोधित करें
+	Refine Mode	परिशोधन मोड
+	Remember Settings	सेटिंग्स याद रखें
+	View Mode	दृश्य मोड
+	Object Aware needs a segmentation model, which isn't available yet	ऑब्जेक्ट-आधारित के लिए सेगमेंटेशन मॉडल चाहिए, जो अभी उपलब्ध नहीं है
+	Refine Hair needs hair detection, which isn't available yet	बाल परिशोधित करने के लिए बालों की पहचान चाहिए, जो अभी उपलब्ध नहीं है
+	Select and Mask was closed: its document is no longer the active one	चयन और मास्क बंद कर दिया गया: उसका दस्तावेज़ अब सक्रिय नहीं है
+	Select and Mask was closed: another layer was selected	चयन और मास्क बंद कर दिया गया: दूसरी लेयर चुनी गई
+# Art History Brush (#213).
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
+	Edit Brush…	ब्रश संपादित करें…
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	फ़्रेम एफ़ाइन रूपांतरणों का समर्थन करता है; परिप्रेक्ष्य रूपांतरणों के लिए उसकी छवि चुनें
+	A frame supports affine transforms; select its image to warp it	फ़्रेम एफ़ाइन रूपांतरणों का समर्थन करता है; वार्प करने के लिए उसकी छवि चुनें
+	Convert to Frame…	फ़्रेम में बदलें…
+	Create a new custom frame	नया कस्टम फ़्रेम बनाएँ
+	Create a new polygonal frame	नया बहुभुजीय फ़्रेम बनाएँ
+	Create a new triangular frame	नया त्रिकोणीय फ़्रेम बनाएँ
+	Fit Content to Frame	सामग्री को फ़्रेम में फ़िट करें
+	Fit Frame to Content	फ़्रेम को सामग्री के अनुसार फ़िट करें
+	Frame coordinates must be finite and within 600000 pixels	फ़्रेम के निर्देशांक परिमित और 600000 पिक्सेल की सीमा में होने चाहिए
+	Import Image…	छवि आयात करें…
+	Invalid frame transform	अमान्य फ़्रेम रूपांतरण
+	Invalid nested file drop	अमान्य नेस्टेड फ़ाइल ड्रॉप
+	New Frame	नया फ़्रेम
+	Replace Image…	छवि बदलें…
+	The frame is locked	फ़्रेम लॉक है
+	The frame is unavailable	फ़्रेम उपलब्ध नहीं है
+	Both	दोनों
+	Center	केंद्र
+	Create a new elliptical frame	नया अंडाकार फ़्रेम बनाएँ
+	Create a new rectangular frame	नया आयताकार फ़्रेम बनाएँ
+	Frame	फ़्रेम
+	H	H
+	Inside	अंदर
+	Outside	बाहर
+	Sides:	भुजाएँ:
+	Stroke	स्ट्रोक
+	W	W
+	X	X
+	Y	Y
+
+# Actions panel: loading several action files at once
+	{message} ({note})	{message} ({note})
+@plural	{n} action|{n} actions	{n} एक्शन|{n} एक्शन
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} चरण का अभी PhotoCraft में कोई समकक्ष नहीं है|{n} चरणों का अभी PhotoCraft में कोई समकक्ष नहीं है
+@plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
+	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+	Embed Linked	लिंक किए गए को एम्बेड करें
+	Embed All Linked	सभी लिंक किए गए को एम्बेड करें
+	Toggle reference point	संदर्भ बिंदु दिखाएँ/छिपाएँ
+
+# Action Stop message (#8386)
+	Message	संदेश
+	Continue	जारी रखें
+	Stop	रोकें
+# Playback Options (#5212)
+	Playback Options…	प्लेबैक विकल्प…
+	Playback Options	प्लेबैक विकल्प
+	Accelerated	त्वरित
+	Step by Step	चरण दर चरण
+	Pause For:	इतने समय रुकें:
+	Pause For	इतने समय रुकें
+	seconds	सेकंड
+	Create a single history state	एक ही इतिहास स्थिति बनाएँ
+
+# Channels panel menu (#11451)
+	New Channel…	नया चैनल…
+	Duplicate Channel	चैनल को डुप्लीकेट करें
+	Delete Channel	चैनल हटाएँ
+	New Spot Channel…	नया स्पॉट चैनल…
+	Merge Spot Channel	स्पॉट चैनल मर्ज करें
+	Channel Options…	चैनल विकल्प…
+	Split Channels	चैनल्स विभाजित करें
+	Merge Channels…	चैनल्स मर्ज करें…
+	Specify Channels:	चैनल्स निर्दिष्ट करें:
+	Not enough grayscale documents for this mode.	इस मोड के लिए पर्याप्त ग्रेस्केल डॉक्यूमेंट नहीं हैं।
+	Pick a different document for each channel.	हर चैनल के लिए अलग डॉक्यूमेंट चुनें।
+	A picked document is no longer open.	चुना गया एक डॉक्यूमेंट अब खुला नहीं है।
+	A picked document is no longer a grayscale document of the same size.	चुना गया एक डॉक्यूमेंट अब उसी आकार का ग्रेस्केल डॉक्यूमेंट नहीं है।

@@ -1,4 +1,11 @@
+use super::invoke::data_sets_text;
 use super::*;
+
+#[test]
+fn data_set_files_must_be_valid_utf8() {
+    assert_eq!(data_sets_text(b"DataSet,headline\nS,Jos\xc3\xa9\n".to_vec()).unwrap(), "DataSet,headline\nS,José\n");
+    assert!(data_sets_text(b"DataSet,headline\nS\xff,Jos\xe9\n".to_vec()).is_err());
+}
 
 #[test]
 fn showing_grid_restores_hidden_extras() {
@@ -301,6 +308,19 @@ fn help_search_matches_the_ui_language_and_english() {
     assert!(!ids(&crate::i18n::tr(fr, "Layer").to_lowercase()).is_empty(), "French menu name");
     assert!(ids("distort").contains(&"edit.transform.distort".to_string()), "English still matches");
     assert!(ids("zzzzqqq").is_empty());
+}
+
+/// Azerbaijani menu text and paths keep dotted I distinct; English aliases still work.
+#[test]
+fn azerbaijani_help_search_uses_the_language_of_each_alias() {
+    let az = crate::i18n::Lang::from_code("az").unwrap();
+    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let items = menu_items(&app);
+    let hits = |query: &str| search_items(&items, query, az).iter().map(|item| item.id.clone()).collect::<Vec<_>>();
+    assert!(!hits("ŞƏKİL").is_empty(), "uppercase dotted I matches Şəkil paths");
+    assert_eq!(hits("ŞƏKİL"), hits("şəkil"));
+    assert!(hits("ŞƏKIL").is_empty(), "dotless I must not match dotted i");
+    assert!(hits("DISTORT").contains(&"edit.transform.distort".to_string()), "English aliases keep English casing");
 }
 
 /// #1447, #1438: a click on Help leaves its search field focused, so typing searches at once,

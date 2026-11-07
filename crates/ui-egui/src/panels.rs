@@ -25,6 +25,7 @@ pub mod channels_panel;
 pub mod chrome_ui;
 pub mod clip_line_ui;
 mod color;
+pub mod color_hud;
 pub mod color_panel_ui;
 pub mod comps_ui;
 pub mod doc_props_ui;
@@ -32,7 +33,7 @@ mod dock;
 pub mod histogram_panel;
 mod history;
 pub mod history_menu_ui;
-mod info;
+pub(crate) mod info;
 mod layer_drag;
 pub mod layer_filter_ui;
 pub mod layer_menu_ui;
@@ -43,6 +44,7 @@ pub mod layer_row_ui;
 pub(super) mod layer_transfer;
 pub mod layer_tree_ui;
 mod layers;
+mod layers_empty_menu;
 pub mod layers_panel_ui;
 pub(super) mod mask_props_ui;
 pub mod mask_thumbs_ui;
@@ -57,9 +59,9 @@ pub mod smart_ui;
 mod status_bar;
 pub mod swatches_ui;
 pub(super) mod timeline_ui;
-mod title_bar;
+pub(crate) mod title_bar;
 pub(super) mod titlebar;
-mod toolbar;
+pub(crate) mod toolbar;
 pub mod type_panels_ui;
 pub(super) mod variables_ui;
 
@@ -87,7 +89,7 @@ pub(crate) use layer_drag::{dropped_on, layer_drag_edge_scroll};
 pub(crate) use layer_row::thumb_load_badge;
 #[cfg(test)]
 use layer_row::{layer_thumb_fit, paint_clipping_indicator};
-pub(crate) use layers::blend_options;
+pub(crate) use layers::{blend_options, fx_button};
 #[cfg(test)]
 use layers::{layers, opacity_row_layout, simple_lock_toggle};
 #[cfg(test)]
@@ -109,7 +111,9 @@ pub use status_bar::{status_bar, status_bar_heights};
 use title_bar::title_x;
 pub use title_bar::{sync_window_title, system_title_bar, title_bar, window_title};
 #[cfg(test)]
-use toolbar::{STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size, visible_sections};
+use toolbar::{
+    STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, next_slot_tool, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size, visible_sections,
+};
 pub use toolbar::{paint_toolbar_flyout_indicator, toolbar};
 
 fn c32(c: [f32; 4]) -> Color32 {
@@ -144,7 +148,7 @@ mod title_tests {
 
     #[test]
     fn without_the_preference_the_mark_stays() {
-        // The default (e.g. the web build or the snapshot example): no custom bar, no preference.
+        // The default (e.g. the web build or snapshot example): the integrated title bar.
         let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         assert!(!system_title_bar(&app));
     }
@@ -257,6 +261,13 @@ mod title_tests {
         super::sync_window_title(&mut app, &ctx);
         assert_eq!(app.last_window_title, "foo.psd \u{2014} PhotoCraft");
     }
+}
+
+/// Whether blend mode `m` starts one of the groups Photoshop's blend mode lists draw a line above:
+/// Normal, Dissolve (and Pass Through, Clear) | darken | lighten | contrast | difference | colour
+/// (#5532). The first mode of a list never gets a line.
+pub(crate) fn starts_blend_group(m: BlendMode) -> bool {
+    matches!(m, BlendMode::Darken | BlendMode::Lighten | BlendMode::Overlay | BlendMode::Difference | BlendMode::Hue)
 }
 
 fn label(ui: &mut egui::Ui, s: &str) {
@@ -819,7 +830,7 @@ mod snapshot_row_tests {
         let p = trash(&h);
         click(&mut h, p);
         let st = h.state().session.active().unwrap();
-        assert_eq!(st.snapshots.len(), 1, "the trash deleted the snapshot (the first snapshot stays)");
+        assert_eq!(st.snapshots.len(), 1, "the trash deleted the snapshot, leaving the first one");
         assert_eq!(st.history.entries().len(), steps, "and left the states alone");
 
         // An edit after the click deselects the snapshot: the trash deletes the state.
@@ -833,7 +844,7 @@ mod snapshot_row_tests {
         let p = trash(&h);
         click(&mut h, p);
         let st = h.state().session.active().unwrap();
-        assert_eq!(st.snapshots.len(), 2, "the snapshot is kept");
+        assert_eq!(st.snapshots.len(), 2, "the snapshot is kept, after the first one");
         assert_eq!(st.history.entries().len(), steps - 1, "the current state is deleted");
     }
 
@@ -846,7 +857,7 @@ mod snapshot_row_tests {
         let to = trash(&h);
         drag(&mut h, egui::pos2(row.x, row.y), to);
         let st = h.state().session.active().unwrap();
-        assert_eq!(st.snapshots.len(), 1, "the dragged snapshot is deleted (the first snapshot stays)");
+        assert_eq!(st.snapshots.len(), 1, "the dragged snapshot is deleted, leaving the first one");
         assert_eq!(st.history.entries().len(), steps, "no state is");
 
         // The second-to-last state: it and the state after it go, as with Delete.
@@ -859,7 +870,7 @@ mod snapshot_row_tests {
         drag(&mut h, egui::pos2(row.x, row.y), to);
         let st = h.state().session.active().unwrap();
         assert_eq!(st.history.entries().len(), 1, "the dragged state and the ones after it are deleted");
-        assert_eq!(st.snapshots.len(), 2, "the snapshot is kept");
+        assert_eq!(st.snapshots.len(), 2, "the snapshot is kept, after the first one");
     }
 
     /// With Allow Non-Linear History and only the oldest state current, a click on the trash has
@@ -996,6 +1007,102 @@ mod snapshot_row_tests {
         assert_eq!(snap.name, "Red layer only");
         assert_eq!(snap.doc.layers.len(), 1, "only the current layer");
         assert!(h.state().ui.dialogs.is_empty());
+    }
+
+    /// History Options › Show New Snapshot Dialog by Default (#2966): a plain click on the camera
+    /// opens New Snapshot as ⌥-click does, and ⌥-click still opens it (Photoshop's button always
+    /// prompts with the option on). Off, a plain click takes the snapshot at once.
+    #[test]
+    fn show_new_snapshot_dialog_by_default_makes_a_click_open_the_dialog() {
+        for (dialog_by_default, modifiers) in [(true, egui::Modifiers::NONE), (true, egui::Modifiers::ALT), (false, egui::Modifiers::NONE)] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+            app.run("history.options", json!({"showNewSnapshotDialogByDefault": dialog_by_default})).unwrap();
+            let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    let ctx = ui.ctx().clone();
+                    if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    history(app, ui);
+                    crate::dialogs::show(app, &ctx);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.state_mut().ui.theme = crate::theme::ThemeKind::ProMedium;
+            h.run_steps(4);
+            let mut buttons: Vec<Rect> = h
+                .ctx
+                .viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.rect.size() == vec2(26.0, 26.0)).map(|w| w.rect).collect());
+            buttons.sort_by(|a, b| b.center().x.total_cmp(&a.center().x));
+            let camera = buttons[1].center();
+            h.event(egui::Event::ModifiersChanged(modifiers));
+            h.event(egui::Event::PointerMoved(camera));
+            h.run_steps(1);
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: camera, button: egui::PointerButton::Primary, pressed, modifiers });
+                h.run_steps(1);
+            }
+            h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+            h.run_steps(3);
+            let snaps = h.state().session.active().unwrap().snapshots.len();
+            let dialog = h.state().ui.dialogs.last().is_some_and(|d| crate::snapshot_dialog::owns(&d.fields));
+            if dialog_by_default {
+                assert!(dialog, "{modifiers:?}: the dialog opens");
+                assert_eq!(snaps, 1, "{modifiers:?}: no snapshot until OK");
+                h.get_by_label("OK").click();
+                h.run_steps(3);
+                assert_eq!(h.state().session.active().unwrap().snapshots.last().unwrap().name, "Snapshot 1");
+            } else {
+                assert!(!dialog, "off: no dialog");
+                assert_eq!(snaps, 2, "off: the click takes the snapshot");
+            }
+        }
+    }
+
+    /// History Options › Automatically Create First Snapshot: on, the panel's top row is a
+    /// snapshot named after the document; off, there is none above the opening state.
+    #[test]
+    fn the_first_snapshot_row_follows_the_option() {
+        for first in [true, false] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("history.options", json!({"automaticallyCreateFirstSnapshot": first})).unwrap();
+            app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+            let name = app.session.active().unwrap().doc.name.clone();
+            let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+            h.run_steps(3);
+            assert_eq!(h.query_by_label(&name).is_some(), first, "a snapshot row named after the document: {first}");
+        }
+    }
+
+    /// Snapshot thumbnails belong to the snapshot's document (#6087): closing a document drops
+    /// them, and a document reopened with the same id (a `.pcraft` keeps it) gets fresh ones
+    /// rather than the closed document's, even before the views are synced.
+    #[test]
+    fn snapshot_thumbnails_follow_their_document() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
+        let doc = (*app.session.active().unwrap().doc).clone();
+        let doc_id = doc.id;
+        let mut h = Harness::builder().with_size(vec2(300.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| history(app, ui), app);
+        h.run_steps(2);
+        let thumb = |h: &Harness<'static, PhotocraftApp>| h.state().snapshot_thumbs.get(&(doc_id, 0)).map(|(_, t)| t.id());
+        let first = thumb(&h).expect("the first snapshot's thumbnail");
+        // Closed: its thumbnails go with it.
+        h.state_mut().session.close(0);
+        h.state_mut().sync_views();
+        assert!(h.state().snapshot_thumbs.keys().all(|(d, _)| *d != doc_id), "closing drops them");
+        h.state_mut().session.add_document(doc.clone(), None);
+        h.run_steps(2);
+        let reopened = thumb(&h).expect("a thumbnail for the reopened document");
+        assert_ne!(reopened, first);
+        // Closed and reopened between two frames, with no sync in between: still a fresh one.
+        h.state_mut().session.close(0);
+        h.state_mut().session.add_document(doc, None);
+        assert_eq!(h.state().session.active().unwrap().doc.id, doc_id, "same id");
+        h.run_steps(2);
+        assert_ne!(thumb(&h).unwrap(), reopened);
     }
 
     /// Renaming belongs to one document: snapshot ids restart in each, so switching tabs must not
@@ -1522,7 +1629,10 @@ mod embedding_tests {
     fn whole_app(rail: bool, menu_bar: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
-            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut session = photocraft_engine::Session::new();
+            // An empty workspace with its docks, not the Home screen.
+            session.edit_prefs(|p| p.general.auto_show_home_screen = false);
+            let mut app = PhotocraftApp::new(session, crate::Services::default());
             app.ui.panels.rail = rail;
             app.ui.panels.menu_bar = menu_bar;
             app
@@ -1949,6 +2059,45 @@ mod sampler_readout_tests {
         assert_eq!(b[0]["rgb"], json!([255, 0, 0]), "an edit shows");
         app.run("view.colorSamplers.add", json!({"x": 8, "y": 8})).unwrap();
         assert_eq!(sampler_readouts(&mut app).len(), 2, "so does a new sampler");
+    }
+}
+
+#[cfg(test)]
+mod brush_chip_tests {
+    use super::brush_controls::brush_preset_chip;
+
+    /// The options-bar chip's tip texture for `brush`, row-major alpha (32 × 32).
+    fn chip_tip(brush: &photocraft_engine::BrushSettings) -> Vec<u8> {
+        let ctx = egui::Context::default();
+        let mut state = crate::state::UiState::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| brush_preset_chip(ui, brush, &mut state));
+        // `Painter::image` is a textured mesh.
+        let id = out.shapes.iter().find_map(|c| match &c.shape {
+            egui::Shape::Mesh(m) if (m.calc_bounds().width() - 14.0).abs() < 0.01 => Some(m.texture_id),
+            _ => None,
+        });
+        let image = id.and_then(|id| out.textures_delta.set.get(&id)).and_then(|d| d.last()).map(|d| match &d.image {
+            egui::ImageData::Color(c) => c.clone(),
+        });
+        out.textures_delta.clear();
+        let image = image.expect("the chip draws its tip as an uploaded texture");
+        assert_eq!(image.size, [32, 32]);
+        image.pixels.iter().map(|p| p.a()).collect()
+    }
+
+    /// The chip shows the brush's own tip: a soft brush fades from its centre as its dabs do, a
+    /// hard one is solid to its rim, and a flattened tip is flat, not a round blob.
+    #[test]
+    fn the_brush_chip_draws_the_brushs_own_tip() {
+        let at = |a: &[u8], x: usize, y: usize| a[y * 32 + x];
+        let hard = chip_tip(&photocraft_engine::BrushSettings { hardness: 1.0, ..Default::default() });
+        let soft = chip_tip(&photocraft_engine::BrushSettings { hardness: 0.0, ..Default::default() });
+        assert!(at(&hard, 16, 16) == 255 && at(&hard, 16 + 11, 16) == 255, "hard: solid to near the rim");
+        assert!(at(&soft, 16, 16) > 230, "soft: full at the centre");
+        assert!(at(&soft, 16 + 11, 16) < 80, "soft: faint near the rim: {}", at(&soft, 16 + 11, 16));
+        assert!(at(&soft, 16 + 6, 16) > at(&soft, 16 + 11, 16), "and fading outwards");
+        let flat = chip_tip(&photocraft_engine::BrushSettings { hardness: 1.0, roundness: 0.3, ..Default::default() });
+        assert!(at(&flat, 16 + 11, 16) > 200 && at(&flat, 16, 16 + 11) == 0, "a flattened tip is flat");
     }
 }
 
