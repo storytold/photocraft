@@ -2107,7 +2107,7 @@ layers	Fill:	Độ tô:
 	Add Vector Mask	Thêm mặt nạ vector
 	Adds the current gradient to the Gradients panel	Thêm chuyển sắc hiện tại vào bảng Chuyển sắc
 	Adjustment Preview	Xem trước điều chỉnh
-	All Layers No Adjustments	Mọi lớp không điều chỉnh
+	All Layers no Adjustments	Mọi lớp không điều chỉnh
 	Alt-click to define a source point to clone from	Alt+nhấp để chỉ định điểm nguồn nhân bản
 	Artboard	Bảng vẽ
 	Artboard Background Color	Màu nền bảng vẽ
@@ -2137,7 +2137,7 @@ layers	Fill:	Độ tô:
 	Create new swatch	Tạo mẫu màu mới
 	Create new tool preset	Tạo thiết lập sẵn công cụ mới
 	Crop Shield color	Màu màn che vùng cắt
-	Current & Below No Adjustments	Hiện tại & dưới không điều chỉnh
+	Current & Below no Adjustments	Hiện tại & dưới không điều chỉnh
 	Current Tool Only	Chỉ công cụ hiện tại
 	Cycle Overlay	Đổi lớp phủ
 	Darken Amount	Mức làm tối

@@ -28,8 +28,8 @@ pub fn layer_options() -> [(String, &'static str); 5] {
         ("current".into(), tl!("Current Layer")),
         ("currentAndBelow".into(), tl!("Current & Below")),
         ("all".into(), tl!("All Layers")),
-        ("allNoAdjustments".into(), tl!("All Layers No Adjustments")),
-        ("currentAndBelowNoAdjustments".into(), tl!("Current & Below No Adjustments")),
+        ("allNoAdjustments".into(), tl!("All Layers no Adjustments")),
+        ("currentAndBelowNoAdjustments".into(), tl!("Current & Below no Adjustments")),
     ]
 }
 
