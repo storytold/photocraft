@@ -229,6 +229,16 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     Some((raw, ev, mods))
 }
 
+/// Remember a Move-way pick that changed the active layer (with the engine's change count after it, so
+/// any later change invalidates the marker), so the Layers panel's
+/// reveal can honour Expand layer group on click (layer_reveal.rs).
+fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc::LayerId>) {
+    let active_after = app.session.active().and_then(|st| st.active_layer);
+    if active_after != active_before {
+        app.move_pick = active_after.map(|id| (id, app.session.active_layer_changes()));
+    }
+}
+
 fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
@@ -244,7 +254,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 return true;
             }
             if multiple_color_target(app) {
-                app.ui.status = "Move and transforms on several colour channels are not implemented yet".into();
+                app.ui.status = "Move and transforms on several color channels are not implemented yet".into();
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
@@ -253,6 +263,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 let target = app.ui.tool_options.move_target.clone();
                 let mode = if mods.shift { "add" } else { "replace" };
                 let before = app.session.active().map(|st| st.selected_layers());
+                let active_before = app.session.active().and_then(|st| st.active_layer);
                 // A locked layer under the pointer (the Background) can't move. Photoshop draws
                 // the layer marquee instead of reporting the lock (#4058). Probe without
                 // selecting so a locked hit doesn't become the selection first.
@@ -269,6 +280,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                         // A click still selects the locked layer, as in Photoshop; a drag's
                         // marquee then replaces that selection on release.
                         let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode}));
+                        note_move_pick(app, active_before);
                     }
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return true;
@@ -280,6 +292,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                     crate::move_box::begin(app, [x, y], mods.shift);
                     return true;
                 }
+                note_move_pick(app, active_before);
                 // Snapping (and the drag's box) started before the pick: point it at what moves.
                 if app.session.active().map(|st| st.selected_layers()) != before {
                     crate::snap_ui::retarget_move(app, [x, y], mods);
@@ -533,6 +546,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
             drag.capture_selection_at_press(app);
+            drag.document = super::drag::DragDocument::capture(app);
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();
