@@ -709,21 +709,31 @@ pub fn begin_selection(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(
     Ok(())
 }
 
+/// Why this box cannot enter Warp. A frame thumbnail targets the clip, which only accepts
+/// affine transforms. Channel targets have their own mesh resampling path.
+pub(super) fn warp_refusal(t: &TransformSession) -> Option<&'static str> {
+    if t.content_aware.is_some() {
+        Some(CAS_ONLY_SCALES)
+    } else if !t.layers.is_empty() {
+        Some(WARP_ONE_LAYER)
+    } else if crate::frame_tool::frame_transform(t) {
+        Some("A frame supports affine transforms; select its image to warp it")
+    } else {
+        None
+    }
+}
+
 /// Start (or switch an active Free Transform into) Warp mode.
 pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    if app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()) {
-        return Err(CAS_ONLY_SCALES.into());
-    }
-    if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
-        return Err(WARP_ONE_LAYER.into());
-    }
     let fresh = app.ui.transform.is_none();
     if fresh {
         begin(app, ctx)?;
-        if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
+    }
+    if let Some(reason) = app.ui.transform.as_ref().and_then(warp_refusal) {
+        if fresh {
             cancel(app);
-            return Err(WARP_ONE_LAYER.into());
         }
+        return Err(tl!(reason).into());
     }
     enter_warp(app, ctx);
     // Started in Warp: that is where Undo stops. Switching an open transform to Warp is a step.
@@ -737,8 +747,7 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 /// custom mesh following the current box (so a transform made first carries over). Editable type
 /// gets its own Warp Text style instead ([`enter_type_warp`]).
 pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    // Several layers keep the box (#6501), even when the active one is type.
-    if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
+    if app.ui.transform.as_ref().and_then(warp_refusal).is_some() {
         return;
     }
     if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) && warps_type(app) {

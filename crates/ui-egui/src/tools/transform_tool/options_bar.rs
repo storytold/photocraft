@@ -1,4 +1,4 @@
-use super::begin::{enter_warp, interpolation_preference, leave_warp, warps_type};
+use super::begin::{enter_warp, interpolation_preference, leave_warp, warp_refusal, warps_type};
 use super::commit::{cancel, commit};
 use super::pointer::point_on_quad;
 use super::warp::edit_session_warp;
@@ -206,7 +206,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let start = row.min_rect().right().min(split);
     let actions = egui::Rect::from_min_max(egui::pos2(start, bar.top()), egui::pos2(start + buttons_w, bar.bottom()));
     let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    transform_actions(app, &mut btns, warping, t.content_aware.is_none());
+    transform_actions(app, &mut btns, warping, warp_refusal(&t).is_none());
 }
 
 fn transform_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: &TransformSession) {
@@ -544,7 +544,7 @@ fn split_icon(ui: &mut egui::Ui, kind: &str, tip: &str, on: bool) -> egui::Respo
 }
 
 /// Warp switch, cancel and commit, kept on the right of the options bar.
-/// `mode_switch`: the Free Transform / Warp switch (not for Content-Aware Scale, which only scales).
+/// `mode_switch`: show the Free Transform / Warp switch for boxes that support Warp.
 fn transform_actions(app: &mut PhotocraftApp, ui: &mut egui::Ui, warping: bool, mode_switch: bool) {
     ui.add_space(8.0);
     let commit_tip = if warping {

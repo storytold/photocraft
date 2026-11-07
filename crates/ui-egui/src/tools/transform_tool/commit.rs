@@ -1,4 +1,4 @@
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warps_type};
+use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warp_refusal, warps_type};
 use super::options_bar::{rotate_about_pivot, scale_about_pivot};
 use super::{
     Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession,
@@ -375,15 +375,14 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         // No Toggle Last State or history jump under the box, and one box at a time.
         "edit.toggleLastState" | "history.selectState" | "edit.contentAwareScale" | "edit.puppetWarp" => Some(false),
         // Switching the captured channel box to Warp edits the session, not document pixels.
-        "edit.transform.warp" if t.layers.is_empty() => Some(t.warp.is_none()),
+        "edit.transform.warp" => Some(t.warp.is_none() && warp_refusal(t).is_none()),
+        "layer.smartObjects.warp" if warp_refusal(t).is_some() => Some(false),
         // Save for Web exports the committed document and would ignore the pending box (#6737).
         SAVE_FOR_WEB => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if box_preset(id).is_some() => Some(t.warp.is_none()),
         // One box over several layers doesn't warp (#6501).
-        "edit.transform.warp"
-        | "layer.smartObjects.warp"
-        | "edit.transform.splitWarpCrosswise"
+        "edit.transform.splitWarpCrosswise"
         | "edit.transform.splitWarpHorizontally"
         | "edit.transform.splitWarpVertically"
         | "edit.transform.removeWarpSplit"

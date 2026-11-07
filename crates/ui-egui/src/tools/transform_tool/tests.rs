@@ -196,6 +196,14 @@ fn transform_bar_pins_warp_cancel_and_commit() {
     h.get_by_label("Cancel transform").click();
     h.run_steps(2);
     assert!(h.state().ui.transform.is_none());
+
+    let mut frame = session();
+    frame.target = Some(json!({"frame": frame.layer}));
+    h.state_mut().ui.transform = Some(frame);
+    h.run_steps(2);
+    assert!(h.query_by_label("Switch between free transform and warp modes").is_none());
+    assert!(h.query_by_label("Commit transform").is_some());
+    assert!(h.query_by_label("Cancel transform").is_some());
 }
 
 #[test]
