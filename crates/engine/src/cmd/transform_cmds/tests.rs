@@ -306,8 +306,15 @@ fn type_layers_transform_as_vectors() {
     let st = s.active().unwrap();
     let LayerContent::Text(t) = &st.doc.layer(LayerId(id)).unwrap().content else { panic!() };
     assert!((t.transform.m[0] - 2.0).abs() < 1e-9);
-    // Perspective on type is refused, like Photoshop.
-    assert!(s.execute("edit.transform", json!({"layer": id, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]})).is_err());
+    // As in Photoshop, Perspective is refused on live type by default.
+    let quad = json!({"layer": id, "quad": [[0, 0], [10, 0], [12, 10], [-2, 10]]});
+    assert!(s.execute("edit.transform", quad.clone()).is_err());
+    // Opted in (Preferences › Type › Free Transforms on Type), it stays on the live type
+    // (beyond Photoshop; type_distort.rs).
+    s.execute("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
+    s.execute("edit.transform", quad).unwrap();
+    let st = s.active().unwrap();
+    assert!(matches!(&st.doc.layer(LayerId(id)).unwrap().content, LayerContent::Text(t) if t.distortions.len() == 1));
 }
 
 #[test]
