@@ -34,9 +34,13 @@ mod vertical;
 
 #[cfg(test)]
 pub(crate) use area::AREA_PASSES;
+#[cfg(test)]
+pub(crate) use lines::CARRY_SCANNED;
 pub use navigate::{byte_index, char_index, hit_char, line_edge, line_index, line_step, text_point_inside, word_boundary};
 use paragraphs::next_tab_stop;
 pub use paragraphs::{DEFAULT_TAB_STOP_PT, split_paragraphs};
+#[cfg(test)]
+pub(crate) use shaping::{CARRY_SETTLE_FORCE_NONCONVERGING, CARRY_SETTLE_PASSES};
 use shaping::{Para, resolve_run_styles, running_starts, small_caps_modes};
 use style::SmallCapsMode;
 #[cfg(test)]
@@ -336,12 +340,13 @@ impl Layouter {
     /// Breaks one paragraph and stacks its lines below the previous paragraph's.
     fn layout_paragraph(&mut self, fonts: &mut FontDb, out: &mut TextLayout, flow: &mut Flow, para: Para<'_>) {
         let env = para.env;
-        let (mut layout, area_slots, area_full) = para.break_paragraph(&mut self.lcx, &mut fonts.fcx, flow);
+        let (mut layout, area_slots, area_full) = para.break_paragraph(&mut self.lcx, &mut fonts.fcx, flow, &mut self.optical);
         layout.align(para.alignment(), para.align_options());
         if flow.prev_baseline.is_some() {
             flow.pending_space += para.ps.space_before_pt * env.k;
         }
         let nlines = layout.len();
+        let mut carried = lines::CarriedSpaces::default();
         for (li, line) in layout.lines().enumerate() {
             // Area type: the slot the breaker gave this line.
             let slot = area_slots.get(li).copied();
@@ -353,7 +358,7 @@ impl Layouter {
                 flow.stop = true;
                 break;
             };
-            para.place_line(&mut self.optical, out, &line, &frame);
+            carried = para.place_line(&mut self.optical, out, &line, &frame, carried);
         }
         if area_full {
             // The shape is full: later paragraphs are hidden too.
