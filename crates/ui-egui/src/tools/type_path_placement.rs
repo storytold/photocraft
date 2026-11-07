@@ -192,15 +192,35 @@ fn marker_hit(ends: [(Pos2, Vec2); 2], p: Pos2) -> Option<(usize, f32)> {
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-/// What a press on marker `index` grabs when it is a marker hit: `(endpoint, either)`. Where the
-/// two markers coincide on screen, a closed path's full lap moves the whole text (the double
-/// cursor), and an empty or end-clamped range waits for the first motion to pick a marker
-/// (`either`): backward takes the beginning and forward the end, so the range can always open.
-fn marker_grab(ends: [(Pos2, Vec2); 2], index: usize, closed: bool, range: [f64; 2], length: f64) -> (Option<usize>, bool) {
-    if ends[0].0.distance(ends[1].0) >= 1.0 {
+/// Screen distance along the path from coincident full-lap markers within which a press moves the
+/// whole text rather than one end.
+const LAP_CENTER: f32 = 1.5;
+
+/// What a press at screen point `p` on marker `index` grabs: `(endpoint, either)`. Where the two
+/// markers coincide on screen:
+///
+/// - On a closed path's full lap (the default for text attached to a closed path) the text
+///   begins just ahead of the point and ends just behind it, so a press ahead along the path
+///   takes the beginning, one behind takes the end, and one on the point moves the whole text.
+///   Either end can then be dragged to shorten the lap.
+/// - An empty or end-clamped range waits for the first motion to pick a marker (`either`):
+///   backward takes the beginning and forward the end, so the range can always open.
+fn marker_grab(ends: [(Pos2, Vec2); 2], index: usize, p: Pos2, closed: bool, range: [f64; 2], length: f64) -> (Option<usize>, bool) {
+    let [(point, tangent), (other, _)] = ends;
+    if point.distance(other) >= 1.0 {
         return (Some(index), false);
     }
-    if closed && range[1] - range[0] >= length - 1e-3 { (None, false) } else { (None, true) }
+    if !(closed && range[1] - range[0] >= length - 1e-3) {
+        return (None, true);
+    }
+    let along = (p - point).dot(tangent);
+    if along > LAP_CENTER {
+        (Some(0), false)
+    } else if along < -LAP_CENTER {
+        (Some(1), false)
+    } else {
+        (None, false)
+    }
 }
 
 /// Whether Direct Selection should edit the path instead of moving a marker at document point
@@ -257,7 +277,7 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
     if let Some((index, _)) = marker_hit(ends, p) {
         let TextShape::Path { path, .. } = &text.shape else { return None };
         let range = effective_range(text, &geometry)?;
-        let (endpoint, _) = marker_grab(ends, index, path.closed, range, geometry.length());
+        let (endpoint, _) = marker_grab(ends, index, p, path.closed, range, geometry.length());
         return (!anchor_wins(app, d[0], d[1])).then_some(Grab::of(endpoint));
     }
     (crate::type_tool::hit_layer(app, d[0], d[1]) == Some(layer)).then_some(Grab::Body)
@@ -665,7 +685,7 @@ pub(crate) fn pointer_with_context(
         if anchor_wins(app, x, y) {
             return false;
         }
-        marker_grab(ends, index, path.closed, original, geometry.length())
+        marker_grab(ends, index, p, path.closed, original, geometry.length())
     } else if crate::type_tool::hit_layer(app, x, y) == active_layer && active_layer.is_some() {
         (None, false)
     } else {
@@ -1150,6 +1170,49 @@ mod tests {
         up(&mut app, doc[0] + 10.0, doc[1]);
         let (start, end, flip) = placement(&app);
         assert!((start - 30.0).abs() < 1e-3 && end.is_some_and(|end| (end - start - 640.0).abs() < 1e-3) && !flip, "{start} {end:?}");
+    }
+
+    /// Text attached to a closed path fills one lap (`end: None`), so its markers coincide. A press
+    /// just ahead along the path grabs the beginning and one just behind grabs the end; dragging
+    /// either shortens the lap without reshaping the path, and the centre still moves the whole
+    /// text.
+    #[test]
+    fn default_full_lap_markers_can_be_pulled_apart() {
+        let square = photocraft_doc::vector::Subpath::polygon(&[(20.0, 20.0), (180.0, 20.0), (180.0, 180.0), (20.0, 180.0)]);
+        // Ahead of the point: the beginning moves forward. Behind it: the end moves back.
+        for (offset, grab, drag, expected) in [(4.0, Grab::Start, 30.0, [130.0, 740.0]), (-4.0, Grab::End, -30.0, [100.0, 710.0])] {
+            let mut app = app(Tool::PathSelection);
+            let id = app.session.active().unwrap().active_layer.unwrap();
+            app.session
+                .edit("closed path", |doc, _| {
+                    let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("expected text") };
+                    // Start mid-edge, so the drags below stay on the top edge.
+                    text.shape = TextShape::Path { path: square.clone(), start: 100.0, end: None, flip: false };
+                    Ok(())
+                })
+                .unwrap();
+            let n = steps(&app);
+            let xf = ViewXform::active(&app).unwrap();
+            let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+            assert!(ends[0].0.distance(ends[1].0) < 1.0, "{ends:?}");
+            let (point, tangent) = ends[0];
+            assert_eq!(cursor(&mut app, &xf, point), Some(Grab::Body));
+            let press = point + tangent * offset;
+            assert_eq!(cursor(&mut app, &xf, press), Some(grab));
+            let from = xf.to_doc(press);
+            down(&mut app, from[0], from[1]);
+            assert_eq!(Grab::of(app.ui.type_path_drag.as_ref().unwrap().endpoint), grab);
+            let to = xf.to_doc(press + tangent * drag);
+            move_to(&mut app, to[0], to[1]);
+            up(&mut app, to[0], to[1]);
+            let (start, end, flip) = placement(&app);
+            let end = end.expect("an explicit range");
+            assert!((start - expected[0] as f32).abs() < 0.01 && (end - expected[1] as f32).abs() < 0.01, "{grab:?}: {start} {end}");
+            assert!(end - start < 640.0 - 1.0, "shorter than one lap");
+            let TextShape::Path { path, .. } = shape(&app) else { panic!("expected path") };
+            assert_eq!(path, square, "the path is not reshaped");
+            assert_eq!(steps(&app), n + 1);
+        }
     }
 
     /// Proves dragging text body translates the placement range even when one boundary touches the open path endpoint.
