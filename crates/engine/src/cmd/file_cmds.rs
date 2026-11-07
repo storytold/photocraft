@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use photocraft_algo::resample::{Resample, resize_surface, translate_surface};
+use photocraft_algo::resample::{Resample, translate_surface};
 use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Affine, Document, Layer, LayerContent, LayerId, SmartObject, SmartSource};
 use photocraft_geom::Rect;
@@ -25,7 +25,7 @@ mod export;
 mod info;
 mod open;
 mod paths;
-mod place_steps;
+pub mod place_steps;
 mod processing;
 mod raw_open;
 mod save;
@@ -58,7 +58,7 @@ pub use paths::{
     template_name, untitled_name,
 };
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, read_file, read_file_limited, sanitize, stem, write_file};
-pub(crate) use place_steps::PlaceSteps;
+pub use place_steps::PlaceSteps;
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;
 pub(crate) use save::{SaveOpts, encode, save_doc};

@@ -6,7 +6,7 @@
 //! did the work. `fine` (a cooperative session) cuts the work into pieces; without it each stage
 //! is one unit and native code keeps its parallel resize and flatten.
 
-use photocraft_algo::resample::ResizeSteps;
+use photocraft_algo::resample::{ResizeSteps, resize_surface_in_canvas};
 use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_io::PngImport;
 use photocraft_raster::{Surface, TranslateSteps};
@@ -16,7 +16,7 @@ use super::open::{PLACE_EMBEDDED, PlaceFile, PlaceInput, Prepared};
 use super::paths::{file_name, read_file, stem};
 use super::{
     Affine, Arc, Document, EngineError, LayerContent, Resample, Result, SmartObject, SmartSource, Value, check_flattenable, f64_param, flattened_checked,
-    resize_surface, translate_surface,
+    translate_surface,
 };
 use crate::jobs::{JobCtx, StepWork};
 
@@ -24,7 +24,7 @@ use crate::jobs::{JobCtx, StepWork};
 const BAND_PIXELS: i64 = 4 * (TILE_SIZE as i64) * (TILE_SIZE as i64);
 
 /// A place as a [`StepWork`]; its result is what [`super::open::apply_place`] inserts.
-pub(crate) struct PlaceSteps {
+pub struct PlaceSteps {
     input: PlaceInput,
     /// The file's contents, once read (a path is read by the first step).
     bytes: Arc<Vec<u8>>,
@@ -190,10 +190,15 @@ impl PlaceSteps {
         if (scale - 1.0).abs() <= 1e-9 {
             self.fitted(px);
         } else if self.fine {
-            self.stage = Stage::Resize(Box::new(ResizeSteps::new(px, scale, scale, Resample::Bicubic, None)));
+            // The canvas keeps opaque edges opaque (#5746): without it the bicubic kernel
+            // blends with transparent support at the source's rectangular border.
+            let content = px.content_bounds();
+            self.stage = Stage::Resize(Box::new(ResizeSteps::new(px, scale, scale, Resample::Bicubic, Some(content))));
         } else {
             ctx.progress(0.7, "Resizing");
-            self.fitted(resize_surface(&px, scale, scale, Resample::Bicubic));
+            // Use resize_surface_in_canvas to preserve opaque edges by repeating edge pixels
+            // instead of blending with transparent kernel support (#5746).
+            self.fitted(resize_surface_in_canvas(&px, scale, scale, Resample::Bicubic, px.content_bounds()));
         }
     }
 
