@@ -1,6 +1,6 @@
 # Raster formats
 
-`photocraft-codecs` provides format detection, capability declarations, decode limits, metadata handling, and encoding for flat images. The default build declares read/write support for PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, Netpbm/PFM, QOI, OpenEXR, and Radiance HDR. HEIF/HEIC (iPhone and Mac photos) is read-only, decoded in pure Rust by `heic-rs` through the optional `photocraft-heif` crate. It is a build-time choice behind the `heif` cargo feature (`cargo build -p photocraft --features heif`): official builds include it; without it HEIC files are still recognised and opening one reports that HEIC support isn't included in that build. AVIF encoding is optional; AVIF decoding is not implemented in the current crate. Lossless JPEG XL (.jxl) export uses the pure-Rust `zune-jpegxl` encoder for 8/16-bit gray, RGB and RGBA data; gray+alpha is expanded to RGBA at the same bit depth. JPEG XL import is tracked separately in #2868.
+`photocraft-codecs` provides format detection, capability declarations, decode limits, metadata handling, and encoding for flat images. The default build declares read/write support for PNG, JPEG, TIFF, WebP, GIF, BMP, TGA, ICO, Netpbm/PFM, DDS, QOI, OpenEXR, Radiance HDR, FITS, DPX, Cineon, and Amiga IFF; PCX, XPM and DICOM are read-only. HEIF/HEIC (iPhone and Mac photos) is read-only, decoded in pure Rust by `heic-rs` through the optional `photocraft-heif` crate. It is a build-time choice behind the `heif` cargo feature (`cargo build -p photocraft --features heif`): official builds include it; without it HEIC files are still recognised and opening one reports that HEIC support isn't included in that build. AVIF encoding is optional; AVIF decoding is not implemented in the current crate. Lossless JPEG XL (.jxl) export uses the pure-Rust `zune-jpegxl` encoder for 8/16-bit gray, RGB and RGBA data; gray+alpha is expanded to RGBA at the same bit depth. JPEG XL import is tracked separately in #2868.
 
 ## Layered TIFF
 
@@ -52,7 +52,7 @@ separations, black generation or native CMYK blending, and is not a claim of Pho
 | Maximum width | 262,144 pixels |
 | Maximum height | 262,144 pixels |
 | Maximum pixel count | 1,073,741,824 pixels |
-| Maximum decoded allocation | 8 GiB on 64-bit targets; 2 GiB on 32-bit targets (including wasm32) |
+| Maximum decoded allocation | 8 GiB on 64-bit targets; 1 GiB on 32-bit targets (including wasm32) |
 
 Format adapters pass compatible allocation limits into PNG, TIFF, WebP, and `image`-based decoders, while other implementations perform explicit checked dimension/buffer validation. Tests cover bomb-like headers, truncation, bit flips, header overwrites, and random data.
 

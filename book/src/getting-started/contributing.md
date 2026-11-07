@@ -8,7 +8,7 @@ Important repository invariants include:
 - public pixel paths cannot assume 8-bit data or sRGB;
 - command execution must return errors for adversarial input rather than panic;
 - format work includes round-trip, malformed-input, and limit tests;
-- L0-L6 changes must continue to compile for WebAssembly;
+- L0-L5 and `ui-egui` changes must continue to compile for WebAssembly;
 - third-party assets need a permissive license, a neighboring license file, and an `ATTRIBUTION.md` entry.
 
 ## Security-sensitive contributions

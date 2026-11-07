@@ -40,7 +40,7 @@ The release packages ship `photocraft-cli` alongside the desktop app, so no buil
 |---|---|
 | Windows (MSI) | `%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft\photocraft-cli.exe` by default (`C:\Program Files\ArtCraft\PhotoCraft\photocraft-cli.exe` for an all-users install, under `Program Files (x86)` instead for the 32-bit build, or wherever you installed it otherwise), not on `PATH` |
 | Linux (deb, rpm) | `/usr/bin/photocraft-cli` |
-| macOS | the separate `photocraft-cli-<version>-macos-<arch>.zip` release asset (the `.app` holds only the desktop app) |
+| macOS | the separate `photocraft-cli-<version>-macos-<arch>.zip` release asset, or `PhotoCraft.app/Contents/MacOS/photocraft-cli` inside the app |
 
 ```sh
 # Windows (PowerShell), default install folder

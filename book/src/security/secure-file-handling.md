@@ -15,7 +15,8 @@ Remote automation paths are untrusted relative names resolved beneath explicitly
   Windows device names, empty or dot components, and link escapes are rejected before file
   effects.
 - Non-existent output files are supported when their parent already exists beneath the write
-  root. Automation does not create caller-selected directory trees.
+  root. Automation creates caller-selected directories only for the multi-file exports (layers,
+  data sets, Render Video), beneath the write root.
 - Filesystem-bearing engine commands that have not migrated to capability I/O fail closed for
   automation. Trusted local CLI subcommands and user-driven desktop file pickers keep their
   intended ambient authority.

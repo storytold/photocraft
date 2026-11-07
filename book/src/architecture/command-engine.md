@@ -1,6 +1,6 @@
 # Command engine
 
-Every user-visible editing action is represented by a command specification in `crates/engine/src/*_cmds.rs` and registered by `crates/engine/src/commands.rs`. A specification supplies an ID, label, menu path, shortcut, parameter documentation, enabled predicate, and `run` implementation.
+Every user-visible editing action is represented by a command specification in `crates/engine/src/cmd/*_cmds.rs` and registered by `crates/engine/src/cmd.rs`. A specification supplies an ID, label, menu path, shortcut, parameter documentation, enabled predicate, and `run` implementation.
 
 ```text
 caller

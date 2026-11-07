@@ -26,7 +26,8 @@ use the same reader in `photocraft-io` (`crates/io/src/xcf.rs`). A file is recog
 | XCF versions | 0 to 26 (GIMP 1.x to 3.2); newer files open with a note, unknown parts skipped |
 
 Not kept, each with a note on open: non-destructive layer effects (GIMP 3's layer filters; the
-layer opens unfiltered), paths, floating selections, item sets, sample points. Layer effects are
+layer opens unfiltered), paths, floating selections. Item sets and sample points are skipped
+without a note. Layer effects are
 not representable without GEGL's operations; paths could follow later.
 
 ## Blend modes

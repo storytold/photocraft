@@ -5,7 +5,7 @@ PhotoCraft has two compositors with distinct roles:
 - `photocraft-compose` is the CPU compositor and correctness oracle used by export and tests.
 - `photocraft-gpu` plans and executes supported canvas composition through wgpu.
 
-The interactive canvas uses the GPU path when the planner can represent the document. Unsupported cases fall back to CPU composition. Current documentation identifies Multichannel documents and regions above the GPU texture limit as fallback cases.
+The interactive canvas uses the GPU path when the planner can represent the document. Unsupported cases fall back to CPU composition. Current documentation identifies Multichannel documents and patterns larger than the GPU texture limit as fallback cases.
 
 Pixel storage in `photocraft-raster` supports runtime sample depth rather than a public 8-bit-only path. Color mode and profiles are document data; color conversion belongs in `photocraft-cms` rather than being treated as implicit sRGB.
 

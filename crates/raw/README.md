@@ -1,7 +1,7 @@
 # photocraft-raw
 
 A clean-room, pure-Rust camera raw decoder and developer. The crate is standalone (no workspace
-dependencies; its decoding dependencies are `flate2` for Deflate DNG and `jxl-oxide`, a pure-Rust
+dependencies; its decoding dependencies are `flate2` for Deflate DNG, `zune-jpeg` for lossy JPEG DNG and `jxl-oxide`, a pure-Rust
 JPEG XL decoder, for DNG 1.7, native builds only), has no `unsafe`, does no I/O (`&[u8]` in), builds for `wasm32-unknown-unknown`
 (sequential there, rayon-parallel on native) and never panics on hostile input: every offset is
 bounds-checked and sizes are checked against `Limits` before allocating.

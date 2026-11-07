@@ -37,7 +37,7 @@ with name and dimensions; its outline becomes an empty frame, including custom-s
 `layer.frame.setContent`, `layer.frame.fit`, and the read-only `layer.frame.info` expose the operations to CLI, MCP, and control clients.
 A frame is a group with `Layer::frame` (unit-square path, affine placement, stroke) and a vector
 clipping mask. Contents remain independently transformable Smart Objects. UI selection and
-pending gestures live in `frameTool`; `ui.set` accepts `frameShape`, `frameSides`, and
+pending gestures live in `UiState::frame_tool`; `ui.set` accepts `frameShape`, `frameSides`, and
 `frameTarget` (`frame`, `content`, `both`). A completed drag is one undo step; previews do not
 change the document. Locks and invalid geometry are rejected before committing an edit.
 
@@ -56,7 +56,8 @@ parity floor is raised by this change.
 
 ## Validation
 
-Frame Tool UI strings are provided in all 21 translated catalogs. Empty placeholders schedule no
+Frame Tool UI strings are provided in 24 of the 34 translated catalogs; Hindi lacks one, Azerbaijani
+nine, and Arabic, Bosnian, Danish, Finnish, Norwegian Bokmål, Swedish, Tamil and Thai about half of them. Empty placeholders schedule no
 frame-sized compositor mask until content or a visible stroke is added.
 
 Regression tests cover persistent handles after release, existing-frame resizing, cancel/undo,
