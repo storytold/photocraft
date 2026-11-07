@@ -356,6 +356,8 @@ fn webp_too_large_is_an_error() {
     }
 }
 
+/// Check that an oversized selected slice causes zero writes, a valid selected subset
+/// still exports, and slices at the exact codec dimension limit are accepted.
 #[test]
 fn selected_slice_format_limits_are_checked_before_any_write() {
     for (format, lossless, limit) in [("webp", false, 16_383_u32), ("webp", true, 16_384), ("gif", false, 65_535), ("jpeg", false, 65_535)] {

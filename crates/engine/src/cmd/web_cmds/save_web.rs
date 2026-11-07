@@ -218,6 +218,8 @@ fn slice_pick(p: &Value, cmd: &str, doc: &photocraft_doc::Document) -> Result<Sl
     Ok(SlicePick::Numbers(numbers))
 }
 
+/// Export the whole image or the requested slices. Validate every selected image slice's
+/// scaled, clipped dimensions against the codec limit before writing the first slice.
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     if let Some(authorize) = s.authorize {
