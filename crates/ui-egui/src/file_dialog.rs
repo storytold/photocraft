@@ -257,6 +257,24 @@ impl PhotocraftApp {
         })
     }
 
+    /// File › Open as Smart Object…: the File › Open dialog (same filters, several files); each
+    /// chosen file opens as its own document holding one embedded smart object, in name order,
+    /// reporting each failure as File › Open does.
+    pub fn open_dialog_as_smart_object(&mut self) -> Result<Value, String> {
+        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+            let FileDialogAnswer::Paths(mut paths) = answer else { return Err(UNEXPECTED.into()) };
+            paths.sort_by(|a, b| crate::file_open::natural_cmp(a, b));
+            for path in &paths {
+                if let Err(e) = crate::jobs_ui::run(app, "file.openAsSmartObject", json!({"path": path})) {
+                    app.open_failed(&crate::file_open::display_name(path), &e);
+                }
+            }
+            app.sync_views();
+            Ok(Value::Null)
+        })
+    }
+
     /// Opens each picked file's contents as its own document, in name order (like
     /// [`Self::open_paths`]), reporting each failure.
     fn open_contents(&mut self, mut files: Vec<(String, Vec<u8>)>) {
