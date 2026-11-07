@@ -70,7 +70,7 @@ pub struct SourceImage {
     pub bounds: Rect,
 }
 
-type CacheKey = ([u8; 32], PixelFormat);
+pub(super) type CacheKey = ([u8; 32], PixelFormat);
 
 struct CacheEntry {
     key: CacheKey,
@@ -353,15 +353,104 @@ pub(crate) fn vector_scale(sm: &SmartObject) -> f64 {
 
 /// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    let key = cache_key(bytes, fmt);
+    source_image_keyed(file_name, bytes, cache_key(bytes, fmt))
+}
+
+/// [`source_image`] with the bytes' cache key already known (its digest from
+/// `rendering::contents_digest`, so instances sharing one buffer don't hash it again).
+pub(super) fn source_image_keyed(file_name: &str, bytes: &[u8], key: CacheKey) -> Result<SourceImage> {
+    let fmt = key.1;
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
     crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
-    let doc = decode_source(file_name, bytes)?;
-    let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
+    let mut doc = decode_source(file_name, bytes)?;
+    let surface = match plain_layer_surface(&mut doc, fmt) {
+        Some(s) => s,
+        None => flattened_source(&doc, fmt)?,
+    };
+    let img = SourceImage { surface: Arc::new(surface), bounds: doc.bounds() };
     cache_put(key, img.clone());
     Ok(img)
+}
+
+/// The pixels of `doc`'s only layer when flattening `doc` would give them back exactly (a placed
+/// PNG): a plain pixel layer (shown, Normal at 100 % opacity and fill, no masks, effects, blending
+/// options or clipping, transparent outside its tiles) inside the canvas of an RGB document,
+/// already in `fmt`, 8 or 16-bit. The composite of such a layer over nothing rounds back to its
+/// own values, and writes transparent pixels as zeros: so are they here. The layer's surface is
+/// moved out of `doc` (left with an empty one), not copied; `None` leaves `doc` untouched.
+fn plain_layer_surface(doc: &mut Document, fmt: PixelFormat) -> Option<Surface> {
+    let [l] = doc.layers.as_slice() else { return None };
+    let LayerContent::Raster(s) = &l.content else { return None };
+    let plain = l.visible
+        && l.blend == photocraft_color::BlendMode::Normal
+        && l.opacity == 1.0
+        && l.fill_opacity == 1.0
+        && !l.clipped
+        && l.mask.is_none()
+        && l.vector_mask.is_none()
+        && !photocraft_compose::effects::has_effects(l)
+        && l.excluded_channels == 0
+        && l.blend_if == photocraft_doc::BlendIf::default()
+        && l.advanced == photocraft_doc::AdvancedBlending::default()
+        && l.video.is_none();
+    let exact = s.format() == fmt
+        && fmt.alpha
+        && fmt.mode == ColorMode::Rgb
+        && doc.mode == ColorMode::Rgb
+        && matches!(fmt.sample, SampleType::U8 | SampleType::U16)
+        && s.default_bytes().iter().all(|&b| b == 0);
+    if !(plain && exact && doc.bounds().contains_rect(&s.content_bounds())) {
+        return None;
+    }
+    let mut s = match doc.layers.first_mut().map(|l| &mut l.content) {
+        Some(LayerContent::Raster(s)) => std::mem::replace(s, Surface::new(fmt)),
+        _ => return None,
+    };
+    clear_transparent(&mut s);
+    s.prune();
+    Some(s)
+}
+
+/// Zeroes the colour of every fully transparent pixel, tiles in parallel: in one pass over a tile
+/// this surface alone holds, else (shared) only if it has such a pixel, after un-sharing it.
+fn clear_transparent(s: &mut Surface) {
+    let fmt = s.format();
+    let bpp = fmt.bytes_per_pixel();
+    let alpha = bpp - bpp / fmt.channels();
+    let clear = |p: &[u8]| p[alpha..].iter().all(|&b| b == 0) && p[..alpha].iter().any(|&b| b != 0);
+    let zero = |px: &mut [u8]| {
+        if bpp == 4 {
+            // 8-bit RGBA, the usual design: a branch-free loop the compiler vectorises.
+            for p in px.as_chunks_mut::<4>().0 {
+                let keep = u8::from(p[3] != 0).wrapping_neg();
+                for c in &mut p[..3] {
+                    *c &= keep;
+                }
+            }
+        } else {
+            for p in px.chunks_exact_mut(bpp).filter(|p| clear(p)) {
+                p.fill(0);
+            }
+        }
+    };
+    let fix = |(_, t): &mut (photocraft_geom::TileCoord, Arc<photocraft_raster::Tile>)| {
+        if let Some(own) = Arc::get_mut(t) {
+            zero(&mut own.bytes_mut());
+        } else if t.bytes().chunks_exact(bpp).any(clear) {
+            zero(&mut Arc::make_mut(t).bytes_mut());
+        }
+    };
+    let mut tiles = s.take_tiles(s.content_bounds());
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        tiles.par_iter_mut().for_each(fix);
+    }
+    #[cfg(target_arch = "wasm32")]
+    tiles.iter_mut().for_each(fix);
+    s.put_tiles(tiles);
 }
 
 #[cfg(test)]
@@ -395,6 +484,70 @@ mod tests {
         assert_eq!(block_size(4096), (4096, 256));
         assert_eq!(block_size(1000), (1024, 1024));
         assert_eq!(block_size(300_000), (4096, 256));
+    }
+
+    /// A placed PNG or JPEG is one plain layer: flattening it gives that layer back, so the layer
+    /// is used as is (no composite, no copy). Every alpha against many colours, at 8 and 16 bits;
+    /// the result must be the flattened surface exactly, transparent pixels and bounds included
+    /// (a whole-pixel placement copies them, and bounds and some filters read them).
+    #[test]
+    fn a_plain_single_layer_source_is_its_own_layer() {
+        let doc_of = |depth: SampleType| {
+            let mut doc = Document::new("d", photocraft_geom::Size::new(256, 300), ColorMode::Rgb, depth);
+            let mut l = Layer::raster("a", doc.pixel_format());
+            let px: Vec<f32> = (0..300)
+                .flat_map(|y| {
+                    (0..256).flat_map(move |x| {
+                        let c = (y % 256) as f32 / 255.0;
+                        [c, 1.0 - c, (c * 7.0) % 1.0, x as f32 / 255.0]
+                    })
+                })
+                .collect();
+            l.surface_mut().unwrap().write_region(Rect::new(0, 0, 256, 300), &px);
+            doc.layers = vec![l];
+            doc
+        };
+        for depth in [SampleType::U8, SampleType::U16] {
+            let doc = doc_of(depth);
+            let fmt = doc.pixel_format();
+            let full = flattened_source(&doc, fmt).unwrap();
+            let fast = plain_layer_surface(&mut doc.clone(), fmt).expect("a plain layer");
+            assert_eq!(fast.content_bounds(), full.content_bounds(), "{depth:?}");
+            assert_eq!(fast.default_bytes(), full.default_bytes(), "{depth:?}");
+            let (f, g) = (fast.read_region(doc.bounds()), full.read_region(doc.bounds()));
+            for (i, (p, q)) in f.as_chunks::<4>().0.iter().zip(g.as_chunks::<4>().0).enumerate() {
+                assert_eq!(p, q, "{depth:?}: pixel {i}");
+            }
+        }
+        // Whatever changes the composite, or the format, is flattened.
+        let doc = doc_of(SampleType::U8);
+        let fmt = doc.pixel_format();
+        type Tweak = (&'static str, fn(&mut Document));
+        let tweaks: [Tweak; 8] = [
+            ("opacity", |d| d.layers[0].opacity = 0.5),
+            ("blend", |d| d.layers[0].blend = photocraft_color::BlendMode::Multiply),
+            ("hidden", |d| d.layers[0].visible = false),
+            ("mask", |d| d.layers[0].mask = Some(photocraft_doc::LayerMask::hide_all())),
+            ("two layers", |d| {
+                let l = d.layers[0].clone();
+                d.layers.push(l);
+            }),
+            ("outside the canvas", |d| d.layers[0].surface_mut().unwrap().fill_rect(Rect::new(250, 290, 270, 310), &[1.0, 0.0, 0.0, 1.0])),
+            ("an opaque default", |d| {
+                let fmt = d.pixel_format();
+                let mut s = Surface::with_default(fmt, &[1.0, 1.0, 1.0, 1.0]);
+                s.fill_rect(Rect::new(0, 0, 10, 10), &[1.0, 0.0, 0.0, 1.0]);
+                d.layers[0].content = LayerContent::Raster(s);
+            }),
+            ("multichannel", |d| d.mode = ColorMode::Multichannel),
+        ];
+        for (what, tweak) in tweaks {
+            let mut d = doc.clone();
+            tweak(&mut d);
+            assert!(plain_layer_surface(&mut d, fmt).is_none(), "{what}");
+        }
+        let wide = PixelFormat::new(ColorMode::Rgb, SampleType::U16, true);
+        assert!(plain_layer_surface(&mut doc.clone(), wide).is_none(), "another format");
     }
 
     #[test]
