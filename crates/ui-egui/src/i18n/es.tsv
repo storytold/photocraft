@@ -139,6 +139,7 @@
 	Right	Derecha
 	Open Recent	Abrir recientes
 	Clear Recent Files	Vaciar archivos recientes
+	Clear Recent File List	Vaciar archivos recientes
 	Remove from Recent	Quitar de recientes
 	Remove {name} from Recent	Quitar {name} de recientes
 	Close	Cerrar
@@ -147,6 +148,10 @@
 	Restore	Restaurar
 	Close All	Cerrar todo
 	Close Others	Cerrar otros
+	New Document…	Documento nuevo…
+	Open Document…	Abrir…
+	Consolidate All to Here	Consolidar todo aquí
+	Move to New Window	Mover a una nueva ventana
 	Save	Guardar
 	Save As…	Guardar como…
 	Save a Copy…	Guardar una copia…
@@ -199,6 +204,7 @@
 	Create Smart Object after Loading Layers	Crear objeto inteligente tras cargar las capas
 	Reveal in Finder	Mostrar en Finder
 	Show in Explorer	Mostrar en el Explorador
+	Reveal in Explorer	Mostrar en el Explorador
 	Show in Folder	Mostrar en la carpeta
 	File Info…	Información del archivo…
 	Print…	Imprimir…
@@ -287,6 +293,7 @@
 	Units & Rulers…	Unidades y reglas…
 	Guides, Grid & Slices…	Guías, cuadrícula y sectores…
 	Plug-ins…	Plugins…
+	Plugins…	Plugins…
 	Type…	Texto…
 	Enhanced Controls…	Controles mejorados…
 	Camera Raw…	Camera Raw…
@@ -444,6 +451,8 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Convertir en objeto inteligente
 	Convert to Embedded	Convertir en incrustado
+	Embed Linked	Incrustar vinculado
+	Embed All Linked	Incrustar todos los vinculados
 	Convert to Layers	Convertir en capas
 	Convert to Linked…	Convertir en vinculado…
 	Edit Contents	Editar contenido
@@ -702,6 +711,7 @@
 	Minimum…	Mínimo…
 	Offset…	Desplazamiento…
 	Plug-ins	Plugins
+	Plugins	Plugins
 	Proof Setup	Ajuste de prueba
 	Proof Colors	Colores de prueba
 	Gamut Warning	Advertencia de gama
@@ -710,9 +720,9 @@
 	Working Magenta Plate	Placa magenta de trabajo
 	Working Yellow Plate	Placa amarilla de trabajo
 	Working Black Plate	Placa negra de trabajo
-	Working CMY Plate	Placa CMY de trabajo
-	Legacy Macintosh RGB	RGB heredado de Macintosh
-	Internet Standard RGB	RGB estándar de Internet
+	Working CMY Plates	Placas CMY de trabajo
+	Legacy Macintosh RGB (Gamma 1.8)	RGB heredado de Macintosh (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB estándar de Internet (sRGB)
 	Monitor RGB	RGB del monitor
 	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
 	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
@@ -804,7 +814,6 @@
 	Consolidate All to Tabs	Consolidar todo en pestañas
 	Float in Window	Hacer flotante en ventana
 	Float All in Windows	Hacer flotantes todas en ventanas
-	New Window for Document	Nueva ventana para el documento
 	Workspace	Espacio de trabajo
 	Essentials	Esenciales
 	Graphic and Web	Gráficos y web
@@ -866,6 +875,12 @@
 	Timeline	Línea de tiempo
 	Tool Presets	Ajustes preestablecidos de herramienta
 	Tools	Herramientas
+	Contextual Task Bar	Barra de tareas contextual
+	Hide bar	Ocultar barra
+	Reset bar position	Restablecer posición de la barra
+	Pin bar position	Fijar posición de la barra
+	Move bar	Mover barra
+	More options	Más opciones
 	About PhotoCraft	Acerca de PhotoCraft
 	PhotoCraft Website	Sitio web de PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft en GitHub
@@ -1817,6 +1832,7 @@
 	Move Tool	Herramienta Mover
 	Could not use the move tool because the layer is locked.	No se pudo usar la herramienta Mover porque la capa está bloqueada.
 	Could not complete the Free Transform command because the layer is locked.	No se pudo completar el comando Transformación libre porque la capa está bloqueada.
+	Could not transform because the layer is locked.	No se pudo transformar porque la capa está bloqueada.
 	Multiply	Multiplicar
 	My Brushes	Mis pinceles
 	Neutrals	Neutros
@@ -1973,6 +1989,11 @@
 	Show canvas dots	Mostrar puntos del lienzo
 	Clip thumbnails to layer bounds	Recortar miniaturas a los límites de la capa
 	Clip Thumbnails to Layer Bounds	Recortar miniaturas a los límites de la capa
+	No Thumbnails	Sin miniaturas
+	Small Thumbnails	Miniaturas pequeñas
+	Medium Thumbnails	Miniaturas medianas
+	Large Thumbnails	Miniaturas grandes
+	Clip Thumbnails to Document Bounds	Recortar miniaturas a los límites del documento
 	Canvas color	Color del lienzo
 	Canvas custom color	Color personalizado del lienzo
 	Color picker	Selector de color
@@ -2090,7 +2111,6 @@
 	Show only crosshair while painting	Mostrar solo la retícula al pintar
 	Show slice numbers	Mostrar los números de sector
 	Show tooltips	Mostrar las descripciones emergentes
-	Enable animations	Activar las animaciones
 	Show highlight on rollover	Mostrar resaltado al pasar el cursor
 	Show bounding box when dragging layer	Mostrar el cuadro delimitador al arrastrar la capa
 	System title bar	Barra de título del sistema
@@ -2340,6 +2360,7 @@
 	Punctuation	Puntuación
 	Make Work Path	Crear trazado de trabajo
 	Make Selection	Crear selección
+	Make Shape	Crear forma
 	Fill Path	Rellenar trazado
 	Stroke Path	Contornear trazado
 	Delete Path	Eliminar trazado

@@ -186,6 +186,7 @@
 	Right	Destra
 	Open Recent	Apri recenti
 	Clear Recent Files	Cancella file recenti
+	Clear Recent File List	Cancella file recenti
 	Remove from Recent	Rimuovi dai recenti
 	Remove {name} from Recent	Rimuovi {name} dai recenti
 	Close	Chiudi
@@ -194,6 +195,10 @@
 	Restore	Ripristina
 	Close All	Chiudi tutto
 	Close Others	Chiudi altri
+	New Document…	Nuovo documento…
+	Open Document…	Apri…
+	Consolidate All to Here	Raggruppa tutto qui
+	Move to New Window	Sposta in una nuova finestra
 	Save	Salva
 	Save As…	Salva con nome…
 	Save a Copy…	Salva una copia…
@@ -245,6 +250,7 @@
 	Create Smart Object after Loading Layers	Crea oggetto avanzato dopo il caricamento dei livelli
 	Reveal in Finder	Mostra nel Finder
 	Show in Explorer	Mostra in Esplora file
+	Reveal in Explorer	Mostra in Esplora file
 	Show in Folder	Mostra nella cartella
 	File Info…	Info file…
 	Print…	Stampa…
@@ -333,6 +339,7 @@
 	Units & Rulers…	Unità e righelli…
 	Guides, Grid & Slices…	Guide, griglia e sezioni…
 	Plug-ins…	Plug-in…
+	Plugins…	Plug-in…
 	Type…	Testo…
 	Enhanced Controls…	Controlli avanzati…
 	Camera Raw…	Camera Raw…
@@ -490,6 +497,8 @@
 	Smart Object	Oggetto avanzato
 	Convert to Smart Object	Converti in oggetto avanzato
 	Convert to Embedded	Converti in incorporato
+	Embed Linked	Incorpora collegato
+	Embed All Linked	Incorpora tutti i collegati
 	Convert to Linked…	Converti in oggetto collegato…
 	Edit Contents	Modifica contenuto
 	Replace Contents…	Sostituisci contenuto…
@@ -745,6 +754,7 @@
 	Minimum…	Minimo…
 	Offset…	Scostamento…
 	Plug-ins	Plug-in
+	Plugins	Plug-in
 	Proof Setup	Configurazione prova
 	Proof Colors	Colori di prova
 	Gamut Warning	Avviso gamma
@@ -753,9 +763,9 @@
 	Working Magenta Plate	Lastra magenta di lavoro
 	Working Yellow Plate	Lastra gialla di lavoro
 	Working Black Plate	Lastra nera di lavoro
-	Working CMY Plate	Lastra CMY di lavoro
-	Legacy Macintosh RGB	RGB legacy Macintosh
-	Internet Standard RGB	RGB standard Internet
+	Working CMY Plates	Lastre CMY di lavoro
+	Legacy Macintosh RGB (Gamma 1.8)	RGB legacy Macintosh (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB standard Internet (sRGB)
 	Monitor RGB	RGB monitor
 	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
 	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
@@ -847,7 +857,6 @@
 	Consolidate All to Tabs	Raggruppa tutto in schede
 	Float in Window	Flottante in finestra
 	Float All in Windows	Flottante tutto in finestre
-	New Window for Document	Nuova finestra per documento
 	Workspace	Area di lavoro
 	Essentials	Essenziali
 	Graphic and Web	Grafica e web
@@ -909,6 +918,12 @@
 	Timeline	Timeline
 	Tool Presets	Predefiniti strumento
 	Tools	Strumenti
+	Contextual Task Bar	Barra delle attività contestuale
+	Hide bar	Nascondi barra
+	Reset bar position	Ripristina posizione barra
+	Pin bar position	Blocca posizione barra
+	Move bar	Sposta barra
+	More options	Altre opzioni
 	About PhotoCraft	Informazioni su PhotoCraft
 	PhotoCraft Website	Sito web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft su GitHub
@@ -1862,6 +1877,7 @@
 	Move Tool	Strumento Sposta
 	Could not use the move tool because the layer is locked.	Impossibile usare lo strumento Sposta perché il livello è bloccato.
 	Could not complete the Free Transform command because the layer is locked.	Impossibile completare il comando Trasformazione libera perché il livello è bloccato.
+	Could not transform because the layer is locked.	Impossibile trasformare perché il livello è bloccato.
 	Multiply	Moltiplica
 	My Brushes	I miei pennelli
 	Neutrals	Neutri
@@ -2018,6 +2034,11 @@
 	Show canvas dots	Mostra punti del quadro
 	Clip thumbnails to layer bounds	Ritaglia le miniature ai limiti del livello
 	Clip Thumbnails to Layer Bounds	Ritaglia le miniature ai limiti del livello
+	No Thumbnails	Nessuna miniatura
+	Small Thumbnails	Miniature piccole
+	Medium Thumbnails	Miniature medie
+	Large Thumbnails	Miniature grandi
+	Clip Thumbnails to Document Bounds	Ritaglia le miniature ai limiti del documento
 	Canvas color	Colore quadro
 	Canvas custom color	Colore personalizzato quadro
 	Color picker	Selettore colore
@@ -2135,7 +2156,6 @@
 	Show only crosshair while painting	Mostra solo mirino durante pittura
 	Show slice numbers	Mostra numeri sezioni
 	Show tooltips	Mostra tooltip
-	Enable animations	Attiva animazioni
 	Show highlight on rollover	Mostra evidenziazione al passaggio del mouse
 	Show bounding box when dragging layer	Mostra riquadro selezione al trascinamento livello
 	System title bar	Barra del titolo di sistema
@@ -2387,6 +2407,7 @@
 	Punctuation	Punteggiatura
 	Make Work Path	Crea tracciato di lavoro
 	Make Selection	Crea selezione
+	Make Shape	Crea forma
 	Fill Path	Riempi tracciato
 	Stroke Path	Traccia tracciato
 	Delete Path	Elimina tracciato

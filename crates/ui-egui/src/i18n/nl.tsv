@@ -128,6 +128,7 @@
 	Right	Rechts
 	Open Recent	Recent geopend
 	Clear Recent Files	Recente bestanden wissen
+	Clear Recent File List	Recente bestanden wissen
 	Remove from Recent	Verwijderen uit recente bestanden
 	Remove {name} from Recent	{name} verwijderen uit recente bestanden
 	Close	Sluiten
@@ -136,6 +137,10 @@
 	Restore	Herstellen
 	Close All	Alles sluiten
 	Close Others	Andere sluiten
+	New Document…	Nieuw document…
+	Open Document…	Openen…
+	Consolidate All to Here	Alles hier samenvoegen
+	Move to New Window	Verplaatsen naar nieuw venster
 	Save	Opslaan
 	Save As…	Opslaan als…
 	Save a Copy…	Kopie opslaan…
@@ -187,6 +192,7 @@
 	Create Smart Object after Loading Layers	Slim object maken na laden van lagen
 	Reveal in Finder	Weergeven in Finder
 	Show in Explorer	Weergeven in Verkenner
+	Reveal in Explorer	Weergeven in Verkenner
 	Show in Folder	Weergeven in map
 	File Info…	Bestandsinformatie…
 	Print…	Afdrukken…
@@ -275,6 +281,7 @@
 	Units & Rulers…	Eenheden en linialen…
 	Guides, Grid & Slices…	Hulplijnen, raster en segmenten…
 	Plug-ins…	Plug-ins…
+	Plugins…	Plug-ins…
 	Type…	Tekst…
 	Enhanced Controls…	Uitgebreide bediening…
 	Camera Raw…	Camera Raw…
@@ -431,6 +438,8 @@
 	Smart Object	Slim object
 	Convert to Smart Object	Omzetten naar slim object
 	Convert to Embedded	Omzetten naar ingesloten
+	Embed Linked	Gekoppeld insluiten
+	Embed All Linked	Alles gekoppeld insluiten
 	Convert to Layers	Omzetten naar lagen
 	Convert to Linked…	Omzetten naar gekoppeld…
 	Edit Contents	Inhoud bewerken
@@ -504,7 +513,9 @@
 	Unite Shapes	Vormen verenigen
 	Subtract Front Shape	Voorste vorm aftrekken
 	Intersect Shape Areas	Overlappende vormgebieden
+	Unite Shapes at Overlap	Overlappende vormgebieden
 	Exclude Overlapping Shapes	Overlappende vormen uitsluiten
+	Subtract Shapes at Overlap	Overlappende vormen uitsluiten
 	Merge Shape Components	Vormcomponenten samenvoegen
 	Path operations	Padbewerkingen
 	Align	Uitlijnen
@@ -687,6 +698,7 @@
 	Minimum…	Minimum…
 	Offset…	Verschuiving…
 	Plug-ins	Plug-ins
+	Plugins	Plug-ins
 	Proof Setup	Proefinstellingen
 	Proof Colors	Proefkleuren
 	Gamut Warning	Waarschuwing kleurbereik
@@ -695,9 +707,9 @@
 	Working Magenta Plate	Werkplaat magenta
 	Working Yellow Plate	Werkplaat geel
 	Working Black Plate	Werkplaat zwart
-	Working CMY Plate	Werkplaat CMY
-	Legacy Macintosh RGB	Verouderde Macintosh RGB
-	Internet Standard RGB	Internetstandaard RGB
+	Working CMY Plates	CMY-werkplaten
+	Legacy Macintosh RGB (Gamma 1.8)	Verouderde Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internetstandaard RGB (sRGB)
 	Monitor RGB	Monitor-RGB
 	Color Blindness — Protanopia-type	Kleurenblindheid — type protanopie
 	Color Blindness — Deuteranopia-type	Kleurenblindheid — type deuteranopie
@@ -779,7 +791,6 @@
 	Consolidate All to Tabs	Alles samenvoegen in tabbladen
 	Float in Window	Zwevend in venster
 	Float All in Windows	Alles zwevend in vensters
-	New Window for Document	Nieuw venster voor document
 	Workspace	Werkruimte
 	Essentials	Basis
 	Graphic and Web	Grafisch en web
@@ -843,6 +854,12 @@
 	Timeline	Tijdlijn
 	Tool Presets	Gereedschapsvoorinstellingen
 	Tools	Gereedschappen
+	Contextual Task Bar	Contextuele taakbalk
+	Hide bar	Balk verbergen
+	Reset bar position	Balkpositie herstellen
+	Pin bar position	Balkpositie vastzetten
+	Move bar	Balk verplaatsen
+	More options	Meer opties
 	About PhotoCraft	Over PhotoCraft
 	PhotoCraft Website	Website van PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft op GitHub
@@ -1792,6 +1809,7 @@
 	Move Tool	Verplaatsgereedschap
 	Could not use the move tool because the layer is locked.	Kan het verplaatsgereedschap niet gebruiken omdat de laag is vergrendeld.
 	Could not complete the Free Transform command because the layer is locked.	Kan de opdracht Vrije transformatie niet voltooien omdat de laag is vergrendeld.
+	Could not transform because the layer is locked.	Kan niet transformeren omdat de laag is vergrendeld.
 	Multiply	Vermenigvuldigen
 	My Brushes	Mijn penselen
 	Neutrals	Neutrale tinten
@@ -1948,6 +1966,11 @@
 	Show canvas dots	Canvasstippen tonen
 	Clip thumbnails to layer bounds	Miniaturen bijsnijden tot laaggrenzen
 	Clip Thumbnails to Layer Bounds	Miniaturen bijsnijden tot laaggrenzen
+	No Thumbnails	Geen miniaturen
+	Small Thumbnails	Kleine miniaturen
+	Medium Thumbnails	Middelgrote miniaturen
+	Large Thumbnails	Grote miniaturen
+	Clip Thumbnails to Document Bounds	Miniaturen bijsnijden tot documentgrenzen
 	Canvas color	Canvaskleur
 	Canvas custom color	Aangepaste canvaskleur
 	Color picker	Kleurkiezer
@@ -2065,7 +2088,6 @@
 	Show only crosshair while painting	Alleen dradenkruis tonen tijdens schilderen
 	Show slice numbers	Segmentnummers tonen
 	Show tooltips	Knopinfo tonen
-	Enable animations	Animaties inschakelen
 	Show highlight on rollover	Markering bij aanwijzen tonen
 	Show bounding box when dragging layer	Selectiekader tonen bij slepen van laag
 	System title bar	Titelbalk van systeem
@@ -2308,6 +2330,7 @@
 	Punctuation	Interpunctie
 	Make Work Path	Werkpad maken
 	Make Selection	Selectie maken
+	Make Shape	Vorm maken
 	Fill Path	Pad vullen
 	Stroke Path	Pad omlijnen
 	Delete Path	Pad verwijderen

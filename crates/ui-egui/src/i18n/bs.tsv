@@ -64,6 +64,7 @@
 	Right	Desno
 	Open Recent	Otvori nedavno
 	Clear Recent Files	Očisti nedavne datoteke
+	Clear Recent File List	Očisti nedavne datoteke
 	Remove from Recent	Ukloni iz nedavnih
 	Remove {name} from Recent	Ukloni {name} iz nedavnih
 	Close	Zatvori
@@ -72,6 +73,10 @@
 	Restore	Vrati
 	Close All	Zatvori sve
 	Close Others	Zatvori ostale
+	New Document…	Novi dokument…
+	Open Document…	Otvori…
+	Consolidate All to Here	Objedini sve ovdje
+	Move to New Window	Premjesti u novi prozor
 	Save	Sačuvaj
 	Save As…	Sačuvaj kao…
 	Save a Copy…	Sačuvaj kopiju…
@@ -123,6 +128,7 @@
 	Create Smart Object after Loading Layers	Kreiraj pametni objekat nakon učitavanja slojeva
 	Reveal in Finder	Prikaži u Finderu
 	Show in Explorer	Prikaži u Exploreru
+	Reveal in Explorer	Prikaži u Exploreru
 	Show in Folder	Prikaži u folderu
 	File Info…	Informacije o datoteci…
 	Print…	Štampaj…
@@ -207,6 +213,7 @@
 	Units & Rulers…	Jedinice i ravnala…
 	Guides, Grid & Slices…	Vodilice, mreža i isječci…
 	Plug-ins…	Dodaci…
+	Plugins…	Dodaci…
 	Type…	Vrsta…
 	Enhanced Controls…	Poboljšane kontrole…
 	Camera Raw…	Camera Raw…
@@ -355,6 +362,8 @@
 	Smart Object	Pametni objekat
 	Convert to Smart Object	Pretvori u pametni objekat
 	Convert to Embedded	Pretvori u ugrađeno
+	Embed Linked	Ugradi povezano
+	Embed All Linked	Ugradi sve povezano
 	Convert to Layers	Pretvori u slojeve
 	Convert to Linked…	Pretvori u povezano…
 	Edit Contents	Uredi sadržaj
@@ -605,6 +614,7 @@
 	Minimum…	Minimum…
 	Offset…	Pomak…
 	Plug-ins	Dodaci
+	Plugins	Dodaci
 	Proof Setup	Postavke probnog prikaza
 	Proof Colors	Probne boje
 	Gamut Warning	Upozorenje o gamutu
@@ -613,9 +623,9 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plate	Radna CMY ploča
-	Legacy Macintosh RGB	Naslijeđeni Macintosh RGB
-	Internet Standard RGB	Internet standardni RGB
+	Working CMY Plates	Radne CMY ploče
+	Legacy Macintosh RGB (Gamma 1.8)	Naslijeđeni Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internet standardni RGB (sRGB)
 	Monitor RGB	RGB monitora
 	Color Blindness — Protanopia-type	Daltonizam — tip protanopije
 	Color Blindness — Deuteranopia-type	Daltonizam — tip deuteranopije
@@ -707,7 +717,6 @@
 	Consolidate All to Tabs	Objedini sve u kartice
 	Float in Window	Odvoji u prozor
 	Float All in Windows	Odvoji sve u prozore
-	New Window for Document	Novi prozor za dokument
 	Workspace	Radni prostor
 	Essentials	Osnove
 	Graphic and Web	Grafika i web
@@ -769,6 +778,12 @@
 	Timeline	Vremenska linija
 	Tool Presets	Predlošci alata
 	Tools	Alati
+	Contextual Task Bar	Kontekstualna traka zadataka
+	Hide bar	Sakrij traku
+	Reset bar position	Vrati položaj trake
+	Pin bar position	Zakači položaj trake
+	Move bar	Pomjeri traku
+	More options	Više opcija
 	About PhotoCraft	O PhotoCraftu
 	PhotoCraft Website	Web stranica PhotoCrafta
 	PhotoCraft on GitHub	PhotoCraft na GitHubu
@@ -1696,6 +1711,7 @@
 	Move Tool	Alat za pomjeranje
 	Could not use the move tool because the layer is locked.	Nije moguće koristiti alat za pomjeranje jer je sloj zaključan.
 	Could not complete the Free Transform command because the layer is locked.	Naredbu Slobodna transformacija nije moguće dovršiti jer je sloj zaključan.
+	Could not transform because the layer is locked.	Transformacija nije moguća jer je sloj zaključan.
 	Multiply	Množenje
 	My Brushes	Moje četkice
 	Neutrals	Neutralni tonovi
@@ -1851,6 +1867,11 @@
 	Show canvas dots	Prikaži tačke platna
 	Clip thumbnails to layer bounds	Ograniči sličice na granice sloja
 	Clip Thumbnails to Layer Bounds	Ograniči sličice na granice sloja
+	No Thumbnails	Bez sličica
+	Small Thumbnails	Male sličice
+	Medium Thumbnails	Srednje sličice
+	Large Thumbnails	Velike sličice
+	Clip Thumbnails to Document Bounds	Ograniči sličice na granice dokumenta
 	Canvas color	Boja platna
 	Canvas custom color	Prilagođena boja platna
 	Color picker	Birač boja
