@@ -42,42 +42,69 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 /// A single stroke's accumulated coverage must stay at or under this many pixels (8192², so a
 /// stroke corner to corner across a 24–36 MP canvas fits). Larger footprints return an error
 /// instead of allocating.
-const MAX_STROKE_PIXELS: u64 = 67_108_864;
+pub(crate) const MAX_STROKE_PIXELS: u64 = 67_108_864;
 
-/// Refuse a stroke whose footprint would not fit the coverage budget, from the points and brush
-/// size alone, before the renderer allocates anything for it.
-fn reject_huge_stroke(cmd: &str, stroke: &Stroke) -> Result<()> {
-    // Dynamics place dabs beyond the input points, so half the tip is not the whole reach:
-    // Scattering offsets a centre by up to its amount times the tip size, and a Dual Brush dab
-    // reaches its own radius further. Pad by what those can add so this estimate does not fall
-    // short of what the renderer will cover. It is only the cheap early-out; the rendered extent
-    // is admitted for real in `coverage` below.
-    let b = &stroke.brush;
-    let size = f64::from(b.size.max(1.0));
-    let scatter = if b.scattering.enabled { size * f64::from(b.scattering.scatter.jitter.max(0.0)) } else { 0.0 };
-    let dual = if b.dual_brush.enabled { f64::from(b.dual_brush.size.max(0.0)) * 0.5 } else { 0.0 };
-    let pad = size.mul_add(0.5, 4.0) + scatter + dual;
-    let mut min_x = f64::INFINITY;
-    let mut min_y = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    for q in &stroke.points {
-        min_x = min_x.min(q.x);
-        min_y = min_y.min(q.y);
-        max_x = max_x.max(q.x);
-        max_y = max_y.max(q.y);
+/// The box the input points of a stroke span, grown as a live stroke is pushed to.
+#[derive(Clone, Copy)]
+pub(crate) struct PointBounds {
+    min_x: f64,
+    min_y: f64,
+    max_x: f64,
+    max_y: f64,
+}
+
+impl PointBounds {
+    pub(crate) const EMPTY: Self = Self { min_x: f64::INFINITY, min_y: f64::INFINITY, max_x: f64::NEG_INFINITY, max_y: f64::NEG_INFINITY };
+
+    pub(crate) fn add(&mut self, points: &[StrokePoint]) {
+        for q in points {
+            self.min_x = self.min_x.min(q.x);
+            self.min_y = self.min_y.min(q.y);
+            self.max_x = self.max_x.max(q.x);
+            self.max_y = self.max_y.max(q.y);
+        }
     }
-    if !min_x.is_finite() || !min_y.is_finite() || !max_x.is_finite() || !max_y.is_finite() {
-        return Err(bad(cmd, "point coordinates must be finite"));
+
+    /// Refuse a footprint that would not fit the coverage budget, from these bounds and the
+    /// brush size alone, before the renderer allocates anything for it.
+    pub(crate) fn reject_huge(&self, cmd: &str, b: &BrushSettings) -> Result<()> {
+        // Dynamics place dabs beyond the input points, so half the tip is not the whole reach:
+        // Scattering offsets a centre by up to its amount times the tip size, and a Dual Brush dab
+        // reaches its own radius further. Pad by what those can add so this estimate does not fall
+        // short of what the renderer will cover. It is only the cheap early-out; the rendered extent
+        // is admitted for real in `coverage` below.
+        let size = f64::from(b.size.max(1.0));
+        let scatter = if b.scattering.enabled { size * f64::from(b.scattering.scatter.jitter.max(0.0)) } else { 0.0 };
+        let dual = if b.dual_brush.enabled { f64::from(b.dual_brush.size.max(0.0)) * 0.5 } else { 0.0 };
+        let pad = size.mul_add(0.5, 4.0) + scatter + dual;
+        if !self.min_x.is_finite() || !self.min_y.is_finite() || !self.max_x.is_finite() || !self.max_y.is_finite() {
+            return Err(bad(cmd, "point coordinates must be finite"));
+        }
+        let w = (self.max_x - self.min_x + pad * 2.0).ceil().max(1.0);
+        let h = (self.max_y - self.min_y + pad * 2.0).ceil().max(1.0);
+        if !w.is_finite() || !h.is_finite() || w > 1.0e9 || h > 1.0e9 {
+            return Err(bad(cmd, format!("stroke too large (at most {MAX_STROKE_PIXELS} px)")));
+        }
+        let area = (w as u64).saturating_mul(h as u64);
+        if area > MAX_STROKE_PIXELS {
+            return Err(bad(cmd, format!("stroke too large ({w:.0}×{h:.0} px, at most {MAX_STROKE_PIXELS})")));
+        }
+        Ok(())
     }
-    let w = (max_x - min_x + pad * 2.0).ceil().max(1.0);
-    let h = (max_y - min_y + pad * 2.0).ceil().max(1.0);
-    if !w.is_finite() || !h.is_finite() || w > 1.0e9 || h > 1.0e9 {
-        return Err(bad(cmd, format!("stroke too large (at most {MAX_STROKE_PIXELS} px)")));
-    }
-    let area = (w as u64).saturating_mul(h as u64);
-    if area > MAX_STROKE_PIXELS {
-        return Err(bad(cmd, format!("stroke too large ({w:.0}×{h:.0} px, at most {MAX_STROKE_PIXELS})")));
+}
+
+/// Refuse a stroke whose footprint would not fit the coverage budget (see [`PointBounds::reject_huge`]).
+pub(crate) fn reject_huge_stroke(cmd: &str, stroke: &Stroke) -> Result<()> {
+    let mut bounds = PointBounds::EMPTY;
+    bounds.add(&stroke.points);
+    bounds.reject_huge(cmd, &stroke.brush)
+}
+
+/// Refuse a dab stroke whose rendered extent plus `halo` exceeds `max` pixels, before the dense
+/// working copy is read. [`reject_huge_stroke`] only sees the input points.
+pub(crate) fn reject_huge_extent(cmd: &str, stroke: &Stroke, halo: i32, max: u64) -> Result<()> {
+    if photocraft_paint::retouch::dab_stroke_area(stroke, halo) > max {
+        return Err(bad(cmd, format!("stroke too large (at most {max} px)")));
     }
     Ok(())
 }

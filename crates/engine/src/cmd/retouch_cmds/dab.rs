@@ -1,8 +1,8 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
-    BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect, Region, Result,
-    Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag, from_rgba_into,
-    has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
+    BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, PointBounds, Rect,
+    Region, Result, Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag,
+    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, reject_huge_stroke, run_stroke, sponge, string, to_rgba,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -269,7 +269,9 @@ impl DabTool {
 /// (`apply_dab_stroke`). Blur, Sharpen and Smudge can sample all layers.
 pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let (stroke, id) = parse_brush(s, p, cmd)?;
+    reject_huge_stroke(cmd, &stroke)?;
     let (tool, label) = DabTool::parse(s, cmd, p, &stroke)?;
+    super::reject_huge_extent(cmd, &stroke, tool.neighborhood().halo(), super::MAX_STROKE_PIXELS)?;
     let all = matches!(tool, DabTool::Focus { .. } | DabTool::Smudge { .. }) && sample_all_layers(p);
     // The live stroke the canvas already drew for exactly this commit (`LiveDab::into_commit`):
     // take its pixels instead of running every dab again (the hitch on release).
@@ -413,6 +415,7 @@ pub struct LiveDab {
     base: Option<(photocraft_doc::DocId, u64)>,
     /// Every point rendered so far, in order.
     points: Vec<StrokePoint>,
+    point_bounds: PointBounds,
 }
 
 impl LiveDab {
@@ -492,6 +495,8 @@ impl LiveDab {
         neighborhood: DabNeighborhood,
         effect: impl FnOnce(&Surface) -> DabEffect,
     ) -> Result<Self> {
+        // The working copy is dense over the stroke's bounds (#8666).
+        reject_huge_stroke(cmd, &stroke)?;
         let colors = crate::color_channels::explicit(p, crate::channel_cmds::color_count(&doc))?;
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
@@ -525,6 +530,7 @@ impl LiveDab {
             tool: None,
             base: None,
             points: Vec::new(),
+            point_bounds: PointBounds::EMPTY,
         };
         live.push(&stroke.points)?;
         Ok(live)
@@ -588,6 +594,13 @@ impl LiveDab {
     fn push_inner(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         crate::brush_cmds::check_coords(pts, &self.cmd)?;
         let pts: Vec<_> = pts.iter().map(|q| StrokePoint::new(q.x, q.y, q.pressure)).collect();
+        // A live stroke grows after it starts: admit the grown box before anything is mutated (#8666).
+        if !pts.is_empty() {
+            let mut grown = self.point_bounds;
+            grown.add(&pts);
+            grown.reject_huge(&self.cmd, &self.ctx.brush)?;
+            self.point_bounds = grown;
+        }
         self.points.extend_from_slice(&pts);
         self.generator.push(&pts, &mut self.pending, &mut self.dual_pending);
         let dmg = self.run_new_dabs();

@@ -607,6 +607,53 @@ fn every_retouch_stroke_refuses_a_box_it_cannot_render() {
     assert!(err.contains("stroke too large"), "paint.remove: {err}");
 }
 
+/// #8666: the sequential-dab strokes (Dodge, Burn, Sponge, Blur, Sharpen, Smudge), the Mixer Brush,
+/// Color Replacement and the Background Eraser all copy the target densely over the stroke's
+/// bounds, and a drag far off the canvas made that copy large enough to abort the process. Each
+/// refuses the oversized stroke without touching the pixels or the history, and an ordinary
+/// stroke still runs, at every depth.
+#[test]
+fn every_dab_stroke_refuses_a_box_it_cannot_copy() {
+    let huge = json!([[0, 0], [900_000, 900_000]]);
+    let ok = json!([[2, 2], [30, 16]]);
+    let cases: [(&str, Value); 10] = [
+        ("paint.dodge", json!({"size": 8})),
+        ("paint.burn", json!({"size": 8})),
+        ("paint.sponge", json!({"size": 8})),
+        ("paint.blur", json!({"size": 8})),
+        ("paint.sharpen", json!({"size": 8})),
+        ("paint.smudge", json!({"size": 8})),
+        ("paint.mixerBrush", json!({"size": 8})),
+        ("paint.mixerBrush", json!({"size": 8, "sampleAllLayers": true})),
+        ("paint.colorReplacement", json!({"size": 8})),
+        ("paint.backgroundEraser", json!({"size": 8})),
+    ];
+    for depth in DEPTHS {
+        for (cmd, base) in &cases {
+            let mut s = session(40, 20, depth, "rgb");
+            s.execute("paint.stroke", json!({"points": [[0, 10], [40, 10]], "size": 12, "hardness": 1.0, "color": "#ff0000"})).unwrap();
+            let before = rgba(&s, 20, 10);
+            let steps = s.active().unwrap().history.past_len();
+            let with = |points: &Value| {
+                let mut v = base.clone();
+                if let Some(o) = v.as_object_mut() {
+                    o.insert("points".into(), points.clone());
+                }
+                v
+            };
+            let err = s.execute(cmd, with(&huge)).unwrap_err().to_string();
+            assert!(err.contains("stroke too large"), "{cmd} at {depth}: {err}");
+            assert_eq!(rgba(&s, 20, 10), before, "{cmd} at {depth}: a refused stroke leaves the pixels alone");
+            assert_eq!(s.active().unwrap().history.past_len(), steps, "{cmd} at {depth}: and records no history step");
+
+            let pixels = layer_pixels(&s);
+            s.execute(cmd, with(&ok)).unwrap_or_else(|e| panic!("{cmd} at {depth}: an ordinary stroke must work: {e}"));
+            assert_ne!(layer_pixels(&s), pixels, "{cmd} at {depth}: and changes pixels");
+            assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "{cmd} at {depth}: and records one step");
+        }
+    }
+}
+
 /// The review on #6110: the estimate from the input points is not the bound. Brush dynamics place
 /// dabs beyond those points, so the budget is applied to the extent the renderer actually produced,
 /// before the dense buffer is allocated. An injected budget makes that observable without asking
@@ -632,6 +679,27 @@ fn the_budget_is_applied_to_the_rendered_extent_not_the_input_points() {
     let err = super::coverage_within("t", &stroke, rendered - 1).unwrap_err().to_string();
     assert!(err.contains("stroke too large"), "{err}");
     assert!(super::coverage_within("t", &stroke, rendered).is_ok(), "the rendered extent itself fits");
+}
+
+/// The review on #9644: a stroke whose input points fit can still render, with scattering and the
+/// neighbourhood halo, into more pixels than the dense working copy may hold. The rendered extent
+/// plus halo is what `reject_huge_extent` measures, before `apply_dab_stroke` reads anything.
+#[test]
+fn the_dab_copy_budget_counts_the_rendered_extent_and_the_halo() {
+    use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
+    let mut brush = BrushSettings { size: 24.0, hardness: 1.0, ..Default::default() };
+    brush.scattering.enabled = true;
+    brush.scattering.scatter.jitter = 6.0;
+    let stroke = Stroke { brush, points: vec![StrokePoint::new(10.0, 10.0, 1.0), StrokePoint::new(40.0, 10.0, 1.0)] };
+
+    let bare = photocraft_paint::retouch::dab_stroke_area(&stroke, 0);
+    let haloed = photocraft_paint::retouch::dab_stroke_area(&stroke, 8);
+    assert!(haloed > bare, "the halo is part of what gets copied: {haloed} vs {bare}");
+
+    assert!(super::reject_huge_extent("t", &stroke, 8, haloed).is_ok(), "exactly the copied area fits");
+    let err = super::reject_huge_extent("t", &stroke, 8, haloed - 1).unwrap_err().to_string();
+    assert!(err.contains("stroke too large"), "{err}");
+    assert!(super::reject_huge_extent("t", &stroke, 0, haloed - 1).is_ok(), "without the halo the same budget still fits");
 }
 
 #[test]
@@ -2530,5 +2598,44 @@ fn periodic_clone_interior_matches_ordinary_brush_masks_and_transparency() {
             let error = a.iter().zip(&b).map(|(a, b)| (a - b).abs()).fold(0.0_f32, f32::max);
             assert!(error <= tolerance, "depth={depth}, brush={brush}, max native-channel error={error}");
         }
+    }
+}
+
+/// #8666: a live stroke can start small and then grow past the budget with a pushed point. The push
+/// is refused with nothing changed (preview, bounds), and the stroke carries on afterwards.
+#[test]
+fn live_dab_push_refuses_a_stroke_that_grows_too_large() {
+    for (cmd, extra) in dab_cases() {
+        let mut s = session(64, 48, 8, "rgb");
+        paint_layer(&mut s, texture);
+        let mut live = LiveDab::begin(&s, cmd, &dab_opts(&[[10.0, 10.0]], 50, &extra)).unwrap();
+        let (shown, bounds) = (live.doc.clone(), live.bounds());
+        let before = shown.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let err = live.push(&[StrokePoint::new(900_000.0, 900_000.0, 1.0)]).unwrap_err().to_string();
+        assert!(err.contains("stroke too large"), "{cmd}: {err}");
+        assert!(std::sync::Arc::ptr_eq(&live.doc, &shown), "{cmd}: a refused push leaves the preview alone");
+        assert_eq!(live.bounds(), bounds, "{cmd}: and the bounds");
+        let id = s.active().unwrap().active_layer.unwrap();
+        assert_eq!(live.doc.layer(id).unwrap().surface().unwrap().read_region(shown.bounds()), before.read_region(shown.bounds()), "{cmd}: and the pixels");
+        live.push(&[StrokePoint::new(30.0, 20.0, 1.0)]).unwrap_or_else(|e| panic!("{cmd}: the stroke must carry on: {e}"));
+    }
+}
+
+/// #8666: the live Clone Stamp, Healing Brush, History Brush and Pattern Stamp strokes are refused
+/// when a pushed point grows them past the budget, with the preview and bounds untouched.
+#[test]
+fn live_retouch_push_refuses_a_stroke_that_grows_too_large() {
+    for cmd in ["paint.cloneStamp", "paint.healingBrush", "paint.historyBrush", "paint.patternStamp"] {
+        let mut s = session(64, 48, 8, "rgb");
+        paint_layer(&mut s, texture);
+        let p = json!({"points": [[10, 10]], "source": [4, 8], "size": 8, "hardness": 50, "pattern": "Checkerboard", "aligned": true});
+        let mut live = LiveRetouch::begin(&s, cmd, &p).unwrap();
+        let (shown, bounds) = (live.doc.clone(), live.bounds());
+        let err = live.push(&[StrokePoint::new(900_000.0, 900_000.0, 1.0)]).unwrap_err().to_string();
+        assert!(err.contains("stroke too large"), "{cmd}: {err}");
+        assert!(std::sync::Arc::ptr_eq(&live.doc, &shown), "{cmd}: a refused push leaves the preview alone");
+        assert_eq!(live.bounds(), bounds, "{cmd}");
+        assert_eq!(live.points().len(), 1, "{cmd}: and the recorded points");
+        live.push(&[StrokePoint::new(30.0, 20.0, 1.0)]).unwrap_or_else(|e| panic!("{cmd}: the stroke must carry on: {e}"));
     }
 }

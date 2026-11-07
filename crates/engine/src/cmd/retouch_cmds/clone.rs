@@ -1,9 +1,9 @@
 use super::heal::history_source;
 use super::sampling::{SampleLayers, sample, sample_layers};
 use super::{
-    BlendMode, BrushSettings, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint, Surface, Value,
-    alpha_index, apply_coverage, bad, blend_from_str, coverage, damage_json, flag, has_pixel_layer, json, parse_brush, pattern_stamp, periodic, point,
-    reject_huge_stroke, run_stroke, to_rgba,
+    BlendMode, BrushSettings, Document, EngineError, LayerId, PixelFormat, PointBounds, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint,
+    Surface, Value, alpha_index, apply_coverage, bad, blend_from_str, coverage, damage_json, flag, has_pixel_layer, json, parse_brush, pattern_stamp, periodic,
+    point, reject_huge_stroke, run_stroke, to_rgba,
 };
 
 /// Where a clone stroke samples: `offset` / `source` params, else the active Clone Source slot,
@@ -195,6 +195,7 @@ pub struct LiveRetouch {
     brush: Box<BrushSettings>,
     /// Every point rendered so far, in order.
     points: Vec<StrokePoint>,
+    point_bounds: PointBounds,
 }
 
 impl LiveRetouch {
@@ -264,6 +265,7 @@ impl LiveRetouch {
             base,
             brush,
             points: Vec::new(),
+            point_bounds: PointBounds::EMPTY,
         };
         live.push(&stroke.points)?;
         Ok(live)
@@ -326,6 +328,13 @@ impl LiveRetouch {
     fn push_inner(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         crate::brush_cmds::check_coords(pts, &self.cmd)?;
         let pts: Vec<_> = pts.iter().map(|q| StrokePoint::new(q.x, q.y, q.pressure)).collect();
+        // A live stroke grows after it starts: admit the grown box before anything is mutated (#8666).
+        if !pts.is_empty() {
+            let mut grown = self.point_bounds;
+            grown.add(&pts);
+            grown.reject_huge(&self.cmd, &self.brush)?;
+            self.point_bounds = grown;
+        }
         self.points.extend_from_slice(&pts);
         self.renderer.push(&pts);
         if self.cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false) {
