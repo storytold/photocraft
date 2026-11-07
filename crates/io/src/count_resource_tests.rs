@@ -184,3 +184,30 @@ fn indexed_count_groups_round_trip_through_psd() {
     assert_eq!(reopened.color_table, doc.color_table);
     assert_eq!(reopened.measurement.count_groups, doc.measurement.count_groups);
 }
+
+/// Both PSD routes report omitted points, keeping the finite points in order.
+#[test]
+fn nonfinite_count_points_warn_on_psd_export() {
+    for (mode, wire_mode) in [(ColorMode::Rgb, PsdMode::Rgb), (ColorMode::Bitmap, PsdMode::Bitmap)] {
+        let mut doc = document(mode);
+        doc.measurement.count_groups = groups();
+        let options = crate::ExportOptions::default();
+        let clean = crate::export(&doc, "counts.psd", &options).unwrap();
+        assert!(!clean.warnings.iter().any(|warning| warning.starts_with("Count group ")));
+        let reopened = crate::import("counts.psd", &clean.bytes).unwrap().document;
+        assert_eq!(reopened.measurement.count_groups, doc.measurement.count_groups);
+
+        let mut expected = groups();
+        expected[0].points.remove(1);
+        doc.measurement.count_groups[0].points[1][1] = f64::INFINITY;
+        let original = doc.measurement.count_groups.clone();
+        let exported = crate::export(&doc, "counts.psd", &options).unwrap();
+        let warnings: Vec<_> = exported.warnings.iter().filter(|warning| warning.starts_with("Count group ")).map(String::as_str).collect();
+        assert_eq!(warnings, ["Count group \"Cells\" had nonfinite points omitted from PSD export (1 total)"]);
+        assert_eq!(doc.measurement.count_groups, original);
+        let file = PsdFile::from_bytes(&exported.bytes).unwrap();
+        assert_eq!(file.header.color_mode, wire_mode);
+        let reopened = crate::import("counts.psd", &exported.bytes).unwrap().document;
+        assert_eq!(reopened.measurement.count_groups, expected);
+    }
+}

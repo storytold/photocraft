@@ -396,7 +396,7 @@ pub(crate) fn import_count_resource(doc: &mut Document) {
     }
 }
 
-/// Resource 1080 from the current groups, warning when PSD cannot represent a size.
+/// Resource 1080 from the current groups, warning when PSD changes sizes or omits points.
 pub(crate) fn fresh_count_resource(doc: &Document, warnings: &mut Vec<String>) -> Option<ImageResource> {
     if doc.measurement.count_groups.is_empty() {
         return None;
@@ -417,12 +417,16 @@ fn count_group_descriptor(group: &CountGroup, warnings: &mut Vec<String>) -> Val
         ));
     }
     let [r, g, b, _] = group.color.to_rgba8();
-    let objects = group
+    let objects: Vec<_> = group
         .points
         .iter()
         .filter(|[x, y]| x.is_finite() && y.is_finite())
         .map(|&[x, y]| Value::Descriptor(Descriptor::new("countObject").with("X   ", Value::Double(x)).with("Y   ", Value::Double(y))))
         .collect();
+    let omitted = group.points.len() - objects.len();
+    if omitted != 0 {
+        warnings.push(format!("Count group {:?} had nonfinite points omitted from PSD export ({omitted} total)", group.name));
+    }
     Value::Descriptor(
         Descriptor::new("countGroup")
             .with("Rd  ", Value::Integer(i32::from(r)))
