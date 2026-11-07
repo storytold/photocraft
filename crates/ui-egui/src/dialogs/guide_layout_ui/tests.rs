@@ -73,7 +73,7 @@ fn tab_includes_optional_sizes_and_shift_tab_selects_their_text() {
     assert_eq!((f["columns"].as_u64(), f["rows"].as_u64()), (Some(4), Some(2)));
     assert_eq!(params(f)["width"], 120.0);
     assert_eq!(params(f)["height"], 90.0);
-    assert_eq!(f["gutter"], 12.0);
+    assert_eq!(params(f)["gutter"], 12.0);
     h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
     h.run_steps(2);
     h.event(egui::Event::Text("3".into()));
@@ -101,7 +101,7 @@ fn tab_skips_disabled_rows_and_margins() {
     let f = &h.state().ui.dialogs.first().unwrap().fields;
     assert_eq!(f["columns"], 6, "Tab wraps after column spacing, skipping disabled row and margin fields");
     assert_eq!(params(f)["width"], 100.0);
-    assert_eq!(f["gutter"], 4.0);
+    assert_eq!(params(f)["gutter"], 4.0);
 }
 
 /// The disabled Number field must not clamp a zero count to 1 and so switch its axis on (#5625).
@@ -173,7 +173,8 @@ fn alt_reset_restores_factory_layout() {
     app.ui.dialog_mut(id).unwrap().fields = fields;
     let f = &app.ui.dialog_mut(id).unwrap().fields;
     assert_eq!(f["columns"], json!(8));
-    assert_eq!(f["gutter"], json!(20));
+    assert_eq!(params(f)["gutter"], 20.0);
+    assert_eq!(f["gutter"], "20 px");
     assert_eq!(f["__preset"], json!("custom"));
     assert!(app.ui.dialogs.iter().any(|d| d.id == id));
 }
@@ -323,4 +324,87 @@ fn preview_cache_tracks_document_revision() {
     assert!(!preview(&app, &app.session.active().unwrap().doc).unwrap().0.vertical.contains(&23.0));
     app.run(COMMAND, json!({"margin":23})).unwrap();
     assert!(preview(&app, &app.session.active().unwrap().doc).unwrap().0.vertical.contains(&23.0));
+}
+
+#[test]
+fn units_can_be_typed_and_convert_on_reopen() {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = {
+        let dialog = app.ui.dialog_mut(id).unwrap();
+        dialog.fields.insert("gutter".into(), json!("1 in"));
+        dialog.fields.insert("margin".into(), json!(["2 cm", "10 mm", "0.5 in", "72 pt"]));
+        dialog.fields.clone()
+    };
+    let p = params_with(Some(&app), &f);
+    assert_eq!(p["gutter"], 72.0);
+    let m = p["margin"].as_array().unwrap();
+    assert!((m[0].as_f64().unwrap() - 2.0 / 2.54 * 72.0).abs() < 1e-3);
+    assert!((m[1].as_f64().unwrap() - 1.0 / 2.54 * 72.0).abs() < 1e-3);
+    assert_eq!(m[2], 36.0);
+    assert_eq!(m[3], 72.0);
+
+    crate::dialogs::confirm(&mut app, id).unwrap();
+
+    app.session.prefs.edit(|p| p.units_and_rulers.rulers = photocraft_engine::prefs::Unit::Inches);
+
+    let reopened = open(&mut app);
+    let rf = &app.ui.dialog_mut(reopened).unwrap().fields;
+    assert_eq!(rf["gutter"], "1 in");
+    assert_eq!(rf["margin"][2], "0.5 in");
+    assert_eq!(rf["margin"][3], "1 in");
+}
+
+#[test]
+fn normalization_appends_the_field_unit_and_ensures_space() {
+    use photocraft_engine::prefs::Unit;
+    let mut app = app();
+    let px = Unit::Pixels;
+    assert_eq!(normalize_field_text("10", &app, true, false, px), Some("10 px".into()));
+    assert_eq!(normalize_field_text("10px", &app, true, false, px), Some("10 px".into()));
+    assert_eq!(normalize_field_text("10cm", &app, true, false, px), Some("10 cm".into()));
+    assert_eq!(normalize_field_text("2in", &app, true, false, px), Some("2 in".into()));
+    assert_eq!(normalize_field_text("5mm", &app, false, false, px), Some("5 mm".into()));
+
+    app.session.prefs.edit(|p| p.units_and_rulers.rulers = Unit::Centimeters);
+    assert_eq!(normalize_field_text("10", &app, true, false, Unit::Centimeters), Some("10 cm".into()));
+    assert_eq!(normalize_field_text("2.5", &app, true, false, Unit::Centimeters), Some("2.5 cm".into()));
+    assert_eq!(normalize_field_text("20px", &app, true, false, Unit::Centimeters), Some("20 px".into()));
+}
+
+/// The reference application keeps three decimals in every unit: a typed "13.5 px" stays, it is
+/// not rounded to whole pixels, and 20 px at 72 ppi opens as "0.706 cm".
+#[test]
+fn fields_keep_three_decimals_in_every_unit() {
+    use photocraft_engine::prefs::Unit;
+    let mut app = app();
+    assert_eq!(normalize_field_text("13.5 px", &app, true, false, Unit::Pixels), Some("13.5 px".into()));
+    assert_eq!(normalize_field_text("5.123456", &app, true, false, Unit::Millimeters), Some("5.123 mm".into()));
+    app.session.prefs.edit(|p| p.units_and_rulers.rulers = Unit::Centimeters);
+    let dpi = f64::from(app.session.active().unwrap().doc.resolution_dpi);
+    assert_eq!(in_ruler_unit(&app, dpi * 0.70556 / 2.54, true), "0.706 cm");
+}
+
+/// After "2 mm", a bare number typed into the field is in millimetres, not the ruler unit.
+#[test]
+fn a_bare_number_takes_the_unit_the_field_showed() {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("columns".into(), json!(2));
+    f.insert("__rowsEnabled".into(), json!(false));
+    f.insert("__marginEnabled".into(), json!(false));
+    f.insert("gutter".into(), json!("2 mm"));
+    let mut h = harness(app);
+    h.run_steps(3);
+    // Number, Width, then Spacing (gutter).
+    for _ in 0..3 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    h.event(egui::Event::Text("5".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs.first().unwrap().fields["gutter"], "5 mm");
 }
