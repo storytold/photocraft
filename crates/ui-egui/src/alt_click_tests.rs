@@ -112,9 +112,7 @@ fn alt_click_with_the_brush_samples_the_foreground() {
 }
 
 /// Alt-click sampling respects the canvas view transform without changing document pixels.
-
 #[test]
-
 fn mixer_alt_click_samples_the_tip_through_zoomed_rotated_canvas_input() {
     for (zoom, rotation) in [(0.5, 0.0), (1.0, 0.0), (2.0, 30.0)] {
         let mut app = two_colours();
@@ -149,9 +147,7 @@ fn mixer_alt_click_samples_the_tip_through_zoomed_rotated_canvas_input() {
 }
 
 /// Native pointer release commits the shown mixer result before restoring a spring-loaded tool.
-
 #[test]
-
 fn mixer_raw_drag_commits_live_pixels_before_a_spring_tool_returns() {
     for spring in [false, true] {
         let mut app = two_colours();
@@ -329,4 +325,20 @@ fn alt_click_with_the_zoom_tool_zooms_out_held_or_latched() {
         click(&mut h, 50.0, 50.0, Modifiers::NONE);
         assert_eq!(h.state().ui.views[0].zoom, 1.0, "sticky={sticky} scrubby={scrubby}");
     }
+}
+
+#[test]
+fn alt_click_with_the_mixer_brush_loads_the_reservoir_not_the_foreground() {
+    let mut h = harness(two_colours());
+    h.state_mut().ui.tool = Tool::MixerBrush;
+    h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+    let rev = h.state().session.active().unwrap().revision;
+    assert!(h.state().session.tools.mixer.reservoir.is_none());
+    click(&mut h, 50.0, 50.0, Modifiers::ALT);
+    assert_eq!(h.state().session.tools.mixer.reservoir, Some([1.0, 0.0, 0.0, 1.0]), "⌥-click loaded red into the reservoir");
+    assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "the foreground colour is unchanged");
+    assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted");
+    click(&mut h, 150.0, 50.0, Modifiers::ALT);
+    assert_eq!(h.state().session.tools.mixer.reservoir, Some([0.0, 1.0, 0.0, 1.0]), "⌥-click loaded green");
+    assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0]);
 }

@@ -27,8 +27,25 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Nederlands | `nl` | one / other |
 | Magyar | `hu` | one form |
 | Tiếng Việt | `vi` | one form |
+| ไทย | `th` | one form |
+| தமிழ் | `ta` | one / other |
 | Srpski | `sr` | one / few / many (teens use many) |
+| Bosanski | `bs` | one / few / other (teens use other) |
 | हिन्दी | `hi` | one / other |
+| Svenska | `sv` | one / other |
+| Suomi | `fi` | one / other (partitive after every count but 1) |
+| Dansk | `da` | one / other |
+| Norsk bokmål | `nb` | one / other |
+| עברית | `he` | one / other |
+| اردو | `ur` | one / other |
+| Română | `ro` | one / few (0, 2–19, 101–119 …) / other (20–100, 120 …) |
+| Azərbaycanca | `az` | one (1) / other (all other integer counts) |
+
+Azerbaijani (`az`, Latin script) is registered with a complete menu catalog. Regional tags
+such as `az-AZ` and `az-Latn-AZ` select it. The catalog includes the existing catalogs'
+dynamic labels, contextual translations and two integer plural forms. Machine-assisted
+drafts have edited core terminology; native-speaker review is pending. See
+[`localization-az.md`](localization-az.md) for terminology, provenance and validation limits.
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels. A string a catalog lacks shows in English:
@@ -38,6 +55,10 @@ selectable, resolves regional tags such as `vi-VN`, and covers all current stabl
 keys. `complete_menus` remains false while generated/dynamic long-tail labels are still under
 review. This does not include every engine error or status message: those remain English, as do
 automation command IDs and user-provided document, layer and preset names.
+
+UI search and access-key comparisons use locale-aware dotted/dotless I rules for Azerbaijani
+and Turkish. English command aliases remain searchable using English casing. See the
+[Azerbaijani case-conversion audit](localization-az.md#ui-case-conversion-audit-2026-11-06).
 
 ## Switch without restarting
 
@@ -53,6 +74,11 @@ native system locale; an unsupported code follows the same fallback. Regional ta
 Simplified Chinese remain distinct. Every Portuguese locale (`pt`, `pt-BR`, `pt-PT`) uses the
 Brazilian Portuguese catalog. The Serbian catalog is written in Latin script (Ekavian); every
 Serbian locale (`sr-RS`, `sr-Latn-RS`, `sr_RS@latin`, and Cyrillic `sr-Cyrl-RS`) resolves to it.
+The Bosnian catalog is written in Latin script (Ijekavian); every Bosnian locale (`bs-BA`,
+`bs-Latn-BA`, `bs_BA.UTF-8`, and Cyrillic `bs-Cyrl-BA`) resolves to it.
+Swedish locales from Sweden and Finland (`sv-SE`, `sv-FI`, `sv_FI.UTF-8`) use the Swedish catalog;
+Finnish (`fi-FI`) uses the Finnish one. Every Norwegian locale (`nb-NO`, the macrolanguage `no`,
+and Nynorsk `nn-NO` from POSIX systems) uses the Bokmål catalog.
 
 ### First launch and system language
 
@@ -103,13 +129,15 @@ title, options and status bars read from the right (`crates/ui-egui/src/directio
 direction follows the language code, so a catalog needs no extra setting.
 
 Not mirrored yet: panel interiors, dialogs, menu rows (shortcuts stay on the right), submenus
-(they open to the right), document tabs and the canvas. Before an Arabic catalog reads
-correctly, the UI also needs an Arabic fallback font (the bundled UI fonts have no Arabic
-glyphs) and bidirectional word order: egui 0.36 shapes each right-to-left word with HarfRust,
-so letters join, but lays a line's words out left to right, and its caret indexing is off in
-right-to-left text (emilk/egui#8576, #8577). Document text is laid out by the text engine.
+(they open to the right), document tabs and the canvas. egui 0.37 lays text out with the Unicode
+Bidirectional Algorithm (each paragraph takes the direction of its first strong letter), so
+catalogs, layer names and document names are handed to it in logical order, as typed; never
+pre-reorder a label. The title line forces a left-to-right paragraph so "— PhotoCraft" stays at
+the right of a right-to-left document name, and `bidi_text::elide` cuts a right-to-left name at
+its logical end. Document text is laid out by the text engine.
 
-No right-to-left catalog ships yet. To check the mirrored layout with any language, launch with
+Arabic (`ar`) is the first right-to-left catalog: Modern Standard Arabic, Western digits, the six
+CLDR plural forms (zero|one|two|few|many|other). To check the mirrored layout with any language, launch with
 `PHOTOCRAFT_UI_DIRECTION=rtl` (or `ltr` to force left-to-right); it is read once per process
 and has no effect on the web build:
 

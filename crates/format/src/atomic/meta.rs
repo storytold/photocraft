@@ -12,7 +12,7 @@
 //! | extended attributes (Finder tags, `user.*`) | `copy_xattrs` | `copy_xattrs` | — |
 //! | "downloaded from the internet" | `com.apple.quarantine`, an xattr | — | `Zone.Identifier`, a named stream kept by [`replace_existing`] |
 //! | access-control list | `copy_acl` (`exacl`) | not carried over (see below) | DACL, kept by [`replace_existing`] |
-//! | creation time | not carried over (#6603) | — | kept by [`replace_existing`] |
+//! | creation time | `copy_created` (#9388) | — | kept by [`replace_existing`] |
 //!
 //! Everything here except [`replace_existing`] is **best effort and never touches the file's
 //! bytes**: a save that cannot carry a piece of metadata across is still a save, because a
@@ -22,7 +22,7 @@
 //!
 //! Not carried over, and why: Linux POSIX ACLs live in `system.posix_acl_access`, which
 //! `listxattr` does not report, so copying the listed attributes misses them; they would need
-//! their own step. macOS creation time needs `setattrlist`, which has no safe wrapper here.
+//! their own step.
 
 use std::io;
 use std::path::Path;
@@ -59,6 +59,13 @@ pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     let attributes = Ok(());
 
+    // The creation time before the ACL: it needs the destination open for writing, which a
+    // copied ACL denying its owner write access would refuse.
+    #[cfg(target_os = "macos")]
+    let created = copy_created(from, to);
+    #[cfg(not(target_os = "macos"))]
+    let created = Ok(());
+
     #[cfg(target_os = "macos")]
     let acl = copy_acl(from, to);
     #[cfg(not(target_os = "macos"))]
@@ -67,7 +74,35 @@ pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
     // A save over a 0600 file must not widen it to whatever the process default is.
     let permissions = std::fs::metadata(from).and_then(|m| std::fs::set_permissions(to, m.permissions()));
 
-    attributes.and(acl).and(permissions)
+    attributes.and(acl).and(created).and(permissions)
+}
+
+/// The creation time ("Created" in Finder) of the file being replaced, onto the file replacing
+/// it: the rename leaves a new file born at the time of the save, where Photoshop keeps the
+/// original's (#9388). The rename keeps the time set here.
+#[cfg(target_os = "macos")]
+fn copy_created(from: &Path, to: &Path) -> io::Result<()> {
+    let old = std::fs::File::open(from)?;
+    let new = std::fs::OpenOptions::new().write(true).open(to)?;
+    copy_created_file(&old, &new)
+}
+
+/// [`copy_created`] through two open files rather than their paths, for the automation write
+/// path's capability-checked handles (see [`copy_xattrs`]). `to` must be open for writing.
+/// Nothing to do outside macOS: Windows keeps the time in [`replace_existing`], and Linux has no
+/// settable creation time.
+pub fn copy_created_file(from: &std::fs::File, to: &std::fs::File) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::FileTimesExt;
+        let created = from.metadata()?.created()?;
+        to.set_times(std::fs::FileTimes::new().set_created(created))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (from, to);
+        Ok(())
+    }
 }
 
 /// [`copy_metadata`]'s extended-attribute step, by path: open both files and hand the
@@ -200,12 +235,46 @@ pub fn replace_existing(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// What the recovery ladder leaves behind after a `ReplaceFileW` answered
+/// `ERROR_UNABLE_TO_MOVE_REPLACEMENT_2` (the destination's old content now lives at the backup
+/// name and the replacement still at its temporary name).
+#[cfg(any(windows, test))]
+#[derive(Debug)]
+pub(crate) enum MoveReplacement2 {
+    /// The replacement was renamed onto the destination: the save completed with its metadata.
+    Completed,
+    /// Completion failed but the original was put back on the destination: the save did not
+    /// happen and the destination still holds the user's file. Carries the completion error.
+    Restored(io::Error),
+    /// Neither completion nor restoration succeeded: the original survives only at `recovery`
+    /// and the destination is currently missing. The caller must report that location and must
+    /// not claim an unchanged destination (#11178).
+    Unresolved { completion: io::Error, restoration: io::Error, recovery: std::path::PathBuf },
+}
+
+/// The recovery ladder of [`MoveReplacement2`], kept free of the Windows call so the branch is
+/// testable on every platform as branch coverage (#11178): first finish the save (`complete`,
+/// the rename of the replacement onto the destination); if that fails, put the original back
+/// (`restore`, the rename of the backup onto the destination).
+#[cfg(any(windows, test))]
+pub(crate) fn recover_after_1177(
+    complete: impl FnOnce() -> io::Result<()>,
+    restore: impl FnOnce() -> io::Result<()>,
+    recovery: std::path::PathBuf,
+) -> MoveReplacement2 {
+    let Err(completion) = complete() else { return MoveReplacement2::Completed };
+    match restore() {
+        Ok(()) => MoveReplacement2::Restored(completion),
+        Err(restoration) => MoveReplacement2::Unresolved { completion, restoration, recovery },
+    }
+}
+
 /// `ReplaceFileW`, with the plain rename as the fallback. See [`replace_existing`].
 ///
 /// **A backup name is not optional.** `ReplaceFile` without one deletes the replaced file before
 /// the final rename, and documents `ERROR_UNABLE_TO_MOVE_REPLACEMENT`: "the replaced file no
 /// longer exists and the replacement file exists under its original name" — the user's document
-/// gone, its replacement left under a hidden temporary name. With a backup name the same failure
+/// gone, its replacement left under a temporary name. With a backup name the same failure
 /// leaves both files where they were. So this always passes one, and deletes it on the way out.
 ///
 /// The failures and what each leaves behind (from the `ReplaceFileW` reference):
@@ -214,7 +283,8 @@ pub fn replace_existing(from: &Path, to: &Path) -> io::Result<()> {
 ///   replacement keeps its name but has already inherited the destination's streams and
 ///   attributes, and the destination's old content is at the backup name. Finishing the rename
 ///   by hand completes the save *with* its metadata; if even that fails, the backup goes back to
-///   the destination so the user's file is where they left it.
+///   the destination so the user's file is where they left it — and if even *that* fails, the
+///   error names the backup, because the original survives nowhere else (#11178).
 /// - Every other error leaves the replaced and replacement files under their own names, so a
 ///   plain rename still saves the document — without the metadata, which is where this started.
 #[cfg(windows)]
@@ -238,17 +308,28 @@ fn windows_replace(from: &Path, to: &Path) -> io::Result<()> {
             remove_backup(backup.as_deref());
             Ok(())
         }
-        Err(e) if e.raw() as i32 == MOVE_REPLACEMENT_2 => match std::fs::rename(from, to) {
-            Ok(()) => {
-                remove_backup(backup.as_deref());
-                Ok(())
-            }
-            Err(rename_failed) => {
-                if let Some(backup) = backup.as_deref() {
-                    let _ = std::fs::rename(backup, to);
+        Err(e) if e.raw() as i32 == MOVE_REPLACEMENT_2 => match backup.clone() {
+            // `backup_str` came from `backup`, so it is `Some` here; if that ever changed, leave
+            // the destination alone rather than guess where the original went (#11178).
+            None => Err(io::Error::other(format!(
+                "cannot save {}: the replacement moved the original to an unknown backup name and cannot report where",
+                to.display()
+            ))),
+            Some(backup_path) => match recover_after_1177(|| std::fs::rename(from, to), || std::fs::rename(&backup_path, to), backup_path.clone()) {
+                MoveReplacement2::Completed => {
+                    remove_backup(Some(&backup_path));
+                    Ok(())
                 }
-                Err(rename_failed)
-            }
+                // The original is back where the user left it; the completion error stands, and
+                // a `PermissionDenied` one may still be retried (the temporary file is intact).
+                MoveReplacement2::Restored(completion) => Err(completion),
+                // Unresolved: the destination is missing and the original survives only at the
+                // backup. Report the recovery location and stop the retry loop from picking a
+                // fresh backup name over it (#11178).
+                MoveReplacement2::Unresolved { completion, restoration, recovery } => {
+                    Err(super::unresolved_recovery_error(to, &completion, &restoration, &recovery))
+                }
+            },
         },
         Err(_) => {
             remove_backup(backup.as_deref());
