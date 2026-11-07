@@ -73,9 +73,12 @@ the repository's lockfile.
 A locally supplied DC-S9 12-bit file was also checked without distributing it:
 all **24,160,256 sensor samples** (6016×4016) match LibRaw 0.22.2 through rawpy
 0.28.0 exactly, with zero differing samples. Its (8,8) 6000×4000 crop develops
-to 4000×6000 after orientation. One local release run measured 98 ms for decode
-and 317 ms for AHD development; these are single-file, machine-specific timings,
-not a cross-camera performance guarantee.
+to 4000×6000 after orientation. On 2026-11-07, a default release build on an
+Apple M1 (8 cores, 16 GB) measured a median 85 ms for decode and 207 ms for AHD
+development over five runs after two warm-ups (decode 85–87 ms, develop
+204–216 ms). These phase timings exclude disk reads and camera-JPEG look
+fitting. The baseline decoder does not support this encoding, so this is not
+a before/after speedup claim or a cross-camera performance guarantee.
 
 Reproduce the synthetic checks with:
 
