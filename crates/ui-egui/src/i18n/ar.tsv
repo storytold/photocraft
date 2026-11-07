@@ -1787,6 +1787,7 @@
 	Move Tool	أداة التحريك
 	Could not use the move tool because the layer is locked.	تعذر استخدام أداة التحريك لأن الطبقة مقفلة.
 	Could not complete the Free Transform command because the layer is locked.	تعذر إكمال أمر التحويل الحر لأن الطبقة مقفلة.
+	Could not transform because the layer is locked.	تعذر التحويل لأن الطبقة مقفلة.
 	Multiply	ضرب
 	My Brushes	الفُرش الخاصة بي
 	Neutrals	الدرجات المحايدة
