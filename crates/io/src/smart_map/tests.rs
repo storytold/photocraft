@@ -1796,6 +1796,44 @@ fn perspective_placement_round_trips_through_sold() {
     assert_eq!(crate::blocks::parse_smart_perspective(b"PlLd", &sold), None);
 }
 
+/// A warp whose control box reaches the perspective's horizon can't frame finite corners: it is
+/// written without its warp, framed by the source rect, and the placement still reads back.
+#[test]
+fn warp_frame_at_the_horizon_is_written_without_the_warp() {
+    // The horizon of this map is x = 100; one control point of the warp sits on it.
+    let p = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -0.01, 0.0, 1.0];
+    let mut mesh = BezierMesh::identity([0.0, 0.0, 64.0, 32.0], 1, 1);
+    mesh.points[3] = [100.0, 0.0];
+    let warp = Warp::custom(mesh, [0.0, 0.0, 64.0, 32.0]);
+    let spec = PlacedSpec {
+        idnt: "id",
+        placed: "pl",
+        transform: Affine::IDENTITY,
+        perspective: Some(p),
+        size: (64.0, 32.0),
+        dpi: 72.0,
+        warp: Some(&warp),
+        filter_fx: None,
+    };
+    assert!(!super::placed::quad_points(&spec, spec.warp).iter().all(|v| v.is_finite()), "the frame reaches the horizon");
+    let mut w = Vec::new();
+    let sold = sold_bytes(None, &spec, &mut w);
+    assert!(w.iter().any(|m| m.contains("horizon")), "{w:?}");
+    let d = sold_descriptor(&sold).unwrap();
+    for k in ["Trnf", "nonAffineTransform"] {
+        let Some(Value::List(q)) = d.get(k) else { panic!("{k}") };
+        assert!(q.iter().all(|v| crate::blocks::num(Some(v)).is_some_and(f64::is_finite)), "{k}: {q:?}");
+    }
+    let back = crate::blocks::parse_smart_perspective(b"SoLd", &sold).expect("a projective placement");
+    let n = |m: [f64; 9]| m.map(|v| v / m[8]);
+    for (a, b) in n(back).iter().zip(n(p)) {
+        assert!((a - b).abs() < 1e-9 * (1.0 + b.abs()), "{back:?} vs {p:?}");
+    }
+    w.clear();
+    photocraft_psd::TaggedBlock::new(*b"PlLd", plld_bytes(&spec, &mut w)).check_structure().unwrap();
+    assert!(w.iter().any(|m| m.contains("horizon")), "{w:?}");
+}
+
 /// `quad_moved` compares the corners a template stores with the placement's: unchanged keeps
 /// the template's quad, a moved corner (affine or projective) or a missing quad rewrites it.
 #[test]
