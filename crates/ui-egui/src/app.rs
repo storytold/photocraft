@@ -284,9 +284,7 @@ impl eframe::App for PhotocraftApp {
         // A pen held still is no touch screen's press-and-hold right click (stylus.rs).
         let pen_down = self.stylus.pen_contacts.observe(&raw_input.events);
         stylus::pen_hold_is_no_right_click(ctx, pen_down);
-        // The OS's moves.
-        let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
-        self.perf.stage.start(frame_start, moves);
+        self.perf.stage.start(frame_start);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
