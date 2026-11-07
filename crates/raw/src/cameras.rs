@@ -141,6 +141,42 @@ const PROFILES: &[Profile] = &[Profile {
 /// * **D800E** (2 files): the camera's JPEG sits 8 x 6 pixels in from the left
 ///   and top of the 7424 x 4924 sensor data (56 and 4 pixels of margin on the
 ///   right and bottom), the same corner as the D4.
+/// * **D800** (3 raw.pixls.us files: 12-bit lossy, 14-bit lossless and 14-bit
+///   uncompressed NEF): the same 7424 x 4924 data and the same 8 x 6 corner
+///   (normalized cross-correlation 0.994–0.995 there, the `raw_image_area`
+///   example of `photocraft-io`). Uncropped, its masked border showed as a
+///   magenta stripe on the right (#10120).
+/// * **More Nikon bodies**, one or two raw.pixls.us files each, measured the
+///   same way (the NCC of the best offset, then of the best one at least 2
+///   pixels away): D3200 at (8, 6) in 6080 x 4012 (0.984, 0.970); D3300 at
+///   (8, 8) in 6016 x 4016 (0.987, 0.984; the D3400 and D3500 record the same
+///   area in their CropArea); D600 (0.993, 0.972) and D610 (0.966, 0.933) at
+///   (8, 6) in 6080 x 4028; D700 at (14, 6) in 4288 x 2844 (0.981, 0.945); D750
+///   at (8, 8) in 6032 x 4032 (two files: 0.930 and 0.926, 0.917 and 0.913);
+///   D810 at (12, 8) in 7380 x 4928 (0.984, 0.950); D7000 at (8, 8) in
+///   4992 x 3280 (two files: 0.960, 0.955); D7200 at (8, 8) in 6016 x 4016
+///   (two files: 0.987, 0.984); Df at (8, 6) in 4992 x 3292, the D4's corner
+///   on the D4's sensor (two files: 0.949 and 0.944, 0.945 and 0.941). Each
+///   area is the size of the camera's JPEG. The D7100 and D5200 are left out:
+///   their files gave different offsets or no clear best one.
+/// * **D5500 and D5600** (two raw.pixls.us files each): (8, 8) in 6016 x 4016,
+///   the D3300's area (D5500: 0.876 against 0.867, 0.879 against 0.870; D5600:
+///   0.939 against 0.894, 0.936 against 0.907). The D5500's lead is narrow, but
+///   both files agree, and an independent alignment on the full-size planes
+///   found the same corner for both bodies.
+/// * **Older Nikon bodies**, measured the same way: D3 at (16, 6) and D3S at
+///   (14, 6) in 4288 x 2844 (three files each: 0.978–0.980 against 0.974–0.976,
+///   0.962–0.966 against 0.887–0.909); D3X at (16, 6) in 6080 x 4044 (two
+///   files: 0.983 and 0.997 against 0.973 and 0.995); D300 (two files: 0.981
+///   against 0.978) and D300S (three: 0.980–0.982 against 0.963–0.967) at
+///   (16, 10) in 4352 x 2868. One file each: D40 at (16, 10) (0.990, 0.978),
+///   D50 at (14, 8) (0.973, 0.933), D70 at (16, 6) (0.985, 0.980) and D70s at
+///   (16, 8) (0.986, 0.967) in 3040 x 2014; D40X (0.988, 0.980), D60 (0.962,
+///   0.895) and D3000 (0.981, 0.974) at (14, 8) and D200 at (16, 12) (0.986,
+///   0.965) in 3904 x 2616; D3100 at (24, 6) in 4672 x 3084 (0.993, 0.983);
+///   COOLPIX A at (8, 8) in 4992 x 3280 (0.989, 0.964). A single file pins the
+///   offset to the even grid it is searched on: where its two scores are close,
+///   it may be 2 pixels off, which still leaves the rest of the border out.
 /// * **D5100** (3 files): 8 x 8 pixels in from the left and top of the
 ///   4992 x 3280 sensor data, giving the camera JPEG's 4928 x 3264 frame.
 /// * **ILCE-7** (2 files): 12 x 12 pixels in from the left and top of the
@@ -162,8 +198,36 @@ struct ImageArea {
 }
 
 const IMAGE_AREAS: &[ImageArea] = &[
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D3", size: (4288, 2844), crop: (16, 6, 4256, 2832) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D3S", size: (4288, 2844), crop: (14, 6, 4256, 2832) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D3X", size: (6080, 4044), crop: (16, 6, 6048, 4032) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D40", size: (3040, 2014), crop: (16, 10, 3008, 2000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D40X", size: (3904, 2616), crop: (14, 8, 3872, 2592) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D50", size: (3040, 2014), crop: (14, 8, 3008, 2000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D60", size: (3904, 2616), crop: (14, 8, 3872, 2592) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D70", size: (3040, 2014), crop: (16, 6, 3008, 2000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D70s", size: (3040, 2014), crop: (16, 8, 3008, 2000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D200", size: (3904, 2616), crop: (16, 12, 3872, 2592) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D300", size: (4352, 2868), crop: (16, 10, 4288, 2848) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D300S", size: (4352, 2868), crop: (16, 10, 4288, 2848) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D3000", size: (3904, 2616), crop: (14, 8, 3872, 2592) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D3100", size: (4672, 3084), crop: (24, 6, 4608, 3072) },
+    ImageArea { make: "NIKON CORPORATION", model: "COOLPIX A", size: (4992, 3280), crop: (8, 8, 4928, 3264) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D3200", size: (6080, 4012), crop: (8, 6, 6016, 4000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D3300", size: (6016, 4016), crop: (8, 8, 6000, 4000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D5500", size: (6016, 4016), crop: (8, 8, 6000, 4000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D5600", size: (6016, 4016), crop: (8, 8, 6000, 4000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D600", size: (6080, 4028), crop: (8, 6, 6016, 4016) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D610", size: (6080, 4028), crop: (8, 6, 6016, 4016) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D700", size: (4288, 2844), crop: (14, 6, 4256, 2832) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D750", size: (6032, 4032), crop: (8, 8, 6016, 4016) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D810", size: (7380, 4928), crop: (12, 8, 7360, 4912) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D7000", size: (4992, 3280), crop: (8, 8, 4928, 3264) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D7200", size: (6016, 4016), crop: (8, 8, 6000, 4000) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON Df", size: (4992, 3292), crop: (8, 6, 4928, 3280) },
     ImageArea { make: "NIKON CORPORATION", model: "NIKON D90", size: (4352, 2868), crop: (10, 10, 4288, 2848) },
     ImageArea { make: "NIKON CORPORATION", model: "NIKON D5100", size: (4992, 3280), crop: (8, 8, 4928, 3264) },
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D800", size: (7424, 4924), crop: (8, 6, 7360, 4912) },
     ImageArea { make: "NIKON CORPORATION", model: "NIKON D800E", size: (7424, 4924), crop: (8, 6, 7360, 4912) },
     ImageArea { make: "SONY", model: "ILCE-7", size: (6048, 4024), crop: (12, 12, 6000, 4000) },
     ImageArea { make: "SONY", model: "ILCE-6000", size: (6048, 4024), crop: (12, 12, 6000, 4000) },
@@ -307,6 +371,22 @@ mod tests {
         assert!(s.color.calibrations.is_empty() && s.tone_curve.is_empty());
         assert_eq!(s.white, [16383.0; 3]);
 
+        // The D800 crops like the D800E (#10120), and the other measured Nikon bodies to their
+        // camera JPEG's size.
+        for (model, w, h, crop) in [
+            ("NIKON D800", 7424, 4924, Rect::new(8, 6, 7360, 4912)),
+            ("NIKON D810", 7380, 4928, Rect::new(12, 8, 7360, 4912)),
+            ("NIKON D750", 6032, 4032, Rect::new(8, 8, 6016, 4016)),
+            ("NIKON D5500", 6016, 4016, Rect::new(8, 8, 6000, 4000)),
+            ("NIKON D5600", 6016, 4016, Rect::new(8, 8, 6000, 4000)),
+            ("NIKON D700", 4288, 2844, Rect::new(14, 6, 4256, 2832)),
+            ("NIKON Df", 4992, 3292, Rect::new(8, 6, 4928, 3280)),
+        ] {
+            let mut s = nef(model, w, h);
+            apply(&mut s, 14);
+            assert_eq!(s.crop, crop, "{model}");
+        }
+
         let mut s = sensor("SONY", "ILCE-7", 6048, 4024);
         apply(&mut s, 14);
         assert_eq!(s.crop, Rect::new(12, 12, 6000, 4000));
@@ -328,7 +408,7 @@ mod tests {
         let mut s = nef("NIKON D800E", 2496, 1646);
         apply(&mut s, 14);
         assert_eq!(s.crop, Rect::new(0, 0, 2496, 1646));
-        let mut s = nef("NIKON D800", 7424, 4924);
+        let mut s = nef("NIKON D810", 7424, 4924);
         apply(&mut s, 14);
         assert_eq!(s.crop, Rect::new(0, 0, 7424, 4924));
     }
@@ -365,12 +445,22 @@ mod tests {
 
     #[test]
     fn other_cameras_and_sizes_are_left_alone() {
-        for (model, w, h) in [("NIKON D4S", 4992, 3292), ("NIKON D4", 2496, 1646), ("NIKON D800", 7424, 4924)] {
+        for (model, w, h) in [("NIKON D4S", 4992, 3292), ("NIKON D4", 2496, 1646), ("NIKON D810", 7424, 4924)] {
             let mut s = nef(model, w, h);
             apply(&mut s, 14);
             assert_eq!(s.crop, Rect::new(0, 0, w, h), "{model} {w}x{h}");
             assert!(s.tone_curve.is_empty() && s.color.calibrations.is_empty() && s.white == [16383.0; 3]);
             assert_eq!(s.warnings.len(), 1);
+        }
+    }
+
+    /// A crop only applies to data of exactly the measured size, so a table entry that lies inside
+    /// its own size can never reach past the sensor data.
+    #[test]
+    fn every_measured_crop_lies_inside_its_sensor_data() {
+        let entries = IMAGE_AREAS.iter().map(|a| (a.model, a.size, a.crop)).chain(PROFILES.iter().map(|p| (p.model, p.size, p.crop)));
+        for (model, (sw, sh), (x, y, w, h)) in entries {
+            assert!(w > 0 && h > 0 && x + w <= sw && y + h <= sh, "{model}: {w}x{h} at ({x}, {y}) in {sw}x{sh}");
         }
     }
 
