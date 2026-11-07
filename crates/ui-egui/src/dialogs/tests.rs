@@ -567,7 +567,7 @@ fn german_color_picker_fits_its_actions_and_translates_the_title() {
     crate::color_picker_ui::open(h.state_mut(), "foreground");
     h.run_steps(4);
     let title = h.get_by_label("Farbwähler (Vordergrundfarbe)").rect();
-    let swatch = h.get_by_label(&text("Click to restore the current colour")).rect();
+    let swatch = h.get_by_label(&text("Click to restore the current color")).rect();
     let frame = rects(&h.ctx)[0];
     for label in ["OK", "Cancel", "Add to Swatches"] {
         let r = h.get_by_label(&text(label)).rect();
