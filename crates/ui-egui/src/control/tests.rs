@@ -1116,7 +1116,7 @@ fn ui_set_opens_the_brush_preset_picker_and_sets_its_cards() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
     let list = &app.ui.brush_picker_list;
-    assert!(list.show_name && list.show_stroke && list.show_tip, "every card part is on by default");
+    assert!(list.show_name && list.show_stroke && !list.show_tip, "the cards show the name and the stroke by default");
     let r = call(&mut app, &ctx, "ui.set", json!({"tool": "brush", "brushPicker": [120, 80], "brushPickerStroke": false}));
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(app.ui.brush_picker, Some([120.0, 80.0]));
@@ -1160,11 +1160,11 @@ fn ui_inspect_tracks_brush_picker_open_and_closed() {
     assert!(open["result"]["brushPicker"]["pos"].is_array(), "{open}");
     assert_eq!(open["result"]["brushPicker"]["list"]["showName"], true);
     assert_eq!(open["result"]["brushPicker"]["list"]["showStroke"], true);
-    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], true);
+    assert_eq!(open["result"]["brushPicker"]["list"]["showTip"], false);
 
-    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": false}))["ok"], true);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPickerTip": true}))["ok"], true);
     let changed = call(&mut app, &ctx, "ui.inspect", json!({}));
-    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], false);
+    assert_eq!(changed["result"]["brushPicker"]["list"]["showTip"], true);
 
     assert_eq!(call(&mut app, &ctx, "ui.set", json!({"brushPicker": null}))["ok"], true);
     let closed_again = call(&mut app, &ctx, "ui.inspect", json!({}));
