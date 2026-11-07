@@ -89,6 +89,9 @@ row; the action still adds only one Undo entry.
 | (string ID only) | colorLookup | Color Lookup (embedded 3D LUT forms) | `image.adjustments.colorLookup` |
 | `Btch` | batch | Batch (supported folder and naming forms) | `file.automate.batch` |
 | `CrtD` | (no string ID) | Create Droplet (destination Folder with Override Action "Save As"; other forms stay kept steps) | `file.automate.createDroplet` |
+| (string ID only) | packageFile | Package | `file.package` |
+| (string ID only) | importAnnots | Import Notes | `file.import.notes` |
+| (string ID only) | apply | Apply Data Set (`dataSetClass` by name) | `image.applyDataSet` |
 | (string ID only) | shapeBlur | Shape Blur (custom shape by installed ID) | `filter.blur.shapeBlur` |
 | (string ID only) | cafWorkspace | Content-Aware Fill | `edit.contentAwareFill` |
 | (string ID only) | perspectiveWarpTransform | Perspective Warp (indexed layout and warp planes) | `edit.perspectiveWarp` |
@@ -923,12 +926,9 @@ layer reference, `Ordn.Trgt`); mapping them needs only the event name.
 
 | Menu | Recorded step | Keys |
 |---|---|---|
-| Image > Apply Data Set | `apply`, `null` = `dataSetClass` **by name** | |
 | File > Export > Data Sets as Files | `exportDataSet`, `null` = class `dataSetClass` | `All ` bool (all data sets), `T   ` alias (folder), `fileNamingRules` (`fileNamingComponents` list of 7 incl. `None`; components as in Batch plus `underscore` and `dataSetName`; `Mcnt`, `Win `, `unix`) |
 | File > Import > Variable Data Sets | `importDataSets`, `null` = class `dataSetClass` | `Usng` alias (the text file), `Encd` (`dataSetEncoding`: `dataSetEncodingAuto`, …), `eraseAll` bool (replace existing), `useFirstColumn` bool (first column = data set names) |
-| File > Package | `packageFile` | `T   ` alias (folder); writes "<document> Folder" (localised) with the document and a `Links` folder |
 | File > Import > Video Frames to Layers | `importVideoToLayers` | `Usng` alias (video), `makeAnimation` bool, `frameSkip` long (limit to every n-th frame; absent when off) |
-| File > Import > Notes (Annotations) | `importAnnots` | `Usng` alias (PDF). A file without notes shows "No annotations were imported" and records nothing |
 | Layer > Video Layers > New Video Layer from File | `addVideoLayer` | `null` alias (video) |
 | Layer > Video Layers > Replace Footage | `replaceFootage` | `null` alias (video) |
 | Layer > Video Layers > Duplicate Frame, Restore Frame, Restore All Frames, Reload Frame | `duplicateFrame`, `restoreFrame`, `restoreAllFrames`, `reloadFrame` | none. Duplicate needs a painted frame; Restore needs an altered frame; Restore All asks for confirmation |
