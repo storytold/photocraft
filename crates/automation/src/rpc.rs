@@ -184,6 +184,9 @@ impl Headless {
                 let tiff_bool = |key| photocraft_engine::file_cmds::tiff_bool_param(&p, key, "doc.save").map_err(|e| bad(e.to_string()));
                 opts.tiff_transparency = tiff_bool("tiffTransparency")?;
                 opts.encode.tiff_pyramid = tiff_bool("tiffPyramid")?.unwrap_or(false);
+                if let Some(maximize) = photocraft_engine::file_cmds::maximize_compatibility_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
+                    opts.psd_maximize_compatibility = maximize;
+                }
                 match p.get("quality") {
                     None | Some(Value::Null) => {}
                     Some(v) => {
