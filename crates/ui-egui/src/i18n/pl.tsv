@@ -1874,6 +1874,7 @@
 	Move Tool	Narzędzie Przesunięcie
 	Could not use the move tool because the layer is locked.	Nie można użyć narzędzia Przesunięcie, ponieważ warstwa jest zablokowana.
 	Could not complete the Free Transform command because the layer is locked.	Nie można ukończyć polecenia Dowolne przekształcanie, ponieważ warstwa jest zablokowana.
+	Could not transform because the layer is locked.	Nie można przekształcić, ponieważ warstwa jest zablokowana.
 	Multiply	Mnożenie
 	My Brushes	Moje pędzle
 	Neutrals	Neutralne
@@ -2008,6 +2009,7 @@
 	Allow scripts to connect	Zezwalaj skryptom na połączenie
 	Always	Zawsze
 	Always create smart objects when placing	Zawsze twórz obiekty inteligentne podczas umieszczania
+	Skip transform when placing	Pomijaj przekształcanie podczas umieszczania
 	Animated zoom	Animowane powiększanie
 	Apply auto tone	Zastosuj automatyczne tony
 	Ask	Pytaj
@@ -4223,3 +4225,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wybierz inny dokument dla każdego kanału.
 	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
 	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.
+# Move tool options bar (#11381)
+	Align top edges	Wyrównaj górne krawędzie
+	Align vertical centers	Wyrównaj środki w pionie
+	Align bottom edges	Wyrównaj dolne krawędzie
+	Distribute vertically	Rozmieść w pionie
+	Distribute horizontally	Rozmieść w poziomie
+	Show layer bounds on hover	Pokaż granice warstwy po najechaniu
+	Expand layer group on click	Rozwiń grupę warstw po kliknięciu
+	Show hover bounds from Layers	Pokaż granice po najechaniu z panelu Warstwy
