@@ -112,6 +112,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Behaviour | Status | Evidence |
 |---|---|---|
 | ⇧ square/circle, ⌥ from centre, live W × H readout (marquee) | done | `marquee_tests.rs` |
+| Fixed Size marquee retains its dimensions past canvas edges, including after moving the outline | done | `marquee_tests.rs::fixed_size_keeps_the_off_canvas_part_when_its_outline_moves`; `selection_cmds/tests.rs::unclipped_marquee_keeps_its_size_through_moves_and_history` |
 | ⇧ add, ⌥ subtract, ⇧⌥ intersect from modifiers at press | done | tested for the marquee (add, subtract, ⇧⌥ intersect: `marquee_tests.rs`), Lasso (all three: `lasso_ui/tests.rs`) and Polygonal Lasso (`polygon_lasso_tests.rs`) (BUG-208-4) |
 | Space repositions the marquee while dragging | done | `hold_keys.rs` |
 | Polygonal Lasso ⇧ snaps to 45° | missing | #2352 |
@@ -270,6 +271,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Fixed Size marquees keep the complete selection mask beyond the canvas, including for sizes larger than the image; outline moves and undo/redo preserve it. Normal marquees keep their existing clipping. Scores unchanged. |
 | 2026-11-06 | minor | Channels panel menu (☰): the channel items, not only the rows' context menu; New Channel…, New Spot Channel…, Channel Options… and Merge Channels… open their dialogs (New Channel and Merge Channels are new), and Channel Options… in Quick Mask mode opens a targeted alpha channel's options (#11451). No percentage changed |
 | 2026-11-05 | minor | Image › Adjustments › Selective Color keeps each colour's own Cyan, Magenta, Yellow and Black, and OK and Preview apply all nine colours; the dialog and the Properties panel share one editor (#11463) |
 | 2026-11-02 | minor | Edit › Transform › Distort: the side handles move their edge freely, both its corners by the drag, stopping before the box folds as a corner does; Perspective's side handles skew along their edge, as in Photoshop (#10085). Not a new command, so no percentage changed |
