@@ -71,6 +71,11 @@ pub(super) struct FieldOpts {
     /// keystroke (the zoom fields: typing `150` over `50` must not zoom to 1 % on the way). Esc,
     /// Tab and Alt do not apply it (`zoom_field`).
     pub(super) hold_typed: bool,
+    /// Whole numbers only ([`super::value_field_int`], #11786): a typed decimal rounds to the
+    /// nearest one, `12.5` and `12,5` both giving `13`, and the value the field holds is never a
+    /// fraction, whichever path wrote it (a drag, another field on the same option, a preference
+    /// file). The number the field shows is therefore the number its caller reads.
+    pub(super) integer: bool,
 }
 
 /// Arrow-key and drag step for a value field: [`FieldOpts::step_from_decimals`] uses `decimals`;
@@ -400,7 +405,7 @@ fn number_edit(
     units: crate::numeric_expression::Units,
     opts: FieldOpts,
 ) -> Response {
-    let FieldOpts { decimals, wrap_drag, hold_typed, .. } = opts;
+    let FieldOpts { decimals, wrap_drag, hold_typed, integer, .. } = opts;
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     // Focused before the DragValue is drawn, so it gains focus this frame and selects its text.
     if ui.data_mut(|d| d.remove_temp::<bool>(first_field_id())).unwrap_or(false) {
@@ -487,11 +492,22 @@ fn number_edit(
                             return lead.and_then(|lead| zoom_number(&lead, units));
                         }
                     }
+                } else if integer {
+                    // A whole-number field takes the decimal comma too (`12,5` is `12.5`); two
+                    // separators (`1,5,2`) are not a number, as in any other field.
+                    match crate::zoom_field::read(s) {
+                        crate::zoom_field::Entry::Number(ready) => ready,
+                        crate::zoom_field::Entry::Invalid(_) => return None,
+                    }
                 } else {
                     s.to_owned()
                 };
                 let s = ready.as_str();
                 let v = if hold_typed { zoom_number(s, units) } else { parse_num_in(s, units) };
+                // A whole-number field already rounds what it reads here, in the parser: the value
+                // it holds while the number is being typed is then the one it keeps, where rounding
+                // it after the DragValue wrote it down would rewrite the text under the typist.
+                let v = if integer { v.map(|v| v.round()) } else { v };
                 if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
@@ -519,6 +535,12 @@ fn number_edit(
     // `f32::clamp` panics on a reversed or NaN range, which `DragValue::range` accepts.
     if *value != before && lo <= hi {
         *value = value.clamp(lo, hi);
+    }
+    // A whole-number field keeps whole numbers whatever wrote one: a drag between two values, a
+    // plain field on the same option, a preference file. The number it shows is then the number
+    // its caller reads, and rounding a whole number changes nothing.
+    if integer && lo <= hi && value.is_finite() && *value != value.round() {
+        *value = value.round().clamp(lo, hi);
     }
     resp.flags.set(egui::response::Flags::CHANGED, *value != before);
     resp

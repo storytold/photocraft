@@ -28,6 +28,14 @@ pub fn value_field_prec(ui: &mut Ui, value: &mut f32, range: std::ops::RangeIncl
     value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(decimals), ..Default::default() }, None).0
 }
 
+/// A [`value_field`] of whole numbers with no decimal places: the Magic Wand's Tolerance, an
+/// integer 0–255 that its tool floors (#11786). A typed decimal rounds to the nearest whole number,
+/// `12.5` and `12,5` both giving `13`, and the value the field holds is never a fraction, so the
+/// number it shows is the number the tool uses. Out-of-range entries clamp, as in any value field.
+pub fn value_field_int(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
+    value_field_in(ui, value, range, suffix, width, 0.0, FieldOpts { decimals: Some(0), integer: true, ..Default::default() }, None).0
+}
+
 /// A field's unit and the resolution a typed unit converts at (`1in` in a px field).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FieldUnits {
