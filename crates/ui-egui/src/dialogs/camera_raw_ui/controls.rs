@@ -1,6 +1,9 @@
 use super::open::{Target, cancel, commit_open_raw, open_raw, raw_stage};
 use super::sidecar::{load_settings, report_file_error, save_settings};
-use super::*;
+use super::{
+    Align2, BANDS, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PANEL_W, PhotocraftApp, Pos2, Sense, Stroke, Tokens, ToneZone, Value, Wheel, curve_lut,
+    json, pos2, vec2, widgets,
+};
 
 const RAW_UNDO_LIMIT: usize = 40;
 
@@ -80,12 +83,12 @@ fn demosaic_row(ui: &mut egui::Ui, m: &mut photocraft_io::raw::Demosaic) {
     use photocraft_io::raw::Demosaic;
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", "Demosaic")).on_hover_text(tl!(
-            "How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with."
+            "How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with."
         ));
         let options = [
-            (Demosaic::Ahd, "AHD (adaptive homogeneity)", "Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest."),
-            (Demosaic::Mhc, "Malvar–He–Cutler", "Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail."),
-            (Demosaic::Bilinear, "Bilinear", "The fastest and the softest, with colour fringing on fine detail."),
+            (Demosaic::Ahd, "AHD (adaptive homogeneity)", "Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest."),
+            (Demosaic::Mhc, "Malvar–He–Cutler", "Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail."),
+            (Demosaic::Bilinear, "Bilinear", "The fastest and the softest, with color fringing on fine detail."),
         ];
         widgets::dropdown_with_tooltips(ui, "camera-raw-demosaic", tl!("Demosaic"), m, &options, 180.0);
     });
@@ -101,6 +104,16 @@ fn tint_stops() -> Vec<Color32> {
 }
 
 /// One labelled slider; marks the dialog dirty when it moves.
+/// The track of Color Mixer band `k` on `tab` (0 Hue, 1 Saturation, 2 Luminance). A Hue slider
+/// turns its band towards the neighbouring bands, so its track runs from the previous band's hue
+/// through its own to the next one's (Reds: magenta, red, orange; #9550); Saturation and Luminance
+/// run from grey to the band's colour.
+pub(super) fn mixer_gradient(tab: usize, k: usize) -> Vec<Color32> {
+    let bands = &photocraft_algo::camera_raw::HSL_BANDS;
+    let hue = |i: usize| widgets::hue_color(bands.get(i % bands.len()).copied().unwrap_or(0.0));
+    if tab == 0 { vec![hue(k + bands.len() - 1), hue(k), hue(k + 1)] } else { vec![Color32::from_gray(128), hue(k)] }
+}
+
 fn row(ui: &mut egui::Ui, dirty: &mut bool, label: &str, v: &mut f32, range: std::ops::RangeInclusive<f32>, grad: Option<&[Color32]>) {
     let _ = slider(ui, dirty, label, v, range, grad);
 }
@@ -197,7 +210,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
     });
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
-    let builder = egui::ViewportBuilder::default().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
+    let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
     let mut close = false;
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
@@ -398,9 +411,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                     _ => &mut p.hsl_lum,
                 };
                 for (k, name) in BANDS.iter().enumerate() {
-                    let c = photocraft_algo::camera_raw::HSL_BANDS[k];
-                    let base = widgets::hue_color(c);
-                    let grad = [Color32::from_gray(128), base];
+                    let grad = mixer_gradient(d.mixer_tab, k);
                     row(ui, &mut dirty, name, &mut arr[k], -100.0..=100.0, Some(&grad));
                 }
             });

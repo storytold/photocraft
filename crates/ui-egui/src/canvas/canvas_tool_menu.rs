@@ -184,9 +184,9 @@ const ENDS_TYPE_EDIT: [&str; 5] =
 pub const PASTEBOARD_PICK: &str = "pasteboard.selectCustomColor";
 
 /// The guide menu's Edit Selected Guides row: New Guide's dialog on the selected guide.
-pub const GUIDE_EDIT: &str = "guides.editSelected";
+pub const GUIDE_EDIT: &str = "view.editSelectedGuides";
 /// The guide menu's Clear Selected Guides row.
-pub const GUIDE_CLEAR: &str = "guides.clearSelected";
+pub const GUIDE_CLEAR: &str = "view.clearSelectedGuides";
 
 /// Photoshop's guide menu (right-click on a guide), in its order. Its two Selected Guides rows act
 /// on the guide the right-click selected; the rest are the View menu's.
@@ -313,7 +313,7 @@ fn choose_crop(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &str) ->
     use crate::crop_overlay::{CropOverlay, OverlayShow};
     use crate::crop_presets::{Choice, apply_choice};
     match command {
-        CROP_CANCEL => crate::crop_ui::cancel(app),
+        CROP_CANCEL => crate::crop_ui::dismiss(app),
         CROP_COMMIT => crate::canvas::commit_crop(app),
         CROP_NEW => apply_choice(app, Choice::New),
         CROP_DELETE => apply_choice(app, Choice::Delete),
@@ -462,6 +462,16 @@ pub fn applies(tool: Tool) -> bool {
             // selection menu, as in Photoshop (#7268).
             | Tool::QuickSelection
     ) || path_menu(tool)
+}
+
+/// A Magnetic Lasso border is being drawn on the document in front: a right-click opens no menu
+/// over it, and the border stays live, as in Photoshop (#11689). A border left on another
+/// document doesn't count, even before `magnetic_lasso_ui::frame` drops it: the control
+/// channel's events run no frame. Nor does an ⌥-drag's freehand segment: that case wasn't
+/// measured, so it keeps the menu it had.
+pub fn magnetic_drawing(app: &PhotocraftApp) -> bool {
+    let m = &app.ui.magnetic;
+    m.active() && !m.freehand && app.ui.tool == Tool::MagneticLasso && app.session.active().map(|d| d.doc.id.0) == Some(m.doc)
 }
 
 /// Tools whose canvas right-click opens the path menu ([`PEN_MENU`]): the Pen, and the Path
@@ -753,14 +763,9 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
     true
 }
 
-/// A guide row: the two Selected Guides rows act on the selected guide; the rest are the View
-/// menu's commands.
+/// A guide row: every row is a View › Guides command, the two Selected Guides ones included.
 fn choose_guide(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result<(), String> {
-    match command {
-        GUIDE_EDIT => crate::new_guide_ui::open_edit(app).map(|_| ()),
-        GUIDE_CLEAR => crate::guide_select::delete_selected(app).map(|_| ()),
-        _ => crate::menus::invoke(app, ctx, command, json!({})).map(|_| ()),
-    }
+    crate::menus::invoke(app, ctx, command, json!({})).map(|_| ())
 }
 
 /// A pasteboard row: set the colour, or open the Color Picker on the custom one.
@@ -1019,6 +1024,33 @@ fn spec_dialog(app: &mut PhotocraftApp, command: &str, label: &str, spec: &str, 
 /// current options) and Simulate Pressure (#2978).
 const STROKE_PATH_SPEC: &str = r##"{"tool":"brush|pencil|eraser|backgroundEraser|cloneStamp|patternStamp|healingBrush|spotHealingBrush|historyBrush|blur|sharpen|smudge|dodge|burn|sponge|colorReplacement|mixerBrush"="brush","simulatePressure":bool=false}"##;
 
+/// Where the Stroke Path dialog's Simulate Pressure choice is remembered: the UI-state preferences'
+/// dialogs map, under the command id, as `edit.fill` and `view.newGuide` use their own (#10527).
+const STROKE_PATH_REMEMBERED: &str = "path.stroke";
+
+/// The choice the next Stroke Path dialog opens with: what the last OK applied, else off. Saved data
+/// is never trusted — anything but an object holding a real bool (a hand-edited preferences file,
+/// an agent that wrote something else) falls back to Photoshop's default, off.
+fn remembered_simulate_pressure(app: &PhotocraftApp) -> bool {
+    app.session
+        .prefs()
+        .dialogs
+        .get(STROKE_PATH_REMEMBERED)
+        .and_then(Value::as_object)
+        .and_then(|saved| saved.get("simulatePressure"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// OK ran the stroke: remember the Simulate Pressure it applied so the dialog opens with it again
+/// next time (#10527). Cancel never reaches here, so cancelling changes nothing, and a stroke run
+/// without the dialog (the Paths panel's Stroke button) writes nothing either. A stroke whose params
+/// said nothing about pressure applied the engine's default, off.
+pub(crate) fn remember_simulate_pressure(app: &mut PhotocraftApp, params: &Value) {
+    let on = params.get("simulatePressure").and_then(Value::as_bool).unwrap_or(false);
+    app.session.prefs.edit(|p| p.dialogs.insert(STROKE_PATH_REMEMBERED.into(), json!({ "simulatePressure": on })));
+}
+
 /// The Stroke Path dialog for the path `name` (Paths panel menu, Alt-click on its Stroke button).
 pub(crate) fn stroke_path_dialog(app: &mut PhotocraftApp, name: &str) {
     pen_dialog(app, "path.stroke", "Stroke Path…", name);
@@ -1041,6 +1073,10 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
     } else {
         fields.insert("name".into(), json!(name));
     }
+    if command == "path.toSelection" {
+        // OK deselects and hides the path, as ⌘↩ does (#6079).
+        fields.insert("__deselectPath".into(), json!(true));
+    }
     if command == "path.fill" {
         let fg = app.session.tools.foreground;
         let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
@@ -1050,6 +1086,12 @@ fn pen_dialog(app: &mut PhotocraftApp, command: &str, label: &str, name: &str) {
         for (key, value) in [("translateX", 0.0), ("translateY", 0.0), ("scaleX", 1.0), ("scaleY", 1.0), ("angle", 0.0)] {
             fields.insert(key.into(), json!(value));
         }
+    }
+    if command == "path.stroke" {
+        // The spec-driven dialog reappears with fresh fields, so the checkbox needs its own seed:
+        // a schema dialog carrying a `__spec` is outside `filter_dialog::remember`. Only Simulate
+        // Pressure is remembered; the tool stays on the spec's default (#10527).
+        fields.insert("simulatePressure".into(), json!(remembered_simulate_pressure(app)));
     }
     spec_dialog(app, command, label, spec, fields);
 }
@@ -1062,8 +1104,8 @@ pub(crate) fn make_selection(app: &mut PhotocraftApp) -> Result<(), String> {
     // else the Paths panel path it adds to (a selected saved path, or the Work Path), which it
     // selects so it is the active path.
     let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || crate::vector_ui::targeted_vector_mask(app).is_some());
-    if pending {
-        crate::vector_ui::pen_commit(app, false);
+    if pending && !crate::vector_ui::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
     }
     let name = if pending_layer { Some("layer".to_string()) } else { crate::vector_ui::active_path_name(app) }
         .ok_or_else(|| "No path is available for this action".to_string())?;
@@ -1082,8 +1124,8 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
     }
     let pending = app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let pending_layer = pending && (app.ui.tool_options.vector_mode == "shape" || app.ui.vector_mask_target);
-    if pending {
-        crate::vector_ui::pen_commit(app, false);
+    if pending && !crate::vector_ui::pen_commit(app, false) {
+        return Err(app.ui.status.clone());
     }
     let name = if pending { Some(if pending_layer { "layer" } else { "work" }.to_string()) } else { menu.path_name.clone() }
         .ok_or_else(|| "No path is available for this action".to_string())?;
@@ -1151,7 +1193,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         continue;
                     };
                     let text = if crop_label_is_ui(&command) { tl!(&label).to_string() } else { label };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), text).min_size(egui::vec2(200.0, 20.0));
+                    // The overlay rows carry their own glyph (#10889); the rest stay text-only.
+                    let mut atoms = egui::Atoms::default();
+                    if let Some(kind) = command.strip_prefix(CROP_OVERLAY).and_then(crate::crop_overlay::CropOverlay::from_id) {
+                        atoms.push_right(crate::icons::image(kind.icon(), 14.0, t.icon));
+                    }
+                    atoms.push_right(text);
+                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), atoms).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, &command), item).clicked() {
                         selected = Some(command);
                     }

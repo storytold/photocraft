@@ -1,4 +1,4 @@
-use super::*;
+use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, layer_multi_cmds, symmetry_cmds};
 
 /// Per-document editing state.
 #[derive(Clone, Debug)]
@@ -48,14 +48,22 @@ pub struct DocState {
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
-    /// the document as opened. Kept for the session only, as in Photoshop: not history states,
+    /// the document as opened (unless History Options › Automatically Create First Snapshot is
+    /// off). Kept for the session only, as in Photoshop: not history states,
     /// and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     pub(crate) next_snapshot: u64,
+    /// The snapshot the latest save added (History Options › Automatically Create New Snapshot
+    /// When Saving), so saving an unchanged document again doesn't add a duplicate row.
+    pub(crate) save_snapshot: Option<u64>,
     /// The snapshot set as the History Brush's source (`history.setSource {snapshot}`); `None`:
     /// the source is a state, kept by the history ([`photocraft_ops::History::brush_source`]).
     pub(crate) source_snapshot: Option<u64>,
+    /// Names the user gave layers (Rename Layer, Duplicate Layer's Name, `type.edit`'s name): a
+    /// type layer keeps such a name although it looks like a copy's ("Title copy 2"), while a
+    /// name Duplicate Layer made still follows the text (#9023). Kept for the session only.
+    pub(crate) typed_names: std::collections::HashMap<LayerId, String>,
 }
 
 impl DocState {
@@ -67,7 +75,7 @@ impl DocState {
     }
 
     /// Pixel bytes of the document, the tiles only its history holds and the tiles only its
-    /// History panel snapshots hold.
+    /// History panel snapshots hold; embedded smart object contents count too.
     pub fn memory_bytes(&self) -> usize {
         let snaps: Vec<&Document> = self.snapshots.iter().map(|s| &*s.doc).collect();
         self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
@@ -78,6 +86,11 @@ impl DocState {
         let mut history = History::default();
         let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
         history.set_current_layers(target.clone());
+        // Spot channels open visible, printing over the composite; alpha channels open hidden.
+        let channel_view = channel_cmds::ChannelView {
+            alpha_visible: (0..doc.channels.len()).map(|i| photocraft_compose::multichannel::is_overprint_spot(&doc, i)).collect(),
+            ..Default::default()
+        };
         let doc = Arc::new(doc);
         // Photoshop's first snapshot: the document as opened, named after it, so the History
         // panel's top row can always bring it back (#2966).
@@ -96,7 +109,7 @@ impl DocState {
             view_revision: 0,
             last_damage: None,
             coalesce: None,
-            channel_view: Default::default(),
+            channel_view,
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
@@ -105,7 +118,9 @@ impl DocState {
             color_samplers: Vec::new(),
             snapshots: vec![first],
             next_snapshot: 1,
+            save_snapshot: None,
             source_snapshot: None,
+            typed_names: Default::default(),
         }
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.

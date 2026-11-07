@@ -1,4 +1,10 @@
-use super::*;
+use super::{
+    PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, gpu_canvas,
+    gpu_status, gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices, paint_mouse,
+    palette, panels, prefs_ui, preset_panels, rasterize_prompt, screen_picker, shape_stroke_ui, shortcuts, smart_svg_ui, targa_options_ui, text_field_menu,
+    theme, tiff_options_ui, timeline_ui, titlebar, tool_cursor, tool_memory, transform_tool, type_panels_ui, type_tool, updates_ui, vector_ui, view_cmds,
+    wide_angle_ui, work_area, workspace_ui,
+};
 
 impl PhotocraftApp {
     /// Wait out the rest of [`Self::min_frame_ms`] since the last frame started.
@@ -15,6 +21,16 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
+    /// Whether the Home screen is what the canvas area shows this frame. Files opening in the
+    /// background (#210) have tabs before they have documents, so they win over Home. The frame
+    /// draws no tool strip, options bar, status bar or docks under Home, and the canvas area
+    /// draws Home itself; both ask here so they cannot disagree.
+    pub(crate) fn home_screen_up(&mut self) -> bool {
+        let opening = !self.jobs.opens.is_empty();
+        let n = self.session.documents().len();
+        !opening && self.ui.chrome.shows_home(n, self.session.prefs().general.auto_show_home_screen)
+    }
+
     /// Shared logic body. A wrapping host owns the final reset tail after its own work.
     pub fn logic_frame(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.cap_frame_rate();
@@ -37,6 +53,7 @@ impl PhotocraftApp {
         }
         self.last_frame_time = now;
         self.sync_views();
+        crate::memory_warning::tick(self, now);
         crate::type_font_preview::follow_hover(self, ctx);
         self.check_gpu(ctx);
         #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
@@ -48,15 +65,14 @@ impl PhotocraftApp {
         self.drain_captures(ctx);
         self.drain_control(ctx);
         native_menu::run(self, ctx);
+        view_cmds::leave_full_screen_without_document(self, ctx);
         // Switching tools commits, also between the Type and Type Mask tools.
         if self.ui.text_edit.as_ref().is_some_and(|ed| !self.ui.tool.is_type() || ed.mask != self.ui.tool.is_type_mask()) {
             type_tool::commit(self);
         }
         // So does selecting another layer or document by any route (#6483).
         type_tool::end_if_left(self);
-        if self.ui.pen.as_ref().is_some_and(|p| !p.drawn_with(self.ui.tool)) {
-            vector_ui::pen_commit(self, false);
-        }
+        vector_ui::finish_pen_if_left(self);
         transform_tool::end_if_left(self);
         shape_stroke_ui::sync_editor(self, ctx);
         prefs_ui::tick(self, ctx);
@@ -69,12 +85,16 @@ impl PhotocraftApp {
         // maximize it into the work area once (#315).
         work_area::fit_window(ctx);
         discard_ui::guard_window_close(self, ctx);
+        // A zoom field being typed in: plays its alert, and notes a click on the pasteboard.
+        crate::zoom_field::tick(self, ctx);
+        // A colour swatch's Color Picker OK hands its colour back to the swatch widget.
+        crate::color_picker_ui::widget_tick(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
         // shortcuts see Esc).
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
-            filter_preview_worker::discard_closed(self);
+            crate::dialogs::filter_preview_worker::discard_closed(self);
             if type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
                     shortcuts::handle(self, ctx);
@@ -91,9 +111,7 @@ impl PhotocraftApp {
             }
         }
         // Web drops onto the canvas, read since the last frame: placed below, one at a time.
-        let to_place: Vec<(String, Vec<u8>)> =
-            self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        self.drop_places.extend(to_place.into_iter().map(|(name, bytes)| file_open::DropPlace::Bytes(name, bytes)));
+        self.queue_web_places();
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
         // While files are dragged over the window it gets no pointer events: keep frames coming so
@@ -151,6 +169,8 @@ impl PhotocraftApp {
         // A real UI pass consumes the one in-flight synthetic batch (see `inject_synthetic`).
         self.begin_synthetic_pass(&ctx);
         self.hover_layer = None;
+        // The contextual task bar reports itself again if this frame draws it (#10890).
+        self.ui.task_bar_shown = None;
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
         if !self.fonts_ready {
@@ -161,11 +181,67 @@ impl PhotocraftApp {
             self.automation_input = false;
             // No editor was drawn this pass: end its IME context rather than keep a stale owner.
             type_tool::sync_ime(self, &ctx);
+            // The frame's stage record was started with its input: close it here too.
+            self.finish_frame(0.0);
             return;
         }
         let t0 = gpu_canvas::now_ms();
-        self.perf.frame_refresh_ms = 0.0;
-        self.stroke_trace.cpu_prev(frame.info().cpu_usage);
+        self.perf.stage.ui_start(t0, frame.info().cpu_usage);
+        // A software adapter or CPU mode chosen at startup is every document's reason.
+        crate::render_path::frame(self);
+        // Every frame that started its stage record closes it, whichever way `ui_body` returns.
+        let drawn = self.ui_body(ui);
+        let ui_ms = gpu_canvas::now_ms() - t0;
+        // A GPU measurement lands a frame or two after the refresh it belongs to. Refreshes
+        // carry them out, but the last refresh before the app settles has none following it, so
+        // drain the timer here too or its number is never reported. Drain it either way: a
+        // measurement left sitting would surface later against an unrelated refresh. Report it
+        // only while the canvas is still on the GPU, since a CPU refresh clears `gpu_ms`
+        // precisely so a GPU number is never shown as that refresh's.
+        if let Some(gpu) = &self.gpu
+            && let Some(t) = gpu.take_gpu_timing()
+            && self.perf.last_refresh.starts_with("gpu")
+        {
+            self.perf.record_gpu(t);
+        }
+        self.perf.frame(ui_ms);
+        self.finish_frame(ui_ms);
+        if !drawn {
+            return;
+        }
+        // This pass handled its input: the in-flight synthetic batch is delivered once and the
+        // next step may be injected on the next frame.
+        self.finish_synthetic_pass();
+        // Synthetic input is injected one press/release step per frame: keep frames coming until
+        // the queue is empty, then release control replies waiting on it.
+        // Only a pass that reached the end of the UI and delivered the in-flight batch counts as
+        // settled input; an early-returning pass keeps the batch (and the waiting replies).
+        if !self.synthetic.is_empty() || self.synthetic_batch.is_some() {
+            ctx.request_repaint();
+        } else if !self.input_waiters.is_empty() {
+            for w in self.input_waiters.drain(..) {
+                let _ = w.send(serde_json::json!({"ok": true, "result": null}));
+            }
+        }
+        // A menu or dialog can start a filter after `jobs_ui::tick` ran in this frame. Keep
+        // polling it even when the platform would otherwise put the event loop to sleep.
+        jobs_ui::keep_polling(self, &ctx);
+        // Menus and buttons in this frame may have asked for a file dialog.
+        self.poll_file_dialog(&ctx, Some(frame));
+        // The Type tool's IME descriptor is the last writer of this pass: every panel and the
+        // canvas have finished mutating the model, and an absent/focus-moved editor ends here.
+        type_tool::sync_ime(self, &ctx);
+        // Issue any due `ui.screenshot` now that this pass's state is settled: a queued request
+        // that has waited its passes and animation delay captures exactly this frame.
+        self.issue_captures(&ctx);
+        // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
+        gpu_status::check_window(self, &ctx);
+    }
+
+    /// The frame's UI, between `ui_start` and `finish_frame`. False when the screen picker's
+    /// wait modal took the frame (its input, IME and window check already handled).
+    fn ui_body(&mut self, ui: &mut egui::Ui) -> bool {
+        let ctx = ui.ctx().clone();
         // A text field's right-click menu, before any field is drawn (text_field_menu.rs).
         text_field_menu::show(&ctx);
         // The wheel goes to a focused value field before the canvas or a panel sees it (#5473).
@@ -176,6 +252,8 @@ impl PhotocraftApp {
         // once, not only after the next pick.
         self.sync_recent_fonts();
         paint_mouse::sync_tool_brush(self);
+        // Step by Step and Pause For: play an action's next step once its wait is over (Esc ends it).
+        crate::actions::playback::tick(self, &ctx);
         // A unit typed into a value field (`1in` in a px field) converts at the active document's
         // resolution, as in Photoshop.
         let ppi = self.session.prefs().units_and_rulers.point_size.per_inch();
@@ -196,7 +274,7 @@ impl PhotocraftApp {
             self.automation_input = false;
             type_tool::sync_ime(self, &ctx);
             gpu_status::check_window(self, &ctx);
-            return;
+            return false;
         }
         if screen_picker::busy(&ctx) {
             ui.disable();
@@ -214,17 +292,19 @@ impl PhotocraftApp {
         if (chrome || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
-        if (chrome && self.ui.panels.options_bar) || tabbed_in {
+        // Home is only the menu bar and the Home content; the saved panel prefs are untouched.
+        let home = self.home_screen_up();
+        if ((chrome && self.ui.panels.options_bar) || tabbed_in) && !home {
             panels::options_bar(self, ui);
         }
-        if chrome && self.ui.panels.status_bar {
+        if chrome && self.ui.panels.status_bar && !home {
             panels::status_bar(self, ui);
         }
-        if (chrome && self.ui.panels.toolbar) || tabbed_in {
+        if ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home {
             panels::toolbar(self, ui);
         }
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
-        let docking = (chrome && self.ui.panels.dock) || tabbed_in;
+        let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
         if docking {
             panels::dock_area(self, ui);
         } else {
@@ -233,15 +313,21 @@ impl PhotocraftApp {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(backdrop)).show(ui, |ui| {
                 canvas::document_area(self, ui);
             });
-            panels::properties_window(self, &ctx);
+            if !home {
+                panels::properties_window(self, &ctx);
+            }
         }
-        brush_panel::window(self, &ctx);
-        preset_panels::windows(self, &ctx);
-        gradient_ui::editor_window(self, &ctx);
-        type_panels_ui::windows(self, &ctx);
-        analysis_ui::windows(self, &ctx);
-        timeline_ui::windows(self, &ctx);
-        workspace_ui::windows(self, &ctx);
+        // The floating editor windows belong to the editor: Home covers them (dialogs and notices
+        // below stay).
+        if !home {
+            brush_panel::window(self, &ctx);
+            preset_panels::windows(self, &ctx);
+            gradient_ui::editor_window(self, &ctx);
+            type_panels_ui::windows(self, &ctx);
+            analysis_ui::windows(self, &ctx);
+            timeline_ui::windows(self, &ctx);
+            workspace_ui::windows(self, &ctx);
+        }
         palette::show(self, &ctx);
         dialogs::show(self, &ctx);
         layers_panel_ui::show_dialog(self, &ctx);
@@ -252,6 +338,8 @@ impl PhotocraftApp {
         targa_options_ui::show(self, &ctx);
         jpeg_options_ui::show(self, &ctx);
         dds_options_ui::show(self, &ctx);
+        smart_svg_ui::poll(self, &ctx);
+        smart_svg_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);
@@ -291,54 +379,6 @@ impl PhotocraftApp {
             egui::Modal::new(egui::Id::unique("screen-color-wait")).frame(egui::Frame::NONE).backdrop_color(egui::Color32::TRANSPARENT).show(&ctx, |_| {});
             ctx.set_cursor_icon(egui::CursorIcon::Wait);
         }
-        let ui_ms = gpu_canvas::now_ms() - t0;
-        // A GPU measurement lands a frame or two after the refresh it belongs to. Refreshes
-        // carry them out, but the last refresh before the app settles has none following it, so
-        // drain the timer here too or its number is never reported. Drain it either way: a
-        // measurement left sitting would surface later against an unrelated refresh. Report it
-        // only while the canvas is still on the GPU, since a CPU refresh clears `gpu_ms`
-        // precisely so a GPU number is never shown as that refresh's.
-        if let Some(gpu) = &self.gpu
-            && let Some(t) = gpu.take_gpu_timing()
-            && self.perf.last_refresh.starts_with("gpu")
-        {
-            self.perf.record_gpu(t);
-        }
-        self.perf.frame(ui_ms);
-        if self.stroke_trace.enabled() {
-            self.stroke_trace.canvas(self.perf.frame_refresh_ms);
-            let info = &self.perf.gpu_info;
-            self.stroke_trace.end_frame(ui_ms, self.live_stroke.is_some(), || {
-                let gpu = format!("{} {}", info.backend, info.adapter).trim().to_string();
-                if info.present.is_empty() { gpu } else { format!("{gpu}, {}", info.present) }
-            });
-        }
-        // This pass handled its input: the in-flight synthetic batch is delivered once and the
-        // next step may be injected on the next frame.
-        self.finish_synthetic_pass();
-        // Synthetic input is injected one press/release step per frame: keep frames coming until
-        // the queue is empty, then release control replies waiting on it.
-        // Only a pass that reached the end of the UI and delivered the in-flight batch counts as
-        // settled input; an early-returning pass keeps the batch (and the waiting replies).
-        if !self.synthetic.is_empty() || self.synthetic_batch.is_some() {
-            ctx.request_repaint();
-        } else if !self.input_waiters.is_empty() {
-            for w in self.input_waiters.drain(..) {
-                let _ = w.send(serde_json::json!({"ok": true, "result": null}));
-            }
-        }
-        // A menu or dialog can start a filter after `jobs_ui::tick` ran in this frame. Keep
-        // polling it even when the platform would otherwise put the event loop to sleep.
-        jobs_ui::keep_polling(self, &ctx);
-        // Menus and buttons in this frame may have asked for a file dialog.
-        self.poll_file_dialog(&ctx, Some(frame));
-        // The Type tool's IME descriptor is the last writer of this pass: every panel and the
-        // canvas have finished mutating the model, and an absent/focus-moved editor ends here.
-        type_tool::sync_ime(self, &ctx);
-        // Issue any due `ui.screenshot` now that this pass's state is settled: a queued request
-        // that has waited its passes and animation delay captures exactly this frame.
-        self.issue_captures(&ctx);
-        // Last, after everything drawn this frame: a lost window device can't draw it (#3438).
-        gpu_status::check_window(self, &ctx);
+        true
     }
 }

@@ -70,6 +70,11 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
+    if photocraft_io::svg::is_svg(bytes) {
+        return photocraft_io::svg::import_svg_bounded_images(file_name, bytes, 24_000_000)
+            .map(|imported| imported.document)
+            .map_err(|e| other(format!("can't read SVG smart object contents: {e}")));
+    }
     crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
 }
 
@@ -96,11 +101,57 @@ fn has_linked(s: &Session) -> std::result::Result<(), String> {
         _ => Err("the smart object is embedded".into()),
     }
 }
+fn linked_layers(doc: &Document) -> Vec<LayerId> {
+    doc.walk()
+        .into_iter()
+        .filter(|(_, _, l)| matches!(&l.content, LayerContent::Smart(sm) if matches!(sm.source, SmartSource::Linked { .. })))
+        .map(|(_, _, l)| l.id)
+        .collect()
+}
+fn has_any_linked(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or("no document open")?;
+    if linked_layers(&d.doc).is_empty() { Err("the document has no linked smart object".into()) } else { Ok(()) }
+}
+/// Embed All Linked: reads every linked file first, so a missing one refuses the whole step.
+fn embed_all_linked(s: &mut Session, _p: &Value) -> Result<Value> {
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let ids = linked_layers(doc);
+    if ids.is_empty() {
+        return Err(other("the document has no linked smart object"));
+    }
+    let mut sources = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let src = &smart(doc, *id)?.source;
+        let (file_name, bytes) = source_bytes(&doc.metadata, src).ok_or_else(|| {
+            let path = match src {
+                SmartSource::Linked { path } => path.as_str(),
+                SmartSource::Embedded { .. } => "",
+            };
+            other(format!("the linked file can't be read: {path}"))
+        })?;
+        sources.push(SmartSource::Embedded { file_name, bytes });
+    }
+    let parent = doc.id;
+    let contents: Vec<SmartContentsId> = ids.iter().map(|id| smart(doc, *id).map(|sm| sm.contents_id)).collect::<Result<_>>()?;
+    s.edit("Embed All Linked", |doc, _| {
+        for (id, src) in ids.iter().zip(sources) {
+            smart_mut(doc, *id)?.source = src;
+            refresh_or_fail(doc, *id)?;
+        }
+        Ok(())
+    })?;
+    s.smart_links.retain(|l| l.parent != parent || !contents.contains(&l.contents_id));
+    Ok(json!({"embedded": ids.iter().map(|l| l.0).collect::<Vec<_>>()}))
+}
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
 }
 fn has_smart_filters(s: &Session) -> std::result::Result<(), String> {
     if active_smart(s)?.smart_filters.is_empty() { Err("the smart object has no smart filters".into()) } else { Ok(()) }
+}
+/// Delete Filter Mask with `ifPresent` needs only a smart object.
+pub(crate) fn smart_layer_active(s: &Session) -> std::result::Result<(), String> {
+    active_smart(s).map(|_| ())
 }
 fn has_filter_mask(s: &Session) -> std::result::Result<(), String> {
     active_smart(s)?.filter_mask.as_ref().map(|_| ()).ok_or_else(|| "the smart object has no filter mask".into())
@@ -137,21 +188,25 @@ mod source;
 pub(crate) use contents::on_close;
 pub use contents::{commit_child, contents_of, replace_contents_bytes, replace_contents_from_bytes};
 use contents::{edit_contents, export_contents, is_smart_child, path_param, replace_contents, set_source, update_all};
-#[cfg(test)]
 use filters::smart_mut;
-pub(crate) use filters::{add_smart_filter, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
+pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
-use placing::{convert, detach_psd, shift_layer, via_copy};
+pub(crate) use placing::detach_psd;
+pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
+use placing::{convert, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
-pub(crate) use placing::{set_placement, shift_smart, transform_placement};
+#[cfg(test)]
+pub(crate) use rendering::DISPLAY_NATIVE_HASH_BYTES;
 use rendering::refresh_or_fail;
 pub(crate) use rendering::source_box;
+#[cfg(test)]
+use rendering::{NativeDigests, blend_surfaces, place, render_in};
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
-use rendering::{blend_surfaces, place, render_in};
-pub use source::{SourceImage, source_bytes, source_decode_count, source_image, svg_source_image};
+use source::svg_source_image_in;
+pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};
 use source::{authorize_source, authorized_source_bytes};
-pub(crate) use source::{restore_unrendered, take_caches};
+pub(crate) use source::{restore_unrendered, take_caches, vector_scale};
 
 const SO: &[&str] = &["Layer", "Smart Objects"];
 const SF: &[&str] = &["Layer", "Smart Filter"];
@@ -230,12 +285,20 @@ pub fn specs() -> Vec<CommandSpec> {
             has_smart,
             unpack::convert_to_layers
         ),
-        spec!("layer.smartObjects.convertToEmbedded", "Convert to Embedded", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
+        spec!("layer.smartObjects.convertToEmbedded", "Embed Linked", SO, r##"{"layer":id?}"##, has_linked, |s, p| {
             set_source(s, p, "Convert to Embedded", true, |meta, src| {
                 let (file_name, bytes) = source_bytes(meta, src).ok_or_else(|| other("the linked file can't be read"))?;
                 Ok(SmartSource::Embedded { file_name, bytes })
             })
         }),
+        spec!(
+            "layer.smartObjects.embedAllLinked",
+            "Embed All Linked",
+            SO,
+            "{} (every linked smart object of the active document becomes embedded in one history step; a linked file that can't be read refuses the whole step and the error names it) -> {embedded: [layer ids]}",
+            has_any_linked,
+            embed_all_linked
+        ),
         spec!(
             "layer.smartObjects.convertToLinked",
             "Convert to Linked…",
@@ -265,12 +328,25 @@ pub fn specs() -> Vec<CommandSpec> {
                 })
             }
         ),
-        spec!("layer.smartFilter.deleteFilterMask", "Delete Filter Mask", SF, r##"{"layer":id?}"##, has_filter_mask, |s, p| {
-            edit_filters(s, p, "Delete Filter Mask", |sm| {
-                sm.filter_mask = None;
-                Ok(())
-            })
-        }),
+        spec!(
+            "layer.smartFilter.deleteFilterMask",
+            "Delete Filter Mask",
+            SF,
+            r##"{"layer":id?,"ifPresent":bool=false (true: a smart object without a filter mask is left as it is, as a Photoshop action's step needs where Photoshop added the mask by default)}"##,
+            has_filter_mask,
+            |s, p| {
+                if p.get("ifPresent").and_then(Value::as_bool) == Some(true) {
+                    let id = layer_param(s, p)?;
+                    if smart(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?.filter_mask.is_none() {
+                        return Ok(Value::Null);
+                    }
+                }
+                edit_filters(s, p, "Delete Filter Mask", |sm| {
+                    sm.filter_mask = None;
+                    Ok(())
+                })
+            }
+        ),
         spec!(
             "layer.smartFilter.disableFilterMask",
             "Disable Filter Mask",
@@ -313,7 +389,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartFilter.setParams",
             "Edit Smart Filter",
             &[],
-            r##"{"layer":id?,"index":u32?,"params":{…} (merged)}"##,
+            r##"{"layer":id?,"index":u32?,"params":{…} (merged),"replace":bool=false (params replace the stored ones instead)}"##,
             has_smart_filters,
             set_filter_params
         ),

@@ -22,7 +22,7 @@
 //! - the target is not a plain pixel layer (smart object, type, shape, group: the command edits
 //!   a smart object's filters or refuses), or is itself clipped (a clipped adjustment would act on
 //!   the whole clipping group, not just the target);
-//! - the target uses Blend If (its "This Layer" ranges test the layer's adjusted colour);
+//! - the target uses Blend If (its "Current Layer" ranges test the layer's adjusted colour);
 //! - the target's untouched area is visible (a surface without alpha whose content doesn't cover
 //!   the canvas: the command only edits content);
 //! - the command targets an alpha channel, the Quick Mask or a single colour channel;
@@ -30,8 +30,8 @@
 //!   RGB, adjusts and converts back (CMYK even changes when the settings are neutral), which a
 //!   composite in display RGB can't reproduce;
 //! - in Grayscale documents, kinds that make colour from gray (Vibrance, Color Balance, Black &
-//!   White, Photo Filter, Channel Mixer, Gradient Map, colorized Hue/Saturation): the command
-//!   folds each pixel back to gray, the composite would carry the colour through;
+//!   White, Photo Filter, Channel Mixer, Gradient Map, Selective Color, colorized Hue/Saturation):
+//!   the command folds each pixel back to gray, the composite would carry the colour through;
 //! - on the GPU canvas, documents the wgpu compositor doesn't cover (it would fall back to a
 //!   full CPU composite per change); on the CPU canvas, documents above the proxy size.
 
@@ -194,6 +194,19 @@ fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     Some((kind, crate::filter_dialog::params_of(&d.fields), preview))
 }
 
+/// Whether Image › Adjustments `kind` on document `idx` would edit a channel (the Channels panel's
+/// target or the Quick Mask) or the active layer's mask instead of the layer's pixels.
+pub(crate) fn targets_channel(app: &PhotocraftApp, idx: usize, kind: &str, params: &Value) -> bool {
+    // The dialog's own target choice, when it has one, decides.
+    if let Some(target) = params.get("target") {
+        return target.as_str() != Some("pixels");
+    }
+    let Some(st) = app.session.documents().get(idx) else { return false };
+    st.channel_view.target != photocraft_engine::channel_cmds::ChannelTarget::Composite
+        || st.doc.quick_mask.is_some()
+        || !app.with_mask_target(&format!("image.adjustments.{kind}"), Value::Null).is_null()
+}
+
 /// FNV-1a over `parts`, never 0.
 fn hash(parts: &[&[u8]]) -> u64 {
     parts.iter().flat_map(|p| p.iter()).fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3)) | 1
@@ -218,15 +231,14 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&AdjustPreview> {
         if let Some(p) = app.adjust_preview.as_mut() {
             (p.hash, p.layer_path, p.shown) = (0, false, None);
         }
+        crate::render_path::adjust_preview_ok(app);
         return None;
     };
     let st = app.session.documents().get(idx)?;
     let (doc_id, revision, target) = (st.doc.id, st.revision, st.active_layer?);
     // Commands that target a channel (Channels panel / Quick Mask) or a layer mask keep the proxy
     // preview.
-    let channel_target = st.channel_view.target != photocraft_engine::channel_cmds::ChannelTarget::Composite
-        || st.doc.quick_mask.is_some()
-        || !app.with_mask_target(&format!("image.adjustments.{kind}"), Value::Null).is_null();
+    let channel_target = targets_channel(app, idx, &kind, &params);
     let session = hash(&[&doc_id.0.to_le_bytes(), &revision.to_le_bytes(), &target.0.to_le_bytes(), &[u8::from(channel_target)]]);
     let h = hash(&[kind.as_bytes(), params.to_string().as_bytes(), &[u8::from(preview)]]);
     if let Some(p) = &app.adjust_preview
@@ -236,7 +248,16 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&AdjustPreview> {
     }
     if app.adjust_preview.as_ref().is_none_or(|p| (p.doc, p.session) != (doc_id, session)) {
         let doc = st.doc.clone();
-        let base = if channel_target { None } else { base_document(&doc, target).ok().filter(|b| cheap(app, b)).map(Arc::new) };
+        let base = if channel_target { None } else { base_document(&doc, target).ok() };
+        // A target the layer path can't preview (or the GPU can't draw) falls to the CPU proxy: say
+        // why (#7487), in the preview's own slot. A channel target's proxy is by design, not a
+        // fallback.
+        let gpu_refuses = app.gpu.as_ref().zip(base.as_ref()).is_some_and(|(g, b)| !g.supports(b));
+        match (!channel_target).then(|| unsupported(&doc, target)).flatten().or(gpu_refuses.then_some("the GPU can't draw the result")) {
+            Some(why) => crate::render_path::adjust_preview_cpu(app, doc_id.0, why),
+            None => crate::render_path::adjust_preview_ok(app),
+        }
+        let base = base.filter(|b| cheap(app, b)).map(Arc::new);
         let region = if base.is_some() { region(&doc, target) } else { Rect::EMPTY };
         app.adjust_preview = Some(AdjustPreview {
             doc: doc_id,

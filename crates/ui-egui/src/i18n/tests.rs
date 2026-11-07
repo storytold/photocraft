@@ -9,6 +9,16 @@ const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
 
 #[test]
+fn hindi_has_the_reveal_and_camera_raw_rows() {
+    assert_eq!(tr(HI(), "Reveal in Explorer"), "Explorer में दिखाएँ");
+    assert_eq!(tr(HI(), "Reveal in Finder"), "Finder में दिखाएँ");
+    assert_eq!(tr(HI(), "Camera Raw…"), "Camera Raw…");
+    let (rows, errors) = parse_entries(include_str!("hi.tsv"));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(rows.iter().any(|(ctx, src, _)| ctx.is_empty() && src == "Camera Raw…"), "Camera Raw… is a catalog row, not a fallback");
+}
+
+#[test]
 fn hindi_tags_resolve() {
     for tag in ["hi", "hi-IN", "hi_IN", "hi_IN.UTF-8"] {
         assert_eq!(lang_from_tag(tag), Some(HI()), "{tag}");
@@ -37,6 +47,34 @@ fn vietnamese_tags_resolve() {
 }
 
 #[test]
+fn thai_tags_resolve() {
+    let th = Lang::from_code("th").expect("th registered");
+    for tag in ["th", "TH", "th-TH", "th_TH", "th_TH.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(th), "{tag}");
+        assert_eq!(Lang::from_pref(tag), th, "{tag}");
+    }
+    assert_eq!(th.name(), "ไทย");
+    assert_eq!((th.0.plural)(5), 0, "Thai has one plural form");
+    assert_eq!(tr(th, "File"), "ไฟล์");
+    assert_eq!(tr(th, "Layer"), "เลเยอร์");
+}
+
+/// Tamil: regional tags resolve, counts take one|other, and placeholders stay untranslated.
+#[test]
+fn tamil_tags_plurals_and_placeholders() {
+    let ta = Lang::from_code("ta").expect("ta registered");
+    for tag in ["ta", "ta-IN", "ta_LK", "ta_IN.UTF-8"] {
+        assert_eq!(Lang::from_pref(tag), ta, "{tag}");
+    }
+    let forms: Vec<usize> = [0, 1, 2, 21].into_iter().map(ta.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1]);
+    assert_eq!(trn(ta, 1, "{n} layer", "{n} layers"), "1 அடுக்கு");
+    assert_eq!(trn(ta, 3, "{n} layer", "{n} layers"), "3 அடுக்குகள்");
+    assert!(tr(ta, "Scratch: {size}").contains("{size}"));
+    assert_ne!(tr(ta, "Zoom In (hold, drag to scrub)"), "Zoom In (hold, drag to scrub)");
+}
+
+#[test]
 fn picker_lists_english_first_then_names_alphabetically() {
     let order = Lang::for_picker();
     assert_eq!(order.first().map(|l| l.code()), Some("en"));
@@ -54,6 +92,11 @@ fn picker_lists_english_first_then_names_alphabetically() {
 
 #[test]
 fn tags_map_to_languages() {
+    western_and_legacy_tags_resolve();
+    chinese_tags_resolve_by_region_and_script();
+}
+
+fn western_and_legacy_tags_resolve() {
     assert_eq!(lang_from_tag("ja_JP.UTF-8"), Some(JA()));
     assert_eq!(lang_from_tag("ja-JP"), Some(JA()));
     assert_eq!(lang_from_tag("en_US.UTF-8"), Some(Lang::EN));
@@ -73,6 +116,9 @@ fn tags_map_to_languages() {
     assert_eq!(lang_from_tag("tr_TR.UTF-8"), Lang::from_code("tr"));
     assert_eq!(lang_from_tag("tr-TR"), Lang::from_code("tr"));
     assert_eq!(lang_from_tag("tr"), Lang::from_code("tr"));
+}
+
+fn chinese_tags_resolve_by_region_and_script() {
     // Traditional Chinese: by region, by script, and with a region after the script.
     assert_eq!(lang_from_tag("zh_TW.UTF-8"), Some(ZH()));
     assert_eq!(lang_from_tag("zh-TW"), Some(ZH()));
@@ -96,6 +142,8 @@ fn candidates_walk_from_specific_to_general() {
     assert_eq!(candidates("zh_TW"), ["zh-tw", "zh-hant", "zh"]);
     assert_eq!(candidates("zh-CN"), ["zh-cn", "zh-hans", "zh"]);
     assert_eq!(candidates("zh-Hant-HK"), ["zh-hant-hk", "zh-hant", "zh"]);
+    assert_eq!(candidates("nn_NO.UTF-8"), ["nn-no", "nb", "nn"]);
+    assert_eq!(candidates("no"), ["nb", "no"]);
 }
 
 #[test]
@@ -125,6 +173,65 @@ fn spanish_resolves_and_pluralises() {
     }
     let forms: Vec<usize> = [0, 1, 3].into_iter().map(es.0.plural).collect();
     assert_eq!(forms, [1, 0, 1]);
+}
+
+#[test]
+fn swedish_resolves_and_pluralises() {
+    let sv = Lang::from_code("sv").expect("sv registered");
+    assert_eq!(sv.name(), "Svenska");
+    for tag in ["sv", "SV", "sv-SE", "sv_SE.UTF-8", "sv-FI", "sv_FI.UTF-8", "sv-AX"] {
+        assert_eq!(lang_from_tag(tag), Some(sv), "{tag}");
+        assert_eq!(Lang::from_pref(tag), sv, "{tag}");
+    }
+    let forms: Vec<usize> = [0, 1, 2, 21].into_iter().map(sv.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1]);
+    assert_eq!(tr(sv, "File"), "Arkiv");
+    assert_eq!(trn(sv, 1, "{n} layer", "{n} layers"), "1 lager");
+    assert_eq!(trn(sv, 3, "{n} layer", "{n} layers"), "3 lager");
+}
+
+#[test]
+fn finnish_resolves_and_pluralises() {
+    let fi = Lang::from_code("fi").expect("fi registered");
+    assert_eq!(fi.name(), "Suomi");
+    for tag in ["fi", "FI", "fi-FI", "fi_FI.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(fi), "{tag}");
+        assert_eq!(Lang::from_pref(tag), fi, "{tag}");
+    }
+    // Filipino and Swedish in Finland don't pick Finnish.
+    assert_ne!(lang_from_tag("fil"), Some(fi));
+    assert_ne!(lang_from_tag("sv-FI"), Some(fi));
+    assert_eq!(tr(fi, "File"), "Tiedosto");
+    // The partitive singular follows any number but 1.
+    for (n, layer) in [(0, "tasoa"), (1, "taso"), (2, "tasoa"), (21, "tasoa")] {
+        assert_eq!(trn(fi, n, "{n} layer", "{n} layers"), format!("{n} {layer}"));
+    }
+}
+
+#[test]
+fn danish_resolves_and_pluralises() {
+    let da = Lang::from_code("da").expect("da registered");
+    assert_eq!(da.name(), "Dansk");
+    for tag in ["da", "DA", "da-DK", "da_DK.UTF-8", "da-GL"] {
+        assert_eq!(lang_from_tag(tag), Some(da), "{tag}");
+        assert_eq!(Lang::from_pref(tag), da, "{tag}");
+    }
+    assert_eq!(tr(da, "File"), "Filer");
+    assert_eq!(trn(da, 1, "{n} document", "{n} documents"), "1 dokument");
+    assert_eq!(trn(da, 3, "{n} document", "{n} documents"), "3 dokumenter");
+}
+
+#[test]
+fn norwegian_resolves_and_pluralises() {
+    let nb = Lang::from_code("nb").expect("nb registered");
+    assert_eq!(nb.name(), "Norsk bokmål");
+    for tag in ["nb", "NB", "nb-NO", "nb_NO.UTF-8", "no", "no-NO", "no_NO.UTF-8", "nn", "nn-NO", "nn_NO.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(nb), "{tag}");
+        assert_eq!(Lang::from_pref(tag), nb, "{tag}");
+    }
+    assert_eq!(tr(nb, "File"), "Fil");
+    assert_eq!(trn(nb, 1, "{n} item", "{n} items"), "1 element");
+    assert_eq!(trn(nb, 3, "{n} item", "{n} items"), "3 elementer");
 }
 
 #[test]
@@ -160,6 +267,16 @@ fn lookups_fall_back_to_english() {
     assert_eq!(trn(JA(), 3, "{n} no such message", "{n} no such messages"), "3 no such messages");
 }
 
+/// Romanian: 1 is one; 0 and counts ending in 01–19 are few ("2 straturi", "119 straturi");
+/// the rest take "de" ("20 de straturi", "121 de straturi").
+#[test]
+fn romanian_plural_rule() {
+    let ro = Lang::from_code("ro").expect("ro registered");
+    let counts = [0, 1, 2, 19, 20, 21, 100, 101, 119, 120, 121, 1001];
+    let forms: Vec<usize> = counts.into_iter().map(ro.0.plural).collect();
+    assert_eq!(forms, [1, 0, 1, 1, 2, 2, 2, 1, 1, 2, 2, 1]);
+}
+
 #[test]
 fn russian_plural_rule() {
     let ru = Lang::from_code("ru").expect("ru registered");
@@ -187,6 +304,25 @@ fn ukrainian_plural_rule_handles_teens_and_compound_counts() {
 }
 
 #[test]
+fn arabic_resolves_locales_and_preferences() {
+    let ar = Lang::from_code("ar").expect("ar registered");
+    assert_eq!(ar.name(), "العربية");
+    for tag in ["ar", "AR", "ar-SA", "ar_EG", "ar_EG.UTF-8", "ar-AE", "ar-MA"] {
+        assert_eq!(lang_from_tag(tag), Some(ar), "{tag}");
+        assert_eq!(Lang::from_pref(tag), ar, "{tag}");
+    }
+    assert_eq!(dir_for_code("ar"), Dir::Rtl);
+}
+
+#[test]
+fn arabic_plural_rule_has_six_forms() {
+    let ar = Lang::from_code("ar").expect("ar registered");
+    let counts = [0, 1, 2, 3, 10, 11, 99, 100, 101, 102, 103, 111, 199, 1000, u64::MAX];
+    let forms: Vec<usize> = counts.into_iter().map(ar.0.plural).collect();
+    assert_eq!(forms, [0, 1, 2, 3, 3, 4, 4, 5, 5, 5, 3, 4, 4, 5, 4]);
+}
+
+#[test]
 fn serbian_resolves_locales_and_preferences() {
     let sr = Lang::from_code("sr").expect("sr registered");
     assert_eq!(sr.name(), "Srpski");
@@ -202,6 +338,67 @@ fn serbian_plural_rule_handles_teens_and_compound_counts() {
     let counts = [0, 1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111, 112, 122];
     let forms: Vec<usize> = counts.into_iter().map(sr.0.plural).collect();
     assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 0, 2, 2, 1]);
+}
+
+/// The catalog resolves regional tags, exposes its native name and falls back to English.
+#[test]
+fn azerbaijani_resolves_locales_and_preferences() {
+    let lang = Lang::from_code("az").expect("az registered");
+    assert_eq!(lang.name(), "Azərbaycanca");
+    assert_eq!(lang.dir(), Dir::Ltr);
+    assert!(lang.complete_menus());
+    for tag in ["az", "AZ", "az-AZ", "az_AZ.UTF-8", "az-Latn", "AZ-LATN-AZ"] {
+        assert_eq!(lang_from_tag(tag), Some(lang), "{tag}");
+        assert_eq!(Lang::from_pref(tag), lang, "{tag}");
+    }
+    assert_eq!(tr(lang, "unknown translation"), "unknown translation");
+}
+
+/// Integer plural boundaries select one only at 1, including large counts without overflow.
+#[test]
+fn azerbaijani_plural_counts_include_hundreds_and_large_values() {
+    let az = Lang::from_code("az").expect("az registered");
+    let counts = [0, 1, 2, 11, 19, 20, 21, 99, 100, 101, 102, 119, 120, 1000, 1001, u64::MAX];
+    assert_eq!(counts.map(az.0.plural), [1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    for n in counts {
+        assert_eq!(trn(az, n, "{n} layer", "{n} layers"), format!("{n} qat"));
+    }
+}
+
+/// Exact lookups retain contextual meanings, dotted/dotless letters and product placeholders.
+#[test]
+fn azerbaijani_keeps_context_placeholders_and_command_names() {
+    let lang = Lang::from_code("az").expect("az registered");
+    for (source, translated) in [("File", "Fayl"), ("Layer", "Qat"), ("Kind", "Növ"), ("Type Layer", "Mətn qatı"), ("Light Theme", "Açıq mövzu")] {
+        assert_eq!(tr(lang, source), translated);
+    }
+    assert_eq!(tr_ctx(lang, "cameraRaw", "Light"), "İşıq");
+    assert_eq!(tr_ctx(lang, "fontWeight", "Light"), "İncə");
+    assert_ne!(tr_id(lang, "edit.clear", "Clear"), "Clear");
+    assert!(fmt(tr(lang, "About {app}"), &[("app", "PhotoCraft")]).contains("PhotoCraft"));
+}
+
+/// Bosnian locales, with or without region, script or encoding, select the Latin catalog.
+#[test]
+fn bosnian_resolves_locales_and_preferences() {
+    let bs = Lang::from_code("bs").expect("bs registered");
+    assert_eq!(bs.name(), "Bosanski");
+    for tag in ["bs", "BS", "bs-BA", "bs_BA", "bs_BA.UTF-8", "bs-Latn", "bs-Latn-BA", "bs-Cyrl-BA", "bs_BA@cyrillic"] {
+        assert_eq!(lang_from_tag(tag), Some(bs), "{tag}");
+        assert_eq!(Lang::from_pref(tag), bs, "{tag}");
+    }
+    assert_ne!(lang_from_tag("hr-HR"), Some(bs), "Croatian is not Bosnian");
+}
+
+/// Bosnian counts: 1, 21, 101 are `one`; 2–4, 22–24 (not 12–14) `few`; everything else `other`.
+#[test]
+fn bosnian_plural_rule_handles_teens_and_compound_counts() {
+    let bs = Lang::from_code("bs").expect("bs registered");
+    let counts = [0, 1, 2, 4, 5, 11, 12, 14, 21, 22, 25, 101, 111, 112, 122];
+    let forms: Vec<usize> = counts.into_iter().map(bs.0.plural).collect();
+    assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 0, 2, 2, 1]);
+    assert_eq!(trn(bs, 3, "{n} pixel", "{n} pixels"), "3 piksela");
+    assert_eq!(trn(bs, 5, "{n} document", "{n} documents"), "5 dokumenata");
 }
 
 #[test]

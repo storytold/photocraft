@@ -20,8 +20,10 @@ mod selection;
 mod structure;
 
 use align::{align, distribute};
-pub use damage::{layer_bounds, layers_damage, same_pixels, selection_only_change, step_damage};
-pub(crate) use damage::{note_damage, note_inert_insert, note_insert};
+#[cfg(any(test, debug_assertions))]
+pub(crate) use damage::hint_misses;
+pub(crate) use damage::note_insert;
+pub use damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use moves::link_groups;
 pub(crate) use moves::shift_surface;
 #[cfg(test)]
@@ -30,7 +32,7 @@ pub use moves::{move_targets, move_to, moved, moved_target, moves_mask_alone, pr
 use selection::{doc_state, find_layers, select_all_layers, select_linked};
 pub(crate) use selection::{mask_targets, recorded_step, reselect, targets, top_level};
 pub use selection::{select, selected, set_selection};
-pub(crate) use structure::{check_group_depth, deletion_neighbours};
+pub(crate) use structure::{check_group_depth, deletion_neighbours, relink_copies};
 pub use structure::{delete_selected, duplicate_selected, group_layers, set_visible_selected};
 use structure::{link_layers, lock_layers, merge_layers, rename_layer, reverse};
 
@@ -132,16 +134,22 @@ pub fn specs() -> Vec<CommandSpec> {
             s,
             "vertically"
         )),
-        spec!("layer.linkLayers", "Link Layers", &["Layer"], None, "{} (toggles: unlinks when the selection is already one link group)", can_link, |s, _| {
-            link_layers(s)
-        }),
+        spec!(
+            "layer.linkLayers",
+            "Link Layers",
+            &["Layer"],
+            None,
+            r#"{"linked":bool?} (omitted: toggle; explicit true links, false unlinks)"#,
+            can_link,
+            link_layers
+        ),
         spec!("layer.mergeLayers", "Merge Layers", &["Layer"], Some("Cmd+E"), "{} (one layer selected: Merge Down)", has_layer, |s, _| merge_layers(s)),
         spec!(
             "layer.new.groupFromLayers",
             "Group from Layers…",
             &["Layer", "New"],
             None,
-            r##"{"layer":id?,"name":str?} (no layer: every selected layer)"##,
+            r##"{"layer":id?,"name":text?,"color":"none|red|orange|yellow|green|seafoam|blue|indigo|magenta|fuchsia|violet|gray"="none","mode":str="passThrough" (blend mode),"opacity":0..100=100 (percent)} (no layer: every selected layer; the new group starts collapsed)"##,
             has_layer,
             group_layers
         ),
@@ -150,7 +158,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.lockLayers",
             "Lock Layers…",
             &["Layer"],
-            None,
+            Some("Cmd+/"),
             r##"{"transparency":bool?,"pixels":bool?,"position":bool?,"artboard":bool?,"all":bool?} (none given: toggle lock all)"##,
             has_layer,
             lock_layers
@@ -164,3 +172,6 @@ mod tests;
 
 #[cfg(test)]
 mod layers_panel_parity_tests;
+
+#[cfg(test)]
+mod tile_damage_tests;

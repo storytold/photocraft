@@ -1,3 +1,6 @@
+use photocraft_color::SampleType;
+
+use super::damage::{align_bounds, shape_pixel_bounds};
 use super::*;
 
 #[test]
@@ -386,9 +389,6 @@ fn clipped_adjustment_in_pass_through_clip_base_damages_its_group() {
     let LayerContent::Group(g) = &mut deleted.layers[2].content else { panic!("group") };
     g.children.remove(1);
     assert_eq!(step_damage(&before, &deleted), group);
-    let LayerContent::Group(g) = &before.layers[2].content else { panic!("group") };
-    let ids = [g.children[1].id];
-    assert_eq!(layers_damage(&before, &after, &ids), group);
     // Without the layer clipped to the group it stays pass-through: just A's base.
     before.layers.truncate(3);
     after.layers.truncate(3);
@@ -636,6 +636,86 @@ fn align_each_edge() {
             s.undo();
             assert_eq!(bounds(&s, a), Rect::new(10, 5, 20, 15));
         }
+    }
+}
+
+/// #8660: a shape partly off the canvas aligns by everything it draws, not the part on the
+/// canvas, so one click aligns the layers and a second moves nothing.
+#[test]
+fn align_uses_a_shape_layers_full_extent_off_the_canvas() {
+    let mut s = session(8);
+    let drawn = |s: &Session, id: LayerId| align_bounds(doc(s).layer(id).unwrap(), doc(s).bounds(), SampleType::U8).unwrap();
+    let shape = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [-20, 10, 40, 20], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap());
+    let measured = align_bounds(doc(&s).layer(shape).unwrap(), doc(&s).bounds(), SampleType::U8);
+    assert_eq!(measured, Some(Rect::new(-20, 10, 20, 30)), "Align: the shape's own extent, not the canvas-clipped render");
+    // Everything else keeps the cheap measure of the cached render (no re-render per layer).
+    assert_eq!(bounds(&s, shape), Rect::new(0, 10, 20, 30), "layer_bounds: the cache, clipped to the canvas");
+    let pixels = rect_layer(&mut s, Rect::new(30, 40, 60, 50));
+    select_all(&mut s, &[shape, pixels]);
+    s.execute("layer.align.leftEdges", json!({})).unwrap();
+    assert_eq!(bounds(&s, pixels), Rect::new(-20, 40, 10, 50));
+    assert_eq!(drawn(&s, shape), Rect::new(-20, 10, 20, 30));
+    s.execute("layer.align.leftEdges", json!({})).unwrap();
+    assert_eq!(bounds(&s, pixels), Rect::new(-20, 40, 10, 50), "a second click moves nothing");
+    // Centred: the union is -20..20 wide on the shape's side and 30 px for the pixel layer.
+    s.execute("layer.align.horizontalCenters", json!({})).unwrap();
+    assert_eq!(drawn(&s, shape), Rect::new(-20, 10, 20, 30));
+    assert_eq!(bounds(&s, pixels), Rect::new(-15, 40, 15, 50));
+    // A feathered shape is measured by its soft edge too, which reaches past the path.
+    let soft = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [-20, 50, 40, 20], "fill": "#00ff00"})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("feather", |doc, _| {
+        if let Some(LayerContent::Shape(sh)) = doc.layer_mut(soft).map(|l| &mut l.content) {
+            sh.feather = 4.0;
+        }
+        Ok(())
+    })
+    .unwrap();
+    // Measured as Align does, in the document's frame: the feather off the canvas still counts.
+    let b = drawn(&s, soft);
+    assert!(b.x0 < -20 && b.x1 > 20 && b.y0 < 50 && b.y1 > 70, "{b:?}");
+    // A fill that shows everywhere keeps the canvas-clipped measure.
+    s.edit("invert", |doc, _| {
+        if let Some(LayerContent::Shape(sh)) = doc.layer_mut(soft).map(|l| &mut l.content) {
+            sh.feather = 0.0;
+            sh.path.inverted = true;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let LayerContent::Shape(sh) = &doc(&s).layer(soft).unwrap().content else { panic!("shape") };
+    assert_eq!(shape_pixel_bounds(sh, doc(&s).bounds(), SampleType::U8), None);
+    // Without a cached render yet, such a fill still measures as the canvas, not as empty.
+    let mut uncached = doc(&s).layer(soft).unwrap().clone();
+    if let LayerContent::Shape(sh) = &mut uncached.content {
+        sh.cache = None;
+    }
+    assert_eq!(align_bounds(&uncached, doc(&s).bounds(), SampleType::U8), Some(doc(&s).bounds()));
+}
+
+/// Review of #8779: shape extents are measured at the document's own alpha precision. A faint
+/// stroke (0.001 opacity) is stored by a 16-bit or float document, so it counts in the extent
+/// and Align moves the opaque body as the document draws it; an 8-bit document stores it as
+/// nothing, so it does not widen the measure.
+#[test]
+fn align_bounds_follow_the_documents_alpha_precision() {
+    for (depth, sample, expected) in [
+        (8, SampleType::U8, Rect::new(60, 60, 120, 120)),
+        (16, SampleType::U16, Rect::new(50, 50, 130, 130)),
+        (32, SampleType::F32, Rect::new(50, 50, 130, 130)),
+    ] {
+        let mut s = session(depth);
+        let id = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [60, 60, 60, 60], "fill": "#000000"})).unwrap()["layer"].as_u64().unwrap());
+        s.edit("faint stroke", |doc, _| {
+            if let Some(LayerContent::Shape(sh)) = doc.layer_mut(id).map(|l| &mut l.content) {
+                sh.stroke = Some(photocraft_doc::ShapeStroke { width: 20.0, opacity: 0.001, ..Default::default() });
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(doc(&s).pixel_format().sample, sample);
+        let LayerContent::Shape(sh) = &doc(&s).layer(id).unwrap().content else { panic!("shape") };
+        assert_eq!(shape_pixel_bounds(sh, doc(&s).bounds(), sample), Some(expected), "depth {depth}");
+        assert_eq!(align_bounds(doc(&s).layer(id).unwrap(), doc(&s).bounds(), sample), Some(expected), "depth {depth}");
     }
 }
 
@@ -916,6 +996,31 @@ fn group_from_layers_preserves_order() {
     assert_eq!(doc(&s).layers.len(), 4);
     // Both create the group collapsed, as Photoshop does (#5571).
     assert!(matches!(&doc(&s).layer(g).unwrap().content, LayerContent::Group(gr) if !gr.expanded));
+}
+
+/// Artboards are top-level groups; grouping them (now a plain click on the Layers panel's New
+/// Group button with two boards selected) is refused and leaves them as they were.
+#[test]
+fn grouping_artboards_is_refused() {
+    let mut s = session(8);
+    let a = LayerId(s.execute("layer.new.artboard", json!({"rect": [0, 0, 100, 80]})).unwrap()["layer"].as_u64().unwrap());
+    let b = LayerId(s.execute("layer.new.artboard", json!({"rect": [120, 0, 100, 80]})).unwrap()["layer"].as_u64().unwrap());
+    select_all(&mut s, &[a, b]);
+    let before = doc(&s).clone();
+    let err = s.execute("layer.groupLayers", json!({})).unwrap_err();
+    assert!(err.to_string().contains("artboards"), "{err}");
+    assert!(s.execute("layer.groupLayers", json!({"layer": a.0})).is_err(), "one board is refused too");
+    assert_eq!(doc(&s).layers.iter().map(|l| l.id).collect::<Vec<_>>(), before.layers.iter().map(|l| l.id).collect::<Vec<_>>());
+    assert_eq!(doc(&s).artboards().len(), 2);
+    // A layer inside a board still groups, inside its board. (Made with no layer selected: a
+    // new layer with a board selected goes into that board, as in Photoshop.)
+    s.execute("select.deselectLayers", json!({})).unwrap();
+    let inner = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    select_all(&mut s, &[inner]);
+    let c = LayerId(s.execute("layer.new.artboardFromLayers", json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(doc(&s).artboard_of(inner), Some(c));
+    let g = LayerId(s.execute("layer.groupLayers", json!({"layer": inner.0})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(doc(&s).artboard_of(g), Some(c));
 }
 
 #[test]
@@ -1349,6 +1454,93 @@ fn inspect_reports_selection() {
     let v = s.execute("document.inspect", json!({})).unwrap();
     assert_eq!(v["selectedLayers"], json!([a.0, b.0]));
     assert_eq!(v["layers"][0]["selected"], true);
+}
+
+fn link_group(s: &Session, id: LayerId) -> Option<u64> {
+    doc(s).layer(id).unwrap().link_group
+}
+
+/// A and B linked (red blocks), C unlinked: (session, A, B, C, A and B's link group).
+fn linked_pair() -> (Session, LayerId, LayerId, LayerId, Option<u64>) {
+    let mut s = session(8);
+    let a = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    let b = rect_layer(&mut s, Rect::new(10, 0, 15, 5));
+    let c = rect_layer(&mut s, Rect::new(20, 0, 25, 5));
+    select_all(&mut s, &[a, b]);
+    assert_eq!(s.execute("layer.linkLayers", json!({})).unwrap()["linked"], true);
+    let group = link_group(&s, a);
+    assert!(group.is_some() && link_group(&s, b) == group);
+    (s, a, b, c, group)
+}
+
+/// #11217: a copy of one linked layer alone joins its original's link group; copied together with
+/// an unlinked layer it is unlinked (both measured in the reference application). The originals
+/// stay linked.
+#[test]
+fn duplicating_one_linked_layer_keeps_the_copy_in_its_link_group() {
+    let (mut s, a, b, c, group) = linked_pair();
+    // One layer, and with an unlinked layer beside it (several selected).
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    let copy = LayerId(s.execute("layer.duplicate", json!({"inPlace": true})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(link_group(&s, copy), group, "the lone copy joins the originals' link group");
+    select_all(&mut s, &[a, c]);
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    let copies: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
+    assert_eq!(copies.len(), 2);
+    assert!(copies.iter().all(|id| link_group(&s, *id).is_none()), "a lone copy of a group has nothing to stay linked to");
+    assert_eq!((link_group(&s, a), link_group(&s, b), link_group(&s, c)), (group, group, None), "the originals keep their links");
+}
+
+/// #11217 review: copy-dragging layers in the panel goes through `apply_move`, which must
+/// relink its copies the way Duplicate does: a lone copy joins its original's link group, a
+/// copied pair is linked to each other under a fresh group, not to the originals.
+#[test]
+fn copy_dragging_linked_layers_relinks_the_copies() {
+    let (mut s, a, b, c, group) = linked_pair();
+    let r = s.execute("layer.moveTo", json!({"layer": a.0, "target": c.0, "position": "above", "copy": true})).unwrap();
+    let copy = LayerId(r["layer"].as_u64().unwrap());
+    assert_eq!(link_group(&s, copy), group, "the lone copy-dragged copy joins the originals' link group");
+    assert_eq!((link_group(&s, a), link_group(&s, b)), (group, group), "the originals keep their links");
+
+    let r = s.execute("layer.moveTo", json!({"layers": [a.0, b.0], "target": c.0, "position": "above", "copy": true})).unwrap();
+    let copies: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
+    assert_eq!(copies.len(), 2);
+    let fresh = link_group(&s, copies[0]);
+    assert!(fresh.is_some() && fresh != group && link_group(&s, copies[1]) == fresh, "the copied pair is linked to each other under a fresh group");
+    assert_eq!((link_group(&s, a), link_group(&s, b)), (group, group), "the originals keep their links");
+}
+
+/// #11217 review: copies of a linked pair stay linked to each other under a new group, not the
+/// originals', which keep theirs.
+#[test]
+fn duplicating_a_linked_pair_links_the_copies_to_each_other() {
+    let (mut s, a, b, _, group) = linked_pair();
+    select_all(&mut s, &[a, b]);
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    let copies: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
+    assert_eq!(copies.len(), 2);
+    let fresh = link_group(&s, copies[0]);
+    assert!(fresh.is_some() && fresh != group, "a group of their own: {fresh:?} vs {group:?}");
+    assert_eq!(link_group(&s, copies[1]), fresh, "the copies are linked to each other");
+    assert_eq!((link_group(&s, a), link_group(&s, b)), (group, group), "the originals keep theirs");
+    // Moving a copy moves its partner copy only.
+    let (a0, b0) = (bounds(&s, a), bounds(&s, b));
+    s.execute("layer.translate", json!({"layer": copies[0].0, "dx": 3})).unwrap();
+    assert_eq!(bounds(&s, copies[1]), b0.translate(3, 0));
+    assert_eq!((bounds(&s, a), bounds(&s, b)), (a0, b0));
+}
+
+/// #11217: Layer via Copy of one linked layer (no selection) joins its original's link group too
+/// (measured): the same rule as `layer.duplicate`, on its own code path in `layer_via`.
+#[test]
+fn layer_via_copy_of_one_linked_layer_keeps_the_copy_in_its_link_group() {
+    let (mut s, a, b, _, group) = linked_pair();
+    let layers = doc(&s).layers.len();
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    let copy = LayerId(s.execute("layer.new.layerViaCopy", json!({})).unwrap()["layer"].as_u64().unwrap());
+    assert_eq!(doc(&s).layers.len(), layers + 1, "only the active layer is copied");
+    assert_eq!(link_group(&s, copy), group, "the lone copy joins the originals' link group");
+    assert_eq!((link_group(&s, a), link_group(&s, b)), (group, group), "the originals keep their links");
 }
 
 /// #7538: `selection: true` moves the selection with the layers in the same step, as the Move

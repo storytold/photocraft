@@ -57,7 +57,7 @@ impl Mode {
         Mode::ALL.into_iter().find(|m| m.id() == id)
     }
 
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Mode::OnionSkin => tl!("Onion Skin"),
             Mode::MarchingAnts => tl!("Marching Ants"),
@@ -70,7 +70,7 @@ impl Mode {
     }
 
     /// The single-letter key that picks this view.
-    fn key(self) -> egui::Key {
+    pub(crate) fn key(self) -> egui::Key {
         match self {
             Mode::OnionSkin => egui::Key::O,
             Mode::MarchingAnts => egui::Key::M,
@@ -83,7 +83,7 @@ impl Mode {
     }
 
     /// The view's opacity (percent) until it is changed; `None` for views without one.
-    fn default_opacity(self) -> Option<f32> {
+    pub(crate) fn default_opacity(self) -> Option<f32> {
         match self {
             Mode::OnionSkin | Mode::Overlay => Some(50.0),
             Mode::OnBlack | Mode::OnWhite => Some(100.0),
@@ -91,7 +91,7 @@ impl Mode {
         }
     }
 
-    fn next(self) -> Mode {
+    pub(crate) fn next(self) -> Mode {
         let i = Mode::ALL.iter().position(|m| *m == self).unwrap_or(0);
         Mode::ALL.get(i + 1).copied().unwrap_or(Mode::OnionSkin)
     }
@@ -197,10 +197,23 @@ pub fn controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
         fields.insert(field.into(), json!(on));
     }
     ui.label(egui::RichText::new(tl!("F cycles the views; hold X to see the image")).color(t.text_dim).small());
+    // Photoshop's Remember Settings, off by default: the next Select and Mask starts from these
+    // settings instead of the defaults (#9423).
+    let mut remember = remembers(fields);
+    crate::widgets::checkbox(ui, &mut remember, tl!("Remember Settings"));
+    fields.insert(REMEMBER.into(), json!(remember));
     ui.add_space(4.0);
     crate::widgets::hairline(ui);
     ui.add_space(6.0);
     brush_controls(ui, fields);
+}
+
+/// The dialog field behind Remember Settings.
+pub const REMEMBER: &str = "__remember";
+
+/// Whether Remember Settings is on in `fields` (a dialog's, or the remembered ones).
+pub fn remembers(fields: &Map<String, Value>) -> bool {
+    flag(fields, REMEMBER)
 }
 
 /// The Refine Edge Brush (R): painting on the canvas sets where edge refinement happens.
@@ -347,73 +360,126 @@ pub(crate) fn ants(app: &PhotocraftApp, idx: usize) -> Option<Option<(Arc<Docume
     Some(Some((p.result.clone()?, p.key.k)))
 }
 
-/// A one-channel coverage over the canvas: `values` inside `area`, `outside` elsewhere.
+/// Sparse float coverage; quantize only when building a display mask.
 struct Coverage {
-    area: Rect,
-    values: Vec<f32>,
+    values: Surface,
     outside: f32,
 }
 
 impl Coverage {
+    /// Creates an empty coverage buffer with zero outside default.
     fn empty() -> Coverage {
-        Coverage { area: Rect::EMPTY, values: Vec::new(), outside: 0.0 }
+        Coverage { values: Surface::new(PixelFormat::GRAY8.with_sample(photocraft_color::SampleType::F32)), outside: 0.0 }
     }
 
-    /// `s` (a selection or a layer mask) read over the part of `canvas` that isn't its default.
+    /// Reads sparse mask coverage from `s` within `canvas`, preserving shared tile buffers.
     fn read(s: Option<&Surface>, canvas: Rect) -> Coverage {
         let Some(s) = s else { return Coverage::empty() };
         let outside = s.default_pixel().first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
-        let area = if outside == 0.0 { s.content_bounds().intersect(&canvas) } else { canvas };
-        Coverage { area, values: photocraft_algo::selection::mask_from_surface(Some(s), area), outside }
+        let mut out = Coverage { values: Surface::with_default(PixelFormat::GRAY8.with_sample(photocraft_color::SampleType::F32), &[outside]), outside };
+        let mut converted = std::collections::HashMap::new();
+        for (tc, tile) in s.tiles() {
+            let area = tc.rect().intersect(&canvas);
+            if area.is_empty() {
+                continue;
+            }
+            let key = Arc::as_ptr(tile) as usize;
+            if area == tc.rect()
+                && let Some(shared) = converted.get(&key)
+            {
+                out.values.put_tiles([(*tc, Arc::clone(shared))]);
+                continue;
+            }
+            let data = photocraft_algo::selection::mask_from_surface(Some(s), area);
+            out.values.write_region(area, &data);
+            if area == tc.rect()
+                && let Some(shared) = out.values.tile(*tc)
+            {
+                converted.insert(key, shared.clone());
+            }
+        }
+        out
     }
 
-    /// The band `r` px either side of the edge of `s`: where grown and shrunk coverage differ.
+    /// Computes the morphological edge band of `s` within `canvas` with radius `r`.
     fn edge_band(s: Option<&Surface>, canvas: Rect, r: usize) -> Coverage {
         let Some(s) = s else { return Coverage::empty() };
         let reach = i32::try_from(r).unwrap_or(i32::MAX).saturating_add(1);
         let outside = s.default_pixel().first().copied().unwrap_or(0.0);
         let area = if outside == 0.0 { s.content_bounds().inflate(reach).intersect(&canvas) } else { canvas };
-        let (w, h) = (area.width() as usize, area.height() as usize);
-        let values = photocraft_algo::selection::mask_from_surface(Some(s), area);
-        let grown = photocraft_algo::matting::morph(&values, w, h, r, true);
-        let shrunk = photocraft_algo::matting::morph(&values, w, h, r, false);
-        if grown.len() != values.len() || shrunk.len() != values.len() {
-            return Coverage::empty();
+        let mut candidates = std::collections::BTreeSet::new();
+        for (tc, _) in s.tiles() {
+            candidates.extend(tc.rect().inflate(reach).intersect(&area).tiles());
         }
-        Coverage { area, values: grown.iter().zip(&shrunk).map(|(g, s)| (g - s).clamp(0.0, 1.0)).collect(), outside: 0.0 }
+        let mut out = Coverage::empty();
+        for tc in candidates {
+            let core = tc.rect().intersect(&area);
+            let input = core.inflate(reach).intersect(&area);
+            let (w, h) = (input.width() as usize, input.height() as usize);
+            let values = photocraft_algo::selection::mask_from_surface(Some(s), input);
+            let grown = photocraft_algo::matting::morph(&values, w, h, r, true);
+            let shrunk = photocraft_algo::matting::morph(&values, w, h, r, false);
+            for y in core.y0..core.y1 {
+                for x in core.x0..core.x1 {
+                    let i = (y - input.y0) as usize * w + (x - input.x0) as usize;
+                    if let (Some(g), Some(s)) = (grown.get(i), shrunk.get(i)) {
+                        let v = (g - s).clamp(0.0, 1.0);
+                        if v != 0.0 {
+                            out.values.write_pixel(x, y, &[v]);
+                        }
+                    }
+                }
+            }
+        }
+        out
     }
 
-    /// Coverage at canvas pixel `(x, y)`.
+    /// Returns the coverage value at canvas coordinate `(x, y)`.
     fn at(&self, x: i32, y: i32) -> f32 {
-        if !self.area.contains(x, y) {
-            return self.outside;
-        }
-        let i = (y - self.area.y0) as usize * self.area.width() as usize + (x - self.area.x0) as usize;
-        self.values.get(i).copied().unwrap_or(self.outside)
+        self.values.sample_channel(x, y, 0)
     }
 
-    /// The edge band as the Refine Edge Brush changes it: painted areas join it, restored ones
-    /// leave it.
-    fn with_brush(self, brush: Option<&photocraft_algo::matting::EdgeBrush>, canvas: Rect) -> Coverage {
+    /// Blends painted brush additions and restorations into the coverage buffer.
+    fn with_brush(mut self, brush: Option<&photocraft_algo::matting::EdgeBrush>, canvas: Rect) -> Coverage {
         let Some(brush) = brush else { return self };
-        let area = self.area.union(&brush.bounds()).intersect(&canvas);
-        let values = (area.y0..area.y1)
-            .flat_map(|y| (area.x0..area.x1).map(move |x| (x, y)))
-            .map(|(x, y)| {
-                let (v, b) = (self.at(x, y), brush.at(x, y));
-                if b >= 0.0 { v.max(b) } else { v * (1.0 + b) }
-            })
-            .collect();
-        Coverage { area, values, outside: self.outside }
+        for tc in brush.tile_coords() {
+            let area = tc.rect().intersect(&canvas);
+            for y in area.y0..area.y1 {
+                for x in area.x0..area.x1 {
+                    let b = brush.at(x, y);
+                    if b == 0.0 {
+                        continue;
+                    }
+                    let v = self.at(x, y);
+                    let value = if b >= 0.0 { v.max(b) } else { v * (1.0 + b) };
+                    self.values.write_pixel(x, y, &[value]);
+                }
+            }
+        }
+        self
     }
 
-    /// A GRAY8 mask surface holding `f(coverage)`.
+    /// Converts float coverage to an 8-bit GRAY8 surface using mapping function `f`.
     fn surface(&self, f: impl Fn(f32) -> f32) -> Surface {
         let g = |v: f32| f(v).clamp(0.0, 1.0);
         let mut s = Surface::with_default(PixelFormat::GRAY8, &[g(self.outside)]);
-        if !self.area.is_empty() && self.values.len() == self.area.width() as usize * self.area.height() as usize {
-            let bytes: Vec<u8> = self.values.iter().map(|v| (g(*v) * 255.0).round() as u8).collect();
-            s.write_interleaved(self.area, &bytes);
+        let default = s.default_bytes().first().copied().unwrap_or(0);
+        let mut converted: std::collections::HashMap<usize, Option<Arc<photocraft_raster::Tile>>> = std::collections::HashMap::new();
+        for (tc, tile) in self.values.tiles() {
+            let key = Arc::as_ptr(tile) as usize;
+            if let Some(shared) = converted.get(&key) {
+                if let Some(shared) = shared {
+                    s.put_tiles([(*tc, shared.clone())]);
+                }
+                continue;
+            }
+            let bytes: Vec<u8> = self.values.read_region(tc.rect()).iter().map(|v| (g(*v) * 255.0).round() as u8).collect();
+            if bytes.iter().all(|v| *v == default) {
+                converted.insert(key, None);
+            } else {
+                s.write_interleaved(tc.rect(), &bytes);
+                converted.insert(key, s.tile(*tc).cloned());
+            }
         }
         s
     }
@@ -425,6 +491,10 @@ struct View {
     opacity: f32,
     show_edge: bool,
     show_original: bool,
+    /// Overlay's colour (Photoshop's default rubylith red) and whether it marks the selected
+    /// areas rather than the masked ones.
+    color: Color,
+    selected: bool,
 }
 
 impl View {
@@ -436,6 +506,16 @@ impl View {
             opacity: v.and_then(|v| v.get("opacity")).and_then(Value::as_f64).filter(|o| o.is_finite()).unwrap_or(0.5).clamp(0.0, 1.0) as f32,
             show_edge: b("showEdge"),
             show_original: b("showOriginal"),
+            color: v
+                .and_then(|v| v.get("color"))
+                .and_then(Value::as_array)
+                .filter(|c| c.len() == 3)
+                .and_then(|c| {
+                    let ch = |i: usize| c.get(i).and_then(Value::as_f64).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0) as f32);
+                    Some(Color::rgb(ch(0)?, ch(1)?, ch(2)?))
+                })
+                .unwrap_or(Color::rgb(1.0, 0.0, 0.0)),
+            selected: v.and_then(|v| v.get("indicates")).and_then(Value::as_str) == Some("selected"),
         }
     }
 }
@@ -448,16 +528,31 @@ fn length(params: &Value, key: &str, k: u32) -> f64 {
 /// The preview of the Select and Mask dialog for `doc`: the proxy reduced by `k`, shown in the
 /// requested view. `None` when the refinement fails or is cancelled.
 pub fn preview_document(doc: &Document, active: Option<LayerId>, params: &Value, k: u32, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Option<Document> {
+    let k = k.max(1);
+    preview_proxy(crate::proxy::proxy_document(doc, k), active, params, k, cancel)
+}
+
+/// [`preview_document`] on `proxy`, the document already reduced by `k` (the Select and Mask
+/// workspace builds it itself, its selection already carrying the workspace's tool edits).
+pub fn preview_proxy(
+    mut proxy: Document,
+    active: Option<LayerId>,
+    params: &Value,
+    k: u32,
+    cancel: Option<&photocraft_engine::jobs::JobCtx>,
+) -> Option<Document> {
     let view = View::of(params);
     let k = k.max(1);
-    let mut proxy = crate::proxy::proxy_document(doc, k);
     let active = active.filter(|id| proxy.layer(*id).is_some());
     // What Select and Mask starts from: the selection, else the active layer's mask.
     let original = proxy.selection.clone().or_else(|| active.and_then(|id| proxy.layer(id)).and_then(|l| l.mask.as_ref()).map(|m| m.surface.clone()));
     let canvas = Rect::new(0, 0, i32::try_from(proxy.size.width).unwrap_or(i32::MAX), i32::try_from(proxy.size.height).unwrap_or(i32::MAX));
     let coverage = if view.show_edge {
         let band = Coverage::edge_band(original.as_ref(), canvas, length(params, "radius", k).round().clamp(1.0, 250.0) as usize);
-        band.with_brush(scaled_strokes(params, k).as_ref().and_then(|s| photocraft_algo::matting::EdgeBrush::new(s, canvas)).as_ref(), canvas)
+        // With nothing selected OK refines nothing (`matting::refine_area`), so the brush shows nothing either.
+        let selects = original.as_ref().is_some_and(|s| !s.content_bounds().intersect(&canvas).is_empty());
+        let brush = if selects { scaled_strokes(params, k).and_then(|s| photocraft_algo::matting::EdgeBrush::new(&s, canvas)) } else { None };
+        band.with_brush(brush.as_ref(), canvas)
     } else if view.show_original {
         Coverage::read(original.as_ref(), canvas)
     } else {
@@ -546,7 +641,10 @@ fn show(doc: &mut Document, active: Option<LayerId>, view: &View, coverage: &Cov
     doc.selection = Some(coverage.surface(|v| v));
     match view.mode {
         Mode::MarchingAnts => {}
-        Mode::Overlay => doc.layers.push(veil("Overlay", Color::rgb(1.0, 0.0, 0.0), o, Some(coverage.surface(|v| 1.0 - v)))),
+        Mode::Overlay => {
+            let marked = if view.selected { coverage.surface(|v| v) } else { coverage.surface(|v| 1.0 - v) };
+            doc.layers.push(veil("Overlay", view.color, o, Some(marked)));
+        }
         Mode::OnBlack => doc.layers.push(veil("On Black", Color::BLACK, o, Some(coverage.surface(|v| 1.0 - v)))),
         Mode::OnWhite => doc.layers.push(veil("On White", Color::WHITE, o, Some(coverage.surface(|v| 1.0 - v)))),
         Mode::BlackWhite => {
@@ -692,6 +790,24 @@ mod tests {
         assert!(pixel(&edge, 35, 10)[0] > 0.99 && pixel(&edge, 55, 10)[0] < 0.01, "Show Edge includes the painted area");
     }
 
+    /// Overlay takes Photoshop's colour swatch and Indicates: the masked (default) or the selected
+    /// areas carry the tint.
+    #[test]
+    fn overlay_colour_and_what_it_indicates() {
+        let doc = half_selected();
+        let active = doc.layers.first().map(|l| l.id);
+        let near = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.02);
+        let view = |indicates: &str| json!({"__view": {"mode": "overlay", "opacity": 1.0, "color": [0.0, 0.0, 1.0], "indicates": indicates}});
+        let masked = preview_document(&doc, active, &view("masked"), 1, None).expect("a preview");
+        assert!(near(&pixel(&masked, 35, 10), &[0.0, 0.0, 1.0, 1.0]) && near(&pixel(&masked, 5, 10), &[1.0, 1.0, 1.0, 1.0]));
+        let selected = preview_document(&doc, active, &view("selected"), 1, None).expect("a preview");
+        assert!(near(&pixel(&selected, 5, 10), &[0.0, 0.0, 1.0, 1.0]) && near(&pixel(&selected, 35, 10), &[1.0, 1.0, 1.0, 1.0]));
+        // A hostile colour falls back to red.
+        let bad = json!({"__view": {"mode": "overlay", "opacity": 1.0, "color": ["x", 2, null]}});
+        let red = preview_document(&doc, active, &bad, 1, None).expect("a preview");
+        assert!(near(&pixel(&red, 35, 10), &[1.0, 0.0, 0.0, 1.0]));
+    }
+
     /// Show Edge shows the band around the selection's edge; Show Original the unrefined selection.
     #[test]
     fn show_edge_and_show_original() {
@@ -705,4 +821,66 @@ mod tests {
         let shown = preview_document(&doc, active, &original, 1, None).expect("a preview");
         assert!(pixel(&shown, 19, 10)[0] > 0.99 && pixel(&shown, 21, 10)[0] < 0.01, "the selection as it was");
     }
+}
+
+#[test]
+fn sparse_edge_band_matches_dense_reference_at_canvas_edges_and_default_holes() {
+    let canvas = Rect::new(0, 0, 540, 300);
+    let mut mask = Surface::with_default(PixelFormat::GRAY8, &[1.0]);
+    mask.fill_rect(Rect::new(0, 0, 7, 18), &[0.0]);
+    mask.fill_rect(Rect::new(240, 100, 270, 280), &[0.0]);
+    mask.fill_rect(Rect::new(20, 0, 24, 5), &[0.0]);
+    let sparse = Coverage::edge_band(Some(&mask), canvas, 2);
+    let input = photocraft_algo::selection::mask_from_surface(Some(&mask), canvas);
+    let w = canvas.width() as usize;
+    let h = canvas.height() as usize;
+    let grown = photocraft_algo::matting::morph(&input, w, h, 2, true);
+    let shrunk = photocraft_algo::matting::morph(&input, w, h, 2, false);
+    for y in canvas.y0..canvas.y1 {
+        for x in canvas.x0..canvas.x1 {
+            let i = y as usize * w + x as usize;
+            let want = (grown[i] - shrunk[i]).clamp(0.0, 1.0);
+            assert!((sparse.at(x, y) - want).abs() < 1e-6, "({x},{y})");
+        }
+    }
+    assert_eq!(sparse.values.sample_channel(0, 0, 0), sparse.at(0, 0));
+    let display = sparse.surface(|v| v);
+    assert_eq!(display.sample_channel(0, 0, 0), (sparse.at(0, 0) * 255.0).round() / 255.0);
+    assert_eq!(sparse.values.tile_count(), display.tile_count());
+}
+
+#[test]
+fn sparse_brush_dabs_bound_tiles_and_apply_add_restore_formula() {
+    let canvas = Rect::new(0, 0, 100_000, 32);
+    let mut base = Surface::with_default(PixelFormat::GRAY8.with_sample(photocraft_color::SampleType::F32), &[0.25]);
+    base.fill_rect(Rect::new(100, 10, 104, 14), &[0.6]);
+    let coverage = Coverage::read(Some(&base), canvas);
+    let strokes = [
+        photocraft_algo::matting::EdgeStroke { points: vec![(101.5, 11.5)], size: 4.0, add: true },
+        photocraft_algo::matting::EdgeStroke { points: vec![(99_001.5, 11.5)], size: 4.0, add: false },
+    ];
+    let brush = photocraft_algo::matting::EdgeBrush::new(&strokes, canvas).expect("dabs paint");
+    let brush_tiles = brush.tile_coords().count();
+    assert!(brush_tiles <= 4, "distant dabs allocated {brush_tiles} tiles");
+    let original = Coverage::read(Some(&base), canvas);
+    let result = coverage.with_brush(Some(&brush), canvas);
+    assert!(result.values.tile_count() <= original.values.tile_count() + brush_tiles);
+    for (x, b) in [(101, brush.at(101, 11)), (99_001, brush.at(99_001, 11))] {
+        let v = original.at(x, 11);
+        let want = if b >= 0.0 { v.max(b) } else { v * (1.0 + b) };
+        assert!((result.at(x, 11) - want).abs() < 1e-6, "x={x}, brush={b}");
+    }
+}
+
+#[test]
+fn preview_conversion_preserves_shared_solid_tiles() {
+    let canvas = Rect::new(0, 0, 2048, 1024);
+    let mut selection = Surface::new(PixelFormat::GRAY8);
+    selection.fill_rect(canvas, &[1.0]);
+    let coverage = Coverage::read(Some(&selection), canvas);
+    let display = coverage.surface(|v| v);
+    let a = photocraft_geom::TileCoord::new(0, 0);
+    let b = photocraft_geom::TileCoord::new(3, 2);
+    assert!(Arc::ptr_eq(coverage.values.tile(a).unwrap(), coverage.values.tile(b).unwrap()));
+    assert!(Arc::ptr_eq(display.tile(a).unwrap(), display.tile(b).unwrap()));
 }

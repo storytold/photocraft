@@ -16,8 +16,10 @@ pub use panel_state::{
 };
 pub use tool::Tool;
 pub use tool_options::{SampleAllLayers, ToolOptions};
-use tool_options::{default_brush_tool, default_layer_filter_mode, yes};
-pub use transform::{BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeTransform};
+use tool_options::{default_brush_tool, default_layer_filter_mode, layer_filter_mode_or_normal, yes};
+pub use transform::{
+    BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Panels {
@@ -63,6 +65,26 @@ pub struct Panels {
     /// floating window rather than a modal so the canvas stays usable while a gradient is edited.
     #[serde(default)]
     pub gradient_editor: bool,
+    /// Window › Contextual Task Bar (#10890): the small floating bar under the Crop tool's frame
+    /// (`crop_task_bar`). Its ⋯ menu's Hide bar clears it too.
+    #[serde(default = "yes")]
+    pub context_task_bar: bool,
+    /// Where that bar sits: following its frame, or dragged or pinned (`widgets::task_bar`).
+    #[serde(default)]
+    pub task_bar: TaskBarPlace,
+}
+
+/// Where the contextual task bar sits (#10890). Part of [`Panels`], so it is kept with the panel
+/// layout across restarts, and `ui.set {panels: {task_bar: …}}` sets it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct TaskBarPlace {
+    /// Pin bar position: the bar stays where it is while its frame changes.
+    #[serde(default)]
+    pub pinned: bool,
+    /// The bar's top-left corner in points from the canvas area's top-left, once it was dragged
+    /// by its grip or pinned; `None` follows the frame. Reset bar position clears both.
+    #[serde(default)]
+    pub at: Option<[f32; 2]>,
 }
 
 impl Default for Panels {
@@ -86,6 +108,8 @@ impl Default for Panels {
             rail: true,
             menu_bar: true,
             gradient_editor: false,
+            context_task_bar: true,
+            task_bar: TaskBarPlace::default(),
         }
     }
 }
@@ -188,6 +212,12 @@ pub struct DocWindow {
     pub document: usize,
     pub view: View,
     pub open: bool,
+    /// This window owns the document's view; the document is removed from the main canvas.
+    #[serde(default)]
+    pub floating: bool,
+    /// Transient focus edge used to activate the document once when this viewport gains focus.
+    #[serde(skip)]
+    pub focused: bool,
     /// Where the window opens on screen (outer top-left, in points); `None` lets the OS place it.
     /// A tab dragged off the tab strip opens its window where it was dropped (#3733).
     #[serde(default)]
@@ -197,8 +227,11 @@ pub struct DocWindow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
-    /// The last tool used in each shortcut group (the tools sharing a key, [`Tool::key`]), at most
-    /// one per group: the group's key brings it back, as in Photoshop (#2608).
+    /// The tools used so far, most recent first and each one once. The first tool of a shortcut
+    /// group (the tools sharing a key, [`Tool::key`]) is the one its key brings back, and the first
+    /// tool of a toolbar slot is the one the slot shows, as in Photoshop (#2608, #3569). One list
+    /// answers both because they don't line up: the Marquee slot holds tools with and without a
+    /// key, the Hand slot two keys. Kept between launches in `Preferences::group_tools`.
     #[serde(default)]
     pub group_tools: Vec<Tool>,
     /// A tool letter still held (spring-loaded tool, #2672): the tool to give back on release.
@@ -215,6 +248,14 @@ pub struct UiState {
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
+    /// Whether the text being edited overflows its paragraph box (the box's lower-right handle
+    /// shows the overflow "+").
+    /// Read by automation while a session edits that box; never written to settings.
+    #[serde(skip)]
+    pub type_box_overflow: bool,
+    /// Font for subsequent typing at this caret, separate from existing character runs.
+    #[serde(default)]
+    pub type_insertion_style: Option<TypeInsertionStyle>,
     /// Clock time in seconds when type cursor blink was last reset (e.g. on keypress/caret move).
     #[serde(skip)]
     pub caret_blink_time: f64,
@@ -273,6 +314,13 @@ pub struct UiState {
     /// its screen position (points).
     #[serde(default)]
     pub brush_picker: Option<[f32; 2]>,
+    /// The painting tools' Shift+right-click menu (Edit Brush… and the tool's Mode list,
+    /// `crate::brush_mode_menu`): screen position in points.
+    #[serde(default)]
+    pub brush_mode_menu: Option<[f32; 2]>,
+    /// The tool whose Shift+right-click menu is open: another tool closes it.
+    #[serde(default)]
+    pub brush_mode_menu_tool: Option<Tool>,
     /// The Brush Preset picker's preset list: search, collapsed groups, view, a rename in progress.
     #[serde(default = "crate::brush_picker::list_state")]
     pub brush_picker_list: crate::brush_panel::BrushesPanelState,
@@ -280,6 +328,10 @@ pub struct UiState {
     /// ([`crate::brush_picker::DEFAULT_SIZE`] before that).
     #[serde(default)]
     pub brush_picker_size: Option<[f32; 2]>,
+    /// Photoshop's HUD Color Picker (#6098), open while Shift+Alt+right-click is held on the
+    /// canvas with a painting tool (`crate::color_hud`).
+    #[serde(default)]
+    pub color_hud: Option<crate::color_hud::Hud>,
     /// Layers under the pointer, listed by a right-click on the canvas with the Move tool or
     /// ⌘/Ctrl+right-click with any tool (`layer_pick_ui`, #307).
     #[serde(default)]
@@ -311,12 +363,23 @@ pub struct UiState {
     /// A live rectangle's corner radius widget being dragged (TOOL-214-12).
     #[serde(skip)]
     pub corner_radius: Option<crate::corner_radius::Drag>,
+    /// The bounding box of several selected shape layers, a handle being dragged.
+    #[serde(skip)]
+    pub shape_box: Option<crate::shape_bounds_box::Drag>,
     /// Selected row in the Paths panel ("work" or a saved path name).
     #[serde(default)]
     pub selected_path: Option<String>,
+    /// The document and Work Path deselected by making a selection from it with the Pen or Path
+    /// Selection tool (#6079): the canvas hides that path until a path is selected again or the
+    /// Work Path changes.
+    #[serde(default)]
+    pub hidden_work_path: Option<(u64, photocraft_doc::Path)>,
     /// Layers panel kind filter ("pixel", "adjustment", "type", "shape", "smart"); empty = all.
     #[serde(default)]
     pub layer_filter: Vec<String>,
+    /// Layers panel Smart Object filter ("linked", "missing", "embedded"); empty = all.
+    #[serde(default)]
+    pub layer_filter_smart: Vec<String>,
     /// Thumbnail dimensions, content cropping and filter-strip visibility.
     #[serde(default)]
     pub layers_panel_options: LayersPanelOptions,
@@ -330,8 +393,17 @@ pub struct UiState {
     #[serde(default)]
     pub layer_filter_name: String,
     /// Layers panel blend-mode filter.
-    #[serde(default = "default_layer_filter_mode")]
+    #[serde(default = "default_layer_filter_mode", deserialize_with = "layer_filter_mode_or_normal")]
     pub layer_filter_mode: photocraft_color::BlendMode,
+    /// Layers panel effect filter (#10880).
+    #[serde(default)]
+    pub layer_filter_effect: crate::layer_filter_ui::effect::EffectKind,
+    /// Layers panel attribute filter (#10881).
+    #[serde(default)]
+    pub layer_filter_attribute: crate::layer_filter_ui::attribute::Attribute,
+    /// Layers panel colour filter (#5898): the label colour listed (None: layers without one).
+    #[serde(default)]
+    pub layer_filter_color: photocraft_doc::LabelColor,
     /// Actions panel: which row is selected and which are expanded. The list lives on the session.
     #[serde(default)]
     pub actions: crate::actions::ActionsUi,
@@ -358,6 +430,10 @@ pub struct UiState {
     /// Frame tool (see `frame_tool`).
     #[serde(default)]
     pub frame_tool: crate::frame_tool::FrameToolUi,
+    /// The contextual task bar as drawn in the last frame: its screen rect `[x0, y0, x1, y1]` in
+    /// points, `None` while no bar shows (`ui.inspect` › `taskBar`).
+    #[serde(skip)]
+    pub task_bar_shown: Option<[f32; 4]>,
     /// Artboard tool (see `artboard_tool`).
     pub artboard_tool: crate::artboard_tool::ArtboardToolUi,
     /// Modifier Keys panel, custom pixel aspect ratios, workspace dialogs (see `workspace_ui`).
@@ -403,6 +479,10 @@ pub struct UiState {
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
+    /// The Color panel options as last synced with the preferences: a stored value that differs
+    /// from it was changed outside the panel (`prefs.set`, a reset) and is taken, not overwritten.
+    #[serde(skip)]
+    pub color_panel_synced: Option<serde_json::Value>,
     /// Histogram panel options: view, channel, statistics, colours, source.
     #[serde(default)]
     pub histogram_panel: crate::histogram_panel::HistogramPanelState,
@@ -483,12 +563,14 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            tool: Tool::Brush,
+            tool: Tool::Move,
             group_tools: Vec::new(),
             spring: None,
             recent_files: Vec::new(),
             recent_fonts: Vec::new(),
             text_edit: None,
+            type_box_overflow: false,
+            type_insertion_style: None,
             caret_blink_time: 0.0,
             text_edit_return_tool: None,
             type_transform: None,
@@ -503,8 +585,11 @@ impl Default for UiState {
             filter_mask_target: None,
             properties_layer: None,
             brush_picker: None,
+            brush_mode_menu: None,
+            brush_mode_menu_tool: None,
             brush_picker_list: crate::brush_picker::list_state(),
             brush_picker_size: None,
+            color_hud: None,
             layer_menu: None,
             canvas_tool_menu: None,
             selected_guide: None,
@@ -524,9 +609,11 @@ impl Default for UiState {
             timeline: Default::default(),
             slices: Default::default(),
             frame_tool: Default::default(),
+            task_bar_shown: None,
             artboard_tool: Default::default(),
             shell: Default::default(),
             layer_filter: Vec::new(),
+            layer_filter_smart: Vec::new(),
             layers_panel_options: LayersPanelOptions::default(),
             histogram_panel: Default::default(),
             histogram_range: None,
@@ -534,12 +621,17 @@ impl Default for UiState {
             layer_filter_by: Default::default(),
             layer_filter_name: String::new(),
             layer_filter_mode: default_layer_filter_mode(),
+            layer_filter_effect: Default::default(),
+            layer_filter_attribute: Default::default(),
+            layer_filter_color: Default::default(),
             pen: None,
             pen_doc: None,
             stroke_editor: None,
             direct_selection: Default::default(),
             corner_radius: None,
+            shape_box: None,
             selected_path: None,
+            hidden_work_path: None,
             panels: Panels::default(),
             views: Vec::new(),
             dialogs: Vec::new(),
@@ -556,6 +648,7 @@ impl Default for UiState {
             docking_collapsed: Vec::new(),
             docking_reveal: None,
             color_panel: Default::default(),
+            color_panel_synced: None,
             brush_section: 0,
             brush_tab: 0,
             brushes_panel: Default::default(),
@@ -585,16 +678,16 @@ impl Default for UiState {
 }
 
 impl UiState {
-    /// Records the current tool as the last one used in its shortcut group.
-    pub fn remember_group_tool(&mut self) {
-        let tool = self.tool;
-        if !self.group_tools.contains(&tool) {
-            self.group_tools.retain(|t| t.key() != tool.key());
-            self.group_tools.push(tool);
+    /// Records `tool` as the last one used in its shortcut group and toolbar slot.
+    pub fn remember_group_tool(&mut self, tool: Tool) {
+        if self.group_tools.first() != Some(&tool) {
+            self.group_tools.retain(|t| *t != tool);
+            self.group_tools.insert(0, tool);
         }
     }
 
     /// The last tool used in the shortcut group of `key`, if any.
+    #[cfg(test)]
     pub fn group_tool(&self, key: char) -> Option<Tool> {
         self.group_tools.iter().copied().find(|t| t.key() == key)
     }
@@ -651,6 +744,11 @@ mod tests {
 
     #[test]
     fn tool_names_parse() {
+        basic_and_retouch_tool_names_parse();
+        vector_tool_names_parse();
+    }
+
+    fn basic_and_retouch_tool_names_parse() {
         assert_eq!(Tool::from_name("brush"), Some(Tool::Brush));
         assert_eq!(Tool::from_name("Rect"), Some(Tool::RectMarquee));
         assert_eq!(Tool::from_name("RectMarquee"), Some(Tool::RectMarquee));
@@ -669,13 +767,16 @@ mod tests {
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
         assert_eq!(Tool::ALL.len(), 68);
+    }
+
+    fn vector_tool_names_parse() {
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));
-        assert_eq!(Tool::DeleteAnchorPoint.key(), 'P');
+        assert_eq!(Tool::DeleteAnchorPoint.key(), ' ');
         assert_eq!(Tool::from_name("convertPoint"), Some(Tool::ConvertPoint));
         assert_eq!(Tool::from_name("Convert Point Tool"), Some(Tool::ConvertPoint));
-        assert_eq!(Tool::ConvertPoint.key(), 'P', "it shares the Pen's key");
+        assert_eq!(Tool::ConvertPoint.key(), ' ', "P never reaches it");
         assert!(!Tool::ConvertPoint.is_brushlike());
         assert_eq!(Tool::from_name("Remove Tool"), Some(Tool::Remove));
         assert_eq!(Tool::Remove.key(), 'J');
@@ -726,7 +827,7 @@ mod tests {
     fn ui_state_serializes() {
         let s = UiState::default();
         let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["tool"], "Brush");
+        assert_eq!(v["tool"], "Move");
         let back: UiState = serde_json::from_value(v).unwrap();
         assert_eq!(back, s);
     }

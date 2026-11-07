@@ -1,15 +1,30 @@
 use super::selection::{reselect, selected, top_level};
-use super::*;
+use super::{Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, Result, Session, Value, bad, json};
 
 // ---------- structural commands ----------
 
-pub(super) fn link_layers(s: &mut Session) -> Result<Value> {
+/// Set an explicit link state idempotently, or toggle when omitted, with singleton cleanup and Undo.
+pub(super) fn link_layers(s: &mut Session, p: &Value) -> Result<Value> {
+    let requested = match p.get("linked") {
+        None => None,
+        Some(Value::Bool(value)) => Some(*value),
+        Some(_) => return Err(bad("layer.linkLayers", "`linked` must be true or false")),
+    };
     let sel = selected(s);
-    let linked = s.edit("Link Layers", |doc, _| {
-        let groups: Vec<Option<u64>> = sel.iter().map(|id| doc.layer(*id).and_then(|l| l.link_group)).collect();
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
+    let groups = sel.iter().map(|id| doc.layer(*id).map(|l| l.link_group).ok_or(EngineError::NoLayer(*id))).collect::<Result<Vec<_>>>()?;
+    let first = groups.first().copied().flatten();
+    let same_group = first.is_some() && groups.iter().all(|group| *group == first);
+    // A recorded Link/Unlink is an operation, not the UI's state-dependent toggle.
+    // An explicit repeat must neither allocate a group nor add an undo entry.
+    let linked_group = same_group && doc.walk().iter().filter(|(_, _, layer)| layer.link_group == first).take(2).count() == 2;
+    if requested == Some(true) && linked_group || requested == Some(false) && groups.iter().all(Option::is_none) {
+        return Ok(json!({"linked": requested == Some(true)}));
+    }
+    let label = if requested == Some(false) { "Unlink Layers" } else { "Link Layers" };
+    let linked = s.edit(label, |doc, _| {
         // Already one link group (or a single linked layer): unlink, like Photoshop's toggle.
-        let first = groups.first().copied().flatten();
-        let unlink = first.is_some() && groups.iter().all(|g| *g == first);
+        let unlink = requested.map_or(same_group, |linked| !linked) || sel.len() < 2;
         // A loaded file can store any id up to u64::MAX, so the new id must not be a bare
         // max + 1 (#961). Unlinking needs no new id at all.
         let next = if unlink { None } else { Some(doc.unused_link_group().ok_or_else(|| bad("layer.linkLayers", "no free link group id is left"))?) };
@@ -59,9 +74,10 @@ pub(super) fn rename_layer(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).filter(|n| !n.trim().is_empty()).ok_or_else(|| bad("layer.renameLayer", "missing `name`"))?.to_string();
     let id = crate::commands::layer_param(s, p)?;
     s.edit("Rename Layer", |doc, _| {
-        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name = name;
+        doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.name.clone_from(&name);
         Ok(())
     })?;
+    crate::type_cmds::note_typed_name(s, id, &name);
     Ok(Value::Null)
 }
 
@@ -97,7 +113,7 @@ pub(crate) fn check_group_depth(doc: &Document, what: &str) -> Result<()> {
 
 /// Group Layers (⌘G) / Group from Layers: the explicit layer, or every selected layer, moves
 /// into a new, collapsed group placed where the top-most of them was. Bottom-to-top order is
-/// preserved.
+/// preserved. The New Group dialog's colour, mode and opacity are set in the same history step.
 pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = match crate::commands::explicit_layer(s, p)? {
         Some(id) => vec![id],
@@ -106,11 +122,15 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
     if ids.is_empty() {
         return Err(EngineError::Other("no layer selected".into()));
     }
-    let name = p.get("name").and_then(Value::as_str).map(str::to_string);
+    let opts = crate::group_options::GroupOptions::parse("layer.groupLayers", p)?;
     let gid = s.edit("Group Layers", |doc, active| {
         let ids = top_level(doc, &ids);
+        // Artboards stay at the top level: inside a group they would stop being boards.
+        if ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some())) {
+            return Err(EngineError::Other("artboards can't go into a group".into()));
+        }
         let top = *ids.last().ok_or(EngineError::NoLayer(LayerId(0)))?;
-        let name = name.unwrap_or_else(|| doc.next_layer_name("Group"));
+        let name = opts.name.clone().unwrap_or_else(|| doc.next_layer_name("Group"));
         // Photoshop creates the group collapsed, so the panel shows one row in place of the layers.
         let mut group = Layer::group(name, vec![]);
         if let LayerContent::Group(g) = &mut group.content {
@@ -121,7 +141,9 @@ pub fn group_layers(s: &mut Session, p: &Value) -> Result<Value> {
         for id in &ids {
             children.push(doc.remove(*id).ok_or(EngineError::NoLayer(*id))?);
         }
-        *doc.layer_mut(gid).and_then(Layer::children_mut).ok_or(EngineError::NoLayer(gid))? = children;
+        let group = doc.layer_mut(gid).ok_or(EngineError::NoLayer(gid))?;
+        *group.children_mut().ok_or(EngineError::NoLayer(gid))? = children;
+        opts.apply(group);
         check_group_depth(doc, "Group Layers")?;
         *active = Some(gid);
         Ok(gid)
@@ -266,6 +288,7 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
             }
             copies.push(nid);
         }
+        relink_copies(doc, &copies)?;
         let a = new_active.or(copies.last().copied());
         *active = a;
         Ok((copies, a))
@@ -275,10 +298,53 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
     Ok(json!({"layers": out, "layer": active.map(|l| l.0)}))
 }
 
+/// Link groups of fresh copies, as the reference application does (measured, #11217): a copy of
+/// one layer alone (Duplicate, Layer via Copy) joins its original's link group. With several
+/// layers copied, the copies of several layers of one link group are linked to each other under a
+/// group of their own, as `layer_copy_cmds::adapt_copies` remaps copies landing in another
+/// document, and a copy that is the only one from its link group is unlinked. `copies` are the
+/// copies just inserted in `doc` (the layers in copied groups are remapped with them); the
+/// originals keep their groups.
+pub(crate) fn relink_copies(doc: &mut Document, copies: &[LayerId]) -> Result<()> {
+    // One layer copied on its own keeps the link group it was copied with.
+    if let [only] = copies
+        && doc.layer(*only).is_some_and(|l| !matches!(l.content, LayerContent::Group(_)))
+    {
+        return Ok(());
+    }
+    // Every copied layer with the link group it was copied with. An explicit stack rather than
+    // recursion: documents can nest deeply.
+    let mut linked: Vec<(LayerId, u64)> = Vec::new();
+    let mut stack: Vec<&Layer> = copies.iter().filter_map(|id| doc.layer(*id)).collect();
+    while let Some(l) = stack.pop() {
+        if let Some(group) = l.link_group {
+            linked.push((l.id, group));
+        }
+        if let LayerContent::Group(g) = &l.content {
+            stack.extend(g.children.iter());
+        }
+    }
+    let mut groups: Vec<u64> = linked.iter().map(|(_, group)| *group).collect();
+    groups.sort_unstable();
+    groups.dedup();
+    for group in groups {
+        let members: Vec<LayerId> = linked.iter().filter(|(_, g)| *g == group).map(|(id, _)| *id).collect();
+        // The id is picked after the previous group's copies took theirs, so no two share one.
+        let fresh =
+            if members.len() < 2 { None } else { Some(doc.unused_link_group().ok_or_else(|| EngineError::Other("no free link group id is left".into()))?) };
+        for id in members {
+            if let Some(l) = doc.layer_mut(id) {
+                l.link_group = fresh;
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Show/hide every selected layer in one step.
 pub fn set_visible_selected(s: &mut Session, visible: bool) -> Result<Value> {
     let sel = selected(s);
-    s.edit(if visible { "Show Layers" } else { "Hide Layers" }, |doc, _| {
+    s.edit_visibility(if visible { "Show Layers" } else { "Hide Layers" }, |doc, _| {
         for id in &sel {
             doc.layer_mut(*id).ok_or(EngineError::NoLayer(*id))?.visible = visible;
         }
