@@ -765,3 +765,31 @@ fn temp_owner_takes_only_a_file_part_temp_name_writes() {
         assert_eq!(temp_owner(&older(&dotted(64))), None, "a dot file one character over: {c}");
     }
 }
+
+/// #11315: an AFP share on macOS refuses the directory flush with ENOENT (2), even though the
+/// rename into that folder just succeeded; there that counts as flushed, like the other codes a
+/// file system produces when it can't flush directories at all. On Linux and Windows 2 means a
+/// genuinely missing folder and stays a failure, as does EIO (5) everywhere.
+#[cfg(not(windows))]
+#[test]
+fn an_afp_enoent_directory_flush_is_unsupported_where_afp_lives() {
+    let code = |c| dir_synced(Err(io::Error::from_raw_os_error(c)));
+    assert_eq!(code(2).is_ok(), cfg!(target_vendor = "apple"), "code 2 counts as flushed only where AFP lives");
+    assert!(code(5).is_err(), "EIO stays a failure");
+}
+
+/// #11315: the macOS mirror of `a_directory_flush_the_file_system_cannot_do_still_saves`: an
+/// AFP share refusing the directory flush with ENOENT still saves through `atomic_write_with`,
+/// and the flush was attempted; EIO (5) still fails the save.
+#[cfg(target_vendor = "apple")]
+#[test]
+fn an_afp_share_that_cannot_flush_a_directory_still_saves() {
+    let d = TempDir::new("syncdir-afp");
+    let p = d.0.join("doc.pcraft");
+    let fs = Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() };
+    atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap();
+    assert_eq!(fs.synced.get(), 1, "the flush was attempted");
+    assert_eq!(std::fs::read(&p).unwrap(), b"new");
+    let fs = Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() };
+    assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
+}

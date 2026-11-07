@@ -395,13 +395,17 @@ fn dir_sync_unsupported(e: &io::Error) -> bool {
         return true;
     }
     // errno values: EINVAL is 22 everywhere; ENOTSUP and EOPNOTSUPP are 95 on Linux and
-    // Android, 45 and 102 on Apple platforms, 45 on the BSDs; ENOTTY is 25. Elsewhere 45 means
-    // something else (illumos: EDEADLK), so only EINVAL and `Unsupported` count there.
+    // Android, 45 and 102 on Apple platforms, 45 on the BSDs; ENOTTY is 25; ENOENT is 2.
+    // Elsewhere 45 means something else (illumos: EDEADLK), so only EINVAL and `Unsupported`
+    // count there.
     const EINVAL: i32 = 22;
+    const ENOENT: i32 = 2;
     let unsupported: &[i32] = if cfg!(any(target_os = "linux", target_os = "android")) {
         &[EINVAL, 95]
     } else if cfg!(target_vendor = "apple") {
-        &[EINVAL, 45, 102, 25]
+        // ENOENT: an AFP share (#11315) refuses the directory flush with it, even though the
+        // rename into that folder just succeeded, so the folder existed a moment before.
+        &[EINVAL, 45, 102, 25, ENOENT]
     } else if cfg!(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd", target_os = "dragonfly")) {
         &[EINVAL, 45]
     } else if cfg!(unix) {
