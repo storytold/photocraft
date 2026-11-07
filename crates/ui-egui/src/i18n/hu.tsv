@@ -158,6 +158,10 @@
 	Clipboard	Vágólap
 	Close All	Összes bezárása
 	Close Others	Többi bezárása
+	New Document…	Új dokumentum…
+	Open Document…	Megnyitás…
+	Consolidate All to Here	Összes ide
+	Move to New Window	Áthelyezés új ablakba
 	Color Balance…	Színegyensúly…
 	Color Lookup Tables…	Színleképezési táblák…
 	Color Lookup…	Színleképezés…
@@ -257,6 +261,7 @@
 	Place Linked…	Csatolt elhelyezése…
 	Place Scale Marker…	Méretarány-jelölő elhelyezése…
 	Plug-ins…	Bővítmények…
+	Plugins…	Bővítmények…
 	Posterize…	Poszterizálás…
 	Preferences	Beállítások
 	Preset Manager…	Előbeállítás-kezelő…
@@ -342,6 +347,8 @@
 	Combine Shapes	Alakzatok kombinálása
 	Contract…	Szűkítés…
 	Convert to Embedded	Átalakítás beágyazottá
+	Embed Linked	Csatolt beágyazása
+	Embed All Linked	Összes csatolt beágyazása
 	Convert to Layers	Átalakítás rétegekké
 	Convert to Linked…	Átalakítás csatolttá…
 	Convert to Smart Object	Átalakítás intelligens objektummá
@@ -550,6 +557,7 @@
 	Clear Canvas Guides	Vászon-segédvonalak törlése
 	Clear Guides	Segédvonalak törlése
 	Clear Recent Files	Legutóbbi fájlok listájának törlése
+	Clear Recent File List	Legutóbbi fájlok listájának törlése
 	Clear Selected Artboard Guides	Kijelölt rajztábla segédvonalainak törlése
 	Clear Slices	Szeletek törlése
 	Clipping Mask	Vágómaszk
@@ -681,7 +689,7 @@
 	Info	Információ
 	Install Plug-in	Bővítmény telepítése
 	Install Plug-in…	Bővítmény telepítése…
-	Internet Standard RGB	Internetes szabványos RGB
+	Internet Standard RGB (sRGB)	Internetes szabványos RGB (sRGB)
 	Inverse	Megfordítás
 	Iris Blur…	Íriszelmosás…
 	Join the ArtCraft Discord	Csatlakozás az ArtCraft Discordhoz
@@ -698,7 +706,7 @@
 	Layer From Background…	Réteg a háttérből…
 	Layers	Rétegek
 	Layers to Files	Rétegek fájlokba
-	Legacy Macintosh RGB	Régi Macintosh RGB
+	Legacy Macintosh RGB (Gamma 1.8)	Régi Macintosh RGB (Gamma 1.8)
 	Lens Blur…	Objektívelmosás…
 	Lens Flare…	Lencsecsillanás…
 	Light gray	Világosszürke
@@ -746,7 +754,6 @@
 	New Type Layer	Új szövegréteg
 	New Video Layer	Új videoréteg
 	New Window	Új ablak
-	New Window for Document	Új ablak a dokumentumhoz
 	New Workspace…	Új munkaterület…
 	Next Appearance Mode	Következő megjelenési mód
 	Next Document	Következő dokumentum
@@ -791,6 +798,7 @@
 	Pixel Grid	Pixelrács
 	Pixelate	Pixelesítés
 	Plug-ins	Bővítmények
+	Plugins	Bővítmények
 	Pointillize…	Pontozás…
 	Polar Coordinates…	Polárkoordináták…
 	Preferences…	Beállítások…
@@ -854,6 +862,7 @@
 	Show All	Összes megjelenítése
 	Show Extras Options…	Segédelemek beállításai…
 	Show in Explorer	Megjelenítés az Intézőben
+	Reveal in Explorer	Megjelenítés az Intézőben
 	Show in Folder	Megjelenítés mappában
 	Show menu colors	Menüszínek megjelenítése
 	Show/Hide All Panels	Összes panel megjelenítése/elrejtése
@@ -899,6 +908,12 @@
 	Titling Alternates	Címbetű-változatok
 	Tool Presets	Eszköz-előbeállítások
 	Tools	Eszközök
+	Contextual Task Bar	Környezetfüggő feladatsáv
+	Hide bar	Sáv elrejtése
+	Reset bar position	Sáv helyzetének visszaállítása
+	Pin bar position	Sáv helyzetének rögzítése
+	Move bar	Sáv áthelyezése
+	More options	További beállítások
 	Trace Contour…	Kontúrkövetés…
 	Transform Symmetry	Szimmetria alakítása
 	Tree…	Fa…
@@ -919,7 +934,7 @@
 	Windows LCD	Windows LCD
 	Wind…	Szél…
 	Working Black Plate	Fekete munkalemez
-	Working CMY Plate	CMY munkalemezek
+	Working CMY Plates	CMY munkalemezek
 	Working CMYK	Munka-CMYK
 	Working Cyan Plate	Cián munkalemez
 	Working Magenta Plate	Magenta munkalemez
@@ -1058,6 +1073,7 @@
 	Control:	Vezérlés:
 	Corners	Sarkok
 	Could not complete the Free Transform command because the layer is locked.	A szabad alakítás nem hajtható végre, mert a réteg zárolva van.
+	Could not transform because the layer is locked.	Az alakítás nem hajtható végre, mert a réteg zárolva van.
 	Could not transform: the layer is empty	Az alakítás nem hajtható végre: a réteg üres
 	Could not use Puppet Warp: no opaque pixels	A bábtorzítás nem használható: nincsenek átlátszatlan pixelek
 	Could not use Puppet Warp: the layer is empty	A bábtorzítás nem használható: a réteg üres
@@ -1181,6 +1197,7 @@
 	History Brush	Előzményecset
 	Paints from the History panel's source state	Az Előzmények panel forrásállapotából fest
 	Sets the source for the history brush	Beállítja az előzményecset forrását
+	The History Brush source was deleted: set a new source in the History panel	Az előzményecset forrása törölve lett: állítson be új forrást az Előzmények panelen
 	Horizontal scale	Vízszintes méretarány
 	Horizontal type	Vízszintes szöveg
 	Hue Jitter	Színárnyalat ingadozása
@@ -1979,6 +1996,7 @@ layerLabel	Magenta	Bíbor
 	Size:	Méret:
 	Source: not set ({key}-click with Clone Stamp)	Forrás: nincs beállítva ({key}+kattintás a klónozó bélyegzővel)
 	Source: set	Forrás: beállítva
+	Source: {name}	Forrás: {name}
 	Style	Stílus
 	Subtract from selection  ({key})	Kivonás a kijelölésből  ({key})
 	Swap colours (X)	Színek cseréje (X)
@@ -3208,6 +3226,8 @@ cameraRaw	Yellow	Sárga
 	Constrain proportions	Arányok megtartása
 	Constraints	Megkötések
 	Background (Default)	Háttér (alapértelmezett)
+	Background (default)	Háttér (alapértelmezett)
+	Transparent (default)	Átlátszó (alapértelmezett)
 	Content-Aware Fill	Tartalomérzékeny kitöltés
 	Content-Aware Move Tool	Tartalomérzékeny mozgatás
 	Contract	Szűkítés
@@ -3286,7 +3306,6 @@ cameraRaw	Yellow	Sárga
 	Ellipse Tool	Ellipszis
 	Elliptical Marquee Tool	Ellipszis-kijelölés
 	Enable	Bekapcsolás
-	Enable animations	Animációk engedélyezése
 	Enable flick panning	Lendítéses pásztázás engedélyezése
 	Enable floating document window docking	Lebegő dokumentumablakok dokkolásának engedélyezése
 	Enable narrow options bar	Keskeny beállítósáv engedélyezése
@@ -3431,6 +3450,7 @@ cameraRaw	Yellow	Sárga
 	Magnetic Lasso	Mágneses lasszó
 	Magnetic Lasso Tool	Mágneses lasszó
 	Make Selection	Kijelölés készítése
+	Make Shape	Alakzat készítése
 	Make work path from selection	Munkaútvonal készítése a kijelölésből
 	Manual	Kézi
 	manual	kézi
@@ -3626,6 +3646,11 @@ cameraRaw	Yellow	Sárga
 	Show canvas dots	Vászonpontok megjelenítése
 	Clip thumbnails to layer bounds	Bélyegképek levágása a réteg határaira
 	Clip Thumbnails to Layer Bounds	Bélyegképek levágása a réteg határaira
+	No Thumbnails	Nincs bélyegkép
+	Small Thumbnails	Kis bélyegképek
+	Medium Thumbnails	Közepes bélyegképek
+	Large Thumbnails	Nagy bélyegképek
+	Clip Thumbnails to Document Bounds	Bélyegképek levágása a dokumentum határaira
 	Show channels in color	Csatornák megjelenítése színesen
 	Show crosshair in brush tip	Szálkereszt az ecsethegyben
 	Show extension panels	Bővítménypanelek megjelenítése
@@ -4416,6 +4441,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Érvénytelen számbevitel. {min}% és {max}% közötti egész szám szükséges. Az előző érték lett beillesztve.
 	Color Aware	Színalapú
 	Decontaminate Colors	Színek fertőtlenítése
@@ -4440,3 +4467,49 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+
+# Action Stop message (#8386)
+	Message	Üzenet
+# Playback Options (#5212)
+	Playback Options…	Lejátszási beállítások…
+	Playback Options	Lejátszási beállítások
+	Accelerated	Gyorsított
+	Step by Step	Lépésenként
+	Pause For:	Szünet ennyi ideig:
+	Pause For	Szünet ennyi ideig
+	seconds	másodperc
+	Create a single history state	Egyetlen előzményállapot létrehozása
+	This Layer:	Ez a réteg:
+	Generator enabled	Generátor bekapcsolva
+	Move Up	Mozgatás felfelé
+	Move Down	Mozgatás lefelé
+	On your computer	A számítógépen
+	New file	Új fájl
+	Learn	Tanulás
+	Website	Weboldal
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	A keret affin transzformációkat támogat; perspektivikus transzformációhoz válassza ki a képét
+	A frame supports affine transforms; select its image to warp it	A keret affin transzformációkat támogat; a hajlításhoz válassza ki a képét
+	Convert to Frame…	Átalakítás keretté…
+	Create a new custom frame	Új egyéni keret létrehozása
+	Create a new polygonal frame	Új sokszögű keret létrehozása
+	Create a new triangular frame	Új háromszögű keret létrehozása
+	Fit Content to Frame	Tartalom igazítása a kerethez
+	Fit Frame to Content	Keret igazítása a tartalomhoz
+	Frame coordinates must be finite and within 600000 pixels	A keret koordinátáinak végesnek és 600000 képponton belülinek kell lenniük
+	Import Image…	Kép importálása…
+	Invalid frame transform	Érvénytelen kerettranszformáció
+	Invalid nested file drop	Érvénytelen beágyazott fájlejtés
+	New Frame	Új keret
+	Replace Image…	Kép cseréje…
+	The frame is locked	A keret zárolva van
+	The frame is unavailable	A keret nem érhető el
+
+# Channels panel menu (#11451)
+	Channel Options…	Csatornabeállítások…
+	Specify Channels:	Csatornák megadása:
+	Not enough grayscale documents for this mode.	Nincs elég szürkeárnyalatos dokumentum ehhez a módhoz.
+	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
+	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
+	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.

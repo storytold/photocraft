@@ -4,7 +4,7 @@
 //! Every editor edits the kind's complete parameter set (`photocraft_engine::adjust_params`) as a
 //! JSON object and reports an [`Edit`]: `changed` while values move (the host previews them live)
 //! and `commit` when a gesture ends (the Properties host then runs one `layer.setAdjustment`; a
-//! dialog commits on OK). Selective Color and Color Lookup keep their editors in `adjust_ui`.
+//! dialog commits on OK). Color Lookup keeps its editor in `adjust_ui`.
 
 use crate::point_curve as curve_edit;
 use crate::state::CurvesEditorState as CurveUi;
@@ -28,6 +28,7 @@ mod curves;
 mod gradient_map;
 mod hue_saturation;
 mod levels;
+mod selective_color;
 mod session;
 
 #[cfg(test)]
@@ -48,10 +49,11 @@ use hue_saturation::hue_saturation;
 use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
 use levels::levels;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
+use selective_color::selective_color;
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
 
-/// Kinds edited here (Selective Color and Color Lookup have their own editors; Invert has none).
-pub const KINDS: [&str; 13] = [
+/// Kinds edited here (Color Lookup has its own editor in `adjust_ui`; Invert has none).
+pub const KINDS: [&str; 14] = [
     "brightnessContrast",
     "levels",
     "curves",
@@ -65,6 +67,7 @@ pub const KINDS: [&str; 13] = [
     "posterize",
     "threshold",
     "gradientMap",
+    "selectiveColor",
 ];
 
 pub fn has_editor(kind: &str) -> bool {
@@ -161,6 +164,7 @@ pub fn editor(ui: &mut egui::Ui, kind: &str, v: &mut Value, cx: &EditorCx) -> Ed
         "posterize" => sliders(ui, v, &[("levels", "Levels", 2.0, 255.0, 4.0, "", None)]),
         "threshold" => threshold(ui, v, cx),
         "gradientMap" => gradient_map(ui, v, cx),
+        "selectiveColor" => selective_color(ui, v, cx),
         _ => Edit::default(),
     }
 }
