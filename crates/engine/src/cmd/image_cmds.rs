@@ -232,7 +232,9 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
         ph = scaled_dimension(p, "height", scale, "image.imageSize")?;
     }
     // `percent` scales both sides (what a Photoshop action records as "200%"); an explicit side wins.
-    if let Some(pc) = p.get("percent") {
+    // A null means "left out", as `scaled_dimension` reads the other optional sizes: a dialog or a
+    // JSON step that carries its empty fields as nulls must behave like one that omits them.
+    if let Some(pc) = p.get("percent").filter(|value| !value.is_null()) {
         let pc = pc.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(|| bad("image.imageSize", "`percent` must be a positive number"))?;
         pw = pw.or(Some(ow as f64 * pc / 100.0));
         ph = ph.or(Some(oh as f64 * pc / 100.0));

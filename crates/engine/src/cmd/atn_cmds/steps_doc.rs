@@ -523,14 +523,18 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
         Some(Value::String(unit)) if unit == "pt" => PT,
         _ => return None,
     };
+    // A supplied `percent` the command itself would refuse must not be dropped here: the step would
+    // export without its size and, beside a resolution with keep-print-size, even gain the default
+    // resampler - a strict round trip that plays where the original step fails. Refuse the mapping
+    // so Save Actions reports the step instead of substituting another edit (#11575 review). The
+    // rule is the command's: a null is "left out", as for the other optional sizes.
+    if p.get("percent").is_some_and(|value| !value.is_null() && value.as_f64().is_none_or(|pc| !pc.is_finite() || pc <= 0.0)) {
+        return None;
+    }
+    // A resolution and nothing else: the one size change the descriptor cannot state on its own.
+    let only_resolution = jnum(p, "resolution").is_some() && jnum(p, "width").is_none() && jnum(p, "height").is_none() && jnum(p, "percent").is_none();
     // Resolution only with Resample on imports as keep-print-size; a command without it cannot be told apart.
-    if jnum(p, "resolution").is_some()
-        && jnum(p, "width").is_none()
-        && jnum(p, "height").is_none()
-        && jnum(p, "percent").is_none()
-        && jstr(p, "resample").is_some_and(|r| r != "none")
-        && jbool(p, "keepPrintSize") != Some(true)
-    {
+    if only_resolution && jstr(p, "resample").is_some_and(|r| r != "none") && jbool(p, "keepPrintSize") != Some(true) {
         return None;
     }
     let mut d = desc("null");
@@ -576,8 +580,11 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     if let Some(r) = jnum(p, "resolution") {
         d = d.with("Rslt", D::UnitFloat { unit: *b"#Rsl", value: r });
     }
-    // Point sizes need an interpolation entry; omission uses the native bicubic default.
-    let resample = jstr(p, "resample").or_else(|| (unit == PT).then_some("bicubic"));
+    // Point sizes need an interpolation entry, and so does a resolution change that keeps the print
+    // size: the descriptor has no keep-print-size flag, so a step carrying only `Rslt` reads back as
+    // Resample off and silently loses the resize (#11515). Bicubic is the command's own default.
+    let keep_print_size = only_resolution && jbool(p, "keepPrintSize") == Some(true);
+    let resample = jstr(p, "resample").or_else(|| (unit == PT || keep_print_size).then_some("bicubic"));
     if let Some(i) = resample.filter(|r| *r != "none") {
         d = d.with("Intr", enm("Intp", lookup_back(INTERPOLATION, i)?));
     }

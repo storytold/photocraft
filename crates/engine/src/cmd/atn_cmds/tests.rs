@@ -3462,6 +3462,102 @@ fn image_size_intentional_controls_still_round_trip() {
     }
 }
 
+/// #11515: keep-print-size with the resampler left at its native default must survive the strict
+/// export. The descriptor has no keep-print-size flag, so the exporter used to write `Rslt` alone,
+/// which imports back as Resample off: the step then changes the resolution and leaves the pixels
+/// alone. It exports as the default it runs with, which is what the explicit control already did.
+#[test]
+fn image_size_keep_print_size_without_a_resample_round_trips() {
+    let kept = json!({"resolution": 144.0, "resample": "bicubic", "keepPrintSize": true, "scaleStyles": true});
+    assert_eq!(image_size_round_trip(&json!({"resolution": 144, "keepPrintSize": true})), Some(kept.clone()));
+    // The explicit default reads back unchanged, and Resample off still says so (its keep-print-size
+    // ask is a no-op the command ignores).
+    assert_eq!(image_size_round_trip(&json!({"resolution": 144, "keepPrintSize": true, "resample": "bicubic"})), Some(kept));
+    assert_eq!(
+        image_size_round_trip(&json!({"resolution": 144, "keepPrintSize": true, "resample": "none"})),
+        Some(json!({"resolution": 144.0, "resample": "none", "scaleStyles": true}))
+    );
+    // A resolution-only step that never asked for keep-print-size is still refused when it names a
+    // resampler (#7245); with the resampler omitted it changes the resolution alone either way, so
+    // it reads back as Resample off. A size change with a resolution is exported as it was.
+    assert_eq!(image_size_round_trip(&json!({"resolution": 144, "resample": "nearest"})), None);
+    assert_eq!(image_size_round_trip(&json!({"resolution": 144})), Some(json!({"resolution": 144.0, "resample": "none", "scaleStyles": true})));
+    assert_eq!(
+        image_size_round_trip(&json!({"width": 12, "height": 10, "resolution": 144})),
+        Some(json!({"width": 12.0, "height": 10.0, "resolution": 144.0, "scaleStyles": true}))
+    );
+}
+
+/// #11575 review: a `percent` the command itself would refuse must not be dropped on export. Beside
+/// a resolution with keep-print-size the dropped value even gained the default resampler, so the
+/// strict round trip produced a step that resamples pixels where the original step fails. The export
+/// refuses such a step instead, and Save Actions reports it. A null is "left out", as it is for the
+/// other optional sizes.
+#[test]
+fn image_size_refuses_to_export_a_step_with_an_unusable_percent() {
+    for params in [
+        json!({"resolution": 144, "keepPrintSize": true, "percent": "50"}),
+        json!({"resolution": 144, "keepPrintSize": true, "percent": 0}),
+        json!({"resolution": 144, "keepPrintSize": true, "percent": -50}),
+        json!({"resolution": 144, "keepPrintSize": true, "percent": true}),
+        json!({"width": 12, "percent": "50"}),
+    ] {
+        assert_eq!(image_size_round_trip(&params), None, "{params} must not export as another step");
+    }
+    // A null percent reads as the step without it, and a usable one is unaffected.
+    let kept = json!({"resolution": 144.0, "resample": "bicubic", "keepPrintSize": true, "scaleStyles": true});
+    assert_eq!(image_size_round_trip(&json!({"resolution": 144, "keepPrintSize": true, "percent": null})), Some(kept));
+    assert_eq!(
+        image_size_round_trip(&json!({"resolution": 144, "percent": null})),
+        Some(json!({"resolution": 144.0, "resample": "none", "scaleStyles": true}))
+    );
+    assert!(image_size_round_trip(&json!({"percent": 200})).is_some());
+
+    // Strict Save Actions reports the step instead of writing a different one; skipping names it.
+    let mut s = Session::new();
+    s.actions.list.push(Action::new("Size", vec![("image.imageSize".into(), json!({"resolution": 144, "keepPrintSize": true, "percent": "50"}))]));
+    let error = s.execute("actions.save", json!({"action": "Size", "skipUnsupported": false})).unwrap_err().to_string();
+    assert!(error.contains("image.imageSize"), "{error}");
+    let r = s.execute("actions.save", json!({"action": "Size", "skipUnsupported": true})).unwrap();
+    assert_eq!(r["skipped"], json!([{"action": "Size", "step": 0, "id": "image.imageSize"}]), "{r}");
+}
+
+/// #11515: the reported symptom. A 32×24 72 ppi document taken to 144 ppi with keep-print-size
+/// resamples to 64×48 when the step runs directly; through Save Actions, Load Actions and Play it
+/// kept its 32×24 pixels, because the export lost the resize. Strict export skips nothing and the
+/// import reports nothing, and the played step now leaves the same document.
+#[test]
+fn keep_print_size_image_size_survives_a_strict_atn_round_trip() {
+    let fresh = |s: &mut Session| s.execute("file.new", json!({"width": 32, "height": 24, "resolution": 72})).unwrap();
+    let size = |s: &Session| {
+        let d = s.active().unwrap();
+        (d.doc.size.width, d.doc.size.height, d.doc.resolution_dpi)
+    };
+
+    let mut s = Session::new();
+    fresh(&mut s);
+    s.execute("image.imageSize", json!({"resolution": 144, "keepPrintSize": true})).unwrap();
+    let direct = size(&s);
+    assert_eq!(direct, (64, 48, 144.0), "the command resamples to keep the print size");
+
+    s.actions.list.push(Action::new("Size", vec![("image.imageSize".into(), json!({"resolution": 144, "keepPrintSize": true}))]));
+    let native = s.execute("actions.play", json!({"action": "Size"})).unwrap();
+    assert!(native.get("failed").is_none(), "{native}");
+    assert_eq!(size(&s), direct, "native playback");
+
+    let saved = s.execute("actions.save", json!({"action": "Size", "skipUnsupported": false})).unwrap();
+    assert_eq!(saved["skipped"], json!([]), "{saved}");
+    let mut t = Session::new();
+    let loaded = t.execute("actions.load", json!({"data": saved["data"].as_str().unwrap()})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    assert_eq!(loaded["warnings"], json!([]), "{loaded}");
+    fresh(&mut t);
+    let played = t.execute("actions.play", json!({"action": "Size"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(size(&t), direct, "the .atn round trip must not lose the resizing");
+    assert_eq!(t.actions.list[0].steps[0].1["resample"], "bicubic", "the step says which resampler ran");
+}
+
 #[test]
 fn recorded_layer_select_exports_to_atn() {
     let mut s = Session::new();

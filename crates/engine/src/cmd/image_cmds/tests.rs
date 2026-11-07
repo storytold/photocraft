@@ -298,6 +298,23 @@ fn image_size_with_a_new_resolution_scales_type_with_the_pixels_only() {
     }
 }
 
+/// A `percent` of null is the same as leaving it out, as it is for the other optional sizes; a
+/// supplied value that is not a finite positive number is still refused, and resizes nothing
+/// (#11575 review).
+#[test]
+fn image_size_reads_a_null_percent_as_omitted() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 32, "height": 24, "resolution": 72})).unwrap();
+    s.execute("image.imageSize", json!({"resolution": 144, "keepPrintSize": true, "percent": null})).unwrap();
+    assert_eq!((doc(&s).size.width, doc(&s).size.height), (64, 48), "a null percent leaves the step as the step without it");
+    for percent in [json!("50"), json!(0), json!(-50), json!(true), json!([50])] {
+        let before = (doc(&s).size.width, doc(&s).size.height);
+        let e = s.execute("image.imageSize", json!({"resolution": 144, "percent": percent.clone()})).unwrap_err();
+        assert!(e.to_string().contains("percent"), "{percent}: {e}");
+        assert_eq!((doc(&s).size.width, doc(&s).size.height), before, "{percent} must not resize");
+    }
+}
+
 #[test]
 fn image_size_reports_the_size_it_applied() {
     // #1815: every path reports the document's size afterwards, at every depth.
