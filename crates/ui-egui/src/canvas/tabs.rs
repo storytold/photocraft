@@ -61,7 +61,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let n = app.session.documents().len();
     // Files opening in the background (#210) have tabs before they have documents.
     let opening = !app.jobs.opens.is_empty();
-    if !opening && app.ui.chrome.shows_home(n, app.session.prefs().general.auto_show_home_screen) {
+    if app.home_screen_up() {
         start_screen(app, ui);
         return;
     }
@@ -327,24 +327,38 @@ fn tab_close_clicked(resp: &egui::Response, xresp: &egui::Response) -> bool {
     xresp.clicked() || xresp.middle_clicked() || resp.middle_clicked()
 }
 
-/// All tab actions go through the same guarded File commands as the menu bar, including the
+/// Rows of the document tab menu after which a separator is drawn: after Move to New Window and
+/// after Open Document…, as in the reference (#11403).
+pub(crate) const TAB_MENU_SEPARATORS_AFTER: [usize; 2] = [4, 6];
+
+pub(crate) type TabMenuItem = (&'static str, &'static str, serde_json::Value, bool);
+
+/// All tab actions go through the same guarded commands as the menu bar, including the
 /// unsaved-changes prompt. The clicked tab is explicit even when another document is active.
-pub(super) fn tab_context_items(index: usize, count: usize, has_path: bool) -> [(&'static str, &'static str, serde_json::Value, bool); 4] {
+/// Order and separators follow the reference application (#11403); see [`TAB_MENU_SEPARATORS_AFTER`].
+pub(crate) fn tab_context_items(index: usize, count: usize, has_path: bool) -> [TabMenuItem; 8] {
     [
+        ("Consolidate All to Here", "window.arrange.consolidateAllToTabs", json!({}), count > 1),
         ("Close", "file.close", json!({"document": index}), true),
-        ("Close Others", "file.closeOthers", json!({"document": index}), count > 1),
         ("Close All", "file.closeAll", json!({}), true),
+        ("Close Others", "file.closeOthers", json!({"document": index}), count > 1),
+        ("Move to New Window", "window.arrange.floatInWindow", json!({"document": index}), true),
+        ("New Document…", "file.new", json!({}), true),
+        ("Open Document…", "file.open", json!({}), true),
         (crate::menus::reveal_label(), "file.revealInFinder", json!({"document": index}), has_path),
     ]
 }
 
-fn tab_context_menu(ui: &mut egui::Ui, index: usize, count: usize, has_path: bool) -> Option<(&'static str, serde_json::Value)> {
+pub(crate) fn tab_context_menu(ui: &mut egui::Ui, index: usize, count: usize, has_path: bool) -> Option<(&'static str, serde_json::Value)> {
     crate::widgets::menu_scroll(ui, |ui| {
         ui.set_min_width(170.0);
-        for (label, id, params, enabled) in tab_context_items(index, count, has_path) {
+        for (row, (label, id, params, enabled)) in tab_context_items(index, count, has_path).into_iter().enumerate() {
             if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
                 ui.close();
                 return Some((id, params));
+            }
+            if TAB_MENU_SEPARATORS_AFTER.contains(&row) {
+                ui.separator();
             }
         }
         None

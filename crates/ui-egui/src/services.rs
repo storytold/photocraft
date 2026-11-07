@@ -79,6 +79,9 @@ pub type ImportFn = Box<dyn Fn(&str, &[u8], &photocraft_io::ImportOptions) -> Re
 pub struct ExportSettings {
     /// JPEG quality 1–100 (None = codec default).
     pub jpeg_quality: Option<u8>,
+    /// JPEG chroma sampling: `true` is 4:2:0, `false` keeps full 4:4:4 colour detail.
+    /// Export As keeps full chroma above quality 50 so saturated text and graphics stay sharp.
+    pub jpeg_chroma_subsampling: bool,
     /// JPEG Options › Format Options: baseline, baseline optimized or progressive.
     pub jpeg_format: photocraft_codecs::JpegFormat,
     /// WebP: lossless (VP8L) rather than lossy (VP8 at [`Self::webp_quality`]).
@@ -133,6 +136,7 @@ impl Default for ExportSettings {
     fn default() -> Self {
         ExportSettings {
             jpeg_quality: None,
+            jpeg_chroma_subsampling: true,
             jpeg_format: photocraft_codecs::JpegFormat::Baseline,
             webp_lossless: true,
             webp_quality: None,
@@ -163,6 +167,7 @@ impl ExportSettings {
         if let Some(q) = self.jpeg_quality {
             opts.encode.jpeg_quality = q;
         }
+        opts.encode.jpeg_chroma_subsampling = self.jpeg_chroma_subsampling;
         opts.encode.jpeg_format = self.jpeg_format;
         opts.encode.webp_lossless = self.webp_lossless;
         if let Some(q) = self.webp_quality {
@@ -331,6 +336,8 @@ pub struct ExternalVectorSource {
 pub type OpenExternalSvgFn = Box<dyn FnMut(ExternalSvgEditor, ExternalVectorSource) -> Result<Box<dyn ExternalSvgSession>, String>>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+/// Shared queue of browser canvas drops with the document captured at the drop event.
+pub type PlaceInbox = std::sync::Arc<std::sync::Mutex<Vec<(photocraft_doc::DocId, String, Vec<u8>)>>>;
 
 /// Read the saved preferences text (`None` when there is none yet).
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
@@ -398,6 +405,10 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 
+/// Polls the platform's optional WinTab packet queue into the app's stylus feed (Windows), with
+/// whether the app window is focused (to re-assert WinTab overlap priority on activation).
+pub type TabletPollFn = Box<dyn FnMut(bool)>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -461,7 +472,7 @@ pub struct Services {
     /// Files delivered asynchronously for a drop onto the active document's canvas (web
     /// drag-and-drop, routed by [`PhotocraftApp::dropped_on_canvas`]): placed as layers like a
     /// desktop canvas drop (Place Embedded, each in Free Transform).
-    pub place_inbox: Option<Inbox>,
+    pub place_inbox: Option<PlaceInbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
     pub clipboard_set_image: Option<ClipboardSetFn>,
     pub clipboard_get_image: Option<ClipboardGetFn>,
@@ -475,6 +486,11 @@ pub struct Services {
     /// the web (see `prefs_ui`).
     pub load_prefs: Option<LoadTextFn>,
     pub save_prefs: Option<SaveTextFn>,
+    /// Load/save the bounded deterministic GPU compositor failure memo (native only).
+    pub load_gpu_memo: Option<LoadTextFn>,
+    pub save_gpu_memo: Option<SaveTextFn>,
+    /// Compiler identity included in GPU memo keys (for example `fxc` or `dxc:<path>`).
+    pub shader_compiler: Option<String>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
@@ -515,6 +531,8 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// WinTab packet poll (Windows with Windows Ink disabled; see `photocraft_tablet::wintab`).
+    pub tablet_poll: Option<TabletPollFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
