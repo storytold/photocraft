@@ -144,9 +144,11 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             }
             let can_snap = app.session.is_enabled("history.newSnapshot");
-            // ⌥-click opens New Snapshot (name, From) instead, as in Photoshop.
+            // ⌥-click opens New Snapshot (name, From) instead, as in Photoshop; with History
+            // Options › Show New Snapshot Dialog by Default a plain click does too.
+            let dialog_by_default = photocraft_engine::history_options_cmds::show_new_snapshot_dialog(&app.session);
             if ui.add_enabled_ui(can_snap, |ui| icons::button(ui, "scan", 26.0, false, tl!("Create new snapshot"))).inner.clicked() {
-                if ui.input(|i| i.modifiers.alt) {
+                if dialog_by_default || ui.input(|i| i.modifiers.alt) {
                     snapshot_dialog = true;
                 } else {
                     footer_cmd = Some(("history.newSnapshot", json!({})));
