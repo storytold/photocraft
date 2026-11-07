@@ -363,6 +363,12 @@ pub struct UiState {
     /// A live rectangle's corner radius widget being dragged (TOOL-214-12).
     #[serde(skip)]
     pub corner_radius: Option<crate::corner_radius::Drag>,
+    /// An Arrow tool handle being dragged (tail, bend or tip).
+    #[serde(skip)]
+    pub arrow_drag: Option<crate::arrow_ui::Drag>,
+    /// Panel edges the Cut Out tool snaps to (found when a drag starts).
+    #[serde(skip)]
+    pub cut_out_edges: Option<crate::cutout_ui::PanelEdges>,
     /// The bounding box of several selected shape layers, a handle being dragged.
     #[serde(skip)]
     pub shape_box: Option<crate::shape_bounds_box::Drag>,
@@ -629,6 +635,8 @@ impl Default for UiState {
             stroke_editor: None,
             direct_selection: Default::default(),
             corner_radius: None,
+            arrow_drag: None,
+            cut_out_edges: None,
             shape_box: None,
             selected_path: None,
             hidden_work_path: None,
@@ -766,7 +774,11 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 68);
+        assert_eq!(Tool::ALL.len(), 71);
+        assert_eq!(Tool::from_name("Marker Tool"), Some(Tool::Marker));
+        assert_eq!(Tool::from_name("Arrow Tool"), Some(Tool::Arrow));
+        assert_eq!(Tool::from_name("cutOut"), Some(Tool::CutOut));
+        assert_eq!((Tool::Arrow.key(), Tool::CutOut.key()), ('U', 'C'));
     }
 
     fn vector_tool_names_parse() {

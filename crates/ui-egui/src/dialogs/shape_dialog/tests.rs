@@ -108,6 +108,8 @@ fn click_dialogs_and_drags_keep_complete_stroke_defaults() {
         dashes: vec![3.0, 1.0, 0.0, 2.0],
         dash_offset: -0.75,
         opacity: 0.6,
+        arrow_start: None,
+        arrow_end: None,
     };
     for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon] {
         for click in [false, true] {

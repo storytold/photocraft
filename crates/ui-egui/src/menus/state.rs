@@ -62,6 +62,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         | "window.panel.minimize"
         | "window.panel.iconic" => !app.session.prefs().workspace_locked,
         "file.open" | "file.exit" | "file.clearRecent" | "file.removeRecent" | "help.about" | "help.systemInfo" | "edit.search" => true,
+        // Screenshots need no document; the system capture exists on macOS only.
+        "file.screenshot.new" => cfg!(target_os = "macos") && app.screenshot.is_none(),
+        "file.screenshot.library" => true,
         i if i.starts_with("file.openRecent.") => true,
         i if i.starts_with(DOCUMENT_ITEM) => true,
         i if crate::links::url_for(i).is_some() => true,

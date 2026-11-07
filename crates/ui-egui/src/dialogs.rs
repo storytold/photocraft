@@ -305,6 +305,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::channel_options_ui::owns(fields) => crate::channel_options_ui::body(ui, fields),
         _ if crate::channel_options_ui::owns_new_spot(fields) => crate::channel_options_ui::new_spot_body(ui, fields),
         _ if crate::shape_dialog::owns(fields) => crate::shape_dialog::body(app, ui, fields),
+        _ if crate::screenshot_library::owns(fields) => crate::screenshot_library::body(app, ui),
         _ if delete_prompt(fields) => delete_prompt_body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
@@ -880,6 +881,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::channel_options_ui::owns_new_spot,
     merge_channels_ui::owns,
     crate::shape_dialog::owns,
+    crate::screenshot_library::owns,
     crate::delete_layer_prompt::owns,
     crate::analysis_ui::owns_delete_note,
     crate::disk_change_prompt::owns,
@@ -1005,6 +1007,12 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
     {
         crate::vector_ui::deselect_loaded_path(app, name);
     }
+    if result.is_ok() && matches!(cmd.as_str(), "figure.fromCollage" | "figure.make") {
+        // The figure workflow's next steps: arrows and markers, then export.
+        app.ui.tool = crate::state::Tool::Arrow;
+        app.ui.status = tl!("Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…").to_string();
+        app.ui.status_error = false;
+    }
     if result.is_ok() && cmd == "path.stroke" {
         // The Stroke Path dialog reopens with the Simulate Pressure that was just applied (#10527).
         crate::canvas_tool_menu::remember_simulate_pressure(app, &params);
@@ -1074,6 +1082,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::channel_options_ui::owns(&d.fields) => crate::channel_options_ui::confirm(app, &d.fields),
         _ if crate::channel_options_ui::owns_new_spot(&d.fields) => crate::channel_options_ui::confirm_new_spot(app, &d.fields),
         _ if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
+        _ if crate::screenshot_library::owns(&d.fields) => Ok(Value::Null),
         _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),

@@ -440,6 +440,8 @@ impl Builder {
                 // In multiples of the width, as Photoshop stores them.
                 dashes: s.dash.as_ref().map(|(d, _)| d.iter().map(|v| (v / s.width.max(1e-9)) as f32).collect()).unwrap_or_default(),
                 dash_offset: s.dash.as_ref().map_or(0.0, |(_, o)| (o / s.width.max(1e-9)) as f32),
+                arrow_start: None,
+                arrow_end: None,
             })
         });
         let mut sh = ShapeLayer { path, fill, stroke, ..ShapeLayer::default() };

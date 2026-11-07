@@ -88,6 +88,30 @@ zero. Set tool colours with `tools.setColors`. `ui.inspect` reports `toolOptions
 `toolOptions.stroke_width`, and the transient `strokeEditor`. Keyboard focus, standard number
 fields, colour pickers, and ComboBoxes remain native egui controls.
 
+## Arrowheads and the Arrow tool
+
+A stroke can carry an arrowhead at the start and/or end of every open subpath
+(`ShapeStroke::arrow_start` / `arrow_end`, `Arrowhead { width, length, concavity }`). Width and
+length are multiples of the stroke width, so heads keep their proportions as the line gets
+thicker; concavity pulls the middle of the base toward the tip (-50%..50%: diamond to barbed).
+Closed subpaths ignore heads. The renderer (`photocraft_vector::arrow`) shortens the line so it
+ends inside the head, draws each head solid even on dashed or dotted lines, aims it along the
+chord over its own length (so a curve's head points the way the curve arrives), and shrinks both
+heads on a line shorter than they are. Stroke Options shows Arrowheads (None, End, Start, Both
+ends) plus head width, length and concavity for open paths, so Pen and Curvature Pen shapes can
+have arrows.
+
+The Arrow tool (U, after Line) is a quick annotation tool: drag from tail to tip. Each arrow is a
+shape layer with one open two-knot path, no fill and a stroke with heads. Its options bar leads
+with six quick styles and also sets colour, width, line (Solid, Dashed, Dotted), heads, head size
+and head shape; every control edits the selected arrow too. With the Arrow tool the active arrow
+shows three handles: drag an end to move it (⇧ snaps to 45°) or the middle one to bend the arrow
+(a quadratic bend through the handle). Each handle drag is one history step.
+
+Automation: `shape.create` / `shape.edit` take `"arrowStart"` / `"arrowEnd"` as
+`{"width": widths, "length": widths, "concavity": percent}`, `true` (default head) or `null`;
+`shape.info` reports them. Arrowheads are saved in `.pcraft`. PSD has no stroke arrowhead
+field, so a PSD export keeps the line but not its heads.
 ## Paint
 
 The Fill and Stroke swatches (options bar and Properties) offer No Color, Solid Color and

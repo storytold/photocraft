@@ -4633,3 +4633,44 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Auto-size Canvas	Kətanın ölçüsünü avtomatik təyin edin
 	Keep Relative Position During Layer Reordering	Qatları yenidən sıralayarkən nisbi mövqeyi saxlayın
 	Shrinkwrap Canvas on Save	Saxlayarkən kətanı məzmuna sıxın
+	Arrow color	Ox rəngi
+	Arrowheads	Ox ucları
+	Concavity	Batıqlıq
+	Direction:	İstiqamət:
+	Drag left or right across the part to remove; the sides join	Silinəcək hissənin üzərindən sola və ya sağa dartın; kənarlar birləşir
+	Drag to draw · Drag the blue dot to bend · ⇧ 45°	Çəkmək üçün dartın · Əymək üçün mavi nöqtəni dartın · ⇧ 45°
+	Drag up or down across the part to remove; the sides join	Silinəcək hissənin üzərindən yuxarı və ya aşağı dartın; kənarlar birləşir
+	Edge color	Kənar rəngi
+	Edge:	Kənar:
+	Head length	Uc uzunluğu
+	Head width	Uc eni
+	Heads:	Uclar:
+	Line:	Xətt:
+	Quick styles:	Sürətli üslublar:
+	Export for Publication	Nəşr üçün ixrac et
+	Export for Publication…	Nəşr üçün ixrac et…
+	Drag across the part to remove: sideways cuts a vertical band, up or down a horizontal one	Silinəcək hissənin üzərindən dartın: yana dartmaq şaquli, yuxarı və ya aşağı dartmaq üfüqi zolaq kəsir
+	Outline	Kontur
+	Curved	Əyri
+	Marker:	İşarə:
+	Marker color	İşarə rəngi
+	Click to place a marker	İşarə qoymaq üçün klikləyin
+	Make Figure	Şəkil hazırla
+	Make Figure…	Şəkil hazırla…
+	Prepare Collage for Publication	Kollajı nəşrə hazırla
+	Prepare Collage for Publication…	Kollajı nəşrə hazırla…
+	Snap to panels	Panellərə yapışdır
+	Figure ready. Next: add arrows (Arrow tool) or markers, then File › Export › Export for Publication…	Şəkil hazırdır. Sonra: ox (Ox aləti) və ya işarə əlavə edin, sonra Fayl › İxrac › Nəşr üçün ixrac et…
+	New Screenshot	Yeni ekran görüntüsü
+	Screenshot Library…	Ekran görüntüləri kitabxanası…
+	Screenshot Library	Ekran görüntüləri kitabxanası
+	Show in Finder	Finder-də göstər
+	Change Folder…	Qovluğu dəyiş…
+	No screenshots yet. Use New Screenshot to take one.	Hələ ekran görüntüsü yoxdur. Birini çəkmək üçün Yeni ekran görüntüsü əmrindən istifadə edin.
+	Open for editing	Redaktə üçün aç
+	Screenshots are available on macOS for now	Ekran görüntüləri hələlik yalnız macOS-da mövcuddur
+	A screenshot is already being taken	Artıq ekran görüntüsü çəkilir
+	The screen capture failed. Allow {app} in System Settings › Privacy & Security › Screen Recording	Ekran çəkilişi alınmadı. Sistem Ayarları › Məxfilik və Təhlükəsizlik › Ekran Yazısı bölməsində {app} tətbiqinə icazə verin
+	Screenshot {name} saved to the library	{name} ekran görüntüsü kitabxanada saxlanıldı
+	Saved, but the library PNG could not be updated: {error}	Saxlanıldı, lakin kitabxanadakı PNG yenilənmədi: {error}
+	Could not open the screenshot	Ekran görüntüsünü açmaq mümkün olmadı

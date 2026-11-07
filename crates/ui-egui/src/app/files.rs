@@ -624,6 +624,8 @@ impl PhotocraftApp {
             }
         };
         self.ui.status = crate::i18n::fmt(tl!("Saved {name}"), &[("name", path)]);
+        // A screenshot library PNG that could not follow the save: shown last, as an error.
+        let mut png_error = None;
         // The file was written, copy or not: another tab bound to it no longer matches it.
         self.detach_others_from_file(path, doc);
         if !copy {
@@ -639,6 +641,11 @@ impl PhotocraftApp {
                     app.remember_stamp(doc, path);
                     // History Options › Automatically Create New Snapshot When Saving (#2966).
                     photocraft_engine::history_options_cmds::snapshot_on_save(&mut app.session);
+                }
+                // A screenshot library document keeps its PNG in step with the editable file, for
+                // automation saves too: it is part of the library, not a user-configured hook.
+                if arm {
+                    png_error = crate::screenshot_library::after_save(app, path);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
                 if hooks && let Some(r) = photocraft_engine::automate_cmds::document_saved(&mut app.session, doc) {
@@ -676,6 +683,10 @@ impl PhotocraftApp {
         self.ui.status_error = false;
         let what = crate::i18n::fmt(tl!("Saved {name}"), &[("name", file_open::display_name(path).as_str())]);
         notices::io_warnings(self, &what, warnings);
+        if let Some(e) = png_error {
+            self.ui.status = e;
+            self.ui.status_error = true;
+        }
         // #11117: a successful save whose Image Assets partially failed must say which outputs
         // did not land, and of which document: the status keeps the full saved path (same-named
         // documents only differ by their folder) and what did go out, the notice lists every failure.

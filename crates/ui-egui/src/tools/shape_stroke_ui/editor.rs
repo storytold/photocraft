@@ -3,7 +3,7 @@ use egui::{Rect, Sense, Stroke, pos2, vec2};
 use photocraft_doc::{LineCap, LineJoin, StrokeAlign};
 use serde::{Deserialize, Serialize};
 
-use super::StrokeOptions;
+use super::{ArrowEnds, StrokeOptions};
 use crate::theme::{self, Tokens};
 
 /// Inspection state. Valid edits are applied immediately; only invalid numeric input is pending.
@@ -187,6 +187,42 @@ pub fn button(
                     s.opacity = opacity / 100.0;
                 }
                 ui.end_row();
+                ui.add_enabled_ui(!closed, |ui| {
+                    ui.label(tl!("Arrowheads"));
+                });
+                let mut ends = s.arrow_ends();
+                ui.add_enabled_ui(!closed, |ui| {
+                    choice(
+                        ui,
+                        "Arrowheads",
+                        &mut ends,
+                        &[(ArrowEnds::None, "None"), (ArrowEnds::End, "End"), (ArrowEnds::Start, "Start"), (ArrowEnds::Both, "Both ends")],
+                        &mut children,
+                    )
+                });
+                if ends != s.arrow_ends() {
+                    s.set_arrow_ends(ends);
+                }
+                ui.end_row();
+                if !closed && let Some(mut head) = s.arrow_end.or(s.arrow_start) {
+                    let before = head;
+                    ui.label(tl!("Head width"));
+                    number(ui, "Head width", &mut head.width, 0.5..=50.0, "×");
+                    ui.end_row();
+                    ui.label(tl!("Head length"));
+                    number(ui, "Head length", &mut head.length, 0.5..=50.0, "×");
+                    ui.end_row();
+                    ui.label(tl!("Concavity"));
+                    let mut c = head.concavity * 100.0;
+                    if number(ui, "Concavity", &mut c, -50.0..=50.0, "%") {
+                        head.concavity = c / 100.0;
+                    }
+                    ui.end_row();
+                    if head != before {
+                        s.arrow_start = s.arrow_start.map(|_| head);
+                        s.arrow_end = s.arrow_end.map(|_| head);
+                    }
+                }
             });
             if !closed {
                 ui.label(egui::RichText::new(tl!("Open paths use centered strokes")).small());

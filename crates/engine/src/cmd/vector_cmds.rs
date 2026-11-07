@@ -19,8 +19,8 @@
 use photocraft_algo::selection::{self as sel, SelectionMode};
 use photocraft_color::{BlendMode, Color};
 use photocraft_doc::{
-    ClippingPath, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path, PathOp,
-    ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
+    Arrowhead, ClippingPath, Document, Fill, FillRule, GradientStyle, Knot, Layer, LayerContent, LayerId, LineCap, LineJoin, LiveShape, NamedPath, Path,
+    PathOp, ShapeLayer, ShapeStroke, StrokeAlign, Subpath, VectorMask,
 };
 use photocraft_geom::{Affine, Point, Rect};
 use photocraft_vector as vector;
@@ -90,7 +90,7 @@ pub(crate) fn leak(s: String) -> &'static str {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n}|null"##;
+    let stroke = r##""stroke":{"width":px,"color":"#rrggbb"|fill,"opacity":0..100,"align":"inside|center|outside","cap":"butt|round|square","join":"miter|round|bevel","miterLimit":n,"dashes":[multiples of width],"dashOffset":n,"arrowStart"|"arrowEnd":{"width":widths=4,"length":widths=4,"concavity":-50..50=0}|true|null (heads on open subpaths)}|null"##;
     let fill = r##""fill":"#rrggbb"|[r,g,b,a]|{"gradient":{"stops":[[t,"#hex"|[r,g,b,a]|stored Color]],"angle":deg,"scale":%,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"opacityStops":[[t,0..1]]?,"midpoints":[0..1]?,"offset":[x,y]?,"dither":bool?,"align":bool?}}|{"pattern":name}|null (no fill)"##;
     vec![
         spec!(
