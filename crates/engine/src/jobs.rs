@@ -956,6 +956,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        keep_raw: false,
         ..Default::default()
     }
 }
@@ -1241,6 +1242,8 @@ impl Session {
         let name_w = name.to_string();
         let name_a = name.to_string();
         let mut opts = import_options(self.prefs());
+        // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
+        opts.keep_raw = confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
