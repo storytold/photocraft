@@ -547,6 +547,173 @@ fn text(app: &PhotocraftApp, id: LayerId) -> TextLayer {
     text_layer(&app.session.active().unwrap().doc, id).unwrap().clone()
 }
 
+/// #10266: a rotated top layer's axis-aligned cache bounds enclose the fourth layer, but its
+/// ink and transformed layout do not. Real canvas clicks must edit the visible lower text.
+#[test]
+fn type_click_picks_lower_text_outside_rotated_top_ink() {
+    for (ppp, grouped) in [(1.0, false), (2.0, true)] {
+        let mut app = new_app();
+        let lower = LayerId(app.run("type.create", json!({"text": "LOWER TEXT", "size": 40, "x": 400, "y": 500})).unwrap()["layer"].as_u64().unwrap());
+        app.run("type.edit", json!({"layer": lower.0, "transform": [1.0, 0.1, -0.1, 1.0, 400.0, 500.0]})).unwrap();
+        for (label, y) in [("Second layer", 180), ("Third layer", 700)] {
+            app.run("type.create", json!({"text": label, "size": 32, "x": 150, "y": y})).unwrap();
+        }
+        let upper = LayerId(app.run("type.create", json!({"text": "TOPMOST ROTATED TEXT", "size": 48})).unwrap()["layer"].as_u64().unwrap());
+        let a = std::f64::consts::FRAC_1_SQRT_2;
+        app.run("type.edit", json!({"layer": upper.0, "transform": [a, a, -a, a, 300.0, 280.0]})).unwrap();
+        if grouped {
+            app.run("layer.new.groupFromLayers", json!({"name": "Inner"})).unwrap();
+            app.run("layer.new.groupFromLayers", json!({"name": "Outer"})).unwrap();
+            app.run("layer.translate", json!({"dx": 35, "dy": 20})).unwrap();
+        }
+        let steps = app.session.active().unwrap().history.entries().len();
+        let mut h = harness(ppp, app);
+        let p = glyph(&mut h, lower, 1, 0.2);
+        let q = xf(h.state()).to_doc(p);
+        let (layout, aff, _) = layout(h.state_mut(), upper).unwrap();
+        let (tx, ty) = super::layout::to_text(&aff, q[0], q[1]);
+        assert!(!photocraft_text::text_point_inside(&layout, tx, ty, 6.0 / h.state().point_zoom()));
+        let cache = text(h.state(), upper).cache.unwrap();
+        assert!(cache.content_bounds().contains(q[0].floor() as i32, q[1].floor() as i32), "regression point lies inside the broad top bounds");
+        assert_eq!(cache.rgba(q[0].floor() as i32, q[1].floor() as i32)[3], 0.0);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(lower.0));
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(lower));
+        assert_eq!(selection(&h), (1, 1));
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "entering native text does not edit it");
+        h.event(egui::Event::Text("X".into()));
+        h.run_steps(2);
+        assert_eq!(text(h.state(), lower).text, "LXOWER TEXT");
+        assert_eq!(text(h.state(), upper).text, "TOPMOST ROTATED TEXT");
+        let p = glyph(&mut h, upper, 1, 0.2);
+        click(&mut h, p);
+        assert!(h.state().ui.text_edit.is_none(), "the first outside click only commits");
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(lower));
+        click(&mut h, p);
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(upper.0));
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1, "one history step for typing");
+    }
+}
+
+/// #10296 review: transparent leading between two soft-wrapped lines still belongs to the
+/// paragraph's layout, so picking must not become an ink-only test.
+#[test]
+fn type_click_between_paragraph_lines_keeps_the_paragraph_target() {
+    for ppp in [1.0, 2.0] {
+        let mut app = new_app();
+        let peer =
+            LayerId(app.run("type.create", json!({"text": "UNCHANGED", "font": "Inter", "size": 32, "x": 100, "y": 100})).unwrap()["layer"].as_u64().unwrap());
+        let original = "MMMM MMMM";
+        let id = LayerId(
+            app.run("type.create", json!({"text": original, "font": "Inter", "size": 32, "box": [400, 300, 150, 260]})).unwrap()["layer"].as_u64().unwrap(),
+        );
+        app.run("type.setStyle", json!({"layer": id.0, "leading": 96})).unwrap();
+        let steps = app.session.active().unwrap().history.entries().len();
+        let mut h = harness(ppp, app);
+        let (l, aff, _) = layout(h.state_mut(), id).unwrap();
+        assert_eq!(l.lines.len(), 2, "one paragraph wraps into two lines");
+        let (first, second) = (&l.lines[0], &l.lines[1]);
+        assert_eq!((first.paragraph, second.paragraph), (0, 0));
+        assert_eq!(second.range.start, 5);
+        let bottom = first.baseline + first.descent;
+        let top = second.baseline - second.ascent;
+        assert!(top > bottom, "explicit leading leaves a gap between line boxes");
+        let c = l.clusters.iter().find(|c| c.range.start == second.range.start).unwrap();
+        let (x, y) = (c.x + c.advance * 0.2, top - (top - bottom) * 0.25);
+        assert!(y > bottom && y < top, "the click is between lines, not inside a glyph");
+        let doc = aff.apply(Point::new(f64::from(x), f64::from(y)));
+        let cache = text(h.state(), id).cache.unwrap();
+        assert_eq!(cache.rgba(doc.x.floor() as i32, doc.y.floor() as i32)[3], 0.0);
+        let p = screen(&mut h, id, x, y);
+        assert!(xf(h.state()).rect.contains(p));
+        assert!(h.state().ui.text_edit.is_none(), "exercise initial layer picking");
+        click(&mut h, p);
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(id.0));
+        assert_eq!(selection(&h), (5, 5), "the gap click places the caret at the second line");
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps);
+        h.event(egui::Event::Text("X".into()));
+        h.run_steps(2);
+        assert_eq!(text(h.state(), id).text, "MMMM XMMMM");
+        assert_eq!(text(h.state(), peer).text, "UNCHANGED");
+    }
+}
+
+/// Imported glyphs can be visible through minification even when the document pixel under the
+/// pointer is transparent and their substituted-font layout is elsewhere.
+#[test]
+fn gpu_type_click_picks_filtered_imported_ink() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    for ppp in [1.0, 2.0] {
+        for zoom in [0.125, 0.25, 0.375, 0.5, 0.75, 1.5] {
+            let mut app = new_app();
+            let id = LayerId(
+                app.run("type.create", json!({"text": "IMPORTED TEXT", "font": "Inter", "size": 64, "color": "#e00000", "x": 100, "y": 100})).unwrap()["layer"]
+                    .as_u64()
+                    .unwrap(),
+            );
+            let mut imported = text(&app, id);
+            imported.transform = Affine::translate(803.0, 451.0);
+            let cache = photocraft_text::shared().lock().unwrap().render(&imported, 72.0, photocraft_color::PixelFormat::RGBA8).1.surface;
+            let doc = std::sync::Arc::make_mut(&mut app.session.active_mut().unwrap().doc);
+            let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!("text") };
+            t.cache = Some(cache.clone());
+            app.session.active_mut().unwrap().revision += 1;
+            let view = &mut app.ui.views[0];
+            (view.zoom, view.center, view.fit_pending) = (zoom, [1000.0, 450.0], false);
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Harness::builder()
+                    .with_size(vec2(1440.0, 900.0))
+                    .with_pixels_per_point(ppp)
+                    .with_max_steps(64)
+                    .wgpu_setup(crate::gpu_canvas::wgpu_setup())
+                    .build_eframe(move |cc| {
+                        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+                        if let Some(rs) = &cc.wgpu_render_state {
+                            app.set_wgpu(rs.clone());
+                        }
+                        app
+                    })
+            }));
+            let Ok(mut h) = built else {
+                eprintln!("skipping: no GPU adapter");
+                return;
+            };
+            h.run_steps(8);
+            assert!(h.state().perf.gpu, "exercise the actual mipmapped canvas");
+            let image = h.render().unwrap();
+            let xf = xf(h.state());
+            let bounds = cache.content_bounds();
+            let a = xf.to_screen(bounds.x0 as f32, bounds.y0 as f32) * ppp;
+            let b = xf.to_screen(bounds.x1 as f32, bounds.y1 as f32) * ppp;
+            let mut candidate: Option<(u16, Pos2, [f64; 2])> = None;
+            for y in (a.y.floor() as u32).saturating_sub(2)..(b.y.ceil() as u32 + 2).min(image.height()) {
+                for x in (a.x.floor() as u32).saturating_sub(2)..(b.x.ceil() as u32 + 2).min(image.width()) {
+                    let [r, g, b, _] = image.get_pixel(x, y).0;
+                    let p = egui::pos2((x as f32 + 0.5) / ppp, (y as f32 + 0.5) / ppp);
+                    let q = xf.to_doc(p);
+                    if r > g.saturating_add(8) && r > b.saturating_add(8) && cache.rgba(q[0].floor() as i32, q[1].floor() as i32)[3] == 0.0 {
+                        let strength = u16::from(r - g) + u16::from(r - b);
+                        if candidate.is_none_or(|c| strength > c.0) {
+                            candidate = Some((strength, p, q));
+                        }
+                    }
+                }
+            }
+            let (_, p, q) = candidate.expect("visible filtered ink over a transparent source pixel");
+            let (l, aff, _) = layout(h.state_mut(), id).unwrap();
+            let (tx, ty) = super::layout::to_text(&aff, q[0], q[1]);
+            assert!(!photocraft_text::text_point_inside(&l, tx, ty, 6.0 / h.state().point_zoom()));
+            let empty = xf.to_screen(bounds.x0 as f32 - 40.0, bounds.y0 as f32 - 40.0);
+            let empty_doc = xf.to_doc(empty);
+            assert_eq!(super::layout::hit_layer(h.state_mut(), empty_doc[0], empty_doc[1]), None, "empty padding remains click-through");
+            click(&mut h, p);
+            assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(id.0), "zoom {zoom}, scale {ppp}: click visible imported ink");
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(id));
+        }
+    }
+}
+
 /// A PSD type layer keeps Photoshop's pixels until it is edited. Clicking into it re-renders it
 /// with our engine first (so the caret sits on what is shown), inside the edit session's single
 /// history step; Cancel brings Photoshop's pixels back.
