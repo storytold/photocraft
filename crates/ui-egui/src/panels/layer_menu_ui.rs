@@ -59,7 +59,7 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
     // Photoshop's New Group dialog.
     v.push(Some((tl!("Group from Layers…"), "layer.new.groupFromLayers")));
     v.push(None);
-    v.push(Some((tl!("Quick Export As PNG"), "layer.quickExportAsPng")));
+    v.push(Some((tl!("Quick Export as PNG"), "layer.quickExportAsPng")));
     v.push(Some((tl!("Export As…"), "layer.exportAs")));
     v.push(None);
     v.push(Some((tl!("Artboard from Layers…"), "layer.new.artboardFromLayers")));
