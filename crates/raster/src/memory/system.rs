@@ -348,14 +348,19 @@ pub(super) mod linux {
 
     /// Whether any cgroup (v1 or v2) filesystem is mounted in this mount namespace.
     fn has_cgroup_mount(info: &str) -> bool {
-        parse_mountinfo(info).iter().any(|m| m.fstype == "cgroup" || m.fstype == "cgroup2")
+        parse_mountinfo(info).iter().any(is_cgroup_mount)
+    }
+
+    fn is_cgroup_mount(mount: &Mount) -> bool {
+        mount.fstype == "cgroup" || mount.fstype == "cgroup2"
     }
 
     /// `mountinfo` parsed to at least one mount, none of them a cgroup filesystem. An empty or
     /// garbled file parses to no mounts at all, which proves nothing about cgroups; a live kernel
     /// always lists the process's own root, so only a real list can show a cgroup mount is absent.
     fn lists_mounts_without_cgroup(info: &str) -> bool {
-        !parse_mountinfo(info).is_empty() && !has_cgroup_mount(info)
+        let mounts = parse_mountinfo(info);
+        !mounts.is_empty() && !mounts.iter().any(is_cgroup_mount)
     }
 
     /// Trims trailing slashes so `Path` equality holds while walking ancestors, keeping `/`.
