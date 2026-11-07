@@ -155,6 +155,13 @@ fn enlarged_solid_sampled_tip_preserves_corners_and_a_one_pixel_edge() {
 }
 
 #[test]
+fn sampled_tip_fractional_corner_multiplies_both_axis_coverages() {
+    let b = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(1, 1, |_, _| 1.0)), ..brush() };
+    let r = raster(&b, &Dab::round(Point::new(50.5, 50.5), 4.0, 1.0));
+    assert!((at(&r, 46, 46) - 0.25).abs() < 1e-6, "a half-covered corner is a quarter-covered pixel");
+}
+
+#[test]
 fn pencil_is_aliased() {
     let b = BrushSettings { aliased: true, hardness: 0.0, size: 9.0, ..brush() };
     let s = paint(&b, &line(10.0, 50.0, 20.5), 64, 40);

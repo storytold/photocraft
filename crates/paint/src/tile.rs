@@ -317,10 +317,17 @@ mod tests {
 
     #[test]
     fn empty_or_missing_mip_levels_sample_as_transparent() {
-        for level in [Mips { levels: vec![] }, Mips { levels: vec![(0, 1, vec![])] }, Mips { levels: vec![(1, 0, vec![])] }] {
+        for level in [
+            Mips { levels: vec![] },
+            Mips { levels: vec![(0, 1, vec![])] },
+            Mips { levels: vec![(1, 0, vec![])] },
+            Mips { levels: vec![(2, 2, vec![1.0, 0.0, 1.0])] },
+        ] {
             assert_eq!(level.sample_clamped(0, 0.5, 0.5), 0.0);
         }
         assert_eq!(Mips { levels: vec![(1, 1, vec![1.0])] }.sample_clamped(1, 0.5, 0.5), 0.0);
+        let one = Mips { levels: vec![(1, 1, vec![0.75])] };
+        assert_eq!(one.sample_clamped(0, -100.0, 200.0), 0.75, "a valid edge texel extends outside the bitmap");
     }
 
     /// Cloning a tile (and the brush settings holding it, on every pointer event of a stroke)

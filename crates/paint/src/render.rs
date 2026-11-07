@@ -1434,14 +1434,16 @@ impl GeneralTip<'_> {
                 }
                 Some(m) => {
                     let (px, py) = (u * inv_scale + tw / 2.0, -(v / ro) * inv_scale + th / 2.0);
-                    if px < -1.0 || py < -1.0 || px > tw + 1.0 || py > th + 1.0 {
-                        continue;
-                    }
                     let s = m.sample_clamped(level, px / tw, py / th);
                     // Clip in document-pixel units, rather than fading one
                     // source texel (which can become dozens of pixels).
-                    let edge = px.min(tw - px).min(py.min(th - py) * ro) / inv_scale;
-                    let val = if aliased { if edge >= 0.0 && s >= 0.5 { 1.0 } else { 0.0 } } else { s * (edge + 0.5).clamp(0.0, 1.0) };
+                    let edge_x = px.min(tw - px) / inv_scale;
+                    let edge_y = py.min(th - py) * ro / inv_scale;
+                    let val = if aliased {
+                        if edge_x >= 0.0 && edge_y >= 0.0 && s >= 0.5 { 1.0 } else { 0.0 }
+                    } else {
+                        s * (edge_x + 0.5).clamp(0.0, 1.0) * (edge_y + 0.5).clamp(0.0, 1.0)
+                    };
                     (val, 1.0 - s)
                 }
             };
