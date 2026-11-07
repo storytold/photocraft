@@ -158,7 +158,8 @@ fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
     let r = with_text(s, p, "Convert to Paragraph Text", |t, dpi| {
         let l = layout_at(dpi, t);
         let size_px = t.char_runs().iter().map(|r| r.style.size_pt).fold(t.size_pt, f32::max) * dpi / 72.0;
-        let ps = t.paragraph_runs().first().map(|p| p.style.clone()).unwrap_or_default();
+        let paragraphs = t.paragraph_runs();
+        let ps = paragraphs.first().map(|p| p.style.clone()).unwrap_or_default();
         let indents = (ps.start_indent_pt + ps.end_indent_pt).max(0.0) * dpi / 72.0;
         if l.vertical {
             // Line space: u along the columns, v across them (first column centred on v = 0).
@@ -177,8 +178,16 @@ fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(json!([x, y, width, height]));
         }
         let [x0, y0, x1, y1] = l.bounds().unwrap_or([0.0, -t.size_pt, t.size_pt, 0.0]);
+        // Alignment bounds trim trailing whitespace. Reserve its advance for later typing (#9945)
+        // where widening the shared frame leaves each paragraph at its original horizontal anchor.
+        let full_width = if matches!(ps.align, TextAlign::Left | TextAlign::Center | TextAlign::Right) && paragraphs.iter().all(|p| p.style.align == ps.align) {
+            // The layouter emits all runs of a line before advancing to the next line.
+            l.clusters.chunk_by(|a, b| a.line == b.line).map(|line| line.iter().map(|c| c.advance).sum::<f32>()).fold(0.0, f32::max)
+        } else {
+            0.0
+        };
         // A little slack so no line re-wraps; the box keeps the text where it was.
-        let width = (x1 - x0).max(1.0) + indents + (size_px * 0.5).max(4.0);
+        let width = (x1 - x0).max(full_width).max(1.0) + indents + (size_px * 0.5).max(4.0);
         let height = (y1 - y0).max(1.0) + size_px * 0.5;
         let x = match ps.align {
             TextAlign::Center | TextAlign::JustifyCenter => -width / 2.0,
