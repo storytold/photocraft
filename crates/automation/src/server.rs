@@ -93,6 +93,16 @@ pub struct ReplaceSmartObjectParams {
     pub layer: Option<Value>,
 }
 
+/// Distinguishes an omitted option (`None`) from an explicit `null` (`Some(None)`), so a caller
+/// that sends `null` is refused rather than silently getting the default.
+fn explicit_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Ok(Some(Option::<T>::deserialize(deserializer)?))
+}
+
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExportLayersParams {
@@ -111,12 +121,13 @@ pub struct ExportLayersParams {
     #[serde(default, rename = "visible_only")]
     pub visible_only: Option<bool>,
     /// What a group produces: `merged`/`single` (default) exports it as one file; `layers` walks
-    /// into it and exports each visible child as its own file.
-    #[serde(default)]
-    pub groups: Option<String>,
+    /// into it and exports each visible child as its own file. An explicit `null` is rejected.
+    #[serde(default, deserialize_with = "explicit_option")]
+    pub groups: Option<Option<String>>,
     /// Filenames: `numbered`/`index` (default) or `layer` for the bare sanitized layer names.
-    #[serde(default)]
-    pub naming: Option<String>,
+    /// An explicit `null` is rejected.
+    #[serde(default, deserialize_with = "explicit_option")]
+    pub naming: Option<Option<String>>,
     /// Encoder quality, 0..12, for the formats that take one.
     #[serde(default)]
     pub quality: Option<f64>,
@@ -815,10 +826,20 @@ impl PhotocraftMcp {
             opts.insert("visibleOnly".into(), json!(v));
         }
         if let Some(v) = p.groups {
-            opts.insert("groups".into(), json!(v));
+            match v {
+                Some(v) => {
+                    opts.insert("groups".into(), json!(v));
+                }
+                None => return Ok(fail("groups must be a string, not null")),
+            }
         }
         if let Some(v) = p.naming {
-            opts.insert("naming".into(), json!(v));
+            match v {
+                Some(v) => {
+                    opts.insert("naming".into(), json!(v));
+                }
+                None => return Ok(fail("naming must be a string, not null")),
+            }
         }
         if let Some(v) = p.quality {
             opts.insert("quality".into(), json!(v));
@@ -1313,6 +1334,20 @@ pub fn render_document_png(doc: &photocraft_doc::Document, max_side: u32) -> Res
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Explicit `null` options parse as `Some(None)` so `doc_export_layers` can refuse them;
+    /// omitted stays `None` and strings keep their value.
+    #[test]
+    fn export_layers_distinguishes_null_from_omitted_options() {
+        let omitted: ExportLayersParams = serde_json::from_value(json!({"dir": "out"})).unwrap();
+        assert!(omitted.groups.is_none() && omitted.naming.is_none());
+        let nulls: ExportLayersParams = serde_json::from_value(json!({"dir": "out", "groups": null, "naming": null})).unwrap();
+        assert_eq!(nulls.groups, Some(None));
+        assert_eq!(nulls.naming, Some(None));
+        let values: ExportLayersParams = serde_json::from_value(json!({"dir": "out", "groups": "layers", "naming": "layer"})).unwrap();
+        assert_eq!(values.groups, Some(Some("layers".into())));
+        assert_eq!(values.naming, Some(Some("layer".into())));
+    }
 
     #[test]
     fn command_rows_keep_bare_and_wrapped_replies_compatible() {

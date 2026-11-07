@@ -1,6 +1,7 @@
 use super::paths::{join, sanitize, stem, write_file};
 use super::save::{SaveOpts, encode};
 use super::{ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Surface, Value, from_rgba_into, json, str_param};
+use unicode_normalization::UnicodeNormalization;
 
 // ---------- Export ----------
 
@@ -176,9 +177,10 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
                     let mut name = format!("{base}.{format}");
                     let mut n = 2;
                     // Destinations are case-insensitive on Windows, and Unicode case folding
-                    // (É/é) matters as much as ASCII: `Logo.png` and `logo.png` would overwrite
-                    // each other, so track the folded name.
-                    while !used.insert(name.to_lowercase()) {
+                    // (É/é) and canonical equivalence (composed/decomposed Hangul) matter as much
+                    // as ASCII: `Logo.png` and `logo.png` would overwrite each other. Fold the
+                    // canonical form, then lowercase; the exported name is unchanged.
+                    while !used.insert(name.nfc().collect::<String>().to_lowercase()) {
                         name = format!("{base}-{n}.{format}");
                         n += 1;
                     }

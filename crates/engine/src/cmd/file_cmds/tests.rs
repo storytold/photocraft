@@ -2640,6 +2640,9 @@ fn layers_to_files_exports_group_children_as_loose_files() {
 #[test]
 fn layers_to_files_folds_name_collisions_and_rejects_untyped_modes() {
     let dir = tmp("layers-names");
+    // Canonically equivalent Hangul: composed syllables and their decomposed Jamo.
+    let composed = "한글";
+    let decomposed = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}";
     let mut s = session(8, 8, 8);
     s.edit("Names", |doc, _| {
         let fmt = doc.pixel_format();
@@ -2647,7 +2650,7 @@ fn layers_to_files_folds_name_collisions_and_rejects_untyped_modes() {
         doc.layers.push(photocraft_doc::Layer::new(
             "Names",
             photocraft_doc::LayerContent::Group(photocraft_doc::Group {
-                children: vec![child("Logo"), child("logo"), child("É"), child("é")],
+                children: vec![child("Logo"), child("logo"), child("É"), child("é"), child(composed), child(decomposed)],
                 expanded: true,
                 artboard: None,
                 frame_stroke: None,
@@ -2660,8 +2663,16 @@ fn layers_to_files_folds_name_collisions_and_rejects_untyped_modes() {
     let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert_eq!(
         files,
-        vec![join(&dir, "é.png"), join(&dir, "É-2.png"), join(&dir, "logo.png"), join(&dir, "Logo-2.png"), join(&dir, "Background.png")],
-        "layer order is top to bottom, and Logo/logo and É/é must not overwrite each other on a case-insensitive destination"
+        vec![
+            join(&dir, &format!("{decomposed}.png")),
+            join(&dir, &format!("{composed}-2.png")),
+            join(&dir, "é.png"),
+            join(&dir, "É-2.png"),
+            join(&dir, "logo.png"),
+            join(&dir, "Logo-2.png"),
+            join(&dir, "Background.png"),
+        ],
+        "layer order is top to bottom, and Logo/logo, É/é and composed/decomposed Hangul must not overwrite each other"
     );
 
     // The advertised default names are aliases for merged/numbered.
