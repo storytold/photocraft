@@ -792,12 +792,10 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Selecting note `i` shows its author and colour in the Note tool's options bar, as Photoshop
-/// does (#7940); a new note then takes them unless they are changed.
 /// The note whose icon is under document point `at` (the topmost), or `None`: the hit test a Note
 /// tool click uses, also for the notes context menu with the Move tool (#11789).
 pub(crate) fn note_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<usize> {
-    let doc = app.session.active().map(|d| d.doc.clone())?;
+    let doc = &app.session.active()?.doc;
     let z = f64::from(app.point_zoom().max(0.01));
     doc.notes.iter().rposition(|n| at[0] >= n.position[0] && at[0] <= n.position[0] + 16.0 / z && at[1] >= n.position[1] && at[1] <= n.position[1] + 20.0 / z)
 }
@@ -819,6 +817,8 @@ pub(crate) fn close_notes_panel(app: &mut PhotocraftApp) {
     app.ui.analysis.notes = false;
 }
 
+/// Selecting note `i` shows its author and colour in the Note tool's options bar, as Photoshop
+/// does (#7940); a new note then takes them unless they are changed.
 fn show_note_options(app: &mut PhotocraftApp, i: usize) {
     let Some(note) = app.session.active().and_then(|d| d.doc.notes.get(i)) else { return };
     let (author, color) = (note.author.clone(), note.color.to_rgb());
