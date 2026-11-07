@@ -234,7 +234,9 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
 #[path = "note_show_on_new_tests.rs"]
 mod note_show_on_new_tests;
 
-/// Create a note with the tool's options and enable Show Notes after success.
+/// Create a note at the rounded document position using the Note tool's options.
+/// After `notes.add` succeeds, select the note and open the Notes panel. Enable Show Notes
+/// while leaving the master Extras switch alone.
 pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Value, String> {
     let a = &app.ui.analysis;
     let params = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": a.note_color});
