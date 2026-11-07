@@ -44,6 +44,7 @@ tempfile = "=3.27.0"
 roxmltree = "0.21"
 craft-update = { workspace = true }
 rfd = { workspace = true }
+tempfile = "3"
 arboard = { version = "3.7", features = ["wayland-data-control"] }
 open = "5"
 # Reads the saved window layout (eframe persistence) to drop values that would abort startup.
