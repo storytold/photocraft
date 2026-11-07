@@ -524,6 +524,31 @@ pub fn live_key(app: &mut PhotocraftApp, doc: &Document, revision: u64, layer: L
     LIVE_TAG | ((session & LIVE_SESSION_MASK) << LIVE_SESSION_SHIFT) | (h & ((1 << LIVE_SESSION_SHIFT) - 1))
 }
 
+/// The text of the LUT folder file that `params` name by path, when it is the file of the live
+/// Color Lookup preview and the step that started it read it (`app.lut_text`, #11341). Nothing
+/// without a live preview, or for another file: a click reads its own file.
+pub(crate) fn lut_text(app: &PhotocraftApp, params: &Value) -> Option<std::sync::Arc<str>> {
+    app.live_adjust.as_ref()?;
+    let (path, text) = app.lut_text.as_ref()?;
+    (params.get("file")?.as_str()? == path).then(|| text.clone())
+}
+
+/// `params` with the LUT folder file they name by path carried as `text` (`data`, with `fileName`
+/// for its name and format), so building the preview, or committing it, reads no file (#11341);
+/// without `text`, or a `file`, a copy of `params`. The params stay small while they are only
+/// hashed and cloned, and grow only here, once per preview built or committed.
+pub(crate) fn live_params(text: Option<&str>, params: &Value) -> Value {
+    let mut out = params.clone();
+    if let (Some(text), Some(Value::String(path))) = (text, out.get("file").cloned())
+        && let Some(map) = out.as_object_mut()
+    {
+        map.remove("file");
+        map.insert("data".into(), Value::String(text.to_owned()));
+        map.insert("fileName".into(), Value::String(path));
+    }
+    out
+}
+
 /// The canvas area to recomposite when document `doc` (at `revision`) switches between two of
 /// this drag's previews, or between one and the committed document (0).
 pub fn live_switch_region(app: &PhotocraftApp, doc: DocId, revision: u64, from: u64, to: u64) -> Option<Rect> {

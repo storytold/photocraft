@@ -105,6 +105,35 @@ fn lookup_params(key: &str) -> Value {
     }
 }
 
+/// The preview params of a dropdown key for a step of the wheel or the arrow keys (#11341): a
+/// built-in by its id, a LUT folder file by its path, read here, once, into `app.lut_text`, from
+/// which the preview is built and the rest commits (`adjust_preview::live_params`) without reading
+/// the file again, while the params themselves stay small for the per-frame hashing. The last
+/// step's text goes whatever this one reads: a file that can't be read, or isn't text, is left to
+/// `layer.setAdjustment` by path, which reports it.
+fn preview_params(app: &mut PhotocraftApp, key: &str) -> Value {
+    app.lut_text = key.strip_prefix(FOLDER_LUT).and_then(|path| {
+        let text = read_lut_text(path)?;
+        Some((path.to_owned(), std::sync::Arc::from(text)))
+    });
+    lookup_params(key)
+}
+
+/// The largest LUT file a step reads: the engine's folder listing skips anything bigger
+/// (`adjust_cmds::MAX_FOLDER_LUT_BYTES`), and a 129^3 `.cube` (the parser's largest) is about 60 MB.
+const MAX_STEP_LUT_BYTES: u64 = 64 << 20;
+
+/// The UTF-8 text of the LUT file at `path`, when it is a regular file of at most
+/// [`MAX_STEP_LUT_BYTES`]: a folder entry swapped for a directory, a device or a huge file since
+/// the scan is left to `layer.setAdjustment` by path rather than read on the UI thread.
+fn read_lut_text(path: &str) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > MAX_STEP_LUT_BYTES {
+        return None;
+    }
+    String::from_utf8(std::fs::read(path).ok()?).ok()
+}
+
 pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
     let t = Tokens::get(ui.ctx());
     let Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, .. } = adj else {
@@ -113,12 +142,17 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
     let builtins = photocraft_engine::adjust_cmds::LOOKS;
     let folder = folder_luts(app, ui.ctx());
     let current = current_lookup(name, lut.is_some(), &folder);
+    // A preview under way (the wheel, the arrow keys) is the shown choice: a built-in by its id, a
+    // LUT folder file by its path (#11341).
     let current = app
         .live_adjust
         .as_ref()
-        .filter(|(layer, params)| *layer == id && params.get("lut").is_some())
-        .and_then(|(_, params)| params.get("lut").and_then(Value::as_str))
-        .map(str::to_owned)
+        .filter(|(layer, _)| *layer == id)
+        .and_then(|(_, params)| match (params.get("lut").and_then(Value::as_str), params.get("file").and_then(Value::as_str)) {
+            (Some(lut), _) => Some(lut.to_owned()),
+            (None, Some(path)) => Some(format!("{FOLDER_LUT}{path}")),
+            (None, None) => None,
+        })
         .unwrap_or(current);
     let custom_label = format!("{name} ({size}³)");
     let mut opts: Vec<(String, &str)> = vec![("load".into(), tl!("Load 3D LUT…")), ("none".into(), tl!("None"))];
@@ -143,10 +177,13 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         let (chosen, _) = widgets::dropdown_wheel_hovered(ui, &format!("clrl-{}", id.0), tl!("Color"), &mut sel, &opts, 170.0);
         if !chosen.is_empty() {
             if cycle_input {
-                // ponytail: wheel previews cover the built-ins only; a folder LUT would be re-read
-                // from disk on every step. Pick it with a click.
-                if sel != "load" && sel != "custom" && !sel.starts_with(FOLDER_LUT) {
-                    app.live_adjust = Some((id, json!({"lut": sel})));
+                // The wheel and the arrow keys preview the LUT folder's files like the built-ins
+                // (#11341): skipping them left the step at the last built-in, the choice falling
+                // back. A folder file is read here, once per step, and kept for the preview and
+                // its commit (`preview_params`, `app.lut_text`).
+                if sel != "load" && sel != "custom" {
+                    let p = preview_params(app, &sel);
+                    app.live_adjust = Some((id, p));
                     cycling_preview = true;
                 }
             } else if sel == "load" {
@@ -164,9 +201,10 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         if ui.input(|input| input.time - since) >= 0.75 {
             if let Some((layer, preview)) = &app.live_adjust
                 && *layer == id
-                && preview.get("lut").is_some()
+                && (preview.get("lut").is_some() || preview.get("file").is_some())
             {
-                params = Some(preview.clone());
+                // A folder file commits as the text its step read: the table that was shown.
+                params = Some(crate::adjust_preview::live_params(crate::adjust_preview::lut_text(app, preview).as_deref(), preview));
             }
             ui.ctx().data_mut(|data| data.remove::<f64>(cycle_key));
         } else {
@@ -195,17 +233,26 @@ pub fn color_lookup_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: Layer
         params = Some(json!({"dither": d}));
     }
     if let Some(mut p) = params {
+        // Tetrahedral or Dither changed under a preview: the previewed look goes with them.
         if p.get("lut").is_none()
+            && p.get("file").is_none()
             && let Some((layer, preview)) = &app.live_adjust
             && *layer == id
-            && let Some(lut) = preview.get("lut")
         {
-            p["lut"] = lut.clone();
+            for k in ["lut", "file"] {
+                if let Some(v) = preview.get(k) {
+                    p[k] = v.clone();
+                }
+            }
+        }
+        if let Some(text) = crate::adjust_preview::lut_text(app, &p) {
+            p = crate::adjust_preview::live_params(Some(&text), &p);
         }
         p["layer"] = json!(id.0);
         // Errors (an unreadable LUT file) land in the status bar.
         let _ = app.run("layer.setAdjustment", p);
         app.live_adjust = None;
+        app.lut_text = None;
         ui.ctx().data_mut(|data| data.remove::<f64>(cycle_key));
     }
 }

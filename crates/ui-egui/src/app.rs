@@ -89,6 +89,7 @@ impl PhotocraftApp {
             type_ime: type_tool::ImeState::default(),
             input_waiters: Vec::new(),
             live_adjust: None,
+            lut_text: None,
             frame: 0,
             notices_hovered: false,
             low_memory: crate::memory_warning::Watch::default(),
