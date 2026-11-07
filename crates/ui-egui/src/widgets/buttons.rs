@@ -217,10 +217,10 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let (mut resp, label_resp) = ui
         .horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
-            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::CLICK);
+            let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::click_and_drag());
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
             let l = ui
-                .add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).selectable(false).sense(Sense::click()))
+                .add(egui::Label::new(egui::RichText::new(tl!(label)).color(t.text_dim)).selectable(false).sense(Sense::click_and_drag()))
                 .on_hover_cursor(egui::CursorIcon::PointingHand);
             // Pressing the label presses the box (#4476).
             let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
@@ -228,14 +228,56 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             (resp.union(l.clone()), l)
         })
         .inner;
-    if resp.clicked() {
-        *on = !*on;
+    if drag_toggle(ui, &resp, resp.rect, on) {
         resp.mark_changed();
     }
     // The label is the single named, focusable checkbox; the box is a mouse target.
     // Override Label's metadata instead of creating a second node with the same name.
     label_resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, tl!(label)));
     resp
+}
+
+/// Click or drag-paint a checkbox (#3333). A click flips `on`. Pressing and dragging flips it and
+/// remembers the new state, and the group it was pressed in (the id scope of the `ui` that holds the box, see `Ui::scope_id`), in the
+/// egui context. Every other checkbox of that same group whose `hit` rect the pointer then sweeps
+/// over is set to the same state (as Photoshop's eye column does), until the button is released.
+/// A box takes part only if it is enabled, the pointer is inside the visible clip of its `ui` and
+/// that `ui`'s layer is the topmost one under the pointer; boxes of other groups, disabled boxes,
+/// clipped-away or covered boxes are left alone. The state outlives the release frame, so a box
+/// that runs before the pressed one in that frame still sees it. `resp` is the response of the
+/// pressed widget (it must sense drags). Returns whether `on` changed.
+pub fn drag_toggle(ui: &Ui, resp: &Response, hit: Rect, on: &mut bool) -> bool {
+    let ctx = ui.ctx();
+    let key = egui::Id::unique("pc-checkbox-drag-target");
+    let frame = ctx.cumulative_frame_nr();
+    // The target carries the last frame the button was seen down in. It stays valid for the one
+    // frame after that (the release frame) and is dropped after it.
+    if let Some((group, target, seen)) = ctx.data(|d| d.get_temp::<(egui::Id, bool, u64)>(key)) {
+        if ctx.input(|i| i.pointer.primary_down()) {
+            ctx.data_mut(|d| d.insert_temp(key, (group, target, frame)));
+        } else if seen.saturating_add(1) < frame {
+            ctx.data_mut(|d| d.remove::<(egui::Id, bool, u64)>(key));
+        }
+    }
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        *on = !*on;
+        ctx.data_mut(|d| d.insert_temp(key, (ui.scope_id(), *on, frame)));
+        return true;
+    }
+    if resp.clicked() {
+        *on = !*on;
+        return true;
+    }
+    let Some((group, target, _)) = ctx.data(|d| d.get_temp::<(egui::Id, bool, u64)>(key)) else { return false };
+    if group != ui.scope_id() || *on == target || !resp.enabled() || !ui.is_enabled() {
+        return false;
+    }
+    let Some(p) = ctx.input(|i| i.pointer.latest_pos()) else { return false };
+    if !hit.contains(p) || !ui.clip_rect().contains(p) || ctx.layer_id_at(p) != Some(ui.layer_id()) {
+        return false;
+    }
+    *on = target;
+    true
 }
 
 /// The fill of a check box: the accent when `on`, else the field colour. While it's pressed
