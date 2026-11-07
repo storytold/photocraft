@@ -1,5 +1,5 @@
 //! File › Automate › Create Droplet (`CrtD`, #10710): the droplet file (`In  `), the action
-//! (`Usng`) and the Batch keys, as `docs/atn.md` measures them. Only the form
+//! (`Usng`) and the Batch keys, as #10710 lists them from the reference application. Only the form
 //! `file.automate.createDroplet` plays the same way maps; any other stays a Photoshop step.
 
 use super::descriptors::{class, desc, jstr, path_text, path_value};

@@ -1,5 +1,6 @@
-//! #10710: Actions steps recorded with the Gradient tool and Create Droplet, as `docs/atn.md`
-//! ("Measured through dialogs and recordings") describes them.
+//! #10710: Actions steps recorded with the Gradient tool and Create Droplet, as the issue's table
+//! gives them (measured in `docs/atn.md` › "Measured through dialogs and recordings"; once mapped,
+//! the events are listed with the supported events instead).
 
 use super::*;
 
@@ -175,4 +176,39 @@ fn create_droplet_steps_that_cannot_be_written_are_refused() {
     let mut no_output = p.clone();
     no_output.as_object_mut().unwrap().remove("output");
     assert!(export_item("file.automate.createDroplet", &no_output, "S").is_none());
+}
+
+/// Loading a set whose action clashes with one already in the panel renames the loaded copy; its
+/// Create Droplet steps follow the rename, as Batch steps do, whether the reference names the
+/// action alone or the action in the file's own set (CodeRabbit review on steps_droplet.rs:59).
+#[test]
+fn create_droplet_steps_follow_a_renamed_loaded_action() {
+    let with_ref = |items: Vec<ReferenceItem>| {
+        let mut d = droplet("/d/S.pcdroplet", "/d/out", &[]);
+        d.items.retain(|(k, _)| !k.is("Usng"));
+        d.with("Usng", D::Reference(items))
+    };
+    let actn = || ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("Sharpen") };
+    let own_set = ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("Recorded") };
+    let file = atn::write(&AtnFile {
+        name: UnicodeString::new_nul("Recorded"),
+        actions: vec![
+            AtnAction { name: UnicodeString::new_nul("Sharpen"), ..Default::default() },
+            AtnAction {
+                name: UnicodeString::new_nul("A"),
+                items: vec![step(b"CrtD", "Create Droplet", with_ref(vec![actn()])), step(b"CrtD", "Create Droplet", with_ref(vec![actn(), own_set]))],
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    })
+    .unwrap();
+    let mut s = Session::new();
+    s.actions.list.push(crate::actions_cmds::Action::new("Sharpen", vec![]));
+    s.actions.list[0].set = Some("Tools".into());
+    let r = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&file), "set": "Loaded"})).unwrap();
+    assert_eq!(r["actions"], json!(["Sharpen 2", "A"]), "{r}");
+    let a = s.actions.list.iter().find(|a| a.name == "A").unwrap();
+    assert_eq!(a.steps[0].1["action"], "Sharpen 2", "{:?}", a.steps[0]);
+    assert_eq!((&a.steps[1].1["action"], &a.steps[1].1["set"]), (&json!("Sharpen 2"), &json!("Loaded")), "{:?}", a.steps[1]);
 }
