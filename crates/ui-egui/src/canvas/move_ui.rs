@@ -383,7 +383,8 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
         return;
     }
     // `nest`: a layer dropped on another artboard joins it (Photoshop's auto-nesting).
-    let Ok(result) = app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": true})) else {
+    let Ok(result) = app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest}))
+    else {
         return;
     };
     // A layer that changed board is clipped by its new board, not the old one the preview showed,
