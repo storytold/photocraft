@@ -1785,6 +1785,63 @@ fn an_8bit_soft_stroke_is_dithered_instead_of_banded() {
     assert!(err < 0.15, "row averages are {err} levels off the float render");
 }
 
+/// `strokes` soft, low-opacity strokes along the same line on a white `fmt` surface, each with its
+/// own seed (as the commands derive one from each stroke's points).
+fn overlapping_soft_strokes(fmt: PixelFormat, strokes: u64) -> Surface {
+    let mut s = Surface::with_default(fmt, &[1.0, 1.0, 1.0, 1.0]);
+    for seed in 1..=strokes {
+        let b = BrushSettings { size: 120.0, hardness: 0.0, opacity: 0.1, color: [0.0, 0.0, 0.0, 1.0], pressure_size: false, seed, ..Default::default() };
+        render_stroke(&mut s, &b, &line(0.0, 300.0, 100.0), None, false, 1.0);
+    }
+    s
+}
+
+/// Largest root-mean-square difference, in 8-bit levels, of one of `got`'s rows from `want`'s
+/// (channel `ch`): the grain a row shows on top of the true value.
+fn worst_row_grain(got: &Surface, want: &Surface, ch: usize) -> f32 {
+    let mut worst = 0.0f32;
+    for y in 30..170 {
+        let mut sq = 0.0;
+        for x in 100..200 {
+            let d = (got.rgba(x, y)[ch] - want.rgba(x, y)[ch]) * 255.0;
+            sq += d * d;
+        }
+        worst = worst.max((sq / 100.0).sqrt());
+    }
+    worst
+}
+
+/// #9156: the dither's noise was the same for every stroke, so each overlapping stroke rounded
+/// the same pixels up and the same pixels down, and the strokes built up a fixed grain.
+#[test]
+fn overlapping_8bit_soft_strokes_do_not_build_up_grain() {
+    let reference = overlapping_soft_strokes(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true), 40);
+    let eight = overlapping_soft_strokes(PixelFormat::RGBA8, 40);
+    // Rounding each stroke independently leaves noise that levels off near 2 levels (RMS) and keeps
+    // every row's average true; one pattern for all strokes grew past 8 levels and drifted by 1.5.
+    let grain = worst_row_grain(&eight, &reference, 0);
+    assert!(grain < 3.0, "rows are {grain} levels (RMS) off the float render");
+    let err = worst_row_error(&eight, &reference);
+    assert!(err < 0.6, "row averages are {err} levels off the float render");
+}
+
+/// The Eraser's soft strokes are dithered too (#9156), in the alpha they leave.
+#[test]
+fn overlapping_8bit_soft_erases_do_not_build_up_grain() {
+    let erase = |fmt: PixelFormat| {
+        let mut s = Surface::with_default(fmt, &[0.0, 0.0, 0.0, 1.0]);
+        for seed in 1..=40 {
+            let b = BrushSettings { size: 120.0, hardness: 0.0, opacity: 0.1, erase: true, pressure_size: false, seed, ..Default::default() };
+            render_stroke(&mut s, &b, &line(0.0, 300.0, 100.0), None, false, 1.0);
+        }
+        s
+    };
+    let reference = erase(PixelFormat::new(ColorMode::Rgb, SampleType::F32, true));
+    let eight = erase(PixelFormat::RGBA8);
+    let grain = worst_row_grain(&eight, &reference, 3);
+    assert!(grain < 3.0, "alpha rows are {grain} levels (RMS) off the float render");
+}
+
 #[test]
 fn dithering_never_moves_an_exact_colour_or_an_untouched_pixel() {
     let mut s = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 1.0]);

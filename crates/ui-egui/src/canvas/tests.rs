@@ -2247,12 +2247,51 @@ fn navigator_keeps_its_image_during_a_live_brush_stroke() {
     assert!(!navigator_waits_for_drag(&app, 0), "the navigator catches up on release");
 }
 
+/// #9156: the seed also picks the 8-bit dither, so repeated dabs on one spot that shared a
+/// seed rounded the same pixels up every time and built up a fixed grain.
+#[test]
+fn brush_strokes_started_on_one_spot_get_their_own_seeds() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 80, "background": "white"})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let m = egui::Modifiers::NONE;
+    let mut seeds = Vec::new();
+    for _ in 0..2 {
+        tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 40.0 }, m);
+        seeds.push(app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").and_then(|(_, p)| p.get("seed").cloned()).unwrap());
+    }
+    assert_ne!(seeds[0], seeds[1], "two strokes from (50, 40)");
+}
+
+/// A failed live preview is dropped (`feed_live_stroke`); the commit still takes the drag's seed
+/// rather than one hashed from the points, so the dither stays per stroke (#9156).
+#[test]
+fn a_brush_stroke_whose_preview_failed_commits_the_seed_it_began_with() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 200, "height": 80, "background": "white"})).unwrap();
+    app.ui.tool = Tool::Brush;
+    let m = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, m);
+    tool_event(&mut app, ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 }, m);
+    // The seed the live preview began with, not one recomputed the way the fallback does.
+    let want = match &app.live_stroke.as_ref().unwrap().stroke {
+        super::strokes::EngineStroke::Brush(stroke) => stroke.seed,
+        _ => panic!("expected a Brush preview"),
+    };
+    app.live_stroke = None;
+    tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 40.0 }, m);
+    let got = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").and_then(|(_, p)| p.get("seed").cloned()).unwrap();
+    assert_eq!(got, json!(want));
+}
+
 #[test]
 fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
     // preview draws that tail live, so no frame after release is missing the end.
     let xs = [30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 150.0, 170.0];
-    let (live, done, partial, _) = drag_frames(0.5, &xs);
+    let (live, done, partial, app) = drag_frames(0.5, &xs);
     assert!(same_pixels(&live, &done), "preview at the last move = committed stroke, tail included");
     assert!(partial);
     let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0)).unwrap();
@@ -2266,8 +2305,9 @@ fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     s.execute("tools.setBrush", json!({"brush": {"size": 16, "hardness": 0.5, "smoothing": {"amount": 0.5}}})).unwrap();
     let mut pts = vec![json!([10.0, 40.0, 1.0])];
     pts.extend(xs.iter().map(|&x| json!([x, 40.0 + (x / 7.0).sin() * 8.0, 1.0])));
-    // (Round tips without dynamics draw the same for any seed.)
-    s.execute("paint.stroke", json!({"points": pts, "seed": 0})).unwrap();
+    // With the committed stroke's seed: it also picks the 8-bit dither's noise (#9156).
+    let seed = app.session.journal.iter().rev().find(|(id, _)| id == "paint.stroke").and_then(|(_, p)| p.get("seed").cloned()).unwrap();
+    s.execute("paint.stroke", json!({"points": pts, "seed": seed})).unwrap();
     assert!(same_pixels(&s.active().unwrap().doc, &done));
 }
 

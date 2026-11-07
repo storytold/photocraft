@@ -29,11 +29,13 @@ const DITHER_SALT: u64 = 0x0000_6469_7468_6572;
 /// Before a stroke's result is quantised to 8 bits, offset every channel of the pixel by the same
 /// deterministic noise of under half a level, so fractional values round up or down in proportion
 /// (a soft, low-flow stroke's fine gradient survives as grain instead of bands). A value already on
-/// an 8-bit level still rounds back to itself, and because the noise depends only on the pixel's
-/// position, the live preview, the commit and a replay all agree.
+/// an 8-bit level still rounds back to itself. The noise depends on the pixel's position and the
+/// stroke's `seed`, so the live preview, the commit and a replay all agree, while each stroke
+/// rounds differently: with one pattern for every stroke, overlapping soft strokes rounded the
+/// same pixels up every time and built up a fixed grain (#9156).
 #[inline]
-fn dither8(px: &mut [f32], x: i32, y: i32) {
-    let d = (hash2(x, y, DITHER_SALT) - 0.5) / 255.0;
+fn dither8(px: &mut [f32], x: i32, y: i32, seed: u64) {
+    let d = (hash2(x, y, DITHER_SALT ^ seed) - 0.5) / 255.0;
     for v in px.iter_mut() {
         *v += d;
     }
@@ -1193,7 +1195,7 @@ impl StrokeRenderer {
                                 px[a] *= 1.0 - k;
                             }
                             if dither {
-                                dither8(px, x, y);
+                                dither8(px, x, y, b.seed);
                             }
                             continue;
                         }
@@ -1235,7 +1237,7 @@ impl StrokeRenderer {
                             px.copy_from_slice(&enc[..n]);
                         }
                         if dither {
-                            dither8(px, x, y);
+                            dither8(px, x, y, b.seed);
                         }
                     }
                 }
