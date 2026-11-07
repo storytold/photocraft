@@ -69,7 +69,10 @@ fn render(profile: &str, rgb: [f32; 3], reopen: bool) -> Option<([u8; 3], [u8; 3
         let bytes = photocraft_format::save_to_bytes(&doc, &photocraft_format::SaveOptions::default()).expect("save native document");
         drop(doc);
         let observer = observer.lock().expect("GPU observer lock").clone().expect("GPU observer");
-        let (request, _) = photocraft_ui_egui::control::ControlRequest::new("ui.menu.invoke", json!({"id":"filter.blur.gaussianBlur"}));
+        // A filter whose preview runs on the CPU and uploads its own texture (the blurs and
+        // sharpens preview on the GPU at 100 %, #5772: `filter_gpu_preview_tests` covers their
+        // release).
+        let (request, _) = photocraft_ui_egui::control::ControlRequest::new("ui.menu.invoke", json!({"id":"filter.noise.median"}));
         let ctx = harness.ctx.clone();
         let response = photocraft_ui_egui::control::handle(harness.state_mut(), &ctx, &request);
         assert!(matches!(response, photocraft_ui_egui::control::Outcome::Done(_)));
