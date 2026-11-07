@@ -119,7 +119,18 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     if n.text != d.notes[i].text || n.author != d.notes[i].author {
         n.modified = pdf_date();
     }
-    let label = if n.position != d.notes[i].position { "Move Note" } else { "Edit Note" };
+    // One field changed from the options bar: Photoshop's names for it (#11790).
+    let old = &d.notes[i];
+    let only = |author: bool, color: bool| (n.author != old.author) == author && (n.color != old.color) == color && n.text == old.text && n.open == old.open;
+    let label = if n.position != old.position {
+        "Move Note"
+    } else if only(true, false) {
+        "Note Author"
+    } else if only(false, true) {
+        "Note Color"
+    } else {
+        "Edit Note"
+    };
     let out = note_json(i, &n);
     s.edit(label, |d, _| {
         d.notes[i] = n;

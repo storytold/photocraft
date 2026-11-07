@@ -997,9 +997,16 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     if target == "artboardBackground" {
         return crate::artboard_tool::bar::set_custom_background_from_picker(app, color, f.get("color") == f.get("__orig"));
     }
-    // The Note tool's colour for new notes (#2144).
+    // The Note tool's colour (#2144): with a note selected it recolours that note, one "Note Color"
+    // step; with none it is the default for new notes (#11790).
     if target == "noteColor" {
-        app.ui.analysis.note_color = parse_hex(color).ok_or("not a colour")?;
+        let rgb = parse_hex(color).ok_or("not a colour")?;
+        if let Some(i) = crate::analysis_ui::selected_note(app) {
+            app.run("notes.set", json!({"index": i, "color": color}))?;
+        } else {
+            app.ui.analysis.note_default_color = rgb;
+        }
+        app.ui.analysis.note_color = rgb;
         return Ok(json!({ "color": color }));
     }
     if target == "pasteboard" {
