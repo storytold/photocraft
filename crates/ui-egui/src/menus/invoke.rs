@@ -10,6 +10,7 @@ pub(crate) fn panel_alias(id: &str) -> Option<&'static str> {
         "navigator" | "info" | "histogram" => "window.toggle.navigator",
         "tools" => "window.toggle.toolbar",
         "options" => "window.toggle.options",
+        "contextualTaskBar" => "window.toggle.contextualTaskBar",
         "brushSettings" => "window.toggle.brushSettings",
         "brushes" => "window.toggle.brushes",
         _ => return None,
@@ -626,6 +627,10 @@ fn type_command_target(app: &PhotocraftApp) -> Option<Value> {
 fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     match id {
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => Some(app.run(id, params.clone())),
+        "view.editSelectedGuides" => Some(crate::new_guide_ui::open_edit(app).map(|_| Value::Null)),
+        "view.clearSelectedGuides" => {
+            Some(crate::guide_select::delete_selected(app).and_then(|done| if done { Ok(Value::Null) } else { Err("No guide is selected".to_string()) }))
+        }
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => {
             let extras = &mut app.ui.extras;
             let slot = match id {
@@ -799,6 +804,7 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
         "navigator" => &mut panels.navigator,
         "toolbar" => &mut panels.toolbar,
         "options" => &mut panels.options_bar,
+        "contextualTaskBar" => &mut panels.context_task_bar,
         "brushSettings" => &mut panels.brush_settings,
         "brushes" => &mut panels.brushes,
         "dock" => &mut panels.dock,
