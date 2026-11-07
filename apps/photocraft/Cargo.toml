@@ -27,8 +27,10 @@ photocraft-io = { workspace = true }
 photocraft-format = { workspace = true }
 photocraft-automation = { workspace = true }
 photocraft-ui-egui = { workspace = true }
-# Pen tablet pressure/tilt on macOS and X11 (the workspace's one isolated unsafe helper crate).
+# Pen tablet pressure/tilt on macOS and X11 (an isolated unsafe helper crate).
 photocraft-tablet = { workspace = true }
+# Scanner import (macOS Image Capture; unavailable on other platforms). The other isolated unsafe helper.
+photocraft-scan = { workspace = true }
 eframe = { workspace = true, features = ["wgpu", "accesskit", "wayland", "x11", "persistence", "clipboard"] }
 egui = { workspace = true }
 serde = { workspace = true }

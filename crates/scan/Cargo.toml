@@ -1,0 +1,28 @@
+[package]
+name = "photocraft-scan"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Scanner import: macOS Image Capture behind a safe API, unavailable elsewhere"
+
+# The second isolated `unsafe` helper (see AGENTS.md). Image Capture's device browser is Objective-C.
+# Only `src/macos.rs` allows `unsafe`; everything else is denied, and every other crate keeps the
+# workspace's `unsafe_code = "forbid"`.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+cognitive_complexity = "deny"
+too_many_arguments = "deny"
+wildcard_imports = "deny"
+dbg_macro = "warn"
+todo = "warn"
+
+[dependencies]
+image = { workspace = true, features = ["jpeg", "png", "tiff"] }
+
+# Already in Cargo.lock (winit, photocraft-tablet); pinned exactly: review the diff before bumping.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "=0.6.5"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSDate", "NSError", "NSGeometry", "NSString", "NSURL", "NSRunLoop", "NSValue"] }
+objc2-image-capture-core = { version = "=0.3.2", default-features = false, features = ["std", "ICDevice", "ICDeviceBrowser", "ICScannerDevice", "ICScannerFunctionalUnits"] }

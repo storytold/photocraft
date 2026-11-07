@@ -90,7 +90,8 @@ in `ci.yml`. Build option: `docs/development.md` › Fonts.
 `MACOSX_DEPLOYMENT_TARGET=11.0`, joins them with `lipo`, and assembles `PhotoCraft.app`:
 
 - `Info.plist` is generated from `Info.plist.in`. The bundle id is `ai.storyteller.photocraft`.
-  The plist sets `LSMinimumSystemVersion` 11.0, `NSHighResolutionCapable`, and document types:
+  The plist sets `LSMinimumSystemVersion` 11.0, `NSHighResolutionCapable`,
+  `NSLocalNetworkUsageDescription` (network scanners), and document types:
   `.pcraft` (Owner), plus PSD/PSB and the image formats PhotoCraft reads (Alternate, so it never
   takes over Preview's defaults). The icon is `assets/app-icon/photocraft.icns`.
 - **Signing** goes inside-out with the hardened runtime and a secure timestamp. The executable

@@ -429,6 +429,37 @@ pub type PenEndFn = Box<dyn Fn() -> Option<bool> + Send + Sync>;
 /// whether the app window is focused (to re-assert WinTab overlap priority on activation).
 pub type TabletPollFn = Box<dyn FnMut(bool)>;
 
+/// One scanner the desktop app can import from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanDevice {
+    pub id: String,
+    pub name: String,
+}
+
+/// A page to scan. `mode` is `color`, `gray` or `bw`. `resolution` is a dpi the scanner should use.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanRequest {
+    pub device_id: String,
+    pub resolution: u32,
+    pub mode: String,
+}
+
+/// One scanned page, 8-bit RGBA. `pages` is how many the feeder produced; only the first is here.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScanBuffer {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+    pub resolution: u32,
+    pub pages: u32,
+}
+
+/// List scanners. See [`Services::scan_list`].
+pub type ScanListFn = Box<dyn Fn(std::time::Duration) -> Result<Vec<ScanDevice>, String>>;
+
+/// Acquire one page. See [`Services::scan_acquire`].
+pub type ScanAcquireFn = Box<dyn Fn(ScanRequest) -> Result<ScanBuffer, String>>;
+
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
 #[derive(Default)]
@@ -570,4 +601,9 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// Scanners attached to this computer. `None` in the browser and in tests. The call blocks until
+    /// `timeout` (the desktop app runs it on the main thread, after a frame has painted "Looking…").
+    pub scan_list: Option<ScanListFn>,
+    /// Scan one page from a device id returned by [`Self::scan_list`]. Blocks until the page arrives.
+    pub scan_acquire: Option<ScanAcquireFn>,
 }

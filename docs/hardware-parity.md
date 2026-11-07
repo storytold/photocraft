@@ -65,12 +65,13 @@ rotation; its eraser end comes from the pointer hooks (#2285).
 | Touch Bar | yes (Intel Macs) | no | missing (low value) |
 | Touch screens (Windows) | yes | basic pointer only | partial |
 | 3D mouse, MIDI, Surface Dial | Surface Dial on Windows | no | missing (low value) |
-| Scanners (WIA / TWAIN) | WIA menu (Windows) | menu item live; no driver integration | partial |
+| Scanners (WIA / TWAIN / Image Capture) | WIA menu (Windows); TWAIN; macOS Image Capture | File › Import › Scan… on macOS (Image Capture: USB and network scanners, one page, 75–600 dpi). WIA menu still has no driver | partial |
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | macOS File › Import › Scan… via Image Capture. WIA is still a menu stub |
 | 2026-11-06 | minor | Windows eraser end: the pointer hooks read `PEN_FLAG_INVERTED` and the Eraser switch follows it (Windows Ink on; #2285) |
 | 2026-11-05 | minor | Optional WinTab driver mode on Windows: pressure and eraser; tilt with orientation axes; rotation with a twist-reporting pen, with Windows Ink off |
 | 2026-10-28 | minor | Build GPU compositor pipelines in the background; benchmark baseline pending (#9157) |
