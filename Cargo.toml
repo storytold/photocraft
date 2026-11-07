@@ -45,6 +45,13 @@ craft-jpeg = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5
 craft-pcraft-format = { git = "https://github.com/storytold/craft-libs", rev = "b8f7d93b00dfb8f172938f3d2d796ae62dcfe123" }
 # craft-update: app-specific pretend versions apply to startup and manual checks.
 craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7", features = ["egui"] }
+# The Craft suite's shared AI layer (connections, models, jobs). Native only: the desktop app
+# holds the client (apps/photocraft/src/subject_ai.rs); the engine and UI reach it through
+# `photocraft_engine::subject_model`. One revision for all of them.
+craft-ai-client = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317", features = ["burn"] }
+craft-ai-core = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317" }
+craft-ai-features = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317" }
+craft-ai-native = { git = "https://github.com/storytold/craft-ai-integrations", rev = "9baaaa79b3c09368b7104b8a935c5e16e1c70317" }
 thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"

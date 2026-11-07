@@ -292,7 +292,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::channel_options_ui::owns(fields) => crate::channel_options_ui::body(ui, fields),
         _ if crate::channel_options_ui::owns_new_spot(fields) => crate::channel_options_ui::new_spot_body(ui, fields),
         _ if crate::shape_dialog::owns(fields) => crate::shape_dialog::body(app, ui, fields),
-        _ if crate::delete_layer_prompt::owns(fields) => crate::delete_layer_prompt::body(ui, fields),
+        _ if is_short_prompt(fields) => short_prompt_body(ui, fields),
         _ if crate::disk_change_prompt::owns(fields) => crate::disk_change_prompt::body(ui, fields),
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
@@ -508,6 +508,14 @@ fn button_row(
                 fields.insert("choice".into(), json!("new"));
             }
             hit
+        } else if crate::subject_model_prompt::owns(fields) {
+            // Download / Cancel / Use Built-in Method: Enter downloads.
+            let built_in = DialogButton::new(ButtonRole::Alternate, tl!("Use Built-in Method"), 150.0);
+            let hit = dialog_buttons(ui, &[ok, cancel, built_in]);
+            if hit == Some(ButtonRole::Alternate) {
+                fields.insert("choice".into(), json!("builtIn"));
+            }
+            hit
         } else {
             dialog_buttons(ui, &[ok, cancel])
         };
@@ -523,6 +531,20 @@ fn button_row(
     (outcome, apply_requested)
 }
 
+/// A prompt that asks before a command runs: deleting from the Layers panel, or the subject
+/// model's offer.
+fn is_short_prompt(fields: &serde_json::Map<String, Value>) -> bool {
+    crate::delete_layer_prompt::owns(fields) || crate::subject_model_prompt::owns(fields)
+}
+
+fn short_prompt_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
+    if crate::subject_model_prompt::owns(fields) { crate::subject_model_prompt::body(ui, fields) } else { crate::delete_layer_prompt::body(ui, fields) }
+}
+
+fn short_prompt_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    if crate::subject_model_prompt::owns(fields) { crate::subject_model_prompt::confirm(app, fields) } else { crate::delete_layer_prompt::confirm(app, fields) }
+}
+
 /// The default button's label: what OK means for this dialog.
 fn ok_label(d: &Dialog) -> &'static str {
     if d.kind == DialogKind::NewDocument {
@@ -533,6 +555,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Continue")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
         tl!("Delete")
+    } else if crate::subject_model_prompt::owns(&d.fields) {
+        tl!("Download")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
     } else if d.fields.contains_key("__export") {
@@ -864,6 +888,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     merge_channels_ui::owns,
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
+    crate::subject_model_prompt::owns,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
     crate::actions::owns_insert_stop,
@@ -1035,7 +1060,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::channel_options_ui::owns(&d.fields) => crate::channel_options_ui::confirm(app, &d.fields),
         _ if crate::channel_options_ui::owns_new_spot(&d.fields) => crate::channel_options_ui::confirm_new_spot(app, &d.fields),
         _ if crate::shape_dialog::owns(&d.fields) => crate::shape_dialog::confirm(app, &d.fields),
-        _ if crate::delete_layer_prompt::owns(&d.fields) => crate::delete_layer_prompt::confirm(app, &d.fields),
+        _ if is_short_prompt(&d.fields) => short_prompt_confirm(app, &d.fields),
         _ if crate::disk_change_prompt::owns(&d.fields) => crate::disk_change_prompt::confirm(app, &d.fields),
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
@@ -1239,6 +1264,7 @@ pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;
 pub mod stack_dialog;
 pub mod stroke_ui;
+pub mod subject_model_prompt;
 pub mod targa_options_ui;
 #[cfg(test)]
 mod tests;

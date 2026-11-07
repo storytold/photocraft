@@ -1133,3 +1133,9 @@ fn csh_import_with_inline_data_ignores_an_unreadable_path() {
     assert_eq!(result["names"], serde_json::json!(["Inline"]), "{result}");
     assert_eq!(result["group"], "Inline Set", "{result}");
 }
+
+#[test]
+fn only_a_person_agrees_to_a_models_terms() {
+    let id = photocraft_engine::subject_model_cmds::INSTALL_CMD;
+    assert!(authorize_desktop_engine_command(id, &serde_json::json!({"acceptTerms": true})).is_err());
+}

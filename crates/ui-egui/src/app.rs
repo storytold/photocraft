@@ -35,6 +35,7 @@ pub use thumbs::surface_fingerprint;
 impl PhotocraftApp {
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
+        session.set_subject_model(services.subject_model.clone());
         let mut app = Self {
             session,
             ui: UiState::default(),
