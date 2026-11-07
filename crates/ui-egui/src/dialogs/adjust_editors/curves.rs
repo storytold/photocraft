@@ -78,15 +78,24 @@ pub(super) fn editor_channel_picker(ui: &mut egui::Ui, id: egui::Id, channels: &
             (egui::Key::Num8, 8),
             (egui::Key::Num9, 9),
         ];
-        let picked = ui.input_mut(|i| {
-            DIGITS.iter().find_map(|&(key, n)| channel_for_shortcut(channels, space, n).filter(|_| i.consume_key(egui::Modifiers::COMMAND, key)))
-        });
+        // ⌘ alone: Alt+⌘ and Shift+⌘ digits are left alone (Curves' Alt+digits are #7325's).
+        let picked = ui.input_mut(|i| DIGITS.iter().find_map(|&(key, n)| channel_for_shortcut(channels, space, n).filter(|_| take_command_key(i, key))));
         if let Some(ch) = picked {
             ui.data_mut(|d| d.insert_temp(id, ch));
         }
     }
     let options: Vec<_> = channels.iter().enumerate().map(|(i, (_, name, _))| (i, name.as_str())).collect();
     channel_picker_opts(ui, id, &options, tl!("Channel:"), false)
+}
+
+/// Consumes one press of `key` with ⌘ (Ctrl off macOS) and no other modifier; true if there was one.
+/// egui's `consume_key` would also take it with Alt or Shift held.
+fn take_command_key(i: &mut egui::InputState, key: egui::Key) -> bool {
+    let at = i
+        .events
+        .iter()
+        .position(|e| matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && modifiers.matches_exact(egui::Modifiers::COMMAND)));
+    at.map(|at| i.events.remove(at)).is_some()
 }
 
 /// The entry of `channels` that ⌘`n` picks in the Levels and Curves dialogs, as in Photoshop
@@ -905,10 +914,15 @@ mod channel_key_tests {
     fn other_modifiers_and_the_properties_panel_leave_the_keys_alone() {
         let ctx = egui::Context::default();
         let dialog = cx(true, false);
-        for m in [Modifiers::NONE, Modifiers::COMMAND, Modifiers::ALT | Modifiers::SHIFT, Modifiers::ALT | Modifiers::COMMAND] {
+        // ⌘ alone is the dialogs' own channel shortcut (#11283), so it isn't in this list.
+        for m in [Modifiers::NONE, Modifiers::ALT | Modifiers::SHIFT, Modifiers::ALT | Modifiers::COMMAND, Modifiers::SHIFT | Modifiers::COMMAND] {
             let (ch, left) = frame(&ctx, &mut json!({}), &dialog, vec![press(Key::Num3, m)]);
             assert_eq!((ch, left), (0, 1), "{m:?}");
         }
+        // ⌘3 picks Red, the document's first channel, as in Photoshop (#11283).
+        assert_eq!(frame(&ctx, &mut json!({}), &dialog, vec![press(Key::Num3, Modifiers::COMMAND)]), (1, 0));
+        // Back to the composite for the panel check below.
+        assert_eq!(frame(&ctx, &mut json!({}), &dialog, vec![press(Key::Num2, Modifiers::COMMAND)]), (0, 0));
         let panel = cx(false, false);
         let (ch, left) = frame(&ctx, &mut json!({}), &panel, vec![press(Key::Num3, Modifiers::ALT)]);
         assert_eq!((ch, left), (0, 1));
