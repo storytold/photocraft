@@ -83,3 +83,16 @@ fn settings_without_a_key_are_refused() {
     assert!(export_item("image.applyDataSet", &json!({"index": 2}), "S").is_none());
     assert!(export_item("file.import.notes", &json!({}), "S").is_none());
 }
+
+/// An `apply` naming a data set with an empty name has no `image.applyDataSet` form that saves
+/// back, so it keeps the Photoshop step and round-trips unchanged (CodeRabbit review on
+/// steps_file_menu.rs:54).
+#[test]
+fn an_empty_data_set_name_keeps_the_photoshop_step() {
+    let empty = desc("null").with("null", name_ref("dataSetClass", ""));
+    let items = vec![named("apply", "Apply Data Set", empty.clone())];
+    let (mut s, _) = load(items);
+    assert_ne!(s.actions.list[0].steps[0].0, "image.applyDataSet", "{:?}", s.actions.list[0].steps);
+    let back = saved(&mut s);
+    assert_eq!((back[0].event.id(), back[0].descriptor.as_ref()), ("apply".to_string(), Some(&empty)));
+}
