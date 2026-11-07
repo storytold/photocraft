@@ -13,6 +13,8 @@ pub struct Pending {
     command: String,
     params: Value,
     target: Target,
+    /// The download's job: only its own end goes on with the command, or drops it.
+    job: u64,
 }
 
 /// What a command was asked on: the document and its active layer then.
@@ -122,7 +124,9 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
     }
     let started = app.run_command(INSTALL_CMD, json!({"acceptTerms": true}))?;
     if started.get("pending").and_then(Value::as_bool) == Some(true) {
-        app.jobs.subject_model_pending = Some(Pending { command: command.into(), params, target: asked_on });
+        if let Some(job) = started.get("job").and_then(Value::as_u64) {
+            app.jobs.subject_model_pending = Some(Pending { command: command.into(), params, target: asked_on, job });
+        }
         return Ok(started);
     }
     app.run_command(command, params)
@@ -131,10 +135,14 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
 /// The download ended: the command it waited for goes on, on the same document and layer. `true`
 /// when that failed and the error is reported, so the download's own message must not replace it.
 pub fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
-    if e.command != INSTALL_CMD || !matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
+    if e.command != INSTALL_CMD || app.jobs.subject_model_pending.as_ref().is_none_or(|p| p.job != e.id.0) {
         return false;
     }
+    // A failed or cancelled download drops the command with it.
     let Some(pending) = app.jobs.subject_model_pending.take() else { return false };
+    if !matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
+        return false;
+    }
     let result = if target(app) == Some(pending.target) { app.run_command(&pending.command, pending.params) } else { Err(changed()) };
     match result {
         Ok(_) => false,
@@ -283,18 +291,43 @@ mod tests {
         let mut app = make_app(Some(Arc::default()));
         let document = app.session.active().unwrap().doc.id;
         let layer = app.session.active().unwrap().active_layer.map(|id| id.0);
-        app.jobs.subject_model_pending =
-            Some(Pending { command: "layer.removeBackground".into(), params: json!({"layer": 999_999}), target: Target { document: document.0, layer } });
-        let event = photocraft_engine::jobs::JobEvent {
-            id: photocraft_engine::jobs::JobId(0),
+        app.jobs.subject_model_pending = Some(Pending {
+            command: "layer.removeBackground".into(),
+            params: json!({"layer": 999_999}),
+            target: Target { document: document.0, layer },
+            job: 0,
+        });
+        let event = install_event(0, document, photocraft_engine::jobs::JobOutcome::Done(json!({"installed": true})));
+        assert!(on_job_event(&mut app, &event), "the caller keeps the error");
+        assert!(app.ui.status_error);
+    }
+
+    /// The end of the download job `id`.
+    fn install_event(id: u64, document: photocraft_doc::DocId, outcome: photocraft_engine::jobs::JobOutcome) -> photocraft_engine::jobs::JobEvent {
+        photocraft_engine::jobs::JobEvent {
+            id: photocraft_engine::jobs::JobId(id),
             command: INSTALL_CMD.into(),
             label: "Download Subject Model".into(),
             document: Some(document),
-            outcome: photocraft_engine::jobs::JobOutcome::Done(json!({"installed": true})),
+            outcome,
             error: None,
-        };
-        assert!(on_job_event(&mut app, &event), "the caller keeps the error");
-        assert!(app.ui.status_error);
+        }
+    }
+
+    #[test]
+    fn only_its_own_download_goes_on_with_the_command_and_a_failed_one_drops_it() {
+        let mut app = make_app(Some(Arc::default()));
+        let document = app.session.active().unwrap().doc.id;
+        let layer = app.session.active().unwrap().active_layer.map(|id| id.0);
+        app.jobs.subject_model_pending =
+            Some(Pending { command: "layer.removeBackground".into(), params: json!({}), target: Target { document: document.0, layer }, job: 7 });
+        let done = || photocraft_engine::jobs::JobOutcome::Done(json!({"installed": true}));
+        assert!(!on_job_event(&mut app, &install_event(8, document, done())));
+        assert!(app.jobs.subject_model_pending.is_some(), "another download leaves it waiting");
+        assert!(!on_job_event(&mut app, &install_event(7, document, photocraft_engine::jobs::JobOutcome::Failed("offline".into()))));
+        assert!(app.jobs.subject_model_pending.is_none(), "a failed download drops it");
+        assert!(!on_job_event(&mut app, &install_event(9, document, done())));
+        assert!(!mask_exists(&app), "a later download runs nothing");
     }
 
     #[test]

@@ -128,25 +128,104 @@ fn failed(message: impl ToString) -> ModelError {
     ModelError::Failed(message.to_string())
 }
 
-/// `image` as a file the engine reads: PNG, or JPEG when a PNG would pass the layer's limit for
-/// one payload. The engine reads the whole picture and only a mask comes back, so a good JPEG is
-/// enough for the pictures too big for a PNG.
-fn encode(image: &SubjectImage) -> Result<Payload, ModelError> {
+/// The model's input: `image` as a file the engine reads, within `limit`, the shared layer's limit
+/// for one payload (the engine reads only inline pictures). PNG, or a good JPEG when a PNG would
+/// not fit: the engine reads the whole picture and only a mask comes back. A picture too big even
+/// as a JPEG goes at half size, as often as it takes, and its mask is scaled back up
+/// ([`fit_mask`]). Returns the payload and the size of the picture in it.
+fn encode(image: &SubjectImage, limit: u64) -> Result<(Payload, u32, u32), ModelError> {
+    let mut smaller: Option<SubjectImage> = None;
+    loop {
+        let current = smaller.as_ref().unwrap_or(image);
+        if let Some(payload) = encode_within(current, limit)? {
+            return Ok((payload, current.width, current.height));
+        }
+        if current.width <= 1 && current.height <= 1 {
+            return Err(failed("The picture is too big to hand to the model."));
+        }
+        let next = half(current);
+        smaller = Some(next);
+    }
+}
+
+/// `image` as PNG, else as a good JPEG, whichever fits `limit` first; `None` when neither does.
+fn encode_within(image: &SubjectImage, limit: u64) -> Result<Option<Payload>, ModelError> {
     let img = Image::from_u8(image.width, image.height, ChannelLayout::Rgb, image.rgb.clone()).map_err(failed)?;
     let png = photocraft_codecs::encode(&img, Format::Png, &EncodeOptions::default()).map_err(failed)?;
-    if png.len() as u64 <= craft_ai_core::Limits::default().max_inline_bytes {
-        return Payload::inline("image/png", png).map_err(failed);
+    if png.len() as u64 <= limit {
+        return Payload::inline("image/png", png).map(Some).map_err(failed);
     }
     let options = EncodeOptions { jpeg_quality: 95, jpeg_chroma_subsampling: false, ..EncodeOptions::default() };
     let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &options).map_err(failed)?;
-    Payload::inline("image/jpeg", jpeg).map_err(failed)
+    if jpeg.len() as u64 <= limit {
+        return Payload::inline("image/jpeg", jpeg).map(Some).map_err(failed);
+    }
+    Ok(None)
 }
 
-/// The mask in `png`, one byte per pixel, checked against the picture it answers.
-fn decode_mask(png: &[u8], image: &SubjectImage) -> Result<Vec<u8>, ModelError> {
+/// `image` at half size (rounded up), each pixel the mean of the up to four it covers.
+fn half(image: &SubjectImage) -> SubjectImage {
+    let (w, h) = (image.width as usize, image.height as usize);
+    let (half_w, half_h) = (w.div_ceil(2), h.div_ceil(2));
+    let mut rgb = Vec::with_capacity(half_w.saturating_mul(half_h).saturating_mul(3));
+    for y in 0..half_h {
+        for x in 0..half_w {
+            let mut sum = [0u32; 3];
+            let mut n = 0u32;
+            for (sx, sy) in [(2 * x, 2 * y), (2 * x + 1, 2 * y), (2 * x, 2 * y + 1), (2 * x + 1, 2 * y + 1)] {
+                let start = (sy * w + sx) * 3;
+                if sx < w
+                    && sy < h
+                    && let Some(px) = image.rgb.get(start..start + 3)
+                {
+                    for (total, value) in sum.iter_mut().zip(px) {
+                        *total += u32::from(*value);
+                    }
+                    n += 1;
+                }
+            }
+            let n = n.max(1);
+            rgb.extend(sum.map(|total| ((total + n / 2) / n) as u8));
+        }
+    }
+    SubjectImage { width: half_w as u32, height: half_h as u32, rgb }
+}
+
+/// `mask`, `from` = (width, height), scaled to `to` with bilinear sampling; as it is when the sizes
+/// match.
+fn fit_mask(mask: Vec<u8>, from: (u32, u32), to: (u32, u32)) -> Vec<u8> {
+    if from == to {
+        return mask;
+    }
+    let (from_w, from_h) = (from.0 as usize, from.1 as usize);
+    let (to_w, to_h) = (to.0 as usize, to.1 as usize);
+    if from_w == 0 || from_h == 0 {
+        return vec![0; to_w.saturating_mul(to_h)];
+    }
+    let at = |x: usize, y: usize| f32::from(mask.get(y.min(from_h - 1) * from_w + x.min(from_w - 1)).copied().unwrap_or(0));
+    // The source position of a target pixel's centre, split into a pixel and the way to the next.
+    let source = |t: usize, from: usize, to: usize| {
+        let s = ((t as f32 + 0.5) * from as f32 / to as f32 - 0.5).max(0.0);
+        (s.floor() as usize, s - s.floor())
+    };
+    let mut out = Vec::with_capacity(to_w.saturating_mul(to_h));
+    for y in 0..to_h {
+        let (y0, fy) = source(y, from_h, to_h);
+        for x in 0..to_w {
+            let (x0, fx) = source(x, from_w, to_w);
+            let top = at(x0, y0) * (1.0 - fx) + at(x0 + 1, y0) * fx;
+            let bottom = at(x0, y0 + 1) * (1.0 - fx) + at(x0 + 1, y0 + 1) * fx;
+            out.push((top * (1.0 - fy) + bottom * fy).round().clamp(0.0, 255.0) as u8);
+        }
+    }
+    out
+}
+
+/// The mask in `png`, one byte per pixel, checked against the size of the picture it answers.
+fn decode_mask(png: &[u8], width: u32, height: u32) -> Result<Vec<u8>, ModelError> {
     let mask = photocraft_codecs::decode(png).map_err(failed)?;
-    if mask.width() != image.width || mask.height() != image.height {
-        return Err(failed(format!("The model answered {} × {} for a {} × {} picture.", mask.width(), mask.height(), image.width, image.height)));
+    if mask.width() != width || mask.height() != height {
+        return Err(failed(format!("The model answered {} × {} for a {} × {} picture.", mask.width(), mask.height(), width, height)));
     }
     if mask.layout() != ChannelLayout::Gray || mask.sample_type() != SampleType::U8 {
         return Err(failed("The model's mask is not an 8-bit grayscale picture."));
@@ -174,7 +253,8 @@ impl SubjectModel for CraftSubject {
     /// Runs the chosen model on `image` through the shared client, refusing anything that would
     /// send it off the computer.
     fn matte(&self, image: &SubjectImage, cancelled: &dyn Fn() -> bool) -> Result<Vec<u8>, ModelError> {
-        let request = Request::new(self.role.capability.clone()).with_input(InputRole::Source, encode(image)?);
+        let (payload, sent_width, sent_height) = encode(image, craft_ai_core::Limits::default().max_inline_bytes)?;
+        let request = Request::new(self.role.capability.clone()).with_input(InputRole::Source, payload);
         let plan = self.client.plan(&self.role, request).map_err(model_error)?;
         // Nothing is agreed to here, so anything that would leave the computer is refused by
         // `start` too; this says so in words.
@@ -210,7 +290,8 @@ impl SubjectModel for CraftSubject {
         if stopping {
             return Err(ModelError::Cancelled);
         }
-        decode_mask(&answer.ok_or_else(|| failed("The model finished without a mask."))?, image)
+        let mask = decode_mask(&answer.ok_or_else(|| failed("The model finished without a mask."))?, sent_width, sent_height)?;
+        Ok(fit_mask(mask, (sent_width, sent_height), (image.width, image.height)))
     }
 
     /// Downloads and checks the built-in route's files in the suite's model folder, then makes

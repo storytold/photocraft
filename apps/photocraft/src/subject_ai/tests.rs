@@ -139,19 +139,51 @@ fn a_file_that_is_not_the_model_fails_in_words_a_person_can_read() {
 
 #[test]
 fn a_small_picture_goes_as_png() {
-    let Payload::Inline { media_type, data } = encode(&picture(16, 16)).unwrap() else { panic!("expected bytes") };
+    let (Payload::Inline { media_type, data }, 16, 16) = encode(&picture(16, 16), u64::MAX).unwrap() else { panic!("expected bytes") };
     assert_eq!(media_type.as_str(), "image/png");
     assert_eq!(photocraft_codecs::decode(&data).unwrap().width(), 16);
 }
 
 #[test]
+fn a_picture_too_big_for_one_payload_goes_at_half_size() {
+    let image = picture(64, 48);
+    let img = Image::from_u8(64, 48, ChannelLayout::Rgb, image.rgb.clone()).unwrap();
+    let png = photocraft_codecs::encode(&img, Format::Png, &EncodeOptions::default()).unwrap().len();
+    let options = EncodeOptions { jpeg_quality: 95, jpeg_chroma_subsampling: false, ..EncodeOptions::default() };
+    let jpeg = photocraft_codecs::encode(&img, Format::Jpeg, &options).unwrap().len();
+    let limit = png.min(jpeg) as u64 - 1;
+    let (Payload::Inline { data, .. }, width, height) = encode(&image, limit).unwrap() else { panic!("expected bytes") };
+    assert_eq!((width, height), (32, 24));
+    assert!(data.len() as u64 <= limit);
+    assert_eq!(photocraft_codecs::decode(&data).unwrap().width(), 32);
+    // Nothing fits at all: an error, not an endless loop.
+    assert!(encode(&image, 0).is_err());
+}
+
+#[test]
+fn half_size_takes_the_mean_and_rounds_up() {
+    let image = SubjectImage { width: 3, height: 1, rgb: vec![0, 0, 0, 100, 50, 10, 7, 8, 9] };
+    assert_eq!(half(&image), SubjectImage { width: 2, height: 1, rgb: vec![50, 25, 5, 7, 8, 9] });
+}
+
+#[test]
+fn a_smaller_mask_is_scaled_back_to_the_picture() {
+    let mask = vec![0, 255, 0, 255];
+    assert_eq!(fit_mask(mask.clone(), (2, 2), (2, 2)), mask);
+    let big = fit_mask(mask, (2, 2), (4, 4));
+    assert_eq!(big.len(), 16);
+    assert_eq!((big[0], big[3], big[12], big[15]), (0, 255, 0, 255));
+    assert!(big[1] > 0 && big[1] < big[2] && big[2] < 255, "{big:?}");
+}
+
+#[test]
 fn a_mask_of_the_wrong_size_or_kind_is_refused() {
     let image = picture(4, 4);
-    assert_eq!(decode_mask(&gray_png(4, 4), &image).unwrap(), vec![200; 16]);
-    assert!(decode_mask(&gray_png(3, 4), &image).is_err());
+    assert_eq!(decode_mask(&gray_png(4, 4), image.width, image.height).unwrap(), vec![200; 16]);
+    assert!(decode_mask(&gray_png(3, 4), image.width, image.height).is_err());
     let rgb = photocraft_codecs::encode(&Image::from_u8(4, 4, ChannelLayout::Rgb, vec![9; 48]).unwrap(), Format::Png, &EncodeOptions::default()).unwrap();
-    assert!(decode_mask(&rgb, &image).is_err());
-    assert!(decode_mask(b"not a picture", &image).is_err());
+    assert!(decode_mask(&rgb, image.width, image.height).is_err());
+    assert!(decode_mask(b"not a picture", image.width, image.height).is_err());
 }
 
 /// The real thing, for a person to run: a real download (or the file in the model folder), then a
