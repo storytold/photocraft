@@ -272,9 +272,9 @@ pub fn locked_for_transform(doc: &Document, id: LayerId) -> bool {
 }
 
 /// The layers Free Transform moves with the Layers panel's selection, bottom-to-top: with several
-/// layers selected, every one that no selected group already carries, as in Photoshop (#6501), but
-/// the Background, which Show Transform Controls doesn't frame either. With one layer selected (or
-/// only the Background besides it), that layer; the active layer when nothing else is.
+/// layers selected, every one that no selected group already carries, as in Photoshop (#6501). The
+/// Background stays among them, so such a box refuses as locked (#11101, [`background_among`]).
+/// With one layer selected, that layer; the active layer when nothing else is.
 pub fn selection_targets(st: &crate::DocState) -> Vec<LayerId> {
     targets_of(&st.doc, &st.selected_layers(), st.active_layer)
 }
@@ -285,14 +285,23 @@ pub(crate) fn targets_of(doc: &Document, selected: &[LayerId], active: Option<La
     if selected.len() < 2 {
         return active.into_iter().collect();
     }
-    let ids: Vec<LayerId> = crate::layer_multi_cmds::top_level(doc, selected).into_iter().filter(|id| !doc.is_background(*id)).collect();
+    let ids = crate::layer_multi_cmds::top_level(doc, selected);
     if ids.is_empty() { active.into_iter().collect() } else { ids }
+}
+
+/// The Background when it is among several layers one box would move: Photoshop refuses that Free
+/// Transform with its locked-layer alert rather than leaving the Background out (#11101).
+pub fn background_among(doc: &Document, ids: &[LayerId]) -> Option<LayerId> {
+    if ids.len() < 2 {
+        return None;
+    }
+    ids.iter().copied().find(|id| doc.is_background(*id))
 }
 
 /// The layers one box over `targets` moves: `targets` with the layers linked to them, as the Move
 /// tool takes them along. In Photoshop transforming one linked layer transforms the whole link
-/// group (#11217). A linked Background joins only when it is a target itself: `targets_of`
-/// leaves it out of a box over other layers, and a link doesn't bring it back in.
+/// group (#11217). A linked Background joins only when it is a target itself: a link doesn't
+/// bring it into a box over other layers.
 pub fn box_targets(doc: &Document, targets: &[LayerId]) -> Vec<LayerId> {
     let mut ids = crate::layer_multi_cmds::move_targets(doc, targets);
     ids.retain(|id| targets.contains(id) || !doc.is_background(*id));
@@ -874,7 +883,14 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         (Some(ids), _) => ids,
         _ if lone.is_some() => Vec::new(),
         (None, Some(id)) => vec![id],
-        (None, None) => selection_targets(st),
+        (None, None) => {
+            let ids = selection_targets(st);
+            if let Some(bg) = background_among(&st.doc, &ids) {
+                let name = st.doc.layer(bg).map_or("Background", |l| l.name.as_str());
+                return Err(EngineError::Other(format!("layer \"{name}\" is locked")));
+            }
+            ids
+        }
     };
     if let Some(missing) = ids.iter().find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*missing));
@@ -1016,7 +1032,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Free Transform",
         menu: &[],
         shortcut: None,
-        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers but the Background, as Photoshop's Free Transform with several selected),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
+        params: r##"{"layer":id?,"layers":[id,…]? (several layers moved by one box, one step; default with neither = the selected layers, as Photoshop's Free Transform with several selected; refused as locked when the Background is among several),"rect":[x0,y0,x1,y1]? (source frame; default = the layers' content ∩ selection),"quad":[[x,y]×4]? (where the frame's corners go, clockwise from top-left),"matrix":[a,b,c,d,e,f]? (affine alternative),"scaleX":%?,"scaleY":%?,"rotate":deg?,"dx":px?,"dy":px?,"reference":"center|topLeft|top|topRight|left|right|bottomLeft|bottom|bottomRight"|[x,y]="center" (relative alternative: scale and rotate about this point, then move),"interpolation":"bicubic|bilinear|nearest|bicubicSharper|bicubicSmoother|bicubicAutomatic"="bicubic" (Photoshop's bicubic variants render as Bicubic),"stepName":"Transform Path"? (History step name; the shape tools' bounding box sends it; default "Free Transform"; any other value is refused),"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask transforms alone; a linked mask moves with its layer)}"##,
         enabled: has_layer,
         journal: true,
         run: transform,
