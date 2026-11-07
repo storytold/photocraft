@@ -773,10 +773,15 @@ fn typed_arithmetic_evaluates() {
         ("(2+3)*4", 20.0),
         ("2^3", 8.0),
         ("10%3", 1.0),
+        // A decimal comma (#10729).
+        ("0,3", 0.3),
+        ("1,5*2", 3.0),
+        ("−2,25", -2.25),
     ] {
         assert_eq!(parse_num(text), Some(want), "{text}");
     }
-    for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3", "1e400"] {
+    // A comma beside a point, or two decimal separators, is not guessed at.
+    for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3", "1e400", "1.234,5", "1,2,3"] {
         assert_eq!(parse_num(text), None, "{text}");
     }
 }
@@ -1292,6 +1297,15 @@ fn value_field_applies_typed_arithmetic() {
     // `5/2` alone would round to 3 under the caller; the whole expression still applies.
     assert_eq!(type_and_press(1.0, "5/2*2", Tab, true), 5.0);
     assert_eq!(type_and_press(1.0, "1280/3*2", Enter, true), 853.0);
+}
+
+/// #10729: a field such as Feather takes a decimal comma, as typed where the comma is the decimal
+/// separator.
+#[test]
+fn value_field_takes_a_decimal_comma() {
+    use egui::Key::{Enter, Tab};
+    assert!((type_and_press(1.0, "0,3", Enter, false) - 0.3).abs() < 1e-6);
+    assert!((type_and_press(1.0, "2,5", Tab, false) - 2.5).abs() < 1e-6);
 }
 
 #[test]
