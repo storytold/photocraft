@@ -523,9 +523,12 @@ const MAX_LEVEL: usize = 6;
 
 /// A reduced level kept while a [`reuse_levels`] scope is open, with what it was built from.
 struct SharedLevel {
-    /// Every tile of the source, held: while cached they can be neither freed nor changed in
-    /// place, so equal tile pointers mean equal pixels.
-    tiles: Vec<(photocraft_geom::TileCoord, std::sync::Arc<photocraft_raster::Tile>)>,
+    /// Every tile of the source, by address: a [`std::sync::Weak`] reserves the allocation, so no
+    /// other tile can take its address, and a tile changed in place moves to a new one
+    /// (`Arc::make_mut` with weak references left), so equal tile pointers mean equal pixels.
+    /// It doesn't keep the pixels alive: only the level's own floats count against the scope
+    /// budget, and a source the caller drops is freed while the scope is open.
+    tiles: Vec<(photocraft_geom::TileCoord, std::sync::Weak<photocraft_raster::Tile>)>,
     default: Vec<u8>,
     format: PixelFormat,
     rect: Rect,
@@ -627,7 +630,7 @@ fn level_for(key: &Surface, src: &Surface, r: Rect, level: usize, n: usize, ctl:
             && e.format == key.format()
             && e.default == key.default_bytes()
             && e.tiles.len() == key.tiles().count()
-            && e.tiles.iter().zip(key.tiles()).all(|((ca, ta), (cb, tb))| ca == cb && std::sync::Arc::ptr_eq(ta, tb))
+            && e.tiles.iter().zip(key.tiles()).all(|((ca, ta), (cb, tb))| ca == cb && std::ptr::eq(ta.as_ptr(), std::sync::Arc::as_ptr(tb)))
     };
     if let Some(hit) = LEVELS.with(|l| l.borrow().as_ref().and_then(|v| v.iter().find(|e| same(e)).map(|e| e.level.clone()))) {
         return Some(hit);
@@ -637,7 +640,7 @@ fn level_for(key: &Surface, src: &Surface, r: Rect, level: usize, n: usize, ctl:
         if let Some(v) = l.borrow_mut().as_mut()
             && v.iter().map(|e| e.level.px.len()).sum::<usize>().saturating_add(built.px.len()) <= scope_floats()
         {
-            let tiles = key.tiles().map(|(c, t)| (*c, t.clone())).collect();
+            let tiles = key.tiles().map(|(c, t)| (*c, std::sync::Arc::downgrade(t))).collect();
             v.push(SharedLevel { tiles, default: key.default_bytes().to_vec(), format: key.format(), rect: r, n, level: built.clone() });
         }
     });
@@ -1066,6 +1069,33 @@ mod tests {
         let _ = warp_mesh_surface(&src, r, &f, Interp::Bicubic);
         let _ = warp_mesh_surface(&src, r, &f, Interp::Bicubic);
         assert_eq!(builds() - before, 2);
+    }
+
+    #[test]
+    fn a_reuse_scope_does_not_keep_a_dropped_source_alive() {
+        // Instances whose sources differ (one converted per instance) each keep a level in the
+        // scope; their source tiles must still be freed once the caller drops them, or N
+        // instances would hold N sources until the scope closes.
+        let r = Rect::new(0, 0, 1024, 512);
+        let f = |x: f64, y: f64| (x / 9.0 + 0.001 * y, y / 9.0);
+        let _scope = reuse_levels();
+        let (tiles, again) = {
+            let src = textured(1024, 512, 6);
+            let tiles: Vec<_> = src.tiles().map(|(_, t)| std::sync::Arc::downgrade(t)).collect();
+            let first = warp_mesh_surface(&src, r, &f, Interp::Bicubic);
+            let before = reduced_levels_built();
+            let again = warp_mesh_surface(&src, r, &f, Interp::Bicubic);
+            assert_eq!(reduced_levels_built(), before, "reused while the source lives");
+            assert_eq!(first.read_region(first.content_bounds()), again.read_region(again.content_bounds()));
+            (tiles, again)
+        };
+        assert!(!tiles.is_empty() && tiles.iter().all(|t| t.strong_count() == 0), "the scope holds no source tile");
+        // A new source at the same place, with other pixels, never matches the old one's level.
+        let other = textured(1024, 512, 7);
+        let before = reduced_levels_built();
+        let fresh = warp_mesh_surface(&other, r, &f, Interp::Bicubic);
+        assert_eq!(reduced_levels_built() - before, 1, "built for the new source");
+        assert_ne!(fresh.read_region(fresh.content_bounds()), again.read_region(again.content_bounds()));
     }
 
     #[test]
