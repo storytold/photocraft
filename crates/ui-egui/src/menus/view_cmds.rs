@@ -114,6 +114,11 @@ pub struct ViewOptions {
     pub middle_eastern_composer: bool,
     /// Parameters from the last successfully applied New Guide Layout dialog.
     pub guide_layout: Value,
+    /// Whether a New Guide Layout dialog has ever been confirmed. Once set, the
+    /// remembered layout wins over the Units & Rulers gutter even when the
+    /// remembered values happen to equal the factory defaults: the flag, not
+    /// equality with the defaults, marks first use.
+    pub guide_layout_saved: bool,
     /// Developer overlay of the active layer's storage tiles (tile_overlay.rs), set with the
     /// control channel's `ui.set {"tileGrid": true}`.
     pub tile_grid: bool,
@@ -142,6 +147,7 @@ impl Default for ViewOptions {
             language_features: "defaultFeatures".into(),
             middle_eastern_composer: false,
             guide_layout: default_guide_layout(),
+            guide_layout_saved: false,
             tile_grid: false,
         }
     }

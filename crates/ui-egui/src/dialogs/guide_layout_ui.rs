@@ -78,6 +78,16 @@ pub fn open(app: &mut PhotocraftApp) -> u64 {
         f.insert("target".into(), json!("document"));
     }
     f.entry("__preset").or_insert_with(|| json!("custom"));
+    // Preferences ▸ Units & Rulers ▸ Gutter: the first layout (before the dialog has been
+    // confirmed and its values remembered) starts from the preferred gutter, as in
+    // Photoshop. A confirmed layout wins even when it equals the factory defaults, so
+    // the saved flag — not equality with the defaults — marks first use. The preference
+    // is in points (see UnitsAndRulers::gutter), so seed it as a typed length: the
+    // spacing field keeps the unit and the engine converts it at the document's
+    // resolution, instead of a bare number silently meaning pixels.
+    if !app.ui.view.guide_layout_saved {
+        f.insert("gutter".into(), json!(format!("{} pt", app.session.prefs().units_and_rulers.gutter)));
+    }
     f.entry("width").or_insert(Value::Null);
     f.entry("height").or_insert(Value::Null);
     let margin = f.get("margin").cloned().unwrap_or(json!(0));
@@ -104,7 +114,10 @@ pub fn params(f: &Map<String, Value>) -> Value {
     if !on(f, "__marginEnabled", true) {
         p.insert("margin".into(), json!(0));
     }
-    for key in ["width", "height"] {
+    // A typed length ("12 pt", "2 cm") survives as text so the engine converts it at the
+    // document's resolution; a bare number becomes pixels, as before. An empty field is
+    // no size for width/height and no spacing for the gutters.
+    for key in ["width", "height", "gutter", "rowGutter"] {
         if let Some(Value::String(s)) = p.get(key) {
             let value = if s.trim().is_empty() {
                 Value::Null
@@ -167,6 +180,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         remembered.remove(key);
     }
     app.ui.view.guide_layout = Value::Object(remembered);
+    app.ui.view.guide_layout_saved = true;
     Ok(result)
 }
 
@@ -203,7 +217,7 @@ fn number(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, name: &str, 
     }
 }
 
-fn optional(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egui::Id) {
+fn optional(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egui::Id, hint: &str) {
     let mut value = match f.get(key) {
         Some(Value::String(s)) => s.clone(),
         Some(v) if v.is_number() => v.to_string(),
@@ -222,7 +236,7 @@ fn optional(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egu
     if response.changed() {
         f.insert(key.into(), json!(value));
     }
-    response.on_hover_text(tl!("Leave empty for automatic size"));
+    response.on_hover_text(hint);
 }
 
 fn group<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
@@ -248,10 +262,13 @@ fn axis(ui: &mut egui::Ui, f: &mut Map<String, Value>, rows: bool) {
                 number(ui, f, count, "Number", true);
                 ui.end_row();
                 let size_label_resp = ui.label(size_label);
-                optional(ui, f, size, size_label_resp.id);
+                optional(ui, f, size, size_label_resp.id, tl!("Leave empty for automatic size"));
                 ui.end_row();
-                ui.label(tl!("Spacing"));
-                number(ui, f, gap, "Spacing", false);
+                // Spacing is a typed length like the sizes above, not a bare pixel count:
+                // "12 pt" stays text so the engine converts it at the document's
+                // resolution, and a bare number still means pixels.
+                let spacing_label = ui.label(tl!("Spacing"));
+                optional(ui, f, gap, spacing_label.id, tl!("Leave empty for no spacing"));
                 ui.end_row();
             });
         });

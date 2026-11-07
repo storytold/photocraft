@@ -834,6 +834,9 @@ pub struct UnitsAndRulers {
     pub rulers: Unit,
     pub type_units: TypeUnit,
     pub column_width: f64,
+    /// Gutter in points, as in Photoshop's Units & Rulers (12 pt default): the guide
+    /// layout dialog seeds its spacing from this value and converts it at the
+    /// document's resolution, so a bare number elsewhere still means pixels.
     pub gutter: f64,
     pub print_resolution: f64,
     pub screen_resolution: f64,
