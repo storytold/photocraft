@@ -387,6 +387,13 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
     true
 }
 
+/// The Color Sampler point a press at document point `at` would grab (the tool's own hit test),
+/// or `None`. The cursor uses it too, so it changes where a drag starts moving the point (#11744).
+pub(crate) fn sampler_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<usize> {
+    let samplers = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
+    nearest_sampler(&samplers, at, tolerance(app))
+}
+
 /// The nearest Color Sampler point within `tol` document pixels, or `None`.
 fn nearest_sampler(points: &[[f64; 2]], at: [f64; 2], tol: f64) -> Option<usize> {
     points.iter().enumerate().filter(|(_, q)| dist(**q, at) <= tol).min_by(|a, b| dist(*a.1, at).total_cmp(&dist(*b.1, at))).map(|(i, _)| i)

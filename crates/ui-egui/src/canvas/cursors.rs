@@ -150,6 +150,51 @@ pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     egui::CursorIcon::None
 }
 
+/// What the Color Sampler's cursor shows (#11744), as in Photoshop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SamplerCursor {
+    /// Off a sampler: the pipette with a small sampler target, its tip on the pixel.
+    Pipette,
+    /// Off a sampler with Precise Other Cursors (or ⇪ toggling it): the crosshair, as before.
+    Crosshair,
+    /// Over a sampler: the arrow with the sampler target (a drag moves it).
+    Move,
+    /// ⌥ over a sampler: the arrow with scissors (a click deletes it).
+    Delete,
+}
+
+/// The Color Sampler cursor for the pointer at document point `at`. "Over a sampler" is the
+/// tool's own hit test (`analysis_ui::sampler_at`). With Caps Lock down the cursor is today's
+/// (the precise crosshair or the pipette) everywhere: that case was not measured.
+pub(crate) fn sampler_cursor_kind(app: &PhotocraftApp, at: [f64; 2], alt: bool) -> SamplerCursor {
+    if !app.caps_lock && crate::analysis_ui::sampler_at(app, at).is_some() {
+        return if alt { SamplerCursor::Delete } else { SamplerCursor::Move };
+    }
+    if precise_other_cursor(app) { SamplerCursor::Crosshair } else { SamplerCursor::Pipette }
+}
+
+/// Draw the Color Sampler cursor `kind` at `p` and return the OS cursor to set. The pipette keeps
+/// its tip on `p` ([`pipette_cursor`]) with the sampler target at its top-left, where the pipette
+/// leaves room; the arrows are the OS arrow (hotspot at its tip) with a badge, as the Move tool's.
+pub(crate) fn sampler_cursor(ctx: &egui::Context, kind: SamplerCursor, p: Pos2) -> egui::CursorIcon {
+    match kind {
+        SamplerCursor::Crosshair => egui::CursorIcon::Crosshair,
+        SamplerCursor::Pipette => {
+            let icon = pipette_cursor(ctx, p);
+            crate::icons::cursor(ctx, "sampler", p + vec2(2.5, -14.0), vec2(0.5, 0.5), 9.0);
+            icon
+        }
+        SamplerCursor::Move => {
+            crate::icons::cursor_badge(ctx, "sampler", p);
+            egui::CursorIcon::Default
+        }
+        SamplerCursor::Delete => {
+            crate::icons::cursor_badge(ctx, "scissors", p);
+            egui::CursorIcon::Default
+        }
+    }
+}
+
 /// The Paint Bucket artwork and target share one cached cursor image. Report rasterization
 /// failures once per distinct message, with the same concise error in the dialog and status bar.
 pub(crate) fn paint_bucket_cursor(app: &mut PhotocraftApp, painter: &egui::Painter, p: Pos2) -> egui::CursorIcon {

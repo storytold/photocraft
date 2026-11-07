@@ -1654,13 +1654,12 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 pipette_cursor(ui.ctx(), p)
             }
         }
-        // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
+        // The Color Sampler (#11744): over a sampler the arrow with its target (⌥: with scissors);
+        // elsewhere a pipette with the target, or the crosshair for precise Other Cursors.
         Tool::ColorSampler => {
-            if precise_other_cursor(app) {
-                egui::CursorIcon::Crosshair
-            } else {
-                pipette_cursor(ui.ctx(), p)
-            }
+            let alt = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).alt;
+            let kind = cursors::sampler_cursor_kind(app, xf.to_doc(p), alt);
+            cursors::sampler_cursor(ui.ctx(), kind, p)
         }
         // The Paint Bucket: a bucket, or the crosshair for precise Other Cursors (#3968).
         Tool::PaintBucket => {
@@ -2266,6 +2265,9 @@ mod tap_pressure_tests {
 
 #[cfg(test)]
 mod tabs_tests;
+
+#[cfg(test)]
+mod sampler_cursor_tests;
 
 #[cfg(test)]
 mod tests;
