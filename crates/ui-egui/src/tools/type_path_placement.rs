@@ -113,8 +113,9 @@ impl PartialEq for CachedGeometry {
 pub struct GeometryCache(pub(crate) Arc<std::sync::Mutex<Option<CachedGeometry>>>);
 
 impl PartialEq for GeometryCache {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+    fn eq(&self, _other: &Self) -> bool {
+        // Cached geometry is transient and does not change logical UI state.
+        true
     }
 }
 
