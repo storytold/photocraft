@@ -107,7 +107,11 @@ pub(super) fn arrange(app: &mut PhotocraftApp, k: &str, p: &Value) -> Result<Val
             // Each view stays within its own document's zoom range (a view not drawn yet has no
             // `doc_size`, so the size comes from the document).
             let sizes: Vec<[u32; 2]> = app.session.documents().iter().map(|d| [d.doc.size.width, d.doc.size.height]).collect();
-            let apply = |v: &mut crate::state::View, doc: usize| {
+            // A default-mode crop turns the active view's camera; that turn is the crop's, not the
+            // view's own rotation (which picking the Crop tool made 0), so it isn't copied (#9308).
+            let crop = crate::crop_mode::turns_view(app);
+            let rotation = if crop { 0.0 } else { src.rotation };
+            let apply = |v: &mut crate::state::View, doc: usize, cropped: bool| {
                 if zoom {
                     v.zoom = crate::zoom_levels::clamp(src.zoom, sizes.get(doc).copied().unwrap_or(v.doc_size));
                     v.request_zoom_animation(animated_zoom);
@@ -115,14 +119,15 @@ pub(super) fn arrange(app: &mut PhotocraftApp, k: &str, p: &Value) -> Result<Val
                 if loc {
                     v.center = src.center;
                 }
-                if rot {
-                    v.rotation = src.rotation;
+                if rot && !cropped {
+                    v.rotation = rotation;
                 }
                 v.fit_pending = false;
             };
-            app.ui.views.iter_mut().enumerate().for_each(|(d, v)| apply(v, d));
-            app.ui.windows.iter_mut().for_each(|w| apply(&mut w.view, w.document));
-            Ok(json!({"zoom": src.zoom, "center": src.center, "rotation": src.rotation}))
+            app.ui.views.iter_mut().enumerate().for_each(|(d, v)| apply(v, d, crop && d == i));
+            app.ui.windows.iter_mut().for_each(|w| apply(&mut w.view, w.document, false));
+            // Match Zoom and Match Location copy no rotation: they report the camera's as it is.
+            Ok(json!({"zoom": src.zoom, "center": src.center, "rotation": if rot { rotation } else { src.rotation }}))
         }
         _ => Err(format!("unknown arrangement {k}")),
     }
