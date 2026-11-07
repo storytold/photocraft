@@ -9,6 +9,7 @@ use crate::PhotocraftApp;
 use crate::brush_mode_menu::{self, Item};
 use crate::state::Tool;
 
+/// Create a test document for the selected tool, optionally with a transparent layer.
 fn app(tool: Tool, transparent_layer: bool) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
@@ -19,6 +20,7 @@ fn app(tool: Tool, transparent_layer: bool) -> PhotocraftApp {
     app
 }
 
+/// Send Shift+Alt+Q through the shortcut handler and assert that it consumes the key.
 fn press_behind(app: &mut PhotocraftApp, ctx: &Context) {
     let modifiers = Modifiers::SHIFT | Modifiers::ALT;
     let events = vec![Event::ModifiersChanged(modifiers), Event::Key { key: Key::Q, physical_key: Some(Key::Q), pressed: true, repeat: false, modifiers }];
@@ -28,7 +30,9 @@ fn press_behind(app: &mut PhotocraftApp, ctx: &Context) {
     ctx.end_pass().textures_delta.clear();
 }
 
+/// Check whether the rendered options bar displays the Behind label.
 fn options_show_behind(app: &mut PhotocraftApp, ctx: &Context) -> bool {
+    /// Find the Behind text label in a shape or its descendants.
     fn has_behind(shape: &egui::Shape) -> bool {
         match shape {
             egui::Shape::Text(text) => text.galley.text() == "Behind",
