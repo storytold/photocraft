@@ -631,6 +631,14 @@ pub struct PhotocraftApp {
     /// The OS clipboard was already read for the paste in flight (Edit › Paste positions it first),
     /// so `run` doesn't read it a second time.
     pub(crate) clip_read_for_paste: bool,
+    /// Image delivered by `egui::Event::PasteImage` this frame (Wayland `wl_data_device` paste).
+    /// Signature of the last internal copy after `egui::ColorImage` premultiplied alpha round-trip.
+    pub(crate) os_clip_wayland_sig: Option<u64>,
+    pub(crate) pending_paste_image: Option<std::sync::Arc<egui::ColorImage>>,
+    /// Menu paste command waiting for `ViewportCommand::RequestPaste` to deliver `Event::PasteImage`.
+    pub(crate) pending_paste_cmd: Option<String>,
+    /// Image copied this frame waiting to be sent as `egui::OutputCommand::CopyImage` on Wayland.
+    pub(crate) pending_copy_image: Option<egui::ColorImage>,
     pub(crate) smart_svg: smart_svg_ui::State,
     /// Pointer position over the canvas (document px), for the Info panel and status bar.
     pub(crate) hover_doc: Option<[f64; 2]>,
