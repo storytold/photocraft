@@ -69,6 +69,7 @@ fn insert(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option
         let Some(removed) = c.0.remove(&old) else { break };
         held = held.saturating_sub(entry_bytes(&removed.0, removed.2.as_ref()));
     }
+    c.1 += 1;
     let tick = c.1;
     c.0.insert(key, (parts.clone(), tick, source.cloned()));
 }
@@ -325,6 +326,30 @@ mod tests {
             assert!(c.0.contains_key(&key), "entry {key} must survive");
         }
         assert_eq!(c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum::<usize>(), bytes * slots as usize);
+    }
+
+    /// Two cold splits can both miss before either completes; completion order sets recency.
+    #[test]
+    fn split_cache_orders_overlapping_misses_by_completion() {
+        let c = Mutex::new(Cache::default());
+        let parts = (tile(SampleType::F32, 0.25), tile(SampleType::F32, 0.5));
+        let slots = (BUDGET / entry_bytes(&parts, None)) as u64;
+        assert!(slots >= 2);
+        assert!(get(&c, 0).is_none());
+        assert!(get(&c, 1).is_none());
+        insert(&c, 0, &parts, None);
+        insert(&c, 1, &parts, None);
+        {
+            let c = c.lock().unwrap();
+            assert!(c.0[&0].1 < c.0[&1].1, "the later completion must get a newer tick");
+        }
+        for key in 2..=slots {
+            insert(&c, key, &parts, None);
+        }
+        let c = c.lock().unwrap();
+        assert_eq!(c.0.len(), slots as usize);
+        assert!(!c.0.contains_key(&0), "evict the earlier completion");
+        assert!(c.0.contains_key(&1), "keep the later completion");
     }
 
     /// The split cache stays within its byte budget, evicting the least recently used, and
