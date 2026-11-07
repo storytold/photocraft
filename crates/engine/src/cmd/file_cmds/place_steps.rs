@@ -190,7 +190,10 @@ impl PlaceSteps {
         if (scale - 1.0).abs() <= 1e-9 {
             self.fitted(px);
         } else if self.fine {
-            self.stage = Stage::Resize(Box::new(ResizeSteps::new(px, scale, scale, Resample::Bicubic, None)));
+            // The canvas keeps opaque edges opaque (#5746): without it the bicubic kernel
+            // blends with transparent support at the source's rectangular border.
+            let content = px.content_bounds();
+            self.stage = Stage::Resize(Box::new(ResizeSteps::new(px, scale, scale, Resample::Bicubic, Some(content))));
         } else {
             ctx.progress(0.7, "Resizing");
             // Use resize_surface_in_canvas to preserve opaque edges by repeating edge pixels

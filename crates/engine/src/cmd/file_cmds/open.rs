@@ -1,7 +1,7 @@
 use super::paths::{file_name, read_file, stem, template_name};
 use super::{
-    Affine, Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, Resample, Result, Session, SmartObject, SmartSource, Value, f64_param, json,
-    str_param, translate_surface,
+    Affine, Arc, Document, EngineError, Layer, LayerContent, LayerId, PixelFormat, PlaceSteps, Resample, Result, Session, SmartObject, SmartSource, Value,
+    f64_param, json, str_param, translate_surface,
 };
 use crate::jobs::JobCtx;
 
@@ -323,10 +323,18 @@ pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<S
     place_input(s, input, "file.placeEmbedded".to_string())
 }
 
-/// Run a place: in the background when the command was started with [`Session::start`].
+/// Run a place: in the background when the command was started with [`Session::start`]. In a
+/// cooperative session (no worker threads, the web build) the place is a [`PlaceSteps`] job
+/// instead: [`Session::poll_jobs`] runs a slice per call, so a large file doesn't freeze the
+/// page, and the result is the same as the one-shot place.
 fn place_input(s: &mut Session, input: PlaceInput, cmd: String) -> Result<Value> {
     let label = input.job_label();
-    crate::jobs::run(s, &label, true, move |ctx| prepare_place(input, ctx, &cmd), apply_place)
+    if s.cooperative_jobs() {
+        let work = PlaceSteps::new(input, true);
+        crate::jobs::run_stepped(s, &label, true, work, apply_place)
+    } else {
+        crate::jobs::run(s, &label, true, move |ctx| prepare_place(input, ctx, &cmd), apply_place)
+    }
 }
 
 /// The file a place reads.
