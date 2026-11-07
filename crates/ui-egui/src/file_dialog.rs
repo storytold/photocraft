@@ -148,6 +148,17 @@ impl PhotocraftApp {
     /// (#1826, #1866). A caller's explicit directory is kept. The chosen folder is remembered for
     /// the document the dialog was asked for.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+        self.pick_save_in(cfg!(target_os = "linux") && std::env::var_os("FLATPAK_ID").is_some(), suggested, then)
+    }
+
+    /// [`Self::pick_save`] with the sandbox decided by the caller, so tests can exercise the
+    /// sandbox path on any host without touching the environment.
+    fn pick_save_in(
+        &mut self,
+        sandboxed: bool,
+        suggested: &str,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         let mut suggested = std::path::PathBuf::from(suggested);
         let doc = self.session.active().map(|d| d.doc.id);
         // Closed documents' folders are no longer needed.
@@ -167,7 +178,7 @@ impl PhotocraftApp {
         let ext = suggested_ext.clone();
         let asked = self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => {
-                let path = saved_path(app, &path, suggested_ext.as_deref());
+                let path = checked_saved_path(app, &path, suggested_ext.as_deref(), sandboxed)?;
                 // The web answers a download name, which has no folder to remember.
                 if let Some(doc) = doc
                     && let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty())
@@ -179,7 +190,10 @@ impl PhotocraftApp {
             _ => Err(UNEXPECTED.into()),
         })?;
         if let Some(p) = self.file_dialog.as_mut() {
-            p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
+            // A sandbox never writes a rewritten name (`checked_saved_path` refuses it), so there is no
+            // other file to ask about: refuse first, instead of asking to replace a file the save
+            // then won't touch.
+            p.saved_path = Some(Box::new(move |app, path| if sandboxed { path.to_string() } else { saved_path(app, path, ext.as_deref()) }));
         }
         Ok(asked)
     }
@@ -368,6 +382,15 @@ fn saved_path(app: &PhotocraftApp, answered: &str, suggested_ext: Option<&str>) 
         Some(ext) if Path::new(&path).extension().is_none() => Path::new(&path).with_extension(ext).to_string_lossy().into_owned(),
         _ => path,
     }
+}
+
+/// A sandboxed document portal grants the chosen filename, not a normalized sibling.
+fn checked_saved_path(app: &PhotocraftApp, answered: &str, suggested_ext: Option<&str>, sandboxed: bool) -> Result<String, String> {
+    let path = saved_path(app, answered, suggested_ext);
+    if sandboxed && path != answered {
+        return Err("The selected filename would change when saving. Save again with the full lowercase extension, or turn off Lowercase Extension in File Handling preferences.".into());
+    }
+    Ok(path)
 }
 
 /// The folder an open dialog starts in: the directory of the most recent file (UI-217-3).

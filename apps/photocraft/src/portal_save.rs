@@ -168,12 +168,18 @@ fn chosen_type(filters: &[Filter], picked: Option<usize>) -> Option<usize> {
     }
 }
 
-/// Save As on Linux: the portal's dialog, with the name given the extension of the file type
-/// picked. When that changes the name to one that already exists, the dialog opens again under
-/// the new name, so the portal asks before replacing it (it asked only about the typed name).
-pub fn save_as(conn: &zbus::blocking::Connection, mut req: SaveRequest) -> Result<Option<PathBuf>, String> {
+/// A portal failure or a selected name that cannot safely be rewritten in a sandbox.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SaveError {
+    Portal(String),
+    NameNeedsExtension,
+}
+
+/// Save As on Linux. Outside a sandbox, confirm an existing target again if its extension
+/// changes. In a sandbox, require the chooser to grant the exact filename that will be written.
+pub fn save_as(conn: &zbus::blocking::Connection, mut req: SaveRequest, sandboxed: bool) -> Result<Option<PathBuf>, SaveError> {
     loop {
-        let Some(saved) = save_file(conn, &req)? else { return Ok(None) };
+        let Some(saved) = save_file(conn, &req).map_err(SaveError::Portal)? else { return Ok(None) };
         let picked = saved.filter.as_deref().and_then(|label| req.filters.iter().position(|(l, _)| l == label));
         // A typed extension is the user's own: `with_chosen_type` keeps one it recognises.
         let exts: &[String] = match chosen_type(&req.filters, picked) {
@@ -181,6 +187,11 @@ pub fn save_as(conn: &zbus::blocking::Connection, mut req: SaveRequest) -> Resul
             None => &[],
         };
         let path = crate::services::with_chosen_type(&saved.path, req.suggested.as_deref(), exts);
+        // A document portal grants the returned filename, not a rewritten sibling.
+        // Refuse it before a successful-looking write can disappear in the portal mount.
+        if sandboxed && path != saved.path {
+            return Err(SaveError::NameNeedsExtension);
+        }
         if path == saved.path || !path.exists() {
             return Ok(Some(path));
         }
