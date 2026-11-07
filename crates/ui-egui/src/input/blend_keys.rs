@@ -237,8 +237,12 @@ fn set_layers_mode(app: &mut PhotocraftApp, mode: BlendMode) {
 /// layer's.
 pub fn press(app: &mut PhotocraftApp, step: i32) {
     match target(app.ui.tool) {
-        Target::Tool(modes) => {
+        Target::Tool(mut modes) => {
             let current = tool_mode(app);
+            // The Brush and Pencil skip what the document can't paint with (#11815).
+            if matches!(app.ui.tool, Tool::Brush | Tool::Pencil) {
+                modes.retain(|m| crate::brush_mode_menu::choice_enabled(app, (*m, false)));
+            }
             if let Some(mode) = stepped(&modes, current, step) {
                 set_tool_mode(app, mode);
             }

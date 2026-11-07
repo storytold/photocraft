@@ -172,7 +172,8 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             } else {
                 opt_label(ui, tl!("Mode"));
                 let held = app.held_erase;
-                paint_mode_dropdown(ui, "brush-mode", b, &mut app.ui.tool_options.brush_clear, held);
+                let modes = crate::brush_mode_menu::PaintModes::of(app);
+                paint_mode_dropdown(ui, "brush-mode", b, &mut app.ui.tool_options.brush_clear, held, &modes);
                 // The dropdown's button, by the id its combo box takes from "brush-mode".
                 if let Some(mode) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("brush-mode"))) {
                     tip(mode, tl!("Painting Mode"));
@@ -214,7 +215,8 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             }
             opt_label(ui, tl!("Mode"));
             let held = app.held_erase;
-            paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
+            let modes = crate::brush_mode_menu::PaintModes::of(app);
+            paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held, &modes);
             percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, if t.pro { 62.0 } else { 66.0 });
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
@@ -240,7 +242,8 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             } else {
                 opt_label(ui, tl!("Mode"));
                 let held = app.held_erase;
-                paint_mode_dropdown(ui, "brush-mode", b, &mut app.ui.tool_options.brush_clear, held);
+                let modes = crate::brush_mode_menu::PaintModes::of(app);
+                paint_mode_dropdown(ui, "brush-mode", b, &mut app.ui.tool_options.brush_clear, held, &modes);
                 if let Some(mode) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("brush-mode"))) {
                     tip(mode, tl!("Painting Mode"));
                 }
