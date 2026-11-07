@@ -3,6 +3,17 @@ use photocraft_psd::atn::{AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
 use serde_json::json;
 
+/// A wire key has one mapper; distinct wire aliases may still name the same command.
+#[test]
+fn event_wire_keys_are_unique() {
+    let mut codes = std::collections::BTreeSet::new();
+    let mut names = std::collections::BTreeSet::new();
+    for event in EVENTS {
+        assert!(event.code.is_empty() || codes.insert(event.code), "duplicate ATN code {}", event.code);
+        assert!(event.name.is_empty() || names.insert(event.name), "duplicate ATN name {}", event.name);
+    }
+}
+
 #[test]
 fn blend_modes_accept_photoshop_string_ids_and_export_canonical_ids() {
     for (string_id, char_id, label) in [
@@ -67,6 +78,168 @@ fn item(event: &str, label: &str, d: Option<Descriptor>) -> AtnItem {
 
 fn b64(bytes: &[u8]) -> String {
     photocraft_paint::tile::b64_encode(bytes)
+}
+
+fn color_lookup_case() -> Value {
+    let bytes = b"LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n";
+    let d = desc("null")
+        .with("lookupType", enm("colorLookupType", "3DLUT"))
+        .with("Nm  ", text("identity.cube"))
+        .with("Dthr", D::Boolean(false))
+        .with("profile", D::RawData(Vec::new()))
+        .with("LUTFormat", enm("LUTFormatType", "LUTFormatCUBE"))
+        .with("LUT3DFileData", D::RawData(Vec::new()))
+        .with("LUT3DFileName", text("identity.cube"));
+    json!({"data":b64(bytes),"dataEncoding":"base64","lutFormat":"cube","fileName":"identity.cube","dither":false,"__atnColorLookup":b64(&d.to_bytes())})
+}
+
+/// Keep the starting counter nested in naming rules, as recorded by the Batch dialog.
+fn batch_descriptor(component: &str) -> Descriptor {
+    let rules = desc("fileNamingRules")
+        .with("fileNamingComponents", D::List(vec![D::Descriptor(desc("fileNamingComponent").with("component", enm("fileNamingComponent", component)))]))
+        .with("Strt", D::Integer(7))
+        .with("Mcnt", D::Boolean(true))
+        .with("Win ", D::Boolean(false))
+        .with("unix", D::Boolean(true));
+    desc("Btch")
+        .with("null", path_value("/input"))
+        .with("Fldr", D::Boolean(false))
+        .with(
+            "Usng",
+            D::Reference(vec![
+                ReferenceItem::Name { class: class("Actn"), name: UnicodeString::new_nul("Child") },
+                ReferenceItem::Name { class: class("ASet"), name: UnicodeString::new_nul("S") },
+            ]),
+        )
+        .with("T   ", path_value("/output"))
+        .with("Ovrd", D::Boolean(false))
+        .with("fileNamingRules", D::Descriptor(rules))
+}
+
+/// Preserve the recorded template in the generic registry round-trip witness.
+fn batch_case() -> Value {
+    json!({"input":"/input","output":"/output","action":"Child","set":"S","flatOutput":true,"includeSubfolders":false,"overrideSaveAs":false,"stopOnError":true,"includeNonImages":true,
+        "namingComponents":[{"component":"serial3"}],"startingSerial":7,"compatibility":{"macintosh":true,"windows":false,"unix":true},
+        "__atnBatch":b64(&batch_descriptor("threeDigit").to_bytes())})
+}
+
+/// Save and Close replaces the folder path while retaining its recorded naming metadata.
+fn batch_save_and_close_case() -> Value {
+    let mut d = batch_descriptor("threeDigit");
+    d.items.retain(|(key, _)| !key.is("T   "));
+    let d = d.with("SvAn", D::Boolean(true));
+    let mut p = batch_case();
+    p.as_object_mut().unwrap().remove("output");
+    p.as_object_mut().unwrap().remove("flatOutput");
+    p["destination"] = json!("saveAndClose");
+    p["__atnBatch"] = json!(b64(&d.to_bytes()));
+    p
+}
+
+/// Destination changes retain exact descriptors and reject ambiguous output/override settings.
+#[test]
+fn batch_save_and_close_round_trips_without_folder_defaults() {
+    let p = batch_save_and_close_case();
+    let d = super::steps_batch::batch_to("file.automate.batch", &p).unwrap();
+    let bytes = photocraft_paint::tile::b64_decode(&set_of("S", vec![("Driver", vec![item("Btch", "Batch", Some(d.clone()))])])).unwrap();
+    let imported = import(&bytes).unwrap();
+    assert!(imported.unsupported.is_empty());
+    assert_eq!(imported.actions[0].steps[0].1, p);
+    let (out, skipped) = export("S", &[&imported.actions[0]], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d.clone()));
+    for bad in [d.clone().with("T   ", path_value("/other")), {
+        let mut bad = d.clone();
+        bad.items.retain(|(key, _)| !key.is("Ovrd"));
+        bad.with("Ovrd", D::Boolean(true))
+    }] {
+        let bytes = photocraft_paint::tile::b64_decode(&set_of("S", vec![("Driver", vec![item("Btch", "Batch", Some(bad.clone()))])])).unwrap();
+        let imported = import(&bytes).unwrap();
+        assert_eq!(imported.actions[0].steps[0].0, PHOTOSHOP_STEP);
+        let (out, _) = export("S", &[&imported.actions[0]], &[], false).unwrap();
+        assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(bad));
+    }
+}
+
+/// Each documented component and portability flag must survive native conversion and save.
+#[test]
+fn batch_all_documented_components_and_compatibility_flags_round_trip() {
+    for &(wire, native) in crate::file_cmds::BATCH_NAMING_COMPONENTS {
+        let d = batch_descriptor(wire);
+        let bytes = photocraft_paint::tile::b64_decode(&set_of("S", vec![("Driver", vec![item("Btch", "Batch", Some(d.clone()))])])).unwrap();
+        let imported = import(&bytes).unwrap();
+        assert!(imported.unsupported.is_empty(), "{wire}");
+        let p = &imported.actions[0].steps[0].1;
+        assert_eq!(p["namingComponents"], json!([{"component":native}]));
+        assert_eq!(p["startingSerial"], 7);
+        assert_eq!(p["stopOnError"], true);
+        assert_eq!(p["includeNonImages"], true);
+        assert_eq!(p["compatibility"], json!({"macintosh":true,"windows":false,"unix":true}));
+        let (out, skipped) = export("S", &[&imported.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
+    }
+}
+
+/// Batch's Open binding round-trips, but richer Open descriptors must remain whole.
+#[test]
+fn batch_override_open_and_unrepresented_open_settings_round_trip() {
+    for enabled in [false, true] {
+        let mut p = batch_case();
+        p.as_object_mut().unwrap().remove("__atnBatch");
+        p["overrideOpen"] = json!(enabled);
+        p["suppressWarnings"] = json!(enabled);
+        p["suppressOpenOptions"] = json!(enabled);
+        let a = Action::new("Driver", vec![("file.automate.batch".into(), p)]);
+        let (bytes, skipped) = export("S", &[&a], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        let loaded = import(&bytes).unwrap();
+        assert_eq!(loaded.actions[0].steps[0].1["overrideOpen"], enabled);
+        assert_eq!(loaded.actions[0].steps[0].1["suppressWarnings"], enabled);
+        assert_eq!(loaded.actions[0].steps[0].1["suppressOpenOptions"], enabled);
+        let (again, skipped) = export("S", &[&loaded.actions[0]], &[], false).unwrap();
+        assert!(skipped.is_empty());
+        assert_eq!(atn::parse(&again).unwrap().actions[0].items[0].descriptor, atn::parse(&bytes).unwrap().actions[0].items[0].descriptor);
+    }
+    let rich = desc("null").with("null", path_value("/recorded.png")).with("unrepresentedOpenSetting", D::Boolean(true));
+    let bytes = photocraft_paint::tile::b64_decode(&set_of("S", vec![("Driver", vec![item("Opn ", "Open", Some(rich.clone()))])])).unwrap();
+    let loaded = import(&bytes).unwrap();
+    assert_eq!(loaded.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    let (again, _) = export("S", &[&loaded.actions[0]], &[], false).unwrap();
+    assert_eq!(atn::parse(&again).unwrap().actions[0].items[0].descriptor, Some(rich));
+    assert!(super::steps_doc::open_to("file.openAs", &json!({"path":"/recorded.png","as":"png"})).is_none());
+}
+
+/// Unsupported modes and misplaced fields must not lose data through a partial conversion.
+#[test]
+fn batch_unknown_components_wrong_start_placement_and_unsupported_modes_stay_whole() {
+    let mut cases = vec![batch_descriptor("unknownComponent")];
+    for (key, value) in [("Strt", D::Integer(3)), ("OvrO", D::Integer(1)), ("SvAn", D::Boolean(true)), ("Log ", path_value("/log"))] {
+        cases.push(batch_descriptor("Nm  ").with(key, value));
+    }
+    let mut odd = batch_descriptor("Nm  ");
+    odd.items.push((Id::new("Fldr"), D::Boolean(true))); // Duplicate keys cannot disappear on save.
+    cases.push(odd);
+    for d in cases {
+        let bytes = photocraft_paint::tile::b64_decode(&set_of("S", vec![("Driver", vec![item("Btch", "Batch", Some(d.clone()))])])).unwrap();
+        let imported = import(&bytes).unwrap();
+        assert_eq!(imported.actions[0].steps[0].0, PHOTOSHOP_STEP);
+        let (out, _) = export("S", &[&imported.actions[0]], &[], false).unwrap();
+        assert_eq!(atn::parse(&out).unwrap().actions[0].items[0].descriptor, Some(d));
+    }
+    let mut p = batch_case();
+    p["target"] = json!("mask");
+    assert!(super::steps_batch::batch_to("file.automate.batch", &p).is_none());
+    for key in ["stopOnError", "includeNonImages"] {
+        for value in [Value::Null, json!(false), json!("yes")] {
+            let mut p = batch_case();
+            p[key] = value;
+            assert!(super::steps_batch::batch_to("file.automate.batch", &p).is_none());
+        }
+        let mut p = batch_case();
+        p.as_object_mut().unwrap().remove(key);
+        assert!(super::steps_batch::batch_to("file.automate.batch", &p).is_none());
+    }
 }
 
 /// A set with a mapped filter, an adjustment layer, selection steps, a layer by name, a Stop,
@@ -485,6 +658,16 @@ fn settings_at_the_value_the_event_plays_still_export() {
 /// Each mapped command retains its parameters through its corresponding ATN descriptor.
 fn every_mapped_command_exports_and_imports_back() {
     let cases: Vec<(&str, Value)> = vec![
+        (
+            "edit.perspectiveWarp",
+            json!({"planes":[{"src":[[4,4],[16,4],[16,20],[4,20]],"dst":[[5,5],[17,4],[18,20],[4,19]]}],
+                "target":"pixels","__atnPerspectiveWarpRect":[0,0,32,24]}),
+        ),
+        (
+            "paint.gradient",
+            json!({"from":[1,1],"to":[6,2],"style":"linear","method":"classic","smoothness":100,
+            "stops":[[0,"#0020ff"],[1,"#ffe000"]],"transparency":[],"opacity":100,"mode":"Normal","reverse":false,"dither":false}),
+        ),
         ("filter.render.clouds", json!({})),
         ("filter.render.differenceClouds", json!({})),
         ("filter.render.fibers", json!({"variance": 20, "strength": 7, "seed": -123})),
@@ -495,8 +678,25 @@ fn every_mapped_command_exports_and_imports_back() {
         ("select.rect", json!({"x":1,"y":2,"width":3,"height":4,"mode":"intersect"})),
         ("edit.pasteSpecial.pasteInto", json!({})),
         ("edit.pasteSpecial.pasteOutside", json!({})),
+        (
+            "edit.contentAwareFill",
+            json!({"sampling":"rectangular","sampleAllLayers":true,"colorAdaptation":"default",
+                "rotationAdaptation":"none","scale":true,"mirror":false,"output":"new"}),
+        ),
         ("edit.fade", json!({"opacity":50,"mode":"Multiply"})),
         ("layer.linkLayers", json!({})),
+        ("layer.smartObjects.stackMode.range", json!({})),
+        ("layer.smartObjects.stackMode.entropy", json!({})),
+        ("layer.smartObjects.stackMode.kurtosis", json!({})),
+        ("layer.smartObjects.stackMode.maximum", json!({})),
+        ("layer.smartObjects.stackMode.median", json!({})),
+        ("layer.smartObjects.stackMode.minimum", json!({})),
+        ("layer.smartObjects.stackMode.mean", json!({})),
+        ("layer.smartObjects.stackMode.skewness", json!({})),
+        ("layer.smartObjects.stackMode.standardDeviation", json!({})),
+        ("layer.smartObjects.stackMode.summation", json!({})),
+        ("layer.smartObjects.stackMode.variance", json!({})),
+        ("layer.smartObjects.stackMode.none", json!({})),
         ("layer.distribute.leftEdges", json!({})),
         ("layer.distribute.horizontalCenters", json!({})),
         ("layer.distribute.rightEdges", json!({})),
@@ -523,6 +723,13 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.noise.addNoise", json!({"amount": 12.5, "distribution": "gaussian", "monochromatic": true, "seed": 7})),
         ("filter.noise.median", json!({"radius": 2})),
         ("filter.stylize.emboss", json!({"angle": 135, "height": 3, "amount": 100})),
+        ("image.calculations", json!({"source1":{"channel":{"color":"red"}},"source2":{"channel":{"color":"green"}},"blending":"add","scale":1,"offset":0})),
+        ("image.adjustments.colorLookup", color_lookup_case()),
+        ("file.automate.batch", batch_case()),
+        ("file.automate.batch", batch_save_and_close_case()),
+        ("filter.other.custom", json!({"kernel":[0,0,0,0,0,0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0],"scale":1,"offset":0})),
+        ("filter.render.fibers", json!({"variance":64,"strength":1,"seed":-1})),
+        ("filter.blur.shapeBlur", json!({"radius":5,"shapeName":"Recorded Square","shapeId":"original-fixture-square","shapeOriginType":9})),
         ("filter.blur.motionBlur", json!({"angle": 45, "distance": 20})),
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
@@ -619,6 +826,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.duplicate", json!({"mergedOnly": true})),
         ("layer.new.layer", json!({"name": "Ink", "opacity": 0.5, "mode": "Multiply"})),
         ("type.convertToShape", json!({})),
+        ("type.createWorkPath", json!({})),
         ("filter.blur.shapeBlur", json!({})),
         ("filter.blur.shapeBlur", json!({"radius": 10})),
         ("layer.new.group", json!({"name": "G"})),
@@ -635,6 +843,9 @@ fn every_mapped_command_exports_and_imports_back() {
         ("type.loadDefaultTypeStyles", json!({})),
         ("type.saveDefaultTypeStyles", json!({})),
         ("image.analysis.recordMeasurements", json!({})),
+        ("layer.videoLayers.insertBlankFrame", json!({})),
+        ("layer.videoLayers.duplicateFrame", json!({})),
+        ("layer.videoLayers.deleteFrame", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({})),
         ("file.automate.cropAndStraightenPhotos", json!({"_atnNoTarget": true})),
         ("layer.new.artboardFromGroup", json!({})),
@@ -845,6 +1056,11 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
         ("layer.smartFilter.blendingOptions", json!({"index": 1, "opacity": 0.5, "blend": "Darken"})),
         ("layer.layerStyle.blendingOptions", json!({"blendClippedLayersAsGroup": false, "transparencyShapesLayer": false})),
+        ("layer.layerStyle.blendingOptions", json!({"blendIf": [{"channel": "gray", "thisLayer": [0, 30, 200, 255], "underlying": [0, 0, 255, 255]}]})),
+        (
+            "layer.layerStyle.blendingOptions",
+            json!({"opacity": 40, "fillOpacity": 70, "blend": "Multiply", "blendIf": [{"channel": "blue", "thisLayer": [5, 5, 250, 250]}]}),
+        ),
         ("layer.createClippingMask", json!({})),
         ("layer.lockLayers", json!({"transparency": true})),
         ("filter.stylize.diffuse", json!({"mode": "normal", "seed": 321654})),
@@ -863,7 +1079,9 @@ fn every_mapped_command_exports_and_imports_back() {
             continue;
         }
         let e = event_for(&item.event).unwrap_or_else(|| panic!("{id} exported as an unknown event {}", item.event.id()));
-        match (e.from)(item.descriptor.as_ref().unwrap()) {
+        assert_eq!(item.descriptor.is_none(), *id == super::steps_stack::NONE, "{id}: unexpected descriptor presence");
+        let descriptor = item.descriptor.unwrap_or_default();
+        match (e.from)(&descriptor) {
             Mapped::Steps(steps) => {
                 assert_eq!(steps.len(), 1, "{id}: {steps:?}");
                 let navigation = match *id {
@@ -885,6 +1103,13 @@ fn every_mapped_command_exports_and_imports_back() {
                 }
                 assert_eq!(steps[0].0, *id, "{id} came back as another command");
                 let mut back = steps[0].1.clone();
+                if *id == "paint.gradient" {
+                    // Executable values match; independent public tests verify the source carrier.
+                    back.as_object_mut().unwrap().remove("__atnClassicGradient");
+                }
+                if *id == "edit.perspectiveWarp" {
+                    back.as_object_mut().unwrap().remove("__atnPerspectiveWarp");
+                }
                 normalise(&mut back);
                 if *id == "actions.play" || *id == "actions.conditional" {
                     back["set"] = json!("S");
@@ -980,6 +1205,9 @@ fn every_mapped_command_exports_and_imports_back() {
         "filter.sharpen.sharpenMore",
         // Saves back only as the descriptor it was loaded from (loaded_camera_raw_filter_steps_save_back_unchanged).
         "filter.cameraRaw",
+        // Load with the recorded descriptor riding along (gradient_fill_steps_export_and_import_back).
+        "gradient.fill.set",
+        "layer.newFillLayer.gradient",
     ];
     let unexpected: Vec<&str> = missing.iter().copied().filter(|id| !allowed.contains(id)).collect();
     assert!(unexpected.is_empty(), "add round-trip cases for {unexpected:?}");
@@ -6060,6 +6288,470 @@ fn shear_nonfinite_coordinates_stay_kept() {
             desc("null").with("ShrP", D::List(vec![point(0.0, 1.0), point(0.0, n)])),
         ] {
             assert!(matches!(steps_distort::shear_from(&d), Mapped::Unsupported { .. }), "{d:?}");
+        }
+    }
+}
+
+/// #10771: a Gradient Fill as Photoshop records it: three stops, a transparency stop at 40 % and
+/// one midpoint per stop (`Mdpn` of stop k is the segment that ends at it).
+fn recorded_gradient(mids: [i32; 3]) -> Descriptor {
+    let stop = |hex: &str, at: i32, mid: i32| {
+        D::Descriptor(
+            desc("Clrt")
+                .with("Clr ", D::Descriptor(color_desc(hex).unwrap()))
+                .with("Type", enm("Clry", "UsrS"))
+                .with("Lctn", D::Integer(at))
+                .with("Mdpn", D::Integer(mid)),
+        )
+    };
+    let trn = |at: i32, o: f64| D::Descriptor(desc("TrnS").with("Opct", pct(o)).with("Lctn", D::Integer(at)).with("Mdpn", D::Integer(50)));
+    let grad = desc("Grdn")
+        .with("Nm  ", text("Custom"))
+        .with("GrdF", enm("GrdF", "CstS"))
+        .with("Intr", D::Double(4096.0))
+        .with("Clrs", D::List(vec![stop("#ff0000", 0, mids[0]), stop("#00ff00", 2048, mids[1]), stop("#0000ff", 4096, mids[2])]))
+        .with("Trns", D::List(vec![trn(0, 100.0), trn(4096, 40.0)]));
+    desc("gradientLayer").with("Angl", ang(30.0)).with("Type", enm("GrdT", "Rdl ")).with("Grad", D::Descriptor(grad))
+}
+
+fn gradient_set(t: Descriptor) -> AtnItem {
+    item("setd", "Set", Some(desc("null").with("null", target_ref("contentLayer")).with("T   ", D::Descriptor(t))))
+}
+
+fn gradient_make(t: Descriptor) -> AtnItem {
+    let d = desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(desc("contentLayer").with("Type", D::Descriptor(t))));
+    item("Mk  ", "Make", Some(d))
+}
+
+/// The first saved step of `action` (strict save).
+fn saved_first(s: &mut Session) -> (AtnEvent, Option<Descriptor>) {
+    let r = s.execute("actions.save", json!({"action": "A"})).unwrap();
+    assert_eq!(r["skipped"], json!([]), "{r}");
+    let saved = atn::parse(&photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap()).unwrap();
+    let i = &saved.actions[0].items[0];
+    (i.event.clone(), i.descriptor.clone())
+}
+
+fn without_hidden(p: &Value) -> Value {
+    let mut p = p.clone();
+    p.as_object_mut().unwrap().remove("__atnDescriptor");
+    normalise(&mut p);
+    p
+}
+
+fn active_fill(s: &Session) -> photocraft_doc::Fill {
+    let st = s.active().unwrap();
+    match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+        photocraft_doc::LayerContent::Fill(f) => f.clone(),
+        c => panic!("not a fill layer: {}", c.kind_name()),
+    }
+}
+
+/// #10771: a recorded Set of a Gradient Fill loads as `gradient.fill.set` with its midpoints on
+/// the segment they belong to, plays them, and saves back as the recorded descriptor.
+#[test]
+fn gradient_fill_set_imports_midpoints_plays_and_saves_back_unchanged() {
+    let recorded = recorded_gradient([50, 25, 70]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded.clone())])).unwrap())})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    let (id, p) = s.actions.list[0].steps[0].clone();
+    assert_eq!(id, "gradient.fill.set");
+    let mut expected = json!({
+        "style": "radial", "angle": 30,
+        "stops": [[0, "#ff0000"], [0.5, "#00ff00"], [1, "#0000ff"]],
+        "transparency": [[0, 100], [1, 40]],
+        "midpoints": [0.25, 0.7]
+    });
+    normalise(&mut expected);
+    assert_eq!(without_hidden(&p), expected);
+    assert_eq!(
+        saved_first(&mut s),
+        (AtnEvent::Code(*b"setd"), Some(desc("null").with("null", target_ref("contentLayer")).with("T   ", D::Descriptor(recorded))))
+    );
+    // It plays on a Gradient Fill layer.
+    s.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
+    s.execute("layer.newFillLayer.gradient", json!({"from": "#000000", "to": "#ffffff"})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let photocraft_doc::Fill::Gradient { stops, midpoints, opacity_stops, .. } = active_fill(&s) else { panic!("not a gradient") };
+    assert_eq!(stops.len(), 3);
+    assert_eq!(midpoints, vec![0.25, 0.7]);
+    assert_eq!(opacity_stops.len(), 2);
+    // Default midpoints load as `[]`, which clears the custom ones when played.
+    let mut s2 = Session::new();
+    s2.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 50, 50]))])).unwrap())})).unwrap();
+    assert_eq!(s2.actions.list[0].steps[0].1["midpoints"], json!([]));
+    s.actions = s2.actions;
+    s.execute("actions.play", json!({"action": "A"})).unwrap();
+    let photocraft_doc::Fill::Gradient { midpoints, .. } = active_fill(&s) else { panic!("not a gradient") };
+    assert!(midpoints.is_empty() || midpoints.iter().all(|m| *m == 0.5), "{midpoints:?}");
+}
+
+/// #10771: an edited loaded step writes a fresh descriptor from its params, midpoints included.
+#[test]
+fn edited_gradient_fill_set_writes_a_fresh_descriptor() {
+    let mut s = Session::new();
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_set(recorded_gradient([50, 25, 70]))])).unwrap())})).unwrap();
+    s.actions.list[0].steps[0].1["midpoints"] = json!([0.4, 0.6]);
+    let (_, d) = saved_first(&mut s);
+    let t = get_obj(d.as_ref().unwrap(), "T   ").unwrap();
+    let clrs = get_list(get_obj(t, "Grad").unwrap(), "Clrs").unwrap();
+    let mids: Vec<f64> = clrs.iter().map(|c| if let D::Descriptor(c) = c { get_num(c, "Mdpn").unwrap() } else { panic!() }).collect();
+    assert_eq!(mids, vec![50.0, 40.0, 60.0]);
+    // Its own import is the edited params.
+    let Mapped::Steps(steps) = (event_for(&AtnEvent::Code(*b"setd")).unwrap().from)(d.as_ref().unwrap()) else { panic!("did not import") };
+    let mut edited = without_hidden(&s.actions.list[0].steps[0].1);
+    edited["midpoints"] = json!([0.4, 0.6]);
+    normalise(&mut edited);
+    assert_eq!(without_hidden(&steps[0].1), edited);
+}
+
+/// #10771: a recorded Make of a Gradient Fill layer plays its stops, transparency and midpoints
+/// and saves back unchanged.
+#[test]
+fn gradient_fill_make_imports_plays_and_saves_back_unchanged() {
+    let recorded = recorded_gradient([50, 25, 70]);
+    let mut s = Session::new();
+    let loaded = s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![gradient_make(recorded.clone())])).unwrap())})).unwrap();
+    assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+    assert_eq!(s.actions.list[0].steps[0].0, "layer.newFillLayer.gradient");
+    let (event, d) = saved_first(&mut s);
+    assert_eq!(event, AtnEvent::Code(*b"Mk  "));
+    assert_eq!(get_obj(get_obj(d.as_ref().unwrap(), "Usng").unwrap(), "Type"), Some(&recorded));
+    for depth in [8, 16] {
+        s.execute("file.new", json!({"width": 16, "height": 12, "depth": depth})).unwrap();
+        let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        let photocraft_doc::Fill::Gradient { stops, midpoints, opacity_stops, .. } = active_fill(&s) else { panic!("not a gradient") };
+        assert_eq!((stops.len(), midpoints, opacity_stops.len()), (3, vec![0.25, 0.7], 2));
+        // One undo step.
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(!matches!(s.active().unwrap().doc.layers.last().unwrap().content, photocraft_doc::LayerContent::Fill(_)));
+    }
+}
+
+/// #10771: PhotoCraft's own Gradient Fill steps export and load back as the same fill.
+#[test]
+fn gradient_fill_steps_export_and_import_back() {
+    let set = json!({"style": "linear", "angle": 45, "stops": [[0, "#ff0000"], [0.25, "#00ff00"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 50]], "midpoints": [0.3, 0.6]});
+    let item = export_item("gradient.fill.set", &set, "S").unwrap();
+    let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("did not import") };
+    let mut expected = set.clone();
+    normalise(&mut expected);
+    assert_eq!((steps[0].0.as_str(), without_hidden(&steps[0].1)), ("gradient.fill.set", expected));
+    // The two-colour Make plays as the same two stops at full opacity.
+    let item = export_item("layer.newFillLayer.gradient", &json!({"from": "#ff0000", "to": "#0000ff", "angle": 45}), "S").unwrap();
+    let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("did not import") };
+    let mut expected = json!({"angle": 45, "stops": [[0, "#ff0000"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]], "midpoints": []});
+    normalise(&mut expected);
+    assert_eq!((steps[0].0.as_str(), without_hidden(&steps[0].1)), ("layer.newFillLayer.gradient", expected));
+    // Stops replace `from` and `to` when it plays, so a Make with all three exports its stops.
+    let p = json!({"from": "#ff0000", "to": "#0000ff", "stops": [[0, "#00ff00"], [1, "#ffffff"]], "transparency": [[0, 100], [1, 100]]});
+    let item = export_item("layer.newFillLayer.gradient", &p, "S").unwrap();
+    let Mapped::Steps(steps) = (event_for(&item.event).unwrap().from)(item.descriptor.as_ref().unwrap()) else { panic!("did not import") };
+    assert_eq!(steps[0].1["stops"], json!([[0.0, "#00ff00"], [1.0, "#ffffff"]]));
+    // What the event cannot hold is refused: a Set without its transparency, toolbox colours,
+    // dragged handles, a path, a midpoint off a whole percent.
+    for (id, p) in [
+        ("gradient.fill.set", json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]]})),
+        ("gradient.fill.set", json!({"stops": [[0, "foreground"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]]})),
+        ("gradient.fill.set", json!({"from": [0, 0], "stops": [[0, "#ff0000"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]]})),
+        ("gradient.fill.set", json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]], "transparency": [[0, 100], [1, 100]], "midpoints": [0.333]})),
+        ("layer.newFillLayer.gradient", json!({"from": "#ff0000", "to": "#0000ff", "path": "work"})),
+        ("layer.newFillLayer.gradient", json!({"from": "#ff0000"})),
+    ] {
+        assert!(export_item(id, &p, "S").is_none(), "{id}: {p}");
+    }
+}
+
+/// #10771: a Noise gradient, smoothness below 100 % or a transparency midpoint stay Photoshop
+/// steps rather than playing as a different fill.
+#[test]
+fn gradient_fills_the_command_cannot_play_stay_photoshop_steps() {
+    // `with` appends; these replace the recorded value.
+    fn replaced(mut d: Descriptor, key: &str, v: D) -> Descriptor {
+        d.items.retain(|(k, _)| !k.is(key));
+        d.with(key, v)
+    }
+    let base = recorded_gradient([50, 50, 50]);
+    let with_grad = |f: &dyn Fn(Descriptor) -> Descriptor| {
+        let g = get_obj(&base, "Grad").unwrap().clone();
+        replaced(base.clone(), "Grad", D::Descriptor(f(g)))
+    };
+    let trns_mid = desc("TrnS").with("Opct", pct(100.0)).with("Lctn", D::Integer(0)).with("Mdpn", D::Integer(30));
+    let trns_end = desc("TrnS").with("Opct", pct(100.0)).with("Lctn", D::Integer(4096)).with("Mdpn", D::Integer(50));
+    let trns = |at: i32, o: f64| D::Descriptor(desc("TrnS").with("Opct", pct(o)).with("Lctn", D::Integer(at)).with("Mdpn", D::Integer(50)));
+    for t in [
+        // A midpoint outside the dialog's 5..95 % would play clamped.
+        recorded_gradient([50, 2, 50]),
+        recorded_gradient([50, 50, 97]),
+        // Transparency stops out of range or out of order would play clamped and sorted.
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(0, 100.0), trns(5000, 40.0)]))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(0, 150.0), trns(4096, 40.0)]))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![trns(4096, 100.0), trns(0, 40.0)]))),
+        // A Set without transparency stops would keep the layer's own.
+        with_grad(&|mut g| {
+            g.items.retain(|(k, _)| !k.is("Trns"));
+            g
+        }),
+        with_grad(&|g| replaced(g, "GrdF", enm("GrdF", "ClNs"))),
+        with_grad(&|g| replaced(g, "Intr", D::Double(2048.0))),
+        with_grad(&|g| replaced(g, "Trns", D::List(vec![D::Descriptor(trns_mid.clone()), D::Descriptor(trns_end.clone())]))),
+        base.clone().with("gradientsInterpolationMethod", enm("gradientInterpolationMethodType", "Perc")),
+    ] {
+        let imp = import(&atn::write(&one_action(vec![gradient_set(t)])).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    }
+    // A Make whose new layer also gets a name, opacity, mode or clipping: the command plays none
+    // of them, so the step stays as recorded.
+    for (key, v) in [("Nm  ", text("Sky")), ("Opct", pct(50.0)), ("Md  ", enm("BlnM", "Mltp")), ("Grup", D::Boolean(true))] {
+        let using = desc("contentLayer").with("Type", D::Descriptor(base.clone())).with(key, v);
+        let make = item("Mk  ", "Make", Some(desc("null").with("null", class_ref("contentLayer")).with("Usng", D::Descriptor(using))));
+        let imp = import(&atn::write(&one_action(vec![make])).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP, "{key}");
+    }
+}
+
+fn blend_if_entry(channel: &str, this: [i32; 4], under: Option<[i32; 4]>) -> D {
+    let mut d = desc("Blnd").with("Chnl", channel_ref(Some(channel)));
+    for (k, v) in ["SrcB", "Srcl", "SrcW", "Srcm"].into_iter().zip(this) {
+        d = d.with(k, D::Integer(v));
+    }
+    if let Some(u) = under {
+        for (k, v) in ["DstB", "Dstl", "DstW", "Dstt"].into_iter().zip(u) {
+            d = d.with(k, D::Integer(v));
+        }
+    }
+    D::Descriptor(d)
+}
+
+fn layer_set(t: Descriptor) -> AtnItem {
+    item("setd", "Set", Some(desc("null").with("null", target_ref("Lyr ")).with("T   ", D::Descriptor(t))))
+}
+
+fn blend_layers(depth: u8) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "depth": depth})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s
+}
+
+fn active_info(s: &Session) -> Value {
+    let st = s.active().unwrap();
+    crate::inspect::layer(st.doc.layer(st.active_layer.unwrap()).unwrap())
+}
+
+/// #10771: Blend If loads as `layer.layerStyle.blendingOptions` and plays (it used to be a
+/// silent no-op), on 8- and 16-bit documents, Gray and a colour channel, split sliders.
+#[test]
+fn blend_if_imports_and_plays() {
+    let blnd = D::List(vec![blend_if_entry("gray", [0, 30, 200, 255], Some([10, 10, 240, 250])), blend_if_entry("red", [20, 40, 255, 255], None)]);
+    for depth in [8, 16] {
+        let mut s = blend_layers(depth);
+        let loaded = s
+            .execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Blnd", blnd.clone()))])).unwrap())}))
+            .unwrap();
+        assert_eq!(loaded["unsupported"], json!([]), "{loaded}");
+        let mut expected = json!({"blendIf": [{"channel": "gray", "thisLayer": [0, 30, 200, 255], "underlying": [10, 10, 240, 250]}, {"channel": "red", "thisLayer": [20, 40, 255, 255]}]});
+        normalise(&mut expected);
+        let (id, p) = &s.actions.list[0].steps[0];
+        assert_eq!((id.as_str(), p), ("layer.layerStyle.blendingOptions", &expected));
+        let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+        assert!(played.get("failed").is_none(), "{played}");
+        let b = active_info(&s)["blendIf"].clone();
+        assert_eq!(b[0], json!({"channel": 0, "thisLayer": [0, 30, 200, 255], "underlying": [10, 10, 240, 250]}), "{b}");
+        assert_eq!(b[1], json!({"channel": 1, "thisLayer": [20, 40, 255, 255], "underlying": [0, 0, 255, 255]}), "{b}");
+        // It saves back as the same `Blnd`.
+        let (_, d) = saved_first(&mut s);
+        assert_eq!(get_obj(d.as_ref().unwrap(), "T   ").unwrap().get("Blnd"), Some(&blnd));
+    }
+}
+
+/// #10771: the Blending Options dialog's OK (opacity, fill, mode and Blend If in one Set) is one
+/// step that applies them all; a Set that also renames splits into setProps and Blend If.
+#[test]
+fn blend_if_with_the_dialog_options_is_one_step_and_a_rename_splits() {
+    let blnd = D::List(vec![blend_if_entry("gray", [0, 0, 128, 255], None)]);
+    let dialog = desc("Lyr ").with("Opct", pct(40.0)).with("fillOpacity", pct(70.0)).with("Md  ", enm("BlnM", "Mltp")).with("Blnd", blnd.clone());
+    let mut s = blend_layers(8);
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(dialog.clone())])).unwrap())})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].0, "layer.layerStyle.blendingOptions");
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = active_info(&s);
+    assert!((info["opacity"].as_f64().unwrap() - 0.4).abs() < 1e-3, "{info}");
+    assert_eq!(info["blend"], json!("Multiply"), "{info}");
+    assert_eq!(info["blendIf"][0]["thisLayer"], json!([0, 0, 128, 255]), "{info}");
+    let (_, d) = saved_first(&mut s);
+    assert_eq!(get_obj(d.as_ref().unwrap(), "T   "), Some(&dialog));
+    // With a rename the Set is not the dialog's: the name and opacity go through setProps.
+    let mut s = blend_layers(8);
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Nm  ", text("Renamed")).with("Opct", pct(40.0)).with("Blnd", blnd))])).unwrap())}))
+        .unwrap();
+    let ids: Vec<&str> = s.actions.list[0].steps.iter().map(|(id, _)| id.as_str()).collect();
+    assert!(ids.contains(&"layer.setProps") && ids.contains(&"layer.layerStyle.blendingOptions"), "{ids:?}");
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = active_info(&s);
+    assert_eq!(info["name"], json!("Renamed"));
+    assert_eq!(info["blendIf"][0]["thisLayer"], json!([0, 0, 128, 255]), "{info}");
+}
+
+/// #10771: the Layer Style dialog's OK on a layer without effects also records the effects'
+/// scale (`Lefx` = {Scl}). With Blend If it is still the dialog's one step and saves back with it.
+#[test]
+fn blend_if_with_the_recorded_effects_scale_saves_back_unchanged() {
+    let blnd = D::List(vec![blend_if_entry("gray", [10, 20, 200, 230], Some([0, 0, 255, 255]))]);
+    let dialog = desc("Lyr ").with("Opct", pct(80.0)).with("Blnd", blnd.clone()).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0))));
+    let mut s = blend_layers(8);
+    s.execute("actions.load", json!({"data": b64(&atn::write(&one_action(vec![layer_set(dialog.clone())])).unwrap())})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!(steps[0].0, "layer.layerStyle.blendingOptions");
+    let played = s.execute("actions.play", json!({"action": "A"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    let info = active_info(&s);
+    assert!((info["opacity"].as_f64().unwrap() - 0.8).abs() < 1e-3, "{info}");
+    assert_eq!(info["blendIf"][0]["thisLayer"], json!([10, 20, 200, 230]), "{info}");
+    let (_, d) = saved_first(&mut s);
+    assert_eq!(get_obj(d.as_ref().unwrap(), "T   "), Some(&dialog));
+    // A `Lefx` with an effect in it is not the scale alone: the step is not the dialog's.
+    let with_fx = desc("Lyr ").with("Blnd", blnd).with("Lefx", D::Descriptor(desc("Lefx").with("Scl ", pct(100.0)).with("DrSh", D::Descriptor(desc("DrSh")))));
+    let imp = import(&atn::write(&one_action(vec![layer_set(with_fx)])).unwrap()).unwrap();
+    assert!(imp.actions[0].steps.iter().all(|(_, p)| p.get("__atnEffectsScale").is_none()), "{:?}", imp.actions[0].steps);
+    // Nor can it play without the shadow: it stays the recorded step.
+    assert_eq!(imp.actions[0].steps.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), [PHOTOSHOP_STEP], "{:?}", imp.actions[0].steps);
+}
+
+/// #10771: Blend If entries that are not whole levels, out of order, with half the Underlying
+/// sliders or an unknown key stay Photoshop steps.
+#[test]
+fn blend_if_the_command_cannot_play_stays_a_photoshop_step() {
+    let with = |key: &str| match blend_if_entry("gray", [0, 0, 255, 255], None) {
+        D::Descriptor(d) => D::Descriptor(d.with(key, D::Integer(3))),
+        e => e,
+    };
+    let (half, unknown) = (with("DstB"), with("Zzzz"));
+    let inverted = blend_if_entry("gray", [0, 200, 100, 255], None);
+    for e in [blend_if_entry("gray", [0, 0, 300, 255], None), inverted, half, unknown] {
+        let imp = import(&atn::write(&one_action(vec![layer_set(desc("Lyr ").with("Blnd", D::List(vec![e])))])).unwrap()).unwrap();
+        assert_eq!(imp.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    }
+    for p in [
+        json!({"blendIf": null}),
+        json!({"blendIf": {"channel": 2, "thisLayer": [0, 255]}}),
+        json!({"blendIf": {"channel": "gray", "thisLayer": [200, 100]}}),
+        json!({"blendIf": {"channel": "gray", "underlying": [0, 255]}}),
+    ] {
+        assert!(export_item("layer.layerStyle.blendingOptions", &p, "S").is_none(), "{p}");
+    }
+}
+
+/// Save one action of steps through `actions.save`, returning the skipped list and the steps
+/// `actions.load` reads back.
+fn save_and_reload(steps: Vec<(String, Value)>) -> (Value, Vec<(String, Value)>) {
+    let mut s = Session::new();
+    let mut action = Action::new("A", steps);
+    action.set = Some("Review".into());
+    s.actions.list.push(action);
+    let saved = s.execute("actions.save", json!({"set": "Review", "skipUnsupported": true})).unwrap();
+    let mut fresh = Session::new();
+    fresh.execute("actions.load", json!({"data": saved["data"]})).unwrap();
+    (saved["skipped"].clone(), fresh.actions.list[0].steps.clone())
+}
+
+/// Calculations plays an omitted blending as Multiply, so Save Actions writes it as Multiply.
+#[test]
+fn calculations_without_blending_saves_as_multiply() {
+    let sources = json!({"source1": {"channel": {"color": "red"}}, "source2": {"channel": {"color": "green"}}});
+    for blending in [None, Some(Value::Null)] {
+        let mut params = sources.clone();
+        if let Some(b) = blending.clone() {
+            params["blending"] = b;
+        }
+        let (skipped, steps) = save_and_reload(vec![("image.calculations".into(), params)]);
+        assert_eq!(skipped, json!([]), "{blending:?}");
+        let mut expected = sources.clone();
+        expected["blending"] = json!("multiply");
+        assert_eq!(steps, vec![("image.calculations".to_string(), expected)], "{blending:?}");
+    }
+    let mut unknown = sources.clone();
+    unknown["blending"] = json!("bogus");
+    assert_eq!(save_and_reload(vec![("image.calculations".into(), unknown)]).0.as_array().map(Vec::len), Some(1));
+}
+
+/// A transparency source with no layer reads the active layer's transparency; Save Actions
+/// refuses it rather than write the merged transparency. Merged and named layers still save.
+#[test]
+fn apply_image_active_layer_transparency_is_not_saved_as_merged() {
+    for source in [json!({"channel": "transparency"}), json!({"channel": "Transparency", "layer": null})] {
+        let (skipped, _) = save_and_reload(vec![("image.applyImage".into(), json!({"source": source, "blending": "normal"}))]);
+        assert_eq!(skipped.as_array().map(Vec::len), Some(1), "{source}: {skipped}");
+    }
+    for layer in ["merged", "Pixels"] {
+        let params = json!({"source": {"channel": "transparency", "layer": layer}, "blending": "normal"});
+        let (skipped, steps) = save_and_reload(vec![("image.applyImage".into(), params)]);
+        assert_eq!(skipped, json!([]), "{layer}");
+        assert_eq!(steps[0].1["source"]["layer"], layer, "{layer}: {steps:?}");
+    }
+    // Other channels keep the merged default for an omitted layer.
+    let (skipped, steps) = save_and_reload(vec![("image.applyImage".into(), json!({"source": {"channel": "red"}, "blending": "normal"}))]);
+    assert_eq!(skipped, json!([]));
+    assert_eq!(steps[0].1["source"]["layer"], "merged");
+}
+
+fn make_levels_layer(using: Descriptor) -> Imported {
+    let levels = desc("Lvls").with("Adjs", D::List(vec![D::Descriptor(desc("LvlA").with("Chnl", channel_ref(None)).with("Gmm ", D::Double(1.2)))]));
+    let make = desc("null").with("null", class_ref("AdjL")).with("Usng", D::Descriptor(using.with("Type", D::Descriptor(levels))));
+    let file = AtnFile {
+        name: UnicodeString::new_nul("S"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item("Mk  ", "Make", Some(make))], ..Default::default() }],
+        ..Default::default()
+    };
+    import(&atn::write(&file).unwrap()).unwrap()
+}
+
+/// A Make adjustment layer takes `Md  ` as its blend mode only when it is a `BlnM` enumeration.
+#[test]
+fn adjustment_layer_blend_mode_needs_a_blend_mode_enumeration() {
+    let imported = make_levels_layer(desc("AdjL").with("Md  ", enm("BlnM", "Mltp")));
+    assert!(imported.unsupported.is_empty());
+    assert_eq!(imported.actions[0].steps[0].1["mode"], "Multiply");
+    let imported = make_levels_layer(desc("AdjL").with("Md  ", enm("Ordn", "Mltp")));
+    assert_eq!(imported.unsupported.len(), 1);
+    assert_eq!(imported.actions[0].steps[0].0, PHOTOSHOP_STEP);
+    // A plain Make layer drops it rather than read another enumeration as a mode.
+    let make = desc("null").with("null", class_ref("Lyr ")).with("Usng", D::Descriptor(desc("Lyr ").with("Md  ", enm("Ordn", "Mltp"))));
+    let file = AtnFile {
+        name: UnicodeString::new_nul("S"),
+        actions: vec![AtnAction { name: UnicodeString::new_nul("A"), items: vec![item("Mk  ", "Make", Some(make))], ..Default::default() }],
+        ..Default::default()
+    };
+    let imported = import(&atn::write(&file).unwrap()).unwrap();
+    assert_eq!(imported.actions[0].steps[0].0, "layer.new.layer");
+    assert!(imported.actions[0].steps[0].1.get("mode").is_none(), "{:?}", imported.actions[0].steps);
+}
+
+/// An adjustment layer name that would not save back unchanged keeps the whole step.
+#[test]
+fn adjustment_layer_name_must_round_trip() {
+    for (name, kept) in [
+        (UnicodeString::new_nul("Grade"), true),
+        (UnicodeString::new("Grade"), true),
+        (UnicodeString(vec![u16::from(b'G'), 0xD800, 0]), false),
+        (UnicodeString(vec![u16::from(b'G'), 0, 0]), false),
+    ] {
+        let imported = make_levels_layer(desc("AdjL").with("Nm  ", D::Text(name.clone())));
+        let step = &imported.actions[0].steps[0];
+        if kept {
+            assert!(imported.unsupported.is_empty(), "{name:?}");
+            assert_eq!(step.1["name"], "Grade", "{name:?}");
+        } else {
+            assert_eq!(step.0, PHOTOSHOP_STEP, "{name:?}");
         }
     }
 }

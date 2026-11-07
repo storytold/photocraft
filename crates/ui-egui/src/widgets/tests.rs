@@ -1442,3 +1442,44 @@ fn the_wheel_leaves_a_plain_dropdown_alone() {
     wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
     assert_eq!(*h.state(), 0);
 }
+
+/// [`MODES`] in a wheel dropdown whose list draws a line above each option `starts_group` picks,
+/// opened: the open list's rect and each option's row in it.
+fn open_grouped_modes(starts_group: fn(&usize) -> bool) -> (egui::Rect, Vec<egui::Rect>) {
+    let mut h = Harness::builder().with_size(egui::vec2(300.0, 300.0)).build_ui_state(
+        move |ui, selected: &mut usize| {
+            super::dropdown_wheel_grouped(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0, starts_group);
+        },
+        0,
+    );
+    crate::theme::apply(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run();
+    h.get_by_role(egui::accesskit::Role::ComboBox).click();
+    h.run_steps(4);
+    let list = h.ctx.memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)));
+    let Some(list) = list else { panic!("the list is open") };
+    let rows = MODES.iter().map(|(_, l)| h.get_all_by_label(l).map(|n| n.rect()).rfind(|r| list.contains_rect(*r)).unwrap_or(egui::Rect::NOTHING)).collect();
+    (list, rows)
+}
+
+/// The gaps between consecutive rows of an open list.
+fn row_gaps(rows: &[egui::Rect]) -> Vec<f32> {
+    rows.windows(2).map(|w| w[1].top() - w[0].bottom()).collect()
+}
+
+/// A grouped dropdown draws a line above each option starting a group, never above the first one,
+/// and the lines take no width: the list is as wide as without them (#5532).
+#[test]
+fn a_grouped_dropdown_list_draws_a_line_above_each_group_and_keeps_its_width() {
+    let (plain_list, plain) = open_grouped_modes(|_| false);
+    let plain_gaps = row_gaps(&plain);
+    let (lo, hi) = plain_gaps.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), g| (lo.min(*g), hi.max(*g)));
+    assert!(hi - lo < 1.0, "no groups, even row gaps: {plain_gaps:?}");
+    // Darken (index 2) starts a group; so does Normal, the first option, which never gets a line.
+    let (list, rows) = open_grouped_modes(|i| matches!(*i, 0 | 2));
+    let gaps = row_gaps(&rows);
+    assert!((gaps[0] - lo).abs() < 0.5 && (gaps[2] - lo).abs() < 0.5, "only Dissolve/Darken is wider: {gaps:?}");
+    assert!(gaps[1] > lo + 2.0, "a line between Dissolve and Darken: {gaps:?}");
+    assert!((rows[0].top() - plain[0].top()).abs() < 0.5, "no line above the first row: {rows:?} vs {plain:?}");
+    assert_eq!(list.width(), plain_list.width(), "the line doesn't widen the list");
+}
