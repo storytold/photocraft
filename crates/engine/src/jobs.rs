@@ -102,6 +102,8 @@ struct Shared {
     /// `fetch_max` keeps progress monotonic even with several reporting threads.
     progress: AtomicU32,
     message: Mutex<String>,
+    /// Intermediate results the worker published for the UI ([`JobCtx::publish`]).
+    published: Mutex<Vec<Box<dyn Any + Send>>>,
     batch: Mutex<BatchInterrupt>,
     batch_decision: Condvar,
     batch_preview: Mutex<Option<BatchPreview>>,
@@ -336,6 +338,12 @@ impl JobCtx {
         self.shared.state.fetch_or(WORK_FINISHED, Ordering::Release);
     }
 
+    /// Hands an intermediate result (for example a preview of what the job is making) to the UI
+    /// thread, which collects it with [`Session::take_published`] while the job runs.
+    pub fn publish<T: Send + 'static>(&self, value: T) {
+        self.shared.published.lock().unwrap_or_else(PoisonError::into_inner).push(Box::new(value));
+    }
+
     /// `Err(Cancelled)` once cancelled, for `?` between stages.
     pub fn check(&self) -> Result<()> {
         if self.cancelled() { Err(EngineError::Cancelled) } else { Ok(()) }
@@ -514,6 +522,8 @@ struct Running {
     pre_selected: Option<Vec<LayerId>>,
     before: crate::actions_record::Before,
     doc: Option<DocId>,
+    /// A document the job locks without editing it (an open's preview, [`Session::set_job_lock`]).
+    locks: Option<DocId>,
     /// The document as the job saw it: applying fails if it was edited meanwhile.
     snapshot: Option<Weak<Document>>,
     ctx: JobCtx,
@@ -867,6 +877,7 @@ fn new_job<T: Send + 'static>(
         pre_selected: None,
         before: crate::actions_record::Before::capture(s),
         doc,
+        locks: None,
         snapshot,
         ctx: JobCtx::new(),
         started_ms: now_ms(),
@@ -956,6 +967,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        keep_raw: false,
         ..Default::default()
     }
 }
@@ -1241,6 +1253,9 @@ impl Session {
         let name_w = name.to_string();
         let name_a = name.to_string();
         let mut opts = import_options(self.prefs());
+        // An interactive raw open keeps its sensor data for the Camera Raw dialog it may show.
+        opts.keep_raw = confirm_damage && self.prefs().raw_defaults.open_in_camera_raw;
+        let progressive = confirm_damage;
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
@@ -1276,6 +1291,16 @@ impl Session {
                 let outcome = match source {
                     OpenSource::Bytes(bytes) => {
                         ctx.check()?;
+                        // Interactive raw opens show the camera's JPEG and a half-size develop while
+                        // the full develop runs (the UI takes them with `take_published`).
+                        if progressive && !cfg!(target_arch = "wasm32") && photocraft_io::raw::is_raw(&bytes) {
+                            ctx.progress(0.01, "Previewing");
+                            photocraft_io::raw::publish_previews(&name_w, &bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
+                            if let Err(e) = ctx.check() {
+                                photocraft_io::raw::discard_predecoded();
+                                return Err(e);
+                            }
+                        }
                         ctx.progress(0.02, "Decoding");
                         let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
                         match res {
@@ -1647,7 +1672,26 @@ impl Session {
 
     /// The running job that locks document `doc`, if any.
     pub fn job_on(&self, doc: DocId) -> Option<JobInfo> {
-        self.jobs.running.iter().find(|r| r.doc == Some(doc)).map(Running::info)
+        self.jobs.running.iter().find(|r| r.doc == Some(doc) || r.locks == Some(doc)).map(Running::info)
+    }
+
+    /// Collects the values of type `T` that running job `id` published ([`JobCtx::publish`]) since
+    /// the last call, oldest first.
+    pub fn take_published<T: 'static>(&mut self, id: JobId) -> Vec<T> {
+        let Some(job) = self.jobs.running.iter().find(|r| r.id == id) else { return Vec::new() };
+        let mut all = job.ctx.shared.published.lock().unwrap_or_else(PoisonError::into_inner);
+        let (mine, rest) = std::mem::take(&mut *all).into_iter().partition::<Vec<_>, _>(|v| v.is::<T>());
+        *all = rest;
+        mine.into_iter().filter_map(|v| v.downcast::<T>().ok().map(|b| *b)).collect()
+    }
+
+    /// Makes running job `id` lock document `doc` (or none) as if it edited it, without it being
+    /// the job's document: edits are refused meanwhile and closing `doc` cancels the job. For a
+    /// preview shown while an open job makes the real document.
+    pub fn set_job_lock(&mut self, id: JobId, doc: Option<DocId>) {
+        if let Some(job) = self.jobs.running.iter_mut().find(|r| r.id == id) {
+            job.locks = doc;
+        }
     }
 
     /// The running job that locks the active document, if any.
@@ -1683,7 +1727,7 @@ impl Session {
     /// Cancel the jobs editing document `doc` (it is closing). A job past its commit keeps
     /// running and its result is still applied (see [`JobCtx::commit`]).
     pub(crate) fn cancel_jobs_on(&mut self, doc: DocId) -> CancelReport {
-        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc)).map(|r| r.id).collect();
+        let ids: Vec<JobId> = self.jobs.running.iter().filter(|r| r.doc == Some(doc) || r.locks == Some(doc)).map(|r| r.id).collect();
         let report = self.cancel_each(ids);
         // Workers cancelled now, or earlier and still unwinding, hold the closing document.
         #[cfg(not(target_arch = "wasm32"))]

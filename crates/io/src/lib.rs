@@ -593,6 +593,9 @@ pub struct ImportOptions {
     pub max_group_depth: usize,
     /// The demosaic method camera raws are developed with.
     pub demosaic: raw::Demosaic,
+    /// Keep a developed raw's sensor data for its open-time Camera Raw dialog
+    /// ([`raw::take_kept_decode`]) instead of decoding the file again there.
+    pub keep_raw: bool,
     /// PSD layer/mask/merged pixel allowance, including conversion workspace, and the
     /// equivalent allowance for a layered TIFF's composite and retained decoded image. May
     /// lower the default cap; 0 uses the adaptive budget. Does not cover metadata or
@@ -613,6 +616,7 @@ impl Default for ImportOptions {
         ImportOptions {
             max_group_depth: photocraft_doc::MAX_GROUP_DEPTH,
             demosaic: raw::Demosaic::default(),
+            keep_raw: false,
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
             psd_high_memory_approved: false,
@@ -987,7 +991,13 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
         Route::Xcf => xcf::import(name, bytes, ctl),
         Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
-        Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
+        Route::Raw => {
+            if opts.keep_raw {
+                raw::import_raw_demosaic_keeping(name, bytes, opts.demosaic)
+            } else {
+                raw::import_raw_demosaic(name, bytes, opts.demosaic)
+            }
+        }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
