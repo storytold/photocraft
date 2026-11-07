@@ -511,7 +511,7 @@ pub struct PhotocraftApp {
     /// Snapshots whose live layer/mask keys were last used to prune thumbnail handles.
     thumb_documents: Vec<(DocId, std::sync::Weak<Document>)>,
     /// Content bounds cached per (key, revision): scanning a 36 MP layer every frame cost ~77 ms.
-    bounds_cache: HashMap<u64, (u64, photocraft_geom::Rect, photocraft_raster::Surface)>,
+    bounds_cache: HashMap<u64, (u64, photocraft_geom::Rect, photocraft_raster::Surface, Option<photocraft_doc::LayerId>)>,
     /// Downsampled proxy of the active document for live previews: (doc, revision, k, proxy).
     pub(crate) proxy: Option<(DocId, u64, u32, std::sync::Arc<Document>)>,
     /// Key of the preview currently uploaded to the GPU (doc, params hash).

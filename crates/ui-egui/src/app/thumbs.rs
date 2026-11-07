@@ -10,10 +10,13 @@ impl PhotocraftApp {
         }
         // Check snapshots every sync, but walk the layer tree only after it changes. A Weak
         // tracks replacement (including undo and preserved-ID reopen) without retaining pixels.
-        if !self.thumbs.is_empty() {
+        let prune_bounds = self.bounds_cache.values().any(|(_, _, _, owner)| owner.is_some());
+        if !self.thumbs.is_empty() || prune_bounds {
             let mut live = std::collections::HashSet::new();
+            let mut live_layers = std::collections::HashSet::new();
             let mut pending: Vec<_> = documents.iter().flat_map(|st| &st.doc.layers).collect();
             while let Some(layer) = pending.pop() {
+                live_layers.insert(layer.id);
                 live.insert((layer.id, mask_thumbs_ui::THUMB_LAYER));
                 if layer.mask.is_some() {
                     live.insert((layer.id, mask_thumbs_ui::THUMB_MASK));
@@ -32,6 +35,10 @@ impl PhotocraftApp {
             // than deleting an ID just because one document containing it was closed.
             self.thumbs.retain(|key, _| live.contains(key));
             self.thumb_frames.retain(|id, _| live.contains(&(*id, mask_thumbs_ui::THUMB_LAYER)));
+            // Pointer fingerprints are safe while each live entry retains its COW surface. Drop
+            // an owned surface as soon as its layer disappears instead of waiting for the global
+            // cache limit; arbitrary non-layer cache keys remain bounded by that limit.
+            self.bounds_cache.retain(|_, (_, _, _, owner)| owner.is_none_or(|id| live_layers.contains(&id)));
         }
         self.thumb_documents = documents.iter().map(|st| (st.doc.id, std::sync::Arc::downgrade(&st.doc))).collect();
     }
@@ -190,7 +197,7 @@ impl PhotocraftApp {
     /// Cached `Surface::content_bounds` keyed by an id and the surface's tile identity.
     pub fn cached_bounds(&mut self, key: u64, surface: &photocraft_raster::Surface) -> photocraft_geom::Rect {
         let rev = surface_fingerprint(surface);
-        if let Some((r, b, _)) = self.bounds_cache.get(&key)
+        if let Some((r, b, _, _)) = self.bounds_cache.get(&key)
             && *r == rev
         {
             return *b;
@@ -201,7 +208,7 @@ impl PhotocraftApp {
         }
         // A pointer-only fingerprint is stable only while its tiles stay alive.
         // Retention also makes a later in-place edit COW, changing its identity.
-        self.bounds_cache.insert(key, (rev, b, surface.clone()));
+        self.bounds_cache.insert(key, (rev, b, surface.clone(), None));
         b
     }
 
@@ -213,7 +220,7 @@ impl PhotocraftApp {
             photocraft_doc::LayerContent::Shape(sh) if sh.has_soft_mask() => {
                 // Cached per rendering, like the pixel bounds: the frame renders strips of the shape.
                 let (key, rev) = (layer.id.0 | 1 << 63, surface_fingerprint(surface));
-                if let Some((r, b, _)) = self.bounds_cache.get(&key)
+                if let Some((r, b, _, _)) = self.bounds_cache.get(&key)
                     && *r == rev
                 {
                     return *b;
@@ -223,10 +230,24 @@ impl PhotocraftApp {
                 if self.bounds_cache.len() > 256 {
                     self.bounds_cache.clear();
                 }
-                self.bounds_cache.insert(key, (rev, b, surface.clone()));
+                self.bounds_cache.insert(key, (rev, b, surface.clone(), Some(layer.id)));
                 b
             }
-            _ => self.cached_bounds(layer.id.0, surface),
+            _ => {
+                let key = layer.id.0;
+                let rev = surface_fingerprint(surface);
+                if let Some((r, b, _, _)) = self.bounds_cache.get(&key)
+                    && *r == rev
+                {
+                    return *b;
+                }
+                let b = surface.content_bounds();
+                if self.bounds_cache.len() > 256 {
+                    self.bounds_cache.clear();
+                }
+                self.bounds_cache.insert(key, (rev, b, surface.clone(), Some(layer.id)));
+                b
+            }
         }
     }
 }
@@ -370,6 +391,19 @@ mod channel_tint_tests {
         assert_eq!(app.cached_bounds(7, &mask), photocraft_geom::Rect::new(10, 10, 11, 11));
         mask.write_pixel(30, 40, &[1.0]);
         assert_eq!(app.cached_bounds(7, &mask), photocraft_geom::Rect::new(10, 10, 31, 41));
+    }
+
+    #[test]
+    fn deleted_layers_release_their_retained_bounds_surfaces() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
+        let id = photocraft_doc::LayerId(app.run("layer.new.layer", serde_json::json!({})).unwrap()["layer"].as_u64().unwrap());
+        let layer = app.session.active().unwrap().doc.layer(id).unwrap().clone();
+        let surface = layer.surface().unwrap().clone();
+        app.layer_frame_bounds(&layer, &surface);
+        assert!(app.bounds_cache.contains_key(&id.0));
+        app.run("layer.delete", serde_json::json!({"layer": id.0})).unwrap();
+        assert!(!app.bounds_cache.contains_key(&id.0));
     }
 
     #[test]
