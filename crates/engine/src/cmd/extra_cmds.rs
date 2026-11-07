@@ -794,6 +794,17 @@ pub(crate) fn rasterize(s: &mut Session, p: &Value, only: Option<&'static str>) 
     rasterize_layers(s, ids, only, rasterize_one)
 }
 
+/// The history label of a Rasterize step: the kind it was limited to, or plain "Rasterize".
+fn rasterize_label(only: Option<&str>) -> &'static str {
+    match only {
+        Some("type") => "Rasterize Type",
+        Some("shape") => "Rasterize Shape",
+        Some("fill") => "Rasterize Fill Content",
+        Some("smart") => "Rasterize Smart Object",
+        _ => "Rasterize",
+    }
+}
+
 fn nothing_to_rasterize(only: Option<&str>, many: bool) -> EngineError {
     EngineError::Other(match (only, many) {
         (Some(k), false) => format!("the layer is not a {k} layer"),
@@ -818,7 +829,7 @@ fn rasterize_layers(
         return Err(nothing_to_rasterize(only, many));
     }
     let key = step_key(s, "rasterize");
-    let (first, done) = crate::analysis_cmds::compound(s, "Rasterize", |s| {
+    let (first, done) = crate::analysis_cmds::compound(s, rasterize_label(only), |s| {
         let mut done = Vec::new();
         for id in ids {
             if convert(s, id, only, &key)? {
