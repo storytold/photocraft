@@ -7,6 +7,10 @@
 //! part of the serialisable UI state so the control channel can read and drive it). The Color
 //! Sampler points themselves live in the engine (`DocState.color_samplers`) so every front end
 //! shares them; this module only maps pointer input and draws the numbered markers.
+//!
+//! The Ruler options bar's Straighten Layer button is on when the engine's check says so, and a
+//! hidden target layer answers its click with the reference's alert rather than the status line
+//! (#12033).
 
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, RichText, Stroke, pos2, vec2};
 use photocraft_doc::{Document, Ruler};
@@ -15,7 +19,7 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::Tool;
+use crate::state::{DialogKind, Tool};
 use crate::theme::Tokens;
 
 /// What a pointer drag is doing (not serialised).
@@ -526,8 +530,19 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut app.ui.analysis.use_measurement_scale, tl!("Use Measurement Scale"));
             let has = doc.measurement.ruler.is_some();
-            if ui.add_enabled_ui(has, |ui| crate::widgets::secondary_button(ui, tl!("Straighten Layer"), 0.0)).inner.clicked() {
-                let _ = app.run("image.analysis.straightenLayer", json!({}));
+            // The engine decides this button's state, so it goes grey for exactly the targets
+            // Straighten Layer is off for: the Background, several selected layers, a group and a
+            // layer locked in place (#12033).
+            let straighten = app.session.is_enabled("image.analysis.straightenLayer");
+            if ui.add_enabled_ui(straighten, |ui| crate::widgets::secondary_button(ui, tl!("Straighten Layer"), 0.0)).inner.clicked() {
+                // A hidden target layer keeps the button on and answers the click with the
+                // reference's alert (its message and an OK button), changing nothing (#12033).
+                if let Err(why) = app.run("image.analysis.straightenLayer", json!({}))
+                    && why == photocraft_engine::analysis_cmds::STRAIGHTEN_HIDDEN_ERROR
+                {
+                    let message = photocraft_engine::analysis_cmds::STRAIGHTEN_HIDDEN_ERROR;
+                    app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(message)}).as_object().cloned().unwrap_or_default());
+                }
             }
             if ui.add_enabled_ui(has, |ui| crate::widgets::secondary_button(ui, tl!("Clear"), 0.0)).inner.clicked() {
                 let _ = app.run("image.analysis.rulerTool", json!({"clear": true}));
