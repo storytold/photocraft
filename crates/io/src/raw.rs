@@ -170,7 +170,7 @@ impl std::fmt::Debug for RawDecode {
 impl RawDecode {
     /// Decodes `bytes` and fits its look, as a default open does.
     pub fn new(bytes: &[u8]) -> Result<RawDecode, IoError> {
-        let sensor = decode_sensor(bytes)?;
+        let sensor = decode_sensor(bytes, &limits())?;
         let look = default_look(bytes, &sensor);
         Ok(RawDecode::from_parts(bytes, sensor, look))
     }
@@ -194,10 +194,10 @@ impl RawDecode {
     }
 }
 
-/// The sensor data of `bytes` under the shared limits.
-fn decode_sensor(bytes: &[u8]) -> Result<Sensor, IoError> {
+/// The sensor data of `bytes` under `limits`.
+fn decode_sensor(bytes: &[u8], limits: &Limits) -> Result<Sensor, IoError> {
     DECODES.with(|n| n.set(n.get() + 1));
-    photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)
+    photocraft_raw::decode(bytes, limits).map_err(IoError::Raw)
 }
 
 thread_local! {
@@ -382,7 +382,7 @@ fn develop_fitted(bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<(ph
     let (sensor, predecoded_look) = match take_predecoded(bytes, opts) {
         Some((sensor, look)) => (sensor, Some(look)),
         None => {
-            let sensor = decode_sensor(bytes).map_err(|e| match e {
+            let sensor = decode_sensor(bytes, &opts.limits).map_err(|e| match e {
                 IoError::Raw(e) => e,
                 e => RawError::Malformed(e.to_string()),
             })?;
@@ -498,6 +498,12 @@ fn take_predecoded(bytes: &[u8], opts: &DevelopOptions) -> Option<(Sensor, Optio
     (p.demosaic == opts.demosaic && opts.camera_look.is_none() && p.fingerprint == Fingerprint::of(bytes)).then_some((p.sensor, p.look))
 }
 
+/// Drops the sensor and look [`publish_previews`] left for the full develop, for an open that
+/// ends (cancelled) before that develop runs.
+pub fn discard_predecoded() {
+    PREDECODED.with(|p| p.borrow_mut().take());
+}
+
 /// Long edge a preview JPEG should have at least to be worth showing: the smallest such preview
 /// decodes fastest, else the largest.
 const FIRST_PAINT_EDGE: u32 = 1920;
@@ -522,7 +528,7 @@ fn jpeg_preview(name: &str, bytes: &[u8]) -> Option<ImportResult> {
 /// full develop ([`develop_fitted`]) on this thread, so the file is decoded once.
 fn half_preview(name: &str, bytes: &[u8], demosaic: Demosaic) -> Option<ImportResult> {
     let opts = DevelopOptions { limits: limits(), demosaic, ..Default::default() };
-    let sensor = decode_sensor(bytes).ok()?;
+    let sensor = decode_sensor(bytes, &opts.limits).ok()?;
     let look = fitted_look(bytes, &sensor, &opts);
     let half = photocraft_raw::develop_half(&sensor, &DevelopOptions { camera_look: look.clone(), ..opts });
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
@@ -568,6 +574,17 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sensor decode takes the caller's limits, as the full develop passes its own (#9433).
+    #[test]
+    fn the_sensor_decode_uses_the_limits_it_is_given() {
+        use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+        let (w, h) = (40, 24);
+        let bytes = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535)).build();
+        let tight = Limits { max_width: 8, max_height: 8, max_pixels: 64, max_alloc: 1 << 20 };
+        assert!(decode_sensor(&bytes, &tight).is_err());
+        assert!(decode_sensor(&bytes, &limits()).is_ok());
+    }
 
     #[test]
     fn the_developed_note_says_which_demosaic_method_was_used() {

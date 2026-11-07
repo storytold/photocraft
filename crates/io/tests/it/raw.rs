@@ -602,3 +602,28 @@ fn a_kept_decode_gives_the_same_pixels_and_decodes_once() {
     assert_eq!(pixels(&got), pixels(&import_raw_tuned("a.nef", &nef, &RawTuning::default()).unwrap().0));
     assert_eq!((got.document.size.width, got.document.size.height), (w as u32, h as u32));
 }
+
+/// A cancelled open drops the sensor its previews left for the full develop, so the next develop
+/// of the file decodes it again instead of finding a stale stash (#9433).
+#[test]
+fn a_discarded_predecode_is_not_used_by_the_next_develop() {
+    use photocraft_io::raw::{Demosaic, decodes_on_this_thread, discard_predecoded, import_raw_demosaic, publish_previews};
+    let (w, h) = (40, 24);
+    let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 65535));
+    spec.as_shot_neutral = Some([0.6, 1.0, 0.8]);
+    let bytes = spec.build();
+    let develop = |discard: bool| {
+        let mut shown = 0;
+        publish_previews("p.dng", &bytes, Demosaic::default(), &mut |_| shown += 1, &|| false);
+        if discard {
+            discard_predecoded();
+        }
+        let before = decodes_on_this_thread();
+        import_raw_demosaic("p.dng", &bytes, Demosaic::default()).unwrap();
+        (shown, decodes_on_this_thread() - before)
+    };
+    let (shown, decodes) = develop(false);
+    assert!(shown > 0, "the half-size preview was made");
+    assert_eq!(decodes, 0, "the develop reuses the previews' sensor");
+    assert_eq!(develop(true).1, 1, "after a discard it decodes again");
+}

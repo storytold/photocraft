@@ -1054,7 +1054,10 @@ impl Session {
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
-        self.dispatch(id, params, true)
+        let before = self.active_layer_stamp();
+        let started = self.dispatch(id, params, true);
+        self.note_layer_change(before);
+        started
     }
 
     pub const MAX_PENDING_PREFLIGHTS: usize = 32;
@@ -1293,7 +1296,10 @@ impl Session {
                         if progressive && !cfg!(target_arch = "wasm32") && photocraft_io::raw::is_raw(&bytes) {
                             ctx.progress(0.01, "Previewing");
                             photocraft_io::raw::publish_previews(&name_w, &bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
-                            ctx.check()?;
+                            if let Err(e) = ctx.check() {
+                                photocraft_io::raw::discard_predecoded();
+                                return Err(e);
+                            }
                         }
                         ctx.progress(0.02, "Decoding");
                         let res = ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl));
@@ -1965,7 +1971,13 @@ impl Session {
     }
 
     /// Apply (or report the failure of) a job whose worker has delivered `r`.
-    fn finish_job(&mut self, mut job: Running, r: Result<Payload>) {
+    fn finish_job(&mut self, job: Running, r: Result<Payload>) {
+        let before = self.active_layer_stamp();
+        self.finish_job_step(job, r);
+        self.note_layer_change(before);
+    }
+
+    fn finish_job_step(&mut self, mut job: Running, r: Result<Payload>) {
         let apply = job.apply.take();
         // Keep the typed error beside its display text, so `wait_job` and `JobEvent` can still
         // report a hard budget's required/limit or an approval request's limits.

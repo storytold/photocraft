@@ -26,6 +26,8 @@ fn dng(with_jpeg: bool) -> Vec<u8> {
 }
 
 fn app_with_a_document() -> PhotocraftApp {
+    // These opens keep their decode in the store the Camera Raw tests share.
+    crate::dialogs::camera_raw_ui::tests::hold_raw_open_turn();
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     let mut app = PhotocraftApp::new(session, crate::Services::default());
@@ -117,4 +119,24 @@ fn a_failing_open_closes_its_preview_and_reports_the_error() {
     until_opened(&mut app);
     assert_eq!(app.session.documents().len(), 1);
     assert!(app.jobs.previews.is_empty() && app.session.jobs().is_empty());
+}
+
+#[test]
+fn a_later_preview_does_not_take_the_focus_from_the_tab_the_user_switched_to() {
+    let mut app = app_with_a_document();
+    start_open(&mut app, "s.dng", None, OpenSource::Bytes(Arc::new(dng(true))), None, None).unwrap();
+    until_previewed(&mut app);
+    let first = app.jobs.previews[0].1;
+    // The user goes back to the first document while the raw keeps developing.
+    app.session.set_active(0);
+    let end = Instant::now() + Duration::from_secs(20);
+    // Each later preview replaces the first one in place; the focus stays where it is.
+    while app.jobs.previews.first().is_some_and(|(_, id)| *id == first) && app.session.has_jobs() {
+        assert!(Instant::now() < end, "no second preview and no end of the open within 20 s");
+        show_previews(&mut app);
+        assert_eq!(app.session.active_index(), Some(0));
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    assert_eq!(app.session.active_index(), Some(0));
+    until_opened(&mut app);
 }
