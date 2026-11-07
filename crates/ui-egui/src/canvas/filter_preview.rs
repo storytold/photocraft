@@ -58,6 +58,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         }
         params = crate::select_mask_view::request_params(&d.fields, params);
     }
+    crate::actions::authorize_panel_preview(app, d.id, &d.fields, &cmd, &params).ok()?;
     let st = app.session.documents().get(idx)?;
     // Fade previews at full size: it blends one area, like OK does, and has no proxy (#8230).
     let k = if cmd == FADE { 1 } else { filter_preview_factor(app, &st.doc, &cmd, &params) };

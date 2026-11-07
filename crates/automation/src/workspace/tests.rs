@@ -734,6 +734,7 @@ fn documents_filesystem_path_params(id: &str, params: &str) -> bool {
             | "path.subtractFromSelection"
             | "path.intersectWithSelection"
             | "path.set"
+            | "actions.insertPath"
             | "path.transform"
             | "path.moveAnchors"
             | "path.moveHandle"
