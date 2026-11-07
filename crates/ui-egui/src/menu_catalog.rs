@@ -804,4 +804,5 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Window"], "---", None, "---"),
     (&["Window"], "Options", None, "window.panel.options"),
     (&["Window"], "Tools", None, "window.panel.tools"),
+    (&["Window"], "Contextual Task Bar", None, "window.panel.contextualTaskBar"),
 ];

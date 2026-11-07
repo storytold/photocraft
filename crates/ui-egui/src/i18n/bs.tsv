@@ -623,7 +623,7 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plates	Radna CMY ploča
+	Working CMY Plates	Radne CMY ploče
 	Legacy Macintosh RGB (Gamma 1.8)	Naslijeđeni Macintosh RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Internet standardni RGB (sRGB)
 	Monitor RGB	RGB monitora
@@ -778,6 +778,12 @@
 	Timeline	Vremenska linija
 	Tool Presets	Predlošci alata
 	Tools	Alati
+	Contextual Task Bar	Kontekstualna traka zadataka
+	Hide bar	Sakrij traku
+	Reset bar position	Vrati položaj trake
+	Pin bar position	Zakači položaj trake
+	Move bar	Pomjeri traku
+	More options	Više opcija
 	About PhotoCraft	O PhotoCraftu
 	PhotoCraft Website	Web stranica PhotoCrafta
 	PhotoCraft on GitHub	PhotoCraft na GitHubu
@@ -1705,6 +1711,7 @@
 	Move Tool	Alat za pomjeranje
 	Could not use the move tool because the layer is locked.	Nije moguće koristiti alat za pomjeranje jer je sloj zaključan.
 	Could not complete the Free Transform command because the layer is locked.	Naredbu Slobodna transformacija nije moguće dovršiti jer je sloj zaključan.
+	Could not transform because the layer is locked.	Transformacija nije moguća jer je sloj zaključan.
 	Multiply	Množenje
 	My Brushes	Moje četkice
 	Neutrals	Neutralni tonovi
@@ -4656,3 +4663,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Odaberite drugi dokument za svaki kanal.
 	A picked document is no longer open.	Jedan odabrani dokument više nije otvoren.
 	A picked document is no longer a grayscale document of the same size.	Jedan odabrani dokument više nije dokument u nijansama sive iste veličine.
+# Move tool options bar (#11381)
+	Align top edges	Poravnaj gornje ivice
+	Align vertical centers	Poravnaj vertikalne centre
+	Align bottom edges	Poravnaj donje ivice
+	Distribute vertically	Rasporedi vertikalno
+	Distribute horizontally	Rasporedi horizontalno
+	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
+	Expand layer group on click	Proširi grupu slojeva klikom
+	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi

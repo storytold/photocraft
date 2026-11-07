@@ -823,7 +823,7 @@
 	Modifier Keys	Phím bổ trợ
 	Motion	Chuyển động
 	Navigator	Điều hướng
-	New Window	Cửa sổ mới cho tài liệu
+	New Window	Cửa sổ mới
 	New Workspace…	Không gian làm việc mới…
 	Next Theme	Chủ đề tiếp theo
 	Options	Thanh tùy chọn
@@ -854,6 +854,12 @@
 	Timeline	Dòng thời gian
 	Tool Presets	Thiết lập sẵn công cụ
 	Tools	Công cụ
+	Contextual Task Bar	Thanh tác vụ theo ngữ cảnh
+	Hide bar	Ẩn thanh
+	Reset bar position	Đặt lại vị trí thanh
+	Pin bar position	Ghim vị trí thanh
+	Move bar	Di chuyển thanh
+	More options	Tùy chọn khác
 	Workspace	Không gian làm việc
 	Move Tool	Công cụ Di chuyển
 	Rectangular Marquee Tool	Công cụ Vùng chọn chữ nhật
@@ -1398,6 +1404,7 @@
 	✓ Color Indicates Selected Areas	✓ Màu chỉ vùng được chọn
 	Work Path	Đường dẫn làm việc
 	Make Selection	Tạo vùng chọn
+	Make Shape	Tạo hình
 	Fill Path	Tô đường dẫn
 	Stroke Path	Đi nét đường dẫn
 	Save Path	Lưu đường dẫn
@@ -2711,6 +2718,7 @@ shape	Appearance	Diện mạo
 	Measurement Scale Marker	Dấu tỉ lệ đo
 	Could not use the move tool because the layer is locked.	Không thể dùng công cụ di chuyển vì lớp đã bị khoá.
 	Could not complete the Free Transform command because the layer is locked.	Không thể hoàn tất lệnh Biến đổi tự do vì lớp đã bị khoá.
+	Could not transform because the layer is locked.	Không thể biến đổi vì lớp đã bị khoá.
 	My Brushes	Cọ của tôi
 	Neutrals	Vùng trung tính
 	New Workspace	Không gian làm việc mới
@@ -2756,6 +2764,7 @@ shape	Appearance	Diện mạo
 	Allow agent control	Cho phép agent điều khiển
 	Allow scripts to connect	Cho phép script kết nối
 	Always create smart objects when placing	Luôn tạo đối tượng thông minh khi đặt
+	Skip transform when placing	Bỏ qua biến đổi khi đặt
 	Animated zoom	Thu phóng có chuyển động
 	Apply auto tone	Áp dụng tự động tông
 	Auto collapse icon panels	Tự động thu gọn các bảng biểu tượng
@@ -4133,3 +4142,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Chọn một tài liệu khác cho mỗi kênh.
 	A picked document is no longer open.	Một tài liệu đã chọn không còn mở.
 	A picked document is no longer a grayscale document of the same size.	Một tài liệu đã chọn không còn là tài liệu thang xám cùng kích thước.
+# Move tool options bar (#11381)
+	Align top edges	Căn các cạnh trên
+	Align vertical centers	Căn các tâm dọc
+	Align bottom edges	Căn các cạnh dưới
+	Distribute vertically	Phân bố theo chiều dọc
+	Distribute horizontally	Phân bố theo chiều ngang
+	Show layer bounds on hover	Hiện ranh giới lớp khi di chuột
+	Expand layer group on click	Mở rộng nhóm lớp khi nhấp
+	Show hover bounds from Layers	Hiện ranh giới khi di chuột từ bảng Lớp

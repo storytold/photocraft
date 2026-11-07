@@ -542,6 +542,12 @@
 	Timeline	Tidslinje
 	Tool Presets	Værktøjsforudindstillinger
 	Tools	Værktøjer
+	Contextual Task Bar	Kontekstafhængig opgavelinje
+	Hide bar	Skjul linjen
+	Reset bar position	Nulstil linjens placering
+	Pin bar position	Fastgør linjens placering
+	Move bar	Flyt linjen
+	More options	Flere indstillinger
 	Libraries	Biblioteker
 	3D	3D
 	Toolbars	Værktøjslinjer
@@ -1214,6 +1220,7 @@
 	Path to Illustrator…	Sti til Illustrator…
 	Make Work Path	Opret arbejdssti
 	Make Selection	Opret markering
+	Make Shape	Opret form
 	Fill Path	Udfyld sti
 	Stroke Path	Lav kontur på sti
 	Clipping Path	Udklipningssti
@@ -1631,6 +1638,7 @@
 	Move Tool	Flytteværktøj
 	Could not use the move tool because the layer is locked.	Kunne ikke bruge flytteværktøjet, fordi laget er låst.
 	Could not complete the Free Transform command because the layer is locked.	Kunne ikke fuldføre kommandoen Fri transformering, fordi laget er låst.
+	Could not transform because the layer is locked.	Kunne ikke transformere, fordi laget er låst.
 	Rectangular Marquee Tool	Rektangulært markeringsværktøj
 	Elliptical Marquee Tool	Elliptisk markeringsværktøj
 	Single Row Marquee Tool	Markeringsværktøj til enkelt række
@@ -2061,7 +2069,7 @@
 	Vertical Centers	Lodrette midtpunkter
 	Video Frames to Layers…	Videobilleder til lag…
 	WIA Support…	WIA-support…
-	Working CMY Plates	Arbejds-CMY-plade
+	Working CMY Plates	Arbejds-CMY-plader
 
 # tl! literals (third pass)
 	Absolute	Absolut
@@ -4838,3 +4846,12 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Pick a different document for each channel.	Vælg et andet dokument til hver kanal.
 	A picked document is no longer open.	Et af de valgte dokumenter er ikke længere åbent.
 	A picked document is no longer a grayscale document of the same size.	Et af de valgte dokumenter er ikke længere et dokument i gråtoner i samme størrelse.
+# Move tool options bar (#11381)
+	Align top edges	Juster øverste kanter
+	Align vertical centers	Juster lodrette midter
+	Align bottom edges	Juster nederste kanter
+	Distribute vertically	Fordel lodret
+	Distribute horizontally	Fordel vandret
+	Show layer bounds on hover	Vis lagets grænser ved svæv
+	Expand layer group on click	Udvid lagergruppe ved klik
+	Show hover bounds from Layers	Vis svævegrænser fra Lag
