@@ -125,11 +125,48 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("findEdges".to_string(), tl!("Find Edges")),
             ];
             widgets::dropdown(ui, "bg-eraser-limits", tl!("Limits:"), &mut o.bg_limits, &limits, 110.0);
+            // The dropdown's button, by the id its combo box takes from "bg-eraser-limits".
+            if let Some(limits) = ui.ctx().read_response(ui.make_persistent_id(egui::IdSalt::new("bg-eraser-limits"))) {
+                limits.on_hover_text(tl!("How far to let the erasing spread"));
+            }
             opt(ui, tl!("Tolerance:"));
-            widgets::value_field(ui, &mut o.bg_tolerance, 0.0..=100.0, "%", 62.0);
-            widgets::checkbox(ui, &mut o.bg_protect_fg, tl!("Protect Foreground Color"));
+            if tolerance_field(ui, &mut o.bg_tolerance) {
+                open_range_alert(app);
+            }
+            let o = &mut app.ui.tool_options;
+            widgets::checkbox(ui, &mut o.bg_protect_fg, tl!("Protect Foreground Color")).on_hover_text(tl!("Do not erase the foreground swatch color"));
         }
         _ => return false,
     }
     true
+}
+
+/// The alert for a Background Eraser Tolerance typed out of range (#11909).
+pub const TOLERANCE_RANGE_ALERT: &str = "An integer between 1% and 100% is required. Closest value inserted.";
+
+/// The Background Eraser's Tolerance: whole numbers in 1..=100, as the reference application takes
+/// them (#11909). A typed fraction becomes the nearest whole number, a value past the range the
+/// closest one. Returns true when the field is left with a value typed out of range, so the
+/// caller shows [`TOLERANCE_RANGE_ALERT`].
+fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
+    // The field's own range is wide, so the typed value reaches here unclamped.
+    let mut typed = *value;
+    let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(tl!("Erase range of similar colors"));
+    let out_id = r.id.with("out-of-range");
+    if r.changed() && typed.is_finite() {
+        *value = typed.round().clamp(1.0, 100.0);
+        // Only what was typed alerts; a scrub past the ends just stops there.
+        let out = r.has_focus() && !(1.0..=100.0).contains(&typed);
+        ui.ctx().data_mut(|d| d.insert_temp(out_id, out));
+    }
+    r.lost_focus() && ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id)).unwrap_or(false)
+}
+
+/// Shows [`TOLERANCE_RANGE_ALERT`]: a modal with OK, once even if more than one pass asks.
+fn open_range_alert(app: &mut PhotocraftApp) {
+    let message = tl!(TOLERANCE_RANGE_ALERT).to_owned();
+    let shown = app.ui.dialogs.iter().any(|d| d.kind == crate::state::DialogKind::Error && d.fields.get("message").and_then(|m| m.as_str()) == Some(&message));
+    if !shown {
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({ "message": message }).as_object().cloned().unwrap_or_default());
+    }
 }
