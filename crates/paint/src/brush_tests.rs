@@ -1333,6 +1333,67 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
 }
 
 #[test]
+fn sampled_dabs_are_the_same_in_their_tight_box_with_rows_cut_to_the_tip() {
+    // A sampled dab is computed over the rotated tip's own box, and in each row only where the
+    // tip can land; at any angle (just off a right angle too), flip, roundness and projection,
+    // the pixels match scanning the whole square that fits any rotation, which is 0 elsewhere.
+    let tip = GrayTile::from_fn(37, 23, |x, y| 0.05 + ((x * 7 + y * 13) % 11) as f32 / 11.0);
+    let dual = DualBrush { enabled: true, tip: TipShape::Sampled(GrayTile::from_fn(15, 40, |x, _| 0.1 + (x % 3) as f32 / 3.0)), ..Default::default() };
+    let b = BrushSettings { tip: TipShape::Sampled(tip), dual_brush: dual, ..brush() };
+    let ctx = BrushContext::new(&b);
+    let half_pi = std::f32::consts::FRAC_PI_2;
+    for angle in [0.0, 0.3, -1.1, half_pi, half_pi + 1e-6, half_pi - 3e-7, 3.0, std::f32::consts::PI] {
+        for (roundness, flip, proj) in [(1.0, false, 1.0), (0.35, true, 1.0), (0.8, false, 0.4)] {
+            let d = Dab { angle, roundness, flip_x: flip, proj_scale: proj, proj_angle: 0.7, ..Dab::round(Point::new(60.3, 41.7), 40.0, 0.9) };
+            for dual in [false, true] {
+                let what = format!("angle {angle}, roundness {roundness}, flip {flip}, projection {proj}, dual {dual}");
+                let r = ctx.dab_rect(&d, dual);
+                let square = crate::render::rect_around(&d, d.radius * std::f32::consts::SQRT_2);
+                let (mut cut, mut full) = (Vec::new(), Vec::new());
+                ctx.rasterize(&d, dual, r, &mut cut);
+                crate::render::FULL_SCAN.with(|f| f.set(true));
+                ctx.rasterize(&d, dual, square, &mut full);
+                crate::render::FULL_SCAN.with(|f| f.set(false));
+                assert!(full.iter().any(|&v| v > 0.0), "{what}");
+                let (sw, rw) = (square.width() as i32, r.width() as i32);
+                for y in square.y0..square.y1 {
+                    for x in square.x0..square.x1 {
+                        let v = full[((y - square.y0) * sw + (x - square.x0)) as usize];
+                        let got = if r.contains(x, y) { cut[((y - r.y0) * rw + (x - r.x0)) as usize] } else { 0.0 };
+                        assert!(v == got, "{what}: pixel ({x}, {y}) is {got}, scanning the square gives {v}");
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn composite_live_shows_the_finished_stroke_after_every_chunk() {
+    // A big smoothed Dual Brush stroke: its tail spans many coverage tiles and moves every step,
+    // so the tiles it redraws, the ones it leaves and the ones the stroke covers all occur. The
+    // zigzag's corners are cut by the smoothing, so earlier tails reach where the stroke never
+    // paints and must be taken back.
+    let dual = DualBrush { enabled: true, size: 90.0, spacing: 0.3, mode: MaskMode::Overlay, roundness: 0.7, ..Default::default() };
+    let b = BrushSettings { size: 70.0, hardness: 0.3, spacing: 0.05, dual_brush: dual, smoothing: Smoothing { amount: 0.9, ..Default::default() }, ..brush() };
+    let pts: Vec<StrokePoint> = (0..40).map(|i| StrokePoint::new(60.0 + i as f64 * 8.0, if i % 8 < 4 { 60.0 } else { 160.0 }, 1.0)).collect();
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        let pre = Surface::with_default(fmt, &[0.2, 0.5, 0.9, 1.0]);
+        let mut live = pre.clone();
+        let mut r = StrokeRenderer::new(&b, Some(fmt), 1.0);
+        let mut tail = Rect::EMPTY;
+        for (n, chunk) in pts.chunks(3).enumerate() {
+            r.push(chunk);
+            tail = r.composite_live(tail, &pre, &mut live, None, false).1;
+            let mut done = pre.clone();
+            render_stroke(&mut done, &b, &pts[..(n * 3 + chunk.len())], None, false, 1.0);
+            let same = (0..220).all(|y| (0..480).all(|x| live.rgba(x, y) == done.rgba(x, y)));
+            assert!(same, "{fmt:?}: after chunk {n} the live preview differs from the finished stroke");
+        }
+    }
+}
+
+#[test]
 fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() {
     // Symmetric painting previews the stroke and its mirrors with `composite_union_live`, which
     // redraws only changed tiles; after every chunk the target must be exactly what finishing
