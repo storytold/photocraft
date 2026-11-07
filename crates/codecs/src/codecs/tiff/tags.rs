@@ -4,6 +4,9 @@ pub(super) const F: Format = Format::Tiff;
 
 pub(super) const TAG_XMP: u16 = 700;
 
+/// IPTC-NAA record.
+pub(super) const TAG_IPTC: u16 = 33723;
+
 /// Photoshop image resources (`8BIM` blocks).
 pub(super) const TAG_PHOTOSHOP: u16 = 34377;
 
