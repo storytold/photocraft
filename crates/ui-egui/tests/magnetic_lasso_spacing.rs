@@ -129,3 +129,54 @@ fn out_of_range_and_non_finite_frequencies_are_clamped() {
     check(-30.0, false, 166.0, 4);
     check(f32::NAN, false, 85.0, 9);
 }
+
+/// Walks the edge like `walk`, at `zoom` (1.0 = 100 %), with the pointer moving 2 screen px a step
+/// below 100 % and 4 screen px from 100 % up (coarser steps give alternating gaps at 50 %).
+fn walk_at(app: &mut PhotocraftApp, held: bool, zoom: f32) {
+    app.ui.views[0].zoom = zoom;
+    assert!((app.point_zoom() - zoom).abs() < 1e-6, "the view is at the zoom under test");
+    let m = Modifiers::NONE;
+    let step = (if zoom < 1.0 { 2.0 } else { 4.0 }) / f64::from(zoom);
+    tool_event(app, ToolEvent::Down { x: START_X, y: EDGE_Y, pressure: 1.0 }, m);
+    if !held {
+        tool_event(app, ToolEvent::Up { x: START_X, y: EDGE_Y }, m);
+    }
+    let mut x = START_X;
+    while x < END_X {
+        x = (x + step).min(END_X);
+        tool_event(app, ToolEvent::Move { x, y: EDGE_Y, pressure: 1.0 }, m);
+    }
+}
+
+/// Frequency 57 at `zoom`: every gap (document px) is within 10 % of `want_doc`.
+fn check_at(zoom: f32, held: bool, want_doc: f64, min: usize) {
+    let mut a = app(57.0);
+    walk_at(&mut a, held, zoom);
+    let g = gaps(&a);
+    let state = if held { "held" } else { "up" };
+    assert!(g.len() >= min, "zoom {zoom}, button {state}: only {} gaps {g:?}, wanted at least {min} of ~{want_doc}", g.len());
+    for (i, d) in g.iter().enumerate() {
+        assert!(
+            (d - want_doc).abs() <= want_doc * 0.10,
+            "zoom {zoom}, button {state}: gap {i} is {d:.1} document px, the reference measures ~{want_doc} ({g:?})"
+        );
+    }
+}
+
+#[test]
+fn button_up_spacing_halves_below_100_percent_in_screen_px() {
+    check_at(0.5, false, 84.0, 9); // 42 screen px
+    check_at(2.0 / 3.0, false, 63.0, 12); // 42 screen px
+}
+
+#[test]
+fn button_up_spacing_stays_84_screen_px_above_100_percent() {
+    check_at(2.0, false, 42.0, 18);
+    check_at(3.0, false, 28.0, 28);
+}
+
+#[test]
+fn button_held_spacing_is_the_stored_value_in_document_px_above_100_percent() {
+    check_at(2.0, true, 20.0, 40); // 40 screen px
+    check_at(3.0, true, 20.0, 40); // 60 screen px
+}

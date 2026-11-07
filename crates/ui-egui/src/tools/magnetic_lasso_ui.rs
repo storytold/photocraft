@@ -71,15 +71,25 @@ fn settings(app: &PhotocraftApp, pressure: f32) -> Settings {
 }
 
 /// How far the border runs before a point fastens by itself (document px), as the reference
-/// application measures it (#11687). With the button held that is `floor(40 - 0.35 x Frequency)`
-/// screen points: 40 at Frequency 0, 20 at the default 57, 5 at 100. With the button up it is four
-/// times that plus 4: 164, 84 and 24. It stays in screen points at any zoom.
+/// application measures it (#11687). The stored spacing is `floor(40 - 0.35 x Frequency)`: 40 at
+/// Frequency 0, 20 at the default 57, 5 at 100.
+///
+/// - Button held: the stored value in document px, whatever the zoom (so on screen it grows with
+///   the zoom: 40 px at 200 %, 60 at 300 %). Below 100 % the reference is uneven (about 8 to 10
+///   screen px at Frequency 57) and no rule was pinned; the stored document value is kept.
+/// - Button up: `4 x stored + 4` screen points at 100 % and above (164, 84 and 24), and half of
+///   that below 100 %, at any zoom, so it is divided by the zoom into document px.
 fn spacing(app: &PhotocraftApp, held: bool) -> f64 {
     let f = app.ui.tool_options.magnetic_frequency;
     let f = if f.is_finite() { f64::from(f.clamp(0.0, 100.0)) } else { 57.0 };
     let stored = (40.0 - 0.35 * f).floor();
-    let screen = if held { stored } else { 4.0 * stored + 4.0 };
-    screen / f64::from(app.point_zoom().max(0.01))
+    if held {
+        return stored;
+    }
+    let zoom = f64::from(app.point_zoom().max(0.01));
+    let screen = 4.0 * stored + 4.0;
+    let screen = if zoom < 1.0 { screen / 2.0 } else { screen };
+    screen / zoom
 }
 
 /// Within this distance of the first point (document px), a click closes the border.
