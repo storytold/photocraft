@@ -219,7 +219,8 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
             widgets::vline(ui, 22.0);
-            widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"));
+            widgets::checkbox(ui, &mut app.ui.tool_options.pencil_auto_erase, tl!("Auto Erase"))
+                .on_hover_text(tl!("Draws background color over foreground colors"));
         }
         Tool::Brush | Tool::Eraser => {
             brush_preset_chip(ui, b, &mut app.ui);
