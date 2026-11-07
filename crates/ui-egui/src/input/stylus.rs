@@ -29,6 +29,8 @@
 //! Automation simulates a pen with `ui.pointer` events carrying `pressure`, `tiltX`, `tiltY`
 //! and `rotation`.
 
+mod pen_button;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -109,6 +111,8 @@ impl StylusFeed {
 /// Per-app stylus state.
 #[derive(Clone, Debug)]
 pub struct Stylus {
+    /// Windows Ink's barrel button, normalized before egui routes pointer input.
+    pub(crate) pen_button: pen_button::PenButton,
     /// Pen samples pushed by the platform (desktop tablet monitor, web runner) or by automation.
     pub feed: StylusFeed,
     /// Preferences › Tools › Use Tablet Pressure: off, a pen paints like a mouse.
@@ -154,6 +158,7 @@ pub struct Stylus {
 impl Default for Stylus {
     fn default() -> Self {
         Self {
+            pen_button: pen_button::PenButton::default(),
             feed: StylusFeed::default(),
             use_pressure: true,
             pressure_curve: None,
