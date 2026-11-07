@@ -25,6 +25,7 @@ pub mod dynamics;
 mod mip_cache;
 pub mod mixer;
 pub mod outline;
+mod pattern_cache;
 pub mod presets;
 pub mod procedural;
 pub mod render;

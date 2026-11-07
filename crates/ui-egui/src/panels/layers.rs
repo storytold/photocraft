@@ -318,8 +318,21 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // A click on that empty space deselects every layer, as in Photoshop (#8100). It
                 // starts under the last layer's sub-rows, which take their own clicks.
                 let empty = Rect::from_min_max(pos2(below.left(), rows_bottom), below.max);
-                if empty.height() > 0.0 && ui.interact(empty, ui.scope_id().with("layers-empty-space"), Sense::click()).clicked() && !selection.is_empty() {
-                    actions.push(("select.deselectLayers".into(), json!({})));
+                if empty.height() > 0.0 {
+                    let response = ui.interact(empty, ui.scope_id().with("layers-empty-space"), Sense::click());
+                    if response.clicked() && !selection.is_empty() {
+                        actions.push(("select.deselectLayers".into(), json!({})));
+                    }
+                    // A right-click there opens the thumbnail size and clipping choices (#11404).
+                    response.context_menu(|ui| super::layers_empty_menu::show(app, ui));
+                }
+            } else {
+                // No row drawn (a filter that matches no layer): the whole list is empty space,
+                // and its right-click opens the same menu.
+                let empty = Rect::from_min_max(pos2(ui.max_rect().left(), rows_bottom), pos2(ui.max_rect().right(), ui.clip_rect().bottom()));
+                if empty.height() > 0.0 && empty.width() > 0.0 {
+                    let response = ui.interact(empty, ui.scope_id().with("layers-empty-space"), Sense::click());
+                    response.context_menu(|ui| super::layers_empty_menu::show(app, ui));
                 }
             }
             // Tab / ⇧Tab in a rename: rename the layer below / above next, as in Photoshop. The
