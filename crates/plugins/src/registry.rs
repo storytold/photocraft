@@ -129,7 +129,7 @@ pub fn load_folder(dir: &std::path::Path) -> Result<FolderReport> {
     files.truncate(1000);
     let mut report = FolderReport::default();
     for f in &files {
-        match load_file(&f, Limits::default()) {
+        match load_file(f, Limits::default()) {
             Ok(p) => report.loaded.push(install(p).id().to_string()),
             Err(e) => report.failed.push((f.display().to_string(), e.to_string())),
         }
