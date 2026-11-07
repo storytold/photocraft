@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-05 · **Change:** minor (adaptive Unsharp Mask performance evidence linked; Photomerge status correction retained; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-11-07 · **Change:** minor (accuracy pass against the code at 6d408847a; adaptive Unsharp Mask performance evidence linked; Photomerge status correction retained; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
 
 - UI.5: Panels can detach, join other tab groups, split, resize and redock through shared docking transactions. Custom layouts persist with workspaces, respect workspace locking, and retain collapse flags for intact native groups.
 
@@ -15,7 +15,7 @@ dimension and area) and the ranked work list in [`gaps.md`](gaps.md); the one-pa
 [`ROADMAP.md`](../ROADMAP.md). Measured numbers: [`scorecard.md`](scorecard.md)
 (`cargo xtask scorecard`: performance budgets, corpus floors, per-area checklists, dead
 preferences) and [`parity-checklist.md`](parity-checklist.md) (`cargo xtask parity`: menu wiring,
-660/660, which says nothing about behaviour).
+661/661, which says nothing about behaviour).
 
 Status legend: ✅ done · 🟡 in progress · ⬜ not started. Hours are Opus 5.5 agent wall-clock hours
 for one agent working sequentially (calibration in
@@ -50,7 +50,7 @@ real work is ~45%, inside the alpha band (~40–75%), but close to its floor.
 | M1 Foundation | ✅ | geom, color (27 blend modes), raster (COW tiles, any depth), doc, ops, cms (ICC) |
 | M2 PSD v1 | ✅ | photocraft-psd: 134/135 real files byte-exact round trip |
 | M3 Viewer app | ✅ | egui shell (Pro / Studio / Classic themes), 13+ codecs, native and web (trunk) builds |
-| M4 Native format + engine | ✅ | 992 engine commands (`photocraft-cli commands`), `.pcraft` (incremental, autosave, crash recovery), CLI, persistent preferences |
+| M4 Native format + engine | ✅ | 995 engine commands (`photocraft-cli commands`), `.pcraft` (incremental, autosave, crash recovery), CLI, persistent preferences |
 | M5 GPU compositor | 🟡 | wgpu compositor drives the canvas, layer effects, vector masks, artboards, pattern fills and every clip case included (≤1/255 vs CPU); Multichannel documents fall back to the CPU |
 | M6 Paint + select | 🟡 | brush engine, all selection tools, multi-layer selection, snapping + smart guides, free transform + warp; stylus pressure on Windows (WM_POINTER via winit), the web (Pointer Events, with tilt/twist), macOS (AppKit event monitor: pressure, tilt, rotation, eraser end) and Linux X11 (XInput2 raw valuators); on Linux Wayland a pen opens the window through Xwayland (native tablet-v2 still open, #79) |
 | M7 Adjust + filters | 🟡 | 16 adjustment layers + destructive-only adjustments, 70+ filters incl. Blur Gallery, Actions record/replay, Fade |
@@ -61,7 +61,7 @@ real work is ~45%, inside the alpha band (~40–75%), but close to its floor.
 | M12 Pro parity | 🟡 | CMYK / Lab / Indexed / Bitmap / Duotone, ICC + soft proofing, channels + Quick Mask, smart-object stack modes, artboards, layer comps; print, HDR, timeline pending; Photomerge is implemented, with real-world quality validation still open |
 
 Releases: 0.1.0 (2026-10-02), 0.2.0 (2026-10-05, first signed and notarized), 0.3.0 (10-07),
-0.5.0 (10-08), 0.6.0 (10-10), then 0.7.0 (10-11) through 0.20.2 (11-05).
+0.5.0 (10-08), 0.6.0 (10-10), then 0.7.0 (10-11) through 0.21.0 (11-06).
 
 ## Current focus
 
@@ -116,7 +116,7 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-05 | minor | Accuracy pass against the code at a25999311: menus 660/660, 992 engine commands, corpus floors 148/170, 249/309 and 190/258, no tool missing, Select and Mask is a workspace, Smart Object conversion and mask targeting done, type on a path partial, DPX and DICOM read landed, releases through 0.20.2; alpha gate result, milestones' status icons and estimates unchanged |
+| 2026-11-07 | minor | Accuracy pass against the code at 6d408847a: menus 661/661, 995 engine commands, corpus floors 148/170, 249/309 and 190/258, no tool missing, Select and Mask is a workspace, Smart Object conversion and mask targeting done, type on a path partial, DPX and DICOM read landed, releases through 0.21.0; alpha gate result, milestones' status icons and estimates unchanged |
 | 2026-10-11 | minor | Linked adaptive Unsharp Mask performance and quality evidence; milestones, alpha gate and estimates unchanged |
 | 2026-10-10 | minor | Photomerge is implemented; real-world quality validation remains open |
 | 2026-10-10 | minor | Alpha gate table (core-workflow gate): passes, stage stays alpha |
