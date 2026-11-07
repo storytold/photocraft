@@ -54,6 +54,11 @@ impl EdgeSource {
 
     /// Whether this still shows the session's active document and revision (and, outside RGB
     /// documents, active layer).
+    ///
+    /// When this returns `false` the caller must drop the `EdgeSource` and build a new one with
+    /// [`EdgeSource::new`]: [`EdgeSource::snap`] and [`EdgeSource::trace`] keep reading the old
+    /// snapshot and its cached pixels otherwise. The Magnetic Lasso tool does so in `source()`
+    /// (`crates/ui-egui/src/tools/magnetic_lasso_ui.rs`) before every snap and trace.
     pub fn is_current(&self, s: &Session) -> bool {
         s.active().is_some_and(|d| d.doc.id == self.doc.id && d.revision == self.revision && pixel_layer(d) == self.layer)
     }
