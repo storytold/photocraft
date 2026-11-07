@@ -34,6 +34,57 @@
 
 # Menus
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Sovellus
+System Info	System	Järjestelmä
+System Info	Graphics	Grafiikka
+System Info	Displays	Näytöt
+System Info	Pen input	Kynäsyöte
+System Info	Fonts	Fontit
+System Info	Session	Istunto
+System Info	Files	Tiedostot
+System Info	Version	Versio
+System Info	Build	Koontiversio
+System Info	Install	Asennus
+System Info	Language	Kieli
+System Info	Running for	Käynnissä
+System Info	OS	Käyttöjärjestelmä
+System Info	Kernel	Ydin
+System Info	Desktop	Työpöytä
+System Info	CPU	Suoritin
+System Info	Worker threads	Työsäikeet
+System Info	Memory	Muisti
+System Info	Adapter	Näytönohjain
+System Info	Type	Tyyppi
+System Info	Graphics API	Grafiikkarajapinta
+System Info	Driver	Ajuri
+System Info	Backend preference	Ensisijainen taustajärjestelmä
+System Info	Startup fallback	Varajärjestelmä käynnistyksessä
+System Info	Image compositor	Kuvan koostaja
+System Info	This session	Tämä istunto
+System Info	GPU memory budget	GPU-muistibudjetti
+System Info	Window's display	Ikkunan näyttö
+System Info	UI scale	Käyttöliittymän skaalaus
+System Info	Window	Ikkuna
+System Info	Monitor profile	Näyttöprofiili
+System Info	Monitor profile on {display}	Näyttöprofiili näytöllä {display}
+System Info	Monitor profile on {display} (main window)	Näyttöprofiili näytöllä {display} (pääikkuna)
+System Info	Display profiles	Näyttöprofiilit
+System Info	Source	Lähde
+System Info	Seen this session	Havaittu tässä istunnossa
+System Info	Use Tablet Pressure	Käytä piirtoalustan painetta
+System Info	craft-fonts bundle	craft-fonts-paketti
+System Info	Families	Perheet
+System Info	Fallbacks	Varafontit
+System Info	Open documents	Avoimet asiakirjat
+System Info	Document {n}	Asiakirja {n}
+System Info	PhotoCraft memory	PhotoCraftin muisti
+System Info	Memory Usage limit	Muistinkäytön raja
+System Info	Plug-ins	Laajennukset
+System Info	Settings	Asetukset
+System Info	Log file	Lokitiedosto
+System Info	Crash recovery	Palautus kaatumisen jälkeen
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

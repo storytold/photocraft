@@ -5605,6 +5605,7 @@ dependencies = [
  "icu_casemap",
  "icu_locale_core",
  "log",
+ "memory-stats",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",

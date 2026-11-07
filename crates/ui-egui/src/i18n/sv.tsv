@@ -31,6 +31,57 @@
 
 # Menus
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Program
+System Info	System	System
+System Info	Graphics	Grafik
+System Info	Displays	Bildskärmar
+System Info	Pen input	Penninmatning
+System Info	Fonts	Teckensnitt
+System Info	Session	Session
+System Info	Files	Filer
+System Info	Version	Version
+System Info	Build	Bygge
+System Info	Install	Installation
+System Info	Language	Språk
+System Info	Running for	Har körts i
+System Info	OS	Operativsystem
+System Info	Kernel	Kärna
+System Info	Desktop	Skrivbord
+System Info	CPU	Processor
+System Info	Worker threads	Arbetstrådar
+System Info	Memory	Minne
+System Info	Adapter	Grafikkort
+System Info	Type	Typ
+System Info	Graphics API	Grafik-API
+System Info	Driver	Drivrutin
+System Info	Backend preference	Föredragen backend
+System Info	Startup fallback	Reservlösning vid start
+System Info	Image compositor	Bildkompositör
+System Info	This session	Denna session
+System Info	GPU memory budget	GPU-minnesbudget
+System Info	Window's display	Fönstrets bildskärm
+System Info	UI scale	Gränssnittsskala
+System Info	Window	Fönster
+System Info	Monitor profile	Bildskärmsprofil
+System Info	Monitor profile on {display}	Bildskärmsprofil på {display}
+System Info	Monitor profile on {display} (main window)	Bildskärmsprofil på {display} (huvudfönster)
+System Info	Display profiles	Bildskärmsprofiler
+System Info	Source	Källa
+System Info	Seen this session	Sett denna session
+System Info	Use Tablet Pressure	Använd ritplattans tryck
+System Info	craft-fonts bundle	craft-fonts-paket
+System Info	Families	Familjer
+System Info	Fallbacks	Reservteckensnitt
+System Info	Open documents	Öppna dokument
+System Info	Document {n}	Dokument {n}
+System Info	PhotoCraft memory	PhotoCrafts minne
+System Info	Memory Usage limit	Gräns för minnesanvändning
+System Info	Plug-ins	Plugin-program
+System Info	Settings	Inställningar
+System Info	Log file	Loggfil
+System Info	Crash recovery	Återställning efter krasch
+
 # Guide layout dialog
 
 # Custom print paper (#3820)

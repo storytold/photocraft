@@ -33,6 +33,57 @@
 
 # Menus
 
+# Help > System Info: section and row labels (the copied report stays in English)
+System Info	Application	Program
+System Info	System	System
+System Info	Graphics	Grafik
+System Info	Displays	Skærme
+System Info	Pen input	Peninput
+System Info	Fonts	Skrifttyper
+System Info	Session	Session
+System Info	Files	Filer
+System Info	Version	Version
+System Info	Build	Build
+System Info	Install	Installation
+System Info	Language	Sprog
+System Info	Running for	Har kørt i
+System Info	OS	Styresystem
+System Info	Kernel	Kerne
+System Info	Desktop	Skrivebord
+System Info	CPU	Processor
+System Info	Worker threads	Arbejdstråde
+System Info	Memory	Hukommelse
+System Info	Adapter	Grafikkort
+System Info	Type	Type
+System Info	Graphics API	Grafik-API
+System Info	Driver	Driver
+System Info	Backend preference	Foretrukken backend
+System Info	Startup fallback	Reserveløsning ved start
+System Info	Image compositor	Billedkompositor
+System Info	This session	Denne session
+System Info	GPU memory budget	GPU-hukommelsesbudget
+System Info	Window's display	Vinduets skærm
+System Info	UI scale	UI-skala
+System Info	Window	Vindue
+System Info	Monitor profile	Skærmprofil
+System Info	Monitor profile on {display}	Skærmprofil på {display}
+System Info	Monitor profile on {display} (main window)	Skærmprofil på {display} (hovedvindue)
+System Info	Display profiles	Skærmprofiler
+System Info	Source	Kilde
+System Info	Seen this session	Set i denne session
+System Info	Use Tablet Pressure	Brug tabletens tryk
+System Info	craft-fonts bundle	craft-fonts-pakke
+System Info	Families	Familier
+System Info	Fallbacks	Reserveskrifttyper
+System Info	Open documents	Åbne dokumenter
+System Info	Document {n}	Dokument {n}
+System Info	PhotoCraft memory	PhotoCrafts hukommelse
+System Info	Memory Usage limit	Grænse for hukommelsesforbrug
+System Info	Plug-ins	Plug-ins
+System Info	Settings	Indstillinger
+System Info	Log file	Logfil
+System Info	Crash recovery	Gendannelse efter nedbrud
+
 # Guide layout dialog
 
 # Custom print paper (#3820)
