@@ -117,7 +117,7 @@ pub fn free_buttons(ctx: &egui::Context, canvas: egui::Rect) -> crate::paint_mou
         (p.primary_down(), dragging, p.primary_clicked() && p.interact_pos().is_some_and(free))
     });
     ctx.data_mut(|d| d.insert_temp(id, dragging));
-    crate::paint_mouse::Buttons { started: dragging && !was, dragged: dragging, stopped: was && !down, clicked }
+    crate::paint_mouse::Buttons { started: dragging && !was, dragged: dragging, stopped: was && !down, clicked, ..Default::default() }
 }
 
 /// A click or drag with the primary button started on the free canvas under an open dialog, Space
