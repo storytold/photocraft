@@ -369,7 +369,7 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>,
     let owner = recording
         .map(|(_, idx)| {
             let into = app.session.actions.list.get(idx).map(|a| a.name.clone());
-            json!({"index": idx, "into": into, "action": action.name, "from": from})
+            json!({"index": idx, "into": into, "action": action.name, "set": action.set, "from": from})
         })
         .or(suspended);
     let mut ran = 0u64;
@@ -1018,6 +1018,8 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
         return;
     };
     let from = owner.get("from").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).unwrap_or(0);
+    // The set the paused call played, kept so the journaled call still names it (#11523).
+    let set = owner.get("set").and_then(Value::as_str);
     // `suspended_guard` refuses what would move the recorded action, but another command may
     // still replace the list: the call goes to the action of that name, never to whatever now
     // sits at the old index, and is dropped if that action is gone.
@@ -1026,7 +1028,7 @@ fn restore_recording(app: &mut PhotocraftApp, owner: Option<&Value>) {
     if let Some(idx) = target
         && app.session.actions.recording.is_none()
     {
-        actions_cmds::restore_recording(&mut app.session, idx, name, from);
+        actions_cmds::restore_recording(&mut app.session, idx, name, set, from);
     }
 }
 

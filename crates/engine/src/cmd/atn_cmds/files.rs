@@ -51,9 +51,13 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         names.push(name);
         added.push(a);
     }
+    // Play calls qualified with another action set, as `(calling action, child, set)`, checked
+    // once the file is in.
+    let mut cross_set_calls = Vec::new();
     // Play, Conditional and Batch steps call actions by name: follow the renames in the actions just
     // loaded, each target looked up once by the name the file gave it.
     for a in &mut added {
+        let caller = a.name.clone();
         for (id, params) in &mut a.steps {
             // A qualified Batch reference belongs to the file's original set, not to a
             // foreign set which happens to have the destination override's name.
@@ -62,8 +66,13 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             } else if id == "file.automate.batch" && params.get("set").is_some_and(|set| !set.is_null()) {
                 continue;
             }
+            if id == "actions.play" {
+                if let Some((child, set)) = bind_play_target(params, &renamed) {
+                    cross_set_calls.push((caller.clone(), child, set));
+                }
+                continue;
+            }
             let keys: &[&str] = match id.as_str() {
-                "actions.play" => &["action"],
                 "actions.conditional" => &["then", "else"],
                 "file.automate.batch" => &["action"],
                 _ => &[],
@@ -76,6 +85,28 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     s.actions.list.extend(added);
+    // A cross-set call the session cannot answer is reported here, so it is heard of when the file
+    // loads rather than only when playback refuses to guess (#11523). The two reasons read
+    // differently: a set the session has not loaded asks for that set, while a loaded set without
+    // that child (or holding two of its renamed forms) asks about the call. A `HashSet` beside the
+    // ordered list keeps the deduplication linear when a big library repeats one lost target.
+    let mut seen: std::collections::HashSet<String> = imp.warnings.iter().cloned().collect();
+    let mut lost_targets = Vec::new();
+    let holds_set = |wanted: &str| s.actions.list.iter().any(|a| a.set.as_deref() == Some(wanted)) || s.actions.sets.iter().any(|set| set == wanted);
+    for (caller, child, set) in cross_set_calls {
+        if crate::actions_cmds::qualified_target(&s.actions.list, &child, &set).is_some() {
+            continue;
+        }
+        let warning = if holds_set(&set) {
+            format!("`{caller}` plays `{child}`, which set `{set}` does not hold; playback will report that action rather than guess another set's")
+        } else {
+            format!("`{caller}` plays `{child}` in set `{set}`, which is not loaded; load that set before playing it")
+        };
+        if seen.insert(warning.clone()) {
+            lost_targets.push(warning);
+        }
+    }
+    imp.warnings.extend(lost_targets);
     // A set saved with no actions (Photoshop saves an empty set) is an empty folder, like one New
     // Set made.
     if !s.actions.list.iter().any(|a| a.set.as_deref() == Some(imp.set.as_str())) && !s.actions.sets.contains(&imp.set) {
@@ -101,6 +132,35 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         "warnings": imp.warnings,
         "encoding": imp.encoding.as_deref().unwrap_or("UTF-8"),
     }))
+}
+
+/// An imported Play step that names an action set other than the file's own, as `(child, set)`.
+///
+/// Photoshop records a Play Action target as a child name *and* the action set holding it, and
+/// `convert_action` already dropped a qualifier naming the file's own set — so what is left points
+/// across sets and must survive the load: `actions.play` resolves it against that set and its
+/// child, so a same-named child of a third set can no longer be played instead (#11523). A call by
+/// name alone follows this load's renames of the child, as it always did (#6806).
+/// `Some((child, set))` asks the caller to check that the session holds that child of that set.
+fn bind_play_target(params: &mut Value, renamed: &std::collections::HashMap<String, String>) -> Option<(String, String)> {
+    let object = params.as_object_mut()?;
+    let set = match object.get("set") {
+        Some(Value::String(set)) if !set.is_empty() => Some(set.clone()),
+        Some(Value::Null) | Some(Value::String(_)) | None => None,
+        Some(_) => {
+            // A qualifier that is not a set name carries no target: keep the plain call.
+            object.remove("set");
+            None
+        }
+    };
+    let recorded = object.get("action").and_then(Value::as_str).unwrap_or_default().to_string();
+    if let Some(set) = set {
+        return (!recorded.is_empty()).then_some((recorded, set));
+    }
+    if let Some(to) = renamed.get(&recorded) {
+        object.insert("action".into(), Value::String(to.clone()));
+    }
+    None
 }
 
 pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {

@@ -853,6 +853,24 @@ Measured with three comps (CompA, CompB, CompC) that each show a different layer
 Delete (`Dlt `) by index uses the same 1-based numbering. PhotoCraft's `applyComp` import reads only the
 name form today; the index, ID and ordinal forms load as kept steps.
 
+### Actions
+
+A Play Action (`Ply `) step names its target as a reference: `Actn` by child name, and the
+reference application also records `ASet` by action-set name (as a named Batch step's `Usng` does,
+see the Batch table). Load Actions keeps a cross-set qualifier as
+`actions.play {"action": child, "set": set}`, and playback resolves a qualified call inside that
+set only: a child an earlier load renamed to keep names unique (`Child 2` for a second `Child`) is
+still found in its own set, and a set holding no such child is an error, never a same-named child of
+another set (#11523). A call of the loaded file's own set stays unqualified,
+following this load's renames of the child (#6806); an unqualified call (the Actions panel, a
+recorded call, an older file) still resolves by name; a `set` that is not a name, or an empty one,
+is refused rather than ignored, because falling back to the name is how a call lands in the wrong
+set. A qualified call whose set the session has not loaded is reported in `actions.load`'s
+`warnings` and fails at playback naming the set it could not find — the warning says which of the
+two is missing when the set is loaded but holds no such child. While recording, a call whose child
+name the library holds in more than one set is journaled with its set, so the recording replays the
+action it recorded; a uniquely named call is journaled bare, as before.
+
 ## Newer events (string ID only)
 
 The original survey covered menu events that were neither mapped nor in the reference below:
