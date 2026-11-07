@@ -393,6 +393,60 @@ fn macos_asks_dont_save_cancel_save_with_the_default_last() {
     assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
 }
 
+/// ⌘D is Don't Save on macOS, as in Photoshop's prompt (#11282). The Windows prompt (Yes / No /
+/// Cancel) has no such key, and nor has Revert's.
+#[test]
+fn macos_command_d_is_dont_save() {
+    let mut h = prompt_on(egui::os::OperatingSystem::Mac);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
+    h.run_steps(2);
+    assert_eq!(docs_left(&h), Some(1), "⌘D answered the first document");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
+    h.run_steps(2);
+    assert!(h.state().discard.is_none());
+    assert!(h.state().session.documents().is_empty(), "both documents closed unsaved");
+    let mut h = prompt_on(egui::os::OperatingSystem::Windows);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
+    h.run_steps(2);
+    assert_eq!(docs_left(&h), Some(2), "Ctrl+D is no answer on Windows");
+    let mut app = app_with_docs(1);
+    make_dirty(&mut app, 0);
+    let mut h = prompt_for(app, "file.revert", egui::os::OperatingSystem::Mac);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
+    h.run_steps(2);
+    assert_eq!(docs_left(&h), Some(1), "Revert / Cancel has no Don't Save for ⌘D to press");
+}
+
+/// Beneath the prompt the shortcuts hold their keys, so ⌘D with a selection on the document
+/// answers Don't Save rather than running Select › Deselect (or refusing it in the status bar).
+#[test]
+fn command_d_answers_the_prompt_rather_than_deselecting() {
+    let mut app = app_with_docs(2);
+    make_dirty(&mut app, 0);
+    make_dirty(&mut app, 1);
+    app.run("select.all", json!({})).unwrap();
+    let selected = app.session.active().map(|st| st.doc.id).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+        |ui, app| {
+            crate::shortcuts::handle(app, ui.ctx());
+            show(app, ui.ctx());
+            app.poll_file_dialog(ui.ctx(), None);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    assert!(intercept(h.state_mut(), "file.close", &json!({"document": 0})));
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
+    h.run_steps(2);
+    assert!(h.state().discard.is_none(), "⌘D answered the prompt");
+    assert_eq!(h.state().session.documents().len(), 1, "the asked-about document closed unsaved");
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    let kept = h.state().session.documents().iter().find(|d| d.doc.id == selected);
+    assert!(kept.is_some_and(|d| d.doc.selection.is_some()), "the selection on the other document is still there");
+}
+
 #[test]
 fn macos_plain_labels_keep_save_and_escape_shortcuts() {
     for key in [Key::S, Key::Enter] {

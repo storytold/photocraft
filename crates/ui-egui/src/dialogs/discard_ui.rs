@@ -308,7 +308,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     } else {
         vec![(ButtonRole::Default, "Yes", Some(Key::Y), 84.0, Answer::Save), (ButtonRole::Alternate, "No", Some(Key::N), 84.0, Answer::Discard), cancel]
     };
-    let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
+    // The letters answer bare. macOS also takes ⌘D for Don't Save, the Mac shortcut Photoshop's
+    // prompt keeps (#11282): the shortcuts hold their keys while the prompt is up
+    // (`shortcuts::handle_modal_canvas_keys`), so the key isn't Select › Deselect here.
+    let mut answer = ctx.input_mut(|i| {
+        let letter = buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4);
+        if letter.is_none() && mac && !reverts && i.consume_key(egui::Modifiers::COMMAND, Key::D) { Some(Answer::Discard) } else { letter }
+    });
     let labels = button_labels(mac, &buttons.iter().map(|b| (b.1, b.2)).collect::<Vec<_>>());
     let row: Vec<DialogButton> =
         buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3).focus(focus && b.0 == ButtonRole::Default)).collect();
