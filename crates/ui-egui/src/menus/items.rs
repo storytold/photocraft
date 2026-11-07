@@ -43,6 +43,10 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("window.theme.cs4", "window.theme.softLight"),
+    ("window.theme.cs5", "window.theme.cs4"),
+    ("window.workspace.importWorkspace", "window.workspace.deleteWorkspace"),
+    ("window.workspace.exportWorkspace", "window.workspace.importWorkspace"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
@@ -166,7 +170,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
     }
     // Window › Workspace: saved workspaces follow the presets, checked while current.
-    let saved = crate::workspace_ui::saved_names(app);
+    let saved: Vec<String> = crate::workspace_ui::saved_names(app).into_iter().filter(|name| !super::workspace_files::is_bundled(name)).collect();
     if !saved.is_empty()
         && let Some(after) = items.iter().position(|i| i.id == "window.workspace.motion")
     {
@@ -181,6 +185,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
+    super::workspace_files::insert_menu_items(app, &mut items);
     // Keep the update command with the links, ahead of System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
         let update = items.remove(at);

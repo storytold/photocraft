@@ -1,0 +1,14 @@
+{
+  "photocraftWorkspace": 1,
+  "name": "CS5",
+  "theme": "cs5",
+  "panels": {
+    "navigator": false,
+    "color": true,
+    "layers": true,
+    "history": true,
+    "properties": true,
+    "character": false,
+    "timeline": false
+  }
+}

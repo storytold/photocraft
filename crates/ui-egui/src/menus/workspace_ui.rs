@@ -35,12 +35,14 @@ pub struct ShellUi {
     pub dialog: Option<(String, Map<String, Value>)>,
 }
 
-const IDS: [&str; 7] = [
+const IDS: [&str; 9] = [
     "window.panel.modifierKeys",
     "window.workspace.newWorkspace",
     "window.workspace.deleteWorkspace",
     "window.workspace.lockWorkspace",
     "window.workspace.select",
+    "window.workspace.importWorkspace",
+    "window.workspace.exportWorkspace",
     "view.pixelAspectRatio.custom",
     "view.show.showExtrasOptions",
 ];
@@ -51,7 +53,7 @@ pub const SAVED: &str = "window.workspace.saved.";
 
 /// Menu ids handled here (live menu items).
 pub fn handles(id: &str) -> bool {
-    IDS.contains(&id) || id.starts_with(SAVED)
+    IDS.contains(&id) || id.starts_with(SAVED) || id.starts_with(super::workspace_files::PREFIX)
 }
 
 /// Saved workspace names, in menu order.
@@ -77,13 +79,15 @@ pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
         ("Motion", tl!("Motion")),
     ];
     let mut opts: Vec<(String, String)> = presets.iter().map(|(k, l)| ((*k).to_string(), (*l).to_string())).collect();
-    opts.extend(saved_names(app).into_iter().map(|n| (n.clone(), n)));
+    opts.extend(super::workspace_files::bundled_names().into_iter().map(|name| (name.clone(), name)));
+    opts.extend(saved_names(app).into_iter().filter(|name| !super::workspace_files::is_bundled(name)).map(|name| (name.clone(), name)));
     opts
 }
 
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     match id {
         i if i.starts_with(SAVED) => Some(saved_name(app, i).is_some_and(|n| n == app.ui.workspace)),
+        i if i.starts_with(super::workspace_files::PREFIX) => Some(super::workspace_files::bundled_name(i).is_some_and(|n| n == app.ui.workspace)),
         "window.panel.modifierKeys" => Some(app.ui.shell.modifier_keys),
         "window.workspace.lockWorkspace" => Some(app.session.prefs().workspace_locked),
         "view.pixelAspectRatio.custom" => Some(app.ui.view.pixel_aspect.starts_with("custom:")),
@@ -130,7 +134,7 @@ fn open(app: &mut PhotocraftApp, kind: &str, f: Value) -> Result<Value, String> 
 }
 
 /// Built-in workspace names (Window › Workspace presets).
-const PRESETS: [&str; 6] = ["Essentials", "Photography", "Painting", "Pixel Art", "Graphic and Web", "Motion"];
+pub(crate) const PRESETS: [&str; 6] = ["Essentials", "Photography", "Painting", "Pixel Art", "Graphic and Web", "Motion"];
 
 /// Run a shell command, or open its dialog. `None` when `id` isn't ours.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -175,6 +179,12 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         }
         "window.workspace.deleteWorkspace" => delete_workspace(app, params),
         "window.workspace.select" => select_workspace(app, params),
+        "window.workspace.importWorkspace" => super::workspace_files::import(app, params),
+        "window.workspace.exportWorkspace" => super::workspace_files::export(app, params),
+        i if i.starts_with(super::workspace_files::PREFIX) => match super::workspace_files::bundled_name(i) {
+            Some(name) => select_workspace(app, &json!({"name": name})),
+            None => Err(format!("no workspace for `{i}`")),
+        },
         i if i.starts_with(SAVED) => match saved_name(app, i) {
             Some(name) => select_workspace(app, &json!({"name": name})),
             None => Err(format!("no saved workspace for `{i}`")),
@@ -209,7 +219,7 @@ fn new_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
     if name.is_empty() {
         return Err("a workspace needs a name".into());
     }
-    if PRESETS.contains(&name.as_str()) {
+    if PRESETS.contains(&name.as_str()) || super::workspace_files::is_bundled(&name) {
         return Err(format!("\"{name}\" is a built-in workspace"));
     }
     let prefs = app.session.prefs().clone();
@@ -256,12 +266,17 @@ fn select_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
         crate::menus::apply_workspace(app);
         return Ok(json!({"workspace": name}));
     }
-    if !app.session.prefs().workspaces.contains_key(&name) {
-        return Err(format!("no workspace \"{name}\""));
+    if super::workspace_files::apply_bundled(app, &name) {
+        let theme = super::workspace_files::bundled_theme(&name).and_then(|theme| theme);
+        return Ok(super::workspace_files::reply_for(&name, theme.as_deref()));
     }
+    let Some(stored) = app.session.prefs().workspaces.get(&name).cloned() else {
+        return Err(format!("no workspace \"{name}\""));
+    };
     app.ui.workspace = name.clone();
     apply_custom(app);
-    Ok(json!({"workspace": name}))
+    let theme = stored.get("theme").and_then(Value::as_str).filter(|id| crate::theme::ThemeKind::ALL.iter().any(|kind| kind.id() == *id));
+    Ok(super::workspace_files::reply_for(&name, theme))
 }
 
 /// Apply the current workspace when it is a saved one. Returns false for the built-in presets.
@@ -686,7 +701,8 @@ mod tests {
         }
         // The top-bar switcher lists them after the presets.
         let keys: Vec<String> = switcher_options(&app).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(keys[6..], ["Comp", "Retouch"]);
+        assert_eq!(&keys[6..8], ["CS4", "CS5"]);
+        assert_eq!(&keys[8..], ["Comp", "Retouch"]);
         assert!(keys.contains(&app.ui.workspace));
     }
 

@@ -1,0 +1,14 @@
+{
+  "photocraftWorkspace": 1,
+  "name": "CS4",
+  "theme": "cs4",
+  "panels": {
+    "navigator": true,
+    "color": true,
+    "layers": true,
+    "history": true,
+    "properties": true,
+    "character": false,
+    "timeline": false
+  }
+}

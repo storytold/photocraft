@@ -42,6 +42,8 @@ pub(super) fn selected_theme(interface: &prefs::Interface, system: Option<egui::
             LightTheme::StudioLight => ThemeKind::StudioLight,
             LightTheme::ProLightGray => ThemeKind::ProLightGray,
             LightTheme::ProLight => ThemeKind::ProLight,
+            LightTheme::Cs4 => ThemeKind::Cs4,
+            LightTheme::Cs5 => ThemeKind::Cs5,
             LightTheme::Classic => ThemeKind::Classic,
             LightTheme::Adwaita => ThemeKind::Adwaita,
             LightTheme::BreezeLight => ThemeKind::BreezeLight,
@@ -99,6 +101,8 @@ pub(crate) fn step_brightness(app: &mut PhotocraftApp, ctx: &egui::Context, ligh
 pub(super) const LIGHT_THEME_OPTIONS: &[(&str, ThemeKind)] = &[
     ("proLight", ThemeKind::ProLight),
     ("proLightGray", ThemeKind::ProLightGray),
+    ("cs4", ThemeKind::Cs4),
+    ("cs5", ThemeKind::Cs5),
     ("studioLight", ThemeKind::StudioLight),
     ("classic", ThemeKind::Classic),
     ("adwaita", ThemeKind::Adwaita),

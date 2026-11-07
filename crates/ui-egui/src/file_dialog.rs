@@ -341,7 +341,11 @@ impl PhotocraftApp {
             }
             return;
         }
-        let _ = self.finish_file_dialog(answer);
+        if let Ok(value) = self.finish_file_dialog(answer)
+            && let Some(kind) = crate::menus::workspace_files::theme_in(&value)
+        {
+            self.set_theme(ctx, kind);
+        }
     }
 
     /// Ends the file dialog in progress: its action continues with `answer`, and its errors go to

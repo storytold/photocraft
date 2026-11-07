@@ -634,8 +634,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     for (id, params) in commands {
-        if let Err(error) = app.run(id, params) {
-            app.ui.status = error;
+        match app.run(id, params) {
+            Ok(value) => {
+                if let Some(kind) = crate::menus::workspace_files::theme_in(&value) {
+                    app.set_theme(ui.ctx(), kind);
+                }
+            }
+            Err(error) => app.ui.status = error,
         }
     }
 }
