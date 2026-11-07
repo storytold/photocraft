@@ -130,3 +130,54 @@ fn dropping_back_on_the_source_copies_nothing() {
     assert_eq!((docs[0].doc.layers.len(), docs[1].doc.layers.len()), (2, 1));
     assert_eq!(h.state().session.active_index(), Some(0));
 }
+
+#[test]
+fn a_move_tool_selection_drag_onto_a_tab_copies_selected_pixels_to_destination() {
+    let (mut h, paint) = harness();
+    // Create a selection inside the red square
+    h.state_mut().session.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(2);
+
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
+    let over_tab = tab(&h, "dest-doc");
+    let drop = h.state().last_canvas_rect.center();
+    drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
+
+    // Destination now has the copied selection layer
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
+    // Source layer keeps its pixels intact (not cut)
+    let src_bounds = source_square(&h, paint);
+    assert_eq!(src_bounds, photocraft_geom::Rect::new(4, 6, 14, 16), "source remains intact");
+}
+
+#[test]
+fn a_move_tool_selection_drag_in_arranged_view_transfers_directly_to_neighbour_cell() {
+    let (mut h, paint) = harness();
+    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    h.run_steps(4);
+
+    let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).unwrap();
+    assert_eq!(cells.len(), 2);
+    let (src_cell, dest_cell) = (cells[0].1, cells[1].1);
+
+    // Create selection on source
+    h.state_mut().session.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    h.state_mut().ui.tool = Tool::Move;
+    h.run_steps(2);
+
+    let view_src = h.state().ui.views[0].clone();
+    let xf_src =
+        crate::canvas::ViewXform { rect: src_cell, zoom: view_src.zoom / h.state().ppp, center: view_src.center, flip: false, rotation: 0.0, aspect: 1.0 };
+    let grab = xf_src.to_screen(6.0, 11.0);
+    let drop = dest_cell.center();
+
+    // Drag directly from src canvas to dest canvas (no tab hover!)
+    drag_along(&mut h, &[grab, drop], Modifiers::NONE);
+
+    // Destination now has the transferred layer!
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
+    // Source layer keeps its pixels intact (not cut)
+    let src_bounds = source_square(&h, paint);
+    assert_eq!(src_bounds, photocraft_geom::Rect::new(4, 6, 14, 16), "source remains intact");
+}

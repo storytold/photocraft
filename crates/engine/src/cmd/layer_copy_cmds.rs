@@ -221,6 +221,72 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (from, to) = (&s.documents()[src], &s.documents()[dest]);
     let (sdoc, ddoc) = (from.doc.clone(), to.doc.clone());
+
+    if p.get("selection").and_then(Value::as_bool).unwrap_or(false) {
+        let id = from.active_layer.ok_or_else(|| bad("no active layer in source document"))?;
+        let src_layer = sdoc.layer(id).ok_or(EngineError::NoLayer(id))?;
+        let surf = src_layer.surface().ok_or_else(|| EngineError::Other("the active layer has no pixels to copy".into()))?;
+        let clip = crate::cmd::edit_cmds::lift(surf, sdoc.selection.as_ref(), sdoc.bounds())?;
+        if clip.bounds.is_empty() {
+            return Err(bad("the selected area is empty"));
+        }
+        for (doc, role) in [(&sdoc, "source"), (&ddoc, "destination")] {
+            if !layered(doc.mode) {
+                return Err(EngineError::Other(format!("layers can't be copied with a {:?} {role} document", doc.mode)));
+            }
+        }
+        let mut copies = Document::new("", sdoc.size, sdoc.mode, sdoc.depth);
+        copies.icc_profile = sdoc.icc_profile.clone();
+        copies.resolution_dpi = sdoc.resolution_dpi;
+        let mut l = Layer::raster(ddoc.next_layer_name("Layer"), clip.surface.format());
+        *crate::pixels_mut(&mut l)? = clip.surface;
+        copies.layers.push(l);
+
+        let content = clip.bounds;
+        adapt_copies(s, &mut copies, &ddoc)?;
+        let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
+            let (c, d) = (center(content), center(ddoc.bounds()));
+            (d[0] - c[0], d[1] - c[1])
+        } else if let Some(at) = point(p, "at")? {
+            let c = center(content);
+            (at[0] - c[0], at[1] - c[1])
+        } else {
+            point(p, "offset")?.map_or((0.0, 0.0), |o| (o[0], o[1]))
+        };
+        let (dx, dy) = (dx.round() as i32, dy.round() as i32);
+        translate_copies(&mut copies, &ddoc, dx, dy);
+
+        let cut = p.get("cut").and_then(Value::as_bool).unwrap_or(false);
+        if cut {
+            let bg = s.tools.background;
+            s.set_active(src);
+            s.edit("Cut Pixels", |doc, _| {
+                crate::cmd::edit_cmds::clear_selected(doc, id, bg)?;
+                doc.selection = None;
+                Ok(())
+            })?;
+        }
+
+        s.set_active(dest);
+        let edited = s.edit("Duplicate Layer", |doc, active| {
+            let mut above = *active;
+            let mut new = Vec::with_capacity(copies.layers.len());
+            let mut place = crate::layer_place::Place::AutoEditable;
+            for l in copies.layers {
+                let id = crate::layer_place::insert_new(doc, above, l, place);
+                new.push(id);
+                above = Some(id);
+                place = crate::layer_place::Place::Above;
+            }
+            *active = above;
+            Ok(new)
+        })?;
+        return Ok(json!({
+            "layers": edited.into_iter().map(|id| id.0).collect::<Vec<_>>(),
+            "offset": [dx, dy],
+        }));
+    }
+
     let ids: Vec<LayerId> = match p.get("layers") {
         None => from.selected_layers(),
         Some(v) => v
