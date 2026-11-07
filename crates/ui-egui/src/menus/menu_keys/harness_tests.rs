@@ -641,3 +641,151 @@ fn help_letters_stay_typing_while_a_zoom_is_typed() {
     letter(&mut h, c);
     assert!(is_open(&h.ctx), "{c} ran no row: Help stays open");
 }
+
+/// A text field outside the menus keeps ← / → while Alt with a letter opens a menu, which leaves it
+/// the focus: its cursor stopped, and the menus changed instead.
+#[test]
+fn a_text_field_outside_the_menu_keeps_its_arrows() {
+    let field = egui::Id::unique("a text field");
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        move |ui, (app, text): &mut (PhotocraftApp, String)| {
+            crate::menus::menu_bar(app, ui);
+            let label = ui.label("Name");
+            ui.add(egui::TextEdit::singleline(text).id(field)).labelled_by(label.id);
+        },
+        (app(), "some text".to_string()),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.ctx.memory_mut(|m| m.request_focus(field));
+    h.run_steps(3);
+    let event = egui::Event::Key { key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+    // The platform sends the letter as text too, in the same frame (`h.event` would give each its own).
+    h.input_mut().events.extend([
+        egui::Event::Key { key: egui::Key::F, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE },
+        egui::Event::Text("!".into()),
+        egui::Event::ModifiersChanged(egui::Modifiers::ALT),
+        event,
+        egui::Event::Text("f".into()),
+        egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+    ]);
+    h.run_steps(3);
+    assert!(is_open(&h.ctx), "Alt+F opened File");
+    assert!(h.ctx.text_edit_focused(), "the field kept the focus");
+    assert_eq!(h.state().1, "some text!", "the F isn't typed into it, and what came before it is");
+    let top = Nav::current(&h.ctx).top;
+    for k in [egui::Key::ArrowLeft, egui::Key::ArrowRight] {
+        h.key_press(k);
+        h.run_steps(3);
+        assert_eq!(Nav::current(&h.ctx).top, top, "{k:?} stays with the field");
+    }
+}
+
+/// A menu opened with Alt+letter has the keys, as after an arrow key: the pointer resting where
+/// the menu drops, over Image › Adjustments, neither lights that row nor opens its submenu. The
+/// menu stayed the pointer's, so egui opened the submenu under it.
+#[test]
+fn a_menu_opened_from_the_keyboard_ignores_a_resting_pointer() {
+    let mut h = bar();
+    h.get_by_label("Image").click();
+    h.run_steps(3);
+    let adjustments =
+        rows(&h, 0).iter().position(|r| r.command.is_none() && r.enabled && r.rect.top() > rows(&h, 0)[0].rect.bottom()).expect("a second submenu row");
+    let rect = rows(&h, 0)[adjustments].rect;
+    key(&mut h, egui::Key::Escape);
+    assert!(!is_open(&h.ctx));
+    h.event(egui::Event::PointerMoved(rect.center()));
+    h.run_steps(30);
+    alt_key(&mut h, egui::Key::I);
+    h.run_steps(30);
+    let nav = Nav::current(&h.ctx);
+    assert!(nav.highlighted(0).is_some_and(|i| i != adjustments), "the first row is lit, not the one under the pointer: {:?}", nav.highlighted(0));
+    let popups = h.ctx.memory(|m| m.areas().visible_layer_ids()).into_iter().filter(|l| l.order == egui::Order::Foreground).count();
+    assert_eq!(popups, 1, "only the Image menu is open");
+}
+
+/// A button outside the menus keeps the focus across a menu opened and closed from the keyboard:
+/// the menu takes the focus while it has the keys (egui would walk it along the menus) and gives
+/// it back when it closes. It was dropped for good.
+#[test]
+fn a_menu_from_the_keyboard_gives_the_focus_back() {
+    let probe = std::rc::Rc::new(std::cell::Cell::new(None));
+    let seen = probe.clone();
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        move |ui, app| {
+            crate::menus::menu_bar(app, ui);
+            seen.set(Some(ui.add(egui::Button::new("Probe")).id));
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    let id = probe.get().expect("the button was drawn");
+    h.ctx.memory_mut(|m| m.request_focus(id));
+    h.run_steps(3);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(id));
+    alt_key(&mut h, egui::Key::I);
+    key(&mut h, egui::Key::ArrowDown);
+    assert!(is_open(&h.ctx));
+    key(&mut h, egui::Key::Escape);
+    h.run_steps(3);
+    assert!(!is_open(&h.ctx));
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(id), "the button has the focus again");
+}
+
+/// With nothing focused before, a menu opened and walked from the keyboard leaves nothing focused
+/// when it closes: a focus egui moved onto a menu title meanwhile (Tab, Up) isn't given "back".
+#[test]
+fn a_menu_from_the_keyboard_gives_no_focus_it_didnt_take() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        |ui, app| {
+            crate::menus::menu_bar(app, ui);
+            ui.add(egui::Button::new("Probe"));
+        },
+        app(),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    assert_eq!(h.ctx.memory(|m| m.focused()), None);
+    // Tab and Up move egui's focus onto a menu title meanwhile, which stays on screen.
+    alt_key(&mut h, egui::Key::I);
+    for k in [egui::Key::Tab, egui::Key::ArrowUp] {
+        key(&mut h, k);
+    }
+    assert!(is_open(&h.ctx));
+    key(&mut h, egui::Key::Escape);
+    assert!(!is_open(&h.ctx));
+    h.run_steps(3);
+    assert_eq!(h.ctx.memory(|m| m.focused()), None, "nothing was focused before the menu");
+}
+
+/// Two Alt+letters in one frame (a fast typist, a slow frame): neither letter is typed into the
+/// focused field. Only the first one's text was taken out.
+#[test]
+fn two_alt_letters_in_one_frame_type_nothing() {
+    let field = egui::Id::unique("a text field");
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 720.0)).build_ui_state(
+        move |ui, (app, text): &mut (PhotocraftApp, String)| {
+            crate::menus::menu_bar(app, ui);
+            let label = ui.label("Name");
+            ui.add(egui::TextEdit::singleline(text).id(field)).labelled_by(label.id);
+        },
+        (app(), "some text".to_string()),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h.ctx.memory_mut(|m| m.request_focus(field));
+    h.run_steps(3);
+    let alt = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::ALT };
+    h.input_mut().events.extend([
+        egui::Event::ModifiersChanged(egui::Modifiers::ALT),
+        alt(egui::Key::F),
+        egui::Event::Text("f".into()),
+        alt(egui::Key::E),
+        egui::Event::Text("e".into()),
+        egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+    ]);
+    h.run_steps(3);
+    assert!(is_open(&h.ctx), "a menu opened");
+    assert_eq!(h.state().1, "some text", "neither letter is typed into the field");
+}
