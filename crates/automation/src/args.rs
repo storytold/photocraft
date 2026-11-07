@@ -99,8 +99,16 @@ pub fn conflict(cmd: &mut Command, m: &ArgMatches, a: &str, b: &str) -> Result<(
             _ => arg.map_or_else(|| id.to_owned(), |arg| arg.to_string()),
         }
     };
-    let message = format!("the argument '{}' cannot be used with '{}'", shown(a), shown(b));
-    Err(cmd.error(ErrorKind::ArgumentConflict, message))
+    let both = Conflict { a: shown(a), b: shown(b) };
+    Err(cmd.error(ErrorKind::ArgumentConflict, both))
+}
+
+/// A [`conflict`]: two arguments, each named as it was given (the flag, or its variable).
+#[derive(Debug, thiserror::Error)]
+#[error("the argument '{a}' cannot be used with '{b}'")]
+struct Conflict {
+    a: String,
+    b: String,
 }
 
 #[cfg(test)]
