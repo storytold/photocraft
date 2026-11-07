@@ -76,6 +76,10 @@ fn frame_convert_dialog(app: &mut PhotocraftApp, id: &str) -> Result<Value, Stri
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if matches!(id, "color.picker.foreground" | "color.picker.background") {
+        let target = if id == "color.picker.background" { "background" } else { "foreground" };
+        return Some(Ok(json!({"dialog": crate::color_picker_ui::open(app, target)})));
+    }
     if let Some(tool) = crate::tool_shortcuts::tool(id) {
         crate::tool_memory::select(app, tool);
         return Some(Ok(json!({"tool": tool})));

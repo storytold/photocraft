@@ -6,18 +6,22 @@ use super::{BTreeMap, Map, PhotocraftApp, RichText, Tokens, Value, default_short
 pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, Option<String>)> {
     let mut out: Vec<(String, String, Vec<String>, Option<String>)> = Vec::new();
     let mut seen = std::collections::HashSet::new();
+    let tools_key = |id: &str| id.starts_with("tools.") || id.starts_with("color.picker.") || photocraft_engine::fill_key_cmds::IDS.contains(&id);
+    let mut tools = Vec::new();
     for it in crate::menus::menu_items(app) {
         if it.label == "---" || !seen.insert(it.id.clone()) {
             continue;
         }
         let default = default_shortcut(&it.id).or(it.shortcut.clone().filter(|_| !app.session.prefs().shortcuts.contains_key(&it.id)));
-        out.push((it.id, it.label, it.path, default));
+        if it.path.is_empty() && tools_key(&it.id) {
+            tools.push((it.id, it.label, vec!["Tools".to_string()], default));
+        } else {
+            out.push((it.id, it.label, it.path, default));
+        }
     }
     // Commands without a menu item: the colour and fill keys (D, X, ⌥⌫…) sit under Tools, as
     // Photoshop lists its colour keys in the Tools shortcut set, after the rest; then the held
     // temporary tools (#249).
-    let tools_key = |id: &str| id.starts_with("tools.") || photocraft_engine::fill_key_cmds::IDS.contains(&id);
-    let mut tools = Vec::new();
     let mut layer = Vec::new();
     for c in photocraft_engine::command_specs() {
         if seen.insert(c.id.to_string()) && c.shortcut.is_some() {
