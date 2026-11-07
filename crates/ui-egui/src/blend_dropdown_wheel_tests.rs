@@ -12,7 +12,12 @@ use crate::PhotocraftApp;
 
 /// The app with a new document after `setup` (its last layer is the active one).
 fn harness(setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static, PhotocraftApp> {
-    let mut h = Harness::builder().with_size(vec2(1440.0, 900.0)).with_max_steps(64).build_eframe(move |cc| {
+    harness_sized(vec2(1440.0, 900.0), setup)
+}
+
+/// [`harness`] in a window of `size`.
+fn harness_sized(size: egui::Vec2, setup: impl FnOnce(&mut PhotocraftApp) + 'static) -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(size).with_max_steps(64).build_eframe(move |cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
@@ -163,19 +168,20 @@ fn the_wheel_over_the_open_list_steps_modes_instead_of_scrolling_it() {
 
 #[test]
 fn wheel_steps_in_the_open_list_keep_the_chosen_mode_in_view() {
-    let mut h = harness(pixel_layer);
+    // A window too short for the whole list, which then scrolls.
+    let mut h = harness_sized(vec2(1440.0, 600.0), pixel_layer);
     let at = dropdown(&h).center();
     click(&mut h, at);
-    // Unscrolled, the list shows its first entry at the top and is at most 420 pt tall.
-    let (top, darken) = (entry(&h, "Normal").top(), entry(&h, "Darken").center());
+    let (view, darken) = (painted(&h, "Normal").expect("the open list").1, entry(&h, "Darken").center());
+    assert!(entry(&h, "Luminosity").top() > view.bottom(), "the last mode starts out of view");
     for _ in 0..22 {
         wheel(&mut h, darken, -1.0);
     }
     h.run_steps(30);
     assert_eq!(blend(&h), BlendMode::Divide);
-    let in_view = |r: Rect| r.top() >= top - 0.5 && r.bottom() <= top + 420.0 + 0.5;
+    let in_view = |r: Rect| view.expand(0.5).contains_rect(r);
     let chosen = entry(&h, "Divide");
-    assert!(in_view(chosen), "{chosen:?} in view below {top}");
+    assert!(in_view(chosen), "{chosen:?} in view in {view:?}");
     // The wheel over the button scrolls the open list along too.
     for _ in 0..21 {
         wheel(&mut h, at, 1.0);
@@ -183,7 +189,7 @@ fn wheel_steps_in_the_open_list_keep_the_chosen_mode_in_view() {
     h.run_steps(30);
     assert_eq!(blend(&h), BlendMode::Dissolve);
     let chosen = entry(&h, "Dissolve");
-    assert!(in_view(chosen), "{chosen:?} in view below {top}");
+    assert!(in_view(chosen), "{chosen:?} in view in {view:?}");
 }
 
 /// The mode the canvas previews on the active layer, if any (#970).
@@ -211,4 +217,38 @@ fn a_wheel_step_ends_the_hover_preview_until_the_pointer_moves() {
     h.hover_at(multiply);
     h.run_steps(3);
     assert_eq!(previewed(&mut h), Some(BlendMode::Multiply), "a moved pointer previews again");
+}
+
+/// Where `text` is painted this frame, and the clip rect it is painted in.
+fn painted(h: &Harness<'_, PhotocraftApp>, text: &str) -> Option<(Rect, Rect)> {
+    // The open list is painted last, over the panel's own labels.
+    h.output().shapes.iter().rev().find_map(|clipped| match &clipped.shape {
+        egui::Shape::Text(t) if t.galley.text() == text => Some((t.visual_bounding_rect(), clipped.clip_rect)),
+        _ => None,
+    })
+}
+
+/// #7261: the open list shows every blend mode, from Normal to Luminosity, as Photoshop's does.
+/// It stopped at 420 pt, and at the window's bottom when opened mid-window: Soft Light and below
+/// hid behind a thin scroll bar.
+#[test]
+fn the_open_blend_list_shows_every_mode() {
+    // A window with room for the whole list on one side of the box (it never runs beside it).
+    let mut h = harness_sized(vec2(1440.0, 2000.0), pixel_layer);
+    let at = dropdown(&h).center();
+    click(&mut h, at);
+    h.run_steps(6);
+    for mode in ["Normal", "Overlay", "Soft Light", "Hard Mix", "Divide", "Luminosity"] {
+        let (rect, clip) = painted(&h, mode).unwrap_or_else(|| panic!("{mode}: painted in the open list"));
+        assert!(clip.contains_rect(rect), "{mode}: {rect:?} visible, not clipped by the list ({clip:?})");
+    }
+    // Under or over the box, in its column: not beside it, where egui's ComboBox jumped to the
+    // box's other side when a longer mode widened the box.
+    let (button, list) = (dropdown(&h), entry(&h, "Normal"));
+    assert!(button.x_range().contains(list.left()), "{list:?} in the column of {button:?}");
+    let darken = entry(&h, "Darken").center();
+    wheel(&mut h, darken, -10.0);
+    h.run_steps(10);
+    assert_eq!(blend(&h), BlendMode::LinearDodge);
+    assert_eq!(entry(&h, "Normal").left(), list.left(), "the list stays put as the box widens");
 }
