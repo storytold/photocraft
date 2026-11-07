@@ -1,10 +1,11 @@
 use super::rendering::{refresh_or_fail, unapplied_filters};
-use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
+use super::source::{SourceImage, cache_key, cache_put, source_bytes};
 use super::{
-    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
-    SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
+    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, PixelFormat, Rect, Result, Session, Size,
+    SmartContentsId, SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
 };
 use photocraft_algo::transform::Interp;
+use photocraft_geom::TILE_SIZE;
 
 /// Rounds float noise off a composed transform (scale 0.1 then 10 should be exactly 1), so
 /// repeated transforms land back on exact, lossless placements.
@@ -174,15 +175,95 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
 }
 
 fn subtree_bounds(l: &Layer, canvas: Rect) -> Rect {
-    match &l.content {
-        LayerContent::Group(g) => g.children.iter().map(|c| subtree_bounds(c, canvas)).fold(Rect::EMPTY, |a, b| a.union(&b)),
+    let has_effects = photocraft_compose::effects::has_effects(l);
+    let bounds = match &l.content {
+        LayerContent::Group(g) => {
+            // Even without children, a group with Transparency Shapes Layer off can draw
+            // effects from its mask.
+            let own = if has_effects && !l.advanced.transparency_shapes { photocraft_compose::effect_source_bounds(l, canvas) } else { Rect::EMPTY };
+            g.children.iter().map(|c| subtree_bounds(c, canvas)).fold(own, |a, b| a.union(&b))
+        }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => canvas,
-        _ => l.surface().map_or(Rect::EMPTY, Surface::content_bounds),
-    }
+        _ => {
+            let bounds = photocraft_compose::effect_source_bounds(l, canvas);
+            // A shapeless knockout takes its shape from the canvas but still draws pixels beyond it.
+            if photocraft_compose::advanced::shapeless(l) { bounds.union(&l.surface().map_or(Rect::EMPTY, Surface::content_bounds)) } else { bounds }
+        }
+    };
+    // Effects become embedded content too. Grow each subtree by the compositor's bounded
+    // reach, including a group's effects after those of its children.
+    if !bounds.is_empty() && has_effects { bounds.inflate(photocraft_compose::effects::margin(l)) } else { bounds }
 }
 
 fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
     f(l) || l.children().is_some_and(|c| c.iter().any(|c| any_layer(c, f)))
+}
+
+// Bound the extra working memory for off-canvas coverage independently of the existing canvas.
+const MAX_CONVERSION_EXPANSION_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
+
+fn conversion_work_bytes(region: Rect, fmt: PixelFormat) -> u64 {
+    let pixels = region.size().area();
+    let pixel_bytes = fmt.bytes_per_pixel() as u64;
+    // Writing a region allocates a whole tile for each intersection, even at unaligned edges.
+    let surface = region.tile_count().saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(pixel_bytes);
+    let composite = pixels.saturating_mul(std::mem::size_of::<[f32; 4]>() as u64);
+    // Encode directly into the cropped tiles. Once the composite is freed, seeding the source
+    // cache can hold a second tiled surface if the source origin is off the tile grid.
+    composite.saturating_add(surface).max(surface.saturating_mul(2))
+}
+
+fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers: &[Layer]) -> Result<u64> {
+    let (width, height) = (region.width(), region.height());
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(other(format!(
+            "Smart Object conversion at {width} x {height} px exceeds the renderer's {} pixel limit. Reduce the canvas or effect extents",
+            photocraft_compose::MAX_RENDER_PIXELS
+        )));
+    }
+    // Conversion already rendered the full canvas. Keep that allowance and cap the expansion.
+    let limit = conversion_work_bytes(canvas, fmt).saturating_add(MAX_CONVERSION_EXPANSION_BYTES);
+    let bytes = conversion_work_bytes(region, fmt);
+    if bytes > limit {
+        return Err(other(format!(
+            "Smart Object conversion at {width} x {height} px needs about {} MiB for its dense buffers, exceeding the {} MiB working-memory limit. Convert fewer layers or reduce the canvas or effect extents",
+            bytes.div_ceil(1 << 20),
+            limit >> 20
+        )));
+    }
+    let effect_bytes = photocraft_compose::estimated_effect_map_bytes(layers, canvas, region)
+        .ok_or_else(|| other("Smart Object conversion effect maps exceed the renderer's working-memory limit. Reduce the canvas or effects"))?;
+    let total = bytes.saturating_add(effect_bytes);
+    if cfg!(target_pointer_width = "32") && total > crate::image_cmds::MAX_RESAMPLE_BYTES {
+        return Err(other(format!(
+            "Smart Object conversion at {width} x {height} px needs about {} MiB including effect maps, exceeding the {} MiB working-memory limit. Reduce the canvas or effects",
+            total.div_ceil(1 << 20),
+            crate::image_cmds::MAX_RESAMPLE_BYTES >> 20
+        )));
+    }
+    Ok(total)
+}
+
+/// Write only the final cache rectangle while preserving the rendered pixel format and colour space.
+fn conversion_cache(buf: &photocraft_compose::Buffer, bounds: Rect, fmt: PixelFormat) -> Result<Surface> {
+    let mut cache = Surface::new(fmt);
+    let bpp = fmt.bytes_per_pixel();
+    let cmyk = photocraft_color::convert::active_cmyk_space();
+    cache
+        .try_write_rows_with(bounds, |y, x0, row| {
+            photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+                let mut samples = [0.0; 5];
+                for (offset, dst) in row.chunks_exact_mut(bpp).enumerate() {
+                    let x = x0.saturating_add(offset as i32);
+                    photocraft_raster::from_rgba_into(&fmt, buf.get(x, y), &mut samples);
+                    photocraft_raster::encode_pixel(&fmt, &samples, dst);
+                }
+            });
+        })
+        .map_err(|e| other(e.to_string()))?;
+    cache.prune();
+    Ok(cache)
 }
 
 /// Builds the smart-object layer replacing `l` in `doc`: the layer (with its mask, effects and
@@ -234,8 +315,13 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
         // Nested PSD placed layers find their embedded files here.
         sub.metadata.psd_global_blocks = doc.metadata.psd_global_blocks.clone();
     }
-    let has_fx = layers.iter().any(|l| any_layer(l, &|x| x.effects.enabled && !x.effects.items.is_empty()));
-    let region = layers.iter().map(|l| subtree_bounds(l, canvas)).fold(canvas, |a, b| a.union(&b)).inflate(if has_fx { 256 } else { 0 });
+    let region = layers.iter().map(|l| subtree_bounds(l, canvas)).fold(canvas, |a, b| a.union(&b));
+    let fmt = doc.pixel_format();
+    let work = check_conversion_budget(region, canvas, fmt, &layers)?;
+    #[cfg(target_arch = "wasm32")]
+    crate::memory_gate::ensure("convert to a Smart Object", work)?;
+    #[cfg(not(target_arch = "wasm32"))]
+    let _working = photocraft_raster::memory::try_reserve_operation(work).map_err(other)?;
     sub.layers = layers;
 
     let buf = photocraft_compose::render(&sub, region);
@@ -250,10 +336,8 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     if b.is_empty() {
         return Err(other("the layer is empty, so there is nothing to convert"));
     }
-    let fmt = doc.pixel_format();
-    let mut cache = buffer_to_surface(&buf, fmt);
-    cache = photocraft_algo::resample::crop_surface(&cache, b);
-    cache.prune();
+    let cache = conversion_cache(&buf, b, fmt)?;
+    drop(buf.into_px());
 
     sub.layers.iter_mut().for_each(|l| shift_layer(l, -b.x0, -b.y0));
     sub.size = Size::new(b.width(), b.height());
@@ -338,4 +422,59 @@ pub(super) fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
         *active = Some(new_id);
         Ok(json!({"layer": new_id.0}))
     })
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn direct_cache_matches_the_existing_conversion_and_crop() {
+        use photocraft_color::{ColorMode, SampleType};
+
+        let region = Rect::new(-3, -2, 260, 4);
+        let bounds = Rect::new(-1, -1, 258, 3);
+        let mut buf = photocraft_compose::Buffer::filled(region, [0.75, 0.25, 0.5, 0.0]);
+        buf.px[region.width() as usize + 12] = [0.9, 0.3, 0.1, 1.0];
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab, ColorMode::Cmyk] {
+            for sample in SampleType::ALL {
+                let format = PixelFormat::new(mode, sample, true);
+                let surface = super::super::source::buffer_to_surface(&buf, format);
+                let mut expected = photocraft_algo::resample::crop_surface(&surface, bounds);
+                expected.prune();
+                assert_eq!(conversion_cache(&buf, bounds, format).unwrap(), expected, "{mode:?} {sample:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn conversion_budget_scales_with_sample_depth_without_allocating_pixels() {
+        let width = if cfg!(target_pointer_width = "64") { 34_000 } else { 8_500 };
+        let region = Rect::new(0, 0, width, 1_000);
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA8, &[]).is_ok(), "8-bit effect extents fit the budget");
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA16, &[]).is_ok(), "16-bit effect extents fit the budget");
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA32F, &[]).is_err(), "the same extent needs more storage at 32 bits");
+        assert!(check_conversion_budget(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), Rect::EMPTY, PixelFormat::RGBA32F, &[]).is_err());
+    }
+
+    #[test]
+    fn a_thin_region_can_exceed_the_budget_in_whole_tiles() {
+        let region = Rect::new(-1, 0, 1, 1_000_000);
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA8, &[]).is_err());
+    }
+
+    #[test]
+    fn a_full_canvas_shadow_fits_the_32_bit_expansion_allowance() {
+        let canvas = Rect::new(0, 0, 6_000, 6_000);
+        let region = canvas.inflate(402);
+        let bytes = conversion_work_bytes(region, PixelFormat::RGBA8);
+        assert!(bytes - conversion_work_bytes(canvas, PixelFormat::RGBA8) < 256 << 20);
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn a_large_rgb32_canvas_can_use_the_desktop_memory_budget() {
+        let canvas = Rect::new(0, 0, 12_000, 12_000);
+        assert!(check_conversion_budget(canvas, canvas, PixelFormat::RGBA32F, &[]).unwrap() < 8 << 30);
+    }
 }
