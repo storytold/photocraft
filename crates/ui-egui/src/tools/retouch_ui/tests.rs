@@ -1009,5 +1009,32 @@ fn quick_selection_options_bar_has_new_add_subtract_mode_buttons() {
     let modifiers = egui::Modifiers::NONE;
     tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, modifiers);
     tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, modifiers);
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "select.quick created a selection");
     assert_eq!(h.state().ui.tool_options.quick_selection_mode, 1, "New mode automatically flips to Add mode after stroke");
+
+    // An empty stroke (outside canvas, changed: false) or failed stroke (no points) in New mode keeps New mode (0)
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.state_mut().ui.tool_options.quick_selection_mode = 0;
+    tool_event(h.state_mut(), ToolEvent::Down { x: -20.0, y: -20.0, pressure: 1.0 }, none);
+    tool_event(h.state_mut(), ToolEvent::Up { x: -20.0, y: -20.0 }, none);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none());
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 0, "Empty stroke keeps New mode");
+
+    finish_stroke(h.state_mut(), Tool::QuickSelection, &[], none);
+    assert!(h.state().ui.status_error);
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 0, "Failed stroke keeps New mode");
+    h.state_mut().ui.status_error = false;
+
+    // Shift and Alt modifiers in New mode (0) run add/subtract and transition to Add mode (1) when changed
+    tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, shift);
+    tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, shift);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some());
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 1);
+
+    h.state_mut().ui.tool_options.quick_selection_mode = 0;
+    tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, alt);
+    tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, alt);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none());
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 1);
 }
