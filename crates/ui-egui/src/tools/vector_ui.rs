@@ -202,6 +202,9 @@ impl PenPath {
 mod tests;
 
 #[cfg(test)]
+mod path_drag_preview_tests;
+
+#[cfg(test)]
 mod path_selection_tests;
 
 #[cfg(test)]

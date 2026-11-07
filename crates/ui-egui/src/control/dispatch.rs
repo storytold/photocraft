@@ -116,7 +116,12 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
     // params and never open a dialog (an agent would otherwise get a modal instead of a
     // result). `ui.menu.invoke` behaves like a menu click, so it may open the dialog.
     if req.method == "engine.execute" && photocraft_engine::commands::find(id).is_some() {
-        return run_waiting(app, wait, |app| app.run(id, params));
+        return run_waiting(app, wait, |app| {
+            let previous = std::mem::replace(&mut app.programmatic_playback, true);
+            let result = app.run(id, params);
+            app.programmatic_playback = previous;
+            result
+        });
     }
     run_waiting(app, wait, |app| crate::menus::invoke(app, ctx, id, params))
 }
