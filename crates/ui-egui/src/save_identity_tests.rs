@@ -248,6 +248,29 @@ fn maximize_compatibility_preference_reaches_the_exporter() {
     }
 }
 
+/// Preferences › File Handling › Save Full-Size Composite in .pcraft Files reaches the exporter
+/// of Save As, Save and automation saves, and is off by default.
+#[test]
+fn full_composite_preference_reaches_the_exporter() {
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let mut app = app();
+    assert!(!app.save_settings().pcraft_full_composite, "off by default");
+    let log = seen.clone();
+    app.services.export = Some(Box::new(move |_, _, settings: &ExportSettings| {
+        log.borrow_mut().push(settings.io_options().pcraft_full_composite);
+        Ok((b"out".to_vec(), Vec::new()))
+    }));
+    let ctx = egui::Context::default();
+    for value in [true, false] {
+        app.run("prefs.set", json!({"path": "fileHandling.pcraftFullComposite", "value": value})).unwrap();
+        seen.borrow_mut().clear();
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({"path": format!("{value}.pcraft")})).unwrap();
+        menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+        app.save_automation(Some(format!("{value} agent.pcraft"))).unwrap();
+        assert_eq!(*seen.borrow(), [value; 3], "{value}");
+    }
+}
+
 /// #2399: Save and Save As start at the opened file's own encoding: a JPEG's estimated quality,
 /// a WebP lossy (at its quality) or lossless; a new document keeps the codec defaults.
 #[test]
@@ -273,6 +296,56 @@ fn save_settings_start_at_the_opened_files_encoding() {
     let lossless = photocraft_codecs::encode(&img, Format::WebP, &EncodeOptions::default()).unwrap();
     app.open_bytes("art.webp", &lossless).unwrap();
     assert!(app.save_settings().webp_lossless);
+}
+
+/// The names of the active document's History panel snapshots.
+fn snapshots(app: &PhotocraftApp) -> Vec<String> {
+    app.session.active().unwrap().snapshots.iter().map(|s| s.name.clone()).collect()
+}
+
+/// History Options › Automatically Create New Snapshot When Saving (#2966) through the desktop
+/// save path: a save adds one snapshot, saving again unchanged adds none, Save a Copy adds none.
+#[test]
+fn a_save_adds_one_snapshot_and_a_copy_none() {
+    let mut app = app();
+    app.run("history.options", json!({"automaticallyCreateNewSnapshotWhenSaving": true})).unwrap();
+    let before = snapshots(&app).len();
+    app.save_as(Some("saved.psd".into())).unwrap();
+    assert_eq!(snapshots(&app).len(), before + 1, "the save adds a snapshot");
+    let st = app.session.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&st.snapshots.last().unwrap().doc, &st.doc), "of the document as saved");
+    app.save_as(Some("saved.psd".into())).unwrap();
+    assert_eq!(snapshots(&app).len(), before + 1, "saving an unchanged document adds no duplicate");
+
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.write_document("copy.psd".into(), &ExportSettings::default(), true).unwrap();
+    assert_eq!(snapshots(&app).len(), before + 1, "Save a Copy adds none");
+    app.save_as(Some("saved.psd".into())).unwrap();
+    assert_eq!(snapshots(&app).len(), before + 2);
+}
+
+/// A background save that finishes while another document is active snapshots the document it
+/// saved, not the active one.
+#[test]
+fn a_background_save_snapshots_its_own_document() {
+    let mut app = app();
+    app.run("history.options", json!({"automaticallyCreateNewSnapshotWhenSaving": true})).unwrap();
+    let (saved_doc, revision) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let saved_snaps = snapshots(&app).len();
+    app.run("file.new", json!({"width": 4, "height": 4, "name": "Untitled-2"})).unwrap();
+    let active = app.active_doc_id().unwrap();
+    assert_ne!(active, saved_doc);
+    let active_snaps = snapshots(&app).len();
+    // What jobs_ui does when the save job of `saved_doc` ends.
+    app.saved(saved_doc, revision, "background.psd", &[], false);
+    assert_eq!(app.active_doc_id(), Ok(active), "the active document stays active");
+    assert_eq!(snapshots(&app).len(), active_snaps, "the active document gets no snapshot");
+    let st = app.session.documents().iter().find(|st| st.doc.id == saved_doc).unwrap();
+    assert_eq!(st.snapshots.len(), saved_snaps + 1, "the saved document gets one");
+    assert_eq!(st.path.as_deref(), Some("background.psd"));
 }
 
 /// A browser download is only requested: the document takes the name but keeps its unsaved
