@@ -57,4 +57,6 @@ pub mod warp_preview;
 pub mod zoom_tool;
 
 #[cfg(test)]
+mod count_show_extras_tests;
+#[cfg(test)]
 mod crop_options_labels_tests;
