@@ -23,6 +23,18 @@ Flatpak builds also check for releases; repository-managed installations are upd
 their package manager. Web/headless frontends have no update transport. No release-workflow
 changes are required: publishing a newer stable GitHub Release makes it discoverable.
 
+**Update and Restart** hands the install to `craft-update`, which downloads the file for the
+installed kind (MSI, portable zip, DMG, AppImage, package) and architecture, checks its SHA-256
+and signature, and lets a small helper finish once PhotoCraft has exited. The helper cannot show
+a window, so when its step fails (a folder that needs administrator rights, a signature that does
+not match, an installer error) it writes the reason to `logs/self-update-error.txt` in
+PhotoCraft's data folder (`%LOCALAPPDATA%\PhotoCraft` on Windows) and starts the old copy again.
+The next start shows that reason in an *Update Problem* window with a link to the release page, and
+a release this copy installed itself within the last day but still is not (the install did not
+take effect) is explained there instead of being offered again (#10477). Releases built before
+`craft-update` recognised every Windows MSI copy (PhotoCraft 0.17.0) cannot update from inside the
+app; install the next release by hand once.
+
 ## Cutting a release
 
 1. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
