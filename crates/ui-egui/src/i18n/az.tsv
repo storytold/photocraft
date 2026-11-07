@@ -493,6 +493,7 @@
 	Timeline	Zaman xətti
 	Tool Presets	Alətin Əvvəlcədən Tənzimləmələri
 	Tools	Alətlər
+	Contextual Task Bar	Kontekstual tapşırıq paneli
 	Libraries	Kitabxanalar
 	3D	3D
 	Toolbars	Alət panelləri
@@ -4616,6 +4617,15 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 # Strings main added after this catalog was written (integration batch 20).
 	Background (default)	Fon (defolt)
 	Transparent (default)	Şəffaf (defolt)
+# Move tool options bar (#11381)
+	Align top edges	Üst kənarları hizalayın
+	Align vertical centers	Şaquli mərkəzləri hizalayın
+	Align bottom edges	Alt kənarları hizalayın
+	Distribute vertically	Şaquli yaymaq
+	Distribute horizontally	Üfüqi yaymaq
+	Show layer bounds on hover	Üzərinə gətirəndə qat sərhədlərini göstərin
+	Expand layer group on click	Klikləyəndə qat qrupunu genişləndirin
+	Show hover bounds from Layers	Üzərinə gətirmə sərhədlərini Qatlardan göstərin
 	Arrow color	Ox rəngi
 	Arrowheads	Ox ucları
 	Concavity	Batıqlıq
@@ -4657,4 +4667,3 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Screenshot {name} saved to the library	{name} ekran görüntüsü kitabxanada saxlanıldı
 	Saved, but the library PNG could not be updated: {error}	Saxlanıldı, lakin kitabxanadakı PNG yenilənmədi: {error}
 	Could not open the screenshot	Ekran görüntüsünü açmaq mümkün olmadı
-	Contextual Task Bar	Kontekst tapşırıq paneli

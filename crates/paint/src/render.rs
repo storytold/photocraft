@@ -214,12 +214,12 @@ fn prepare_pattern(b: &BrushSettings) -> Option<Arc<PatternImage>> {
     if !t.enabled {
         return None;
     }
-    let mut img = match &t.pattern {
-        Pattern::Procedural { style, size, seed } => crate::procedural::pattern(*style, *size, *seed),
-        p => match p.bitmap() {
-            Some(g) if g.is_valid() => PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
-            _ => return None,
-        },
+    if let Pattern::Procedural { style, size, seed } = &t.pattern {
+        return Some(crate::pattern_cache::procedural_pattern(*style, *size, *seed, t));
+    }
+    let mut img = match t.pattern.bitmap() {
+        Some(g) if g.is_valid() => PatternImage { width: g.width as usize, height: g.height as usize, data: g.to_f32() },
+        _ => return None,
     };
     for v in &mut img.data {
         *v = t.level(*v);

@@ -162,6 +162,16 @@ pub struct ToolOptions {
     pub move_target: String,
     #[serde(default)]
     pub move_show_transform: bool,
+    /// Move tool options bar, gear menu (#11381), all on by default: outline the layer under the
+    /// pointer, open the closed groups of a layer picked by a canvas click, and outline the layer
+    /// whose Layers panel row is hovered. Preferences > Show Highlight on Rollover still gates
+    /// the two outlines.
+    #[serde(default = "yes")]
+    pub move_show_hover_bounds: bool,
+    #[serde(default = "yes")]
+    pub move_expand_group_on_click: bool,
+    #[serde(default = "yes")]
+    pub move_show_layers_hover_bounds: bool,
     /// Transform options bar: Toggle Reference Point. Off by default, as in Photoshop: the point
     /// isn't drawn and isn't a handle, so a drag from the middle of the box moves the content;
     /// transforms still turn and scale about it (#11098).
@@ -201,7 +211,8 @@ pub struct ToolOptions {
     #[serde(default = "yes")]
     pub perspective_crop_grid: bool,
     /// Crop overlay (#1919): the guide in the crop box, when it shows and its orientation
-    /// (Photoshop's defaults: Rule of Thirds, Auto Show Overlay). See `crop_overlay`.
+    /// (the reference application's defaults: Rule of Thirds, Always Show Overlay, #10894). See
+    /// `crop_overlay`.
     #[serde(default)]
     pub crop_overlay: crate::crop_overlay::CropOverlay,
     #[serde(default)]
@@ -475,6 +486,9 @@ impl Default for ToolOptions {
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
+            move_show_hover_bounds: true,
+            move_expand_group_on_click: true,
+            move_show_layers_hover_bounds: true,
             transform_reference_point: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
