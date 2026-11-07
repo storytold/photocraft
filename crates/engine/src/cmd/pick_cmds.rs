@@ -93,6 +93,8 @@ pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option
     pick_target(doc, x, y, group, true)
 }
 
+/// Choose the topmost hit eligible for selection before resolving its group. An effective Lock
+/// All excludes a layer from selection here. Move Auto-Select also skips effective Position locks.
 fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool) -> Option<LayerId> {
     let hit = layers_hit(doc, x, y, true).into_iter().find(|id| {
         let locks = doc.effective_locks(*id);
@@ -101,6 +103,8 @@ fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bo
     Some(if group { top_group(doc, hit) } else { hit })
 }
 
+/// List the hits for a context menu or pick one layer or group. A probe leaves the selection
+/// alone. A replace click on a selected member keeps the full multi-selection for dragging.
 fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `x`".into() })?.floor() as i32;
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `y`".into() })?.floor() as i32;
@@ -427,6 +431,8 @@ mod tests {
         assert_eq!(menu["layers"][1]["layer"], bg.0);
     }
 
+    /// A marquee normalizes reversed bounds and extends the existing selection in add mode.
+    /// An empty marquee preserves the selection in add mode and clears it in replace mode.
     #[test]
     fn a_marquee_selects_the_layers_it_touches() {
         let (mut s, a, b) = two_squares();

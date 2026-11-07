@@ -57,6 +57,8 @@ impl Fixture {
         std::iter::once(self.background).chain(self.layers).map(|id| doc.layer(id).unwrap().surface().unwrap().content_bounds()).collect()
     }
 
+    /// Send a click or drag through the tool event path. Equal endpoints send no move event.
+    /// The release must end any marquee without raising a move-lock error.
     fn gesture(&mut self, from: [f64; 2], to: [f64; 2], mods: Modifiers) {
         tool_event(&mut self.app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, mods);
         if from != to {
@@ -130,6 +132,8 @@ fn shift_drag_moves_the_layers_selected_after_the_press() {
     }
 }
 
+/// A plain click on locked-only pixels clears the selection. Shift keeps the base for an
+/// additive marquee, and neither gesture moves the locked content.
 #[test]
 fn locked_only_click_clears_each_measured_selection_and_shift_keeps_its_base() {
     let mut f = Fixture::new();
@@ -155,6 +159,8 @@ fn locked_only_click_clears_each_measured_selection_and_shift_keeps_its_base() {
     assert_eq!(f.bounds(), before, "the all-locked layer and Background stay put");
 }
 
+/// Once Background becomes a normal layer, Position and All locks prevent Auto-Select.
+/// An Image Pixels lock still permits selection, and the unlocked layer can be dragged.
 #[test]
 fn converted_background_point_pick_obeys_position_and_all_but_not_image_pixels_lock() {
     for (locks, selectable) in [(json!({}), true), (json!({"all": true}), false), (json!({"position": true}), false), (json!({"pixels": true}), true)] {
@@ -176,6 +182,8 @@ fn converted_background_point_pick_obeys_position_and_all_but_not_image_pixels_l
     assert_eq!(f.bounds()[0], Rect::new(3, 2, 83, 62), "an unlocked converted Background can move");
 }
 
+/// Move Auto-Select picks the movable layer under a Position- or All-locked hit. The context
+/// menu still lists the locked hit first so the user can choose it explicitly.
 #[test]
 fn locked_top_layer_is_clicked_through_while_the_context_menu_still_lists_it() {
     for locks in [json!({"position": true}), json!({"all": true})] {
@@ -193,6 +201,8 @@ fn locked_top_layer_is_clicked_through_while_the_context_menu_still_lists_it() {
     }
 }
 
+/// A marquee starting on Background adds hits with Shift and replaces the set without it.
+/// Empty boxes preserve the additive base and clear a replacement, with no pixel movement.
 #[test]
 fn background_marquee_adds_with_shift_and_replaces_without_it_including_empty_hits() {
     let mut f = Fixture::new();

@@ -229,6 +229,9 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     Some((raw, ev, mods))
 }
 
+/// Handle Move-specific pointer events and report whether the event was consumed. Auto-Select
+/// picks on press so snapping and dragging use the resulting layer selection. When a locked-only
+/// hit starts a marquee, Shift preserves the selection that the marquee adds to.
 fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods: egui::Modifiers) -> bool {
     match ev {
         ToolEvent::Down { x, y, pressure } if tool == Tool::Move => {
