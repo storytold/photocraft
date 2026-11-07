@@ -410,9 +410,9 @@ pub struct SectionLocks {
     pub protect_texture: bool,
 }
 
-/// Brush Pose: stylus values used instead of (override) or for missing device data.
+/// Brush Pose: fixed values used for the selected stylus-component overrides.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
+#[serde(from = "PoseWire", into = "PoseWire")]
 pub struct Pose {
     pub enabled: bool,
     /// Degrees, -90..90 (W3C Pointer Events convention).
@@ -422,7 +422,8 @@ pub struct Pose {
     pub rotation: f32,
     /// 0..1.
     pub pressure: f32,
-    pub override_tilt: bool,
+    pub override_tilt_x: bool,
+    pub override_tilt_y: bool,
     pub override_rotation: bool,
     pub override_pressure: bool,
 }
@@ -435,9 +436,84 @@ impl Default for Pose {
             tilt_y: 0.0,
             rotation: 0.0,
             pressure: 1.0,
-            override_tilt: false,
+            override_tilt_x: false,
+            override_tilt_y: false,
             override_rotation: false,
             override_pressure: false,
+        }
+    }
+}
+
+// Old presets used one combined flag. Keep that JSON input and readback while the
+// model has only the two independent sources of truth. Explicit axis fields win.
+#[derive(Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct PoseWire {
+    enabled: bool,
+    tilt_x: f32,
+    tilt_y: f32,
+    rotation: f32,
+    pressure: f32,
+    override_tilt: bool,
+    #[serde(default, deserialize_with = "pose_axis_bool")]
+    override_tilt_x: Option<bool>,
+    #[serde(default, deserialize_with = "pose_axis_bool")]
+    override_tilt_y: Option<bool>,
+    override_rotation: bool,
+    override_pressure: bool,
+}
+
+// Missing axis keys migrate from the old flag; a present null/non-boolean is an error.
+fn pose_axis_bool<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
+    bool::deserialize(d).map(Some)
+}
+
+impl Default for PoseWire {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            tilt_x: 0.0,
+            tilt_y: 0.0,
+            rotation: 0.0,
+            pressure: 1.0,
+            override_tilt: false,
+            override_tilt_x: None,
+            override_tilt_y: None,
+            override_rotation: false,
+            override_pressure: false,
+        }
+    }
+}
+
+impl From<PoseWire> for Pose {
+    fn from(p: PoseWire) -> Self {
+        Self {
+            enabled: p.enabled,
+            tilt_x: p.tilt_x,
+            tilt_y: p.tilt_y,
+            rotation: p.rotation,
+            pressure: p.pressure,
+            override_tilt_x: p.override_tilt_x.unwrap_or(p.override_tilt),
+            override_tilt_y: p.override_tilt_y.unwrap_or(p.override_tilt),
+            override_rotation: p.override_rotation,
+            override_pressure: p.override_pressure,
+        }
+    }
+}
+
+impl From<Pose> for PoseWire {
+    fn from(p: Pose) -> Self {
+        Self {
+            enabled: p.enabled,
+            tilt_x: p.tilt_x,
+            tilt_y: p.tilt_y,
+            rotation: p.rotation,
+            pressure: p.pressure,
+            override_tilt: p.override_tilt_x && p.override_tilt_y,
+            override_tilt_x: Some(p.override_tilt_x),
+            override_tilt_y: Some(p.override_tilt_y),
+            override_rotation: p.override_rotation,
+            override_pressure: p.override_pressure,
         }
     }
 }
@@ -500,6 +576,8 @@ pub struct BrushSettings {
     pub background: [f32; 4],
     /// Erase instead of paint.
     pub erase: bool,
+    /// Paint beneath existing pixels; opaque pixels and transparency-locked layers are unchanged.
+    pub behind: bool,
     /// Brush blend mode (Normal, Multiply, Dissolve…).
     pub mode: BlendMode,
     // --- Brush Tip Shape ---
@@ -552,12 +630,14 @@ impl Default for BrushSettings {
             spacing_enabled: true,
             opacity: 1.0,
             flow: 1.0,
-            pressure_size: true,
+            // Off, as the reference application leaves it after Reset Tool (#11809).
+            pressure_size: false,
             pressure_opacity: false,
             color: [0.0, 0.0, 0.0, 1.0],
             color_cmyk: None,
             background: [1.0, 1.0, 1.0, 1.0],
             erase: false,
+            behind: false,
             mode: BlendMode::Normal,
             tip: TipShape::Round,
             angle: 0.0,
@@ -623,6 +703,15 @@ impl BrushSettings {
         brush.dual_brush.size = safe_size(brush.dual_brush.size);
         brush.scattering.scatter.jitter = safe_scatter(brush.scattering.scatter.jitter);
         brush.dual_brush.scatter = safe_scatter(brush.dual_brush.scatter);
+        // A NaN here would paint fully opaque (`f32::min` returns the other operand) or not at all;
+        // it falls back to the default (the values of `BrushSettings::default` and `DualBrush::default`). Every other value, infinities included, is left to the clamps downstream.
+        let nan_or = |v: f32, d: f32| if v.is_nan() { d } else { v };
+        brush.opacity = nan_or(brush.opacity, 1.0);
+        brush.flow = nan_or(brush.flow, 1.0);
+        brush.hardness = nan_or(brush.hardness, 1.0);
+        brush.spacing = nan_or(brush.spacing, 0.1);
+        brush.dual_brush.hardness = nan_or(brush.dual_brush.hardness, 1.0);
+        brush.dual_brush.spacing = nan_or(brush.dual_brush.spacing, 0.25);
         brush
     }
 

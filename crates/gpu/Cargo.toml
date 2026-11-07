@@ -4,16 +4,28 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = []
+vulkan = ["wgpu/vulkan"]
+metal = ["wgpu/metal"]
+dx12 = ["wgpu/dx12"]
+gles = ["wgpu/gles"]
+native = ["vulkan", "metal", "dx12", "gles"]
+
 [lints]
 workspace = true
 
 [dependencies]
 half = "2"
+thiserror = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-compose = { workspace = true }
+# Camera Raw's per-pixel stages (`camera_raw.rs`) take their constants from the CPU develop.
+photocraft-algo = { workspace = true }
+bytemuck = { workspace = true }
 # Same major version as eframe's wgpu so the app's device can be shared.
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl"] }
 log = { workspace = true }
@@ -21,9 +33,12 @@ log = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Effect distance fields are computed in parallel bands.
 rayon = { workspace = true }
+pollster = "1"
 
 [dev-dependencies]
 wgpu = { version = "30" }
 pollster = "1"
 # Shape layers in the effect parity tests.
 photocraft-vector = { workspace = true }
+# A document-tagged CMYK profile in the tile conversion test.
+photocraft-cms = { workspace = true }
