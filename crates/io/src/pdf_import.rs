@@ -101,10 +101,10 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     if doc_width > u64::from(u32::MAX) || doc_height > u64::from(u32::MAX) {
         return Err(IoError::Unsupported("PDF import is too large at this DPI; lower the import DPI".into()));
     }
-    // Retained tiles plus the converting page's peak: craft-pdf's RGBA8 raster (4 B/px) and the
-    // f32 document buffer (16 B/px).
+    // Retained tiles plus the converting page's raster (4 B/px); the f32 conversion runs in
+    // 256-row bands, so it adds only a constant-sized buffer rather than a second full page.
     let max_page = sizes.iter().map(|&(w, h)| u64::from(page_pixels(w, dpi)) * u64::from(page_pixels(h, dpi))).max().unwrap_or(0);
-    let estimate = retained.saturating_add(max_page.saturating_mul(20));
+    let estimate = retained.saturating_add(max_page.saturating_mul(4));
     let budget = if opts.flat_max_pixel_bytes > 0 { opts.flat_max_pixel_bytes } else { DEFAULT_MAX_PIXEL_BYTES };
     if estimate > budget {
         return Err(IoError::Unsupported(format!(
@@ -159,17 +159,23 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
 
         let mut surface = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
         let bytes = rendered.bytes();
-        let mut data = Vec::new();
-        if data.try_reserve_exact(bytes.len()).is_err() {
+        // Convert and write in row bands: the f32 buffer stays bounded instead of a second
+        // 16-bytes-per-pixel copy of the whole page, and cancellation is polled per band.
+        const BAND_ROWS: usize = 256;
+        let row_bytes = width as usize * 4;
+        let band_bytes = row_bytes.saturating_mul(BAND_ROWS);
+        let mut data: Vec<f32> = Vec::new();
+        if data.try_reserve_exact(band_bytes).is_err() {
             return Err(IoError::Unsupported(format!("PDF page {page_number} needs more memory than is available")));
         }
-        for chunk in bytes.as_chunks::<4>().0 {
-            for &value in &chunk[..3] {
-                data.push(f32::from(value) / 255.0);
-            }
-            data.push(f32::from(chunk[3]) / 255.0);
+        for (band, rows) in bytes.chunks(band_bytes).enumerate() {
+            ctl.check().map_err(|_| IoError::Cancelled)?;
+            data.clear();
+            data.extend(rows.iter().map(|&value| f32::from(value) / 255.0));
+            let top = (band * BAND_ROWS) as i32;
+            let band_height = (rows.len() / row_bytes) as u32;
+            surface.write_region(Rect::from_xywh(x as i32, top, width, band_height), &data);
         }
-        surface.write_region(Rect::from_xywh(x as i32, 0, width, height), &data);
         let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
         let layer = Layer::new(format!("Page {page_number}"), LayerContent::Raster(surface));
         let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };

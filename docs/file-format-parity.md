@@ -145,13 +145,13 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 Embedded SVG and PDF-compatible AI/PDF/EPS payloads can use an explicit VectorCraft editor choice, including nested PSB contents. AI/PDF/EPS working copies retain their format on save-back; a separate source-bound SVG display preview does not replace the native payload. Placement, shared instances, masks and Undo/Redo use existing smart-object transactions, with native bytes and previews persisted through .pcraft and PSD/PSB saves. Unsupported editor features may still change; standalone EPS/DCS import and lossless Adobe round-trip compatibility remain unverified. See [workflow, safety and validation limits](embedded-vector-editing.md). No corpus floor or parity percentage is changed.
 
 ## Revision history
-| 2026-11-07 | minor | Photoshop PDF read: pages import as raster artboards through the shared craft-pdf (Hayro) renderer, up to 16 pages, 8192 px per side and 64M px per page; editable text/vectors and PDFium are gone. Write is unchanged. |
 
 The original reference row retains its source date and historical totals; current totals are in the status and Actions row above.
 The original reference entry retains its source date and historical totals; current totals are in the status above.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Photoshop PDF read: pages import as raster artboards through the shared craft-pdf (Hayro) renderer, up to 16 pages, 8192 px per side and 64M px per page; editable text/vectors and PDFium are gone. Write is unchanged. |
 | 2026-11-06 | minor | Scripted PSD/PSB saves take `maximizeCompatibility` (Save, Save As, Save a Copy, `app.save`, serve `doc.save`, MCP `doc_save`/`doc_export`, Batch, Image Processor, Layers to Files) over Preferences › File Handling for one save, and the CLI `--no-maximize-compatibility` (#8064). Layer channels and the merged image were already RLE (ZIP with prediction at 32-bit), as Photoshop writes them (#8645) |
 | 2026-11-02 | minor | Actions Shear (`Shr `) loads, plays and saves the measured curve points and edge mode; unsafe subranges and unrepresentable forms remain kept steps (#10605). |
 | 2026-11-01 | minor | `.atn`: 23 newer measured forms mapped, including explicit Link/Unlink, Smart Object file operations, Make Type to Shape, radius-only Shape Blur, Artboard from Group and the Crop Photos parent; supported in batch 13; Link Layers keeps the measured toggle. Artboard forms with unmeasured settings and generated Crop helper steps remain kept. |

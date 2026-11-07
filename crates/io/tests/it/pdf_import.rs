@@ -103,6 +103,7 @@ fn first_artboard(document: &photocraft_doc::Document) -> Rect {
     group.artboard.as_ref().expect("page artboard").rect
 }
 
+/// Each page becomes its own artboard at 72 and 300 DPI, with the print size preserved.
 #[test]
 fn imports_every_page_as_an_artboard_with_its_print_size() {
     let pdf = variant_pdf();
@@ -148,6 +149,7 @@ fn imports_every_page_as_an_artboard_with_its_print_size() {
     }
 }
 
+/// A page over the renderer's side limit lowers the effective DPI instead of failing.
 #[test]
 fn huge_pages_lower_the_effective_dpi_within_the_renderer_bounds() {
     // 3000 pt at 300 dpi would be 12500 px wide, over craft-pdf's 8192 px side limit.
@@ -162,6 +164,7 @@ fn huge_pages_lower_the_effective_dpi_within_the_renderer_bounds() {
     assert!((print_width - 3000.0).abs() < 1.0, "print width {print_width:.1} pt should stay 3000 pt");
 }
 
+/// Cancelling on the last page check or the public boundary returns Cancelled, never a document.
 #[test]
 fn cancelling_on_the_last_checks_is_reported() {
     let pdf = variant_pdf();
