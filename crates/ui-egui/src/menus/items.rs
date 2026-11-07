@@ -154,7 +154,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         }
         recent.push(MenuItem {
             id: "file.clearRecent".into(),
-            label: "Clear Recent Files".into(),
+            label: "Clear Recent File List".into(),
             path: rp.clone(),
             shortcut: None,
             enabled: !app.ui.recent_files.is_empty(),
