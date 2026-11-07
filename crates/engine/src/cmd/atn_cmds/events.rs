@@ -1188,6 +1188,31 @@ pub(super) const EVENTS: &[Event] = &[
         to: super::steps_batch::batch_to,
     },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
+    // File › Package, File › Import › Notes and Image › Apply Data Set (#10723).
+    Event {
+        code: "",
+        name: "packageFile",
+        label: "Package",
+        ids: &["file.package"],
+        from: super::steps_file_menu::package_from,
+        to: super::steps_file_menu::package_to,
+    },
+    Event {
+        code: "",
+        name: "importAnnots",
+        label: "Import Notes",
+        ids: &["file.import.notes"],
+        from: super::steps_file_menu::notes_from,
+        to: super::steps_file_menu::notes_to,
+    },
+    Event {
+        code: "",
+        name: "apply",
+        label: "Apply Data Set",
+        ids: &["image.applyDataSet"],
+        from: super::steps_file_menu::apply_data_set_from,
+        to: super::steps_file_menu::apply_data_set_to,
+    },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },
 ];
 
