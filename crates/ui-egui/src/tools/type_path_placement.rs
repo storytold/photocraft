@@ -54,14 +54,15 @@ fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]
     }
     let range = if let Some(end) = end {
         let mut end = f64::from(*end);
+        if !end.is_finite() || end < start {
+            return None;
+        }
         if !path.closed {
-            let max_f32 = length as f32;
-            if end <= f64::from(max_f32) {
-                end = end.min(length);
+            if start < 0.0 {
+                return None;
             }
-            if (start as f32) <= max_f32 {
-                start = start.min(length);
-            }
+            start = start.min(length);
+            end = end.min(length);
         }
         [start, end]
     } else {
@@ -73,16 +74,19 @@ fn effective_range(text: &TextLayer, geometry: &PathGeometry) -> Option<[f64; 2]
         }
         if path.closed {
             [start - f * length, start + (1.0 - f) * length]
-        } else if !(0.0..=length).contains(&start) {
+        } else if start < 0.0 {
             return None;
-        } else if f == 0.0 {
-            [start, length]
-        } else if f == 1.0 {
-            [0.0, start]
-        } else if start <= length / 2.0 {
-            [0.0, 2.0 * start]
         } else {
-            [2.0 * start - length, length]
+            let start = start.min(length);
+            if f == 0.0 {
+                [start, length]
+            } else if f == 1.0 {
+                [0.0, start]
+            } else if start <= length / 2.0 {
+                [0.0, 2.0 * start]
+            } else {
+                [2.0 * start - length, length]
+            }
         }
     };
     if range.iter().any(|n| !n.is_finite()) || range[1] < range[0] || (!path.closed && (range[0] < 0.0 || range[1] > length)) {
@@ -1523,5 +1527,153 @@ mod tests {
         let end = end.expect("explicit end");
         assert!((end - 169.8).abs() < 2.0, "end must stay on branch 1 without jumping: {end}");
         assert!(!flip);
+    }
+
+    /// Proves markers and placement gestures work on shortened open geometry with stale explicit end, cancel preserves the original, and edits commit valid ranges.
+    #[test]
+    fn shortened_path_stale_explicit_end_preserves_markers_cancellation_and_commits_valid_range() {
+        let mut app = app(Tool::PathSelection);
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        // Shorten path from length 160 (20 to 180) to length 60 (20 to 80).
+        let shortened = photocraft_doc::vector::Subpath::polyline(&[(20.0, 100.0), (80.0, 100.0)]);
+        app.session
+            .edit("shorten path", |doc, _| {
+                let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("expected text") };
+                let TextShape::Path { path, .. } = &mut text.shape else { panic!("expected path") };
+                *path = shortened;
+                Ok(())
+            })
+            .unwrap();
+
+        // Stored document retains stale explicit end (100.0) past shortened path length (60.0).
+        let (stored_start, stored_end, stored_flip) = placement(&app);
+        assert_eq!(stored_start, 20.0);
+        assert_eq!(stored_end, Some(100.0));
+        assert!(!stored_flip);
+
+        // Markers remain visible on shortened path with bounded effective range.
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).expect("markers must remain visible after shortening");
+        let tip0 = marker_tip(ends[0].0, ends[0].1, 0);
+        let tip1 = marker_tip(ends[1].0, ends[1].1, 1);
+        assert_eq!(cursor(&mut app, &xf, tip0), Some(true));
+        assert_eq!(cursor(&mut app, &xf, tip1), Some(false));
+
+        // Click and release without dragging preserves stored document and history count.
+        let before = shape(&app);
+        let initial_steps = steps(&app);
+        let doc0 = xf.to_doc(tip0);
+        down(&mut app, doc0[0], doc0[1]);
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
+        up(&mut app, doc0[0], doc0[1]);
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), initial_steps);
+
+        // Cancelling drag gesture preserves stored document and history count.
+        down(&mut app, doc0[0], doc0[1]);
+        assert!(cancel(&mut app));
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), initial_steps);
+
+        // Dragging end marker commits a valid bounded endpoint on the shortened path.
+        let doc1 = xf.to_doc(tip1);
+        down(&mut app, doc1[0], doc1[1]);
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
+        move_to(&mut app, 70.0, doc1[1]);
+        up(&mut app, 70.0, doc1[1]);
+        assert_eq!(steps(&app), initial_steps + 1);
+        let (new_start, new_end, new_flip) = placement(&app);
+        assert_eq!(new_start, 20.0);
+        assert_eq!(new_end, Some(50.0));
+        assert!(!new_flip);
+
+        // Undo cleanly rolls back to the preserved original stale document.
+        assert!(app.session.undo());
+        assert_eq!(shape(&app), before);
+    }
+
+    /// Proves markers remain visible and start can be dragged onto the path when both endpoints exceed shortened path length.
+    #[test]
+    fn shortened_path_start_beyond_new_length_preserves_markers_cancellation_and_commits_valid_range() {
+        let mut app = app(Tool::PathSelection);
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        // Shorten path to length 40 (20 to 60) and place stale start at 50.0 and end at 80.0.
+        let shortened = photocraft_doc::vector::Subpath::polyline(&[(20.0, 100.0), (60.0, 100.0)]);
+        app.session
+            .edit("shorten path beyond start", |doc, _| {
+                let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("expected text") };
+                text.shape = TextShape::Path { path: shortened, start: 50.0, end: Some(80.0), flip: false };
+                Ok(())
+            })
+            .unwrap();
+
+        // Stored document retains stale range beyond new length.
+        let (stored_start, stored_end, stored_flip) = placement(&app);
+        assert_eq!(stored_start, 50.0);
+        assert_eq!(stored_end, Some(80.0));
+        assert!(!stored_flip);
+
+        // Markers remain visible, bounded to the endpoint of the shortened path.
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).expect("markers must remain visible when start is beyond length");
+        let tip0 = marker_tip(ends[0].0, ends[0].1, 0);
+        let tip1 = marker_tip(ends[1].0, ends[1].1, 1);
+        assert_eq!(cursor(&mut app, &xf, tip0), Some(true));
+        assert_eq!(cursor(&mut app, &xf, tip1), Some(false));
+
+        // Click and release or cancel preserves original stored shape.
+        let before = shape(&app);
+        let initial_steps = steps(&app);
+        let doc0 = xf.to_doc(tip0);
+        down(&mut app, doc0[0], doc0[1]);
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
+        assert!(cancel(&mut app));
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), initial_steps);
+
+        down(&mut app, doc0[0], doc0[1]);
+        up(&mut app, doc0[0], doc0[1]);
+        assert_eq!(shape(&app), before);
+        assert_eq!(steps(&app), initial_steps);
+
+        // Dragging start marker backward brings start onto the path and commits valid endpoints.
+        down(&mut app, doc0[0], doc0[1]);
+        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
+        move_to(&mut app, 35.0, doc0[1]);
+        up(&mut app, 35.0, doc0[1]);
+        assert_eq!(steps(&app), initial_steps + 1);
+        let (new_start, new_end, new_flip) = placement(&app);
+        assert_eq!(new_start, 15.0);
+        assert_eq!(new_end, Some(40.0));
+        assert!(!new_flip);
+
+        // Undo restores original shape.
+        assert!(app.session.undo());
+        assert_eq!(shape(&app), before);
+    }
+
+    /// Verifies malformed, non-finite, and inverted ranges continue to be rejected by effective_range.
+    #[test]
+    fn effective_range_safeguards_reject_malformed_and_inverted_ranges() {
+        use photocraft_doc::vector::Subpath;
+        let path = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+        let geometry = PathGeometry::new(&path, false).unwrap();
+        let make_text = |start: f32, end: Option<f32>| TextLayer {
+            text: "ABC".into(),
+            shape: TextShape::Path { path: path.clone(), start, end, flip: false },
+            ..Default::default()
+        };
+
+        // Inverted explicit range (start > end) must return None.
+        assert!(effective_range(&make_text(50.0, Some(20.0)), &geometry).is_none());
+
+        // Negative start on open path must return None.
+        assert!(effective_range(&make_text(-5.0, Some(50.0)), &geometry).is_none());
+        assert!(effective_range(&make_text(-5.0, None), &geometry).is_none());
+
+        // Non-finite values must return None.
+        assert!(effective_range(&make_text(f32::NAN, Some(50.0)), &geometry).is_none());
+        assert!(effective_range(&make_text(10.0, Some(f32::NAN)), &geometry).is_none());
+        assert!(effective_range(&make_text(10.0, Some(f32::INFINITY)), &geometry).is_none());
     }
 }
