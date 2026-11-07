@@ -135,6 +135,134 @@ fn spectrum_popup_style_matches_main_menu_and_preserves_studio() {
     }
 }
 
+/// Open a themed popup with an action, a disabled row and a submenu for paint and input checks.
+fn hover_menu(kind: crate::theme::ThemeKind) -> egui_kittest::Harness<'static, usize> {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 260.0)).build_ui_state(
+        |ui, chosen| {
+            ui.menu_button("Menu", |ui| {
+                super::style_spectrum_popup_menu(ui);
+                if ui.button("Subject").clicked() {
+                    *chosen += 1;
+                    ui.close();
+                }
+                ui.add_enabled(false, egui::Button::new("Unavailable"));
+                ui.menu_button("Color", |ui| {
+                    super::style_spectrum_popup_menu(ui);
+                    let _ = ui.button("Red");
+                });
+            });
+        },
+        0,
+    );
+    crate::PhotocraftApp::setup_context(&h.ctx, kind);
+    h.run_steps(3);
+    use egui_kittest::kittest::Queryable;
+    h.get_by_label("Menu").click();
+    h.run_steps(4);
+    h
+}
+
+/// Inspect actual button paint, not just style values, including an open submenu header.
+#[test]
+fn popup_highlights_round_the_paint_and_keep_the_full_hit_target() {
+    use egui_kittest::kittest::Queryable;
+    for kind in crate::theme::ThemeKind::ALL {
+        let mut h = hover_menu(kind);
+        let radius = egui::CornerRadius::from(crate::theme::Tokens::for_kind(kind).radius_sm);
+        let check = |h: &egui_kittest::Harness<'_, usize>, rect: egui::Rect, state: &str| {
+            let shapes: Vec<_> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.rect == rect && r.fill != Color32::TRANSPARENT => Some(r),
+                    _ => None,
+                })
+                .collect();
+            let painted: Vec<_> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) => Some((r.rect, r.corner_radius, r.fill)),
+                    _ => None,
+                })
+                .collect();
+            assert!(!shapes.is_empty(), "{kind:?} {state}: the menu row {rect:?} has a highlight; painted: {painted:?}");
+            assert!(shapes.iter().all(|r| r.corner_radius == radius), "{kind:?}: row paint uses the theme radius");
+        };
+        let subject = h.get_by_label("Subject").rect();
+        h.hover_at(subject.center());
+        h.run_steps(3);
+        check(&h, subject, "hovered action");
+        assert_eq!(h.get_by_label("Subject").rect(), subject, "rounding never changes the row's hit box");
+
+        let color = h.get_by_label("Color").rect();
+        h.hover_at(color.center());
+        h.run_steps(8);
+        check(&h, color, "hovered submenu");
+        h.hover_at(h.get_by_label("Red").rect().center());
+        h.run_steps(3);
+        check(&h, color, "open submenu");
+
+        h.get_by_label("Unavailable").click();
+        h.run_steps(3);
+        assert_eq!(*h.state(), 0, "disabled menu entries remain disabled");
+        // A disabled-row click may dismiss the popup; test its enabled corner in a fresh menu.
+        let mut h = hover_menu(kind);
+        let subject = h.get_by_label("Subject").rect();
+        let at = subject.min + egui::vec2(0.5, 0.5);
+        h.hover_at(at);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        check(&h, subject, "pressed action");
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+        assert_eq!(*h.state(), 1, "the rounded-off paint corner remains a usable click target");
+    }
+}
+
+/// Fractional token overrides must round identically for popup states and painted surfaces.
+#[test]
+fn popup_fractional_radius_matches_surface_rounding() {
+    let ctx = egui::Context::default();
+    crate::theme::apply(&ctx, crate::theme::ThemeKind::Pro);
+    let mut tokens = crate::theme::Tokens::get(&ctx);
+    tokens.radius_sm = 2.5;
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("photocraft-theme"), tokens));
+    let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(80.0, 24.0));
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        super::style_spectrum_popup_menu(ui);
+        let widgets = &ui.visuals().widgets;
+        for state in [&widgets.inactive, &widgets.hovered, &widgets.active, &widgets.open] {
+            assert_eq!(state.corner_radius, egui::CornerRadius::same(3));
+        }
+        super::surface(ui, rect, Color32::WHITE, false);
+    });
+    output.textures_delta.clear();
+    assert!(
+        output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(painted) if painted.rect == rect && painted.corner_radius == egui::CornerRadius::same(3))
+        })
+    );
+}
+
+/// Set PHOTOCRAFT_MENU_PREVIEW_DIR to an existing directory for native visual review.
+#[test]
+#[ignore]
+fn render_rounded_menu_highlights() {
+    use egui_kittest::kittest::Queryable;
+    let dir = std::env::var("PHOTOCRAFT_MENU_PREVIEW_DIR").expect("set preview output directory");
+    for kind in crate::theme::ThemeKind::ALL {
+        let mut h = hover_menu(kind);
+        for label in ["Subject", "Color"] {
+            h.hover_at(h.get_by_label(label).rect().center());
+            h.run_steps(8);
+            h.render().unwrap().save(std::path::Path::new(&dir).join(format!("menu-{}-{label}.png", kind.id()))).unwrap();
+        }
+    }
+}
+
 /// One primary press+release at `pos`. When `touch`, emit Touch Start/End with the pointer events (as egui-winit does) so [`super::second_click`] uses the touch distance.
 fn pointer_click(ctx: &egui::Context, time: f64, pos: egui::Pos2, touch: bool) -> bool {
     let area = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 200.0));

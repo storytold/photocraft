@@ -17,9 +17,12 @@ pub fn style_spectrum_popup_menu(ui: &mut Ui) {
     v.widgets.hovered.bg_fill = t.accent;
     v.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
     v.widgets.hovered.bg_stroke = Stroke::NONE;
-    v.widgets.inactive.corner_radius = CornerRadius::ZERO;
-    v.widgets.hovered.corner_radius = CornerRadius::ZERO;
-    v.widgets.active.corner_radius = CornerRadius::ZERO;
+    // Round only the paint: rows still meet and keep their full rectangular hit targets.
+    let radius = CornerRadius::from(t.radius_sm);
+    v.widgets.inactive.corner_radius = radius;
+    v.widgets.hovered.corner_radius = radius;
+    v.widgets.active.corner_radius = radius;
+    v.widgets.open.corner_radius = radius;
 }
 
 /// An accent insertion line on one edge of `r` while a drag hovers it (vertical: on its left or,
