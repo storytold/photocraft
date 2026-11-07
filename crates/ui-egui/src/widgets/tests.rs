@@ -1366,6 +1366,155 @@ fn dropdown_list_keeps_its_width_while_scrolling() {
     }
 }
 
+/// A window `height` tall with the Layers panel's blend mode dropdown (all 27 modes, wheel
+/// steps them) `down` from its top, opened.
+fn open_blend_modes(height: f32, down: f32) -> Harness<'static, photocraft_color::BlendMode> {
+    use photocraft_color::BlendMode;
+    let mut h = Harness::builder().with_size(egui::vec2(400.0, height)).build_ui_state(
+        move |ui, mode: &mut BlendMode| {
+            ui.add_space(down);
+            let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+            super::dropdown_wheel_hovered(ui, "blend-mode", tl!("Blend Mode"), mode, &opts, 120.0);
+        },
+        BlendMode::Normal,
+    );
+    crate::theme::apply(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run();
+    h.get_by_role(egui::accesskit::Role::ComboBox).click();
+    h.run_steps(4);
+    h
+}
+
+/// The open list's rect.
+fn open_list<T>(h: &Harness<'_, T>) -> egui::Rect {
+    let list = h.ctx.memory(|m| m.layer_ids().filter(|l| l.order == egui::Order::Foreground).find_map(|l| m.area_rect(l.id)));
+    let Some(list) = list else { panic!("the list is open") };
+    list
+}
+
+/// Each mode's row in the open list: its label's last node, as the box shows the chosen one's.
+fn mode_rows<T>(h: &Harness<'_, T>) -> Vec<egui::Rect> {
+    use photocraft_color::BlendMode;
+    BlendMode::LAYER_MODES.iter().map(|m| h.get_all_by_label(m.label()).last().map(|n| n.rect()).unwrap_or(egui::Rect::NOTHING)).collect()
+}
+
+/// Photoshop opens the Layers panel's blend modes at full height when the window has room, no
+/// scroll bar (#5495): not capped at a fixed height. A short window still scrolls the list,
+/// which stays inside the window.
+#[test]
+fn dropdown_list_is_as_tall_as_its_options_up_to_the_window() {
+    let h = open_blend_modes(1000.0, 0.0);
+    let (list, rows) = (open_list(&h), mode_rows(&h));
+    for (i, row) in rows.iter().enumerate() {
+        assert!(list.contains_rect(*row), "row {i} {row:?} shows in the list {list:?}");
+    }
+    let h = open_blend_modes(300.0, 0.0);
+    let (list, rows) = (open_list(&h), mode_rows(&h));
+    assert!(list.top() >= 0.0 && list.bottom() <= 300.0, "the list {list:?} stays in the window");
+    assert!(list.height() > 200.0, "the list {list:?} uses the window's height");
+    assert!(rows.last().is_some_and(|r| !list.contains_rect(*r)), "the last rows scroll: {rows:?}");
+}
+
+/// The open list opens at the button's left edge, below the button or above it, never over it
+/// (#5495 review: a click released in place would choose the row under the pointer): below
+/// when the whole list fits there, else on the side with more room, scrolling when it doesn't
+/// fit there either. It stays put while the wheel steps through every mode over it (#1747),
+/// although the button widens for the longer names.
+#[test]
+fn dropdown_list_opens_beside_its_button_and_stays_put_while_the_wheel_steps_its_value() {
+    use photocraft_color::BlendMode;
+    // (window height, button's distance from the top, list below it, all modes in sight)
+    let cases = [
+        (1000.0, 0.0, true, true),    // room below
+        (900.0, 420.0, true, false),  // room on neither side, more below
+        (900.0, 520.0, false, false), // room on neither side, more above
+        (1000.0, 900.0, false, true), // room above only, near the bottom edge
+        (300.0, 150.0, false, false), // a window shorter than the list
+    ];
+    for (height, down, below, all) in cases {
+        let mut h = open_blend_modes(height, down);
+        let button = h.get_by_role(egui::accesskit::Role::ComboBox).rect();
+        let list = open_list(&h);
+        assert!(list.top() >= 0.0 && list.bottom() <= height, "{height}/{down}: the list {list:?} is in the window");
+        assert!((list.left() - button.left()).abs() < 8.0, "{height}/{down}: the list {list:?} starts at the button {button:?}");
+        assert!(!list.intersects(button.shrink(1.0)), "{height}/{down}: the list {list:?} leaves the button {button:?} free");
+        assert_eq!(list.top() >= button.bottom() - 1.0, below, "{height}/{down}: the list {list:?} is below the button {button:?}");
+        let rows = mode_rows(&h);
+        assert_eq!(rows.iter().all(|r| list.contains_rect(*r)), all, "{height}/{down}: all modes show in {list:?}");
+        let over = list.center();
+        for _ in 1..BlendMode::LAYER_MODES.len() {
+            h.hover_at(over);
+            h.event(egui::Event::MouseWheel {
+                source: egui::MouseWheelSource::Unknown,
+                unit: egui::MouseWheelUnit::Line,
+                delta: egui::vec2(0.0, -1.0),
+                phase: egui::TouchPhase::Move,
+                modifiers: Modifiers::NONE,
+            });
+            h.run_steps(3);
+            assert_eq!(open_list(&h), list, "{height}/{down}: the list stays put at {:?}", h.state());
+        }
+        assert_eq!(*h.state(), BlendMode::Luminosity, "{height}/{down}: the wheel stepped through every mode");
+    }
+}
+
+/// A short list opens below its button when it fits there, and above it near the window's
+/// bottom edge, whole either way.
+#[test]
+fn a_short_dropdown_list_opens_below_or_above_its_button_whole() {
+    for (down, below) in [(100.0, true), (360.0, false)] {
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 400.0)).build_ui_state(
+            move |ui, selected: &mut usize| {
+                ui.add_space(down);
+                super::dropdown(ui, "blend-mode", tl!("Blend Mode"), selected, &MODES, 120.0);
+            },
+            0,
+        );
+        h.run();
+        h.get_by_role(egui::accesskit::Role::ComboBox).click();
+        h.run_steps(4);
+        let button = h.get_by_role(egui::accesskit::Role::ComboBox).rect();
+        let list = open_list(&h);
+        assert_eq!(list.top() >= button.bottom() - 1.0, below, "{down}: the list {list:?} is below the button {button:?}");
+        assert!(!list.intersects(button.shrink(1.0)), "{down}: the list {list:?} leaves the button {button:?} free");
+        for (_, label) in MODES {
+            let row = h.get_all_by_label(label).last().map(|n| n.rect()).unwrap_or(egui::Rect::NOTHING);
+            assert!(list.contains_rect(row), "{down}: {label} {row:?} shows in {list:?}");
+        }
+        assert!(list.height() < 150.0, "{down}: the list {list:?} is only as tall as its rows");
+        assert_eq!(*h.state(), 0, "{down}: the click chose nothing");
+    }
+}
+
+/// In a window with less than 120 pt on either side of the button the list still leaves
+/// its button free, scrolling in the room that side has, and stays in the window; the release
+/// of the click that opened it, held a few frames, chooses nothing (#5495 review).
+#[test]
+fn in_a_very_short_window_the_list_still_leaves_its_button_free_and_the_opening_click_chooses_nothing() {
+    use photocraft_color::BlendMode;
+    let mut h = Harness::builder().with_size(egui::vec2(400.0, 110.0)).build_ui_state(
+        |ui, mode: &mut BlendMode| {
+            ui.add_space(40.0);
+            let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
+            super::dropdown_wheel_hovered(ui, "blend-mode", tl!("Blend Mode"), mode, &opts, 120.0);
+        },
+        BlendMode::Normal,
+    );
+    h.run();
+    let button = h.get_by_role(egui::accesskit::Role::ComboBox).rect();
+    let at = button.center();
+    h.hover_at(at);
+    h.run();
+    for (pressed, frames) in [(true, 6), (false, 4)] {
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+        h.run_steps(frames);
+    }
+    let list = open_list(&h);
+    assert!(!list.intersects(button.shrink(1.0)), "the list {list:?} leaves the button {button:?} free");
+    assert!(list.top() >= 0.0 && list.bottom() <= 110.0, "the list {list:?} is in the window");
+    assert_eq!(*h.state(), BlendMode::Normal, "the click chose nothing");
+}
+
 const MODES: [(usize, &str); 4] = [(0, "Normal"), (1, "Dissolve"), (2, "Darken"), (3, "Multiply")];
 
 /// A wheel dropdown (or a plain one) of [`MODES`], whose state is the chosen index.
