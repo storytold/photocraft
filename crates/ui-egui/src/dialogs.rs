@@ -1028,8 +1028,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
     result
 }
 
-/// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
-/// that touches files itself, a valid guide layout, and Equalize's own document, layer and selection.
+/// Check child pickers, file access and dialog-specific inputs before removing the dialog.
+/// Equalize checks its document, layer and selection. A rejected preset choice leaves the prompt
+/// and its pending import available for retry.
 pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
@@ -1059,6 +1060,9 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::preset_group_prompt::owns(&d.fields)) {
+        crate::preset_group_prompt::replace_choice(&d.fields)?;
+    }
     Ok(())
 }
 
