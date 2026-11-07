@@ -77,10 +77,10 @@ impl Read for SourceReader {
     }
 }
 
-/// A reusable zstd compressor. `ruzstd` allocates a block buffer, a ~1 MiB suffix table and a
-/// block output buffer per frame; keeping the [`FrameCompressor`](ruzstd::encoding::FrameCompressor)
-/// between objects reuses the first two (its matcher resets itself on every `compress`).
-/// Output is byte-identical to `compress_to_vec` at the same level.
+/// Compress each object with independent zstd matching state. Reusing a `ruzstd` frame keeps
+/// suffix-table capacities from previous objects, which can change a smaller object's encoding
+/// with worker scheduling. Fresh state matches `compress_to_vec` at the same level; the writer
+/// still caches completed compressed objects for incremental saves.
 struct Compressor {
     inner: ruzstd::encoding::FrameCompressor<SourceReader, Vec<u8>, ruzstd::encoding::MatchGeneratorDriver>,
 }
@@ -91,6 +91,7 @@ impl Compressor {
     }
 
     fn run(&mut self, source: Source) -> Vec<u8> {
+        self.inner = ruzstd::encoding::FrameCompressor::new(ruzstd::encoding::CompressionLevel::Fastest);
         let reader = SourceReader { source, pos: 0 };
         // Room for the worst case (raw blocks: 3 bytes per 128 KiB, plus frame header and
         // checksum), so the output never regrows; shrunk afterwards to what it used. Untouched
@@ -1722,6 +1723,28 @@ fn reused_compressor_matches_compress_to_vec_and_round_trips() {
         assert_eq!(got, expected, "len {}", data.len());
         assert_eq!(decompress(&got, data.len(), "test").unwrap(), data);
     }
+}
+
+#[cfg(test)]
+#[test]
+/// A smaller object's encoding cannot depend on which larger object a worker handled first.
+fn small_blob_compression_is_independent_of_previous_object_size() {
+    let prefix = Object::Blob(Arc::new(vec![7; 8192]));
+    let mut state = 0u32;
+    let bytes: Vec<u8> = (0..652)
+        .map(|i| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            if i % 4 < 2 { 0 } else { (state >> 24) as u8 % 16 }
+        })
+        .collect();
+    let expected = ruzstd::encoding::compress_to_vec(bytes.as_slice(), ruzstd::encoding::CompressionLevel::Fastest);
+    let blob = Object::Blob(Arc::new(bytes.clone()));
+    let mut compressor = Compressor::new();
+    compressor.object(&prefix);
+    let after_larger = compressor.object(&blob);
+    assert_eq!(decompress(&after_larger, bytes.len(), "test").unwrap(), bytes);
+    assert_eq!(after_larger, expected, "compression must not depend on worker history");
+    assert_eq!(compressor.object(&blob), expected, "the next save keeps the same bytes");
 }
 
 #[cfg(test)]

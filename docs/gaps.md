@@ -320,6 +320,7 @@ what an agent can't finish alone.
 - **Estimate:** 60–110 h.
 
 ### G9. Panels, preferences and workspace
+- **Progress (2026-10-23, #8832):** New Document captures the current working profile of its colour mode without requiring a manual profile choice. An explicit profile still wins; changing Color Settings later does not reinterpret existing documents. RGB/CMYK/Gray/Lab at 8/16/32 bits are covered by `engine/tests/it/new_document_profile.rs`. Other panel and preference gaps remain open.
 - **Progress (2026-10-21):** adjustment clipping is reachable above the Properties editor in a compact dock (#5231), with all-theme layout coverage and 8/16/32-bit scope and undo/redo tests. The normal adjustment-layer scope and remaining estimate stay unchanged.
 - **Progress (2026-10-16, #3222):** UI scale presets are complete: 75–125% in 5% steps,
   then 150–300%, remembered through preferences (UI-217-9).
@@ -498,6 +499,7 @@ what an agent can't finish alone.
 | 2026-10-23 | minor | G10: TIFF alpha and spot channels written and read as extra samples with Photoshop's channel resources, PSD output unchanged (#7415); FILE-215-7 leaves the list, FILE-215-17 narrows to RGB/CMYK spot preview and PDF Separation |
 | 2026-10-23 | minor | G10: Amiga IFF write landed (24-plane ILBM, Save As `.iff`) and 24-plane ILBMs open |
 | 2026-10-23 | minor | #8940: Filter Gallery Halftone Pattern maps size, contrast and dot/circle/line both ways with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`); PSD/PSB round trips at 8/16/32 bits, malformed descriptors preserved verbatim. Other gallery effects remain partial; no floor or estimate changed. |
+| 2026-10-23 | minor | New Document captures its mode's working Color Profile by default (#8832); explicit profile and untagged creation preserved; no parity percentage, floor or estimate changed |
 | 2026-10-22 | minor | G11: document offsets use opening order despite tab reordering; lifecycle and `.atn` playback regressions; behavioral source evidence, no new live Photoshop reproduction |
 | 2026-10-22 | minor | G17: Help › Check for Updates and an opt-out check once per launch (#5485), DIST-220-1 partial; estimate unchanged |
 | 2026-10-19 | minor | G5: Free Transform of several selected layers (#6501): one box moves them all; no estimate changed |

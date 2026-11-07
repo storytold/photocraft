@@ -253,7 +253,7 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; it must suit the mode)}"##,
+            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|"none"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; working captures the mode's current Color Settings, none leaves it untagged; it must suit the mode)}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
@@ -269,6 +269,15 @@ fn build() -> Vec<CommandSpec> {
                 };
                 let (w, h) = (px("width", 1920), px("height", 1080));
                 let mode = color_mode(p.get("mode").and_then(Value::as_str).unwrap_or("rgb")).unwrap_or(ColorMode::Rgb);
+                let spec = p.get("profile").and_then(Value::as_str).unwrap_or("working");
+                // Check the selected mode before reading a desktop preference's ICC path.
+                // Built-in working spaces remain available, including in recorded actions.
+                if spec == "working" && (s.authorize.is_some() || crate::jobs::authorization_installed()) && s.color.working_profile_is_path_backed(mode) {
+                    return Err(EngineError::BadParams {
+                        cmd: "file.new".into(),
+                        msg: "the working profile uses ambient filesystem paths; pass an explicit built-in `profile` or `none`".into(),
+                    });
+                }
                 let depth = sample_type(p.get("depth").and_then(Value::as_u64).unwrap_or(8)).unwrap_or(SampleType::U8);
                 let name = p.get("name").and_then(Value::as_str).unwrap_or("Untitled").to_string();
                 let res = p.get("resolution").and_then(Value::as_f64).unwrap_or(72.0).clamp(1.0, MAX_RESOLUTION) as f32;
@@ -295,9 +304,9 @@ fn build() -> Vec<CommandSpec> {
                     d
                 };
                 doc.resolution_dpi = res;
-                // Photoshop's New Document › Color Profile: tag the document with another profile
-                // than the working space (#321). Checked before the document opens.
-                if let Some(spec) = p.get("profile").and_then(Value::as_str).filter(|spec| !matches!(*spec, "working" | "none")) {
+                // Capture the working space shown by New Document, so later Color Settings
+                // changes cannot reinterpret this document (#8832). Explicit profiles still win.
+                if spec != "none" {
                     let prof = s.color.resolve(spec, Some(&doc), None)?;
                     if prof.color_space != crate::color_cmds::mode_space(doc.mode) {
                         return Err(EngineError::BadParams {

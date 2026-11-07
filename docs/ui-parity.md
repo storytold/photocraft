@@ -235,6 +235,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
+| New Document uses the working Color Profile without choosing it again; existing documents keep their profile after Color Settings changes | done (2026-10-23) | #8832; `engine/tests/it/new_document_profile.rs`, RGB/CMYK/Gray/Lab at 8/16/32 bits; an explicit profile still wins, `none` stays untagged |
 | Character and Paragraph controls without a type target | done | #5556; persistent Type tool defaults feed new point, box and mask text; existing text still edits in its selected scope (`type_tool.rs`, `type_tool_tests.rs`) |
 | Panel groups float and tear off into OS windows | missing | UI-217-5, #1828, #1213 |
 | Drag panels to reorder and regroup | partial | #2272, #2305 |
@@ -289,6 +290,7 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-24 | minor | Type options bar: the alignment and paragraph-direction buttons show the edited or selected type layer's paragraph instead of the tool defaults, as Photoshop's bar does. Scores unchanged. |
 | 2026-10-24 | minor | Font menus (options bar, Character panel): the current family is marked in the recent group when it is a recent one, and the menu opens showing it, as Photoshop's does, scrolled to the marked row when it sits below the fold; the arrows walk on from the marked row (#9160). Scores unchanged. |
 | 2026-10-24 | minor | Properties › Transform shows and edits a shape layer's path geometry (W/H/X/Y), not the pixel bounds its stroke adds, as in Photoshop; W/H scale the path to exactly the typed size. Scores unchanged. |
+| 2026-10-23 | minor | New Document captures its mode's working Color Profile by default (#8832); explicit profile and untagged creation preserved; no parity percentage, floor or estimate changed |
 | 2026-10-23 | minor | Frame Tool interaction and persistence work (#8864); documented remaining native Photoshop frame metadata and independent-oracle limits; no percentage changed |
 | 2026-10-22 | minor | Crop default mode: a drag inside an upright box snaps the frame's edges and centre to the document, layers, guides and grid, as a Classic Mode frame's move does (#8580); no percentage changed |
 | 2026-10-21 | minor | Adjustment clipping moved above Properties editors to remain visible in compact docks (#5231); scope, undo/redo and 8/16/32-bit pixel regressions; readiness estimate unchanged |

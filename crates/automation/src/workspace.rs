@@ -403,9 +403,9 @@ pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), Automati
 }
 
 /// Desktop sessions may already contain user-configured ambient colour-profile
-/// paths. Commands which implicitly resolve those settings are denied even
-/// when their request parameters contain no path. Fresh headless sessions
-/// cannot acquire such settings through the automation interface.
+/// paths. Mode conversions remain denied; `file.new` checks the selected mode's
+/// working profile in the engine before resolving it. Fresh headless sessions
+/// cannot acquire external working profiles through the automation interface.
 pub fn authorize_desktop_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
     authorize_engine_command(id, params)?;
     if id.starts_with("image.mode.") {
@@ -456,8 +456,9 @@ fn profile_command_may_read_ambient(id: &str, params: &Value) -> bool {
     if matches!(id, "color.profileMismatch" | "edit.colorSettings" | "edit.installedProfiles" | "view.proofSetup") {
         return true;
     }
-    // New Document skips exact `working` and `none`; the other working aliases resolve
-    // the configured working space, which may be an .icc path.
+    // Fresh headless sessions can use their built-in `working` default or `none`;
+    // desktop requests also check the implicit/explicit default above. Keep other
+    // aliases denied here because they resolve a configured working space.
     if id == "file.new" {
         return params.get("profile").and_then(Value::as_str).is_some_and(|profile| {
             matches!(profile, "default" | "working-cmyk" | "workingCmyk" | "working-rgb" | "workingRgb" | "working-gray" | "workingGray")

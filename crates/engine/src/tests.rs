@@ -158,6 +158,7 @@ fn file_new_keeps_defaults_and_supported_modes_and_depths() {
     }
 }
 
+/// Explicit profiles override the captured working space; invalid profiles open nothing.
 #[test]
 fn file_new_tags_the_document_with_the_chosen_profile() {
     // #321: New Document › Color Profile, as in Photoshop: another profile than the working space.
@@ -170,10 +171,10 @@ fn file_new_tags_the_document_with_the_chosen_profile() {
     assert_eq!(desc(&s).as_deref(), Some(photocraft_cms::Builtin::AdobeRgbCompat.description()));
     s.execute("file.new", json!({"width": 4, "height": 4, "mode": "cmyk", "profile": "coated-cmyk"})).unwrap();
     assert!(desc(&s).is_some());
-    // The working space (the default, or asked for) leaves it as before.
+    // The working space is captured, whether requested explicitly or used by default (#8832).
     for p in [json!({"width": 4, "height": 4}), json!({"width": 4, "height": 4, "profile": "working"})] {
         s.execute("file.new", p).unwrap();
-        assert_eq!(desc(&s), None);
+        assert_eq!(desc(&s).as_deref(), Some(photocraft_cms::Builtin::Srgb.description()));
     }
     // A profile that doesn't suit the mode, an unknown one or a wrong type opens nothing.
     let open = s.documents().len();
