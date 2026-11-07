@@ -128,12 +128,13 @@ const CYLINDER_VALUES: &str =
     "a cylinder needs `values`: seven numbers [left, bottom, right, top, top depth, bottom depth, wrap 0..1], the right silhouette right of the left one";
 const CYLINDER_SHAPE: &str = "a cylinder is horizontal, with no hDistort or vDistort";
 
-/// A document-space cylinder `w` stored on a smart object, whose placement's inverse is `inv` and
-/// whose warp box `w.bounds` lands on `sb` in source space. A placement that only scales and
-/// moves keeps it a cylinder (written to PSD as one): the silhouettes and edges map, and the
+/// A document-space cylinder `w` stored on a smart object, mapped into source space by `inv` (a
+/// placement's inverse when Warp mode commits, the replacement fit's inverse when Replace Contents
+/// re-bases it onto new contents) so its warp box `w.bounds` lands on `sb`. A map that only scales
+/// and moves keeps it a cylinder (written to PSD as one): the silhouettes and edges map, and the
 /// ellipses' depth, in units of the half axis, follows the change of aspect. Otherwise (rotated,
 /// skewed, flipped, in perspective) it becomes its mesh, a custom warp.
-fn cylinder_in_source(w: &Warp, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
+pub(crate) fn cylinder_in_source(w: &Warp, inv: &Homography, sb: [f64; 4]) -> Option<Warp> {
     let m = inv.0;
     let axis_aligned = m[8] != 0.0 && m[1] == 0.0 && m[3] == 0.0 && m[6] == 0.0 && m[7] == 0.0;
     let (sx, sy) = (m[0] / m[8], m[4] / m[8]);

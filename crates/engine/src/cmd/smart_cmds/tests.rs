@@ -1,6 +1,7 @@
 use super::*;
 
 mod filter_mask_paint;
+mod replace_fit;
 mod selection;
 mod source_flatten;
 mod stack_cache;
@@ -683,9 +684,23 @@ fn export_replace_and_linked_contents() {
     );
     let png = dir.join("yellow.png");
     std::fs::write(&png, photocraft_io::export(&png_doc, "png", &Default::default()).unwrap().bytes).unwrap();
-    s.execute("layer.smartObjects.replaceContents", json!({"path": png.to_str().unwrap()})).unwrap();
+    let r = s.execute("layer.smartObjects.replaceContents", json!({"path": png.to_str().unwrap()})).unwrap();
     let sm = active_smart(&s);
-    assert_eq!(sm.cache.as_ref().unwrap().content_bounds(), Rect::new(-6, 5, -2, 9), "transform kept");
+    // #11529: the new contents fill the frame the layer had (46 × 33 px at -6, 5) instead of
+    // keeping the 1:1 placement, which drew a 4 × 4 px square in its top-left corner. Photoshop
+    // fills the frame and the frame is the object's, so this expectation changed with the bug:
+    // per-axis here, a square having another shape than the frame, and the warning says so.
+    assert_eq!(sm.transform.m, [11.5, 0.0, 0.0, 8.25, -6.0, 5.0], "scaled onto the frame on both axes");
+    let doc = s.active().unwrap().doc.clone();
+    let [x0, y0, x1, y1] = source_box(&doc, &sm).unwrap();
+    let p = placement(&sm);
+    let (a, b) = (p.apply(x0, y0), p.apply(x1, y1));
+    assert_eq!((a.0, a.1, b.0, b.1), (-6.0, 5.0, 40.0, 38.0), "the replacement fills the 46 × 33 px frame it replaces, corner for corner");
+    assert_eq!(
+        r["warnings"],
+        json!(["layer \"Layer 1\": the new contents are 4 × 4 px and the frame they replace is 46 × 33 px, so they are stretched to fill the frame"]),
+        "a shape the frame doesn't share is reported: {r}"
+    );
     assert!(s.execute("layer.smartObjects.replaceContents", json!({})).is_err());
     // Linked: write out, edit the file, update.
     let linked = dir.join("linked.png");
@@ -696,7 +711,8 @@ fn export_replace_and_linked_contents() {
     red.layers[0].surface_mut().unwrap().fill_rect(rb, &[1.0, 0.0, 0.0, 1.0]);
     std::fs::write(&linked, photocraft_io::export(&red, "png", &Default::default()).unwrap().bytes).unwrap();
     s.execute("layer.smartObjects.updateAllModifiedContent", json!({})).unwrap();
-    assert_eq!(active_smart(&s).cache.unwrap().rgba(-5, 6), [1.0, 0.0, 0.0, 1.0]);
+    // The red file is read with the placement the replace gave it, so it covers the fitted box.
+    assert_eq!(active_smart(&s).cache.unwrap().rgba(4, 20), [1.0, 0.0, 0.0, 1.0]);
     s.execute("layer.smartObjects.convertToEmbedded", json!({})).unwrap();
     std::fs::remove_dir_all(&dir).ok();
     // Missing linked file: re-rendering fails cleanly and changes nothing.
