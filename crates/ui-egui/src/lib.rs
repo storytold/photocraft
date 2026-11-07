@@ -339,8 +339,8 @@ use widgets::tab_strip;
 pub use widgets::text_field_menu;
 pub use widgets::tone;
 
-/// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
-type InfoSampleKey = (i32, i32, u64, u32);
+/// The Info panel's cached sample: pixel x, y, document revision, Eyedropper Sample Size and the view zoom's bits.
+type InfoSampleKey = (i32, i32, u64, u32, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
