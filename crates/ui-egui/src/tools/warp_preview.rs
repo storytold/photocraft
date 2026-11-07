@@ -48,8 +48,8 @@ pub fn samples(mesh: &BezierMesh, zoom: f64) -> (Vec<f64>, Vec<f64>) {
 }
 
 /// Triangle indices for a `row`-wide vertex grid (`pos` and `rest` row by row; `rest` is where each
-/// vertex sits with no warp), two triangles per cell. Cells are drawn from the least displaced to
-/// the most, so the part of the picture dragged furthest is on top.
+/// vertex sits with no warp), two triangles per cell, in the render's order: a part the fold turns
+/// over lies on top, and otherwise the part of the picture dragged furthest.
 ///
 /// Drawing in plain row order lets the layers of a hard pull (the sheets of an S-shaped fold) cover
 /// each other row by row, which shows as a comb along the fold. A fold's layers differ in how far
@@ -61,9 +61,9 @@ pub fn triangle_order(pos: &[[f32; 2]], rest: &[[f32; 2]], row: usize) -> Vec<u3
     }
     // The render's own order (`photocraft_algo::warp::cell_order`), so preview and result stack
     // a fold alike.
-    let moved: Vec<f64> = pos.iter().zip(rest).map(|(p, r)| f64::from((p[0] - r[0]).hypot(p[1] - r[1]))).collect();
+    let wide = |v: &[[f32; 2]]| -> Vec<[f64; 2]> { v.iter().map(|p| [f64::from(p[0]), f64::from(p[1])]).collect() };
     let mut out = Vec::with_capacity(pos.len() * 6);
-    for a in photocraft_algo::warp::cell_order(&moved, row) {
+    for a in photocraft_algo::warp::cell_order(&wide(pos), &wide(rest), row) {
         out.extend([a, a + 1, a + row + 1, a, a + row + 1, a + row].map(|k| k as u32));
     }
     out
@@ -110,17 +110,23 @@ mod tests {
     }
 
     #[test]
-    fn the_most_displaced_cells_are_drawn_last() {
-        // A 4 x 3 vertex grid; the middle column was pulled 30 px right, so it moved most.
+    fn a_turned_over_cell_is_drawn_last_then_the_most_displaced() {
+        // A 4 x 3 vertex grid; the middle columns were pulled 30 px right, past the last column, so
+        // the cells between them and it are turned over (mirrored).
         let rest: Vec<[f32; 2]> = (0..3).flat_map(|j| (0..4).map(move |i| [i as f32 * 10.0, j as f32 * 10.0])).collect();
         let pos: Vec<[f32; 2]> = rest.iter().enumerate().map(|(k, p)| if k % 4 == 1 || k % 4 == 2 { [p[0] + 30.0, p[1]] } else { *p }).collect();
         let idx = triangle_order(&pos, &rest, 4);
         assert_eq!(idx.len(), 2 * 2 * 3 * 3);
-        // Cells come in whole pairs of triangles, and displacement never falls along the list.
-        let moved = |k: u32| (pos[k as usize][0] - rest[k as usize][0]).abs();
-        let per_cell: Vec<f32> = idx.chunks(6).map(|c| c.iter().map(|k| moved(*k)).sum::<f32>()).collect();
+        // Cells come in whole pairs of triangles, named here by their top-left vertex.
+        let cells: Vec<u32> = idx.chunks(6).map(|c| c[0]).collect();
+        let turned = |a: u32| pos[a as usize + 1][0] < pos[a as usize][0];
+        let (facing, over): (Vec<u32>, Vec<u32>) = cells.iter().partition(|a| !turned(**a));
+        assert_eq!(over, vec![2, 6], "the turned-over cells, last");
+        assert_eq!(cells[cells.len() - over.len()..], over[..], "drawn after every other cell");
+        // The others in displacement order, least first.
+        let moved = |a: u32| [a, a + 1, a + 4, a + 5].iter().map(|k| (pos[*k as usize][0] - rest[*k as usize][0]).abs()).sum::<f32>();
+        let per_cell: Vec<f32> = facing.iter().map(|a| moved(*a)).collect();
         assert!(per_cell.windows(2).all(|w| w[0] <= w[1]), "{per_cell:?}");
-        assert!(per_cell[0] < per_cell[per_cell.len() - 1]);
         assert!(triangle_order(&pos, &rest[..5], 4).is_empty());
     }
 
