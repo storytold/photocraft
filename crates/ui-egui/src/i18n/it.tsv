@@ -2063,6 +2063,8 @@
 	Dynamic color sliders	Slider colore dinamici
 	East asian	Asia orientale
 	Effect cache mb	Cache effetti MB
+	Smart source cache mb	Cache contenuti oggetti avanzati MB
+	Smart stage cache mb	Cache rendering oggetti avanzati MB
 	Enable flick panning	Abilita scorrimento a sfioro
 	Enable floating document window docking	Abilita ancoraggio finestre documento flottanti
 	Enable narrow options bar	Barra opzioni stretta

@@ -2018,6 +2018,8 @@
 	Dynamic color sliders	Controles deslizantes de cor dinâmicos
 	East asian	Leste Asiático
 	Effect cache mb	Cache de efeitos (MB)
+	Smart source cache mb	Cache de conteúdo de objetos inteligentes (MB)
+	Smart stage cache mb	Cache de renderização de objetos inteligentes (MB)
 	Enable flick panning	Ativar movimento por gesto rápido
 	Enable floating document window docking	Ativar encaixe de janelas de documento flutuantes
 	Enable narrow options bar	Ativar barra de opções estreita

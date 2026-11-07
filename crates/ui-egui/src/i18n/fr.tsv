@@ -2024,6 +2024,8 @@
 	Dynamic color sliders	Curseurs de couleur dynamiques
 	East asian	Asie orientale
 	Effect cache mb	Cache des effets (Mo)
+	Smart source cache mb	Cache du contenu des objets intelligents (Mo)
+	Smart stage cache mb	Cache du rendu des objets intelligents (Mo)
 	Enable flick panning	Activer le défilement par glissement rapide
 	Enable floating document window docking	Autoriser l'ancrage des fenêtres de document flottantes
 	Enable narrow options bar	Barre d'options étroite

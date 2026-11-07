@@ -2068,6 +2068,8 @@
 	Dynamic color sliders	動態色彩滑桿
 	East asian	東亞
 	Effect cache mb	效果快取 (MB)
+	Smart source cache mb	智慧型物件內容快取 (MB)
+	Smart stage cache mb	智慧型物件轉譯快取 (MB)
 	Enable flick panning	啟用輕撥平移
 	Enable floating document window docking	啟用浮動文件視窗停駁
 	Enable narrow options bar	啟用窄版選項列

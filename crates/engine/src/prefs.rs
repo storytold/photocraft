@@ -461,7 +461,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, help, is_color, is_hidden, parse_hex, range};
 use validate::{check_value, get_path, keyed, set_path};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -608,6 +608,20 @@ fn accepted_effect_cache_mb(stored: u32, small: bool) -> u32 {
     stored.clamp(EFFECT_CACHE_MIN_MB, effect_cache_max_mb(small))
 }
 
+/// The largest smart-object source or stage cache the Preferences dialog and `prefs.set` accept,
+/// in MB: as for the effect cache, the 32-bit cap on a build with a 32-bit address space (`small`),
+/// where a larger budget would never trim before allocation fails.
+fn smart_cache_max_mb(small: bool) -> u32 {
+    effect_cache_max_mb(small)
+}
+
+/// The smart-object cache budget a build honours for a `stored` preference, in bytes: at most
+/// [`smart_cache_max_mb`] (0 keeps nothing between commands). Separate from the target check so
+/// native tests exercise both.
+fn smart_cache_budget_bytes_for(stored: u32, small: bool) -> u64 {
+    u64::from(stored.min(smart_cache_max_mb(small))) << 20
+}
+
 /// The layer-effect cache budget a build honours for a `stored` preference, in bytes: within the
 /// range the field accepts, so a hand-edited 0 reports 16 MB, not 0. Separate from the target
 /// check so native tests exercise both.
@@ -664,6 +678,13 @@ pub struct Performance {
     pub gpu_memory_mb: u32,
     /// Memory budget of the layer-effect cache, in MB.
     pub effect_cache_mb: u32,
+    /// Memory budget of decoded smart-object contents, in MB. A decode larger than the budget on
+    /// its own isn't kept, so 0 keeps none between commands (one command still decodes a file
+    /// once for all the instances it re-renders).
+    pub smart_source_cache_mb: u32,
+    /// Memory budget of rendered smart-object placements and smart filter results, in MB; 0
+    /// keeps none between commands (a render server, where each design is placed once).
+    pub smart_stage_cache_mb: u32,
     pub legacy_compositing: bool,
 }
 
@@ -729,6 +750,8 @@ impl Default for Performance {
             linux_display_server: LinuxDisplayServer::Auto,
             gpu_memory_mb: 0,
             effect_cache_mb: 768,
+            smart_source_cache_mb: (crate::smart_cmds::SOURCE_CACHE_BYTES >> 20) as u32,
+            smart_stage_cache_mb: (crate::smart_cmds::STAGE_CACHE_BYTES >> 20) as u32,
             legacy_compositing: false,
         }
     }
@@ -1469,6 +1492,11 @@ impl Session {
             st.trim_history();
         }
         photocraft_compose::set_effect_cache_budget(budget);
+        let perf = &self.prefs().performance;
+        // Capped on a 32-bit address space, so the bytes fit its `usize`.
+        let bytes = |mb| usize::try_from(smart_cache_budget_bytes_for(mb, SMALL_ADDRESS_SPACE)).unwrap_or(usize::MAX);
+        crate::smart_cmds::set_source_cache_budget(bytes(perf.smart_source_cache_mb));
+        crate::smart_cmds::set_stage_cache_budget(bytes(perf.smart_stage_cache_mb));
         crate::transform_cmds::set_budget(u64::from(self.prefs().performance.effective_memory_usage_mb()) << 20);
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
@@ -1556,6 +1584,10 @@ impl Session {
         // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise
         // Apply from another Preferences tab, which validates every value, would reject it.
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
+        // Likewise the smart-object caches (above the 32-bit cap, saved by a 64-bit build).
+        let max = smart_cache_max_mb(SMALL_ADDRESS_SPACE);
+        prefs.performance.smart_source_cache_mb = prefs.performance.smart_source_cache_mb.min(max);
+        prefs.performance.smart_stage_cache_mb = prefs.performance.smart_stage_cache_mb.min(max);
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);

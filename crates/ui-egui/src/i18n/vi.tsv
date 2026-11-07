@@ -2791,6 +2791,8 @@ shape	Appearance	Diện mạo
 	Dynamic color sliders	Thanh trượt màu động
 	East asian	Đông Á
 	Effect cache mb	Bộ nhớ đệm hiệu ứng (mb)
+	Smart source cache mb	Bộ nhớ đệm nội dung đối tượng thông minh (mb)
+	Smart stage cache mb	Bộ nhớ đệm kết xuất đối tượng thông minh (mb)
 	Enable flick panning	Bật cuộn kiểu flick
 	Enable floating document window docking	Bật gắn cửa sổ tài liệu nổi
 	Enable narrow options bar	Bật thanh tuỳ chọn hẹp

@@ -2048,6 +2048,8 @@
 	Dynamic color sliders	Dynamische Farbregler
 	East asian	Ostasiatisch
 	Effect cache mb	Effekt-Cache (MB)
+	Smart source cache mb	Smart-Objekt-Inhalts-Cache (MB)
+	Smart stage cache mb	Smart-Objekt-Render-Cache (MB)
 	Enable flick panning	Wischschwenken aktivieren
 	Enable floating document window docking	Andocken schwebender Dokumentfenster aktivieren
 	Enable narrow options bar	Schmale Optionsleiste aktivieren

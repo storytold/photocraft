@@ -2047,6 +2047,8 @@
 	Dynamic color sliders	동적 색상 슬라이더
 	East asian	동아시아
 	Effect cache mb	효과 캐시(MB)
+	Smart source cache mb	스마트 오브젝트 내용 캐시(MB)
+	Smart stage cache mb	스마트 오브젝트 렌더 캐시(MB)
 	Enable flick panning	튕겨서 화면 이동 활성화
 	Enable floating document window docking	별도 문서 창 도킹 활성화
 	Enable narrow options bar	좁은 옵션 막대 활성화

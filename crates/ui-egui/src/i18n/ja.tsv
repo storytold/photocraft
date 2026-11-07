@@ -2074,6 +2074,8 @@
 	Dynamic color sliders	カラースライダーを動的に変化
 	East asian	東アジア
 	Effect cache mb	効果キャッシュ (MB)
+	Smart source cache mb	スマートオブジェクトの内容キャッシュ (MB)
+	Smart stage cache mb	スマートオブジェクトの描画キャッシュ (MB)
 	Enable flick panning	フリックによるパンを有効にする
 	Enable floating document window docking	浮動ドキュメントウィンドウのドッキングを有効にする
 	Enable narrow options bar	幅の狭いオプションバーを有効にする

@@ -2060,6 +2060,8 @@
 	Dynamic color sliders	Dynamiczne suwaki kolorów
 	East asian	Wschodnioazjatycki
 	Effect cache mb	Pamięć podręczna efektów (MB)
+	Smart source cache mb	Pamięć podręczna zawartości obiektów inteligentnych (MB)
+	Smart stage cache mb	Pamięć podręczna renderowania obiektów inteligentnych (MB)
 	Enable flick panning	Włącz przesuwanie gestem
 	Enable floating document window docking	Włącz dokowanie pływających okien dokumentów
 	Enable narrow options bar	Włącz wąski pasek opcji

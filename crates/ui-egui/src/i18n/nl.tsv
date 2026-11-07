@@ -1995,6 +1995,8 @@
 	Dynamic color sliders	Dynamische kleurschuifregelaars
 	East asian	Oost-Aziatisch
 	Effect cache mb	Effectcache (MB)
+	Smart source cache mb	Cache voor inhoud van slimme objecten (MB)
+	Smart stage cache mb	Cache voor weergave van slimme objecten (MB)
 	Enable flick panning	Pannen met veeggebaar inschakelen
 	Enable floating document window docking	Koppelen van zwevende documentvensters inschakelen
 	Enable narrow options bar	Smalle optiebalk inschakelen

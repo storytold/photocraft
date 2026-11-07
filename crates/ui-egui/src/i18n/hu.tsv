@@ -3300,6 +3300,8 @@ cameraRaw	Yellow	Sárga
 	Edit › Paste	Szerkesztés › Beillesztés
 	Edits that change the whole document, such as a layer's blend mode, opacity or visibility, redraw all of it.	A teljes dokumentumot érintő módosítások (például egy réteg keverési módja, átlátszatlansága vagy láthatósága) az egész dokumentumot újrarajzolják.
 	Effect cache mb	Effektus-gyorsítótár (MB)
+	Smart source cache mb	Intelligens objektumok tartalom-gyorsítótára (MB)
+	Smart stage cache mb	Intelligens objektumok renderelési gyorsítótára (MB)
 	Efficiency	Hatékonyság
 	Efficiency: 100%	Hatékonyság: 100%
 	Elevation	Magassági szög

@@ -2385,6 +2385,8 @@
 	Dynamic color sliders	Dynamiske fargeglidebrytere
 	East asian	Østasiatisk
 	Effect cache mb	Effektbuffer (MB)
+	Smart source cache mb	Buffer for smartobjektinnhold (MB)
+	Smart stage cache mb	Buffer for gjengitte smartobjekter (MB)
 	Enable flick panning	Aktiver kastpanorering
 	Enable floating document window docking	Aktiver dokking av flytende dokumentvinduer
 	Enable narrow options bar	Aktiver smal alternativlinje

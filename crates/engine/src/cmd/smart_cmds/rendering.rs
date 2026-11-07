@@ -166,6 +166,8 @@ fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect
 
 /// The source placed in document pixels, before any smart filter.
 pub(super) fn place(name: &str, bytes: &[u8], doc: &Document, sm: &SmartObject) -> Result<Surface> {
+    #[cfg(test)]
+    super::PLACEMENTS.with(|p| p.set(p.get() + 1));
     let fmt = doc.pixel_format();
     // A vector source is rendered at the placement's scale, and the placement is divided by
     // that scale so the rendered pixels land where the source units would.
