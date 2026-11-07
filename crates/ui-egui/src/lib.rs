@@ -990,6 +990,8 @@ mod menu_item_labels_tests;
 mod pen_path_ownership_tests;
 
 #[cfg(test)]
+mod brush_hud_rate_tests;
+#[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;

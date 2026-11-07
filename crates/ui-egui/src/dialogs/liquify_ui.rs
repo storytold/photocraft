@@ -800,11 +800,13 @@ fn brush_resize_gesture(mods: egui::Modifiers, secondary: bool) -> bool {
 }
 
 /// Horizontal motion sets the diameter (the circle's edge follows the pointer). Vertical motion
-/// sets density, Liquify's edge falloff, over the same 200 px travel the canvas uses for hardness.
+/// sets density, Liquify's edge falloff, over 200 px of travel.
 fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32, zoom: f32) -> (f32, f32) {
     // Liquify stores density as 0–100; the shared brush gesture works on normalized hardness.
     // Use the same zoom-corrected screen movement and size limits as the main canvas.
     let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    // Density keeps its 200 px travel; the canvas hardness took Photoshop's slower rate (#11891).
+    let dy = dy * crate::brush_resize::HARDNESS_TRAVEL / 200.0;
     let (size, density) = crate::brush_resize::resized((start_size, start_density / 100.0), f64::from(dx / zoom), f64::from(dy / zoom), zoom);
     (size, (density * 100.0).round())
 }
