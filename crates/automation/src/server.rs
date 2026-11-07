@@ -1522,6 +1522,25 @@ mod tests {
         server.await.unwrap().unwrap();
     }
 
+    /// Answer the bridge's challenge authentication on one fake-app connection, frame by frame,
+    /// as the real control servers do. Returns whether the connection authenticated.
+    async fn fake_app_handshake<R, W>(lines: &mut tokio::io::Lines<R>, write: &mut W, token: &str) -> bool
+    where
+        R: tokio::io::AsyncBufRead + Unpin,
+        W: tokio::io::AsyncWrite + Unpin,
+    {
+        use tokio::io::AsyncWriteExt;
+        let mut handshake = crate::security::ServerHandshake::new();
+        while let Ok(Some(line)) = lines.next_line().await {
+            let (reply, step) = handshake.reply(&line, token);
+            write.write_all(format!("{reply}\n").as_bytes()).await.unwrap();
+            if step != crate::security::AuthStep::Challenged {
+                return step == crate::security::AuthStep::Authenticated;
+            }
+        }
+        false
+    }
+
     /// The same over the bridge (#8130): a dropped wait sends `jobs.cancel` for the app's job.
     #[tokio::test(flavor = "multi_thread")]
     async fn dropping_a_bridged_wait_cancels_the_apps_job() {
@@ -1539,8 +1558,7 @@ mod tests {
                 let (socket, _) = listener.accept().await.unwrap();
                 let (read, mut write) = socket.into_split();
                 let mut lines = tokio::io::BufReader::new(read).lines();
-                let (auth, _) = crate::security::authentication_reply(&lines.next_line().await.unwrap().unwrap(), TOKEN);
-                write.write_all(format!("{auth}\n").as_bytes()).await.unwrap();
+                fake_app_handshake(&mut lines, &mut write, TOKEN).await;
                 while let Ok(Some(line)) = lines.next_line().await {
                     let request: Value = serde_json::from_str(&line).unwrap();
                     let result = match request["method"].as_str().unwrap() {
