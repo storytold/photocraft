@@ -416,3 +416,44 @@ fn inspect_preview_is_the_active_documents() {
     app.doc_hist_preview = Some(other);
     assert_eq!(inspect(&app)["preview"], false);
 }
+
+/// #10111: the graph grows with the panel's height, above the rows below it, in Compact and
+/// Expanded views, and keeps its old 100 points in a short panel.
+#[test]
+fn graph_fills_the_panel_height() {
+    let mut app = app_with(json!({"width": 64, "height": 64}));
+    settle(&mut app);
+    for view in [HistView::Compact, HistView::Expanded] {
+        app.ui.histogram_panel.view = view;
+        for height in [200.0, 600.0] {
+            let ctx = egui::Context::default();
+            let mut graph = Rect::NOTHING;
+            let mut bottom = 0.0;
+            // The second pass sizes the graph from the rows measured in the first.
+            for _ in 0..2 {
+                ctx.begin_pass(Default::default());
+                let mut ui = egui::Ui::new(
+                    ctx.clone(),
+                    egui::Id::unique("hist-height"),
+                    egui::UiBuilder::new().max_rect(Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, height))),
+                );
+                show(&mut app, &mut ui);
+                bottom = ui.min_rect().bottom();
+                graph = ctx.data(|d| d.get_temp::<Rect>(graph_rect_id())).expect("graph drawn");
+                ctx.end_pass().textures_delta.clear();
+            }
+            assert!(graph.height() >= GRAPH_MIN_H, "{view:?} {height}: {graph:?}");
+            if height == 600.0 {
+                assert!(graph.height() > GRAPH_MIN_H, "{view:?}: the graph grows in a tall panel");
+                assert!((bottom - height).abs() < 1.0, "{view:?}: the panel's rows end at its bottom ({bottom})");
+            }
+        }
+    }
+}
+
+#[test]
+fn graph_height_keeps_its_minimum() {
+    assert_eq!(graph_height(500.0, 100.0), 400.0);
+    assert_eq!(graph_height(150.0, 100.0), GRAPH_MIN_H);
+    assert_eq!(graph_height(f32::INFINITY, 0.0), GRAPH_MIN_H);
+}

@@ -637,6 +637,7 @@ fn graph(app: &mut PhotocraftApp, ui: &mut egui::Ui, s: &Shown, channel: HistCha
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (r, resp) = ui.allocate_exact_size(vec2(w, height), Sense::click_and_drag());
+    ui.data_mut(|d| d.insert_temp(graph_rect_id(), r));
     let p = ui.painter_at(r);
     p.rect_filled(r, 0.0, t.field);
     let level_at = |x: f32| (((x - r.left()) / r.width().max(1.0)) * 256.0).floor().clamp(0.0, 255.0) as u8;
@@ -747,7 +748,8 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let channel = resolve_channel(s.mode, opts.channel);
     if opts.view == HistView::Compact {
         // Compact View: the graph alone; a single channel is always in its colour.
-        graph(app, ui, &s, channel, true, 100.0);
+        let h = graph_height(ui.available_height(), 0.0);
+        graph(app, ui, &s, channel, true, h);
         return;
     }
     let mut changed = false;
@@ -766,7 +768,11 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
     });
     let colored = opts.show_channels_in_color;
-    let hover = graph(app, ui, &s, channel, colored, 100.0);
+    // The graph fills the group's height above the rows below it (their height as measured last
+    // frame), so it grows when the group is made taller, like the Navigator preview (#10111).
+    let below = ui.data(|d| d.get_temp::<f32>(below_graph_id())).unwrap_or(0.0);
+    let hover = graph(app, ui, &s, channel, colored, graph_height(ui.available_height(), below));
+    let below_top = ui.cursor().top();
     // Source: only for documents with several layers.
     if s.layers > 1 {
         ui.horizontal(|ui| {
@@ -800,9 +806,29 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             tone::draw_histogram(&p, r, bins(&s.hist, s.mode, *c), graph_color(*c, colored, &t));
         }
     }
+    let below_h = ui.cursor().top() - below_top;
+    ui.data_mut(|d| d.insert_temp(below_graph_id(), below_h));
     if changed {
         persist_options(app);
     }
+}
+
+/// The smallest height of the main graph: its fixed height until #10111.
+const GRAPH_MIN_H: f32 = 100.0;
+
+/// The main graph's height: the room `avail` leaves above `below`, never under the old 100
+/// points, and the old height where the panel is unbounded (a scroll area).
+fn graph_height(avail: f32, below: f32) -> f32 {
+    let left = avail - below;
+    if left.is_finite() { left.max(GRAPH_MIN_H) } else { GRAPH_MIN_H }
+}
+
+fn graph_rect_id() -> egui::Id {
+    egui::Id::unique("histogram-panel-graph")
+}
+
+fn below_graph_id() -> egui::Id {
+    egui::Id::unique("histogram-panel-below-graph")
 }
 
 /// The Histogram items of the panel menu.
