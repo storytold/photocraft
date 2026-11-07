@@ -617,6 +617,47 @@ fn reset_transform_centres_a_distorted_object_on_its_corner_average() {
     assert!((now.0 - middle.0).abs() + (now.1 - middle.1).abs() > 1.0, "not on the point the box centre mapped to");
 }
 
+/// A stack holding a filter this build can't apply can't be re-rendered without the warp, so Reset
+/// Transform refuses the whole step instead of recording the old warped pixels at the new
+/// placement: no history state, and placement, warp and stack left exactly as they were.
+#[test]
+fn reset_transform_refuses_a_stack_it_cannot_re_render() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    s.execute("edit.transform.warp", json!({"style": "arc", "bend": 30})).unwrap();
+    s.execute("edit.transform", json!({"scaleX": 160, "scaleY": 160})).unwrap();
+    // A smart filter whose command this build doesn't have, as an imported PSD leaves it.
+    s.edit("unsupported filter", |doc, active| {
+        let LayerContent::Smart(sm) = &mut doc.layer_mut(active.unwrap()).unwrap().content else { panic!("a smart object") };
+        sm.smart_filters.push(SmartFilter {
+            command: UNSUPPORTED_FILTER.into(),
+            params: json!({"name": "Camera Raw Filter"}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let before = active_smart(&s);
+    assert!(!super::rendering::unapplied_filters(&before).is_empty(), "the fixture's filter can't be applied");
+    let states = s.active().unwrap().history.entries().len();
+    let err = s.execute("layer.smartObjects.resetTransform", json!({})).unwrap_err().to_string();
+    assert!(err.contains("Camera Raw Filter"), "the error names the filter that blocks it: {err}");
+    let after = active_smart(&s);
+    assert_eq!(after.transform, before.transform, "the placement is left alone");
+    assert_eq!(after.warp, before.warp, "the warp is still there");
+    assert_eq!(after.smart_filters, before.smart_filters, "so is the stack");
+    assert_eq!(s.active().unwrap().history.entries().len(), states, "a refused step records no history state");
+    // Only this step is refused: with the stack gone the same object resets normally.
+    s.execute("layer.smartFilter.clearSmartFilters", json!({})).unwrap();
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let cleared = active_smart(&s);
+    assert_eq!(&cleared.transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "then the reset goes through");
+    assert!(cleared.warp.is_none(), "with the warp");
+}
+
 /// Enabled for a smart object only, and one undo step back (#11662).
 #[test]
 fn reset_transform_needs_a_smart_object_and_undoes_in_one_step() {
