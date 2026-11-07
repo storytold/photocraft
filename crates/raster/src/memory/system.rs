@@ -346,11 +346,7 @@ pub(super) mod linux {
         best.map(|(_, _, dir)| dir)
     }
 
-    /// Whether any cgroup (v1 or v2) filesystem is mounted in this mount namespace.
-    fn has_cgroup_mount(info: &str) -> bool {
-        parse_mountinfo(info).iter().any(is_cgroup_mount)
-    }
-
+    /// A cgroup (v1 or v2) filesystem.
     fn is_cgroup_mount(mount: &Mount) -> bool {
         mount.fstype == "cgroup" || mount.fstype == "cgroup2"
     }
