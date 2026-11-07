@@ -107,6 +107,12 @@ pub(crate) struct ConvertArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    /// PDF import resolution in DPI (default 300)
+    #[arg(long)]
+    pub(crate) pdf_dpi: Option<f32>,
+    /// PDF pages to import, 1-based: "3" or "2-7" (default all)
+    #[arg(long)]
+    pub(crate) pdf_pages: Option<String>,
     #[command(flatten)]
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]

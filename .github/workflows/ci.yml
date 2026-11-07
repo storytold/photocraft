@@ -251,6 +251,24 @@ jobs:
         with:
           tool: cargo-nextest@0.9.150
 
+      # The PDF import integration test loads PDFium at run time. Provision the pinned build for
+      # the integration leg and make an unavailable library fail there; local runs still skip.
+      - name: PDFium for the PDF import test
+        if: matrix.part == 'integration'
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'pdfium'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $tgz = Join-Path $env:RUNNER_TEMP 'pdfium-win-x64.tgz'
+          Invoke-WebRequest -Uri 'https://github.com/bblanchon/pdfium-binaries/releases/download/chromium/8138/pdfium-win-x64.tgz' -OutFile $tgz
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $tgz).Hash.ToLowerInvariant()
+          if ($hash -ne '8d48973e3eb472dda0f5f2435e595ac043f9f2219dd71883392f549445afa8a5') {
+            throw "PDFium archive checksum $hash does not match the pinned chromium/8138 build"
+          }
+          tar -xzf $tgz -C $dir
+          "PDFIUM_DIR=$dir\bin" >> $env:GITHUB_ENV
+          "PHOTOCRAFT_REQUIRE_PDFIUM=1" >> $env:GITHUB_ENV
+
       # The unit leg runs `--lib --bins` and the integration leg `--test '*'` (every
       # integration-test target); the feature selection stays the same, so both legs share the
       # dependency cache.

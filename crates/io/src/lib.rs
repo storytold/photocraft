@@ -65,6 +65,7 @@ pub use ora::losses as ora_losses;
 pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
+mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -513,8 +514,8 @@ pub enum ImportPreflight {
     /// A flat raster decoded into one image, bounded by
     /// [`ImportOptions::flat_max_pixel_bytes`].
     Flat,
-    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw and `.pcraft` files: this build has
-    /// no header-only estimate of their pixel memory before decoding.
+    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw, PDF and `.pcraft` files: this
+    /// build has no header-only estimate of their pixel memory before decoding.
     Unbounded,
 }
 
@@ -554,6 +555,11 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     }
     if is_psd_input(name, bytes) {
         return ImportPreflight::Psd;
+    }
+    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
+    // raster signature wins over a misleading `.pdf` suffix.
+    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none()) {
+        return ImportPreflight::Unbounded;
     }
     if photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff) { ImportPreflight::Tiff } else { ImportPreflight::Flat }
 }
@@ -601,6 +607,15 @@ pub struct ImportOptions {
     /// Decoded-pixel allowance for a flat raster (the buffer a codec decodes into). May lower
     /// the codec's default cap; 0 uses it. PSD/PSB and layered TIFF use `psd_max_pixel_bytes`.
     pub flat_max_pixel_bytes: u64,
+    /// Resolution (dots per inch) PDF pages are rendered at on import; the document keeps it so
+    /// the page's print size is preserved. Defaults to 300.
+    pub pdf_dpi: f32,
+    /// The 1-based, inclusive page range to import; `None` imports every page (up to the cap).
+    pub pdf_pages: Option<(u32, u32)>,
+    /// Import PDF text objects as editable text layers (default on).
+    pub pdf_text: bool,
+    /// Import PDF vector paths as editable shape layers (default on).
+    pub pdf_vectors: bool,
     /// Explicit one-shot authorization for imports that exceed the soft budget but fit within the hard budget.
     pub psd_high_memory_approved: bool,
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
@@ -615,6 +630,10 @@ impl Default for ImportOptions {
             demosaic: raw::Demosaic::default(),
             psd_max_pixel_bytes: 0,
             flat_max_pixel_bytes: 0,
+            pdf_dpi: 300.0,
+            pdf_pages: None,
+            pdf_text: true,
+            pdf_vectors: true,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
         }
@@ -975,6 +994,16 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
 /// Dispatches format-specific importers and propagates a structured PSD damage
 /// flag alongside the ordinary best-effort import result.
 fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
+    // SVG content wins over a misleading `.pdf` suffix, matching the preflight (which checks SVG
+    // before PDF).
+    if is_svg_input(name, bytes) {
+        return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
+    }
+    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
+    // raster signature wins over a misleading `.pdf` suffix.
+    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none()) {
+        return pdf_import::import(name, bytes, opts, ctl);
+    }
     match route(name, bytes) {
         Route::Pcraft => {
             let document = photocraft_format::load_from_bytes(bytes)?;
@@ -999,10 +1028,28 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
 pub fn is_svg_input(name: &str, bytes: &[u8]) -> bool {
     // Keep the SVG extension as a fallback for malformed files so the SVG parser can return an
     // actionable SVG error. A recognized raster signature still wins over a misleading `.svg`
-    // suffix (for example, a WebP downloaded as Firefox_logo.svg).
+    // suffix (for example, a WebP downloaded as Firefox_logo.svg), and so does every other
+    // format's signature: a PDF named `.svg` must reach the PDF importer.
     svg::is_svg(bytes)
-        || (has_extension(name, "svg") && photocraft_codecs::detect(bytes).is_none())
-        || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]))
+        || (has_extension(name, "svg") && photocraft_codecs::detect(bytes).is_none() && !has_format_signature(name, bytes))
+        || (has_extension(name, "svgz") && bytes.starts_with(&[0x1f, 0x8b]) && !has_format_signature(name, bytes))
+}
+
+/// A non-raster format's signature or declared extension, checked before the `.svg` suffix
+/// fallback so a misnamed file keeps its own importer.
+fn has_format_signature(name: &str, bytes: &[u8]) -> bool {
+    is_psd(bytes)
+        || pdf_import::is_pdf(bytes)
+        || is_psd_input(name, bytes)
+        || raw::is_raw(bytes)
+        || affinity::is_affinity(bytes)
+        || ora::is_ora(bytes)
+        || kra::is_kra(bytes)
+        || xcf::is_xcf(bytes)
+        || has_extension(name, "pdn")
+        || bytes.starts_with(b"PDN3")
+        || photocraft_format::is_pcraft(bytes)
+        || has_extension(name, photocraft_format::EXTENSION)
 }
 
 fn extension(name_or_ext: &str) -> String {
@@ -1154,7 +1201,7 @@ fn export_stages_with_renderer(
         return Ok(res.into());
     }
     if ext == "pdf" {
-        let mut res = pdf::export(doc)?;
+        let mut res = pdf::export(doc, ctl)?;
         if let Some(r) = renderer {
             res.warnings.push("PDF export uses CPU compositor; GPU rendering applies to flat formats".into());
             res.warnings.extend(r.drain_diagnostics());
@@ -1569,5 +1616,16 @@ mod tests {
             assert_eq!(d.bounds().width(), 8, "{name}");
             assert_eq!(d.bounds().height(), 8, "{name}");
         }
+    }
+
+    /// A PDF named `.svg` (a save-as mistake) must reach the PDF importer, not the SVG parser;
+    /// SVG content still wins over a `.pdf` suffix.
+    #[test]
+    fn a_pdf_named_svg_stays_a_pdf() {
+        let pdf = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n";
+        assert!(!is_svg_input("drawing.svg", pdf));
+        assert!(!is_svg_input("drawing.svgz", pdf));
+        assert!(is_svg_input("drawing.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"));
+        assert_eq!(crate::route("drawing.svg", pdf), crate::Route::Flat);
     }
 }
