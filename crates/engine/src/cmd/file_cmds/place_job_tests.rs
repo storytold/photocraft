@@ -92,6 +92,67 @@ fn a_place_job_equals_the_inline_place() {
     }
 }
 
+/// A `.vectorcraft` file placed as a job, from a path and from bytes, is drawn from the PDF it
+/// carries and converted into the document's profile, as the inline place does, and the result
+/// carries the import warnings.
+#[test]
+fn a_vectorcraft_place_job_equals_the_inline_place() {
+    let dir = tmp("vectorcraft");
+    let path = join(&dir, "Gray.vectorcraft");
+    let file = super::tests::vectorcraft_file(20, 20, "0.5 0.5 0.5");
+    std::fs::write(&path, &file).unwrap();
+    let linear = || {
+        let mut s = session(40, 40, 8);
+        Arc::make_mut(&mut s.active_mut().unwrap().doc).icc_profile = Some(photocraft_cms::Builtin::LinearSrgb.profile().to_bytes());
+        s
+    };
+    for smart in [true, false] {
+        let params = json!({"smartObject": smart, "scale": 200});
+        let mut inline = linear();
+        let want = place_bytes(&mut inline, "Gray.vectorcraft", file.clone(), None, &params).unwrap();
+        assert_eq!(want["smartObject"], json!(smart));
+        assert!(want["warnings"].is_array(), "{want}");
+
+        let mut by_path = linear();
+        let id = job(by_path.start("file.placeEmbedded", json!({"path": path, "smartObject": smart, "scale": 200})).unwrap());
+        let e = wait_event(&mut by_path, id);
+        let JobOutcome::Done(got) = &e.outcome else { panic!("{smart}: {e:?}") };
+        same_but_layer(got, &want);
+
+        let mut by_bytes = linear();
+        let id = job(by_bytes.start_place_bytes("Gray.vectorcraft", file.clone(), None, params).unwrap());
+        let e = wait_event(&mut by_bytes, id);
+        let JobOutcome::Done(got) = &e.outcome else { panic!("{smart}: {e:?}") };
+        same_but_layer(got, &want);
+
+        for s in [&by_path, &by_bytes] {
+            assert_eq!(layer_pixels(s), layer_pixels(&inline), "layer pixels, smart {smart}");
+            assert_eq!(canvas_pixels(s), canvas_pixels(&inline), "composite, smart {smart}");
+            let d = s.active().unwrap();
+            let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+            let LayerContent::Smart(so) = &l.content else {
+                assert!(!smart, "a pixel layer was expected");
+                continue;
+            };
+            assert!(smart && so.cache.is_some(), "the smart object is drawn from the carried PDF");
+        }
+        let converted = canvas_pixels(&by_path).iter().any(|p| (p[0] - 0.214).abs() < 0.01 && p[3] > 0.99);
+        assert!(converted, "the sRGB gray is converted into the linear profile, smart {smart}");
+    }
+}
+
+/// The memory a VectorCraft place needs follows the artboard's drawn size, not the size of the
+/// file around its PDF.
+#[test]
+fn a_vectorcraft_files_memory_need_follows_its_artboard() {
+    let small = super::tests::vectorcraft_file(40, 20, "0 0 1");
+    let large = super::tests::vectorcraft_file(8_000, 8_000, "0 0 1");
+    assert_eq!(crate::memory_gate::source_pixels(&small), 40 * 20);
+    // An artboard at the raster limit is drawn a pixel short of 8,000 on a side.
+    assert_eq!(crate::memory_gate::source_pixels(&large), 7_999 * 7_999);
+    assert!(crate::memory_gate::place_need(&large, 4) > 63_000_000 * 4);
+}
+
 /// Place Linked as a job keeps the link and its history label.
 #[test]
 fn a_linked_place_job_keeps_the_link() {

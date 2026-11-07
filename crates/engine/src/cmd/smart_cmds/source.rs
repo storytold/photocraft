@@ -301,6 +301,37 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     Ok(img)
 }
 
+/// A VectorCraft source's first artboard drawn from its PDF at `scale` times the size it opens at
+/// (cached per scale and destination profile), its sRGB colors converted into `doc`'s profile as
+/// an SVG source's are, so the smart object stays sharp however it is placed.
+pub(super) fn vectorcraft_source_image_in(file_name: &str, bytes: &[u8], doc: &Document, scale: f64) -> Result<SourceImage> {
+    let fmt = doc.pixel_format();
+    let profile = crate::color_cmds::document_profile(doc);
+    let srgb = doc.mode == ColorMode::Rgb && profile.to_bytes().as_ref() == photocraft_cms::Builtin::Srgb.profile().to_bytes().as_ref();
+    let mut h = blake3::Hasher::new();
+    h.update(b"vectorcraft\0");
+    h.update(bytes);
+    h.update(&scale.to_bits().to_le_bytes());
+    if !srgb {
+        h.update(&profile.to_bytes());
+    }
+    let key = (*h.finalize().as_bytes(), fmt);
+    if let Some(img) = cache_get(&key) {
+        return Ok(img);
+    }
+    let drawn = photocraft_io::vectorcraft::import_scaled(file_name, bytes, scale as f32, &photocraft_raster::Interrupt::NONE)
+        .map_err(|e| other(format!("can't draw the VectorCraft smart object: {e}")))?
+        .document;
+    let img = if srgb {
+        SourceImage { surface: Arc::new(flattened_source(&drawn, fmt)?), bounds: drawn.bounds() }
+    } else {
+        let source = SourceImage { surface: Arc::new(flattened_source(&drawn, drawn.pixel_format())?), bounds: drawn.bounds() };
+        convert_svg_source(source, doc)?
+    };
+    cache_put(key, img.clone());
+    Ok(img)
+}
+
 /// Render SVG's sRGB colours into the destination profile before placement. The profile is
 /// part of the source cache key, so assigning a different profile cannot reuse old colours.
 pub(super) fn svg_source_image_in(bytes: &[u8], doc: &Document, scale: f64) -> Result<SourceImage> {
