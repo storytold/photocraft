@@ -1,5 +1,6 @@
 //! #11816: Escape in the Brush Preset picker closes it and reverts a size or hardness typed in
-//! it; Enter keeps them, and a preset picked before Escape stays picked.
+//! it; Enter keeps them, a preset picked before Escape stays picked, a change made outside the
+//! picker stays, and each opening reverts to its own start.
 
 use egui::vec2;
 use egui_kittest::Harness;
@@ -91,4 +92,35 @@ fn a_preset_picked_before_escape_stays_picked() {
     h.run_steps(2);
     assert_eq!(h.state().ui.brush_picker, None);
     assert_eq!(brush(&h), picked);
+}
+
+#[test]
+fn escape_keeps_a_size_changed_outside_the_picker() {
+    let mut h = harness();
+    open(&mut h);
+    type_into(&mut h, 1, "100");
+    // As `]` or the options bar would, while the picker stays open.
+    h.state_mut().run("tools.setBrush", json!({"brush": {"size": 45}})).unwrap();
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(brush(&h), (45.0, 0.0), "the typed hardness reverts, the size from elsewhere stays");
+}
+
+#[test]
+fn a_reopened_picker_reverts_to_its_own_opening() {
+    let mut h = harness();
+    open(&mut h);
+    type_into(&mut h, 0, "60");
+    // Closed, changed and opened again (a control request) before the next frame.
+    let ctx = h.ctx.clone();
+    let app = h.state_mut();
+    crate::brush_picker::close(&mut app.ui);
+    app.run("tools.setBrush", json!({"brush": {"size": 33}})).unwrap();
+    let at = app.last_canvas_rect.center();
+    crate::brush_picker::open(&mut app.ui, &ctx, [at.x, at.y]);
+    h.run_steps(2);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert_eq!(brush(&h).0, 33.0, "the size this opening started with");
 }
