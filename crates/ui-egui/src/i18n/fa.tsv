@@ -3040,3 +3040,152 @@ curves	Smooth	نرم
 @plural	{n} action|{n} actions	{n} اکشن|{n} اکشن
 @plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} مرحله هنوز معادل PhotoCraft ندارد|{n} مرحله هنوز معادل PhotoCraft ندارند
 @plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} مرحله بدون معادل Photoshop حذف شد|{n} مرحله بدون معادل Photoshop حذف شدند
+	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	یک فرمان هنگام پردازش دسته‌ای لغو یا متوقف شد. می‌خواهید پردازش فایل بعدی ادامه یابد یا متوقف شود؟
+	A file is still being placed; try again when it has finished.	قرار دادن یک فایل هنوز در حال انجام است؛ پس از پایان آن دوباره تلاش کنید.
+	A frame supports affine transforms; select its image for perspective transforms	قاب از تبدیل‌های آفین پشتیبانی می‌کند؛ برای تبدیل پرسپکتیو، تصویر داخل آن را انتخاب کنید.
+	A frame supports affine transforms; select its image to warp it	قاب از تبدیل‌های آفین پشتیبانی می‌کند؛ برای تغییر شکل تصویر، خود تصویر را انتخاب کنید.
+	Accelerated	شتاب‌یافته
+	Advanced Blending	ترکیب پیشرفته
+	Attribute	ویژگی
+	Automatically Create First Snapshot	ایجاد خودکار نخستین عکس فوری
+	Automatically Create New Snapshot When Saving	ایجاد خودکار عکس فوری جدید هنگام ذخیره
+	Background (default)	پس‌زمینه (پیش‌فرض)
+	Batch	پردازش دسته‌ای
+	Batch preview	پیش‌نمایش پردازش دسته‌ای
+	Cancelled placing {name}	قرار دادن {name} لغو شد
+	Channel Options…	گزینه‌های کانال…
+	Clear Selected Guides	پاک کردن خطوط راهنمای انتخاب‌شده
+	Clip Thumbnails to Document Bounds	محدود کردن تصاویر بندانگشتی به محدوده سند
+	Contextual Task Bar	نوار وظیفه زمینه‌ای
+	Convert to Frame…	تبدیل به قاب…
+	Create a new custom frame	ایجاد قاب سفارشی جدید
+	Create a new polygonal frame	ایجاد قاب چندضلعی جدید
+	Create a new triangular frame	ایجاد قاب مثلثی جدید
+	Create a single history state	ایجاد یک وضعیت منفرد در تاریخچه
+	Data Sets as Files is unavailable on the web	قابلیت «مجموعه‌داده‌ها به‌صورت فایل» در نسخه وب در دسترس نیست
+	Delete Channel	حذف کانال
+	Dropped files weren't placed: their document was closed.	فایل‌های رهاشده قرار داده نشدند: سند مربوط به آن‌ها بسته شده بود.
+	Dropped files weren't placed: too many are waiting for their document.	فایل‌های رهاشده قرار داده نشدند: تعداد فایل‌های منتظر برای سندشان بیش از حد است.
+	Duplicate	تکثیر
+	Duplicate Channel	تکثیر کانال
+	Edit Selected Guides	ویرایش خطوط راهنمای انتخاب‌شده
+	Effect	جلوه
+	Embed All Linked	جاسازی همه موارد پیوندشده
+	Embed Linked	جاسازی مورد پیوندشده
+	Empty	خالی
+	Filter for embedded smart objects	فیلتر اشیای هوشمند جاسازی‌شده
+	Filter for linked smart objects that are missing	فیلتر اشیای هوشمند پیوندشده مفقود
+	Filter for smart objects linked locally	فیلتر اشیای هوشمند پیوندشده به‌صورت محلی
+	Fit Content to Frame	جور کردن محتوا در قاب
+	Fit Frame to Content	جور کردن قاب با محتوا
+	Frame	قاب
+	Frame coordinates must be finite and within 600000 pixels	مختصات قاب باید معتبر و در محدوده ۶۰۰۰۰۰ پیکسل باشند
+	Grid view	نمای شبکه‌ای
+	Hide bar	پنهان کردن نوار
+	High Memory Photoshop Document	سند Photoshop با مصرف حافظه بالا
+	Image Compression	فشرده‌سازی تصویر
+	Import Image…	وارد کردن تصویر…
+	Internet Standard RGB (sRGB)	RGB استاندارد اینترنت (sRGB)
+	Invalid frame transform	تبدیل قاب نامعتبر است
+	Invalid nested file drop	رهاسازی فایل تودرتو نامعتبر است
+	LZW	LZW
+	Large Thumbnails	تصاویر بندانگشتی بزرگ
+	Layer Effects	جلوه‌های لایه
+	Learn	آموزش
+	Legacy Macintosh RGB (Gamma 1.8)	RGB قدیمی مکینتاش (گاما ۱٫۸)
+	Lining	ارقام هم‌ردیف
+	Linked	پیوندشده
+	List view	نمای فهرستی
+	Little memory would be left after opening this file. Close other apps first, or PhotoCraft may run out of memory.	پس از باز کردن این فایل، حافظه کمی باقی می‌ماند. ابتدا برنامه‌های دیگر را ببندید؛ در غیر این صورت ممکن است حافظه PhotoCraft تمام شود.
+	Make Shape	تبدیل به شکل
+	Medium Thumbnails	تصاویر بندانگشتی متوسط
+	Merge Channels…	ادغام کانال‌ها…
+	Merge Spot Channel	ادغام کانال رنگ تفکیکی
+	More options	گزینه‌های بیشتر
+	Move bar	جابه‌جایی نوار
+	New Channel…	کانال جدید…
+	New Frame	قاب جدید
+	New Spot Channel…	کانال رنگ تفکیکی جدید…
+	New Window	پنجره جدید
+	New file	فایل جدید
+	No Adv. Blending	بدون ترکیب پیشرفته
+	No Layer Effects	بدون جلوه‌های لایه
+	No Layer Mask	بدون ماسک لایه
+	No Thumbnails	بدون تصاویر بندانگشتی
+	No Vector Mask	بدون ماسک برداری
+	No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.	مسیری برای ساخت شکل وجود ندارد: با ابزار قلم مسیری رسم کنید یا مسیری را در پنل مسیرها انتخاب کنید.
+	No recent files	هیچ فایل اخیری وجود ندارد
+	Not Clipped	برش‌نخورده
+	Not Empty	خالی نیست
+	Not Linked	پیوندنشده
+	Not Locked	قفل‌نشده
+	Not Visible	نامرئی
+	Nudge	جابه‌جایی جزئی
+	Numerals	ارقام
+	On your computer	روی رایانه شما
+	Open anyway	به هر حال باز کن
+	Opening this document uses more memory and may slow down your computer or other running applications.	باز کردن این سند حافظه بیشتری مصرف می‌کند و ممکن است سرعت رایانه یا برنامه‌های در حال اجرا را کاهش دهد.
+	Opening “{name}” requires an estimated {est} GiB of memory ({avail} GiB available).	باز کردن «{name}» به حدود {est} گیگابایت حافظه نیاز دارد ({avail} گیگابایت در دسترس است).
+	Opening “{name}” requires an estimated {est} GiB of memory. The available memory could not be measured.	باز کردن «{name}» به حدود {est} گیگابایت حافظه نیاز دارد. اندازه‌گیری حافظه در دسترس ممکن نبود.
+	Pause For	مکث به مدت
+	Pause For:	مکث به مدت:
+	Pin bar position	ثابت کردن موقعیت نوار
+	Playback Options…	گزینه‌های پخش…
+	Plugins…	افزونه‌ها…
+	Proportional	متناسب
+	Proportional Lining	ارقام هم‌ردیف متناسب
+	Proportional Oldstyle	ارقام سبک قدیمی متناسب
+	Replace Image…	جایگزینی تصویر…
+	Reset bar position	بازنشانی موقعیت نوار
+	Save Image Pyramid	ذخیره هرم تصویر
+	Save Transparency	ذخیره شفافیت
+	Set	مجموعه
+	Set 1	مجموعه ۱
+	Set 2	مجموعه ۲
+	Set 3	مجموعه ۳
+	Set 4	مجموعه ۴
+	Set 5	مجموعه ۵
+	Set 6	مجموعه ۶
+	Set 7	مجموعه ۷
+	Set 8	مجموعه ۸
+	Set 9	مجموعه ۹
+	Set 10	مجموعه ۱۰
+	Set 11	مجموعه ۱۱
+	Set 12	مجموعه ۱۲
+	Set 13	مجموعه ۱۳
+	Set 14	مجموعه ۱۴
+	Set 15	مجموعه ۱۵
+	Set 16	مجموعه ۱۶
+	Set 17	مجموعه ۱۷
+	Set 18	مجموعه ۱۸
+	Set 19	مجموعه ۱۹
+	Set 20	مجموعه ۲۰
+	Show New Snapshot Dialog by Default	نمایش پیش‌فرض پنجره عکس فوری جدید
+	Small Thumbnails	تصاویر بندانگشتی کوچک
+	Source: {name}	منبع: {name}
+	Specify Channels:	تعیین کانال‌ها:
+	Split Channels	تفکیک کانال‌ها
+	Step by Step	گام‌به‌گام
+	Stylistic Sets	مجموعه‌های سبکی
+	Subtract Shapes at Overlap	کاستن شکل‌ها در ناحیه هم‌پوشانی
+	Tabular	جدولی
+	Tabular Lining	ارقام جدولی هم‌ردیف
+	Tabular Oldstyle	ارقام جدولی سبک قدیمی
+	The GPU compositor is still being prepared	ترکیب‌کننده GPU هنوز در حال آماده‌سازی است
+	The History Brush source was deleted: set a new source in the History panel	منبع قلم‌موی تاریخچه حذف شده است: منبع جدیدی را در پنل تاریخچه تعیین کنید
+	The current scratch directory ({path}) doesn't report its free space, so PhotoCraft can't stop before it fills up, and large files get no extra room from it without a Scratch Size Limit. This warning applies to the current configuration; changes above take effect on Apply or OK. Set a limit or use a local disk.	پوشه موقت فعلی ({path}) فضای خالی خود را گزارش نمی‌کند؛ بنابراین PhotoCraft نمی‌تواند پیش از پر شدن آن عملیات را متوقف کند و فایل‌های بزرگ نیز بدون تعیین محدودیت اندازه فضای موقت، فضای اضافی دریافت نمی‌کنند. این هشدار مربوط به پیکربندی فعلی است؛ تغییرات بالا پس از زدن «اعمال» یا «تأیید» اجرا می‌شوند. محدودیتی تعیین کنید یا از یک دیسک محلی استفاده کنید.
+	The frame is locked	قاب قفل است
+	The frame is unavailable	قاب در دسترس نیست
+	Toggle reference point	تغییر وضعیت نقطه مرجع
+	Transparent (default)	شفاف (پیش‌فرض)
+	Unite Shapes at Overlap	یکی کردن شکل‌ها در ناحیه هم‌پوشانی
+	Unknown	ناشناخته
+	Website	وب‌سایت
+	Working CMY Plates	صفحات رنگی CMY فعال
+	ZIP	ZIP
+	seconds	ثانیه
+	{ok} written to {dir}	{ok} در {dir} نوشته شد
+	{set} from {file} replaced the one from {earlier}	مجموعه {set} از {file} جایگزین نسخه موجود در {earlier} شد
+@plural	{n} action file loaded|{n} action files loaded	{n} فایل اکشن بارگیری شد|{n} فایل اکشن بارگیری شد
+@plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} فایل بارگیری نشد: {errors}|{n} فایل بارگیری نشد: {errors}
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	خروجی {n} دارایی تصویر در {what} ناموفق بود|خروجی {n} دارایی تصویر در {what} ناموفق بود
