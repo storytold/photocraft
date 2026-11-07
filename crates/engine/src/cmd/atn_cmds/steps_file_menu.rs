@@ -44,7 +44,7 @@ fn notes_file(path: &str) -> bool {
 
 pub(super) fn notes_to(_: &str, p: &Value) -> Option<Descriptor> {
     sets_only(p, &["path"]).then_some(())?;
-    Some(desc("null").with("Usng", path_value(jstr(p, "path").filter(|s| !s.is_empty())?)))
+    Some(desc("null").with("Usng", path_value(jstr(p, "path").filter(|s| notes_file(s))?)))
 }
 
 /// Image › Apply Data Set: the data set is named in `null` (`dataSetClass` by name). Any other

@@ -110,3 +110,13 @@ fn notes_from_a_pdf_keep_the_photoshop_step() {
         assert!(!kept(steps_file_menu::notes_from(&desc("null").with("Usng", path_value(path)))), "{path}");
     }
 }
+
+/// Saving refuses an Import Notes step from a file `notes_from` wouldn't map back, so a step never
+/// changes kind over a save and load (CodeRabbit review on steps_file_menu.rs:37).
+#[test]
+fn notes_from_a_pdf_are_refused_on_save() {
+    for path in ["/work/review.pdf", "/work/notes"] {
+        assert!(export_item("file.import.notes", &json!({"path": path}), "S").is_none(), "{path}");
+    }
+    assert!(export_item("file.import.notes", &json!({"path": "/work/review.psd"}), "S").is_some());
+}
