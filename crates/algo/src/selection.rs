@@ -246,6 +246,43 @@ pub fn rgba8_image(s: &Surface, area: Rect) -> Vec<[u8; 4]> {
     img
 }
 
+/// The surface's own stored channels over `area` as 0–255 levels: `channels()` bytes per pixel,
+/// no colour conversion and no reordering. Unlike [`rgba8_image`], which reads the picture as
+/// RGB, a Lab surface gives its stored Lightness, a and b and a CMYK surface its four inks, the
+/// alpha last when the surface has one. Read in parallel bands like [`rgba8_image`].
+///
+/// The Magic Wand measures a document's Tolerance on these channels for the modes and depths the
+/// reference measures it there (#11785), where reading the picture as RGB would measure the
+/// Tolerance in a colour space the document is not in. For an 8-bit surface the levels are the
+/// stored bytes exactly; a deeper surface is quantized to the 8-bit grid here, so where this is
+/// the right read stays the caller's decision.
+pub fn stored_levels_planes(s: &Surface, area: Rect) -> Vec<u8> {
+    let (w, h, ch) = (area.width() as usize, area.height() as usize, s.channels());
+    let mut data = vec![0u8; w * h * ch];
+    if w == 0 || h == 0 {
+        return data;
+    }
+    let band = 256usize;
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let read = |bi: usize, chunk: &mut [u8]| {
+        let y0 = area.y0 + (bi * band) as i32;
+        let rows = chunk.len() / (w * ch);
+        let mut px = Vec::new();
+        s.read_region_into(Rect::new(area.x0, y0, area.x1, y0 + rows as i32), &mut px);
+        for (d, v) in chunk.iter_mut().zip(px) {
+            *d = q(v);
+        }
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        data.par_chunks_mut(w * band * ch).enumerate().for_each(|(bi, c)| read(bi, c));
+    }
+    #[cfg(target_arch = "wasm32")]
+    data.chunks_mut(w * band * ch).enumerate().for_each(|(bi, c)| read(bi, c));
+    data
+}
+
 /// A selected region: 8-bit coverage over `bbox` (row-major), the bounding box of the pixels
 /// touched (including the anti-aliased fringe).
 #[derive(Clone, Debug, PartialEq)]
@@ -266,37 +303,129 @@ impl Region {
     }
 }
 
+/// Whether a difference of exactly `tolerance` levels still matches a Magic Wand seed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WandBound {
+    /// A difference of at most `tolerance` levels matches (≤). What the tools that sample the
+    /// picture as 8-bit RGBA do, and what their Tolerance has always meant.
+    AtMost,
+    /// A difference of *below* `tolerance` levels matches (<), with Tolerance 0 and 1 both
+    /// meaning "the same colour". The wand uses this on a document's own colour channels, where
+    /// the reference's Tolerance is measured finer than the document's 8-bit grid (#11785: see
+    /// [`wand_region_on`]).
+    Below,
+}
+
+/// Integer greatest difference still matching `bound`, in stored levels.
+fn wand_max_diff(tolerance: f32, bound: WandBound) -> i32 {
+    match bound {
+        WandBound::AtMost => (tolerance + 1e-3).floor().max(0.0) as i32,
+        // `d < tolerance` on whole levels, so Tolerance 5 keeps differences 0..=4. A NaN or a
+        // negative Tolerance keeps exactly the same colour rather than selecting nothing, and a
+        // Tolerance past the scale keeps every difference.
+        WandBound::Below => {
+            if tolerance.is_nan() || tolerance <= 1.0 {
+                0
+            } else if tolerance >= 256.0 {
+                255
+            } else {
+                tolerance.ceil() as i32 - 1
+            }
+        }
+    }
+}
+
+/// The most channels the Magic Wand compares at once: a CMYK document's four inks and an alpha.
+pub const MAX_WAND_CHANNELS: usize = 5;
+
+/// The picture the Magic Wand measures its Tolerance on: `channels` stored levels (0–255) per
+/// pixel over `area`, with `alpha` the index of the alpha channel when the picture has one.
+/// [`rgba8_image`] reads the picture as RGB; [`stored_levels_planes`] gives a document its own
+/// colour channels.
+#[derive(Clone, Copy, Debug)]
+pub struct WandPixels<'a> {
+    pub area: Rect,
+    pub data: &'a [u8],
+    pub channels: usize,
+    pub alpha: Option<usize>,
+}
+
+impl<'a> WandPixels<'a> {
+    /// Straight 8-bit RGBA over `area`: what [`rgba8_image`] reads, as `w * h * 4` bytes.
+    pub fn rgba(area: Rect, data: &'a [u8]) -> Self {
+        Self { area, data, channels: 4, alpha: Some(3) }
+    }
+}
+
 /// Magic wand on 8-bit pixels: a scanline flood fill (or a global match) that only allocates a
 /// byte mark per pixel, then anti-aliases just the edges inside the touched bounding box.
 /// Matches [`magic_wand`] for 8-bit sources. `None` if the seed is outside `area`.
 pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
-    if !area.contains(seed.0, seed.1) {
+    wand_region_on(&WandPixels::rgba(area, img.as_flattened()), seed, tolerance, contiguous, anti_alias, WandBound::AtMost)
+}
+
+/// [`wand_region`] over any [`WandPixels`] with the Tolerance bound chosen: RGBA with
+/// [`WandBound::AtMost`] is [`wand_region`] itself; [`WandBound::Below`] is how the Magic Wand
+/// measures a document's own colour channels (#11785). `None` when the seed is outside the area
+/// or the picture is not something the wand can compare.
+///
+/// Why the document-channel comparison is exclusive at the bound: the reference measures Tolerance
+/// on the document's channels, finer than an 8-bit document stores them. Its Lab row (8-bit
+/// document, grey ramp of ten 40 px blocks 100, 105, … 145, click on the 100 block) says
+/// Tolerance 5 reaches only the 100 block and Tolerance 32 up to the 130 block, while this
+/// document stores Lightness 108, 113, 118, 124, … 153 (L\* / 100 × 255): steps of 0, 5, 10, 16,
+/// …, 31, 36 levels, of which 5 (5.2 unrounded) must not match at Tolerance 5 and 31 (30.6) must
+/// at Tolerance 32. The re-measured dither-free CMYK ramp (same issue, comment 6705983844) has
+/// largest ink steps of 7, 13, 19, 25, 31, 37 from the seed, and its two required cells —
+/// Tolerance 5 to x 100-140 and Tolerance 32 to x 100-340 — fall out either way, so the document
+/// channels share this one bound.
+pub fn wand_region_on(px: &WandPixels, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool, bound: WandBound) -> Option<Region> {
+    if !px.area.contains(seed.0, seed.1) || px.channels == 0 || px.channels > MAX_WAND_CHANNELS {
         return None;
     }
-    let (w, h) = (area.width() as usize, area.height() as usize);
-    if w.checked_mul(h).is_none_or(|n| n > img.len()) {
+    // One fill per channel count: the comparison runs per pixel over the canvas.
+    match px.channels {
+        1 => wand_fill::<1>(px, seed, tolerance, contiguous, anti_alias, bound),
+        2 => wand_fill::<2>(px, seed, tolerance, contiguous, anti_alias, bound),
+        3 => wand_fill::<3>(px, seed, tolerance, contiguous, anti_alias, bound),
+        4 => wand_fill::<4>(px, seed, tolerance, contiguous, anti_alias, bound),
+        _ => wand_fill::<5>(px, seed, tolerance, contiguous, anti_alias, bound),
+    }
+}
+
+/// [`wand_region_on`] for `CH` stored channels per pixel.
+fn wand_fill<const CH: usize>(px: &WandPixels, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool, bound: WandBound) -> Option<Region> {
+    let (w, h) = (px.area.width() as usize, px.area.height() as usize);
+    if w.checked_mul(h).is_none_or(|n| n > px.data.len() / CH) {
         return None;
     }
-    let target = img[(seed.1 - area.y0) as usize * w + (seed.0 - area.x0) as usize];
-    let tol = (tolerance + 1e-3).floor().max(0.0) as i32;
-    // Copying a selection can leave RGB under zero alpha. Those invisible colours must not
+    let so = ((seed.1 - px.area.y0) as usize * w + (seed.0 - px.area.x0) as usize) * CH;
+    let mut target = [0u8; CH];
+    target.copy_from_slice(px.data.get(so..so + CH)?);
+    let alpha = px.alpha.filter(|&a| a < CH);
+    let tol = wand_max_diff(tolerance, bound);
+    // Copying a selection can leave colour under zero alpha. Those invisible colours must not
     // split a transparent region into pieces, as if the copied source were still visible.
-    let similar = |p: [u8; 4]| (target[3] == 0 && p[3] == 0) || (0..4).all(|c| (p[c] as i32 - target[c] as i32).abs() <= tol);
+    let similar = |i: usize| -> bool {
+        let o = i * CH;
+        let Some(v) = px.data.get(o..o + CH) else { return false };
+        (alpha.is_some_and(|a| target[a] == 0 && v[a] == 0)) || (0..CH).all(|c| (v[c] as i32 - target[c] as i32).abs() <= tol)
+    };
     let mut marks = vec![0u8; w * h];
     let (mut bx0, mut by0, mut bx1, mut by1) = (usize::MAX, usize::MAX, 0usize, 0usize);
     if contiguous {
         // Span fill: fill a run, then scan the rows above and below it for new seeds.
-        let mut stack = vec![((seed.0 - area.x0) as usize, (seed.1 - area.y0) as usize)];
+        let mut stack = vec![((seed.0 - px.area.x0) as usize, (seed.1 - px.area.y0) as usize)];
         while let Some((x, y)) = stack.pop() {
             let row = y * w;
             if marks[row + x] != 0 {
                 continue;
             }
             let (mut l, mut r) = (x, x);
-            while l > 0 && marks[row + l - 1] == 0 && similar(img[row + l - 1]) {
+            while l > 0 && marks[row + l - 1] == 0 && similar(row + l - 1) {
                 l -= 1;
             }
-            while r + 1 < w && marks[row + r + 1] == 0 && similar(img[row + r + 1]) {
+            while r + 1 < w && marks[row + r + 1] == 0 && similar(row + r + 1) {
                 r += 1;
             }
             marks[row + l..=row + r].fill(255);
@@ -308,7 +437,7 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
                 let nrow = ny * w;
                 let mut in_run = false;
                 for nx in l..=r {
-                    let ok = marks[nrow + nx] == 0 && similar(img[nrow + nx]);
+                    let ok = marks[nrow + nx] == 0 && similar(nrow + nx);
                     if ok && !in_run {
                         stack.push((nx, ny));
                     }
@@ -320,7 +449,7 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
         let scan = |y: usize, row: &mut [u8]| -> Option<(usize, usize)> {
             let mut span: Option<(usize, usize)> = None;
             for (x, m) in row.iter_mut().enumerate() {
-                if similar(img[y * w + x]) {
+                if similar(y * w + x) {
                     *m = 255;
                     span = Some(span.map_or((x, x), |(a, _)| (a, x)));
                 }
@@ -385,7 +514,7 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
     }
     #[cfg(target_arch = "wasm32")]
     mask.chunks_mut(bw).enumerate().for_each(|(yy, row)| fill_row(yy, row));
-    let bbox = Rect::new(area.x0 + x0 as i32, area.y0 + y0 as i32, area.x0 + x1 as i32, area.y0 + y1 as i32);
+    let bbox = Rect::new(px.area.x0 + x0 as i32, px.area.y0 + y0 as i32, px.area.x0 + x1 as i32, px.area.y0 + y1 as i32);
     Some(Region { bbox, mask })
 }
 

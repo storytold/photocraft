@@ -17,6 +17,8 @@ mod modify_window;
 mod color_range_performance;
 #[cfg(test)]
 mod color_range_window_tests;
+#[cfg(test)]
+mod wand_color_mode_tests;
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
     s.active().map(|_| ()).ok_or_else(|| "no document open".into())
@@ -133,14 +135,81 @@ pub(crate) fn sample_rgba8(s: &Session, all_layers: bool) -> Result<(Rect, Vec<[
     }
 }
 
+/// The Magic Wand's picture in a document's own colour channels (#11785): the stored levels of
+/// the active layer, `channels` of them per pixel with the alpha last.
+struct DocumentChannels {
+    area: Rect,
+    levels: Vec<u8>,
+    channels: usize,
+    alpha: Option<usize>,
+}
+
+impl DocumentChannels {
+    fn pixels(&self) -> sel::WandPixels<'_> {
+        sel::WandPixels { area: self.area, data: &self.levels, channels: self.channels, alpha: self.alpha }
+    }
+}
+
+/// What the wand measures its Tolerance on: the picture as 8-bit RGBA, or a document's own
+/// stored colour channels with the bound that goes with them.
+enum WandPicture {
+    Rgba(Rect, Vec<[u8; 4]>),
+    Channels(DocumentChannels),
+}
+
+/// The Magic Wand's sampling in an 8-bit Lab or CMYK document's own colour channels (#11785);
+/// `None` when the wand samples the picture as 8-bit RGBA, as before.
+///
+/// The reference measures the wand's Tolerance on the channels a document is in, on a grey ramp
+/// of ten 40 px blocks (100, 105, … 145) clicked on the 100 block, with Anti-alias off:
+///
+/// - Lab 8-bit: Tolerance 5 reaches only the 100 block and Tolerance 32 up to the 130 block,
+///   while the RGB picture (steps of 5) reaches x 100-180 and x 100-380.
+/// - CMYK 8-bit: Tolerance 5 reaches x 100-140 and Tolerance 32 x 100-340; the largest of the
+///   four ink differences is what counts (#11785's re-measured, dither-free ramp and the ink
+///   table in its comment 6705983844, which the tests fill directly so no profile is involved).
+///
+/// The rest of the table keeps today's sampling, because that is what it says: RGB and Grayscale
+/// documents at 8, 16 and 32 bits, Lab and CMYK documents at 16 and 32 bits and Sample All Layers
+/// are all marked *not measured* there.
+fn wand_document_channels(s: &Session, all_layers: bool) -> Option<DocumentChannels> {
+    let d = s.active()?;
+    if all_layers || d.doc.depth != photocraft_doc::SampleType::U8 || !matches!(d.doc.mode, photocraft_doc::ColorMode::Lab | photocraft_doc::ColorMode::Cmyk) {
+        return None;
+    }
+    let surf = d.active_layer.and_then(|id| d.doc.layer(id)).and_then(|l| l.surface())?;
+    let fmt = surf.format();
+    // The layer has to hold the document's model at 8 bits, and the wand compares at most four
+    // colour channels and an alpha; anything else samples as the RGB picture.
+    if fmt.mode != d.doc.mode || fmt.sample != photocraft_doc::SampleType::U8 || fmt.channels() > sel::MAX_WAND_CHANNELS {
+        return None;
+    }
+    let area = d.doc.bounds();
+    Some(DocumentChannels { area, levels: sel::stored_levels_planes(surf, area), channels: fmt.channels(), alpha: fmt.alpha.then_some(fmt.channels() - 1) })
+}
+
 fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y) = (f(p, "x", 0.0).floor() as i32, f(p, "y", 0.0).floor() as i32);
-    let (area, img) = match shown_gray(s) {
-        Some(plane) => plane,
-        None => sample_rgba8(s, b(p, "sampleAllLayers", false))?,
+    let all_layers = b(p, "sampleAllLayers", false);
+    // What the Tolerance is measured on: a mask or alpha plane shown as the picture, else the
+    // document's own channels where the reference measures them there (#11785), else the 8-bit
+    // RGBA `sample_rgba8` also hands the Paint Bucket and the Magic Eraser.
+    let picture = match shown_gray(s) {
+        Some((area, img)) => WandPicture::Rgba(area, img),
+        None => match wand_document_channels(s, all_layers) {
+            Some(d) => WandPicture::Channels(d),
+            None => {
+                let (area, img) = sample_rgba8(s, all_layers)?;
+                WandPicture::Rgba(area, img)
+            }
+        },
     };
-    let region = sel::wand_region(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true));
-    drop(img);
+    let (pixels, bound) = match &picture {
+        WandPicture::Rgba(area, img) => (sel::WandPixels::rgba(*area, img.as_flattened()), sel::WandBound::AtMost),
+        WandPicture::Channels(d) => (d.pixels(), sel::WandBound::Below),
+    };
+    let region = sel::wand_region_on(&pixels, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true), bound);
+    drop(picture);
     let m = mode(p);
     let selected = s.edit("Magic Wand", |doc, _| {
         doc.selection = sel::combine_region(doc.selection.as_ref(), region.as_ref(), m);
@@ -713,7 +782,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.magicWand",
             "Magic Wand",
             [],
-            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture)"##,
+            r##"{"x":px,"y":px,"tolerance":0..255=32,"contiguous":bool=true,"antiAlias":bool=true,"sampleAllLayers":bool=false,"mode":"replace|add|subtract|intersect"="replace"} (samples the visible alpha, Quick Mask, or layer mask when that is the picture; an 8-bit Lab or CMYK document measures it on its own stored channels: Lightness/a/b, or the four inks with the largest difference counting)"##,
             has_doc,
             magic_wand
         ),
