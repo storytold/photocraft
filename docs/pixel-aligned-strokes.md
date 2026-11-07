@@ -6,6 +6,12 @@ Properties edit the selected shape; the tool preference also controls new shapes
 Custom Shape placement and Pen shape creation. Tool presets keep the option;
 Reset Tool restores its default for Shape Tools and all three Pen tools.
 
+When `shape.create` appends with `addTo`, an explicit `pixelAlignStroke` updates the
+target layer; omitting it preserves that layer's setting. The Pen checkbox shows
+the existing Combine target's setting without overwriting the New Layer default.
+During a draft it edits the captured setting, applied together with the combined
+or resumed path in one undo step. New Layer retains the tool preference.
+
 Alignment is a rendering option. Stored knots, control handles, live parameters,
 stroke width, dash lengths and dash offset are unchanged. Turning it off restores
 the legacy renderer. Native projects serialize the option only when enabled.
@@ -33,6 +39,9 @@ rendering parity.
   lengths and phase are unchanged; their rasterized boundaries move by at most
   half a pixel. Fractional dash lengths can occupy adjacent integer pixel counts,
   and gaps shorter than a pixel can disappear at document resolution.
+  If adjacent area samples are indistinguishable (for example `[1, 1]` dashes
+  with a half-pixel offset), a small positive translation of the compiled outline
+  resolves only the coverage tie. Dashing is not recomputed for that probe.
 - The same path-based rule handles Rounded Rectangle, Polygon, Triangle, Star,
   Custom Shape and Pen paths. Pure curves and diagonals keep their original
   antialiasing, including Ellipse. Flattened curve chords are never mistaken for
@@ -41,9 +50,20 @@ rendering parity.
   1 px line uses a half-pixel translation of a render-only copy of its fill path.
   Arrowheads move with the shaft and retain antialiasing and proportions. Paint
   coordinates and the stored vector geometry stay unchanged.
+  Drag previews apply the same fill alignment in document space before the view's
+  zoom, rotation and translation, then discard live metadata to avoid a second
+  alignment in screen space. Path-only previews remain unpainted.
 - Alignment is evaluated in document pixels after geometry transforms. Fractional
   centerlines and rotated diagonals retain their original coverage. Tiled/banded
   rendering samples both neighboring rows so tile boundaries do not alter results.
+
+Retained PSD paths get an axis-specific allowance of half an 8.24 fixed-point
+quantum of the document dimensions (at most about 0.009 px on a valid PSB canvas).
+Rectangle clipping and normal coverage account for that error at render time,
+while the original path still determines dash lengths and phase. Native paths
+retain the strict floating-point epsilon; genuinely fractional centerlines beyond
+the allowance retain legacy rendering. Appearance edits preserve the allowance
+while the original PSD path block is retained.
 
 ## Deliberate limits
 
@@ -61,8 +81,9 @@ Filled Line/ArrowLine alignment requires live parameters matching the current
 path, and is disabled for density/feather masks. A point edit or transform that
 drops live line metadata leaves the filled path on the legacy renderer. A Line
 Tool shape with an additional visible outline retains legacy fill placement, so
-the fill and outline remain registered. Imported PSD path quantization can also
-prevent an exact live/path match.
+the fill and outline remain registered. Imported PSD path quantization can still
+prevent an exact live/path match for these filled bars; the ordinary stroke's
+quantization allowance does not relax this live-geometry check.
 
 Tests cover the pending live-line regression, rectangle dash phases and corners,
 Pen dashes and tile boundaries, curved corners, polygons/triangles, curve and

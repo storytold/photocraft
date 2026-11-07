@@ -60,6 +60,8 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     depth.hash(&mut h);
     format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(&mut h);
     (sh.density.to_bits(), sh.feather.to_bits()).hash(&mut h);
+    sh.pixel_align_stroke.hash(&mut h);
+    sh.psd_raw.is_some().hash(&mut h);
     if let Some(c) = &sh.cache {
         format!("{:?}{:?}", c.format(), c.default_pixel()).hash(&mut h);
         for (k, t) in c.tiles() {
@@ -228,6 +230,52 @@ mod tests {
 
     fn held() -> usize {
         cache().lock().unwrap_or_else(|e| e.into_inner()).0.values().map(|e| entry_bytes(&e.0)).sum()
+    }
+
+    /// Toggling only alignment must invalidate both directions of a cached split.
+    #[test]
+    fn split_cache_tracks_pixel_alignment_without_a_shape_cache() {
+        let canvas = Rect::new(0, 0, 64, 64);
+        let mut sh = ShapeLayer {
+            path: Path::new(vec![Subpath::polyline(&[(13.0, 23.0), (53.0, 23.0)])]),
+            fill: None,
+            stroke: Some(ShapeStroke { width: 1.0, ..ShapeStroke::default() }),
+            ..ShapeLayer::default()
+        };
+        for aligned in [false, true, false] {
+            sh.pixel_align_stroke = aligned;
+            let (_, stroke) = split(&sh, canvas, SampleType::U8).expect("stroked shape");
+            let alpha = |y| photocraft_raster::to_rgba(&stroke.format(), &stroke.pixel(31, y))[3];
+            if aligned {
+                assert_eq!(alpha(22), 0.0);
+                assert_eq!(alpha(23), 1.0);
+            } else {
+                assert!((alpha(22) - 0.5).abs() < 0.01);
+                assert!((alpha(23) - 0.5).abs() < 0.01);
+            }
+        }
+    }
+
+    /// A retained PSD marker changes near-integer eligibility and must distinguish cache entries.
+    #[test]
+    fn split_cache_distinguishes_psd_quantization_allowance() {
+        let canvas = Rect::new(0, 0, 64, 64);
+        let mut sh = ShapeLayer {
+            path: Path::new(vec![Subpath::polyline(&[(13.0, 27.0000005), (53.0, 27.0000005)])]),
+            pixel_align_stroke: true,
+            stroke: Some(ShapeStroke { width: 1.0, ..ShapeStroke::default() }),
+            ..ShapeLayer::default()
+        };
+        for imported in [false, true, false] {
+            sh.psd_raw = imported.then(|| std::sync::Arc::new(Vec::new()));
+            let (_, stroke) = split(&sh, canvas, SampleType::U8).expect("stroked shape");
+            let alpha = photocraft_raster::to_rgba(&stroke.format(), &stroke.pixel(31, 26))[3];
+            if imported {
+                assert_eq!(alpha, 0.0);
+            } else {
+                assert!((alpha - 0.5).abs() < 0.01);
+            }
+        }
     }
 
     /// The split cache stays within its byte budget, evicting the least recently used, and

@@ -6,8 +6,20 @@ use photocraft_geom::Rect;
 // Trigonometric live shapes and quarter-turn transforms carry tiny rounding errors.
 const ALIGN_EPSILON: f64 = 1e-7;
 type CleanLine = (Vec<(f64, f64)>, Vec<bool>);
+/// Compare source coordinates without treating flattened curve chords as straight segments.
 fn same(a: f64, b: f64) -> bool {
     (a - b).abs() <= ALIGN_EPSILON
+}
+
+/// A PSD path is rounded to signed 8.24 fractions of the document dimensions. Only
+/// retained PSD geometry gets its half-quantum allowance; native paths keep the strict epsilon.
+pub(crate) fn coordinate_tolerance(shape: &ShapeLayer, canvas: Rect) -> (f64, f64) {
+    if shape.psd_raw.is_none() {
+        return (ALIGN_EPSILON, ALIGN_EPSILON);
+    }
+    // Valid PSB dimensions need less than 0.009 px; cap hostile oversized frames too.
+    let epsilon = |side: u32| (f64::from(side) / 33_554_432.0).clamp(ALIGN_EPSILON, 1.0 / 64.0);
+    (epsilon(canvas.width()), epsilon(canvas.height()))
 }
 
 #[derive(Default)]
@@ -23,7 +35,16 @@ impl PixelRuns {
     /// resolves an exact half-pixel tie consistently: round both boundaries toward
     /// increasing document coordinates. A 9px dash therefore stays 9 opaque pixels,
     /// including when its phase alternates between integer and half-integer starts.
-    pub(crate) fn sharpen_dash_caps(&self, rect: Rect, coverage: &mut [f32], threshold: f32, sample: impl Fn(Rect) -> Vec<f32>) {
+    /// Ambiguous equal-neighbor ties probe a positively biased copy of the compiled edges;
+    /// this distinguishes alternating one-pixel dashes whose area samples are all one half.
+    pub(crate) fn sharpen_dash_caps(
+        &self,
+        rect: Rect,
+        coverage: &mut [f32],
+        threshold: f32,
+        sample: impl Fn(Rect) -> Vec<f32>,
+        biased_sample: impl Fn(Rect) -> Vec<f32>,
+    ) {
         let width = rect.width() as usize;
         for run in &self.0 {
             let lo = run.start.ceil() as i32;
@@ -40,6 +61,7 @@ impl PixelRuns {
                 Rect::new(c - 1, visible.y0.saturating_sub(1), c + 1, visible.y1.saturating_add(1))
             };
             let values = sample(source);
+            let mut biased = None;
             let sw = source.width() as usize;
             let sum = |p: i32| {
                 let k = if run.horizontal { (p - source.x0) as usize } else { (p - source.y0) as usize * sw };
@@ -59,7 +81,16 @@ impl PixelRuns {
                     let p = if run.horizontal { x } else { y };
                     let value = sum(p);
                     *out = if (value - threshold).abs() <= 1e-5 {
-                        f32::from(sum(p.saturating_sub(1)) > sum(p.saturating_add(1)))
+                        let before = sum(p.saturating_sub(1));
+                        let after = sum(p.saturating_add(1));
+                        if (before - after).abs() > 1e-5 {
+                            f32::from(before > after)
+                        } else {
+                            let values = biased.get_or_insert_with(|| biased_sample(source));
+                            let k = if run.horizontal { (p - source.x0) as usize } else { (p - source.y0) as usize * sw };
+                            let adjacent = if run.horizontal { k + sw } else { k + 1 };
+                            f32::from(values.get(k).copied().unwrap_or(0.0) + values.get(adjacent).copied().unwrap_or(0.0) > threshold)
+                        }
                     } else {
                         f32::from(value > threshold)
                     };
@@ -67,11 +98,17 @@ impl PixelRuns {
             }
         }
     }
-    pub(crate) fn stroke(shape: &ShapeLayer, tol: f64) -> Self {
+
+    /// Whether any isolated source run can use coverage alignment.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    /// Keep centered one-pixel source runs isolated from neighboring geometry and joins.
+    pub(crate) fn stroke(shape: &ShapeLayer, tol: f64, coordinate_tolerance: (f64, f64)) -> Self {
         if !shape.pixel_align_stroke || !shape.stroke.as_ref().is_some_and(|s| s.width == 1.0 && s.align == StrokeAlign::Center) {
             return Self::default();
         }
-        let mut runs = Self::path(&shape.path);
+        let mut runs = Self::path(&shape.path, coordinate_tolerance);
         if runs.0.is_empty() {
             return runs;
         }
@@ -89,16 +126,18 @@ impl PixelRuns {
         });
         runs
     }
-    fn segment(a: (f64, f64), b: (f64, f64)) -> Self {
+    /// Leave endpoint guards on an integer-axis segment long enough to have a safe interior.
+    fn segment(a: (f64, f64), b: (f64, f64), tolerance: (f64, f64)) -> Self {
         let horizontal = same(a.1, b.1);
         if !horizontal && !same(a.0, b.0) {
             return Self::default();
         }
         let (coordinate, start, end) = if horizontal { (a.1, a.0.min(b.0), a.0.max(b.0)) } else { (a.0, a.1.min(b.1), a.1.max(b.1)) };
         if !coordinate.is_finite()
-            || !same(coordinate, coordinate.round())
-            || coordinate <= f64::from(i32::MIN)
-            || coordinate >= f64::from(i32::MAX)
+            || (coordinate - coordinate.round()).abs() > if horizontal { tolerance.1 } else { tolerance.0 }
+            // Normal-axis sampling needs both adjacent integer rows/columns.
+            || coordinate.round() <= f64::from(i32::MIN)
+            || coordinate.round() >= f64::from(i32::MAX)
             || !start.is_finite()
             || !end.is_finite()
             || end - start < 5.0
@@ -107,7 +146,8 @@ impl PixelRuns {
         }
         Self(vec![Run { horizontal, coordinate: coordinate.round() as i32, start: start + 2.0, end: end - 2.0 }])
     }
-    fn path(path: &Path) -> Self {
+    /// Find straight source segments with bounded overlap checks; curves retain normal coverage.
+    fn path(path: &Path, coordinate_tolerance: (f64, f64)) -> Self {
         // Alignment is optional. Complex artwork retains its normal bounded renderer;
         // do not add quadratic compilation work to arbitrary imported paths.
         if path.subpaths.iter().map(|s| s.knots.len()).sum::<usize>() > 256 {
@@ -119,7 +159,7 @@ impl PixelRuns {
             if !((same(a.x, b.x) && same(c1.x, a.x) && same(c2.x, a.x)) || (same(a.y, b.y) && same(c1.y, a.y) && same(c2.y, a.y))) {
                 continue;
             }
-            let candidate = Self::segment((a.x, a.y), (b.x, b.y));
+            let candidate = Self::segment((a.x, a.y), (b.x, b.y), coordinate_tolerance);
             for run in candidate.0 {
                 // Coverage belongs to the entire stroke. Leave crossing/overlapping
                 // geometry alone rather than moving another segment's antialiasing.
@@ -131,6 +171,7 @@ impl PixelRuns {
         }
         runs
     }
+    /// Combine normal-axis coverage in the selected pixel, sampling beyond tile boundaries.
     pub(crate) fn apply(&self, rect: Rect, coverage: &mut [f32], sample: impl Fn(Rect) -> Vec<f32>) {
         let width = rect.width() as usize;
         for run in &self.0 {
@@ -183,6 +224,7 @@ pub(crate) fn line_fill_path(shape: &ShapeLayer) -> Option<Path> {
     Some(shape.path.transform(&photocraft_geom::Affine::translate(if vertical { 0.5 } else { 0.0 }, if horizontal { 0.5 } else { 0.0 })))
 }
 
+/// Reject a run when another source segment or its control bounds enter its coverage strip.
 fn isolated(run: &Run, points: &[photocraft_geom::Point; 4], padding: f64) -> bool {
     let c = f64::from(run.coordinate);
     let [a, c1, c2, b] = points;
@@ -217,8 +259,8 @@ fn isolated(run: &Run, points: &[photocraft_geom::Point; 4], padding: f64) -> bo
 }
 
 /// Recognize the same rectangle after a reversed traversal or quarter-turn transform.
-/// The original path is still used for dashing and clipping.
-pub(crate) fn integer_rectangle(path: &Path) -> bool {
+/// The stored path still determines stroke geometry and dash phase.
+pub(crate) fn integer_rectangle(path: &Path, tolerance: (f64, f64)) -> bool {
     if path.inverted || path.subpaths.len() != 1 {
         return false;
     }
@@ -231,7 +273,11 @@ pub(crate) fn integer_rectangle(path: &Path) -> bool {
     let Some((x0, y0, x1, y1)) = path.control_bounds() else {
         return false;
     };
-    if x1 - x0 < 2.0 || y1 - y0 < 2.0 || ![x0, y0, x1, y1].iter().all(|x| x.is_finite() && same(*x, x.round())) {
+    let near_integer = |coordinate: f64, epsilon: f64| coordinate.is_finite() && (coordinate - coordinate.round()).abs() <= epsilon;
+    if x1.round() - x0.round() < 2.0
+        || y1.round() - y0.round() < 2.0
+        || ![(x0, tolerance.0), (x1, tolerance.0), (y0, tolerance.1), (y1, tolerance.1)].iter().all(|(value, epsilon)| near_integer(*value, *epsilon))
+    {
         return false;
     }
     let mut corners = 0u8;
@@ -243,6 +289,29 @@ pub(crate) fn integer_rectangle(path: &Path) -> bool {
         }
     }
     corners == 15 && s.segments().iter().all(|[a, _, _, b]| (same(a.x, b.x) && !same(a.y, b.y)) || (same(a.y, b.y) && !same(a.x, b.x)))
+}
+
+/// The original bounds of an eligible rectangle; only its render-time clipping mask is rounded.
+pub(crate) fn rectangle_bounds(shape: &ShapeLayer, tolerance: (f64, f64)) -> Option<(f64, f64, f64, f64)> {
+    let stroke = shape.stroke.as_ref()?;
+    if !shape.pixel_align_stroke || stroke.width != 1.0 || stroke.align != StrokeAlign::Center || !integer_rectangle(&shape.path, tolerance) {
+        return None;
+    }
+    shape.path.control_bounds()
+}
+
+/// Normalize the selected interior row using its actual normal-axis coverage. This keeps
+/// quantized PSD edges opaque without rounding the path used for dash lengths and phase.
+pub(crate) fn rectangle_coverage_scale((x0, y0, x1, y1): (f64, f64, f64, f64), x: i32, y: i32) -> f32 {
+    let mut normal: f64 = 1.0;
+    for (pixel, edge, inside_positive) in [(x, x0, true), (x, x1, false), (y, y0, true), (y, y1, false)] {
+        let rounded = edge.round();
+        let row = (rounded as i32).saturating_sub(i32::from(!inside_positive));
+        if pixel == row {
+            normal = normal.min(0.5 + (edge - rounded) * if inside_positive { 1.0 } else { -1.0 });
+        }
+    }
+    (1.0 / normal) as f32
 }
 
 /// Bound actual tessellated joins, including sharp interior cusps. Source control
@@ -288,6 +357,7 @@ fn join_bounds(shape: &ShapeLayer, tol: f64) -> Option<Vec<((f64, f64), f64)>> {
     }
     Some(bounds)
 }
+/// Match the stroker's duplicate-point policy while retaining source-knot join flags.
 fn clean_line(line: &crate::Polyline) -> Option<CleanLine> {
     let mut points: Vec<(f64, f64)> = Vec::new();
     let mut knots = Vec::new();

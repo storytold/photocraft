@@ -66,7 +66,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 o.stroke_width = enabled_stroke_width(o.stroke_width);
             }
             crate::widgets::vline(ui, 22.0);
-            crate::widgets::checkbox(ui, &mut o.pixel_align_stroke, tl!("Pixel Align Stroke"));
+            pen_pixel_align_option(app, ui);
         }
         crate::widgets::vline(ui, 22.0);
         path_operations_menu(app, ui);
@@ -165,6 +165,41 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         .on_hover_text(tl!("Arrowhead options"));
     }
     true
+}
+
+/// Edit the target layer before drawing, or the captured setting during an owned draft.
+/// Deferring an in-flight edit to its commit keeps that draft's source revision valid.
+fn pen_pixel_align_option(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    let draft = app
+        .ui
+        .pen
+        .as_ref()
+        .and_then(|pen| pen.owner.as_ref())
+        .filter(|owner| owner.valid(app) && owner.options.vector_mode == "shape")
+        .map(|owner| owner.options.pixel_align_stroke);
+    let target = if app.ui.pen.is_none() && super::pen::pen_path_op(&app.ui.tool_options).is_some() { selected_shape(&app.session) } else { None };
+    let layer_value = app
+        .session
+        .active()
+        .and_then(|st| target.and_then(|id| st.doc.layer(id)))
+        .and_then(|layer| if let LayerContent::Shape(shape) = &layer.content { Some(shape.pixel_align_stroke) } else { None });
+    let mut enabled = draft.or(layer_value).unwrap_or(app.ui.tool_options.pixel_align_stroke);
+    let previous = enabled;
+    if !crate::widgets::checkbox(ui, &mut enabled, tl!("Pixel Align Stroke")).changed() {
+        return;
+    }
+    app.ui.tool_options.pixel_align_stroke = enabled;
+    if draft.is_some() {
+        if let Some(owner) = app.ui.pen.as_mut().and_then(|pen| pen.owner.as_mut()) {
+            owner.options.pixel_align_stroke = enabled;
+        }
+    } else if let Some(layer) = target
+        && let Err(error) = app.run("shape.edit", json!({"layer":layer.0,"pixelAlignStroke":enabled}))
+    {
+        app.ui.tool_options.pixel_align_stroke = previous;
+        app.ui.status = error;
+        app.ui.status_error = true;
+    }
 }
 
 /// Whether the Shape tools are in Path mode: a drag adds its outline to the work path.

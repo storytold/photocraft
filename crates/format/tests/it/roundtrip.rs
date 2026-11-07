@@ -1091,6 +1091,7 @@ fn arrow_document_is_backward_compatible() {
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
 }
+/// Native files keep enabled alignment; missing or disabled fields preserve legacy rendering.
 #[test]
 fn pixel_align_stroke_roundtrips_and_defaults_for_legacy_files() {
     use photocraft_doc::{ShapeLayer, ShapeStroke};

@@ -1593,6 +1593,7 @@ fn path_rows_dragged_onto_the_trash_are_deleted() {
     assert_eq!((doc.layers.len(), doc.paths.len()), (layers, 1), "nothing is deleted");
 }
 
+/// The Shape toolbar edits its selected layer even when the next-shape preference differs.
 #[test]
 fn pixel_align_checkbox_edits_selected_shape_and_undo_restores_its_value() {
     use egui_kittest::kittest::Queryable;
@@ -1626,6 +1627,7 @@ fn pixel_align_checkbox_edits_selected_shape_and_undo_restores_its_value() {
     assert!(h.query_by_label("Pixel Align Stroke").is_none(), "Path mode has no stroke controls");
 }
 
+/// Keeping alignment in preview metadata must not add paint to Path-mode outlines.
 #[test]
 fn pixel_align_preview_preserves_shape_and_path_modes() {
     let mut app = app();
@@ -1641,6 +1643,45 @@ fn pixel_align_preview_preserves_shape_and_path_modes() {
     }
 }
 
+/// A filled Line Tool preview must render the same crisp pixels as its committed shape.
+#[test]
+fn pixel_align_live_line_preview_matches_commit() {
+    let clip = photocraft_geom::Rect::new(0, 0, 200, 200);
+    for vertical in [false, true] {
+        for arrows in [false, true] {
+            let mut app = app();
+            app.ui.tool_options.pixel_align_stroke = true;
+            app.ui.tool_options.stroke_width = 0.0;
+            app.ui.tool_options.line_weight = 1.0;
+            app.ui.tool_options.arrow_end = arrows;
+            let (start, end) = if vertical { ([80.0, 20.0], [80.0, 150.0]) } else { ([20.0, 80.0], [150.0, 80.0]) };
+            let preview = shape_preview(&app, Tool::Line, start, end, Default::default()).unwrap();
+            finish_shape(&mut app, Tool::Line, start, end, Default::default());
+            let st = app.session.active().unwrap();
+            let LayerContent::Shape(committed) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
+            assert_eq!(preview.path, committed.path);
+            let render =
+                |s: &photocraft_doc::ShapeLayer| photocraft_vector::CompiledShape::new(s, photocraft_vector::DEFAULT_TOLERANCE, clip).render_rgba(clip);
+            let actual = render(&preview);
+            let expected = render(committed);
+            let mismatch = actual.iter().zip(&expected).enumerate().find(|(_, (a, b))| a != b);
+            assert_eq!(mismatch, None, "vertical={vertical}, arrows={arrows}");
+            for zoom in [0.5, 1.0, 3.0] {
+                for angle in [0.0, 0.3, std::f64::consts::FRAC_PI_2] {
+                    let transform = photocraft_geom::Affine::scale(zoom)
+                        .then(&photocraft_geom::Affine::rotate(angle))
+                        .then(&photocraft_geom::Affine::translate(7.25, 13.5));
+                    let projected = super::shapes::preview_for_view(preview.clone(), &transform, zoom);
+                    let alignment = photocraft_geom::Affine::translate(if vertical { 0.5 } else { 0.0 }, if vertical { 0.0 } else { 0.5 });
+                    assert_eq!(projected.path, preview.path.transform(&alignment).transform(&transform));
+                    assert!(projected.live.is_none(), "view-space rendering must not apply alignment twice");
+                }
+            }
+        }
+    }
+}
+
+/// Shape-tool resets clear alignment and restore Shape mode without changing Pen's mode.
 #[test]
 fn pixel_align_reset_restores_shape_mode_without_resetting_pen_mode() {
     let mut app = app();

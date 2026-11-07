@@ -423,6 +423,7 @@ fn default_name(kind: &str) -> &'static str {
     }
 }
 
+/// Create a shape, or append to one while applying only explicitly supplied alignment.
 pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.create";
     let kind = p.get("kind").and_then(Value::as_str).unwrap_or("rect");
@@ -436,8 +437,8 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
     let (fill, stroke) = new_fill_stroke(s, CMD, p)?;
     vector::flatten::validate_shape(&path, stroke.as_ref()).map_err(|e| bad(CMD, e))?;
     let pixel_align_stroke = match p.get("pixelAlignStroke") {
-        None => false,
-        Some(Value::Bool(enabled)) => *enabled,
+        None => None,
+        Some(Value::Bool(enabled)) => Some(*enabled),
         Some(_) => return Err(bad(CMD, "`pixelAlignStroke` must be a boolean")),
     };
     // Add to an existing shape layer with a path operation (Shape tool in combine/subtract… mode).
@@ -445,6 +446,9 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         let op = p.get("op").and_then(Value::as_str).map_or(Some(PathOp::Combine), op_from).ok_or_else(|| bad(CMD, "unknown `op`"))?;
         let id = LayerId(target);
         with_shape(s, id, "Add Shape", |sh, _| {
+            if let Some(enabled) = pixel_align_stroke {
+                sh.pixel_align_stroke = enabled;
+            }
             for mut sp in path.subpaths {
                 sp.op = op;
                 sh.path.subpaths.push(sp);
@@ -457,7 +461,7 @@ pub(super) fn shape_create(s: &mut Session, p: &Value) -> Result<Value> {
         return shape_info(s, id);
     }
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
-    let mut sh = ShapeLayer { path, fill, stroke, live, pixel_align_stroke, ..Default::default() };
+    let mut sh = ShapeLayer { path, fill, stroke, live, pixel_align_stroke: pixel_align_stroke.unwrap_or(false), ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = name.unwrap_or_else(|| doc.next_layer_name(default_name(kind)));

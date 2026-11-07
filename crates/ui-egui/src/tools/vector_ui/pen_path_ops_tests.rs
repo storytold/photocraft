@@ -19,6 +19,87 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// Combining or resuming a Pen path applies the captured flag in the same undo step.
+#[test]
+fn pixel_align_pen_append_and_resume_apply_the_captured_setting() {
+    for resume in [false, true] {
+        for enabled in [false, true] {
+            let mut app = app();
+            let before = app
+                .run(
+                    "shape.create",
+                    json!({"kind":"path", "pixelAlignStroke": !enabled,
+                    "fill":null,"stroke":{"width":1},"path":{"subpaths":[{"closed":false,"knots":[
+                        {"anchor":[20,20]},{"anchor":[80,20]}
+                    ]}]}}),
+                )
+                .unwrap();
+            app.ui.tool_options.vector_mode = "shape".into();
+            app.ui.tool_options.pen_path_op = if resume { "newLayer" } else { "combine" }.into();
+            app.ui.tool_options.pixel_align_stroke = enabled;
+            if resume {
+                draw(&mut app, &[(80.0, 20.0), (80.0, 80.0)]);
+                assert!(app.ui.pen.as_ref().unwrap().resumes.is_some());
+                assert!(super::pen_commit(&mut app, false));
+            } else {
+                draw(&mut app, &[(110.0, 110.0), (140.0, 110.0), (140.0, 140.0), (110.0, 140.0)]);
+                // Model the pending checkbox edit before closing the captured draft.
+                app.ui.pen.as_mut().unwrap().owner.as_mut().unwrap().options.pixel_align_stroke = enabled;
+                pen_down(&mut app, 110.5, 110.5, false);
+                pen_up(&mut app);
+            }
+            let after = app.run("shape.info", json!({})).unwrap();
+            assert_eq!(after["layer"], before["layer"]);
+            assert_eq!(after["pixelAlignStroke"], enabled, "resume={resume}");
+            app.session.undo();
+            let undone = app.run("shape.info", json!({})).unwrap();
+            assert_eq!(undone["pixelAlignStroke"], !enabled);
+            assert_eq!(undone["path"], before["path"]);
+            app.session.redo();
+            assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
+        }
+    }
+}
+
+/// The checkbox shows the existing target, and an in-flight edit must not stale its draft.
+#[test]
+fn pixel_align_pen_checkbox_controls_the_target_and_pending_draft() {
+    for tool in [Tool::Pen, Tool::CurvaturePen, Tool::FreeformPen] {
+        let mut app = app();
+        app.ui.tool = tool;
+        app.run("shape.create", json!({"kind":"rect","rect":[20,20,60,60],"pixelAlignStroke":false})).unwrap();
+        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.pen_path_op = "combine".into();
+        app.ui.tool_options.pixel_align_stroke = true;
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.horizontal(|ui| super::options_bar(app, ui, tool));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        assert_eq!(h.get_by_label("Pixel Align Stroke").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+        assert!(h.state().ui.tool_options.pixel_align_stroke, "viewing a combine target must preserve the New Layer default");
+        h.get_by_label("Pixel Align Stroke").click();
+        h.run_steps(3);
+        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["pixelAlignStroke"], true);
+        h.state_mut().session.undo();
+        h.run_steps(3);
+        assert_eq!(h.get_by_label("Pixel Align Stroke").accesskit_node().toggled(), Some(egui::accesskit::Toggled::False));
+        draw(h.state_mut(), &[(110.0, 110.0), (150.0, 110.0)]);
+        h.run_steps(3);
+        h.get_by_label("Pixel Align Stroke").click();
+        h.run_steps(3);
+        assert!(super::pen_commit(h.state_mut(), false), "checkbox must not invalidate the draft");
+        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["pixelAlignStroke"], true);
+        h.state_mut().session.undo();
+        assert_eq!(h.state_mut().run("shape.info", json!({})).unwrap()["pixelAlignStroke"], false);
+    }
+}
+
 /// Clicks a closed square with the Pen, from `(x, y)` with side `side`.
 fn square(app: &mut PhotocraftApp, x: f64, y: f64, side: f64) {
     for (dx, dy) in [(0.0, 0.0), (side, 0.0), (side, side), (0.0, side)] {

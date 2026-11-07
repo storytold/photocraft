@@ -769,6 +769,7 @@ mod tests {
         assert_eq!(app.ui.crop_rect, Some([8.0, 0.0, 56.0, 48.0]));
     }
 
+    /// Every shape and Pen preset restores alignment after Reset Tool clears it.
     #[test]
     fn pixel_alignment_tool_presets_roundtrip_and_reset_for_shape_and_pen_tools() {
         for tool in [
