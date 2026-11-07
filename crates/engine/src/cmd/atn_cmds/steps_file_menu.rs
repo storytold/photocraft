@@ -29,9 +29,17 @@ pub(super) fn package_to(_: &str, p: &Value) -> Option<Descriptor> {
     Some(desc("null").with("T   ", path_value(jstr(p, "dir").filter(|s| !s.is_empty())?)))
 }
 
-/// File › Import › Notes: `Usng` is the file the notes come from.
+/// File › Import › Notes: `Usng` is the file the notes come from. Only the files
+/// `file.import.notes` reads map (.psd, .psb, .pcraft); notes from a PDF or FDF keep the
+/// Photoshop step, so loading reports them instead of playback failing.
 pub(super) fn notes_from(d: &Descriptor) -> Mapped {
-    only_path(d, "Usng").map_or(Mapped::Unsupported { harmless: false }, |path| step("file.import.notes", json!({"path": path})))
+    only_path(d, "Usng")
+        .filter(|path| notes_file(path))
+        .map_or(Mapped::Unsupported { harmless: false }, |path| step("file.import.notes", json!({"path": path})))
+}
+
+fn notes_file(path: &str) -> bool {
+    std::path::Path::new(path).extension().and_then(|e| e.to_str()).is_some_and(|e| ["psd", "psb", "pcraft"].iter().any(|ok| e.eq_ignore_ascii_case(ok)))
 }
 
 pub(super) fn notes_to(_: &str, p: &Value) -> Option<Descriptor> {
