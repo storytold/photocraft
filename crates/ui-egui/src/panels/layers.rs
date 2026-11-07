@@ -109,6 +109,7 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
     ui.add_space(2.0);
 }
 
+/// Render Layers in a bounded child so its fixed controls cannot enlarge the dock.
 pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A very short panel may clip its fixed controls, but must not grow its enclosing
     // frame into the status bar. Keep the content's minimum size local to this child.
@@ -118,6 +119,8 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.advance_cursor_after_rect(rect);
 }
 
+/// Reserve the action footer, then clip controls and scroll layer rows in the space above it.
+/// Actions collected from the controls and rows are dispatched after the panel is drawn.
 fn layers_content(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());

@@ -153,6 +153,8 @@ pub(super) fn path_context_actions(entry: &PathEntry, doc: &Document, layer: Opt
     actions
 }
 
+/// Render editable document paths in the space above a pinned action footer.
+/// The list supports selection, renaming and drag actions while its height follows the dock.
 pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {

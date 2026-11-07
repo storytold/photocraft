@@ -302,6 +302,8 @@ fn row_presentation(row: Row, context: &RowPresentationContext<'_>, mask_visible
     RowPresentation { name, thumb_idx, slot, visible, selected }
 }
 
+/// Render the document's channels with a bounded scrolling list and a pinned action footer.
+/// Row selection, reordering and footer actions dispatch the corresponding channel commands.
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Greyed in the rows' menu as in the panel menu and the command palette.
     let merge_enabled = crate::menus::is_enabled(app, "channel.merge");
