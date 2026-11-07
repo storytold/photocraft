@@ -741,6 +741,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.smartBlur", json!({"radius": 2.5, "threshold": 40, "quality": "medium", "mode": "overlayEdge"})),
         ("filter.other.offset", json!({"horizontal": 10, "vertical": -5, "undefinedAreas": "wrap"})),
         ("filter.blur.blur", json!({})),
+        ("file.automate.createDroplet", json!({"path": "/d/Sharpen.pcdroplet", "action": "Sharpen", "set": "Tools", "output": "/d/out", "overrideOpen": true})),
         ("filter.distort.shear", json!({"points": [[0,0], [0.5,0.25], [1,0]], "undefinedAreas": "repeat"})),
         ("filter.distort.pinch", json!({"amount": -30})),
         ("filter.distort.polarCoordinates", json!({"mode": "polarToRectangular"})),
