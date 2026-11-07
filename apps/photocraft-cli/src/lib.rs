@@ -16,6 +16,7 @@ mod document;
 mod error;
 mod gpu;
 mod output;
+mod responsive_batch;
 
 pub use actions::{ActionsError, Steps, load_actions, load_actions_file, parse_actions};
 use args::{Command, parse};
@@ -55,6 +56,7 @@ where
         Command::Info(a) => info(a, out),
         Command::Run(a) => run_cmds(a, out, err),
         Command::Batch(a) => batch(a, out, err),
+        Command::ResponsiveBatch(a) => responsive_batch::responsive_batch(a, out, err),
         Command::Droplet(a) => droplet(a, out, err),
         Command::Commands(a) => commands(a, out),
         Command::Mcp(a) => mcp(a, err),

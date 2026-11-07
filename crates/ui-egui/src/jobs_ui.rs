@@ -190,7 +190,10 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
     // A place is also a job where there are no threads (the web build): the session steps it a
     // slice per frame, and every other command stays synchronous there.
     let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
-    if !app.background_jobs && !place {
+    // Responsive reflow can reshape many editable type layers and run text layout. Keep the
+    // native canvas responsive even when the optional general background-jobs switch is off.
+    let responsive_reflow = matches!(id, "layer.artboard.createVariant" | "layer.artboard.variants.update");
+    if !app.background_jobs && !place && !responsive_reflow {
         return app.session.execute(id, params).map_err(|e| e.to_string());
     }
     match app.session.start(id, params).map_err(|e| e.to_string())? {

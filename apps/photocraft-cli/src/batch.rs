@@ -15,7 +15,7 @@ use crate::{
 
 /// Whether `a` and `b` name the same existing folder, however they are spelt (relative, with a
 /// trailing separator, through a symbolic link).
-fn same_dir(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
