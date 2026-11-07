@@ -318,8 +318,6 @@ mod tests {
         notice.lines.iter().map(|line| crate::i18n::fmt(line, &args)).collect::<Vec<_>>().join(" ")
     }
 
-
-
     #[test]
     fn paste_hint_follows_the_shortcut_and_falls_back_to_the_menu() {
         let mut app = PhotocraftApp::new(Session::new(), Services::default());
