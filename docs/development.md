@@ -508,7 +508,8 @@ cargo xtask perf --update-baseline --from a/results.json --from b/results.json .
 `perf_scenarios` and its CPU run, `flat_open_bench`, `interactive_bench`, `fx_bench`, `bevel_bench`,
 `camera_raw_bench`, `type_bench`, `large_image_bench`, `large_file_bench`, `layout_bench`,
 `cursor_bench`, and `photocraft-algo`'s `bench_multiband` and `bench_filters2`), runs each with
-`--json`, and merges the reports into `target/perf/results.json` keyed by scenario id, with p50,
+`--json`, and merges the reports into `target/perf/results.json` keyed by scenario id (no scenario in
+`perf/budgets.toml` uses `layout_bench` or `cursor_bench`; `layout_bench` reports median, p90 and max per layout), with p50,
 p95 and max (nearest rank over the samples), peak RSS measured in-process (`photocraft-testkit`'s
 `perf::RssSampler`), GPU bytes held by the canvas, and the load average before and after each
 bench. `target/perf/summary.md` is the Markdown table. It exits non-zero when an enforced budget

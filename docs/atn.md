@@ -1156,9 +1156,12 @@ What the reference application records when a user works normally, measured on 2
 an action through the panel, mouse and keyboard on a document with layers A, B and C and a second open
 document, then reading the steps back. This is the form PhotoCraft's recorder should write (AUTO-219-1);
 today it drops the active layer's id when that layer is the only one selected and the command does not
-name a source layer (`layer.select`, `layer.new.frame`, `select.loadSelection`, `type.createSelection` and
-`edit.checkSpelling` keep it), and names every other layer it keeps by name when the name is unique, so
-playback acts on that named layer and fails if it is absent (`crates/engine/src/actions_record.rs`). A
+name a source layer (`layer.select`, `layer.new.frame`, `select.loadSelection` and `type.createSelection`
+keep it), and names every other layer it keeps by name when the name is unique, so
+playback acts on that named layer and fails if it is absent (`crates/engine/src/actions_record.rs`).
+`select.loadSelection` keeps the id of a source layer named `merged` or with no name.
+`edit.checkSpelling` records only `allLayers` (`type_spell_cmds::recorded_step`); with it off, playback
+checks the active layer. A
 Layers-panel move of several layers, or of a layer that is not the selected one, keeps its layer ids
 (`crates/engine/src/cmd/layer_multi_cmds/moves.rs`), so it replays only on the same document.
 
