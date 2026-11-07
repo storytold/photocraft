@@ -83,6 +83,30 @@ fn on_pasteboard(app: &PhotocraftApp, p: [f64; 2]) -> bool {
     app.session.active().is_some_and(|st| p[0] < 0.0 || p[1] < 0.0 || p[0] >= f64::from(st.doc.size.width) || p[1] >= f64::from(st.doc.size.height))
 }
 
+/// Whether a document point lands on pixels of a layer the box doesn't move: the frontmost hit
+/// there, skipping the moved layers and fully locked ones as Auto-Select does, is a visible
+/// top-level layer that is not the Background. As measured in the reference application
+/// (#11100, #8208), a click there commits a layer transform and leaves the selection as it was;
+/// a second click picks that layer. Not measured, so the box stays open as before: Transform
+/// Selection, a path or mask target, and hidden, locked or grouped layers (also when a grouped
+/// layer covers a top-level one at the click).
+fn on_other_layer(app: &PhotocraftApp, t: &TransformSession, p: [f64; 2]) -> bool {
+    if t.selection || t.path.is_some() || t.target.is_some() || !p[0].is_finite() || !p[1].is_finite() {
+        return false;
+    }
+    let Some(st) = app.session.active() else { return false };
+    let doc = &st.doc;
+    // The layers the commit moves: `edit.transform` takes the link group along as it is then, so a
+    // layer linked after the box opened counts as moved too.
+    let moved = photocraft_engine::transform_cmds::box_targets(doc, &super::begin::moving_layers(t));
+    let moved = |id: photocraft_doc::LayerId| id.0 == t.layer || moved.contains(&id);
+    // `as` saturates out-of-range floats; `layers_at` returns nothing off the canvas.
+    photocraft_engine::pick_cmds::layers_at(doc, p[0].floor() as i32, p[1].floor() as i32)
+        .into_iter()
+        .find(|id| !moved(*id) && !doc.effective_locks(*id).all)
+        .is_some_and(|id| !doc.is_background(id) && doc.layers.iter().any(|l| l.id == id && l.artboard().is_none()))
+}
+
 /// Pointer input while transforming. Returns false when no transform is active.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let Some(t) = app.ui.transform.clone() else { return false };
@@ -118,16 +142,18 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             if matches!(ev, ToolEvent::Up { .. }) {
                 pv.gesture = None;
             }
-            // Clicking the pasteboard (outside the document) commits; a click outside the box on the
-            // image does nothing and the box stays open (#11100). Dragging the rotation zone and
-            // Option-clicking to move the pivot keep their existing behavior.
+            // Clicking the pasteboard (outside the document) or another layer's pixels commits; a
+            // click outside the box where only the Background has pixels does nothing and the box
+            // stays open (#11100). The commit doesn't pick the layer under the click: as in the
+            // reference application, that takes a second click (#8208). Dragging the rotation
+            // zone and Option-clicking to move the pivot keep their existing behavior.
             // The press decides: a click that starts on the image and jitters past the edge
             // before the release is still a click on the image.
             if matches!(ev, ToolEvent::Up { .. })
                 && let Some(g) = g
                 && accepts_outside_click(g, [x, y], tol)
             {
-                if on_pasteboard(app, g.start) {
+                if on_pasteboard(app, g.start) || on_other_layer(app, &t, g.start) {
                     commit(app);
                 } else if let Some(s) = app.ui.transform.as_mut() {
                     // Jitter before the release may have turned the box a little: put it back.
