@@ -259,12 +259,6 @@ pub fn delete_anchor(path: &mut Path, [s, k]: [usize; 2]) -> Result<bool, String
     Ok(false)
 }
 
-/// An open subpath's first or last anchor: the Pen continues from it. Closed paths have none.
-pub fn is_endpoint(path: &Path, [s, k]: [usize; 2]) -> bool {
-    let Some(sp) = path.subpaths.get(s) else { return false };
-    !sp.closed && !sp.knots.is_empty() && k < sp.knots.len() && (k == 0 || k + 1 == sp.knots.len())
-}
-
 /// Every anchor of subpath `s` (⌥-click with Direct Selection selects the whole subpath).
 pub fn subpath_anchors(path: &Path, s: usize) -> Vec<[usize; 2]> {
     path.subpaths.get(s).map_or_else(Vec::new, |sp| (0..sp.knots.len()).map(|k| [s, k]).collect())
@@ -539,15 +533,6 @@ mod tests {
         let Some(Hit::Segment(r, t)) = hit(&long, q, 4.0, &[]) else { panic!("long segment at {q:?}") };
         assert_eq!(r, [0, 0]);
         assert!((t - gap).abs() < 0.02, "{t}");
-    }
-
-    #[test]
-    fn an_open_subpath_ends_are_where_the_pen_continues() {
-        assert!(is_endpoint(&curve(), [0, 0]) && is_endpoint(&curve(), [0, 2]));
-        assert!(!is_endpoint(&curve(), [0, 1]));
-        assert!(!is_endpoint(&tri(), [0, 0]), "a closed path has no end to continue");
-        assert!(!is_endpoint(&curve(), [1, 0]));
-        assert!(!is_endpoint(&curve(), [0, 9]));
     }
 
     #[test]

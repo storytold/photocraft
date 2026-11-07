@@ -45,12 +45,9 @@ pub const PATCH_RADIUS: usize = 15;
 
 struct Rng(u64);
 impl Rng {
+    /// The next value of the SplitMix64 sequence.
     fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        crate::photo_util::splitmix64(&mut self.0)
     }
     fn unit(&mut self) -> f64 {
         (self.next() >> 11) as f64 / (1u64 << 53) as f64
@@ -700,11 +697,14 @@ mod parallel_tests {
             .collect()
     }
 
-    /// Blocks of random brightness: lots of strong corners, no libm in the making.
+    /// Blocks of random brightness: lots of strong corners, no libm in the making. Only the
+    /// recorded-hash test below uses it, and that one is Linux x86_64 only.
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn blocks(w: usize, h: usize, seed: u64) -> Vec<f32> {
         (0..w * h).map(|i| (mix(seed + ((i % w) / 8) as u64 * 4096 + ((i / w) / 8) as u64) >> 40) as f32 / 16_777_216.0).collect()
     }
 
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     fn fnv(parts: &[u64]) -> u64 {
         let mut h = 0xcbf2_9ce4_8422_2325u64;
         for p in parts {
