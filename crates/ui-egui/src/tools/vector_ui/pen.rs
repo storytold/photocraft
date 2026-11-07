@@ -836,9 +836,7 @@ fn as_owner<R>(app: &mut PhotocraftApp, owner: &PenOwner, f: impl FnOnce(&mut Ph
         super::PenTarget::Path { name, append } => append.then(|| name.clone()),
         _ => None,
     };
-    if let Some(st) = app.session.active_mut() {
-        st.active_layer = owner.layer;
-    }
+    app.session.set_active_layer(owner.layer);
     let foreground = std::mem::replace(&mut app.session.tools.foreground, owner.foreground);
     let background = std::mem::replace(&mut app.session.tools.background, owner.background);
     let channel = app.session.active().map(|st| st.channel_view.target);
