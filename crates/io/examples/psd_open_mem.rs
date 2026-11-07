@@ -2,13 +2,23 @@
 //! `/usr/bin/time -l` for the peak memory. `--read` reads the whole file first and imports the
 //! bytes, as opens did before `import_file` (to compare).
 //!
-//! `cargo run --release -p photocraft-io --example psd_open_mem -- <file.psd> [--read]`
+//! `--preview` only reads the merged-image preview the open card shows (`psd_preview`).
+//! `--save <out.psd>` then saves the document as PSD and reopens it, checking that its embedded
+//! smart-object files (`lnk2`, left in the source by the open) came through unchanged.
+//!
+//! `cargo run --release -p photocraft-io --example psd_open_mem -- <file.psd> [--read] [--save <out.psd>]`
 
 fn main() {
-    let Some(path) = std::env::args().nth(1).filter(|a| a != "--read") else {
+    let Some(path) = std::env::args().nth(1).filter(|a| !a.starts_with("--")) else {
         eprintln!("usage: psd_open_mem <file.psd>");
         std::process::exit(2);
     };
+    if std::env::args().any(|a| a == "--preview") {
+        let t = std::time::Instant::now();
+        let p = photocraft_io::psd_preview(std::path::Path::new(&path), 1024);
+        println!("{path}: preview {:?} in {:.3}s", p.map(|p| (p.width, p.height)), t.elapsed().as_secs_f64());
+        return;
+    }
     if std::env::args().any(|a| a == "--read") {
         read_then_import(&path);
         return;
@@ -23,6 +33,59 @@ fn main() {
             }
         };
     report(&path, &format!("open {:.2}s", t.elapsed().as_secs_f64()), &res);
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(out) = args.iter().position(|a| a == "--save").and_then(|i| args.get(i + 1)) {
+        save_and_check(&res.document, out);
+    }
+}
+
+/// Each embedded file's uuid, length and content hash: a change of any byte shows.
+fn embedded(doc: &photocraft_doc::Document) -> Vec<(String, u64, [u8; 32])> {
+    let mut v: Vec<(String, u64, [u8; 32])> = doc
+        .metadata
+        .psd_global_blocks
+        .iter()
+        .filter(|(_, k, _)| matches!(k, b"lnk2" | b"lnk3" | b"lnkD"))
+        .flat_map(|(_, _, d)| {
+            let bytes = d.bytes().unwrap_or_else(|e| {
+                eprintln!("an embedded file could not be read: {e}");
+                std::process::exit(1)
+            });
+            photocraft_io::linked::parse_linked_files(&bytes)
+        })
+        .map(|f| (f.uuid, f.bytes.len() as u64, *blake3::hash(&f.bytes).as_bytes()))
+        .collect();
+    v.sort();
+    v
+}
+
+fn save_and_check(doc: &photocraft_doc::Document, out: &str) {
+    let t = std::time::Instant::now();
+    let saved = match photocraft_io::export(doc, out, &Default::default()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("{out}: save failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    if let Err(e) = std::fs::write(out, &saved.bytes) {
+        eprintln!("{out}: write failed: {e}");
+        std::process::exit(1);
+    }
+    drop(saved);
+    println!("saved {out} in {:.2}s", t.elapsed().as_secs_f64());
+    let back = match photocraft_io::import_file(out, std::path::Path::new(out), &photocraft_io::ImportOptions::default(), &photocraft_raster::Interrupt::NONE) {
+        Ok(r) => r.document,
+        Err(e) => {
+            eprintln!("{out}: reopen failed: {e}");
+            std::process::exit(1);
+        }
+    };
+    let (a, b) = (embedded(doc), embedded(&back));
+    println!("embedded files: {} before, {} after, same: {}; layers {} / {}", a.len(), b.len(), a == b, doc.walk().len(), back.walk().len());
+    if a != b || doc.walk().len() != back.walk().len() {
+        std::process::exit(1);
+    }
 }
 
 fn read_then_import(path: &str) {
