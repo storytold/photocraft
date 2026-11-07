@@ -328,11 +328,16 @@ impl ResponsiveLayout {
             true
         });
         // An override needs its variant artboard to stay a variant (remap may drop the variant).
+        // The variant was already remapped above, so the override follows its variant's new id
+        // first: checking the stored id against the remapped artboards would drop every
+        // override whenever the loader hands out fresh layer ids.
         let variant_artboards: std::collections::HashSet<LayerId> = self.variants.iter().map(|v| v.artboard).collect();
         self.overrides.retain_mut(|entry| {
-            if !variant_artboards.contains(&entry.variant) {
+            let Some(variant) = map.get(&entry.variant).copied() else { return false };
+            if !variant_artboards.contains(&variant) {
                 return false;
             }
+            entry.variant = variant;
             let (Some(layer), Some(rule_layer)) = (map.get(&entry.layer), map.get(&entry.rule.layer)) else {
                 return false;
             };

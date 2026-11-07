@@ -670,6 +670,23 @@ fn responsive_layout_roundtrips_in_native_manifest() {
     // The layer rule points at a live layer so it survives loader ID remapping.
     doc.layers[0].children_mut().unwrap().push(Layer::new("Text", LayerContent::Text(TextLayer::default())));
     doc.layers[0].children_mut().unwrap()[0].id = text;
+    doc.responsive.overrides.push(photocraft_doc::responsive::LayerRuleOverride {
+        variant,
+        layer: text,
+        rule: photocraft_doc::responsive::LayerLayoutRule {
+            layer: text,
+            anchor: photocraft_doc::responsive::Anchor {
+                horizontal: photocraft_doc::responsive::HorizontalAnchor::Left,
+                vertical: photocraft_doc::responsive::VerticalAnchor::Top,
+            },
+            mode: photocraft_doc::responsive::ResizeMode::Fixed,
+            min_size: None,
+            max_size: None,
+            text_flow: photocraft_doc::responsive::TextFlow::Preserve,
+            min_font_size_pt: None,
+            stack: None,
+        },
+    });
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(load_from_bytes(&bytes).unwrap().responsive, doc.responsive);
     let remapped = load_from_bytes_with(&bytes, &LoadOptions { preserve_ids: false, ..Default::default() }).unwrap();
@@ -680,6 +697,11 @@ fn responsive_layout_roundtrips_in_native_manifest() {
     assert_eq!(remapped.responsive.variants[0].artboard, loaded_variant);
     assert_eq!(remapped.responsive.variants[0].master, loaded_master);
     assert_eq!(remapped.responsive.rules[0].layer, loaded_text);
+    // The override follows its variant's fresh id (it must not be dropped by the remap).
+    assert_eq!(remapped.responsive.overrides.len(), 1);
+    assert_eq!(remapped.responsive.overrides[0].variant, loaded_variant);
+    assert_eq!(remapped.responsive.overrides[0].layer, loaded_text);
+    assert_eq!(remapped.responsive.overrides[0].rule.layer, loaded_text);
     assert_eq!(photocraft_format::FORMAT_VERSION, 2);
 }
 
