@@ -4187,3 +4187,9 @@ shape	Appearance	화면 모양
 	Show layer bounds on hover	마우스를 올리면 레이어 경계 표시
 	Expand layer group on click	클릭하면 레이어 그룹 펼치기
 	Show hover bounds from Layers	레이어 패널에서 마우스를 올릴 때 경계 표시
+
+# Startup splash screen
+	Initializing graphics & engine…	그래픽 및 엔진 초기화 중…
+	Loading workspace & font assets…	작업 영역 및 글꼴 준비 중…
+	Ready	준비 완료
+	Click anywhere to skip	아무 곳이나 클릭하여 건너뛰기

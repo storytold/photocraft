@@ -474,7 +474,11 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !keep_polling(app, ctx) {
         return;
     }
-    if let Some(job) = job_in_view(app)
+    let splash_active = app.synthetic.is_empty()
+        && app.synthetic_batch.is_none()
+        && app.splash.as_ref().is_some_and(|s| s.is_active(ctx.input(|i| i.time)));
+    if !splash_active
+        && let Some(job) = job_in_view(app)
         && !ctx.text_edit_focused()
         && !crate::zoom_field::editing(ctx)
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))

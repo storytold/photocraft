@@ -18,6 +18,27 @@ impl PhotocraftApp {
         }
         self.last_frame_start_ms = gpu_canvas::now_ms();
     }
+
+    /// Returns whether the system is fully initialized (fonts ready and text engine available).
+    pub fn system_ready(&self) -> bool {
+        #[cfg(test)]
+        if let Some(r) = self.system_ready_override {
+            return r;
+        }
+        self.fonts_ready && photocraft_text::try_shared().is_some()
+    }
+
+    /// Returns whether application shortcuts are suppressed by an actively rendered splash screen.
+    ///
+    /// Shortcuts remain available during the initial appearance delay (when [`crate::splash::SplashState::time_until_appearance`]
+    /// is `Some`), when notices are posted, or when system initialization has completed (`system_ready`).
+    pub fn splash_shortcuts_blocked(&self, now: f64) -> bool {
+        !self.system_ready()
+            && self.ui.notices.is_empty()
+            && self.synthetic.is_empty()
+            && self.synthetic_batch.is_none()
+            && self.splash.as_ref().is_some_and(|s| s.should_render(now))
+    }
 }
 
 impl PhotocraftApp {
@@ -46,6 +67,10 @@ impl PhotocraftApp {
             self.fonts_ready = true;
         }
         self.frame += 1;
+        // After the first frame has rendered, warm CJK fallback fonts lazily without holding up startup.
+        if self.frame == 2 {
+            let _ = crate::cjk_fonts::preload_cjk(ctx);
+        }
         let now = ctx.input(|i| i.time);
         let dt = (now - self.last_frame_time) as f32;
         if dt > 0.0 {
@@ -90,12 +115,15 @@ impl PhotocraftApp {
         // A colour swatch's Color Picker OK hands its colour back to the swatch widget.
         crate::color_picker_ui::widget_tick(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
-        // shortcuts see Esc).
+        // shortcuts see Esc). Shortcuts are suppressed only while the splash is actually rendered.
+        let splash_visible = self.splash_shortcuts_blocked(now);
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
-            if type_tool::in_ui_pass(ctx) {
+            // Treat the splash as visible only if it was initially visible and notices remain empty.
+            let splash_visible = splash_visible && self.ui.notices.is_empty();
+            if !splash_visible && type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
                     shortcuts::handle(self, ctx);
                 } else {
@@ -184,6 +212,36 @@ impl PhotocraftApp {
             // The frame's stage record was started with its input: close it here too.
             self.finish_frame(0.0);
             return;
+        }
+        let now = ctx.input(|i| i.time);
+        if (!self.synthetic.is_empty() || self.synthetic_batch.is_some() || self.captures.any_pending())
+            && let Some(s) = &mut self.splash
+        {
+            s.dismiss();
+            ctx.request_repaint();
+        }
+        let system_ready = self.system_ready();
+        if let Some(splash) = &mut self.splash {
+            splash.ensure_started(now);
+            // Closes immediately when ready and never waits for an artificial timer.
+            // In the web build or whenever notices arrive (e.g. preset warnings), dismiss immediately so failures are never hidden.
+            let has_failures_or_notices = !self.ui.notices.is_empty();
+            if has_failures_or_notices || system_ready || !splash.is_active(now) {
+                splash.dismiss();
+                self.splash = None;
+                ctx.request_repaint();
+            } else if splash.should_render(now) {
+                splash.show(&ctx, ui);
+                if !self.ui.notices.is_empty() {
+                    notices::show(self, &ctx);
+                }
+                self.automation_input = false;
+                return;
+            } else if let Some(remaining) = splash.time_until_appearance(now) {
+                // Request repaint when appear delay expires so the splash appears on time
+                // without requiring external user input.
+                ctx.request_repaint_after(remaining);
+            }
         }
         let t0 = gpu_canvas::now_ms();
         self.perf.stage.ui_start(t0, frame.info().cpu_usage);
