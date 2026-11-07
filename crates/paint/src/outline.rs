@@ -112,6 +112,9 @@ fn trace(t: &GrayTile, thr: f32, xf: (f32, f32, f32, f32, f32)) -> Option<Vec<Ve
 /// Match the renderer's extended edge texels; the contour is clipped to the
 /// bitmap's physical support when mapped above.
 fn sample(t: &GrayTile, x: f32, y: f32) -> f32 {
+    if !t.is_valid() {
+        return 0.0;
+    }
     let (x0, y0) = (x.floor(), y.floor());
     let (tx, ty) = (x - x0, y - y0);
     let (x0, y0) = (x0 as i64, y0 as i64);
@@ -284,6 +287,13 @@ fn seg_dist2(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_sampled_tips_sample_as_transparent() {
+        for tip in [GrayTile::from_fn(0, 1, |_, _| 1.0), GrayTile::from_fn(1, 0, |_, _| 1.0)] {
+            assert_eq!(sample(&tip, 0.0, 0.0), 0.0);
+        }
+    }
 
     #[test]
     fn solid_sampled_cursor_is_centered_on_the_exact_bitmap_corners() {
