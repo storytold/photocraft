@@ -164,3 +164,65 @@ fn transform_task_bar_uses_the_shared_menu_and_window_toggle() {
     h.run_steps(4);
     assert_eq!(bar(&mut h)["visible"], true);
 }
+
+/// A switch before the next canvas pass must not expose the previous document's Done action.
+#[test]
+fn transform_task_bar_ignores_a_foreign_preview_after_a_document_switch() {
+    let mut h = harness();
+    h.state_mut().run("file.new", json!({"width": 400, "height": 300})).unwrap();
+    h.state_mut().run("document.activate", json!({"document": 0})).unwrap();
+    begin(&mut h);
+    h.run_steps(4);
+    let owner = h.state().transform_preview.as_ref().unwrap().doc.id;
+    let quad = h.state().ui.transform.as_ref().unwrap().quad;
+    assert_eq!(bar(&mut h)["visible"], true);
+
+    control(&mut h, "ui.menu.invoke", json!({"id": "window.nextDocument"}));
+    assert_ne!(h.state().session.active().unwrap().doc.id, owner);
+    assert_eq!(h.state().transform_preview.as_ref().unwrap().doc.id, owner);
+    assert_eq!(bar(&mut h)["visible"], false);
+
+    // Deliver a click to the old widget before the harness redraws the new document's canvas.
+    h.get_by_label("Done").click_accesskit();
+    h.run_steps(1);
+    assert_eq!(h.state().transform_preview.as_ref().unwrap().doc.id, owner);
+    assert_eq!(h.state().ui.transform.as_ref().unwrap().quad, quad);
+}
+
+/// Accessibility can deliver Hide and Done during the same pass.
+#[test]
+fn transform_task_bar_commits_when_done_and_hide_arrive_together() {
+    let mut h = open_box();
+    click(&mut h, "Rotate 90° Clockwise");
+    let edits = history(&h);
+    click(&mut h, "More options");
+
+    h.get_by_label("Hide bar").click_accesskit();
+    h.get_by_label("Done").click_accesskit();
+    h.run_steps(4);
+
+    assert!(!h.state().ui.panels.context_task_bar);
+    assert!(h.state().ui.transform.is_none());
+    assert_eq!(history(&h), edits + 1);
+}
+
+/// A Crop frame created synchronously after Cancel cannot inherit the Transform rect.
+#[test]
+fn transform_task_bar_does_not_report_its_rect_as_crop_after_cancel() {
+    let mut h = open_box();
+    assert!(bar(&mut h)["rect"].is_array());
+    h.get_by_label("Cancel").click_accesskit();
+    h.run_steps(1);
+    assert!(h.state().ui.transform.is_none());
+
+    // No UI pass between the Crop request and inspection.
+    control(
+        &mut h,
+        "ui.pointer",
+        json!({"tool": "crop", "events": [{"kind": "down", "x": 40, "y": 40}, {"kind": "move", "x": 230, "y": 170}, {"kind": "up", "x": 230, "y": 170}]}),
+    );
+    assert!(crate::crop_task_bar::eligible(h.state()));
+    let crop_bar = bar(&mut h);
+    assert_eq!(crop_bar["visible"], false);
+    assert!(crop_bar["rect"].is_null());
+}

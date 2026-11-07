@@ -15,10 +15,12 @@ enum Action {
 
 /// Crop keeps its own bar. Warp, Transform Selection and Content-Aware Scale use their own controls.
 fn open_box(app: &PhotocraftApp) -> Option<&TransformSession> {
+    let active = app.session.active()?;
+    let preview = app.transform_preview.as_ref()?;
     if !app.ui.panels.context_task_bar
         || app.ui.tool == Tool::Crop
         || !app.ui.dialogs.is_empty()
-        || app.session.active().is_none()
+        || preview.doc.id != active.doc.id
         || crate::transform_tool::committing(app).is_some()
     {
         return None;
@@ -41,10 +43,6 @@ pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
     let shown = task_bar::show(&ctx, &mut place, anchor, xf.rect, contents);
     app.ui.panels.task_bar = place;
     let Some(shown) = shown else { return };
-    if shown.hide {
-        app.ui.panels.context_task_bar = false;
-        return;
-    }
     match shown.inner {
         Some(Action::Preset(id)) => {
             if let Err(error) = crate::menus::invoke(app, &ctx, id, json!({})) {
@@ -56,10 +54,14 @@ pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
         Some(Action::Done) => crate::transform_tool::commit(app),
         None => {}
     }
-    if eligible(app) {
-        let r = shown.rect;
-        app.ui.task_bar_shown = Some([r.min.x, r.min.y, r.max.x, r.max.y]);
+    if shown.hide {
+        app.ui.panels.context_task_bar = false;
     }
+    // An action in an extra window can invalidate the rect written by the main canvas.
+    app.ui.task_bar_shown = eligible(app).then(|| {
+        let r = shown.rect;
+        [r.min.x, r.min.y, r.max.x, r.max.y]
+    });
 }
 
 /// Draw presets in the measured order, with the shared menu before Cancel and Done.
