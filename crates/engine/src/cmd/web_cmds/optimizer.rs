@@ -187,6 +187,21 @@ pub fn optimize(
             }
             (bytes, None)
         }
+        WebFormat::Avif => {
+            // The AVIF writer embeds no profile or metadata, so the file is read as sRGB.
+            let (data, layout) = true_color();
+            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?;
+            let opts = photocraft_codecs::EncodeOptions { jpeg_quality: st.quality.clamp(1, 100), ..Default::default() };
+            let bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Avif, &opts).map_err(e)?;
+            if preview {
+                // The preview shows the compression artefacts (the image itself if decoding fails).
+                look = match photocraft_codecs::decode_avif_preview(&bytes) {
+                    Ok(img) => img.into_data(),
+                    Err(_) => rgba(img.data(), layout),
+                };
+            }
+            (bytes, None)
+        }
         WebFormat::Jpeg => {
             let mut rgb = Vec::with_capacity(w * h * 3);
             for p in region() {

@@ -4188,3 +4188,5 @@ shape	Appearance	화면 모양
 	Show layer bounds on hover	마우스를 올리면 레이어 경계 표시
 	Expand layer group on click	클릭하면 레이어 그룹 펼치기
 	Show hover bounds from Layers	레이어 패널에서 마우스를 올릴 때 경계 표시
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	AVIF 파일에는 색상 프로파일과 메타데이터가 포함되지 않습니다.

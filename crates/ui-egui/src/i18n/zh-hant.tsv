@@ -3264,3 +3264,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	滑過時顯示圖層邊界
 	Expand layer group on click	按一下時展開圖層群組
 	Show hover bounds from Layers	顯示來自圖層面板的滑過邊界
+# Save for Web: AVIF (#2415, #6391)
+	AVIF files carry no color profile or metadata.	AVIF 檔案不含色彩描述檔與中繼資料。

@@ -1,6 +1,14 @@
-use super::{Arc, DialogKind, Map, PhotocraftApp, Tokens, Value, WebSettings, b, check, dropdown_str, json, n, number, params, s, web_cmds, web_preview};
+use super::{
+    Arc, DialogKind, Map, PhotocraftApp, Tokens, Value, WebFormat, WebSettings, b, check, dropdown_str, json, n, number, params, s, web_cmds, web_preview,
+};
 
-const WEB_FORMATS: [(&str, &str); 6] = [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("webp", "WebP"), ("wbmp", "WBMP")];
+const WEB_FORMATS: [(&str, &str); 7] =
+    [("gif", "GIF"), ("png8", "PNG-8"), ("png24", "PNG-24"), ("jpeg", "JPEG"), ("webp", "WebP"), ("avif", "AVIF"), ("wbmp", "WBMP")];
+
+/// The formats this build can write: AVIF only with the `avif` codecs feature.
+pub(super) fn web_formats() -> Vec<(&'static str, &'static str)> {
+    WEB_FORMATS.into_iter().filter(|(id, _)| WebFormat::from_id(id).is_some_and(WebFormat::available)).collect()
+}
 
 pub(super) const WEB_COMMAND: &str = "file.export.saveForWebLegacy";
 
@@ -31,6 +39,10 @@ pub fn open_web(app: &mut PhotocraftApp) -> u64 {
                 f.insert(k, v);
             }
         }
+    }
+    // A format remembered from a build that could write it (AVIF) falls back to the default.
+    if f.get("format").and_then(Value::as_str).is_some_and(|id| !WebFormat::from_id(id).is_some_and(WebFormat::available)) {
+        f.remove("format");
     }
     for (k, v) in [
         ("format", json!("jpeg")),
@@ -67,7 +79,7 @@ pub(super) fn variants(p: &Value) -> Vec<Value> {
             m.remove("colorTable");
             m.remove("colorTableEdits");
         }
-        if fmt == "jpeg" || (fmt == "webp" && !p["lossless"].as_bool().unwrap_or(false)) {
+        if fmt == "jpeg" || fmt == "avif" || (fmt == "webp" && !p["lossless"].as_bool().unwrap_or(false)) {
             v["quality"] = json!((p["quality"].as_f64().unwrap_or(60.0) / k).round().max(1.0));
         } else if fmt == "gif" || fmt == "png8" {
             v["colors"] = json!((p["colors"].as_f64().unwrap_or(128.0) / k).round().max(2.0));
@@ -129,8 +141,10 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
             v
         }
     };
-    let sig = format!("{}|{rev}|{frame:?}|{size_sig}|{}", doc.id.0, p.map(|v| v.to_string()).unwrap_or_else(|| "original".into()));
     let key = egui::Id::unique(("web-pane", doc.id.0, pane));
+    // AVIF: a finished background encode replaces the estimate (a new generation).
+    let (avif_generation, encoding) = if p.is_some() { web_preview::avif_status(ui, key) } else { (0, false) };
+    let sig = format!("{}|{rev}|{frame:?}|{size_sig}|{}|{avif_generation}", doc.id.0, p.map(|v| v.to_string()).unwrap_or_else(|| "original".into()));
     let cached: Option<WebCache> = ui.data(|d| d.get_temp(key));
     let (tex, info) = match cached.filter(|c| c.0 == sig) {
         Some((_, tex, info)) => (tex, info),
@@ -173,6 +187,7 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
             (Some(_), None) => ("—".into(), String::new()),
         };
         let l1 = if ratio > 1.001 { format!("{l1}  ·  Proxy preview") } else { l1 };
+        let l1 = if encoding { format!("{l1}  ·  Encoding…") } else { l1 };
         ui.add(egui::Label::new(egui::RichText::new(l1).color(t.text).size(11.5)).truncate());
         ui.add(egui::Label::new(egui::RichText::new(l2).color(t.text_dim).size(11.0)).truncate());
     });
@@ -314,7 +329,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                     f.insert("__preset".into(), json!(preset));
                 }
                 ui.add_space(4.0);
-                dropdown_str(ui, "web-format", tl!("Format"), f, "format", &WEB_FORMATS, 230.0);
+                dropdown_str(ui, "web-format", tl!("Format"), f, "format", &web_formats(), 230.0);
                 ui.add_space(4.0);
                 let fmt = s(f, "format", "jpeg");
                 match fmt.as_str() {
@@ -363,6 +378,11 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                         check(ui, f, "transparency", tl!("Transparency"), true);
                         check(ui, f, "embedIcc", tl!("Embed Color Profile"), false);
                     }
+                    "avif" => {
+                        number(ui, f, "quality", tl!("Quality"), 0.0..=100.0, "", 60.0);
+                        check(ui, f, "transparency", tl!("Transparency"), true);
+                        ui.label(egui::RichText::new(tl!("AVIF files carry no color profile or metadata.")).color(t.text_dim).small());
+                    }
                     "wbmp" => {
                         dropdown_str(
                             ui,
@@ -379,28 +399,31 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                         check(ui, f, "interlaced", tl!("Interlaced"), false);
                     }
                 }
-                if !matches!(fmt.as_str(), "png24" | "webp") || !b(f, "transparency", true) {
+                if !matches!(fmt.as_str(), "png24" | "webp" | "avif") || !b(f, "transparency", true) {
                     ui.horizontal(|ui| matte_field(ui, f));
                 }
                 ui.add_space(6.0);
                 check(ui, f, "convertToSrgb", tl!("Convert to sRGB"), true);
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
-                    dropdown_str(
-                        ui,
-                        "web-meta",
-                        tl!("Metadata"),
-                        f,
-                        "metadata",
-                        &[
-                            ("none", tl!("None")),
-                            ("copyright", tl!("Copyright")),
-                            ("copyrightAndContact", tl!("Copyright and Contact Info")),
-                            ("all", tl!("All")),
-                        ],
-                        160.0,
-                    );
-                });
+                // The AVIF writer embeds no metadata, so it offers no choice of it.
+                if fmt != "avif" {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(tl!("Metadata")).color(t.text_dim));
+                        dropdown_str(
+                            ui,
+                            "web-meta",
+                            tl!("Metadata"),
+                            f,
+                            "metadata",
+                            &[
+                                ("none", tl!("None")),
+                                ("copyright", tl!("Copyright")),
+                                ("copyrightAndContact", tl!("Copyright and Contact Info")),
+                                ("all", tl!("All")),
+                            ],
+                            160.0,
+                        );
+                    });
+                }
                 if matches!(fmt.as_str(), "gif" | "png8") {
                     web_preview::table(ui, f);
                 }
