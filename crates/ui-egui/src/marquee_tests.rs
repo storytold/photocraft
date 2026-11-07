@@ -320,6 +320,56 @@ fn fixed_size_alt_centers_the_box_at_the_current_pointer() {
     }
 }
 
+#[test]
+fn shape_creation_readout_tracks_live_geometry_and_ruler_units() {
+    use photocraft_engine::prefs::Unit;
+
+    let mut h = harness(Tool::Rectangle);
+    h.state_mut().ui.extras.snap = false;
+    h.state_mut().run("prefs.set", json!({"path": "tools.showTransformationValues", "value": true})).unwrap();
+    press_at(&mut h, 50.0, 50.0, Modifiers::NONE);
+    move_to(&mut h, 122.0, 86.0);
+    assert!(readout(&h, 72, 36), "the readout follows the current 72 × 36 px shape");
+
+    let cursor = screen(&h, 122.0, 86.0);
+    let label = h.query_by_label("W:").expect("W label while drawing").rect();
+    assert!(label.left() >= cursor.x + 16.0 && label.top() >= cursor.y + 18.0, "tooltip is beside, not over, the cursor: {label:?} vs {cursor:?}");
+
+    for (unit, width, height) in [
+        (Unit::Pixels, "72 px", "36 px"),
+        (Unit::Inches, "1 in", "0.5 in"),
+        (Unit::Centimeters, "2.54 cm", "1.27 cm"),
+        (Unit::Millimeters, "25.4 mm", "12.7 mm"),
+    ] {
+        h.state_mut().session.prefs.edit(|prefs| prefs.units_and_rulers.rulers = unit);
+        h.run_steps(1);
+        assert!(h.query_by_label("W:").is_some() && h.query_by_label("H:").is_some(), "W/H for {unit:?}");
+        assert!(h.query_by_label(width).is_some() && h.query_by_label(height).is_some(), "{unit:?}: {width} × {height}");
+    }
+
+    // A new pointer position changes the values while the same drag is held.
+    h.state_mut().session.prefs.edit(|prefs| prefs.units_and_rulers.rulers = Unit::Pixels);
+    move_to(&mut h, 194.0, 122.0);
+    assert!(readout(&h, 144, 72), "values update during the active drag");
+
+    // Each modifier, and then their combination, follows the shape preview's geometry.
+    mods(&mut h, Modifiers::SHIFT);
+    move_to(&mut h, 110.0, 90.0);
+    assert!(readout(&h, 60, 60), "Shift constrains the live readout to a square");
+    mods(&mut h, Modifiers::ALT);
+    move_to(&mut h, 110.0, 90.0);
+    assert!(readout(&h, 120, 80), "Alt doubles the dimensions around the press point");
+    mods(&mut h, Modifiers::SHIFT | Modifiers::ALT);
+    move_to(&mut h, 110.0, 90.0);
+    assert!(readout(&h, 120, 120), "Shift + Alt readout matches the constrained shape bounds");
+    let bounds = crate::vector_ui::shape_bounds(&h.state().ui.tool_options, Tool::Rectangle, [50.0, 50.0], [110.0, 90.0], Modifiers::SHIFT | Modifiers::ALT)
+        .expect("constrained rectangle bounds");
+    assert_eq!([bounds[2] - bounds[0], bounds[3] - bounds[1]], [120.0, 120.0]);
+
+    release_at(&mut h, 110.0, 90.0, Modifiers::SHIFT | Modifiers::ALT);
+    assert!(h.query_by_label("W:").is_none() && h.query_by_label("H:").is_none(), "the readout disappears after release");
+}
+
 /// #204: Preferences › Tools › Show Transformation Values off hides the readout, not the marquee.
 #[test]
 fn show_transformation_values_off_hides_the_readout() {
