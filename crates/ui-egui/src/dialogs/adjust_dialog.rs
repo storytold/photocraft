@@ -284,15 +284,29 @@ pub fn reset(app: &PhotocraftApp, ctx: &egui::Context, fields: &mut Map<String, 
     }
 }
 
-/// Adjustments whose dialog opens at the settings last confirmed in it, as Photoshop's Photo
-/// Filter keeps its filter and density from one use to the next (#9879). The others open at their
-/// neutral settings, and ⌥ reopens them at the last ones ([`open_last`]).
-const REMEMBERS_LAST: &[&str] = &["photoFilter"];
+/// Settings an adjustment dialog keeps from its last OK although it opens at its neutral ones:
+/// the reference application's Photo Filter reopens at Warming Filter (85) and 25 % every time,
+/// but with Preserve Luminosity as last confirmed (measured 2026-11-08, #9879). ⌥ still reopens
+/// at all the last settings ([`open_last`]).
+const KEEPS_LAST: &[(&str, &str)] = &[("photoFilter", "preserveLuminosity")];
 
-/// Opens the dialog for `command`: at its last confirmed settings for the [`REMEMBERS_LAST`]
-/// kinds, else at the kind's neutral ones.
+/// Opens the dialog for `command` at the kind's neutral settings, except the [`KEEPS_LAST`] ones,
+/// which keep their last confirmed value.
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
-    if command.strip_prefix(PREFIX).is_some_and(|kind| REMEMBERS_LAST.contains(&kind)) { open_last(app, command) } else { open_neutral(app, command) }
+    let id = open_neutral(app, command)?;
+    let kind = command.strip_prefix(PREFIX).unwrap_or_default();
+    let kept: Vec<(String, Value)> = match app.session.prefs().dialogs.get(command) {
+        Some(last) => KEEPS_LAST
+            .iter()
+            .filter(|(k, _)| *k == kind)
+            .filter_map(|(_, key)| last.get(*key).filter(|v| v.is_boolean()).map(|v| ((*key).to_owned(), v.clone())))
+            .collect(),
+        None => Vec::new(),
+    };
+    if let Some(d) = app.ui.dialog_mut(id) {
+        d.fields.extend(kept);
+    }
+    Some(id)
 }
 
 /// Opens the dialog for `command` with the kind's neutral settings.

@@ -939,36 +939,50 @@ fn curves_on_a_targeted_filter_mask_is_a_gray_plane() {
     assert_eq!(curve_mode(&app, "curves"), photocraft_doc::ColorMode::Grayscale);
 }
 
-/// #9879: Photo Filter opens at the filter and density last confirmed in it, without ⌥; Levels
-/// still opens at its neutral settings, and a smart filter's dialog never takes the last ones.
+/// #9879: the reference application's Photo Filter reopens at Warming Filter (85) and 25 % after
+/// any OK, but keeps Preserve Luminosity as last confirmed (measured 2026-11-08); ⌥ reopens at all
+/// the last settings; Levels still opens at its neutral settings, and a smart filter's dialog
+/// never takes the last ones.
 #[test]
-fn photo_filter_opens_at_its_last_settings() {
+fn photo_filter_keeps_only_preserve_luminosity_from_its_last_ok() {
     let mut app = app_with_image();
     let cmd = "image.adjustments.photoFilter";
     let first = open_neutral(&mut app, cmd).unwrap();
     let neutral = crate::filter_dialog::params_of(&app.ui.dialog_mut(first).unwrap().fields.clone());
     app.ui.dialogs.clear();
     let id = open(&mut app, cmd).unwrap();
-    let sample = photocraft_engine::adjust_params::to_params(
+    let mut sample = photocraft_engine::adjust_params::to_params(
         &photocraft_engine::adjust_params::from_params("photoFilter", &sample_params("photoFilter"), None, photocraft_doc::ColorMode::Rgb).unwrap(),
     );
-    assert_ne!(sample, neutral, "the sample differs from the neutral settings");
+    // Preserve Luminosity is on by default; the sample turns it off with the other settings.
+    assert_eq!(neutral["preserveLuminosity"], json!(true));
+    sample["preserveLuminosity"] = json!(false);
+    assert_ne!(sample["color"], neutral["color"], "the sample differs from the neutral settings");
+    assert_ne!(sample["density"], neutral["density"]);
     if let Value::Object(p) = sample.clone() {
         app.ui.dialog_mut(id).unwrap().fields.extend(p);
     }
     crate::dialogs::confirm(&mut app, id).unwrap();
 
     let again = open(&mut app, cmd).unwrap();
-    assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone()), sample, "reopened at the last settings");
-    // Preserve Luminosity is on by default; turned off and confirmed, it reopens off.
-    assert_eq!(neutral["preserveLuminosity"], json!(true));
-    app.ui.dialog_mut(again).unwrap().fields.insert("preserveLuminosity".into(), json!(false));
+    let reopened = crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone());
+    assert_eq!(reopened["preserveLuminosity"], json!(false), "Preserve Luminosity off is kept");
+    assert_eq!(reopened["color"], neutral["color"], "the colour is the neutral one again");
+    assert_eq!(reopened["density"], neutral["density"], "and so is the density");
+    // Turned on again and confirmed, it reopens on.
+    app.ui.dialog_mut(again).unwrap().fields.insert("preserveLuminosity".into(), json!(true));
     crate::dialogs::confirm(&mut app, again).unwrap();
     let again = open(&mut app, cmd).unwrap();
-    let reopened = crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone());
-    assert_eq!(reopened["preserveLuminosity"], json!(false), "Preserve Luminosity off is remembered");
-    assert_eq!(reopened["color"], sample["color"], "with the rest of the last settings");
-    assert_eq!(reopened["density"], sample["density"]);
+    assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(again).unwrap().fields.clone()), neutral, "all neutral again");
+    app.ui.dialogs.clear();
+    // ⌥ reopens at every last setting (#8900).
+    let id = open(&mut app, cmd).unwrap();
+    if let Value::Object(p) = sample.clone() {
+        app.ui.dialog_mut(id).unwrap().fields.extend(p);
+    }
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let alt = open_last(&mut app, cmd).unwrap();
+    assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(alt).unwrap().fields.clone()), sample, "⌥ reopens at the last settings");
     app.ui.dialogs.clear();
     let smart = open_neutral(&mut app, cmd).unwrap();
     assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(smart).unwrap().fields.clone()), neutral, "open_neutral ignores them");
@@ -984,25 +998,33 @@ fn photo_filter_opens_at_its_last_settings() {
     assert_eq!(app.ui.dialog_mut(again).unwrap().fields["inBlack"], defaults["inBlack"], "Levels opens neutral without ⌥");
 }
 
-/// #9879 review: a custom colour confirmed in Photo Filter reopens with Color chosen, even after an
-/// opening that switched to Filter and was cancelled (the choice lives in the editor memory).
+/// #9879: Photo Filter reopens with Filter chosen for its neutral preset colour, even after an OK
+/// with Color chosen (the choice lives in the editor memory), as the reference application does;
+/// ⌥ reopens a custom colour with Color chosen, also after an opening that chose Filter and was
+/// cancelled.
 #[test]
 fn photo_filter_reopens_with_the_choice_its_colour_implies() {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     let cmd = "image.adjustments.photoFilter";
-    let id = open(h.state_mut(), cmd).unwrap();
-    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#123456"));
-    h.run_steps(2);
-    crate::dialogs::confirm(h.state_mut(), id).unwrap();
-    // The next opening chooses Filter (what clicking its radio stores), then is cancelled.
     let mode = dialog_mem("photoFilter").with(crate::adjust_editors::PHOTO_FILTER_MODE);
     let id = open(h.state_mut(), cmd).unwrap();
     h.run_steps(2);
-    h.ctx.data_mut(|d| d.insert_temp(mode, false));
-    h.state_mut().ui.close_dialog(id);
+    let neutral = h.state_mut().ui.dialog_mut(id).unwrap().fields["color"].clone();
+    // Color chosen (what clicking its radio stores), a custom colour, OK.
+    h.ctx.data_mut(|d| d.insert_temp(mode, true));
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#123456"));
+    h.run_steps(2);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
     h.run_steps(1);
     let id = open(h.state_mut(), cmd).unwrap();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["color"], neutral, "the neutral colour again");
+    assert_eq!(h.ctx.data(|d| d.get_temp::<bool>(mode)), Some(false), "Filter is chosen for the preset colour");
+    // That opening is cancelled with Filter chosen; ⌥ brings the custom colour back with Color.
+    h.state_mut().ui.close_dialog(id);
+    h.run_steps(1);
+    let id = open_last(h.state_mut(), cmd).unwrap();
     h.run_steps(2);
     assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["color"], json!("#123456"));
     assert_eq!(h.ctx.data(|d| d.get_temp::<bool>(mode)), Some(true), "Color is chosen for the custom colour");
