@@ -96,7 +96,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
     let split_groups = match p.get("groups") {
         None => false,
-        Some(Value::String(value)) => match value.as_str() {
+        Some(Value::String(value)) => match value.to_ascii_lowercase().as_str() {
             // `single` is the name earlier docs used for the same non-splitting mode.
             "merged" | "single" => false,
             "layers" => true,

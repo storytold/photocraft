@@ -2669,6 +2669,10 @@ fn layers_to_files_folds_name_collisions_and_rejects_untyped_modes() {
     let alias_files: Vec<String> = merged["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
     assert_eq!(alias_files, vec![join(&dir, "alias_0000_Names.png"), join(&dir, "alias_0001_Background.png")]);
 
+    // Both modes are case-insensitive, like naming.
+    let upper = s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "LAYERS", "naming": "Layer"})).unwrap();
+    let upper_files: Vec<String> = upper["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(upper_files, files, "groups and naming match case-insensitively");
     assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": 3})).is_err(), "groups must be a string");
     assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "naming": true})).is_err(), "naming must be a string");
 }
