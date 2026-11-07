@@ -479,6 +479,9 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 Tool::MagicWand => {
                     let o = app.ui.tool_options.clone();
                     let mode = selection_mode(app, mods);
+                    if wand_pasteboard_click(app, x, y, mode) {
+                        return;
+                    }
                     let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
                     return;
                 }
@@ -692,6 +695,19 @@ fn covers(sel: &photocraft_raster::Surface, p: [f64; 2]) -> bool {
     v[0] > 0.0
 }
 
+/// A New-mode Magic Wand click on the pasteboard deselects, as Photoshop's step "Deselect"
+/// (#11782), instead of a "Magic Wand" step that selects nothing. True when it handled the click.
+fn wand_pasteboard_click(app: &mut PhotocraftApp, x: f64, y: f64, mode: &str) -> bool {
+    let on_canvas = app.session.active().is_some_and(|st| st.doc.bounds().contains(x.floor() as i32, y.floor() as i32));
+    if mode != "replace" || on_canvas {
+        return false;
+    }
+    if app.session.is_enabled("select.deselect") {
+        let _ = app.run("select.deselect", json!({}));
+    }
+    true
+}
+
 /// Does a press with `tool` at `p` drag the selection rather than draw a new one? `Some(true)`
 /// moves the floating piece (⌘ cuts one first, ⌘⌥ copies; the Polygonal Lasso and Magic Wand need
 /// ⌘, as a plain press there places or samples), `Some(false)` just the outline (no ⇧ / ⌥ and the
@@ -730,7 +746,10 @@ pub fn selection_drag_kind(app: &PhotocraftApp, tool: Tool, p: [f64; 2], mods: e
     if cut {
         return Some(true);
     }
-    (!clicky && !mods.command && selection_mode(app, mods) == "replace").then_some(false)
+    // The Magic Wand in New mode drags the outline like a marquee: a click deselects, a drag
+    // moves the outline (#11782).
+    let outline = !clicky || tool == Tool::MagicWand;
+    (outline && !mods.command && selection_mode(app, mods) == "replace").then_some(false)
 }
 
 /// The tool a pointer event with `mods` goes to: ⌘ held is the Move tool (`hold_keys::cmd_moves`).
