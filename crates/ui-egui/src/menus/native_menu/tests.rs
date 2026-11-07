@@ -147,6 +147,7 @@ fn menu_rows_show_the_shortcut_that_runs_them() {
 /// documents gains a row, which rebuilds only the Window menu.
 #[test]
 fn opening_a_document_changes_state_not_structure() {
+    let _plugins = crate::plugin_ui::steady_plugins();
     let (a, b) = (crate::menus::menu_items(&app(false)), crate::menus::menu_items(&app(true)));
     let kind = |items: &[MenuItem]| items.iter().map(|i| (i.id.clone(), i.checked.is_some())).collect::<HashMap<_, _>>();
     let (ka, kb) = (kind(&a), kind(&b));
@@ -161,6 +162,7 @@ fn opening_a_document_changes_state_not_structure() {
 /// the active one checked. Switching documents moves the check without a rebuild.
 #[test]
 fn the_documents_follow_bring_all_to_front() {
+    let _plugins = crate::plugin_ui::steady_plugins();
     let none = ids(&layout(false).bar.menu(MenuRole::Window).unwrap().children);
     assert_eq!(none.last().map(String::as_str), Some("<BringAllToFront>"));
 
