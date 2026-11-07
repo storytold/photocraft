@@ -580,7 +580,7 @@ fn only_allocation_failures_are_fatal_to_a_layer_channel() {
         fatal_error: None,
         dpi: 72.0,
         txt2: None,
-        filter_effects: Vec::new(),
+        filter_effects: Default::default(),
         filter_masks: Default::default(),
         unfiltered: Default::default(),
         unfiltered_bytes: 0,

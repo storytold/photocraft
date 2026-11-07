@@ -48,6 +48,25 @@ impl PatternLibrary {
             None => self.items.push(pat),
         }
     }
+
+    /// [`upsert`](Self::upsert) each of `pats`, finding the ids through one index rather than a
+    /// scan of the library per pattern (a `.pat` of many patterns made the import quadratic).
+    pub fn upsert_all(&mut self, pats: impl IntoIterator<Item = Pattern>) {
+        let mut by_id: std::collections::HashMap<String, usize> = self.items.iter().enumerate().map(|(i, q)| (q.id.clone(), i)).collect();
+        for pat in pats {
+            self.stored.remove(&pat.id);
+            match by_id.get(&pat.id) {
+                Some(&i) => {
+                    self.items[i] = pat;
+                    self.pixels_rev += 1;
+                }
+                None => {
+                    by_id.insert(pat.id.clone(), self.items.len());
+                    self.items.push(pat);
+                }
+            }
+        }
+    }
 }
 
 /// Whether `p` is a built-in pattern as shipped (same id, name, size and pixels): those are never
@@ -409,12 +428,8 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         (None, None) => return Err(bad(cmd, "missing `path` (.pat file) or `data`")),
     };
     let pats = photocraft_io::pattern_map::read_pat(&bytes).map_err(EngineError::Other)?;
-    let mut ids = Vec::new();
-    for pat in pats {
-        ids.push(pat.id.clone());
-        s.patterns.stored.remove(&pat.id);
-        s.patterns.upsert(pat);
-    }
+    let ids: Vec<String> = pats.iter().map(|pat| pat.id.clone()).collect();
+    s.patterns.upsert_all(pats);
     Ok(json!({"imported": ids, "count": ids.len()}))
 }
 
