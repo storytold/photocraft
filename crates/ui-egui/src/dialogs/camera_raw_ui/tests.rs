@@ -86,6 +86,56 @@ fn closing_the_camera_raw_window_cancels() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 }
 
+/// Over a full-screen main window (or a maximized one on Wayland) the dialog is drawn in that
+/// window, not in a window of its own: a separate window would cover the main one, which then
+/// draws no frames, and the dialog drawn inside those frames would freeze.
+#[test]
+fn camera_raw_stays_in_a_full_screen_or_wayland_maximized_window() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+    ctx.set_embed_viewports(false);
+    // Stands in for the desktop backend: records each window the dialog asks for and draws it,
+    // as eframe does, in a frame of its own.
+    let windows = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = std::rc::Rc::clone(&windows);
+    egui::Context::set_immediate_viewport_renderer(move |ctx, mut viewport| {
+        seen.borrow_mut().push(viewport.ids.this);
+        let mut input = egui::RawInput { viewport_id: viewport.ids.this, ..Default::default() };
+        input.viewports.insert(viewport.ids.this, egui::ViewportInfo::default());
+        ctx.run_ui(input, |ui| (viewport.viewport_ui_cb)(ui)).textures_delta.clear();
+    });
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+
+    // (Wayland, full screen, maximized, a window of its own)
+    for (wayland, fullscreen, maximized, own_window) in [
+        (false, false, false, true),
+        (true, false, false, true),
+        (false, true, false, false),
+        (true, true, false, false),
+        (false, false, true, true),
+        (true, false, true, false),
+    ] {
+        app.services.is_wayland = wayland;
+        windows.borrow_mut().clear();
+        app.camera_raw.as_mut().unwrap().viewport = None;
+        let mut input = egui::RawInput::default();
+        let root = input.viewports.entry(egui::ViewportId::ROOT).or_default();
+        (root.fullscreen, root.maximized) = (Some(fullscreen), Some(maximized));
+        ctx.run_ui(input, |ui| show(&mut app, ui.ctx())).textures_delta.clear();
+        let case = format!("wayland {wayland}, full screen {fullscreen}, maximized {maximized}");
+        if own_window {
+            assert_eq!(*windows.borrow(), [window], "a window of its own ({case})");
+        } else {
+            assert!(windows.borrow().is_empty(), "no window of its own ({case})");
+        }
+        assert!(app.camera_raw.as_ref().unwrap().viewport.is_some(), "the dialog is drawn ({case})");
+    }
+}
+
 /// A layer with tonal variation, a selection over part of it and the dialog open on it.
 fn worker_app() -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
