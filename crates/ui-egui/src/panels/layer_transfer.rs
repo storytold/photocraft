@@ -19,7 +19,7 @@ use crate::state::Tool;
 #[derive(Clone, Debug)]
 pub enum TransferKind {
     Layers(Vec<u64>),
-    Selection,
+    Selection { mask: bool },
 }
 
 /// The layers or selection being dragged and where from.
@@ -58,10 +58,10 @@ fn begin_layers(app: &PhotocraftApp, ctx: &egui::Context, id: LayerId, grab: Opt
     true
 }
 
-fn begin_selection(app: &PhotocraftApp, ctx: &egui::Context, grab: [f64; 2]) -> bool {
+fn begin_selection(app: &PhotocraftApp, ctx: &egui::Context, grab: [f64; 2], mask: bool) -> bool {
     let Some(st) = app.session.active() else { return false };
     let label = tl!("Selection");
-    let t = Transfer { source: st.doc.id, kind: TransferKind::Selection, grab: Some(grab), label: label.to_string() };
+    let t = Transfer { source: st.doc.id, kind: TransferKind::Selection { mask }, grab: Some(grab), label: label.to_string() };
     ctx.data_mut(|d| d.insert_temp(key(), t));
     true
 }
@@ -126,12 +126,13 @@ fn arm_move_drag(app: &mut PhotocraftApp, ctx: &egui::Context, drag: MoveDrag) {
             }
         }
         MoveDrag::Selection { grab, .. } => {
+            let mask = app.session.active().and_then(photocraft_engine::float_cmds::floating).map_or_else(|| app.layer_mask_targeted(), |f| f.parts.is_mask());
             if let Some(st) = app.session.active_mut()
                 && st.floating.as_ref().is_some_and(|f| !f.moved && f.offset == (0, 0))
             {
                 st.floating = None;
             }
-            begin_selection(app, ctx, grab);
+            begin_selection(app, ctx, grab, mask);
         }
     }
 }
@@ -237,7 +238,13 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     let shift = ctx.input(|i| i.modifiers.shift);
     let mut p = match t.kind {
         TransferKind::Layers(layers) => json!({"document": dest, "source": src, "layers": layers}),
-        TransferKind::Selection => json!({"document": dest, "source": src, "selection": true, "cut": false}),
+        TransferKind::Selection { mask } => {
+            let mut v = json!({"document": dest, "source": src, "selection": true, "cut": false});
+            if mask {
+                v["target"] = json!("mask");
+            }
+            v
+        }
     };
     apply_drop_placement(&mut p, at, t.grab, shift, same_size);
     app.session.set_active(dest);

@@ -701,3 +701,31 @@ fn copies_selected_pixels_to_destination_document_with_copy_and_cut() {
     assert_eq!(bounds(&s, 1, dest_id3), Rect::new(17, 13, 22, 23));
     assert_eq!(s.documents()[0].floating.as_ref().map(|f| f.offset), Some((6, 4)));
 }
+
+#[test]
+fn copying_or_cutting_a_mask_selection_transfers_the_mask_without_touching_layer_pixels() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 4, "y": 6, "width": 5, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080", "target": "mask"})).unwrap();
+
+    // Unfloated mask target (as after arm_move_drag clears an unmoved float): copies mask gray, not red layer pixels.
+    let r1 = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": false, "target": "mask"})).unwrap();
+    let dest_id1 = copied(&r1);
+    let mut px1 = [0.0f32; 4];
+    doc(&s, 1).layer(dest_id1).unwrap().surface().unwrap().read_pixel(5, 8, &mut px1);
+    assert!((px1[0] - px1[1]).abs() < 0.02 && (px1[0] - 128.0 / 255.0).abs() < 0.02, "copied mask gray, not red: {px1:?}");
+
+    // Moved floating mask selection: copies moved mask piece and with cut: true leaves red layer pixels untouched.
+    s.set_active(0);
+    s.execute("select.float", json!({"dx": 6, "dy": 4, "target": "mask"})).unwrap();
+    let r2 = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": true, "offset": [2, 3]})).unwrap();
+    let dest_id2 = copied(&r2);
+    assert_eq!(bounds(&s, 1, dest_id2), Rect::new(12, 13, 17, 23));
+    let mut px2 = [0.0f32; 4];
+    doc(&s, 1).layer(dest_id2).unwrap().surface().unwrap().read_pixel(13, 15, &mut px2);
+    assert!((px2[0] - px2[1]).abs() < 0.02 && (px2[0] - 128.0 / 255.0).abs() < 0.02, "copied floating mask gray: {px2:?}");
+    let mut src_px = [0.0f32; 4];
+    doc(&s, 0).layer(paint).unwrap().surface().unwrap().read_pixel(5, 8, &mut src_px);
+    assert_eq!(src_px, [1.0, 0.0, 0.0, 1.0], "source layer image pixels were not cleared or altered");
+}

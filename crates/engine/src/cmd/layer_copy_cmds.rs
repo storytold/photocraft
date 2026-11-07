@@ -238,13 +238,21 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let id = from.active_layer.ok_or_else(|| bad("no active layer in source document"))?;
         let src_layer = sdoc.layer(id).ok_or(EngineError::NoLayer(id))?;
-        let floating_parts = crate::float_cmds::floating(from)
-            .filter(|f| f.layer == id)
-            .and_then(|f| f.parts.piece().map(|(piece, bounds)| (piece.clone(), bounds, f.offset, f.parts.clone())));
+        let mask_target = crate::channel_cmds::target_of(p) == crate::channel_cmds::Target::Mask
+            || from.channel_view.target == crate::channel_cmds::ChannelTarget::LayerMask
+            || crate::mask_view_cmds::current(from).is_some_and(|v| !v.filter);
+        let floating_parts = crate::float_cmds::floating(from).filter(|f| f.layer == id).map(|f| {
+            let (piece, bounds) = f.parts.piece();
+            (piece.clone(), bounds, f.offset, f.parts.clone())
+        });
         let (clip_surface, clip_bounds, float_off, float_cut) = match floating_parts {
             Some((piece, bounds, off, parts)) => (piece, bounds, off, Some(parts)),
             None => {
-                let surf = src_layer.surface().ok_or_else(|| EngineError::Other("the active layer has no pixels to copy".into()))?;
+                let surf = if mask_target {
+                    &src_layer.mask.as_ref().ok_or_else(|| EngineError::Other("the active layer has no layer mask".into()))?.surface
+                } else {
+                    src_layer.surface().ok_or_else(|| EngineError::Other("the active layer has no pixels to copy".into()))?
+                };
                 let clip = crate::cmd::edit_cmds::lift(surf, sdoc.selection.as_ref(), sdoc.bounds())?;
                 (clip.surface, clip.bounds, (0, 0), None)
             }
@@ -257,10 +265,12 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(EngineError::Other(format!("layers can't be copied with a {:?} {role} document", doc.mode)));
             }
         }
+        let target_fmt = photocraft_color::PixelFormat::new(sdoc.mode, sdoc.depth, true);
+        let clip_surface = if clip_surface.format() == target_fmt { clip_surface } else { clip_surface.convert(target_fmt) };
         let mut copies = Document::new("", sdoc.size, sdoc.mode, sdoc.depth);
         copies.icc_profile = sdoc.icc_profile.clone();
         copies.resolution_dpi = sdoc.resolution_dpi;
-        let mut l = Layer::raster(ddoc.next_layer_name("Layer"), clip_surface.format());
+        let mut l = Layer::raster(ddoc.next_layer_name("Layer"), target_fmt);
         *crate::pixels_mut(&mut l)? = clip_surface;
         copies.layers.push(l);
 
@@ -288,6 +298,8 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
             s.edit("Cut Pixels", |doc, _| {
                 if let Some(parts) = &float_cut {
                     parts.place_rest(doc)?;
+                } else if mask_target {
+                    crate::cmd::edit_cmds::clear_mask(doc, id, bg, &json!({"target": "mask"}))?;
                 } else {
                     crate::cmd::edit_cmds::clear_selected(doc, id, bg)?;
                 }

@@ -103,15 +103,24 @@ impl CutParts {
         self.outline.as_ref()
     }
 
-    /// The floating pixel piece and its bounds (`None` when the floating piece is a layer mask).
-    pub fn piece(&self) -> Option<(&Surface, photocraft_geom::Rect)> {
-        (!self.mask).then_some((&self.piece, self.piece_bounds))
+    /// Whether this floating piece is a layer mask (`"target":"mask"`).
+    pub fn is_mask(&self) -> bool {
+        self.mask
     }
 
-    /// Replace the layer's pixels with the cut-out remainder.
+    /// The floating pixel or mask piece and its bounds.
+    pub fn piece(&self) -> (&Surface, photocraft_geom::Rect) {
+        (&self.piece, self.piece_bounds)
+    }
+
+    /// Replace the layer's pixels (or mask) with the cut-out remainder.
     pub fn place_rest(&self, doc: &mut Document) -> Result<()> {
         let l = doc.layer_mut(self.layer).ok_or(EngineError::NoLayer(self.layer))?;
-        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?;
+        let surf = if self.mask {
+            l.mask.as_mut().map(|m| &mut m.surface).ok_or_else(|| EngineError::Other("the layer has no mask".into()))?
+        } else {
+            l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?
+        };
         *surf = self.rest.clone();
         Ok(())
     }
