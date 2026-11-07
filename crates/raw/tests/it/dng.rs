@@ -928,6 +928,63 @@ fn profile_gain_table_map_is_reported() {
     assert!(gain_table(&sensor(&spec.build())));
 }
 
+#[test]
+fn profile_tone_curve_is_read_and_applied() {
+    let (w, h) = (16, 16);
+    let base = DngSpec::cfa(w, h, vec![1200; w * h]);
+    let with_curve = |values: Vec<f64>| DngSpec { ifd0_extra: vec![(50940, Val::Double(values))], ..base.clone() };
+    // A curve that darkens the mid-tones, same end points. It comes back as its cubic spline,
+    // sampled densely, through the file's own points.
+    let s = sensor(&with_curve(vec![0.0, 0.0, 0.25, 0.1, 0.5, 0.35, 1.0, 1.0]).build());
+    assert!(s.tone_curve.len() > 1000);
+    for knot in [[0.0, 0.0], [0.25, 0.1], [0.5, 0.35], [1.0, 1.0]] {
+        assert!(s.tone_curve.contains(&knot), "{knot:?}");
+    }
+    assert!(s.tone_curve.windows(2).all(|w| w[1][0] > w[0][0] && w[1][1] >= w[0][1]));
+    assert!(!s.warnings.iter().any(|w| w.contains("ProfileToneCurve")));
+    let mean = |s: &Sensor| {
+        let d = develop_sensor(s, &DevelopOptions::default()).unwrap();
+        d.rgb.iter().map(|&v| f64::from(v)).sum::<f64>() / d.rgb.len() as f64
+    };
+    let plain = sensor(&base.build());
+    assert!(plain.tone_curve.is_empty());
+    assert!(mean(&s) < mean(&plain) * 0.95, "{} vs {}", mean(&s), mean(&plain));
+
+    // A profile that also carries a ProfileGainTableMap (not applied yet) keeps its curve out:
+    // the specification applies the map first, and the curve alone crushes the shadows.
+    let both = DngSpec { profile_gain_table_map: Some(vec![0; 64]), ..with_curve(vec![0.0, 0.0, 0.25, 0.1, 0.5, 0.35, 1.0, 1.0]) };
+    let s = sensor(&both.build());
+    assert!(s.tone_curve.is_empty());
+    assert!(s.warnings.iter().any(|w| w.contains("ProfileToneCurve is not applied without its ProfileGainTableMap")), "{:?}", s.warnings);
+
+    // The identity curve is no curve.
+    let s = sensor(&with_curve(vec![0.0, 0.0, 0.5, 0.5, 1.0, 1.0]).build());
+    assert!(s.tone_curve.is_empty() && !s.warnings.iter().any(|w| w.contains("ProfileToneCurve")));
+}
+
+#[test]
+fn malformed_profile_tone_curves_are_ignored_with_a_warning() {
+    let base = DngSpec::cfa(8, 8, vec![500; 64]);
+    for values in [
+        vec![0.0, 0.0, 1.0],                          // odd count
+        vec![0.0, 0.0],                               // one point
+        vec![0.0, 0.0, 0.5, 0.2, 0.5, 0.6, 1.0, 1.0], // repeated input
+        vec![0.0, 0.0, 0.6, 0.2, 0.4, 0.6, 1.0, 1.0], // decreasing input
+        vec![0.0, 0.0, 0.5, f64::NAN, 1.0, 1.0],
+        vec![0.0, 0.0, 0.5, 1e300, 1.0, 1.0],
+        vec![0.0, 0.0, 0.5, -0.1, 1.0, 1.0],
+        vec![0.1, 0.0, 1.0, 1.0],                     // does not start at (0, 0)
+        vec![0.0, 0.0, 0.9, 0.9],                     // does not end at (1, 1)
+        vec![0.0, 0.0, 0.4, 0.6, 0.6, 0.5, 1.0, 1.0], // output decreases
+    ] {
+        let spec = DngSpec { ifd0_extra: vec![(50940, Val::Double(values.clone()))], ..base.clone() };
+        let s = sensor(&spec.build());
+        assert!(s.tone_curve.is_empty(), "{values:?}");
+        assert!(s.warnings.iter().any(|w| w.contains("ProfileToneCurve")), "{values:?}");
+        develop_sensor(&s, &DevelopOptions::default()).unwrap();
+    }
+}
+
 // ---------------------------------------------------------------- lossy DNG (compression 34892)
 
 /// The largest difference between decoded and source samples, in stored (8-bit) levels.
@@ -1160,4 +1217,41 @@ fn lossy_jpeg_rejects_other_depths_and_sample_counts() {
     bytes[at + 8] = 4;
     let err = decode(&bytes, &Limits::default()).unwrap_err();
     assert!(matches!(&err, RawError::Unsupported(m) if m.contains("4 samples")), "{err}");
+}
+
+#[test]
+fn profile_tone_curve_is_interpolated_with_a_cubic_spline() {
+    // The DNG specification interpolates ProfileToneCurve with a cubic spline. Through (0, 0),
+    // (0.5, 0.25) and (1, 1) the natural spline has second derivative 3 at 0.5 (6 * (1.5 - 0.5)
+    // / (2 * 1)), so at 0.25: 3 * 0.25^3 / (6 * 0.5) + (0.25 / 0.5 - 3 * 0.5 / 6) * 0.25
+    // = 0.015625 + 0.0625 = 0.078125; a straight line between the knots gives 0.125.
+    let spec = DngSpec { ifd0_extra: vec![(50940, Val::Double(vec![0.0, 0.0, 0.5, 0.25, 1.0, 1.0]))], ..DngSpec::cfa(8, 8, vec![500; 64]) };
+    let s = sensor(&spec.build());
+    let at = |x: f32| s.tone_curve.iter().find(|p| p[0] == x).map(|p| p[1]);
+    assert!((at(0.25).unwrap() - 0.078125).abs() < 1e-6, "{:?}", at(0.25));
+    assert_eq!(at(0.5), Some(0.25));
+    // A spline through steep points overshoots below 0; the samples stay in 0..=1 and rise.
+    let spec = DngSpec { ifd0_extra: vec![(50940, Val::Double(vec![0.0, 0.0, 0.1, 0.0, 0.2, 0.9, 1.0, 1.0]))], ..DngSpec::cfa(8, 8, vec![500; 64]) };
+    let s = sensor(&spec.build());
+    assert!(s.tone_curve.iter().all(|p| (0.0..=1.0).contains(&p[1])));
+    assert!(s.tone_curve.windows(2).all(|w| w[1][1] >= w[0][1]));
+    // A shoulder (steep rise, then almost flat): the spline overshoots between 0.05 and 0.3
+    // to about 0.71, above the next knot's 0.45. Every file point keeps its own output, and
+    // samples between two knots stay between their outputs.
+    let spec = DngSpec { ifd0_extra: vec![(50940, Val::Double(vec![0.0, 0.0, 0.05, 0.4, 0.3, 0.45, 1.0, 1.0]))], ..DngSpec::cfa(8, 8, vec![500; 64]) };
+    let s = sensor(&spec.build());
+    for knot in [[0.0, 0.0], [0.05, 0.4], [0.3, 0.45], [1.0, 1.0]] {
+        assert!(s.tone_curve.contains(&knot), "{knot:?} not kept");
+    }
+    for p in &s.tone_curve {
+        let (lo, hi) = if p[0] <= 0.05 {
+            (0.0, 0.4)
+        } else if p[0] <= 0.3 {
+            (0.4, 0.45)
+        } else {
+            (0.45, 1.0)
+        };
+        assert!((lo..=hi).contains(&p[1]), "{p:?} outside its knots' outputs");
+    }
+    assert!(s.tone_curve.windows(2).all(|w| w[1][1] >= w[0][1]));
 }
