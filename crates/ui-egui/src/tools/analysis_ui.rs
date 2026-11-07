@@ -15,7 +15,7 @@ use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::Tool;
+use crate::state::{DialogKind, Tool};
 use crate::theme::Tokens;
 
 /// What a pointer drag is doing (not serialised).
@@ -360,7 +360,18 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 None if mods.alt => {}
                 None if (0.0..f64::from(doc.size.width)).contains(&x) && (0.0..f64::from(doc.size.height)).contains(&y) => {
                     let r = app.run("view.colorSamplers.add", json!({"x": x, "y": y}));
-                    status_on_err(app, r);
+                    match r {
+                        Ok(_) => reveal_info_panel(app),
+                        Err(e) if e.contains("Color Sampler limit reached") => {
+                            app.ui.status.clear();
+                            app.ui.status_error = false;
+                            app.ui.open_dialog(
+                                DialogKind::Error,
+                                json!({"message": tl!(MAX_SAMPLERS_ALERT)}).as_object().cloned().unwrap_or_default(),
+                            );
+                        }
+                        Err(e) => status_on_err(app, Err(e)),
+                    }
                 }
                 // A click outside the canvas places nothing, as in Photoshop.
                 None => {}
@@ -390,6 +401,20 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 /// The nearest Color Sampler point within `tol` document pixels, or `None`.
 fn nearest_sampler(points: &[[f64; 2]], at: [f64; 2], tol: f64) -> Option<usize> {
     points.iter().enumerate().filter(|(_, q)| dist(**q, at) <= tol).min_by(|a, b| dist(*a.1, at).total_cmp(&dist(*b.1, at))).map(|(i, _)| i)
+}
+
+/// The alert when the 11th Color Sampler is clicked (#11743).
+pub const MAX_SAMPLERS_ALERT: &str = "Could not create a new sampler because the maximum number of samplers is 10.";
+
+/// Open the closed Info panel (or bring it to the front) when a Color Sampler point is placed (#11745).
+pub(crate) fn reveal_info_panel(app: &mut PhotocraftApp) {
+    if app.ui.docking.is_some() {
+        let _ = app.run("window.panel.activate", json!({"panel": "info"}));
+    } else {
+        app.ui.panels.navigator = true;
+        app.ui.dock_tabs.navigator = 2;
+        crate::dock::reveal(app, crate::dock::Group::Navigator);
+    }
 }
 
 /// Show a command error in the status bar without treating the sample-limit message as a fault.

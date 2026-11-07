@@ -296,3 +296,54 @@ fn count_size_fields_send_whole_numbers_the_engine_applies() {
     let g = &app.session.active().unwrap().doc.measurement.count_groups[0];
     assert_eq!((g.marker_size, g.label_size), (8, 20));
 }
+
+#[test]
+fn placing_color_sampler_reveals_closed_info_panel() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    // Close the Navigator / Info panel group.
+    app.ui.panels.navigator = false;
+    app.ui.dock_tabs.navigator = 0;
+    assert!(!app.ui.panels.navigator);
+
+    // Placing a sampler inside the canvas opens the Info panel (#11745).
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert!(app.ui.panels.navigator);
+    assert_eq!(app.ui.dock_tabs.navigator, 2);
+
+    // A click on an existing sampler (starting a move or selection) does not reopen a closed panel.
+    app.ui.panels.navigator = false;
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert!(!app.ui.panels.navigator);
+}
+
+#[test]
+fn color_sampler_limit_opens_alert_dialog_instead_of_status_note() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    for i in 0..10 {
+        let x = 10.0 + (i as f64) * 10.0;
+        down(&mut app, x, 20.0, egui::Modifiers::NONE);
+        up(&mut app, x, 20.0);
+    }
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
+    assert!(app.ui.dialogs.is_empty());
+
+    // The 11th click opens the limit alert dialog instead of a status-bar note (#11743).
+    down(&mut app, 150.0, 20.0, egui::Modifiers::NONE);
+    up(&mut app, 150.0, 20.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
+    assert_eq!(app.ui.status, "");
+    assert!(!app.ui.status_error);
+
+    let alerts: Vec<_> = app
+        .ui
+        .dialogs
+        .iter()
+        .filter(|d| d.kind == crate::state::DialogKind::Error)
+        .filter_map(|d| d.fields.get("message")?.as_str())
+        .collect();
+    assert_eq!(alerts, [MAX_SAMPLERS_ALERT]);
+}
