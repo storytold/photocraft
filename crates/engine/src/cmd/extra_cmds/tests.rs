@@ -851,3 +851,22 @@ fn rasterize_smart_object_layer() {
     assert!(matches!(active(&s4).content, LayerContent::Raster(_)));
     assert_eq!(pixel(&s4, 30, 30), vec![1.0, 1.0, 0.0, 1.0]);
 }
+
+/// The ring scan skips tiles inside the bounds already found (CodeRabbit on #11610): a fully
+/// visible surface keeps its whole rect, and an interior tile is still read when the rings
+/// around it found nothing.
+#[test]
+fn visible_bounds_skips_interior_tiles_without_losing_pixels() {
+    let side = photocraft_geom::TILE_SIZE;
+    let whole = Rect::new(0, 0, 3 * side, 3 * side);
+    let mut opaque = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    opaque.fill_rect(whole, &[1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(visible_bounds(&opaque, Rect::EMPTY), whole);
+
+    let mut erased = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    erased.fill_rect(whole, &[1.0, 0.0, 0.0, 0.0]);
+    assert_eq!(visible_bounds(&erased, Rect::EMPTY), Rect::EMPTY, "colour bytes alone are not visible");
+    let (x, y) = (side + side / 2, side + side / 2);
+    erased.fill_rect(Rect::new(x, y, x + 1, y + 1), &[0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(visible_bounds(&erased, Rect::EMPTY), Rect::new(x, y, x + 1, y + 1));
+}
