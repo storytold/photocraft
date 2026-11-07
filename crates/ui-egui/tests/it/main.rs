@@ -31,6 +31,7 @@ mod full_res_preview;
 mod gpu_device_loss;
 mod layout_perf;
 mod live_stroke_canvas;
+mod magnetic_lasso_right_click;
 mod marching_ants_pixels;
 mod marquee_autoscroll;
 mod paint_bucket_all_layers;

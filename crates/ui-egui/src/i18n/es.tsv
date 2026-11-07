@@ -4506,6 +4506,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Elija un documento distinto para cada canal.
 	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
 	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.
+# Move tool options bar (#11381)
+	Align top edges	Alinear bordes superiores
+	Align vertical centers	Alinear centros verticales
+	Align bottom edges	Alinear bordes inferiores
+	Distribute vertically	Distribuir verticalmente
+	Distribute horizontally	Distribuir horizontalmente
+	Show layer bounds on hover	Mostrar límites de capa al pasar el puntero
+	Expand layer group on click	Expandir grupo de capas al hacer clic
+	Show hover bounds from Layers	Mostrar límites al pasar el puntero desde Capas
+
 
 # PDF Options (PDF/X-1a, PDF/X-3, PDF/X-4)
 	A {bleed} mm bleed leaves no trim on this {width} × {height} mm page.	Un sangrado de {bleed} mm no deja tamaño final en esta página de {width} × {height} mm.

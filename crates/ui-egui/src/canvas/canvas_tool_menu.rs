@@ -464,6 +464,16 @@ pub fn applies(tool: Tool) -> bool {
     ) || path_menu(tool)
 }
 
+/// A Magnetic Lasso border is being drawn on the document in front: a right-click opens no menu
+/// over it, and the border stays live, as in Photoshop (#11689). A border left on another
+/// document doesn't count, even before `magnetic_lasso_ui::frame` drops it: the control
+/// channel's events run no frame. Nor does an ⌥-drag's freehand segment: that case wasn't
+/// measured, so it keeps the menu it had.
+pub fn magnetic_drawing(app: &PhotocraftApp) -> bool {
+    let m = &app.ui.magnetic;
+    m.active() && !m.freehand && app.ui.tool == Tool::MagneticLasso && app.session.active().map(|d| d.doc.id.0) == Some(m.doc)
+}
+
 /// Tools whose canvas right-click opens the path menu ([`PEN_MENU`]): the Pen, and the Path
 /// Selection and Direct Selection tools, whose Photoshop menu offers the same whole-path actions
 /// for the selected path (#1056).
