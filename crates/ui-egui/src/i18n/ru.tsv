@@ -1749,6 +1749,7 @@
 	Move Tool	Перемещение
 	Could not use the move tool because the layer is locked.	Не удалось использовать инструмент «Перемещение», потому что слой заблокирован.
 	Could not complete the Free Transform command because the layer is locked.	Не удалось выполнить команду «Свободное трансформирование», потому что слой заблокирован.
+	Could not transform because the layer is locked.	Не удалось выполнить трансформирование, потому что слой заблокирован.
 	Rectangular Marquee Tool	Прямоугольная область
 	Elliptical Marquee Tool	Овальная область
 	Single Row Marquee Tool	Область (горизонтальная строка)
