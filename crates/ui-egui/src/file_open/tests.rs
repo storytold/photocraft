@@ -1694,3 +1694,75 @@ fn queued_drop_waits_for_an_external_document_job() {
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
     assert!(app.drop_places.is_empty());
 }
+
+/// #8910: an SVG picked in File › Open asks for its size, Width and Height starting at the
+/// drawing's own size, and opens at the size chosen; `file.open` from a script never asks. With
+/// background jobs the drawing's size is read on a worker, and a dropped SVG keeps its tab slot.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn an_svg_asks_for_its_size_when_picked_but_not_from_a_script() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect x="5" y="2" width="10" height="6" fill="#f00"/></svg>"##;
+    let (_dir, paths) = files("svg-size", &["icon.svg", "logo.svg", "badge.svg", "drop.svg"], svg);
+    let real = |answers: Vec<Option<FileDialogAnswer>>| {
+        let services = Services {
+            import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            file_dialog: Some(file_dialog::fake(answers).0),
+            ..Default::default()
+        };
+        PhotocraftApp::new(photocraft_engine::Session::new(), services)
+    };
+    let size = |app: &PhotocraftApp| app.session.active().map(|d| (d.doc.size.width, d.doc.size.height));
+    let set = |app: &mut PhotocraftApp, id: u64, k: &str, v: serde_json::Value| {
+        if let Some(open) = app.ui.dialogs.iter_mut().find(|x| x.id == id) {
+            open.fields.insert(k.into(), v);
+        }
+    };
+    // Picked in File › Open: a dialog at 20 × 10, nothing open yet.
+    let mut app = real(vec![Some(FileDialogAnswer::Paths(vec![paths[0].clone()]))]);
+    app.open_dialog_file().unwrap();
+    answer(&mut app);
+    assert!(app.session.documents().is_empty(), "nothing opens before the answer");
+    let d = app.ui.dialogs.last().expect("the Open SVG dialog").clone();
+    assert!(crate::svg_open_ui::owns(&d.fields));
+    assert_eq!((d.fields["width"].as_f64(), d.fields["height"].as_f64()), (Some(20.0), Some(10.0)));
+    // Width and Height that don't keep the proportions are refused: the dialog reopens with them.
+    set(&mut app, d.id, "width", json!(80));
+    assert!(crate::dialogs::confirm(&mut app, d.id).is_err());
+    assert!(app.session.documents().is_empty());
+    let d = app.ui.dialogs.last().expect("reopened").clone();
+    assert_eq!(d.fields["width"], json!(80));
+    assert!(d.fields.contains_key("__error"));
+    // 80 × 40 keeps them: an 80 × 40 document whose shapes scaled with it.
+    set(&mut app, d.id, "height", json!(40));
+    crate::dialogs::confirm(&mut app, d.id).unwrap();
+    assert_eq!(size(&app), Some((80, 40)));
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some(paths[0].as_str()));
+    // A script's `file.open` opens at once: the drawing's own size, or `svgScale` × it.
+    let ctx = egui::Context::default();
+    let mut app = real(Vec::new());
+    menus::invoke(&mut app, &ctx, "file.open", json!({"path": paths[1]})).unwrap();
+    assert!(app.ui.dialogs.is_empty());
+    assert_eq!(size(&app), Some((20, 10)));
+    menus::invoke(&mut app, &ctx, "file.open", json!({"path": paths[2], "svgScale": 2.5})).unwrap();
+    assert_eq!(size(&app), Some((50, 25)));
+    for bad in [json!(-1), json!("x"), json!(null)] {
+        assert!(menus::invoke(&mut app, &ctx, "file.open", json!({"path": paths[3], "svgScale": bad})).is_err(), "{bad}");
+    }
+    // Dropped on the tabs with background jobs: the size is read on a worker, then the dialog
+    // opens; the document opens at the slot it was dropped on.
+    app.background_jobs = true;
+    app.tab_strip = Some(crate::canvas::TabStrip {
+        rect: egui::Rect::from_min_max(egui::pos2(92.0, 14.0), egui::pos2(700.0, 50.0)),
+        tabs: vec![(0, egui::Rect::from_min_max(egui::pos2(100.0, 20.0), egui::pos2(200.0, 46.0)))],
+    });
+    app.open_dropped(&ctx, vec![dropped(paths[3].as_str(), Ok(svg.to_vec()))], Some(egui::pos2(120.0, 30.0)));
+    tick_until(&mut app, &ctx, |app| app.ui.dialogs.iter().any(|d| crate::svg_open_ui::owns(&d.fields)));
+    let d = app.ui.dialogs.last().unwrap().clone();
+    set(&mut app, d.id, "width", json!(40));
+    set(&mut app, d.id, "height", json!(20));
+    crate::dialogs::confirm(&mut app, d.id).unwrap();
+    tick_until(&mut app, &ctx, |app| app.session.documents().iter().any(|d| d.doc.name == "drop.svg"));
+    assert_eq!(app.session.documents().first().map(|d| (d.doc.name.as_str(), d.doc.size.width)), Some(("drop.svg", 40)), "at the dropped slot, 2×");
+}

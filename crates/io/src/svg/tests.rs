@@ -1016,3 +1016,29 @@ fn only_stored_previews_refuse_unreadable_embedded_images() {
     assert!(import_svg_bounded_with_work("edit", svg.as_bytes(), MAX_RASTER_PIXELS).is_ok());
     assert!(import_svg_preview_with_work("preview", svg.as_bytes(), MAX_RASTER_PIXELS).is_err());
 }
+
+/// #8910: an SVG opens at a chosen scale of its own size, as shapes (sharp at any size); the
+/// size limit still applies, and a nonsense scale opens it at its own size.
+#[test]
+fn opens_at_a_chosen_scale() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"><rect x="5" y="2" width="10" height="6" fill="#f00"/></svg>"##;
+    assert_eq!(drawing_size(svg).unwrap(), (20.0, 10.0));
+    let r = import_svg_scaled("a.svg", svg, MAX_GROUP_DEPTH, 4.0).unwrap();
+    assert_eq!((r.document.size.width, r.document.size.height), (80, 40));
+    let bounds = r.document.layers.iter().find_map(|l| match &l.content {
+        LayerContent::Shape(sh) => sh.path.control_bounds(),
+        _ => None,
+    });
+    assert_eq!(bounds, Some((20.0, 8.0, 60.0, 32.0)), "the rect scales with the canvas, as a shape");
+    for bad in [0.0, -2.0, f32::NAN, f32::INFINITY] {
+        let r = import_svg_scaled("a.svg", svg, MAX_GROUP_DEPTH, bad).unwrap();
+        assert_eq!((r.document.size.width, r.document.size.height), (20, 10), "{bad}");
+    }
+    let r = import_svg_scaled("a.svg", svg, MAX_GROUP_DEPTH, 10_000.0).unwrap();
+    assert_eq!(r.document.size.width, MAX_SIDE);
+    assert!(r.warnings.iter().any(|w| w.contains("scaled down")), "{:?}", r.warnings);
+    // `import_with_options` routes an SVG through its scale.
+    let opts = crate::ImportOptions { svg_scale: 2.0, ..Default::default() };
+    let r = crate::import_with_options("a.svg", svg, &opts).unwrap();
+    assert_eq!((r.document.size.width, r.document.size.height), (40, 20));
+}

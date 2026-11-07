@@ -972,11 +972,18 @@ struct Canvas {
 }
 
 fn canvas(tree: &usvg::Tree, warnings: &mut Vec<String>) -> Canvas {
+    canvas_at(tree, 1.0, warnings)
+}
+
+/// [`canvas`] for the drawing at `want` × its own size (#8910), scaled down further to fit
+/// [`MAX_SIDE`] when needed. A `want` that isn't a positive number is 1.
+fn canvas_at(tree: &usvg::Tree, want: f32, warnings: &mut Vec<String>) -> Canvas {
     let (w, h) = (tree.size().width().max(1.0), tree.size().height().max(1.0));
+    let want = if want.is_finite() && want > 0.0 { want } else { 1.0 };
     let limit = MAX_SIDE as f32;
-    let scale = (limit / w).min(limit / h).min(1.0);
-    if scale < 1.0 {
-        warnings.push(format!("SVG: the {w:.0} × {h:.0} px drawing was scaled down to fit {MAX_SIDE} px"));
+    let scale = want.min(limit / w).min(limit / h);
+    if scale < want {
+        warnings.push(format!("SVG: the {:.0} × {:.0} px drawing was scaled down to fit {MAX_SIDE} px", w * want, h * want));
     }
     let side = |v: f32| ((v * scale).round() as u32).clamp(1, MAX_SIDE);
     Canvas { size: Size::new(side(w), side(h)), scale }
@@ -991,6 +998,20 @@ pub fn import_svg(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 /// layers. The document's hard nesting limit remains [`MAX_GROUP_DEPTH`].
 pub fn import_svg_with_group_depth(name: &str, bytes: &[u8], max_group_depth: usize) -> Result<ImportResult, IoError> {
     import_svg_inner(name, bytes, max_group_depth, None, false)
+}
+
+/// [`import_svg_with_group_depth`] with the drawing at `scale` × its own size (#8910; File › Open
+/// asks): shapes stay shapes, so a small icon opens large and sharp. A `scale` that isn't a
+/// positive number is 1.
+pub fn import_svg_scaled(name: &str, bytes: &[u8], max_group_depth: usize, scale: f32) -> Result<ImportResult, IoError> {
+    import_parsed_with_limits(name, parse(bytes)?, max_group_depth, None, false, MAX_PIXEL_BYTES, scale)
+}
+
+/// The drawing's own size in px (its width and height, or its viewBox): the size it opens at with
+/// scale 1, before the [`MAX_SIDE`] limit.
+pub fn drawing_size(bytes: &[u8]) -> Result<(f32, f32), IoError> {
+    let tree = parse(bytes)?.tree;
+    Ok((tree.size().width(), tree.size().height()))
 }
 
 /// Opens an SVG with a conservative budget for eagerly rendered layer caches. A canvas above
@@ -1108,12 +1129,12 @@ fn import_parsed(
     max_cached_pixels: Option<u64>,
     reject_cache_overflow: bool,
 ) -> Result<ImportResult, IoError> {
-    import_parsed_with_limits(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow, MAX_PIXEL_BYTES)
+    import_parsed_with_limits(name, parsed, max_group_depth, max_cached_pixels, reject_cache_overflow, MAX_PIXEL_BYTES, 1.0)
 }
 
 #[cfg(test)]
 fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize, pixel_budget: u64) -> Result<ImportResult, IoError> {
-    import_parsed_with_limits(name, parsed, max_group_depth, None, false, pixel_budget)
+    import_parsed_with_limits(name, parsed, max_group_depth, None, false, pixel_budget, 1.0)
 }
 
 /// Convert a parsed tree into a document. With `max_cached_pixels`, a canvas over the budget is
@@ -1127,13 +1148,14 @@ fn import_parsed_with_limits(
     max_cached_pixels: Option<u64>,
     reject_cache_overflow: bool,
     pixel_budget: u64,
+    scale: f32,
 ) -> Result<ImportResult, IoError> {
     let Parsed { tree, fontless_text } = parsed;
     let mut warnings = Vec::new();
     if fontless_text {
         warnings.push("SVG: the text needs a font and none is installed, so it was dropped".to_string());
     }
-    let cv = canvas(&tree, &mut warnings);
+    let cv = canvas_at(&tree, scale, &mut warnings);
     check_filter_cost(&tree, cv.scale)?;
     let nodes = count_nodes(tree.root(), max_cached_pixels.is_some());
     let over_cache_budget = if let Some(budget) = max_cached_pixels {
