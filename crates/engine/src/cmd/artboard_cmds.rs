@@ -289,16 +289,38 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let background = background_param(p, cmd)?.unwrap_or_default();
     let name = p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
+    let take_background = match p.get("takeBackground") {
+        None => false,
+        Some(v) => v.as_bool().ok_or_else(|| bad(cmd, "`takeBackground` must be true or false"))?,
+    };
     let id = s.edit("New Artboard", |doc, active| {
         let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), vec![]);
         set_artboard(&mut g, Artboard { rect, background, preset });
+        // Only the first board takes the Background in (decided before the board exists).
+        let take = take_background && doc.artboards().is_empty() && doc.background().is_some();
         let id = doc.insert_above(None, g);
+        if take {
+            move_background_into(doc, id);
+        }
         fit_canvas(doc);
         *active = Some(id);
         Ok(id)
     })?;
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
+
+/// Turns the Background into a normal layer ("Layer 0") and makes it the child of board `board`,
+/// as the reference does when the first artboard is drawn. Does nothing without a Background.
+fn move_background_into(doc: &mut Document, board: LayerId) {
+    let Some(bg) = doc.background().map(|l| l.id) else { return };
+    let Some(mut layer) = doc.remove(bg) else { return };
+    crate::extra_cmds::unlock_background(&mut layer);
+    match doc.layer_mut(board).and_then(Layer::children_mut) {
+        Some(children) => children.push(layer),
+        // Unreachable for a group; put the layer back rather than lose it.
+        None => doc.layers.insert(0, layer),
+    }
 }
 
 /// Convert a plain group at its content bounds; recorded guide IDs are ignored session metadata.
@@ -705,7 +727,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.new.artboard",
             "Artboard…",
             &["Layer", "New"],
-            r##"{"rect":[x,y,w,h]? | "x","y","width","height"? (default: canvas size, right of the last board),"preset":"iPhone 14|Web 1920|A4|…"?,"name":str?,"background":"white|black|transparent|custom"="white","color":[r,g,b]|"#rrggbb"? (custom)} → {layer, rect}"##,
+            r##"{"rect":[x,y,w,h]? | "x","y","width","height"? (default: canvas size, right of the last board),"preset":"iPhone 14|Web 1920|A4|…"?,"name":str?,"background":"white|black|transparent|custom"="white","color":[r,g,b]|"#rrggbb"? (custom),"takeBackground":bool=false (the first board in the document also takes in the Background as a normal layer "Layer 0"; the Artboard tool's drag sets it)} → {layer, rect}"##,
             has_doc,
             new_artboard
         ),
@@ -768,6 +790,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "artboard_cmds/first_board_background_tests.rs"]
+mod first_board_background_tests;
 #[cfg(test)]
 #[path = "artboard_cmds/tests.rs"]
 mod tests;
