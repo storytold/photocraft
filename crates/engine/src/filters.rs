@@ -233,7 +233,8 @@ pub(crate) fn apply_filter_to_surface_in(
     let sel_bounds = selection.map(photocraft_raster::Surface::content_bounds);
     let content = surf.content_bounds();
     let area = algo::output_area(&fp, content, bounds, sel_bounds);
-    let out = algo::apply_in_with(surf, &fp, area, bounds, selection, canvas.union(&content), &ctl);
+    let frame = distort_frame(id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
+    let out = algo::apply_in_with(surf, &fp, area, frame, selection, canvas.union(&content), &ctl);
     filter_output(out, ctx.cancelled()).map(Some)
 }
 
@@ -246,6 +247,14 @@ fn filter_output(out: Option<photocraft_raster::Surface>, cancelled: bool) -> Re
         None if cancelled => Err(EngineError::Cancelled),
         None => Err(EngineError::Other("the filter could not prepare its working data (not enough memory, or an unusable kernel)".into())),
     }
+}
+
+/// The frame of filter `id` on pixels covering `content`: without a selection, Displace frames the
+/// canvas and the layer's pixels past it, as Photoshop does: it stretches or tiles its map over
+/// them and repeats their edge pixels (#10444). Anything else keeps `bounds`, the selection's or
+/// the canvas. The output area is unchanged.
+fn distort_frame(id: &str, bounds: photocraft_geom::Rect, content: photocraft_geom::Rect, selected: bool) -> photocraft_geom::Rect {
+    if selected || content.is_empty() || id != "filter.distort.displace" { bounds } else { bounds.union(&content) }
 }
 
 pub(crate) fn has_filterable_layer(s: &Session) -> std::result::Result<(), String> {
@@ -380,14 +389,20 @@ pub(crate) fn run_filter(s: &mut Session, id: &str, p: &Value) -> Result<Value> 
                 // Keep the full native input context: filters can read transparency as a depth
                 // or texture map, and colour-valued settings belong to the source colour model.
                 let before = surf.clone();
-                *surf = filter(surf, &fp, area, bounds, selection.as_ref(), extent)?;
+                // Displace frames the layer's pixels past the canvas here too, as on all channels.
+                let frame = distort_frame(&id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
+                *surf = filter(surf, &fp, area, frame, selection.as_ref(), extent)?;
                 crate::color_channels::restrict_surface_in(&before, surf, colors, extent)?;
                 return Ok(fp);
             }
             let before = locks.transparency.then(|| surf.clone());
             let content = surf.content_bounds();
             let area = algo::output_area(&fp, content, bounds, sel_bounds);
-            *surf = filter(surf, &fp, area, bounds, selection.as_ref(), algo::separable::edge_extent(doc_bounds, content))?;
+            let frame = distort_frame(&id, bounds, content, sel_bounds.is_some_and(|b| !b.is_empty()));
+            // `filter` admits `working_bytes` with this same frame. Displace reads the area grown
+            // by its map's reach, past the canvas into the frame, and is priced for that; a layer
+            // pixel far off the canvas widens the frame but not what it reads.
+            *surf = filter(surf, &fp, area, frame, selection.as_ref(), algo::separable::edge_extent(doc_bounds, content))?;
             if let Some(before) = &before {
                 keep_alpha(before, surf, &|| ctx.cancelled())?;
             }

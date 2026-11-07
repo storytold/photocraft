@@ -713,3 +713,41 @@ fn blur_halos_follow_the_clamped_radius_and_never_overflow() {
     let gaussian = FilterParams::GaussianBlur { radius: f32::INFINITY };
     assert_eq!(gaussian.halo(), Halo::Radius(i32::MAX));
 }
+
+/// Displace reads the output area grown by its map's reach (#10444). Without a selection the
+/// engine frames the canvas and the layer's pixels past it, so that source reaches past the canvas
+/// into the frame, and filter admission prices it (tanish2k09 review on #10462): at least the
+/// source [`distort2::displace_source`] allocates, past the canvas too, beyond what a filter that
+/// reads only the canvas is charged.
+#[test]
+fn displace_admission_counts_a_frame_past_the_canvas() {
+    let params = FilterParams::Displace { horizontal: 10.0, vertical: 10.0, stretch: true, undefined: UndefinedAreas::Repeat, map: None, map_8bit: true };
+    let canvas = Rect::new(0, 0, 128, 128);
+    let frame = Rect::new(0, 0, 256, 256);
+    let mut layer = Surface::new(PixelFormat::RGBA8);
+    layer.fill_rect(frame, &[0.5, 0.25, 0.75, 1.0]);
+    let source = distort2::displace_source(&layer, canvas, frame, (10.0, 10.0), UndefinedAreas::Repeat);
+    assert!(source.rect.intersect(&frame).size().area() > canvas.size().area(), "the source reaches past the canvas into the frame");
+    let floats = 4 * 4u64;
+    let canvas_only = FilterParams::Shear { points: vec![[0.0, 0.0], [1.0, 0.0]], undefined: UndefinedAreas::Repeat };
+    let extra = working_bytes(&params, canvas, frame, 4) - working_bytes(&canvas_only, canvas, canvas, 4);
+    assert!(extra >= (source.rect.size().area() - canvas.size().area()) * floats, "the source's pixels past the canvas, as floats: {extra}");
+}
+
+/// CodeRabbit on #10462: a layer pixel a million pixels past the canvas on both axes makes
+/// Displace's frame about 10¹² pixels, but Displace reads only the canvas grown by its map's
+/// reach, so admission charges the same as for a frame of the canvas alone, a few MB, not 16 TB.
+#[test]
+fn displace_admission_prices_its_source_not_a_frame_to_a_far_pixel() {
+    let params = FilterParams::Displace { horizontal: 10.0, vertical: 10.0, stretch: true, undefined: UndefinedAreas::Wrap, map: None, map_8bit: true };
+    let canvas = Rect::new(0, 0, 128, 128);
+    let mut layer = Surface::new(PixelFormat::RGBA8);
+    layer.fill_rect(canvas, &[0.5, 0.25, 0.75, 1.0]);
+    layer.write_pixel(1_000_000, 1_000_000, &[1.0, 0.0, 0.0, 1.0]);
+    let frame = canvas.union(&layer.content_bounds());
+    let bytes = working_bytes(&params, canvas, frame, 4);
+    assert_eq!(bytes, working_bytes(&params, canvas, canvas, 4), "the frame's size is not charged");
+    assert!(bytes < 64 << 20, "{bytes} bytes");
+    let source = distort2::displace_source(&layer, canvas, frame, (10.0, 10.0), UndefinedAreas::Wrap);
+    assert!(bytes >= source.data.len() as u64 * 4, "at least the source it reads");
+}
