@@ -232,6 +232,10 @@
 	Add Mask to Selection	Lisää maski valintaan
 	Subtract Mask from Selection	Vähennä maski valinnasta
 	Intersect Mask with Selection	Leikkaa maski valinnan kanssa
+	Select Pixels	Valitse pikselit
+	Add Pixels to Selection	Lisää pikselit valintaan
+	Subtract Pixels from Selection	Vähennä pikselit valinnasta
+	Intersect Pixels with Selection	Leikkaa pikselit valinnan kanssa
 	Link Layer Mask	Linkitä tasomaski
 	Unlink Layer Mask	Poista tasomaskin linkitys
 	Vector Mask	Vektorimaski

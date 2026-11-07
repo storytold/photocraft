@@ -1106,6 +1106,10 @@
 	Add Mask to Selection	Thêm mặt nạ vào vùng chọn
 	Subtract Mask from Selection	Trừ mặt nạ khỏi vùng chọn
 	Intersect Mask with Selection	Giao mặt nạ với vùng chọn
+	Select Pixels	Chọn pixel
+	Add Pixels to Selection	Thêm pixel vào vùng chọn
+	Subtract Pixels from Selection	Trừ pixel khỏi vùng chọn
+	Intersect Pixels with Selection	Giao pixel với vùng chọn
 	Delete Layer Mask	Xóa mặt nạ lớp
 	Disable Layer Mask	Tắt mặt nạ lớp
 	Release Clipping Mask	Nhả mặt nạ cắt

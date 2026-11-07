@@ -583,6 +583,10 @@ cameraRaw	Yellow	पीला
 
 	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Clear Selection	चयन साफ़ करें
+	Select Pixels	पिक्सेल चुनें
+	Add Pixels to Selection	चयन में पिक्सेल जोड़ें
+	Subtract Pixels from Selection	चयन से पिक्सेल घटाएँ
+	Intersect Pixels with Selection	पिक्सेल को चयन के साथ प्रतिच्छेदित करें
 	Color Aware	रंग-आधारित
 	Decontaminate Colors	रंग शुद्ध करें
 	Edge Detection	किनारा पहचान

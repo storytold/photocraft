@@ -900,6 +900,10 @@
 	Add Mask to Selection	Maskeyi Seçime Ekle
 	Subtract Mask from Selection	Maskeyi Seçimden Çıkar
 	Intersect Mask with Selection	Maskeyi Seçimle Kesiştir
+	Select Pixels	Pikselleri Seç
+	Add Pixels to Selection	Pikselleri Seçime Ekle
+	Subtract Pixels from Selection	Pikselleri Seçimden Çıkar
+	Intersect Pixels with Selection	Pikselleri Seçimle Kesiştir
 	Apply Per Tip	Uç Başına Uygula
 	Apply next selected layer comp	Sonraki seçilen katman kompozisyonunu uygula
 	Apply previous selected layer comp	Önceki seçilen katman kompozisyonunu uygula

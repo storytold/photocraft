@@ -374,6 +374,10 @@
 	Add Mask to Selection	Προσθήκη μάσκας στην επιλογή
 	Subtract Mask from Selection	Αφαίρεση μάσκας από την επιλογή
 	Intersect Mask with Selection	Τομή μάσκας με την επιλογή
+	Select Pixels	Επιλογή εικονοστοιχείων
+	Add Pixels to Selection	Προσθήκη εικονοστοιχείων στην επιλογή
+	Subtract Pixels from Selection	Αφαίρεση εικονοστοιχείων από την επιλογή
+	Intersect Pixels with Selection	Τομή εικονοστοιχείων με την επιλογή
 	Brush Preset picker	Επιλογή προεπιλογής πινέλου
 	Brush Reconstruct Options	Επιλογές πινέλου επαναφοράς
 	Brush Tool Options	Επιλογές πινέλου (Brush Tool)

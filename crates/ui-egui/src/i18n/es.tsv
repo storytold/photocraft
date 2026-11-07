@@ -957,6 +957,10 @@
 	Add Mask to Selection	Añadir máscara a la selección
 	Subtract Mask from Selection	Restar máscara de la selección
 	Intersect Mask with Selection	Intersecar máscara con la selección
+	Select Pixels	Seleccionar píxeles
+	Add Pixels to Selection	Añadir píxeles a la selección
+	Subtract Pixels from Selection	Restar píxeles de la selección
+	Intersect Pixels with Selection	Intersecar píxeles con la selección
 	Apply Per Tip	Aplicar por punta
 	Apply next selected layer comp	Aplicar la composición de capa seleccionada siguiente
 	Apply previous selected layer comp	Aplicar la composición de capa seleccionada anterior

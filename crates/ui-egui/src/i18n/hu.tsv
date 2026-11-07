@@ -522,6 +522,10 @@
 	Add Mask to Selection	Maszk hozzáadása a kijelöléshez
 	Subtract Mask from Selection	Maszk kivonása a kijelölésből
 	Intersect Mask with Selection	Maszk metszése a kijelöléssel
+	Select Pixels	Pixelek kijelölése
+	Add Pixels to Selection	Pixelek hozzáadása a kijelöléshez
+	Subtract Pixels from Selection	Pixelek kivonása a kijelölésből
+	Intersect Pixels with Selection	Pixelek metszése a kijelöléssel
 	Artboard Guides	Rajztábla-segédvonalak
 	Artboards to Files	Rajztáblák fájlokba
 	Artboards to PDF	Rajztáblák PDF-be

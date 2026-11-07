@@ -1000,6 +1000,10 @@
 	Add Mask to Selection	Aggiungi maschera alla selezione
 	Subtract Mask from Selection	Sottrai maschera dalla selezione
 	Intersect Mask with Selection	Interseca maschera con la selezione
+	Select Pixels	Seleziona pixel
+	Add Pixels to Selection	Aggiungi pixel alla selezione
+	Subtract Pixels from Selection	Sottrai pixel dalla selezione
+	Intersect Pixels with Selection	Interseca pixel con la selezione
 	Apply Per Tip	Applica per punta
 	Apply next selected layer comp	Applica composizione livelli successiva selezionata
 	Apply previous selected layer comp	Applica composizione livelli precedente selezionata

@@ -203,6 +203,26 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
     });
 }
 
+/// The Select Pixels family a right-click on `l`'s layer thumbnail adds above the layer menu
+/// (#11680): the loads the thumbnail's ⌘-, ⌘⇧-, ⌘⌥- and ⌘⌥⇧-clicks make, then a separator. The
+/// Background has no transparency to load (its thumbnail click is a plain one), so the entries are
+/// there but disabled.
+pub fn thumbnail_entries(ui: &mut egui::Ui, l: &Layer, background: bool, actions: &mut Vec<(String, Value)>) {
+    let loads = [
+        (tl!("Select Pixels"), "new"),
+        (tl!("Add Pixels to Selection"), "add"),
+        (tl!("Subtract Pixels from Selection"), "subtract"),
+        (tl!("Intersect Pixels with Selection"), "intersect"),
+    ];
+    for (label, operation) in loads {
+        if ui.add_enabled(!background, egui::Button::new(label)).clicked() {
+            actions.push(("select.loadSelection".into(), json!({"channel": "transparency", "layer": l.id.0, "operation": operation})));
+            ui.close();
+        }
+    }
+    ui.separator();
+}
+
 /// Render the layer style menu of `l`'s effect rows ([`effects_entries`]); the actions select `l`
 /// first when it isn't the active layer.
 pub fn show_effects(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actions: &mut Vec<(String, Value)>) {

@@ -905,6 +905,10 @@
 	Add Mask to Selection	إضافة القناع إلى التحديد
 	Subtract Mask from Selection	طرح القناع من التحديد
 	Intersect Mask with Selection	تقاطع القناع مع التحديد
+	Select Pixels	تحديد البكسلات
+	Add Pixels to Selection	إضافة البكسلات إلى التحديد
+	Subtract Pixels from Selection	طرح البكسلات من التحديد
+	Intersect Pixels with Selection	تقاطع البكسلات مع التحديد
 	Apply Per Tip	تطبيق لكل رأس
 	Apply next selected layer comp	تطبيق تركيبة الطبقات المحددة التالية
 	Apply previous selected layer comp	تطبيق تركيبة الطبقات المحددة السابقة
