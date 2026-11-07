@@ -69,6 +69,8 @@ pub mod comps_cmds;
 pub mod contour_lib_cmds;
 #[cfg(test)]
 mod count_delete_group_tests;
+#[cfg(test)]
+mod count_history_names_tests;
 pub mod cutout_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;

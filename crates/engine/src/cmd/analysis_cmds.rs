@@ -796,7 +796,7 @@ fn count_add(s: &mut Session, p: &Value) -> Result<Value> {
     if gi.is_some_and(|i| i >= group_count) {
         return Err(bad("count.add", "no such group"));
     }
-    let n = s.edit("Count", |d, _| {
+    let n = s.edit("Add Count Object", |d, _| {
         if d.measurement.count_groups.is_empty() {
             let g = new_group(d, None, None);
             d.measurement.count_groups.push(g);
@@ -846,7 +846,7 @@ fn locate(s: &Session, p: &Value, cmd: &str) -> Result<(usize, usize)> {
 
 fn count_remove(s: &mut Session, p: &Value) -> Result<Value> {
     let (g, i) = locate(s, p, "count.remove")?;
-    s.edit("Count", |d, _| {
+    s.edit("Delete Count Object", |d, _| {
         d.measurement.count_groups[g].points.remove(i);
         Ok(())
     })?;
@@ -856,7 +856,7 @@ fn count_remove(s: &mut Session, p: &Value) -> Result<Value> {
 fn count_move(s: &mut Session, p: &Value) -> Result<Value> {
     let to = point(p.get("to")).ok_or_else(|| bad("count.move", "pass `to`: [x, y]"))?;
     let (g, i) = locate(s, p, "count.move")?;
-    s.edit("Count", |d, _| {
+    s.edit("Drag Count Object", |d, _| {
         d.measurement.count_groups[g].points[i] = to;
         Ok(())
     })?;
@@ -881,7 +881,7 @@ fn count_clear(s: &mut Session, p: &Value) -> Result<Value> {
 fn count_new_group(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let color = color_of("count.newGroup", p, "color")?;
-    s.edit("New Count Group", |d, _| {
+    s.edit("Add Count Group", |d, _| {
         let g = new_group(d, name, color);
         d.measurement.count_groups.push(g);
         d.measurement.active_count_group = d.measurement.count_groups.len() - 1;
@@ -949,8 +949,24 @@ fn count_set_group(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let activate = p.get("active").and_then(Value::as_bool) == Some(true) || p.as_object().is_some_and(|o| o.len() == 1 && o.contains_key("group"));
     let changed = grp != d.measurement.count_groups[g];
-    if changed || (activate && d.measurement.active_count_group != g) {
-        s.edit("Count Group Options", |d, _| {
+    let switches = activate && d.measurement.active_count_group != g;
+    if changed || switches {
+        // One field changed: Photoshop's name for it (#11763). Several fields, or a switch of the
+        // current group (not measured), keep "Count Group Options".
+        let old = &d.measurement.count_groups[g];
+        let fields = [
+            (grp.name != old.name, "Set Count Group Name"),
+            (grp.visible != old.visible, "Set Count Group Visibility"),
+            (grp.color != old.color, "Set Count Draw Color"),
+            (grp.marker_size != old.marker_size, "Set Count Marker Size"),
+            (grp.label_size != old.label_size, "Set Count Font Size"),
+        ];
+        let mut one = fields.iter().filter(|(c, _)| *c).map(|(_, l)| *l);
+        let label = match (one.next(), one.next()) {
+            (Some(l), None) if !switches => l,
+            _ => "Count Group Options",
+        };
+        s.edit(label, |d, _| {
             d.measurement.count_groups[g] = grp;
             if activate {
                 d.measurement.active_count_group = g;
