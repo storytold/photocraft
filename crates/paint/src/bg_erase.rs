@@ -19,7 +19,8 @@ pub struct BgEraseSettings {
     pub limits: Limits,
     /// 0..1: largest per-channel difference from the sampled colour that is erased.
     pub tolerance: f32,
-    /// Keep pixels that match the foreground colour.
+    /// Keep the foreground colour: the erase narrows to the colours between the sampled colour and
+    /// the foreground colour (see [`protected_distance`]).
     pub protect_foreground: bool,
     /// Straight RGBA foreground colour (for Protect Foreground Color).
     pub foreground: [f32; 4],
@@ -43,6 +44,22 @@ impl Default for BgEraseSettings {
 /// Largest per-channel difference over the colour channels.
 fn dist(a: &[f32], b: &[f32]) -> f32 {
     a.iter().zip(b).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+}
+
+/// The distance `d` from the sampled colour as Protect Foreground Color weighs it: the Tolerance
+/// narrows to `limit`, the distance from the sampled colour to the foreground colour, so the
+/// protection fades with the distance from the foreground and the sampled colour itself is still
+/// erased (#11903). Colours at least as far from the sample as the foreground (the foreground
+/// itself included) are never erased; a foreground equal to the sample protects everything.
+fn protected_distance(d: f32, tol: f32, limit: f32) -> f32 {
+    if limit.is_nan() || d.is_nan() || limit <= 0.0 || d >= limit {
+        return f32::INFINITY;
+    }
+    if limit >= tol || d <= 0.0 {
+        return d;
+    }
+    // Stretch the distance so the Tolerance ends at the foreground colour.
+    d * (tol / limit)
 }
 
 /// Erase along `stroke`. The brush opacity is ignored (Photoshop's Background Eraser has none);
@@ -116,6 +133,7 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
             Sampling::BackgroundSwatch => Some(swatch.clone()),
         };
         let Some(sampled) = sampled else { return };
+        let protect_limit = protect_foreground.then(|| dist(&sampled, &fg));
         let (w, h) = (r.width() as usize, r.height() as usize);
         // Per-pixel match weight from the pre-stroke colours: the contiguous fill passes through
         // pixels this stroke already erased.
@@ -129,11 +147,11 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
                 if p[a] <= 0.0 {
                     continue;
                 }
-                let c = &p[..nc];
-                if protect_foreground && dist(c, &fg) <= tol {
-                    continue;
+                let mut d = dist(&p[..nc], &sampled);
+                if let Some(limit) = protect_limit {
+                    d = protected_distance(d, tol, limit);
                 }
-                weight[(y - r.y0) as usize * w + (x - r.x0) as usize] = match_w(dist(c, &sampled));
+                weight[(y - r.y0) as usize * w + (x - r.x0) as usize] = match_w(d);
             }
         }
         if limits != Limits::Discontiguous {
@@ -190,6 +208,10 @@ fn keep_connected(weight: &mut [f32], w: usize, h: usize, sx: usize, sy: usize) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bg_erase_protect_foreground_tests.rs"]
+mod protect_foreground_tests;
 
 #[cfg(test)]
 mod tests {
