@@ -116,6 +116,36 @@ fn poisoned_session_keeps_serving() {
     assert_eq!(r["ok"], true, "{r}");
 }
 
+/// A renderer whose diagnostics panic must not cost the request its reply.
+#[test]
+fn a_panicking_renderer_diagnostic_drain_still_writes_the_reply() {
+    struct PanickyDiagnostics;
+    impl photocraft_io::BandRenderer for PanickyDiagnostics {
+        fn render_bands(
+            &mut self,
+            _doc: &photocraft_doc::Document,
+            _rect: photocraft_doc::Rect,
+            _band_rows: i32,
+            _ctl: &photocraft_raster::Interrupt<'_>,
+            _sink: &mut dyn FnMut(photocraft_io::RenderBand) -> Result<(), photocraft_io::IoError>,
+        ) -> Result<(), photocraft_io::RenderError> {
+            Ok(())
+        }
+
+        fn drain_diagnostics(&mut self) -> Vec<String> {
+            panic!("diagnostics blew up");
+        }
+    }
+    let h = session();
+    h.lock().unwrap().set_renderer(Some(Box::new(PanickyDiagnostics)));
+    let r = respond(&h, r#"{"id":7,"method":"doc.new","params":{"width":8,"height":8}}"#);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(r["id"], 7);
+    // The session keeps serving afterwards.
+    let r = respond(&h, r#"{"id":8,"method":"doc.new","params":{"width":8,"height":8}}"#);
+    assert_eq!(r["ok"], true, "{r}");
+}
+
 #[test]
 fn batch_stops_on_error_unless_told_not_to() {
     let h = session();
@@ -1062,7 +1092,12 @@ fn approve_high_memory_rejects_invalid_types_and_formats_structured_error() {
     // fields, and only the fields an approval request has: no soft limit and no capacity, since
     // no approval can raise the ceiling.
     let mut hard_obj = json!({"id": 2, "ok": false, "error": "test"});
-    let hard = crate::AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { name: "big.psd".into(), required: 9000, limit: 8000 });
+    let hard = crate::AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget {
+        name: "big.psd".into(),
+        required: 9000,
+        limit: 8000,
+        free_memory: None,
+    });
     super::attach_memory_error_details(&mut hard_obj, &hard);
     assert_eq!(hard_obj["required"], 9000);
     assert_eq!(hard_obj["hard"], 8000);
@@ -1070,6 +1105,20 @@ fn approve_high_memory_rejects_invalid_types_and_formats_structured_error() {
     for absent in ["soft", "softLimit", "available", "availableRam"] {
         assert!(hard_obj.get(absent).is_none(), "a hard refusal has no {absent}: {hard_obj}");
     }
+
+    // When measured free memory set the limit, the refusal also reports it.
+    let mut low_obj = json!({"id": 3, "ok": false, "error": "test"});
+    let low = crate::AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget {
+        name: "big.psd".into(),
+        required: 9000,
+        limit: 8000,
+        free_memory: Some(10_000),
+    });
+    super::attach_memory_error_details(&mut low_obj, &low);
+    assert_eq!(low_obj["hardLimit"], 8000);
+    assert_eq!(low_obj["available"], 10_000);
+    assert_eq!(low_obj["availableRam"], 10_000);
+    assert!(low_obj.get("soft").is_none(), "a hard refusal has no soft limit: {low_obj}");
 }
 
 /// #10897: `doc.place` forwards the strict one-shot high-memory approval on both routes: the

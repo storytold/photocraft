@@ -25,7 +25,19 @@ pub(crate) type ToolBrushes = (Tool, Vec<(Tool, BrushSettings)>);
 pub(crate) fn select(app: &mut PhotocraftApp, tool: Tool) {
     app.stylus.tool_before_eraser = None;
     app.ui.spring = None;
+    if app.ui.tool == Tool::Frame && tool != Tool::Frame {
+        crate::frame_tool::cancel(app);
+    }
     app.ui.tool = tool;
+    ended_by_tool(app);
+}
+
+/// Add New Artboard's placing mode ends with the Artboard tool (#11386): every place that sets
+/// `ui.tool` calls this right after, so there is one rule.
+pub(crate) fn ended_by_tool(app: &mut PhotocraftApp) {
+    if app.ui.tool != Tool::Artboard {
+        app.ui.artboard_tool.adding = false;
+    }
 }
 
 /// Temporary canvas overrides do not change `ui.tool`. Spring-loaded letters and the pen's
