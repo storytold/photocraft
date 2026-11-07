@@ -89,14 +89,16 @@ fn floating_square() -> PhotocraftApp {
     app
 }
 
-/// #7538: a selection tool's press on a floating piece's ants drags it; one in the margin its
-/// cut left of the loose marquee draws a new selection, as the ants say.
+/// #7538: a selection tool's press on a floating piece's ants drags its outline (#11368), a ⌘
+/// press the piece; one in the margin its cut left of the loose marquee draws a new selection, as
+/// the ants say.
 #[test]
 fn a_press_in_the_margin_of_a_floating_piece_starts_a_new_selection() {
     let app = floating_square();
     let none = egui::Modifiers::NONE;
     for tool in [Tool::RectMarquee, Tool::Lasso] {
-        assert_eq!(selection_drag_kind(&app, tool, [70.0, 60.0], none), Some(true), "{tool:?}: on the square drags it");
+        assert_eq!(selection_drag_kind(&app, tool, [70.0, 60.0], none), Some(false), "{tool:?}: on the square drags its outline");
+        assert_eq!(selection_drag_kind(&app, tool, [70.0, 60.0], egui::Modifiers::COMMAND), Some(true), "{tool:?}: ⌘ drags the square");
         assert_eq!(selection_drag_kind(&app, tool, [33.0, 28.0], none), None, "{tool:?}: in the old marquee's margin");
     }
 }
