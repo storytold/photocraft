@@ -1244,6 +1244,7 @@ pub mod targa_options_ui;
 mod tests;
 pub mod tiff_options_ui;
 pub mod vp_ui;
+pub mod wand_no_pixels;
 pub mod wide_angle_ui;
 
 #[cfg(test)]

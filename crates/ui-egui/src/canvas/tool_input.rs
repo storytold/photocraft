@@ -347,6 +347,17 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
 }
 
 /// Tool state machine. Shared by mouse input and automation.
+/// A Magic Wand click at document `(x, y)`; one that leaves nothing selected says so, as the
+/// reference does (#11781).
+fn magic_wand_click(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
+    let o = app.ui.tool_options.clone();
+    let mode = selection_mode(app, mods);
+    let r = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+    if r.is_ok_and(|v| v["selected"] == json!(false)) {
+        crate::wand_no_pixels::warn(app);
+    }
+}
+
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     if consumes_cancelled_vector_event(app, ev) {
         return;
@@ -464,9 +475,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                     return;
                 }
                 Tool::MagicWand => {
-                    let o = app.ui.tool_options.clone();
-                    let mode = selection_mode(app, mods);
-                    let _ = app.run("select.magicWand", json!({"x": x.floor(), "y": y.floor(), "tolerance": o.tolerance, "contiguous": o.contiguous, "antiAlias": o.anti_alias, "sampleAllLayers": o.sample_all.magic_wand, "mode": mode}));
+                    magic_wand_click(app, x, y, mods);
                     return;
                 }
                 Tool::MagicEraser => {
