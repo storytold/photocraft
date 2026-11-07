@@ -739,6 +739,72 @@ fn cancelling_a_background_place_continues_the_queue() {
     assert_eq!(layer_count(&app), layers + 1);
 }
 
+/// #8492: with Skip Transform when Placing on, dropped files still go through the background place
+/// job one at a time, but no Free Transform opens when a layer lands: the next file starts as soon
+/// as the previous one has landed, without waiting for ↩.
+#[test]
+fn skip_transform_when_placing_places_background_drops_without_free_transform() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.background_jobs = true;
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    app.open_dropped(&ctx, vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    let first = app.jobs.place.clone().expect("the first file is being placed");
+    assert_eq!(first.name, "first.png");
+    assert!(app.session.job(first.job).is_some(), "as a background job");
+    assert_eq!(app.drop_places.len(), 1, "the second file waits for the first job");
+    tick_until(&mut app, &ctx, |app| app.jobs.place.as_ref().is_some_and(|p| p.name == "second.png"));
+    assert!(app.ui.transform.is_none(), "no Free Transform on the first file");
+    assert_eq!(layer_count(&app), layers + 1);
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2), "one Place Embedded step each");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Place Embedded"));
+}
+
+/// #8492: inline (background jobs off, as on the web) the preference places every queued drop
+/// without Free Transform, a file that can't be placed reported on the way.
+#[test]
+fn skip_transform_when_placing_places_inline_drops_without_free_transform() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": true})).unwrap();
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    app.open_dropped(
+        &ctx,
+        vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("bad.png", Ok(b"bad".to_vec())), dropped("second.png", Ok(png_bytes(2, 2)))],
+        Some(egui::pos2(400.0, 300.0)),
+    );
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_none() && app.drop_places.is_empty());
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2));
+    assert_eq!(app.ui.notices.iter().filter(|n| n.error && n.title.contains("bad.png")).count(), 1);
+}
+
+/// #8492: Skip Transform when Placing only concerns the interactive place. `file.placeEmbedded`
+/// with a `path` (actions, scripts, the control channel, MCP) runs the engine command, which never
+/// opens Free Transform, whatever the preference.
+#[test]
+fn a_scripted_place_never_opens_free_transform() {
+    let dir = std::env::temp_dir().join(format!("pc-scripted-place-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("dot.png");
+    std::fs::write(&path, png_bytes(4, 3)).unwrap();
+    let mut app = app_with_canvas();
+    for skip in [false, true] {
+        app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+        let layers = layer_count(&app);
+        app.run("file.placeEmbedded", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(layer_count(&app), layers + 1, "skip={skip}");
+        assert!(app.ui.transform.is_none(), "skip={skip}");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 /// Frames with nothing to wait for: jobs applied and the drop queue served.
 fn idle_frames(app: &mut PhotocraftApp, ctx: &egui::Context) {
     for _ in 0..3 {
