@@ -160,6 +160,8 @@ pub struct ColorInfo {
     pub as_shot_neutral: Option<[f64; 3]>,
     /// AsShotWhiteXY.
     pub as_shot_white_xy: Option<[f64; 2]>,
+    /// The DNG profile's hue / saturation map and look table (empty: none).
+    pub profile: crate::profile::Profile,
 }
 
 fn lerp_mat(a: &Mat3, b: &Mat3, g: f64) -> Mat3 {
@@ -229,6 +231,11 @@ impl ColorInfo {
             }
         }
         xy
+    }
+
+    /// Correlated colour temperature of the white whose camera coordinates are `neutral`.
+    pub(crate) fn neutral_temperature(&self, neutral: [f64; 3]) -> f64 {
+        cct(self.neutral_to_xy(neutral))
     }
 
     /// Camera coordinates of a white with chromaticity `xy`, max component 1.

@@ -409,6 +409,75 @@ fn forward_matrix_path_maps_neutral_to_white() {
     }
 }
 
+/// A flat-colour DNG whose camera is linear sRGB, balanced as shot to (1, 1, 1), with extra IFD0
+/// tags (the profile under test).
+fn profiled(rgb: [f32; 3], extra: Vec<(u16, Val)>) -> Vec<u8> {
+    let (w, h) = (16, 16);
+    let mut spec = DngSpec::cfa(w, h, mosaic(&vec![rgb; w * h], w, [0, 1, 1, 2], 0, 65535));
+    let cm = invert(SRGB_TO_XYZ);
+    spec.color_matrix1 = Some((21, [cm[0][0], cm[0][1], cm[0][2], cm[1][0], cm[1][1], cm[1][2], cm[2][0], cm[2][1], cm[2][2]]));
+    spec.as_shot_neutral = Some([1.0, 1.0, 1.0]);
+    spec.ifd0_extra = extra;
+    spec.build()
+}
+
+/// Linear ProPhoto of the centre pixel.
+fn centre(bytes: &[u8]) -> [f64; 3] {
+    let d = develop(bytes, &DevelopOptions::default()).unwrap();
+    let i = (8 * d.width as usize + 8) * 3;
+    [0, 1, 2].map(|c| (f64::from(d.rgb[i + c]) / 65535.0).powf(1.8))
+}
+
+/// A hue / saturation map of `hue × sat` divisions, every entry `[shift, sat scale, val scale]`.
+fn hsv_map(hue: u32, sat: u32, entry: [f64; 3]) -> (Val, Val) {
+    (Val::Long(vec![hue, sat, 1]), Val::Double((0..hue * sat).flat_map(|_| entry).collect()))
+}
+
+#[test]
+fn profile_tone_curve_and_hue_sat_map_apply() {
+    let grey = [0.25f32; 3];
+    let plain = centre(&profiled(grey, Vec::new()));
+    assert!(plain.iter().all(|v| (v - 0.25).abs() < 0.005), "{plain:?}");
+    // ProfileToneCurve through (0.25, 0.5), on linear values.
+    let curve = centre(&profiled(grey, vec![(50940, Val::Double(vec![0.0, 0.0, 0.25, 0.5, 1.0, 1.0]))]));
+    assert!(curve.iter().all(|v| (v - 0.5).abs() < 0.01), "{curve:?}");
+    // A hue / saturation map that doubles the value.
+    let (dims, data) = hsv_map(6, 2, [0.0, 1.0, 2.0]);
+    let brighter = centre(&profiled(grey, vec![(50937, dims), (50938, data)]));
+    assert!(brighter.iter().all(|v| (v - 0.5).abs() < 0.01), "{brighter:?}");
+    // Saturation scale 0 turns a colour neutral; a look table does the same after exposure.
+    let red = [0.4f32, 0.1, 0.1];
+    let (dims, data) = hsv_map(6, 2, [0.0, 0.0, 1.0]);
+    for tags in [vec![(50937, dims.clone()), (50938, data.clone())], vec![(50981, dims), (50982, data)]] {
+        let o = centre(&profiled(red, tags));
+        assert!((o[0] - o[1]).abs() < 0.005 && (o[1] - o[2]).abs() < 0.005 && o[0] > 0.05, "{o:?}");
+    }
+    let colour = centre(&profiled(red, Vec::new()));
+    assert!(colour[0] > colour[1] + 0.05, "{colour:?}");
+}
+
+#[test]
+fn malformed_profile_tags_are_ignored() {
+    let grey = [0.25f32; 3];
+    let cases: Vec<Vec<(u16, Val)>> = vec![
+        // Data that does not match the dimensions, dimensions with no data, absurd dimensions.
+        vec![(50937, Val::Long(vec![6, 2, 1])), (50938, Val::Double(vec![0.0, 1.0, 2.0]))],
+        vec![(50937, Val::Long(vec![6, 2, 1]))],
+        vec![(50937, Val::Long(vec![u32::MAX, u32::MAX, u32::MAX])), (50938, Val::Double(vec![0.0; 9]))],
+        vec![(50981, Val::Long(vec![0, 0, 0])), (50982, Val::Double(Vec::new()))],
+        vec![(50937, Val::Long(vec![1, 2, 1])), (50938, Val::Double(vec![0.0, -1.0, 2.0, 0.0, 1.0, f64::NAN]))],
+        // A tone curve that falls, leaves 0..1 or has an odd number of values.
+        vec![(50940, Val::Double(vec![0.0, 0.0, 0.6, 0.5, 0.4, 0.6, 1.0, 1.0]))],
+        vec![(50940, Val::Double(vec![0.0, 0.0, 2.0, 3.0]))],
+        vec![(50940, Val::Double(vec![0.0, 0.0, 1.0]))],
+    ];
+    for (i, tags) in cases.into_iter().enumerate() {
+        let bytes = profiled(grey, tags);
+        let o = centre(&bytes);
+        assert!(o.iter().all(|v| (v - 0.25).abs() < 0.005), "case {i}: {o:?}");
+    }
+}
+
 #[test]
 fn highlights_clip_to_white_and_exposure_applies() {
     let (w, h) = (8, 8);

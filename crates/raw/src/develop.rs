@@ -341,8 +341,15 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
         }
     };
     let gain = 2f64.powf(s.baseline_exposure + opts.exposure.clamp(-10.0, 10.0));
-    let out_m = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &to_xyz), gain);
+    // The DNG profile's hue / saturation map (at the white's temperature) acts on linear ProPhoto
+    // before exposure, its look table after; a fitted camera look replaces the profile.
+    let profile = Some(&s.color.profile).filter(|p| !mono && look.is_none() && !p.is_empty());
+    let hue_sat = profile.and_then(|p| p.hue_sat_at(s.color.neutral_temperature(neutral)));
+    let look_table = profile.and_then(|p| p.look_table.as_ref());
+    let base = color::mul(&color::xyz_d50_to_prophoto(), &to_xyz);
+    let out_m = if hue_sat.is_some() { base } else { color::scale(&base, gain) };
     let out_m: [[f32; 3]; 3] = out_m.map(|r| r.map(|v| v as f32));
+    let map_gain = gain as f32;
 
     // Neutral grey through `out_m`: the gain alone (the matrix maps camera white to ProPhoto
     // white, up to rounding), so the three output channels stay exactly equal.
@@ -354,7 +361,20 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     let y_row = color::rgb_to_xyz(color::ROMM, color::D50_XY)[1].map(|v| v as f32);
     let lum = |v: &[f32; 3]| y_row[0] * v[0] + y_row[1] * v[1] + y_row[2] * v[2];
     // Monochrome: the one sample, grey; no colour matrix.
-    let pro = |p: &[f32]| if mono { [grey_gain * p[0]; 3] } else { [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]) };
+    let pro = |p: &[f32]| {
+        if mono {
+            return [grey_gain * p[0]; 3];
+        }
+        let v = [0, 1, 2].map(|k| out_m[k][0] * p[0] + out_m[k][1] * p[1] + out_m[k][2] * p[2]);
+        let v = match &hue_sat {
+            Some(m) => m.apply(v).map(|c| c * map_gain),
+            None => v,
+        };
+        match look_table {
+            Some(t) => t.apply(v),
+            None => v,
+        }
+    };
     let lut = match look {
         Some(l) => GammaLut::with_tone(l.tone.as_ref()),
         None => GammaLut::with_curve(&s.tone_curve),
