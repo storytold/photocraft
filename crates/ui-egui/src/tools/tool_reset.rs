@@ -73,8 +73,12 @@ fn reset_tool(app: &mut PhotocraftApp, tool: Tool) {
         crate::frame_tool::cancel(app);
         app.ui.frame_tool = Default::default();
     }
+    if tool == Tool::Artboard {
+        app.ui.artboard_tool = Default::default();
+    }
     reset_options(&mut app.ui.tool_options, tool);
-    if is_selection_tool(tool) {
+    // Patch and Content-Aware Move lasso in the shared selection mode their bars show (#11024).
+    if is_selection_tool(tool) || matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
         app.ui.selection_mode = 0;
     }
     if crate::paint_mouse::has_brush_picker(tool) {
@@ -90,6 +94,7 @@ fn reset_all(app: &mut PhotocraftApp) {
     crate::frame_tool::cancel(app);
     app.ui.frame_tool = Default::default();
     app.ui.tool_options = ToolOptions::default();
+    app.ui.artboard_tool = Default::default();
     app.ui.selection_mode = 0;
     app.ui.tool_brushes.clear();
     reset_session_brush(app);
@@ -313,6 +318,20 @@ mod tests {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
         assert_eq!(app.ui.tool_options, ToolOptions::default());
         assert!(app.ui.dialogs.is_empty());
+    }
+
+    /// The Patch and Content-Aware Move bars show the shared selection mode, so Reset Tool on
+    /// either sets it back to New, as on the selection tools (#11024).
+    #[test]
+    fn reset_tool_resets_the_patch_selection_mode() {
+        let ctx = egui::Context::default();
+        for tool in [Tool::Patch, Tool::ContentAwareMove] {
+            let mut app = app();
+            app.ui.selection_mode = 2;
+            app.ui.tool = tool;
+            crate::menus::invoke(&mut app, &ctx, RESET, json!({})).unwrap();
+            assert_eq!(app.ui.selection_mode, 0, "{tool:?}");
+        }
     }
 
     /// Sample All Layers is per tool (#5524): resetting Blur turns off only Blur's.
