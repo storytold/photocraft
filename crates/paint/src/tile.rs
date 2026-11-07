@@ -272,16 +272,22 @@ impl Mips {
         (ratio.log2().floor() as usize).min(self.levels.len() - 1)
     }
 
-    /// Bilinear sample at normalised `u, v` in 0..1 (outside = 0).
+    /// Bilinear sample with the edge texels extended. The dab rasterizer clips
+    /// the bitmap's support in document pixels, so enlarging a cropped tip does
+    /// not also enlarge an imaginary transparent border around its edge texels.
     #[inline]
     pub fn sample_clamped(&self, level: usize, u: f32, v: f32) -> f32 {
-        let (w, h, d) = &self.levels[level];
+        let Some((w, h, d)) = self.levels.get(level) else { return 0.0 };
+        let Some(len) = w.checked_mul(*h) else { return 0.0 };
+        if *w == 0 || *h == 0 || d.len() < len {
+            return 0.0;
+        }
         let fx = u * *w as f32 - 0.5;
         let fy = v * *h as f32 - 0.5;
         let (x0, y0) = (fx.floor(), fy.floor());
         let (tx, ty) = (fx - x0, fy - y0);
         let (x0, y0) = (x0 as i64, y0 as i64);
-        let get = |x: i64, y: i64| if x < 0 || y < 0 || x >= *w as i64 || y >= *h as i64 { 0.0 } else { d[y as usize * w + x as usize] };
+        let get = |x: i64, y: i64| d[y.clamp(0, *h as i64 - 1) as usize * w + x.clamp(0, *w as i64 - 1) as usize];
         let a = get(x0, y0) + (get(x0 + 1, y0) - get(x0, y0)) * tx;
         let b = get(x0, y0 + 1) + (get(x0 + 1, y0 + 1) - get(x0, y0 + 1)) * tx;
         a + (b - a) * ty
@@ -308,6 +314,21 @@ impl PatternImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_or_missing_mip_levels_sample_as_transparent() {
+        for level in [
+            Mips { levels: vec![] },
+            Mips { levels: vec![(0, 1, vec![])] },
+            Mips { levels: vec![(1, 0, vec![])] },
+            Mips { levels: vec![(2, 2, vec![1.0, 0.0, 1.0])] },
+        ] {
+            assert_eq!(level.sample_clamped(0, 0.5, 0.5), 0.0);
+        }
+        assert_eq!(Mips { levels: vec![(1, 1, vec![1.0])] }.sample_clamped(1, 0.5, 0.5), 0.0);
+        let one = Mips { levels: vec![(1, 1, vec![0.75])] };
+        assert_eq!(one.sample_clamped(0, -100.0, 200.0), 0.75, "a valid edge texel extends outside the bitmap");
+    }
 
     /// Cloning a tile (and the brush settings holding it, on every pointer event of a stroke)
     /// shares its samples instead of copying them (#4534).
