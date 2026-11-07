@@ -56,6 +56,106 @@ pub fn exif_color_space(exif: &[u8]) -> Option<u16> {
     }
 }
 
+/// Normalize EXIF colour-space declarations for an sRGB JPEG XL codestream.
+///
+/// Used when the selected JPEG XL path writes sRGB rather than the source ICC.
+/// Only the existing inline ColorSpace value and an existing Adobe RGB
+/// InteroperabilityIndex (R03 -> R98) are rewritten. All other EXIF bytes,
+/// including GPS, camera data and offsets, remain untouched. Unknown or
+/// malformed TIFF structures are returned unchanged.
+pub(crate) fn srgb_exif_metadata(exif: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let body = tiff_body(exif);
+    let prefix = exif.len() - body.len();
+    let edits = (|| -> Option<Vec<(usize, Vec<u8>)>> {
+        let (order, first, count, entry_bytes, big_tiff) = ifd0_entries(body)?;
+        if big_tiff {
+            return None;
+        }
+        let ptr = find(order, body, first, count, entry_bytes, TAG_EXIF_IFD)?;
+        if !matches!(order.u16(body, ptr.checked_add(2)?)?, TYPE_LONG | TYPE_IFD) || order.u32(body, ptr.checked_add(4)?)? != 1 {
+            return None;
+        }
+        let ifd = usize::try_from(order.u32(body, ptr.checked_add(8)?)?).ok()?;
+        if ifd < HEADER {
+            return None;
+        }
+        let count = usize::from(order.u16(body, ifd)?);
+        let first = ifd.checked_add(2)?;
+        let end = first.checked_add(count.checked_mul(ENTRY)?)?;
+        if end.checked_add(4)? > body.len() {
+            return None;
+        }
+        let mut edits = Vec::new();
+        for i in 0..count {
+            let e = first.checked_add(i.checked_mul(ENTRY)?)?;
+            let ty = order.u16(body, e.checked_add(2)?)?;
+            if order.u32(body, e.checked_add(4)?)? != 1 {
+                continue;
+            }
+            if order.u16(body, e)? == TAG_COLOR_SPACE {
+                let at = e.checked_add(8)?;
+                let replacement = match (ty, order) {
+                    (TYPE_SHORT, Order::Little) => 1u16.to_le_bytes().to_vec(),
+                    (TYPE_SHORT, Order::Big) => 1u16.to_be_bytes().to_vec(),
+                    (TYPE_LONG, Order::Little) => 1u32.to_le_bytes().to_vec(),
+                    (TYPE_LONG, Order::Big) => 1u32.to_be_bytes().to_vec(),
+                    _ => continue,
+                };
+                if body.get(at..at.checked_add(replacement.len())?)? != replacement.as_slice() {
+                    edits.push((prefix.checked_add(at)?, replacement));
+                }
+            }
+            // ExifIFD 0xA005 points to an Interoperability IFD. R03 means
+            // Adobe RGB, while R98 means sRGB. Rewrite an existing R03 only.
+            if order.u16(body, e)? == 0xA005 && matches!(ty, TYPE_LONG | TYPE_IFD) {
+                edits.extend(srgb_interoperability_edits(order, body, e, prefix)?);
+            }
+        }
+        Some(edits)
+    })();
+    let Some(edits) = edits else { return std::borrow::Cow::Borrowed(exif) };
+    if edits.is_empty() {
+        return std::borrow::Cow::Borrowed(exif);
+    }
+    let mut updated = exif.to_vec();
+    for (at, bytes) in edits {
+        if let Some(slot) = updated.get_mut(at..at + bytes.len()) {
+            slot.copy_from_slice(&bytes);
+        }
+    }
+    std::borrow::Cow::Owned(updated)
+}
+
+/// Locate only existing Adobe RGB interoperability values in a classic TIFF sub-IFD.
+fn srgb_interoperability_edits(order: Order, body: &[u8], e: usize, prefix: usize) -> Option<Vec<(usize, Vec<u8>)>> {
+    let mut edits = Vec::new();
+    let sub = usize::try_from(order.u32(body, e.checked_add(8)?)?).ok()?;
+    if sub < HEADER {
+        return Some(Vec::new());
+    }
+    let Some(n) = order.u16(body, sub) else { return Some(Vec::new()) };
+    let Some(start) = sub.checked_add(2) else { return Some(Vec::new()) };
+    let Some(end) = start.checked_add(usize::from(n).checked_mul(ENTRY)?) else { return Some(Vec::new()) };
+    if end.checked_add(4)? > body.len() {
+        return Some(Vec::new());
+    }
+    for j in 0..usize::from(n) {
+        let entry = start.checked_add(j.checked_mul(ENTRY)?)?;
+        if order.u16(body, entry) != Some(1) || order.u16(body, entry.checked_add(2)?) != Some(2) {
+            continue;
+        }
+        let length = usize::try_from(order.u32(body, entry.checked_add(4)?)?).ok()?;
+        if length < 4 {
+            continue;
+        }
+        let data_at = if length <= 4 { entry.checked_add(8)? } else { usize::try_from(order.u32(body, entry.checked_add(8)?)?).ok()? };
+        if body.get(data_at..data_at.checked_add(3)?) == Some(b"R03".as_slice()) {
+            edits.push((prefix.checked_add(data_at)?, b"R98".to_vec()));
+        }
+    }
+    Some(edits)
+}
+
 /// Offset of the first entry tagged `tag` in the IFD whose `count` entries start at `first`.
 fn find(order: Order, b: &[u8], first: usize, count: usize, entry_bytes: usize, tag: u16) -> Option<usize> {
     (0..count).filter_map(|i| first.checked_add(i.checked_mul(entry_bytes)?)).find(|&e| order.u16(b, e) == Some(tag))
@@ -106,6 +206,105 @@ mod tests {
             assert_eq!(exif_color_space(&prefixed), Some(1));
             assert_eq!(exif_color_space(&exif(big, &[(TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xFFFF)])), Some(0xFFFF));
             assert_eq!(exif_color_space(&exif(big, &[(TAG_COLOR_SPACE, TYPE_LONG, 1, 1)])), Some(1), "LONG is accepted");
+        }
+    }
+
+    #[test]
+    fn srgb_export_corrects_exif_colour_space_but_preserves_other_tags() {
+        for big_endian in [false, true] {
+            let input = exif(
+                big_endian,
+                &[
+                    (TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff),
+                    (0x9000, 7, 4, 0x3032_3330), // ExifVersion: untouched
+                ],
+            );
+            let output = srgb_exif_metadata(&input);
+            assert_eq!(exif_color_space(&output), Some(1));
+            assert_eq!(output.len(), input.len());
+            // Only the two-byte ColorSpace value may change.
+            let differences: Vec<_> = input.iter().zip(output.iter()).enumerate().filter(|(_, (a, b))| a != b).map(|(i, _)| i).collect();
+            assert!(!differences.is_empty());
+            assert!(differences.iter().all(|&i| (36..38).contains(&i)));
+            assert!(matches!(srgb_exif_metadata(&output), std::borrow::Cow::Borrowed(_)));
+
+            let mut prefixed = b"Exif\0\0".to_vec();
+            prefixed.extend_from_slice(&input);
+            let corrected = srgb_exif_metadata(&prefixed);
+            assert!(corrected.starts_with(b"Exif\0\0"));
+            assert_eq!(exif_color_space(&corrected), Some(1));
+        }
+
+        assert!(matches!(srgb_exif_metadata(b"not an EXIF payload"), std::borrow::Cow::Borrowed(_)));
+        assert!(matches!(srgb_exif_metadata(&exif(false, &[(0x9000, 7, 4, 0)])), std::borrow::Cow::Borrowed(_)));
+    }
+
+    #[test]
+    fn srgb_export_normalizes_long_color_space_and_keeps_other_exif_bytes() {
+        for big in [false, true] {
+            let input = exif(big, &[(TAG_COLOR_SPACE, TYPE_LONG, 1, 0xffff), (0x9000, 7, 4, 0x3032_3330)]);
+            let mut expected = input.clone();
+            let one = if big { 1u32.to_be_bytes() } else { 1u32.to_le_bytes() };
+            // First entry in Exif IFD: 26-byte IFD0+header, count (2), value (+8).
+            expected[36..40].copy_from_slice(&one);
+            let converted = srgb_exif_metadata(&input);
+            assert_eq!(converted.as_ref(), expected.as_slice(), "big-endian: {big}");
+            assert_eq!(exif_color_space(&converted), Some(1));
+            assert!(matches!(srgb_exif_metadata(&converted), std::borrow::Cow::Borrowed(_)));
+        }
+    }
+
+    #[test]
+    fn srgb_export_rewrites_inline_and_out_of_line_interoperability_index() {
+        for big in [false, true] {
+            for inline in [true, false] {
+                let u16b = |v: u16| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+                let u32b = |v: u32| if big { v.to_be_bytes() } else { v.to_le_bytes() };
+                // Exif IFD: two entries (ColorSpace and pointer to interoperability IFD).
+                // Its IFD begins immediately after IFD0, at TIFF offset 26.
+                let interop_ifd = 26 + 2 + 2 * ENTRY + 4;
+                let mut input = exif(big, &[(TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff), (0xA005, TYPE_LONG, 1, interop_ifd as u32)]);
+                assert_eq!(input.len(), interop_ifd);
+                input.extend(u16b(1));
+                // InteroperabilityIndex = tag 1, ASCII; R03 indicates Adobe RGB.
+                input.extend(u16b(1));
+                input.extend(u16b(2));
+                input.extend(u32b(if inline { 4 } else { 6 }));
+                let value_at = if inline { interop_ifd + 2 + 8 } else { interop_ifd + 2 + ENTRY + 4 };
+                if inline {
+                    input.extend(b"R03\0");
+                } else {
+                    input.extend(u32b(value_at as u32));
+                }
+                input.extend(u32b(0)); // next IFD pointer
+                if !inline {
+                    assert_eq!(input.len(), value_at);
+                    input.extend(b"R03\0\0\0");
+                }
+                let mut expected = input.clone();
+                expected[36..38].copy_from_slice(&u16b(1));
+                expected[value_at..value_at + 3].copy_from_slice(b"R98");
+                let corrected = srgb_exif_metadata(&input);
+                assert_eq!(corrected.as_ref(), expected.as_slice(), "big-endian: {big}, inline: {inline}");
+                assert!(matches!(srgb_exif_metadata(&corrected), std::borrow::Cow::Borrowed(_)));
+            }
+        }
+    }
+
+    /// Broken optional interoperability metadata must not undo a valid ColorSpace edit.
+    #[test]
+    fn srgb_export_keeps_color_space_edit_with_malformed_interoperability() {
+        for big in [false, true] {
+            for truncated in [false, true] {
+                let interop = 26 + 2 + 2 * ENTRY + 4;
+                let mut input = exif(big, &[(TAG_COLOR_SPACE, TYPE_SHORT, 1, 0xffff), (0xA005, TYPE_LONG, 1, interop as u32)]);
+                if truncated {
+                    input.extend(if big { 1u16.to_be_bytes() } else { 1u16.to_le_bytes() });
+                }
+                let mut expected = input.clone();
+                expected[36..38].copy_from_slice(&if big { 1u16.to_be_bytes() } else { 1u16.to_le_bytes() });
+                assert_eq!(srgb_exif_metadata(&input).as_ref(), expected.as_slice());
+            }
         }
     }
 

@@ -8,14 +8,15 @@ A TIFF saved by Photoshop with its layers carries them in two private tags: 3772
 
 ## JPEG XL
 
-Save As, Export As and the CLI can write a lossless, single-image `.jxl` bare
+Save As, Export As and the CLI can write a lossless, single-image `.jxl`
 codestream at 8 or 16 bits per sample. Gray, RGB and RGBA are encoded
 natively. Grayscale with alpha is expanded to RGBA at the original bit depth
 to preserve both grayscale and alpha samples. For 16-bit RGBA the encoder's
 incorrect default 8-bit alpha header is corrected to explicitly describe
 16-bit alpha, with an independent decoder oracle checking alpha values.
-The bare codestream has no ICC, EXIF, XMP or DPI boxes; the export path
-converts tagged RGB to sRGB and surfaces metadata losses as fidelity warnings.
+With metadata enabled, EXIF/XMP are wrapped in standard JPEG XL container boxes;
+without metadata the original bare codestream is kept. ICC and explicit DPI
+embedding are not supported; tagged RGB is converted to sRGB.
 JPEG XL opening remains under review in #2868.
 
 ## WebP
@@ -59,3 +60,15 @@ Format adapters pass compatible allocation limits into PNG, TIFF, WebP, and `ima
 `Limits::none()` exists for callers with a deliberate reason to relax policy. It remains bounded by representable memory sizes, but it removes the default resource policy and should not be used for untrusted input.
 
 Animated containers and multi-page TIFFs are represented as a single decoded frame or page by the current codec API; opening one adds an import warning such as "only the first of 3 frames was imported". A JPEG cut off inside its image data opens with a warning that its data ends early (an error when it holds no image data at all). Refer to [`crates/codecs/README.md`](https://github.com/storytold/photocraft/blob/main/crates/codecs/README.md) and source capability declarations for current behavior.
+
+### JPEG XL metadata controls
+
+EXIF/XMP embedding is enabled by default (`EncodeOptions::embed_metadata = true`).
+In **File > Export > Export As**, **Metadata: All** preserves available EXIF/XMP;
+**Metadata: None** disables metadata embedding. Save As uses the default metadata
+settings. The current CLI convert command preserves available metadata by default
+and exposes no separate metadata switch; codec API callers can set
+`embed_metadata = false`. Empty metadata leaves the original bare codestream.
+
+The existing export warnings still report unsupported ICC/DPI and conversion to
+sRGB. Preserving EXIF/XMP does not add support for embedding a source ICC profile.

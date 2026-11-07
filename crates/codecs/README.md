@@ -46,7 +46,7 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | OpenEXR | yes | yes | F16, F32 | Y, YA, RGB, RGBA | yes | no | no | no | no | no | no | `exr` |
 | Radiance HDR | yes | yes | F32 | RGB | no | no | no | no | no | no | yes (RGBE) | `image` |
 | FITS | yes | yes | U8, U16, F32 | Gray, RGB | no | no | no | no | no | yes (header cards) | no | built in |
-| JPEG XL (.jxl) | **no** (see #2868) | yes | U8, U16 | Gray, RGB, RGBA (GrayA expands to RGBA) | yes | no (bare codestream) | no | no | no | no | no | `zune-jpegxl` |
+| JPEG XL (.jxl) | **no** (see #2868) | yes | U8, U16 | Gray, RGB, RGBA (GrayA expands to RGBA) | yes | no (ICC unsupported) | yes (container) | yes (container) | no | no | no | `zune-jpegxl` |
 | DPX | yes | yes | U8, U16 (10/12-bit code values read and written exactly through U16) | Gray, RGB, RGBA | yes | no | no | no | no | DPX header fields only (creator, project, copyright, creation time, transfer, colorimetric, frame position, frame rate, time code) | no | built in |
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
@@ -74,14 +74,13 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 
 ## Documented asymmetries and limitations
 
-* **JPEG XL export.** Writes lossless 8/16-bit bare codestreams with `zune-jpegxl`.
+* **JPEG XL export.** Writes lossless 8/16-bit codestreams with `zune-jpegxl`. Bare codestreams are retained when metadata are disabled or absent.
   Native layouts are Gray, RGB and RGBA. GrayA is expanded to RGBA at the
   original depth. For 16-bit RGBA (including expanded GrayA), we correct
   zune-jpegxl 0.5.2's extra-channel header, which otherwise describes the
   16-bit alpha samples as 8-bit. This preserves alpha precision; the independent
   jxl-oxide decoder test checks the actual gray and alpha samples. The expansion
-  is not a native GrayA layout. No ICC, EXIF, XMP or DPI container boxes are written; the
-  document pipeline converts tagged images to sRGB and reports metadata loss.
+  is not a native GrayA layout. EXIF and XMP use ISO 18181-2 container boxes when requested; ICC and explicit DPI embedding remain unsupported. The document pipeline converts tagged images to sRGB.
   Reading remains in the separate #2868 PR. The `ASYMMETRIC_EXCEPTIONS`
   entry stays until import is merged.
 
@@ -316,3 +315,15 @@ including chunks after IDAT. This budget is separate from pixels, not a total pr
 
 If `corpus/pngsuite/*.png` exists at the repo root, every file in it is compared against the
 `image` crate's decoder. Without it, that test is skipped.
+
+### JPEG XL metadata controls
+
+EXIF/XMP embedding is enabled by default (`EncodeOptions::embed_metadata = true`).
+In **File > Export > Export As**, **Metadata: All** preserves available EXIF/XMP;
+**Metadata: None** disables metadata embedding. Save As uses the default metadata
+settings. The current CLI convert command preserves available metadata by default
+and exposes no separate metadata switch; codec API callers can set
+`embed_metadata = false`. Empty metadata leaves the original bare codestream.
+
+The existing export warnings still report unsupported ICC/DPI and conversion to
+sRGB. Preserving EXIF/XMP does not add support for embedding a source ICC profile.
