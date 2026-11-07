@@ -378,6 +378,8 @@
 	Match Color…	Dopasuj kolor…
 	Replace Color…	Zamień kolor…
 	Equalize	Wyrównaj
+	Equalize Selected Area Only	Wyrównaj tylko zaznaczony obszar
+	Equalize Entire Image Based On Selected Area	Wyrównaj cały obraz na podstawie zaznaczonego obszaru
 	Auto Tone	Automatyczne tony
 	Auto Contrast	Automatyczny kontrast
 	Auto Color	Automatyczny kolor
@@ -4231,3 +4233,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Pokaż granice warstwy po najechaniu
 	Expand layer group on click	Rozwiń grupę warstw po kliknięciu
 	Show hover bounds from Layers	Pokaż granice po najechaniu z panelu Warstwy
+# Artboard tool options bar (#11385)
+	Distribute Widths	Rozmieść szerokości równomiernie
+	Distribute Heights	Rozmieść wysokości równomiernie
+	Auto-nest Layers	Automatycznie zagnieżdżaj warstwy
+	Auto-size Canvas	Automatycznie zmieniaj rozmiar płótna
+	Keep Relative Position During Layer Reordering	Zachowaj położenie względne przy zmianie kolejności warstw
+	Shrinkwrap Canvas on Save	Przytnij płótno do zawartości przy zapisie

@@ -322,6 +322,8 @@ pub const PREVIEWED: &[&str] = &[
     // The preview shows the image through the chosen profile, as Photoshop's Preview does.
     "edit.assignProfile",
     "edit.convertToProfile",
+    // Previewed from the session's history (`canvas::filter_preview`), at full size (#8230).
+    "edit.fade",
 ];
 
 pub fn has_dialog(command: &str) -> bool {
