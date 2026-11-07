@@ -1862,6 +1862,7 @@
 	Move Tool	Verschieben-Werkzeug
 	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
 	Could not complete the Free Transform command because the layer is locked.	Der Befehl „Frei transformieren“ konnte nicht ausgeführt werden, weil die Ebene gesperrt ist.
+	Could not transform because the layer is locked.	Transformieren nicht möglich, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
@@ -3640,6 +3641,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
 	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
 	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.
+# Move tool options bar (#11381)
+	Align top edges	Obere Kanten ausrichten
+	Align vertical centers	Vertikale Mitten ausrichten
+	Align bottom edges	Untere Kanten ausrichten
+	Distribute vertically	Vertikal verteilen
+	Distribute horizontally	Horizontal verteilen
+	Show layer bounds on hover	Ebenenbegrenzung beim Darüberfahren anzeigen
+	Expand layer group on click	Ebenengruppe per Klick erweitern
+	Show hover bounds from Layers	Begrenzung beim Darüberfahren aus Ebenen anzeigen
 # Artboard tool options bar (#11385)
 	Distribute Widths	Breiten verteilen
 	Distribute Heights	Höhen verteilen

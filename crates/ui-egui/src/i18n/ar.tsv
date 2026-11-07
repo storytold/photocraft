@@ -1787,6 +1787,7 @@
 	Move Tool	أداة التحريك
 	Could not use the move tool because the layer is locked.	تعذر استخدام أداة التحريك لأن الطبقة مقفلة.
 	Could not complete the Free Transform command because the layer is locked.	تعذر إكمال أمر التحويل الحر لأن الطبقة مقفلة.
+	Could not transform because the layer is locked.	تعذر التحويل لأن الطبقة مقفلة.
 	Multiply	ضرب
 	My Brushes	الفُرش الخاصة بي
 	Neutrals	الدرجات المحايدة
@@ -3602,6 +3603,15 @@ curves	Smooth	تنعيم
 	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
 	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
 	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.
+# Move tool options bar (#11381)
+	Align top edges	محاذاة الحواف العلوية
+	Align vertical centers	محاذاة المراكز الرأسية
+	Align bottom edges	محاذاة الحواف السفلية
+	Distribute vertically	توزيع رأسي
+	Distribute horizontally	توزيع أفقي
+	Show layer bounds on hover	إظهار حدود الطبقة عند التمرير
+	Expand layer group on click	توسيع مجموعة الطبقات عند النقر
+	Show hover bounds from Layers	إظهار حدود التمرير من الطبقات
 # Artboard tool options bar (#11385)
 	Distribute Widths	توزيع العروض
 	Distribute Heights	توزيع الارتفاعات
