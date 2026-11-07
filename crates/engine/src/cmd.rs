@@ -68,6 +68,8 @@ pub mod color_to_alpha_cmds;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
 #[cfg(test)]
+mod count_delete_group_tests;
+#[cfg(test)]
 mod count_record_label_tests;
 pub mod cutout_cmds;
 pub mod distort_cmds;
