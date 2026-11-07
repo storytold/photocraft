@@ -112,7 +112,8 @@ use title_bar::title_x;
 pub use title_bar::{sync_window_title, system_title_bar, title_bar, window_title};
 #[cfg(test)]
 use toolbar::{
-    STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, next_slot_tool, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size, visible_sections,
+    STUDIO_CHIP, TOOL_SECTIONS, chips_height, color_chips, next_slot_tool, slot_tool, tool_flyout_drag_open, tool_flyout_release, toolbar_icon_size,
+    visible_sections,
 };
 pub use toolbar::{paint_toolbar_flyout_indicator, toolbar};
 
