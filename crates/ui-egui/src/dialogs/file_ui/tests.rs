@@ -36,6 +36,17 @@ fn busy_driver_page_requests_a_retry_without_input() {
 #[cfg(windows)]
 #[test]
 fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_empty() {
+    check_saved_settings_with_cached_printers(false);
+}
+
+#[cfg(windows)]
+#[test]
+fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_stale() {
+    check_saved_settings_with_cached_printers(true);
+}
+
+#[cfg(windows)]
+fn check_saved_settings_with_cached_printers(stale: bool) {
     use std::sync::atomic::{AtomicBool, Ordering};
     let (mut app, ctx) = app();
     let available = Arc::new(AtomicBool::new(false));
@@ -43,6 +54,8 @@ fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_empty() {
     app.session.printer_source = Some(Arc::new(move || {
         if listed.load(Ordering::SeqCst) {
             vec![craft_print::Printer { name: "Saved printer".into(), default: true, two_sided: None, description: String::new() }]
+        } else if stale {
+            vec![craft_print::Printer { name: "Old printer".into(), default: true, two_sided: None, description: String::new() }]
         } else {
             Vec::new()
         }
@@ -56,7 +69,7 @@ fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_empty() {
     let (release, released_rx) = std::sync::mpsc::channel::<()>();
     let holder = std::thread::spawn(move || {
         photocraft_engine::print_cmds::with_spooler(|| {
-            assert!(photocraft_engine::print_cmds::rgb_printers(&lister).unwrap().is_empty());
+            assert_eq!(photocraft_engine::print_cmds::rgb_printers(&lister).unwrap().len(), usize::from(stale));
             available.store(true, Ordering::SeqCst);
             held_tx.send(()).unwrap();
             let _ = released_rx.recv_timeout(std::time::Duration::from_secs(5));
@@ -67,15 +80,19 @@ fn print_dialog_keeps_saved_settings_when_the_cached_printer_list_is_empty() {
     let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
     let before_retry = (fields.get("printer").cloned(), fields.get("printerSettings").cloned());
     let pending = fields.get("__printerListingPending").cloned();
+    let shown_while_pending = fields.get("__printers").cloned();
     let _ = release.send(());
     holder.join().unwrap();
     assert_eq!(pending, Some(json!(true)));
     assert_eq!(before_retry, (Some(json!("Saved printer")), Some(json!("0011"))));
+    let expected = if stale { json!(["Old printer", "Saved printer"]) } else { json!(["Saved printer"]) };
+    assert_eq!(shown_while_pending, Some(expected));
     fields.insert("dryRun".into(), json!(true));
     photocraft_engine::print_cmds::with_spooler(|| {
         ctx.run_ui(Default::default(), |ui| print_body(&mut app, ui, &mut fields, id)).textures_delta.clear();
         assert_eq!(fields["printer"], "Saved printer");
         assert_eq!(fields["printerSettings"], "0011");
+        assert_eq!(fields["__printers"], json!(["Saved printer"]));
         assert!(!fields.contains_key("__printerListingPending"));
     });
 }

@@ -446,7 +446,7 @@ fn cups_spool(job: &PrintJob) -> std::result::Result<String, SpoolError> {
 /// server and where there is no `lp` (a sandbox).
 fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
     let named = p.get("printServer").and_then(Value::as_str).filter(|v| !v.is_empty());
-    if named.is_none() && (stand_in_printers(s.printer_source.as_ref(), cfg!(target_arch = "wasm32")).is_some() || system_spooler().is_some()) {
+    if !lists_over_ipp(s, p) {
         return Ok(printers_answer(system_printer_list(s)));
     }
     #[cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))]
@@ -472,6 +472,13 @@ fn system_printers(s: &mut Session, p: &Value) -> Result<Value> {
         let _ = named;
         Ok(json!({"server": Value::Null, "default": Value::Null, "printers": [], "note": "listing printers is not available on this platform yet"}))
     }
+}
+
+/// Whether `file.printers` with the params `p` asks a print server over IPP instead of the
+/// local spooler: for a named `printServer`, and where there is no stand-in and no `lp`.
+fn lists_over_ipp(s: &Session, p: &Value) -> bool {
+    p.get("printServer").and_then(Value::as_str).is_some_and(|v| !v.is_empty())
+        || (stand_in_printers(s.printer_source.as_ref(), cfg!(target_arch = "wasm32")).is_none() && system_spooler().is_none())
 }
 
 // ---------- PDF ----------
@@ -1352,8 +1359,11 @@ fn print(s: &mut Session, p: &Value) -> Result<Value> {
 fn print_one_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let mut q = last_print(s).unwrap_or_else(|| json!({}));
     // A printer remembered from an earlier session may be gone: then the default takes the job,
-    // as the Print dialog falls back (#7410). A list that can't be read decides nothing.
-    if let Ok(listed) = system_printers(s, &q) {
+    // as the Print dialog falls back (#7410). A list that can't be read decides nothing. The local
+    // spooler's listing is skipped while another thread holds the spooler lock; an IPP listing
+    // does not use that lock and always runs.
+    let listed = if lists_over_ipp(s, &q) { Some(system_printers(s, &q)) } else { try_with_spooler(|| system_printers(s, &q)) };
+    if let Some(Ok(listed)) = listed {
         let names: Vec<&str> = listed["printers"].as_array().into_iter().flatten().filter_map(|p| p["name"].as_str()).collect();
         drop_vanished_printer(&mut q, &names);
     }
