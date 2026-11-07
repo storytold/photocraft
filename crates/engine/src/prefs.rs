@@ -1296,6 +1296,10 @@ pub struct Preferences {
     /// Last selected tool, restored at launch. A tool-name string owned and validated by the
     /// shell; null in older files. Kept separate from tool options so neither overwrites the other.
     pub selected_tool: Value,
+    /// The tools used last, most recent first, restored at launch so each toolbar slot shows the
+    /// tool it was left on and each tool key brings it back, as in Photoshop (#3569). Tool-name
+    /// strings owned and validated by the shell; null in older files.
+    pub group_tools: Value,
     /// View › Extras, the View › Show items (Pixel Grid, Grid, Guides, …) and the View › Snap To
     /// targets that differ from their defaults, saved as the user toggles them and restored at
     /// launch, as Photoshop keeps them between sessions (#3762). JSON owned by the shell.

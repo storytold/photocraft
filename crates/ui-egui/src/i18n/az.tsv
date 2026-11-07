@@ -4623,3 +4623,12 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 	Info Panel Options	Məlumat Paneli Seçimləri
 	Readouts	Oxunuşlar
 	Total Spot Ink	Ümumi Spot Mürəkkəbi
+# Move tool options bar (#11381)
+	Align top edges	Üst kənarları hizalayın
+	Align vertical centers	Şaquli mərkəzləri hizalayın
+	Align bottom edges	Alt kənarları hizalayın
+	Distribute vertically	Şaquli yaymaq
+	Distribute horizontally	Üfüqi yaymaq
+	Show layer bounds on hover	Üzərinə gətirəndə qat sərhədlərini göstərin
+	Expand layer group on click	Klikləyəndə qat qrupunu genişləndirin
+	Show hover bounds from Layers	Üzərinə gətirmə sərhədlərini Qatlardan göstərin
