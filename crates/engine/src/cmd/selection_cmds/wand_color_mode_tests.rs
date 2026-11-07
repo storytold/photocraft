@@ -1,12 +1,15 @@
 //! The Magic Wand's Tolerance in the document's own colour channels (#11785).
 //!
-//! The fixture is the reference's test: a grey ramp of ten 40 px blocks (grey 100, 105, … 145)
-//! from x 100, clicked on the 100 block, with Contiguous on. The reference reads the reached
-//! range off the selection bounds in x, and counts the block it stops on, so a range is written
-//! here as `lo..hi` with `hi` one past the last selected column: one 40 px block at x 100 is
-//! `100..140`, which is the table's "x 100-140". Anti-alias is off in these tests: with it on,
-//! the wand adds its one-pixel soft fringe to the bounds, which is the same in every mode and
-//! not what the table measures.
+//! The fixtures are the reference's tests. The grey ramp is ten 40 px blocks (grey 100, 105, …
+//! 145) from x 100, clicked on the 100 block, with Contiguous on; the CMYK row is the re-measured
+//! dither-free ramp, filled block by block with the reference's own ink levels so no colour
+//! profile sits between the fixture and the assertion (#11785 comment 6705983844).
+//!
+//! The reference reads the reached range off the selection bounds in x and counts the block it
+//! stops on, so a range is written here as `lo..hi` with `hi` one past the last selected column:
+//! one 40 px block at x 100 is `100..140`, which is the table's "x 100-140". Anti-alias is off in
+//! these tests: with it on the wand adds its one-pixel soft fringe to the bounds, which is the
+//! same in every mode and not what the table measures.
 
 use super::*;
 use photocraft_doc::{ColorMode, SampleType};
@@ -15,6 +18,21 @@ const W: i32 = 500;
 const H: i32 = 8;
 const X0: i32 = 100;
 const BLOCK: i32 = 40;
+
+/// The reference's dither-free CMYK ramp: the ink levels (0-255) of the ten grey blocks, in the
+/// order Cyan, Magenta, Yellow, Black.
+const INKS: [[u8; 4]; 10] = [
+    [111, 138, 139, 169],
+    [114, 141, 143, 176],
+    [117, 144, 145, 182],
+    [121, 148, 149, 188],
+    [124, 150, 152, 194],
+    [127, 154, 155, 200],
+    [131, 158, 158, 206],
+    [135, 161, 161, 210],
+    [139, 164, 164, 215],
+    [143, 167, 167, 220],
+];
 
 /// The grey at block `k` of the ramp.
 fn grey(k: u8) -> u8 {
@@ -27,19 +45,42 @@ fn grey(k: u8) -> u8 {
 fn ramp(create: &str, depth: u32, mode: Option<&str>) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": W, "height": H, "mode": create, "depth": depth})).unwrap();
-    s.edit("paint", |doc, _| {
-        let bg = doc.layers[0].surface_mut().unwrap();
-        for k in 0..10u8 {
-            let v = grey(k) as f32 / 255.0;
-            bg.fill_rect(Rect::new(X0 + BLOCK * i32::from(k), 0, X0 + BLOCK * (i32::from(k) + 1), H), &[v, v, v, 1.0]);
-        }
-        Ok(())
-    })
-    .unwrap();
+    paint_ramp(&mut s, &|k| {
+        let v = grey(k) as f32 / 255.0;
+        [v, v, v, 1.0, 1.0]
+    });
     if let Some(cmd) = mode {
         s.execute(cmd, json!({})).unwrap();
     }
     s
+}
+
+/// An 8-bit CMYK document with each block filled directly with its ink from [`INKS`]: one fill
+/// per block, so the blocks are uniform and no conversion or dither is involved (#11785).
+fn ink_ramp() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": W, "height": H, "mode": "cmyk", "depth": 8})).unwrap();
+    paint_ramp(&mut s, &|k| {
+        let mut v = [1.0f32; 5];
+        v[..4].copy_from_slice(&INKS[usize::from(k)].map(|x| f32::from(x) / 255.0));
+        v
+    });
+    s
+}
+
+/// Fill the ten blocks across the canvas with one colour each, `pixel` of block `k` as the
+/// surface's own channels (a CMYK surface has five, an RGB one four; the extra is ignored).
+fn paint_ramp(s: &mut Session, pixel: &dyn Fn(u8) -> [f32; 5]) {
+    s.edit("paint", |doc, _| {
+        let bg = doc.layers[0].surface_mut().unwrap();
+        let n = bg.channels().min(5);
+        for k in 0..10u8 {
+            let v = pixel(k);
+            bg.fill_rect(Rect::new(X0 + BLOCK * i32::from(k), 0, X0 + BLOCK * (i32::from(k) + 1), H), &v[..n]);
+        }
+        Ok(())
+    })
+    .unwrap();
 }
 
 /// Click block 0 with `tolerance`.
@@ -105,6 +146,49 @@ fn lab_document_measures_tolerance_in_its_own_channels() {
     assert_eq!(reach(&s), Some((100, 380)));
 }
 
+/// #11785 as re-measured without dither: in an 8-bit CMYK document the wand measures Tolerance on
+/// the document's inks, and the largest of the four differences is what counts.
+#[test]
+fn cmyk_document_measures_tolerance_on_the_largest_ink_difference() {
+    let mut s = ink_ramp();
+    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Cmyk);
+    assert_eq!(s.active().unwrap().doc.depth, SampleType::U8);
+    // The blocks hold the reference's levels exactly: filled one colour per block, not converted.
+    assert_eq!(stored(&s, 0), INKS.iter().map(|ink| ink[0]).collect::<Vec<_>>(), "cyan");
+    assert_eq!(stored(&s, 1), INKS.iter().map(|ink| ink[1]).collect::<Vec<_>>(), "magenta");
+    assert_eq!(stored(&s, 2), INKS.iter().map(|ink| ink[2]).collect::<Vec<_>>(), "yellow");
+    assert_eq!(stored(&s, 3), INKS.iter().map(|ink| ink[3]).collect::<Vec<_>>(), "black");
+
+    // The largest ink difference from the 100 block is 7, 13, 19, 25, 31, 37, 41, 46, 51 levels
+    // (Black moves most), so Tolerance 5 stops after the first block and Tolerance 32 reaches the
+    // 125 block: the two cells #11785's "Done when" asks for.
+    wand(&mut s, 5.0);
+    assert_eq!(reach(&s), Some((100, 140)), "Tolerance 5 stops before the 7-level ink step");
+    wand(&mut s, 32.0);
+    assert_eq!(reach(&s), Some((100, 340)), "Tolerance 32 reaches the 31-level block, not the 37-level one");
+
+    // Tolerance 0 keeps the same inks; the RGB picture of these blocks would step only 5 levels
+    // to the next block, so these two ranges are the inks' and not the picture's.
+    wand(&mut s, 0.0);
+    assert_eq!(reach(&s), Some((100, 140)), "Tolerance 0 keeps the same inks");
+    s.execute("select.magicWand", json!({"x": X0 + 5, "y": 1, "tolerance": 32.0, "contiguous": false, "antiAlias": false})).unwrap();
+    assert_eq!(reach(&s), Some((100, 340)), "the same ink measure without Contiguous");
+}
+
+/// The same ink measure on an 8-bit CMYK document converted from grey with the working profile.
+/// Its inks are not the reference's, but the rule is: Black moves most, by 9, 17, 25, 32, 38 …
+/// levels, so Tolerance 32 stops one block earlier than the RGB picture would.
+#[test]
+fn a_converted_cmyk_document_measures_the_same_ink_difference() {
+    let mut s = ramp("rgb", 8, Some("image.mode.cmyk"));
+    assert_eq!(stored(&s, 0), [95, 96, 97, 97, 97, 96, 95, 94, 93, 91], "cyan");
+    assert_eq!(stored(&s, 3), [81, 72, 64, 56, 49, 43, 36, 31, 25, 20], "black");
+    wand(&mut s, 5.0);
+    assert_eq!(reach(&s), Some((100, 140)), "converted CMYK, Tolerance 5");
+    wand(&mut s, 32.0);
+    assert_eq!(reach(&s), Some((100, 260)), "converted CMYK, Tolerance 32 stops at the 32-level ink step");
+}
+
 /// #11785's unchanged rows: RGB documents keep the selection they make today, at every depth.
 #[test]
 fn rgb_documents_keep_measuring_tolerance_in_rgb() {
@@ -130,48 +214,29 @@ fn grayscale_documents_keep_their_selection_at_every_depth() {
     }
 }
 
-/// Lab at 16 and 32 bits is marked *not measured* in #11785, so it keeps today's sampling. If the
-/// rows get measured, this is the test to change with them.
+/// Lab and CMYK above 8 bits are marked *not measured* in #11785, so they keep today's sampling.
+/// If those rows get measured, this is the test to change with them.
 #[test]
-fn lab_documents_above_8_bits_keep_todays_sampling() {
-    for depth in [16u32, 32] {
-        let mut s = ramp("rgb", depth, Some("image.mode.lab"));
-        assert_eq!(s.active().unwrap().doc.depth, if depth == 16 { SampleType::U16 } else { SampleType::F32 });
-        // Its Lightness is 108.06, 113.26, …, so a Lab comparison would stop as in 8-bit; today's
-        // RGB sampling reaches the 105 block at Tolerance 5 instead, and stays.
-        assert_eq!(stored(&s, 0), [108, 113, 118, 124, 129, 134, 139, 144, 149, 153], "lab {depth} Lightness");
-        wand(&mut s, 5.0);
-        assert_eq!(reach(&s), Some((100, 180)), "lab {depth} keeps today's Tolerance 5 reach");
-        wand(&mut s, 32.0);
-        assert_eq!(reach(&s), Some((100, 380)), "lab {depth} keeps today's Tolerance 32 reach");
+fn documents_above_8_bits_keep_todays_sampling() {
+    for (cmd, name, tol5, tol32) in [("image.mode.lab", "lab", (100, 180), (100, 380)), ("image.mode.cmyk", "cmyk", (100, 140), (100, 380))] {
+        for depth in [16u32, 32] {
+            let mut s = ramp("rgb", depth, Some(cmd));
+            assert_eq!(s.active().unwrap().doc.depth, if depth == 16 { SampleType::U16 } else { SampleType::F32 });
+            // The Lab Lightness is 108.06, 113.26, …, so a Lab comparison would stop as in 8-bit;
+            // today's RGB sampling reaches the 105 block at Tolerance 5 instead, and stays.
+            wand(&mut s, 5.0);
+            assert_eq!(reach(&s), Some(tol5), "{name} {depth} keeps today's Tolerance 5 reach");
+            wand(&mut s, 32.0);
+            assert_eq!(reach(&s), Some(tol32), "{name} {depth} keeps today's Tolerance 32 reach");
+        }
     }
 }
 
-/// CMYK 8-bit is left on today's sampling for now: the reference's two CMYK numbers cannot come
-/// from a per-ink comparison on this ramp, so the ink channels are not compared yet (the question
-/// is on #11785). This pins what the wand does there today, and records the ink values an ink
-/// comparison would measure, so the difference is on the table when that row is settled.
-#[test]
-fn cmyk_document_keeps_todays_sampling_until_its_numbers_are_settled() {
-    let mut s = ramp("rgb", 8, Some("image.mode.cmyk"));
-    assert_eq!(s.active().unwrap().doc.mode, ColorMode::Cmyk);
-    // Grey 100 … 145 as coated-CMYK inks: the cyan hovers near 96 while the black ink falls from
-    // 81 to 20, so the seed's steps in the inks are 0, 9, 17, 25, 32, 38, 45, 50, 56, 61.
-    assert_eq!(stored(&s, 0), [95, 96, 97, 97, 97, 96, 95, 94, 93, 91], "cyan");
-    assert_eq!(stored(&s, 3), [81, 72, 64, 56, 49, 43, 36, 31, 25, 20], "black");
-    // On these inks Tolerance 5 would reach 100-140 and Tolerance 32 100-260, and on today's RGB
-    // picture (100, 105/106, 110/111, …) it reaches 100-140 and 100-380. The table's numbers,
-    // 100-146 and 100-341, are inside neither: they are not on the 40 px block grid.
-    wand(&mut s, 5.0);
-    assert_eq!(reach(&s), Some((100, 140)), "cmyk keeps today's Tolerance 5 reach");
-    wand(&mut s, 32.0);
-    assert_eq!(reach(&s), Some((100, 380)), "cmyk keeps today's Tolerance 32 reach");
-}
-
 /// The shared sampler the Paint Bucket, the Magic Eraser and the Background Eraser go through is
-/// untouched: an 8-bit Lab document still hands it the RGB picture.
+/// untouched: both document modes still hand it the RGB picture, and Sample All Layers keeps the
+/// RGB composite for the wand too.
 #[test]
-fn the_shared_rgba8_sample_path_still_reads_rgb_in_a_lab_document() {
+fn the_shared_rgba8_sample_path_still_reads_rgb() {
     let s = ramp("rgb", 8, Some("image.mode.lab"));
     let (area, img) = sample_rgba8(&s, false).unwrap();
     let at = |k: u8| img[(X0 + BLOCK * i32::from(k) + 5 - area.x0) as usize];
@@ -183,4 +248,12 @@ fn the_shared_rgba8_sample_path_still_reads_rgb_in_a_lab_document() {
     }
     assert!(wand_document_channels(&s, false).is_some(), "the wand's own Lab route is in use here");
     assert!(wand_document_channels(&s, true).is_none(), "Sample All Layers is not measured, so it keeps the RGB composite");
+
+    let s = ink_ramp();
+    let (area, img) = sample_rgba8(&s, false).unwrap();
+    let seed = img[(X0 + 5 - area.x0) as usize];
+    assert_ne!(seed[..4].to_vec(), INKS[0].to_vec(), "the other tools sample the CMYK picture as RGB, not as inks");
+    assert_eq!(seed[3], 255);
+    assert!(wand_document_channels(&s, false).is_some(), "the wand's own ink route is in use here");
+    assert!(wand_document_channels(&s, true).is_none(), "and not with Sample All Layers");
 }
