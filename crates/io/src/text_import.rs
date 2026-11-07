@@ -28,7 +28,13 @@ fn render_bounded(eng: &mut photocraft_text::TextEngine, t: &mut TextLayer, dpi:
 /// - a type layer without pixels (ag-psd, GIMP and other writers leave the image data out and
 ///   let Photoshop re-render on open) is rendered from its model, instead of staying empty
 ///   until it is edited.
+///
+/// Documents with no editable type at any nesting depth return before acquiring
+/// the shared text engine; cached type still requires the preparation above.
 pub(crate) fn prepare(doc: &mut Document, txt2: Option<&photocraft_text::engine_data::Value>) {
+    if !doc.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Text(_))) {
+        return;
+    }
     fn visit(
         layers: &mut [Layer],
         eng: &mut photocraft_text::TextEngine,
