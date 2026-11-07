@@ -420,7 +420,7 @@ fn clip_to_canvas_renders_only_the_canvas_and_the_same_pixels_inside_it() {
     let name = clipped.active().unwrap().doc.layer(id2).unwrap().name.clone();
     let warnings = cut["warnings"].as_array().unwrap();
     assert!(
-        warnings.len() == 1 && warnings[0].as_str().is_some_and(|w| w.contains(&format!("\"{name}\"")) && w.contains("only where it shows")),
+        warnings.len() == 1 && warnings[0].as_str().is_some_and(|w| w.contains(&format!("\"{name}\" (layer {})", id2.0)) && w.contains("only where it shows")),
         "{warnings:?}"
     );
     let canvas = clipped.active().unwrap().doc.bounds();
@@ -523,6 +523,36 @@ fn clip_to_canvas_renders_only_what_the_layer_mask_reveals() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[test]
+fn clip_to_canvas_warns_once_per_instance_even_when_they_share_a_name() {
+    let dir = tmp_dir("clip-names");
+    let design = std::fs::read(png_file(&dir, "d.png", 30, 20, [0.2, 0.7, 0.4])).unwrap();
+    let (mut s, id) = smart_session();
+    let b = old_box(&s, id);
+    set_placement(&mut s, id, |sm| {
+        sm.transform = Affine { m: [3.0, 0.0, 0.0, 3.0, -20.0, -10.0] };
+        sm.warp = Some(Warp::custom(BezierMesh::identity(b, 1, 1).map_points(|p| [p[0] + 0.1 * p[1], p[1]]), b));
+    });
+    s.execute("layer.duplicate", json!({"layer": id.0})).unwrap();
+    let both = s
+        .edit("rename", |doc, _| {
+            let ids: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Smart(_))).map(|(_, _, l)| l.id).collect();
+            for &l in &ids {
+                doc.layer_mut(l).ok_or(EngineError::NoLayer(l))?.name = "Design".into();
+            }
+            Ok(ids)
+        })
+        .unwrap();
+    assert_eq!(both.len(), 2);
+    let r = replace_contents_with(&mut s, id, "d.png", design, Fit::Stretch, true).unwrap();
+    let warned: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str()).collect();
+    assert_eq!(warned.len(), 2, "{warned:?}");
+    for l in both {
+        assert!(warned.iter().any(|w| w.starts_with(&format!("\"Design\" (layer {})", l.0))), "{l:?}: {warned:?}");
+    }
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 fn hide(s: &mut Session, id: LayerId) {
     s.edit("hide", |doc, _| {
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.visible = false;
@@ -570,7 +600,7 @@ fn clip_to_canvas_leaves_hidden_instances_unrendered() {
         let doc = &s.active().unwrap().doc;
         // Told about the hidden instance only; the copy is unwarped, so the clip leaves it whole.
         let warned: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str()).collect();
-        let hidden = format!("\"{}\" is hidden", doc.layer(id).unwrap().name);
+        let hidden = format!("\"{}\" (layer {}) is hidden", doc.layer(id).unwrap().name, id.0);
         assert_eq!(warned.len(), usize::from(clip), "clip {clip}, group {group}: {warned:?}");
         assert!(warned.iter().all(|w| w.starts_with(&hidden)), "clip {clip}, group {group}: {warned:?}");
         let copy = doc.walk().into_iter().find(|(_, _, l)| l.id != id && matches!(l.content, LayerContent::Smart(_))).map(|(_, _, l)| l.id).unwrap();

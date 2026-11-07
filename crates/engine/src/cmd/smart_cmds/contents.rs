@@ -67,9 +67,10 @@ fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bo
             // `clip`, it is left unrendered, like the parts of the others past the canvas.
             let layer = doc.layer(instance).ok_or(EngineError::NoLayer(instance))?;
             if clip && hidden_in(doc, instance) {
+                // The id too: instances often share a name, and each must get its own warning.
                 warnings.insert(format!(
-                    "\"{}\" is hidden, so clipToCanvas left it unrendered: it shows nothing until it is rendered again without clipToCanvas",
-                    layer.name
+                    "\"{}\" (layer {}) is hidden, so clipToCanvas left it unrendered: it shows nothing until it is rendered again without clipToCanvas",
+                    layer.name, instance.0
                 ));
                 smart_mut(doc, instance)?.cache = None;
                 continue;
@@ -82,8 +83,8 @@ fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bo
             // less than a full render, which a saved document would keep.
             if clip_this.is_some() && smart(doc, instance)?.warp.as_ref().is_some_and(|w| !w.is_identity()) {
                 warnings.insert(format!(
-                    "\"{}\" was rendered only where it shows in the flattened document (clipToCanvas): the rest of it stays empty until it is rendered again without clipToCanvas",
-                    layer.name
+                    "\"{}\" (layer {}) was rendered only where it shows in the flattened document (clipToCanvas): the rest of it stays empty until it is rendered again without clipToCanvas",
+                    layer.name, instance.0
                 ));
             }
             refresh_or_fail_opt(doc, instance, &JobCtx::new(), clip_this)?;
