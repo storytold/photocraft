@@ -270,6 +270,19 @@ impl Region {
 /// byte mark per pixel, then anti-aliases just the edges inside the touched bounding box.
 /// Matches [`magic_wand`] for 8-bit sources. `None` if the seed is outside `area`.
 pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
+    wand_region_inner(img, area, seed, tolerance, contiguous, anti_alias, false)
+}
+
+/// [`wand_region`] for a fill (the Paint Bucket): pixels inside the tolerance region are filled
+/// at full coverage — Photoshop's bucket paints its region solid — and only the outer edge gets
+/// the anti-aliasing fringe. The selection wand's rule also softens region pixels against their
+/// neighbourhood, which over partly transparent pixels paints the fill semi-transparent and
+/// leaves a mottled ring behind (#11311).
+pub fn fill_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool) -> Option<Region> {
+    wand_region_inner(img, area, seed, tolerance, contiguous, anti_alias, true)
+}
+
+fn wand_region_inner(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32, contiguous: bool, anti_alias: bool, fill: bool) -> Option<Region> {
     if !area.contains(seed.0, seed.1) {
         return None;
     }
@@ -356,7 +369,7 @@ pub fn wand_region(img: &[[u8; 4]], area: Rect, seed: (i32, i32), tolerance: f32
             let x = x0 + xx;
             let v = at(x, y);
             *o = v;
-            if !anti_alias {
+            if !anti_alias || fill && v == 255 {
                 continue;
             }
             // Same rule as `antialias`: edge pixels blend with their 3×3 neighbourhood; neighbours

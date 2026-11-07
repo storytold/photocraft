@@ -226,7 +226,7 @@ pub fn bucket_fill_inks(
         return false;
     }
     let img = crate::selection::rgba8_image(s, area);
-    let Some(region) = crate::selection::wand_region(&img, area, seed, tolerance, contiguous, anti_alias) else { return false };
+    let Some(region) = crate::selection::fill_region(&img, area, seed, tolerance, contiguous, anti_alias) else { return false };
     drop(img);
     bucket_fill_region_inks(s, &region, opacity, selection, lock_transparency, src, inks, mode);
     true

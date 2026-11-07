@@ -328,3 +328,30 @@ fn bucket_and_gradient_reject_non_numeric_opacity_without_editing() {
         assert!((px(&s, 5, 5)[0] - 128.0 / 255.0).abs() < 0.01, "{cmd}: null opacity is 100%");
     }
 }
+
+/// #11311: filling the hole a cleared anti-aliased selection leaves paints the tolerance region
+/// solid. The bucket's region previously reused the selection wand's fringe, which also softened
+/// the region's own pixels against their neighbourhood; over the partly transparent hole that
+/// painted the fill semi-transparent and left a mottled, grey ring behind.
+#[test]
+fn bucket_fills_a_cleared_anti_aliased_hole_solid() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 12, "depth": depth, "background": "white"})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("edit.fill", json!({"contents": "white"})).unwrap();
+        s.execute("select.rect", json!({"x": 2, "y": 2, "width": 12, "height": 8, "ellipse": true})).unwrap();
+        s.execute("edit.clear", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("paint.bucket", json!({"x": 7, "y": 6, "color": "#ffffff"})).unwrap();
+        // Through the hole's widest row (its centre), everything the region covered is opaque white.
+        for x in 3..13 {
+            let p = px(&s, x, 6);
+            assert!(p[3] > 0.99, "depth {depth}: ({x},6) is partly transparent: {p:?}");
+            assert!(p[0] > 0.99, "depth {depth}: ({x},6) is not white: {p:?}");
+        }
+        // The fill is one undoable step, and undoing brings the hole back.
+        assert!(s.execute("edit.undo", json!({})).is_ok());
+        assert!(px(&s, 7, 6)[3] < 0.01, "depth {depth}: undo restores the hole");
+    }
+}
