@@ -330,6 +330,12 @@ impl MouseButtons {
     pub fn holds(&self, viewport: egui::ViewportId, button: egui::PointerButton) -> bool {
         self.held.contains(&(viewport, button))
     }
+
+    /// Forget buttons held in viewports that no longer exist: their release never arrives, and a
+    /// stale entry would keep the mouse owning the pointer in every remaining viewport.
+    pub fn retain(&mut self, viewports: &[egui::ViewportId]) {
+        self.held.retain(|(viewport, _)| viewports.contains(viewport));
+    }
 }
 
 /// The pen's protocol frames as UI input: each frame's events go to the viewport the pen is over
@@ -346,6 +352,8 @@ pub struct PenInput {
     pub mouse: MouseButtons,
     /// Pen buttons whose press went into the UI and whose release hasn't yet.
     held: Vec<PenButton>,
+    /// The viewport where those buttons were pressed: their release arrives there.
+    held_in: Option<egui::ViewportId>,
     /// Where the pen last was, in its surface's logical pixels.
     pos: Option<[f64; 2]>,
     /// The tip's last sample while touching: the lift's last move strokes with it.
@@ -361,7 +369,7 @@ impl PenInput {
     /// releases of presses the UI got go through, unless the mouse holds the same button there.
     pub fn frame(&mut self, f: FrameOut, mouse: bool, route: PenRoute, viewports: &[egui::ViewportId]) {
         self.bound();
-        let (held, pos, buttons) = (&mut self.held, &mut self.pos, &self.mouse);
+        let (held, held_in, pos, buttons) = (&mut self.held, &mut self.held_in, &mut self.pos, &self.mouse);
         let mut strokes = Vec::new();
         let target = self.router.route(f.events, route, viewports, |e, viewport| {
             match *e {
@@ -373,14 +381,22 @@ impl PenInput {
                 }
                 PenEvent::Button { button, pressed: true, x, y } if !mouse => {
                     *pos = Some([x, y]);
+                    *held_in = Some(viewport);
                     held.push(button);
                 }
                 PenEvent::Button { button, pressed: false, .. } if held.contains(&button) => {
                     held.retain(|b| *b != button);
+                    if held.is_empty() {
+                        *held_in = None;
+                    }
                     // The mouse still holds it: its release ends the press.
                     return !buttons.holds(viewport, pointer_button(button));
                 }
-                PenEvent::Leave => {}
+                PenEvent::Leave => {
+                    if held.is_empty() {
+                        *held_in = None;
+                    }
+                }
                 _ => return false,
             }
             true
@@ -415,6 +431,20 @@ impl PenInput {
             }
             self.queue(viewport, Some(s));
         }
+    }
+
+    /// Forget holds and queued input for viewports that have closed: their release can never
+    /// arrive, and a stale mouse or pen hold would otherwise suppress input in the remaining
+    /// viewports.
+    pub fn retain_viewports(&mut self, viewports: &[egui::ViewportId]) {
+        self.mouse.retain(viewports);
+        if self.held_in.is_some_and(|viewport| !viewports.contains(&viewport)) {
+            self.held.clear();
+            self.held_in = None;
+            self.contact = None;
+        }
+        self.router.retain(viewports);
+        self.samples.retain(|id, _| viewports.contains(id));
     }
 
     /// Queue a stylus feed update for `viewport`'s pass ([`Self::flush`]).
@@ -509,10 +539,7 @@ impl PenRouter {
         viewports: &[egui::ViewportId],
         mut keep: impl FnMut(&PenEvent, egui::ViewportId) -> bool,
     ) -> Option<egui::ViewportId> {
-        self.pending.retain(|id, _| viewports.contains(id));
-        if self.over.is_some_and(|id| !viewports.contains(&id)) {
-            self.over = None;
-        }
+        self.retain(viewports);
         let extra: Vec<_> = viewports.iter().copied().filter(|id| *id != egui::ViewportId::ROOT).collect();
         let mut last = None;
         for e in events {
@@ -530,6 +557,14 @@ impl PenRouter {
             }
         }
         last.or(self.over)
+    }
+
+    /// Forget queued events and the pen's surface for viewports that have closed.
+    pub fn retain(&mut self, viewports: &[egui::ViewportId]) {
+        self.pending.retain(|id, _| viewports.contains(id));
+        if self.over.is_some_and(|id| !viewports.contains(&id)) {
+            self.over = None;
+        }
     }
 
     /// Queue `e` for `viewport`'s pass.
@@ -703,10 +738,13 @@ impl egui::Plugin for WaylandPen {
             self.feed.set(None);
         }
         // The root's input lists every open viewport; an extra viewport's pass runs inside the
-        // root's, so its events are sorted out by then.
-        let mouse = pressed || self.input.mouse.held();
+        // root's, so its events are sorted out by then. A window that closed without delivering
+        // its release must not keep the mouse or a pen button held.
+        let mut mouse = pressed || self.input.mouse.held();
         if id == egui::ViewportId::ROOT {
             let viewports: Vec<_> = input.viewports.keys().copied().chain([egui::ViewportId::ROOT]).collect();
+            self.input.retain_viewports(&viewports);
+            mouse = pressed || self.input.mouse.held();
             self.dispatch(&viewports, mouse);
         }
         self.input.flush(id, mouse, &self.feed);
@@ -1082,6 +1120,29 @@ mod tests {
         // The next pass is the pen's again.
         pass(&ctx, &mut input, &feed, vec![], vec![pen_frame(vec![PenEvent::Move { x: 3.0, y: 3.0 }], None)]);
         assert_eq!(feed.get().map(|s| s.pressure), Some(0.0));
+    }
+
+    /// A viewport that closes while the mouse or a pen button is held never delivers its release.
+    /// Its stale hold must not keep the mouse owning the pointer in the remaining viewports.
+    #[test]
+    fn a_closed_viewport_clears_mouse_and_pen_holds() {
+        use egui::PointerButton::Primary;
+        let (root, doc) = (egui::ViewportId::ROOT, egui::ViewportId::from_hash_of("docwin"));
+        let mut m = MouseButtons::default();
+        m.track(doc, &[mouse(true, Primary)]);
+        assert!(m.held());
+        m.retain(&[root]);
+        assert!(!m.held(), "the closed window's mouse hold is gone");
+
+        let mut input = PenInput::default();
+        let route = PenRoute { window: 1, server_decorations: true };
+        input.frame(pen_frame(vec![PenEvent::Enter { surface: 2 }, PenEvent::Move { x: 1.0, y: 1.0 }, tip(true, 1.0)], Some(0.5)), false, route, &[root, doc]);
+        assert!(input.held.contains(&PenButton::Tip));
+        assert_eq!(input.held_in, Some(doc));
+        input.retain_viewports(&[root]);
+        assert!(input.held.is_empty(), "the closed window's pen hold is gone");
+        assert_eq!(input.held_in, None);
+        assert_eq!(input.router.over, None, "the pen is no longer over the closed viewport");
     }
 
     /// The canvas's stroke moves: `PointerMoved` while the tip is down (canvas `pointer_moves`).

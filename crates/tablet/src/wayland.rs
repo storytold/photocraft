@@ -483,6 +483,8 @@ struct ToolState {
     proxy: ZwpTabletToolV2,
     map: Tool,
     serial: Option<u32>,
+    /// The tool left proximity; the frame that carries its `Leave` has not arrived yet.
+    leaving: bool,
     shape: Option<WpCursorShapeDeviceV1>,
     images: Option<Images>,
 }
@@ -493,7 +495,7 @@ static CROSSHAIR: std::sync::OnceLock<Arc<[u8]>> = std::sync::OnceLock::new();
 impl ToolState {
     /// A tool just announced: no proximity serial or cursor objects yet.
     fn new(proxy: ZwpTabletToolV2) -> Self {
-        Self { proxy, map: Tool::default(), serial: None, shape: None, images: None }
+        Self { proxy, map: Tool::default(), serial: None, leaving: false, shape: None, images: None }
     }
 
     /// Show `wanted` for this tool, with its proximity serial: a shape through cursor-shape-v1, a
@@ -729,14 +731,15 @@ impl Dispatch<ZwpTabletToolV2, ()> for State {
             }
             E::ProximityIn { serial, surface, .. } => {
                 t.serial = Some(serial);
+                t.leaving = false;
                 state.active = Some(id.clone());
                 Raw::ProximityIn { surface: surface.id().as_ptr() as u64 }
             }
             E::ProximityOut => {
                 t.serial = None;
-                if state.active.as_ref() == Some(&id) {
-                    state.active = None;
-                }
+                // Keep the tool active until its departure frame is delivered: the `Leave` and
+                // the sample clear belong to the active tool, not to a background one.
+                t.leaving = true;
                 Raw::ProximityOut
             }
             E::Down { .. } => Raw::Down,
@@ -750,13 +753,23 @@ impl Dispatch<ZwpTabletToolV2, ()> for State {
             _ => return,
         };
         let entered = matches!(raw, Raw::ProximityIn { .. });
-        let out = state.tools.get_mut(&id).and_then(|t| t.map.handle(raw));
+        let leaving_frame = matches!(raw, Raw::Frame) && state.tools.get(&id).is_some_and(|t| t.leaving);
+        let out = state.tools.get_mut(&id).and_then(|t| {
+            let out = t.map.handle(raw);
+            if leaving_frame {
+                t.leaving = false;
+            }
+            out
+        });
         if entered {
             state.apply_cursor();
         }
         let active = was_active || state.active.as_ref() == Some(&id);
         if let Some(out) = out.and_then(|f| if active { Some(f) } else { f.background() }) {
             state.push_frame(out);
+        }
+        if leaving_frame && state.active.as_ref() == Some(&id) {
+            state.active = None;
         }
     }
 }
