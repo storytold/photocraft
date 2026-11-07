@@ -127,6 +127,7 @@ impl PhotocraftApp {
             color_range: None,
             adjust_preview: None,
             live_adjust_preview: None,
+            levels_clipping: None,
             synthetic: Vec::new(),
             synthetic_batch: None,
             synthetic_reinject: false,

@@ -41,6 +41,7 @@ mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
+pub mod levels_clipping;
 pub mod links;
 pub mod memory_warning;
 pub mod menu_catalog;
@@ -261,8 +262,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
-    SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
+    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -543,6 +544,8 @@ pub struct PhotocraftApp {
     /// The Properties panel's live adjustment-layer drag: its damage region and coverage
     /// (`adjust_preview::live_key`).
     pub(crate) live_adjust_preview: Option<adjust_preview::LiveAdjust>,
+    /// The Levels dialog's Alt-drag clipping display over the canvas.
+    pub(crate) levels_clipping: Option<levels_clipping::Cache>,
     /// Synthetic input events queued by automation (`ui.click`, `ui.key`, …), injected next frame.
     pub(crate) synthetic: Vec<egui::Event>,
     /// The one synthetic batch currently being delivered.
@@ -773,6 +776,8 @@ impl SyntheticTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod brush_picker_escape_tests;
+#[cfg(test)]
 mod shape_bounds_box_tests;
 
 #[cfg(test)]
@@ -992,6 +997,8 @@ mod menu_item_labels_tests;
 #[cfg(test)]
 mod pen_path_ownership_tests;
 
+#[cfg(test)]
+mod artboard_options_bar_tests;
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
