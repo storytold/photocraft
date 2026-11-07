@@ -150,10 +150,12 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
 /// The serialized name of `tool`'s own Sample All Layers inside `sample_all`, if it has one: a
 /// tool preset stores that one alone, not the other tools' (#5524, #7356).
 pub fn sample_all_key(tool: Tool) -> Option<String> {
-    let mut probe = crate::state::SampleAllLayers::default();
-    *probe.slot(tool)? = true;
-    let Ok(Value::Object(m)) = serde_json::to_value(probe) else { return None };
-    m.into_iter().find(|(_, v)| v.as_bool() == Some(true)).map(|(k, _)| k)
+    let base = crate::state::SampleAllLayers::default();
+    let mut probe = base;
+    let slot = probe.slot(tool)?;
+    *slot = !*slot;
+    let (Ok(Value::Object(b)), Ok(Value::Object(m))) = (serde_json::to_value(base), serde_json::to_value(probe)) else { return None };
+    m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
 }
 
 /// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets and
@@ -360,3 +362,7 @@ mod tests {
         assert_eq!((keys.len(), distinct.len()), (12, 12), "one key per tool with the option");
     }
 }
+
+#[cfg(test)]
+#[path = "../patch_sample_all_default_tests.rs"]
+mod patch_sample_all_default_tests;
