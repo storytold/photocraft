@@ -16,7 +16,7 @@
 use egui::{Context, Event, Id, MouseWheelUnit, Rect, Ui, Vec2};
 
 /// Wheel events this close together (seconds) are one gesture.
-const GESTURE_GAP: f64 = 0.3;
+pub(crate) const GESTURE_GAP: f64 = 0.3;
 
 /// Who a wheel gesture belongs to.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -117,6 +117,15 @@ impl egui::plugin::Plugin for FieldWheel {
     fn on_begin_pass(&mut self, ui: &mut Ui) {
         begin_frame(ui.ctx());
     }
+}
+
+/// Whether a wheel gesture stepping a value field is still running: its last notch came less than
+/// [`GESTURE_GAP`] ago. A field that applies each value as a new edit holds the wheeled value until
+/// this turns false, so a burst of notches is one edit (#9898).
+pub fn field_gesture_running(ctx: &Context) -> bool {
+    // This window's gesture; the key is read outside the closure, as in `begin_frame`.
+    let (now, gesture_key) = (ctx.input(|i| i.time), gesture_id(ctx));
+    ctx.data(|d| d.get_temp::<Gesture>(gesture_key)).is_some_and(|g| matches!(g.owner, Owner::Field(_)) && now - g.last <= GESTURE_GAP)
 }
 
 /// Record that value field `id` (whose slot is `field`, as given to [`notches`]) has keyboard
