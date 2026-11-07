@@ -426,9 +426,9 @@ pub(crate) fn decode(data: &[u8], max_samples: usize) -> Result<(Frame, Vec<u16>
         .samples()
         .filter(|&n| n <= max_samples)
         .ok_or_else(|| RawError::LimitExceeded(format!("lossless JPEG frame {}x{}x{}", f.width, f.height, f.components)))?;
-    // An entropy-coded sample needs at least one bit: a stream far shorter than
-    // the frame cannot be valid (cheap decompression-bomb guard).
-    if p.entropy.len().saturating_mul(8) < total / 2 {
+    // An entropy-coded sample needs at least one bit (a Huffman code is one bit or more): a stream
+    // shorter than the frame cannot be valid (cheap decompression-bomb guard).
+    if total.div_ceil(8) > p.entropy.len() {
         return Err(RawError::malformed("lossless JPEG data is truncated"));
     }
     let row_len = f.width * f.components;
@@ -640,6 +640,20 @@ mod tests {
         // Lossy JPEG markers are reported as unsupported.
         let lossy = [0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 8, 0, 1, 0, 1, 1, 1, 0x11, 0];
         assert!(matches!(decode(&lossy, usize::MAX), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn a_frame_needing_a_partial_extra_byte_of_entropy_data_is_truncated() {
+        // 17 x 1 samples cost at least 17 bits (a Huffman code is one bit or more): 3 bytes, the scan holds 2
+        let v = samples(4 * 4, 12, 3);
+        let mut j = lj92_encode(&v, 4, 4, 1, 12, 1, None);
+        j[7..9].copy_from_slice(&1u16.to_be_bytes()); // height
+        j[9..11].copy_from_slice(&17u16.to_be_bytes()); // width
+        let sos = j.windows(2).position(|b| b == [0xFF, 0xDA]).unwrap();
+        let scan = sos + 2 + usize::from(u16::from_be_bytes([j[sos + 2], j[sos + 3]]));
+        j.truncate(scan);
+        j.extend([0, 0]);
+        assert!(matches!(decode(&j, usize::MAX), Err(RawError::Malformed(_))));
     }
 
     #[test]
