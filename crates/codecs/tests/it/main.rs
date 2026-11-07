@@ -14,6 +14,7 @@ mod exr_stream;
 mod fidelity;
 mod gif_frames;
 mod heif;
+mod jxl;
 mod limits;
 mod malformed;
 mod metadata;

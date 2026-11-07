@@ -34,7 +34,7 @@ pub enum Format {
     Fits,
     /// DPX (SMPTE 268M Digital Picture Exchange): luma, RGB or RGBA film and video frames.
     Dpx,
-    /// JPEG XL: lossless export-only until the separate importer lands.
+    /// JPEG XL: lossless 8/16-bit write; read behind the `jxl` feature, see [`ASYMMETRIC_EXCEPTIONS`].
     Jxl,
     /// Kodak Cineon (`.cin`, the 10-bit film-scan format DPX grew from).
     Cineon,
@@ -87,7 +87,13 @@ pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
         "AVIF encode uses ravif (pure Rust) but decoding requires dav1d (C); read stays unsupported \
          until a pure-Rust AV1 decoder is viable. Only enabled with the non-default `avif` feature.",
     ),
-    (Format::Jxl, "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder; JPEG XL reading is tracked separately and is not yet available."),
+    (
+        Format::Jxl,
+        "JPEG XL decode uses jxl-oxide (pure Rust, in the optional photocraft-jxl crate behind the \
+         non-default `jxl` feature, which official builds enable); lossless 8/16-bit write uses \
+         zune-jpegxl (pure Rust) in every build. Without the feature JPEG XL is detected and \
+         written but not read.",
+    ),
     (
         Format::Heif,
         "HEIC decode uses heic-rs (pure Rust, in the optional photocraft-heif crate behind the \
@@ -283,8 +289,10 @@ pub fn caps(format: Format) -> FormatCaps {
         Format::Fits => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: &[L::Gray, L::Rgb], alpha: false, text: true, ..base },
         // `text`: the DPX header fields only (see `fidelity_warnings_with`).
         Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
-        // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
-        Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        // What an export keeps: 8/16-bit Gray, RGB and RGBA (GrayA is widened to RGBA at the same
+        // depth and the 16-bit alpha header corrected), no metadata boxes. Reading, with the `jxl`
+        // feature, also takes GrayA, 16/32-bit floats, ICC, EXIF, XMP and an animation's first frame.
+        Format::Jxl => FormatCaps { read: cfg!(feature = "jxl"), depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], animation: true, ..base },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },

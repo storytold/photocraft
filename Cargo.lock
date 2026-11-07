@@ -5279,6 +5279,7 @@ dependencies = [
  "jpeg-encoder",
  "jxl-oxide",
  "photocraft-heif",
+ "photocraft-jxl",
  "png 0.18.1",
  "proptest",
  "rayon",
@@ -5468,6 +5469,14 @@ dependencies = [
 [[package]]
 name = "photocraft-ipp"
 version = "0.20.1"
+
+[[package]]
+name = "photocraft-jxl"
+version = "0.20.1"
+dependencies = [
+ "brotli-decompressor",
+ "jxl-oxide",
+]
 
 [[package]]
 name = "photocraft-ops"
