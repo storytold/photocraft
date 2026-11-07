@@ -755,7 +755,7 @@
 	Working Magenta Plate	Arbeits-Magenta-Druckplatte
 	Working Yellow Plate	Arbeits-Gelb-Druckplatte
 	Working Black Plate	Arbeits-Schwarz-Druckplatte
-	Working CMY Plates	Arbeits-CMY-Druckplatte
+	Working CMY Plates	Arbeits-CMY-Druckplatten
 	Legacy Macintosh RGB (Gamma 1.8)	Legacy-Macintosh-RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Internet-Standard-RGB (sRGB)
 	Monitor RGB	Monitor-RGB
@@ -839,7 +839,7 @@
 	Consolidate All to Tabs	Alle in Registerkarten zusammenfassen
 	Float in Window	In Fenster schweben lassen
 	Float All in Windows	Alle in Fenstern schweben lassen
-	New Window	Neues Fenster für Dokument
+	New Window	Neues Fenster
 	Workspace	Arbeitsbereich
 	Essentials	Essentials
 	Graphic and Web	Grafik und Web
@@ -901,6 +901,12 @@
 	Timeline	Zeitleiste
 	Tool Presets	Werkzeugvorgaben
 	Tools	Werkzeuge
+	Contextual Task Bar	Kontextbezogene Taskleiste
+	Hide bar	Leiste ausblenden
+	Reset bar position	Leistenposition zurücksetzen
+	Pin bar position	Leistenposition fixieren
+	Move bar	Leiste verschieben
+	More options	Weitere Optionen
 	About PhotoCraft	Über PhotoCraft
 	PhotoCraft Website	PhotoCraft-Website
 	PhotoCraft on GitHub	PhotoCraft auf GitHub
@@ -1856,6 +1862,7 @@
 	Move Tool	Verschieben-Werkzeug
 	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
 	Could not complete the Free Transform command because the layer is locked.	Der Befehl „Frei transformieren“ konnte nicht ausgeführt werden, weil die Ebene gesperrt ist.
+	Could not transform because the layer is locked.	Transformieren nicht möglich, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
@@ -2381,6 +2388,7 @@
 	Punctuation	Zeichensetzung
 	Make Work Path	Arbeitspfad erzeugen
 	Make Selection	Auswahl erzeugen
+	Make Shape	Form erzeugen
 	Fill Path	Pfad füllen
 	Stroke Path	Pfad nachziehen
 	Delete Path	Pfad löschen

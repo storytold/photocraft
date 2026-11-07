@@ -304,6 +304,16 @@ impl PhotocraftApp {
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
         let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        // Crop's Fill goes back to its default entry when another document that was already open
+        // becomes active (a tab switch, or closing the active one), as in the reference
+        // application. A new or opened document isn't in `view_docs` yet, so it keeps the setting,
+        // as do tool switches, commits and cancels, which leave the active document alone (#10894).
+        if let (Some((id, ..)), Some((old_id, ..))) = (&document, &self.path_document)
+            && id != old_id
+            && self.view_docs.contains(id)
+        {
+            self.ui.tool_options.crop_content_aware = false;
+        }
         let same_document = match (&self.path_document, &document) {
             (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
             (None, None) => true,
