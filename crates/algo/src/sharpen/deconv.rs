@@ -25,8 +25,8 @@ use crate::{Ctx, SharpenRemove};
 
 /// Largest point-spread radius in pixels (Smart Sharpen's own range).
 const MAX_RADIUS: f32 = 64.0;
-/// Largest apron read around a block. A radius-64 "More Accurate" run would want 3,000 px; the
-/// influence of a pixel that far away is negligible.
+/// Largest apron read around a block. A radius-64 run would want 1,000 px; the influence of a
+/// pixel that far away is negligible.
 const MAX_APRON: i32 = 768;
 /// Largest transform side, bounding a block's working memory to about 190 MB (120 MB in the
 /// browser, which has less to spare).
@@ -41,19 +41,17 @@ type C = Complex<f32>;
 /// One non-zero entry of the point-spread function: offset and weight.
 pub(crate) type Tap = (i32, i32, f32);
 
-/// Iteration count: "More Accurate" runs three times as many.
-pub(crate) fn iterations(more_accurate: bool) -> usize {
-    if more_accurate { 24 } else { 8 }
-}
+/// Richardson–Lucy iterations per run.
+pub(crate) const ITERATIONS: usize = 8;
 
 fn clamp_radius(radius: f32) -> f32 {
     if radius.is_finite() { radius.clamp(0.1, MAX_RADIUS) } else { 0.1 }
 }
 
 /// Pixels read outside an output tile.
-pub(crate) fn reach(radius: f32, more_accurate: bool) -> i32 {
+pub(crate) fn reach(radius: f32) -> i32 {
     let r = (clamp_radius(radius) + 1.0).ceil() as i32;
-    (2 * iterations(more_accurate) as i32 * r + 1).min(MAX_APRON)
+    (2 * ITERATIONS as i32 * r + 1).min(MAX_APRON)
 }
 
 /// The point-spread function, normalised to sum 1. `Gaussian` has no kernel here (Smart Sharpen
@@ -353,7 +351,7 @@ pub(crate) fn deconvolve(src: &Image, out: Rect, ctx: &Ctx, taps: &[Tap], iters:
 /// build uses, otherwise `rustfft`.
 pub(super) fn deconvolve_with(src: &Image, out: Rect, ctx: &Ctx, taps: &[Tap], iters: usize, small: bool) -> Vec<f32> {
     let n = src.ch;
-    let cc = if ctx.alpha { n - 1 } else { n };
+    let cc = if ctx.alpha { n.saturating_sub(1) } else { n };
     let mut data = src.data.clone();
     premultiply(&mut data, n, ctx.alpha);
     let premult = Image { rect: src.rect, ch: n, data };

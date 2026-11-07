@@ -64,6 +64,7 @@ fn core_filter_numbers_reject_wrong_types_and_documented_range_violations() {
         ("sharpen.smartSharpen", "amount", 1.0, 500.0),
         ("sharpen.smartSharpen", "radius", 0.1, 64.0),
         ("sharpen.smartSharpen", "reduceNoise", 0.0, 100.0),
+        ("sharpen.smartSharpen", "angle", -360.0, 360.0),
         ("noise.addNoise", "amount", 0.1, 400.0),
         ("noise.median", "radius", 1.0, 500.0),
         ("noise.dustAndScratches", "radius", 1.0, 500.0),

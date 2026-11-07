@@ -68,9 +68,8 @@ fn fields(id: &str) -> Option<&'static [(&'static str, Rule)]> {
             ("amount", Number(1.0, 500.0)),
             ("radius", Number(0.1, 64.0)),
             ("reduceNoise", Number(0.0, 100.0)),
-            ("remove", Choice("gaussian|lens|motion")),
+            ("remove", Choice("gaussianBlur|lensBlur|motionBlur")),
             ("angle", Number(-360.0, 360.0)),
-            ("moreAccurate", Bool),
         ],
         "filter.noise.addNoise" => {
             &[("amount", Number(0.1, 400.0)), ("distribution", Choice("uniform|gaussian")), ("monochromatic", Bool), ("seed", Unsigned(u32::MAX as u64))]

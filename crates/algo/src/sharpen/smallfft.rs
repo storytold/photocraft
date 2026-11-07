@@ -89,8 +89,14 @@ impl SmallFft {
         if row.len() != self.n {
             return;
         }
+        // Every swap index is below `n` (built in `new`), and `row` is `n` long.
         for &(i, j) in &self.swaps {
-            row.swap(i as usize, j as usize);
+            if let (Ok(i), Ok(j)) = (usize::try_from(i), usize::try_from(j))
+                && i < self.n
+                && j < self.n
+            {
+                row.swap(i, j);
+            }
         }
         for stage in &self.stages {
             match (stage.radix, stage.m) {

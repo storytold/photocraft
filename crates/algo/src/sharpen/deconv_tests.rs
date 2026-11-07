@@ -76,8 +76,8 @@ fn check_recovers(remove: SharpenRemove, radius: f32, angle: f32) {
     let taps = kernel(remove, radius, angle);
     let soft = blurred(&truth, w, h, &taps);
     let img = image(soft.clone(), w, h, 1);
-    let sharp = deconvolve(&img, img.rect, &ctx(img.rect, false), &taps, iterations(false));
-    let accurate = deconvolve(&img, img.rect, &ctx(img.rect, false), &taps, iterations(true));
+    let sharp = deconvolve(&img, img.rect, &ctx(img.rect, false), &taps, ITERATIONS);
+    let accurate = deconvolve(&img, img.rect, &ctx(img.rect, false), &taps, 3 * ITERATIONS);
     let (before, after, best) = (mse(&soft, &truth), mse(&sharp, &truth), mse(&accurate, &truth));
     assert!(after < before * 0.6, "{remove:?}: error {before} -> {after}");
     assert!(best < after, "{remove:?}: more iterations should recover more ({after} vs {best})");
@@ -140,10 +140,10 @@ fn a_tile_matches_the_whole_layer() {
     let (w, h) = (220usize, 40usize);
     let whole = image(blurred(&scene(w, h), w, h, &kernel(SharpenRemove::Lens, 2.0, 0.0)), w, h, 1);
     let taps = kernel(SharpenRemove::Lens, 2.0, 0.0);
-    let iters = iterations(false);
+    let iters = ITERATIONS;
     let full = deconvolve(&whole, whole.rect, &ctx(whole.rect, false), &taps, iters);
     let out = Rect::new(100, 0, 120, h as i32);
-    let halo = reach(2.0, false);
+    let halo = reach(2.0);
     let window = Rect::new(out.x0 - halo, 0, out.x1 + halo, h as i32).intersect(&whole.rect);
     let sub = Image { rect: window, ch: 1, data: whole.crop(window) };
     let tile = deconvolve(&sub, out, &ctx(whole.rect, false), &taps, iters);

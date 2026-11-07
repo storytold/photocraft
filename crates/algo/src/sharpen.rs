@@ -51,7 +51,6 @@ pub(crate) fn smart(
     reduce_noise: f32,
     remove: SharpenRemove,
     angle: f32,
-    more_accurate: bool,
 ) -> Vec<f32> {
     let k = amount / 100.0;
     let nr = (reduce_noise / 100.0).clamp(0.0, 1.0);
@@ -64,17 +63,17 @@ pub(crate) fn smart(
         });
     }
     let taps = deconv::kernel(remove, radius, angle);
-    let sharp = deconv::deconvolve(src, out, ctx, &taps, deconv::iterations(more_accurate));
+    let sharp = deconv::deconvolve(src, out, ctx, &taps, deconv::ITERATIONS);
     let mut res = src.crop(out);
     let n = src.ch;
-    let cc = if ctx.alpha { n - 1 } else { n };
-    for (px, sh) in res.chunks_exact_mut(n).zip(sharp.chunks_exact(n)) {
-        if ctx.alpha && px[n - 1] <= 0.0 {
+    let cc = if ctx.alpha { n.saturating_sub(1) } else { n };
+    for (px, sh) in res.chunks_exact_mut(n.max(1)).zip(sharp.chunks_exact(n.max(1))) {
+        if ctx.alpha && px.last().is_none_or(|a| *a <= 0.0) {
             continue;
         }
-        for c in 0..cc {
-            let d = sh[c] - px[c];
-            px[c] += k * d * keep(d);
+        for (p, s) in px.iter_mut().zip(sh).take(cc) {
+            let d = s - *p;
+            *p += k * d * keep(d);
         }
     }
     res

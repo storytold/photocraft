@@ -752,6 +752,7 @@ fn installed_choices(cmd: &str, key: &str, installed: &[InstalledProfile]) -> Ve
 /// the Blur Gallery shapes) and angles with another zero (Flame's points up) keep the slider.
 const ANGLE_DIAL: &[&str] = &[
     "filter.blur.motionBlur",
+    "filter.sharpen.smartSharpen",
     "filter.stylize.emboss",
     "filter.stylize.oilPaint",
     "filter.render.lightingEffects",
@@ -761,6 +762,12 @@ const ANGLE_DIAL: &[&str] = &[
 
 fn uses_angle_dial(command: &str, key: &str) -> bool {
     key == "angle" && ANGLE_DIAL.contains(&command)
+}
+
+/// A field the dialog shows but that has no effect in the dialog's current state, so it is greyed
+/// out as in Photoshop: Smart Sharpen's Angle only steers Motion Blur removal.
+fn param_inactive(command: &str, key: &str, fields: &Map<String, Value>) -> bool {
+    command == "filter.sharpen.smartSharpen" && key == "angle" && fields.get("remove").and_then(Value::as_str) != Some("motionBlur")
 }
 
 /// Replace Color (#4143): the dialog's "From" colour, sampled from the image with a canvas
@@ -889,7 +896,8 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     continue;
                 }
                 // Replace Color's Range only applies with Localized Color Clusters on, as in Photoshop.
-                let enabled = !(cmd == REPLACE_COLOR && p.key == "range") || f.get("localized").and_then(Value::as_bool) == Some(true);
+                let enabled = (!(cmd == REPLACE_COLOR && p.key == "range") || f.get("localized").and_then(Value::as_bool) == Some(true))
+                    && !param_inactive(&cmd, &p.key, f);
                 let unit = if is_pixel_param_of(&cmd, &p.key) {
                     "px"
                 } else if p.key == "angle" {

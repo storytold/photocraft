@@ -111,13 +111,12 @@ pub fn params_for(id: &str, p: &Value) -> Option<FilterParams> {
             amount: f(p, "amount", 100.0).clamp(1.0, 500.0),
             radius: f(p, "radius", 1.0).clamp(0.1, 64.0),
             reduce_noise: f(p, "reduceNoise", 10.0).clamp(0.0, 100.0),
-            remove: match s(p, "remove", "gaussian") {
-                "lens" => photocraft_algo::SharpenRemove::Lens,
-                "motion" => photocraft_algo::SharpenRemove::Motion,
+            remove: match s(p, "remove", "gaussianBlur") {
+                "lensBlur" => photocraft_algo::SharpenRemove::Lens,
+                "motionBlur" => photocraft_algo::SharpenRemove::Motion,
                 _ => photocraft_algo::SharpenRemove::Gaussian,
             },
             angle: f(p, "angle", 0.0).clamp(-360.0, 360.0),
-            more_accurate: b(p, "moreAccurate", false),
         },
         "filter.other.highPass" => FilterParams::HighPass { radius: f(p, "radius", 10.0).clamp(0.1, 1000.0) },
         "filter.noise.addNoise" => FilterParams::AddNoise {
@@ -503,7 +502,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "filter.sharpen.smartSharpen",
             "Smart Sharpen…",
             ["Filter", "Sharpen"],
-            r##"{"amount":1..500=100,"radius":0.1..64=1,"reduceNoise":0..100=10,"remove":"gaussian|lens|motion"="gaussian","angle":-360..360=0,"moreAccurate":bool}"##
+            r##"{"amount":1..500=100,"radius":0.1..64=1,"reduceNoise":0..100=10,"remove":"gaussianBlur|lensBlur|motionBlur"="gaussianBlur","angle":-360..360=0}"##
         ),
         filter_cmd!(
             "filter.noise.addNoise",
