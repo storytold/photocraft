@@ -188,6 +188,8 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
     // Color Sampler points are view state a step may move (crop, rotation): roll them back too, so
     // a failed second step can't leave them pinned to pixels the restored document no longer has.
     let samplers = st.color_samplers.clone();
+    // So is the painting symmetry, which a rotation moves with the pixels.
+    let symmetry = st.symmetry.clone();
     let r = f(s);
     if r.is_err() {
         s.journal.truncate(journal);
@@ -212,6 +214,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             st.channel_view = channel_view;
             st.coalesce = coalesce;
             st.color_samplers = samplers;
+            st.symmetry = symmetry;
             st.revision += 1;
             // A failed compound does not make an otherwise untouched document dirty.
             if was_clean {
@@ -893,9 +896,15 @@ fn count_delete_group(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Delete Count Group", |d, _| {
         d.measurement.count_groups.remove(g);
         let n = d.measurement.count_groups.len();
-        // Removing a group before the active one shifts it down a slot.
+        // Deleting the current group makes the first one current (#11771); removing a group
+        // before the current one shifts it down a slot (#5654).
         let a = d.measurement.active_count_group;
-        d.measurement.active_count_group = (if g < a { a - 1 } else { a }).min(n.saturating_sub(1));
+        let next = match g.cmp(&a) {
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Less => a - 1,
+            std::cmp::Ordering::Greater => a,
+        };
+        d.measurement.active_count_group = next.min(n.saturating_sub(1));
         Ok(())
     })?;
     Ok(count_json(doc(s)?.as_ref()))
