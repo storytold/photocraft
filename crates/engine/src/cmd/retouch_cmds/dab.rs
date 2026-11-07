@@ -180,6 +180,13 @@ impl DabFault {
         self.0.set(fault.clone());
         fault.map_or(Ok(()), |e| Err(EngineError::Other(e)))
     }
+
+    fn is_set(&self) -> bool {
+        let fault = self.0.take();
+        let set = fault.is_some();
+        self.0.set(fault);
+        set
+    }
 }
 
 /// Pixels an effect reads beyond the dab it writes. Smudge's pickup is a fixed-size square,
@@ -617,8 +624,15 @@ impl LiveDab {
             if r.is_empty() {
                 continue;
             }
+            if self.fault.is_set() {
+                break;
+            }
             let mut region = self.work.read(&self.pre_surf, self.neighborhood.read_rect(r, d));
             (self.effect)(&mut region, &ctx.footprint(d, self.done.saturating_add(k)));
+            // A failed stroke allocates no more working tiles.
+            if self.fault.is_set() {
+                break;
+            }
             self.work.write(&self.pre_surf, &region.crop(r));
             dmg = dmg.union(&r);
         }
@@ -626,6 +640,11 @@ impl LiveDab {
         new.clear();
         self.pending = new;
         dmg
+    }
+
+    #[cfg(test)]
+    pub(super) fn work_tiles(&self) -> usize {
+        self.work.tiles.len()
     }
 
     /// Mix the working pixels of `r` back over the original into the shown document.

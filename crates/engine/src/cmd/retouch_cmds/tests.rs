@@ -1815,6 +1815,20 @@ fn live_burn_out_of_memory_is_an_error_and_keeps_the_preview() {
     assert!(s.offer_live_dab(live).is_err(), "and isn't committed with dabs missing");
 }
 
+#[test]
+fn live_burn_out_of_memory_runs_no_more_dabs_in_the_batch() {
+    let mut s = session(600, 90, 8, "rgb");
+    paint_layer(&mut s, texture);
+    let opts = json!({"points": [[10, 40], [30, 40]], "size": 40, "hardness": 100});
+    let mut live = LiveDab::begin(&s, "paint.burn", &opts).unwrap();
+    let tiles = live.work_tiles();
+    crate::allocation::fail_next_for_test();
+    let pushed = live.push(&[StrokePoint::new(580.0, 40.0, 1.0)]);
+    let _ = crate::allocation::capacity::<u8>(0, "reset failpoint");
+    assert!(pushed.is_err_and(|e| e.to_string().contains("Dodge or Burn stroke")));
+    assert_eq!(live.work_tiles(), tiles, "the dabs past the failure wrote no working tiles");
+}
+
 /// The sequential-dab tools' options for the live hand-off tests.
 fn dab_cases() -> [(&'static str, Value); 6] {
     [
