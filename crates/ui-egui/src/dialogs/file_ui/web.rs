@@ -157,7 +157,8 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
         if let Some(rects) = f.get_mut("__previewRects").and_then(Value::as_array_mut) {
             rects.push(json!([r.left(), r.top(), r.right(), r.bottom()]));
         }
-        crate::widgets::checker(ui.painter(), r, 8.0);
+        // Photoshop's panes are grey around the image; only the image shows transparency (#2362).
+        ui.painter().rect_filled(r, 0.0, t.canvas);
         web_preview::paint(ui, r, &response, &tex, source_size, f);
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
         let (l1, l2) = match (p, info) {
