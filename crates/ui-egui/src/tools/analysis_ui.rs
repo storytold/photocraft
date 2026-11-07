@@ -245,7 +245,6 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         return true;
     };
     let tol = tolerance(app);
-    let samplers: Vec<[f64; 2]> = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
@@ -337,7 +336,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         }
         (Tool::ColorSampler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
-            match nearest_sampler(&samplers, p, tol) {
+            match sampler_at(app, p) {
                 // ⌥-click a point removes it.
                 Some(i) if mods.alt => {
                     let _ = app.run("view.colorSamplers.delete", json!({"index": i}));
@@ -373,6 +372,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         _ => {}
     }
     true
+}
+
+/// The Color Sampler point at document position `at` within the grab tolerance, or `None`.
+pub fn sampler_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<usize> {
+    let samplers = &app.session.active()?.color_samplers;
+    nearest_sampler(samplers, at, tolerance(app))
 }
 
 /// The nearest Color Sampler point within `tol` document pixels, or `None`.
