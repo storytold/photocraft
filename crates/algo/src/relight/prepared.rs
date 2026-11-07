@@ -157,7 +157,11 @@ fn apply_stream(
     let mut strip = zeros(row_len.checked_mul(STRIP)?)?;
     let shading_rows = 2 * step as usize + STRIP;
     let shading = zeros((field.width() as usize).checked_mul(shading_rows)?)?;
-    let mut output = Output { surface, selection, area, field, ctx, p, step, shading, shading_rows, received: 0, next_y: area.y0, result: surface.clone() };
+    // Keep only this slab's tile references. A full source-index clone per stream would
+    // multiply metadata for large documents and retain unrelated tiles until every stream ends.
+    let mut result = Surface::with_default(fmt, &surface.default_pixel());
+    result.put_tiles(area.tiles().filter_map(|tc| surface.tile(tc).map(|tile| (tc, tile.clone()))));
+    let mut output = Output { surface, selection, area, field, ctx, p, step, shading, shading_rows, received: 0, next_y: area.y0, result };
     let h = field.height() as usize;
     for y in (0..h).step_by(STRIP) {
         if ctl.cancelled() {

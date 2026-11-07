@@ -245,3 +245,26 @@ fn a_one_shot_cancellation_never_writes_an_incomplete_strip() {
     assert!(!output.push(&vec![1.0; area.width() as usize * 2], &ctl));
     assert_eq!(output.result.read_region(area), surface.read_region(area));
 }
+
+#[test]
+fn stream_tile_indexes_are_local_and_keep_nonzero_defaults_and_edge_pixels() {
+    let area = Rect::new(-19, 13, 581, 493);
+    let bounds = Rect::new(0, 0, 6000, 4000);
+    let far = Rect::new(100_000, 100_000, 100_001, 100_001).tiles().next().unwrap();
+    for sample in SampleType::ALL {
+        let fmt = PixelFormat::new(ColorMode::Rgb, sample, true);
+        let mut source = Surface::with_default(fmt, &[0.2, 0.4, 0.1, 0.37]);
+        source.write_pixel(-25, 15, &[0.9, 0.1, 0.7, 1.0]); // Outside the area, in its edge tile.
+        source.write_pixel(30, 40, &[0.7, 0.5, 0.3, 0.6]);
+        source.write_pixel(100_000, 100_000, &[0.8, 0.7, 0.6, 0.5]);
+        let p = params(100.0);
+        let stream = apply_stream(&source, &p, area, bounds, None, None, &Interrupt::NONE, true).unwrap().unwrap();
+        assert!(stream.tile(far).is_none(), "a stream must not retain unrelated tile entries");
+        assert!(stream.tile_count() as u64 <= area.tile_count());
+        assert_eq!(stream.default_bytes(), source.default_bytes());
+        let merged = apply(&source, &p, area, bounds, None, None, &Interrupt::NONE).unwrap().unwrap();
+        let expected = reference(&source, &p, area, bounds, None, None);
+        compare(&merged, &expected, area.inflate(8), 2e-5);
+        assert_eq!(merged.pixel(100_000, 100_000), source.pixel(100_000, 100_000));
+    }
+}
