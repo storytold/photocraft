@@ -1709,6 +1709,9 @@ pub fn export_flat_with_renderer(
                 if format == Format::Tiff {
                     warnings.extend(crate::tiff_layers::flat_transparency_and_channels(doc, &mut img, opts.tiff_transparency, opts.preserve_alpha)?);
                 }
+                if format == Format::Bmp {
+                    img = bmp_image(img, opts.bmp_bits, &mut warnings)?;
+                }
                 // Drain only once encoding succeeded: if it fails, the queued diagnostics stay
                 // with the renderer for the caller to report alongside the error.
                 let mut res = encode_image(&img, format, opts, warnings)?;
