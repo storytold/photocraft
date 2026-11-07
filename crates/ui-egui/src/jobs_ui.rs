@@ -19,12 +19,12 @@
 //!
 //! The canvas keeps showing the pre-job state: workers never touch the session's documents.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Weak};
 
 use egui::{Color32, Rect, RichText, Sense, Stroke, vec2};
-use photocraft_doc::DocId;
+use photocraft_doc::{DocId, Document};
 use photocraft_engine::jobs::{CancelRefused, JobCtx, JobEvent, JobId, JobInfo, JobOutcome, OPEN_JOB, OpenSource, Started};
 use serde_json::{Value, json};
 
@@ -141,6 +141,9 @@ const SAVE_CANCELLED: &str = "cancelled";
 pub struct SaveJob {
     pub job: JobId,
     pub doc: DocId,
+    /// The live document captured before export, checked again when handling completion:
+    /// earlier job events may edit it after the engine applied this save's result.
+    pub original: Weak<Document>,
     /// The document's revision when the save started (the job locks it against edits).
     pub revision: u64,
     pub path: String,
@@ -372,7 +375,7 @@ pub fn start_save(
     if app.jobs.saves.iter().any(|s| s.path == path) {
         return Err(crate::i18n::fmt(tl!("A save to {name} is still running; try again when it finishes"), &[("name", &name)]));
     }
-    let (snapshot, doc, revision) = (Arc::clone(&st.doc), st.doc.id, st.revision);
+    let (original, snapshot, doc, revision) = (Arc::downgrade(&st.doc), st.save_snapshot(), st.doc.id, st.revision);
     let label = crate::i18n::fmt(tl!("Saving {name}"), &[("name", &name)]);
     let target = path.clone();
     let result_path = path.clone();
@@ -394,6 +397,7 @@ pub fn start_save(
     match started.map_err(|e| e.to_string())? {
         Started::Done(v) => {
             let warnings = warnings_of(&v);
+            let revision = completion_revision(app, doc, &original, revision, automation);
             if automation {
                 app.saved_automation(doc, revision, &path, &warnings, copy);
             } else {
@@ -404,7 +408,7 @@ pub fn start_save(
         Started::Job(job) => {
             // Preferences › File Handling › Save in Background, read when the save starts.
             let foreground = !app.session.prefs().file_handling.save_in_background;
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
+            app.jobs.saves.push(SaveJob { job, doc, original, revision, path, copy, automation, state, ended: false, foreground });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -419,15 +423,26 @@ fn warnings_of(v: &Value) -> Vec<String> {
     v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect()).unwrap_or_default()
 }
 
+/// Include later view-only revisions only while the live content still matches the saved
+/// document. `poll_jobs` applies every ready job before shell events run; an earlier save's
+/// script can therefore edit this document after the engine's guard. Unconfirmed browser
+/// downloads retain the previous saved revision instead of marking any work saved.
+fn completion_revision(app: &PhotocraftApp, doc: DocId, original: &Weak<Document>, written: u64, automation: bool) -> u64 {
+    let Some(state) = app.session.documents().iter().find(|state| state.doc.id == doc) else { return written };
+    let revision = if original.ptr_eq(&Arc::downgrade(&state.doc)) { state.revision } else { written };
+    crate::services::saved_revision_after_write(automation || !app.services.write_unconfirmed, revision, state.saved_revision)
+}
+
 /// A background save ended: record it, or report why not. The close prompt waiting on it moves
 /// on, or asks again.
 fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, label: &str, outcome: JobOutcome) {
     match outcome {
         JobOutcome::Done(v) => {
+            let revision = completion_revision(app, save.doc, &save.original, save.revision, save.automation);
             if save.automation {
-                app.saved_automation(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
+                app.saved_automation(save.doc, revision, &save.path, &warnings_of(&v), save.copy);
             } else {
-                app.saved(save.doc, save.revision, &save.path, &warnings_of(&v), save.copy);
+                app.saved(save.doc, revision, &save.path, &warnings_of(&v), save.copy);
             }
             if !save.copy {
                 crate::discard_ui::saved_document(app, ctx, save.doc);

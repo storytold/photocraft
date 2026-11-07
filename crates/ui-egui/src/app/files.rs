@@ -466,7 +466,7 @@ impl PhotocraftApp {
         if id == "file.saveACopy" {
             let path = params.get("path").and_then(Value::as_str).filter(|p| !p.is_empty()).ok_or("Save a Copy needs a `path`")?;
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
-            let doc = self.session.active().ok_or("no document")?.doc.clone();
+            let doc = self.session.active().ok_or("no document")?.save_snapshot();
             return crate::view_cmds::write_copy(self, &doc, path, choices);
         }
         let path = self.recorded_save_path(params)?;
@@ -545,7 +545,8 @@ impl PhotocraftApp {
         ensure_memory_to_save(&st.doc, &path)?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&st.doc, &path, settings)?;
+        let snapshot = st.save_snapshot();
+        let (bytes, warnings) = export(&snapshot, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
@@ -608,6 +609,9 @@ impl PhotocraftApp {
         self.saved_inner(doc, revision, path, warnings, copy, SaveKind::Automation);
     }
 
+    /// Applies completion to the originating document, even when another tab is active.
+    /// Callers provide the verified saved revision, including any view-only revisions or the
+    /// prior revision for an unconfirmed download. Copies keep their file state.
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
         // Per-output Image Assets failures from the after-save hook, reported with this save (#11117).
         let mut asset_errors: Vec<String> = Vec::new();
@@ -634,7 +638,8 @@ impl PhotocraftApp {
                     && arm
                 {
                     st.saved_to(path.to_string());
-                    // The job locked the document, but record the revision that was written.
+                    // A preceding completion handler may have edited this document after
+                    // its worker's guard: retain the revision verified by the caller.
                     st.saved_revision = revision;
                     app.remember_stamp(doc, path);
                     // History Options › Automatically Create New Snapshot When Saving (#2966).
@@ -789,7 +794,8 @@ impl PhotocraftApp {
         ensure_memory_to_save(&state.doc, &target)?;
         let (doc, revision) = (state.doc.id, state.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&state.doc, &target, &settings)?;
+        let snapshot = state.save_snapshot();
+        let (bytes, warnings) = export(&snapshot, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
         self.saved_automation(doc, revision, &target, &warnings, false);

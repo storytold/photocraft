@@ -16,4 +16,5 @@ mod native_save_name;
 mod openraster;
 mod raw_defaults;
 mod renderer_save;
+mod saved_layer_selection;
 mod smart_filter_authorization;

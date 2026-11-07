@@ -56,6 +56,7 @@ mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod duotone_map;
 mod kra;
+mod layer_selection_map;
 pub mod linked;
 pub mod memory;
 mod multichannel_map;

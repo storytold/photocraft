@@ -9,4 +9,5 @@ mod float_roundtrip;
 mod frame_stroke;
 mod layer_labels;
 mod roundtrip;
+mod saved_layer_selection;
 mod smart_contents;

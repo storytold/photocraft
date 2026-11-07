@@ -1,4 +1,5 @@
 use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cmds, history_cmds, layer_multi_cmds, symmetry_cmds};
+use photocraft_doc::SavedLayerSelection;
 
 /// Per-document editing state.
 #[derive(Clone, Debug)]
@@ -81,10 +82,14 @@ impl DocState {
         self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
     }
 
-    pub fn new(doc: Document, path: Option<String>) -> Self {
-        let active_layer = doc.top_layer();
+    /// Admit a document as a clean editing state, consuming its imported layer targeting before
+    /// creating history and the initial snapshot. The range anchor starts at the resolved primary;
+    /// import transport data is never retained by the live document or its history.
+    pub fn new(mut doc: Document, path: Option<String>) -> Self {
+        let saved = doc.take_saved_layer_selection();
+        let active_layer = saved.active;
         let mut history = History::default();
-        let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
+        let target = LayerTarget { active: active_layer, selected: saved.selected.clone() };
         history.set_current_layers(target.clone());
         // Spot channels open visible, printing over the composite; alpha channels open hidden.
         let channel_view = channel_cmds::ChannelView {
@@ -99,7 +104,7 @@ impl DocState {
             doc,
             history,
             active_layer,
-            selected_layers: active_layer.into_iter().collect(),
+            selected_layers: saved.selected,
             layer_anchor: active_layer,
             path,
             source_read_only: false,
@@ -122,6 +127,22 @@ impl DocState {
             source_snapshot: None,
             typed_names: Default::default(),
         }
+    }
+    /// Capture the document and its current layer targeting for a save. The transport field
+    /// exists only on this copy: selecting a layer does not change the live document's identity,
+    /// history, or dirty state, including while a background job holds that document.
+    /// Layer data is cloned with the document's existing copy-on-write payload sharing. A missing
+    /// active layer means deselection; an inconsistent set follows the effective active target.
+    pub fn save_snapshot(&self) -> Arc<Document> {
+        let selected = match self.active_layer {
+            None => Vec::new(),
+            Some(active) if self.selected_layers.contains(&active) => self.selected_layers.clone(),
+            Some(active) => vec![active],
+        };
+        let saved = SavedLayerSelection { active: self.active_layer, selected }.resolve(&self.doc);
+        let mut doc = (*self.doc).clone();
+        doc.saved_layer_selection = Some(saved);
+        Arc::new(doc)
     }
     /// The selected layers in bottom-to-top document order, always including the active layer.
     /// Robust against stale state: ids no longer in the document are skipped, and if the active
