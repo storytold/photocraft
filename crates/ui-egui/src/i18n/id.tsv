@@ -3629,3 +3629,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
 	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
 	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
+# Move tool options bar (#11381)
+	Align top edges	Ratakan tepi atas
+	Align vertical centers	Ratakan pusat vertikal
+	Align bottom edges	Ratakan tepi bawah
+	Distribute vertically	Distribusikan secara vertikal
+	Distribute horizontally	Distribusikan secara horizontal
+	Show layer bounds on hover	Tampilkan batas layer saat kursor di atasnya
+	Expand layer group on click	Perluas grup layer saat diklik
+	Show hover bounds from Layers	Tampilkan batas saat kursor di atas dari Layer

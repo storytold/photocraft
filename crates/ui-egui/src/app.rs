@@ -78,6 +78,7 @@ impl PhotocraftApp {
             last_stroke_end: None,
             brush_resize: None,
             quick_pick: false,
+            move_pick: None,
             brush_resize_armed: false,
             alt_sampling: false,
             mixer_sampling: false,

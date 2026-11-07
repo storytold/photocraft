@@ -4110,3 +4110,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Chọn một tài liệu khác cho mỗi kênh.
 	A picked document is no longer open.	Một tài liệu đã chọn không còn mở.
 	A picked document is no longer a grayscale document of the same size.	Một tài liệu đã chọn không còn là tài liệu thang xám cùng kích thước.
+# Move tool options bar (#11381)
+	Align top edges	Căn các cạnh trên
+	Align vertical centers	Căn các tâm dọc
+	Align bottom edges	Căn các cạnh dưới
+	Distribute vertically	Phân bố theo chiều dọc
+	Distribute horizontally	Phân bố theo chiều ngang
+	Show layer bounds on hover	Hiện ranh giới lớp khi di chuột
+	Expand layer group on click	Mở rộng nhóm lớp khi nhấp
+	Show hover bounds from Layers	Hiện ranh giới khi di chuột từ bảng Lớp
