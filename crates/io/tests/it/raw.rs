@@ -60,8 +60,19 @@ fn monochrome_dng_opens() {
 fn cr2_opens() {
     let (w, h) = (48, 16);
     let data = mosaic(&scene(w, h), w, [0, 1, 1, 2], 256, 12000);
-    let spec =
-        Cr2Spec { width: w, height: h, data, precision: 14, components: 2, slices: vec![24, 24], borders: None, wb_rggb: None, orientation: 6, model_id: None };
+    let spec = Cr2Spec {
+        width: w,
+        height: h,
+        data,
+        precision: 14,
+        components: 2,
+        slices: vec![24, 24],
+        slices_long: None,
+        borders: None,
+        wb_rggb: None,
+        orientation: 6,
+        model_id: None,
+    };
     let r = import("IMG_0001.CR2", &spec.build()).unwrap();
     // Orientation 6 rotates the 48×16 sensor image to 16×48.
     assert_eq!((r.document.size.width, r.document.size.height), (16, 48));
@@ -74,8 +85,19 @@ fn cr2_opens() {
 fn a_developed_raw_keeps_its_exif() {
     let (w, h) = (48, 16);
     let data = mosaic(&scene(w, h), w, [0, 1, 1, 2], 256, 12000);
-    let spec =
-        Cr2Spec { width: w, height: h, data, precision: 14, components: 2, slices: vec![24, 24], borders: None, wb_rggb: None, orientation: 6, model_id: None };
+    let spec = Cr2Spec {
+        width: w,
+        height: h,
+        data,
+        precision: 14,
+        components: 2,
+        slices: vec![24, 24],
+        slices_long: None,
+        borders: None,
+        wb_rggb: None,
+        orientation: 6,
+        model_id: None,
+    };
     let r = import("IMG_0001.CR2", &spec.build()).unwrap();
     assert!(r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE)), "developed, not a preview: {:?}", r.warnings);
     let exif = r.document.metadata.exif.as_deref().expect("the raw's EXIF");
