@@ -18,6 +18,16 @@ use crate::canvas::{ToolEvent, ViewXform};
 use crate::state::Tool;
 use crate::theme::Tokens;
 
+#[cfg(test)]
+#[path = "count_marker_look_tests.rs"]
+mod count_marker_look_tests;
+
+/// A count marker's radius in points (#11769): its dot is Marker Size physical pixels across, on
+/// screen at every zoom.
+pub(crate) fn count_marker_radius(marker_size: u32, pixels_per_point: f32) -> f32 {
+    marker_size.max(1) as f32 / pixels_per_point.max(0.01) / 2.0
+}
+
 /// What a pointer drag is doing (not serialised).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
@@ -433,13 +443,16 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         handle(painter, s);
     }
     if v.shows(v.show.count) {
+        let ppp = painter.ctx().pixels_per_point();
         for g in doc.measurement.count_groups.iter().filter(|g| g.visible) {
             let c = color32(g.color.to_rgb());
+            let r = count_marker_radius(g.marker_size, ppp);
             for (i, p) in g.points.iter().enumerate() {
                 let at = xf.to_screen(p[0] as f32, p[1] as f32);
-                painter.circle_filled(at, 1.0 + g.marker_size as f32, c);
+                painter.circle_filled(at, r, c);
                 let font = FontId::proportional(g.label_size as f32);
-                painter.text(at + vec2(2.0 + g.marker_size as f32, -1.0), Align2::LEFT_BOTTOM, format!("{}", i + 1), font, c);
+                // Above right of the dot, whatever its size.
+                painter.text(at + vec2(r + 1.0, -1.0), Align2::LEFT_BOTTOM, format!("{}", i + 1), font, c);
             }
         }
     }
