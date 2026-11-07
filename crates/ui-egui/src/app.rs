@@ -78,6 +78,7 @@ impl PhotocraftApp {
             last_stroke_end: None,
             brush_resize: None,
             quick_pick: false,
+            move_pick: None,
             brush_resize_armed: false,
             alt_sampling: false,
             mixer_sampling: false,
@@ -127,11 +128,13 @@ impl PhotocraftApp {
             color_range: None,
             adjust_preview: None,
             live_adjust_preview: None,
+            levels_clipping: None,
             synthetic: Vec::new(),
             synthetic_batch: None,
             synthetic_reinject: false,
             synthetic_snapshot: None,
             automation_input: false,
+            programmatic_playback: false,
             run_depth: 0,
             paused_playbacks: Default::default(),
             channel_thumbs: None,
@@ -207,6 +210,8 @@ impl PhotocraftApp {
             held_memory_prompts: Default::default(),
             prompt_order: Default::default(),
             held_preset_import: None,
+            held_record_again: None,
+            held_insert_menu: None,
             allow_close: false,
             stylus: Default::default(),
             control_click: Default::default(),
@@ -233,7 +238,7 @@ impl PhotocraftApp {
 impl eframe::App for PhotocraftApp {
     fn on_exit(&mut self) {
         if let Err(err) = tool_memory::save_on_exit(self) {
-            log::warn!("Preferences: could not save the final tool selection: {err}");
+            log::warn!("Preferences: could not save the final tool state: {err}");
         }
         // Release a pending screenshot's image budget and answer its control request; the
         // callback is inert afterwards (it holds only a weak slot).
