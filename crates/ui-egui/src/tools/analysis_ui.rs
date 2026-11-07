@@ -605,8 +605,13 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             let author = ui.add(egui::TextEdit::singleline(&mut app.ui.analysis.note_author).desired_width(120.0)).labelled_by(author_label.id);
             match selected {
                 None if author.changed() => app.ui.analysis.note_default_author.clone_from(&app.ui.analysis.note_author),
-                // Enter commits it to the selected note: one "Note Author" step.
-                Some(i) if author.lost_focus() && ui.input(|inp| inp.key_pressed(egui::Key::Enter)) => {
+                // Enter commits it to the selected note: one "Note Author" step. An unchanged
+                // author runs nothing, so a recorded action gets no step for it.
+                Some(i)
+                    if author.lost_focus()
+                        && ui.input(|inp| inp.key_pressed(egui::Key::Enter))
+                        && app.session.active().and_then(|d| d.doc.notes.get(i)).is_some_and(|n| n.author != app.ui.analysis.note_author) =>
+                {
                     let _ = app.run("notes.set", json!({"index": i, "author": app.ui.analysis.note_author}));
                 }
                 _ => {}

@@ -146,3 +146,22 @@ fn notes_set_names_a_single_field_change() {
         assert_eq!(app.session.active().unwrap().history.undo_label(), Some(want), "{p}");
     }
 }
+
+fn journaled_notes_set(app: &PhotocraftApp) -> usize {
+    app.session.journal.iter().filter(|(id, _)| id == "notes.set").count()
+}
+
+#[test]
+fn enter_on_an_unchanged_author_runs_nothing() {
+    let mut app = app();
+    select(&mut app, 0);
+    let before = steps(&app);
+    let mut h = harness(app);
+    h.get_by_label("Author:").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(journaled_notes_set(app), 0, "no notes.set for an action to record");
+    assert_eq!(steps(app), before, "no history step");
+}
