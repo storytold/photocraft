@@ -1013,3 +1013,47 @@ fn path_placement_noninteger_line_rounding_upward_and_zero_capacity() {
     s.execute("type.setPathPlacement", json!({"start": 0.0, "end": length_f32, "flip": true})).unwrap();
     assert!(matches!(text(&s, id).shape, TextShape::Path { start: 0.0, end: Some(end), flip: true, .. } if end == canonical));
 }
+
+/// Flipping preserves stale endpoints after shortening a path; endpoint edits still validate.
+#[test]
+fn path_placement_shortened_path_flip_only_and_endpoint_rejection() {
+    let mut s = session(8);
+    let id = text_layer(&mut s, "Path");
+    let line100 = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+    with_text(&mut s, &json!({}), "attach", |t, _| {
+        t.shape = TextShape::Path { path: line100, start: 10.0, end: Some(80.0), flip: false };
+        Ok(())
+    })
+    .unwrap();
+
+    // Shorten the path from length 100 to length 50.
+    let shortened = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (50.0, 0.0)])]);
+    with_text(&mut s, &json!({}), "shorten", |t, _| set_type_path(t, &shortened)).unwrap();
+
+    // Stored end (80.0) is now past the shortened path length (50.0).
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 10.0, end: Some(80.0), flip: false, .. }));
+
+    // Flip-only call must succeed and preserve the stored range.
+    let r = s.execute("type.setPathPlacement", json!({"flip": true})).unwrap();
+    assert_eq!(r, json!({"start": 10.0, "end": 80.0, "flip": true}));
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 10.0, end: Some(80.0), flip: true, .. }));
+
+    // Flip back without supplying endpoints also succeeds.
+    let r = s.execute("type.setPathPlacement", json!({"flip": false})).unwrap();
+    assert_eq!(r, json!({"start": 10.0, "end": 80.0, "flip": false}));
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 10.0, end: Some(80.0), flip: false, .. }));
+
+    // Supplying out-of-bounds start or end on the shortened path must be rejected.
+    let before = text(&s, id).shape.clone();
+    assert!(s.execute("type.setPathPlacement", json!({"end": 80.0})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": 60.0})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": -5.0})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": 10.0, "flip": true})).is_err());
+    assert!(s.execute("type.setPathPlacement", json!({"start": 40.0, "end": 30.0})).is_err());
+    assert_eq!(text(&s, id).shape, before);
+
+    // Supplying a valid range on the shortened path succeeds and updates the range.
+    let r = s.execute("type.setPathPlacement", json!({"start": 5.0, "end": 45.0, "flip": true})).unwrap();
+    assert_eq!(r, json!({"start": 5.0, "end": 45.0, "flip": true}));
+    assert!(matches!(text(&s, id).shape, TextShape::Path { start: 5.0, end: Some(45.0), flip: true, .. }));
+}

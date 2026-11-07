@@ -504,48 +504,51 @@ fn set_path_placement(s: &mut Session, p: &Value) -> Result<Value> {
         };
         let mut new_end = end.unwrap_or(*current_end);
         let mut new_start = start.unwrap_or(*current_start);
-        if new_end.is_some_and(|end| end < new_start) {
+        let validate_range = start.is_some() || end.is_some();
+        if validate_range && new_end.is_some_and(|end| end < new_start) {
             return Err(bad("end must not be before start"));
         }
-        if let Some(mut end_val) = new_end {
-            if !new_start.is_finite() || !end_val.is_finite() {
-                return Err(bad("range must be finite"));
-            }
-            let geometry = photocraft_text::warp::PathGeometry::new(path, false)
-                .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
-                .ok_or_else(|| bad("path must have a finite nonzero length"))?;
-            if !path.closed {
-                let length = geometry.length();
-                let max_f32 = length as f32;
-                if new_start < 0.0 || new_start > max_f32 || end_val > max_f32 {
-                    return Err(bad("range must lie on the path"));
+        if validate_range {
+            if let Some(mut end_val) = new_end {
+                if !new_start.is_finite() || !end_val.is_finite() {
+                    return Err(bad("range must be finite"));
                 }
-                let canonical_max = geometry.canonical_length_f32();
-                if end_val > canonical_max {
-                    end_val = canonical_max;
-                }
-                if new_start > canonical_max {
-                    new_start = canonical_max;
-                }
-                new_end = Some(end_val);
-            }
-            *current_start = new_start;
-        } else if let Some(start_val) = start {
-            if !path.closed {
                 let geometry = photocraft_text::warp::PathGeometry::new(path, false)
                     .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
                     .ok_or_else(|| bad("path must have a finite nonzero length"))?;
-                let length = geometry.length();
-                let max_f32 = length as f32;
-                if start_val < 0.0 || start_val > max_f32 {
-                    return Err(bad("range must lie on the path"));
+                if !path.closed {
+                    let length = geometry.length();
+                    let max_f32 = length as f32;
+                    if new_start < 0.0 || new_start > max_f32 || end_val > max_f32 {
+                        return Err(bad("range must lie on the path"));
+                    }
+                    let canonical_max = geometry.canonical_length_f32();
+                    if end_val > canonical_max {
+                        end_val = canonical_max;
+                    }
+                    if new_start > canonical_max {
+                        new_start = canonical_max;
+                    }
+                    new_end = Some(end_val);
                 }
-                let canonical_max = geometry.canonical_length_f32();
-                new_start = start_val.min(canonical_max);
+                *current_start = new_start;
+            } else if let Some(start_val) = start {
+                if !path.closed {
+                    let geometry = photocraft_text::warp::PathGeometry::new(path, false)
+                        .filter(|geometry| geometry.length().is_finite() && geometry.length() > 0.0)
+                        .ok_or_else(|| bad("path must have a finite nonzero length"))?;
+                    let length = geometry.length();
+                    let max_f32 = length as f32;
+                    if start_val < 0.0 || start_val > max_f32 {
+                        return Err(bad("range must lie on the path"));
+                    }
+                    let canonical_max = geometry.canonical_length_f32();
+                    new_start = start_val.min(canonical_max);
+                }
+                *current_start = new_start;
             }
-            *current_start = new_start;
+            *current_end = new_end;
         }
-        *current_end = new_end;
         if let Some(flip) = flip {
             *current_flip = flip;
         }
