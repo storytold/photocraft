@@ -815,6 +815,9 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut close = false;
         let mut focused = false;
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
+            // The window's own pointer moves (the Wayland pen's go to the window it is over) are
+            // the frame's too, for the stroke trace.
+            app.perf.stage.moves += ui.ctx().input(|i| i.raw.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count());
             if ui.ctx().input(|i| i.viewport().close_requested()) {
                 close = true;
             }

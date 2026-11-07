@@ -19,9 +19,11 @@
 //! - **Linux X11**: the desktop app reads XInput2 raw valuator events on its own X connection
 //!   (`photocraft-tablet`, x11rb) and writes them into the [`StylusFeed`].
 //! - **Linux Wayland**: compositors give a pen only to clients that bind `zwp_tablet_v2`, which
-//!   winit doesn't (it would have to share winit's connection), so with a pen attached the
-//!   desktop app opens its window through Xwayland, which reports tablet valuators to the X11
-//!   reader. `PHOTOCRAFT_NATIVE_WAYLAND=1` keeps native Wayland, where the pen has no input.
+//!   winit doesn't, so the desktop app binds it on winit's own connection (`photocraft-tablet`)
+//!   and injects the pen's motion and buttons as pointer events besides writing its samples into
+//!   the [`StylusFeed`] (in the pass of the window the pen is over). The pen reaches the main
+//!   window, and an extra window only when exactly one is open. A compositor without the
+//!   protocol gets the window through Xwayland and the X11 reader instead.
 //!
 //! Preferences › Tools › Use Tablet Pressure off makes a pen paint like a mouse. Flipping the pen
 //! to its eraser end selects the Eraser tool and flipping back restores the previous tool, as in
@@ -66,8 +68,10 @@ impl PenSample {
     }
 }
 
-/// Most samples a [`StylusFeed`] keeps between two frames (a stalled UI drops the oldest).
-const FEED_QUEUE: usize = 1024;
+/// Most samples a [`StylusFeed`] keeps between two frames (a stalled UI drops the oldest). Above
+/// the backlog the Wayland pen hands one window's pass (4096 samples, reduced together with its
+/// moves past that), so its samples reach the canvas whole.
+const FEED_QUEUE: usize = 8192;
 
 #[derive(Debug, Default)]
 struct FeedState {
@@ -107,6 +111,15 @@ impl StylusFeed {
     }
 }
 
+/// What [`Stylus::update_for_frame`] took for one viewport's frame.
+#[derive(Clone, Debug)]
+struct FrameUpdate {
+    viewport: egui::ViewportId,
+    frame: u64,
+    prev: Option<PenSample>,
+    samples: Vec<PenSample>,
+}
+
 /// Per-app stylus state.
 #[derive(Clone, Debug)]
 pub struct Stylus {
@@ -140,8 +153,8 @@ pub struct Stylus {
     peak: f32,
     /// The pen's touch contacts in the raw input, so a held pen is no press-and-hold right click.
     pub(crate) pen_contacts: PenContacts,
-    /// The egui frame [`Self::update_for_frame`] last ran in.
-    updated_frame: Option<u64>,
+    /// Each viewport's last frame [`Self::update_for_frame`] ran in, with what that update took.
+    updated: Vec<FrameUpdate>,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
     pub(crate) stroke: Vec<[f32; 3]>,
     /// Time in milliseconds of each point of the current drag (parallel to its points), from
@@ -170,7 +183,7 @@ impl Default for Stylus {
             current: None,
             peak: 0.0,
             pen_contacts: PenContacts::default(),
-            updated_frame: None,
+            updated: Vec::new(),
             stroke: Vec::new(),
             times: Vec::new(),
             clock_ms: 0.0,
@@ -179,13 +192,25 @@ impl Default for Stylus {
 }
 
 impl Stylus {
-    /// [`Self::update`] once per egui frame: the canvas runs once per view, and egui can run a
-    /// frame in several passes; a second update would drain an empty queue and lose the frame's
-    /// pen samples.
-    pub fn update_for_frame(&mut self, frame: u64, events: &[egui::Event]) {
-        if self.updated_frame.replace(frame) != Some(frame) {
-            self.update(events);
+    /// [`Self::update`] once per egui frame of each viewport: the canvas runs once per view, and
+    /// egui can run a frame in several passes; a second update would drain an empty queue and
+    /// lose the frame's pen samples. Each viewport counts its own frames, and a document window
+    /// gets its pen samples in its own pass.
+    pub fn update_for_frame(&mut self, viewport: egui::ViewportId, frame: u64, events: &[egui::Event]) {
+        // A repeated pass (a root pass egui runs again after a document window's) gets the
+        // samples its first pass took.
+        if let Some(u) = self.updated.iter().find(|u| u.viewport == viewport && u.frame == frame) {
+            self.prev = u.prev;
+            self.frame = u.samples.clone();
+            self.current = None;
+            return;
         }
+        self.update(events);
+        self.updated.retain(|u| u.viewport != viewport);
+        if self.updated.len() >= 16 {
+            self.updated.remove(0);
+        }
+        self.updated.push(FrameUpdate { viewport, frame, prev: self.prev, samples: self.frame.clone() });
     }
 
     /// Track touch/pen contacts from this frame's input events.

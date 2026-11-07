@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-07 · **Change:** minor (native Wayland pen input through tablet-v2, #79; hardware-verified on KDE Plasma 6.8 with a Wacom CTL-472 (pressure, clicks, drag, context menu, mouse/pen switching, UI interaction); Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -9,9 +9,12 @@ strings, Touch Bar resources, pen pressure/tilt strings) and Adobe's GPU FAQ. Ph
 `engine/src/display_color.rs`, `apps/photocraft/src/monitor_profile.rs`.
 
 **Summary (estimated):** ~50% ready. GPU compositing and colour-managed display are solid; pen
-input is uneven by platform (the default Windows Ink path lacks tilt and rotation, Wayland is
-broken; the opt-in WinTab path on Windows supplies tilt only on devices that report orientation
-axes, and rotation only when the pen and driver report twist) and there is no HDR
+input is uneven by platform (the default Windows Ink path lacks tilt and rotation; native
+Wayland is new, hardware-verified on KDE Plasma 6.8 with a Wacom CTL-472 for pressure, clicks,
+drag, context menu, mouse/pen switching and UI interaction; eraser/tilt/rotation are synthetic
+only, as this pen reports pressure and distance; the opt-in WinTab path on Windows supplies tilt
+only on devices that report orientation axes, and rotation only when the pen and driver report
+twist) and there is no HDR
 output. Remaining: 80–150 h (gap G12). Human: tablets (Wacom, XP-Pen, Huion) on each OS and an
 HDR display to verify.
 
@@ -32,10 +35,10 @@ HDR display to verify.
 
 | Feature | Photoshop | macOS | Windows | Linux X11 | Linux Wayland | Web |
 |---|---|---|---|---|---|---|
-| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622), KDE (#2297) | yes |
-| Tilt | yes | yes | **no** (WinTab: with orientation axes, opt-in) | yes | no | yes |
-| Barrel rotation | yes | yes (not applied to tip angle, #1301) | no (WinTab: with a twist-reporting pen and driver, opt-in) | partial | no | yes (twist) |
-| Eraser end | yes | yes | yes with Windows Ink, not yet confirmed on hardware (#2285); WinTab: yes (opt-in) | partial | no | partial |
+| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | yes (tablet-v2; Xwayland only on compositors without it); hardware-verified on KDE 6.8 with a Wacom CTL-472 (2026-11-07: pressure, cursor, clicks, drag, context menu, mouse/pen switching, UI); GNOME 50 (#2622) not yet | yes |
+| Tilt | yes | yes | **no** (WinTab: with orientation axes, opt-in) | yes | yes (read; synthetic test; hardware untested) | yes |
+| Barrel rotation | yes | yes (not applied to tip angle, #1301) | no (WinTab: with a twist-reporting pen and driver, opt-in) | partial | partial (read, synthetic; hardware untested) | yes (twist) |
+| Eraser end | yes | yes | yes with Windows Ink, not yet confirmed on hardware (#2285); WinTab: yes (opt-in) | partial | yes (eraser tool type; synthetic; hardware untested) | partial |
 | WinTab driver mode | yes | – | yes (opt-in; Windows Ink off) | – | – | – |
 | Pressure curve | Windows Ink / driver | global curve in Preferences (#2195) | same | same | same | same |
 
@@ -44,6 +47,12 @@ in the tablet utility) supplies pressure and the eraser end, tilt only on device
 orientation axes, and rotation only when the pen and driver report twist (pressure-only devices
 get neutral tilt and rotation). The default Windows Ink path still lacks tilt and
 rotation; its eraser end comes from the pointer hooks (#2285).
+
+A compositor that offers tablet-v2 can still be forced through Xwayland with
+`PHOTOCRAFT_XWAYLAND_PEN=1`, unless `PHOTOCRAFT_NATIVE_WAYLAND=1` is set. The tablet probe also
+fails when `WAYLAND_SOCKET` is set (PhotoCraft cannot open its own probe connection), so such a
+compositor takes the fallback even when it offers tablet-v2. The fallback needs a detected pen,
+a nonempty `DISPLAY` and the X11 libraries; without them the window stays on native Wayland.
 
 ## Displays and colour
 
@@ -77,3 +86,5 @@ rotation; its eraser end comes from the pointer hooks (#2285).
 | 2026-10-10 | major | First version |
 | 2026-10-17 | minor | GPU filters: Camera Raw's preview, per-pixel stages (#6916 step 1) |
 | 2026-10-19 | minor | Graphics Adapter choice on Linux (#1885) |
+| 2026-10-22 | minor | Native Wayland pen input through tablet-v2 (#79) |
+| 2026-11-07 | minor | KDE 6.8 tablet-v2 hardware-verified with a Wacom CTL-472: pressure, cursor, clicks, drag, context menu, mouse/pen switching and UI interaction; eraser/tilt/rotation covered by synthetic tests (the pen reports pressure and distance only); GNOME 50 remains open |
