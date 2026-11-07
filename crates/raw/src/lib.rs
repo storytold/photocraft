@@ -60,6 +60,7 @@ mod orf;
 mod par;
 mod preview;
 mod raf;
+mod rafc;
 mod rw2;
 mod saturation;
 mod sensor;

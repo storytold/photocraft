@@ -11,8 +11,9 @@ pub enum RafPacking {
     Lsb12,
     /// 14-bit, most significant bit first in little-endian 32-bit words.
     Words14,
-    /// A short `IS…` strip standing in for Fujifilm's compressed data.
-    Compressed,
+    /// Fujifilm's striped compression, lossless or lossy: a stream whose residuals are all
+    /// zero, so it needs a 780-pixel-wide, all-zero image whose height is a multiple of 6.
+    Compressed { lossy: bool },
 }
 
 /// The X-Trans repeat at the data origin, as observed (row major, 0 = R, 1 = G, 2 = B).
@@ -46,6 +47,8 @@ pub struct RafSpec {
     pub orientation: u16,
     /// `false` writes an early-FinePix-style file without the CFA TIFF.
     pub cfa_tiff: bool,
+    /// A real JPEG to embed as the preview; `None` writes a tiny header-only stand-in.
+    pub preview_jpeg: Option<Vec<u8>>,
 }
 
 impl RafSpec {
@@ -63,6 +66,7 @@ impl RafSpec {
             exposure_bias: None,
             orientation: 1,
             cfa_tiff: true,
+            preview_jpeg: None,
         }
     }
 
@@ -102,10 +106,10 @@ impl RafSpec {
                 logical.resize(logical.len().next_multiple_of(4), 0);
                 logical.chunks(4).flat_map(|w| w.iter().rev().copied().collect::<Vec<u8>>()).collect()
             }
-            RafPacking::Compressed => {
-                let mut v = b"IS\x01\x00".to_vec();
-                v.resize(self.width * self.height / 2, 0x5A);
-                v
+            RafPacking::Compressed { lossy } => {
+                assert!(self.width == 780 && self.height.is_multiple_of(6) && self.data.iter().all(|&v| v == 0), "see RafPacking::Compressed");
+                let quantizers: Vec<u8> = (0..self.height / 6).map(|g| [2, 0, 5][g % 3]).collect();
+                crate::rafc::zero_stream(self.bits, self.cfa.len() == 36, self.height / 6, lossy.then_some(quantizers.as_slice()))
             }
         }
     }
@@ -166,6 +170,9 @@ impl RafSpec {
     /// A tiny baseline-JPEG preview (APP1 EXIF with make, model and
     /// orientation; SOF0 32×24; EOI).
     fn preview(&self) -> Vec<u8> {
+        if let Some(jpeg) = &self.preview_jpeg {
+            return jpeg.clone();
+        }
         let mut t = TiffBuilder::default();
         let ifd0 = t.ifd(vec![(271, Val::Ascii("FUJIFILM".into())), (272, Val::Ascii("X-Synthetic".into())), (274, Val::Short(vec![self.orientation]))]);
         t.chain = vec![ifd0];
@@ -223,6 +230,10 @@ impl RafSpec {
         b.resize(60, 0);
         b.extend_from_slice(b"0100");
         b.resize(160, 0);
+        // Compression mode: 0 uncompressed, 2 lossless, 3 lossy.
+        if let RafPacking::Compressed { lossy } = self.packing {
+            b[108..112].copy_from_slice(&(if lossy { 3u32 } else { 2 }).to_be_bytes());
+        }
         let preview = self.preview();
         let meta = self.meta();
         let region = if self.cfa_tiff { self.cfa_region() } else { self.strip() };
