@@ -986,6 +986,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
                             continue;
                         }
                         let params = crate::actions_cmds::playback_params(scratch, id, params)?;
+                        let params = crate::layer_multi_cmds::playback_retarget(scratch, id, params);
                         let r = scratch.execute(id, params)?;
                         ctx.publish_batch_preview(&source_path, scratch.active().map(|state| state.doc.clone()));
                         // A failed step inside a called action makes this file an error, not a saved result.
@@ -1137,6 +1138,7 @@ fn batch_open_documents(
                     continue;
                 }
                 let params = crate::actions_cmds::playback_params(s, command, params)?;
+                let params = crate::layer_multi_cmds::playback_retarget(s, command, params);
                 let response = s.execute(command, params)?;
                 if let Some(error) = crate::actions_cmds::nested_failure(command, &response) {
                     return Err(FileFailure { error: EngineError::Other(error), result: Some(response) });

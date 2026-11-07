@@ -275,6 +275,35 @@ fn batch_save_and_close_preserves_caller_and_failed_sources() {
     assert_eq!(caller_state(&s), before);
 }
 
+/// Batch retargets a missing numeric layer on non-destructive steps (blend / High Pass style),
+/// but a recorded `layer.delete` of a stale id still fails for that file.
+#[test]
+fn batch_retargets_missing_layer_props_but_not_delete() {
+    let dir = tmp("batch-retarget-layer");
+    let path = png(&dir, "a.png", 4, 4, "#ff0000");
+    let mut s = Session::new();
+    let soft = s
+        .execute(
+            "file.automate.batch",
+            json!({"input":[path],"destination":"saveAndClose","steps":[["layer.setProps",{"layer":9001,"blend":"Soft Light"}]]}),
+        )
+        .unwrap();
+    assert!(soft["errors"].as_array().unwrap().is_empty(), "{soft}");
+    assert_eq!(soft["files"].as_array().map(Vec::len), Some(1), "{soft}");
+
+    let path = png(&dir, "b.png", 4, 4, "#00ff00");
+    let before = std::fs::read(&path).unwrap();
+    let deleted = s
+        .execute(
+            "file.automate.batch",
+            json!({"input":[path],"destination":"saveAndClose","steps":[["layer.delete",{"layer":9001}]]}),
+        )
+        .unwrap();
+    assert!(deleted["files"].as_array().unwrap().is_empty(), "{deleted}");
+    assert!(!deleted["errors"].as_array().unwrap().is_empty(), "{deleted}");
+    assert_eq!(std::fs::read(&path).unwrap(), before, "a failed delete must not overwrite the source");
+}
+
 /// In-place TIFF keeps layers by default; explicit flattening is allowed only when it loses no layer data.
 #[test]
 fn batch_save_and_close_keeps_tiff_layers() {
