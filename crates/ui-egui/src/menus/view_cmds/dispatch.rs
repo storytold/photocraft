@@ -103,6 +103,8 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         // Batch's dialog is built from an Actions-panel action. Keep it disabled until one
         // exists instead of opening a menu item that can only report "record an action".
         "file.automate.batch" => crate::actions::selected_action(app).is_some() && engine_enabled(),
+        #[cfg(target_arch = "wasm32")]
+        "file.export.dataSetsAsFiles" => false,
         i if wraps(i) => engine_enabled(),
         _ => true,
     })
@@ -203,9 +205,17 @@ fn type_checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         "ornaments" => "ornm",
         "ordinals" => "ordn",
         "fractions" => "frac",
-        _ => return None,
+        set => stylistic_set_tag(set.strip_prefix("stylisticSets.set")?)?,
     };
     Some(photocraft_engine::type_extra_cmds::feature_on_at(t, start, tag))
+}
+
+/// `ss01`..`ss20` for the digits of a Stylistic Sets item id (`1`..`20`, no leading zeros).
+fn stylistic_set_tag(n: &str) -> Option<&'static str> {
+    if n.starts_with('0') || !n.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    photocraft_engine::type_extra_cmds::STYLISTIC_SET_TAGS.get(n.parse::<usize>().ok()?.checked_sub(1)?).copied()
 }
 
 /// Engine commands that get a dialog or file picker here when invoked without parameters.
@@ -236,6 +246,7 @@ fn wraps(id: &str) -> bool {
             | "file.export.layerCompsToFiles"
             | "file.export.artboardsToFiles"
             | "file.export.artboardsToPdf"
+            | "file.export.dataSetsAsFiles"
             | "layer.new.artboard"
             | "file.export.colorLookupTables"
             | "view.newGuideLayout"
