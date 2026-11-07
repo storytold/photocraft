@@ -463,7 +463,8 @@ fn a_cancelled_warp_stops_in_a_selected_linked_mask() {
 /// degrees, flipped, sheared or in Perspective keeps the placement: the stored warp sends each
 /// source point to the source point the document warp sends its placed position to, so the
 /// rendered pixels land where the uncommitted warp showed them (#10325). The cylinder becomes a
-/// 13x13 fitted mesh when the placement isn't upright; its error stays under a pixel.
+/// 13x13 fitted mesh when the placement isn't upright; its error stays under a pixel. The
+/// rendered smart object is compared with the uncommitted warp of its placed render as well.
 #[test]
 fn warp_keeps_the_placement_of_a_smart_object_under_any_transform() {
     for case in ["upright", "rotate 0", "rotate 30", "rotate 90", "flip", "shear", "perspective"] {
@@ -527,6 +528,23 @@ fn warp_keeps_the_placement_of_a_smart_object_under_any_transform() {
                 let got = stored.map(src[0], src[1]);
                 assert!((got.0 - want[0]).abs() < 1.0 && (got.1 - want[1]).abs() < 1.0, "{case} {:?} ({u}, {v}): {got:?} vs {want:?}", w.style);
             }
+            // The rendered pixels: the committed smart object covers what the uncommitted warp of
+            // its placed render covered, up to the anti-aliased edge.
+            let doc = &s.active().unwrap().doc;
+            let placed = crate::smart_cmds::render(doc, sm).unwrap().unwrap();
+            let shown = warp_mesh_surface_with(&placed, rect, &|x: f64, y: f64| w.map(x, y), Interp::Bicubic, &Interrupt::NONE).unwrap();
+            let rendered = crate::smart_cmds::render(doc, csm).unwrap().unwrap();
+            let area = shown.content_bounds().union(&rendered.content_bounds());
+            let alpha = |surf: &Surface, x: i32, y: i32| surf.pixel(x, y).last().copied().unwrap_or(0.0);
+            let (mut covered, mut moved) = (0usize, 0usize);
+            for y in area.y0..area.y1 {
+                for x in area.x0..area.x1 {
+                    let (before, after) = (alpha(&shown, x, y), alpha(&rendered, x, y));
+                    covered += usize::from(before > 0.5);
+                    moved += usize::from((before - after).abs() > 0.5);
+                }
+            }
+            assert!(covered > 0 && moved * 8 <= covered, "{case} {:?}: {moved} of {covered} pixels moved", w.style);
         }
     }
 }
