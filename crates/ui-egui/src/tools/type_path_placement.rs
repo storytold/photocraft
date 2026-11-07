@@ -1231,18 +1231,26 @@ mod tests {
 
         let pos = egui::pos2(1000.0, 1000.0);
 
+        let make_raw = |viewport: egui::ViewportId, focused: bool, pressed: bool| {
+            let mut raw = egui::RawInput {
+                viewport_id: viewport,
+                focused,
+                events: if pressed {
+                    vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }]
+                } else {
+                    vec![]
+                },
+                ..Default::default()
+            };
+            raw.viewports.insert(viewport, egui::ViewportInfo { focused: Some(focused), ..Default::default() });
+            raw
+        };
+
         // Set owner ctx focused with primary down.
-        ctx_owner.begin_pass(egui::RawInput {
-            viewport_id: owner_vp,
-            focused: true,
-            events: vec![egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }],
-            ..Default::default()
-        });
-        ctx_owner.end_pass().textures_delta.clear();
+        ctx_owner.begin_pass(make_raw(owner_vp, true, true));
 
         // Set nonowner ctx unfocused without primary pressed.
-        ctx_nonowner.begin_pass(egui::RawInput { viewport_id: nonowner_vp, focused: false, events: vec![], ..Default::default() });
-        ctx_nonowner.end_pass().textures_delta.clear();
+        ctx_nonowner.begin_pass(make_raw(nonowner_vp, false, false));
 
         // Start drag in owner viewport.
         let xf = ViewXform::active(&app).unwrap();
@@ -1253,6 +1261,12 @@ mod tests {
         assert!(app.ui.type_path_drag.is_some());
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, Some(owner_vp));
 
+        // Verify separate viewport identity and focus/held assertions.
+        assert_eq!(ctx_owner.viewport_id(), owner_vp);
+        assert_eq!(ctx_nonowner.viewport_id(), nonowner_vp);
+        assert!(ctx_owner.input(|i| i.focused && i.pointer.primary_down()));
+        assert!(ctx_nonowner.input(|i| !i.focused && !i.pointer.primary_down()));
+
         // Unfocused nonowner cannot cancel.
         cancel_missing_release(&mut app, &ctx_nonowner);
         assert!(app.ui.type_path_drag.is_some(), "unfocused nonowner must not cancel owner drag");
@@ -1261,15 +1275,21 @@ mod tests {
         cancel_missing_release(&mut app, &ctx_owner);
         assert!(app.ui.type_path_drag.is_some(), "focused held owner must retain drag");
 
+        ctx_owner.end_pass().textures_delta.clear();
+
         // Owner focus loss cancels.
-        ctx_owner.begin_pass(egui::RawInput { viewport_id: owner_vp, focused: false, events: vec![], ..Default::default() });
+        ctx_owner.begin_pass(make_raw(owner_vp, false, false));
+        assert_eq!(ctx_owner.viewport_id(), owner_vp);
+        assert!(ctx_owner.input(|i| !i.focused));
         cancel_missing_release(&mut app, &ctx_owner);
         assert!(app.ui.type_path_drag.is_none(), "owner focus loss must cancel drag");
+        ctx_owner.end_pass().textures_delta.clear();
 
         // Automation drag without owner retains cancellation on lost release.
         assert!(pointer(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }));
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().viewport, None);
         cancel_missing_release(&mut app, &ctx_nonowner);
         assert!(app.ui.type_path_drag.is_none(), "automation fallback cleans up without owner");
+        ctx_nonowner.end_pass().textures_delta.clear();
     }
 }

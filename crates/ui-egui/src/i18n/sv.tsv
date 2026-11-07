@@ -540,6 +540,12 @@
 	Timeline	Tidslinje
 	Tool Presets	Verktygsförinställningar
 	Tools	Verktyg
+	Contextual Task Bar	Kontextuellt aktivitetsfält
+	Hide bar	Dölj fältet
+	Reset bar position	Återställ fältets position
+	Pin bar position	Fäst fältets position
+	Move bar	Flytta fältet
+	More options	Fler alternativ
 	Libraries	Bibliotek
 	3D	3D
 	Toolbars	Verktygsfält
@@ -1212,6 +1218,7 @@
 	Path to Illustrator…	Bana till Illustrator…
 	Make Work Path	Skapa arbetsbana
 	Make Selection	Skapa markering
+	Make Shape	Skapa form
 	Fill Path	Fyll bana
 	Stroke Path	Linje på bana
 	Clipping Path	Urklippsbana
@@ -1629,6 +1636,7 @@
 	Move Tool	Flyttverktyg
 	Could not use the move tool because the layer is locked.	Det gick inte att använda flyttverktyget eftersom lagret är låst.
 	Could not complete the Free Transform command because the layer is locked.	Det gick inte att slutföra kommandot Ombilda fritt eftersom lagret är låst.
+	Could not transform because the layer is locked.	Det gick inte att omforma eftersom lagret är låst.
 	Rectangular Marquee Tool	Verktyget Rektangulär markeringsram
 	Elliptical Marquee Tool	Verktyget Elliptisk markeringsram
 	Single Row Marquee Tool	Verktyget Enradsmarkeringsram
@@ -2059,7 +2067,7 @@
 	Vertical Centers	Lodräta mittpunkter
 	Video Frames to Layers…	Videobildrutor till lager…
 	WIA Support…	WIA-stöd…
-	Working CMY Plates	CMY-arbetsplåt
+	Working CMY Plates	CMY-arbetsplåtar
 
 # tl! literals (third pass)
 	Absolute	Absolut
@@ -2476,7 +2484,6 @@
 	Show only crosshair while painting	Visa bara hårkors vid målning
 	Show slice numbers	Visa skivnummer
 	Show tooltips	Visa verktygstips
-	Enable animations	Aktivera animeringar
 	Show highlight on rollover	Visa framhävning när pekaren förs över
 	Show bounding box when dragging layer	Visa begränsningsram när lager dras
 	System title bar	Systemets namnlist

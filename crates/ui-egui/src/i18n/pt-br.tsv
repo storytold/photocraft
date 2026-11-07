@@ -730,7 +730,7 @@
 	Working Magenta Plate	Chapa magenta de trabalho
 	Working Yellow Plate	Chapa amarela de trabalho
 	Working Black Plate	Chapa preta de trabalho
-	Working CMY Plates	Chapa CMY de trabalho
+	Working CMY Plates	Chapas CMY de trabalho
 	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh legado (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RGB padrão da Internet (sRGB)
 	Monitor RGB	RGB do monitor
@@ -885,6 +885,12 @@
 	Timeline	Linha do tempo
 	Tool Presets	Predefinições de ferramentas
 	Tools	Ferramentas
+	Contextual Task Bar	Barra de tarefas contextual
+	Hide bar	Ocultar barra
+	Reset bar position	Redefinir posição da barra
+	Pin bar position	Fixar posição da barra
+	Move bar	Mover barra
+	More options	Mais opções
 	About PhotoCraft	Sobre o PhotoCraft
 	PhotoCraft Website	Site do PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft no GitHub
@@ -1828,6 +1834,7 @@
 	Move Tool	Ferramenta Mover
 	Could not use the move tool because the layer is locked.	Não foi possível usar a ferramenta Mover porque a camada está bloqueada.
 	Could not complete the Free Transform command because the layer is locked.	Não foi possível concluir o comando Transformação livre porque a camada está bloqueada.
+	Could not transform because the layer is locked.	Não foi possível transformar porque a camada está bloqueada.
 	Multiply	Multiplicação
 	My Brushes	Meus pincéis
 	Neutrals	Neutros
@@ -2104,7 +2111,6 @@
 	Show only crosshair while painting	Mostrar apenas a mira ao pintar
 	Show slice numbers	Mostrar números das fatias
 	Show tooltips	Mostrar dicas de ferramentas
-	Enable animations	Ativar animações
 	Show highlight on rollover	Mostrar realce ao passar o mouse
 	Show transformation values	Mostrar valores de transformação
 	Slice color	Cor das fatias
@@ -2488,6 +2494,7 @@
 	Path to Illustrator…	Demarcador para o Illustrator…
 	Make Work Path	Criar demarcador de trabalho
 	Make Selection	Fazer seleção
+	Make Shape	Fazer forma
 	Fill Path	Preencher demarcador
 	Stroke Path	Traçar demarcador
 	Clipping Path	Demarcador de corte

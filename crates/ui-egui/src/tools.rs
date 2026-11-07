@@ -14,6 +14,7 @@ pub mod crop_presets;
 pub mod crop_shield;
 pub mod crop_size;
 pub mod crop_straighten;
+pub mod crop_task_bar;
 pub mod crop_ui;
 pub mod direct_select;
 pub mod eraser_ui;
