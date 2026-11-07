@@ -84,3 +84,16 @@ fn plain_brackets_still_step_by_one_and_stop_at_the_limits() {
         assert_eq!(width(app), 256.0, "] stops at 256");
     });
 }
+
+#[test]
+fn curly_bracket_keys_set_the_limits_with_and_without_shift() {
+    with_and_without_border(|app| {
+        for mods in [Modifiers::SHIFT, Modifiers::NONE] {
+            app.ui.tool_options.magnetic_width = 10.0;
+            assert!(press(app, Key::OpenCurlyBracket, mods));
+            assert_eq!(width(app), 1.0, "{{ with {mods:?}");
+            assert!(press(app, Key::CloseCurlyBracket, mods));
+            assert_eq!(width(app), 256.0, "}} with {mods:?}");
+        }
+    });
+}
