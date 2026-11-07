@@ -291,32 +291,39 @@ fn the_curvature_pen_carries_on_the_selected_subpath_of_two_that_end_together() 
     assert_eq!(work.subpaths.iter().map(|s| s.knots.len()).collect::<Vec<_>>(), [2, 3], "the second subpath grew");
 }
 
-/// CodeRabbit on #10744: a smooth endpoint carried on keeps its incoming handle, and its outgoing
-/// one, bent into the new segment, stays in line with it: the knot stays smooth.
+/// Photoshop: an open Curvature Pen arc carried on from its endpoint goes on as a new Curvature
+/// run from that endpoint. The old segments keep their shape, the endpoint keeps its incoming
+/// handle, and its outgoing handle and the new knots are those of a path drawn from the endpoint
+/// on, so the join is a cusp where both arcs meet, not bent smooth.
 #[test]
-fn a_smooth_endpoint_carried_on_stays_smooth() {
-    use photocraft_doc::vector::{Knot, Subpath};
-    use photocraft_geom::Point;
-    let mut app = app(Tool::CurvaturePen);
-    let end = Knot::smooth(Point::new(80.0, 80.0), Point::new(60.0, 60.0), Point::new(100.0, 100.0));
-    set_work_path(&mut app, vec![Subpath { closed: false, knots: vec![Knot::corner(20.0, 20.0), end], op: Default::default() }]);
-    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 1]);
-    click(&mut app, 140.0, 40.0);
-    let knots = app.ui.pen.as_ref().map(|p| p.knots.clone()).expect("the path is carried on");
-    let [anchor, in_ctrl, out_ctrl] = knots[1];
-    assert_eq!(in_ctrl, [60.0, 60.0], "the incoming handle is kept");
-    let (a, b) = ([anchor[0] - in_ctrl[0], anchor[1] - in_ctrl[1]], [out_ctrl[0] - anchor[0], out_ctrl[1] - anchor[1]]);
-    assert!(b[0].hypot(b[1]) > 1.0, "the outgoing handle bends into the new segment: {out_ctrl:?}");
-    assert!((a[0] * b[1] - a[1] * b[0]).abs() < 1e-6 && a[0] * b[0] + a[1] * b[1] > 0.0, "in line: {knots:?}");
-    // CodeRabbit on #10744: committed, the join is stored as a smooth knot.
+fn a_carried_on_endpoint_starts_a_new_curvature_run() {
+    let draw = |points: &[(f64, f64)]| {
+        let mut app = app(Tool::CurvaturePen);
+        for &(x, y) in points {
+            click(&mut app, x, y);
+        }
+        assert!(crate::vector_ui::pen_commit(&mut app, false), "the commit goes through");
+        app
+    };
+    let fresh = work_path(&draw(&[(400.0, 300.0), (550.0, 150.0), (700.0, 300.0)])).subpaths[0].knots.clone();
+    let mut app = draw(&[(100.0, 300.0), (250.0, 150.0), (400.0, 300.0)]);
+    let before = work_path(&app).subpaths[0].knots.clone();
+    click(&mut app, 400.0, 300.0);
+    assert!(app.ui.pen.is_none(), "the click selects the endpoint, it draws nothing");
+    click(&mut app, 550.0, 150.0);
+    click(&mut app, 700.0, 300.0);
     assert!(crate::vector_ui::pen_commit(&mut app, false), "the commit goes through");
     let work = work_path(&app);
     assert_eq!(work.subpaths.len(), 1, "the same subpath, extended");
-    assert_eq!(work.subpaths[0].knots.len(), 3, "carried on by the new anchor");
-    let join = &work.subpaths[0].knots[1];
-    assert!(join.smooth, "{join:?}");
-    let (a, b) = ([join.anchor.x - join.in_ctrl.x, join.anchor.y - join.in_ctrl.y], [join.out_ctrl.x - join.anchor.x, join.out_ctrl.y - join.anchor.y]);
-    assert!(b[0].hypot(b[1]) > 1.0 && (a[0] * b[1] - a[1] * b[0]).abs() < 1e-6 && a[0] * b[0] + a[1] * b[1] > 0.0, "stored in line: {join:?}");
+    let knots = &work.subpaths[0].knots;
+    assert_eq!(knots.len(), 5, "carried on by the new anchors");
+    assert_eq!((knots[0], knots[1]), (before[0], before[1]), "the old segments keep their shape");
+    assert_eq!((knots[2].anchor, knots[2].in_ctrl), (before[2].anchor, before[2].in_ctrl), "the endpoint keeps its incoming handle");
+    assert_eq!(knots[2].out_ctrl, fresh[0].out_ctrl, "the endpoint goes on as a new run's first knot: {knots:?}");
+    assert_eq!((knots[3], knots[4]), (fresh[1], fresh[2]), "the new knots are those of a new run");
+    // Both arcs meet at the endpoint from above: a cusp, as in Photoshop.
+    let k = &knots[2];
+    assert!(k.in_ctrl.y < k.anchor.y && k.out_ctrl.y < k.anchor.y, "{k:?}");
 }
 
 /// CodeRabbit on #10744: a curved path carried on from its first endpoint runs backwards, each
@@ -351,23 +358,6 @@ fn toggling_a_carried_knot_changes_nothing() {
     let before = app.ui.pen.as_ref().map(|p| (p.unlinked.clone(), p.knots.clone()));
     crate::vector_ui::curvature_toggle(&mut app, 80.0, 20.0);
     assert_eq!(app.ui.pen.as_ref().map(|p| (p.unlinked.clone(), p.knots.clone())), before, "the old corner stays as it was, handles and all");
-}
-
-/// CodeRabbit on #10744: the corner endpoint carried on from, toggled smooth, has no incoming
-/// handle to line up with: its outgoing handle goes on the way the straight segment arrives.
-#[test]
-fn a_corner_endpoint_toggled_smooth_goes_on_the_way_its_segment_arrives() {
-    use photocraft_doc::vector::Subpath;
-    let mut app = app(Tool::CurvaturePen);
-    set_work_path(&mut app, vec![Subpath::polyline(&[(20.0, 20.0), (80.0, 20.0), (80.0, 80.0)])]);
-    select_anchor(&mut app, crate::direct_select::PathRef::Work, [0, 2]);
-    click(&mut app, 140.0, 120.0);
-    crate::vector_ui::curvature_toggle(&mut app, 80.0, 80.0);
-    let pen = app.ui.pen.as_ref().expect("the path is carried on");
-    assert!(!pen.unlinked.contains(&2), "the endpoint is smooth now");
-    let [anchor, _, out] = pen.knots[2];
-    // The segment arrives straight down from (80, 20): the handle goes on straight down.
-    assert!((out[0] - anchor[0]).abs() < 1e-6 && out[1] > anchor[1] + 1.0, "{:?}", pen.knots[2]);
 }
 
 /// CodeRabbit on #10744: in Path mode the Pen carries on the work path, so an endpoint selected

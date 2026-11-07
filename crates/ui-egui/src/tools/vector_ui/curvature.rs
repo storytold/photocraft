@@ -2,20 +2,27 @@ use super::pen::{cancel_stale, pen_commit, resume_selected};
 use super::{PenPath, PhotocraftApp};
 
 /// Recompute a Curvature Pen path's handles from its anchors and corner points. The knots of a
-/// path it carries on (`PenPath::fixed`) keep theirs, but for the endpoint's outgoing handle,
-/// which bends into the first new segment (#10726), and, once the path closes, the first knot's
-/// incoming handle, which bends into the closing one. A smooth knot's bent handle stays in line
-/// with the one it keeps, so the knot stays smooth.
+/// path it carries on (`PenPath::fixed`) keep theirs, but for the endpoint's outgoing handle
+/// and, once the path closes, the first knot's incoming handle (#10726). As in Photoshop, an open
+/// path carried on is a new Curvature run from the endpoint: the endpoint's outgoing handle and
+/// the new knots are those of a path drawn from the endpoint on, so the join is not made smooth.
+/// The first knot's incoming handle, bent into the closing segment, stays in line with its
+/// outgoing one, so that knot stays smooth.
 pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
     let anchors: Vec<[f64; 2]> = pen.knots.iter().map(|k| k[0]).collect();
     let corners: Vec<bool> = (0..anchors.len()).map(|i| pen.unlinked.contains(&i)).collect();
     pen.knots = photocraft_vector::edit::curvature_knots(&anchors, &corners, closed);
     let last = pen.fixed.len().saturating_sub(1);
     let extended = pen.knots.len() > pen.fixed.len();
+    if extended && !closed && !pen.fixed.is_empty() {
+        let run = photocraft_vector::edit::curvature_knots(anchors.get(last..).unwrap_or_default(), corners.get(last..).unwrap_or_default(), false);
+        for (k, r) in pen.knots.iter_mut().skip(last).zip(run) {
+            *k = r;
+        }
+    }
     for (i, was) in pen.fixed.iter().enumerate() {
         let Some(k) = pen.knots.get_mut(i) else { break };
         let (keep_in, keep_out) = (!(closed && i == 0), !(extended && i == last));
-        let smooth = !corners.get(i).copied().unwrap_or(false);
         k[0] = was[0];
         if keep_in {
             k[1] = was[1];
@@ -23,16 +30,14 @@ pub(super) fn curvature_refresh(pen: &mut PenPath, closed: bool) {
         if keep_out {
             k[2] = was[2];
         }
-        if smooth && keep_in != keep_out {
-            let (kept, bent) = if keep_in { (1, 2) } else { (2, 1) };
-            // A kept handle on its anchor gives no direction: the kept segment arrives along its
-            // other control point, else from the neighbouring anchor, so the bent handle goes on
-            // that way and the join is still smooth (CodeRabbit on #10744).
-            let across =
-                if keep_in { i.checked_sub(1).and_then(|j| pen.fixed.get(j)).map(|n| [n[2], n[0]]) } else { pen.fixed.get(i + 1).map(|n| [n[1], n[0]]) };
-            let toward = std::iter::once(k[kept]).chain(across.into_iter().flatten());
-            if let Some(h) = toward.filter_map(|from| in_line(k[0], from, k[bent])).next() {
-                k[bent] = h;
+        if !keep_in && keep_out && !corners.get(i).copied().unwrap_or(false) {
+            // An outgoing handle on its anchor gives no direction: the kept segment leaves
+            // towards its next control point, else the next anchor, so the bent handle comes in
+            // from the far side and the knot is still smooth (CodeRabbit on #10744).
+            let across = pen.fixed.get(i + 1).map(|n| [n[1], n[0]]);
+            let toward = std::iter::once(k[2]).chain(across.into_iter().flatten());
+            if let Some(h) = toward.filter_map(|from| in_line(k[0], from, k[1])).next() {
+                k[1] = h;
             }
         }
     }
