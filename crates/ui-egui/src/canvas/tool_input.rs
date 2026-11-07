@@ -360,6 +360,15 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
 }
 
 /// Tool state machine. Shared by mouse input and automation.
+/// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
+/// (#11897). A held `~` keeps today's behaviour.
+fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
+    let on_background = app.session.active().is_some_and(|st| st.active_layer.is_some_and(|id| st.doc.is_background(id)));
+    if tool == Tool::Brush && app.ui.tool_options.brush_clear && !app.held_erase && on_background && paint_target(app) == serde_json::json!("pixels") {
+        app.ui.tool_options.brush_clear = false;
+    }
+}
+
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     if consumes_cancelled_vector_event(app, ev) {
         return;
@@ -524,6 +533,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 _ => {}
             }
             crate::paint_mouse::sync_tool_brush(app);
+            clear_off_on_background(app, tool);
             // Clear mode (`~` held, or chosen in the options bar) erases with the tool's own brush.
             let clear = crate::paint_mouse::clears(app, tool);
             let erase = std::mem::take(&mut app.secondary_erase) || tool == Tool::Eraser || clear;
