@@ -277,7 +277,11 @@ impl Mips {
     /// not also enlarge an imaginary transparent border around its edge texels.
     #[inline]
     pub fn sample_clamped(&self, level: usize, u: f32, v: f32) -> f32 {
-        let (w, h, d) = &self.levels[level];
+        let Some((w, h, d)) = self.levels.get(level) else { return 0.0 };
+        let Some(len) = w.checked_mul(*h) else { return 0.0 };
+        if *w == 0 || *h == 0 || d.len() < len {
+            return 0.0;
+        }
         let fx = u * *w as f32 - 0.5;
         let fy = v * *h as f32 - 0.5;
         let (x0, y0) = (fx.floor(), fy.floor());
@@ -310,6 +314,14 @@ impl PatternImage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_or_missing_mip_levels_sample_as_transparent() {
+        for level in [Mips { levels: vec![] }, Mips { levels: vec![(0, 1, vec![])] }, Mips { levels: vec![(1, 0, vec![])] }] {
+            assert_eq!(level.sample_clamped(0, 0.5, 0.5), 0.0);
+        }
+        assert_eq!(Mips { levels: vec![(1, 1, vec![1.0])] }.sample_clamped(1, 0.5, 0.5), 0.0);
+    }
 
     /// Cloning a tile (and the brush settings holding it, on every pointer event of a stroke)
     /// shares its samples instead of copying them (#4534).
