@@ -10,8 +10,10 @@
 //! the true one; affine
 //! maps (the identity included) are reproduced exactly. Where the warp shrinks the source, each
 //! pixel instead averages a grid of bilinear subsamples over its source footprint (about one per
-//! source pixel), so thin lines don't alias. Where the warp folds over itself the
-//! later (lower-right) cell wins. Work is split per destination tile (parallel on native).
+//! source pixel), so thin lines don't alias. Where the warp folds over itself, [`Fold`] decides
+//! what shows: for Edit › Transform › Warp and smart objects the part dragged furthest is on top and
+//! the layers composite; for other mesh maps (lens corrections, distortions) the later
+//! (lower-right) cell wins. Work is split per destination tile (parallel on native).
 
 use photocraft_color::PixelFormat;
 use photocraft_geom::{Rect, TileCoord};
@@ -24,6 +26,23 @@ use crate::transform::{Interp, bicubic};
 const CELL: f64 = 4.0;
 /// Most cells along one axis (bounds memory and time on huge layers).
 const MAX_CELLS: usize = 512;
+/// How a mesh warp stacks the picture where it folds over itself.
+#[derive(Clone, Copy)]
+pub enum Fold<'a> {
+    /// Cells in row order, the last one drawn wins (lens corrections, distortions).
+    Rows,
+    /// A warp of the picture in place (Edit › Transform › Warp, a smart object's warp): cells in
+    /// [`cell_order`] (a part the fold turns over on top, else the part dragged furthest), and a fold's layers composite, so transparent
+    /// parts show what is under them, as Warp mode's preview draws them. The map is where a
+    /// source point lands without the warp: the identity for a layer, a smart object's placement.
+    Stack(&'a (dyn Fn(f64, f64) -> (f64, f64) + Sync)),
+}
+
+impl Fold<'_> {
+    /// [`Fold::Stack`] about the identity: a warp of a layer where it is.
+    pub const IN_PLACE: Fold<'static> = Fold::Stack(&|x: f64, y: f64| (x, y));
+}
+
 /// Most subsamples per axis when a warp shrinks the source; also the longest source step per
 /// destination pixel the filter follows (bounds the footprint each tile reads).
 const MAX_SS: f64 = 8.0;
@@ -44,7 +63,9 @@ pub fn place_source(
             let (u, v) = w.map(x, y);
             (a * u + c * v + e, b * u + d * v + f)
         };
-        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
+        // A fold's layers are ordered by how far the warp moved them, not the placement.
+        let rest = |x: f64, y: f64| (a * x + c * y + e, b * x + d * y + f);
+        return Ok(mesh(src, src_rect, &map, Fold::Stack(&rest), Interp::Bicubic, &Interrupt::NONE));
     }
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
@@ -66,7 +87,8 @@ pub fn place_source_projective(
             let (u, v) = w.map(x, y);
             h.apply(u, v)
         };
-        return Ok(warp_mesh_surface(src, src_rect, &map, Interp::Bicubic));
+        let rest = |x: f64, y: f64| h.apply(x, y);
+        return Ok(mesh(src, src_rect, &map, Fold::Stack(&rest), Interp::Bicubic, &Interrupt::NONE));
     }
     crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
 }
@@ -75,16 +97,61 @@ pub fn place_source_projective(
 /// coordinates → destination document coordinates). Output has `src`'s format with alpha
 /// added; pixels outside the warped area are transparent.
 pub fn warp_mesh_surface(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp) -> Surface {
-    mesh(src, src_rect, f, interp, &Interrupt::NONE)
+    mesh(src, src_rect, f, Fold::Rows, interp, &Interrupt::NONE)
 }
 
-/// [`warp_mesh_surface`] reporting progress per destination tile; `None` once `ctl` is cancelled.
-pub fn warp_mesh_surface_with(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp, ctl: &Interrupt) -> Option<Surface> {
-    let out = mesh(src, src_rect, f, interp, ctl);
+/// [`warp_mesh_surface`] with folds stacked as `fold` says, reporting progress per destination
+/// tile; `None` once `ctl` is cancelled.
+pub fn warp_mesh_surface_with(
+    src: &Surface,
+    src_rect: Rect,
+    f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync),
+    fold: Fold,
+    interp: Interp,
+    ctl: &Interrupt,
+) -> Option<Surface> {
+    let out = mesh(src, src_rect, f, fold, interp, ctl);
     (!ctl.cancelled()).then_some(out)
 }
 
-fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp, ctl: &Interrupt) -> Surface {
+/// The order Warp draws the cells of a vertex grid in (`row` vertices a row; `pos` where the warp
+/// put each vertex, `rest` where it would be without it). Where a warp folds the picture over
+/// itself, the part turned over lies on top, like a folded-back flap: a corner or edge dragged
+/// across the picture, and also the edge row that folds back when the middle is pulled out past
+/// it, which leaves the pulled part under that row. Within each, the cells moved least come first,
+/// so the part dragged furthest is on top. Each cell is named by its top-left vertex. Shared by
+/// the render and Warp mode's preview, so they stack folds alike.
+pub fn cell_order(pos: &[[f64; 2]], rest: &[[f64; 2]], row: usize) -> Vec<usize> {
+    if row < 2 || pos.len() != rest.len() {
+        return Vec::new();
+    }
+    let rows = pos.len() / row;
+    // A vertex with no finite movement (sent to infinity, as near a Distort's horizon) goes under,
+    // not on top.
+    let moved = |k: usize| match (pos.get(k), rest.get(k)) {
+        (Some(p), Some(r)) => Some((p[0] - r[0]).hypot(p[1] - r[1])).filter(|m| m.is_finite()).unwrap_or(f64::NEG_INFINITY),
+        _ => f64::NEG_INFINITY,
+    };
+    // Twice the signed area of a cell's quad: its sign is the cell's orientation (NaN when a corner
+    // isn't finite, which counts as not turned over).
+    let area = |pts: &[[f64; 2]], a: usize| {
+        let q = [a, a + 1, a + row + 1, a + row].map(|k| pts.get(k).copied().unwrap_or([f64::NAN; 2]));
+        (0..4).map(|i| q[i][0] * q[(i + 1) % 4][1] - q[(i + 1) % 4][0] * q[i][1]).sum::<f64>()
+    };
+    let mut cells: Vec<(bool, f64, usize)> = Vec::with_capacity(rows.saturating_sub(1) * (row - 1));
+    for j in 0..rows.saturating_sub(1) {
+        for i in 0..row - 1 {
+            let a = j * row + i;
+            let turned = area(pos, a) * area(rest, a) < 0.0;
+            cells.push((turned, moved(a) + moved(a + 1) + moved(a + row) + moved(a + row + 1), a));
+        }
+    }
+    cells.sort_by(|x, y| x.0.cmp(&y.0).then(x.1.total_cmp(&y.1)));
+    cells.into_iter().map(|(_, _, a)| a).collect()
+}
+
+/// Folds stack as `fold` says.
+fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), fold: Fold, interp: Interp, ctl: &Interrupt) -> Surface {
     if src_rect.is_empty() {
         let fmt = src.format();
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
@@ -106,15 +173,26 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
         }
     }
     let w1 = nx + 1;
-    let mut tris = Vec::with_capacity(nx * ny * 2);
-    for j in 0..ny {
-        for i in 0..nx {
-            let a = j * w1 + i;
-            tris.push([a, a + 1, a + w1 + 1]);
-            tris.push([a, a + w1 + 1, a + w1]);
+    let order: Vec<usize> = match fold {
+        Fold::Stack(rest) => {
+            let pos: Vec<[f64; 2]> = verts.iter().map(|(d, _)| *d).collect();
+            let at_rest: Vec<[f64; 2]> = verts
+                .iter()
+                .map(|(_, s)| {
+                    let r = rest(s[0], s[1]);
+                    [r.0, r.1]
+                })
+                .collect();
+            cell_order(&pos, &at_rest, w1)
         }
+        Fold::Rows => (0..ny).flat_map(|j| (0..nx).map(move |i| j * w1 + i)).collect(),
+    };
+    let mut tris = Vec::with_capacity(nx * ny * 2);
+    for a in order {
+        tris.push([a, a + 1, a + w1 + 1]);
+        tris.push([a, a + w1 + 1, a + w1]);
     }
-    triangles(src, src_rect, &verts, &tris, interp, ctl)
+    triangles(src, src_rect, &verts, &tris, interp, ctl, matches!(fold, Fold::Stack(_)))
 }
 
 /// Probe lines per axis [`mapped_lengths`] follows through the map.
@@ -159,17 +237,29 @@ fn mapped_lengths(src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) -
 /// interpolation of its source positions. Later triangles in `tris` draw over earlier ones (the
 /// order is the depth order). Output has `src`'s format with alpha added.
 pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp) -> Surface {
-    triangles(src, src_rect, verts, tris, interp, &Interrupt::NONE)
+    triangles(src, src_rect, verts, tris, interp, &Interrupt::NONE, false)
 }
 
 /// [`warp_triangles`], reporting progress per destination tile to `ctl`. A cancelled `ctl` skips
 /// the remaining tiles; the caller discards the result.
 /// Destination tiles one triangle render may keep bookkeeping for (a 1M-tile render is 69 Gpx).
 const MAX_DST_TILES: u64 = 1 << 20;
+/// How close (source px) two triangles' source points under one pixel are when they are the
+/// same layer of the picture meeting on a shared edge, rather than two layers of a fold.
+const SAME_LAYER: f64 = 1e-3;
 /// Source pixels one destination tile may read densely.
 const MAX_FOOTPRINT_PIXELS: u64 = 1 << 25;
 
-fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt) -> Surface {
+/// A premultiplied window of the source that a destination tile samples.
+struct Win {
+    px: Vec<f32>,
+    foot: Rect,
+    fw: usize,
+}
+
+/// `folds`: where triangles drawn later cover a pixel already covered from another part of the
+/// source (a fold of the picture), composite them over it instead of replacing it.
+fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt, folds: bool) -> Surface {
     let mut fmt = src.format();
     let converted;
     let src = if fmt.alpha {
@@ -262,6 +352,10 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         // point-sampled) and the subsamples along each.
         let mut uv = vec![[f64::NAN; 2]; w * h];
         let mut owner = vec![0u32; w * h];
+        // The layers of a fold under a pixel's top one, bottom first: (source position, triangle),
+        // in `under`, at the index `under_at` holds for the pixel (`u32::MAX`: none).
+        let mut under: Vec<Vec<([f64; 2], u32)>> = Vec::new();
+        let mut under_at: Vec<u32> = if folds { vec![u32::MAX; w * h] } else { Vec::new() };
         let mut jac: Vec<([f64; 4], usize, usize)> = Vec::with_capacity(tris.len());
         for (k, tri) in tris.iter().enumerate() {
             let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
@@ -297,72 +391,123 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                         continue;
                     }
                     let o = (y - t.y0) as usize * w + (x - t.x0) as usize;
-                    uv[o] = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]];
+                    let q = [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]];
+                    // Another part of the source: a fold. Triangles of one layer meeting at a pixel
+                    // (on their shared edge) interpolate the same source point, to float noise,
+                    // and replace each other; one drawn again after another layer comes back on
+                    // top of it, as painting would put it. Layers of a tight fold can be well under
+                    // a source pixel apart and still be layers.
+                    let near = |a: [f64; 2]| (a[0] - q[0]).hypot(a[1] - q[1]) <= SAME_LAYER;
+                    if folds && !uv[o][0].is_nan() && !near(uv[o]) {
+                        let i = match under_at.get(o) {
+                            Some(&i) if i != u32::MAX => i as usize,
+                            _ => {
+                                under.push(Vec::new());
+                                if let Some(slot) = under_at.get_mut(o) {
+                                    *slot = (under.len() - 1) as u32;
+                                }
+                                under.len() - 1
+                            }
+                        };
+                        if let Some(layers) = under.get_mut(i) {
+                            layers.retain(|(p, _)| !near(*p));
+                            layers.push((uv[o], owner[o]));
+                        }
+                    }
+                    uv[o] = q;
                     owner[o] = k as u32;
                 }
             }
         }
-        // Source footprint of the covered pixels, including the spread of their subsamples.
-        let (mut fx0, mut fy0, mut fx1, mut fy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for (q, j) in uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(q, &k)| (q, jac[k as usize].0)) {
-            let (ex, ey) = (0.5 * (j[0].abs() + j[2].abs()), 0.5 * (j[1].abs() + j[3].abs()));
-            fx0 = fx0.min(q[0] - ex);
-            fy0 = fy0.min(q[1] - ey);
-            fx1 = fx1.max(q[0] + ex);
-            fy1 = fy1.max(q[1] + ey);
-        }
-        if fx0 > fx1 {
-            return None;
-        }
-        let foot = Rect::new(fx0.floor() as i32 - 3, fy0.floor() as i32 - 3, fx1.ceil() as i32 + 3, fy1.ceil() as i32 + 3).intersect(&src_rect);
+        // Source footprint of the covered pixels, including the spread of their subsamples: the
+        // top layer's and, apart, that of the fold layers under it, which can be far away in the
+        // source (a fold joins distant parts), so one window over both could be huge.
+        let footprint = |qs: &mut dyn Iterator<Item = ([f64; 2], u32)>| -> Rect {
+            let (mut fx0, mut fy0, mut fx1, mut fy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+            for (q, k) in qs {
+                let j = jac[k as usize].0;
+                let (ex, ey) = (0.5 * (j[0].abs() + j[2].abs()), 0.5 * (j[1].abs() + j[3].abs()));
+                fx0 = fx0.min(q[0] - ex);
+                fy0 = fy0.min(q[1] - ey);
+                fx1 = fx1.max(q[0] + ex);
+                fy1 = fy1.max(q[1] + ey);
+            }
+            if fx0 > fx1 {
+                return Rect::EMPTY;
+            }
+            Rect::new(fx0.floor() as i32 - 3, fy0.floor() as i32 - 3, fx1.ceil() as i32 + 3, fy1.ceil() as i32 + 3).intersect(&src_rect)
+        };
         // Sparse components far apart in the source can land in one tile: the dense window
         // between them is not read (the tile stays empty). The pixel-area cap is checked first:
         // `has_tiles_in` walks the source tile grid, so an oversized footprint must return
         // without paying for that scan.
-        if foot.is_empty() || foot.size().area() > MAX_FOOTPRINT_PIXELS || !src.has_tiles_in(foot) {
+        let window = |foot: Rect| -> Option<Win> {
+            if foot.is_empty() || foot.size().area() > MAX_FOOTPRINT_PIXELS || !src.has_tiles_in(foot) {
+                return None;
+            }
+            let mut px = src.read_region(foot);
+            for p in px.chunks_exact_mut(n) {
+                let al = p[a];
+                for v in &mut p[..a] {
+                    *v *= al;
+                }
+            }
+            Some(Win { px, foot, fw: foot.width() as usize })
+        };
+        // A top layer over an empty part of the source has no window: it is transparent there,
+        // and the fold layers under it still show. One too large to read leaves the tile empty,
+        // as without folds: what is under it can't show through where it may be opaque.
+        let top_foot = footprint(&mut uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(q, &k)| (*q, k)));
+        if top_foot.size().area() > MAX_FOOTPRINT_PIXELS {
             return None;
         }
-        let mut px = src.read_region(foot);
-        for p in px.chunks_exact_mut(n) {
-            let al = p[a];
-            for v in &mut p[..a] {
-                *v *= al;
-            }
+        let top = window(top_foot);
+        // Fold layers whose source can't be read in a window of their own, within the one cap
+        // for both, are left out (the top one stays).
+        let below_foot = footprint(&mut under.iter().flatten().copied());
+        let room = MAX_FOOTPRINT_PIXELS.saturating_sub(top.as_ref().map_or(0, |w| w.foot.size().area()));
+        let below = (!under.is_empty() && below_foot.size().area() <= room).then(|| window(below_foot)).flatten();
+        if below.is_none() {
+            under.clear();
         }
-        let fw = foot.width() as usize;
-        let at = |x: i32, y: i32, c: usize| -> f64 {
+        if top.is_none() && below.is_none() {
+            return None;
+        }
+        let at = |win: &Win, x: i32, y: i32, c: usize| -> f64 {
+            let foot = win.foot;
             if x < foot.x0 || y < foot.y0 || x >= foot.x1 || y >= foot.y1 {
                 0.0
             } else {
-                f64::from(px[((y - foot.y0) as usize * fw + (x - foot.x0) as usize) * n + c])
+                f64::from(win.px[((y - foot.y0) as usize * win.fw + (x - foot.x0) as usize) * n + c])
             }
         };
         // Offset of pixel (x, y) when the `taps` x `taps` block from it lies inside `foot`, so
         // the samplers can index `px` directly instead of bounds-checking every tap.
-        let base = |x: i32, y: i32, taps: i32| -> Option<usize> {
-            (x >= foot.x0 && y >= foot.y0 && x + taps <= foot.x1 && y + taps <= foot.y1).then(|| ((y - foot.y0) as usize * fw + (x - foot.x0) as usize) * n)
+        let base = |win: &Win, x: i32, y: i32, taps: i32| -> Option<usize> {
+            let foot = win.foot;
+            (x >= foot.x0 && y >= foot.y0 && x + taps <= foot.x1 && y + taps <= foot.y1).then(|| ((y - foot.y0) as usize * win.fw + (x - foot.x0) as usize) * n)
         };
         let mut outp = vec![0.0f32; w * h * n];
         let mut any = false;
         let mut acc = [0.0f64; 8];
         let mut one = [0.0f64; 8];
         // One premultiplied sample at source position (u, v) (pixel centres at integers).
-        let point = |interp: Interp, u: f64, v: f64, acc: &mut [f64; 8]| {
+        let point = |win: &Win, interp: Interp, u: f64, v: f64, acc: &mut [f64; 8]| {
             acc[..n].fill(0.0);
             match interp {
                 Interp::Nearest => {
                     let (ix, iy) = ((u + 0.5).floor() as i32, (v + 0.5).floor() as i32);
                     for (c, s) in acc.iter_mut().enumerate().take(n) {
-                        *s = at(ix, iy, c);
+                        *s = at(win, ix, iy, c);
                     }
                 }
                 Interp::Bilinear => {
                     let (ix, iy) = (u.floor() as i32, v.floor() as i32);
                     let (fx, fy) = (u - f64::from(ix), v - f64::from(iy));
-                    if let Some(o) = base(ix, iy, 2) {
+                    if let Some(o) = base(win, ix, iy, 2) {
                         for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
                             for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
-                                let p = &px[o + (dy * fw + dx) * n..][..n];
+                                let p = &win.px[o + (dy * win.fw + dx) * n..][..n];
                                 for (s, v) in acc.iter_mut().zip(p) {
                                     *s += f64::from(*v) * wx * wy;
                                 }
@@ -373,7 +518,7 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                     for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
                         for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
                             for (c, s) in acc.iter_mut().enumerate().take(n) {
-                                *s += at(ix + dx, iy + dy, c) * wx * wy;
+                                *s += at(win, ix + dx, iy + dy, c) * wx * wy;
                             }
                         }
                     }
@@ -384,14 +529,14 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                     let (u, v) = (snap(u), snap(v));
                     let (ix, iy) = (u.floor() as i32, v.floor() as i32);
                     let (wx, wy) = (bicubic(u - f64::from(ix)), bicubic(v - f64::from(iy)));
-                    if let Some(o) = base(ix - 1, iy - 1, 4) {
+                    if let Some(o) = base(win, ix - 1, iy - 1, 4) {
                         for (j, wyj) in wy.iter().enumerate() {
                             for (i, wxi) in wx.iter().enumerate() {
                                 let k = wxi * wyj;
                                 if k == 0.0 {
                                     continue;
                                 }
-                                let p = &px[o + (j * fw + i) * n..][..n];
+                                let p = &win.px[o + (j * win.fw + i) * n..][..n];
                                 for (s, v) in acc.iter_mut().zip(p) {
                                     *s += f64::from(*v) * k;
                                 }
@@ -406,35 +551,63 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                                 continue;
                             }
                             for (c, s) in acc.iter_mut().enumerate().take(n) {
-                                *s += at(ix - 1 + i as i32, iy - 1 + j as i32, c) * k;
+                                *s += at(win, ix - 1 + i as i32, iy - 1 + j as i32, c) * k;
                             }
                         }
                     }
                 }
             }
         };
+        // A premultiplied sample of triangle `k`'s source at (u, v): one point, or the average of
+        // its subsamples where the warp shrinks the source.
+        let sample = |win: &Win, q: [f64; 2], k: u32, acc: &mut [f64; 8], one: &mut [f64; 8]| {
+            let (j, nx, ny) = jac[k as usize];
+            if nx * ny == 1 {
+                point(win, interp, q[0] - 0.5, q[1] - 0.5, acc);
+                return;
+            }
+            acc[..n].fill(0.0);
+            for sy in 0..ny {
+                let t = (sy as f64 + 0.5) / ny as f64 - 0.5;
+                for sx in 0..nx {
+                    let s = (sx as f64 + 0.5) / nx as f64 - 0.5;
+                    point(win, Interp::Bilinear, q[0] + s * j[0] + t * j[2] - 0.5, q[1] + s * j[1] + t * j[3] - 0.5, one);
+                    for (c, v) in acc.iter_mut().zip(one.iter()).take(n) {
+                        *c += v;
+                    }
+                }
+            }
+            let k = 1.0 / (nx * ny) as f64;
+            for c in acc.iter_mut().take(n) {
+                *c *= k;
+            }
+        };
+        let mut layer = [0.0f64; 8];
         for (o, (q, &k)) in uv.iter().zip(&owner).enumerate() {
             if q[0].is_nan() {
                 continue;
             }
-            let (j, nx, ny) = jac[k as usize];
-            if nx * ny == 1 {
-                point(interp, q[0] - 0.5, q[1] - 0.5, &mut acc);
-            } else {
-                acc[..n].fill(0.0);
-                for sy in 0..ny {
-                    let t = (sy as f64 + 0.5) / ny as f64 - 0.5;
-                    for sx in 0..nx {
-                        let s = (sx as f64 + 0.5) / nx as f64 - 0.5;
-                        point(Interp::Bilinear, q[0] + s * j[0] + t * j[2] - 0.5, q[1] + s * j[1] + t * j[3] - 0.5, &mut one);
-                        for (c, v) in acc.iter_mut().zip(&one).take(n) {
-                            *c += v;
-                        }
+            match top.as_ref() {
+                Some(tw) => sample(tw, *q, k, &mut acc, &mut one),
+                None => acc[..n].fill(0.0),
+            }
+            // A fold: its layers under this one, bottom first, composite under the top (unless
+            // the top covers them).
+            let layers = under_at.get(o).filter(|&&i| i != u32::MAX).and_then(|&i| under.get(i as usize));
+            if let (Some(bw), Some(layers)) = (below.as_ref(), layers)
+                && acc[a] < 1.0
+            {
+                let mut below = [0.0f64; 8];
+                for e in layers {
+                    sample(bw, e.0, e.1, &mut layer, &mut one);
+                    let keep = 1.0 - layer[a].clamp(0.0, 1.0);
+                    for c in 0..n {
+                        below[c] = layer[c] + below[c] * keep;
                     }
                 }
-                let k = 1.0 / (nx * ny) as f64;
-                for c in acc.iter_mut().take(n) {
-                    *c *= k;
+                let keep = 1.0 - acc[a].clamp(0.0, 1.0);
+                for c in 0..n {
+                    acc[c] += below[c] * keep;
                 }
             }
             let al = acc[a].clamp(0.0, 1.0);
@@ -482,6 +655,12 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
 /// (layer masks, selections): the content is warped with alpha and flattened back onto the
 /// default.
 pub fn warp_mesh_gray(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp) -> Surface {
+    warp_mesh_gray_with(s, f, Fold::Rows, interp)
+}
+
+/// [`warp_mesh_gray`] with folds stacked as `fold` says: a layer's mask and its selection follow
+/// the layer's pixels, the part on top of a fold included.
+pub fn warp_mesh_gray_with(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), fold: Fold, interp: Interp) -> Surface {
     let default = s.default_pixel().first().copied().unwrap_or(0.0);
     let fmt = s.format();
     let src = s.content_bounds();
@@ -493,7 +672,7 @@ pub fn warp_mesh_gray(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), 
     let mut tmp = Surface::new(with_alpha);
     let v = s.read_region(src);
     tmp.write_region(src, &v.iter().flat_map(|g| [*g, 1.0]).collect::<Vec<f32>>());
-    let w = warp_mesh_surface(&tmp, src, f, interp);
+    let w = mesh(&tmp, src, f, fold, interp, &Interrupt::NONE);
     // Clear the old region and write the warped one separately, as `warp_gray` does: one dense
     // `src ∪ warped` buffer grows with the square of how far a mesh moves the content (#995).
     // `Surface` is tile-sparse, so a distant region costs only its own tiles.
@@ -511,6 +690,125 @@ pub fn warp_mesh_gray(s: &Surface, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Edit › Transform › Warp folding the picture over itself (#8927): the layers stack as the
+    /// preview draws them, the part dragged furthest on top, and composite, so a transparent part on top
+    /// shows the content folded under it, also where the top part is a stretch of the source with
+    /// no pixels at all (no tiles). Layers aren't composited twice, and other mesh maps keep row
+    /// order.
+    #[test]
+    fn a_fold_shows_what_is_under_its_transparent_parts() {
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+        let ts = photocraft_geom::TILE_SIZE;
+        for width in [100, 4 * ts] {
+            let half = width / 2;
+            // The red left half stays; the right half, transparent (no pixels), folds back over it.
+            let mut src = Surface::new(fmt);
+            src.fill_rect(Rect::new(0, 0, half, 10), &[1.0, 0.0, 0.0, 1.0]);
+            let w = f64::from(width);
+            let fold = move |x: f64, y: f64| (if x <= w / 2.0 { x } else { w - x }, y);
+            let out = warp_mesh_surface_with(&src, Rect::new(0, 0, width, 10), &fold, Fold::IN_PLACE, Interp::Bilinear, &Interrupt::NONE).unwrap();
+            let px = out.read_region(Rect::new(0, 5, half, 6));
+            let alpha: Vec<f32> = px.as_chunks::<4>().0.iter().map(|p| p[3]).collect();
+            let lit = alpha.iter().filter(|a| **a > 0.99).count();
+            assert!(lit as i32 >= half - 4, "width {width}: the red under the transparent top shows ({lit} of {half} px)");
+            // The generic mesh warp keeps row order: the last drawn (the right half, empty) wins.
+            let plain = warp_mesh_surface(&src, Rect::new(0, 0, width, 10), &fold, Interp::Bilinear);
+            assert!(plain.read_region(Rect::new(half / 2, 5, half / 2 + 1, 6))[3] < 0.01);
+        }
+        // Two half-transparent layers composite: 0.75.
+        let mut half = Surface::new(fmt);
+        half.fill_rect(Rect::new(0, 0, 100, 10), &[0.0, 0.0, 1.0, 0.5]);
+        let fold = |x: f64, y: f64| (if x <= 50.0 { x } else { 100.0 - x }, y);
+        let out = warp_mesh_surface_with(&half, Rect::new(0, 0, 100, 10), &fold, Fold::IN_PLACE, Interp::Bilinear, &Interrupt::NONE).unwrap();
+        let a = out.read_region(Rect::new(20, 5, 21, 6))[3];
+        assert!((a - 0.75).abs() < 0.02, "two half-transparent layers: alpha {a}");
+        // No fold: every pixel of a half-transparent picture stays at 0.5 (no layer counted twice
+        // along the cells' edges).
+        let mut big = Surface::new(fmt);
+        big.fill_rect(Rect::new(0, 0, 200, 200), &[0.0, 0.0, 1.0, 0.5]);
+        let bend = |x: f64, y: f64| (x + 6.0 * (y / 30.0).sin(), y + 6.0 * (x / 40.0).cos());
+        let out = warp_mesh_surface_with(&big, Rect::new(0, 0, 200, 200), &bend, Fold::IN_PLACE, Interp::Bilinear, &Interrupt::NONE).unwrap();
+        let px = out.read_region(Rect::new(20, 20, 180, 180));
+        let worst = px.as_chunks::<4>().0.iter().map(|p| (p[3] - 0.5).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 0.02, "a warp without a fold keeps the alpha: off by {worst}");
+        // A tight fold, magnified: the layers are under a source pixel apart and still composite.
+        let mut thin = Surface::new(fmt);
+        thin.fill_rect(Rect::new(0, 0, 20, 2), &[0.0, 0.0, 1.0, 0.5]);
+        let tight = |x: f64, y: f64| (50.0 * if x <= 10.0 { x } else { 20.0 - x }, y);
+        let out = warp_mesh_surface_with(&thin, Rect::new(0, 0, 20, 2), &tight, Fold::IN_PLACE, Interp::Bilinear, &Interrupt::NONE).unwrap();
+        // 20 px from the crease: 0.4 source px into each layer, 0.8 apart.
+        let a = out.read_region(Rect::new(480, 1, 481, 2))[3];
+        assert!((a - 0.75).abs() < 0.02, "layers 0.8 source px apart: alpha {a}");
+    }
+
+    /// A mask or selection warped with the layer follows its pixels: where the warp folds, the
+    /// part on top is the part the layer shows on top.
+    #[test]
+    fn a_fold_stacks_a_mask_as_it_stacks_the_layer() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false);
+        let mut m = Surface::with_default(fmt, &[0.0]);
+        m.fill_rect(Rect::new(0, 0, 100, 10), &[0.25]);
+        m.fill_rect(Rect::new(50, 0, 100, 10), &[1.0]);
+        // The left half folds over the right.
+        let fold = |x: f64, y: f64| (if x >= 50.0 { x } else { 100.0 - x }, y);
+        let top = warp_mesh_gray_with(&m, &fold, Fold::IN_PLACE, Interp::Bilinear).read_region(Rect::new(80, 5, 81, 6))[0];
+        assert!((top - 0.25).abs() < 1e-3, "the left part, dragged over, is on top: {top}");
+        let rows = warp_mesh_gray(&m, &fold, Interp::Bilinear).read_region(Rect::new(80, 5, 81, 6))[0];
+        assert!((rows - 1.0).abs() < 1e-3, "other mesh maps: the last cell wins: {rows}");
+    }
+
+    /// A vertex with no finite movement (past a Distort's horizon) goes under, not on top.
+    #[test]
+    fn cells_moved_without_bound_go_first() {
+        // Two cells in a row: the second's right vertices moved to infinity.
+        let rest = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0]];
+        let mut pos = rest.map(|[x, y]| [x + 1.0, y]);
+        pos[2] = [f64::INFINITY, 0.0];
+        pos[5] = [f64::NAN, 1.0];
+        assert_eq!(cell_order(&pos, &rest, 3), vec![1, 0]);
+    }
+
+    /// A cell the warp turns over (mirrored, as a flap folded back) goes on top, even when it moved
+    /// less than the cells around it; within each kind, the cell moved least goes first.
+    #[test]
+    fn a_turned_over_cell_goes_on_top() {
+        let rest = [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [0.0, 1.0], [1.0, 1.0], [2.0, 1.0], [3.0, 1.0]];
+        // Cell 0 moved far and cell 1 a little, both facing as before; cell 2 is mirrored in x and
+        // moved less than cell 0.
+        let pos = [[-9.0, 0.0], [1.0, 0.0], [2.2, 0.0], [1.6, 0.0], [-9.0, 1.0], [1.0, 1.0], [2.2, 1.0], [1.6, 1.0]];
+        assert_eq!(cell_order(&pos, &rest, 4), vec![1, 0, 2]);
+        // A mirrored placement turns nothing over: only a change of facing counts.
+        let mirrored = rest.map(|[x, y]| [-x, y]);
+        assert_eq!(cell_order(&mirrored, &mirrored, 4), vec![0, 1, 2]);
+    }
+
+    /// The middle of the picture pulled out past its right edge: the edge strip folds back over it
+    /// and lies on top, so the pulled middle is under that strip (by distance moved alone, the middle
+    /// would cover it).
+    #[test]
+    fn the_middle_pulled_past_an_edge_goes_under_the_folded_edge() {
+        let fmt = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false);
+        let mut m = Surface::with_default(fmt, &[0.0]);
+        m.fill_rect(Rect::new(0, 0, 75, 10), &[0.25]);
+        m.fill_rect(Rect::new(75, 0, 100, 10), &[1.0]);
+        // 0..75 stretches to 0..90; the edge strip 75..100 folds back onto 90..80; beyond, unchanged.
+        let pull = |x: f64, y: f64| {
+            (
+                if x <= 75.0 {
+                    x * 1.2
+                } else if x <= 100.0 {
+                    90.0 - (x - 75.0) * 0.4
+                } else {
+                    x - 20.0
+                },
+                y,
+            )
+        };
+        let at = warp_mesh_gray_with(&m, &pull, Fold::IN_PLACE, Interp::Bilinear).read_region(Rect::new(85, 5, 86, 6))[0];
+        assert!((at - 1.0).abs() < 1e-3, "the folded-back edge strip is on top: {at}");
+    }
+
     use photocraft_color::{ColorMode, SampleType};
     use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
 
@@ -572,13 +870,13 @@ mod tests {
             *m = m.max(p);
         };
         let never = || false;
-        let out = warp_mesh_surface_with(&s, r, &map, Interp::Bicubic, &Interrupt::new(&never, &progress)).expect("not cancelled");
+        let out = warp_mesh_surface_with(&s, r, &map, Fold::Rows, Interp::Bicubic, &Interrupt::new(&never, &progress)).expect("not cancelled");
         let want = warp_mesh_surface(&s, r, &map, Interp::Bicubic);
         assert_eq!(out.content_bounds(), want.content_bounds());
         assert_eq!(out.read_region(want.content_bounds()), want.read_region(want.content_bounds()));
         assert!(*reported.lock().unwrap() > 0.9);
         let always = || true;
-        assert!(warp_mesh_surface_with(&s, r, &map, Interp::Bicubic, &Interrupt::cancel_only(&always)).is_none());
+        assert!(warp_mesh_surface_with(&s, r, &map, Fold::Rows, Interp::Bicubic, &Interrupt::cancel_only(&always)).is_none());
     }
 
     #[test]
