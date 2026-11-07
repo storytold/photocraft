@@ -134,7 +134,8 @@ fn convert(s: &mut Session) -> u64 {
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap()["layer"].as_u64().unwrap()
 }
 
-/// The two budgets start at the caches' built-in ones and take 0 to 65536 MB.
+/// The two budgets start at the caches' built-in ones and take 0 up to the build's cap (65536 MB,
+/// 1536 MB on a 32-bit address space).
 #[test]
 fn performance_prefs_hold_the_smart_object_cache_budgets() {
     let defaults = ((SOURCE_CACHE_BYTES >> 20) as u32, (STAGE_CACHE_BYTES >> 20) as u32);
@@ -145,11 +146,13 @@ fn performance_prefs_hold_the_smart_object_cache_budgets() {
     // running alongside use.
     let mut p = crate::prefs::Preferences::default();
     for path in ["performance.smartSourceCacheMb", "performance.smartStageCacheMb"] {
-        for ok in [0, 65536] {
+        let max = if cfg!(target_pointer_width = "32") { 1536 } else { 65536 };
+        assert_eq!(crate::prefs::range(path), Some((0.0, f64::from(max))), "{path}");
+        for ok in [0, max] {
             p.set(path, json!(ok)).unwrap_or_else(|e| panic!("{path} {ok}: {e}"));
             assert_eq!(p.get(path), Some(json!(ok)), "{path}");
         }
-        for bad in [json!(-1), json!(65537)] {
+        for bad in [json!(-1), json!(max + 1)] {
             assert!(p.set(path, bad.clone()).is_err(), "{path} {bad}");
         }
     }
