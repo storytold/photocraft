@@ -82,7 +82,43 @@ pub(crate) fn picker_id() -> egui::Id {
 /// All opening paths protect the same frame, including the control channel and options bar.
 pub(crate) fn open(ui: &mut crate::state::UiState, ctx: &egui::Context, at: [f32; 2]) {
     ui.brush_picker = Some(at);
+    // A new opening takes the brush as it is then, not an earlier opening's.
+    ctx.data_mut(|d| d.remove_temp::<Opened>(opened_id()));
     crate::canvas_popup::mark_open(ctx, picker_id());
+}
+
+pub(crate) fn opened_id() -> egui::Id {
+    picker_id().with("opened-with")
+}
+
+/// What Escape in the picker goes back to (#11816): the Size and Hardness it opened with (or a
+/// picked preset brought), and the values its own fields last typed. Escape reverts a value only
+/// while it is still the typed one, so a change from elsewhere (`]`, the options bar) stays.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct Opened {
+    opened: [f32; 2],
+    typed: [f32; 2],
+}
+
+impl Opened {
+    pub(crate) fn new(b: &photocraft_engine::BrushSettings) -> Self {
+        Self { opened: [b.size, b.hardness], typed: [b.size, b.hardness] }
+    }
+
+    pub(crate) fn typed(&mut self, b: &photocraft_engine::BrushSettings) {
+        self.typed = [b.size, b.hardness];
+    }
+
+    pub(crate) fn revert(&self, now: &photocraft_engine::BrushSettings) -> photocraft_engine::BrushSettings {
+        let mut b = now.clone();
+        if b.size == self.typed[0] {
+            b.size = self.opened[0];
+        }
+        if b.hardness == self.typed[1] {
+            b.hardness = self.opened[1];
+        }
+        b
+    }
 }
 
 /// The options-bar brush chip that shows and hides the picker. A press on it isn't an outside

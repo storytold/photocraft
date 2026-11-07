@@ -101,7 +101,8 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
 }
 
 /// Color Lookup from params: `"lut"` (a built-in look id or `"none"`), `"file"` (a .cube / .3dl /
-/// .look path, native only) or `"data"` (the file's text, with `"fileName"` naming its format),
+/// .look path, native only) or `"data"` (file text, or base64 with `"dataEncoding":"base64"`).
+/// `"lutFormat":"cube|3dl|look"` can supply the format when the file name doesn't identify it.
 /// `"interpolation":"trilinear|tetrahedral"`, `"dither":bool`. The table is embedded in the
 /// layer, as Photoshop does. Unspecified fields keep `base`'s values; a key of the wrong type is an
 /// error.
@@ -112,6 +113,17 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
             (name.clone(), lut.clone(), *size, *tetrahedral, *dither, source.clone())
         }
         _ => (String::new(), None, 0, false, false, None),
+    };
+    let encoding = opt_str(CMD, p, "dataEncoding")?.unwrap_or("text");
+    if !matches!(encoding, "text" | "base64") {
+        return Err(bad(CMD, "`dataEncoding` must be \"text\" or \"base64\""));
+    }
+    let format = match opt_str(CMD, p, "lutFormat")? {
+        None => None,
+        Some("cube") => Some(photocraft_cms::lutfile::Format::Cube),
+        Some("3dl") => Some(photocraft_cms::lutfile::Format::ThreeDl),
+        Some("look") => Some(photocraft_cms::lutfile::Format::Look),
+        Some(_) => return Err(bad(CMD, "`lutFormat` must be \"cube\", \"3dl\" or \"look\"")),
     };
     // The parsed table, its label and (for a file) the file as loaded, which a PSD save embeds.
     let mut loaded: Option<(photocraft_cms::lutfile::LutFile, String, Option<LutSource>)> = None;
@@ -130,13 +142,20 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
     let file_name = opt_str(CMD, p, "fileName")?;
     if let Some(text) = opt_str(CMD, p, "data")? {
         let file_name = file_name.unwrap_or("lut.cube");
-        let f = photocraft_cms::lutfile::parse(file_name, text.as_bytes()).map_err(|e| bad(CMD, e.0))?;
-        loaded = Some((f, base_name(file_name), Some(lut_source(file_name, text.as_bytes().to_vec()))));
+        let bytes = if encoding == "base64" {
+            photocraft_paint::tile::b64_decode(text).ok_or_else(|| bad(CMD, "`data` is not valid base64"))?
+        } else {
+            text.as_bytes().to_vec()
+        };
+        let format = format.unwrap_or_else(|| photocraft_cms::lutfile::Format::detect(file_name, &bytes));
+        let f = photocraft_cms::lutfile::parse_as(format, &bytes).map_err(|e| bad(CMD, e.0))?;
+        loaded = Some((f, base_name(file_name), Some(lut_source(format, bytes))));
     }
     if let Some(path) = opt_str(CMD, p, "file")?.filter(|s| !s.is_empty()) {
         let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
-        let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
-        loaded = Some((f, base_name(path), Some(lut_source(path, bytes))));
+        let format = format.unwrap_or_else(|| photocraft_cms::lutfile::Format::detect(path, &bytes));
+        let f = photocraft_cms::lutfile::parse_as(format, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
+        loaded = Some((f, base_name(path), Some(lut_source(format, bytes))));
     }
     if let Some((f, label, src)) = loaded {
         if !f.domain_is_default() {
@@ -169,8 +188,8 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
 }
 
 /// A loaded LUT file, tagged with the format [`photocraft_cms::lutfile::parse`] read it as.
-fn lut_source(file_name: &str, bytes: Vec<u8>) -> LutSource {
-    let format = match photocraft_cms::lutfile::Format::detect(file_name, &bytes) {
+fn lut_source(format: photocraft_cms::lutfile::Format, bytes: Vec<u8>) -> LutSource {
+    let format = match format {
         photocraft_cms::lutfile::Format::Cube => LutFormat::Cube,
         photocraft_cms::lutfile::Format::ThreeDl => LutFormat::ThreeDl,
         photocraft_cms::lutfile::Format::Look => LutFormat::Look,
@@ -415,6 +434,33 @@ fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range
     // (a percentage of the canvas's longer side) of where it was picked.
     let points = sample_points(p).map_err(|m| bad(CMD, m))?;
+    // Several samples (Add to Sample / Subtract from Sample, #6280): the colours match as
+    // Select › Color Range's do for the same clicks, through its own matcher.
+    // A malformed `subtractPoints` is refused here, as malformed `points` are, rather than read as
+    // no subtraction by the single-colour path.
+    let subtracted = match p.get("subtractPoints") {
+        None => false,
+        Some(v) => !v.as_array().ok_or_else(|| bad(CMD, "`subtractPoints` must be [[x, y], …]"))?.is_empty(),
+    };
+    if subtracted || points.len() > 1 {
+        let mut q = json!({"points": p.get("points").cloned().unwrap_or(Value::Array(Vec::new())), "fuzziness": fuzz});
+        // With no Add samples, the subtraction starts from the dialog's From colour, not the
+        // foreground; with them, the samples alone span the range, as in Color Range.
+        // Forwarded as resolved (a `null` or missing colour is the foreground), as RGB 0..1.
+        if points.is_empty() {
+            q["color"] = json!([c[0], c[1], c[2]]);
+        }
+        for key in ["subtractPoints", "order", "localized", "range"] {
+            if let Some(v) = p.get(key) {
+                q[key] = v.clone();
+            }
+        }
+        let samples = crate::selection_cmds::ColorRangeSamples::new(s, &q).map_err(|e| bad(CMD, e.to_string()))?;
+        return rgba_edit(s, "Replace Color", p, |px, r| {
+            let mask = samples.coverage(px, r.width() as usize, 1.0, [r.x0 as f32, r.y0 as f32]);
+            tone::replace_color_masked(px, &mask, h, sat, l);
+        });
+    }
     let localized = if p.get("localized").and_then(Value::as_bool).unwrap_or(false) {
         if points.is_empty() {
             return Err(bad(CMD, "localized clusters need eyedropper `points` (where the colour was picked)"));
@@ -568,7 +614,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.adjustments.replaceColor",
             "Replace Color…",
             ["Image", "Adjustments"],
-            r##"{"localized":bool=false,"color":color,"fuzziness":0..200=40,"range":0..100=100,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"points":[[x,y],…]?,"labMinimum":[L,a,b]?,"labMaximum":[L,a,b]?} (Lab bounds: a finite ordered D50 box, mutually exclusive with color/points/localized/range; composite pixel-layer target only. Otherwise color defaults to the foreground; localized points use range % of the longer side.)"##,
+            r##"{"localized":bool=false,"color":color,"fuzziness":0..200=40,"range":0..100=100,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"points":[[x,y],…]?,"subtractPoints":[[x,y],…]?,"order":["+"|"-",…]?,"labMinimum":[L,a,b]?,"labMaximum":[L,a,b]?} (Lab bounds: a finite ordered D50 box, mutually exclusive with color/points/subtractPoints/order/localized/range; composite pixel-layer target only. Otherwise color ("#rrggbb") defaults to the foreground; localized points use range % of the longer side; several "points" (Add to Sample) or any "subtractPoints" (Subtract from Sample) match as select.colorRange does for the same samples, "order" the click order.)"##,
             has_pixels,
             replace_color
         ),
