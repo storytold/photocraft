@@ -1031,7 +1031,9 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         var pm = vec4(a.rgb * a.a, a.a) + vec4(b.rgb * b.a, b.a) - vec4(c.rgb * c.a, c.a);
         let al = clamp(pm.a, 0.0, 1.0);
         if (al <= 0.0) { return vec4(0.0); }
-        return vec4(clamp(pm.rgb / al, vec3(0.0), vec3(1.0)), al);
+        let rgb = pm.rgb / al;
+        if ((op.flags & F_HDR) != 0u) { return vec4(rgb, al); }
+        return vec4(clamp(rgb, vec3(0.0), vec3(1.0)), al);
     }
     if ((op.flags & F_BLEND_IF) != 0u) {
         // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks, or an
