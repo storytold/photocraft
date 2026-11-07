@@ -1337,11 +1337,6 @@ fn parse_pointer_event(i: usize, e: &Value) -> std::result::Result<PointerSample
 
 /// Whether a modal tool, picker or context menu took the event instead of the canvas.
 fn pointer_event_intercepted(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
-    // A primary release ends a held locator press wherever it lands (another dialog on top, Space
-    // held, the dialog closed), so a later hover never drags the preview; the event goes on.
-    if matches!(s.ev, ToolEvent::Up { .. }) && !g.secondary && !g.middle {
-        crate::filter_preview_ui::clear_pointer_state(app);
-    }
     let took = pointer_eyedropper_took(app, ctx, g, s) || color_range_took(app, g, s);
     if took && matches!(s.ev, ToolEvent::Up { .. }) && !g.secondary && !g.middle {
         release_taken_drag(app, g);
@@ -1361,7 +1356,7 @@ fn release_taken_drag(app: &mut PhotocraftApp, g: &PointerGesture) {
 }
 
 /// A filter dialog with a preview window on top: the image is its locator, as for the mouse
-/// (#9648). A press or drag with the primary button centres the window there; every other event
+/// (#9648). A press with the primary button centres the window there; every other event
 /// is consumed too, so nothing reaches the tool under the dialog, except the moves and release of
 /// a tool gesture begun before the dialog opened, which finish it along the path they draw. A Crop
 /// frame or Straighten drag is one too, though the Crop tool keeps it apart from `app.drag`. While
@@ -1371,13 +1366,13 @@ fn preview_locator_took(app: &mut PhotocraftApp, g: &PointerGesture, s: &Pointer
     if crate::filter_preview_ui::locator(app).is_none() {
         return false;
     }
-    let (down, up) = (matches!(s.ev, ToolEvent::Down { .. }), matches!(s.ev, ToolEvent::Up { .. }));
+    let down = matches!(s.ev, ToolEvent::Down { .. });
     let tool_gesture = app.drag.is_some() || app.crop.drag.is_some() || app.crop.straighten.line.is_some();
     if !g.secondary && !g.middle && tool_gesture {
         return down;
     }
-    if !g.secondary && !g.middle && !g.space {
-        crate::filter_preview_ui::pointer_event(app, down, up, s.x, s.y);
+    if down && !g.secondary && !g.middle && !g.space {
+        crate::filter_preview_ui::center_at(app, s.x, s.y);
     }
     true
 }

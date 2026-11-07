@@ -718,7 +718,8 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     // Field Blur's pins are placed and dragged on the image (`blur_pins`).
     let pinning = input.primary && app.ui.dialogs.last().is_some_and(|d| crate::blur_pins::owns(&d.fields));
     // A filter dialog with a preview window (Smart Sharpen, Unsharp Mask, Reduce Noise…): the image
-    // is its locator, and a click or drag centres the window there (#9648), whatever the tool.
+    // is its locator, and a click centres the window there (#9648), whatever the tool. Only the
+    // press counts: as in the reference application, dragging on afterwards leaves the window be.
     let locating = input.primary && crate::filter_preview_ui::locator(app).is_some();
     // Layer Style on a Drop or Inner Shadow page: a drag on the image moves the shadow (#5701).
     let shadow_drag =
@@ -833,7 +834,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect)
     {
         input.ctx.set_cursor_icon(preview_locator_cursor(input.ctx, p));
-        if let Some(q) = crate::dialogs::free_press(input.ctx, input.rect) {
+        if let Some(q) = crate::dialogs::free_press(input.ctx, input.rect).filter(|_| input.ctx.input(|i| i.pointer.primary_pressed())) {
             let d = input.xf.to_doc(q);
             crate::filter_preview_ui::center_at(app, d[0], d[1]);
         }

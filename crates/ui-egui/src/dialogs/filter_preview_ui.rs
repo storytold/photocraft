@@ -7,8 +7,8 @@
 //! image. The proxy is drawn scaled by its reduction factor, so 100% is one *document* pixel per
 //! point whatever the proxy factor. The Preview checkbox keeps toggling the on-canvas live result
 //! (`canvas::ensure_filter_preview`), unchanged. While such a dialog is on top, the image under it
-//! is the preview's locator: the pointer is a small square there, and a click or drag centres the
-//! window on that document point ([`center_at`], #9648).
+//! is the preview's locator: the pointer is a small square there, and a click centres the window
+//! on that document point ([`center_at`], #9648).
 
 use egui::{Color32, Rect, Sense, Stroke, Vec2, pos2, vec2};
 use photocraft_doc::Document;
@@ -28,9 +28,6 @@ const PREVIEW_H: f32 = 150.0;
 const ZOOM_FIELD: &str = "__pvZoom";
 const CENTER_X_FIELD: &str = "__pvCx";
 const CENTER_Y_FIELD: &str = "__pvCy";
-/// Whether a `ui.pointer` press on the locator is held (agents send press, moves and release as
-/// separate requests).
-const POINTER_DOWN_FIELD: &str = "__pvPointerDown";
 
 /// Draw the filter dialog's in-dialog preview window below its parameters (its `fields` `f`). A
 /// no-op for dialogs without a preview and for Select and Mask, which has its own view.
@@ -183,26 +180,6 @@ pub(crate) fn center_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     d.fields.insert(CENTER_X_FIELD.into(), json!(cx));
     d.fields.insert(CENTER_Y_FIELD.into(), json!(cy));
     true
-}
-
-/// A `ui.pointer` primary-button event on the top dialog's locator (#9648): a press centres the
-/// preview window, and so does a move while that press is held, remembered across requests as a
-/// held mouse button is; a hover or a release does not.
-pub(crate) fn pointer_event(app: &mut PhotocraftApp, down: bool, up: bool, x: f64, y: f64) {
-    let Some(d) = locator(app).and_then(|id| app.ui.dialog_mut(id)) else { return };
-    let held = !up && (down || d.fields.get(POINTER_DOWN_FIELD).and_then(Value::as_bool) == Some(true));
-    d.fields.insert(POINTER_DOWN_FIELD.into(), json!(held));
-    if held {
-        center_at(app, x, y);
-    }
-}
-
-/// A primary `ui.pointer` release, wherever it went: no locator press stays held in any open
-/// dialog, even one that was not on top or not taking the pointer when the button came up.
-pub(crate) fn clear_pointer_state(app: &mut PhotocraftApp) {
-    for d in &mut app.ui.dialogs {
-        d.fields.remove(POINTER_DOWN_FIELD);
-    }
 }
 
 /// The zoom levels the − / + buttons step through, like the Filter Gallery's.

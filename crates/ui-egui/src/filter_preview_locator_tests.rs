@@ -1,7 +1,8 @@
 //! #9648: with a filter dialog that has a preview window on top (Smart Sharpen, Unsharp Mask…),
 //! the image under it is the preview's locator, as in Photoshop: the pointer is a small square
-//! there, and a click or drag centres the dialog's preview window on that document point, without
-//! reaching the tool or making a history step.
+//! there, and a click centres the dialog's preview window on that document point, without reaching
+//! the tool or making a history step. Only the press counts: a drag after it leaves the window
+//! where the press put it, as in the reference application.
 
 use egui::{Modifiers, PointerButton, Pos2, pos2, vec2};
 use egui_kittest::Harness;
@@ -111,17 +112,19 @@ fn a_click_on_the_image_centres_the_smart_sharpen_preview() {
     assert!(near(centre(&h), at), "{:?} vs {at:?}", centre(&h));
     assert!(at[0] < 150.0 && at[1] > 200.0, "the point is off the default centre: {at:?}");
 
-    // A drag keeps centring it where the pointer is.
+    // A drag centres it where it was pressed: neither its moves nor its release move it on.
     let b = pos2(r.left() + 140.0, r.top() + 100.0);
-    move_to(&mut h, a);
-    button(&mut h, a, true);
+    move_to(&mut h, b);
+    button(&mut h, b, true);
+    let pressed = xf(&h).to_doc(b);
+    assert!(near(centre(&h), pressed), "the press centres it: {:?} vs {pressed:?}", centre(&h));
     for i in 1..=4 {
-        move_to(&mut h, a + (b - a) * (i as f32 / 4.0));
+        move_to(&mut h, b + (a - b) * (i as f32 / 4.0));
+        assert!(near(centre(&h), pressed), "a held move leaves it: {:?} vs {pressed:?}", centre(&h));
     }
-    button(&mut h, b, false);
+    button(&mut h, a, false);
     h.run_steps(2);
-    let at = xf(&h).to_doc(b);
-    assert!(near(centre(&h), at), "{:?} vs {at:?}", centre(&h));
+    assert!(near(centre(&h), pressed), "the release leaves it: {:?} vs {pressed:?}", centre(&h));
 
     // The Brush never painted, no command ran, and the dialog stays open.
     assert_eq!(edits(&h), before, "no stroke and no history step");
@@ -182,10 +185,10 @@ fn agents_centre_the_preview_with_ui_pointer_without_painting() {
     let mut h = harness(Some("filter.sharpen.smartSharpen"), 0.0);
     let before = edits(&h);
     let ctx = egui::Context::default();
-    let events = json!([{"kind": "down", "x": 40, "y": 30}, {"kind": "move", "x": 60.5, "y": 250}, {"kind": "up", "x": 60.5, "y": 250}]);
+    let events = json!([{"kind": "down", "x": 60.5, "y": 250}, {"kind": "move", "x": 40, "y": 30}, {"kind": "up", "x": 40, "y": 30}]);
     let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", json!({"events": events}));
     let _ = crate::control::handle(h.state_mut(), &ctx, &req);
-    assert!(near(centre(&h), [60.5, 250.0]), "{:?}", centre(&h));
+    assert!(near(centre(&h), [60.5, 250.0]), "the press decides, not the drag: {:?}", centre(&h));
     assert_eq!(edits(&h), before, "the Brush must not paint under the dialog");
     // Off the image the centre is clamped to it.
     let events = json!([{"kind": "down", "x": 900, "y": -40}, {"kind": "up", "x": 900, "y": -40}]);
@@ -208,10 +211,10 @@ fn pointer(h: &mut Harness<'static, PhotocraftApp>, events: Value) {
     h.run_steps(2);
 }
 
-/// Agents send a press, its moves and its release as separate requests: only a held press centres
-/// the preview, a bare hover does not.
+/// Agents send a press, its moves and its release as separate requests: only the press centres
+/// the preview; a hover, a move with the press held and the release leave it.
 #[test]
-fn ui_pointer_centres_only_while_the_press_is_held() {
+fn ui_pointer_centres_only_on_the_press() {
     let mut h = harness(Some("filter.sharpen.smartSharpen"), 0.0);
     pointer(&mut h, json!([{"kind": "move", "x": 40, "y": 30}]));
     // An event without a kind is a move, so a hover too.
@@ -220,10 +223,10 @@ fn ui_pointer_centres_only_while_the_press_is_held() {
     pointer(&mut h, json!([{"kind": "down", "x": 40, "y": 30}]));
     assert!(near(centre(&h), [40.0, 30.0]), "{:?}", centre(&h));
     pointer(&mut h, json!([{"kind": "move", "x": 80, "y": 60}]));
-    assert!(near(centre(&h), [80.0, 60.0]), "a move while the press is held drags it: {:?}", centre(&h));
+    assert!(near(centre(&h), [40.0, 30.0]), "a move while the press is held leaves it: {:?}", centre(&h));
     pointer(&mut h, json!([{"kind": "up", "x": 80, "y": 60}]));
     pointer(&mut h, json!([{"kind": "move", "x": 120, "y": 90}]));
-    assert!(near(centre(&h), [80.0, 60.0]), "after the release a move is a hover again: {:?}", centre(&h));
+    assert!(near(centre(&h), [40.0, 30.0]), "so do the release and a later hover: {:?}", centre(&h));
 }
 
 /// A Brush stroke an agent began before the dialog opened still ends along its own path: its moves
@@ -244,30 +247,6 @@ fn a_tool_gesture_begun_before_the_dialog_still_ends_under_it() {
     assert!(h.state().drag.is_none(), "the release reached the Brush");
     assert_eq!(edits(&h).1, before.1 + 1, "the stroke is one history step");
     assert!(near(centre(&h), [200.0, 150.0]), "the stroke's moves and release are not locator presses: {:?}", centre(&h));
-}
-
-/// A release the locator doesn't take (Space held, or another dialog on top) still ends its press,
-/// so a later hover doesn't drag the preview with no button down.
-#[test]
-fn a_release_elsewhere_ends_the_locator_press() {
-    let mut h = harness(Some("filter.sharpen.smartSharpen"), 0.0);
-    pointer(&mut h, json!([{"kind": "down", "x": 40, "y": 30}]));
-    assert!(near(centre(&h), [40.0, 30.0]), "{:?}", centre(&h));
-    let (req, _rx) = crate::control::ControlRequest::new("ui.pointer", json!({"events": [{"kind": "up", "x": 40, "y": 30}], "space": true}));
-    let _ = crate::control::handle(h.state_mut(), &egui::Context::default(), &req);
-    h.run_steps(2);
-    pointer(&mut h, json!([{"kind": "move", "x": 120, "y": 90}]));
-    assert!(near(centre(&h), [40.0, 30.0]), "a Space-held release ends the press: {:?}", centre(&h));
-
-    // The release lands on a Color Picker opened over the dialog.
-    pointer(&mut h, json!([{"kind": "down", "x": 60, "y": 50}]));
-    assert!(near(centre(&h), [60.0, 50.0]), "{:?}", centre(&h));
-    let picker = crate::color_picker_ui::open(h.state_mut(), "foreground");
-    pointer(&mut h, json!([{"kind": "up", "x": 60, "y": 50}]));
-    h.state_mut().ui.close_dialog(picker);
-    h.run_steps(2);
-    pointer(&mut h, json!([{"kind": "move", "x": 120, "y": 90}]));
-    assert!(near(centre(&h), [60.0, 50.0]), "a release on another dialog ends the press: {:?}", centre(&h));
 }
 
 /// The Crop tool keeps its frame drag apart from `app.drag`: one an agent began before the dialog
