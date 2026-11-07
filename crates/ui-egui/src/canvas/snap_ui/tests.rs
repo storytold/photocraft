@@ -937,7 +937,7 @@ fn hidden_reference_point_alt_drag_snaps_to_the_box_points() {
 }
 
 /// Alt over the box, or outside it in the rotation zone, shows the reference point's pointer: a
-/// press there places the point.
+/// press there places the point, and the canvas draws its arrowhead with a target there (#11683).
 #[test]
 fn alt_over_the_box_shows_the_reference_point_pointer() {
     let mut app = app_with_box();
@@ -945,10 +945,10 @@ fn alt_over_the_box_shows_the_reference_point_pointer() {
     let xf = crate::canvas::ViewXform::active(&app).unwrap();
     let alt = egui::Modifiers::ALT;
     for p in [[55.0, 52.0], [30.0, 30.0], [200.0, 200.0]] {
-        assert_eq!(crate::transform_tool::cursor(&app, &xf, p, alt), Some(egui::CursorIcon::Crosshair), "{p:?}");
+        assert_eq!(crate::transform_tool::cursor(&app, &xf, p, alt), Some(egui::CursorIcon::None), "{p:?}: the reference point's pointer is drawn");
     }
     assert_eq!(crate::transform_tool::cursor(&app, &xf, [55.0, 52.0], egui::Modifiers::NONE), Some(egui::CursorIcon::Move));
-    assert_ne!(crate::transform_tool::cursor(&app, &xf, [40.0, 40.0], alt), Some(egui::CursorIcon::Crosshair), "a corner handle stays a handle");
+    assert_ne!(crate::transform_tool::cursor(&app, &xf, [40.0, 40.0], alt), Some(egui::CursorIcon::None), "a corner handle stays a handle");
 }
 
 /// Free Transform Path leaves the selection where it is, so the box still snaps to the selection's

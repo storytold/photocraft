@@ -1,19 +1,27 @@
 use super::begin::warps_type;
 use super::drag_modes::{HandleIndicator, handle_indicator};
 use super::options_bar::{quad_scale, readout};
-use super::pointer::{Hit, handle_at, rotate_dir, rotation_degrees};
+use super::pointer::{Hit, handle_at, rotate_dir, rotation_degrees, shows_reference_pointer};
 use super::warp::{on_section_edge, quick_split_kind, single_patch};
 use super::{
     BezierMesh, Color32, DocId, HANDLE_PX, Homography, LayerId, PhotocraftApp, Pos2, SplitTool, Stroke, TransformPreview, TransformSession, ViewXform, Warp,
     WarpDrag, WarpStyle, corners, pos2, vec2,
 };
 
-/// The distort or skew pointer at screen point `at`, where [`super::cursor`] hid the system
-/// pointer over a handle. The canvas calls it from its cursor branch, so nothing is drawn where a
-/// guide, a pan or a zoom set the cursor instead.
+/// The reference point's pointer where a press puts the point, else the distort or skew pointer at
+/// screen point `at`, where [`super::cursor`] hid the system pointer over a handle. The canvas
+/// calls it from its cursor branch, so nothing is drawn where a guide, a pan or a zoom set the
+/// cursor instead.
 pub(crate) fn draw_handle_cursor(app: &PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, at: Pos2, mods: egui::Modifiers) {
     let Some(t) = &app.ui.transform else { return };
-    let h = handle_at(app, t, xf.to_doc(at), super::handle_tolerance(app));
+    let doc = xf.to_doc(at);
+    // The reference point's pointer where a press puts the point (#11683); it takes the place of
+    // the handle pointers, which never show for it.
+    if shows_reference_pointer(app, doc, mods) {
+        draw_reference_cursor(ctx, at);
+        return;
+    }
+    let h = handle_at(app, t, doc, super::handle_tolerance(app));
     let scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     match (h, handle_indicator(app, t, h, mods)) {
         (Hit::Corner(i), Some(HandleIndicator::Distort)) => {
@@ -58,6 +66,31 @@ fn draw_distort_cursor(ctx: &egui::Context, at: Pos2, toward: egui::Vec2) {
     painter.add(egui::Shape::convex_polygon(vec![tip, left, notch], tokens.accent_text, Stroke::NONE));
     painter.add(egui::Shape::convex_polygon(vec![tip, notch, right], tokens.accent_text, Stroke::NONE));
     painter.add(egui::Shape::closed_line(vec![tip, left, notch, right], Stroke::new(1.5, tokens.shadow)));
+}
+
+/// Draws the reference point's pointer at `at` (#11683): a plain arrowhead with its tip on the
+/// point a press puts there, and a small target circle beside it. Its own geometry, painted with
+/// the same fill and contrast as [`draw_distort_cursor`] so it reads on any canvas background.
+fn draw_reference_cursor(ctx: &egui::Context, at: Pos2) {
+    let tokens = crate::theme::Tokens::get(ctx);
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("transform-reference-cursor")));
+    // The arrowhead points away from its tip, into the box's lower right, as a plain pointer sits.
+    let u = vec2(1.0, 1.0).normalized();
+    let perp = vec2(-u.y, u.x);
+    const LENGTH: f32 = 15.0;
+    const HALF_WIDTH: f32 = 6.0;
+    const TARGET: f32 = 3.5;
+    let base = at + u * LENGTH;
+    let notch = at + u * (LENGTH * 0.4);
+    let (left, right) = (base + perp * HALF_WIDTH, base - perp * HALF_WIDTH);
+    // Convex decomposition: two triangles meeting along [tip, notch].
+    painter.add(egui::Shape::convex_polygon(vec![at, left, notch], tokens.accent_text, Stroke::NONE));
+    painter.add(egui::Shape::convex_polygon(vec![at, notch, right], tokens.accent_text, Stroke::NONE));
+    painter.add(egui::Shape::closed_line(vec![at, left, notch, right], Stroke::new(1.5, tokens.shadow)));
+    // The target circle behind the notch, clear of the arrowhead and its outline.
+    let centre = at + u * (LENGTH + TARGET + 2.0);
+    painter.circle_stroke(centre, TARGET, Stroke::new(3.5, tokens.shadow));
+    painter.circle_stroke(centre, TARGET, Stroke::new(1.5, tokens.accent_text));
 }
 
 /// Draws the Skew cursor at `at`: opposing parallel arrows aligned with the edge tangent `tangent`.
@@ -226,7 +259,10 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     if let Some(at) = painter.ctx().pointer_hover_pos().filter(|p| xf.rect.contains(*p)) {
         let p = xf.to_doc(at);
         let tol = HANDLE_PX / f64::from(xf.zoom.max(0.01));
-        if let Some(k) = rotate_dir(t, Some(pv), p, tol) {
+        // The same keys as `cursor`, sticky ones included: away from the handles with ⌥ held the
+        // reference point's pointer is drawn at the pointer instead of the turn arrow (#11683).
+        let mods = crate::workspace_ui::sticky_mods(app, painter.ctx().input(|i| i.modifiers));
+        if let Some(k) = rotate_dir(t, Some(pv), p, tol).filter(|_| !shows_reference_pointer(app, p, mods)) {
             // Through the view, so the arc bends round the corner as it shows under a turned or
             // flipped view.
             let toward = xf.to_screen((p[0] + k[0] * 16.0) as f32, (p[1] + k[1] * 16.0) as f32) - at;
