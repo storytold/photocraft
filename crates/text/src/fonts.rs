@@ -421,7 +421,21 @@ impl FontDb {
     }
 
     pub fn has_family(&mut self, name: &str) -> bool {
-        self.fcx.collection.family_id(name).is_some()
+        self.family_info(name).is_some()
+    }
+
+    pub(crate) fn family_info(&mut self, name: &str) -> Option<parley::fontique::FamilyInfo> {
+        if let Some(info) = self.fcx.collection.family_by_name(name) {
+            return Some(info);
+        }
+        for suffix in [" Roman", " Regular", " Book", " Normal"] {
+            if let Some(base) = name.strip_suffix(suffix)
+                && let Some(info) = self.fcx.collection.family_by_name(base)
+            {
+                return Some(info);
+            }
+        }
+        None
     }
 
     /// Whether the face selected for a character style exposes an OpenType GSUB feature.
@@ -430,7 +444,7 @@ impl FontDb {
     /// regular face can lack a feature that its italic or bold sibling has (or vice versa).
     pub(crate) fn selected_face_has_feature(&mut self, family: &str, weight: u16, italic: bool, feature: Tag) -> bool {
         let family = if family.is_empty() || !self.has_family(family) { DEFAULT_FAMILY } else { family };
-        let Some(info) = self.fcx.collection.family_by_name(family) else {
+        let Some(info) = self.family_info(family) else {
             return false;
         };
         let style = if italic { FontStyle::Italic } else { FontStyle::Normal };
@@ -454,7 +468,7 @@ impl FontDb {
         if let Some(faces) = self.face_cache.get(family) {
             return faces.clone();
         }
-        let Some(info) = self.fcx.collection.family_by_name(family) else {
+        let Some(info) = self.family_info(family) else {
             return Vec::new();
         };
         let faces: Vec<_> = info
@@ -489,7 +503,7 @@ impl FontDb {
             return t.clone();
         }
         let traits = (|| {
-            let info = self.fcx.collection.family_by_name(family)?;
+            let info = self.family_info(family)?;
             let face = info.fonts().iter().min_by_key(|f| (!matches!(f.style(), FontStyle::Normal), (f.weight().value() - 400.0).abs() as u32))?.clone();
             let blob = face.load(Some(&mut self.fcx.source_cache))?;
             let font = skrifa::FontRef::from_index(blob.as_ref(), face.index()).ok()?;
@@ -543,7 +557,7 @@ impl FontDb {
         let alias = if let Some(alias) = self.face_aliases.get(&key) {
             alias.clone()
         } else {
-            let Some(info) = self.fcx.collection.family_by_name(&family) else { return };
+            let Some(info) = self.family_info(&family) else { return };
             let Some(font) = info.fonts().get(index) else { return };
             let Some(blob) = font.load(Some(&mut self.fcx.source_cache)) else { return };
             let Some(blob) = isolated_face(blob, font.index()) else { return };
@@ -567,7 +581,7 @@ impl FontDb {
         let key = |s: &str| s.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect::<String>();
         let wanted = key(ps);
         let wanted_style = ps.split_once('-').map(|(_, s)| key(s));
-        let info = self.fcx.collection.family_by_name(family)?;
+        let info = self.family_info(family)?;
         for (index, face) in info.fonts().iter().enumerate() {
             if faces.get(index).is_none_or(|f| f.axes.is_empty()) {
                 continue;
