@@ -1146,6 +1146,43 @@ fn unfinished_shape_path_disables_actions_that_would_target_the_previous_layer()
     assert!(entry_enabled(&app, menu, "path.toSelection"));
 }
 
+/// The Space-Hand view menu over a pending crop (#11271): Esc closes only the menu and ↵ commits
+/// nothing, as under the crop's own menu; with the menu closed Esc discards the crop as before.
+#[test]
+fn space_hand_view_menu_keeps_escape_and_enter_from_the_pending_crop() {
+    let mut app = crop_app();
+    let frame = draw_crop(&mut app);
+    let mut h = shortcut_harness(app);
+    let size = h.state().session.active().map(|s| s.doc.size);
+    let steps = h.state().session.active().map(|s| s.history.past_len());
+    let center = h.state().last_canvas_rect.center();
+    let space = |pressed| egui::Event::Key { key: egui::Key::Space, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    h.event(space(true));
+    h.run_steps(2);
+    right_click(&mut h, center, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| m.crop.is_none() && is_view_tool(m.tool)), "Space's Hand opens the view menu");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.canvas_tool_menu.is_none(), "Esc closes the menu");
+    assert_eq!(h.state().ui.crop_rect, Some(frame), "and only the menu: the crop is not discarded");
+    assert!(crate::crop_ui::pending(h.state()));
+    right_click(&mut h, center, Modifiers::NONE);
+    assert!(h.state().ui.canvas_tool_menu.is_some(), "the view menu opens again");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().map(|s| s.doc.size), size, "↵ under the menu doesn't crop");
+    assert_eq!(h.state().session.active().map(|s| s.history.past_len()), steps, "no history step");
+    assert_eq!(h.state().ui.crop_rect, Some(frame));
+    assert!(crate::crop_ui::pending(h.state()));
+    // Close the menu and let Space go: Esc discards the pending crop as ever.
+    h.state_mut().ui.canvas_tool_menu = None;
+    h.event(space(false));
+    h.run_steps(3);
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(!crate::crop_ui::pending(h.state()), "with no menu open Esc discards the crop");
+}
+
 /// A 32 × 32 document with the Crop tool picked (Classic Mode, so the view stays put) and its
 /// untouched default frame.
 fn crop_app() -> PhotocraftApp {

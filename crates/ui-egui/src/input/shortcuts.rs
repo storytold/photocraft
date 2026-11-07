@@ -526,6 +526,14 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| m.text || m.crop.is_some()) {
         return false;
     }
+    // The view menu (the Hand's or Zoom's, Space's Hand over any tool among them, #11271) takes Esc
+    // and ↵ too: they don't cancel or commit a pending crop under it. Tool keys still pass, and
+    // close the menu through the tool change.
+    if app.ui.canvas_tool_menu.as_ref().is_some_and(|m| crate::canvas_tool_menu::is_view_tool(m.tool))
+        && ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter))
+    {
+        return false;
+    }
     let symmetry_editing = app.ui.symmetry_transform.is_some();
     crate::symmetry_ui::track(app, ctx);
     if symmetry_editing && (app.ui.symmetry_transform.is_none() || egui::Popup::is_any_open(ctx)) {
