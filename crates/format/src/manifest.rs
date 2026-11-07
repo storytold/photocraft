@@ -114,6 +114,8 @@ pub struct CompStateM {
     pub visible: Option<bool>,
     #[serde(default)]
     pub position: Option<(i32, i32)>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_position: Option<(i32, i32)>,
     #[serde(default)]
     pub appearance: Option<CompAppearanceM>,
 }
@@ -378,6 +380,20 @@ pub struct MetadataM {
     pub psd_resources: Vec<(u16, String, Hash)>,
     /// (signature hex, key hex, blob)
     pub psd_global_blocks: Vec<(String, String, Hash)>,
+}
+
+#[cfg(test)]
+mod comp_tests {
+    use super::*;
+
+    /// A legacy manifest with only content bounds loads with the Type anchor absent.
+    #[test]
+    fn older_comp_states_keep_their_bounds_position() {
+        let old = serde_json::json!({ "layer": 1, "position": [10, 20] });
+        let state: CompStateM = serde_json::from_value(old).unwrap();
+        assert_eq!(state.position, Some((10, 20)));
+        assert_eq!(state.text_position, None);
+    }
 }
 
 #[cfg(test)]
