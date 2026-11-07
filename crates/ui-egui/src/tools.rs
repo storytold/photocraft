@@ -14,6 +14,7 @@ pub mod crop_presets;
 pub mod crop_shield;
 pub mod crop_size;
 pub mod crop_straighten;
+pub mod crop_task_bar;
 pub mod crop_ui;
 pub mod direct_select;
 pub mod eraser_ui;
@@ -34,6 +35,7 @@ pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod puppet_ui;
 pub mod retouch_ui;
+pub mod shape_bounds_box;
 pub(super) mod shape_gradient_ui;
 pub(super) mod shape_options;
 pub(super) mod shape_paint_ui;
@@ -53,3 +55,6 @@ pub(super) mod type_transform;
 pub mod vector_ui;
 pub mod warp_preview;
 pub mod zoom_tool;
+
+#[cfg(test)]
+mod crop_options_labels_tests;

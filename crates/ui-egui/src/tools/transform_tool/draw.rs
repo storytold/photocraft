@@ -21,6 +21,12 @@ pub(crate) fn draw_handle_cursor(app: &PhotocraftApp, ctx: &egui::Context, xf: &
                 draw_distort_cursor(ctx, at, scr(*q) - scr(t.pivot));
             }
         }
+        // Distort mode's side handles (#10085): the same pointer, out through the edge's middle.
+        (Hit::Edge(i), Some(HandleIndicator::Distort)) => {
+            if let (Some(a), Some(b)) = (t.quad.get(i), t.quad.get((i + 1) % 4)) {
+                draw_distort_cursor(ctx, at, scr(*a).lerp(scr(*b), 0.5) - scr(t.pivot));
+            }
+        }
         (Hit::Edge(i), Some(HandleIndicator::Skew)) => {
             if let (Some(a), Some(b)) = (t.quad.get(i), t.quad.get((i + 1) % 4)) {
                 draw_skew_cursor(ctx, at, scr(*b) - scr(*a));
@@ -91,6 +97,9 @@ pub(super) fn front_vertices(h: &Homography, n: usize) -> Vec<bool> {
 /// Photoshop. The box, handles and reference point are [`draw_overlay`], drawn over the guides.
 pub fn draw_content(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let (Some(t), Some(pv)) = (&app.ui.transform, &app.transform_preview) else { return };
+    if crate::frame_tool::frame_transform(t) {
+        return;
+    }
     let output = crate::monitor_status::view_display(app, painter.ctx());
     let (display, _) = crate::canvas::canvas_display(app, &pv.doc, output);
     // Selection tint and lone mask/channel values are UI diagnostics, not document colors.
@@ -205,12 +214,15 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         painter.rect_filled(r, 0.0, Color32::WHITE);
         painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
     }
-    // Reference point (Photoshop's crosshair circle).
-    let c = scr(t.pivot);
-    painter.circle_stroke(c, 5.0, Stroke::new(1.0, Color32::WHITE));
-    painter.circle_stroke(c, 5.0, Stroke::new(0.5, Color32::BLACK));
-    painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
-    painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
+    // Reference point (Photoshop's crosshair circle): only with Toggle Reference Point on, or
+    // while an ⌥-click is dragging it (#11098).
+    if app.ui.tool_options.transform_reference_point || pv.gesture.is_some_and(|g| g.hit == Hit::Pivot) {
+        let c = scr(t.pivot);
+        painter.circle_stroke(c, 5.0, Stroke::new(1.0, Color32::WHITE));
+        painter.circle_stroke(c, 5.0, Stroke::new(0.5, Color32::BLACK));
+        painter.line_segment([c - vec2(8.0, 0.0), c + vec2(8.0, 0.0)], Stroke::new(1.0, Color32::WHITE));
+        painter.line_segment([c - vec2(0.0, 8.0), c + vec2(0.0, 8.0)], Stroke::new(1.0, Color32::WHITE));
+    }
     if let Some(at) = painter.ctx().pointer_hover_pos().filter(|p| xf.rect.contains(*p)) {
         let p = xf.to_doc(at);
         let tol = HANDLE_PX / f64::from(xf.zoom.max(0.01));
@@ -231,7 +243,14 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
 /// `edit.transform.warp` map it like the pixels. Not Transform Selection (its ants are hidden), a
 /// path, Content-Aware Scale or a type layer's Warp Text, which leave the selection alone.
 fn carries_selection(app: &PhotocraftApp, t: &TransformSession) -> bool {
-    !t.selection && t.path.is_none() && t.content_aware.is_none() && !(t.warp.is_some() && warps_type(app))
+    !t.selection && !crate::frame_tool::frame_transform(t) && t.path.is_none() && t.content_aware.is_none() && !(t.warp.is_some() && warps_type(app))
+}
+
+/// Applying the open box moves the selection outline: Transform Selection's own box, or a box
+/// that [carries the selection along](carries_selection). A path, Content-Aware Scale or Warp Text
+/// leaves it where it is, so its edges stay snap targets.
+pub(crate) fn moves_selection(app: &PhotocraftApp, t: &TransformSession) -> bool {
+    t.selection || carries_selection(app, t)
 }
 
 /// A transform of `document` is open that carries its selection along (#5297): the canvas traces
