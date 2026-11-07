@@ -126,10 +126,10 @@ fn arm_move_drag(app: &mut PhotocraftApp, ctx: &egui::Context, drag: MoveDrag) {
             }
         }
         MoveDrag::Selection { grab, .. } => {
-            if let Some(st) = app.session.active_mut() {
-                if st.floating.as_ref().is_some_and(|f| !f.moved && f.offset == (0, 0)) {
-                    st.floating = None;
-                }
+            if let Some(st) = app.session.active_mut()
+                && st.floating.as_ref().is_some_and(|f| !f.moved && f.offset == (0, 0))
+            {
+                st.floating = None;
             }
             begin_selection(app, ctx, grab);
         }
