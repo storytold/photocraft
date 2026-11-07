@@ -607,6 +607,88 @@ fn batch_dialogs_include_all_subfolders() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// #10682 / #10113: an action recorded with the Type tool (a new type layer, typed in key by key)
+/// runs in Batch on every file of the folder and saves each into the destination.
+#[test]
+fn batch_runs_an_action_recorded_with_the_type_tool() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-type-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    for name in ["a.png", "b.png"] {
+        app.run("file.saveACopy", json!({"path": dir.join("in").join(name).to_string_lossy()})).unwrap();
+    }
+    app.run("actions.record", json!({"name": "Caption"})).unwrap();
+    let id = app.run("type.create", json!({"x": 10, "y": 40, "text": "", "size": 20})).unwrap()["layer"].as_u64().unwrap();
+    for (i, c) in "Hi".chars().enumerate() {
+        app.run("type.edit", json!({"layer": id, "replace": {"start": i, "end": i, "text": c.to_string()}, "coalesce": "typing"})).unwrap();
+    }
+    app.run("actions.stop", json!({})).unwrap();
+    app.run("file.saveACopy", json!({"path": dir.join("ref.png").to_string_lossy()})).unwrap();
+    assert_eq!(crate::actions::selected_action(&app).map(|a| a.steps.len()), Some(1), "one step for the typing");
+    // CodeRabbit on #10730: and that step makes the layer with the text typed.
+    assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|(_, p)| p["text"].clone()), Some(json!("Hi")));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
+    fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
+    let r = crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "{r}");
+    assert!(r.get("failed").is_none_or(|f| f.as_array().is_some_and(Vec::is_empty)), "{r}");
+    for name in ["a.png", "b.png"] {
+        assert!(dir.join("out").join(name).is_file(), "{name} saved: {r}");
+        // CodeRabbit on #10730: the action ran on each file: the typed text is in its pixels.
+        let pixels = |folder: &str| photocraft_codecs::decode(&std::fs::read(dir.join(folder).join(name)).unwrap()).unwrap().data().to_vec();
+        assert_ne!(pixels("out"), pixels("in"), "{name}: the text was laid on it");
+    }
+    // CodeRabbit on #10730: all of it, as typed by hand: the document the action was recorded
+    // on (the same image, with the text typed into it) has the pixels Batch wrote.
+    let decoded = |path: std::path::PathBuf| photocraft_codecs::decode(&std::fs::read(path).unwrap()).unwrap().data().to_vec();
+    for name in ["a.png", "b.png"] {
+        assert_eq!(decoded(dir.join("out").join(name)), decoded(dir.join("ref.png")), "{name}: Batch laid the whole text, as it was typed by hand");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #10682: a Batch whose action fails on every file said nothing; the status bar and a notice now
+/// name each file that failed and why.
+#[test]
+fn a_batch_that_fails_on_its_files_says_which_and_why() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-fails-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    for name in ["a.png", "b.png"] {
+        app.run("file.saveACopy", json!({"path": dir.join("in").join(name).to_string_lossy()})).unwrap();
+    }
+    // A step for a layer that only the recording document has.
+    app.session
+        .actions
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new("Stale", vec![("layer.setProps".into(), json!({"layer": 424_242, "opacity": 50}))]));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
+    fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
+    let notices = app.ui.notices.len();
+    let r = crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "{r}");
+    assert!(app.ui.status_error, "the status bar reports it: {}", app.ui.status);
+    let notice = app.ui.notices.get(notices).expect("a notice lists the files");
+    assert_eq!(notice.lines.len(), 2);
+    // CodeRabbit on #10730: a failure, not a warning, and each file by its whole path.
+    assert!(notice.error && notice.title.ends_with("2 files failed"), "{}", notice.title);
+    let path = |name: &str| format!("{}: ", dir.join("in").join(name).to_string_lossy());
+    assert!(notice.lines[0].starts_with(&path("a.png")) && notice.lines[1].starts_with(&path("b.png")), "{:?}", notice.lines);
+    // CodeRabbit on #10730: each line is its file's error, word for word, path then reason.
+    let errors = r["errors"].as_array().unwrap();
+    for (line, e) in notice.lines.iter().zip(errors) {
+        assert!(!e["error"].as_str().unwrap_or_default().trim().is_empty(), "{e}");
+        assert_eq!(*line, format!("{}: {}", e["file"].as_str().unwrap(), e["error"].as_str().unwrap()));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Float in Window takes the document and the screen position a dragged-off tab was dropped at
 /// (#3733); bad params are errors, not panics.
 #[test]
