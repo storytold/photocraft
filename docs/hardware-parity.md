@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-07 · **Change:** minor (accuracy pass against the code at 6d408847a; Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-07 · **Change:** minor (accuracy pass against the code at e6ba4aca4; Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -71,7 +71,7 @@ rotation; its eraser end comes from the pointer hooks (#2285).
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | minor | Accuracy pass against the code at 6d408847a: documents over the texture limit composite on the GPU in pages (#49), the Rgba32Float panic is fixed (#2020), OpenCore issue is #4011, KDE Wayland pen works (#2297), Linux X11 monitor profiles, `input/stylus.rs` path. No estimate changed |
+| 2026-11-07 | minor | Accuracy pass against the code at e6ba4aca4: documents over the texture limit composite on the GPU in pages (#49), the Rgba32Float panic is fixed (#2020), OpenCore issue is #4011, KDE Wayland pen works (#2297), Linux X11 monitor profiles, `input/stylus.rs` path. No estimate changed |
 | 2026-11-06 | minor | Windows eraser end: the pointer hooks read `PEN_FLAG_INVERTED` and the Eraser switch follows it (Windows Ink on; #2285) |
 | 2026-11-05 | minor | Optional WinTab driver mode on Windows: pressure and eraser; tilt with orientation axes; rotation with a twist-reporting pen, with Windows Ink off |
 | 2026-10-28 | minor | Build GPU compositor pipelines in the background; benchmark baseline pending (#9157) |
