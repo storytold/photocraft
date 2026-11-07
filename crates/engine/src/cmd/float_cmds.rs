@@ -69,7 +69,7 @@ impl CutParts {
         let mut outline: Option<Surface> = None;
         let fill = !copy && (mask || doc.is_background(layer));
         // A mask's untouched pixels (its default, e.g. white) move too, so take the whole canvas.
-        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.content_bounds() });
+        let b = sel.content_bounds().intersect(&if mask { doc.bounds() } else { base.stored_bounds() });
         if !b.is_empty() {
             piece = cut_piece(&base, sel, b, with_alpha)?;
             // The moved pixels' selection is what they took with them: the alpha the piece
@@ -123,7 +123,9 @@ impl CutParts {
             return Ok(());
         }
         let mut out = self.rest.clone();
-        let piece = self.piece.translated(dx, dy, self.piece_bounds);
+        // Every stored tile moves, not only the visible box: the colour under the piece's clear
+        // pixels is part of what was cut (#9824).
+        let piece = self.piece.translated(dx, dy, self.piece.tile_bounds());
         if self.mask {
             crate::fill_cmds::composite_over(&mut out, &piece, self.piece_bounds.translate(dx, dy), None)?;
         } else {

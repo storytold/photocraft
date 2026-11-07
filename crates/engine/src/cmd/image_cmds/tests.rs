@@ -885,9 +885,10 @@ fn crop_target_budgets_the_hidden_pixels_it_resamples() {
             p["angle"] = json!(a);
         }
         let err = s.execute("image.crop", p).unwrap_err().to_string();
-        // Since the crop turns the Background into Layer 0 (#10867), the turned layer's
-        // bounds are 2001 px a side, resampled x100 to 200100.
-        let want = if angle.is_some() { "200100 x 200100 px is 40040 megapixels" } else { "200000 x 200000 px is 40000 megapixels" };
+        // The crop turns the Background into Layer 0 (#10867), and the turn leaves a ring of clear
+        // pixels around it that the bounds do not count (#9824): the layer measures 2000 px a
+        // side, resampled x100 to 200000.
+        let want = "200000 x 200000 px is 40000 megapixels";
         assert!(err.contains(want) && err.contains("Delete Cropped Pixels"), "{angle:?}: {err}");
         assert_eq!(doc(&s).size, Size::new(2000, 2000), "{angle:?}: the document is unchanged");
         assert_eq!(s.active().unwrap().history.past_len(), past, "{angle:?}: no history step");

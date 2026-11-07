@@ -383,7 +383,9 @@ fn color_table(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Color Table", |doc, _| {
         let old = cur.clone();
         for surf in doc.layers.iter_mut().filter_map(Layer::surface_mut) {
-            let r = surf.content_bounds();
+            // Every stored pixel, not just the visible ones: a pixel the old transparent entry
+            // cleared holds its colour with a zero alpha, and clearing the entry restores it.
+            let r = surf.stored_bounds();
             if r.is_empty() {
                 continue;
             }

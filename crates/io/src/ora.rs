@@ -627,6 +627,8 @@ impl Writer<'_> {
         let canvas = self.doc.bounds();
         let (rect, mut buf) = match &layer.content {
             LayerContent::Raster(s) => {
+                // An ORA layer rect is its visible pixels: `crop` below drops clear pixels, so
+                // the written rect excludes them (#9824).
                 let r = s.content_bounds();
                 admit_layer(r)?;
                 (r, photocraft_compose::surface_to_buffer(s, r).into_px())

@@ -325,10 +325,12 @@ pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_targ
     Ok(out)
 }
 
-/// `photocraft_algo::resample::translate_surface` with the content scan cached per tile (a Move
-/// drag shifts the same layers every frame; scanning them each time cost more than the copy).
+/// `photocraft_algo::resample::translate_surface`, moving every stored tile: the tile extent
+/// costs one pass over the tile map instead of a pixel scan (a Move drag shifts the same layers
+/// every frame), and it contains the stored bounds, so the colour under a clear pixel moves with
+/// the layer instead of being dropped by the narrower visible bounds (#9824).
 pub(crate) fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) -> photocraft_raster::Surface {
-    s.translated(dx, dy, photocraft_compose::bounds::content_bounds(s))
+    s.translated(dx, dy, s.tile_bounds())
 }
 
 /// [`crate::commands::translate_layer`] plus the vector side, without re-rendering anything.

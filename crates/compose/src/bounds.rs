@@ -48,6 +48,14 @@ pub fn content_bounds(s: &Surface) -> Rect {
     let fmt = s.format();
     let mut dp = vec![0u8; fmt.bytes_per_pixel()];
     photocraft_raster::encode_pixel(&fmt, &s.default_pixel(), &mut dp);
+    // As in `Surface::content_bounds`: a clear pixel's colour is not content, so a surface that
+    // has an alpha channel and defaults to transparent measures by its alpha. Both paths decide
+    // "clear" with one predicate over the encoded default pixel, so a `-0.0` `f32` alpha — zero,
+    // but not zero bytes — cannot measure by alpha here and by whole pixels there (#9824).
+    let sample = fmt.sample;
+    let alpha_at = fmt.mode.color_channels() * sample.bytes();
+    let by_alpha = fmt.alpha && photocraft_raster::alpha_is_clear(&dp, alpha_at, sample);
+    let bpp = fmt.bytes_per_pixel();
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
     if c.entries.len() > c.sweep_at {
         c.entries.retain(|_, e| e.tile.strong_count() > 0);
@@ -61,7 +69,7 @@ pub fn content_bounds(s: &Surface) -> Rect {
             Some(b) => b,
             None => {
                 let generation = photocraft_raster::spill::read_error_generation();
-                let b = t.content_bounds(&dp);
+                let b = if by_alpha { t.alpha_bounds(alpha_at, bpp, sample) } else { t.content_bounds(&dp) };
                 if photocraft_raster::spill::check_since(generation).is_ok() && t.scratch_health().is_ok() {
                     c.entries.insert(key, Entry { tile: Arc::downgrade(t), default: dp.clone().into_boxed_slice(), bounds: b });
                 }
@@ -96,5 +104,28 @@ mod tests {
         s.fill_rect(Rect::new(-300, 10, 1300, 900), &[0.2, 0.4, 0.6, 1.0]);
         assert_eq!(content_bounds(&s), Rect::new(-300, 10, 1300, 900));
         assert_eq!(content_bounds(&s), s.content_bounds(), "cached");
+    }
+
+    #[test]
+    fn a_clear_pixels_colour_is_not_content_here_either() {
+        // The cached path measures by alpha like `Surface::content_bounds`, so the transform box
+        // and the layer listing agree on a file whose clear pixels hold white.
+        let mut s = Surface::new(photocraft_color::PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 300, 300), &[1.0, 1.0, 1.0, 0.0]);
+        s.fill_rect(Rect::new(70, 41, 270, 241), &[0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(content_bounds(&s), Rect::new(70, 41, 270, 241));
+        assert_eq!(content_bounds(&s), s.content_bounds(), "cached and surface agree");
+    }
+
+    #[test]
+    fn a_negative_zero_alpha_is_clear_here_and_there() {
+        // `-0.0` is a zero alpha whose bytes are not zero (`00 00 00 80`). Comparing the decoded
+        // float here and the raw bytes in `Surface` split the two paths on exactly this value:
+        // the cached box measured the artwork while the surface measured the white canvas.
+        let mut s = Surface::with_default(photocraft_color::PixelFormat::RGBA32F, &[1.0, 1.0, 1.0, -0.0]);
+        s.fill_rect(Rect::new(0, 0, 200, 120), &[1.0, 1.0, 1.0, 0.0]);
+        s.fill_rect(Rect::new(31, 17, 121, 91), &[0.0, 0.0, 0.0, 1.0]);
+        assert_eq!(content_bounds(&s), Rect::new(31, 17, 121, 91));
+        assert_eq!(s.content_bounds(), Rect::new(31, 17, 121, 91), "surface agrees");
     }
 }
