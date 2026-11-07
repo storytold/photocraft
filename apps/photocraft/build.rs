@@ -11,19 +11,6 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    // PDF import loads PDFium at runtime. When the build provides the shared library
-    // (`PDFIUM_DLL`, set by the release packaging step), copy it beside the executable so the
-    // installer's pdfium.dll and the running app agree.
-    println!("cargo:rerun-if-env-changed=PDFIUM_DLL");
-    if let (Some(dll), Ok(out)) = (std::env::var_os("PDFIUM_DLL"), std::env::var("OUT_DIR")) {
-        let dll = std::path::PathBuf::from(dll);
-        if let Some(profile_dir) = std::path::Path::new(&out).ancestors().nth(3) {
-            let dest = profile_dir.join(dll.file_name().unwrap_or_default());
-            if let Err(e) = std::fs::copy(&dll, &dest) {
-                println!("cargo:warning=could not copy PDFium to {}: {e}", dest.display());
-            }
-        }
-    }
     // Printing to PDF (winprint's `PdfCreateRenderer`) imports Windows.Data.Pdf.dll, which
     // stripped Windows images (NTLite, some N/LTSC builds) lack. A load-time import stops the exe
     // from starting at all ("windows.data.pdf.dll was not found", #5884), so load it on first use;

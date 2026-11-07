@@ -556,9 +556,9 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     if is_psd_input(name, bytes) {
         return ImportPreflight::Psd;
     }
-    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
-    // raster signature wins over a misleading `.pdf` suffix.
-    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none()) {
+    // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
+    // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
+    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && photocraft_codecs::detect(bytes).is_none()) {
         return ImportPreflight::Unbounded;
     }
     if photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff) { ImportPreflight::Tiff } else { ImportPreflight::Flat }
@@ -612,10 +612,6 @@ pub struct ImportOptions {
     pub pdf_dpi: f32,
     /// The 1-based, inclusive page range to import; `None` imports every page (up to the cap).
     pub pdf_pages: Option<(u32, u32)>,
-    /// Import PDF text objects as editable text layers (default on).
-    pub pdf_text: bool,
-    /// Import PDF vector paths as editable shape layers (default on).
-    pub pdf_vectors: bool,
     /// Explicit one-shot authorization for imports that exceed the soft budget but fit within the hard budget.
     pub psd_high_memory_approved: bool,
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
@@ -632,8 +628,6 @@ impl Default for ImportOptions {
             flat_max_pixel_bytes: 0,
             pdf_dpi: 300.0,
             pdf_pages: None,
-            pdf_text: true,
-            pdf_vectors: true,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
         }
@@ -999,9 +993,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     if is_svg_input(name, bytes) {
         return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
     }
-    // PDF (PDFium, native only). `.ai` files are PDFs but keep their existing path; a recognized
-    // raster signature wins over a misleading `.pdf` suffix.
-    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && !has_extension(name, "ai") && photocraft_codecs::detect(bytes).is_none()) {
+    // PDF (craft-pdf, pure Rust). `.ai` files that start with `%PDF-` are PDFs and take this
+    // importer too; a recognized raster signature wins over a misleading `.pdf` suffix.
+    if pdf_import::is_pdf(bytes) || (has_extension(name, "pdf") && photocraft_codecs::detect(bytes).is_none()) {
         return pdf_import::import(name, bytes, opts, ctl);
     }
     match route(name, bytes) {
@@ -1627,5 +1621,39 @@ mod tests {
         assert!(!is_svg_input("drawing.svgz", pdf));
         assert!(is_svg_input("drawing.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"));
         assert_eq!(crate::route("drawing.svg", pdf), crate::Route::Flat);
+    }
+
+    /// `.ai` files that start with `%PDF-` are PDFs: both preflight and dispatch send them to the
+    /// PDF importer rather than the flat decoder.
+    #[test]
+    fn an_ai_with_pdf_content_takes_the_pdf_importer() {
+        use lopdf::{Document as PdfDocument, Object, Stream, dictionary};
+        let mut pdf = PdfDocument::with_version("1.5");
+        let pages_id = pdf.new_object_id();
+        let content = b"0 0 1 rg 10 10 20 20 re f";
+        let content_id = pdf.add_object(Stream::new(dictionary! {}, content.to_vec()));
+        let page_id = pdf.add_object(dictionary! {
+            "Type" => "Page",
+            "Parent" => pages_id,
+            "MediaBox" => Object::Array(vec![Object::Real(0.0), Object::Real(0.0), Object::Real(100.0), Object::Real(100.0)]),
+            "Contents" => content_id,
+            "Resources" => dictionary! {},
+        });
+        pdf.objects.insert(
+            pages_id,
+            Object::Dictionary(dictionary! {
+                "Type" => "Pages",
+                "Kids" => Object::Array(vec![Object::Reference(page_id)]),
+                "Count" => 1,
+            }),
+        );
+        let catalog = pdf.add_object(dictionary! { "Type" => "Catalog", "Pages" => pages_id });
+        pdf.trailer.set("Root", catalog);
+        let mut bytes = Vec::new();
+        pdf.save_to(&mut bytes).expect("writing the .ai fixture");
+        assert!(pdf_import::is_pdf(&bytes));
+        assert_eq!(import_preflight("illustration.ai", &bytes), ImportPreflight::Unbounded);
+        let result = import("illustration.ai", &bytes).expect("an .ai starting with %PDF- takes the PDF importer");
+        assert_eq!(result.document.artboards().len(), 1);
     }
 }

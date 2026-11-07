@@ -33,7 +33,6 @@
       <ComponentGroupRef Id="CraftFontLicences" />
       <?endif?>
       <ComponentGroupRef Id="PhotocraftFiles" />
-      <ComponentGroupRef Id="PdfiumLicences" />
     </Feature>
 
     <!-- The setup wizard: WixUI_InstallDir without its licence page (the code is MIT OR
@@ -67,17 +66,11 @@
       <Files Include="$(var.DocsDir)\**" />
     </ComponentGroup>
     <?endif?>
-    <!-- PDFium's BSD licence and the licences bundled into its DLL, staged flat by package.ps1. -->
-    <ComponentGroup Id="PdfiumLicences" Directory="INSTALLFOLDER">
-      <Files Include="$(var.BinDir)\pdfium-license*.txt" />
-    </ComponentGroup>
     <ComponentGroup Id="PhotocraftFiles" Directory="INSTALLFOLDER">
       <Component Id="PhotocraftApp" Guid="A6DE41B7-A80F-4C59-A17E-BB68065BF67E">
         <File Id="PhotocraftExe" Source="$(var.BinDir)\photocraft.exe" KeyPath="yes">
           <Shortcut Id="StartMenuShortcut" Directory="ProgramMenuFolder" Name="PhotoCraft" Description="PhotoCraft image editor" WorkingDirectory="INSTALLFOLDER" Advertise="yes" Icon="PhotocraftIcon.exe" IconIndex="0" />
         </File>
-        <!-- PDF import's PDFium (BSD-3-Clause), loaded at runtime; see apps/photocraft/build.rs. -->
-        <File Id="PdfiumDll" Source="$(var.BinDir)\pdfium.dll" />
 
         <!-- .pcraft: PhotoCraft's own format; PhotoCraft is its default app. -->
         <ProgId Id="Photocraft.Document" Description="PhotoCraft Document" Icon="PhotocraftExe" IconIndex="0">

@@ -15,8 +15,7 @@
   ],
   "payloads": [
     "photocraft-cli.exe",
-    "photocraft.exe",
-    "pdfium.dll"
+    "photocraft.exe"
   ],
   "registry": [
     [

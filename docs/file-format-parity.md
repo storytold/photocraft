@@ -40,7 +40,7 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | Portable Bit Map (PBM/PGM/PPM/PNM/PFM/PAM) | R/W | yes | yes | 8/16/32f |
 | FITS | R/W (FITS Liberator plug-in) | yes | yes | 8/16/32f gray or RGB, header cards kept; no fpack, no debayer |
 | Targa | R/W | yes | yes | 8-bit |
-| Photoshop PDF | R/W | no (#2541) | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | No vector/text PDF, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10); read still missing (#2541) |
+| Photoshop PDF | R/W | yes, raster pages (craft-pdf; up to 16 pages, 8192 px per side, 64M px per page) | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | Read renders each page as a raster artboard: no editable text/vector layers yet (craft-pdf `interpret` is the follow-up), no PDF forms or annotations; write is still one flattened page, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10) |
 | Photoshop EPS, DCS 1.0/2.0, EPS TIFF/PICT preview | R/W | no | no | |
 | Generic EPS / AI | R (rasterize) | no | no | |
 | SVG | R (rasterize) | yes, as editable shape layers or a vector smart object | no | Better than Photoshop for editing; gradients approximated (FILE-215-9) |
@@ -145,6 +145,7 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 Embedded SVG and PDF-compatible AI/PDF/EPS payloads can use an explicit VectorCraft editor choice, including nested PSB contents. AI/PDF/EPS working copies retain their format on save-back; a separate source-bound SVG display preview does not replace the native payload. Placement, shared instances, masks and Undo/Redo use existing smart-object transactions, with native bytes and previews persisted through .pcraft and PSD/PSB saves. Unsupported editor features may still change; standalone EPS/DCS import and lossless Adobe round-trip compatibility remain unverified. See [workflow, safety and validation limits](embedded-vector-editing.md). No corpus floor or parity percentage is changed.
 
 ## Revision history
+| 2026-11-07 | minor | Photoshop PDF read: pages import as raster artboards through the shared craft-pdf (Hayro) renderer, up to 16 pages, 8192 px per side and 64M px per page; editable text/vectors and PDFium are gone. Write is unchanged. |
 
 The original reference row retains its source date and historical totals; current totals are in the status and Actions row above.
 The original reference entry retains its source date and historical totals; current totals are in the status above.

@@ -70,3 +70,14 @@ Permission is hereby granted, free of charge, to any person obtaining a copy of 
 The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+Optional PDF reader (craft-pdf)
+
+PhotoCraft imports PDF pages through craft-pdf (https://github.com/storytold/craft-libs,
+MIT OR Apache-2.0), pinned to revision c5a1cbfb5f9049f9270955caffb5bee5997aebf7. It vendors
+Hayro 0.7.1, hayro-interpret 0.7.0, hayro-syntax 0.7.2, hayro-jbig2 0.3.0 and
+hayro-cmap 0.1.0 (https://github.com/LaurenzV/hayro, MIT OR Apache-2.0). The reader bundles
+the standard-14 Foxit fonts (BSD-3-Clause), Adobe CMaps (BSD-3-Clause) and a Compact ICC
+profile by Clinton Ingram (CC0-1.0); per-file sources and hashes are in craft-libs
+ATTRIBUTION.md. No PDF assets are copied into this repository, and PDFium is no longer used or
+shipped.
