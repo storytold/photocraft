@@ -201,6 +201,12 @@ fn turn(img: &Image) -> Image {
 /// `y' = b x + d y + f`, with `x, y` measured from `bounds`' corner). `None` for a mirror flip, a
 /// degenerate map, or a size past [`MAX_SAMPLES`].
 pub fn render(src: &Surface, bounds: Rect, m: [f64; 6]) -> Option<Surface> {
+    render_with(src, bounds, m, true)
+}
+
+/// [`render`], bleeding the contents or (for a perspective cascade's intermediate, which keeps
+/// its computed colours under transparency) not.
+pub(crate) fn render_with(src: &Surface, bounds: Rect, m: [f64; 6], bleed_contents: bool) -> Option<Surface> {
     let fmt = src.format();
     let nc = src.channels();
     if !fmt.alpha || nc == 0 || bounds.is_empty() || m.iter().any(|v| !v.is_finite()) {
@@ -222,7 +228,9 @@ pub fn render(src: &Surface, bounds: Rect, m: [f64; 6]) -> Option<Surface> {
         });
     }
     let mut img = Image { w, h, n: nc, px };
-    bleed(&mut img);
+    if bleed_contents {
+        bleed(&mut img);
+    }
     // Rule 2: quarter turns, and the map from the turned image.
     let ang = b0.atan2(a0).to_degrees();
     let turns = ((ang + 45.0) / 90.0).floor().rem_euclid(4.0) as usize;

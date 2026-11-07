@@ -17,22 +17,31 @@
 //!    column's own top and length, plain Bicubic, no averaging.
 //! 5. **Clip:** the corners' rounded bounding box.
 //!
-//! **Both directions converging** (Perspective dragged sideways *and* up or down, no scale, skew or
-//! rotation) is drawn in two such stages, measured byte for byte on four impulse probes and two
-//! renders. In coordinates centred on the contents' centre the map is `x ↦ x / (1 + g·x + h·y)`,
-//! which is the horizontal one-way perspective `g` followed by the vertical one `h` (they
-//! commute). The one with the larger coefficient goes first, into an intermediate image that is
-//! stretched so the second stage never magnifies along its walk: along the second stage's walk
-//! axis by the second stage's largest walk magnification (`1 / (1 + h·y)` at the far row of the
-//! first quad), along its projective axis by the ratio of the final quad's extent to the first
-//! quad's. The intermediate's far edge along the walk axis lands on the whole pixel below the
-//! final quad's edge; along the projective axis it lands exactly on the final quad's edge. The
-//! second stage then draws the intermediate with the same one-way rules. The two kernels compose
-//! into the wide, two-humped weights the reference shows, and the first kernel's phase-dependent
-//! centroid, averaged by the second, into its 1/20-pixel ripples.
+//! **Every other quad** (Perspective both ways, Distort, a perspective with scale, skew or
+//! rotation, or turned afterwards) is drawn in two such stages, measured byte for byte on the
+//! reference's impulse probes and renders (31 band probes, 4 dot probes, 5 pictures):
 //!
-//! Quads with an affine part as well (scale, skew or rotation with a two-way perspective) are not
-//! handled here.
+//! 1. In coordinates centred on the contents' centre and on its image the map is
+//!    `hc = [[A, t], [g, h, 1]]`, which factors exactly into a side one-way stage
+//!    `[[s, 0, tx], [c', d, 0], [g1, 0, 1]]` (scale, vertical shear, horizontal perspective)
+//!    followed by a down one `[[1, b2, 0], [0, 1, ty], [0, h2, 1]]` (horizontal shear, vertical
+//!    perspective), or the same with x and y swapped ([`stages`]).
+//! 2. Of the two orders the one whose intermediate image is smaller is used (ties: horizontal
+//!    first). The intermediate is stage 1 stretched along stage 2's walk axis by stage 2's largest
+//!    walk magnification (`1 / (1 + h2·y)` over stage 1's corners, scale included) and along its
+//!    projective axis to the final quad's height; its left edge lands on the whole pixel below,
+//!    its top exactly on the final quad's top. Stage 2 then draws the intermediate (cropped to its
+//!    coverage, its colours under transparency kept, not bled again) with the same one-way rules;
+//!    when stage 2 has no perspective it is the exact
+//!    affine walk ([`crate::smart_affine`]), and when it would be a plain translation there is
+//!    no second stage at all.
+//! 3. Kernels: Automatic for stage 1 by the stretched intermediate's width against the contents'
+//!    (strictly wider: Smoother, else Sharper; the reference decides this tie by its own last
+//!    bits), Sharper for stage 2. The two kernels compose into the wide, two-humped weights the
+//!    reference shows, and the first kernel's phase-dependent centroid, averaged by the second,
+//!    into its 1/20-pixel ripples.
+//!
+//! The intermediate has the document's depth (8-bit documents keep an 8-bit intermediate).
 
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
@@ -127,8 +136,20 @@ fn transposed(h: &[f64; 9]) -> [f64; 9] {
     [h[4], h[3], h[5], h[1], h[0], h[2], h[7], h[6], h[8]]
 }
 
-/// Draws `img` through `h` (h6 ≠ 0, h7 = 0, h8 = 1): the result and its top-left corner.
-fn draw(img: &Image, h: &[f64; 9], depth: Depth) -> Option<(Image, i64, i64)> {
+/// Bicubic Automatic's choice for a pass whose output spans `out` pixels where its input spans
+/// `inp`: Smoother when the pass enlarges, else Sharper. The comparison is strict: a Distort that
+/// keeps the width exactly draws Sharper, as the reference does.
+fn automatic(out: f64, inp: f64) -> (f64, f64) {
+    if out > inp * (1.0 + 1e-9) { SMOOTHER } else { SHARPER }
+}
+
+/// Keys kernels (a, stretch) of Bicubic Sharper and Smoother at 1:1.
+const SHARPER: (f64, f64) = (-1.0, 1.05);
+const SMOOTHER: (f64, f64) = (-0.625, 1.15);
+
+/// Draws `img` through `h` (h6 ≠ 0, h7 = 0, h8 = 1): the result and its top-left corner. `kernel`
+/// for the projective pass, or Automatic by the quad's extent along it.
+fn draw(img: &Image, h: &[f64; 9], depth: Depth, kernel: Option<(f64, f64)>) -> Option<(Image, i64, i64)> {
     let (wf, hf) = (img.w as f64, img.h as f64);
     let map = |x: f64, y: f64| {
         let w = h[6] * x + h[7] * y + 1.0;
@@ -149,16 +170,8 @@ fn draw(img: &Image, h: &[f64; 9], depth: Depth) -> Option<(Image, i64, i64)> {
     if nx.max(img.w).checked_mul(ny.max(img.h))?.checked_mul(img.n)? > MAX_SAMPLES {
         return None;
     }
-    // Rule 3's Automatic: the quad's area against the contents'.
-    let area = 0.5
-        * (0..4)
-            .map(|i| {
-                let (p, q) = (corners[i], corners[(i + 1) % 4]);
-                p.0 * q.1 - q.0 * p.1
-            })
-            .sum::<f64>()
-            .abs();
-    let (a, st) = if area < wf * hf { (-1.0, 1.05) } else { (-0.625, 1.15) };
+    // Rule 3's Automatic: the quad's extent along the projective direction against the contents'.
+    let (a, st) = kernel.unwrap_or_else(|| automatic(hi(|c| c.0) - lo(|c| c.0), wf));
     let inter = projective(img, h, x0, nx, depth, &table(a, st))?;
     // Pass 2: column X samples source x = p y + q; along it y ↦ (A y + B) / Dd (h7 = 0).
     let mut dist0 = Vec::with_capacity(nx);
@@ -183,6 +196,13 @@ fn draw(img: &Image, h: &[f64; 9], depth: Depth) -> Option<(Image, i64, i64)> {
 /// `None` when the map isn't a one-way perspective (affine, or converging both ways), folds over,
 /// or the size passes [`MAX_SAMPLES`].
 pub fn render(src: &Surface, bounds: Rect, h: [f64; 9]) -> Option<Surface> {
+    render_with(src, bounds, h, None, true)
+}
+
+/// [`render`] with the projective pass's kernel fixed (`None`: Automatic) and the bleed optional
+/// (a cascade's intermediate keeps its computed colours), for the cascade's stages. A map that
+/// is neither a one-way perspective nor a general quad is `None`.
+fn render_with(src: &Surface, bounds: Rect, h: [f64; 9], kernel: Option<(f64, f64)>, bleed_contents: bool) -> Option<Surface> {
     let fmt = src.format();
     let nc = src.channels();
     if !fmt.alpha || nc == 0 || bounds.is_empty() || h.iter().any(|v| !v.is_finite()) || h[8].abs() < FLAT {
@@ -194,11 +214,9 @@ pub fn render(src: &Surface, bounds: Rect, h: [f64; 9]) -> Option<Surface> {
     let flat = |v: f64| v.abs() <= FLAT;
     let side = !flat(h[6]) && flat(h[7]) && flat(h[1] / h[0].abs().max(FLAT));
     let down = !flat(h[7]) && flat(h[6]) && flat(h[3] / h[4].abs().max(FLAT));
-    if !flat(h[6]) && !flat(h[7]) {
-        return two_way(src, bounds, &h);
-    }
     if !(side || down) {
-        return None;
+        // Any other perspective: two one-way stages (an affine map is for `smart_affine`).
+        return if flat(h[6]) && flat(h[7]) || kernel.is_some() { None } else { cascade(src, bounds, &h) };
     }
     let depth = Depth::of(fmt.sample);
     let unit = depth.levels.unwrap_or(1.0);
@@ -213,11 +231,19 @@ pub fn render(src: &Surface, bounds: Rect, h: [f64; 9]) -> Option<Surface> {
         });
     }
     let mut img = Image { w, h: hgt, n: nc, px };
-    bleed(&mut img);
+    // The bleed's tie rule is not symmetric, so a down perspective bleeds in its own (transposed)
+    // frame, as the reference does.
     let (out, x0, y0) = if side {
-        draw(&img, &h, depth)?
+        if bleed_contents {
+            bleed(&mut img);
+        }
+        draw(&img, &h, depth, kernel)?
     } else {
-        let (out, y0, x0) = draw(&transpose(&img), &transposed(&h), depth)?;
+        let mut t = transpose(&img);
+        if bleed_contents {
+            bleed(&mut t);
+        }
+        let (out, y0, x0) = draw(&t, &transposed(&h), depth, kernel)?;
         (transpose(&out), x0, y0)
     };
     let mut surface = Surface::new(fmt);
@@ -297,12 +323,43 @@ fn alpha_bounds(s: &Surface) -> Option<Rect> {
     (x1 > 0).then(|| Rect::new(r.x0 + x0 as i32, r.y0 + y0 as i32, r.x0 + x1 as i32, r.y0 + y1 as i32))
 }
 
-/// A perspective converging both ways, with no affine part: two one-way stages (see the module
-/// docs). `h` is normalised and measured from `bounds`' corner.
-fn two_way(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
+/// The two one-way stages of a general quad in coordinates centred on the contents' centre and
+/// its image: `hc = stage2 · stage1` with `stage1 = [[s, 0, tx], [c', d, 0], [g1, 0, 1]]` (a side
+/// perspective with any scale and vertical shear) and `stage2 = [[1, b2, 0], [0, 1, ty], [0, h2, 1]]`
+/// (a down perspective with a horizontal shear). Returns `(stage1, stage2, g1, h2)`.
+fn stages(hc: &[f64; 9]) -> Option<([f64; 9], [f64; 9], f64, f64)> {
+    let [a, b, tx, c, d, ty, g, h, _] = *hc;
+    if d.abs() <= FLAT {
+        return None;
+    }
+    let (h2, b2) = (h / d, b / d);
+    let den = 1.0 - h2 * ty;
+    if den.abs() <= FLAT {
+        return None;
+    }
+    let g1 = (g - h * c / d) / den;
+    let cp = c - ty * g1;
+    let s = a - b2 * cp;
+    let st1 = [s, 0.0, tx, cp, d, 0.0, g1, 0.0, 1.0];
+    let st2 = [1.0, b2, 0.0, 0.0, 1.0, ty, 0.0, h2, 1.0];
+    Some((st1, st2, g1, h2))
+}
+
+/// One orientation's cascade plan: stage 1 in document coordinates, its stretch, the final
+/// box, the stage-1 quad's box and the two coefficients.
+struct Plan {
+    m1: [f64; 9],
+    stage2_shear: f64,
+    h2: f64,
+    sx: f64,
+    sy: f64,
+    fb: [f64; 4],
+    b: [f64; 4],
+    area: f64,
+}
+
+fn plan(h: &[f64; 9], w: f64, hgt: f64) -> Option<Plan> {
     let flat = |v: f64| v.abs() <= FLAT;
-    let (w, hgt) = (f64::from(bounds.width()), f64::from(bounds.height()));
-    // In coordinates centred on the contents' centre and on its image: x ↦ (A x + t) / (1 + p·x).
     let (cx, cy) = (w / 2.0, hgt / 2.0);
     let dc = h[6] * cx + h[7] * cy + h[8];
     if !dc.is_finite() || dc <= FLAT {
@@ -314,46 +371,95 @@ fn two_way(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
         return None;
     }
     let hc = hc.map(|v| v / hc[8]);
-    let (g, p) = (hc[6], hc[7]);
-    if !(flat(hc[0] - 1.0) && flat(hc[1]) && flat(hc[3]) && flat(hc[4] - 1.0) && flat(hc[2]) && flat(hc[5])) {
-        return None; // an affine part as well: not measured yet
-    }
-    let to_doc = translation(tx, ty);
-    let to_centre = translation(-w / 2.0, -hgt / 2.0);
-    // The larger coefficient goes first; a tie (within float noise of corners read from a file) goes
-    // horizontal.
-    let hfirst = g.abs() >= p.abs() * (1.0 - 1e-3);
-    let first: [f64; 9] = if hfirst { [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, g, 0.0, 1.0] } else { [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, p, 1.0] };
-    let m1 = mul(&mul(&to_doc, &first), &to_centre);
+    let (st1, st2, _g1, h2) = stages(&hc)?;
+    let m1 = mul(&mul(&translation(tx, ty), &st1), &translation(-cx, -cy));
     let q1 = corners(&m1, w, hgt)?;
     let fb = extent(&q1);
     let b = extent(&corners(h, w, hgt)?);
-    // The stretch: the second stage's largest walk magnification along its walk axis, the extent
-    // ratio along its projective axis; placed with the far edge on the pixel below the final edge
-    // along the walk axis and exactly on it along the other.
-    let snap = |edges: [f64; 2], targets: [f64; 2]| {
-        let k = usize::from((edges[1] - targets[1]).abs() < (edges[0] - targets[0]).abs());
-        targets[k].floor() - edges[k]
-    };
-    let s = if hfirst {
-        let sx = q1.iter().map(|c| 1.0 / (1.0 + p * (c.1 - ty))).fold(f64::NEG_INFINITY, f64::max);
-        let sy = (b[3] - b[1]) / (fb[3] - fb[1]);
-        let shift = snap([tx + sx * (fb[0] - tx), tx + sx * (fb[2] - tx)], [b[0], b[2]]);
-        [sx, 0.0, tx - sx * tx + shift, 0.0, sy, b[1] - sy * fb[1], 0.0, 0.0, 1.0]
+    let (sx, sy) = if flat(h2) {
+        (1.0, 1.0)
     } else {
-        let sy = q1.iter().map(|c| 1.0 / (1.0 + g * (c.0 - tx))).fold(f64::NEG_INFINITY, f64::max);
-        let sx = (b[2] - b[0]) / (fb[2] - fb[0]);
-        let shift = snap([ty + sy * (fb[1] - ty), ty + sy * (fb[3] - ty)], [b[1], b[3]]);
-        [sx, 0.0, b[0] - sx * fb[0], 0.0, sy, ty - sy * ty + shift, 0.0, 0.0, 1.0]
+        let sx = q1.iter().map(|c| (1.0 / (1.0 + h2 * (c.1 - ty))).abs()).fold(f64::NEG_INFINITY, f64::max);
+        (sx, (b[3] - b[1]) / (fb[3] - fb[1]))
     };
-    if s.iter().any(|v| !v.is_finite()) || s[0] <= 0.0 || s[4] <= 0.0 {
+    if !(sx.is_finite() && sy.is_finite() && sx > 0.0 && sy > 0.0) {
         return None;
     }
-    let m1s = mul(&s, &m1);
-    let inter = render(src, bounds, m1s)?;
+    let area = sx * (fb[2] - fb[0]) * sy * (fb[3] - fb[1]);
+    Some(Plan { m1, stage2_shear: st2[1], h2, sx, sy, fb, b, area })
+}
+
+/// `s` with x and y swapped (contents and document), and the box it occupies.
+fn transposed_surface(s: &Surface, r: Rect) -> Option<(Surface, Rect)> {
+    let nc = s.channels();
+    let (w, h) = (r.width() as usize, r.height() as usize);
+    w.checked_mul(h)?.checked_mul(nc)?.le(&MAX_SAMPLES).then_some(())?;
+    let img = Image { w, h, n: nc, px: s.read_region(r) };
+    let t = transpose(&img);
+    let tr = Rect::new(r.y0, r.x0, r.y1, r.x1);
+    let mut out = Surface::new(s.format());
+    out.write_region_par(tr, &t.px);
+    Some((out, tr))
+}
+
+/// A general quad (see the module docs): two one-way stages through a stretched intermediate.
+/// `h` is normalised and measured from `bounds`' corner.
+fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
+    let (w, hgt) = (f64::from(bounds.width()), f64::from(bounds.height()));
+    let normal = plan(h, w, hgt);
+    let mirrored = plan(&transposed(h), hgt, w);
+    let (p, turned) = match (normal, mirrored) {
+        (Some(n), Some(m)) => {
+            if m.area < n.area * (1.0 - 1e-9) { (m, true) } else { (n, false) }
+        }
+        (Some(n), None) => (n, false),
+        (None, Some(m)) => (m, true),
+        (None, None) => return None,
+    };
+    if turned {
+        let (ts, tb) = transposed_surface(src, bounds)?;
+        let out = cascade_normal(&ts, tb, &transposed(h), &p)?;
+        let r = out.content_bounds();
+        if r.is_empty() {
+            return Some(Surface::new(out.format()));
+        }
+        return transposed_surface(&out, r).map(|(s, _)| s);
+    }
+    cascade_normal(src, bounds, h, &p)
+}
+
+fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan) -> Option<Surface> {
+    let flat = |v: f64| v.abs() <= FLAT;
+    let w = f64::from(bounds.width());
+    if flat(p.stage2_shear) && flat(p.h2) {
+        // Stage 2 would be a plain translation: the one stage draws the whole map.
+        return render_with(src, bounds, *h, None, true);
+    }
+    // The intermediate: stage 1 stretched along stage 2's walk axis by stage 2's largest walk
+    // magnification and along its projective axis to the final box's height; its left edge on the
+    // whole pixel below, its top exactly on the final box's top.
+    let dc = h[6] * w / 2.0 + h[7] * f64::from(bounds.height()) / 2.0 + h[8];
+    let tx = (h[0] * w / 2.0 + h[1] * f64::from(bounds.height()) / 2.0 + h[2]) / dc;
+    let left = tx + p.sx * (p.fb[0] - tx);
+    let s = [p.sx, 0.0, tx - p.sx * tx + left.floor() - left, 0.0, p.sy, if flat(p.h2) { 0.0 } else { p.b[1] - p.sy * p.fb[1] }, 0.0, 0.0, 1.0];
+    let m1s = mul(&s, &p.m1);
+    let k1 = automatic(p.sx * (p.fb[2] - p.fb[0]), w);
+    let inter = if flat(m1s[6]) && flat(m1s[7]) {
+        crate::smart_affine::render(src, bounds, [m1s[0], m1s[3], m1s[1], m1s[4], m1s[2], m1s[5]])?
+    } else {
+        render_with(src, bounds, m1s, Some(k1), true)?
+    };
     let ib = alpha_bounds(&inter)?;
     let m2 = mul(&mul(h, &inverse(&m1s)?), &translation(f64::from(ib.x0), f64::from(ib.y0)));
-    render(&inter, ib, m2)
+    if m2[8].abs() <= FLAT {
+        return None;
+    }
+    let m2 = m2.map(|v| v / m2[8]);
+    if flat(m2[6]) && flat(m2[7]) {
+        // Stage 2 is a horizontal shear (and the translation): the exact affine walk.
+        return crate::smart_affine::render_with(&inter, ib, [m2[0], m2[3], m2[1], m2[4], m2[2], m2[5]], false);
+    }
+    render_with(&inter, ib, m2, Some(SHARPER), false)
 }
 
 /// `h` (row-major, in the contents' own coordinates) measured instead from the point `(x, y)`, the
@@ -383,22 +489,94 @@ mod tests {
         s.write_region(Rect::new(0, 0, 4, 4), &[1.0; 64]);
         let r = Rect::new(0, 0, 4, 4);
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]).is_none());
-        // Converging both ways about a point other than the contents' centre (an affine part): not drawn.
-        assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.01, 1.0]).is_none());
+        // Converging both ways about a point other than the contents' centre (an affine part): the cascade.
+        assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.01, 1.0]).is_some());
         // The same about the centre: the two-stage path.
         let about_centre = mul(&mul(&translation(10.0, 10.0), &[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.005, 1.0]), &translation(-2.0, -2.0));
         assert!(render(&s, r, about_centre).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.0, 1.0]).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.01, 1.0]).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, f64::NAN, 0.0, 1.0]).is_none());
-        // A one-way perspective turned afterwards: the columns are no longer straight walks.
-        assert!(render(&s, r, [0.94, -0.34, 0.0, 0.34, 0.94, 0.0, 0.01, 0.0, 1.0]).is_none());
+        // A one-way perspective turned afterwards: two stages, the second an affine shear.
+        assert!(render(&s, r, [0.94, -0.34, 0.0, 0.34, 0.94, 0.0, 0.01, 0.0, 1.0]).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0]).is_none());
     }
 
+    /// A 128 px grey field (96) with a 224 dot every 16 px from (8, 8): the reference's impulse
+    /// probe, whose renders give the expected values below.
+    fn dots() -> Surface {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let mut data = vec![0.0f32; 128 * 128 * 4];
+        for (i, px) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = (i % 128, i / 128);
+            let v = if x % 16 == 8 && y % 16 == 8 { 224.0 } else { 96.0 };
+            px.copy_from_slice(&[v / 255.0, v / 255.0, v / 255.0, 1.0]);
+        }
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.write_region(Rect::new(0, 0, 128, 128), &data);
+        s
+    }
+
+    fn grey_patch(s: &Surface, x: i32, y: i32) -> [[u8; 3]; 3] {
+        let px = s.read_region(Rect::new(x - 1, y - 1, x + 2, y + 2));
+        let mut out = [[0u8; 3]; 3];
+        for (i, p) in px.as_chunks::<4>().0.iter().enumerate() {
+            assert!(p[3] > 0.999, "opaque at ({x}, {y})");
+            out[i / 3][i % 3] = (p[0] * 255.0).round() as u8;
+        }
+        out
+    }
+
+    /// The reference's render of the dots moved by (30, 10) under Perspective 0.35 % / 0.2 %:
+    /// the vertical stage goes first here (its intermediate is the smaller), although the
+    /// horizontal coefficient is larger.
+    #[test]
+    fn a_moved_two_way_perspective_matches_the_reference_byte_for_byte() {
+        let h = [2.4074074074099214, 0.49382716049342734, 107.53086419753102, 0.864197530867415, 2.037037037036821, 76.6666666666538, 0.005401234567917046, 0.0030864197530817293, 1.0];
+        let out = render(&dots(), Rect::new(0, 0, 128, 128), h).expect("drawn");
+        assert_eq!(grey_patch(&out, 184, 126), [[95, 93, 87], [89, 129, 143], [91, 137, 165]]);
+        assert_eq!(grey_patch(&out, 196, 177), [[97, 92, 93], [94, 146, 139], [95, 121, 110]]);
+    }
+
+    /// The reference's render of the dots in a one-way perspective turned by 20 degrees: stage 1
+    /// draws Smoother (its stretched intermediate is wider than the contents) and stage 2 is a
+    /// plain horizontal shear through the affine walk.
+    #[test]
+    fn a_turned_perspective_matches_the_reference_byte_for_byte() {
+        let h = [3.015369202285501, -0.34202014332565317, 124.07807401908897, 2.0570322987729495, 0.9396926207829912, 64.76132928581427, 0.009428879310300618, 0.0, 1.0];
+        let out = render(&dots(), Rect::new(0, 0, 128, 128), h).expect("drawn");
+        assert_eq!(grey_patch(&out, 186, 132), [[97, 96, 96], [103, 94, 89], [91, 189, 104]]);
+        assert_eq!(grey_patch(&out, 188, 167), [[96, 95, 96], [106, 140, 120], [96, 91, 90]]);
+    }
+
+    /// A down perspective is the side perspective of the transposed contents, bleed included (the
+    /// bleed's tie rule is not symmetric, so it has to run in the transposed frame).
+    #[test]
+    fn a_down_perspective_is_the_transposed_side_perspective() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let mut data = vec![0.0f32; 24 * 20 * 4];
+        for (i, px) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let (x, y) = (i % 24, i / 24);
+            // A slanted transparent corner over a two-tone field.
+            let (c, a) = if x + y < 10 { (0.0, 0.0) } else { (if (x / 3 + y / 5) % 2 == 0 { 0.2 } else { 0.9 }, 1.0) };
+            px.copy_from_slice(&[c, c * 0.5, 1.0 - c, a]);
+        }
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.write_region(Rect::new(0, 0, 24, 20), &data);
+        let (ts, tr) = transposed_surface(&s, Rect::new(0, 0, 24, 20)).expect("transposed");
+        let down = [1.0, 0.0, 30.0, 0.0, 1.3, 40.0, 0.0, 0.004, 1.0];
+        let a = render(&s, Rect::new(0, 0, 24, 20), down).expect("down");
+        let b = render(&ts, tr, transposed(&down)).expect("side");
+        let (bt, _) = transposed_surface(&b, b.content_bounds()).expect("back");
+        let r = a.content_bounds();
+        assert_eq!(r, bt.content_bounds());
+        assert_eq!(a.read_region(r), bt.read_region(r));
+    }
+
     /// Renders the cases listed in `$PERSP_CASES` (`name source.rgba h0 .. h8` per line, 128 px
-    /// 8-bit sources) into `$PERSP_OUT/<name>.rust.rgba` (320 px, straight 8-bit) for comparison
-    /// with the reference's renders.
+    /// 8-bit sources; or `name source.rgba W H auto|sharper|smoother h0 .. h8` for another size
+    /// and a fixed projective kernel) into `$PERSP_OUT/<name>.rust.rgba` (320 px, straight 8-bit)
+    /// for comparison with the reference's renders.
     #[test]
     #[ignore]
     fn dump_reference_cases() {
@@ -407,16 +585,39 @@ mod tests {
         for line in std::fs::read_to_string(cases).expect("cases").lines() {
             let f: Vec<&str> = line.split_whitespace().collect();
             let bytes = std::fs::read(f[1]).expect("source");
-            let h: Vec<f64> = f[2..11].iter().map(|v| v.parse().expect("number")).collect();
+            let (w, hgt, kern, hs) = if f.len() == 11 {
+                (128, 128, None, &f[2..11])
+            } else {
+                let k = match f[4] {
+                    "sharper" => Some(SHARPER),
+                    "smoother" => Some(SMOOTHER),
+                    _ => None,
+                };
+                (f[2].parse().expect("w"), f[3].parse().expect("h"), k, &f[5..14])
+            };
+            let h: Vec<f64> = hs.iter().map(|v| v.parse().expect("number")).collect();
             let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
             let data: Vec<f32> = bytes.iter().map(|&b| f32::from(b) / 255.0).collect();
-            s.write_region(Rect::new(0, 0, 128, 128), &data);
+            s.write_region(Rect::new(0, 0, w, hgt), &data);
             let h: [f64; 9] = h.try_into().expect("nine");
-            let r = render(&s, Rect::new(0, 0, 128, 128), h);
+            let r = render_with(&s, Rect::new(0, 0, w, hgt), h, kern, true);
             let px = r.map(|r| r.read_region(Rect::new(0, 0, 320, 320))).unwrap_or_else(|| vec![0.0; 320 * 320 * 4]);
             let b: Vec<u8> = px.iter().map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8).collect();
             std::fs::write(format!("{out}/{}.rust.rgba", f[0]), b).expect("write");
         }
+    }
+
+    /// Bleeds the straight 8-bit RGBA image `$BLEED_IN` (`W H` in `$BLEED_SIZE`) into `$BLEED_OUT`.
+    #[test]
+    #[ignore]
+    fn dump_bleed() {
+        let (Ok(inp), Ok(size), Ok(out)) = (std::env::var("BLEED_IN"), std::env::var("BLEED_SIZE"), std::env::var("BLEED_OUT")) else { return };
+        let dims: Vec<usize> = size.split_whitespace().map(|v| v.parse().expect("size")).collect();
+        let bytes = std::fs::read(inp).expect("input");
+        let mut img = Image { w: dims[0], h: dims[1], n: 4, px: bytes.iter().map(|&b| f32::from(b)).collect() };
+        bleed(&mut img);
+        let b: Vec<u8> = img.px.iter().map(|v| v.round().clamp(0.0, 255.0) as u8).collect();
+        std::fs::write(out, b).expect("write");
     }
 
     /// General-quad experiments: each line of `$GEN_CASES` is `name source.rgba depth mode ...`
