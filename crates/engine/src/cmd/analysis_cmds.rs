@@ -728,7 +728,8 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
     let (w0, h0) = (f64::from(d.size.width), f64::from(d.size.height));
     compound(s, "Straighten", |s| {
         if crop {
-            s.execute("image.rotation.arbitrary", json!({"angle": rot, "direction": "cw"}))?;
+            // Count points turn with the image here, since the crop after it moves them too.
+            crate::mode_cmds::rotate_arbitrary_with(s, &json!({"angle": rot, "direction": "cw"}), false)?;
             let nd = doc(s)?;
             let (cw, ch) = inscribed(w0, h0, rot.to_radians());
             let (nw, nh) = (f64::from(nd.size.width), f64::from(nd.size.height));
