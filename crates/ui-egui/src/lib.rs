@@ -995,9 +995,9 @@ mod menu_item_labels_tests;
 mod pen_path_ownership_tests;
 
 #[cfg(test)]
-mod brush_opacity_minimum_tests;
-#[cfg(test)]
 mod artboard_options_bar_tests;
+#[cfg(test)]
+mod brush_opacity_minimum_tests;
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
