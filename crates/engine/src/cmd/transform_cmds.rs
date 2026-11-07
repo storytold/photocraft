@@ -645,7 +645,8 @@ pub(crate) fn transform_by(doc: &mut Document, id: LayerId, affine: Affine, inte
     // Price the smart object caches before they are taken: the fallback warp below isn't budgeted.
     check_layer_budget(None, l, &h)?;
     let taken = crate::smart_cmds::take_caches(std::slice::from_mut(l));
-    apply_transform(None, group, l, &h, Some(affine), interp, &Interrupt::NONE)?;
+    // An affine map, so the free-transforms-on-type flag (only read for a non-affine one) is moot.
+    apply_transform(None, group, l, &h, Some(affine), interp, false, &Interrupt::NONE)?;
     let snapshot = doc.clone();
     if let Some(l) = doc.layer_mut(id) {
         refresh_text(&snapshot, l);
