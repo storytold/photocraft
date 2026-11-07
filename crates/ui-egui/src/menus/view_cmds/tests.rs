@@ -1108,3 +1108,73 @@ fn full_screen_modes_need_a_document() {
     leave_full_screen_without_document(&mut app, &ctx);
     assert_eq!(app.ui.view.screen_mode, "standard");
 }
+
+/// One frame of the documents' own windows (embedded in the main one, as egui does without a
+/// window system).
+fn draw_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    ctx.run_ui(egui::RawInput::default(), |ui| crate::canvas::extra_windows(app, ui.ctx())).textures_delta.clear();
+}
+
+/// View › Zoom In and Fit on Screen act on the document's stored view; a document that floats in
+/// a window of its own (no tab) shows that view, so they zoom its window (CodeRabbit on #11664).
+#[test]
+fn view_commands_zoom_a_document_floating_in_its_own_window() {
+    let (mut app, ctx) = app_with(1);
+    menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    draw_windows(&mut app, &ctx);
+    let window_zoom = |app: &PhotocraftApp| app.ui.windows.iter().find(|w| w.document == 0).unwrap().view.zoom;
+    // From 50%, so Actual Pixels has something to change.
+    app.ui.views[0].zoom = 0.5;
+    draw_windows(&mut app, &ctx);
+    assert_eq!(window_zoom(&app), 0.5);
+    menu(&mut app, &ctx, "view.actualPixels", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    assert_eq!(window_zoom(&app), 1.0, "View › Actual Pixels shows the floating window at 100%");
+    assert_eq!(window_zoom(&app), app.ui.views[0].zoom, "the window shows the document's view");
+    let before = window_zoom(&app);
+    menu(&mut app, &ctx, "view.zoomIn", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    assert!(window_zoom(&app) > before, "View › Zoom In zooms the floating window: {before} -> {}", window_zoom(&app));
+    let zoomed = window_zoom(&app);
+    menu(&mut app, &ctx, "view.zoomOut", json!({})).unwrap();
+    draw_windows(&mut app, &ctx);
+    assert!(window_zoom(&app) < zoomed, "and View › Zoom Out zooms it out");
+}
+
+/// View › Fit Layer(s) on Screen on a document floating in its own window fits that window's
+/// canvas, not the main window's (CodeRabbit on #11664).
+#[test]
+fn fit_layers_on_screen_fits_the_floating_window() {
+    let (mut app, ctx) = app_with(1);
+    menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
+    draw_windows(&mut app, &ctx);
+    let (area, ppp) = crate::canvas::tabs::floating_canvas(&app, &ctx, 0).expect("the window recorded its canvas");
+    // A main canvas of another size, so the two fits differ.
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(3000.0, 2000.0));
+    menu(&mut app, &ctx, "view.fitLayersOnScreen", json!({})).unwrap();
+    // The layer is the whole 100×80 document.
+    let fit = |area: egui::Vec2, ppp: f32| crate::zoom_levels::clamp(((area.x - 40.0) / 100.0).min((area.y - 40.0) / 80.0) * ppp, [100, 80]);
+    let zoom = app.ui.views[0].zoom;
+    assert_ne!(fit(area, ppp), fit(egui::vec2(3000.0, 2000.0), app.canvas_ppp()), "the test needs two different fits");
+    assert!((zoom - fit(area, ppp)).abs() < 1e-4, "fits the window's canvas {area:?}: {zoom} vs {}", fit(area, ppp));
+}
+
+/// Float All in Windows and Cascade keep a floating document's own window instead of adding a
+/// second one, and leave second views alone (CodeRabbit on #11664).
+#[test]
+fn float_all_in_windows_reuses_a_documents_own_window() {
+    let (mut app, ctx) = app_with(3);
+    let own = menu(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap()["window"].as_u64().unwrap();
+    app.session.set_active(2);
+    menu(&mut app, &ctx, "window.arrange.newWindowForDocument", json!({})).unwrap();
+    let owning = |app: &PhotocraftApp, d: usize| app.ui.windows.iter().filter(|w| w.floating && w.document == d).map(|w| w.id).collect::<Vec<_>>();
+    for command in ["window.arrange.floatAllInWindows", "window.arrange.cascade"] {
+        let ids = menu(&mut app, &ctx, command, json!({})).unwrap()["windows"].clone();
+        assert_eq!(owning(&app, 0), [own], "{command}: document 0 keeps its window");
+        assert_eq!(ids[0], json!(own), "{command} reports the window it kept");
+        for d in 0..3 {
+            assert_eq!(owning(&app, d).len(), 1, "{command}: one window of its own for document {d}");
+        }
+        assert_eq!(app.ui.windows.iter().filter(|w| !w.floating).count(), 1, "{command}: the second view stays");
+    }
+}

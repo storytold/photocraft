@@ -1,7 +1,7 @@
 use super::{LAYOUTS, PhotocraftApp, Value, json};
 
 /// View › Fit Layer(s) on Screen: zoom and centre on the selected layers' bounds.
-pub(super) fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
+pub(super) fn fit_layers(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
     let i = app.session.active_index().ok_or("no document")?;
     let st = app.session.active().ok_or("no document")?;
     let mut b = photocraft_geom::Rect::EMPTY;
@@ -14,10 +14,11 @@ pub(super) fn fit_layers(app: &mut PhotocraftApp) -> Result<Value, String> {
         b = st.doc.bounds();
     }
     let size = [st.doc.size.width, st.doc.size.height];
-    let area = app.last_canvas_rect.size();
+    // A document floating in its own window fits that window's canvas, which may be smaller than
+    // the main window's and on a display with another scale.
+    let (area, ppp) = crate::canvas::tabs::floating_canvas(app, ctx, i).unwrap_or((app.last_canvas_rect.size(), app.canvas_ppp()));
     let area = if area.x > 50.0 { area } else { egui::vec2(1200.0, 800.0) };
     // The area is in egui points; the stored zoom is device pixels per document pixel.
-    let ppp = app.canvas_ppp();
     let points = ((area.x - 40.0) / b.width().max(1) as f32).min((area.y - 40.0) / b.height().max(1) as f32);
     let v = &mut app.ui.views[i];
     v.zoom = crate::zoom_levels::clamp(points * ppp, size);
@@ -44,6 +45,12 @@ pub(crate) fn float_window(app: &mut PhotocraftApp, doc: usize, offset: usize, f
     view.zoom_transition = None;
     view.display_camera = None;
     view.fit_pending = offset > 0 || view.fit_pending;
+    // A window that owns the document (no tab) shares the document's stored view, so the view
+    // commands, the zoom field and the Navigator, which all act on it, move this window
+    // (`canvas::extra_windows`).
+    if floating && let Some(stored) = app.ui.views.get_mut(doc) {
+        *stored = view.clone();
+    }
     app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating, focused: false, position: None });
     wid
 }
@@ -94,8 +101,16 @@ pub(super) fn arrange(app: &mut PhotocraftApp, k: &str, p: &Value) -> Result<Val
             Ok(json!({"window": wid}))
         }
         "floatAllInWindows" | "cascade" => {
+            // A document that already floats keeps its window (Open Documents as Tabs off, an
+            // earlier Float in Window): a second owning window would show it twice. Second views
+            // (New Window for Document) don't count; they stay as they are.
             let n = app.session.documents().len();
-            let ids: Vec<u64> = (0..n).map(|d| float_window(app, d, d, true)).collect();
+            let ids: Vec<u64> = (0..n)
+                .map(|d| match app.ui.windows.iter().find(|w| w.open && w.floating && w.document == d) {
+                    Some(w) => w.id,
+                    None => float_window(app, d, d, true),
+                })
+                .collect();
             Ok(json!({"windows": ids}))
         }
         "matchZoom" | "matchLocation" | "matchRotation" | "matchAll" => {

@@ -359,9 +359,13 @@ impl PhotocraftApp {
         self.ui.windows.retain_mut(|w| now(w.document).map(|d| w.document = d).is_some());
         if !self.session.prefs().workspace.open_documents_as_tabs {
             let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
+            // Each new document floats in a window of its own, as Window › Arrange › Float in
+            // Window does: the window owns its view and the document has no tab. A second view
+            // (`floating: false`, New Window for Document) would leave the tab and show the
+            // document twice.
             for &idx in &new_docs {
                 if !self.ui.windows.iter().any(|w| w.document == idx) {
-                    crate::view_cmds::float_window(self, idx, idx, false);
+                    crate::view_cmds::float_window(self, idx, idx, true);
                 }
             }
         }
