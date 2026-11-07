@@ -201,16 +201,16 @@ fn agents_see_the_border_in_progress() {
 fn switching_tools_or_documents_drops_the_border() {
     let mut app = app();
     click(&mut app, 52.0, 37.0, Modifiers::NONE);
-    frame(&mut app);
+    frame(&mut app, true);
     assert!(app.ui.magnetic.active());
     app.ui.tool = Tool::Lasso;
-    frame(&mut app);
+    frame(&mut app, true);
     assert!(!app.ui.magnetic.active());
     app.ui.tool = Tool::MagneticLasso;
     click(&mut app, 52.0, 37.0, Modifiers::NONE);
     app.run("file.new", json!({"width": 50, "height": 50})).unwrap();
     app.sync_views();
-    frame(&mut app);
+    frame(&mut app, true);
     assert!(!app.ui.magnetic.active());
 }
 
@@ -244,6 +244,38 @@ fn width_follows_pen_pressure_only_when_asked_and_only_with_a_pen() {
     assert_eq!(settings(&app, 0.5).width, 11.0);
     assert_eq!(settings(&app, 1.0).width, 1.0);
     assert_eq!(settings(&app, f32::NAN).width, 21.0);
+}
+
+/// Starts a border at the top edge of the square, presses the button, then lets `release` end the
+/// press; walks along the edge in 2 px steps and returns how many fastening points the border has.
+fn points_after_walk(release: impl FnOnce(&mut PhotocraftApp)) -> usize {
+    let mut a = app();
+    tool_event(&mut a, ToolEvent::Down { x: 50.0, y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+    release(&mut a);
+    for x in (52..=128).step_by(2) {
+        tool_event(&mut a, ToolEvent::Move { x: f64::from(x), y: 40.0, pressure: 1.0 }, Modifiers::NONE);
+    }
+    a.ui.magnetic.anchors.len()
+}
+
+#[test]
+fn the_button_up_spacing_applies_after_a_release_the_temporary_move_took() {
+    // Baseline: an ordinary release, then the button-up spacing (~24 px at Frequency 100).
+    let plain = points_after_walk(|a| tool_event(a, ToolEvent::Up { x: 50.0, y: 40.0 }, Modifiers::NONE));
+    assert!(plain <= 6, "button up: {plain} points");
+    // The release arrives while the temporary Move (Ctrl held) is the active tool.
+    let moved = points_after_walk(|a| {
+        a.tool_override = Some(Tool::Move);
+        tool_event(a, ToolEvent::Up { x: 50.0, y: 40.0 }, Modifiers::COMMAND);
+        a.tool_override = None;
+    });
+    assert!(moved <= 6, "after a release taken by the Move: {moved} points");
+    // The canvas frame also clears it: the button is up, whoever saw the release.
+    let framed = points_after_walk(|a| frame(a, false));
+    assert!(framed <= 6, "after a frame with the button up: {framed} points");
+    // A frame with the button still down keeps the held-button spacing.
+    let held = points_after_walk(|a| frame(a, true));
+    assert!(held > 10, "button held: {held} points");
 }
 
 #[test]

@@ -110,6 +110,10 @@ fn trace(app: &mut PhotocraftApp, from: [f64; 2], to: [f64; 2], guide: &[[f64; 2
 
 /// Pointer events while the Magnetic Lasso is the tool (it takes them all).
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool {
+    // A release ends the held-button spacing whoever takes it (the temporary Move included).
+    if matches!(ev, ToolEvent::Up { .. }) {
+        app.magnetic.held = false;
+    }
     // ⌘ held makes it the Move tool (`hold_keys::cmd_moves`): nothing to take then.
     if app.active_tool() != Tool::MagneticLasso {
         return false;
@@ -377,8 +381,13 @@ pub fn replaces_selection(app: &PhotocraftApp) -> bool {
     app.ui.magnetic.active() && app.ui.magnetic.mode == "replace"
 }
 
-/// Once a frame: a border left behind by a tool or document switch is dropped.
-pub fn frame(app: &mut PhotocraftApp) {
+/// Once a frame (`primary_down`: the primary pointer button is down): a border left behind by a tool or document switch is dropped.
+pub fn frame(app: &mut PhotocraftApp, primary_down: bool) {
+    // The button is up: the held-button spacing ends even when the release went to the temporary
+    // Move (Ctrl pressed during the drag) and never reached this tool.
+    if !primary_down {
+        app.magnetic.held = false;
+    }
     let m = &app.ui.magnetic;
     if m.active() && (app.ui.tool != Tool::MagneticLasso || app.session.active().map(|d| d.doc.id.0) != Some(m.doc)) {
         cancel(app);
