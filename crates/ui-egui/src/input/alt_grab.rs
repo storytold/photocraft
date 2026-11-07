@@ -40,6 +40,11 @@ pub(crate) fn message() -> &'static str {
 /// Watch one canvas view's frame for an ⌥-click the window manager grabbed. `rect` is the view's
 /// canvas area, `tool` the tool in effect, `active` false while a dialog owns the canvas.
 pub(crate) fn watch(app: &mut PhotocraftApp, ctx: &Context, id: Id, rect: Rect, tool: Tool, active: bool) {
+    // Windows and macOS have no window-move key to point at: the pointer leaving there is no grab
+    // (#10904).
+    if cfg!(any(windows, target_os = "macos")) {
+        return;
+    }
     let (gone, hover, mods, down, focused) =
         ctx.input(|i| (i.events.iter().any(|e| matches!(e, Event::PointerGone)), i.pointer.hover_pos(), i.modifiers, i.pointer.any_down(), i.focused));
     let mut w = ctx.data(|d| d.get_temp::<Watch>(id)).unwrap_or_default();
