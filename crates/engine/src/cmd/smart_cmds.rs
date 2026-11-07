@@ -243,7 +243,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.resetTransform",
             "Reset Transform",
             SO,
-            r##"{"layer":id?} (the placement returns to 100 % of the current contents' own size, rotation, skew, Distort and Perspective cleared, centred where the object is; the Warp and the smart filters stay; one undo step)"##,
+            r##"{"layer":id?} (the placement returns to 100 % of the current contents' own size with rotation, skew, Distort, Perspective and the Warp cleared, centred on the average of the placement's four corners; the smart filters stay; one undo step)"##,
             has_smart,
             reset_transform
         ),

@@ -59,9 +59,11 @@ pub(crate) fn shift_smart(sm: &mut SmartObject, dx: i32, dy: i32) {
 }
 
 /// Layer ▸ Smart Objects ▸ Reset Transform, and the same item of the Layers panel menu (#11662):
-/// the placement goes back to 100 % of the current contents' own size with rotation, skew, Distort
-/// and Perspective cleared, centred where the object sits now. Photoshop resets the *transform*,
-/// so the Warp (kept in source space) and the smart filters stay as they are.
+/// the placement goes back to 100 % of the current contents' own size with rotation, skew, Distort,
+/// Perspective **and Warp** cleared, centred where the object sits. Measured in the reference
+/// application 2026-11-06 (see the #11675 discussion): a smart object warped with Arc 50, rotated
+/// and scaled came back with no warp at all, at its contents' own size, unrotated, and centred on
+/// the average of its four corners. The smart filters stay.
 pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -72,8 +74,16 @@ pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
     let [x0, y0, x1, y1] = source_box(&st.doc, sm).ok_or_else(|| other("the smart object's contents are unavailable"))?;
     let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
     let old = placement(sm);
-    let (dx, dy) = old.apply(cx, cy);
-    let to = Affine { m: [1.0, 0.0, 0.0, 1.0, dx - cx, dy - cy] };
+    // The object stays where it is: the average of the placement's four corners, which is its
+    // centre for an affine placement and the quad's centre once Distort or Perspective bent it.
+    let (mut sx, mut sy) = (0.0, 0.0);
+    for (u, v) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)] {
+        let (px, py) = old.apply(u, v);
+        sx += px;
+        sy += py;
+    }
+    let (dx, dy) = (sx / 4.0 - cx, sy / 4.0 - cy);
+    let to = Affine { m: [1.0, 0.0, 0.0, 1.0, dx, dy] };
     let new = affine_homography(&to);
     // Everything the accumulated transform moved the pixels by, so the linked masks and the Smart
     // Filter mask follow the placement back as they do under Free Transform.
@@ -82,6 +92,12 @@ pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(other("the smart object's placement is not a usable transform"));
     }
     s.edit("Reset Transform", |doc, _| {
+        // The Warp is part of what the reference takes back, so the re-render below starts from the
+        // unwarped contents. How far a painted Smart Filter mask should follow a cleared warp is
+        // unmeasured: here it follows the placement, as it does under Free Transform.
+        if let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            sm.warp = None;
+        }
         crate::transform_cmds::transform_by_map(doc, id, &rel, None, Interp::Bicubic)?;
         // `new ∘ old⁻¹ ∘ old` only lands on the reset map to within float noise, and could leave a
         // Distort placement behind as a nearly affine one: store the exact map.

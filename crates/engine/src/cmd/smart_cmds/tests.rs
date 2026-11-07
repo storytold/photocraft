@@ -503,10 +503,26 @@ fn transforms_re_render_from_source_losslessly() {
     assert!(active_smart(&smart).perspective.is_some());
 }
 
-/// The contents' box centre in document pixels under `sm`'s placement: what Reset Transform keeps.
+/// The contents' box centre in document pixels under `sm`'s placement: what an affine placement is
+/// centred on, and where the box centre of a projective one maps to.
 fn placed_centre(s: &Session, sm: &SmartObject) -> (f64, f64) {
     let b = crate::smart_cmds::source_box(&s.active().unwrap().doc, sm).unwrap();
     placement(sm).apply((b[0] + b[2]) / 2.0, (b[1] + b[3]) / 2.0)
+}
+
+/// The average of the four corners of `sm`'s placement in document pixels: the point Reset
+/// Transform keeps (measured in the reference application 2026-11-06, see the #11675 discussion).
+/// It is the box centre under an affine placement, and the quad's centre under a projective one.
+fn quad_centre(s: &Session, sm: &SmartObject) -> (f64, f64) {
+    let b = crate::smart_cmds::source_box(&s.active().unwrap().doc, sm).unwrap();
+    let h = placement(sm);
+    let (mut x, mut y) = (0.0, 0.0);
+    for (u, v) in [(b[0], b[1]), (b[2], b[1]), (b[2], b[3]), (b[0], b[3])] {
+        let (px, py) = h.apply(u, v);
+        x += px;
+        y += py;
+    }
+    (x / 4.0, y / 4.0)
 }
 
 /// Layer ▸ Smart Objects ▸ Reset Transform (#11662): 100 % of the contents' own size, no rotation,
@@ -544,28 +560,61 @@ fn reset_transform_restores_100_percent_in_place() {
     assert_eq!(active_smart(&s).transform, after.transform, "idempotent");
 }
 
-/// Reset Transform resets the *transform*: the Warp and the smart filter stack survive it (#11662).
+/// Reset Transform takes the Warp back with the transform and keeps the smart filter stack:
+/// measured in the reference application 2026-11-06 (an Arc 50 warp came back as no warp at all),
+/// see the #11675 discussion.
 #[test]
-fn reset_transform_keeps_the_warp_and_the_smart_filters() {
+fn reset_transform_clears_the_warp_and_keeps_the_smart_filters() {
     let mut s = session(8);
     paint(&mut s);
     let id = convert(&mut s);
     s.execute("edit.transform.warp", json!({"style": "arc", "bend": 30})).unwrap();
     s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
     let before = active_smart(&s);
+    assert!(before.warp.is_some(), "the fixture is warped");
     let r = before.cache.unwrap().content_bounds();
     let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
     s.execute("edit.transform", json!({"layer": id, "rect": [x0, y0, x1, y1], "quad": [[x0, y0], [x1, y0], [x1 - 12.0, y1 - 8.0], [x0, y1]]})).unwrap();
     assert!(active_smart(&s).perspective.is_some(), "Distort keeps a projective placement");
-    let centre = placed_centre(&s, &active_smart(&s));
+    let centre = quad_centre(&s, &active_smart(&s));
     s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
     let after = active_smart(&s);
-    assert_eq!(after.warp, before.warp, "the Warp is not part of the transform");
-    assert_eq!(after.smart_filters.len(), 1, "nor is the smart filter stack");
+    assert!(after.warp.is_none(), "the Warp goes with the transform, as the reference does");
+    assert_eq!(after.smart_filters.len(), 1, "the smart filter stack stays");
     assert!(after.perspective.is_none(), "Distort is cleared");
     assert_eq!(&after.transform.m[..4], &[1.0, 0.0, 0.0, 1.0]);
     let now = placed_centre(&s, &after);
     assert!((now.0 - centre.0).abs() < 1e-6 && (now.1 - centre.1).abs() < 1e-6, "centred where it was: {now:?} vs {centre:?}");
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let again = active_smart(&s);
+    assert_eq!(again.transform, after.transform, "idempotent");
+    assert!(again.warp.is_none(), "and still unwarpd");
+}
+
+/// The centre Reset Transform keeps is the average of the placement's four corners, not the point
+/// its box centre maps to: they differ once Distort or Perspective bends the quad, and the
+/// reference application keeps the corners' average (measured 2026-11-06, #11675 discussion).
+#[test]
+fn reset_transform_centres_a_distorted_object_on_its_corner_average() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let r = active_smart(&s).cache.unwrap().content_bounds();
+    let (x0, y0, x1, y1) = (f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
+    let quad = [[x0 - 10.0, y0 - 6.0], [x1 + 26.0, y0 - 2.0], [x1 + 4.0, y1 + 18.0], [x0 - 16.0, y1 + 8.0]];
+    s.execute("edit.transform", json!({"layer": id, "rect": [x0, y0, x1, y1], "quad": quad})).unwrap();
+    let sm = active_smart(&s);
+    assert!(sm.perspective.is_some(), "a projective placement");
+    let corners = quad_centre(&s, &sm);
+    let middle = placed_centre(&s, &sm);
+    assert!((corners.0 - middle.0).abs() + (corners.1 - middle.1).abs() > 1.0, "the fixture splits the two centres: {corners:?} vs {middle:?}");
+    s.execute("layer.smartObjects.resetTransform", json!({})).unwrap();
+    let after = active_smart(&s);
+    assert_eq!(&after.transform.m[..4], &[1.0, 0.0, 0.0, 1.0], "100 %, square");
+    assert!(after.perspective.is_none() && after.warp.is_none(), "no projective placement or warp left");
+    let now = placed_centre(&s, &after);
+    assert!((now.0 - corners.0).abs() < 1e-6 && (now.1 - corners.1).abs() < 1e-6, "centred on the corners: {now:?} vs {corners:?}");
+    assert!((now.0 - middle.0).abs() + (now.1 - middle.1).abs() > 1.0, "not on the point the box centre mapped to");
 }
 
 /// Enabled for a smart object only, and one undo step back (#11662).
