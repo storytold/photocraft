@@ -424,3 +424,15 @@ fn a_deferred_redraws_gpu_attempt_is_counted_once_when_it_ends() {
     assert_eq!(perf.gpu_attempt_ms, 7.0);
     assert_eq!(perf.stage.composite_ms + perf.stage.upload_ms, 9.0);
 }
+
+/// The public `texels` serves the canvas's two formats only: another format's texels would
+/// have the wrong layout and length (#8848).
+#[test]
+fn texels_refuse_formats_the_canvas_does_not_use() {
+    let px = [[1.0, 0.5, 0.0, 0.5]];
+    assert_eq!(texels(FORMAT, &px), Some(vec![128, 64, 0, 128]));
+    assert_eq!(texels(FORMAT_HIGH, &px).map(|t| t.len()), Some(8));
+    for other in [wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::Rgba8UnormSrgb] {
+        assert_eq!(texels(other, &px), None, "{other:?}");
+    }
+}
