@@ -168,7 +168,13 @@ pub fn pattern_rgba_rows(p: &Pattern, mode: ColorMode, top: u32, bottom: u32, ou
     let bottom = bottom.min(p.height);
     let top = top.min(bottom);
     out.clear();
+    if !p.is_paintable() {
+        return None;
+    }
     let pixels = (p.width as usize).checked_mul((bottom - top) as usize)?;
+    if pixels.checked_mul(std::mem::size_of::<[f32; 4]>())? as u64 > photocraft_doc::pattern::MAX_WORKING_BYTES {
+        return None;
+    }
     out.try_reserve_exact(pixels).ok()?;
     out.resize(pixels, [0.0f32; 4]);
     p.surface.read_rgba_into(Rect::new(0, top as i32, p.width as i32, bottom as i32), out);
@@ -423,6 +429,17 @@ pub fn render(tile: &Tile, place: &Placement, rect: Rect) -> Vec<[f32; 4]> {
 mod tests {
     use super::*;
     use photocraft_doc::{PixelFormat, Surface};
+
+    #[test]
+    /// Reject dense paint expansion of a retained oversized pattern without materializing sparse source tiles.
+    fn stored_900_megapixel_pattern_is_not_expanded_for_painting() {
+        let pattern = Pattern { id: "large".into(), name: "large".into(), width: 30_000, height: 30_000, surface: Surface::new(PixelFormat::RGBA8) };
+        assert!(pattern_rgba(&pattern, ColorMode::Rgb).is_empty());
+        let mut rows = Vec::new();
+        assert!(pattern_rgba_rows(&pattern, ColorMode::Rgb, 0, pattern.height, &mut rows).is_none());
+        assert!(rows.is_empty());
+        assert_eq!(pattern.surface.tile_count(), 0);
+    }
 
     fn checker() -> Pattern {
         let mut s = Surface::new(PixelFormat::RGBA8);

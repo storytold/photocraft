@@ -157,7 +157,8 @@ fn export_supported_document(
         resources.push(ImageResource::new(ids::EXIF, photocraft_codecs::export_exif(e, ppi).into_owned()));
     }
     let mut global_blocks = Vec::new();
-    let preserved = ex.smart.finish(crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc)));
+    let patterns = crate::pattern_map::export_global_blocks_with_warnings(doc, &mut ex.warnings);
+    let preserved = ex.smart.finish(crate::annotations_map::export_blocks(doc, patterns));
     // The type layers' `Txt2` is regenerated (the auto-kern modes live there, and a preserved
     // block goes stale as text is edited): one object per `TextIndex`, at the slot each layer's
     // `TySh` names (unused slots stay empty; see `photocraft_text::psd::build_txt2`). The block

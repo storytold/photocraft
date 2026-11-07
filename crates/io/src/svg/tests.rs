@@ -1,5 +1,55 @@
 use super::*;
 
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+/// Require shallow, deep and nested private SVG probes to reuse the single native parser worker.
+fn private_svg_parsing_uses_the_same_worker_at_every_depth() {
+    for depth in [2, 200] {
+        parse_at_depth(depth, false, |isolated| {
+            assert!(isolated);
+            assert!(SVG_WORKER.with(std::cell::Cell::get));
+            assert_eq!(std::thread::current().name(), Some("photocraft-svg"));
+            let worker = std::thread::current().id();
+            parse_at_depth(200, isolated, |nested| {
+                assert!(nested);
+                assert_eq!(std::thread::current().id(), worker);
+                Ok(())
+            })
+            .map_err(IoError::from)
+        })
+        .unwrap();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+/// Keep invalid embedded images optional while recording failed isolation even for non-strict imports.
+fn non_strict_embedded_svg_records_isolation_failure_but_omits_invalid_images() {
+    /// Inject a worker failure before font resolution to exercise isolation-error propagation.
+    fn panic_fonts() -> Arc<usvg::fontdb::Database> {
+        panic!("injected worker failure")
+    }
+    let budget = Arc::new(Mutex::new(ImageBudget {
+        pixels: MAX_RASTER_PIXELS,
+        xml_bytes: MAX_BOUNDED_SVG_BYTES,
+        svg_images: 0,
+        svg_chain: 0,
+        draw_nodes: 0,
+        repeatable_raster: false,
+        repeatable_svg: false,
+        fontless_text: false,
+        strict: false,
+        error: None,
+    }));
+    let opt = options(Arc::new(usvg::fontdb::Database::new()), MAX_XML_DEPTH);
+    assert!(bounded_data_image("image/svg+xml", Arc::new(b"<not-svg/>".to_vec()), &opt, &budget, 0, MAX_XML_DEPTH, false).is_none());
+    assert!(budget.lock().unwrap().error.is_none(), "ordinary invalid images are still omitted");
+    let svg = image_svg("<text>x</text>");
+    let error = parse_image_bounded_with(svg.as_bytes(), budget.clone(), 1, MAX_XML_DEPTH, panic_fonts, false).unwrap_err();
+    assert!(error.to_string().contains("bounded SVG worker failed"));
+    assert_eq!(budget.lock().unwrap().error.as_deref(), Some(error.to_string().as_str()));
+}
+
 fn embedded_image(mime: &str, bytes: &[u8]) -> String {
     let data = bytes.iter().map(|byte| format!("%{byte:02X}")).collect::<String>();
     format!("<image width=\"1\" height=\"1\" href=\"data:{mime},{data}\"/>")
