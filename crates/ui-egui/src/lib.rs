@@ -927,6 +927,9 @@ mod options_bar_mode_wheel_tests;
 mod field_wheel_app_tests;
 
 #[cfg(test)]
+mod brush_shift_drag_axis_tests;
+
+#[cfg(test)]
 mod dropdown_press_tests;
 
 #[cfg(test)]
