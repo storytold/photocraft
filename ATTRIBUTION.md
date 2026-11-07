@@ -150,6 +150,12 @@ next to the files:
 
 Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 
+## Packaged macOS updater
+
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `PhotoCraft.app/Contents/Frameworks/Sparkle.framework` (downloaded by packaging) | Sparkle 2.9.6 updater | Sparkle Project contributors | https://github.com/sparkle-project/Sparkle/releases/tag/2.9.6 | MIT and bundled third-party notices; the complete distribution `LICENSE` is copied to `Contents/Resources/Licenses/Sparkle.txt` |
+
 ## Synthetic parser test fixtures
 
 | Path | Title | Author | Source | License |
