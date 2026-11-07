@@ -10,7 +10,7 @@ impl PhotocraftApp {
         }
         // Check snapshots every sync, but walk the layer tree only after it changes. A Weak
         // tracks replacement (including undo and preserved-ID reopen) without retaining pixels.
-        let prune_bounds = self.bounds_cache.values().any(|(_, _, _, owner)| owner.is_some());
+        let prune_bounds = !self.bounds_cache.is_empty();
         if !self.thumbs.is_empty() || prune_bounds {
             let mut live = std::collections::HashSet::new();
             let mut live_layers = std::collections::HashSet::new();
@@ -38,7 +38,9 @@ impl PhotocraftApp {
             // Pointer fingerprints are safe while each live entry retains its COW surface. Drop
             // an owned surface as soon as its layer disappears instead of waiting for the global
             // cache limit; arbitrary non-layer cache keys remain bounded by that limit.
-            self.bounds_cache.retain(|_, (_, _, _, owner)| owner.is_none_or(|id| live_layers.contains(&id)));
+            // Anonymous entries are selection/preview surfaces. They cannot be tied back to a
+            // live layer, so release them whenever the open document set changes.
+            self.bounds_cache.retain(|_, (_, _, _, owner)| owner.is_some_and(|id| live_layers.contains(&id)));
         }
         self.thumb_documents = documents.iter().map(|st| (st.doc.id, std::sync::Arc::downgrade(&st.doc))).collect();
     }
@@ -404,6 +406,25 @@ mod channel_tint_tests {
         assert!(app.bounds_cache.contains_key(&id.0));
         app.run("layer.delete", serde_json::json!({"layer": id.0})).unwrap();
         assert!(!app.bounds_cache.contains_key(&id.0));
+    }
+
+    #[test]
+    fn closing_a_document_releases_its_selection_bounds_and_outline_surfaces() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 32, "height": 32})).unwrap();
+        let source = app.session.active().unwrap().doc.id;
+        app.run("file.new", serde_json::json!({"width": 16, "height": 16})).unwrap();
+        let mut selection = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+        selection.write_pixel(4, 5, &[1.0]);
+        let selection_key = u64::MAX - source.0;
+        app.cached_bounds(selection_key, &selection);
+        app.outline_cache = Some((source, 1, std::sync::Arc::new(Vec::new())));
+        app.outline_cache_source = Some(selection);
+        assert!(app.session.set_active(0));
+        app.run("file.close", serde_json::json!({})).unwrap();
+        assert!(!app.bounds_cache.contains_key(&selection_key));
+        assert!(app.outline_cache.is_none());
+        assert!(app.outline_cache_source.is_none());
     }
 
     #[test]
