@@ -196,6 +196,7 @@
 	Right	Desno
 	Open Recent	Otvori nedavno
 	Clear Recent Files	Obriši spisak nedavnih datoteka
+	Clear Recent File List	Obriši spisak nedavnih datoteka
 	Remove from Recent	Ukloni iz nedavnih
 	Remove {name} from Recent	Ukloni {name} iz nedavnih
 	Close	Zatvori
@@ -204,6 +205,10 @@
 	Restore	Vrati
 	Close All	Zatvori sve
 	Close Others	Zatvori ostale
+	New Document…	Novi dokument…
+	Open Document…	Otvori…
+	Consolidate All to Here	Objedini sve ovde
+	Move to New Window	Premesti u novi prozor
 	Save	Sačuvaj
 	Save As…	Sačuvaj kao…
 	Save a Copy…	Sačuvaj kopiju…
@@ -255,6 +260,7 @@
 	Create Smart Object after Loading Layers	Napravi pametni objekat posle učitavanja slojeva
 	Reveal in Finder	Prikaži u Finderu
 	Show in Explorer	Prikaži u Exploreru
+	Reveal in Explorer	Prikaži u Exploreru
 	Show in Folder	Prikaži u fascikli
 	File Info…	Informacije o datoteci…
 	Print…	Štampaj…
@@ -339,6 +345,7 @@
 	Units & Rulers…	Jedinice i lenjiri…
 	Guides, Grid & Slices…	Vodilje, mreža i isečci…
 	Plug-ins…	Dodaci…
+	Plugins…	Dodaci…
 	Type…	Tekst…
 	Enhanced Controls…	Napredne kontrole…
 	Camera Raw…	Camera Raw…
@@ -487,6 +494,8 @@
 	Smart Object	Pametni objekat
 	Convert to Smart Object	Pretvori u pametni objekat
 	Convert to Embedded	Pretvori u ugrađeni
+	Embed Linked	Ugradi povezani
+	Embed All Linked	Ugradi sve povezane
 	Convert to Layers	Pretvori u slojeve
 	Convert to Linked…	Pretvori u povezani…
 	Edit Contents	Uredi sadržaj
@@ -738,6 +747,7 @@
 	Minimum…	Minimum…
 	Offset…	Pomak…
 	Plug-ins	Dodaci
+	Plugins	Dodaci
 	Proof Setup	Podešavanje probnog prikaza
 	Proof Colors	Probne boje
 	Gamut Warning	Upozorenje o gamutu
@@ -746,9 +756,9 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plate	Radna CMY ploča
-	Legacy Macintosh RGB	Stari Macintosh RGB
-	Internet Standard RGB	Internet standard RGB
+	Working CMY Plates	Radne CMY ploče
+	Legacy Macintosh RGB (Gamma 1.8)	Stari Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internet standard RGB (sRGB)
 	Monitor RGB	RGB monitora
 	Color Blindness — Protanopia-type	Daltonizam — tip protanopije
 	Color Blindness — Deuteranopia-type	Daltonizam — tip deuteranopije
@@ -840,7 +850,6 @@
 	Consolidate All to Tabs	Objedini sve u kartice
 	Float in Window	Odvoji u prozor
 	Float All in Windows	Odvoji sve u prozore
-	New Window for Document	Novi prozor za dokument
 	Workspace	Radni prostor
 	Essentials	Osnovno
 	Graphic and Web	Grafika i veb
@@ -902,6 +911,12 @@
 	Timeline	Vremenska linija
 	Tool Presets	Šabloni alatki
 	Tools	Alatke
+	Contextual Task Bar	Kontekstualna traka zadataka
+	Hide bar	Sakrij traku
+	Reset bar position	Vrati položaj trake
+	Pin bar position	Zakači položaj trake
+	Move bar	Pomeri traku
+	More options	Više opcija
 	About PhotoCraft	O programu PhotoCraft
 	PhotoCraft Website	Veb-sajt PhotoCraft-a
 	PhotoCraft on GitHub	PhotoCraft na GitHub-u
@@ -1832,6 +1847,7 @@
 	Move Tool	Alatka za pomeranje
 	Could not use the move tool because the layer is locked.	Alatka za pomeranje ne može da se koristi jer je sloj zaključan.
 	Could not complete the Free Transform command because the layer is locked.	Komanda Slobodna transformacija ne može da se izvrši jer je sloj zaključan.
+	Could not transform because the layer is locked.	Transformacija nije moguća jer je sloj zaključan.
 	Multiply	Množenje
 	My Brushes	Moje četkice
 	Neutrals	Neutralne
@@ -1850,6 +1866,7 @@
 	Paints from the document's opening state	Slika iz stanja dokumenta pri otvaranju
 	Paints from the History panel's source state	Slika iz izvornog stanja panela Istorija
 	Sets the source for the history brush	Postavlja izvor za četkicu istorije
+	The History Brush source was deleted: set a new source in the History panel	Izvor četkice istorije je izbrisan: postavite novi izvor u panelu Istorija
 	Path Selection Tool	Alatka za selekciju putanje
 	Direct Selection Tool	Alatka za direktnu selekciju
 	Add Anchor Point Tool	Alatka za dodavanje sidrišne tačke
@@ -1913,6 +1930,7 @@
 	Soften	Omekšaj
 	Source	Izvor
 	Source: set	Izvor: postavljen
+	Source: {name}	Izvor: {name}
 	Sponge Tool	Alatka sunđer
 	Spot Healing Brush Tool	Alatka četkica za tačkastu popravku
 	Spread	Raširenost
@@ -1987,6 +2005,11 @@
 	Show canvas dots	Prikaži tačke na platnu
 	Clip thumbnails to layer bounds	Iseci sličice prema granicama sloja
 	Clip Thumbnails to Layer Bounds	Iseci sličice prema granicama sloja
+	No Thumbnails	Bez sličica
+	Small Thumbnails	Male sličice
+	Medium Thumbnails	Srednje sličice
+	Large Thumbnails	Velike sličice
+	Clip Thumbnails to Document Bounds	Iseci sličice prema granicama dokumenta
 	Canvas color	Boja platna
 	Canvas custom color	Prilagođena boja platna
 	Color picker	Birač boja
@@ -2104,7 +2127,6 @@
 	Show only crosshair while painting	Prikaži samo krstić tokom slikanja
 	Show slice numbers	Prikaži brojeve isečaka
 	Show tooltips	Prikaži opise alatki
-	Enable animations	Omogući animacije
 	Show highlight on rollover	Istakni pri prelasku pokazivačem
 	Show transformation values	Prikaži vrednosti transformacije
 	Slice color	Boja isečka
@@ -2494,6 +2516,7 @@
 	Path to Illustrator…	Putanja u Illustrator…
 	Make Work Path	Napravi radnu putanju
 	Make Selection	Napravi selekciju
+	Make Shape	Napravi oblik
 	Fill Path	Popuni putanju
 	Stroke Path	Ocrtaj putanju
 	Clipping Path	Putanja isecanja
@@ -3860,6 +3883,8 @@ layerLabel	No Color	Bez boje
 	Color Table	Tabela boja
 	Conditional Mode Change	Uslovna promena režima
 	Background (Default)	Pozadina (podrazumevano)
+	Background (default)	Pozadina (podrazumevano)
+	Transparent (default)	Providno (podrazumevano)
 	Content-Aware Fill	Popuna prema sadržaju
 	Convert to Linked	Pretvori u povezani
 	Convert to Profile	Pretvori u profil
@@ -4574,6 +4599,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Neispravan numerički unos. Potreban je ceo broj između {min}% i {max}%. Umetnuta je prethodna vrednost.
 	Color Aware	Prema boji
 	Decontaminate Colors	Dekontaminiraj boje
@@ -4599,3 +4626,49 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare
 	Edit Brush…	Uredi četkicu…
+
+# Action Stop message (#8386)
+	Message	Poruka
+# Playback Options (#5212)
+	Playback Options…	Opcije reprodukcije…
+	Playback Options	Opcije reprodukcije
+	Accelerated	Ubrzano
+	Step by Step	Korak po korak
+	Pause For:	Pauza od:
+	Pause For	Pauza od
+	seconds	sekundi
+	Create a single history state	Napravi jedno stanje istorije
+	Generator enabled	Generator je omogućen
+	This Layer:	Ovaj sloj:
+	Move Up	Pomeri nagore
+	Move Down	Pomeri nadole
+	On your computer	На вашем рачунару
+	New file	Novi fajl
+	Learn	Učenje
+	Website	Veb-sajt
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Оквир подржава афине трансформације; за перспективне трансформације изаберите његову слику
+	A frame supports affine transforms; select its image to warp it	Оквир подржава афине трансформације; за изобличавање изаберите његову слику
+	Convert to Frame…	Претвори у оквир…
+	Create a new custom frame	Направи нови прилагођени оквир
+	Create a new polygonal frame	Направи нови многоугаони оквир
+	Create a new triangular frame	Направи нови троугаони оквир
+	Fit Content to Frame	Прилагоди садржај оквиру
+	Fit Frame to Content	Прилагоди оквир садржају
+	Frame coordinates must be finite and within 600000 pixels	Координате оквира морају бити коначне и унутар 600000 пиксела
+	Import Image…	Увези слику…
+	Invalid frame transform	Неважећа трансформација оквира
+	Invalid nested file drop	Неважеће угнежђено испуштање датотеке
+	New Frame	Нови оквир
+	Replace Image…	Замени слику…
+	The frame is locked	Оквир је закључан
+	The frame is unavailable	Оквир није доступан
+
+# Channels panel menu (#11451)
+	Channel Options…	Opcije kanala…
+	Specify Channels:	Odredi kanale:
+	Not enough grayscale documents for this mode.	Nema dovoljno dokumenata u nijansama sive za ovaj režim.
+	Pick a different document for each channel.	Izaberite drugi dokument za svaki kanal.
+	A picked document is no longer open.	Jedan izabrani dokument više nije otvoren.
+	A picked document is no longer a grayscale document of the same size.	Jedan izabrani dokument više nije dokument u nijansama sive iste veličine.

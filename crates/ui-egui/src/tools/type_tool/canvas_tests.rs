@@ -1382,7 +1382,9 @@ fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
             }
             "rotate" | "snap" => {
                 let a = [frame.quad[1][0] + 20.0, frame.quad[1][1] - 10.0];
-                let da: f64 = 0.42;
+                // A snapped drag turns in 15° steps from where it started, so the first preview steps need a
+                // turn of at least half a step to change anything (#11099).
+                let da: f64 = if gesture == "snap" { 0.9 } else { 0.42 };
                 let (x, y) = (a[0] - frame.pivot[0], a[1] - frame.pivot[1]);
                 let b = [frame.pivot[0] + x * da.cos() - y * da.sin(), frame.pivot[1] + x * da.sin() + y * da.cos()];
                 (a, b, if gesture == "snap" { type_command() | Modifiers::SHIFT } else { type_command() })
@@ -1420,8 +1422,9 @@ fn temporary_type_transform_free_scale_center_scale_move_skew_and_rotation() {
                     .mul(&initial),
             );
         } else if gesture == "snap" {
-            let angle = after.transform.m[1].atan2(after.transform.m[0]).to_degrees();
-            assert!((angle / 15.0 - (angle / 15.0).round()).abs() < 1e-8);
+            // Shift snaps the turn made by the drag, not the absolute angle (#11099).
+            let turn = (after.transform.m[1].atan2(after.transform.m[0]) - initial.m[1].atan2(initial.m[0])).to_degrees();
+            assert!((turn / 15.0 - (turn / 15.0).round()).abs() < 1e-8);
         } else if gesture == "center" {
             let p = after.transform.apply(Point::new((frame.rect[0] + frame.rect[2]) / 2.0, (frame.rect[1] + frame.rect[3]) / 2.0));
             assert!((p.x - frame.pivot[0]).abs() < 1e-8 && (p.y - frame.pivot[1]).abs() < 1e-8);
@@ -2440,6 +2443,34 @@ mod multi_layer_formatting {
         assert_eq!(text(&app, ids[1]).antialias, AntiAlias::Crisp);
         assert_eq!(text(&app, ids[2]).orientation, Orientation::Vertical);
         assert_eq!(text(&app, ids[0]).antialias, AntiAlias::Sharp);
+    }
+
+    /// Type > OpenType > Stylistic Sets (#10285): while editing, a set goes on for the selected
+    /// characters only, and its checkmark follows the style at the selection start.
+    #[test]
+    fn stylistic_set_menu_toggles_the_selection_and_checks_its_start() {
+        use photocraft_engine::type_extra_cmds::feature_on;
+        let (mut app, ids) = fixture();
+        let ctx = egui::Context::default();
+        let id = "type.openType.stylisticSets.set2";
+        let checked = |app: &PhotocraftApp| crate::menus::menu_items(app).into_iter().find(|i| i.id == id).and_then(|i| i.checked);
+        editing(&mut app, ids[0]);
+        assert_eq!(checked(&app), Some(false));
+        crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        let on: Vec<bool> = (0..5).map(|ci| feature_on(&style(&app, ids[0], ci), "ss02")).collect();
+        assert_eq!(on, [false, true, true, false, false], "only the selected characters");
+        assert!((0..5).all(|ci| !feature_on(&style(&app, ids[1], ci), "ss02")), "the other layer is untouched");
+        assert_eq!(checked(&app), Some(true), "the selection start has the set");
+        // A selection starting after the styled characters shows it off.
+        if let Some(ed) = app.ui.text_edit.as_mut() {
+            ed.anchor = 3;
+            ed.caret = 5;
+        }
+        assert_eq!(checked(&app), Some(false));
+        crate::menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        let on: Vec<bool> = (0..5).map(|ci| feature_on(&style(&app, ids[0], ci), "ss02")).collect();
+        assert_eq!(on, [false, true, true, true, true]);
+        assert_eq!(checked(&app), Some(true));
     }
 
     /// The Character panel's OpenType buttons (TYPE-218-5, #3752): Photoshop's eight, in its

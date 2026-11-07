@@ -43,7 +43,7 @@ pub enum HistorySource {
 
 /// The document's History Brush source, `None` once the source state or snapshot is gone.
 pub fn source(st: &DocState) -> Option<HistorySource> {
-    match st.source_snapshot {
+    match st.source_snapshot.or_else(|| st.history.brush_source_snapshot()) {
         Some(id) => st.snapshots.iter().any(|s| s.id == id).then_some(HistorySource::Snapshot(id)),
         None => st.history.brush_source().map(HistorySource::State),
     }
@@ -366,6 +366,7 @@ mod tests {
             json!({"state": 1.5}),
             json!({"state": "1"}),
             json!({"state": [1]}),
+            json!({"snapshot": 99}),
             json!({"snapshot": 1}),
             json!({"snapshot": -1}),
             json!({"snapshot": "Open"}),
@@ -375,7 +376,7 @@ mod tests {
             assert!(s.execute(CMD, p.clone()).is_err(), "{p}");
         }
         assert_eq!(s.active().unwrap().history.brush_source(), Some(0), "nothing changed");
-        // Snapshot 0 is the document as opened, so it is a valid source.
+        // Snapshot 0 is the document as opened (Automatically Create First Snapshot), so it is a valid source.
         assert_eq!(s.execute(CMD, json!({"snapshot": 0})).unwrap()["snapshot"], 0);
     }
 }

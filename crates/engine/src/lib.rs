@@ -31,6 +31,8 @@ pub mod layer_place;
 pub mod layer_style;
 pub mod link_watch;
 pub mod malloc_tuning;
+pub mod memory;
+pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
 mod pixels;
@@ -95,7 +97,7 @@ pub use cmd::fill_cmds;
 pub use cmd::fill_key_cmds;
 pub use cmd::float_cmds;
 pub use cmd::font_library_cmds;
-use cmd::frame_cmds;
+pub use cmd::frame_cmds;
 pub use cmd::fx_view_cmds;
 pub use cmd::fx_visibility_cmds;
 pub use cmd::gallery_cmds;
@@ -173,6 +175,16 @@ pub use session::move_item;
 use session::restore_target;
 pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
 
+/// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
+/// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against
+/// that version of the layer, which may differ from the open one or be gone from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TypeLayerRef {
+    pub doc: photocraft_doc::DocId,
+    pub layer: LayerId,
+    pub first_snapshot: bool,
+}
+
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
 pub(crate) fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raster::Surface> {
@@ -189,6 +201,12 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Override Open belongs only to one Batch scratch session, never to caller preferences.
+    pub(crate) batch_open: Option<file_cmds::BatchOpen>,
+    /// Import diagnostics retained by a Batch scratch that suppresses only profile prompts.
+    pub(crate) batch_open_notices: Option<Vec<Value>>,
+    /// Frozen RAW workflow settings for one noninteractive Batch input.
+    pub(crate) batch_raw_open: Option<prefs::RawDefaults>,
     /// Admitted document identities in opening order, independent of visual-tab reordering.
     open_document_order: Vec<photocraft_doc::DocId>,
     active: Option<usize>,
@@ -205,6 +223,13 @@ pub struct Session {
     typed_layer: Option<(photocraft_doc::DocId, LayerId)>,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
+    /// The outer action's original document/history states, independent of command transactions.
+    action_history: Option<actions_cmds::ActionHistory>,
+    /// Weak leases expire when every copy of a suspended continuation is abandoned.
+    paused_action_history: Vec<std::sync::Weak<()>>,
+    /// Tests observe the actual scratch-session boundary without retaining it or changing output.
+    #[cfg(test)]
+    batch_history_observer: Option<fn(&Session)>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
@@ -308,9 +333,13 @@ pub struct Session {
 }
 
 #[cfg(test)]
+mod embed_all_linked_tests;
+#[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
 mod pattern_mode_tests;
+#[cfg(test)]
+mod second_keys_zoom_actions_tests;
 #[cfg(test)]
 mod tests;
 
