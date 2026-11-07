@@ -65,15 +65,27 @@ fn set_shared_source_fit(s: &mut Session, id: LayerId, label: &str, keep_psd: bo
                 .extend(unapplied_filters(smart(doc, instance)?).into_iter().map(|n| format!("the {n} smart filter is not supported, so it was not applied")));
             // A hidden instance (or one in a hidden group) is not in the flattened document: with
             // `clip`, it is left unrendered, like the parts of the others past the canvas.
+            let layer = doc.layer(instance).ok_or(EngineError::NoLayer(instance))?;
             if clip && hidden_in(doc, instance) {
+                warnings.insert(format!(
+                    "\"{}\" is hidden, so clipToCanvas left it unrendered: it shows nothing until it is rendered again without clipToCanvas",
+                    layer.name
+                ));
                 smart_mut(doc, instance)?.cache = None;
                 continue;
             }
             // Effects (the layer's or a group's) follow the edge and bounds of what they cover,
             // and smart filters read past the canvas: such an instance is rendered whole, so the
             // flattened result stays the same.
-            let layer = doc.layer(instance).ok_or(EngineError::NoLayer(instance))?;
             let clip_this = (clip && !needs_whole_render(doc, instance)).then(|| visible_clip(layer, doc.bounds()));
+            // Only a warped placement is clipped (see `place`): say so, as the layer then holds
+            // less than a full render, which a saved document would keep.
+            if clip_this.is_some() && smart(doc, instance)?.warp.as_ref().is_some_and(|w| !w.is_identity()) {
+                warnings.insert(format!(
+                    "\"{}\" was rendered only where it shows in the flattened document (clipToCanvas): the rest of it stays empty until it is rendered again without clipToCanvas",
+                    layer.name
+                ));
+            }
             refresh_or_fail_opt(doc, instance, &JobCtx::new(), clip_this)?;
         }
         Ok((doc.id, contents_id, changed, warnings))

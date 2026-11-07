@@ -411,10 +411,18 @@ fn clip_to_canvas_renders_only_the_canvas_and_the_same_pixels_inside_it() {
     let (mut full, id) = smart_session();
     let b = old_box(&full, id);
     set_placement(&mut full, id, |sm| setup(sm, b));
-    replace_contents_with(&mut full, id, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, false).unwrap();
+    let whole = replace_contents_with(&mut full, id, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, false).unwrap();
+    assert_eq!(whole["warnings"], json!([]));
     let (mut clipped, id2) = smart_session();
     set_placement(&mut clipped, id2, |sm| setup(sm, b));
-    replace_contents_with(&mut clipped, id2, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, true).unwrap();
+    let cut = replace_contents_with(&mut clipped, id2, "d.png", std::fs::read(&design).unwrap(), Fit::Stretch, true).unwrap();
+    // The caller is told the layer holds only what shows, since a saved document would keep that.
+    let name = clipped.active().unwrap().doc.layer(id2).unwrap().name.clone();
+    let warnings = cut["warnings"].as_array().unwrap();
+    assert!(
+        warnings.len() == 1 && warnings[0].as_str().is_some_and(|w| w.contains(&format!("\"{name}\"")) && w.contains("only where it shows")),
+        "{warnings:?}"
+    );
     let canvas = clipped.active().unwrap().doc.bounds();
     let (a, c) = (rendered(&full, id), rendered(&clipped, id2));
     assert!(!canvas.contains_rect(&a.content_bounds()), "the full render spills: {:?}", a.content_bounds());
@@ -558,8 +566,13 @@ fn clip_to_canvas_leaves_hidden_instances_unrendered() {
         } else {
             hide(&mut s, id)
         }
-        replace_contents_with(&mut s, id, "d.png", design.clone(), Fit::Stretch, clip).unwrap();
+        let r = replace_contents_with(&mut s, id, "d.png", design.clone(), Fit::Stretch, clip).unwrap();
         let doc = &s.active().unwrap().doc;
+        // Told about the hidden instance only; the copy is unwarped, so the clip leaves it whole.
+        let warned: Vec<&str> = r["warnings"].as_array().unwrap().iter().filter_map(|w| w.as_str()).collect();
+        let hidden = format!("\"{}\" is hidden", doc.layer(id).unwrap().name);
+        assert_eq!(warned.len(), usize::from(clip), "clip {clip}, group {group}: {warned:?}");
+        assert!(warned.iter().all(|w| w.starts_with(&hidden)), "clip {clip}, group {group}: {warned:?}");
         let copy = doc.walk().into_iter().find(|(_, _, l)| l.id != id && matches!(l.content, LayerContent::Smart(_))).map(|(_, _, l)| l.id).unwrap();
         assert_eq!(smart(doc, id).unwrap().cache.is_none(), clip, "clip {clip}, group {group}: the hidden instance is left unrendered only with clip");
         assert!(
