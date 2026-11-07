@@ -14,7 +14,9 @@
 
 use std::borrow::Cow;
 
-use egui::{Color32, TextureOptions};
+use super::textures::canvas_texture_options;
+
+use egui::Color32;
 use photocraft_doc::{AlphaChannel, ColorMode, Document};
 use photocraft_engine::channel_cmds::{ChannelView, color_count};
 use photocraft_engine::mask_view_cmds::MaskViewMode;
@@ -552,7 +554,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
             // Nothing to draw there (the ink erased) still clears what the texture showed.
             let px = render_with_source(&doc, &view, r, factor, look, active, CompositeSource { cached: None, fresh: &mut None, screen: &screen })
                 .unwrap_or_else(|| vec![Color32::TRANSPARENT; size[0] * size[1]]);
-            tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], egui::ColorImage::new(size, px), TextureOptions::LINEAR);
+            tex.set_partial([(r.x0 / f) as usize, (r.y0 / f) as usize], egui::ColorImage::new(size, px), canvas_texture_options(factor));
         }
         let tex_id = tex.id();
         c.revision = revision;
@@ -587,7 +589,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
     match app.channel_views.get_mut(&id) {
         Some(c) if c.tex.as_ref().is_some_and(|t| t.size() == size) => {
             if let Some(t) = c.tex.as_mut() {
-                t.set(img, TextureOptions::LINEAR);
+                t.set(img, canvas_texture_options(factor));
             }
             c.revision = revision;
             c.preview_key = preview_key;
@@ -599,7 +601,7 @@ pub fn ensure(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usize, display:
             }
         }
         _ => {
-            let tex = ctx.load_texture(format!("channel-view-{id}"), img, TextureOptions::LINEAR);
+            let tex = ctx.load_texture(format!("channel-view-{id}"), img, canvas_texture_options(factor));
             // A composite still current (checked above) is kept when none was rendered.
             let kept = app.channel_views.remove(&id).and_then(|c| c.source);
             let source = fresh.map(|pixels| SampledComposite { revision, content, preview_key, factor, pixels }).or(kept);
