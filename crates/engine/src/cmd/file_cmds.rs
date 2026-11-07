@@ -126,7 +126,7 @@ impl crate::DocState {
             Arc::make_mut(&mut self.doc).name = name;
         }
         self.path = Some(path);
-        self.saved_revision = self.revision;
+        self.mark_saved();
     }
 }
 
