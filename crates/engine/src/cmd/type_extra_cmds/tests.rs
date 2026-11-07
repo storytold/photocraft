@@ -154,6 +154,36 @@ fn point_to_paragraph_reserves_spaces_on_each_line() {
 }
 
 #[test]
+fn point_to_paragraph_reserves_later_paragraph_indents() {
+    for (end_indent, first_line_indent) in [(28.0, 0.0), (0.0, 28.0)] {
+        let mut s = session(8);
+        let prefix = "H\nH\n";
+        let original = format!("{prefix}H    ");
+        let r = s.execute("type.create", json!({"x": 25, "y": 20, "text": original, "font": "Inter", "size": 36})).unwrap();
+        let id = LayerId(r["layer"].as_u64().unwrap());
+        s.execute(
+            "type.setStyle",
+            json!({
+                "layer": id.0, "range": [prefix.len(), original.len()],
+                "startIndent": 8, "endIndent": end_indent, "firstLineIndent": first_line_indent
+            }),
+        )
+        .unwrap();
+        // The two unindented paragraphs share one run.
+        let paragraphs = text(&s, id).paragraph_runs();
+        assert_eq!(paragraphs.len(), 2);
+        s.execute("type.convertToParagraphText", json!({"layer": id.0})).unwrap();
+        assert_eq!(text(&s, id).paragraph_runs(), paragraphs);
+
+        let edited = format!("{original}I");
+        s.execute("type.edit", json!({"layer": id.0, "text": edited})).unwrap();
+        let l = layout(&s.active().unwrap().doc, text(&s, id));
+        assert_eq!(l.lines.len(), 3);
+        assert_eq!(l.lines[2].range, prefix.len()..edited.len(), "appended I is hidden with end indent {end_indent} and first-line indent {first_line_indent}");
+    }
+}
+
+#[test]
 fn point_to_paragraph_keeps_legacy_width_for_mixed_alignment() {
     use photocraft_doc::text::{ParagraphRun, ParagraphStyle};
 
