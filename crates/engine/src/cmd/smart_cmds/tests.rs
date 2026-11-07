@@ -135,6 +135,65 @@ fn convert(s: &mut Session) -> u64 {
 }
 
 #[test]
+fn replacing_shared_contents_reduces_the_new_file_once_for_all_instances() {
+    // Three instances shrinking a large file through warps, each at its own place: one reduced
+    // level of the new contents serves them all.
+    use photocraft_geom::warp::{BezierMesh, Warp};
+    let mut s = session(8);
+    paint(&mut s);
+    let id = LayerId(convert(&mut s));
+    for _ in 0..2 {
+        s.execute("layer.duplicate", json!({"layer": id.0})).unwrap();
+    }
+    s.edit("setup", |doc, _| {
+        let smart_layers: Vec<LayerId> = doc.walk().into_iter().filter(|(_, _, l)| matches!(l.content, LayerContent::Smart(_))).map(|(_, _, l)| l.id).collect();
+        assert_eq!(smart_layers.len(), 3);
+        let b = [0.0, 0.0, 900.0, 600.0];
+        for (k, l) in smart_layers.into_iter().enumerate() {
+            let sm = smart_mut(doc, l)?;
+            sm.transform = Affine { m: [0.1, 0.0, 0.0, 0.1, 3.0 * k as f64, 2.0] };
+            sm.warp = Some(Warp::custom(BezierMesh::identity(b, 1, 1).map_points(|p| [p[0] + 0.1 * p[1], p[1]]), b));
+        }
+        Ok(())
+    })
+    .unwrap();
+    let big = Document::with_background(
+        "big",
+        Size::new(900, 600),
+        photocraft_color::ColorMode::Rgb,
+        photocraft_color::SampleType::U8,
+        photocraft_color::Color::rgba(0.5, 0.2, 0.9, 1.0),
+    );
+    let png = photocraft_io::export(&big, "png", &Default::default()).unwrap().bytes;
+    let before = photocraft_algo::warp::reduced_levels_built();
+    replace_contents_bytes(&mut s, id, "big.png", png).unwrap();
+    let built = photocraft_algo::warp::reduced_levels_built() - before;
+    assert_eq!(built, 1, "built {built} reduced levels for three instances");
+    // Every instance holds the new file and was re-rendered at its own place (a tenth of 900 ×
+    // 600, sheared by the warp, from x = 3k).
+    let doc = &s.active().unwrap().doc;
+    let smart_layers: Vec<(&Layer, &SmartObject)> = doc
+        .walk()
+        .into_iter()
+        .filter_map(|(_, _, l)| match &l.content {
+            LayerContent::Smart(sm) => Some((l, sm)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(smart_layers.len(), 3);
+    let mut origins = Vec::new();
+    for (l, sm) in smart_layers {
+        assert!(matches!(&sm.source, SmartSource::Embedded { file_name, .. } if file_name == "big.png"), "{}: {:?}", l.name, sm.source);
+        let b = sm.cache.as_ref().map(|c| c.content_bounds()).unwrap_or_default();
+        assert!(b.width() >= 85 && b.height() >= 55, "{}: rendered {b:?}", l.name);
+        origins.push(b.x0);
+    }
+    origins.sort_unstable();
+    assert_eq!(origins.len(), 3);
+    assert!(origins.windows(2).all(|w| (w[1] - w[0] - 3).abs() <= 1), "each at its own place: {origins:?}");
+}
+
+#[test]
 fn conversion_is_pixel_identical_at_every_depth() {
     for depth in DEPTHS {
         let mut s = session(depth);
