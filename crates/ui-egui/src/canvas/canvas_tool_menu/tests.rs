@@ -2,6 +2,9 @@ use super::*;
 use egui::{Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
+#[path = "zoom_menu_anchor_tests.rs"]
+mod zoom_menu_anchor_tests;
+
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
