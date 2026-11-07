@@ -150,7 +150,7 @@ pub fn apply_txt2_path(layer: &mut TextLayer, tysh: &[u8], txt2: &E) -> Result<b
         return Ok(false);
     }
     let path = crate::psd_path::read(frame)?;
-    layer.shape = TextShape::Path { path, start: 0.0, flip: false };
+    layer.shape = TextShape::Path { path, start: 0.0, end: None, flip: false };
     Ok(true)
 }
 

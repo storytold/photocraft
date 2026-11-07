@@ -264,7 +264,7 @@ pub(crate) fn update_frame(entry: &mut E, shape: &TextShape) {
     let frame = entry.get("0");
     let kind = frame.map_or(0, frame_kind);
     match shape {
-        TextShape::Path { path, start, flip } => {
+        TextShape::Path { path, start, flip, .. } => {
             let path = frame_path(path, *start, *flip);
             if kind == PATH_FRAME && frame.and_then(|f| read(f).ok()).is_some_and(|p| same_path(&p, &path)) {
                 return;

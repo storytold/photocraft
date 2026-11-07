@@ -30,19 +30,20 @@ fn photoshop_path_frames_read_into_text_space() {
     assert!(circle.knots.iter().all(|k| k.smooth));
 }
 
+/// Verifies updating path text frames preserves existing PSD frame entries or writes transformed paths.
 #[test]
 fn written_frames_read_back() {
     for src in [CIRCLE, WAVE] {
         let path = read(&frame(src)).unwrap();
         let mut entry = E::Dict(vec![("0".into(), frame(src))]);
         let before = entry.clone();
-        update_frame(&mut entry, &TextShape::Path { path: path.clone(), start: 0.0, flip: false });
+        update_frame(&mut entry, &TextShape::Path { path: path.clone(), start: 0.0, end: None, flip: false });
         assert_eq!(entry, before, "an unchanged path keeps Photoshop's frame");
         let mut moved = path.clone();
         for k in &mut moved.knots {
             *k = k.transform(&Affine::translate(5.0, -3.0));
         }
-        update_frame(&mut entry, &TextShape::Path { path: moved.clone(), start: 0.0, flip: false });
+        update_frame(&mut entry, &TextShape::Path { path: moved.clone(), start: 0.0, end: None, flip: false });
         let back = read(entry.get("0").unwrap()).unwrap();
         assert!(same_path(&back, &moved), "{back:?}");
         assert_eq!(entry.path(&["0", "2", "6"]), before.path(&["0", "2", "6"]), "the frame's other keys stay");
@@ -56,8 +57,8 @@ fn flip_and_start_are_baked_into_the_frame() {
     for src in [CIRCLE, WAVE] {
         let path = read(&frame(src)).unwrap();
         for (start, flip) in [(40.0, false), (0.0, true), (25.0, true)] {
-            let shape = TextShape::Path { path: path.clone(), start, flip };
-            let baked = TextShape::Path { path: frame_path(&path, start, flip), start: 0.0, flip: false };
+            let shape = TextShape::Path { path: path.clone(), start, end: None, flip };
+            let baked = TextShape::Path { path: frame_path(&path, start, flip), start: 0.0, end: None, flip: false };
             let (a, b) = (Warp::on_path(&shape).unwrap(), Warp::on_path(&baked).unwrap());
             for x in [0.0, 10.0, 50.0, 120.0] {
                 for y in [-12.0, 0.0, 4.0] {
@@ -172,13 +173,13 @@ fn save_and_open(layers: &[&photocraft_doc::TextLayer], prev: &[u8]) -> (Vec<u8>
 fn path_text_round_trips_through_tysh_and_txt2() {
     let circle = read(&frame(CIRCLE)).unwrap();
     let wave = read(&frame(WAVE)).unwrap();
-    let a = layer("On a circle", TextShape::Path { path: circle.clone(), start: 0.0, flip: false });
-    let b = layer("Along a wave", TextShape::Path { path: wave.clone(), start: 30.0, flip: true });
+    let a = layer("On a circle", TextShape::Path { path: circle.clone(), start: 0.0, end: None, flip: false });
+    let b = layer("Along a wave", TextShape::Path { path: wave.clone(), start: 30.0, end: None, flip: true });
     let prev = photoshop_txt2("On a circle\r");
     let (txt2, back) = save_and_open(&[&a, &b], &prev);
     for ((l, applied), (want, start, flip)) in back.iter().zip([(&circle, 0.0, false), (&wave, 30.0, true)]) {
         assert_eq!(applied, &Ok(true), "{}", l.text);
-        let TextShape::Path { path, start: s, flip: f } = &l.shape else { panic!("{}: {:?}", l.text, l.shape) };
+        let TextShape::Path { path, start: s, flip: f, .. } = &l.shape else { panic!("{}: {:?}", l.text, l.shape) };
         assert_eq!((*s, *f), (0.0, false));
         assert!(same_path(path, &frame_path(want, start, flip)), "{}: {path:?}", l.text);
         assert_eq!(l.transform, Affine::translate(32.0, 20.0), "the frame's matrix is not applied twice");
@@ -253,7 +254,7 @@ fn saved_frame(txt2: &[u8], index: usize) -> (i64, E) {
 #[test]
 fn an_object_rebuilt_from_a_template_keeps_its_own_frame() {
     let circle = read(&frame(CIRCLE)).unwrap();
-    let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, flip: false });
+    let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, end: None, flip: false });
     // Object 1's style run has a length that is no count, so it can't be refitted.
     let mut broken = photoshop_object("Old\r", 0);
     let run = d(vec![("0", d(vec![("0", d(vec![("0", E::String(String::new()))]))])), ("1", E::String("x".into()))]);
@@ -272,7 +273,7 @@ fn an_object_rebuilt_from_a_template_keeps_its_own_frame() {
 #[test]
 fn a_new_object_gets_a_frame_no_other_object_is_drawn_in() {
     let circle = read(&frame(CIRCLE)).unwrap();
-    let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, flip: false });
+    let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, end: None, flip: false });
     let path_frame = E::Dict(vec![("0".into(), frame(CIRCLE))]);
     let prev = photoshop_txt2_of(vec![photoshop_object("On a circle\r", 1)], vec![point_frame(), path_frame.clone()]);
     let new = layer("New", TextShape::Point);
@@ -295,7 +296,7 @@ fn a_rebuilt_object_never_names_a_missing_frame() {
     broken.get_mut("0").unwrap().set("6", d(vec![("0", E::Array(vec![run]))]));
     let path_frame = E::Dict(vec![("0".into(), frame(CIRCLE))]);
     let prev = photoshop_txt2_of(vec![photoshop_object("On a circle\r", 1), broken], vec![point_frame(), path_frame.clone()]);
-    let on_path = layer("On a circle", TextShape::Path { path: read(&frame(CIRCLE)).unwrap(), start: 0.0, flip: false });
+    let on_path = layer("On a circle", TextShape::Path { path: read(&frame(CIRCLE)).unwrap(), start: 0.0, end: None, flip: false });
     let (txt2, _) = save_and_open(&[&on_path, &layer("New", TextShape::Point)], &prev);
     assert_eq!(saved_frame(&txt2, 1), (2, point_frame()));
     assert_eq!(saved_frame(&txt2, 0), (1, path_frame));
@@ -315,7 +316,7 @@ fn a_kept_object_naming_a_far_frame_adds_no_frames() {
 #[test]
 fn a_frame_two_objects_name_is_kept() {
     let circle = read(&frame(CIRCLE)).unwrap();
-    let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, flip: false });
+    let on_path = layer("On a circle", TextShape::Path { path: circle, start: 0.0, end: None, flip: false });
     let path_frame = E::Dict(vec![("0".into(), frame(CIRCLE))]);
     let objects = vec![photoshop_object("On a circle\r", 1), photoshop_object("Point\r", 1)];
     let prev = photoshop_txt2_of(objects, vec![point_frame(), path_frame.clone()]);

@@ -109,12 +109,31 @@ fn preflight_tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modi
     Some((armed, mods))
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ToolViewContext<'a> {
+    pub(crate) xf: &'a super::ViewXform,
+    pub(crate) viewport: Option<egui::ViewportId>,
+}
+
+impl<'a> ToolViewContext<'a> {
+    /// Creates a view context pairing the current canvas transform with an optional viewport identity.
+    pub(crate) fn new(xf: &'a super::ViewXform, viewport: Option<egui::ViewportId>) -> Self {
+        Self { xf, viewport }
+    }
+}
+
 /// The handlers a pointer event meets before the tool: dropping a floating piece the press won't
 /// drag, snapping, and the overlays and modifier gestures (Free Transform, sticky keys, brush
 /// resize, the ⌥ eyedropper, path and shape widgets…) that take the event for themselves. `None`:
 /// one of them handled it; otherwise the event as it came and as filtered (snapped, the Move
 /// tool's axis lock), and the modifiers with the sticky keys applied.
-fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, armed: bool) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
+fn filter_event_before_tool(
+    app: &mut PhotocraftApp,
+    ev: ToolEvent,
+    mods: egui::Modifiers,
+    armed: bool,
+    view: Option<ToolViewContext<'_>>,
+) -> Option<(ToolEvent, ToolEvent, egui::Modifiers)> {
     // View › Snap / Snap To and smart guides (snap_ui.rs).
     let raw = ev;
     // The Move tool's marquee selecting layers takes its moves and release unsnapped (move_box.rs).
@@ -178,6 +197,11 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
         return None;
     }
     // Direct Selection, and the Pen's ⌘ (Direct Selection) and ⌥ (Convert Point) modes (#790).
+    let xf = view.map(|v| v.xf);
+    let viewport = view.and_then(|v| v.viewport);
+    if crate::type_path_placement::pointer_with_context(app, raw, xf, viewport) {
+        return None;
+    }
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
     }
@@ -361,11 +385,16 @@ fn handle_eyedropper_event(app: &mut PhotocraftApp, tool: Tool, ev: ToolEvent, m
 
 /// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
+    tool_event_with_view(app, ev, mods, None);
+}
+
+/// Dispatches a tool event through preflight, pre-tool overlays, and tool handlers within an explicit view context.
+pub(super) fn tool_event_with_view(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, view: Option<ToolViewContext<'_>>) {
     if consumes_cancelled_vector_event(app, ev) {
         return;
     }
     let Some((armed, mods)) = preflight_tool_event(app, ev, mods) else { return };
-    let Some((raw, ev, mods)) = filter_event_before_tool(app, ev, mods, armed) else { return };
+    let Some((raw, ev, mods)) = filter_event_before_tool(app, ev, mods, armed, view) else { return };
     let tool = event_tool(app, mods);
     if handle_eyedropper_event(app, tool, ev, mods) {
         return;

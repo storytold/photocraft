@@ -2687,7 +2687,7 @@ fn type_on_a_path_follows_the_curve() {
     assert!(flat.width() > flat.height() * 3, "{flat:?}");
 
     let mut down = straight.clone();
-    down.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 400.0)]), start: 0.0, flip: false };
+    down.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (0.0, 400.0)]), start: 0.0, end: None, flip: false };
     let r = ink(&mut eng, &down);
     assert!(r.height() > r.width() * 3, "vertical path gives tall ink: {r:?}");
     assert!(r.height() >= flat.width() - 8, "arc length is preserved: {r:?} vs {flat:?}");
@@ -2719,17 +2719,17 @@ fn type_on_a_path_follows_the_curve() {
         ..Default::default()
     };
     let mut curved = straight.clone();
-    curved.shape = TextShape::Path { path: arc.clone(), start: 0.0, flip: false };
+    curved.shape = TextShape::Path { path: arc.clone(), start: 0.0, end: None, flip: false };
     let c = ink(&mut eng, &curved);
     assert!(c.height() > flat.height() * 2, "curved ink is taller: {c:?} vs {flat:?}");
 
     // A path too short for the text hides the glyphs past its end.
     let mut short = straight.clone();
-    short.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (30.0, 0.0)]), start: 0.0, flip: false };
+    short.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (30.0, 0.0)]), start: 0.0, end: None, flip: false };
     assert!(ink(&mut eng, &short).width() < flat.width() / 2);
     // A degenerate path falls back to straight point text instead of failing.
     let mut dot = straight.clone();
-    dot.shape = TextShape::Path { path: Subpath::polyline(&[(5.0, 5.0), (5.0, 5.0)]), start: 0.0, flip: false };
+    dot.shape = TextShape::Path { path: Subpath::polyline(&[(5.0, 5.0), (5.0, 5.0)]), start: 0.0, end: None, flip: false };
     assert_eq!(ink(&mut eng, &dot), flat);
 }
 
@@ -3669,4 +3669,193 @@ fn colour_passes_hold_each_glyph_once() {
     for (c, _, p) in &passes {
         assert!(p.glyphs.iter().all(|&i| l.styles[l.glyphs[i].style as usize].color == *c));
     }
+}
+
+/// Verifies paragraph alignment offsets text along explicit path spans according to measured line advance and alignment factor.
+#[test]
+fn path_range_alignment_uses_measured_advance() {
+    use photocraft_doc::vector::Subpath;
+    let mut e = TextEngine::new();
+    for closed in [false, true] {
+        for flip in [false, true] {
+            for span in [0.0_f32, 10.0, 180.0] {
+                for (align, factor) in [(TextAlign::Left, 0.0), (TextAlign::Center, 0.5), (TextAlign::Right, 1.0)] {
+                    let path = if closed {
+                        Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+                    } else {
+                        Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)])
+                    };
+                    let start = if closed { 390.0 } else { 20.0 };
+                    let mut t = styled("Alignment   ", CharStyle { font_family: "Inter".into(), size_pt: 20.0, horizontal_scale: 1.5, ..Default::default() });
+                    t.shape = TextShape::Path { path, start, end: Some(start + span), flip };
+                    let t = with_para(t, ParagraphStyle { align, ..Default::default() });
+                    let l = e.layout(&t, 72.0);
+                    let line = &l.lines[0];
+                    let advance = line.x1 - line.x0;
+                    assert!((line.x0 - (span - advance) * factor).abs() < 0.01, "{line:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Proves `path_overflows` reports true if and only if any drawable glyph outline is hidden outside the path range.
+#[test]
+fn path_overflow_matches_visible_glyph_clipping() {
+    use photocraft_doc::vector::Subpath;
+    let mut engine = TextEngine::new();
+    for flip in [false, true] {
+        let mut text = point("Overflow", 20.0);
+        text.shape = TextShape::Path { path: Subpath::polyline(&[(0.0, 0.0), (500.0, 0.0)]), start: 0.0, end: Some(500.0), flip };
+        let layout = engine.layout(&text, 72.0);
+        assert!(!crate::render::path_overflows(&layout, &text.shape));
+        if let TextShape::Path { end, .. } = &mut text.shape {
+            *end = Some(1.0);
+        }
+        let layout = engine.layout(&text, 72.0);
+        assert!(crate::render::path_overflows(&layout, &text.shape));
+        text.text.clear();
+        let layout = engine.layout(&text, 72.0);
+        assert!(!crate::render::path_overflows(&layout, &text.shape));
+    }
+}
+
+/// Ensures path decoration rasterization bounds clamp within explicit range endpoints across open and closed curves.
+#[test]
+fn path_decoration_draw_bounds_respect_explicit_ranges() {
+    use crate::layout::DecorationRect;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let layout = |x0, x1| crate::TextLayout {
+        decorations: vec![DecorationRect { x0, x1, y0: 2.0, y1: 3.0, style: 0 }, DecorationRect { x0, x1, y0: -4.0, y1: -3.0, style: 0 }],
+        ..Default::default()
+    };
+    for flip in [false, true] {
+        for closed in [false, true] {
+            let path = if closed {
+                Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)])
+            } else {
+                Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)])
+            };
+            let start = if closed { 390.0 } else { 20.0 };
+            let shape = |end| TextShape::Path { path: path.clone(), start, end, flip };
+            let bounds = |l: &crate::TextLayout, end| {
+                let warp = crate::warp::Warp::on_path(&shape(end)).unwrap();
+                crate::render::ink_rect_warped(l, &Affine::IDENTITY, Some(&warp))
+            };
+            let clipped = bounds(&layout(-10.0, 40.0), Some(start + 20.0));
+            assert_eq!(clipped, bounds(&layout(0.0, 20.0), Some(start + 20.0)));
+            assert_ne!(clipped, bounds(&layout(0.0, 40.0), None));
+            assert_eq!(bounds(&layout(-10.0, 40.0), Some(start)), photocraft_geom::Rect::EMPTY);
+            assert_eq!(bounds(&layout(0.0, 40.0), None), bounds(&layout(0.0, 40.0), Some(start + 40.0)));
+        }
+    }
+}
+
+/// Verifies vertical path text aligns along the curve and advances progressively for left, center, and right alignments.
+#[test]
+fn vertical_path_range_alignment_renders_and_shifts_properly() {
+    use photocraft_doc::text::{Orientation, ParagraphStyle, TextAlign};
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 500.0)]);
+    let span = 300.0_f32;
+    let start = 50.0_f32;
+
+    let mut rects = Vec::new();
+    for align in [TextAlign::Left, TextAlign::Center, TextAlign::Right] {
+        let mut text = point("TEST", 20.0);
+        text.orientation = Orientation::Vertical;
+        text.shape = TextShape::Path { path: path.clone(), start, end: Some(start + span), flip: false };
+        text = with_para(text, ParagraphStyle { align, ..Default::default() });
+        let layout = engine.layout(&text, 72.0);
+        let warp = crate::render::layout_deform(&layout, &text);
+        assert!(warp.is_some(), "warp should be constructed");
+        let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, warp.as_ref());
+        assert!(!rect.is_empty(), "vertical text must render for alignment {align:?}");
+        rects.push((align, rect));
+    }
+
+    let left_rect = rects[0].1;
+    let center_rect = rects[1].1;
+    let right_rect = rects[2].1;
+    assert!(left_rect.y0 < center_rect.y0, "center text should be further along the path than left");
+    assert!(center_rect.y0 < right_rect.y0, "right text should be further along the path than center");
+}
+
+/// Verifies flipping vertical path text places glyphs beginning from the opposite curve endpoint.
+#[test]
+fn vertical_path_flip_reverses_placement() {
+    use photocraft_doc::text::Orientation;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 500.0)]);
+
+    let mut text_normal = point("FLIP", 20.0);
+    text_normal.orientation = Orientation::Vertical;
+    text_normal.shape = TextShape::Path { path: path.clone(), start: 50.0, end: Some(350.0), flip: false };
+    let l_normal = engine.layout(&text_normal, 72.0);
+    let warp_normal = crate::render::layout_deform(&l_normal, &text_normal);
+    let rect_normal = crate::render::ink_rect_warped(&l_normal, &Affine::IDENTITY, warp_normal.as_ref());
+    assert!(!rect_normal.is_empty());
+
+    let mut text_flipped = point("FLIP", 20.0);
+    text_flipped.orientation = Orientation::Vertical;
+    text_flipped.shape = TextShape::Path { path: path.clone(), start: 50.0, end: Some(350.0), flip: true };
+    let l_flipped = engine.layout(&text_flipped, 72.0);
+    let warp_flipped = crate::render::layout_deform(&l_flipped, &text_flipped);
+    let rect_flipped = crate::render::ink_rect_warped(&l_flipped, &Affine::IDENTITY, warp_flipped.as_ref());
+    assert!(!rect_flipped.is_empty());
+
+    assert!(rect_flipped.y0 > rect_normal.y0, "flipped text must start from opposite path end");
+}
+
+/// Proves vertical path text renders across closed seams and projects hit coordinates onto valid character indices.
+#[test]
+fn vertical_path_seam_and_caret_projection() {
+    use photocraft_doc::text::Orientation;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let mut engine = TextEngine::new();
+    let path = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)]);
+    let start = 390.0_f32;
+    let mut text = point("SEAM", 12.0);
+    text.orientation = Orientation::Vertical;
+    text.shape = TextShape::Path { path: path.clone(), start, end: Some(start + 80.0), flip: false };
+    let layout = engine.layout(&text, 72.0);
+    let warp = crate::render::layout_deform(&layout, &text).unwrap();
+    let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
+    assert!(!rect.is_empty(), "vertical text across seam must render");
+
+    let text_end = layout.line_bounds().map_or(0.0, |b| f64::from(b[2]));
+    let px = 10.0;
+    let py = 0.0;
+    let projected_x = warp.path_text_x_near_text(px, py, text_end).unwrap();
+    assert!(projected_x.is_finite());
+    let (tx, ty) = layout.to_text(projected_x as f32, -1.0);
+    let (char_idx, _) = crate::hit_char(&layout, &text.text, tx, ty);
+    assert!(char_idx <= text.text.len());
+}
+
+/// Verifies vertical path text decorations are properly deformed and clamped to the explicit placement interval.
+#[test]
+fn vertical_path_decoration_clipping_and_warp() {
+    use crate::layout::DecorationRect;
+    use photocraft_doc::vector::Subpath;
+    use photocraft_geom::Affine;
+
+    let path = Subpath::polyline(&[(0.0, 0.0), (0.0, 200.0)]);
+    let shape = TextShape::Path { path, start: 20.0, end: Some(60.0), flip: false };
+    let warp = crate::warp::Warp::on_path_oriented(&shape, 0.0, true).unwrap();
+    let layout =
+        crate::TextLayout { vertical: true, decorations: vec![DecorationRect { x0: -5.0, x1: -3.0, y0: -10.0, y1: 50.0, style: 0 }], ..Default::default() };
+    let rect = crate::render::ink_rect_warped(&layout, &Affine::IDENTITY, Some(&warp));
+    assert!(!rect.is_empty(), "clipped vertical decoration must draw");
+    assert!(rect.y0 >= 19 && rect.y1 <= 61, "decoration bounds should be within clipped range: {rect:?}");
 }
