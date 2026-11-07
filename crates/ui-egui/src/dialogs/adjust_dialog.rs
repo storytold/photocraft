@@ -504,6 +504,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             fields.insert(CURVE_PICKER_BASE.into(), base);
         }
     }
+    crate::levels_clipping::sync(ui.ctx(), dialog_mem(&kind), fields);
     let mut preview = fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
     ui.add_space(6.0);
     if crate::widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
