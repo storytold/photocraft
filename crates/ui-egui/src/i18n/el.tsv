@@ -3481,6 +3481,7 @@ cameraRaw	Yellow	Κίτρινο
 	Move Tool	Μετακίνηση (Move Tool)
 	Could not use the move tool because the layer is locked.	Δεν ήταν δυνατή η χρήση του εργαλείου Μετακίνηση, επειδή το επίπεδο είναι κλειδωμένο.
 	Could not complete the Free Transform command because the layer is locked.	Δεν ήταν δυνατή η ολοκλήρωση της εντολής Ελεύθερος μετασχηματισμός, επειδή το επίπεδο είναι κλειδωμένο.
+	Could not transform because the layer is locked.	Δεν ήταν δυνατός ο μετασχηματισμός, επειδή το επίπεδο είναι κλειδωμένο.
 	Note Tool	Σημείωση (Note Tool)
 	Object Selection Tool	Επιλογή αντικειμένου (Object Selection Tool)
 	Paint Bucket Tool	Κουβάς γεμίσματος (Paint Bucket Tool)
@@ -4305,3 +4306,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Επιλέξτε διαφορετικό έγγραφο για κάθε κανάλι.
 	A picked document is no longer open.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον ανοιχτό.
 	A picked document is no longer a grayscale document of the same size.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον έγγραφο σε κλίμακα του γκρι ίδιου μεγέθους.
+# Move tool options bar (#11381)
+	Align top edges	Στοίχιση πάνω άκρων
+	Align vertical centers	Στοίχιση κατακόρυφων κέντρων
+	Align bottom edges	Στοίχιση κάτω άκρων
+	Distribute vertically	Κατανομή κατακόρυφα
+	Distribute horizontally	Κατανομή οριζόντια
+	Show layer bounds on hover	Εμφάνιση ορίων στρώσης στο πέρασμα του δείκτη
+	Expand layer group on click	Ανάπτυξη ομάδας στρώσεων με κλικ
+	Show hover bounds from Layers	Εμφάνιση ορίων στο πέρασμα από τις Στρώσεις
