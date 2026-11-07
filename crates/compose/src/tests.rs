@@ -3165,6 +3165,47 @@ fn float_curves_extend_past_the_unit_range_like_photoshop() {
     assert!(odd.px[0].iter().all(|v| !v.is_nan()), "{:?}", odd.px[0]);
 }
 
+/// The #11409 reporter's exact Selective Color matrix, exercised through an adjustment
+/// layer as well as the direct function (PR #11644 review): Absolute mode, Black -100 on
+/// all six chromatic ranges and +100 on Whites, Neutrals and Blacks. The function-level
+/// pins in adjust.rs cannot catch a regression in how a layer applies the adjustment, so
+/// the characterized outputs are asserted again on the rendered route: near-neutral
+/// landings, with small residual chroma on the mixed colours. Photoshop's outputs for
+/// the same matrix are unmeasured — this characterizes our route, not parity.
+#[test]
+fn selective_color_reporter_matrix_through_an_adjustment_layer() {
+    let mut adjustments = [[0.0f32; 4]; 9];
+    for (r, row) in adjustments.iter_mut().enumerate() {
+        row[3] = if r < 6 { -100.0 } else { 100.0 };
+    }
+    let adj = Adjustment::SelectiveColor { relative: false, adjustments };
+    let input = Buffer { rect: Rect::new(0, 0, 3, 1), px: vec![[0.9, 0.8, 0.7, 1.0], [0.2, 0.6, 0.3, 1.0], [1.0, 0.0, 0.0, 1.0]] };
+    let want = [[0.14, 0.08, 0.02], [0.36, 0.32, 0.34], [1.0, 1.0, 1.0]];
+    let check = |got: &Buffer, what: &str| {
+        for (p, w) in got.px.iter().zip(want) {
+            for i in 0..3 {
+                assert!((p[i] - w[i]).abs() < 1e-5, "{what}: {p:?} vs {w:?}");
+            }
+            assert_eq!(p[3], 1.0);
+        }
+    };
+    let mut destructive = input.clone();
+    adjust::apply_depth(&adj, &mut destructive, adjust::Transfer::Gamma(1.0), Some(SampleType::F32));
+    check(&destructive, "Image > Adjustments");
+    // Through a real adjustment layer in a rendered document (PR #11644 round 3):
+    // applying `adj` to a bare buffer would still pass if the compositor stopped
+    // applying Selective Color layers, so the pins are asserted on render output.
+    let mut doc = Document::new("selc", Size::new(3, 1), ColorMode::Rgb, SampleType::F32);
+    let mut base = Layer::raster("pixels", PixelFormat::RGBA32F);
+    for (x, px) in input.px.iter().enumerate() {
+        base.surface_mut().unwrap().write_pixel(x as i32, 0, &photocraft_raster::from_rgba(&PixelFormat::RGBA32F, *px));
+    }
+    doc.layers = vec![base, Layer::new("selective color", LayerContent::Adjustment(adj.clone()))];
+    let rendered = render(&doc, doc.bounds());
+    check(&rendered, "adjustment layer");
+    assert_eq!(rendered.px, destructive.px);
+}
+
 #[test]
 fn float_adjustments_preserve_hdr_range() {
     let identity = vec![photocraft_doc::adjust::CurvePoint { input: 0.0, output: 0.0 }, photocraft_doc::adjust::CurvePoint { input: 1.0, output: 1.0 }];
