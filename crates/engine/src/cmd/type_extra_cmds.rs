@@ -7,7 +7,7 @@
 //! so the PSD `TySh` data (and with it warp, anti-aliasing and the OpenType flags) is regenerated
 //! and the layer saves as editable text.
 
-use photocraft_doc::text::{AntiAlias, FontFeature, Orientation, TextAlign, TextShape, TextWarp};
+use photocraft_doc::text::{AntiAlias, FontFeature, Orientation, ParagraphRun, TextAlign, TextShape, TextWarp};
 use photocraft_doc::vector::{Knot, Path, PathOp, Subpath};
 use photocraft_doc::{Affine, Document, Fill, Layer, LayerContent, LayerId, ShapeLayer, TextLayer};
 use photocraft_geom::Point;
@@ -154,11 +154,43 @@ fn set_orientation(s: &mut Session, p: &Value, o: Orientation) -> Result<Value> 
 
 // ---------- point ⇄ paragraph ----------
 
+/// The widest full line advance plus the indents that the box layouter deducts from it.
+fn widest_indented_line(l: &photocraft_text::TextLayout, text: &str, paragraphs: &[ParagraphRun]) -> f32 {
+    let ranges = photocraft_text::layout::split_paragraphs(text);
+    let run_starts: Vec<_> = paragraphs
+        .iter()
+        .scan(0usize, |end, run| {
+            let start = *end;
+            *end = end.saturating_add(run.len);
+            Some(start)
+        })
+        .collect();
+    let k = l.px_per_pt;
+    // The layouter emits all runs of a line before advancing to the next line.
+    l.clusters
+        .chunk_by(|a, b| a.line == b.line)
+        .filter_map(|clusters| {
+            let index = clusters.first()?.line;
+            let line = l.lines.get(index)?;
+            // A style run can span more than one paragraph. Match the style by its byte offset.
+            let paragraph_start = ranges.get(line.paragraph)?.start;
+            let run = run_starts.partition_point(|&start| start <= paragraph_start).saturating_sub(1);
+            let style = &paragraphs.get(run)?.style;
+            let first = index.checked_sub(1).and_then(|prev| l.lines.get(prev)).is_none_or(|prev| prev.paragraph != line.paragraph);
+            let first_indent = if first { style.first_line_indent_pt * k } else { 0.0 };
+            let indents = (style.start_indent_pt * k + style.end_indent_pt * k + first_indent).max(0.0);
+            let advance = clusters.iter().map(|c| c.advance).sum::<f32>();
+            Some(advance + indents)
+        })
+        .fold(0.0, f32::max)
+}
+
 fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
     let r = with_text(s, p, "Convert to Paragraph Text", |t, dpi| {
         let l = layout_at(dpi, t);
         let size_px = t.char_runs().iter().map(|r| r.style.size_pt).fold(t.size_pt, f32::max) * dpi / 72.0;
-        let ps = t.paragraph_runs().first().map(|p| p.style.clone()).unwrap_or_default();
+        let paragraphs = t.paragraph_runs();
+        let ps = paragraphs.first().map(|p| p.style.clone()).unwrap_or_default();
         let indents = (ps.start_indent_pt + ps.end_indent_pt).max(0.0) * dpi / 72.0;
         if l.vertical {
             // Line space: u along the columns, v across them (first column centred on v = 0).
@@ -177,8 +209,15 @@ fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(json!([x, y, width, height]));
         }
         let [x0, y0, x1, y1] = l.bounds().unwrap_or([0.0, -t.size_pt, t.size_pt, 0.0]);
-        // A little slack so no line re-wraps; the box keeps the text where it was.
-        let width = (x1 - x0).max(1.0) + indents + (size_px * 0.5).max(4.0);
+        // Alignment bounds trim trailing whitespace. Reserve its advance for later typing (#9945)
+        // where widening the shared frame leaves each paragraph at its original horizontal anchor.
+        let full_width = if matches!(ps.align, TextAlign::Left | TextAlign::Center | TextAlign::Right) && paragraphs.iter().all(|p| p.style.align == ps.align) {
+            widest_indented_line(&l, &t.text, &paragraphs)
+        } else {
+            0.0
+        };
+        // Keep the existing width floor and some slack for typing.
+        let width = ((x1 - x0).max(1.0) + indents).max(full_width) + (size_px * 0.5).max(4.0);
         let height = (y1 - y0).max(1.0) + size_px * 0.5;
         let x = match ps.align {
             TextAlign::Center | TextAlign::JustifyCenter => -width / 2.0,
