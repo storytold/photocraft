@@ -125,6 +125,8 @@ pub struct Tool {
     /// The tip touched before the tool's first motion on the surface: the press waits for it (a
     /// press at a stale position would click whatever is there).
     unplaced_down: bool,
+    /// A barrel button pressed before the first motion: like the tip, it waits for the position.
+    unplaced_barrel: [bool; 2],
     pressure: f64,
     tilt_x: f64,
     tilt_y: f64,
@@ -182,6 +184,14 @@ impl Tool {
                     if std::mem::take(&mut self.unplaced_down) {
                         self.push(Pending::Button(PenButton::Tip, true, None));
                     }
+                    if std::mem::take(&mut self.unplaced_barrel[0]) {
+                        self.barrel = true;
+                        self.push(Pending::Button(PenButton::Barrel, true, None));
+                    }
+                    if std::mem::take(&mut self.unplaced_barrel[1]) {
+                        self.barrel2 = true;
+                        self.push(Pending::Button(PenButton::Barrel2, true, None));
+                    }
                 }
             }
             Raw::Pressure(p) => {
@@ -198,16 +208,28 @@ impl Tool {
                 self.changed = true;
             }
             Raw::Button { code, pressed } => {
-                let (button, held) = match code {
-                    BTN_STYLUS => (PenButton::Barrel, &mut self.barrel),
-                    BTN_STYLUS2 => (PenButton::Barrel2, &mut self.barrel2),
+                let (button, held, deferred) = match code {
+                    BTN_STYLUS => (PenButton::Barrel, &mut self.barrel, &mut self.unplaced_barrel[0]),
+                    BTN_STYLUS2 => (PenButton::Barrel2, &mut self.barrel2, &mut self.unplaced_barrel[1]),
                     _ => return None,
                 };
-                // A press needs the pen over a surface, at a known position there (never a click
-                // at a stale one); a release always goes through.
-                if *held != pressed && (!pressed || self.placed) {
-                    *held = pressed;
-                    self.push(Pending::Button(button, pressed, None));
+                if pressed {
+                    if *held || *deferred {
+                        return None;
+                    }
+                    // A press needs the pen over a surface, at a known position there (never a
+                    // click at a stale one); before the first motion it waits for one.
+                    if self.placed {
+                        *held = true;
+                        self.push(Pending::Button(button, true, None));
+                    } else {
+                        *deferred = true;
+                    }
+                } else if std::mem::take(deferred) {
+                    // The press never reached the UI, so there is nothing to release.
+                } else if *held {
+                    *held = false;
+                    self.push(Pending::Button(button, false, None));
                 }
             }
             Raw::Frame => return self.frame(),
@@ -265,6 +287,7 @@ impl Tool {
         if std::mem::take(&mut self.unplaced_down) {
             self.down = false;
         }
+        self.unplaced_barrel = [false; 2];
         for p in &mut self.pending {
             if let Pending::Button(_, _, pos @ None) = p {
                 *pos = Some(at);
@@ -554,9 +577,21 @@ mod tests {
             ],
         );
         assert_eq!(out[0].events, vec![PenEvent::Enter { surface: 7 }, PenEvent::Move { x: 3.0, y: 4.0 }, press(PenButton::Barrel2, true, 3.0, 4.0)]);
-        // Before the pen's first position on the surface a barrel press clicks nothing.
+        // Before the pen's first position on the surface a barrel press waits for the motion
+        // that places it, then presses at that position.
         let mut t = pen();
         let out = run(&mut t, &[Raw::ProximityIn { surface: 7 }, Raw::Button { code: BTN_STYLUS, pressed: true }, Raw::Frame]);
+        assert_eq!(out[0].events, vec![PenEvent::Enter { surface: 7 }], "no press before the position is known");
+        let out = run(&mut t, &[Raw::Motion { x: 5.0, y: 6.0 }, Raw::Frame]);
+        assert_eq!(out[0].events, vec![PenEvent::Move { x: 5.0, y: 6.0 }, press(PenButton::Barrel, true, 5.0, 6.0)]);
+        let out = run(&mut t, &[Raw::Button { code: BTN_STYLUS, pressed: false }, Raw::Frame]);
+        assert_eq!(out[0].events, vec![press(PenButton::Barrel, false, 5.0, 6.0)]);
+        // A press and release before any motion never reach the UI.
+        let mut t = pen();
+        let out = run(
+            &mut t,
+            &[Raw::ProximityIn { surface: 7 }, Raw::Button { code: BTN_STYLUS, pressed: true }, Raw::Button { code: BTN_STYLUS, pressed: false }, Raw::Frame],
+        );
         assert_eq!(out[0].events, vec![PenEvent::Enter { surface: 7 }]);
     }
 
