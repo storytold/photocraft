@@ -20,7 +20,10 @@ fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasTo
     entries
 }
 
-/// Snapshot of everything on screen, addressable by id.
+/// Snapshot current UI state without changing the document or an open dialog's draft.
+///
+/// Reports committed Info readouts alongside upstream controls. Last-frame task-bar geometry
+/// is included only while the bar remains eligible, even before another frame is drawn.
 pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     let screen = ctx.content_rect();
     let mut dialogs: Vec<Value> =
@@ -29,6 +32,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
+    // Last frame's task bar rect, unless the bar can't show now (hidden by `ui.set` before the
+    // next draw).
+    let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app));
     // One `json!` this size is at the macro recursion limit; further keys are added below it.
     let mut snapshot = json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
@@ -36,6 +42,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "memory": photocraft_raster::memory::stats(),
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
+        "artboardTool": app.ui.artboard_tool,
         "perspectiveCrop": app.ui.perspective_crop,
         "strokeEditor": app.ui.stroke_editor,
         "magnetic": app.ui.magnetic,
@@ -92,6 +99,15 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
             })
         }),
         "panels": app.ui.panels,
+        // The contextual task bar (#10890): Window › Contextual Task Bar, whether it shows now and
+        // where (screen points), and its place (pinned, dragged-to corner).
+        "taskBar": json!({
+            "enabled": app.ui.panels.context_task_bar,
+            "visible": task_bar_rect.is_some(),
+            "rect": task_bar_rect,
+            "pinned": app.ui.panels.task_bar.pinned,
+            "at": app.ui.panels.task_bar.at,
+        }),
         "dockTabs": app.ui.dock_tabs,
         "dock": app.ui.dock,
         "docking": app.ui.docking,

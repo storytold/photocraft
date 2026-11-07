@@ -642,11 +642,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// A modal dialog or workspace is open. egui's `Modal` blocks input only in the window it shows
 /// in, so the floating panels' own OS windows are blocked meanwhile (`DockArea::input_blocked`).
-/// The app's dialogs count from the frame they open; any other egui modal (a format's options,
-/// a job's progress) from the frame after it first shows.
+/// The app's explicit dialogs, including pending Info Options, count from the frame they open;
+/// any other egui modal (a format's options, a job's progress) from the frame after it first shows.
 pub(crate) fn modal_open(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     !app.ui.dialogs.is_empty()
         || app.ui.layers_panel_dialog.is_some()
+        || app.ui.info_panel_dialog.is_some()
         || app.discard.is_some()
         || app.camera_raw.is_some()
         || crate::distort_ui::modal_workspace(app).is_some()

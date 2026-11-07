@@ -932,6 +932,33 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
 
+/// Pending Info Options blocks native floating panels before its first egui modal draw.
+/// Closing it restores ordinary panel input; checking ownership changes neither the document,
+/// history nor saved preferences. The fresh context exposes the missing opening-frame guard.
+#[test]
+fn pending_info_options_blocks_floating_panels_before_first_modal_draw() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    let before = app.run("document.inspect", json!({})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    let journal = app.session.journal.len();
+    let saved = app.session.prefs_to_json();
+    assert!(ctx.memory(|memory| memory.is_above_modal_layer(egui::LayerId::background())));
+    assert!(!modal_open(&app, &ctx), "ordinary panel input starts enabled");
+
+    app.ui.info_panel_dialog = Some(app.ui.info_panel.clone());
+    assert!(modal_open(&app, &ctx), "pending options own input before egui sees the modal");
+    assert!(ctx.memory(|memory| memory.is_above_modal_layer(egui::LayerId::background())), "no modal has been drawn");
+
+    app.ui.info_panel_dialog = None;
+    assert!(!modal_open(&app, &ctx), "closing options restores ordinary panel input");
+    assert_eq!(app.run("document.inspect", json!({})).unwrap(), before);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.journal.len(), journal);
+    assert_eq!(app.session.prefs_to_json(), saved);
+}
+
 /// The Info menu exposes the same Panel Options dialog when docked and floated, including an empty session.
 #[test]
 fn info_panel_menu_opens_readout_options_docked_and_floating() {

@@ -195,6 +195,7 @@
 	Right	右
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
+	Clear Recent File List	最近使ったファイルを消去
 	Remove from Recent	最近使ったファイルから削除
 	Remove {name} from Recent	{name} を最近使ったファイルから削除
 	Close	閉じる
@@ -203,6 +204,10 @@
 	Restore	元に戻す (縮小)
 	Close All	すべて閉じる
 	Close Others	ほかを閉じる
+	New Document…	新規ドキュメント…
+	Open Document…	開く…
+	Consolidate All to Here	すべてをここに統合
+	Move to New Window	新規ウィンドウに移動
 	Save	保存
 	Save As…	名前を付けて保存…
 	Save a Copy…	コピーを保存…
@@ -255,6 +260,7 @@
 	Create Smart Object after Loading Layers	レイヤーの読み込み後にスマートオブジェクトを作成
 	Reveal in Finder	Finder で表示
 	Show in Explorer	エクスプローラーで表示
+	Reveal in Explorer	エクスプローラーで表示
 	Show in Folder	フォルダーで表示
 	File Info…	ファイル情報…
 	Print…	プリント…
@@ -343,6 +349,7 @@
 	Units & Rulers…	単位・定規…
 	Guides, Grid & Slices…	ガイド・グリッド・スライス…
 	Plug-ins…	プラグイン…
+	Plugins…	プラグイン…
 	Type…	文字…
 	Enhanced Controls…	拡張コントロール…
 	Camera Raw…	Camera Raw…
@@ -499,6 +506,8 @@
 	Smart Object	スマートオブジェクト
 	Convert to Smart Object	スマートオブジェクトに変換
 	Convert to Embedded	埋め込みに変換
+	Embed Linked	リンクを埋め込む
+	Embed All Linked	すべてのリンクを埋め込む
 	Convert to Layers	レイヤーに変換
 	Convert to Linked…	リンクに変換…
 	Edit Contents	コンテンツを編集
@@ -572,7 +581,9 @@
 	Unite Shapes	シェイプを結合
 	Subtract Front Shape	前面シェイプで型抜き
 	Intersect Shape Areas	シェイプの重なりを抽出
+	Unite Shapes at Overlap	シェイプの重なりを抽出
 	Exclude Overlapping Shapes	シェイプの重なりを除外
+	Subtract Shapes at Overlap	シェイプの重なりを除外
 	Merge Shape Components	シェイプの構成要素を結合
 	Path operations	パスの操作
 	Align	整列
@@ -756,6 +767,7 @@
 	Minimum…	最小値…
 	Offset…	オフセット…
 	Plug-ins	プラグイン
+	Plugins	プラグイン
 	Proof Setup	校正設定
 	Proof Colors	色の校正
 	Gamut Warning	色域外警告
@@ -764,9 +776,9 @@
 	Working Magenta Plate	作業用マゼンタ版
 	Working Yellow Plate	作業用イエロー版
 	Working Black Plate	作業用ブラック版
-	Working CMY Plate	作業用 CMY 版
-	Legacy Macintosh RGB	旧 Macintosh RGB
-	Internet Standard RGB	インターネット標準 RGB
+	Working CMY Plates	作業用 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	旧 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	インターネット標準 RGB (sRGB)
 	Monitor RGB	モニター RGB
 	Color Blindness — Protanopia-type	色覚特性 — 1 型(P 型)
 	Color Blindness — Deuteranopia-type	色覚特性 — 2 型(D 型)
@@ -858,7 +870,7 @@
 	Consolidate All to Tabs	すべてをタブに統合
 	Float in Window	ウィンドウ内に浮動
 	Float All in Windows	すべてをウィンドウ内に浮動
-	New Window for Document	ドキュメントの新規ウィンドウ
+	New Window	新規ウィンドウ
 	Workspace	ワークスペース
 	Essentials	基本
 	Graphic and Web	グラフィックと Web
@@ -920,6 +932,12 @@
 	Timeline	タイムライン
 	Tool Presets	ツールプリセット
 	Tools	ツール
+	Contextual Task Bar	コンテキストタスクバー
+	Hide bar	バーを隠す
+	Reset bar position	バーの位置をリセット
+	Pin bar position	バーの位置を固定
+	Move bar	バーを移動
+	More options	その他のオプション
 	About PhotoCraft	PhotoCraft について
 	PhotoCraft Website	PhotoCraft の Web サイト
 	PhotoCraft on GitHub	GitHub 上の PhotoCraft
@@ -1870,6 +1888,7 @@
 	Move Tool	移動ツール
 	Could not use the move tool because the layer is locked.	レイヤーがロックされているため、移動ツールを使用できません。
 	Could not complete the Free Transform command because the layer is locked.	レイヤーがロックされているため、自由変形コマンドを完了できません。
+	Could not transform because the layer is locked.	レイヤーがロックされているため、変形できません。
 	Multiply	乗算
 	My Brushes	マイブラシ
 	Neutrals	中間色系
@@ -2026,6 +2045,11 @@
 	Show canvas dots	カンバスのドットを表示
 	Clip thumbnails to layer bounds	サムネールをレイヤーの境界でクリップ
 	Clip Thumbnails to Layer Bounds	サムネールをレイヤーの境界でクリップ
+	No Thumbnails	サムネールなし
+	Small Thumbnails	小さいサムネール
+	Medium Thumbnails	中サイズのサムネール
+	Large Thumbnails	大きいサムネール
+	Clip Thumbnails to Document Bounds	サムネールをドキュメントの境界でクリップ
 	Canvas color	カンバスの色
 	Canvas custom color	カンバスのカスタム色
 	Color picker	カラーピッカー
@@ -2143,7 +2167,6 @@
 	Show only crosshair while painting	描画中は十字線のみ表示
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
-	Enable animations	アニメーションを有効にする
 	Show highlight on rollover	ロールオーバー時にハイライトを表示
 	Show bounding box when dragging layer	レイヤーのドラッグ中にバウンディングボックスを表示
 	System title bar	システムのタイトルバー
@@ -3025,6 +3048,7 @@ fontWeight	Italic	斜体
 	Magnetic Lasso	マグネット投げ縄
 	Make	作成
 	Make Selection	選択範囲を作成
+	Make Shape	シェイプを作成
 	Make Work Path	作業用パスを作成
 	Match Color	カラーを一致
 	Mezzotint	メゾティント

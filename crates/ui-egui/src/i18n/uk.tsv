@@ -255,6 +255,7 @@
 	Right	Правий
 	Open Recent	Нещодавні файли
 	Clear Recent Files	Очистити список нещодавніх файлів
+	Clear Recent File List	Очистити список нещодавніх файлів
 	Remove from Recent	Вилучити з нещодавніх
 	Remove {name} from Recent	Вилучити {name} з нещодавніх
 	Close	Закрити
@@ -263,6 +264,10 @@
 	Restore	Відновити
 	Close All	Закрити всі
 	Close Others	Закрити інші
+	New Document…	Новий документ…
+	Open Document…	Відкрити…
+	Consolidate All to Here	Об'єднати все тут
+	Move to New Window	Перемістити в нове вікно
 	Save	Зберегти
 	Save As…	Зберегти як…
 	Save a Copy…	Зберегти копію…
@@ -646,7 +651,7 @@
 	Match Location	Узгодити розташування
 	Match Rotation	Узгодити поворот
 	Match All	Узгодити все
-	New Window for Document	Нове вікно для документа
+	New Window	Нове вікно
 	Workspace	Робочий простір
 	Extensions	Розширення
 	Panels	Панелі
@@ -676,6 +681,12 @@
 	Timeline	Шкала часу
 	Tool Presets	Набори інструментів
 	Tools	Інструменти
+	Contextual Task Bar	Контекстна панель завдань
+	Hide bar	Сховати панель
+	Reset bar position	Скинути положення панелі
+	Pin bar position	Закріпити положення панелі
+	Move bar	Перемістити панель
+	More options	Інші параметри
 	Libraries	Бібліотеки
 	3D	3D
 	Toolbars	Панелі інструментів
@@ -816,6 +827,7 @@
 	Units & Rulers…	Одиниці та лінійки…
 	Guides, Grid & Slices…	Напрямні, сітка та фрагменти…
 	Plug-ins…	Плагіни…
+	Plugins…	Плагіни…
 	Technology Previews	Попередній перегляд технологій
 	Scratch Disks…	Робочі диски…
 	Export Preferences…	Налаштування експорту…
@@ -1038,8 +1050,8 @@
 	ACES	ACES
 	Industry Standard	Галузевий стандарт
 	Web	Веб
-	Internet Standard RGB	Стандартний RGB для інтернету
-	Legacy Macintosh RGB	Застарілий Macintosh RGB
+	Internet Standard RGB (sRGB)	Стандартний RGB для інтернету (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Застарілий Macintosh RGB (Gamma 1.8)
 	Monitor RGB	RGB монітора
 	Windows LCD	Windows LCD
 	Coated CMYK	CMYK для крейдованого паперу
@@ -1308,6 +1320,7 @@
 	Path to Illustrator…	Контур до Illustrator…
 	Make Work Path	Створити робочий контур
 	Make Selection	Створити виділення
+	Make Shape	Створити фігуру
 	Fill Path	Залити контур
 	Stroke Path	Обвести контур
 	Clipping Path	Відсічний контур
@@ -1706,6 +1719,7 @@
 	Move Tool	Інструмент «Переміщення»
 	Could not use the move tool because the layer is locked.	Не вдалося використати інструмент «Переміщення», бо шар заблоковано.
 	Could not complete the Free Transform command because the layer is locked.	Не вдалося виконати команду «Вільна трансформація», бо шар заблоковано.
+	Could not transform because the layer is locked.	Не вдалося трансформувати, бо шар заблоковано.
 	Rectangular Marquee Tool	Інструмент «Прямокутне виділення»
 	Elliptical Marquee Tool	Інструмент «Еліптичне виділення»
 	Single Row Marquee Tool	Інструмент «Виділення одного рядка»
@@ -1822,6 +1836,7 @@
 	Saved	Збережено
 	Reveal in Finder	Показати у Finder
 	Show in Explorer	Показати у Провіднику
+	Reveal in Explorer	Показати у Провіднику
 	Show in Folder	Показати в теці
 	Before (Y)	До (Y)
 	Save Settings…	Зберегти налаштування…
@@ -1985,6 +2000,8 @@
 	Combine Shapes	Об'єднати фігури
 	Contract…	Стиснути…
 	Convert to Embedded	Перетворити на вбудований
+	Embed Linked	Вбудувати пов'язаний
+	Embed All Linked	Вбудувати всі пов'язані
 	Convert to Layers	Перетворити на шари
 	Convert to Linked…	Перетворити на пов'язаний…
 	Count	Підрахунок
@@ -2007,6 +2024,7 @@
 	Enhanced Controls…	Розширені елементи керування…
 	Entropy	Ентропія
 	Exclude Overlapping Shapes	Виключити перекриття фігур
+	Subtract Shapes at Overlap	Виключити перекриття фігур
 	Exit	Вийти
 	Expand…	Розширити…
 	Extra Large	Дуже великий
@@ -2032,6 +2050,7 @@
 	Indexed Color…	Індексований колір…
 	Integrations…	Інтеграції…
 	Intersect Shape Areas	Перетин областей фігур
+	Unite Shapes at Overlap	Перетин областей фігур
 	Kurtosis	Ексцес
 	Large	Великий
 	Layer Edges	Краї шару
@@ -2073,6 +2092,7 @@
 	Pixelate	Пікселізація
 	Place Scale Marker…	Розмістити маркер масштабу…
 	Plug-ins	Плагіни
+	Plugins	Плагіни
 	Print One Copy	Надрукувати одну копію
 	Print…	Друк…
 	Range	Діапазон
@@ -2117,7 +2137,7 @@
 	Vertical Centers	Вертикальні центри
 	Video Frames to Layers…	Відеокадри в шари…
 	WIA Support…	Підтримка WIA…
-	Working CMY Plate	Робоча форма CMY
+	Working CMY Plates	Робочі форми CMY
 	Absolute	Абсолютний
 	Action	Дія
 	Adaptive	Адаптивний
@@ -2394,6 +2414,11 @@
 	Show canvas dots	Показувати крапки полотна
 	Clip thumbnails to layer bounds	Обрізати мініатюри до меж шару
 	Clip Thumbnails to Layer Bounds	Обрізати мініатюри до меж шару
+	No Thumbnails	Без мініатюр
+	Small Thumbnails	Малі мініатюри
+	Medium Thumbnails	Середні мініатюри
+	Large Thumbnails	Великі мініатюри
+	Clip Thumbnails to Document Bounds	Обрізати мініатюри до меж документа
 	Canvas color	Колір полотна
 	Canvas custom color	Довільний колір полотна
 	Classic	Класична
@@ -2520,7 +2545,6 @@
 	Show only crosshair while painting	Показувати лише перехрестя під час малювання
 	Show slice numbers	Показувати номери фрагментів
 	Show tooltips	Показувати підказки
-	Enable animations	Увімкнути анімацію
 	Show highlight on rollover	Показувати підсвічування під час наведення
 	Show bounding box when dragging layer	Показувати рамку під час перетягування шару
 	System title bar	Системний рядок заголовка

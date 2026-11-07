@@ -890,7 +890,7 @@ fn ui_set_drives_the_layers_panel_artboard_filter() {
     assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard);
     let bad = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "artboards"}}));
     assert_eq!(bad["ok"], false, "{bad}");
-    assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject or artboard"), "{bad}");
+    assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject, artboard or group"), "{bad}");
     assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard, "a bad value changed nothing");
 }
 
@@ -2022,6 +2022,35 @@ fn huge_click_count_is_rejected() {
     }
 }
 
+/// #9137: a coordinate past f32's range became `inf`, and on the next frame egui's pointer
+/// delta `inf - inf` panicked outside the dispatch guard, closing the app.
+#[test]
+fn huge_click_coordinate_is_rejected() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    for method in ["ui.click", "ui.move"] {
+        for (field, v) in [("x", 1e308), ("y", -1e308), ("x", 3.5e38), ("y", 1e7), ("x", -1.5e6)] {
+            let (req, _rx) = ControlRequest::new(method, json!({ field: v }));
+            let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!("{method} {field}={v}: accepted") };
+            assert_eq!(r["ok"], false, "{method} {field}={v}: {r}");
+            assert!(r["error"].as_str().unwrap().starts_with(&format!("{field} must be between")), "{r}");
+            assert!(app.synthetic.is_empty(), "a rejected {method} queues nothing");
+        }
+    }
+    // Points at the edges of the range, off-window included, reach egui and run a frame each.
+    let edge = MAX_SCREEN_POINT;
+    for (method, x, y) in [("ui.move", edge, -edge), ("ui.click", -edge, edge), ("ui.click", -5.0, 20.0)] {
+        let (req, _rx) = ControlRequest::new(method, json!({"x": x, "y": y}));
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::AfterInput));
+        while !app.synthetic.is_empty() {
+            let events = app.take_synthetic_step();
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |_| {}).textures_delta.clear();
+        }
+        let pos = ctx.input(|i| i.pointer.latest_pos());
+        assert_eq!(pos, Some(egui::pos2(x as f32, y as f32)), "{method} {x},{y}");
+    }
+}
+
 /// #2449: the error of a rejected synthetic input call, after checking it changed nothing.
 fn rejected(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value, names: &str) -> String {
     let (tool, revision) = (app.ui.tool, app.session.active().map(|d| d.revision));
@@ -2323,6 +2352,56 @@ fn ui_set_info_panel_readouts() {
     }
     assert_eq!(call(&mut app, &ctx, "ui.set", json!({"infoPanel": {"readouts": []}}))["ok"], true);
     assert!(app.ui.info_panel.readouts.is_empty());
+}
+
+/// An inspection must expose integrated Info settings and current upstream controls together.
+/// Hiding and restoring the task bar before drawing distinguishes eligible geometry from a
+/// stale last-frame rect; changing readouts or visibility must leave the document untouched.
+#[test]
+fn ui_inspect_keeps_info_readouts_and_current_task_bar_state() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let initial = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(initial["ok"], true);
+    assert_eq!(initial["result"]["infoPanel"]["readouts"], json!(["actualColor", "cmyk"]));
+    assert_eq!(initial["result"]["taskBar"]["visible"], false);
+    assert_eq!(initial["result"]["taskBar"]["rect"], Value::Null);
+    assert_eq!(initial["result"]["artboardTool"], serde_json::to_value(&app.ui.artboard_tool).unwrap());
+
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let before = app.run("document.inspect", json!({})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    let journal = app.session.journal.len();
+    let rect = [10.0_f32, 20.0, 110.0, 40.0];
+    app.ui.crop_rect = Some([0.0, 0.0, 64.0, 48.0]);
+    app.ui.task_bar_shown = Some(rect);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "crop", "infoPanel": {"readouts": ["opacity"]}}))["ok"], true);
+    let visible = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(visible["result"]["infoPanel"]["readouts"], json!(["opacity"]));
+    assert_eq!(visible["result"]["taskBar"]["visible"], true);
+    assert_eq!(visible["result"]["taskBar"]["rect"], json!(rect));
+    assert_eq!(visible["result"]["artboardTool"], serde_json::to_value(&app.ui.artboard_tool).unwrap());
+
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"panels": {"context_task_bar": false}}))["ok"], true);
+    let hidden = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(hidden["result"]["taskBar"]["enabled"], false);
+    assert_eq!(hidden["result"]["taskBar"]["visible"], false);
+    assert_eq!(hidden["result"]["taskBar"]["rect"], Value::Null);
+    assert_eq!(hidden["result"]["infoPanel"]["readouts"], json!(["opacity"]));
+    assert_eq!(app.ui.task_bar_shown, Some(rect), "the old geometry remains until a draw");
+
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"panels": {"context_task_bar": true}, "infoPanel": {"readouts": []}}))["ok"], true);
+    let restored = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(restored["result"]["taskBar"]["visible"], true);
+    assert_eq!(restored["result"]["taskBar"]["rect"], json!(rect));
+    assert_eq!(restored["result"]["infoPanel"]["readouts"], json!([]));
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "brush"}))["ok"], true);
+    let other_tool = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(other_tool["result"]["taskBar"]["visible"], false);
+    assert_eq!(other_tool["result"]["taskBar"]["rect"], Value::Null);
+    assert_eq!(app.run("document.inspect", json!({})).unwrap(), before);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.journal.len(), journal);
 }
 
 /// Info Options owns menu invocations too; closing it restores ordinary menu commands.

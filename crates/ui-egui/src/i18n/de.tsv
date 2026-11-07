@@ -173,6 +173,7 @@
 	Right	Rechts
 	Open Recent	Zuletzt geöffnete Dateien
 	Clear Recent Files	Zuletzt geöffnete Dateien leeren
+	Clear Recent File List	Zuletzt geöffnete Dateien leeren
 	Remove from Recent	Aus zuletzt geöffneten Dateien entfernen
 	Remove {name} from Recent	{name} aus zuletzt geöffneten Dateien entfernen
 	Close	Schließen
@@ -181,6 +182,10 @@
 	Restore	Wiederherstellen
 	Close All	Alle schließen
 	Close Others	Andere schließen
+	New Document…	Neues Dokument…
+	Open Document…	Öffnen…
+	Consolidate All to Here	Alle hier zusammenfassen
+	Move to New Window	In neues Fenster verschieben
 	Save	Speichern
 	Save As…	Speichern unter…
 	Save a Copy…	Kopie speichern…
@@ -233,6 +238,7 @@
 	Create Smart Object after Loading Layers	Nach dem Laden der Ebenen Smart-Objekt erstellen
 	Reveal in Finder	Im Finder anzeigen
 	Show in Explorer	Im Explorer anzeigen
+	Reveal in Explorer	Im Explorer anzeigen
 	Show in Folder	Im Ordner anzeigen
 	File Info…	Dateiinformationen…
 	Print…	Drucken…
@@ -321,6 +327,7 @@
 	Units & Rulers…	Einheiten & Lineale…
 	Guides, Grid & Slices…	Hilfslinien, Raster & Slices…
 	Plug-ins…	Plug-ins…
+	Plugins…	Plug-ins…
 	Type…	Text…
 	Enhanced Controls…	Erweiterte Bedienelemente…
 	Camera Raw…	Camera Raw…
@@ -478,6 +485,8 @@
 	Smart Object	Smart-Objekt
 	Convert to Smart Object	In Smart-Objekt konvertieren
 	Convert to Embedded	In eingebettetes Smart-Objekt konvertieren
+	Embed Linked	Verknüpftes einbetten
+	Embed All Linked	Alle verknüpften einbetten
 	Convert to Layers	In Ebenen konvertieren
 	Convert to Linked…	In verknüpftes Smart-Objekt konvertieren…
 	Edit Contents	Inhalt bearbeiten
@@ -551,7 +560,9 @@
 	Unite Shapes	Formen vereinigen
 	Subtract Front Shape	Vordere Form subtrahieren
 	Intersect Shape Areas	Schnittmenge der Formen
+	Unite Shapes at Overlap	Schnittmenge der Formen
 	Exclude Overlapping Shapes	Überlappende Formen ausschließen
+	Subtract Shapes at Overlap	Überlappende Formen ausschließen
 	Merge Shape Components	Formkomponenten zusammenfügen
 	Path operations	Pfadvorgänge
 	Align	Ausrichten
@@ -735,6 +746,7 @@
 	Minimum…	Minimum…
 	Offset…	Versatz…
 	Plug-ins	Plug-ins
+	Plugins	Plug-ins
 	Proof Setup	Proof-Setup
 	Proof Colors	Proof-Farben
 	Gamut Warning	Farbumfang-Warnung
@@ -743,9 +755,9 @@
 	Working Magenta Plate	Arbeits-Magenta-Druckplatte
 	Working Yellow Plate	Arbeits-Gelb-Druckplatte
 	Working Black Plate	Arbeits-Schwarz-Druckplatte
-	Working CMY Plate	Arbeits-CMY-Druckplatte
-	Legacy Macintosh RGB	Legacy-Macintosh-RGB
-	Internet Standard RGB	Internet-Standard-RGB
+	Working CMY Plates	Arbeits-CMY-Druckplatten
+	Legacy Macintosh RGB (Gamma 1.8)	Legacy-Macintosh-RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Internet-Standard-RGB (sRGB)
 	Monitor RGB	Monitor-RGB
 	Color Blindness — Protanopia-type	Farbenblindheit — Protanopie-Typ
 	Color Blindness — Deuteranopia-type	Farbenblindheit — Deuteranopie-Typ
@@ -827,7 +839,7 @@
 	Consolidate All to Tabs	Alle in Registerkarten zusammenfassen
 	Float in Window	In Fenster schweben lassen
 	Float All in Windows	Alle in Fenstern schweben lassen
-	New Window for Document	Neues Fenster für Dokument
+	New Window	Neues Fenster
 	Workspace	Arbeitsbereich
 	Essentials	Essentials
 	Graphic and Web	Grafik und Web
@@ -889,6 +901,12 @@
 	Timeline	Zeitleiste
 	Tool Presets	Werkzeugvorgaben
 	Tools	Werkzeuge
+	Contextual Task Bar	Kontextbezogene Taskleiste
+	Hide bar	Leiste ausblenden
+	Reset bar position	Leistenposition zurücksetzen
+	Pin bar position	Leistenposition fixieren
+	Move bar	Leiste verschieben
+	More options	Weitere Optionen
 	About PhotoCraft	Über PhotoCraft
 	PhotoCraft Website	PhotoCraft-Website
 	PhotoCraft on GitHub	PhotoCraft auf GitHub
@@ -1844,6 +1862,7 @@
 	Move Tool	Verschieben-Werkzeug
 	Could not use the move tool because the layer is locked.	Das Verschieben-Werkzeug konnte nicht verwendet werden, weil die Ebene gesperrt ist.
 	Could not complete the Free Transform command because the layer is locked.	Der Befehl „Frei transformieren“ konnte nicht ausgeführt werden, weil die Ebene gesperrt ist.
+	Could not transform because the layer is locked.	Transformieren nicht möglich, weil die Ebene gesperrt ist.
 	Multiply	Multiplizieren
 	My Brushes	Meine Pinsel
 	Neutrals	Neutrale
@@ -2000,6 +2019,11 @@
 	Show canvas dots	Punkte der Zeichenfläche anzeigen
 	Clip thumbnails to layer bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
 	Clip Thumbnails to Layer Bounds	Miniaturbilder auf Ebenenbegrenzung beschneiden
+	No Thumbnails	Keine Miniaturbilder
+	Small Thumbnails	Kleine Miniaturbilder
+	Medium Thumbnails	Mittlere Miniaturbilder
+	Large Thumbnails	Große Miniaturbilder
+	Clip Thumbnails to Document Bounds	Miniaturbilder auf Dokumentbegrenzung beschneiden
 	Canvas color	Zeichenflächenfarbe
 	Canvas custom color	Benutzerdefinierte Zeichenflächenfarbe
 	Color picker	Farbwähler
@@ -2117,7 +2141,6 @@
 	Show only crosshair while painting	Beim Malen nur Fadenkreuz zeigen
 	Show slice numbers	Slice-Nummern anzeigen
 	Show tooltips	Tooltips anzeigen
-	Enable animations	Animationen aktivieren
 	Show highlight on rollover	Hervorhebung bei Rollover anzeigen
 	Show bounding box when dragging layer	Begrenzungsrahmen beim Ziehen einer Ebene anzeigen
 	System title bar	System-Titelleiste
@@ -2365,6 +2388,7 @@
 	Punctuation	Zeichensetzung
 	Make Work Path	Arbeitspfad erzeugen
 	Make Selection	Auswahl erzeugen
+	Make Shape	Form erzeugen
 	Fill Path	Pfad füllen
 	Stroke Path	Pfad nachziehen
 	Delete Path	Pfad löschen
@@ -3309,6 +3333,9 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+	Automatically Create First Snapshot	Ersten Snapshot automatisch erstellen
+	Automatically Create New Snapshot When Saving	Beim Speichern automatisch neuen Snapshot erstellen
+	Show New Snapshot Dialog by Default	Dialogfeld „Neuer Snapshot“ standardmäßig anzeigen
 	Memory usage percent	Speichernutzung (%)
 	Show Favorite Fonts	Favorisierte Schriften anzeigen
 	No favorite fonts yet: click the star beside a font to add it.	Noch keine favorisierten Schriften: Klicken Sie auf den Stern neben einer Schrift, um sie hinzuzufügen.

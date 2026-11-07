@@ -194,6 +194,10 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 draw_anchor(painter, to_scr([k.anchor.x, k.anchor.y]), true, accent);
             }
         }
+        // Only over the active document, whose selected layers the box frames.
+        if st.is_some_and(|s| s.doc.id == doc.id) {
+            crate::shape_bounds_box::draw(app, painter, &to_scr, accent);
+        }
         crate::corner_radius::draw(app, painter, &to_scr, accent);
     }
     // Pen path in progress, with handles of the last knot and a rubber band to the pointer. While
