@@ -320,6 +320,7 @@ pub use tools::stroke_trail;
 pub use tools::symmetry_ui;
 use tools::tool_reset;
 pub use tools::transform_fx;
+pub use tools::transform_task_bar;
 pub use tools::transform_tex;
 pub use tools::transform_tool;
 use tools::type_font_preview;
@@ -836,6 +837,8 @@ mod transform_fx_tests;
 
 #[cfg(test)]
 mod transform_commit_click_tests;
+#[cfg(test)]
+mod transform_task_bar_tests;
 
 #[cfg(test)]
 mod layer_props_ui_tests;

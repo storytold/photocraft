@@ -47,6 +47,7 @@ pub mod stroke_trail;
 pub mod symmetry_ui;
 pub(super) mod tool_reset;
 pub mod transform_fx;
+pub mod transform_task_bar;
 pub mod transform_tex;
 pub mod transform_tool;
 pub(super) mod type_font_preview;
