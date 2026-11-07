@@ -269,13 +269,75 @@ pub fn apply_dab_stroke(
     let ctx = crate::BrushContext::new(&stroke.brush);
     let bounds = ds.iter().fold(Rect::EMPTY, |r, d| r.union(&ctx.dab_rect(d, false)));
     let outer = Rect::new(bounds.x0 - halo, bounds.y0 - halo, bounds.x1 + halo, bounds.y1 + halo);
-    let orig = Region::read(target, outer);
-    let mut work = orig.clone();
+    // One dense working plane over the grown bounds and nothing else: the originals stay in
+    // `target`, which no effect writes, and the mix-back re-reads them row by row. Two more
+    // page-sized copies (an `orig` plane and a cropped mix buffer) used to ride along here and
+    // dominated a long thin stroke's memory (#11135).
+    let mut work = Region::read(target, outer);
     for (i, d) in ds.iter().enumerate() {
         effect(&mut work, &ctx.footprint(d, i));
     }
-    mix_back(target, &orig, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
+    mix_back_banded(target, &work, bounds, stroke.brush.opacity, selection, lock_transparency);
     bounds
+}
+
+/// The row height of the [`mix_back_banded`] walking bands, with its measurements in that doc.
+const BAND_ROWS: i32 = 64;
+
+/// [`mix_back`] without keeping the originals: `target` still holds them untouched when this
+/// runs, so it walks `rect` in row bands, reading each band of originals straight from `target`,
+/// mixing the working pixels over it at `opacity × selection`, and writing the band back. The
+/// arithmetic is bit-for-bit [`mix_back`]'s — including the "untouched pixels stay exact" rule —
+/// with a band of scratch instead of a second full plane (#11135).
+///
+/// The band is 64 rows tall: each tile it crosses is loaded and written once per band instead
+/// of once per row — the churn a disk-spilling tile store hates — while the band's scratch
+/// still fits the CPU cache. Measured on the 24 MP diagonal stroke, warm commits: 64-row
+/// bands 327 ms, whole-tile-row (256) bands 343 ms with a 25 MB scratch past L3, one row at a
+/// time 344 ms with 64× the tile traffic.
+fn mix_back_banded(target: &mut Surface, work: &Region, rect: Rect, opacity: f32, selection: Option<&Surface>, lock_transparency: bool) {
+    let fmt = target.format();
+    let a = alpha_index(&fmt);
+    let n = work.ch;
+    let w = rect.width() as usize;
+    let opacity = opacity.clamp(0.0, 1.0);
+    let mut band = Vec::new();
+    let mut y0 = rect.y0;
+    while y0 < rect.y1 {
+        let y1 = (y0 + BAND_ROWS).min(rect.y1);
+        let rows = Rect::new(rect.x0, y0, rect.x1, y1);
+        target.read_region_into(rows, &mut band);
+        for y in y0..y1 {
+            let row_off = (y - y0) as usize * w * n;
+            for x in rect.x0..rect.x1 {
+                let k = opacity * selection.map_or(1.0, |s| s.sample_channel(x, y, 0));
+                if k <= 0.0 {
+                    continue;
+                }
+                let wv = work.px(x, y);
+                let i = row_off + (x - rect.x0) as usize * n;
+                let o = &mut band[i..i + n];
+                // Untouched by the dabs: keep the pixel exactly (the premultiplied mix can round it).
+                if *o == *wv {
+                    continue;
+                }
+                match a {
+                    // Alpha changes: mix premultiplied, so colour under transparent pixels doesn't bleed in.
+                    Some(a) if !lock_transparency => mix_premultiplied(o, wv, a, k),
+                    _ => {
+                        for c in 0..n {
+                            if lock_transparency && Some(c) == a {
+                                continue;
+                            }
+                            o[c] += (wv[c] - o[c]) * k;
+                        }
+                    }
+                }
+            }
+        }
+        target.write_region(rows, &band);
+        y0 = y1;
+    }
 }
 
 /// Mix a sequential-dab stroke's working pixels `work` back over the original `orig` at
@@ -611,6 +673,54 @@ mod tests {
             apply_dab_stroke(&mut s, &st, None, false, 0, |w, fp| sm.dab(w, fp));
             let p = s.rgba(34, 20);
             assert!(p[3] > 0.02 && p[0] > 0.97, "{fmt:?}: {p:?}");
+        }
+    }
+
+    /// #11135: `apply_dab_stroke` now mixes back in row bands, re-reading the originals from
+    /// `target` instead of a plane of them. That must agree bit-for-bit with the plane-based
+    /// `mix_back` the live previews still use, for every opacity, selection, alpha-lock and
+    /// format combination — including pixels the stroke leaves exact.
+    #[test]
+    fn banded_mix_back_is_bit_identical_to_the_plane_version() {
+        let full = Rect::new(0, 0, 40, 160);
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F, PixelFormat::GRAYA8, PixelFormat::CMYKA8] {
+            let n = fmt.channels();
+            let mut base = Surface::new(fmt);
+            for y in 0..160i32 {
+                for x in 0..40i32 {
+                    // Include `-0.0` samples: `f32` equality cannot tell them from `+0.0`, and
+                    // the "keep the pixel exactly" rule must not flip the sign bit.
+                    let px: Vec<f32> = (0..n)
+                        .map(|c| match (x as usize * 7 + y as usize * 13 + c * 31) % 101 {
+                            0 => -0.0,
+                            k => k as f32 / 100.0,
+                        })
+                        .collect();
+                    base.fill_rect(Rect::new(x, y, x + 1, y + 1), &px);
+                }
+            }
+            // The working rectangle is grown by the halo; only the stroke bounds mix back.
+            let outer = Rect::new(4, 3, 34, 151);
+            let bounds = Rect::new(8, 6, 30, 147);
+            let orig = Region::read(&base, outer);
+            let mut work = orig.clone();
+            for (i, v) in work.data.iter_mut().enumerate() {
+                if i % 5 != 0 {
+                    *v = 1.0 - *v;
+                }
+            }
+            let mut sel = Surface::new(PixelFormat::GRAYA8);
+            sel.fill_rect(Rect::new(12, 9, 26, 140), &[1.0, 1.0]);
+            for (opacity, sel_use, lock) in [(1.0, false, false), (0.6, true, false), (0.6, true, true), (0.0, true, false), (0.6, false, true)] {
+                let selection = if sel_use { Some(&sel) } else { None };
+                let mut plane = base.clone();
+                let mut banded = base.clone();
+                mix_back(&mut plane, &orig, &work, bounds, opacity, selection, lock);
+                mix_back_banded(&mut banded, &work, bounds, opacity, selection, lock);
+                // Bit-level equality: `==` on floats blurs -0.0 with 0.0.
+                let (p, b) = (plane.read_region(full), banded.read_region(full));
+                assert!(p.iter().map(|v| v.to_bits()).eq(b.iter().map(|v| v.to_bits())), "{fmt:?} opacity {opacity} selection {sel_use} lock {lock}");
+            }
         }
     }
 
