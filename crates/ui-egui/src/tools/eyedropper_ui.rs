@@ -58,6 +58,10 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 #[cfg(test)]
+#[path = "../eyedropper_sample_labels_tests.rs"]
+mod eyedropper_sample_labels_tests;
+
+#[cfg(test)]
 mod tests {
     use egui::vec2;
     use egui_kittest::Harness;
