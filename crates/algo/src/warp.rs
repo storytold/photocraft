@@ -12,6 +12,10 @@
 //! pixel instead averages a grid of bilinear subsamples over its source footprint (about one per
 //! source pixel), so thin lines don't alias. Where the warp folds over itself the
 //! later (lower-right) cell wins. Work is split per destination tile (parallel on native).
+//!
+//! A smart object's warp ([`place_source`]) is cut as the reference application cuts it instead
+//! ([`warp_patches_surface`]): cells that halve until they are within half a pixel of the surface,
+//! small where the warp bends and large where it is flat.
 
 use photocraft_color::PixelFormat;
 use photocraft_geom::{Rect, TileCoord};
@@ -148,7 +152,14 @@ type TriMesh = (Vec<([f64; 2], [f64; 2])>, Vec<[usize; 3]>);
 /// the patch borders inside the rectangle (normalised, `0..1`): the cells start from them.
 /// Where a cell meets two smaller ones, the point between them is put on the bigger cell's edge,
 /// so no crack opens.
-pub fn warp_patches_surface(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), cuts_u: &[f64], cuts_v: &[f64], interp: Interp) -> Surface {
+pub fn warp_patches_surface(
+    src: &Surface,
+    src_rect: Rect,
+    f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync),
+    cuts_u: &[f64],
+    cuts_v: &[f64],
+    interp: Interp,
+) -> Surface {
     if src_rect.is_empty() {
         let fmt = src.format();
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
@@ -883,6 +894,111 @@ mod tests {
         // pixel 1 to the black pixel 2.
         let v = out.read_region(Rect::new(6, 1, 7, 2))[0];
         assert!((v - 0.875).abs() < 0.01, "a straight ramp: {v}");
+    }
+
+    /// A 1-patch custom warp of the box `[0, 0, s, s]` with control point `k` (row-major, 4 x 4)
+    /// moved by `d`, as `tessellate` takes it (normalised in, document px out).
+    fn pulled(s: f64, k: usize, d: [f64; 2]) -> impl Fn(f64, f64) -> [f64; 2] {
+        let mut mesh = photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, s, s], 1, 1);
+        mesh.points[k] = [mesh.points[k][0] + d[0], mesh.points[k][1] + d[1]];
+        let w = Warp::custom(mesh, [0.0, 0.0, s, s]);
+        move |u, v| {
+            let (x, y) = w.map(u * s, v * s);
+            [x, y]
+        }
+    }
+
+    /// The largest distance, over a 9 x 9 grid of points in each cell, between the warped surface
+    /// and the cell's two flat triangles.
+    fn facet_error(at: &dyn Fn(f64, f64) -> [f64; 2], leaves: &[Cell]) -> f64 {
+        let mut worst = 0.0f64;
+        for &[u0, u1, v0, v1] in leaves {
+            let (p00, p10, p01, p11) = (at(u0, v0), at(u1, v0), at(u0, v1), at(u1, v1));
+            for i in 0..=8 {
+                for j in 0..=8 {
+                    let (fu, fv) = (f64::from(i) / 8.0, f64::from(j) / 8.0);
+                    let lin = |k: usize| {
+                        if fu >= fv {
+                            p00[k] + (p10[k] - p00[k]) * fu + (p11[k] - p10[k]) * fv
+                        } else {
+                            p00[k] + (p01[k] - p00[k]) * fv + (p11[k] - p01[k]) * fu
+                        }
+                    };
+                    let e = at(u0 + (u1 - u0) * fu, v0 + (v1 - v0) * fv);
+                    worst = worst.max((e[0] - lin(0)).hypot(e[1] - lin(1)));
+                }
+            }
+        }
+        worst
+    }
+
+    /// An affine warp is flat everywhere: it keeps the 4 x 4 cells a patch starts as.
+    #[test]
+    fn an_affine_warp_keeps_its_starting_cells() {
+        let at = |u: f64, v: f64| [10.0 + 300.0 * u + 40.0 * v, 5.0 + 20.0 * u + 200.0 * v];
+        let leaves = tessellate(&at, &[], &[], 256.0, 256.0);
+        assert_eq!(leaves.len(), 16);
+        assert!(leaves.iter().all(|c| (c[1] - c[0] - 0.25).abs() < 1e-12 && (c[3] - c[2] - 0.25).abs() < 1e-12));
+    }
+
+    /// Cells are small where a warp bends hard and large where it is flat, as the reference
+    /// application cuts them: a corner pulled out gets the smallest cell, the far corner keeps a
+    /// starting cell, and every cell is within the tolerance of the surface.
+    #[test]
+    fn cells_are_small_where_a_warp_bends_and_large_where_it_is_flat() {
+        let at = pulled(512.0, 0, [-192.0, -192.0]);
+        let leaves = tessellate(&at, &[], &[], 512.0, 512.0);
+        let width = |c: &Cell| c[1] - c[0];
+        let corner = leaves.iter().find(|c| c[0] == 0.0 && c[2] == 0.0).unwrap();
+        let far = leaves.iter().find(|c| c[1] == 1.0 && c[3] == 1.0).unwrap();
+        let smallest = leaves.iter().map(width).fold(f64::MAX, f64::min);
+        assert_eq!(width(corner), smallest, "{corner:?}");
+        assert_eq!(width(far), 0.25, "{far:?}");
+        assert!(width(corner) <= 1.0 / 32.0, "{corner:?}");
+        let e = facet_error(&at, &leaves);
+        assert!(e < 3.0 * FLAT_TOL, "facets stray {e} px");
+    }
+
+    /// An S-shaped edge crosses its chord at the midpoint, so a test of one whole patch sees it
+    /// straight. Starting from 4 x 4 cells, it is still cut fine enough.
+    #[test]
+    fn an_s_shaped_edge_is_still_cut_finely() {
+        let mut mesh = photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 256.0, 256.0], 1, 1);
+        mesh.points[1][1] -= 60.0;
+        mesh.points[2][1] += 60.0;
+        let w = Warp::custom(mesh, [0.0, 0.0, 256.0, 256.0]);
+        let at = |u: f64, v: f64| {
+            let (x, y) = w.map(u * 256.0, v * 256.0);
+            [x, y]
+        };
+        let leaves = tessellate(&at, &[], &[], 256.0, 256.0);
+        let e = facet_error(&at, &leaves);
+        assert!(e < 3.0 * FLAT_TOL, "facets stray {e} px over {} cells", leaves.len());
+    }
+
+    /// Where a big cell meets two smaller ones, the point between the small ones lies on the big
+    /// one's edge, so no crack opens: every pixel well inside a warped opaque picture is opaque.
+    #[test]
+    fn no_crack_opens_between_big_and_small_cells() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 200, 200), &[1.0, 0.5, 0.2, 1.0]);
+        let mut mesh = photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 200.0, 200.0], 1, 1);
+        mesh.points[0] = [-90.0, -70.0];
+        mesh.points[5] = [mesh.points[5][0] + 40.0, mesh.points[5][1] + 25.0];
+        let warp = Warp::custom(mesh, [0.0, 0.0, 200.0, 200.0]);
+        let out = place_source(&src, Rect::new(0, 0, 200, 200), &photocraft_geom::Affine::IDENTITY, Some(&warp)).unwrap();
+        let mut holes = Vec::new();
+        for j in 0..=200 {
+            for i in 0..=200 {
+                let (x, y) = warp.map(2.0 + 196.0 * f64::from(i) / 200.0, 2.0 + 196.0 * f64::from(j) / 200.0);
+                let (px, py) = (x.floor() as i32, y.floor() as i32);
+                let a = out.pixel(px, py)[3];
+                if a < 0.999 {
+                    holes.push((px, py, a));
+                }
+            }
+        }
+        assert!(holes.is_empty(), "{} see-through pixels, e.g. {:?}", holes.len(), &holes[..holes.len().min(5)]);
     }
 
     #[test]
