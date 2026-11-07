@@ -112,17 +112,43 @@ pub fn import(bytes: &[u8]) -> std::result::Result<Imported, String> {
 /// `"gbk"`) instead of working it out. An unknown label fails.
 pub fn import_with_encoding(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Imported, String> {
     let file = atn::parse_with_encoding(bytes, encoding).map_err(|e| e.to_string())?;
+    Ok(convert_set(&file))
+}
+
+pub(super) struct ReplacementSet {
+    pub imported: Imported,
+    pub keys: Vec<(usize, String)>,
+}
+
+pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Vec<ReplacementSet>, String> {
+    let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
+    Ok(files
+        .iter()
+        .map(|file| {
+            let keys = file
+                .actions
+                .iter()
+                .enumerate()
+                .filter(|(_, action)| action.function_key > 0)
+                .map(|(index, action)| (index, function_key_name(action.function_key, action.shift, action.command)))
+                .collect();
+            ReplacementSet { imported: convert_set(file), keys }
+        })
+        .collect())
+}
+
+fn convert_set(file: &AtnFile) -> Imported {
     let set = file.name.to_string_lossy();
     let set = if set.trim().is_empty() { DEFAULT_SET.to_string() } else { clip_name(&set) };
     let mut out = Imported { set: set.clone(), warnings: file.warnings.clone(), encoding: file.encoding.clone(), ..Default::default() };
     for a in &file.actions {
-        let action = convert_action(&file, a, &set, &mut out.unsupported);
+        let action = convert_action(file, a, &set, &mut out.unsupported);
         if a.function_key > 0 {
             out.function_keys.push((action.name.clone(), function_key_name(a.function_key, a.shift, a.command)));
         }
         out.actions.push(action);
     }
-    Ok(out)
+    out
 }
 
 // ------------------------------------------------------------------ export

@@ -134,6 +134,7 @@ impl PhotocraftApp {
             automation_input: false,
             run_depth: 0,
             paused_playbacks: Default::default(),
+            held_actions_library: None,
             channel_thumbs: None,
             channel_views: HashMap::new(),
             type_layout: None,

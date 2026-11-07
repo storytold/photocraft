@@ -1,6 +1,10 @@
 use super::convert::{UniqueNames, export, import_with_encoding};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
+mod replacement;
+pub(super) use replacement::replace;
+pub use replacement::validate as validate_replacement;
+
 /// Load a set and retarget its own action references once, preserving foreign qualifications
 /// even when the caller changes the imported set's name or action names collide.
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
@@ -34,6 +38,17 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if replace {
         s.actions.list.retain(|a| a.set.as_deref() != Some(imp.set.as_str()));
+        let mut slots = Vec::with_capacity(s.actions.set_rows.len());
+        let mut next = 0;
+        s.actions.set_rows.retain(|name| {
+            let keep = name != &imp.set;
+            slots.push(keep.then_some(next));
+            next += usize::from(keep);
+            keep
+        });
+        for action in &mut s.actions.list {
+            action.set_slot = action.set_slot.and_then(|slot| slots.get(slot).copied().flatten());
+        }
     }
     let mut taken = UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
     let mut names = Vec::with_capacity(imp.actions.len());
@@ -119,14 +134,20 @@ pub(super) fn save(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`set` must be a non-empty string")),
     };
+    let set_slot = crate::actions_edit_cmds::set_slot(s, p, set_param.as_deref(), cmd)?;
+    if set_slot.is_some() && p.get("action").is_some() {
+        return Err(bad(cmd, "select a folder occurrence or an action"));
+    }
     let (set, actions): (String, Vec<&Action>) = if p.get("action").is_some() {
         let idx = crate::actions_cmds::resolve(&s.actions.list, p, cmd)?;
         let a = &s.actions.list[idx];
         (set_param.or_else(|| a.set.clone()).unwrap_or_else(|| a.name.clone()), vec![a])
     } else if let Some(set) = set_param {
-        let list: Vec<&Action> = s.actions.list.iter().filter(|a| a.set.as_deref() == Some(set.as_str())).collect();
+        let list: Vec<&Action> =
+            s.actions.list.iter().filter(|a| a.set.as_deref() == Some(set.as_str()) && (p.get("setSlot").is_none() || a.set_slot == set_slot)).collect();
         // An empty set New Set made is written with no actions, as Photoshop saves one.
-        if list.is_empty() && !s.actions.sets.contains(&set) {
+        let known_row = p.get("setSlot").is_none() && s.actions.set_rows.contains(&set);
+        if list.is_empty() && set_slot.is_none() && !known_row && !s.actions.sets.contains(&set) {
             return Err(bad(cmd, format!("no actions in a set named `{set}`")));
         }
         (set, list)
