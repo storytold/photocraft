@@ -172,7 +172,8 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 paint_mode_dropdown(ui, "brush-mode", b, &mut app.ui.tool_options.brush_clear, held);
             }
             ui.add_enabled_ui(!block, |ui| {
-                percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0);
+                // A whole number from 1 to 100, as in Photoshop: 0 paints nothing (#11812).
+                whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 62.0);
                 if icons::button(ui, "circle-dot", 24.0, b.pressure_opacity, tl!("Always use pressure for opacity")).clicked() {
                     b.pressure_opacity = !b.pressure_opacity;
                 }
@@ -206,7 +207,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             opt_label(ui, tl!("Mode"));
             let held = app.held_erase;
             paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
-            percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, if t.pro { 62.0 } else { 66.0 });
+            whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
             widgets::vline(ui, 22.0);
@@ -233,7 +234,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
             let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
             ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
-            ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0));
+            ui.add_enabled_ui(!block, |ui| whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 66.0));
             ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0));
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, 66.0);
@@ -800,6 +801,15 @@ fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::op
     let mut percent = *value * 100.0;
     if widgets::value_field_named(ui, label, &mut percent, range, "%", width).changed() {
         *value = percent / 100.0;
+    }
+}
+
+/// [`percent_field`] that keeps whole percents (`33.7` becomes 34 %).
+fn whole_percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) {
+    opt_label(ui, label);
+    let mut percent = *value * 100.0;
+    if widgets::value_field_named(ui, label, &mut percent, range.clone(), "%", width).changed() {
+        *value = percent.round().max(*range.start()).min(*range.end()) / 100.0;
     }
 }
 

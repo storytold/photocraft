@@ -1,5 +1,5 @@
 //! Number keys set opacity (#352): 1 = 10% … 9 = 90%, 0 = 100%; two digits
-//! typed quickly set an exact value (4 then 5 = 45%, 0 then 0 = 0%). With the Brush, Pencil or
+//! typed quickly set an exact value (4 then 5 = 45%; 0 then 0 = 100% for the Brush, #11812). With the Brush, Pencil or
 //! Eraser they set the brush's Opacity (⇧: Flow; swapped while airbrush build-up is on); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
 //! active layer's Opacity (⇧: Fill). Tools whose number is a strength or exposure are left alone.
@@ -107,9 +107,13 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
     let shift = shift ^ (build_up && matches!(target(tool), Target::Brush { flow: true }));
     match (target(app.ui.tool), shift) {
         (Target::Brush { .. }, false) => {
-            // Clone Stamp's and History Brush's Opacity fields (and their strokes) start at 1%, so
-            // `00` sets the 1% they actually paint with rather than showing a 0% they can't do.
-            let v = if matches!(tool, Tool::CloneStamp | Tool::HistoryBrush) { v.max(0.01) } else { v };
+            // The painting tools' Opacity fields (and `tools.setBrush`) start at 1%, so `00` sets the
+            // 1% they actually paint with rather than a 0% they can't do. The Brush's `00` is 100%,
+            // as in Photoshop (#11812); only `00` gives 0 here.
+            let v = match tool {
+                Tool::Brush if v <= 0.0 => 1.0,
+                _ => v.max(0.01),
+            };
             let _ = app.run("tools.setBrush", json!({ "brush": { "opacity": v } }));
         }
         // The options bar's Flow field starts at 1%.
@@ -163,7 +167,7 @@ mod tests {
         press(&mut a, 0, false, 9000.0);
         assert_eq!(a.session.tools.brush.opacity, 1.0, "0 = 100%");
         press(&mut a, 0, false, 9100.0);
-        assert_eq!(a.session.tools.brush.opacity, 0.0, "00 = 0%");
+        assert_eq!(a.session.tools.brush.opacity, 1.0, "00 = 100%");
         press(&mut a, 2, true, 20000.0);
         assert!((a.session.tools.brush.flow - 0.2).abs() < 1e-6);
         press(&mut a, 0, true, 30000.0);
@@ -224,10 +228,6 @@ mod tests {
             press(&mut a, 0, false, 100.0);
             assert!((a.session.tools.brush.opacity - 0.01).abs() < 1e-6, "{tool:?}");
         }
-        let mut a = app(Tool::Brush);
-        press(&mut a, 0, false, 0.0);
-        press(&mut a, 0, false, 100.0);
-        assert!(a.session.tools.brush.opacity.abs() < 1e-6, "the Brush itself still goes to 0%");
     }
 
     #[test]

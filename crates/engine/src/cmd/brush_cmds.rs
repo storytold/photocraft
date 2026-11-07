@@ -1105,6 +1105,8 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     b = merge_brush(&b, &patch, cmd)?;
     validate_brush(&b, cmd)?;
+    // The painting tools' Opacity takes 1-100 %, as in Photoshop: a 0 % brush paints nothing (#11812).
+    b.opacity = b.opacity.max(0.01);
     // Loading a stored tip can fail. Finish preparing the brush before changing its identity or
     // foreground colour, so a failed pick leaves the entire current brush state intact.
     s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
@@ -1365,7 +1367,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "tools.setBrush",
             "Set Brush",
-            r##"{"preset":name?,"reset":bool?,…BrushSettings fields (camelCase, deep-merged; pose.overrideTiltX/Y:bool; pose.overrideTilt:legacy combined alias)}"##,
+            r##"{"preset":name?,"reset":bool?,…BrushSettings fields (camelCase, deep-merged; pose.overrideTiltX/Y:bool; pose.overrideTilt:legacy combined alias; opacity floors at 0.01)}"##,
             always,
             set_brush,
             true
