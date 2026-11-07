@@ -181,9 +181,18 @@ pub fn gen_doc(mode: ColorMode, depth: SampleType, f: Features) -> Document {
             Adjustment::ColorBalance { shadows: [10.0, 0.0, -5.0], midtones: [0.0, 20.0, 0.0], highlights: [-30.0, 0.0, 15.0], preserve_luminosity: true },
             Adjustment::BlackWhite { weights: [50.0, 60.0, 40.0, 60.0, 20.0, 70.0], tint: Some([1.0, 0.8, 0.6]) },
             Adjustment::PhotoFilter { color: [1.0, f32::from(32768u16) / 65535.0, 0.0], density: 0.25, preserve_luminosity: false },
-            Adjustment::ChannelMixer { matrix: [[0.8, 0.2, 0.0, 0.0], [0.0, 1.0, 0.0, 0.1], [0.1, 0.0, 0.9, 0.0]], monochrome: false },
+            Adjustment::ChannelMixer { matrix: [[0.8, 0.2, 0.0, 0.0], [0.0, 1.0, 0.0, 0.1], [0.1, 0.0, 0.9, 0.0]], monochrome: false, cmyk: None },
         ];
-        let adjs = adjs.into_iter().chain(colour.into_iter().filter(|_| mode != ColorMode::Grayscale));
+        // A CMYK document's Channel Mixer has ink outputs (#8047).
+        let colour = colour.into_iter().map(|a| match a {
+            Adjustment::ChannelMixer { monochrome, .. } if mode == ColorMode::Cmyk => Adjustment::ChannelMixer {
+                matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]],
+                monochrome,
+                cmyk: Some([[0.8, 0.2, 0.0, 0.1, 0.0], [0.0, 1.0, 0.0, 0.0, 0.1], [0.1, 0.0, 0.9, 0.0, 0.0], [0.2, 0.2, 0.2, 0.8, -0.05]]),
+            },
+            other => other,
+        });
+        let adjs = adjs.into_iter().chain(colour.filter(|_| mode != ColorMode::Grayscale));
         for (i, a) in adjs.enumerate() {
             let mut l = Layer::new(format!("adj {i}"), LayerContent::Adjustment(a));
             l.opacity = g(if i % 2 == 0 { 255 } else { 128 });

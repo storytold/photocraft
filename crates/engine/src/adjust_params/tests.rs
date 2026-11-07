@@ -61,6 +61,35 @@ fn every_kind_round_trips_through_params() {
     }
 }
 
+/// A Channel Mixer made in a CMYK document has Photoshop's four ink outputs, starting at
+/// identity (#8047); RGB and other documents keep red, green and blue.
+#[test]
+fn channel_mixer_outputs_follow_the_document_mode() {
+    let ink = default_for("channelMixer", ColorMode::Cmyk).unwrap();
+    assert!(matches!(ink, Adjustment::ChannelMixer { cmyk: Some(rows), monochrome: false, .. } if rows == photocraft_doc::adjust::CMYK_MIXER_IDENTITY));
+    let p = to_params(&ink);
+    assert!(MIXER_INKS.iter().all(|k| p.get(*k).is_some()) && p.get("red").is_none(), "{p}");
+    assert_eq!(p["black"], json!([0.0, 0.0, 0.0, 100.0, 0.0]));
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab] {
+        assert!(matches!(default_for("channelMixer", mode).unwrap(), Adjustment::ChannelMixer { cmyk: None, .. }), "{mode:?}");
+    }
+    // CMYK keys make ink outputs in any document; a partial update keeps the rest.
+    let a = from_params("channelMixer", &json!({"magenta": [0, 100, 0, 0, -20]}), None, ColorMode::Rgb).unwrap();
+    let Adjustment::ChannelMixer { cmyk: Some(rows), .. } = &a else { panic!("{a:?}") };
+    assert_eq!(rows[1], [0.0, 1.0, 0.0, 0.0, -0.2]);
+    assert_eq!(rows[3], [0.0, 0.0, 0.0, 1.0, 0.0]);
+    let b = from_params("channelMixer", &json!({"black": [10, 10, 10, 90, 0]}), Some(&a), ColorMode::Cmyk).unwrap();
+    assert!(matches!(&b, Adjustment::ChannelMixer { cmyk: Some(r), .. } if r[1] == rows[1] && r[3] == [0.1, 0.1, 0.1, 0.9, 0.0]));
+    assert_eq!(from_params("channelMixer", &to_params(&b), None, ColorMode::Rgb).unwrap(), b);
+    // Monochrome starts from the Black output's mix, and round-trips.
+    let m = from_params("channelMixer", &json!({"monochrome": true}), Some(&b), ColorMode::Cmyk).unwrap();
+    assert!(matches!(&m, Adjustment::ChannelMixer { cmyk: Some(r), monochrome: true, .. } if r[0] == [0.1, 0.1, 0.1, 0.9, 0.0]));
+    assert_eq!(from_params("channelMixer", &to_params(&m), None, ColorMode::Cmyk).unwrap(), m);
+    // RGB keys over a CMYK base switch back to RGB outputs.
+    let rgb = from_params("channelMixer", &json!({"red": [50, 50, 0, 0]}), Some(&b), ColorMode::Cmyk).unwrap();
+    assert!(matches!(rgb, Adjustment::ChannelMixer { cmyk: None, matrix, .. } if matrix[0] == [0.5, 0.5, 0.0, 0.0] && matrix[1] == [0.0, 1.0, 0.0, 0.0]));
+}
+
 #[test]
 fn params_reach_the_model() {
     basic_params_reach_the_model();
@@ -71,7 +100,7 @@ fn basic_params_reach_the_model() {
     let a = from_params("colorBalance", &json!({"midtones": [50, 0, -200]}), None, ColorMode::Rgb).unwrap();
     assert_eq!(a, Adjustment::ColorBalance { shadows: [0.0; 3], midtones: [50.0, 0.0, -100.0], highlights: [0.0; 3], preserve_luminosity: true });
     let a = from_params("channelMixer", &json!({"monochrome": true}), None, ColorMode::Rgb).unwrap();
-    assert!(matches!(a, Adjustment::ChannelMixer { matrix, monochrome: true } if matrix[0] == [0.4, 0.4, 0.2, 0.0]));
+    assert!(matches!(a, Adjustment::ChannelMixer { matrix, monochrome: true, .. } if matrix[0] == [0.4, 0.4, 0.2, 0.0]));
     let a = from_params("photoFilter", &json!({"filter": "cooling80", "density": 60}), None, ColorMode::Rgb).unwrap();
     assert!(matches!(a, Adjustment::PhotoFilter { color, density, .. } if color[2] == 1.0 && (density - 0.6).abs() < 1e-6));
     let a = from_params("blackWhite", &json!({"reds": 120, "tint": true}), None, ColorMode::Rgb).unwrap();
@@ -118,6 +147,8 @@ fn bad_params_are_errors_not_panics() {
         ("photoFilter", json!({"filter": "nope"})),
         ("photoFilter", json!({"color": [1]})),
         ("channelMixer", json!({"red": [1, 2, 3]})),
+        ("channelMixer", json!({"cyan": [1, 2, 3, 4]})),
+        ("channelMixer", json!({"black": [1, 2, 3, 4, "x"]})),
         ("gradientMap", json!({"stops": [[0, "#000"]]})),
         ("gradientMap", json!({"stops": 7})),
         ("selectiveColor", json!({"method": 5})),

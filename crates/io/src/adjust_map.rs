@@ -7,7 +7,7 @@
 //! Every [`Adjustment`] kind is written (`vibA`, `blnc`, `blwh`, `phfl` and `mixr` included);
 //! a Color Lookup without a table is written as an identity cube and a Gradient Map with fewer
 //! than two stops as the equivalent two-stop gradient, so nothing is dropped on save. Blocks
-//! that cannot be read (noise gradients, profile lookups, CMYK channel mixers, unknown versions)
+//! that cannot be read (noise gradients, profile lookups, ink channel mixers outside CMYK documents, unknown versions)
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
 
 use photocraft_doc::Adjustment;
@@ -167,9 +167,13 @@ pub fn unreadable_reason(key: &[u8; 4], data: &[u8]) -> Option<String> {
 /// (modern brightness/contrast parameters). Levels/Curves store the
 /// composite record first, then one per document channel (see [`Channels`]).
 pub fn parse(key: &[u8; 4], data: &[u8], cged: Option<&[u8]>, channels: Channels) -> Adjustment {
-    // A CMYK Channel Mixer (any record using the fourth, black, source) has no RGB meaning:
-    // keep it raw. Mixers written by `write` leave that source at 0 and map in every mode.
-    if key == b"mixr" && matches!(channels, Channels::Cmyk | Channels::Other) && (0..).map_while(|r| bei16(data, 4 + r * 10 + 6)).any(|k| k != 0) {
+    // A CMYK document's mixer has Photoshop's four ink outputs.
+    if key == b"mixr" && channels == Channels::Cmyk {
+        return parse_cmyk_mixer(data).unwrap_or_else(|| unsupported(key, data));
+    }
+    // In other modes a mixer using the fourth (black) source has no RGB meaning: keep it raw.
+    // Mixers written by `write` from RGB outputs leave that source at 0.
+    if key == b"mixr" && channels != Channels::Cmyk && (0..).map_while(|r| bei16(data, 4 + r * 10 + 6)).any(|k| k != 0) {
         return unsupported(key, data);
     }
     let mut a = parse_any(key, data, cged);
@@ -645,7 +649,37 @@ fn parse_channel_mixer(d: &[u8]) -> Option<Adjustment> {
     let first = rec(0)?;
     // A monochrome block may carry only the gray record.
     let (g, b) = if monochrome { (rec(1).unwrap_or([0.0; 4]), rec(2).unwrap_or([0.0; 4])) } else { (rec(1)?, rec(2)?) };
-    Some(Adjustment::ChannelMixer { matrix: [first, g, b], monochrome })
+    Some(Adjustment::ChannelMixer { matrix: [first, g, b], monochrome, cmyk: None })
+}
+
+/// `mixr` in a CMYK document: the same layout with four output records (cyan, magenta,
+/// yellow, black), each using all four sources (cyan, magenta, yellow, black) and the constant,
+/// on ink amounts. Photoshop writes exactly these four records (photoshop corpus cmyk8 and
+/// cmyk16 channel-mixer.psd: a 44-byte block whose black record is all zeros, and whose merged
+/// image has no black ink). A monochrome block may carry only its first record (the mix the
+/// black ink gets); no Photoshop sample of one exists yet, and an unedited one is saved back as
+/// it was read.
+fn parse_cmyk_mixer(d: &[u8]) -> Option<Adjustment> {
+    if be16(d, 0)? != 1 {
+        return None;
+    }
+    let monochrome = be16(d, 2)? != 0;
+    let rec = |r: usize| -> Option<[f32; 5]> {
+        let at = 4 + r * 10;
+        let v = |k: usize| bei16(d, at + k * 2).map(|x| f32::from(x).clamp(-200.0, 200.0) / 100.0);
+        Some([v(0)?, v(1)?, v(2)?, v(3)?, v(4)?])
+    };
+    let identity = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
+    let mut rows = identity;
+    for (r, row) in rows.iter_mut().enumerate() {
+        *row = match rec(r) {
+            Some(v) => v,
+            None if monochrome && r > 0 => identity[r],
+            None => return None,
+        };
+    }
+    let matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+    Some(Adjustment::ChannelMixer { matrix, monochrome, cmyk: Some(rows) })
 }
 
 fn put16(v: &mut Vec<u8>, x: u16) {
@@ -664,6 +698,44 @@ fn levels_write(v: &mut Vec<u8>, c: &LevelsChannel) {
     put16(v, q255(c.out_black));
     put16(v, q255(c.out_white));
     put16(v, (c.gamma * 100.0).round().clamp(1.0, 999.0) as u16);
+}
+
+/// The Channel Mixer `adj` reshaped for a document whose `mixr` records are `channels`, or None
+/// when it already has that shape (or is not a mixer). A PSD stores no output shape: a CMYK
+/// document reads four ink records and every other mode three RGB records, so a mixer of the
+/// other shape could not be read back as it is. An RGB mixer in a CMYK document becomes ink
+/// outputs (cyan from the red row, magenta from green, yellow from blue, sources red, green,
+/// blue as cyan, magenta, yellow) with black passed through; a CMYK mixer elsewhere keeps its
+/// cyan, magenta and yellow rows as red, green and blue without the black source. A CMYK mixer
+/// mixes ink amounts and an RGB one light (ink = 1 - light, ignoring black), so each row keeps
+/// its sources and its constant becomes `complement_constant`. Either is an approximation, so
+/// the caller warns.
+pub fn mixer_for(adj: &Adjustment, channels: Channels) -> Option<Adjustment> {
+    let Adjustment::ChannelMixer { matrix, monochrome, cmyk } = adj else { return None };
+    match (cmyk, channels == Channels::Cmyk) {
+        (None, true) => {
+            let mut rows = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
+            for (row, m) in rows.iter_mut().zip(matrix) {
+                *row = [m[0], m[1], m[2], 0.0, complement_constant(m[0], m[1], m[2], m[3])];
+            }
+            let matrix = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+            Some(Adjustment::ChannelMixer { matrix, monochrome: *monochrome, cmyk: Some(rows) })
+        }
+        (Some(rows), false) => {
+            let matrix = std::array::from_fn(|i| rows.get(i).map_or([0.0; 4], |r| [r[0], r[1], r[2], complement_constant(r[0], r[1], r[2], r[4])]));
+            Some(Adjustment::ChannelMixer { matrix, monochrome: *monochrome, cmyk: None })
+        }
+        _ => None,
+    }
+}
+
+/// The constant of a mixer row with sources `a`, `b`, `c` and constant `k` once it mixes the
+/// complements of its inputs and output (ink for light, or light for ink): 1 - a - b - c - k,
+/// since 1 - (a(1 - x) + b(1 - y) + c(1 - z) + k) = ax + by + cz + (1 - a - b - c - k). It is
+/// rounded to the whole percent a `mixr` record stores and kept to its -200..200 %, so the saved
+/// block reads back the same.
+fn complement_constant(a: f32, b: f32, c: f32, k: f32) -> f32 {
+    ((1.0 - a - b - c - k) * 100.0).round().clamp(-200.0, 200.0) / 100.0
 }
 
 /// Serializes an adjustment into its PSD blocks: `(key, data)` pairs
@@ -699,7 +771,8 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
         Adjustment::PhotoFilter { color, density, preserve_luminosity } => {
             return block(b"phfl", encode::photo_filter(*color, *density, *preserve_luminosity));
         }
-        Adjustment::ChannelMixer { matrix, monochrome } => {
+        Adjustment::ChannelMixer { cmyk: Some(rows), monochrome, .. } => return block(b"mixr", encode::channel_mixer_cmyk(rows, *monochrome)),
+        Adjustment::ChannelMixer { matrix, monochrome, cmyk: None } => {
             return block(b"mixr", encode::channel_mixer(matrix, *monochrome));
         }
         Adjustment::Unsupported { psd_key, raw } => {

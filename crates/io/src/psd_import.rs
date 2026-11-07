@@ -546,6 +546,13 @@ impl Ctx<'_> {
                     if light { "Light" } else { adjust_map::label(k) }
                 ));
             }
+            // Photoshop's CMYK Channel Mixer is checked against its own files, but not yet with
+            // Monochrome on (#8047): say so. Unedited, its block is saved back as it was read.
+            if matches!(adj, photocraft_doc::Adjustment::ChannelMixer { cmyk: Some(_), monochrome: true, .. }) {
+                self.warn(format!(
+                    "layer \"{name}\": a monochrome CMYK Channel Mixer may not render as in Photoshop yet; unless edited, it is saved back unchanged"
+                ));
+            }
             LayerContent::Adjustment(adj)
         } else if let Some(block) = rec.block(b"TySh") {
             // Only canonical type data with a safe transform can become a text layer. A retained

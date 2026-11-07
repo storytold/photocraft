@@ -109,7 +109,7 @@ fn thirty_two_bit_adjustments_match_photoshop_unclipped() {
     // brightness-contrast-legacy.psd
     assert!(near(hdr(&bc, [0.4910, 0.0009, 0.9301]), [0.6280, -0.0721, 1.2553], 2e-4), "{:?}", hdr(&bc, [0.4910, 0.0009, 0.9301]));
     // channel-mixer.psd: pure red, green, blue and black, exactly.
-    let mixer = Adjustment::ChannelMixer { matrix: [[0.8, 0.3, -0.1, 0.0], [0.1, 0.9, 0.0, 0.05], [0.0, 0.2, 0.7, 0.0]], monochrome: false };
+    let mixer = Adjustment::ChannelMixer { matrix: [[0.8, 0.3, -0.1, 0.0], [0.1, 0.9, 0.0, 0.05], [0.0, 0.2, 0.7, 0.0]], monochrome: false, cmyk: None };
     for (c, want) in [
         ([1.0, 0.0, 0.0], [0.7998047, 0.1245117, 0.0]),
         ([0.0, 1.0, 0.0], [0.2998047, 0.9243164, 0.1992188]),
@@ -854,6 +854,74 @@ fn lab_gradient_map_follows_l() {
         let t = if reverse { 0.4 } else { 0.6 };
         let want = srgb_to_lab([1.0 - t, 0.0, t]);
         assert!(near(grey, want, 0.05), "{reverse}: {grey:?} vs {want:?}");
+    }
+}
+
+/// A CMYK Channel Mixer mixes the ink amounts (#8047): identity keeps the pixel, a mix moves
+/// only the ink it targets (a positive constant adds ink), monochrome puts its mix in the black
+/// ink alone, and odd values never panic.
+#[test]
+fn cmyk_channel_mixer_mixes_the_inks() {
+    let identity = photocraft_doc::adjust::CMYK_MIXER_IDENTITY;
+    let ink = [0.2, 0.4, 0.6, 0.1];
+    let mut same = ink;
+    mix_inks(&identity, false, &mut same);
+    assert!(same.iter().zip(&ink).all(|(g, w)| (g - w).abs() < 1e-6), "{same:?}");
+    let mut rows = identity;
+    rows[2] = [0.0, 0.0, 1.0, 0.0, 0.25];
+    let mut more_yellow = ink;
+    mix_inks(&rows, false, &mut more_yellow);
+    let want = [0.2, 0.4, 0.85, 0.1];
+    assert!(more_yellow.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{more_yellow:?}");
+    let mut mono = ink;
+    mix_inks(&identity, true, &mut mono);
+    assert!(mono[..3] == [0.0; 3] && (mono[3] - 0.2).abs() < 1e-6, "{mono:?}");
+    let mut odd = [f32::NAN, f32::INFINITY, -3.0, 9.0];
+    mix_inks(&[[f32::MAX; 5]; 4], false, &mut odd);
+    assert!(odd.iter().all(|v| (0.0..=1.0).contains(v)), "{odd:?}");
+    mix_inks(&identity, false, &mut [0.5]);
+
+    // In a CMYK document the mixer works on the screen colour's separation: identity is
+    // the round trip through the inks alone; elsewhere it's the same.
+    let mixer =
+        Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: false, cmyk: Some(identity) };
+    assert!(cmyk_channel_adjustment(&mixer) && cmyk_mixer(&mixer));
+    let c = [0.3, 0.5, 0.7, 1.0];
+    let round_trip = {
+        use photocraft_color::convert::{cmyk_to_rgb, rgb_to_cmyk};
+        cmyk_to_rgb(rgb_to_cmyk([c[0], c[1], c[2]]))
+    };
+    for mode in [ColorMode::Cmyk, ColorMode::Rgb] {
+        let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), c);
+        apply_in(&mixer, &mut b, Transfer::Srgb, Some(SampleType::U8), mode);
+        assert!((0..3).all(|i| (b.px[0][i] - round_trip[i]).abs() < 1e-5) && b.px[0][3] == 1.0, "{mode:?}: {:?}", b.px[0]);
+    }
+    let mut more_cyan = identity;
+    more_cyan[0][4] = 0.3;
+    let more_cyan =
+        Adjustment::ChannelMixer { matrix: [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], monochrome: false, cmyk: Some(more_cyan) };
+    let mut b = Buffer::filled(crate::Rect::new(0, 0, 1, 1), c);
+    apply_in(&more_cyan, &mut b, Transfer::Srgb, Some(SampleType::U8), ColorMode::Cmyk);
+    assert!(b.px[0][0] < round_trip[0] - 0.05, "more cyan ink takes red away: {:?}", b.px[0]);
+}
+
+/// Photoshop's own CMYK Channel Mixer (photoshop corpus cmyk16 channel-mixer.psd, made with
+/// cyan 80/30/-10, magenta 10/90/0 +5, yellow 0/20/70 and an all-zero black record) on three of
+/// its pixels: each output ink is the mix of the ink amounts, and the empty black record leaves no
+/// black ink. Values are the file's 16-bit samples (stored as 1 - ink).
+#[test]
+fn cmyk_channel_mixer_matches_photoshop_pixels() {
+    let rows = [[0.8, 0.3, -0.1, 0.0, 0.0], [0.1, 0.9, 0.0, 0.0, 0.05], [0.0, 0.2, 0.7, 0.0, 0.0], [0.0; 5]];
+    let ink = |v: [u16; 4]| v.map(|x| 1.0 - f32::from(x) / 65535.0);
+    for (before, after) in [
+        ([65535, 8738, 0, 65535], [55035, 11188, 8396, 65535]),
+        ([31612, 37007, 37007, 60395], [32692, 33233, 39905, 65535]),
+        ([16448, 21074, 21588, 6426], [17322, 17392, 25950, 65535]),
+    ] {
+        let mut got = ink(before);
+        mix_inks(&rows, false, &mut got);
+        let want = ink(after);
+        assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1.0 / 255.0), "{before:?}: {got:?} vs {want:?}");
     }
 }
 
