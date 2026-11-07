@@ -18,7 +18,7 @@ pub fn style_spectrum_popup_menu(ui: &mut Ui) {
     v.widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
     v.widgets.hovered.bg_stroke = Stroke::NONE;
     // Round only the paint: rows still meet and keep their full rectangular hit targets.
-    let radius = CornerRadius::same(t.radius_sm as u8);
+    let radius = CornerRadius::from(t.radius_sm);
     v.widgets.inactive.corner_radius = radius;
     v.widgets.hovered.corner_radius = radius;
     v.widgets.active.corner_radius = radius;

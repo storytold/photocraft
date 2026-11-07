@@ -168,7 +168,7 @@ fn popup_highlights_round_the_paint_and_keep_the_full_hit_target() {
     use egui_kittest::kittest::Queryable;
     for kind in crate::theme::ThemeKind::ALL {
         let mut h = hover_menu(kind);
-        let radius = egui::CornerRadius::same(crate::theme::Tokens::for_kind(kind).radius_sm as u8);
+        let radius = egui::CornerRadius::from(crate::theme::Tokens::for_kind(kind).radius_sm);
         let check = |h: &egui_kittest::Harness<'_, usize>, rect: egui::Rect, state: &str| {
             let shapes: Vec<_> = h
                 .output()
@@ -220,6 +220,31 @@ fn popup_highlights_round_the_paint_and_keep_the_full_hit_target() {
         h.run_steps(3);
         assert_eq!(*h.state(), 1, "the rounded-off paint corner remains a usable click target");
     }
+}
+
+/// Fractional token overrides must round identically for popup states and painted surfaces.
+#[test]
+fn popup_fractional_radius_matches_surface_rounding() {
+    let ctx = egui::Context::default();
+    crate::theme::apply(&ctx, crate::theme::ThemeKind::Pro);
+    let mut tokens = crate::theme::Tokens::get(&ctx);
+    tokens.radius_sm = 2.5;
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("photocraft-theme"), tokens));
+    let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(80.0, 24.0));
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        super::style_spectrum_popup_menu(ui);
+        let widgets = &ui.visuals().widgets;
+        for state in [&widgets.inactive, &widgets.hovered, &widgets.active, &widgets.open] {
+            assert_eq!(state.corner_radius, egui::CornerRadius::same(3));
+        }
+        super::surface(ui, rect, Color32::WHITE, false);
+    });
+    output.textures_delta.clear();
+    assert!(
+        output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Rect(painted) if painted.rect == rect && painted.corner_radius == egui::CornerRadius::same(3))
+        })
+    );
 }
 
 /// Set PHOTOCRAFT_MENU_PREVIEW_DIR to an existing directory for native visual review.
