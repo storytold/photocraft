@@ -7,7 +7,8 @@
 //! The Color Picker button opens the full Color Picker dialog (HSB, RGB, Lab, CMYK, hex and the
 //! eyedropper); the popover only reports it ([`PaintChange::OpenPicker`]), since opening a dialog
 //! needs the app. Recently Used Colors live in `Preferences::recent_colors`, so they survive a
-//! restart.
+//! restart. The Eyedropper adds what it samples, and the Swatches panel lists the same row under
+//! its library (#11524), as Photoshop's single history of lately used colours.
 
 use std::sync::Arc;
 
@@ -379,5 +380,21 @@ mod tests {
         remember(&mut app, [f32::NAN, 0.0, 0.0]);
         app.session.prefs.edit(|p| p.recent_colors.insert(0, "not a colour é".into()));
         assert_eq!(crate::color_picker_ui::hex(recent_colors(&app.session)[0]), "#0a0000");
+    }
+
+    /// #11524: the Swatches panel's history is this very list, so it is the preferences' own
+    /// `recentColors`: it round-trips, and a file written by an older version (without the key)
+    /// still loads, with an empty row.
+    #[test]
+    fn recently_used_colors_survive_a_restart() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        remember(&mut app, [0.25, 0.5, 0.75]);
+        remember(&mut app, [1.0, 0.5, 0.0]);
+        let json = serde_json::to_value(app.session.prefs()).expect("the preferences serialize");
+        assert_eq!(json["recentColors"], serde_json::json!(["#ff8000", "#4080bf"]), "newest first on disk");
+        let back: photocraft_engine::prefs::Preferences = serde_json::from_value(json).expect("and load back");
+        assert_eq!(back.recent_colors, app.session.prefs().recent_colors, "the same row next launch");
+        let old: photocraft_engine::prefs::Preferences = serde_json::from_str("{}").expect("an older preferences file loads");
+        assert!(old.recent_colors.is_empty(), "which held no history");
     }
 }

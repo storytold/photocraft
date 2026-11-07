@@ -21,11 +21,17 @@ pub fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let canvas = canvas_drop_rect(app);
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let max_h = (ui.available_height() - 40.0).clamp(90.0, 260.0);
-    let events =
-        browser(ui, &mut st, "gradients", &groups, Place { canvas, max_h, new_tip: tl!("Create new gradient"), flush: false }, &mut |ui, r, gi, ii| {
+    let events = browser(
+        ui,
+        &mut st,
+        "gradients",
+        &groups,
+        Place { canvas, max_h, new_tip: tl!("Create new gradient"), flush: false, extra: None },
+        &mut |ui, r, gi, ii| {
             let stops = groups_src[gi].items[ii].resolve(fg, bg);
             paint_gradient(ui, r, &stops);
-        });
+        },
+    );
     app.ui.presets_ui = st;
     for e in events {
         match &e {
@@ -79,7 +85,7 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "patterns",
         &groups,
-        Place { canvas, max_h, new_tip: tl!("Create new pattern from the selection"), flush: false },
+        Place { canvas, max_h, new_tip: tl!("Create new pattern from the selection"), flush: false, extra: None },
         &mut |ui, r, gi, ii| {
             let tex = pattern_texture(&ctx, &pats[gi][ii]);
             ui.painter().image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -193,7 +199,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "styles",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer"), flush: false },
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer"), flush: false, extra: None },
         &mut |ui, r, gi, ii| {
             ui.painter().rect_filled(r, 2.0, t.field);
             ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -292,7 +298,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut st,
         "shapes",
         &groups,
-        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path"), flush: false },
+        Place { canvas, max_h: 300.0, new_tip: tl!("Create new shape from the current path"), flush: false, extra: None },
         &mut |ui, r, gi, ii| {
             let tex = shape_texture(&ctx, &src[gi].items[ii]);
             ui.painter().image(tex.id(), r.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);

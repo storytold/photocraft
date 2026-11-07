@@ -213,7 +213,11 @@ pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: e
     };
     if let Some(rgb) = rgb {
         let key = if mods.alt { "background" } else { "foreground" };
-        let _ = app.run("tools.setColors", json!({ key: [rgb[0],rgb[1],rgb[2],1.0] }));
+        if app.run("tools.setColors", json!({ key: [rgb[0], rgb[1], rgb[2], 1.0] })).is_ok() {
+            // Photoshop keeps the colours it picked lately: a sample joins the Recently Used
+            // Colors the Swatches panel and the Fill and Stroke popovers both show (#11524).
+            crate::paint_picker::remember(app, rgb);
+        }
     }
 }
 
