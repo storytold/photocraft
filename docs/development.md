@@ -155,6 +155,12 @@ If the device is lost while running (#243), every GPU entry point checks the dev
 
 The window itself draws with the same device (or, with the CPU canvas, one it watches), and nothing can draw it once wgpu reports that device lost, for example after a driver reset while the PC slept (#3438). A frame with shapes then panicked inside egui-wgpu ("Failed to create staging buffer", #1215). A frame without any froze the window, and the close button opened an unsaved-changes prompt nobody could see. `gpu_status::check_window` polls the device each frame. Once wgpu reports it lost, frames draw nothing, every unsaved document is written to crash recovery (`Services::flush_autosaves` waits for the writes), and the app closes; the next launch reopens them. `ui.gpu.simulateLoss {destroy: true}` destroys the real device to test this path.
 
+Automatic startup on Windows first scans DXGI vendor IDs. A complete scan without Intel skips
+the D3D12 capability probe. Finding Intel, or any factory, enumeration or adapter-description
+error, retains the original wgpu probe and its capability filtering before deciding whether to
+exclude Vulkan. This keeps legacy Intel and mixed-GPU behavior while avoiding device creation
+just to identify vendors on other systems.
+
 ## Logs
 
 Native pixel residency, RAM limits and scratch failure recovery are described in
