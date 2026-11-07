@@ -53,7 +53,7 @@ pub fn place_source(
             (a * u + c * v + e, b * u + d * v + f)
         };
         let (cu, cv) = patch_cuts(w, src_rect);
-        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear));
+        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear, facets_of(w)));
     }
     let near = |x: f64, y: f64| (x - y).abs() < 1e-9;
     if near(a, 1.0) && near(b, 0.0) && near(c, 0.0) && near(d, 1.0) && near(e, e.round()) && near(f, f.round()) {
@@ -143,7 +143,7 @@ pub fn place_source_projective(
             h.apply(u, v)
         };
         let (cu, cv) = patch_cuts(w, src_rect);
-        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear));
+        return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear, facets_of(w)));
     }
     // A one-way perspective: as the reference application draws it.
     let corner = crate::smart_perspective::from_corner(h.0, f64::from(src_rect.x0), f64::from(src_rect.y0));
@@ -200,8 +200,31 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
 }
 
 /// How far (destination px) a cell's straight edges and middle may stray from the warped surface
-/// before the cell is split, in [`warp_patches_surface`].
+/// before the cell is split, in [`warp_patches_surface`], for an envelope ([`Facets::Envelope`]).
 const FLAT_TOL: f64 = 0.5;
+/// The same for a full mesh ([`Facets::Mesh`]), whose edges alone decide (measured between 0.381
+/// and 0.396 on the reference's coordinate probes).
+const MESH_TOL: f64 = 0.3873;
+
+/// How the reference application tessellates a warp, by the kind of mesh it was given.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Facets {
+    /// A mesh with fewer than four control points along a side (the presets' envelopes: Arc,
+    /// Arch, Bulge, Flag, Wave, Fish, Rise, Inflate, Squeeze and their kin, stored as 4 × 2, 3 × 3
+    /// or 4 × 3 grids): a cell splits along both axes when its middle strays, along one when that
+    /// axis's edges do, by [`FLAT_TOL`].
+    Envelope,
+    /// A full 4 × 4 mesh (custom warps, Fisheye, Twist, Shell): each axis splits only when its own
+    /// edges stray, by [`MESH_TOL`]; the middle is not tested.
+    Mesh,
+}
+
+/// The [`Facets`] rule for `warp`: [`Facets::Envelope`] for a mesh given with fewer than four
+/// control points along a side ([`photocraft_geom::warp::Warp::envelope`]), else [`Facets::Mesh`].
+pub fn facets_of(warp: &photocraft_geom::warp::Warp) -> Facets {
+    if warp.envelope { Facets::Envelope } else { Facets::Mesh }
+}
+
 /// Most cells one [`warp_patches_surface`] tessellation makes; past it, cells stay as they are.
 const MAX_LEAVES: usize = 1 << 18;
 /// Cells narrower than this (source px) aren't split further.
@@ -218,8 +241,8 @@ type TriMesh = (Vec<([f64; 2], [f64; 2])>, Vec<[usize; 3]>);
 /// Warps `src` through a smart object's warp, `f`, as the reference application draws one: the
 /// surface is cut into cells, each drawn as two flat triangles (split along the diagonal from the
 /// top-left corner): each patch starts as [`START_CELLS`] × [`START_CELLS`] cells, and a cell is
-/// halved, along an axis or both, until its edges and its middle stray at most [`FLAT_TOL`] from
-/// the surface. So cells are small where the warp bends hard and
+/// halved, along an axis or both, until its edges (and, for an envelope, its middle) stray at
+/// most the tolerance of `facets` from the surface. So cells are small where the warp bends hard and
 /// large where it is flat, and the picture keeps the slight facets of that tessellation, which
 /// cells of a few pixels everywhere ([`warp_mesh_surface`]) smoothed away. `cuts_u`/`cuts_v` are
 /// the patch borders inside the rectangle (normalised, `0..1`): the cells start from them.
@@ -232,6 +255,7 @@ pub fn warp_patches_surface(
     cuts_u: &[f64],
     cuts_v: &[f64],
     interp: Interp,
+    facets: Facets,
 ) -> Surface {
     if src_rect.is_empty() {
         let fmt = src.format();
@@ -243,7 +267,7 @@ pub fn warp_patches_surface(
         let (x, y) = f(x0 + sw * u, y0 + sh * v);
         [x, y]
     };
-    let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh);
+    let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh, facets);
     let (verts, tris) = cell_triangles(&at, &leaves, [x0, y0, sw, sh]);
     triangles(src, src_rect, &verts, &tris, interp, &Interrupt::NONE)
 }
@@ -265,7 +289,11 @@ fn start_cells(w: &[f64]) -> Vec<[f64; 2]> {
 }
 
 /// The leaf cells of the adaptive tessellation, in row order (top to bottom, then left to right).
-fn tessellate(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64], sw: f64, sh: f64) -> Vec<Cell> {
+fn tessellate(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64], sw: f64, sh: f64, facets: Facets) -> Vec<Cell> {
+    let (tol, centre) = match facets {
+        Facets::Envelope => (FLAT_TOL, true),
+        Facets::Mesh => (MESH_TOL, false),
+    };
     let gap = |p: [f64; 2], a: [f64; 2], b: [f64; 2]| {
         let d = (p[0] - (a[0] + b[0]) / 2.0).hypot(p[1] - (a[1] + b[1]) / 2.0);
         // A non-finite surface can't be judged: leave the cell as it is.
@@ -287,10 +315,10 @@ fn tessellate(at: &dyn Fn(f64, f64) -> [f64; 2], cuts_u: &[f64], cuts_v: &[f64],
         let eu = gap(at(um, v0), p00, p10).max(gap(at(um, v1), p01, p11));
         let ev = gap(at(u0, vm), p00, p01).max(gap(at(u1, vm), p10, p11));
         let mid = [(p00[0] + p10[0] + p01[0] + p11[0]) / 4.0, (p00[1] + p10[1] + p01[1] + p11[1]) / 4.0];
-        let ec = gap(at(um, vm), mid, mid);
+        let ec = if centre { gap(at(um, vm), mid, mid) } else { 0.0 };
         let room = leaves.len() + queue.len() + 3 < MAX_LEAVES;
-        let split_u = room && (eu > FLAT_TOL || ec > FLAT_TOL) && (u1 - u0) * sw > MIN_CELL;
-        let split_v = room && (ev > FLAT_TOL || ec > FLAT_TOL) && (v1 - v0) * sh > MIN_CELL;
+        let split_u = room && (eu > tol || ec > tol) && (u1 - u0) * sw > MIN_CELL;
+        let split_v = room && (ev > tol || ec > tol) && (v1 - v0) * sh > MIN_CELL;
         if !split_u && !split_v {
             leaves.push(c);
             continue;
@@ -624,7 +652,9 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 }
                 Interp::Bilinear => {
                     let (ix, iy) = (u.floor() as i32, v.floor() as i32);
-                    let (fx, fy) = (u - f64::from(ix), v - f64::from(iy));
+                    // The reference's weights: the fraction in 1/256 steps, over 255 (so the far
+                    // sample never quite reaches full weight), as its warp probes show.
+                    let (fx, fy) = (((u - f64::from(ix)) * 256.0).floor() / 255.0, ((v - f64::from(iy)) * 256.0).floor() / 255.0);
                     if let Some(o) = base(ix, iy, 2) {
                         for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
                             for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
@@ -1009,7 +1039,7 @@ mod tests {
     #[test]
     fn an_affine_warp_keeps_its_starting_cells() {
         let at = |u: f64, v: f64| [10.0 + 300.0 * u + 40.0 * v, 5.0 + 20.0 * u + 200.0 * v];
-        let leaves = tessellate(&at, &[], &[], 256.0, 256.0);
+        let leaves = tessellate(&at, &[], &[], 256.0, 256.0, Facets::Envelope);
         assert_eq!(leaves.len(), 16);
         assert!(leaves.iter().all(|c| (c[1] - c[0] - 0.25).abs() < 1e-12 && (c[3] - c[2] - 0.25).abs() < 1e-12));
     }
@@ -1020,7 +1050,7 @@ mod tests {
     #[test]
     fn cells_are_small_where_a_warp_bends_and_large_where_it_is_flat() {
         let at = pulled(512.0, 0, [-192.0, -192.0]);
-        let leaves = tessellate(&at, &[], &[], 512.0, 512.0);
+        let leaves = tessellate(&at, &[], &[], 512.0, 512.0, Facets::Envelope);
         let width = |c: &Cell| c[1] - c[0];
         let corner = leaves.iter().find(|c| c[0] == 0.0 && c[2] == 0.0).unwrap();
         let far = leaves.iter().find(|c| c[1] == 1.0 && c[3] == 1.0).unwrap();
@@ -1044,7 +1074,7 @@ mod tests {
             let (x, y) = w.map(u * 256.0, v * 256.0);
             [x, y]
         };
-        let leaves = tessellate(&at, &[], &[], 256.0, 256.0);
+        let leaves = tessellate(&at, &[], &[], 256.0, 256.0, Facets::Envelope);
         let e = facet_error(&at, &leaves);
         assert!(e < 3.0 * FLAT_TOL, "facets stray {e} px over {} cells", leaves.len());
     }
@@ -1143,5 +1173,55 @@ mod tests {
         assert_eq!(o.pixel(0, 0), vec![1.0]);
         assert_eq!(o.pixel(12, 6), vec![0.0]);
         assert_eq!(o.pixel(5, 6), vec![1.0]);
+    }
+
+    /// A bend preset the reference stores as an envelope (Arc) is tessellated as one; Fisheye,
+    /// Twist and the Shells, which it stores as full meshes, and any custom mesh, as a mesh.
+    #[test]
+    fn facets_follow_the_kind_of_mesh() {
+        use photocraft_geom::warp::{BezierMesh, Warp, WarpStyle};
+        let b = [96.0, 96.0, 224.0, 224.0];
+        assert_eq!(facets_of(&Warp::preset(WarpStyle::Arc, 50.0, b)), Facets::Envelope);
+        assert_eq!(facets_of(&Warp::preset(WarpStyle::Inflate, 50.0, b)), Facets::Envelope);
+        assert_eq!(facets_of(&Warp::preset(WarpStyle::Fisheye, 50.0, b)), Facets::Mesh);
+        assert_eq!(facets_of(&Warp::preset(WarpStyle::Twist, 50.0, b)), Facets::Mesh);
+        assert_eq!(facets_of(&Warp::preset(WarpStyle::ShellLower, 50.0, b)), Facets::Mesh);
+        let mut bulge = Vec::new();
+        for j in 0..4 {
+            for i in 0..4 {
+                let inner = (1..3).contains(&i) && (1..3).contains(&j);
+                let (x, y) = (96.0 + i as f64 * 128.0 / 3.0, 96.0 + j as f64 * 128.0 / 3.0);
+                bulge.push(if inner { [x + if i == 1 { -12.0 } else { 12.0 }, y + if j == 1 { -12.0 } else { 12.0 }] } else { [x, y] });
+            }
+        }
+        let fisheye = Warp::custom(BezierMesh { us: vec![0.0, 1.0], vs: vec![0.0, 1.0], points: bulge }, b);
+        assert_eq!(facets_of(&fisheye), Facets::Mesh);
+        // The same bulge splits more finely as a mesh than it would as an envelope: edges alone
+        // decide, at the tighter tolerance.
+        let m = fisheye.to_mesh(1, 1);
+        let at = |u: f64, v: f64| m.eval(u, v);
+        let as_mesh = tessellate(&at, &[], &[], 128.0, 128.0, Facets::Mesh).len();
+        let as_env = tessellate(&at, &[], &[], 128.0, 128.0, Facets::Envelope).len();
+        assert!(as_mesh != as_env, "{as_mesh} vs {as_env}");
+    }
+
+    /// Bilinear warp weights are the reference's: the fraction in 1/256 steps over 255, so a point
+    /// halfway between two samples weighs the far one 128/255, not 1/2.
+    #[test]
+    fn warp_bilinear_weights_are_in_1_256_steps_over_255() {
+        use photocraft_geom::warp::{BezierMesh, Warp};
+        let mut src = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, true));
+        // Two columns, 0 and 1, four rows: a half-pixel shift to the right samples the midpoint.
+        src.write_region(Rect::new(0, 0, 2, 4), &[0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0]);
+        let shift = BezierMesh {
+            us: vec![0.0, 1.0],
+            vs: vec![0.0, 1.0],
+            points: (0..4).flat_map(|j| (0..4).map(move |i| [0.5 + 2.0 * i as f64 / 3.0, 4.0 * j as f64 / 3.0])).collect(),
+        };
+        let warp = Warp::custom(shift, [0.0, 0.0, 2.0, 4.0]);
+        let out = place_source(&src, Rect::new(0, 0, 2, 4), &photocraft_geom::Affine::IDENTITY, Some(&warp)).expect("placed");
+        let px = out.read_region(Rect::new(1, 1, 2, 2));
+        let got = f64::from(px[0]) / f64::from(px[1]);
+        assert!((got - 128.0 / 255.0).abs() < 1e-5, "weight {got}");
     }
 }

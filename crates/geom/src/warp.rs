@@ -1050,6 +1050,12 @@ pub struct Warp {
     /// A cylinder's seven `warpValues` (see [`Warp::cylinder`]); empty for other styles.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub values: Vec<f64>,
+    /// The mesh was given with fewer than four control points along a side: the reference
+    /// application's preset envelopes (every bend preset but Fisheye, Twist and the Shells, which
+    /// it stores as full 4 × 4 meshes), and custom envelopes read from a file. It tessellates such
+    /// a surface by a different rule than a full mesh; see the renderer.
+    #[serde(default)]
+    pub envelope: bool,
 }
 
 /// Relative to the magnitude so the fit's rounding at large origins isn't rejected.
@@ -1061,12 +1067,13 @@ fn point_fits(expected: [f64; 2], actual: [f64; 2]) -> bool {
 impl Warp {
     /// No warp over `bounds`.
     pub fn none(bounds: [f64; 4]) -> Warp {
-        Warp { style: WarpStyle::None, bend: 0.0, h_distort: 0.0, v_distort: 0.0, vertical: false, bounds, mesh: None, values: Vec::new() }
+        Warp { style: WarpStyle::None, bend: 0.0, h_distort: 0.0, v_distort: 0.0, vertical: false, bounds, mesh: None, values: Vec::new(), envelope: false }
     }
 
     /// A preset style.
     pub fn preset(style: WarpStyle, bend: f64, bounds: [f64; 4]) -> Warp {
-        Warp { style, bend, ..Warp::none(bounds) }
+        let envelope = !matches!(style, WarpStyle::None | WarpStyle::Custom | WarpStyle::Cylinder | WarpStyle::Fisheye | WarpStyle::Twist | WarpStyle::ShellLower | WarpStyle::ShellUpper);
+        Warp { style, bend, envelope, ..Warp::none(bounds) }
     }
 
     /// A custom warp from a mesh.
