@@ -669,6 +669,16 @@ fn tab_in_full_screen_shows_and_hides_the_chrome_and_leaving_restores_the_panels
     assert!(v.get("full_screen_chrome").is_none());
 }
 
+/// #10339: Gradients and Patterns lay out their own list, so it fills the group on either tab
+/// order of the Color group.
+#[test]
+fn gradients_and_patterns_fill_their_group() {
+    for pro in [true, false] {
+        assert_eq!(Group::Color.tabs(pro).get(2..4), Some(&["Gradients", "Patterns"][..]));
+    }
+    assert!(Group::Color.scrolls_itself(2) && Group::Color.scrolls_itself(3) && !Group::Color.scrolls_itself(1));
+}
+
 /// #2726: the Navigator sizes its own preview to the group (no outer scroll area, so no scroll
 /// fade over the thumbnail), keeping the document's aspect, with the zoom controls below it.
 #[test]

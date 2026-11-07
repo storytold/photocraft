@@ -122,7 +122,7 @@ impl Group {
     /// areas shared the wheel, and where the outer content overflowed by one physical pixel (at
     /// 125 % scaling for some window heights) the footer and list moved a pixel as you scrolled (#6238).
     pub fn scrolls_itself(self, tab: usize) -> bool {
-        matches!((self, tab), (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
+        matches!((self, tab), (Group::Color, 2 | 3) | (Group::Layers, 0..=2) | (Group::History, 0) | (Group::History, 1) | (Group::Navigator, 0))
     }
 
     pub(crate) fn tab_mut(self, tabs: &mut DockTabs) -> &mut usize {
