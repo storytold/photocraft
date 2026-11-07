@@ -115,7 +115,7 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let v = canvas_view(app, ui, d, cell, view, d == active_doc);
             if d != active_doc {
                 app.ui.views[d] = v;
-                if main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| cell.contains(p))) {
+                if main_focused && pressed_on_canvas(ui, cell) {
                     app.session.set_active(d);
                 }
             }
@@ -124,11 +124,18 @@ fn documents(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         return;
     }
-    if idx != active_doc && main_focused && ui.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
+    if idx != active_doc && main_focused && pressed_on_canvas(ui, rect) {
         app.session.set_active(idx);
     }
     let view = app.ui.views[idx].clone();
     canvas_view(app, ui, idx, rect, view, app.session.active_index() == Some(idx));
+}
+
+/// Whether a primary press landed inside `rect` with nothing floating over it: a press on a dialog or
+/// menu lying over a canvas is not a click into that canvas (#11612).
+fn pressed_on_canvas(ui: &egui::Ui, rect: Rect) -> bool {
+    let press = ui.input(|i| i.pointer.primary_pressed().then(|| i.pointer.interact_pos()).flatten());
+    press.is_some_and(|p| rect.contains(p) && ui.ctx().layer_id_at(p).is_none_or(|l| l.order == egui::Order::Background))
 }
 
 /// The tab strip; returns where its document tabs are.
