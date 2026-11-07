@@ -47,6 +47,9 @@ pub fn open_scanned(session: &mut Session, image: ScannedImage) -> Result<usize>
             (ColorMode::Grayscale, 2)
         }
     };
+    if !resolution_dpi.is_finite() {
+        return Err(bad("`resolution` must be a number"));
+    }
     let mut doc = Document::with_background(name, Size::new(width, height), mode, SampleType::U8, Color::WHITE);
     doc.resolution_dpi = resolution_dpi.clamp(1.0, 30_000.0);
     {
@@ -93,7 +96,7 @@ fn write_rows(surface: &mut photocraft_raster::Surface, width: u32, height: u32,
                 let start = (row as usize).checked_mul(width as usize).and_then(|n| n.checked_mul(4)).ok_or_else(|| bad("the scan is too large"))?;
                 let end = start.checked_add(count.saturating_mul(4)).ok_or_else(|| bad("the scan is too large"))?;
                 let src = bytes.get(start..end).ok_or_else(|| bad("the scan is too large"))?;
-                buf.reserve(count.saturating_mul(4));
+                buf.try_reserve(count.saturating_mul(4)).map_err(|e| EngineError::Other(format!("not enough memory for the scan ({e})")))?;
                 for px in src.as_chunks::<4>().0 {
                     buf.extend([u8_to_f(px[0]), u8_to_f(px[1]), u8_to_f(px[2]), u8_to_f(px[3])]);
                 }
@@ -102,7 +105,7 @@ fn write_rows(surface: &mut photocraft_raster::Surface, width: u32, height: u32,
                 let start = (row as usize).checked_mul(width as usize).ok_or_else(|| bad("the scan is too large"))?;
                 let end = start.checked_add(count).ok_or_else(|| bad("the scan is too large"))?;
                 let src = bytes.get(start..end).ok_or_else(|| bad("the scan is too large"))?;
-                buf.reserve(count.saturating_mul(2));
+                buf.try_reserve(count.saturating_mul(2)).map_err(|e| EngineError::Other(format!("not enough memory for the scan ({e})")))?;
                 for sample in src {
                     buf.extend([u8_to_f(*sample), 1.0]);
                 }
@@ -149,20 +152,32 @@ fn resolution(p: &Value) -> Result<f32> {
     Ok(n as f32)
 }
 
-fn decode_bytes(p: &Value, key: &str) -> Result<Vec<u8>> {
+/// Base64 length of `width * height * channels` bytes, including padding.
+fn encoded_limit(width: u32, height: u32, channels: u32) -> usize {
+    let bytes = u64::from(width).saturating_mul(u64::from(height)).saturating_mul(u64::from(channels));
+    let chars = bytes.saturating_add(2) / 3;
+    usize::try_from(chars.saturating_mul(4)).unwrap_or(usize::MAX)
+}
+
+fn decode_bytes(p: &Value, key: &str, max_chars: usize) -> Result<Vec<u8>> {
     let text = p.get(key).and_then(Value::as_str).ok_or_else(|| bad(format!("`{key}` must be base64")))?;
-    base64::engine::general_purpose::STANDARD.decode(text.trim()).map_err(|_| bad(format!("`{key}` is not valid base64")))
+    let text = text.trim();
+    if text.len() > max_chars {
+        return Err(bad(format!("`{key}` is too large")));
+    }
+    base64::engine::general_purpose::STANDARD.decode(text).map_err(|_| bad(format!("`{key}` is not valid base64")))
 }
 
 fn run(session: &mut Session, p: &Value) -> Result<Value> {
     let width = positive(p, "width", MAX_DIMENSION)?;
     let height = positive(p, "height", MAX_DIMENSION)?;
+    check_size(width, height)?;
     let resolution_dpi = resolution(p)?;
     let name = p.get("name").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("Scan").to_string();
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("rgb");
     let pixels = match mode {
-        "rgb" => ScannedPixels::Rgba(decode_bytes(p, "rgba")?),
-        "gray" | "grayscale" => ScannedPixels::Gray(decode_bytes(p, "gray")?),
+        "rgb" => ScannedPixels::Rgba(decode_bytes(p, "rgba", encoded_limit(width, height, 4))?),
+        "gray" | "grayscale" => ScannedPixels::Gray(decode_bytes(p, "gray", encoded_limit(width, height, 1))?),
         _ => return Err(bad("`mode` must be rgb or gray")),
     };
     let index = open_scanned(session, ScannedImage { name, width, height, resolution_dpi, pixels })?;
@@ -227,6 +242,28 @@ mod tests {
         assert!(session.execute("file.import.scan", json!({"width": 2, "height": 2, "rgba": b64(&[0, 0, 0, 255])})).is_err());
         assert!(session.execute("file.import.scan", json!({"width": 20000, "height": 20000, "rgba": ""})).is_err());
         assert!(session.execute("file.import.scan", json!("nope")).is_err());
+        assert!(session.documents().is_empty());
+    }
+
+    #[test]
+    fn a_non_finite_resolution_does_not_open_a_document() {
+        let mut session = Session::new();
+        for dpi in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let err = open_scanned(
+                &mut session,
+                ScannedImage { name: "Scan".into(), width: 1, height: 1, resolution_dpi: dpi, pixels: ScannedPixels::Gray(vec![0]) },
+            );
+            assert!(matches!(err, Err(EngineError::BadParams { ref msg, .. }) if msg.contains("resolution")), "{dpi}: {err:?}");
+        }
+        assert!(session.documents().is_empty());
+    }
+
+    #[test]
+    fn an_oversized_payload_is_rejected_before_it_is_decoded() {
+        let mut session = Session::new();
+        let huge = "A".repeat(4_096);
+        let err = session.execute("file.import.scan", json!({"width": 1, "height": 1, "rgba": huge})).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { ref msg, .. } if msg.contains("too large")), "{err}");
         assert!(session.documents().is_empty());
     }
 }

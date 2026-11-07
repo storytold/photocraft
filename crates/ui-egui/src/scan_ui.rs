@@ -176,10 +176,9 @@ fn list_now(app: &mut PhotocraftApp) {
     };
     match list(std::time::Duration::from_secs(3)) {
         Ok(devices) => {
+            let previous = app.scan.devices.get(app.scan.selected).map(|device| device.id.clone());
             app.scan.devices = devices;
-            if app.scan.selected >= app.scan.devices.len() {
-                app.scan.selected = 0;
-            }
+            app.scan.selected = previous.and_then(|id| app.scan.devices.iter().position(|device| device.id == id)).unwrap_or(0);
             app.scan.status =
                 if app.scan.devices.is_empty() { tl!("No scanner is connected. Check the cable, then press Refresh.").to_string() } else { String::new() };
         }
@@ -285,6 +284,32 @@ mod tests {
         let doc = &app.session.active().unwrap().doc;
         assert_eq!((doc.size.width, doc.size.height, doc.mode), (2, 1, photocraft_color::ColorMode::Rgb));
         assert_eq!(doc.layers[0].surface().unwrap().pixel(0, 0), vec![1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn refresh_keeps_the_same_scanner_when_the_list_order_changes() {
+        let calls = std::cell::Cell::new(0u8);
+        let services = Services {
+            scan_list: Some(Box::new(move |_| {
+                let n = calls.get();
+                calls.set(n.saturating_add(1));
+                if n == 0 {
+                    Ok(vec![ScanDevice { id: "usb".into(), name: "USB".into() }, ScanDevice { id: "net".into(), name: "Network".into() }])
+                } else {
+                    Ok(vec![ScanDevice { id: "net".into(), name: "Network".into() }, ScanDevice { id: "other".into(), name: "Other".into() }])
+                }
+            })),
+            ..Default::default()
+        };
+        let (mut app, ctx) = app(services);
+        crate::menus::invoke(&mut app, &ctx, "file.import.scan", json!({})).unwrap();
+        advance(&mut app);
+        advance(&mut app);
+        app.scan.selected = 1;
+        app.scan.phase = Phase::ArmList;
+        advance(&mut app);
+        advance(&mut app);
+        assert_eq!(app.scan.devices.get(app.scan.selected).map(|device| device.id.as_str()), Some("net"));
     }
 
     #[test]

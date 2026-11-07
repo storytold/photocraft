@@ -53,7 +53,6 @@ struct State {
     select_requested: bool,
     unit_ready: bool,
     close_requested: bool,
-    local_done: bool,
     opened_id: Option<String>,
 }
 
@@ -72,7 +71,6 @@ impl State {
             select_requested: false,
             unit_ready: false,
             close_requested: false,
-            local_done: false,
             opened_id: None,
         }
     }
@@ -105,11 +103,6 @@ define_class!(
                 let Some(id) = device_id(device) else { return };
                 lock(self.ivars()).devices.retain(|d| d.id != id);
             }));
-        }
-
-        #[unsafe(method(deviceBrowserDidEnumerateLocalDevices:))]
-        fn deviceBrowserDidEnumerateLocalDevices(&self, _browser: &ICDeviceBrowser) {
-            lock(self.ivars()).local_done = true;
         }
     }
 
@@ -365,14 +358,12 @@ impl Drop for Session {
 
 pub(crate) fn list_devices(timeout: Duration) -> Result<Vec<Scanner>, Error> {
     let session = Session::start(None)?;
+    // USB devices show up before network ones. Image Capture has no signal that network
+    // enumeration is finished, so the list stays open until the caller's wait elapses.
     let timeout = timeout.min(Duration::from_secs(30));
     let started = Instant::now();
     loop {
-        let ready = session.with_state(|state| {
-            let elapsed = started.elapsed();
-            elapsed >= timeout || (state.local_done && !state.devices.is_empty() && elapsed >= Duration::from_millis(400))
-        });
-        if ready {
+        if listing_finished(started.elapsed(), timeout) {
             return Ok(session.with_state(|state| state.devices.clone()));
         }
         if let Some(err) = session.with_state(|state| state.error.clone()) {
@@ -380,6 +371,10 @@ pub(crate) fn list_devices(timeout: Duration) -> Result<Vec<Scanner>, Error> {
         }
         session.pump_slice();
     }
+}
+
+fn listing_finished(elapsed: Duration, timeout: Duration) -> bool {
+    elapsed >= timeout
 }
 
 pub(crate) fn acquire(request: ScanRequest) -> Result<ScanImage, Error> {
@@ -462,6 +457,8 @@ fn select_unit(session: &Session) -> Result<(), Error> {
 }
 
 fn preferred_unit(scanner: &ICScannerDevice) -> ICScannerFunctionalUnitType {
+    // A scanner with both a flatbed and a feeder uses the flatbed. A feeder-only
+    // device keeps the first page (`ScanImage::pages` reports the rest).
     // SAFETY: the array is the scanner's functional-unit numbers.
     let types = unsafe { scanner.availableFunctionalUnitTypes() };
     let count = types.count();
@@ -578,4 +575,17 @@ fn finish(session: &Session, mode: Mode) -> Result<ScanImage, Error> {
     image.dpi = if dpi == 0 { 300 } else { dpi };
     image.pages = pages.max(1);
     Ok(image)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listing_waits_out_the_callers_timeout() {
+        let timeout = Duration::from_secs(3);
+        assert!(!listing_finished(Duration::from_millis(400), timeout));
+        assert!(!listing_finished(Duration::from_millis(2_999), timeout));
+        assert!(listing_finished(timeout, timeout));
+    }
 }
