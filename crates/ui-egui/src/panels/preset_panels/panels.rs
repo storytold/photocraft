@@ -1,6 +1,6 @@
 use super::{
-    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, TextureHandle, Tokens, Tool, Value,
-    browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
+    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, Tokens, Tool, Value, browser,
+    canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
 };
 
 // ------------------------------------------------------------------ Gradients
@@ -174,6 +174,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 // ------------------------------------------------------------------ Styles
 
+/// Browse style presets, preparing thumbnails as they become visible.
 pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let src = app.session.presets.styles.clone();
     let groups: Vec<GroupView> = src
@@ -184,10 +185,6 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
-    let mut texes: Vec<Vec<TextureHandle>> = Vec::new();
-    for g in &src {
-        texes.push(g.items.iter().map(|s| style_texture(app, &ctx, s)).collect());
-    }
     let events = browser(
         ui,
         &mut st,
@@ -195,8 +192,12 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &groups,
         Place { canvas, max_h: 300.0, new_tip: tl!("Create new style from the selected layer"), flush: false },
         &mut |ui, r, gi, ii| {
+            if !ui.is_rect_visible(r) {
+                return;
+            }
+            let tex = style_texture(app, &ctx, &src[gi].items[ii]);
             ui.painter().rect_filled(r, 2.0, t.field);
-            ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+            ui.painter().image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         },
     );
     app.ui.presets_ui = st;
