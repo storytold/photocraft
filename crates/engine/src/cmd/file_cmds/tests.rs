@@ -4091,7 +4091,7 @@ fn approve_memory_releases_the_preflight_when_the_hard_limit_refuses_it() {
     photocraft_io::memory::with_mock_memory(snap_low, || {
         let err = s.execute("file.approveMemory", json!({"id": id, "approve": true, "background": false})).unwrap_err();
         match &err {
-            EngineError::PsdHardBudget { name, required, limit } => {
+            EngineError::PsdHardBudget { name, required, limit, .. } => {
                 assert_eq!(name, "ram_drop.psd");
                 assert_eq!((*required, *limit), (8 * gb, expected_limit));
             }
@@ -4120,7 +4120,7 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
             let mut s = Session::new();
             let err = s.execute("file.openAs", json!({"path": path.clone(), "approveHighMemory": true})).unwrap_err();
             match &err {
-                EngineError::PsdHardBudget { name, required, limit } => {
+                EngineError::PsdHardBudget { name, required, limit, .. } => {
                     assert_eq!(name, &path);
                     assert!(*required > hard && *limit == hard);
                 }
