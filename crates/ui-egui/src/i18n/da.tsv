@@ -4816,3 +4816,9 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Pick a different document for each channel.	Vælg et andet dokument til hver kanal.
 	A picked document is no longer open.	Et af de valgte dokumenter er ikke længere åbent.
 	A picked document is no longer a grayscale document of the same size.	Et af de valgte dokumenter er ikke længere et dokument i gråtoner i samme størrelse.
+	HSL Color	HSL-farve
+	Spot Channels	Spotkanaler
+	Alpha Channels	Alfakanaler
+	Info Panel Options	Indstillinger for panelet Info
+	Readouts	Aflæsninger
+	Total Spot Ink	Samlet spotfarve

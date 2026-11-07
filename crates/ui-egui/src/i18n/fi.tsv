@@ -4817,3 +4817,9 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Pick a different document for each channel.	Valitse jokaiselle kanavalle eri asiakirja.
 	A picked document is no longer open.	Yksi valituista asiakirjoista ei ole enää auki.
 	A picked document is no longer a grayscale document of the same size.	Yksi valituista asiakirjoista ei ole enää samankokoinen harmaasävyasiakirja.
+	HSL Color	HSL-väri
+	Spot Channels	Spottivärikanavat
+	Alpha Channels	Alfakanavat
+	Info Panel Options	Tiedot-paneelin asetukset
+	Readouts	Lukemat
+	Total Spot Ink	Spottivärin kokonaismäärä

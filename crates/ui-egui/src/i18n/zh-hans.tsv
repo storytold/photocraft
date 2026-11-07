@@ -3298,3 +3298,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	请为每个通道选择不同的文档。
 	A picked document is no longer open.	所选的一个文档已不再打开。
 	A picked document is no longer a grayscale document of the same size.	所选的一个文档已不再是同样大小的灰度文档。
+	Actual Color	实际颜色
+	Web Color	Web 颜色
+	HSB Color	HSB 颜色
+	HSL Color	HSL 颜色
+	Total Ink	油墨总量
+	Spot Channels	专色通道
+	Alpha Channels	Alpha 通道
+	Info Panel Options	信息面板选项
+	Readouts	读数
+	Total Spot Ink	专色油墨总量
+	Composite opacity	合成不透明度

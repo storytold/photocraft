@@ -4791,3 +4791,10 @@ shape	Appearance	Оформление
 	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
 	A picked document is no longer open.	Один из выбранных документов больше не открыт.
 	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.
+	HSL Color	HSL
+	Spot Channels	Плашечные каналы
+	Alpha Channels	Альфа-каналы
+	Info Panel Options	Параметры панели «Инфо»
+	Readouts	Показания
+	Total Spot Ink	Суммарное покрытие плашечными красками
+	Composite opacity	Непрозрачность композиции

@@ -642,11 +642,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// A modal dialog or workspace is open. egui's `Modal` blocks input only in the window it shows
 /// in, so the floating panels' own OS windows are blocked meanwhile (`DockArea::input_blocked`).
-/// The app's dialogs count from the frame they open; any other egui modal (a format's options,
-/// a job's progress) from the frame after it first shows.
+/// The app's explicit dialogs, including pending Info Options, count from the frame they open;
+/// any other egui modal (a format's options, a job's progress) from the frame after it first shows.
 pub(crate) fn modal_open(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     !app.ui.dialogs.is_empty()
         || app.ui.layers_panel_dialog.is_some()
+        || app.ui.info_panel_dialog.is_some()
         || app.discard.is_some()
         || app.camera_raw.is_some()
         || crate::distort_ui::modal_workspace(app).is_some()
@@ -1176,6 +1177,7 @@ struct PanelContent<'a> {
     commands: &'a mut Vec<(&'static str, Value)>,
 }
 
+/// Route docked and floating panels through their shared options menus before adding common dock actions.
 fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
     match panel {
         "layers" => {
@@ -1204,6 +1206,10 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
         }
         "histogram" => {
             crate::histogram_panel::panel_menu(app, ui);
+            ui.separator();
+        }
+        "info" => {
+            crate::info_panel_options::panel_menu(app, ui);
             ui.separator();
         }
         "channels" => {

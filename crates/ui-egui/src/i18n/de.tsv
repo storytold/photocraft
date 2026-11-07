@@ -3641,3 +3641,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
 	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
 	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.
+	Actual Color	Tatsächliche Farbe
+	Web Color	Webfarbe
+	HSB Color	HSB-Farbe
+	HSL Color	HSL-Farbe
+	Total Ink	Gesamtfarbauftrag
+	Spot Channels	Schmuckfarbenkanäle
+	Alpha Channels	Alphakanäle
+	Info Panel Options	Optionen des Informationenbedienfelds
+	Readouts	Messwerte
+	Total Spot Ink	Gesamtauftrag Schmuckfarben
+	Composite opacity	Deckkraft des Gesamtbilds

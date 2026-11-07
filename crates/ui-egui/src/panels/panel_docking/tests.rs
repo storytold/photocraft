@@ -931,3 +931,64 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert_eq!(columns[0].width, 380.0);
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
+
+/// Pending Info Options blocks native floating panels before its first egui modal draw.
+/// Closing it restores ordinary panel input; checking ownership changes neither the document,
+/// history nor saved preferences. The fresh context exposes the missing opening-frame guard.
+#[test]
+fn pending_info_options_blocks_floating_panels_before_first_modal_draw() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+    let before = app.run("document.inspect", json!({})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    let journal = app.session.journal.len();
+    let saved = app.session.prefs_to_json();
+    assert!(ctx.memory(|memory| memory.is_above_modal_layer(egui::LayerId::background())));
+    assert!(!modal_open(&app, &ctx), "ordinary panel input starts enabled");
+
+    app.ui.info_panel_dialog = Some(app.ui.info_panel.clone());
+    assert!(modal_open(&app, &ctx), "pending options own input before egui sees the modal");
+    assert!(ctx.memory(|memory| memory.is_above_modal_layer(egui::LayerId::background())), "no modal has been drawn");
+
+    app.ui.info_panel_dialog = None;
+    assert!(!modal_open(&app, &ctx), "closing options restores ordinary panel input");
+    assert_eq!(app.run("document.inspect", json!({})).unwrap(), before);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.journal.len(), journal);
+    assert_eq!(app.session.prefs_to_json(), saved);
+}
+
+/// The Info menu exposes the same Panel Options dialog when docked and floated, including an empty session.
+#[test]
+fn info_panel_menu_opens_readout_options_docked_and_floating() {
+    for floating in [false, true] {
+        let mut app = app();
+        app.run("window.panel.activate", json!({"panel":"info"})).unwrap();
+        if floating {
+            app.run("window.panel.float", json!({"panel":"info", "x":20, "y":40})).unwrap();
+        }
+        let mut h = harness(app, vec2(1280.0, 800.0));
+        for _ in 0..1 {
+            let tab = tab_rect(&h, "info");
+            let button = h
+                .query_all_by_label("Panel menu")
+                .find(|node| {
+                    let rect = node.rect();
+                    if floating { floating_rect(&h, "info").contains_rect(rect) } else { (rect.center().y - tab.center().y).abs() < 2.0 }
+                })
+                .expect("Info panel menu button")
+                .rect()
+                .center();
+            h.hover_at(button);
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos: button, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+                h.run_steps(1);
+            }
+            h.run_steps(2);
+            h.get_by_label("Panel Options…").click();
+            h.run_steps(2);
+            assert_eq!(h.state().ui.info_panel_dialog.as_ref(), Some(&h.state().ui.info_panel));
+        }
+    }
+}

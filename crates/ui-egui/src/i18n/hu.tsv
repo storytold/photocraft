@@ -4513,3 +4513,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Minden csatornához másik dokumentumot válasszon.
 	A picked document is no longer open.	Az egyik kiválasztott dokumentum már nincs megnyitva.
 	A picked document is no longer a grayscale document of the same size.	Az egyik kiválasztott dokumentum már nem azonos méretű szürkeárnyalatos dokumentum.
+	HSL Color	HSL-szín
+	Spot Channels	Direktszín-csatornák
+	Alpha Channels	Alfa-csatornák
+	Info Panel Options	Információ panel beállításai
+	Readouts	Kijelzések
+	Total Spot Ink	Teljes direktszín-mennyiség
+	Composite opacity	Kompozit fedettség

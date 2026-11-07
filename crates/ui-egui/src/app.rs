@@ -33,6 +33,7 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
+    /// Build the native UI around the supplied session and services, restoring preferences with empty transient caches.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
         let mut app = Self {
@@ -46,6 +47,7 @@ impl PhotocraftApp {
             navigator_plain: std::collections::HashSet::new(),
             streams: HashMap::new(),
             info_samplers: None,
+            info_channels: None,
             monitors: Default::default(),
             thumbnail_cache: std::sync::Arc::new(std::sync::Mutex::new(crate::home_recent_ui::ThumbnailCache::default())),
             checker: None,
@@ -220,6 +222,7 @@ impl PhotocraftApp {
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
         histogram_panel::restore_options(&mut app);
+        crate::info_panel_options::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
         notices::wayland_file_drop_guidance(&mut app);

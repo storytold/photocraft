@@ -2319,6 +2319,114 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
 }
 
+/// `ui.set {"infoPanel": {"readouts": [...]}}` picks the Info panel's readouts (any order, read
+/// back in menu order), keeps them with the preferences and reports them in `ui.inspect`; an
+/// unknown readout or field changes nothing.
+#[test]
+fn ui_set_info_panel_readouts() {
+    use crate::info_panel_options::Readout;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(app.ui.info_panel.readouts, vec![Readout::ActualColor, Readout::Cmyk]);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"infoPanel": {"readouts": ["spotChannels", "grayscale", "grayscale"]}}))["ok"], true);
+    assert_eq!(app.ui.info_panel.readouts, vec![Readout::Grayscale, Readout::SpotChannels]);
+    assert_eq!(app.session.prefs().dialogs.get("infoPanel").unwrap()["readouts"], json!(["grayscale", "spotChannels"]));
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["infoPanel"]["readouts"], json!(["grayscale", "spotChannels"]));
+    let saved = app.session.prefs_to_json();
+    let ui_before = serde_json::to_value(&app.ui).unwrap();
+    for bad in [
+        json!({"infoPanel": {"readouts": ["nope"]}}),
+        json!({"infoPanel": {"showCompositeOpacity": true}}),
+        json!({"infoPanel": {"nope": true}}),
+        json!({"infoPanel": "grayscale"}),
+        json!({"infoPanel": {"readouts": "grayscale"}}),
+        json!({"infoPanel": {"readouts": ["opacity"]}, "tool": "eraser", "theme": "unknown"}),
+        json!({"infoPanel": {"readouts": ["opacity"]}, "zoom": "invalid"}),
+        json!({"infoPanel": {"readouts": ["opacity"]}, "brushPickerScale": 0.0}),
+        json!({"infoPanel": {"readouts": ["opacity"]}, "tool": "eraser", "brushSize": -1e100}),
+    ] {
+        assert_eq!(call(&mut app, &ctx, "ui.set", bad.clone())["ok"], false, "{bad}");
+        assert_eq!(app.ui.info_panel.readouts, vec![Readout::Grayscale, Readout::SpotChannels], "{bad} changed nothing");
+        assert_eq!(serde_json::to_value(&app.ui).unwrap(), ui_before, "{bad} changed UI state");
+        assert_eq!(app.session.prefs_to_json(), saved, "{bad} changed saved preferences");
+    }
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"infoPanel": {"readouts": []}}))["ok"], true);
+    assert!(app.ui.info_panel.readouts.is_empty());
+}
+
+/// An inspection must expose integrated Info settings and current upstream controls together.
+/// Hiding and restoring the task bar before drawing distinguishes eligible geometry from a
+/// stale last-frame rect; changing readouts or visibility must leave the document untouched.
+#[test]
+fn ui_inspect_keeps_info_readouts_and_current_task_bar_state() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let initial = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(initial["ok"], true);
+    assert_eq!(initial["result"]["infoPanel"]["readouts"], json!(["actualColor", "cmyk"]));
+    assert_eq!(initial["result"]["taskBar"]["visible"], false);
+    assert_eq!(initial["result"]["taskBar"]["rect"], Value::Null);
+    assert_eq!(initial["result"]["artboardTool"], serde_json::to_value(&app.ui.artboard_tool).unwrap());
+
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let before = app.run("document.inspect", json!({})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    let journal = app.session.journal.len();
+    let rect = [10.0_f32, 20.0, 110.0, 40.0];
+    app.ui.crop_rect = Some([0.0, 0.0, 64.0, 48.0]);
+    app.ui.task_bar_shown = Some(rect);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "crop", "infoPanel": {"readouts": ["opacity"]}}))["ok"], true);
+    let visible = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(visible["result"]["infoPanel"]["readouts"], json!(["opacity"]));
+    assert_eq!(visible["result"]["taskBar"]["visible"], true);
+    assert_eq!(visible["result"]["taskBar"]["rect"], json!(rect));
+    assert_eq!(visible["result"]["artboardTool"], serde_json::to_value(&app.ui.artboard_tool).unwrap());
+
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"panels": {"context_task_bar": false}}))["ok"], true);
+    let hidden = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(hidden["result"]["taskBar"]["enabled"], false);
+    assert_eq!(hidden["result"]["taskBar"]["visible"], false);
+    assert_eq!(hidden["result"]["taskBar"]["rect"], Value::Null);
+    assert_eq!(hidden["result"]["infoPanel"]["readouts"], json!(["opacity"]));
+    assert_eq!(app.ui.task_bar_shown, Some(rect), "the old geometry remains until a draw");
+
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"panels": {"context_task_bar": true}, "infoPanel": {"readouts": []}}))["ok"], true);
+    let restored = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(restored["result"]["taskBar"]["visible"], true);
+    assert_eq!(restored["result"]["taskBar"]["rect"], json!(rect));
+    assert_eq!(restored["result"]["infoPanel"]["readouts"], json!([]));
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "brush"}))["ok"], true);
+    let other_tool = call(&mut app, &ctx, "ui.inspect", json!({}));
+    assert_eq!(other_tool["result"]["taskBar"]["visible"], false);
+    assert_eq!(other_tool["result"]["taskBar"]["rect"], Value::Null);
+    assert_eq!(app.run("document.inspect", json!({})).unwrap(), before);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.journal.len(), journal);
+}
+
+/// Info Options owns menu invocations too; closing it restores ordinary menu commands.
+#[test]
+fn info_panel_options_blocks_menu_edits_until_closed() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    let before = app.run("document.inspect", json!({})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    let journal = app.session.journal.len();
+    app.ui.info_panel_dialog = Some(app.ui.info_panel.clone());
+    for params in [json!({"id":"edit.undo"}), json!({"id":"image.imageRotation.90cw", "params":{}}), json!({"id":"select.all"}), json!({"id":"view.zoomIn"})] {
+        assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", params.clone())["ok"], false, "{params}");
+        assert_eq!(app.run("document.inspect", json!({})).unwrap(), before);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert_eq!(app.session.journal.len(), journal);
+        assert!(app.ui.info_panel_dialog.is_some());
+    }
+    app.ui.info_panel_dialog = None;
+    assert_eq!(call(&mut app, &ctx, "ui.menu.invoke", json!({"id":"image.imageRotation.90cw"}))["ok"], true);
+    assert_eq!(app.session.active().unwrap().doc.size, photocraft_doc::Size::new(48, 64));
+}
+
 fn shift_right(app: &mut PhotocraftApp, ctx: &egui::Context, tool: &str) {
     call(
         app,

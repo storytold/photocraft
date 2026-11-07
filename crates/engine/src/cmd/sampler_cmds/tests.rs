@@ -351,3 +351,130 @@ fn document_helpers_are_not_disturbed() {
     assert_eq!(pixel(&d, 3.9, 3.9), Some([3.0, 3.0]));
     assert_eq!(pixel(&d, 4.0, 0.0), None);
 }
+
+/// The readout modes of a sample, pinned to Photoshop 2027's Info panel on flat swatches
+/// (2026-10-28): Grayscale is 100 − Rec.601 luma of the encoded RGB, Opacity the composite alpha.
+#[test]
+fn readouts_match_photoshops_info_panel() {
+    let s = session();
+    let doc = &s.active().unwrap().doc;
+    let gray = |v: f32| readouts(doc, [v, v, v, 1.0]);
+    assert_eq!(gray(0.0).gray, 100);
+    assert_eq!(gray(64.0 / 255.0).gray, 75);
+    assert_eq!(gray(128.0 / 255.0).gray, 50);
+    assert_eq!(gray(192.0 / 255.0).gray, 25);
+    assert_eq!(gray(1.0).gray, 0);
+    let red = readouts(doc, [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(red.rgb, [255, 0, 0]);
+    assert_eq!(red.gray, 70, "pure red reads K 70 % in Photoshop");
+    assert_eq!(red.hsb, [0, 100, 100]);
+    assert_eq!(red.hsl, [0, 100, 50]);
+    assert_eq!(red.web, "ff0000");
+    assert_eq!(red.opacity, 100);
+    assert_eq!(red.cmyk, device_cmyk(1.0, 0.0, 0.0));
+    assert_eq!(red.total_ink, red.cmyk.iter().sum::<i32>());
+    assert_eq!(red.lab[0], 54, "L of sRGB red");
+    assert!(red.lab[1] > 70 && red.lab[2] > 60, "a and b of sRGB red: {:?}", red.lab);
+    let green = readouts(doc, [0.0, 1.0, 0.0, 0.5]);
+    assert_eq!((green.hsb[0], green.hsl[0], green.opacity), (120, 120, 50));
+    let mid = gray(0.5);
+    assert_eq!((mid.hsb, mid.hsl), ([0, 0, 50], [0, 0, 50]));
+    // Clamped and NaN-safe, like the RGB readout.
+    let wild = readouts(doc, [2.0, -1.0, f32::NAN, f32::NAN]);
+    assert_eq!((wild.rgb, wild.opacity, wild.web.as_str()), ([255, 0, 0], 0, "ff0000"));
+    assert_eq!(serde_json::to_value(&red).unwrap()["totalInk"], red.total_ink, "camelCase JSON");
+}
+
+/// Spot channels read their ink (1 = solid), alpha channels their masked share (white = 0 %), as
+/// Photoshop reads a channel targeted alone; off the canvas there is nothing to read.
+#[test]
+fn channel_readouts_read_ink_and_masked_percent() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Ink Red", "color": "#ff0000"})).unwrap();
+    s.execute("channel.new", json!({"name": "Alpha 1", "fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let doc = &s.active().unwrap().doc;
+    let inside = channel_readouts(doc, 15, 15);
+    assert_eq!(
+        inside,
+        vec![ChannelReadout { name: "Ink Red".into(), spot: true, percent: 100 }, ChannelReadout { name: "Alpha 1".into(), spot: false, percent: 0 },]
+    );
+    let outside = channel_readouts(doc, 50, 50);
+    assert_eq!(outside.iter().map(|c| c.percent).collect::<Vec<_>>(), vec![0, 100]);
+    assert_eq!(total_spot_ink(&inside), 100, "spot inks only, the alpha channel left out");
+    assert_eq!(total_spot_ink(&outside), 0);
+    assert!(channel_readouts(doc, -1, 5).is_empty());
+    assert!(channel_readouts(doc, 5, 80).is_empty());
+    assert!(channel_readouts(&session().active().unwrap().doc, 5, 5).is_empty(), "no extra channels");
+}
+
+/// `document.sampleChannels` reads the channels at a pixel; bad params are errors, not panics.
+#[test]
+fn sample_channels_command() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 50, "height": 80})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Ink Blue", "color": "#0000ff"})).unwrap();
+    let r = s.execute("document.sampleChannels", json!({"x": 10.7, "y": 3})).unwrap();
+    assert_eq!(r, json!([{"name": "Ink Blue", "spot": true, "percent": 100}]));
+    let r = s.execute("document.sampleChannels", json!({"x": 60, "y": 3})).unwrap();
+    assert_eq!(r[0]["percent"], 0);
+    assert_eq!(s.execute("document.sampleChannels", json!({"x": 500, "y": 3})).unwrap(), json!([]), "off the canvas");
+    for bad in [json!({}), json!({"x": "a", "y": 1}), json!({"x": 1, "y": f64::NAN}), json!({"x": 1e300, "y": 1}), json!({"x": 1})] {
+        assert!(s.execute("document.sampleChannels", bad.clone()).is_err(), "{bad}");
+    }
+    assert!(Session::new().execute("document.sampleChannels", json!({"x": 1, "y": 1})).is_err(), "no document");
+}
+
+/// The sampler list carries every readout and the channels, so the Info panel's readout modes
+/// read the same numbers for a point as for the pointer.
+#[test]
+fn list_reports_every_readout_and_the_channels() {
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 50, "height": 80})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Ink Red", "color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 5, "y": 6})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 70, "y": 6})).unwrap();
+    let p = points(&mut s);
+    assert_eq!(p[0]["gray"], 70);
+    assert_eq!(p[0]["hsb"], json!([0, 100, 100]));
+    assert_eq!(p[0]["hsl"], json!([0, 100, 50]));
+    assert_eq!(p[0]["web"], "ff0000");
+    assert_eq!(p[0]["opacity"], 100);
+    assert_eq!(p[0]["totalInk"], p[0]["cmyk"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).sum::<i64>());
+    assert_eq!(p[0]["lab"][0], 54);
+    assert_eq!(p[0]["channels"], json!([{"name": "Ink Red", "spot": true, "percent": 100}]));
+    assert_eq!(p[1]["channels"][0]["percent"], 0);
+    assert_eq!((p[0]["totalSpotInk"].as_i64(), p[1]["totalSpotInk"].as_i64()), (Some(100), Some(0)), "Total Spot Ink per point");
+}
+
+/// Lab goes through the document's profile: the same red reads more saturated (a larger a*) in
+/// an Adobe RGB document than in an sRGB one, and the sRGB document matches the sRGB maths.
+#[test]
+fn lab_readout_follows_the_document_profile() {
+    let mut s = session();
+    s.execute("edit.assignProfile", json!({"profile": "srgb"})).unwrap();
+    let srgb = readouts(&s.active().unwrap().doc, [1.0, 0.0, 0.0, 1.0]).lab;
+    let maths = photocraft_color::convert::srgb_to_lab([1.0, 0.0, 0.0]).map(|v| v.round() as i32);
+    assert!(
+        (srgb[0] - maths[0]).abs() <= 1 && (srgb[1] - maths[1]).abs() <= 1 && (srgb[2] - maths[2]).abs() <= 1,
+        "sRGB document ≈ sRGB maths: {srgb:?} vs {maths:?}"
+    );
+    s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    let adobe = readouts(&s.active().unwrap().doc, [1.0, 0.0, 0.0, 1.0]).lab;
+    assert!(adobe[1] > srgb[1] + 5, "Adobe RGB red is more saturated: a* {} vs sRGB {}", adobe[1], srgb[1]);
+    assert_eq!(readouts(&s.active().unwrap().doc, [1.0, 1.0, 1.0, 1.0]).lab, [100, 0, 0], "white is white in any RGB profile");
+    s.execute("view.colorSamplers.add", json!({"x": 1, "y": 1})).unwrap();
+    assert_eq!(points(&mut s)[0]["lab"], json!([100, 0, 0]), "points read the same way");
+}
+
+/// The public helper also accepts constructed/read-back readings: large totals must not panic.
+#[test]
+fn total_spot_ink_never_overflows() {
+    let channel = |spot, percent| ChannelReadout { name: "Synthetic".into(), spot, percent };
+    assert_eq!(total_spot_ink(&[channel(true, 100), channel(false, 100), channel(true, 75)]), 175);
+    assert_eq!(total_spot_ink(&[]), 0);
+    assert_eq!(total_spot_ink(&[channel(true, i32::MAX), channel(false, i32::MAX), channel(true, 1)]), i32::MAX);
+}

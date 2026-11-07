@@ -20,7 +20,10 @@ fn context_entries(app: &PhotocraftApp, menu: &crate::canvas_tool_menu::CanvasTo
     entries
 }
 
-/// Snapshot of everything on screen, addressable by id.
+/// Snapshot current UI state without changing the document or an open dialog's draft.
+///
+/// Reports committed Info readouts alongside upstream controls. Last-frame task-bar geometry
+/// is included only while the bar remains eligible, even before another frame is drawn.
 pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     let screen = ctx.content_rect();
     let mut dialogs: Vec<Value> =
@@ -32,7 +35,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
     // Last frame's task bar rect, unless the bar can't show now (hidden by `ui.set` before the
     // next draw).
     let task_bar_rect = app.ui.task_bar_shown.filter(|_| crate::crop_task_bar::eligible(app));
-    json!({
+    // One `json!` this size is at the macro recursion limit; further keys are added below it.
+    let mut snapshot = json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "scratch": photocraft_raster::spill::stats(),
         "memory": photocraft_raster::memory::stats(),
@@ -136,7 +140,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "jobs": crate::jobs_ui::inspect(app),
         "histogram": crate::histogram_panel::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
-    })
+    });
+    snapshot["infoPanel"] = json!(app.ui.info_panel);
+    snapshot
 }
 
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {

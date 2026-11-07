@@ -4110,3 +4110,14 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Chọn một tài liệu khác cho mỗi kênh.
 	A picked document is no longer open.	Một tài liệu đã chọn không còn mở.
 	A picked document is no longer a grayscale document of the same size.	Một tài liệu đã chọn không còn là tài liệu thang xám cùng kích thước.
+	Actual Color	Màu thực tế
+	Web Color	Màu Web
+	HSB Color	Màu HSB
+	HSL Color	Màu HSL
+	Total Ink	Tổng mực
+	Spot Channels	Kênh màu điểm
+	Alpha Channels	Kênh alpha
+	Info Panel Options	Tùy chọn bảng Thông tin
+	Readouts	Số đọc
+	Total Spot Ink	Tổng mực điểm
+	Composite opacity	Độ mờ tổng hợp
