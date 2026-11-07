@@ -4,7 +4,7 @@
 use photocraft_doc::{Effect, Layer};
 use serde::{Deserialize, Serialize};
 
-use crate::{PhotocraftApp, widgets};
+use crate::widgets;
 
 /// The effect kinds the Effect filter picks from, in Photoshop's order.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -88,8 +88,8 @@ pub fn parse(v: &serde_json::Value) -> Result<EffectKind, String> {
 }
 
 /// The Effect filter's controls: the effect kind dropdown.
-pub fn controls(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub fn controls(effect: &mut EffectKind, ui: &mut egui::Ui) {
     let kinds: Vec<(EffectKind, &str)> = EffectKind::ALL.into_iter().map(|k| (k, k.label())).collect();
     let width = ui.available_width().max(96.0);
-    widgets::dropdown(ui, "layer-filter-effect", tl!("Effect"), &mut app.ui.layer_filter_effect, &kinds, width);
+    widgets::dropdown(ui, "layer-filter-effect", tl!("Effect"), effect, &kinds, width);
 }

@@ -18,6 +18,7 @@ impl PhotocraftApp {
             self.session.authorize = gate;
         }
         let result = self.run_command(id, params);
+        crate::layer_filter_ui::retain_open(self);
         if gate.is_some() {
             self.session.authorize = None;
         }
@@ -300,6 +301,7 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
+        crate::layer_filter_ui::retain_open(self);
         // The Paths panel selection belongs to the active document. Ordinary edits replace the
         // snapshot and advance its revision; a replaced snapshot without a newer revision is a
         // reopened document, even with the same ID.
