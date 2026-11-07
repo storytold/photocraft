@@ -85,15 +85,26 @@ fn top_group(doc: &Document, id: LayerId) -> LayerId {
 }
 
 /// The layer an Auto-Select click at (x, y) picks (with `group`, its outermost group): the topmost
-/// hit, a type layer by its text bounds. Like Photoshop, it clicks through a fully locked layer
-/// (its own Lock All or a locked group's) to the layer under it (#1641); the right-click list
-/// still shows it. The click (`layer.pickAt`) and the Move tool's rollover highlight both ask
-/// here, so the outline always names the layer a click takes.
+/// movable hit, a type layer by its text bounds. It clicks through Position or All locks
+/// (including locks inherited from a group) to the layer under it; the right-click list
+/// still shows it. The Move tool's rollover highlight and `layer.pickAt` with `moveAutoSelect`
+/// use the same eligibility, so the outline names the layer the click takes.
 pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
-    let hit = layers_hit(doc, x, y, true).into_iter().find(|id| !doc.effective_locks(*id).all)?;
+    pick_target(doc, x, y, group, true)
+}
+
+/// Choose the topmost hit eligible for selection before resolving its group. An effective Lock
+/// All excludes a layer from selection here. Move Auto-Select also skips effective Position locks.
+fn pick_target(doc: &Document, x: i32, y: i32, group: bool, move_auto_select: bool) -> Option<LayerId> {
+    let hit = layers_hit(doc, x, y, true).into_iter().find(|id| {
+        let locks = doc.effective_locks(*id);
+        !locks.all && (!move_auto_select || !locks.position)
+    })?;
     Some(if group { top_group(doc, hit) } else { hit })
 }
 
+/// List the hits for a context menu or pick one layer or group. A probe leaves the selection
+/// alone. A replace click on a selected member keeps the full multi-selection for dragging.
 fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     let x = p.get("x").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `x`".into() })?.floor() as i32;
     let y = p.get("y").and_then(Value::as_f64).ok_or_else(|| EngineError::BadParams { cmd: "layer.pickAt".into(), msg: "missing `y`".into() })?.floor() as i32;
@@ -105,7 +116,8 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({ "layers": names }));
     }
     let group = p.get("target").and_then(Value::as_str) == Some("group");
-    let Some(target) = auto_select_target(&doc, x, y, group) else { return Ok(json!({ "layer": null })) };
+    let move_auto_select = p.get("moveAutoSelect").and_then(Value::as_bool).unwrap_or(false);
+    let Some(target) = pick_target(&doc, x, y, group, move_auto_select) else { return Ok(json!({ "layer": null })) };
     if p.get("select").and_then(Value::as_bool).unwrap_or(true) {
         let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
         // Like Photoshop, a plain click on one of several selected layers keeps them all
@@ -118,10 +130,10 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": target.0 }))
 }
 
-/// Layers whose content touches document rect `r`, top to bottom: visible, not fully locked, not
-/// the locked Background (as Select › All Layers). A layer on an artboard counts only where the
-/// board shows it, and without artboards only where the canvas does (#10665). With `group`, each
-/// counts as its outermost group (deduplicated).
+/// Visible layers whose content touches document rect `r`, top to bottom. The Move marquee skips
+/// the locked Background and layers with effective Position or All locks (#11102). A layer on an
+/// artboard counts only where the board shows it, and without artboards only where the canvas
+/// does (#10665). With `group`, each counts as its outermost group (deduplicated).
 pub fn layers_in_rect(doc: &Document, r: Rect, group: bool) -> Vec<LayerId> {
     let mut out = Vec::new();
     let canvas = doc.bounds();
@@ -132,7 +144,10 @@ pub fn layers_in_rect(doc: &Document, r: Rect, group: bool) -> Vec<LayerId> {
     for (path, _, l) in doc.walk().iter().rev() {
         if matches!(l.content, LayerContent::Group(_) | LayerContent::Adjustment(_))
             || doc.is_background(l.id)
-            || doc.effective_locks(l.id).all
+            || {
+                let locks = doc.effective_locks(l.id);
+                locks.position || locks.all
+            }
             || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))
         {
             continue;
@@ -172,8 +187,8 @@ fn select_in_rect(s: &mut Session, p: &Value) -> Result<Value> {
         "add" => true,
         other => return Err(EngineError::BadParams { cmd: "layer.selectInRect".into(), msg: format!("unknown mode `{other}`") }),
     };
-    // Nothing touched leaves the layer selection as it is.
-    if !hits.is_empty() {
+    // A plain marquee replaces even with no hits; Shift only adds to its base selection.
+    if !hits.is_empty() || !add {
         let mut ids = if add { s.active().map(|st| st.selected_layers()).unwrap_or_default() } else { Vec::new() };
         ids.extend(hits.iter().filter(|id| !ids.contains(id)).copied().collect::<Vec<_>>());
         crate::layer_multi_cmds::set_selection(s, ids, hits.first().copied(), hits.first().copied())?;
@@ -188,7 +203,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Select Layers in Marquee",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"width":px,"height":px,"target":"layer|group"="layer","mode":"replace|add"="replace"} → {layers} (the layers whose content touches the rect, topmost first; none leaves the selection as it is)"##,
+            params: r##"{"x":px,"y":px,"width":px,"height":px,"target":"layer|group"="layer","mode":"replace|add"="replace"} → {layers} (layers whose content touches the rect, topmost first, skipping Position and All locks; no hits clears in replace mode, preserves in add mode)"##,
             enabled: has_doc,
             journal: true,
             run: select_in_rect,
@@ -198,7 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Auto-Select Layer",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","list":bool=false (return visible layers at the point, including text bounds, topmost first)} → {layer} | {layers}"##,
+            params: r##"{"x":px,"y":px,"target":"layer|group"="layer","select":bool=true,"mode":"replace|toggle|add"="replace","moveAutoSelect":bool=false (also skip Position locks),"list":bool=false (return visible layers at the point, including text bounds, topmost first)} → {layer} | {layers}"##,
             enabled: has_doc,
             journal: false,
             run: pick,
@@ -321,7 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fully_locked_layer_is_clicked_through() {
+    fn position_and_fully_locked_layers_are_clicked_through() {
         // #1641: a locked layer on top was picked, so the drag couldn't reach the layer under it.
         let (mut s, a, _) = two_squares();
         s.execute("layer.new.layer", json!({"name": "Top"})).unwrap();
@@ -330,10 +345,12 @@ mod tests {
         s.execute("select.deselect", json!({})).unwrap();
         let top = s.active().unwrap().active_layer.unwrap();
         let lock = |s: &mut Session, id: u64, locks: Value| s.execute("layer.setProps", json!({"layer": id, "locks": locks})).unwrap();
-        let pick = |s: &mut Session| s.execute("layer.pickAt", json!({"x": 5, "y": 5})).unwrap()["layer"].clone();
+        let pick = |s: &mut Session| s.execute("layer.pickAt", json!({"x": 5, "y": 5, "moveAutoSelect": true})).unwrap()["layer"].clone();
         assert_eq!(pick(&mut s), top.0);
-        // A position lock alone doesn't hide it from Auto-Select.
+        // Position and All locks are both skipped; Image Pixels still permits picking.
         lock(&mut s, top.0, json!({"position": true}));
+        assert_eq!(pick(&mut s), a.0);
+        lock(&mut s, top.0, json!({"position": false, "pixels": true}));
         assert_eq!(pick(&mut s), top.0);
         lock(&mut s, top.0, json!({"all": true}));
         assert_eq!(pick(&mut s), a.0);
@@ -346,12 +363,14 @@ mod tests {
         s.execute("layer.select", json!({"layer": top.0})).unwrap();
         let g = s.execute("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
         assert_eq!(pick(&mut s), top.0);
+        lock(&mut s, g, json!({"position": true}));
+        assert_eq!(pick(&mut s), a.0);
         lock(&mut s, g, json!({"all": true}));
         assert_eq!(pick(&mut s), a.0);
         // Nothing unlocked under the point: no pick.
         lock(&mut s, a.0, json!({"all": true}));
         let bg = s.active().unwrap().doc.layers[0].id;
-        assert_eq!(pick(&mut s), bg.0);
+        assert_eq!(pick(&mut s), Value::Null, "the Background's effective position lock also excludes it");
         lock(&mut s, bg.0, json!({"all": true}));
         assert_eq!(pick(&mut s), Value::Null);
     }
@@ -412,6 +431,8 @@ mod tests {
         assert_eq!(menu["layers"][1]["layer"], bg.0);
     }
 
+    /// A marquee normalizes reversed bounds and extends the existing selection in add mode.
+    /// An empty marquee preserves the selection in add mode and clears it in replace mode.
     #[test]
     fn a_marquee_selects_the_layers_it_touches() {
         let (mut s, a, b) = two_squares();
@@ -426,9 +447,10 @@ mod tests {
         // Touching A's corner only (dragged up and left); never the empty layer or the Background.
         assert_eq!(sel(&mut s, [-5.0, -5.0, 6.0, 6.0], "layer", "replace"), (vec![a.0], vec![a.0]));
         assert_eq!(sel(&mut s, [50.0, 50.0, -27.0, -27.0], "layer", "replace"), (vec![b.0], vec![b.0]));
-        // ⇧ adds; a box over nothing leaves the selection alone.
+        // ⇧ adds and an empty additive box preserves; an empty plain box clears.
         assert_eq!(sel(&mut s, [0.0, 0.0, 5.0, 5.0], "layer", "add"), (vec![a.0], vec![a.0, b.0]));
-        assert_eq!(sel(&mut s, [11.0, 11.0, 8.0, 8.0], "layer", "replace"), (vec![], vec![a.0, b.0]));
+        assert_eq!(sel(&mut s, [11.0, 11.0, 8.0, 8.0], "layer", "add"), (vec![], vec![a.0, b.0]));
+        assert_eq!(sel(&mut s, [11.0, 11.0, 8.0, 8.0], "layer", "replace"), (vec![], vec![]));
         assert_eq!(sel(&mut s, [-10.0, -10.0, 60.0, 60.0], "layer", "replace"), (vec![b.0, a.0], vec![a.0, b.0]));
         // Group mode selects the outermost group; a hidden or fully locked layer is skipped.
         s.execute("layer.select", json!({"layer": a.0})).unwrap();

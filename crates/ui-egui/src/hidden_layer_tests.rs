@@ -47,9 +47,8 @@ fn bounds(app: &PhotocraftApp, id: LayerId) -> Rect {
 #[test]
 fn auto_select_skips_hidden_layers() {
     let (mut app, id) = app(Tool::Move);
-    let bg = app.session.active().unwrap().doc.layers[0].id;
     drag(&mut app, [16.0, 16.0], [30.0, 16.0]);
-    assert_eq!(app.session.active().unwrap().active_layer, Some(bg), "the visible layer under the pointer was picked");
+    assert!(app.session.active().unwrap().selected_layers().is_empty(), "the hidden layer and locked Background are skipped");
     assert_eq!(bounds(&app, id), Rect::new(8, 8, 24, 24), "the hidden layer stayed put");
 }
 
