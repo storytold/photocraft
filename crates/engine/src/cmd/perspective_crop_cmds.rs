@@ -8,12 +8,15 @@
 //! Background over the background colour where the quad reaches past the image, and pixels outside
 //! the quad are deleted (Photoshop's Perspective Crop has no Delete Cropped Pixels option).
 //!
-//! Type, shape, fill and smart object layers are rasterized first: a projective map has no
-//! editable equivalent for them. Vector masks, paths, notes, slices and guides follow the affine
-//! map closest to the homography (exact when the quad is a parallelogram).
+//! A document holding a type layer or a smart object anywhere, and a Bitmap mode document, are
+//! refused with the tool's alerts ([`UNSUPPORTED_LAYERS_ERROR`] and [`BITMAP_MODE_ERROR`], #11799)
+//! before anything is rasterized or warped, so the document stays exactly as it was. Shape and fill
+//! layers are rasterized first: a projective map has no editable equivalent for them (keeping them
+//! live is #11800). Vector masks, paths, notes, slices and guides follow the affine map closest to
+//! the homography (exact when the quad is a parallelogram).
 
 use photocraft_algo::transform::{Homography, Interp, convex_quad, quad_size, quad_to_rect, warp_surface_clipped};
-use photocraft_color::PixelFormat;
+use photocraft_color::{ColorMode, PixelFormat};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::{Affine, Rect};
 use photocraft_raster::Surface;
@@ -29,6 +32,34 @@ const MAX_SIDE: u32 = 300_000;
 const MAX_COORD: f64 = 1e7;
 /// The highest resolution (ppi) the crop may set, as for Image Size.
 const MAX_RESOLUTION: f64 = 10_000.0;
+
+/// The reference's alert when the document holds a layer the tool can't map (#11799): an alert with
+/// only an OK button on the tool's first press. The UI shows this text through `tl!` (English is
+/// the catalog source); the command returns it as its error.
+pub const UNSUPPORTED_LAYERS_ERROR: &str = "Could not use the perspective crop tool because the image contains unsupported layers types.";
+/// The reference's alert for a Bitmap mode document (#11799), shown the same way.
+pub const BITMAP_MODE_ERROR: &str =
+    "Could not use the perspective crop tool because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
+/// Does `doc` hold a layer the perspective crop can't map: a type layer or a smart object, anywhere
+/// in it - visible or hidden, active or not, also inside a group (#11799)? The alert is about the
+/// document, not the targeted layer. Shape, fill, adjustment, pixel and group layers do not refuse
+/// it (measured); keeping shape and fill layers live is #11800.
+pub fn has_unsupported_layers(doc: &Document) -> bool {
+    doc.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Text(_) | LayerContent::Smart(_)))
+}
+
+/// The alert `doc` gets instead of a perspective crop, or `None` when the crop can go through
+/// (#11799). The text is exactly what `image.perspectiveCrop` answers with, so the tool can refuse
+/// the press with what the command would later refuse. Bitmap is checked first: converting to
+/// Bitmap flattens the document (`mode_cmds`), so a Bitmap document never holds a type layer or a
+/// smart object and the order is not observable.
+pub fn refusal(doc: &Document) -> Option<&'static str> {
+    if doc.mode == ColorMode::Bitmap {
+        return Some(BITMAP_MODE_ERROR);
+    }
+    has_unsupported_layers(doc).then_some(UNSUPPORTED_LAYERS_ERROR)
+}
 
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: CMD.into(), msg: msg.into() }
@@ -220,12 +251,15 @@ fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
     let res = resolution(p)?;
     let interp = interpolation(p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    // #11799: what the reference answers with an alert, it answers before it touches anything: no
+    // rasterization, no warp, no history step. The tool shows the same text on the press.
+    if let Some(msg) = refusal(&d.doc) {
+        return Err(EngineError::Other(msg.into()));
+    }
     crate::image_cmds::check_resample_budget(CMD, &d.doc, w, h, "")?;
-    let rasterize = d
-        .doc
-        .walk()
-        .iter()
-        .any(|(_, _, l)| matches!(l.content, LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Fill(_) | LayerContent::Smart(_)));
+    // A type layer or a smart object can't get here (they are refused above), so only shape and
+    // fill layers are ever rasterized (#11800 is about keeping those live).
+    let rasterize = d.doc.walk().iter().any(|(_, _, l)| matches!(l.content, LayerContent::Shape(_) | LayerContent::Fill(_)));
     let map = quad_to_rect(&q, f64::from(w), f64::from(h)).ok_or_else(|| bad("the corners don't define a perspective"))?;
     let bg = s.tools.background;
     // The Color Sampler points follow their pixels through the homography, which the edit's
@@ -259,7 +293,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Perspective Crop",
         menu: &[],
         shortcut: None,
-        params: r##"{"corners":[[x,y],[x,y],[x,y],[x,y]] (top-left, top-right, bottom-right, bottom-left; a convex quad, document px),"width":px,"height":px,"resolution":ppi,"interpolation":"bicubic|bilinear|nearest"="bicubic"} → {width,height,resolution,corners} (the quad is mapped onto an upright width x height canvas, all layers, one undo step; no width/height: the quad's mean side lengths, one alone keeps its proportions; type, shape, fill and smart object layers are rasterized)"##,
+        params: r##"{"corners":[[x,y],[x,y],[x,y],[x,y]] (top-left, top-right, bottom-right, bottom-left; a convex quad, document px),"width":px,"height":px,"resolution":ppi,"interpolation":"bicubic|bilinear|nearest"="bicubic"} → {width,height,resolution,corners} (the quad is mapped onto an upright width x height canvas, all layers, one undo step; no width/height: the quad's mean side lengths, one alone keeps its proportions; shape and fill layers are rasterized; refused with the tool's alert, and nothing changes: a document holding a type layer or a smart object anywhere, hidden or inside a group included, answers "Could not use the perspective crop tool because the image contains unsupported layers types.", a Bitmap mode document "Could not use the perspective crop tool because it does not work with Bitmap images (convert image to Grayscale mode to edit).")"##,
         enabled: has_doc,
         run: perspective_crop,
         journal: true,
