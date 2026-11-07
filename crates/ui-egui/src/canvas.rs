@@ -1422,12 +1422,13 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         // CursorIcon::None hides the pointer; the curved arrow has to be drawn or the
         // rotate zone looks like a plain cursor (#4050).
         let d = xf.to_doc(p);
-        // Not with Alt held, which shows the reference point's pointer there instead.
-        if let Some(k) = crate::transform_tool::rotate_cursor_dir(app, d).filter(|_| c == egui::CursorIcon::None) {
+        // Not with Alt held, which shows the reference point's pointer there instead (#11683).
+        let reference = c == egui::CursorIcon::None && crate::transform_tool::shows_reference_pointer(app, d, mods);
+        if let Some(k) = crate::transform_tool::rotate_cursor_dir(app, d).filter(|_| c == egui::CursorIcon::None && !reference) {
             let toward = xf.to_screen((d[0] + k[0] * 16.0) as f32, (d[1] + k[1] * 16.0) as f32) - p;
             crate::crop_ui::draw_turn_cursor(ctx, p, toward);
         } else if c == egui::CursorIcon::None {
-            // Likewise the distort and skew pointers over a handle (#5405).
+            // Likewise the reference point's pointer, and the distort and skew ones over a handle (#5405).
             crate::transform_tool::draw_handle_cursor(app, ctx, xf, p, mods);
         }
     } else if let Some(c) = response.hover_pos().and_then(|p| crate::symmetry_ui::cursor(app, xf, xf.to_doc(p))) {

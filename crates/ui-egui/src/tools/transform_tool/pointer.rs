@@ -329,6 +329,33 @@ pub(super) fn handle_at(app: &PhotocraftApp, t: &TransformSession, p: [f64; 2], 
     app.transform_preview.as_ref().and_then(|pv| pv.gesture.map(|g| g.hit)).unwrap_or_else(|| box_hit(app, t, p, tol))
 }
 
+/// Whether a transform drag is in progress. Its pointer then stays the one the press started with:
+/// the reference application's pointers during a drag were not measured (#11683).
+fn drag_in_progress(app: &PhotocraftApp) -> bool {
+    app.transform_preview.as_ref().is_some_and(|pv| pv.gesture.is_some())
+}
+
+/// The pointer for handle `h` where a press puts the reference point: Alt held away from the corner
+/// and edge handles (inside the box, outside it and in the rotation zone), or the shown reference
+/// point itself. A press there places the point ([`pointer`]), so the pointer says so: the reference
+/// application draws an arrowhead with a small target circle, which the canvas paints where this
+/// hides the system pointer (`draw_handle_cursor`, #11683). `None` elsewhere. While a drag runs the
+/// pointer stays the one the press started with, and Content-Aware Scale keeps today's crosshair:
+/// neither was measured (#11683).
+pub(crate) fn reference_pointer(t: &TransformSession, h: Hit, mods: egui::Modifiers, dragging: bool) -> Option<CursorIcon> {
+    if dragging || !(h == Hit::Pivot || (mods.alt && matches!(h, Hit::Inside | Hit::Outside))) {
+        return None;
+    }
+    Some(if t.content_aware.is_some() { CursorIcon::Crosshair } else { CursorIcon::None })
+}
+
+/// Whether the canvas paints the reference point's pointer at document point `p` of the open box:
+/// what [`cursor`] hid the system pointer for there.
+pub(crate) fn shows_reference_pointer(app: &PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) -> bool {
+    let Some(t) = app.ui.transform.as_ref() else { return false };
+    reference_pointer(t, handle_at(app, t, p, handle_tolerance(app)), mods, drag_in_progress(app)) == Some(CursorIcon::None)
+}
+
 /// Cursor for hovering a document point while transforming. `xf` is the canvas's view;
 /// `mods` provides modifier keys (Command for Distort on corners / Skew on edges; Alt/Command for quick split in warp).
 pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], mods: egui::Modifiers) -> Option<CursorIcon> {
@@ -353,10 +380,10 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], mods: egui::Modi
         return Some(if w.mesh.as_ref().and_then(|m| surface_at(m, p)).is_some() { CursorIcon::Grab } else { CursorIcon::Default });
     }
     let h = handle_at(app, t, p, tol);
-    // Alt off the handles, inside or outside the box (the rotation zone too): a press places the
-    // reference point there (`pointer`), and the reference application shows its pointer.
-    if mods.alt && matches!(h, Hit::Inside | Hit::Outside) && app.transform_preview.as_ref().is_none_or(|pv| pv.gesture.is_none()) {
-        return Some(CursorIcon::Crosshair);
+    // Alt off the handles, inside or outside the box (the rotation zone too), and a shown reference
+    // point: a press there places the point, so its own pointer shows (`reference_pointer`).
+    if let Some(icon) = reference_pointer(t, h, mods, drag_in_progress(app)) {
+        return Some(icon);
     }
     if !mode_allows(t.mode, h) || (t.content_aware.is_some() && h == Hit::Outside) {
         return Some(CursorIcon::Default);
@@ -381,6 +408,7 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], mods: egui::Modi
         Hit::Corner(_) | Hit::Edge(_) if indicator.is_some() => CursorIcon::None,
         Hit::Corner(i) => crate::tool_cursor::corner_resize(&t.quad, i, xf),
         Hit::Edge(i) => resize(edge_mid(i + 2), edge_mid(i)),
+        // Only while a press is dragging the point: hovering it takes the drawn pointer above.
         Hit::Pivot => CursorIcon::Crosshair,
         Hit::Inside => CursorIcon::Move,
         Hit::Outside => CursorIcon::Alias,
