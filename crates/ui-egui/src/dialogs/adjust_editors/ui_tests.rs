@@ -819,6 +819,40 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
     h
 }
 
+/// #10108: the Levels histogram stretches with the panel instead of stopping at 300 points.
+#[test]
+fn levels_histogram_fills_the_panel_width() {
+    use crate::adjust_editors::{EditorCx, editor};
+    for width in [300.0, 600.0] {
+        let mut h = Harness::builder().with_size(vec2(width, 500.0)).build_ui_state(
+            |ui, values: &mut serde_json::Value| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("lv"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: false,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                let avail = ui.available_width();
+                editor(ui, "levels", values, &cx);
+                ui.data_mut(|d| d.insert_temp(egui::Id::unique("lv-avail"), avail));
+            },
+            json!({}),
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        let hist = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("lv").with("levels-hist"))).expect("histogram drawn");
+        let avail = h.ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("lv-avail"))).unwrap();
+        assert!((hist.width() - avail).abs() < 0.5, "{width}: histogram {} of {avail}", hist.width());
+    }
+}
+
 /// #9242: the Hue/Saturation spectrum bars stretch with the panel, like the sliders above them.
 #[test]
 fn hue_saturation_bars_fill_the_panel_width() {
