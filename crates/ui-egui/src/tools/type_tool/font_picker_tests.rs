@@ -1463,6 +1463,27 @@ fn the_class_list_narrows_the_fonts_and_all_classes_brings_them_back() {
     assert!(h.query_by_label("Family 10").is_some(), "unclassified fonts are back");
 }
 
+/// Font class filter buttons must fill the column width so short labels like "Serif"
+/// share the full hit area with "All Classes" (#10083).
+#[test]
+fn font_class_buttons_fill_the_class_column() {
+    let mut h = filter_harness();
+    let serif = h.get_by_label("Serif").rect();
+    let all = h.get_by_label("All Classes").rect();
+    let expected = crate::font_filters::CLASS_COLUMN_WIDTH;
+    assert_eq!(serif.width(), all.width(), "buttons should have the same width");
+    assert!((serif.width() - expected).abs() <= 1.0, "button width {} != {expected}", serif.width());
+
+    // Clicking near the right edge of the Serif row selects Serif.
+    let right_edge = egui::pos2(serif.right() - 2.0, serif.center().y);
+    h.event(egui::Event::PointerMoved(right_edge));
+    h.event(egui::Event::PointerButton { pos: right_edge, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: right_edge, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run();
+    assert!(h.query_by_label("Family 00").is_some(), "clicking right edge of Serif selects it");
+    assert!(h.query_by_label("Family 03").is_none());
+}
+
 #[test]
 fn variable_and_similar_filters_and_clear_all() {
     let mut h = filter_harness();
