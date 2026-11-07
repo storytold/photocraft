@@ -1,6 +1,8 @@
 use super::options_bar::reveal_focused_control;
 use super::{Align2, Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, StrokeKind, Tokens, Tool, c32, icons, json, pos2, vec2};
 
+mod gestures;
+
 // ----------------------------------------------------------------------------- toolbar
 
 /// Tool groups separated by hairlines, Photoshop order.
@@ -150,6 +152,7 @@ fn more_slot_flyout(app: &mut PhotocraftApp, ui: &mut egui::Ui, button: &egui::R
     }
 }
 
+/// Render tool selection and view gestures without changing document content.
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
@@ -190,13 +193,15 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
             let flyout_id = egui::Id::unique("tool-flyout");
             let held_id = flyout_id.with("held");
-            if ui.input(|i| i.pointer.any_pressed()) {
+            let pointer = gestures::read(ui, flyout_id);
+            let released = pointer.released;
+            if (pointer.started_press && !released) || (pointer.interrupted_before_release && !pointer.active_press) {
                 ui.data_mut(|d| d.remove::<egui::Id>(held_id));
             }
             // No tool tooltips over an open flyout, or while a button is held to open one (#4450):
             // Photoshop shows none there. (The flyout is our own Area, so egui's rule for popups
             // doesn't hide them.)
-            let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !ui.input(|i| i.pointer.primary_down());
+            let tool_tips = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_none() && !pointer.active_press;
             let ctx = ui.ctx().clone();
             let footer = (if t.pro { 8.0 } else { 14.0 })
                 + chips_height(t.pro, t.round_chips, t.round_chips && double)
@@ -213,6 +218,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 .show(ui, |ui| {
                     // Pro has no group dividers, so its two columns fill every row across groups.
                     let sections: Vec<Vec<(usize, Vec<Tool>)>> = if t.pro { vec![sections.into_iter().flatten().collect()] } else { sections };
+                    let mut controls = Vec::new();
                     for (si, section) in sections.iter().enumerate() {
                         // Photoshop 2026 draws one uninterrupted column (no group dividers).
                         if si > 0 && !t.pro {
@@ -237,62 +243,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     if slot.len() > 1 {
                                         paint_toolbar_flyout_indicator(ui, &t, &resp);
                                     }
-                                    // Plain click selects the shown tool; Alt/Option-click cycles the
-                                    // flyout slot to the next tool, as Shift+letter does for the key group.
-                                    // Prefer the primary-release event's modifiers (Alt may already be
-                                    // up), and only a release on this slot — the frame's event list is
-                                    // shared with every other widget.
-                                    let click_mods =
-                                        ui.input(|i| {
-                                            i.events
-                                                .iter()
-                                                .rev()
-                                                .find_map(|e| match e {
-                                                    egui::Event::PointerButton {
-                                                        pos, button: egui::PointerButton::Primary, pressed: false, modifiers, ..
-                                                    } if resp.rect.contains(*pos) => Some(*modifiers),
-                                                    _ => None,
-                                                })
-                                                .unwrap_or(i.modifiers)
-                                        });
-                                    let alt = click_mods.alt;
-                                    let modified = click_mods.alt || click_mods.shift || click_mods.ctrl || click_mods.command;
-                                    // egui's double-click ignores modifiers: a plain click after a
-                                    // modified click within max_double_click_delay still reports
-                                    // double_clicked(). Remember the previous click so Hand fit /
-                                    // Zoom 100% only run for two plain clicks.
-                                    let prev_mod_id = key.with("click-mod");
-                                    let prev_modified = ui.data(|d| d.get_temp::<bool>(prev_mod_id)).unwrap_or(false);
-                                    let slot_click = resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key);
-                                    if slot_click {
-                                        let pick = if slot.len() > 1 && alt {
-                                            let from = if slot.contains(&app.ui.tool) { app.ui.tool } else { tool };
-                                            next_slot_tool(slot, from)
-                                        } else {
-                                            tool
-                                        };
-                                        crate::tool_memory::select(app, pick);
-                                    }
-                                    // Double-clicking the Hand tool fits the image on screen (Photoshop).
-                                    // Modified clicks only cycle / select: a second rapid Alt-click, or a
-                                    // plain click that egui pairs with a prior modified click, must not
-                                    // count as Hand/Zoom double-click after cycling onto those tools.
-                                    let plain_double = resp.double_clicked() && !modified && !prev_modified;
-                                    if plain_double && tool == Tool::Hand {
-                                        crate::tool_memory::select(app, tool);
-                                        // With no document open there is nothing to fit.
-                                        let _ = app.run("view.fitOnScreen", json!({}));
-                                    }
-                                    if plain_double && tool == Tool::Zoom {
-                                        crate::tool_memory::select(app, tool);
-                                        let _ = app.run("view.actualPixels", json!({}));
-                                    }
-                                    if slot_click {
-                                        ui.data_mut(|d| d.insert_temp(prev_mod_id, modified));
-                                    }
-                                    // Right-click, long-press, or press-drag away opens the flyout (Photoshop).
-                                    let held_for =
-                                        resp.is_pointer_button_down_on().then(|| ui.input(|i| i.pointer.press_start_time().map(|t0| i.time - t0))).flatten();
+                                    let held = ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
+                                    controls.push(gestures::Control::Slot { target: gestures::Target::new(&resp), tools: slot, key, displayed: tool, held });
+                                    // Retained contact ownership also preserves its original long-press deadline.
+                                    let held_for = pointer.press_on(ui, &resp).then(|| pointer.press_started_at.map(|t0| ui.input(|i| i.time) - t0)).flatten();
                                     if slot.len() > 1
                                         && let Some(seconds) = held_for
                                         && seconds < 0.35
@@ -300,8 +254,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(0.35 - seconds));
                                     }
                                     let long_press = held_for.is_some_and(|seconds| seconds >= 0.35);
-                                    let drag_open = ui
-                                        .input(|i| tool_flyout_drag_open(resp.rect, i.pointer.press_origin(), i.pointer.hover_pos(), i.pointer.primary_down()));
+                                    let drag_open = pointer.drag_open(ui, &resp);
                                     // Clicking the button of its open flyout again, with either button, closes
                                     // it (#4932); the release that ends the long press that opened it doesn't.
                                     let open_here = ui.data(|d| d.get_temp::<(egui::Id, Rect)>(flyout_id)).is_some_and(|(k, _)| k == key);
@@ -380,26 +333,25 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                                 t.text_dim,
                                                             );
                                                         }
-                                                        let drag_release = tool_flyout_release(
-                                                            r,
-                                                            ui.input(|i| i.pointer.hover_pos()),
-                                                            ui.input(|i| i.pointer.primary_released()),
-                                                            ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key),
-                                                        );
-                                                        if ir.clicked() || drag_release {
-                                                            crate::tool_memory::select(app, item);
-                                                            ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                                        }
+                                                        let held = released && ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key);
+                                                        controls.push(gestures::Control::Row {
+                                                            target: gestures::Target::new(&ir),
+                                                            key,
+                                                            displayed: tool,
+                                                            tool: item,
+                                                            held,
+                                                        });
                                                     }
                                                 });
                                             },
                                         );
                                         // Any press outside the flyout and its button closes it, as in Photoshop: a
                                         // drag on the canvas (cropping, painting) isn't a click (#4460).
-                                        let pressed_outside = ui.input(|i| {
-                                            i.pointer.any_pressed()
-                                                && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !resp.rect.contains(p))
-                                        });
+                                        let pressed_outside = pointer.new_pointer_press
+                                            && ui.input(|i| {
+                                                i.pointer.any_pressed()
+                                                    && i.pointer.press_origin().is_some_and(|p| !area.response.rect.contains(p) && !resp.rect.contains(p))
+                                            });
                                         if pressed_outside || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                                             ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
                                         }
@@ -408,6 +360,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             });
                         }
                     }
+                    pointer.apply(ui, app, &controls);
                     let more = icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…"));
                     if more.clicked()
                         && let Err(e) = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}))
@@ -418,6 +371,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     more_slot_flyout(app, ui, &more, &t);
                     reveal_focused_control(ui);
                 });
+            if released || (pointer.interrupted_after_release() && !pointer.active_press) {
+                ui.data_mut(|d| d.remove::<egui::Id>(held_id));
+            }
+            pointer.finish(ui);
             ui.add_space(if t.pro { 8.0 } else { 14.0 });
             // Centred in the tool column as it is before the tools scroll: a scroll bar widens the
             // UI it is in, and the chips moved over by its width (#7316).
@@ -692,3 +649,6 @@ fn chip_command(app: &mut PhotocraftApp, id: &str) {
         crate::type_tool::foreground_changed(app);
     }
 }
+
+#[cfg(test)]
+mod gesture_tests;
