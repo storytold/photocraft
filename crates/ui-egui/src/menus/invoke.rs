@@ -10,6 +10,7 @@ pub(crate) fn panel_alias(id: &str) -> Option<&'static str> {
         "navigator" | "info" | "histogram" => "window.toggle.navigator",
         "tools" => "window.toggle.toolbar",
         "options" => "window.toggle.options",
+        "contextualTaskBar" => "window.toggle.contextualTaskBar",
         "brushSettings" => "window.toggle.brushSettings",
         "brushes" => "window.toggle.brushes",
         _ => return None,
@@ -688,6 +689,10 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
             Some(crate::sizing::open(app, sz).map(|dialog| json!({"dialog": dialog})).ok_or_else(|| "no document".to_string()))
         }
         "view.newGuide" if params.as_object().is_none_or(|object| object.is_empty()) => Some(Ok(json!({"dialog": crate::new_guide_ui::open(app)}))),
+        // Image › Adjustments › Equalize with a selection asks what to equalize, as in Photoshop.
+        crate::equalize_ui::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) && crate::equalize_ui::asks(app) => {
+            Some(Ok(json!({"dialog": crate::equalize_ui::open(app)})))
+        }
         fl if crate::filter_dialog::has_dialog(fl) && params.as_object().is_none_or(|object| object.is_empty()) => {
             Some(Ok(json!({"dialog": crate::filter_dialog::open(app, fl)})))
         }
@@ -805,6 +810,7 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
         "navigator" => &mut panels.navigator,
         "toolbar" => &mut panels.toolbar,
         "options" => &mut panels.options_bar,
+        "contextualTaskBar" => &mut panels.context_task_bar,
         "brushSettings" => &mut panels.brush_settings,
         "brushes" => &mut panels.brushes,
         "dock" => &mut panels.dock,

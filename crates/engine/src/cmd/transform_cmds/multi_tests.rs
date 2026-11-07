@@ -91,13 +91,17 @@ fn the_layers_param_names_the_layers_and_a_listed_group_carries_its_children() {
 }
 
 #[test]
-fn the_background_stays_out_of_a_selection_of_several() {
+fn the_background_among_a_selection_of_several_refuses_as_locked() {
+    // Photoshop shows its locked-layer alert rather than leaving the Background out (#11101).
     let (mut s, paint, text) = two_layers();
     let bg = s.active().unwrap().doc.layers[0].id;
     s.execute("layer.select", json!({"layer": bg.0, "mode": "add"})).unwrap();
-    let r = s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 3, 0]})).unwrap();
-    assert_eq!(r["layers"], json!([paint.0, text.0]));
     let st = s.active().unwrap();
+    let (before, revision) = (st.doc.clone(), st.revision);
+    let err = s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 3, 0]})).unwrap_err().to_string();
+    assert!(err.contains("\"Background\" is locked"), "{err}");
+    let st = s.active().unwrap();
+    assert!(st.doc == before && st.revision == revision, "nothing moved, not even {paint:?} or {text:?}");
     assert!(st.doc.is_background(bg), "still the Background");
     assert_eq!(st.doc.layer(bg).unwrap().surface().unwrap().content_bounds(), Rect::new(0, 0, 200, 200));
 }

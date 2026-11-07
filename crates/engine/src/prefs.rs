@@ -100,6 +100,11 @@ choice!(
     /// pointer (Photoshop), or erase with the current brush while dragging (Krita, Paint).
     RightClickPaint { BrushPicker = "brushPicker", Erase = "erase" } default BrushPicker
 );
+choice!(
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    TabletInput { WindowsInk = "windowsInk", WinTab = "winTab" } default WindowsInk
+);
 choice!(OtherCursor { Standard = "standard", Precise = "precise" } default Standard);
 choice!(CheckerSize { None = "none", Small = "small", Medium = "medium", Large = "large" } default Medium);
 choice!(CheckerColors { Light = "light", Medium = "medium", Dark = "dark", Red = "red", Orange = "orange", Green = "green", Blue = "blue", Purple = "purple", Custom = "custom" } default Light);
@@ -222,6 +227,10 @@ pub struct General {
     pub export_clipboard: bool,
     pub resize_image_during_place: bool,
     pub always_create_smart_objects_when_placing: bool,
+    /// Place files without opening Free Transform on them (#8492). Only the interactive place
+    /// (File ▸ Place, canvas drops) opens Free Transform; `file.placeEmbedded`/`file.placeLinked`
+    /// run with a `path` (actions, scripts, automation) never do, so this doesn't affect them.
+    pub skip_transform_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
     /// Wheel zoom eases over the frames of a notch; off, a notch is one instant ×1.1 step.
@@ -242,6 +251,7 @@ impl Default for General {
             export_clipboard: true,
             resize_image_during_place: true,
             always_create_smart_objects_when_placing: true,
+            skip_transform_when_placing: false,
             zoom_with_scroll_wheel: false,
             animated_zoom: true,
             zoom_resizes_windows: false,
@@ -287,9 +297,6 @@ pub struct Interface {
     /// objects in a large document stay visible (Photoshop's Clip Thumbnails to Layer Bounds; #4281).
     pub clip_thumbnails_to_layer_bounds: bool,
     pub show_tooltips: bool,
-    /// Menus, popups and collapsing sections fade and slide, and scroll areas glide to a new
-    /// position. Off, everything changes at once (a reduced-motion mode; #1218, #3273).
-    pub enable_animations: bool,
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
@@ -330,7 +337,6 @@ impl Default for Interface {
             show_menu_colors: true,
             clip_thumbnails_to_layer_bounds: false,
             show_tooltips: true,
-            enable_animations: true,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
             show_file_name_in_title: true,
@@ -396,6 +402,9 @@ pub struct Tools {
     pub right_click_with_painting_tools: RightClickPaint,
     /// Pen tablets: pressure, tilt and rotation reach the brush (off: a pen paints like a mouse).
     pub use_tablet_pressure: bool,
+    /// Windows: which pen input supplies pressure. Windows Ink is the default; WinTab needs
+    /// Windows Ink turned off in the tablet driver's utility and a restart.
+    pub tablet_input: TabletInput,
     /// Pen pressure response: `[input, output]` control points in 0..1 that the pen's pressure
     /// passes through before it reaches any brush ([`PressureCurve`]). Linear by default.
     pub pressure_curve: Vec<[f32; 2]>,
@@ -423,6 +432,7 @@ impl Default for Tools {
             double_click_layer_mask_launches_select_and_mask: true,
             right_click_with_painting_tools: RightClickPaint::BrushPicker,
             use_tablet_pressure: true,
+            tablet_input: TabletInput::WindowsInk,
             pressure_curve: vec![[0.0, 0.0], [1.0, 1.0]],
             bundle_nudges: true,
             nudge_bundle_pause_ms: 1000,
@@ -1291,6 +1301,10 @@ pub struct Preferences {
     /// Last selected tool, restored at launch. A tool-name string owned and validated by the
     /// shell; null in older files. Kept separate from tool options so neither overwrites the other.
     pub selected_tool: Value,
+    /// The tools used last, most recent first, restored at launch so each toolbar slot shows the
+    /// tool it was left on and each tool key brings it back, as in Photoshop (#3569). Tool-name
+    /// strings owned and validated by the shell; null in older files.
+    pub group_tools: Value,
     /// View › Extras, the View › Show items (Pixel Grid, Grid, Guides, …) and the View › Snap To
     /// targets that differ from their defaults, saved as the user toggles them and restored at
     /// launch, as Photoshop keeps them between sessions (#3762). JSON owned by the shell.
