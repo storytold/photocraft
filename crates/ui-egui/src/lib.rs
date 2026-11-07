@@ -261,7 +261,7 @@ pub use services::{
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
     LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
-    SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
+    SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -286,6 +286,7 @@ pub use tools::crop_presets;
 pub use tools::crop_shield;
 pub use tools::crop_size;
 pub use tools::crop_straighten;
+pub use tools::crop_task_bar;
 pub use tools::crop_ui;
 pub use tools::direct_select;
 pub use tools::eraser_ui;
@@ -306,6 +307,7 @@ pub use tools::perspective_crop_ui;
 pub use tools::perspective_ui;
 pub use tools::puppet_ui;
 pub use tools::retouch_ui;
+pub use tools::shape_bounds_box;
 use tools::shape_gradient_ui;
 use tools::shape_options;
 use tools::shape_paint_ui;
@@ -758,6 +760,11 @@ impl SyntheticTarget {
 }
 
 #[cfg(test)]
+mod artboard_add_mode_tests;
+#[cfg(test)]
+mod shape_bounds_box_tests;
+
+#[cfg(test)]
 mod lifecycle_tests;
 
 #[cfg(test)]
@@ -793,11 +800,21 @@ mod layer_shortcut_tests;
 #[cfg(test)]
 mod live_retouch_tests;
 #[cfg(test)]
+mod lock_layers_shortcut_tests;
+#[cfg(test)]
 mod pencil_tests;
+#[cfg(test)]
+mod smart_objects_menu_tests;
 #[cfg(test)]
 mod tool_options_theme_tests;
 #[cfg(test)]
+mod tool_shift_cycle_order_tests;
+#[cfg(test)]
 mod tool_shortcut_tests;
+#[cfg(test)]
+mod toolbar_group_order_tests;
+#[cfg(test)]
+mod toolbar_more_slot_flyout_tests;
 
 #[cfg(test)]
 mod pixel_aspect_tests;
@@ -832,12 +849,20 @@ mod transform_reference_point_tests;
 mod transform_several_tests;
 
 #[cfg(test)]
+mod transform_selection_rules_tests;
+
+#[cfg(test)]
 mod psd_open_tests;
 #[cfg(test)]
 mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod move_history_names_tests;
+#[cfg(test)]
+mod move_shift_diagonal_tests;
 
 #[cfg(test)]
 mod new_group_button_tests;
@@ -894,7 +919,12 @@ mod field_wheel_app_tests;
 mod dropdown_press_tests;
 
 #[cfg(test)]
+mod marquee_press_mods_tests;
+#[cfg(test)]
 mod marquee_tests;
+
+#[cfg(test)]
+mod single_line_marquee_move_tests;
 
 #[cfg(test)]
 mod guide_cursor_tests;
@@ -917,10 +947,14 @@ mod stamp_tests;
 #[cfg(test)]
 mod alt_click_tests;
 #[cfg(test)]
+mod artboard_first_board_tests;
+#[cfg(test)]
 mod status_bar_tests;
 #[cfg(test)]
 mod stroke_timing_tests;
 
+#[cfg(test)]
+mod polygon_lasso_step_snap_tests;
 #[cfg(test)]
 mod polygon_lasso_tests;
 
@@ -940,4 +974,17 @@ mod select_and_mask_button_tests;
 mod saved_path_edit_tests;
 
 #[cfg(test)]
+mod menu_item_labels_tests;
+#[cfg(test)]
 mod pen_path_ownership_tests;
+
+#[cfg(test)]
+mod doc_tab_menu_tests;
+#[cfg(test)]
+mod layers_empty_area_menu_tests;
+#[cfg(test)]
+mod preferences_submenu_tests;
+#[cfg(test)]
+mod selection_move_step_tests;
+#[cfg(test)]
+mod view_guides_submenu_tests;

@@ -79,12 +79,16 @@ fn attach_memory_error_details(obj: &mut Value, err: &AutomationError) {
                 }
             }
         }
-        AutomationError::Import(photocraft_io::IoError::PsdImportBudget { required, limit })
-        | AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required, limit, .. }) => {
+        AutomationError::Import(photocraft_io::IoError::PsdImportBudget { required, limit, free_memory })
+        | AutomationError::Engine(photocraft_engine::EngineError::PsdHardBudget { required, limit, free_memory, .. }) => {
             if let Some(m) = obj.as_object_mut() {
                 m.insert("required".into(), json!(required));
                 m.insert("hard".into(), json!(limit));
                 m.insert("hardLimit".into(), json!(limit));
+                if let Some(free) = free_memory {
+                    m.insert("available".into(), json!(free));
+                    m.insert("availableRam".into(), json!(free));
+                }
             }
         }
         _ => {}
