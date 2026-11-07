@@ -1,6 +1,6 @@
 use super::*;
 use photocraft_color::Color;
-use photocraft_doc::{Effect, FxCommon, FxPaint, StrokeFx, StrokePosition};
+use photocraft_doc::{Effect, FxCommon, FxPaint, Knockout, StrokeFx, StrokePosition};
 
 fn shadow_fixture(depth: u64, distance: u64, angle: u64, width: i32) -> Session {
     let mut s = Session::new();
@@ -27,11 +27,11 @@ fn conversion_preserves_long_off_canvas_shadows_at_every_depth() {
             let mut s = shadow_fixture(depth, distance, angle, width);
             let region = Rect::new(-512, 0, 1536, H);
             let before = s.active().unwrap().doc.clone();
-            let expected = photocraft_compose::render(&before, region).px;
+            let expected = photocraft_compose::render(&before, region).into_px();
             assert_eq!(expected.iter().filter(|p| p[0] > 0.99 && p[1] < 0.01 && p[3] > 0.99).count(), 64, "direct shadow control");
 
             convert(&mut s);
-            let actual = photocraft_compose::render(&s.active().unwrap().doc, region).px;
+            let actual = photocraft_compose::render(&s.active().unwrap().doc, region).into_px();
             assert!(max_diff(&actual, &expected) < 1e-6, "cropped shadow: depth {depth}, distance {distance}, angle {angle}, width {width}");
             let sm = active_smart(&s);
             let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("expected embedded contents") };
@@ -80,7 +80,7 @@ fn conversion_preserves_long_shadows_on_groups_and_their_children() {
             .unwrap();
         }
         let region = Rect::new(0, 0, 800, H);
-        let expected = photocraft_compose::render(&s.active().unwrap().doc, region).px;
+        let expected = photocraft_compose::render(&s.active().unwrap().doc, region).into_px();
         assert_eq!(expected.iter().filter(|p| p[0] > 0.99 && p[1] < 0.01 && p[3] > 0.99).count(), 64, "direct shadow control");
         convert(&mut s);
         assert!(max_diff(&photocraft_compose::render(&s.active().unwrap().doc, region).px, &expected) < 1e-6, "shadow on group: {on_group}");
@@ -133,6 +133,42 @@ fn conversion_review_regression_preserves_transparent_shape_strokes() {
         assert_eq!(actual.get(-8, 6), expected.get(-8, 6), "native reopen retains the solid off-canvas stroke");
         assert!(max_diff(&actual.px, &expected.px) <= tolerance);
     }
+}
+
+#[test]
+fn conversion_preserves_off_canvas_pixels_of_a_shapeless_knockout() {
+    let mut s = session(8);
+    s.edit("Knockout with off-canvas pixels", |doc, active| {
+        let layer = doc.layer_mut(active.unwrap()).unwrap();
+        layer.advanced.transparency_shapes = false;
+        layer.advanced.knockout = Knockout::Shallow;
+        let surface = layer.surface_mut().unwrap();
+        surface.fill_rect(Rect::new(12, 16, 20, 24), &[0.0, 0.0, 0.0, 1.0]);
+        surface.fill_rect(Rect::new(400, 16, 408, 24), &[0.0, 0.0, 1.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let region = Rect::new(0, 0, 416, H);
+    let before = photocraft_compose::render(&s.active().unwrap().doc, region);
+    assert_eq!(before.get(400, 16), [0.0, 0.0, 1.0, 1.0]);
+    convert(&mut s);
+    let after = photocraft_compose::render(&s.active().unwrap().doc, region);
+    assert_eq!(after.get(400, 16), before.get(400, 16));
+}
+
+#[test]
+fn conversion_accepts_a_36_megapixel_rgb8_canvas() {
+    let mut s = shadow_fixture(8, 400, 180, 128);
+    s.edit("36 MP canvas", |doc, _| {
+        doc.size = Size::new(6_000, 6_000);
+        Ok(())
+    })
+    .unwrap();
+    convert(&mut s);
+    let sm = active_smart(&s);
+    let cache = sm.cache.as_ref().unwrap();
+    assert_eq!(cache.pixel(12, 16), [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(cache.pixel(412, 16), [1.0, 0.0, 0.0, 1.0]);
 }
 
 #[test]

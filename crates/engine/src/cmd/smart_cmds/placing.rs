@@ -1,8 +1,11 @@
+use super::rendering::{refresh_or_fail, unapplied_filters};
 use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, PixelFormat, Rect, Result, Session, Size,
-    SmartContentsId, SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, translate_surface,
+    SmartContentsId, SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
 };
+use photocraft_algo::transform::Interp;
+use photocraft_geom::TILE_SIZE;
 
 /// Rounds float noise off a composed transform (scale 0.1 then 10 should be exactly 1), so
 /// repeated transforms land back on exact, lossless placements.
@@ -57,9 +60,76 @@ pub(crate) fn shift_smart(sm: &mut SmartObject, dx: i32, dy: i32) {
     }
 }
 
+/// Layer ▸ Smart Objects ▸ Reset Transform, and the same item of the Layers panel menu (#11662):
+/// the placement goes back to 100 % of the current contents' own size with rotation, skew, Distort,
+/// Perspective **and Warp** cleared, centred where the object sits. Measured in the reference
+/// application 2026-11-06 (see the #11675 discussion): a smart object warped with Arc 50, rotated
+/// and scaled came back with no warp at all, at its contents' own size, unrotated, and centred on
+/// the average of its four corners. The smart filters stay.
+///
+/// The step needs the contents re-rendered from their source: a stack whose filters can't all be
+/// applied, or a source that can't be read, refuses it whole rather than recording the old (still
+/// warped) pixels under a placement that no longer describes them.
+pub(super) fn reset_transform(s: &mut Session, p: &Value) -> Result<Value> {
+    let id = layer_param(s, p)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let LayerContent::Smart(sm) = &st.doc.layer(id).ok_or(EngineError::NoLayer(id))?.content else {
+        return Err(other("the layer is not a smart object"));
+    };
+    // Checked before anything changes, so a filter PhotoCraft doesn't have (kept verbatim from a
+    // PSD) leaves the document as it was, as `layer.smartObjects.updateModifiedContent` insists on
+    // a re-render too.
+    let stuck = unapplied_filters(sm);
+    if let Some(name) = stuck.first() {
+        return Err(other(format!("the {name} smart filter is not supported, so the smart object's transform can't be reset")));
+    }
+    // The contents' own box in source pixels: 100 % maps it one-to-one onto the document.
+    let [x0, y0, x1, y1] = source_box(&st.doc, sm).ok_or_else(|| other("the smart object's contents are unavailable"))?;
+    let (cx, cy) = ((x0 + x1) / 2.0, (y0 + y1) / 2.0);
+    let old = placement(sm);
+    // The object stays where it is: the average of the placement's four corners, which is its
+    // centre for an affine placement and the quad's centre once Distort or Perspective bent it.
+    let (mut sx, mut sy) = (0.0, 0.0);
+    for (u, v) in [(x0, y0), (x1, y0), (x1, y1), (x0, y1)] {
+        let (px, py) = old.apply(u, v);
+        sx += px;
+        sy += py;
+    }
+    let (dx, dy) = (sx / 4.0 - cx, sy / 4.0 - cy);
+    let to = Affine { m: [1.0, 0.0, 0.0, 1.0, dx, dy] };
+    let new = affine_homography(&to);
+    // Everything the accumulated transform moved the pixels by, so the linked masks and the Smart
+    // Filter mask follow the placement back as they do under Free Transform.
+    let rel = new.mul(&old.inverse().ok_or_else(|| other("the smart object has a degenerate transform"))?);
+    if ![dx, dy, cx, cy].iter().all(|v| v.is_finite()) || !rel.0.iter().all(|v| v.is_finite()) {
+        return Err(other("the smart object's placement is not a usable transform"));
+    }
+    s.edit("Reset Transform", |doc, _| {
+        // The Warp is part of what the reference takes back, so the re-render below starts from the
+        // unwarped contents. How far a painted Smart Filter mask should follow a cleared warp is
+        // unmeasured: here it follows the placement, as it does under Free Transform.
+        if let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            sm.warp = None;
+        }
+        crate::transform_cmds::transform_by_map(doc, id, &rel, None, Interp::Bicubic)?;
+        // Required, not best-effort: `transform_by_map` re-renders too, but falls back to the old
+        // pixels when that isn't possible. `Session::edit` runs this on a copy, so an `Err` here
+        // records no step and leaves the document exactly as it was. The state is unchanged since
+        // that render, so the guarded refresh answers from the stack cache rather than placing the
+        // contents a second time.
+        refresh_or_fail(doc, id)?;
+        // `new ∘ old⁻¹ ∘ old` only lands on the reset map to within float noise, and could leave a
+        // Distort placement behind as a nearly affine one: store the exact map.
+        if let Some(LayerContent::Smart(sm)) = doc.layer_mut(id).map(|l| &mut l.content) {
+            set_placement(sm, new);
+        }
+        Ok(json!({"layer": id.0, "transform": to.m}))
+    })
+}
+
 /// Forget PSD placed-layer data that no longer describes the smart object (its source changed):
 /// PSD export then writes fresh placed-layer blocks and embeds the new source.
-pub(super) fn detach_psd(l: &mut Layer) {
+pub(crate) fn detach_psd(l: &mut Layer) {
     if let LayerContent::Smart(sm) = &mut l.content {
         sm.psd_raw = None;
     }
@@ -108,7 +178,11 @@ fn subtree_bounds(l: &Layer, canvas: Rect) -> Rect {
     let bounds = match &l.content {
         LayerContent::Group(g) => g.children.iter().map(|c| subtree_bounds(c, canvas)).fold(Rect::EMPTY, |a, b| a.union(&b)),
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => canvas,
-        _ => photocraft_compose::effect_source_bounds(l, canvas),
+        _ => {
+            let bounds = photocraft_compose::effect_source_bounds(l, canvas);
+            // A shapeless knockout takes its shape from the canvas but still draws pixels beyond it.
+            if photocraft_compose::advanced::shapeless(l) { bounds.union(&l.surface().map_or(Rect::EMPTY, Surface::content_bounds)) } else { bounds }
+        }
     };
     // Effects become embedded content too. Grow each subtree by the compositor's bounded
     // reach, including a group's effects after those of its children.
@@ -119,11 +193,23 @@ fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
     f(l) || l.children().is_some_and(|c| c.iter().any(|c| any_layer(c, f)))
 }
 
-// A renderer-sized rectangle can still need many GiB for the composite, float staging data
-// and tiled caches. Bound those dense conversion allocations before invoking the compositor.
-const MAX_CONVERSION_WORK_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
+// Bound the extra working memory for off-canvas coverage independently of the existing canvas.
+const MAX_CONVERSION_EXPANSION_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
 
-fn check_conversion_budget(region: Rect, fmt: PixelFormat) -> Result<()> {
+fn conversion_work_bytes(region: Rect, fmt: PixelFormat) -> u64 {
+    let pixels = region.size().area();
+    let pixel_bytes = fmt.bytes_per_pixel() as u64;
+    // Writing a region allocates a whole tile for each intersection, even at unaligned edges.
+    let surface = region.tile_count().saturating_mul((TILE_SIZE as u64).pow(2)).saturating_mul(pixel_bytes);
+    let composite = pixels.saturating_mul(std::mem::size_of::<[f32; 4]>() as u64);
+    let staging = pixels.saturating_mul((fmt.channels() * std::mem::size_of::<f32>()) as u64);
+    // Staging is dropped before cropping. Cropping holds two tile surfaces and an
+    // interleaved copy. The crop overlaps at most as many tiles as the region.
+    let crop = surface.saturating_mul(2).saturating_add(pixels.saturating_mul(pixel_bytes));
+    composite.saturating_add(staging.saturating_add(surface).max(crop))
+}
+
+fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat) -> Result<()> {
     let (width, height) = (region.width(), region.height());
     let pixels = u64::from(width).saturating_mul(u64::from(height));
     if pixels > photocraft_compose::MAX_RENDER_PIXELS {
@@ -132,18 +218,15 @@ fn check_conversion_budget(region: Rect, fmt: PixelFormat) -> Result<()> {
             photocraft_compose::MAX_RENDER_PIXELS
         )));
     }
-    // Keep the RGBA f32 render plus either staging + cache, or cache + cropped copy:
-    // staging is released before cropping, so count the larger of those two phases.
-    // The compositor budgets its effect-map cache separately.
-    let staging = (fmt.channels() as u64).saturating_mul(std::mem::size_of::<f32>() as u64);
-    let surface = fmt.bytes_per_pixel() as u64;
-    let bytes_per_pixel = (std::mem::size_of::<[f32; 4]>() as u64).saturating_add(surface).saturating_add(staging.max(surface));
-    let bytes = pixels.saturating_mul(bytes_per_pixel);
-    if bytes > MAX_CONVERSION_WORK_BYTES {
+    // Conversion already rendered the full canvas. Keep that allowance while bounding the
+    // effect expansion and keeping the total under the image-operation allocation limit.
+    let limit = crate::image_cmds::MAX_RESAMPLE_BYTES.min(conversion_work_bytes(canvas, fmt).saturating_add(MAX_CONVERSION_EXPANSION_BYTES));
+    let bytes = conversion_work_bytes(region, fmt);
+    if bytes > limit {
         return Err(other(format!(
             "Smart Object conversion at {width} x {height} px needs about {} MiB for its dense buffers, exceeding the {} MiB working-memory limit. Convert fewer layers or reduce the canvas or effect extents",
             bytes.div_ceil(1 << 20),
-            MAX_CONVERSION_WORK_BYTES >> 20
+            limit >> 20
         )));
     }
     Ok(())
@@ -200,7 +283,7 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     }
     let region = layers.iter().map(|l| subtree_bounds(l, canvas)).fold(canvas, |a, b| a.union(&b));
     let fmt = doc.pixel_format();
-    check_conversion_budget(region, fmt)?;
+    check_conversion_budget(region, canvas, fmt)?;
     sub.layers = layers;
 
     let buf = photocraft_compose::render(&sub, region);
@@ -230,8 +313,8 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
 }
 
 pub(super) fn convert(s: &mut Session, p: &Value) -> Result<Value> {
-    let ids = match p.get("layer").and_then(Value::as_u64) {
-        Some(id) => vec![LayerId(id)],
+    let ids = match crate::commands::explicit_layer(s, p)? {
+        Some(id) => vec![id],
         None => crate::layer_multi_cmds::selected(s),
     };
     let new_id = s.edit("Convert to Smart Object", |doc, active| {
@@ -312,9 +395,15 @@ mod budget_tests {
     fn conversion_budget_scales_with_sample_depth_without_allocating_pixels() {
         let width = if cfg!(target_pointer_width = "64") { 24_000 } else { 6_000 };
         let region = Rect::new(0, 0, width, 1_000);
-        assert!(check_conversion_budget(region, PixelFormat::RGBA8).is_ok(), "ordinary 8-bit conversions fit the budget");
-        assert!(check_conversion_budget(region, PixelFormat::RGBA16).is_ok(), "ordinary 16-bit conversions fit the budget");
-        assert!(check_conversion_budget(region, PixelFormat::RGBA32F).is_err(), "the same extent needs more storage at 32 bits");
-        assert!(check_conversion_budget(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), PixelFormat::RGBA32F).is_err());
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA8).is_ok(), "8-bit effect extents fit the budget");
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA16).is_ok(), "16-bit effect extents fit the budget");
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA32F).is_err(), "the same extent needs more storage at 32 bits");
+        assert!(check_conversion_budget(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), Rect::EMPTY, PixelFormat::RGBA32F).is_err());
+    }
+
+    #[test]
+    fn a_thin_region_can_exceed_the_budget_in_whole_tiles() {
+        let region = Rect::new(-1, 0, 1, 1_000_000);
+        assert!(check_conversion_budget(region, Rect::EMPTY, PixelFormat::RGBA8).is_err());
     }
 }

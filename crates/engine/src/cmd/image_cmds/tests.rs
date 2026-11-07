@@ -234,6 +234,48 @@ fn resolution_only_change() {
     assert_eq!(r, json!({"width": 40, "height": 20}));
 }
 
+/// #9260: a resolution outside the document range (1..=30000 ppi, as File › New and the
+/// dialog's field) is refused and leaves the document as it was, instead of being clamped;
+/// one inside it, also above 10000, is set as given.
+#[test]
+fn image_size_refuses_a_resolution_out_of_range() {
+    for extra in [json!({"resample": "none"}), json!({"resample": "bicubic"}), json!({"resample": "bicubic", "keepPrintSize": true})] {
+        for r in [json!(1e39), json!(-5), json!(0), json!(0.5), json!(30_001), json!("300")] {
+            let mut s = session();
+            let (size, dpi, past) = (doc(&s).size, doc(&s).resolution_dpi, s.active().unwrap().history.past_len());
+            let mut p = extra.clone();
+            p["resolution"] = r;
+            assert!(s.execute("image.imageSize", p.clone()).is_err(), "{p}");
+            assert_eq!((doc(&s).size, doc(&s).resolution_dpi, s.active().unwrap().history.past_len()), (size, dpi, past), "{p}: nothing changed");
+        }
+    }
+    let mut s = session();
+    s.execute("image.imageSize", json!({"resolution": 20_000, "resample": "none"})).unwrap();
+    assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(40, 20), 20_000.0));
+    s.execute("image.imageSize", json!({"resolution": null, "resample": "none"})).unwrap();
+    assert_eq!(doc(&s).resolution_dpi, 20_000.0, "null leaves the resolution as it is");
+    // An imported document's own resolution outside the range (a PNG pHYs of 1 px/m is
+    // 0.0254 ppi) still resizes: the Image Size dialog sends it back unchanged on OK.
+    for own in [0.0254_f32, 40_000.0] {
+        let mut s = session();
+        s.edit("ppi", |doc, _| {
+            doc.resolution_dpi = own;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("image.imageSize", json!({"width": 80, "height": 40, "resolution": f64::from(own), "resample": "bicubic"})).unwrap();
+        assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(80, 40), own), "{own}");
+        assert!(s.execute("image.imageSize", json!({"resolution": 0.03, "resample": "none"})).is_err(), "{own}: another value is still checked");
+        // Only the exact value: one that merely rounds to it as f32 is refused.
+        let near = if own < 1.0 { f64::from(own) * (1.0 + 1e-9) } else { f64::from(own) + 0.001 };
+        assert_eq!(near as f32, own);
+        assert!(s.execute("image.imageSize", json!({"resolution": near, "resample": "none"})).is_err(), "{own}: {near}");
+        // keepPrintSize with the unchanged resolution keeps the pixels.
+        s.execute("image.imageSize", json!({"resolution": f64::from(own), "resample": "bicubic", "keepPrintSize": true})).unwrap();
+        assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(80, 40), own), "{own}: keepPrintSize");
+    }
+}
+
 /// Type keeps its pixel size across a resolution change: resampled 2x at twice the ppi it is
 /// twice as tall (not 4x), with Resample off it stays, and a later re-render doesn't jump.
 #[test]
@@ -486,6 +528,17 @@ fn extending_the_canvas_keeps_the_backgrounds_hidden_pixels() {
             })
             .unwrap();
             s.execute("image.crop", json!({"x": 50, "y": 0, "width": 50, "height": 100, "deleteCroppedPixels": false})).unwrap();
+            // That crop makes the Background "Layer 0" now (#10867); a Background with pixels past
+            // the canvas is still in documents saved before, so lock it back into one.
+            s.edit("relock", |doc, _| {
+                let l = doc.layers.first_mut().unwrap();
+                l.name = "Background".into();
+                l.locks.transparency = true;
+                l.locks.position = true;
+                Ok(())
+            })
+            .unwrap();
+            assert!(doc(s).background().is_some());
             s.tools.background = [0.0, 0.0, 0.0, 1.0];
         };
         let mut s = Session::new();
@@ -814,6 +867,79 @@ fn crop_target_accepts_whole_number_floats() {
     assert_eq!(doc(&s).size, Size::new(40, 20));
 }
 
+/// #9212: a non-deleting crop keeps the pixels outside the frame, and W x H resamples them
+/// too. A 20 px frame of a 2000 px Background resampled to 2000 px scales its hidden pixels
+/// x100, to 200000 px a side (160 GB at 8 bits, past the 8 GiB budget): refused before
+/// allocating, like a target size past the budget.
+#[test]
+fn crop_target_budgets_the_hidden_pixels_it_resamples() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 2000, "height": 2000})).unwrap();
+    s.execute("paint.setSymmetry", json!({"mode": "vertical", "center": [500, 700]})).unwrap();
+    let symmetry = s.active().unwrap().symmetry.clone();
+    let past = s.active().unwrap().history.past_len();
+    let mut p = json!({"x": 0, "y": 0, "width": 20, "height": 20, "deleteCroppedPixels": false, "targetWidth": 2000, "targetHeight": 2000});
+    for angle in [None, Some(90)] {
+        let mut p = p.clone();
+        if let Some(a) = angle {
+            p["angle"] = json!(a);
+        }
+        let err = s.execute("image.crop", p).unwrap_err().to_string();
+        // Since the crop turns the Background into Layer 0 (#10867), the turned layer's
+        // bounds are 2001 px a side, resampled x100 to 200100.
+        let want = if angle.is_some() { "200100 x 200100 px is 40040 megapixels" } else { "200000 x 200000 px is 40000 megapixels" };
+        assert!(err.contains(want) && err.contains("Delete Cropped Pixels"), "{angle:?}: {err}");
+        assert_eq!(doc(&s).size, Size::new(2000, 2000), "{angle:?}: the document is unchanged");
+        assert_eq!(s.active().unwrap().history.past_len(), past, "{angle:?}: no history step");
+        // The turned crop rotates first: the painting symmetry turns back with the document.
+        assert_eq!(s.active().unwrap().symmetry, symmetry, "{angle:?}: the painting symmetry stays");
+    }
+    // Deleting the cropped pixels leaves only the frame to resample.
+    p["deleteCroppedPixels"] = json!(true);
+    s.execute("image.crop", p).unwrap();
+    assert_eq!(doc(&s).size, Size::new(2000, 2000));
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1);
+}
+
+/// #9212: Image Size resamples the pixels outside the canvas as well. After a non-deleting
+/// crop to 10 px, 20000 px (400 MP, within the budget) scales the hidden 100 px Background x2000.
+#[test]
+fn image_size_budgets_the_hidden_pixels_it_resamples() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("image.crop", json!({"x": 0, "y": 0, "width": 10, "height": 10, "deleteCroppedPixels": false})).unwrap();
+    let past = s.active().unwrap().history.past_len();
+    let err = s.execute("image.imageSize", json!({"width": 20000, "height": 20000})).unwrap_err().to_string();
+    assert!(err.contains("200000 x 200000 px is 40000 megapixels"), "{err}");
+    // The hidden pixels are a pixel layer's: Delete Cropped Pixels would clear them.
+    assert!(err.contains("or delete them first (Crop with Delete Cropped Pixels)"), "{err}");
+    assert_eq!((doc(&s).size, s.active().unwrap().history.past_len()), (Size::new(10, 10), past));
+    // Without resampling only the resolution changes.
+    s.execute("image.imageSize", json!({"resolution": 300, "resample": "none"})).unwrap();
+    assert_eq!((doc(&s).size, doc(&s).resolution_dpi), (Size::new(10, 10), 300.0));
+}
+
+/// Delete Cropped Pixels clips pixel layers only: an alpha channel keeps its pixels outside the
+/// crop, so the refusal doesn't send the user to an option that can't clear it.
+#[test]
+fn hidden_resample_budget_names_what_delete_cropped_pixels_keeps() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.edit("channel", |doc, _| {
+        let fmt = photocraft_color::PixelFormat::new(ColorMode::Grayscale, doc.pixel_format().sample, false);
+        let mut ch = Surface::new(fmt);
+        ch.write_region(Rect::new(0, 0, 100, 100), &[1.0; 100 * 100]);
+        doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", ch));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.crop", json!({"x": 0, "y": 0, "width": 10, "height": 10, "deleteCroppedPixels": true})).unwrap();
+    let err = s.execute("image.imageSize", json!({"width": 20000, "height": 20000})).unwrap_err().to_string();
+    assert!(err.contains("200000 x 200000 px is 40000 megapixels"), "{err}");
+    assert!(err.contains("channels") && !err.contains("delete them first"), "{err}");
+    assert_eq!(doc(&s).size, Size::new(10, 10));
+}
+
 #[test]
 fn crop_target_rejects_bad_params_without_changing_the_document() {
     let rect = json!({"x": 0, "y": 0, "width": 10, "height": 10});
@@ -860,6 +986,28 @@ fn trim_based_on_top_left_colour() {
     .unwrap();
     s.execute("image.trim", json!({"basedOn": "topLeft"})).unwrap();
     assert_eq!(doc(&s).size, Size::new(10, 10));
+}
+
+#[test]
+fn trim_transparent_drops_alpha_that_rounds_to_zero_at_the_depth() {
+    // A faint pixel at (0, 0) on a 40 % layer: alpha 1 step × 0.4 rounds to 0 at 8 and 16 bits
+    // (the stored image is transparent there), so Trim keeps only the opaque square. A 1/255
+    // pixel is 0.4 × 257 ≈ 103 steps at 16 bits and any alpha is content at 32 bits: kept.
+    for (depth, faint, keeps) in [(8, 1.0 / 255.0, false), (16, 1.0 / 65535.0, false), (16, 1.0 / 255.0, true), (32, 1.0 / 65535.0, true)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth, "background": "transparent"})).unwrap();
+        s.edit("paint", |doc, _| {
+            let surf = doc.layers[0].surface_mut().unwrap();
+            surf.fill_rect(Rect::new(40, 40, 50, 50), &[1.0, 0.0, 0.0, 1.0]);
+            surf.fill_rect(Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, faint]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.setProps", json!({"layer": doc(&s).layers[0].id.0, "opacity": 0.4})).unwrap();
+        let r = s.execute("image.trim", json!({"basedOn": "transparent"})).unwrap();
+        let want = if keeps { json!({"x": 0, "y": 0, "width": 50, "height": 50}) } else { json!({"x": 40, "y": 40, "width": 10, "height": 10}) };
+        assert_eq!(r, want, "{depth}-bit, faint alpha {faint}");
+    }
 }
 
 #[test]
@@ -960,4 +1108,49 @@ fn duplicate_document() {
     assert_eq!(s.documents().len(), 2);
     assert_eq!(doc(&s).layers.len(), 1);
     assert!(doc(&s).name.ends_with("copy"));
+}
+
+/// #9212: a bicubic shrink stores the image between its two passes with one axis at its old
+/// size. A Background whose kept pixels reach (69999, 69999), halved from 200 to 100 px, ends at
+/// about 35000 x 35000 px (4.9 GB, within the 8 GiB budget) but passes through about
+/// 35000 x 70000 px (9.8 GB): refused before allocating. Bilinear has one pass and fits. The
+/// check alone runs, so nothing that large is allocated either way.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn hidden_resample_budget_counts_the_image_between_bicubic_passes() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    let mut d = doc(&s).clone();
+    let bg = d.background_mut().unwrap().surface_mut().unwrap();
+    bg.fill_rect(Rect::new(69_999, 69_999, 70_000, 70_000), &[1.0, 0.0, 0.0, 1.0]);
+    let err = check_hidden_resample_budget("image.imageSize", &mut d, 0.5, 0.5, Resample::Bicubic).unwrap_err().to_string();
+    assert!(err.contains(" x 70000 px is "), "{err}");
+    check_hidden_resample_budget("image.imageSize", &mut d, 0.5, 0.5, Resample::Bilinear).unwrap();
+}
+
+#[test]
+fn trim_and_duplicate_merged_on_too_large_document_fail_gracefully_without_panic() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40000, "height": 30000, "background": "transparent"})).unwrap();
+    let initial_layers = doc(&s).layers.len();
+    let initial_bounds = doc(&s).bounds();
+    let initial_rev = s.active().unwrap().revision;
+    let initial_docs = s.documents().len();
+
+    let trim_res = s.execute("image.trim", json!({"basedOn": "topLeft"}));
+    assert!(trim_res.is_err(), "trim on too-large document must return error");
+    let err = trim_res.unwrap_err().to_string();
+    assert!(err.contains("too large to trim"), "error should explain document is too large: {err}");
+    assert_eq!(doc(&s).layers.len(), initial_layers, "layer count unchanged after failed trim");
+    assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed trim");
+    assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed trim");
+
+    let dup_res = s.execute("image.duplicate", json!({"mergedOnly": true}));
+    assert!(dup_res.is_err(), "duplicate merged on too-large document must return error");
+    let dup_err = dup_res.unwrap_err().to_string();
+    assert!(dup_err.contains("too large to duplicate merged"), "error should explain document is too large: {dup_err}");
+    assert_eq!(s.documents().len(), initial_docs, "document count unchanged after failed duplicate");
+    assert_eq!(doc(&s).layers.len(), initial_layers, "layer count unchanged after failed duplicate");
+    assert_eq!(doc(&s).bounds(), initial_bounds, "canvas size unchanged after failed duplicate");
+    assert_eq!(s.active().unwrap().revision, initial_rev, "revision unchanged after failed duplicate");
 }
