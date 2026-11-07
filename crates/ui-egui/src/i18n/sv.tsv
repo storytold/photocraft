@@ -4892,3 +4892,80 @@ smartSvg	Updates wait while another document or an editing dialog is active.	Upp
 	Pick a different document for each channel.	Välj ett annat dokument för varje kanal.
 	A picked document is no longer open.	Ett av de valda dokumenten är inte längre öppet.
 	A picked document is no longer a grayscale document of the same size.	Ett av de valda dokumenten är inte längre ett gråskaledokument i samma storlek.
+	Enable animations	Aktivera animeringar
+	A file is still being placed; try again when it has finished.	En fil håller fortfarande på att placeras. Försök igen när den är klar.
+	A frame supports affine transforms; select its image for perspective transforms	En ram stöder affina transformeringar. Markera bilden i den för perspektivtransformeringar
+	A frame supports affine transforms; select its image to warp it	En ram stöder affina transformeringar. Markera bilden i den för att deformera den
+	Add Path to Selection	Lägg till bana i markering
+	Arrange Panels	Ordna paneler
+	Cancelled placing {name}	Placeringen av {name} avbröts
+	Close Other Panels in Group	Stäng andra paneler i gruppen
+	Convert to Frame…	Konvertera till ram…
+	Create a new custom frame	Skapa en ny anpassad ram
+	Create a new polygonal frame	Skapa en ny polygonal ram
+	Create a new triangular frame	Skapa en ny triangulär ram
+	Dropped files weren't placed: their document was closed.	Släppta filer placerades inte: deras dokument har stängts.
+	Dropped files weren't placed: too many are waiting for their document.	Släppta filer placerades inte: för många väntar på sitt dokument.
+	Fill from History	Fyll från historik
+	Fit Content to Frame	Anpassa innehåll till ram
+	Fit Frame to Content	Anpassa ram till innehåll
+	Frame coordinates must be finite and within 600000 pixels	Ramens koordinater måste vara ändliga och ligga inom 600000 pixlar
+	Generator enabled	Generator aktiverad
+	Import Image…	Importera bild…
+	Internet Standard RGB	Internetstandard-RGB
+	Invalid frame transform	Ogiltig ramtransformering
+	Invalid nested file drop	Ogiltigt släpp av nästlade filer
+	Learn	Lär dig
+	Legacy Macintosh RGB	Äldre Macintosh RGB
+	Lining	Versalsiffror
+	Little memory would be left after opening this file. Close other apps first, or PhotoCraft may run out of memory.	Det skulle finnas lite minne kvar efter att den här filen har öppnats. Stäng andra appar först, annars kan PhotoCraft få slut på minne.
+	Load Luminosity	Läs in luminositet
+	Minimize Panel	Minimera panel
+	New file	Ny fil
+	New Frame	Ny ram
+	No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.	Det finns ingen bana att skapa en form av: rita en med pennverktyget eller markera en i panelen Banor.
+	Nudge	Flytta stegvis
+	Numerals	Siffror
+	On your computer	På din dator
+	Open Panel in Own Window	Öppna panel i eget fönster
+	Proportional	Proportionell
+	Proportional Lining	Proportionella versalsiffror
+	Proportional Oldstyle	Proportionella medievalsiffror
+	Replace Image…	Ersätt bild…
+	Set 	Uppsättning 
+	Set 1	Uppsättning 1
+	Set 10	Uppsättning 10
+	Set 11	Uppsättning 11
+	Set 12	Uppsättning 12
+	Set 13	Uppsättning 13
+	Set 14	Uppsättning 14
+	Set 15	Uppsättning 15
+	Set 16	Uppsättning 16
+	Set 17	Uppsättning 17
+	Set 18	Uppsättning 18
+	Set 19	Uppsättning 19
+	Set 2	Uppsättning 2
+	Set 20	Uppsättning 20
+	Set 3	Uppsättning 3
+	Set 4	Uppsättning 4
+	Set 5	Uppsättning 5
+	Set 6	Uppsättning 6
+	Set 7	Uppsättning 7
+	Set 8	Uppsättning 8
+	Set 9	Uppsättning 9
+	Stylistic Sets	Stilistiska uppsättningar
+	Subtract Path from Selection	Subtrahera bana från markering
+	Tabular	Tabellbredd
+	Tabular Lining	Tabellsiffror, versala
+	Tabular Oldstyle	Medievalsiffror i tabellbredd
+	Target Layer Mask	Välj lagermask som mål
+	The current scratch directory ({path}) doesn't report its free space, so PhotoCraft can't stop before it fills up, and large files get no extra room from it without a Scratch Size Limit. This warning applies to the current configuration; changes above take effect on Apply or OK. Set a limit or use a local disk.	Den aktuella arbetsdiskkatalogen ({path}) rapporterar inte sitt lediga utrymme, så PhotoCraft kan inte stoppa innan den blir full, och stora filer får inget extra utrymme från den utan en storleksgräns för arbetsdisk. Den här varningen gäller den aktuella konfigurationen; ändringar ovan börjar gälla när du klickar på Använd eller OK. Ange en gräns eller använd en lokal disk.
+	The frame is locked	Ramen är låst
+	The frame is unavailable	Ramen är inte tillgänglig
+	The GPU compositor is still being prepared	GPU-kompositören håller fortfarande på att förberedas
+	Website	Webbplats
+	WinTab reads pressure, tilt, rotation and the eraser end from the tablet driver. Turn off Windows Ink in your tablet's software utility (for example Wacom Center) before using it.	WinTab läser tryck, lutning, rotation och suddgummiänden från ritplattans drivrutin. Stäng av Windows Ink i ritplattans verktygsprogram (till exempel Wacom Center) innan du använder det.
+	Working CMY Plate	CMY-arbetsplåt
+@plural	The brush group “{group}” already has {n} brush of yours.|The brush group “{group}” already has {n} brushes of yours.	Penselgruppen ”{group}” har redan {n} egen pensel.|Penselgruppen ”{group}” har redan {n} egna penslar.
+@plural	The gradient group “{group}” already exists ({n} gradient).|The gradient group “{group}” already exists ({n} gradients).	Gradientgruppen ”{group}” finns redan ({n} gradient).|Gradientgruppen ”{group}” finns redan ({n} gradienter).
+@plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: utdata för {n} bildresurs misslyckades|{what}: utdata för {n} bildresurser misslyckades
