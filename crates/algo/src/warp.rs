@@ -65,6 +65,11 @@ pub fn place_source(
     {
         return Ok(out);
     }
+    // Rotated, skewed or both (not mirrored): as the reference application draws it.
+    let (bx, by) = (f64::from(src_rect.x0), f64::from(src_rect.y0));
+    if let Some(out) = crate::smart_affine::render(src, src_rect, [a, b, c, d, e + a * bx + c * by, f + b * bx + d * by]) {
+        return Ok(out);
+    }
     crate::transform::warp_surface(src, src_rect, &crate::transform::Homography([a, c, e, b, d, f, 0.0, 0.0, 1.0]), Interp::Bicubic)
 }
 

@@ -114,10 +114,15 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, canvas: photocraft_geom:
     }
     for l in layers {
         // A pixel layer's own pixels, resized as the smart object draws them.
-        let pixels = snapped.and_then(|_| match &l.content {
-            LayerContent::Raster(surface) => photocraft_algo::warp::scale_snapped(surface, canvas, [a, d, e, f]),
+        let pixels = match &l.content {
+            LayerContent::Raster(surface) if snapped.is_some() => photocraft_algo::warp::scale_snapped(surface, canvas, [a, d, e, f]),
+            // Rotated or skewed (not in perspective): as the smart object draws it.
+            LayerContent::Raster(surface) if sm.perspective.is_none() => {
+                let (cx, cy) = (f64::from(canvas.x0), f64::from(canvas.y0));
+                photocraft_algo::smart_affine::render(surface, canvas, [a, b, c, d, e + a * cx + c * cy, f + b * cx + d * cy])
+            }
             _ => None,
-        });
+        };
         released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;
         if let (Some(p), LayerContent::Raster(surface)) = (pixels, &mut l.content) {
             *surface = p;

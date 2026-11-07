@@ -26,37 +26,37 @@ use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 
 /// The weights' unit: 14 bits.
-const ONE: i64 = 1 << 14;
+pub(crate) const ONE: i64 = 1 << 14;
 
 /// Samples (pixels × channels) one scaled image may hold at any step; larger ones return `None`
 /// and take the general transform path, which bounds its own work.
-const MAX_SAMPLES: usize = 1 << 31;
+pub(crate) const MAX_SAMPLES: usize = 1 << 31;
 
 /// An image of whole sample levels (at 8 and 16 bits) or plain values (at 32 bits), interleaved,
 /// the last channel alpha.
 #[derive(Clone)]
-struct Image {
-    w: usize,
-    h: usize,
-    n: usize,
-    px: Vec<f32>,
+pub(crate) struct Image {
+    pub(crate) w: usize,
+    pub(crate) h: usize,
+    pub(crate) n: usize,
+    pub(crate) px: Vec<f32>,
 }
 
 impl Image {
-    fn at(&self, x: usize, y: usize, c: usize) -> f32 {
+    pub(crate) fn at(&self, x: usize, y: usize, c: usize) -> f32 {
         self.px.get((y * self.w + x) * self.n + c).copied().unwrap_or(0.0)
     }
 }
 
 /// How one depth's samples are stored and rounded.
 #[derive(Clone, Copy)]
-struct Depth {
+pub(crate) struct Depth {
     /// The largest level (255, 65535), or `None` at 32 bits (unrounded, colour unclipped).
-    levels: Option<f32>,
+    pub(crate) levels: Option<f32>,
 }
 
 impl Depth {
-    fn of(sample: SampleType) -> Self {
+    pub(crate) fn of(sample: SampleType) -> Self {
         match sample {
             SampleType::U8 => Depth { levels: Some(255.0) },
             SampleType::U16 => Depth { levels: Some(65535.0) },
@@ -65,7 +65,7 @@ impl Depth {
     }
 
     /// `sum / ONE`, rounded halves up and clipped to the levels (alpha to [0, 1] at 32 bits).
-    fn settle(self, sum: f64, alpha: bool) -> f32 {
+    pub(crate) fn settle(self, sum: f64, alpha: bool) -> f32 {
         match self.levels {
             Some(top) => {
                 let s = sum.round() as i64;
@@ -77,7 +77,7 @@ impl Depth {
     }
 
     /// The rounded mean of `count` samples summing to `sum`.
-    fn mean(self, sum: f64, count: usize) -> f32 {
+    pub(crate) fn mean(self, sum: f64, count: usize) -> f32 {
         let count = count.max(1) as f64;
         match self.levels {
             Some(top) => ((sum / count + 0.5).floor() as f32).clamp(0.0, top),
@@ -156,7 +156,7 @@ fn automatic(k: f64) -> (f64, f64) {
     }
 }
 
-fn keys(x: f64, a: f64) -> f64 {
+pub(crate) fn keys(x: f64, a: f64) -> f64 {
     let x = x.abs();
     if x < 1.0 {
         (a + 2.0) * x * x * x - (a + 3.0) * x * x + 1.0
@@ -332,7 +332,7 @@ impl Cone {
 /// (per row) the nearest seeds left and right; a pixel takes the best of the eight directions.
 /// Column strips run in parallel: a strip also tracks the column on each side of it, and starts
 /// its row scans from the nearest seeds beyond those.
-fn bleed(img: &mut Image) {
+pub(crate) fn bleed(img: &mut Image) {
     #[cfg(not(target_arch = "wasm32"))]
     let threads = rayon::current_num_threads().max(1);
     #[cfg(target_arch = "wasm32")]
