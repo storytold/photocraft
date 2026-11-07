@@ -13,8 +13,9 @@
 //! Smudge). Resetting one of those tools resets the shared field too. Sample All Layers is kept per
 //! tool, as in Photoshop, so resetting a tool resets only its own.
 //! [`reset_options`] lists the fields of each tool. The selection tools also go back to New
-//! Selection, and the painting tools (the ones with a brush in the options bar) get the default
-//! brush, keeping the colours. Tools without options (Hand, Rotate View, Ruler, Note, …) have
+//! Selection, and the painting tools (the ones with a brush in the options bar) get their starting
+//! brush (`paint_mouse::fresh_brush`: the Brush tool's 13 px soft round, the default brush for the
+//! others), keeping the colours. Tools without options (Hand, Rotate View, Ruler, Note, …) have
 //! nothing to reset.
 
 use serde_json::{Map, Value, json};
@@ -91,8 +92,15 @@ fn reset_all(app: &mut PhotocraftApp) {
     app.ui.frame_tool = Default::default();
     app.ui.tool_options = ToolOptions::default();
     app.ui.selection_mode = 0;
-    app.ui.tool_brushes.clear();
     reset_session_brush(app);
+    // Every other painting tool gets its own starting brush. Left without one, it would take the
+    // live brush when picked (`sync_tool_brush`), and the tools' starting tips differ (#11810).
+    let (live, current) = (app.ui.brush_tool, app.session.tools.brush.clone());
+    app.ui.tool_brushes = Tool::ALL
+        .iter()
+        .filter(|t| **t != live && crate::paint_mouse::has_brush_picker(**t))
+        .map(|t| (*t, crate::paint_mouse::fresh_brush(*t, &current)))
+        .collect();
 }
 
 /// The live brush is `app.ui.brush_tool`'s: give it that tool's starting brush.

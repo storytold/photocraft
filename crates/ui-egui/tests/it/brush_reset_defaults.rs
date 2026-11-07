@@ -63,6 +63,34 @@ fn reset_all_tools_gives_the_brush_its_tip() {
     assert_eq!(tip(&mut app), BRUSH_TIP);
 }
 
+/// Reset All Tools from another painting tool: the Brush gets its own tip when picked, not the
+/// live brush.
+#[test]
+fn reset_all_tools_from_another_tool_gives_the_brush_its_tip() {
+    let mut app = app();
+    pick(&mut app, Tool::Brush);
+    scramble(&mut app);
+    pick(&mut app, Tool::Eraser);
+    scramble(&mut app);
+    control(&mut app, "ui.menu.invoke", json!({"id": "tool.resetAll", "params": {"confirmed": true}}));
+    assert_eq!(tip(&mut app), DEFAULT_TIP, "the Eraser");
+    pick(&mut app, Tool::Brush);
+    assert_eq!(tip(&mut app), BRUSH_TIP, "the Brush");
+}
+
+/// Reset All Tools from the Brush: the other painting tools get the default tip when picked, not
+/// the Brush's.
+#[test]
+fn reset_all_tools_from_the_brush_gives_the_other_tools_the_default_tip() {
+    let mut app = app();
+    pick(&mut app, Tool::Brush);
+    control(&mut app, "ui.menu.invoke", json!({"id": "tool.resetAll", "params": {"confirmed": true}}));
+    for tool in [Tool::Pencil, Tool::Eraser] {
+        pick(&mut app, tool);
+        assert_eq!(tip(&mut app), DEFAULT_TIP, "{tool:?}");
+    }
+}
+
 #[test]
 fn other_painting_tools_keep_the_default_reset_tip() {
     for tool in [Tool::Pencil, Tool::Eraser] {

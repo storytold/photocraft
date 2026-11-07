@@ -1313,7 +1313,7 @@ fn remembered_tool_brushes_survive_damage() {
 }
 
 /// #6212: Reset Tool forgets that tool's remembered options and brush; Reset All Tools
-/// forgets every tool's.
+/// forgets every tool's: each painting tool keeps only its own starting brush (#11810).
 #[test]
 fn reset_tools_clear_the_remembered_options_and_brushes() {
     use crate::state::Tool;
@@ -1352,10 +1352,13 @@ fn reset_tools_clear_the_remembered_options_and_brushes() {
     tick(&mut app, &ctx);
     let saved = stored(&store);
     assert!(saved["toolOptions"].is_null(), "{saved}");
-    assert!(saved["toolBrushes"]["brushes"].as_object().is_none_or(|m| m.is_empty()), "{saved}");
+    let starting = |brushes: &[(Tool, photocraft_engine::BrushSettings)]| {
+        brushes.iter().all(|(t, b)| *b == crate::paint_mouse::fresh_brush(*t, b) && b.size != 77.0)
+    };
+    assert!(starting(&app.ui.tool_brushes), "{saved}");
     let (app2, _) = app_with_saved(store.lock().unwrap().clone());
     assert_eq!(app2.ui.tool_options, crate::state::ToolOptions::default());
-    assert!(app2.ui.tool_brushes.is_empty());
+    assert!(!app2.ui.tool_brushes.is_empty() && starting(&app2.ui.tool_brushes), "remembered across a restart");
 }
 
 #[test]
