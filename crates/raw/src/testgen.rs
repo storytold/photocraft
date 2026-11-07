@@ -9,6 +9,7 @@
 
 mod canon;
 mod dng;
+mod hasselblad;
 mod lj92;
 mod orf;
 mod raf;
@@ -17,6 +18,7 @@ mod tiff;
 
 pub use canon::{Cr2Spec, craw_block, craw_encode, nef_compressed, sony_craw, tiff_ep};
 pub use dng::{DngSpec, DngStorage, baseline_jpeg, gain_map_opcode_list, map_polynomial_opcode_list};
+pub use hasselblad::Hasselblad3frSpec;
 pub use lj92::{lj92_encode, lj92_encode_tables};
 pub use orf::orf;
 pub use raf::{RafPacking, RafSpec, XTRANS, mosaic, mosaic_cfa, scene};
