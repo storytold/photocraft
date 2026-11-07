@@ -374,12 +374,11 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx);
     // Auto: the shown channel's curve runs from its histogram's black point to its white point,
-    // the same automatic points as Levels' Auto (a drawn curve becomes a point curve first). An
-    // empty histogram (a fully transparent layer) has no such points: Auto changes nothing.
+    // the same automatic points as Levels' Auto. With the pencil it draws that ramp into the
+    // shown channel's map and stays in pencil mode, so the other channels' drawn maps keep every
+    // level (leaving the pencil would refit them all to points). An empty histogram (a fully
+    // transparent layer) has no such points: Auto changes nothing.
     let auto_points = auto.then(|| cx.hist.as_ref().filter(|h| h[hist_i].iter().any(|&n| n != 0)).map(|h| auto_levels(&h[hist_i]))).flatten();
-    if auto_points.is_some() && v.get("pencil").and_then(Value::as_bool).unwrap_or(false) {
-        e.add(Edit::discrete(set_editor_pencil(v, false, cx)));
-    }
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
@@ -418,8 +417,16 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         e.commit |= interaction.commit;
     }
     if let Some((lo, hi)) = auto_points {
-        pts = vec![[lo, 0.0], [hi, 255.0]];
-        changed = true;
+        if pencil {
+            let span = (hi - lo).max(f32::EPSILON);
+            for (x, o) in map.iter_mut().enumerate() {
+                *o = ((x as f32 - lo) / span * 255.0).clamp(0.0, 255.0);
+            }
+            drawn = true;
+        } else {
+            pts = vec![[lo, 0.0], [hi, 255.0]];
+            changed = true;
+        }
         e.commit = true;
     }
 

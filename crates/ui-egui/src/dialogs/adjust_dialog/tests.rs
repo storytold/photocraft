@@ -406,37 +406,59 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// A 64 x 48 image, left half #3c3c3c and right half #bebebe: Auto's points are 60 and 190.
+fn two_tone() -> PhotocraftApp {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
+    s.execute("edit.fill", json!({"color": "#3c3c3c"})).unwrap();
+    s.execute("select.inverse", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#bebebe"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    PhotocraftApp::new(s, crate::Services::default())
+}
+
 /// #9229: Curves has an Auto button beside the channel menu, as Photoshop's does: on a
 /// low-contrast image it stretches the curve from the image's darkest to its lightest level
-/// (the same automatic points as Levels' Auto), as one edit, a drawn curve included.
+/// (the same automatic points as Levels' Auto), as one edit.
 #[test]
 fn curves_auto_stretches_a_low_contrast_image() {
-    let two_tone = || {
-        let mut s = photocraft_engine::Session::new();
-        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
-        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
-        s.execute("edit.fill", json!({"color": "#3c3c3c"})).unwrap();
-        s.execute("select.inverse", json!({})).unwrap();
-        s.execute("edit.fill", json!({"color": "#bebebe"})).unwrap();
-        s.execute("select.deselect", json!({})).unwrap();
-        PhotocraftApp::new(s, crate::Services::default())
-    };
-    for pencil in [false, true] {
-        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), two_tone());
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
-        if pencil {
-            // A drawn (inverted) curve: Auto replaces it with its point curve.
-            let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
-            fields.insert("pencil".into(), json!(true));
-            fields.insert("points".into(), json!((0..256).map(|i| 255 - i).collect::<Vec<_>>()));
-        }
-        h.run_steps(4);
-        h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
-        h.run_steps(3);
-        let f = &h.state().ui.dialogs[0].fields;
-        assert_eq!(f["points"], json!([[60.0, 0.0], [190.0, 255.0]]), "pencil {pencil}: {f:?}");
-        assert_ne!(f.get("pencil"), Some(&json!(true)), "Auto leaves a point curve");
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), two_tone());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open(h.state_mut(), "image.adjustments.curves").unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
+    h.run_steps(3);
+    let f = &h.state().ui.dialogs[0].fields;
+    assert_eq!(f["points"], json!([[60.0, 0.0], [190.0, 255.0]]), "{f:?}");
+    assert_ne!(f.get("pencil"), Some(&json!(true)), "a point curve stays a point curve");
+}
+
+/// With the pencil, Auto draws the shown channel's map as the same ramp (60 → 0, 190 → 255) and
+/// stays in pencil mode, so a map drawn on another channel keeps every one of its levels
+/// (CodeRabbit review on curves.rs:381: leaving the pencil refits every channel's map).
+#[test]
+fn curves_auto_with_the_pencil_redraws_only_the_shown_channel() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), two_tone());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+    // A detailed red map no 16-point curve can hold, and an inverted composite map.
+    let red: Vec<f64> = (0..256).map(|i| if i % 2 == 0 { f64::from(i) } else { f64::from(255 - i) }).collect();
+    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    fields.insert("pencil".into(), json!(true));
+    fields.insert("points".into(), json!((0..256).map(|i| 255 - i).collect::<Vec<_>>()));
+    fields.insert("red".into(), json!(red));
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
+    h.run_steps(3);
+    let f = &h.state().ui.dialogs[0].fields;
+    assert_eq!(f.get("pencil"), Some(&json!(true)), "Auto keeps the pencil: {f:?}");
+    assert_eq!(f["red"], json!(red), "the red map is untouched");
+    let ramp: Vec<f64> = (0..256).map(|x| ((f64::from(x) - 60.0) / 130.0 * 255.0).clamp(0.0, 255.0)).collect();
+    let got: Vec<f64> = f["points"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    assert_eq!(got.len(), 256);
+    for (x, (g, r)) in got.iter().zip(&ramp).enumerate() {
+        assert!((g - r).abs() < 0.01, "level {x}: {g} vs {r}");
     }
 }
 
