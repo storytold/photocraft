@@ -147,8 +147,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
             invoke(app, &ctx, &alt_click(id, alt), json!({}))
         };
         if let Err(e) = r {
-            app.ui.status = e;
-            app.ui.status_error = true;
+            app.show_error(e);
         }
     }
     edge

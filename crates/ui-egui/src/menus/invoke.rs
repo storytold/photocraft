@@ -41,6 +41,16 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
 
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    let r = invoke_guarded(app, ctx, id, params);
+    // A refused menu item or shortcut answers the synthetic input that chose it (#11579).
+    if let Err(e) = &r {
+        app.note_input_error(e);
+    }
+    r
+}
+
+/// [`invoke`] without reporting its refusal to waiting synthetic input.
+fn invoke_guarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if app.automation_input
         && let Some(authorize) = app.services.automation_command.as_ref()
     {

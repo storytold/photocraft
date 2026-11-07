@@ -87,8 +87,7 @@ pub fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
         // Repeated quit requests (the X pressed again) keep the prompt, and the answers so far.
         Some(open) if open.id == id => {}
         Some(_) => {
-            app.ui.status = tl!("Answer the unsaved-changes prompt first").into();
-            app.ui.status_error = true;
+            app.show_error(tl!("Answer the unsaved-changes prompt first"));
         }
     }
     true
@@ -157,8 +156,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(i) = answered.and_then(|d| index_of(app, d))
             && let Err(e) = crate::menus::invoke_unguarded(app, ctx, "file.close", json!({"document": i}))
         {
-            app.ui.status = e;
-            app.ui.status_error = true;
+            app.show_error(e);
         }
         show_tab(app, next);
     }
@@ -200,8 +198,7 @@ fn advance(app: &mut PhotocraftApp, ctx: &egui::Context) {
         };
     }
     if let Err(e) = crate::menus::invoke_unguarded(app, ctx, &id, params) {
-        app.ui.status = e;
-        app.ui.status_error = true;
+        app.show_error(e);
     }
 }
 
@@ -231,8 +228,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
-            app.ui.status = couldnt_save(e);
-            app.ui.status_error = true;
+            app.show_error(couldnt_save(e));
             false
         }
     }

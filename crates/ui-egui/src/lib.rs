@@ -64,7 +64,7 @@ pub mod widgets;
 pub mod work_area;
 
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 
 use photocraft_doc::{DocId, Document};
 use photocraft_engine::Session;
@@ -457,8 +457,9 @@ pub struct PhotocraftApp {
     captures: screenshot::Captures,
     /// The custom Type tool's IME owner/generation/receipt tracker (`type_tool::sync_ime`).
     pub(crate) type_ime: type_tool::ImeState,
-    /// Control replies waiting for queued synthetic input to be processed.
-    input_waiters: Vec<Sender<ControlResponse>>,
+    /// Control replies waiting for queued synthetic input to be processed, and the refusals
+    /// that input caused (`app/input_replies.rs`).
+    input_replies: app::input_replies::InputReplies,
     /// Live (uncommitted) adjustment edit shown on canvas while a slider is dragged.
     pub live_adjust: Option<(photocraft_doc::LayerId, Value)>,
     /// Frames rendered (for tests and the status bar).
@@ -777,6 +778,8 @@ mod brush_picker_escape_tests;
 #[cfg(test)]
 mod shape_bounds_box_tests;
 
+#[cfg(test)]
+mod input_refusal_tests;
 #[cfg(test)]
 mod lifecycle_tests;
 

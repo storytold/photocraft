@@ -577,6 +577,8 @@ fn default_max_width(d: &Dialog, compact: bool, curves: bool, about_tabs: bool, 
     }
 }
 
+/// Show the open dialogs for this frame and apply their OK, Cancel and Apply; a refused OK is
+/// reported to the synthetic input that pressed it (#11579).
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::guide_edit::sync(app) {
         ctx.request_repaint();
@@ -782,6 +784,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         match outcome {
             Some(true) => {
                 if let Err(error) = confirm(app, d.id) {
+                    // A refused OK answers the synthetic input that pressed it (#11579).
+                    app.note_input_error(&error);
                     app.ui.status = error;
                 }
             }
@@ -790,6 +794,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             None => {
                 if let Err(error) = crate::layer_style::color_picker::take_request(app, d.id) {
+                    app.note_input_error(&error);
                     app.ui.status = error;
                 }
             }

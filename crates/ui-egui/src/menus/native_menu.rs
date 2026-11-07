@@ -700,10 +700,14 @@ pub fn run(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if !crate::menus::modal_allows(app, &id) {
             continue;
         }
+        // A click made at the machine is not the synthetic input's, even when it lands in a frame
+        // that input is being handled in: its refusal shows in the status bar but is not reported
+        // to a waiting `ui.key`/`ui.click` reply (#11579), as for a direct control request.
+        app.set_direct_request(true);
         if let Err(e) = crate::menus::invoke(app, ctx, &id, serde_json::json!({})) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+            app.show_error(e);
         }
+        app.set_direct_request(false);
     }
 }
 
