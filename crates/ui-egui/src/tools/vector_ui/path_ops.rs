@@ -73,6 +73,42 @@ pub fn path_to_selection(app: &mut PhotocraftApp, params: Value) -> Result<Value
     Ok(r)
 }
 
+/// The Pen options bar's Make Shape (Path mode, #10934): a new shape layer from the path being
+/// drawn, or else from the Work Path or saved path that is the target path, with the shape tools'
+/// fill and stroke, as one History step. A path being drawn is not committed: the shape takes what
+/// the commit would have made (with a vector mask targeted, only the drawn path, and the mask
+/// stays), see [`super::pen::make_shape_from_draft`]. A shape layer's own path or vector mask
+/// isn't copied. The Work Path becomes the shape's path, so it is no longer selected in the Paths
+/// panel.
+pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
+    super::cancel_stale_pen(app);
+    if let Some(mut pen) = app.ui.pen.clone().filter(|p| p.knots.len() >= 2) {
+        if pen.curvature {
+            super::curvature::curvature_refresh(&mut pen, false);
+        }
+        let r = super::pen::make_shape_from_draft(app, &pen)?;
+        app.ui.pen = None;
+        app.ui.pen_doc = None;
+        if app.ui.direct_selection.target == Some(crate::direct_select::PathRef::Pen) {
+            app.ui.direct_selection = Default::default();
+        }
+        return Ok(r);
+    }
+    let name =
+        shape_source_path(app).ok_or_else(|| tl!("No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
+    let r = app.run("path.toShape", json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)}))?;
+    if name == "work" && app.ui.selected_path.as_deref() == Some("work") {
+        app.ui.selected_path = None;
+    }
+    Ok(r)
+}
+
+/// The path Make Shape makes a shape from without a draft: [`active_path_name`] when it is the
+/// Work Path or a saved path, never a layer's own path (that would duplicate the shape or mask).
+pub fn shape_source_path(app: &PhotocraftApp) -> Option<String> {
+    active_path_name(app).filter(|n| n != "layer")
+}
+
 /// After the Pen or Path Selection tool made a selection from the path `name` (⌘↩, the canvas
 /// menu's Make Selection…), Photoshop deselects it in the Paths panel and stops drawing it; the
 /// path itself stays (#6079). The Work Path is hidden too when a saved path was loaded, so no
