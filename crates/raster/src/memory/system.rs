@@ -354,9 +354,11 @@ pub(super) mod linux {
     /// `mountinfo` parsed to at least one mount, none of them a cgroup filesystem. An empty or
     /// garbled file parses to no mounts at all, which proves nothing about cgroups; a live kernel
     /// always lists the process's own root, so only a real list can show a cgroup mount is absent.
+    /// Every non-empty line must parse: a skipped truncated line could be the cgroup mount.
     fn lists_mounts_without_cgroup(info: &str) -> bool {
         let mounts = parse_mountinfo(info);
-        !mounts.is_empty() && !mounts.iter().any(is_cgroup_mount)
+        let lines = info.lines().filter(|l| !l.trim().is_empty()).count();
+        !mounts.is_empty() && mounts.len() == lines && !mounts.iter().any(is_cgroup_mount)
     }
 
     /// Trims trailing slashes so `Path` equality holds while walking ancestors, keeping `/`.
@@ -962,6 +964,14 @@ mod tests {
         write(&proc.join("self/cgroup"), "0::/app.slice/app-flatpak.scope\n");
         write(&proc.join("self/mountinfo"), "25 20 0:23 / /proc rw - proc proc rw\n");
         assert_eq!(linux::cgroup_limits(&proc, &sys), linux::CgroupLimits::NotConstrained);
+        std::fs::remove_dir_all(proc.parent().unwrap()).unwrap();
+
+        // A truncated mount line may be the cgroup mount: with /sys/fs/cgroup absent, fail closed.
+        let (proc, _) = fixture("truncated-mountinfo-line");
+        let sys = proc.parent().unwrap().join("absent-sys");
+        write(&proc.join("self/cgroup"), "0::/app\n");
+        write(&proc.join("self/mountinfo"), "25 20 0:23 / /proc rw - proc proc rw\n30 20 0:26 / /sys/fs/cgroup rw - cgroup2\n");
+        assert_eq!(linux::cgroup_limits(&proc, &sys), linux::CgroupLimits::Unreadable);
         std::fs::remove_dir_all(proc.parent().unwrap()).unwrap();
 
         // A cgroup2 mount at an alternate path must be honoured while /sys/fs/cgroup is absent.
