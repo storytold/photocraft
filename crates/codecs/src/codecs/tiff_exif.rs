@@ -108,6 +108,38 @@ pub(crate) fn read_raw(b: &[u8]) -> Option<ExifDirs> {
     Some(dirs)
 }
 
+/// The EXIF parts of a raw that keeps each directory as the first one of its own classic TIFF
+/// stream (Canon CR3's CMT1, CMT2 and CMT4 boxes), as [`read_raw`] gives them. A stream whose
+/// first directory doesn't read is left out, and so is one in another byte order than the first
+/// readable one (a block has one byte order). Each stream is copied within its own budget, as
+/// [`read`] bounds one stream, so a large GPS directory can't crowd out the Exif one.
+pub(crate) fn read_directories(ifd0: Option<&[u8]>, exif: Option<&[u8]>, gps: Option<&[u8]>) -> Option<ExifDirs> {
+    fn parse(b: Option<&[u8]>) -> Option<(File<'_>, Ifd)> {
+        let f = b.and_then(File::parse).filter(|f| !f.big)?;
+        let dir = f.ifd(f.first_ifd)?;
+        Some((f, dir))
+    }
+    let (ifd0, exif, gps) = (parse(ifd0), parse(exif), parse(gps));
+    let le = [&ifd0, &exif, &gps].into_iter().flatten().next()?.0.le;
+    let first = |part: &Option<(File<'_>, Ifd)>, keep: &dyn Fn(u16) -> bool| match part {
+        Some((f, dir)) if f.le == le => fields(f, dir, &mut MAX_COPIED_BYTES.min(f.b.len()), keep),
+        _ => Vec::new(),
+    };
+    let ifd0 = first(&ifd0, &|t| IFD0_TAGS.contains(&t));
+    let gps = first(&gps, &|_| true);
+    let mut exif = first(&exif, &|_| true);
+    exif.retain(|f| !matches!(f.tag, TAG_PIXEL_X_DIMENSION | TAG_PIXEL_Y_DIMENSION));
+    Some(ExifDirs { le, ifd0, exif, gps })
+}
+
+/// The EXIF parts of a camera's JPEG (Fujifilm RAF's), as [`read_raw`] gives them for the image
+/// developed from the raw: `exif` is its APP1 block without the `Exif\0\0` prefix.
+pub(crate) fn read_camera_jpeg(exif: &[u8]) -> Option<ExifDirs> {
+    let mut dirs = read(exif)?;
+    dirs.exif.retain(|f| !matches!(f.tag, TAG_PIXEL_X_DIMENSION | TAG_PIXEL_Y_DIMENSION));
+    Some(dirs)
+}
+
 fn read_file(f: File<'_>) -> Option<ExifDirs> {
     let b = f.b;
     if f.big {

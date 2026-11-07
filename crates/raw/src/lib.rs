@@ -98,6 +98,30 @@ pub fn orientation(bytes: &[u8]) -> Option<u16> {
     tiff.tag_uint(&ifd, tag::ORIENTATION).filter(|o| (1..=8).contains(o)).map(|o| o as u16)
 }
 
+/// Where a raw that is not a TIFF stream keeps its EXIF (camera, exposure, lens, date), for
+/// the metadata of the image opened from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExifSource<'a> {
+    /// Canon CR3: classic TIFF streams whose first directory is IFD0 (the CMT1 box), the Exif
+    /// directory (CMT2) and the GPS directory (CMT4), each when present.
+    Directories { ifd0: Option<&'a [u8]>, exif: Option<&'a [u8]>, gps: Option<&'a [u8]> },
+    /// Fujifilm RAF: the camera's JPEG, whose APP1 EXIF describes the shot.
+    Jpeg(&'a [u8]),
+}
+
+/// Where a CR3 or RAF keeps its EXIF; `None` for the TIFF-based raws, whose own stream holds
+/// it, and when the file has none.
+pub fn exif_source(bytes: &[u8]) -> Option<ExifSource<'_>> {
+    match identify(bytes)? {
+        RawFormat::Cr3 => cr3::exif_directories(bytes),
+        RawFormat::Raf => {
+            let (at, len) = raf::preview_range(bytes)?;
+            bytes.get(at..at.checked_add(len)?).filter(|j| j.starts_with(&[0xFF, 0xD8])).map(ExifSource::Jpeg)
+        }
+        _ => None,
+    }
+}
+
 /// Camera raw container families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RawFormat {
