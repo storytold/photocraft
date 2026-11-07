@@ -8,7 +8,10 @@
 //! ([`photocraft_algo::direct`], `registration`: auto falls back to it, or ask for it). Projections: Auto, Perspective
 //! (homography), Cylindrical and Spherical (rigid motion on the cylinder / sphere, focal length
 //! from the homographies or EXIF), Collage (similarity) and Reposition (translation). The
-//! reference stays put in the planar projections.
+//! reference stays put in the planar projections. With Auto, layers that nearly coincide (a
+//! bracket) keep the simplest placement that agrees with the reference photometrically, so an
+//! already-aligned bracket is not bent by a homography fitted to correspondences within a pixel
+//! of the identity.
 //!
 //! Auto-Blend gives each selected layer a mask so the composite shows, per pixel, the sharpest
 //! layer (Stack Images, for focus stacking) or one layer per region with seams routed where the
