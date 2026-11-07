@@ -33,9 +33,11 @@ pub(crate) fn commands(a: &CommandsArgs, out: &mut dyn Write) -> Result {
 }
 
 /// The JSON type an `edit.colorSettings` key takes.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SettingType {
+    /// A string (a profile name or path, a policy, an intent).
     Text,
+    /// `true` or `false`.
     Flag,
     /// `blendTextGamma`: a gamma, or a bool for the default or none.
     FlagOrNumber,
@@ -84,6 +86,8 @@ fn check_color_settings(v: &serde_json::Value) -> std::result::Result<(), String
     Ok(())
 }
 
+/// `photocraft-cli serve`: one headless session answering JSON lines on stdio or a local port,
+/// with the operator's `--color-settings` applied before the first request.
 pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     use std::sync::{Arc, Mutex};
     let mut h = Headless::with_workspace(a.automation.workspace()?);
@@ -155,4 +159,41 @@ pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     };
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     Ok(rt.block_on(server.serve_stdio())?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{COLOR_SETTINGS_KEYS, Headless, SettingType};
+
+    /// `--color-settings` takes exactly the keys `edit.colorSettings` documents in its params,
+    /// each with the type documented there (a quoted value is a string, `bool` a flag, a range or
+    /// `bool` a number or flag). A key added to the command without being added here fails this
+    /// test, instead of being refused only when an operator first passes it.
+    #[test]
+    fn color_settings_keys_match_the_command_params_doc() {
+        let list = Headless::new().command_list();
+        let spec = list.as_array().into_iter().flatten().find(|c| c["id"] == "edit.colorSettings").expect("edit.colorSettings is listed");
+        let doc = spec["params"].as_str().expect("a params doc");
+        let inner = doc.strip_prefix('{').and_then(|d| d.split_once('}')).map(|(i, _)| i).expect("a params object first");
+        let mut documented: Vec<(String, SettingType)> = inner
+            .split(',')
+            .map(|kv| {
+                let (k, v) = kv.split_once(':').unwrap_or_else(|| panic!("`{kv}` is not key:value"));
+                let ty = if v.starts_with('"') {
+                    SettingType::Text
+                } else if v.starts_with("bool") {
+                    SettingType::Flag
+                } else if v.contains("bool") {
+                    SettingType::FlagOrNumber
+                } else {
+                    panic!("{k}: no rule for `{v}`")
+                };
+                (k.trim_matches('"').to_string(), ty)
+            })
+            .collect();
+        let mut ours: Vec<(String, SettingType)> = COLOR_SETTINGS_KEYS.iter().map(|&(k, t)| (k.to_string(), t)).collect();
+        documented.sort_by(|a, b| a.0.cmp(&b.0));
+        ours.sort_by(|a, b| a.0.cmp(&b.0));
+        assert_eq!(ours, documented);
+    }
 }
