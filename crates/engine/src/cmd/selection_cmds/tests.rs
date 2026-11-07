@@ -731,6 +731,19 @@ fn lasso_polygon() {
     assert_eq!(coverage(&s, 2, 2), 1.0);
 }
 
+/// A non-finite x takes the full-width rows; finite points keep the narrow band.
+#[test]
+fn lasso_band_is_full_width_for_a_non_finite_x() {
+    use super::polygon_window_rect;
+    let area = photocraft_geom::Rect::new(0, 0, 100, 100);
+    let finite = [(10.0f32, 10.0f32), (20.0, 10.0), (10.0, 20.0)];
+    let band = polygon_window_rect(&finite, area);
+    assert!(band.x0 > 0 && band.x1 < 100);
+    let wide = [(10.0f32, 10.0f32), (1e40f64 as f32, 10.0), (10.0, 20.0)];
+    let band = polygon_window_rect(&wide, area);
+    assert_eq!((band.x0, band.x1), (0, 100));
+}
+
 /// The previous per-sample padding and cropping, kept as the oracle for the row-wise ones.
 fn old_pad_mask(m: &[f32], w: usize, h: usize, pad: usize, outside_empty: bool) -> Vec<f32> {
     let pw = w + 2 * pad;
