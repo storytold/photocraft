@@ -923,9 +923,11 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
             app.ui.tool = match group.iter().position(|x| *x == app.ui.tool) {
                 Some(i) if shift_switch && !cycle_shift => group[i],
                 Some(i) => group[(i + 1) % group.len()],
-                None => app.ui.group_tool(t.key()).filter(|last| group.contains(last)).unwrap_or_else(|| {
-                    group.iter().copied().min_by_key(|tool| crate::panels::toolbar::toolbar_position(*tool)).unwrap_or(t)
-                }),
+                None => app
+                    .ui
+                    .group_tool(t.key())
+                    .filter(|last| group.contains(last))
+                    .unwrap_or_else(|| group.iter().copied().min_by_key(|tool| crate::panels::toolbar::toolbar_position(*tool)).unwrap_or(t)),
             };
             crate::tool_memory::ended_by_tool(app);
             // `consume_key` ignores extra ⇧ and ⌥: a ⇧/⌥ switch is never spring-loaded.
