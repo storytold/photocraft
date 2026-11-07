@@ -709,12 +709,15 @@ fn steps_after_a_revert_reuse_no_step_of_the_file() {
 #[test]
 fn a_mode_change_replays_with_the_colour_settings_it_ran_with() {
     let mut s = Session::new();
-    s.execute("edit.colorSettings", json!({"workingRgb": "rec2020"})).unwrap();
+    s.execute("edit.colorSettings", json!({"workingRgb": "rec2020", "intent": "perceptual", "bpc": false})).unwrap();
     s.execute("file.new", json!({"width": 8, "height": 8, "mode": "gray", "depth": 8, "background": "white"})).unwrap();
     s.execute("design.start", json!({})).unwrap();
     s.execute("image.mode.rgb", json!({})).unwrap();
     let step = s.active().unwrap().doc.design_timeline.as_ref().unwrap().steps.last().unwrap().clone();
     assert_eq!(step.params["profile"], "rec2020", "{}", step.params);
+    // Not the defaults (relative, bpc on), so a replay without them would convert differently.
+    assert_eq!(step.params["intent"], "perceptual", "{}", step.params);
+    assert_eq!(step.params["bpc"], false, "{}", step.params);
     assert!(step.baked.is_none(), "a built-in working space replays");
     let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
     let mut r = Session::new();
