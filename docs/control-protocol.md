@@ -486,15 +486,19 @@ a host page on the same origin that shows it in an `<iframe>`, uses the commands
 |---|---|
 | `photocraft.request(method, params)` | any control method of this document → its `result` |
 | `photocraft.execute(command, params)` | `engine.execute` |
-| `photocraft.commands()` / `photocraft.inspect()` | `engine.commands` / `ui.inspect` |
-| `photocraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline) |
+| `photocraft.commands()` / `photocraft.uiInspect(params)` | `engine.commands` / `ui.inspect` |
+| `photocraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline, as `data` and as `base64`) |
 | `photocraft.openFile(name, bytes)` | opens the bytes the way a dropped file opens |
 
-`request`, `execute`, `commands`, `inspect` and `screenshot` return promises. `openFile` returns at once:
-`true` when the file is queued to open on the next frame, `false` when the app isn't running yet.
+`request`, `execute`, `commands`, `uiInspect` and `screenshot` come from
+[`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413),
+the same functions every Craft web build has, and return promises. PhotoCraft has no `document.inspect`, so
+there is no `docInspect`. `openFile` is PhotoCraft's own and returns at once: `true` when the file is queued to
+open on the next frame, `false` when the app isn't running yet.
 
-Errors reject with an `Error` carrying the method's message, and params that are not an object (a number, `NaN`, a string, a function) or have no JSON (a cyclic object) reject without running anything. Requests run on the UI's next frame, so a
-hidden tab (whose frames the browser pauses) answers when it is shown again.
+Errors reject with an `Error` carrying the method's message, and params that are not an object (a number, `NaN`, a string, an array, a function) or have no JSON (a cyclic object) reject without running anything. Requests run on the UI's next frame, so a
+hidden tab (whose frames the browser pauses) answers when it is shown again. A call the app doesn't answer
+within 30 seconds rejects, and the app drops it unrun if it had not started it.
 
 **Who can call it.** `window.photocraft` is on the page's own `window`, so it can be called by scripts that
 run in that page (the page's own scripts, anything it includes, the browser console) and by a page on the

@@ -476,7 +476,6 @@ impl eframe::App for WebShell {
         self.app.logic_frame(ctx, frame);
         self.save_presets(ctx);
         self.app.finish_type_reset_logic(ctx);
-        crate::api::poll_replies();
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -506,7 +505,6 @@ impl eframe::App for WebShell {
         self.app.ui_frame(ui, frame);
         self.save_presets(ui.ctx());
         self.app.finish_type_reset_pass(ui.ctx());
-        crate::api::poll_replies();
     }
 }
 
