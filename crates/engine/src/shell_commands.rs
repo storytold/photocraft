@@ -26,6 +26,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("window.panel.window", "Open Panel in Own Window", &[], None),
     ("ui.dock", "Arrange Panels", &[], None),
     ("file.open", "Open…", &["File"], Some("Cmd+O")),
+    ("file.openDeep", "Open as Deep…", &["File", "Import"], None),
     ("file.save", "Save", &["File"], Some("Cmd+S")),
     ("file.saveAs", "Save As…", &["File"], Some("Cmd+Shift+S")),
     ("file.exit", "Exit", &["File"], Some("Cmd+Q")),
