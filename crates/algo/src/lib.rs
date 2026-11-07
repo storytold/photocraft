@@ -79,6 +79,7 @@ pub mod separable;
 mod shape_blur;
 mod sharpen;
 pub mod smart_affine;
+pub mod smart_perspective;
 pub mod smart_scale;
 mod square_dilate;
 pub mod stack;

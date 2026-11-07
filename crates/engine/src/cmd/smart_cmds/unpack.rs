@@ -121,6 +121,11 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, canvas: photocraft_geom:
                 let (cx, cy) = (f64::from(canvas.x0), f64::from(canvas.y0));
                 photocraft_algo::smart_affine::render(surface, canvas, [a, b, c, d, e + a * cx + c * cy, f + b * cx + d * cy])
             }
+            // In a one-way perspective: as the smart object draws it.
+            LayerContent::Raster(surface) => sm.perspective.and_then(|p| {
+                let corner = photocraft_algo::smart_perspective::from_corner(p, f64::from(canvas.x0), f64::from(canvas.y0));
+                photocraft_algo::smart_perspective::render(surface, canvas, corner)
+            }),
             _ => None,
         };
         released(l, |l| crate::transform_cmds::transform_layer(None, photocraft_doc::Locks::default(), l, &h, affine, Interp::Bicubic))?;

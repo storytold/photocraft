@@ -34,7 +34,7 @@ const WALK_BITS: u32 = 25;
 
 /// 14-bit Bicubic weights of the six taps `floor(u) − 2 ..= floor(u) + 3` for each of the 128
 /// phases of `u`.
-fn weight_table() -> Vec<[i64; 6]> {
+pub(crate) fn weight_table() -> Vec<[i64; 6]> {
     (0..128)
         .map(|ph| {
             let u = f64::from(ph) / 128.0;
@@ -60,11 +60,11 @@ fn weight_table() -> Vec<[i64; 6]> {
 }
 
 /// Rounds to whole 1/256 px, halves up.
-fn r256(v: f64) -> i64 {
+pub(crate) fn r256(v: f64) -> i64 {
     (v * 256.0 + 0.5).floor() as i64
 }
 
-fn round_half_up(v: f64) -> i64 {
+pub(crate) fn round_half_up(v: f64) -> i64 {
     (v + 0.5).floor() as i64
 }
 
@@ -118,20 +118,23 @@ fn reduce(img: &Image, n1: usize, depth: Depth) -> Image {
 /// (1/256 px) from that row's origin, the row's `img.w` samples spanning `length` (1/256 px).
 fn pass(img: &Image, dist0: &[i64], count: usize, length: i64, depth: Depth, table: &[[i64; 6]]) -> Option<Image> {
     let scale = length as f64 / (img.w as f64 * 256.0);
-    let reduced;
-    let img = if scale < SHRINK_LIMIT {
+    if scale < SHRINK_LIMIT {
         let n1 = round_half_up(img.w as f64 * scale / SHRINK_LIMIT).max(1) as usize;
-        reduced = reduce(img, n1, depth);
-        &reduced
-    } else {
-        img
-    };
+        return walk(&reduce(img, n1, depth), dist0, count, &vec![length; img.h], depth, table);
+    }
+    walk(img, dist0, count, &vec![length; img.h], depth, table)
+}
+
+/// The walk of rule 4 along the rows of `img`, no averaging: row `y` produces `count` pixels, the
+/// first lying `dist0[y]` (1/256 px) from that row's origin, its `img.w` samples spanning
+/// `lengths[y]` (1/256 px).
+pub(crate) fn walk(img: &Image, dist0: &[i64], count: usize, lengths: &[i64], depth: Depth, table: &[[i64; 6]]) -> Option<Image> {
     let (n, nc) = (img.w, img.n);
     let alpha = nc - 1;
     let last = n as i64 - 1;
     let mut px = vec![0.0f32; count.checked_mul(img.h)?.checked_mul(nc)?];
     crate::par::chunks_mut(&mut px, count * nc, true, |y, row| {
-        let Some(&d0) = dist0.get(y) else { return };
+        let (Some(&d0), Some(&length)) = (dist0.get(y), lengths.get(y)) else { return };
         let Some(line) = img.px.get(y * n * nc..(y + 1) * n * nc) else { return };
         let phases = line_phases(d0, count, length, n);
         let mut acc = vec![0.0f64; nc];
@@ -164,7 +167,7 @@ fn pass(img: &Image, dist0: &[i64], count: usize, length: i64, depth: Depth, tab
     Some(Image { w: count, h: img.h, n: nc, px })
 }
 
-fn transpose(img: &Image) -> Image {
+pub(crate) fn transpose(img: &Image) -> Image {
     let (w, h, n) = (img.w, img.h, img.n);
     let mut px = vec![0.0f32; w * h * n];
     // Output row x is input column x.

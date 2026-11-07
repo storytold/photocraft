@@ -145,6 +145,11 @@ pub fn place_source_projective(
         let (cu, cv) = patch_cuts(w, src_rect);
         return Ok(warp_patches_surface(src, src_rect, &map, &cu, &cv, Interp::Bilinear));
     }
+    // A one-way perspective: as the reference application draws it.
+    let corner = crate::smart_perspective::from_corner(h.0, f64::from(src_rect.x0), f64::from(src_rect.y0));
+    if let Some(out) = crate::smart_perspective::render(src, src_rect, corner) {
+        return Ok(out);
+    }
     crate::transform::warp_surface(src, src_rect, h, Interp::Bicubic)
 }
 
