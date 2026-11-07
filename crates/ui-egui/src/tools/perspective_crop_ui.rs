@@ -121,6 +121,11 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
     let tol = crate::distort_ui::tolerance(app);
     match ev {
         ToolEvent::Down { .. } => {
+            // A new quad's first press drops an active selection as its own "Deselect" step, as in
+            // Photoshop (#11975): it is gone after the commit and after Esc too.
+            if app.ui.perspective_crop.is_none() && app.session.active().is_some_and(|d| d.doc.selection.is_some()) {
+                let _ = app.run("select.deselect", json!({}));
+            }
             app.pcrop.drag = match app.ui.perspective_crop {
                 Some(q) => {
                     let near = (0..4)
@@ -315,6 +320,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
 }
+
+#[cfg(test)]
+#[path = "perspective_crop_deselect_tests.rs"]
+mod perspective_crop_deselect_tests;
 
 #[cfg(test)]
 mod tests {
