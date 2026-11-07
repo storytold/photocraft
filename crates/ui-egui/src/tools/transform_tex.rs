@@ -53,6 +53,17 @@ impl PreviewTextures {
         }
     }
 
+    /// Level-zero texel for preview regressions.
+    #[cfg(test)]
+    pub fn texel(&self, x: usize, y: usize) -> Option<egui::Color32> {
+        let images = self.images.lock().ok()?;
+        let image = images.first()?;
+        if x >= image.size[0] || y >= image.size[1] {
+            return None;
+        }
+        image.pixels.get(y.checked_mul(image.size[0])?.checked_add(x)?).copied()
+    }
+
     /// Size of the full-resolution level in texels.
     pub fn size(&self) -> [usize; 2] {
         self.images.lock().unwrap_or_else(PoisonError::into_inner).first().map_or([0, 0], |i| i.size)
