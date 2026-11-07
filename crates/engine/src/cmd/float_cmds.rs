@@ -103,6 +103,19 @@ impl CutParts {
         self.outline.as_ref()
     }
 
+    /// The floating pixel piece and its bounds (`None` when the floating piece is a layer mask).
+    pub fn piece(&self) -> Option<(&Surface, photocraft_geom::Rect)> {
+        (!self.mask).then_some((&self.piece, self.piece_bounds))
+    }
+
+    /// Replace the layer's pixels with the cut-out remainder.
+    pub fn place_rest(&self, doc: &mut Document) -> Result<()> {
+        let l = doc.layer_mut(self.layer).ok_or(EngineError::NoLayer(self.layer))?;
+        let surf = l.surface_mut().ok_or_else(|| EngineError::Other("the layer has no pixels to move".into()))?;
+        *surf = self.rest.clone();
+        Ok(())
+    }
+
     /// `doc` with the piece moved by whole pixels (dx, dy) over the cut-out layer.
     pub fn moved(&self, doc: &Document, dx: i32, dy: i32) -> Result<Document> {
         let mut d = doc.clone();
@@ -340,7 +353,7 @@ pub fn drop_floating(s: &mut Session) -> Result<Value> {
 
 /// Commands that leave a floating piece floating: its own, and ones that don't touch documents.
 fn keeps_floating(id: &str) -> bool {
-    matches!(id, "select.float" | "select.drop" | "brush.mixer.sample" | "brush.mixer.load" | "brush.mixer.clean")
+    matches!(id, "select.float" | "select.drop" | "layer.copyToDocument" | "brush.mixer.sample" | "brush.mixer.load" | "brush.mixer.clean")
         || ["view.", "window.", "help.", "prefs."].iter().any(|p| id.starts_with(p))
 }
 

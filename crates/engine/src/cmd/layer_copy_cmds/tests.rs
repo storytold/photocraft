@@ -696,8 +696,7 @@ fn copies_selected_pixels_to_destination_document_with_copy_and_cut() {
     s.set_active(0);
     s.execute("select.rect", json!({"x": 9, "y": 6, "width": 5, "height": 10})).unwrap();
     s.execute("select.float", json!({"dx": 6, "dy": 4})).unwrap();
-    s.set_active(1);
-    let r3 = s.execute("layer.copyToDocument", json!({"document": 1, "source": 0, "selection": true, "cut": false, "offset": [2, 3]})).unwrap();
+    let r3 = s.execute("layer.copyToDocument", json!({"document": 1, "selection": true, "cut": false, "offset": [2, 3]})).unwrap();
     let dest_id3 = copied(&r3);
     assert_eq!(bounds(&s, 1, dest_id3), Rect::new(17, 13, 22, 23));
     assert_eq!(s.documents()[0].floating.as_ref().map(|f| f.offset), Some((6, 4)));

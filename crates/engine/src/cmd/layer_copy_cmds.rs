@@ -211,6 +211,9 @@ pub(crate) fn translate_copies(copies: &mut Document, destination: &Document, dx
 
 /// `layer.copyToDocument`.
 fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
+    if !p.get("selection").and_then(Value::as_bool).unwrap_or(false) {
+        crate::float_cmds::drop_floating(s)?;
+    }
     let dest = doc_index(s, p, "document")?.ok_or_else(|| bad("missing `document` (the destination's index)"))?;
     let src = match doc_index(s, p, "source")? {
         Some(i) => i,
@@ -221,13 +224,32 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let (from, to) = (&s.documents()[src], &s.documents()[dest]);
     let (sdoc, ddoc) = (from.doc.clone(), to.doc.clone());
+    if let Some(job) = s.job_on(ddoc.id) {
+        return Err(EngineError::Disabled(CMD.into(), format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", job.label)));
+    }
 
     if p.get("selection").and_then(Value::as_bool).unwrap_or(false) {
+        let cut = p.get("cut").and_then(Value::as_bool).unwrap_or(false);
+        if cut && let Some(job) = s.job_on(sdoc.id) {
+            return Err(EngineError::Disabled(
+                CMD.into(),
+                format!("“{}” is still running on this document; wait for it to finish or cancel it (Esc)", job.label),
+            ));
+        }
         let id = from.active_layer.ok_or_else(|| bad("no active layer in source document"))?;
         let src_layer = sdoc.layer(id).ok_or(EngineError::NoLayer(id))?;
-        let surf = src_layer.surface().ok_or_else(|| EngineError::Other("the active layer has no pixels to copy".into()))?;
-        let clip = crate::cmd::edit_cmds::lift(surf, sdoc.selection.as_ref(), sdoc.bounds())?;
-        if clip.bounds.is_empty() {
+        let floating_parts = crate::float_cmds::floating(from)
+            .filter(|f| f.layer == id)
+            .and_then(|f| f.parts.piece().map(|(piece, bounds)| (piece.clone(), bounds, f.offset, f.parts.clone())));
+        let (clip_surface, clip_bounds, float_off, float_cut) = match floating_parts {
+            Some((piece, bounds, off, parts)) => (piece, bounds, off, Some(parts)),
+            None => {
+                let surf = src_layer.surface().ok_or_else(|| EngineError::Other("the active layer has no pixels to copy".into()))?;
+                let clip = crate::cmd::edit_cmds::lift(surf, sdoc.selection.as_ref(), sdoc.bounds())?;
+                (clip.surface, clip.bounds, (0, 0), None)
+            }
+        };
+        if clip_bounds.is_empty() {
             return Err(bad("the selected area is empty"));
         }
         for (doc, role) in [(&sdoc, "source"), (&ddoc, "destination")] {
@@ -238,12 +260,11 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         let mut copies = Document::new("", sdoc.size, sdoc.mode, sdoc.depth);
         copies.icc_profile = sdoc.icc_profile.clone();
         copies.resolution_dpi = sdoc.resolution_dpi;
-        let mut l = Layer::raster(ddoc.next_layer_name("Layer"), clip.surface.format());
-        *crate::pixels_mut(&mut l)? = clip.surface;
+        let mut l = Layer::raster(ddoc.next_layer_name("Layer"), clip_surface.format());
+        *crate::pixels_mut(&mut l)? = clip_surface;
         copies.layers.push(l);
 
-        let float_off = crate::float_cmds::floating(from).map_or((0, 0), |f| f.offset);
-        let content = clip.bounds.translate(float_off.0, float_off.1);
+        let content = clip_bounds.translate(float_off.0, float_off.1);
         adapt_copies(s, &mut copies, &ddoc)?;
         let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
             let (c, d) = (center(content), center(ddoc.bounds()));
@@ -257,18 +278,26 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         let (dx, dy) = (dx.round() as i32 + float_off.0, dy.round() as i32 + float_off.1);
         translate_copies(&mut copies, &ddoc, dx, dy);
 
-        let cut = p.get("cut").and_then(Value::as_bool).unwrap_or(false);
-        if cut {
+        let prev_active = s.active_index();
+        let pre_cut = if cut {
             sdoc.scratch_health().map_err(EngineError::Other)?;
             ddoc.scratch_health().map_err(EngineError::Other)?;
+            let pre_cut = s.documents()[src].clone();
             let bg = s.tools.background;
             s.set_active(src);
             s.edit("Cut Pixels", |doc, _| {
-                crate::cmd::edit_cmds::clear_selected(doc, id, bg)?;
+                if let Some(parts) = &float_cut {
+                    parts.place_rest(doc)?;
+                } else {
+                    crate::cmd::edit_cmds::clear_selected(doc, id, bg)?;
+                }
                 doc.selection = None;
                 Ok(())
             })?;
-        }
+            Some(pre_cut)
+        } else {
+            None
+        };
 
         s.set_active(dest);
         let edited = match s.edit("Duplicate Layer", |doc, active| {
@@ -286,9 +315,13 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         }) {
             Ok(edited) => edited,
             Err(e) => {
-                if cut {
-                    s.set_active(src);
-                    s.rollback();
+                if let Some(pre_cut) = pre_cut
+                    && let Some(slot) = s.docs.get_mut(src)
+                {
+                    *slot = pre_cut;
+                }
+                if let Some(prev) = prev_active {
+                    s.set_active(prev);
                 }
                 return Err(e);
             }

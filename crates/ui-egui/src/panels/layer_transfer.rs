@@ -234,42 +234,26 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
     let Some(to) = docs.get(dest).filter(|_| dest != src) else { return };
     let same_size = to.doc.size == docs[src].doc.size;
 
-    match t.kind {
-        TransferKind::Layers(layers) => {
-            let mut p = json!({"document": dest, "source": src, "layers": layers});
-            match at.filter(|_| !ctx.input(|i| i.modifiers.shift)) {
-                Some(at) => match t.grab {
-                    Some(g) => p["offset"] = json!([(at[0] - g[0]).round(), (at[1] - g[1]).round()]),
-                    None => p["at"] = json!(at),
-                },
-                None => p["center"] = json!(!same_size),
-            }
-            app.session.set_active(dest);
-            if let Err(e) = app.run("layer.copyToDocument", p) {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
-        }
-        TransferKind::Selection => {
-            let mut p = json!({
-                "document": dest,
-                "source": src,
-                "selection": true,
-                "cut": false,
-            });
-            match at.filter(|_| !ctx.input(|i| i.modifiers.shift)) {
-                Some(at) => match t.grab {
-                    Some(g) => p["offset"] = json!([(at[0] - g[0]).round(), (at[1] - g[1]).round()]),
-                    None => p["at"] = json!(at),
-                },
-                None => p["center"] = json!(!same_size),
-            }
-            app.session.set_active(dest);
-            if let Err(e) = app.run("layer.copyToDocument", p) {
-                app.ui.status = e;
-                app.ui.status_error = true;
-            }
-        }
+    let shift = ctx.input(|i| i.modifiers.shift);
+    let mut p = match t.kind {
+        TransferKind::Layers(layers) => json!({"document": dest, "source": src, "layers": layers}),
+        TransferKind::Selection => json!({"document": dest, "source": src, "selection": true, "cut": false}),
+    };
+    apply_drop_placement(&mut p, at, t.grab, shift, same_size);
+    app.session.set_active(dest);
+    if let Err(e) = app.run("layer.copyToDocument", p) {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
+}
+
+fn apply_drop_placement(p: &mut serde_json::Value, at: Option<[f64; 2]>, grab: Option<[f64; 2]>, shift: bool, same_size: bool) {
+    match at.filter(|_| !shift) {
+        Some(at) => match grab {
+            Some(g) => p["offset"] = json!([(at[0] - g[0]).round(), (at[1] - g[1]).round()]),
+            None => p["at"] = json!(at),
+        },
+        None => p["center"] = json!(!same_size),
     }
 }
 
