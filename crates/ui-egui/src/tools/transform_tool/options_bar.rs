@@ -270,6 +270,64 @@ fn reference_point_toggle(ui: &mut egui::Ui, on: &mut bool) -> bool {
     *on
 }
 
+/// Where the reference point was when the session opened: the point of the original box that the
+/// box's transform has carried to the reference point now. A box that only scales or turns about
+/// its reference point leaves it in place; a moved box carries it along.
+fn reference_point_origin(rect: [f64; 4], quad: [[f64; 2]; 4], pivot: [f64; 2]) -> [f64; 2] {
+    if let Some(h) = Homography::rect_to_quad(rect, quad).and_then(|h| h.inverse()) {
+        let (x, y) = h.apply(pivot[0], pivot[1]);
+        if x.is_finite() && y.is_finite() {
+            return [x, y];
+        }
+    }
+    // A flattened box has no inverse: count how far its top-left corner moved.
+    [pivot[0] - (quad[0][0] - rect[0]), pivot[1] - (quad[0][1] - rect[1])]
+}
+
+fn shown_at(rect: [f64; 4], quad: [[f64; 2]; 4], pivot: [f64; 2], relative: bool) -> [f64; 2] {
+    if relative {
+        let o = reference_point_origin(rect, quad, pivot);
+        [pivot[0] - o[0], pivot[1] - o[1]]
+    } else {
+        pivot
+    }
+}
+
+/// X and Y as the options bar shows them: the reference point's position, or with relative
+/// positioning on (#11679) its offset from where it was when the session opened.
+pub(crate) fn position_shown(t: &TransformSession, relative: bool) -> [f64; 2] {
+    shown_at(t.rect, t.quad, t.pivot, relative)
+}
+
+/// Moves the box (and its reference point) so X and Y read `xy` (see [`position_shown`]).
+pub(crate) fn set_position(s: &mut TransformSession, relative: bool, xy: [f64; 2]) {
+    let now = position_shown(s, relative);
+    let (dx, dy) = (xy[0] - now[0], xy[1] - now[1]);
+    s.quad = s.quad.map(|q| [q[0] + dx, q[1] + dy]);
+    s.pivot = [s.pivot[0] + dx, s.pivot[1] + dy];
+}
+
+/// Use Relative Positioning for Reference Point: the triangle button Photoshop puts between X and
+/// Y (#11679). On, X and Y are the reference point's offset from where the box started.
+fn relative_position_toggle(ui: &mut egui::Ui, on: &mut bool) {
+    let tk = crate::theme::Tokens::get(ui.ctx());
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::click());
+    if resp.clicked() {
+        *on = !*on;
+    }
+    let painter = ui.painter();
+    if *on || resp.hovered() {
+        painter.rect_filled(rect, 3.0, if *on { tk.accent.gamma_multiply(0.35) } else { tk.card_border.gamma_multiply(0.5) });
+    }
+    let c = rect.center();
+    let tri = vec![egui::pos2(c.x, c.y - 4.5), egui::pos2(c.x + 5.0, c.y + 4.0), egui::pos2(c.x - 5.0, c.y + 4.0)];
+    let color = if *on { tk.accent } else { tk.text_dim };
+    painter.add(egui::Shape::closed_line(tri, egui::Stroke::new(1.2, color)));
+    let label = tl!("Use relative positioning for reference point");
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, *on, label));
+    resp.on_hover_text(label);
+}
+
 fn anchor_grid_widget(ui: &mut egui::Ui, current_anchor: Option<usize>, enabled: bool) -> Option<usize> {
     let size = egui::vec2(16.0, 16.0);
     // Greyed and inert while Toggle Reference Point is off, as in Photoshop (#11098).
@@ -314,18 +372,19 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
         pivot = new_p;
     }
     ui.add_space(4.0);
-    let mut px = pivot[0] as f32;
-    let mut py = pivot[1] as f32;
+    let relative = app.ui.tool_options.transform_relative_position;
+    let shown = shown_at(t.rect, t.quad, pivot, relative);
+    let mut px = shown[0] as f32;
+    let mut py = shown[1] as f32;
     lbl(ui, "X:");
     let rx = crate::widgets::value_field(ui, &mut px, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", 72.0).accessible_name("X");
+    relative_position_toggle(ui, &mut app.ui.tool_options.transform_relative_position);
     lbl(ui, "Y:");
     let ry = crate::widgets::value_field(ui, &mut py, -POSITION_LIMIT_PX..=POSITION_LIMIT_PX, "px", 72.0).accessible_name("Y");
     if (rx.changed() || ry.changed())
         && let Some(s) = app.ui.transform.as_mut()
     {
-        let (dx, dy) = (px as f64 - s.pivot[0], py as f64 - s.pivot[1]);
-        s.quad = s.quad.map(|q| [q[0] + dx, q[1] + dy]);
-        s.pivot = [px as f64, py as f64];
+        set_position(s, relative, [px as f64, py as f64]);
     }
     crate::widgets::vline(ui, 22.0);
     // W and H in the unit picked from their right-click menu: the scale in percent, or the box's
