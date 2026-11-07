@@ -1,7 +1,7 @@
 //! With [`ExportOptions::pcraft_full_composite`] on, a `.pcraft` save writes the flattened
 //! document at its canvas size as `composite/full.png`, next to the 256 px thumbnail and the
 //! 1024 px preview, so other apps can read the whole image without decoding tiles. Off (the
-//! default), the save writes the bundle it wrote before the option existed.
+//! default), the save writes only the two reduced previews.
 
 use photocraft_color::{BlendMode, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent};
@@ -44,18 +44,133 @@ fn flattened(doc: &Document) -> Vec<u8> {
 }
 
 #[test]
+/// Cached and uncached native previews retain native RGB samples with their exact profile,
+/// independently of the full-preview option, and normalize correctly through the tested CMS policy.
+fn reduced_native_previews_carry_their_rgb_profile_without_converting_pixels() {
+    use photocraft_cms::{Builtin, Intent, Profile, Transform};
+    use std::sync::Arc;
+
+    for (builtin, normalized) in [(Builtin::Srgb, [64u8, 128, 191]), (Builtin::LinearSrgb, [137, 188, 225]), (Builtin::DisplayP3, [32, 129, 197])] {
+        let mut d = Document::new("native", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+        let profile = builtin.profile().to_bytes();
+        d.icc_profile = Some(profile.clone());
+        let mut surface = Surface::new(d.pixel_format());
+        surface.write_pixel(0, 0, &[0.25, 0.5, 0.75, 1.0]);
+        d.layers.push(Layer::new("pixel", LayerContent::Raster(surface)));
+        for cached in [false, true] {
+            let cache = cached.then(photocraft_io::PcraftExportCache::default);
+            for full in [false, true, false] {
+                let opts = ExportOptions { pcraft_full_composite: full, pcraft_cache: cache.clone(), ..Default::default() };
+                let bytes = export(&d, "native.pcraft", &opts).unwrap().bytes;
+                let zip = ZipReader::new(&bytes).unwrap();
+                assert_eq!(zip.find("composite/full.png").is_some(), full);
+                for name in ["thumb.png", "composite/preview.png"].into_iter().chain(full.then_some("composite/full.png")) {
+                    let png = zip.read_by_name(name, usize::MAX).unwrap();
+                    let image = photocraft_codecs::decode(&png).unwrap();
+                    assert_eq!(image.icc.as_deref(), Some(profile.as_slice()), "{builtin:?}, {cached}, {full}, {name}");
+                    assert_eq!(image.to_rgba8(), [64, 128, 191, 255]);
+                    assert!(!png_has_srgb(&png));
+                    let source = Profile::parse(image.icc.as_ref().unwrap()).unwrap();
+                    let transform = Transform::new(&source, Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).unwrap();
+                    let mut pixel = [64.0 / 255.0, 128.0 / 255.0, 191.0 / 255.0, 1.0];
+                    transform.apply(&mut pixel, 4);
+                    for (value, expected) in pixel[..3].iter().zip(normalized) {
+                        assert!((value * 255.0 - f32::from(expected)).abs() <= 1.0, "{builtin:?}: {pixel:?}");
+                    }
+                }
+            }
+        }
+        assert!(Arc::ptr_eq(d.icc_profile.as_ref().unwrap(), &profile));
+    }
+}
+
+/// Inspect chunk boundaries in an encoder-produced PNG for a competing sRGB declaration.
+fn png_has_srgb(png: &[u8]) -> bool {
+    let mut chunks = &png[8..];
+    while chunks.len() >= 12 {
+        let len = u32::from_be_bytes(chunks[..4].try_into().unwrap()) as usize;
+        if &chunks[4..8] == b"sRGB" {
+            return true;
+        }
+        chunks = &chunks[len + 12..];
+    }
+    false
+}
+
+/// Asserts that `icc` is an RGB profile with an invertible colorant matrix whose `(v, v, v)`
+/// has the color of gray `v` in `gray`.
+fn assert_rgb_view_of_gray(icc: &[u8], gray: &photocraft_cms::Profile, what: &str) {
+    use photocraft_cms::{Builtin, ColorSpace, Intent, Profile, Transform, math};
+    let rgb = Profile::parse(icc).expect("profile");
+    assert_eq!(rgb.color_space, ColorSpace::Rgb, "{what}");
+    assert!(math::invert(&rgb.matrix.expect("a colorant matrix")).is_some(), "{what}: the colorant matrix is not invertible");
+    let lab = Builtin::LabD50.profile();
+    let from_rgb = Transform::new(&rgb, lab, Intent::RelativeColorimetric, false).expect("RGB to Lab");
+    let from_gray = Transform::new(gray, lab, Intent::RelativeColorimetric, false).expect("gray to Lab");
+    let decode = |o: [f32; 3]| [f64::from(o[0]) * 100.0, f64::from(o[1]) * 255.0 - 128.0, f64::from(o[2]) * 255.0 - 128.0];
+    for step in 0..=16 {
+        let v = step as f32 / 16.0;
+        let (mut a, mut b) = ([0f32; 3], [0f32; 3]);
+        from_rgb.eval(&[v, v, v], &mut a);
+        from_gray.eval(&[v], &mut b);
+        assert!(math::delta_e76(decode(a), decode(b)) < 0.1, "{what}: gray {v} is {a:?} as RGB and {b:?} as gray");
+    }
+}
+
+#[test]
+/// Reduced RGBA previews use adapted RGB gray profiles or the compositor's sRGB fallback,
+/// never a document's incompatible gray, CMYK or Lab profile.
+fn reduced_native_profiles_follow_the_compositor_color_model() {
+    use photocraft_cms::{Builtin, ColorSpace, Profile};
+    use std::sync::Arc;
+
+    let srgb = Builtin::Srgb.profile().to_bytes();
+    let gray = Builtin::GrayGamma22.profile();
+    let default_gray = Builtin::SGray.profile();
+    // `Err` names the gray profile whose RGB view the previews carry.
+    for (mode, own, expected) in [
+        (ColorMode::Rgb, None, Ok(srgb.clone())),
+        (ColorMode::Rgb, Some(Arc::new(vec![0; 128])), Ok(srgb.clone())),
+        (ColorMode::Rgb, Some(gray.to_bytes()), Ok(srgb.clone())),
+        (ColorMode::Grayscale, Some(gray.to_bytes()), Err(gray)),
+        (ColorMode::Bitmap, Some(gray.to_bytes()), Err(gray)),
+        (ColorMode::Duotone, Some(gray.to_bytes()), Err(gray)),
+        (ColorMode::Grayscale, None, Err(default_gray)),
+        (ColorMode::Cmyk, Some(Builtin::CoatedCmyk.profile().to_bytes()), Ok(srgb.clone())),
+        (ColorMode::Lab, Some(Builtin::LabD50.profile().to_bytes()), Ok(srgb.clone())),
+    ] {
+        let mut d = Document::new("policy", Size::new(2, 1), mode, SampleType::U8);
+        d.icc_profile = own;
+        let bytes = export(&d, "policy.pcraft", &ExportOptions::default()).unwrap().bytes;
+        let zip = ZipReader::new(&bytes).unwrap();
+        for (name, side) in [("thumb.png", 256), ("composite/preview.png", 1024)] {
+            let png = zip.read_by_name(name, usize::MAX).unwrap();
+            let image = photocraft_codecs::decode(&png).unwrap();
+            match &expected {
+                Ok(bytes) => assert_eq!(image.icc.as_deref(), Some(bytes.as_slice()), "{mode:?}, {name}"),
+                Err(gray) => assert_rgb_view_of_gray(image.icc.as_ref().unwrap(), gray, &format!("{mode:?}, {name}")),
+            }
+            assert_eq!(Profile::parse(image.icc.as_ref().unwrap()).unwrap().color_space, ColorSpace::Rgb);
+            assert_eq!(image.to_rgba8(), photocraft_compose::thumbnail(&d, side).pixels);
+        }
+    }
+}
+
+#[test]
+/// Default saves tag both reduced previews and omit the full PNG at every supported sample depth.
 fn a_default_save_writes_the_bundle_without_the_full_composite() {
     for depth in SampleType::ALL {
         let d = doc(1500, 700, depth);
         let bytes = export(&d, "a.pcraft", &ExportOptions::default()).expect("export").bytes;
         assert_eq!(photocraft_format::read_full_composite(&bytes).expect("manifest"), None, "{depth:?}");
         assert!(ZipReader::new(&bytes).expect("zip").find("composite/full.png").is_none(), "{depth:?}");
-        // The bytes a save wrote before the option: the bundle with its two previews alone.
+        // Native saves supply the profile of both reduced previews explicitly.
         let mut named = d.clone();
         named.name = "a.pcraft".into();
         let previews = photocraft_format::SaveOptions {
             thumbnail: Some(photocraft_compose::thumbnail(&named, 256)),
             composite: Some(photocraft_compose::thumbnail(&named, 1024)),
+            preview_icc: Some(std::sync::Arc::new(photocraft_io::pcraft_full_composite_icc(&named))),
             ..Default::default()
         };
         assert!(bytes == photocraft_format::save_to_bytes(&named, &previews).expect("save"), "{depth:?}: the default save changed");
@@ -114,7 +229,13 @@ fn the_full_composite_carries_the_profile_of_its_pixels() {
     g.icc_profile = Some(std::sync::Arc::new(gray.to_bytes().to_vec()));
     let tagged = Profile::parse(&full_icc(&g)).expect("profile");
     assert_eq!(tagged.color_space, ColorSpace::Rgb);
-    assert_eq!(tagged.to_bytes(), gray.gray_as_rgb().expect("gray as RGB").to_bytes());
+    assert_rgb_view_of_gray(&full_icc(&g), &gray, "full composite");
+    // A linear gray profile keeps its curve in the RGB view.
+    let mut linear = Builtin::GrayGamma22.profile().clone();
+    linear.gray_trc = Some(photocraft_cms::Curve::Identity);
+    let linear = linear.with_encoded_bytes();
+    g.icc_profile = Some(std::sync::Arc::new(linear.to_bytes().to_vec()));
+    assert_rgb_view_of_gray(&full_icc(&g), &linear, "linear full composite");
 }
 
 #[test]

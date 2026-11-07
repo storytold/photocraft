@@ -1123,6 +1123,8 @@ const PCRAFT_FULL_COMPOSITE_PIXELS: u64 = 1 << 26;
 /// before its bytes are assembled: about 2.7 s of 3.0 s for a 24 MP, 5-layer RGB/8 document.
 const PSD_MODEL_DONE: f32 = 0.9;
 
+/// Prepare the requested output; the caller checks scratch health before and after these stages.
+/// Native previews retain compositor RGB samples and embed the profile describing those samples.
 fn export_stages_with_renderer(
     doc: &Document,
     name_or_ext: &str,
@@ -1176,7 +1178,8 @@ fn export_stages_with_renderer(
             ctl.progress(PCRAFT_FULL_COMPOSITE_DONE);
         }
         let full_composite_icc = full_composite.as_ref().map(|_| pcraft_full_composite_icc(doc.as_ref()));
-        let previews = photocraft_format::SaveOptions { thumbnail, composite, full_composite, full_composite_icc };
+        let preview_icc = Some(std::sync::Arc::new(pcraft_full_composite_icc(doc.as_ref())));
+        let previews = photocraft_format::SaveOptions { thumbnail, composite, preview_icc, full_composite, full_composite_icc };
         let bytes = match &opts.pcraft_cache {
             Some(cache) => cache.encode(doc.as_ref(), &previews)?,
             None => photocraft_format::save_to_bytes(doc.as_ref(), &previews)?,
@@ -1239,17 +1242,41 @@ pub fn pcraft_full_composite(doc: &Document) -> Option<photocraft_raster::Rgba8I
     pcraft_full_composite_with(doc, &photocraft_raster::Interrupt::NONE).ok().flatten()
 }
 
-/// The ICC profile of [`pcraft_full_composite`]'s pixels: an RGB document's own profile as stored,
+/// The ICC profile of the compositor's RGB pixels, including [`pcraft_full_composite`] and
+/// native reduced previews: an RGB document's own profile as stored,
 /// a gray document's gray profile as RGB, and sRGB for CMYK, Lab and documents without a usable
 /// profile ([`psd_thumbnail::composite_profile`]).
+///
+/// A gray document's RGB view gets an invertible colorant matrix ([`neutral_rgb_matrix`]), so
+/// viewers that invert the matrix accept the profile; `(v, v, v)` keeps the color of gray `v`.
 pub fn pcraft_full_composite_icc(doc: &Document) -> Vec<u8> {
     let own = doc.icc_profile.as_ref().filter(|bytes| {
         doc.mode == photocraft_color::ColorMode::Rgb && photocraft_cms::Profile::parse(bytes).is_ok_and(|p| p.color_space == photocraft_cms::ColorSpace::Rgb)
     });
     match own {
         Some(bytes) => bytes.to_vec(),
-        None => psd_thumbnail::composite_profile(doc).to_bytes().to_vec(),
+        None => {
+            let mut profile = psd_thumbnail::composite_profile(doc);
+            if profile.matrix.is_some_and(|m| photocraft_cms::math::invert(&m).is_none()) {
+                profile.matrix = Some(neutral_rgb_matrix());
+            }
+            profile.to_bytes().to_vec()
+        }
     }
+}
+
+/// The built-in sRGB colorant matrix with each row scaled to sum to the PCS white (D50), so
+/// `(v, v, v)` maps to `v` times the white, as the gray-as-RGB matrix does.
+fn neutral_rgb_matrix() -> photocraft_cms::math::Mat3 {
+    let white = photocraft_cms::math::D50;
+    let mut m = photocraft_cms::Builtin::Srgb.profile().matrix.unwrap_or(photocraft_cms::math::IDENTITY);
+    for (row, w) in m.iter_mut().zip(white) {
+        let sum: f64 = row.iter().sum();
+        if sum.abs() > f64::EPSILON {
+            row.iter_mut().for_each(|v| *v *= w / sum);
+        }
+    }
+    m
 }
 
 /// [`pcraft_full_composite`] rendered in bands: `ctl` gets the fraction of rows done, and a

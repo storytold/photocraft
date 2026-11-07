@@ -1101,7 +1101,7 @@ fn start<W: Write>(
     if opts.embed_icc
         && let Some(icc) = icc
     {
-        info.icc_profile = Some(icc.clone().into());
+        info.icc_profile = Some(icc.as_slice().into());
     }
     if opts.embed_metadata {
         if let Some(exif) = &meta.exif {
@@ -1969,7 +1969,9 @@ mod streamed_tests {
                     let (h2, z2, _) = split(&png);
                     assert!(h2 == head, "{layout:?} {level:?} {heights:?}: header chunks differ");
                     assert!(z2 == zlib, "{layout:?} {level:?} {heights:?}: zlib stream differs");
-                    assert_eq!(decode(&png, &Limits::default()).unwrap().data(), img.data());
+                    let back = decode(&png, &Limits::default()).unwrap();
+                    assert_eq!(back.data(), img.data());
+                    assert_eq!(back.icc, img.icc);
                 }
             }
         }

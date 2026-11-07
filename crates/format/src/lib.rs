@@ -37,6 +37,7 @@ mod store;
 pub mod zip;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use photocraft_doc::Document;
 use photocraft_raster::Rgba8Image;
@@ -99,6 +100,9 @@ pub type Result<T> = std::result::Result<T, FormatError>;
 pub struct SaveOptions {
     pub thumbnail: Option<Rgba8Image>,
     pub composite: Option<Rgba8Image>,
+    /// The RGB ICC profile describing both `thumbnail` and `composite` pixels, embedded in
+    /// their PNGs. `None` leaves them untagged; `full_composite_icc` is independent.
+    pub preview_icc: Option<Arc<Vec<u8>>>,
     /// The flattened document at its canvas size, for other apps that read `.pcraft` files. A ZIP
     /// save leaves it out when it would take the archive past 4 GiB or 65,535 entries, and every
     /// save leaves it out when it cannot be encoded.
