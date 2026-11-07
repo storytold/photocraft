@@ -15,8 +15,9 @@ pub struct LutFile {
     pub data: Vec<f32>,
     /// The input domain the table expects (`.cube` `DOMAIN_MIN`/`DOMAIN_MAX`,
     /// `LUT_3D_INPUT_RANGE`): an input `c` samples the table at `(c - min) / (max - min)`,
-    /// saturating outside. `[0, 1]` is the identity default; applying a table with any other
-    /// domain is rejected upstream until Color Lookup carries it through.
+    /// saturating outside. `[0, 1]` is the identity default. The table itself stays on the
+    /// 0..1 grid: Color Lookup carries the domain into the layer (`Adjustment::ColorLookup`'s
+    /// `domain_min`/`domain_max`) and the compositor and GPU apply it when sampling.
     pub domain_min: [f32; 3],
     pub domain_max: [f32; 3],
 }

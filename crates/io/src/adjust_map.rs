@@ -467,12 +467,6 @@ fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
         _ => LutFormat::Cube,
     };
     let lut = parse_lut_source(format, bytes).map_err(|e| format!("its {} LUT can't be read ({e})", psd_lut_format(format).trim_start_matches("LUTFormat")))?;
-    if !lut.domain_is_default() {
-        return Err(format!(
-            "its LUT has a non-default input domain (DOMAIN_MIN {:?}, DOMAIN_MAX {:?}), which is not supported yet",
-            lut.domain_min, lut.domain_max
-        ));
-    }
     let name = desc_text(&desc, "LUT3DFileName").or_else(|| desc_text(&desc, "NM  ")).unwrap_or_default();
     Ok(Adjustment::ColorLookup {
         name,
@@ -482,6 +476,9 @@ fn read_lookup(d: &[u8]) -> Result<Adjustment, String> {
         dither: desc_bool(&desc, "Dthr").unwrap_or(false),
         // Kept so a save embeds the file as loaded (Photoshop never converts it).
         source: Some(LutSource { format, bytes: std::sync::Arc::new(bytes.clone()) }),
+        // The file's declared input domain (`.cube` DOMAIN_MIN/DOMAIN_MAX), applied when sampling.
+        domain_min: lut.domain_min,
+        domain_max: lut.domain_max,
     })
 }
 
@@ -505,11 +502,11 @@ fn psd_lut_format(format: LutFormat) -> &'static str {
 }
 
 /// The source file of a Color Lookup to embed as is: only while it still parses to the
-/// layer's table, so an edited table is never saved with stale bytes.
-fn lut_source_for<'a>(source: Option<&'a LutSource>, table: &[f32], size: usize) -> Option<&'a LutSource> {
+/// layer's table and input domain, so an edited table is never saved with stale bytes.
+fn lut_source_for<'a>(source: Option<&'a LutSource>, table: &[f32], size: usize, domain: ([f32; 3], [f32; 3])) -> Option<&'a LutSource> {
     let source = source?;
     let file = parse_lut_source(source.format, &source.bytes).ok()?;
-    (file.size == size && file.data == table).then_some(source)
+    (file.size == size && file.data == table && (file.domain_min, file.domain_max) == domain).then_some(source)
 }
 
 /// `name` with a `.3dl` / `.look` extension swapped for `.cube`, for a table saved as `.cube`.
@@ -685,8 +682,10 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             return block(b"curv", encode::curves(master, per_channel, *space, black, *pencil));
         }
         Adjustment::SelectiveColor { relative, adjustments } => return block(b"selc", encode::selective_color(*relative, adjustments)),
-        Adjustment::ColorLookup { name, lut, size, dither, source, .. } => {
-            return block(b"clrL", encode::color_lookup(name, lut.as_deref().map(Vec::as_slice), *size, *dither, source.as_ref()));
+        Adjustment::ColorLookup { name, lut, size, dither, source, domain_min, domain_max, .. } => {
+            // The domain as rendered: a degenerate stored channel is written as the 0..1 it renders as.
+            let domain = photocraft_doc::adjust::lut_domain_effective(*domain_min, *domain_max);
+            return block(b"clrL", encode::color_lookup(name, lut.as_deref().map(Vec::as_slice), *size, *dither, source.as_ref(), domain));
         }
         Adjustment::GradientMap { stops, reverse, dither } => {
             return block(b"grdm", write_gradient_map(&encode::gradient_stops(stops), *reverse, *dither));

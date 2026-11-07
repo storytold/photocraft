@@ -954,11 +954,35 @@ fn color_lookup_lut_file_round_trips_and_old_files_load() {
     use photocraft_doc::adjust::{LutFormat, LutSource};
     let lut = Some(std::sync::Arc::new(vec![0.5f32; 24]));
     let source = Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"0 1023\n0 0 0\n".to_vec()) });
-    let adj = Adjustment::ColorLookup { name: "Film.3dl".into(), lut, size: 2, tetrahedral: false, dither: false, source };
+    let adj = Adjustment::ColorLookup {
+        name: "Film.3dl".into(),
+        lut: lut.clone(),
+        size: 2,
+        tetrahedral: false,
+        dither: false,
+        source,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    };
     let mut doc = Document::new("d", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
     doc.insert_above(None, Layer::new("lookup", LayerContent::Adjustment(adj.clone())));
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     assert_eq!(back, doc, "the LUT file survives a .pcraft round trip (#6544)");
+    // #11620: so does a declared input domain.
+    let ranged = Adjustment::ColorLookup {
+        name: "Log.cube".into(),
+        lut,
+        size: 2,
+        tetrahedral: true,
+        dither: false,
+        source: None,
+        domain_min: [0.25, 0.0, -0.5],
+        domain_max: [0.75, 1.0, 1.5],
+    };
+    let mut ranged_doc = Document::new("d", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    ranged_doc.insert_above(None, Layer::new("lookup", LayerContent::Adjustment(ranged)));
+    let back = load_from_bytes(&save_to_bytes(&ranged_doc, &SaveOptions::default()).unwrap()).unwrap();
+    assert_eq!(back, ranged_doc, "the input domain survives a .pcraft round trip");
     // A .pcraft written before the field existed has no `source`: it loads as None.
     let mut v = serde_json::to_value(&adj).unwrap();
     let removed = v.as_object_mut().and_then(|o| o.values_mut().next()).and_then(|f| f.as_object_mut()).and_then(|f| f.remove("source"));

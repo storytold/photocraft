@@ -751,7 +751,53 @@ fn adjustments() -> Vec<Adjustment> {
         lookup(17, false, false),
         lookup(5, true, false),
         lookup(33, false, true),
+        // #11620: a declared input domain normalises the colour before either interpolation.
+        with_domain(lookup(17, false, false), [0.1, 0.25, 0.0], [0.9, 0.75, 0.5]),
+        with_domain(lookup(5, true, true), [0.2, 0.0, 0.3], [0.6, 1.0, 1.2]),
     ]
+}
+
+/// `adj` (a Color Lookup) sampled over the input domain `min..max`.
+fn with_domain(mut adj: Adjustment, min: [f32; 3], max: [f32; 3]) -> Adjustment {
+    if let Adjustment::ColorLookup { domain_min, domain_max, .. } = &mut adj {
+        *domain_min = min;
+        *domain_max = max;
+    }
+    adj
+}
+
+/// #11620: an identity table over the domain 0.25..0.75 maps 0.25 to 0, 0.5 to 0.5 and 0.75 to 1
+/// on the GPU as on the CPU (both interpolations, 8- and 32-bit), and a degenerate stored domain
+/// falls back to 0..1 on both.
+#[test]
+fn color_lookup_input_domain_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let n = 5;
+    let id = photocraft_cms::lutfile::LutFile::identity(n).data;
+    for depth in [SampleType::U8, SampleType::F32] {
+        let mut d = Document::new("domain", Size::new(4, 1), ColorMode::Rgb, depth);
+        let mut bg = Layer::raster("bg", d.pixel_format());
+        let px = [0.25, 0.25, 0.25, 1.0, 0.5, 0.5, 0.5, 1.0, 0.75, 0.75, 0.75, 1.0, 0.1, 0.4, 0.9, 1.0];
+        bg.surface_mut().unwrap().write_region(Rect::from_xywh(0, 0, 4, 1), &px);
+        d.layers.push(bg);
+        for tetrahedral in [false, true] {
+            for (min, max) in [([0.25; 3], [0.75; 3]), ([0.5, f32::NAN, 0.0], [0.5, 1.0, -1.0])] {
+                let look = Adjustment::ColorLookup {
+                    name: "id".into(),
+                    lut: Some(std::sync::Arc::new(id.clone())),
+                    size: n as u32,
+                    tetrahedral,
+                    dither: false,
+                    source: None,
+                    domain_min: min,
+                    domain_max: max,
+                };
+                d.layers.push(Layer::new("look", LayerContent::Adjustment(look)));
+                check(&mut g, &d, &format!("lookup domain {min:?}..{max:?} tetrahedral={tetrahedral} {depth:?}"));
+                d.layers.pop();
+            }
+        }
+    }
 }
 
 fn selective() -> [[f32; 4]; 9] {
@@ -769,7 +815,16 @@ fn lookup(n: usize, tetrahedral: bool, dither: bool) -> Adjustment {
             }
         }
     }
-    Adjustment::ColorLookup { name: "test".into(), lut: Some(std::sync::Arc::new(t)), size: n as u32, tetrahedral, dither, source: None }
+    Adjustment::ColorLookup {
+        name: "test".into(),
+        lut: Some(std::sync::Arc::new(t)),
+        size: n as u32,
+        tetrahedral,
+        dither,
+        source: None,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    }
 }
 
 /// 32-bit Hue/Saturation on colours at and above HSL lightness 1 and with a negative channel,
@@ -3363,6 +3418,8 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
                             tetrahedral: false,
                             dither: false,
                             source: None,
+                            domain_min: [0.0; 3],
+                            domain_max: [1.0; 3],
                         };
                         let mut layer = Layer::new("adjust", LayerContent::Adjustment(look));
                         layer.blend = mode;
@@ -3394,6 +3451,8 @@ fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
         tetrahedral: false,
         dither: false,
         source: None,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
     };
     d.layers = vec![base, Layer::new("lookup", LayerContent::Adjustment(look))];
     check(&mut g, &d, "HDR full coverage with bounded result");

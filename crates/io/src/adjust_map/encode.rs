@@ -121,8 +121,9 @@ pub(super) fn selective_color(relative: bool, adjustments: &[[f32; 4]; 9]) -> Ve
     v
 }
 
-/// Color Lookup payload, written as an identity cube when there is no usable table.
-pub(super) fn color_lookup(name: &str, lut: Option<&[f32]>, size: u32, dither: bool, source: Option<&LutSource>) -> Vec<u8> {
+/// Color Lookup payload, written as an identity cube when there is no usable table. `domain` is
+/// the table's input domain (min, max), kept as `DOMAIN_MIN`/`DOMAIN_MAX` in a written `.cube`.
+pub(super) fn color_lookup(name: &str, lut: Option<&[f32]>, size: u32, dither: bool, source: Option<&LutSource>, domain: ([f32; 3], [f32; 3])) -> Vec<u8> {
     // A lookup without a usable table (none chosen yet, or a bad size) renders as the
     // identity, so it is written as a 2³ identity cube rather than dropped.
     let n = size as usize;
@@ -130,10 +131,10 @@ pub(super) fn color_lookup(name: &str, lut: Option<&[f32]>, size: u32, dither: b
     // Like Photoshop, embed the LUT file as loaded, in its own format; a table made or
     // changed in PhotoCraft is written as `.cube`, named to match.
     let (format, data, name, dither) = match cube {
-        Some(cube) => match lut_source_for(source, cube, n) {
+        Some(cube) => match lut_source_for(source, cube, n, domain) {
             Some(src) => (src.format, src.bytes.to_vec(), name.to_string(), dither),
             None => {
-                let file = photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: cube.to_vec(), domain_min: [0.0; 3], domain_max: [1.0; 3] };
+                let file = photocraft_cms::lutfile::LutFile { title: String::new(), size: n, data: cube.to_vec(), domain_min: domain.0, domain_max: domain.1 };
                 (LutFormat::Cube, photocraft_cms::lutfile::write_cube(&file).into_bytes(), cube_file_name(name), dither)
             }
         },

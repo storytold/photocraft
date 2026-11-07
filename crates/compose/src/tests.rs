@@ -433,6 +433,8 @@ fn full_coverage_adjustment_keeps_its_result_over_huge_hdr_values() {
             tetrahedral: false,
             dither: false,
             source: None,
+            domain_min: [0.0; 3],
+            domain_max: [1.0; 3],
         };
         d.layers = vec![base, Layer::new("look", LayerContent::Adjustment(look))];
         let got = px(&d, 0, 0);
@@ -458,6 +460,8 @@ fn adjustment_fill_changes_the_special_blend_modes() {
             tetrahedral: false,
             dither: false,
             source: None,
+            domain_min: [0.0; 3],
+            domain_max: [1.0; 3],
         };
         let mut adj = Layer::new("look", LayerContent::Adjustment(look));
         adj.blend = mode;

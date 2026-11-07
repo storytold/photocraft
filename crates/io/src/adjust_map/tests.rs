@@ -221,7 +221,30 @@ fn roundtrips() {
     let id = photocraft_cms::lutfile::LutFile::identity(5);
     let cube = photocraft_cms::lutfile::write_cube(&id).into_bytes();
     let source = Some(LutSource { format: LutFormat::Cube, bytes: std::sync::Arc::new(cube) });
-    rt(Adjustment::ColorLookup { name: "Look.cube".into(), lut: Some(std::sync::Arc::new(id.data)), size: 5, tetrahedral: false, dither: true, source });
+    rt(Adjustment::ColorLookup {
+        name: "Look.cube".into(),
+        lut: Some(std::sync::Arc::new(id.data.clone())),
+        size: 5,
+        tetrahedral: false,
+        dither: true,
+        source,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    });
+    // #11620: a declared input domain survives too.
+    let ranged = photocraft_cms::lutfile::LutFile { domain_min: [0.25, 0.0, 0.1], domain_max: [0.75, 1.0, 2.0], ..id };
+    let cube = photocraft_cms::lutfile::write_cube(&ranged).into_bytes();
+    let source = Some(LutSource { format: LutFormat::Cube, bytes: std::sync::Arc::new(cube) });
+    rt(Adjustment::ColorLookup {
+        name: "Ranged.cube".into(),
+        lut: Some(std::sync::Arc::new(ranged.data)),
+        size: 5,
+        tetrahedral: false,
+        dither: false,
+        source,
+        domain_min: [0.25, 0.0, 0.1],
+        domain_max: [0.75, 1.0, 2.0],
+    });
 }
 
 #[test]
@@ -320,14 +343,31 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
     let Adjustment::ColorLookup { name, size, tetrahedral, dither, source, .. } = a else { panic!("{a:?}") };
     // The table no longer matches the stored file (changed in PhotoCraft): the bytes are stale.
     let id = photocraft_cms::lutfile::LutFile::identity(2).data;
-    let edited = Adjustment::ColorLookup { name, lut: Some(std::sync::Arc::new(id.clone())), size, tetrahedral, dither, source };
+    let edited = Adjustment::ColorLookup {
+        name,
+        lut: Some(std::sync::Arc::new(id.clone())),
+        size,
+        tetrahedral,
+        dither,
+        source,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    };
     let d = written_clrl(&edited);
     assert_eq!(desc_enum(&d, "LUTFormat"), Some(&b"LUTFormatCUBE"[..]));
     assert_eq!(desc_text(&d, "LUT3DFileName").as_deref(), Some("Invert.cube"));
     assert_eq!(photocraft_cms::lutfile::parse("x.cube", raw(&d, "LUT3DFileData")).unwrap().data, id);
     // A table made in PhotoCraft (no file) named like another format is also renamed.
-    let made =
-        Adjustment::ColorLookup { name: "Grade.look".into(), lut: Some(std::sync::Arc::new(id)), size: 2, tetrahedral: false, dither: false, source: None };
+    let made = Adjustment::ColorLookup {
+        name: "Grade.look".into(),
+        lut: Some(std::sync::Arc::new(id)),
+        size: 2,
+        tetrahedral: false,
+        dither: false,
+        source: None,
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
+    };
     let d = written_clrl(&made);
     assert_eq!(desc_enum(&d, "LUTFormat"), Some(&b"LUTFormatCUBE"[..]));
     assert_eq!(desc_text(&d, "LUT3DFileName").as_deref(), Some("Grade.cube"));
@@ -340,6 +380,8 @@ fn color_lookup_table_without_matching_file_is_saved_as_cube_named_to_match() {
         tetrahedral: false,
         dither: false,
         source: Some(LutSource { format: LutFormat::ThreeDl, bytes: std::sync::Arc::new(b"\xFF not a lut".to_vec()) }),
+        domain_min: [0.0; 3],
+        domain_max: [1.0; 3],
     };
     assert_eq!(desc_text(&written_clrl(&junk), "LUT3DFileName").as_deref(), Some("Junk.cube"));
     assert_eq!(cube_file_name("a.b.3dl"), "a.b.cube");
@@ -398,20 +440,59 @@ fn identity_cube(domain: &str) -> Vec<u8> {
     format!("{domain}LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n").into_bytes()
 }
 
+/// #11620: a LUT with a declared input domain reads as a real Color Lookup carrying that domain
+/// (it used to stay Unsupported), and a save embeds the file unchanged.
 #[test]
-fn color_lookup_custom_domains_are_kept_unsupported() {
-    let domains = ["DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\n", "DOMAIN_MIN 0 0.25 0\nDOMAIN_MAX 1 0.75 1\n", "LUT_3D_INPUT_RANGE 0 0.5\n"];
-    for domain in domains {
-        let raw = cube_lookup_block(&identity_cube(domain));
-        let Adjustment::Unsupported { psd_key, raw: kept } = parse(b"clrL", &raw, None, Channels::Rgb) else {
-            panic!("custom LUT domain was applied instead of kept unsupported: {domain}")
-        };
-        assert_eq!(psd_key, "clrL");
-        assert_eq!(*kept, *raw);
-        let reason = unreadable_reason(b"clrL", &raw).expect("custom domain has an explanation");
-        assert!(reason.contains("DOMAIN_MIN") && reason.contains("DOMAIN_MAX"), "{reason}");
-        assert!(reason.to_ascii_lowercase().contains("not supported"), "{reason}");
+fn color_lookup_custom_domains_are_read_and_saved() {
+    let domains = [
+        ("DOMAIN_MIN 0 0 0\nDOMAIN_MAX 0.5 0.5 0.5\n", [0.0; 3], [0.5; 3]),
+        ("DOMAIN_MIN 0 0.25 0\nDOMAIN_MAX 1 0.75 1\n", [0.0, 0.25, 0.0], [1.0, 0.75, 1.0]),
+        ("LUT_3D_INPUT_RANGE 0 0.5\n", [0.0; 3], [0.5; 3]),
+    ];
+    for (domain, min, max) in domains {
+        let cube = identity_cube(domain);
+        let block = cube_lookup_block(&cube);
+        let a = parse(b"clrL", &block, None, Channels::Rgb);
+        let Adjustment::ColorLookup { size: 2, domain_min, domain_max, source: Some(src), .. } = &a else { panic!("{domain}: {a:?}") };
+        assert_eq!((*domain_min, *domain_max), (min, max), "{domain}");
+        assert_eq!(src.bytes.as_slice(), cube.as_slice());
+        assert_eq!(unreadable_reason(b"clrL", &block), None, "{domain}");
+        // Saved: the file as loaded, which reads back as the same layer.
+        assert_eq!(raw(&written_clrl(&a), "LUT3DFileData"), cube.as_slice(), "{domain}");
+        let b = write(&a);
+        assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Rgb), a, "{domain}");
     }
+}
+
+/// A domain that no longer matches the stored file makes its bytes stale (the table is written
+/// as `.cube` with the layer's domain); a table made in PhotoCraft keeps its domain in the
+/// `.cube` it is written as, and a degenerate stored domain is written as the 0..1 it renders as.
+#[test]
+fn color_lookup_domain_is_written_with_the_table() {
+    let id = photocraft_cms::lutfile::LutFile::identity(2).data;
+    let mk = |source: Option<LutSource>, domain_min, domain_max| Adjustment::ColorLookup {
+        name: "Ranged.cube".into(),
+        lut: Some(std::sync::Arc::new(id.clone())),
+        size: 2,
+        tetrahedral: false,
+        dither: false,
+        source,
+        domain_min,
+        domain_max,
+    };
+    let reread = |a: &Adjustment| photocraft_cms::lutfile::parse("x.cube", raw(&written_clrl(a), "LUT3DFileData")).unwrap();
+    // Made in PhotoCraft: no file, so a `.cube` is written with the domain.
+    let made = reread(&mk(None, [0.25, 0.1, 0.0], [0.75, 0.9, 0.5]));
+    assert_eq!((made.domain_min, made.domain_max, made.data.as_slice()), ([0.25, 0.1, 0.0], [0.75, 0.9, 0.5], id.as_slice()));
+    // A stored file whose domain differs from the layer's is not embedded.
+    let plain = LutSource { format: LutFormat::Cube, bytes: std::sync::Arc::new(identity_cube("")) };
+    let edited = mk(Some(plain.clone()), [0.25; 3], [0.75; 3]);
+    assert_ne!(raw(&written_clrl(&edited), "LUT3DFileData"), plain.bytes.as_slice());
+    assert_eq!((reread(&edited).domain_min, reread(&edited).domain_max), ([0.25; 3], [0.75; 3]));
+    // Degenerate channels (as a hostile document could store) are written as plain 0..1, so the
+    // file always re-reads.
+    let odd = reread(&mk(None, [0.25, f32::NAN, 0.9], [0.75, 1.0, 0.1]));
+    assert_eq!((odd.domain_min, odd.domain_max), ([0.25, 0.0, 0.0], [0.75, 1.0, 1.0]));
 }
 
 #[test]
@@ -668,7 +749,16 @@ fn degenerate_adjustments_still_get_an_encoding() {
     }
     // A colour lookup without a (usable) table becomes an identity cube, without dither.
     for lut in [None, Some(std::sync::Arc::new(vec![0.5; 7]))] {
-        let b = write(&Adjustment::ColorLookup { name: "L".into(), lut, size: 3, tetrahedral: false, dither: true, source: None });
+        let b = write(&Adjustment::ColorLookup {
+            name: "L".into(),
+            lut,
+            size: 3,
+            tetrahedral: false,
+            dither: true,
+            source: None,
+            domain_min: [0.0; 3],
+            domain_max: [1.0; 3],
+        });
         let back = parse(&b[0].0, &b[0].1, None, Channels::Rgb);
         let Adjustment::ColorLookup { lut: Some(t), size: 2, dither: false, name, .. } = back else { panic!("{back:?}") };
         assert_eq!(name, "L");

@@ -515,7 +515,9 @@ metadata template excludes the file data, so the action does not store a second
 copy of a large LUT. Unrepresented native option changes refuse export. Abstract
 and device-link profiles, nonempty ICC processing data, unknown formats and
 unknown settings remain complete preserved steps; these parts of #10705 remain
-unfinished. The native command continues to refuse non-default input domains.
+unfinished. A CUBE's declared input domain (`DOMAIN_MIN`/`DOMAIN_MAX`,
+`LUT_3D_INPUT_RANGE`) replays natively: the native command carries it into the
+adjustment (#11620).
 Nonlinear 3DL input shapers use Hector Villarreal's existing #9170 implementation
 for #8982. Shapers the parser cannot retain stay complete preserved steps.
 PSD-specific LUT Data Order and Table Order handling is separately tracked by
