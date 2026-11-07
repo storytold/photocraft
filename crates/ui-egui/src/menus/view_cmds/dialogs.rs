@@ -66,8 +66,10 @@ pub(super) fn form(app: &mut PhotocraftApp, command: &str, label: &str, fields: 
     if let Value::Object(m) = fields {
         f.extend(m);
     }
-    // Snapshot user-facing params at open so Alt+Reset can restore them.
-    let orig: Map<String, Value> = f.iter().filter(|(k, _)| !k.starts_with("__")).map(|(k, v)| (k.clone(), v.clone())).collect();
+    // Snapshot user-facing params at open so Alt+Reset can restore them, with the Custom
+    // quality rows' inactive state.
+    let orig: Map<String, Value> =
+        f.iter().filter(|(k, _)| !k.starts_with("__") || RESET_SHELL_KEYS.contains(&k.as_str())).map(|(k, v)| (k.clone(), v.clone())).collect();
     f.insert("__formOrig".into(), Value::Object(orig));
     app.ui.open_dialog(DialogKind::Command, f)
 }
@@ -166,15 +168,18 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             if k == "quality" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 ui.label(label(&k));
                 let mut custom = v.as_f64().is_some();
-                let mut quality = v.as_f64().or_else(|| f.get("__batchQuality").and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
-                ui.horizontal(|ui| {
-                    crate::widgets::checkbox(ui, &mut custom, tl!("Custom"));
-                    ui.add_enabled_ui(custom, |ui| crate::widgets::value_field(ui, &mut quality, 0.0..=12.0, "", 74.0).accessible_name(tl!("Quality")));
-                });
+                let mut quality = v.as_f64().or_else(|| f.get(BATCH_QUALITY).and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
+                custom_quality_row(ui, &mut custom, &mut quality, true);
                 // None preserves the command's existing JPEG and lossless WebP defaults.
                 // The inactive custom value is shell state, never a command parameter.
-                f.insert("__batchQuality".into(), json!(quality));
+                f.insert(BATCH_QUALITY.into(), json!(quality));
                 f.insert(k, if custom { json!(quality) } else { Value::Null });
+                ui.end_row();
+                continue;
+            }
+            if k == "quality" && f.contains_key(JPEG_QUALITY) {
+                ui.label(label(&k));
+                jpeg_quality_field(ui, f);
                 ui.end_row();
                 continue;
             }
@@ -191,9 +196,17 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     let mut s = s.clone();
                     match choices.get(&k).and_then(Value::as_array) {
                         Some(opts) => {
-                            let opts: Vec<(String, String)> = opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), label(o))).collect();
+                            // Action and set names are the user's own text, never catalogue entries.
+                            let action_names = matches!(k.as_str(), "action" | "set")
+                                && matches!(f.get("__command").and_then(Value::as_str), Some("file.automate.batch" | "file.automate.createDroplet"));
+                            let opts: Vec<(String, String)> =
+                                opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), if action_names { o.to_string() } else { label(o) })).collect();
                             let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-                            crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            if action_names {
+                                crate::widgets::dropdown_literal(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            } else {
+                                crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
+                            }
                         }
                         None => {
                             if file_info && matches!(k.as_str(), "description" | "keywords" | "copyright") {
@@ -238,6 +251,42 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     camera_data(ui, f);
 }
 
+/// Batch's inactive Custom quality (#3956): shell state, never a command parameter.
+const BATCH_QUALITY: &str = "__batchQuality";
+/// An export-to-files dialog's Custom checkbox and its quality (#11481), kept while the format
+/// is not JPEG or Custom is off: shell state, never command parameters.
+const JPEG_CUSTOM: &str = "__jpegCustom";
+const JPEG_QUALITY: &str = "__jpegQuality";
+/// The shell keys Alt+Reset restores along with a form's params.
+const RESET_SHELL_KEYS: [&str; 3] = [BATCH_QUALITY, JPEG_CUSTOM, JPEG_QUALITY];
+
+/// A Custom checkbox and the 0..12 Quality field it enables (Batch, the exports to files). Off,
+/// the command gets no quality and keeps its own defaults; `usable` false greys out both.
+fn custom_quality_row(ui: &mut egui::Ui, custom: &mut bool, quality: &mut f32, usable: bool) {
+    ui.add_enabled_ui(usable, |ui| {
+        ui.horizontal(|ui| {
+            crate::widgets::checkbox(ui, custom, tl!("Custom"));
+            ui.add_enabled_ui(*custom, |ui| crate::widgets::value_field(ui, quality, 0.0..=12.0, "", 74.0).accessible_name(tl!("Quality")));
+        });
+    });
+}
+
+/// Layers, Layer Comps and Artboards to Files: the JPEG quality, sent only for a JPEG with Custom
+/// on. Left alone, the export writes what the command writes with no quality (the source JPEG's
+/// own quality, else the encoder default), as Batch does; a quality would also make a WebP lossy
+/// (its default is lossless), and PNG, PSD, TIFF and BMP have none.
+fn jpeg_quality_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let jpeg = f.get("format").and_then(Value::as_str).is_some_and(|x| x.eq_ignore_ascii_case("jpg") || x.eq_ignore_ascii_case("jpeg"));
+    let sent = f.get("quality").and_then(Value::as_f64);
+    let mut custom = sent.is_some() || f.get(JPEG_CUSTOM).and_then(Value::as_bool).unwrap_or(false);
+    let mut quality = sent.or_else(|| f.get(JPEG_QUALITY).and_then(Value::as_f64)).unwrap_or(10.0).clamp(0.0, 12.0) as f32;
+    custom_quality_row(ui, &mut custom, &mut quality, jpeg);
+    let quality = quality.round().clamp(0.0, 12.0) as i64;
+    f.insert(JPEG_CUSTOM.into(), json!(custom));
+    f.insert(JPEG_QUALITY.into(), json!(quality));
+    f.insert("quality".into(), if jpeg && custom { json!(quality) } else { Value::Null });
+}
+
 /// File Info's read-only Camera Data section (`__camera`, from the document's EXIF/XMP).
 fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
     let Some(camera) = f.get("__camera").and_then(Value::as_object).filter(|c| !c.is_empty()) else { return };
@@ -260,6 +309,7 @@ fn default_dir(app: &PhotocraftApp) -> String {
     app.session.active().and_then(|d| d.path.as_deref()).and_then(|p| p.rfind(['/', '\\']).map(|i| p[..i].to_string())).unwrap_or_else(|| ".".into())
 }
 
+/// Handle menu commands that need a shell action or a parameter dialog before execution.
 pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "file.closeAll" || id == "file.closeOthers" {
         // Keep the remaining document's view (views are index-aligned with documents).
@@ -314,7 +364,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 app.refocus(doc)?;
                 let linked = linked.then(|| name.clone());
                 let result = app.place_bytes(&name, bytes, linked)?;
-                crate::transform_tool::begin_placed(app, &ctx)?;
+                // In the background, Free Transform starts when the layer has landed.
+                if result.get("frame").and_then(Value::as_u64).is_none() && !crate::jobs_ui::track_place(app, &name, &result) {
+                    crate::transform_tool::begin_placed(app, &ctx)?;
+                }
                 Ok(result)
             }))
         }
@@ -416,7 +469,8 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let (_, _, name) = doc?;
             dialog(
                 app,
-                json!({"dir": dir, "prefix": name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a), "format": "png", "visibleOnly": true, "trim": false}),
+                json!({"dir": dir, "prefix": name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a), "format": "png", "quality": null, JPEG_CUSTOM: false,
+                    JPEG_QUALITY: 10, "visibleOnly": true, "trim": false, "__order": ["dir", "prefix", "visibleOnly", "format", "quality", "trim"]}),
                 json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
             )
         }
@@ -424,9 +478,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let (_, _, name) = doc?;
             let prefix = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
             let fields = if id == "file.export.layerCompsToFiles" {
-                json!({"dir": dir, "prefix": prefix, "format": "png", "selectedOnly": false})
+                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "selectedOnly": false,
+                    "__order": ["dir", "prefix", "selectedOnly", "format", "quality"]})
             } else {
-                json!({"dir": dir, "prefix": prefix, "format": "png"})
+                json!({"dir": dir, "prefix": prefix, "format": "png", "quality": null, JPEG_CUSTOM: false, JPEG_QUALITY: 10, "__order": ["dir", "prefix", "format", "quality"]})
             };
             dialog(app, fields, json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}))
         }
@@ -498,20 +553,21 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let Some(action) = crate::actions::selected_action(app) else {
                 return Some(Err("record an action in the Actions panel first".into()));
             };
-            let steps = crate::actions::action_steps(action);
-            let name = action.name.clone();
-            dialog(
-                app,
-                json!({
-                    "action": name, "steps": steps, "source": "folder", "input": dir,
-                    "includeSubfolders": false, "__labels": subfolders_label(),
-                    "output": format!("{dir}/batch"), "format": "same", "quality": null,
-                    "__batchQuality": 8, "naming": "", "startingSerial": 1,
-                    "stopOnError": false, "errorLog": "",
-                    "__order": ["action", "source", "input", "includeSubfolders", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
-                }),
-                json!({"format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]}),
-            )
+            let (name, set) = (action.name.clone(), action.set.clone());
+            let (names, sets) = crate::actions::action_form_choices(app);
+            let mut fields = json!({
+                "action": name, "source": "folder", "input": dir,
+                "includeSubfolders": false, "__labels": subfolders_label(),
+                "output": format!("{dir}/batch"), "format": "same", "quality": null,
+                "__batchQuality": 8, "naming": "", "startingSerial": 1,
+                "stopOnError": false, "errorLog": "",
+                "__order": ["set", "action", "source", "input", "includeSubfolders", "output", "format", "naming", "startingSerial", "quality", "stopOnError", "errorLog"]
+            });
+            // The Set dropdown picks between same-named actions; an action outside any set has none.
+            if let Some(set) = set {
+                fields["set"] = json!(set);
+            }
+            dialog(app, fields, json!({"set": sets, "action": names, "format": ["same", "png", "jpg", "psd", "tiff", "webp"], "source": ["folder", "open"]}))
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).
         "select.saveSelection" | "select.loadSelection" | "image.applyImage" | "image.calculations" => {
@@ -644,6 +700,7 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// are any.
 pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document, path: &str, choices: crate::FormatChoices) -> Result<Value, String> {
     let settings = choices.apply(app.save_settings());
+    crate::app::ensure_memory_to_save(doc, path)?;
     let export = app.services.export.as_ref().ok_or("no exporter configured")?;
     let (bytes, warnings) = export(doc, path, &settings)?;
     let write = app.services.write.as_mut().ok_or("no writer configured")?;
