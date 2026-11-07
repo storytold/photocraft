@@ -104,10 +104,15 @@ impl InputReplies {
         self.status_before = None;
     }
 
-    /// Fail every waiting request with `error` and drop the log.
+    /// The queued input was dropped: a request whose input was already handled gets its own
+    /// reply (its refusals or `ok`); the others fail with `error`. Then drop the log.
     fn fail(&mut self, error: &str) {
         for w in self.waiters.drain(..) {
-            let _ = w.reply.send(serde_json::json!({"ok": false, "error": error}));
+            let reply = match w.to {
+                Some(to) => Self::reply(self.errors.get(w.from.unwrap_or(to)..to).unwrap_or_default()),
+                None => serde_json::json!({"ok": false, "error": error}),
+            };
+            let _ = w.reply.send(reply);
         }
         self.errors.clear();
         self.pass_start = 0;
@@ -272,6 +277,26 @@ mod tests {
         r.settle();
         assert_eq!(first.recv().unwrap()["errors"].as_array().map(Vec::len), Some(super::MAX_ERRORS));
         assert_eq!(second.recv().unwrap(), json!({"ok": false, "error": "second refused", "errors": ["second refused"]}));
+    }
+
+    /// Later queued input is cancelled: requests whose input was already handled keep their own
+    /// replies (a refusal or `ok`); only the one still waiting on input is cancelled.
+    #[test]
+    fn cancelling_later_input_keeps_the_replies_of_handled_requests() {
+        let mut r = InputReplies::default();
+        let (refused_tx, refused) = std::sync::mpsc::channel();
+        let (handled_tx, handled) = std::sync::mpsc::channel();
+        let (pending_tx, pending) = std::sync::mpsc::channel();
+        r.waiters.push(super::Waiter { reply: refused_tx, from: Some(0), until_taken: 1, to: None });
+        r.log("A refused");
+        r.waiters[0].to = Some(1);
+        r.waiters.push(super::Waiter { reply: handled_tx, from: Some(1), until_taken: 2, to: Some(1) });
+        r.waiters.push(super::Waiter { reply: pending_tx, from: Some(1), until_taken: 3, to: None });
+        r.fail("input cancelled: the document changed");
+        assert_eq!(refused.recv().unwrap(), json!({"ok": false, "error": "A refused", "errors": ["A refused"]}));
+        assert_eq!(handled.recv().unwrap(), json!({"ok": true, "result": null}));
+        assert_eq!(pending.recv().unwrap(), json!({"ok": false, "error": "input cancelled: the document changed"}));
+        assert!(r.waiters.is_empty() && r.errors.is_empty());
     }
 
     fn app() -> PhotocraftApp {
