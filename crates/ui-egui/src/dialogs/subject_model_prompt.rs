@@ -12,7 +12,32 @@ const PREF: &str = "select.subjectModel.offer";
 pub struct Pending {
     command: String,
     params: Value,
-    document: photocraft_doc::DocId,
+    target: Target,
+}
+
+/// What a command was asked on: the document and its active layer then.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Target {
+    document: u64,
+    layer: Option<u64>,
+}
+
+fn target(app: &PhotocraftApp) -> Option<Target> {
+    let d = app.session.active()?;
+    Some(Target { document: d.doc.id.0, layer: d.active_layer.map(|id| id.0) })
+}
+
+fn recorded(fields: &Map<String, Value>) -> Option<Target> {
+    let document = fields.get("__document")?.as_u64()?;
+    let layer = match fields.get("__layer")? {
+        Value::Null => None,
+        v => Some(v.as_u64()?),
+    };
+    Some(Target { document, layer })
+}
+
+fn changed() -> String {
+    tl!("The document or layer changed. Please run the command again.").into()
 }
 
 pub fn owns(fields: &Map<String, Value>) -> bool {
@@ -29,6 +54,7 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
         return None;
     }
     let ModelStatus::Offer(offer) = app.session.subject_model()?.status() else { return None };
+    let asked_on = target(app)?;
     if app.ui.dialogs.iter().any(|d| owns(&d.fields)) {
         return Some(Ok(json!({"confirmationPending": true})));
     }
@@ -40,7 +66,7 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
         &[("model", &offer.model), ("size", &size)],
     );
     let folder = if offer.folder.is_empty() { String::new() } else { crate::i18n::fmt(tl!("It will be saved in {folder}."), &[("folder", &offer.folder)]) };
-    let fields = json!({MARK: true, "__command": command, "__label": "Subject Model", "message": message, "folder": folder, "terms": offer.terms, "params": params, "skip": false});
+    let fields = json!({MARK: true, "__command": command, "__label": "Subject Model", "__document": asked_on.document, "__layer": asked_on.layer, "message": message, "folder": folder, "terms": offer.terms, "params": params, "skip": false});
     let id = app.ui.open_dialog(DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
     Some(Ok(json!({"dialog": id, "confirmationPending": true})))
 }
@@ -58,7 +84,7 @@ pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     });
     ui.add_space(8.0);
     let mut skip = fields.get("skip").and_then(Value::as_bool).unwrap_or(false);
-    ui.checkbox(&mut skip, tl!("Always use the built-in method"));
+    ui.checkbox(&mut skip, tl!("Don't offer the download again"));
     fields.insert("skip".into(), json!(skip));
 }
 
@@ -69,6 +95,8 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
         return Err(tl!("The document is closed").into());
     }
     let params = fields.get("params").cloned().unwrap_or_else(|| json!({}));
+    // A background open can make another document active while the dialog is open.
+    let asked_on = recorded(fields).filter(|asked_on| target(app) == Some(*asked_on)).ok_or_else(changed)?;
     if fields.get("choice").and_then(Value::as_str) == Some("builtIn") {
         if fields.get("skip").and_then(Value::as_bool) == Some(true) {
             app.session.edit_prefs(|prefs| {
@@ -85,28 +113,28 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
         }
         return app.run_command(command, params);
     }
-    let document = app.session.active().ok_or(tl!("The document is closed"))?.doc.id;
     let started = app.run_command(INSTALL_CMD, json!({"acceptTerms": true}))?;
     if started.get("pending").and_then(Value::as_bool) == Some(true) {
-        app.jobs.subject_model_pending = Some(Pending { command: command.into(), params, document });
+        app.jobs.subject_model_pending = Some(Pending { command: command.into(), params, target: asked_on });
         return Ok(started);
     }
     app.run_command(command, params)
 }
 
-/// The download ended: the command it waited for goes on, on the same document.
-pub fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) {
-    if e.command != INSTALL_CMD {
-        return;
+/// The download ended: the command it waited for goes on, on the same document and layer. `true`
+/// when that failed and the error is reported, so the download's own message must not replace it.
+pub fn on_job_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
+    if e.command != INSTALL_CMD || !matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
+        return false;
     }
-    let Some(pending) = app.jobs.subject_model_pending.take() else { return };
-    let same_document = app.session.active().is_some_and(|d| d.doc.id == pending.document);
-    if !same_document || !matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) {
-        return;
-    }
-    if let Err(error) = app.run_command(&pending.command, pending.params) {
-        app.ui.status = error;
-        app.ui.status_error = true;
+    let Some(pending) = app.jobs.subject_model_pending.take() else { return false };
+    let result = if target(app) == Some(pending.target) { app.run_command(&pending.command, pending.params) } else { Err(changed()) };
+    match result {
+        Ok(_) => false,
+        Err(error) => {
+            crate::notices::error(app, error);
+            true
+        }
     }
 }
 
@@ -227,6 +255,39 @@ mod tests {
         assert!(!*model.installed.lock().unwrap());
         let _ = app.run("select.subject", json!({})).unwrap();
         assert!(app.ui.dialogs.is_empty(), "it does not ask again");
+    }
+
+    #[test]
+    fn the_offer_stays_with_the_document_it_was_asked_on() {
+        for choice in ["builtIn", "download"] {
+            let model = Arc::new(StandIn::default());
+            let mut app = make_app(Some(model.clone()));
+            let dialog = app.run("layer.removeBackground", json!({})).unwrap()["dialog"].as_u64().unwrap();
+            app.ui.dialog_mut(dialog).unwrap().fields.insert("choice".into(), json!(choice));
+            app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+            assert!(crate::dialogs::confirm(&mut app, dialog).is_err(), "{choice}");
+            assert!(!mask_exists(&app));
+            assert!(!*model.installed.lock().unwrap(), "{choice}");
+        }
+    }
+
+    #[test]
+    fn a_command_that_fails_after_the_download_keeps_its_error() {
+        let mut app = make_app(Some(Arc::default()));
+        let document = app.session.active().unwrap().doc.id;
+        let layer = app.session.active().unwrap().active_layer.map(|id| id.0);
+        app.jobs.subject_model_pending =
+            Some(Pending { command: "layer.removeBackground".into(), params: json!({"layer": 999_999}), target: Target { document: document.0, layer } });
+        let event = photocraft_engine::jobs::JobEvent {
+            id: photocraft_engine::jobs::JobId(0),
+            command: INSTALL_CMD.into(),
+            label: "Download Subject Model".into(),
+            document: Some(document),
+            outcome: photocraft_engine::jobs::JobOutcome::Done(json!({"installed": true})),
+            error: None,
+        };
+        assert!(on_job_event(&mut app, &event), "the caller keeps the error");
+        assert!(app.ui.status_error);
     }
 
     #[test]

@@ -29,6 +29,11 @@ const POLL: Duration = Duration::from_millis(50);
 const DOWNLOAD_SHARE: f32 = 0.95;
 const DOWNLOADING: &str = "Downloading subject model";
 
+/// The connection the shared layer saves for this build's model (`ToolDesk::enable_native`).
+fn native_connection() -> String {
+    format!("local-{TOOL}-{ENGINE}")
+}
+
 /// The app's subject model, or `None` if the shared layer can't be reached: Select Subject and
 /// Remove Background then keep their built-in method.
 pub fn shared() -> Option<SharedSubjectModel> {
@@ -93,6 +98,16 @@ impl CraftSubject {
         folder.map_or_else(String::new, |path| path.display().to_string())
     }
 
+    /// Whether the tool has a model chosen that is not this build's: PhotoCraft's own choice, else
+    /// the launcher's. A download would leave that choice in place.
+    fn keeps_another_choice(&self) -> bool {
+        let Ok(store) = self.shared.load() else { return false };
+        let Ok(app) = app_id() else { return false };
+        let mine = store.apps.get(&app).and_then(|settings| settings.overrides.iter().find(|b| b.role == self.role.id));
+        let chosen = mine.or_else(|| store.defaults.iter().find(|b| b.role == self.role.id));
+        chosen.is_some_and(|b| b.connection.as_str() != native_connection())
+    }
+
     /// Makes `checked` the suite's model for this tool, as the launcher would.
     fn adopt(&self, checked: &craft_ai_client::CheckedNative) -> Result<(), AiError> {
         let launcher = AiClient::new(ToolDesk::app()?, self.shared.clone(), Arc::clone(&self.secrets));
@@ -140,6 +155,11 @@ impl SubjectModel for CraftSubject {
             RoleStatus::Ready(ready) if ready.locality == Locality::Local => ModelStatus::Ready { model: ready.model_label },
             RoleStatus::Ready(ready) => {
                 ModelStatus::Unavailable { reason: format!("{} runs online, and PhotoCraft only uses a model on this computer here.", ready.model_label) }
+            }
+            // A download only helps when it becomes the tool's model: the shared layer keeps a
+            // choice a person made, even one that does not work right now.
+            RoleStatus::Unavailable { reason } if self.keeps_another_choice() => {
+                ModelStatus::Unavailable { reason: format!("{reason} Choose another model for Remove background in the Craft launcher.") }
             }
             RoleStatus::Unavailable { reason } => self.offer().map_or(ModelStatus::Unavailable { reason }, ModelStatus::Offer),
         }

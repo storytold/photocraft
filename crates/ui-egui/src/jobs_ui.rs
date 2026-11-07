@@ -584,7 +584,9 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
     });
     // A Free Transform commit's session ends with its job (then reported like any job).
     crate::transform_tool::on_job_event(app, &e);
-    crate::subject_model_prompt::on_job_event(app, &e);
+    if crate::subject_model_prompt::on_job_event(app, &e) {
+        return;
+    }
     if crate::prefs_ui::on_recovery_event(app, &e) {
         return;
     }

@@ -65,7 +65,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
             let found = match &model {
                 Some(model) => {
                     ctx.progress(0.1, "Finding subject");
-                    with_doc_sampler(doc, Some(id), sample_all, |smp, _| crate::subject_model_cmds::find(model, smp, area, ctx))?
+                    crate::subject_model_cmds::find_in(model, doc, Some(id), sample_all, area, ctx)?
                 }
                 // Cancel reaches the min cuts inside Select Subject, so Esc doesn't wait for them.
                 None => ctx

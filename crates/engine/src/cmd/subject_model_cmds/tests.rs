@@ -6,21 +6,23 @@ use serde_json::json;
 use crate::subject_model::{ModelError, ModelOffer, ModelStatus, SubjectImage, SubjectModel};
 use crate::{EngineError, Session};
 
-/// A model that covers the left half of what it is shown.
+/// A model that covers the left half of what it is shown, with a soft column at its edge.
 struct LeftHalf {
     status: Mutex<ModelStatus>,
     calls: AtomicUsize,
     seen: Mutex<Option<(u32, u32)>>,
     answer: Option<ModelError>,
+    /// Whether a CMYK profile was active while it read.
+    cmyk: Mutex<Option<bool>>,
 }
 
 impl LeftHalf {
     fn new(status: ModelStatus) -> Arc<Self> {
-        Arc::new(Self { status: Mutex::new(status), calls: AtomicUsize::new(0), seen: Mutex::new(None), answer: None })
+        Arc::new(Self { status: Mutex::new(status), calls: AtomicUsize::new(0), seen: Mutex::new(None), answer: None, cmyk: Mutex::new(None) })
     }
 
     fn failing(answer: ModelError) -> Arc<Self> {
-        Arc::new(Self { status: Mutex::new(ready()), calls: AtomicUsize::new(0), seen: Mutex::new(None), answer: Some(answer) })
+        Arc::new(Self { status: Mutex::new(ready()), calls: AtomicUsize::new(0), seen: Mutex::new(None), answer: Some(answer), cmyk: Mutex::new(None) })
     }
 
     fn calls(&self) -> usize {
@@ -36,11 +38,19 @@ impl SubjectModel for LeftHalf {
     fn matte(&self, image: &SubjectImage, _: &dyn Fn() -> bool) -> Result<Vec<u8>, ModelError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         *self.seen.lock().unwrap() = Some((image.width, image.height));
+        *self.cmyk.lock().unwrap() = Some(photocraft_color::convert::active_cmyk_space().is_some());
         assert_eq!(image.rgb.len(), image.width as usize * image.height as usize * 3);
         if let Some(e) = &self.answer {
             return Err(e.clone());
         }
-        Ok((0..image.width * image.height).map(|i| if i % image.width < image.width / 2 { 255 } else { 0 }).collect())
+        let half = image.width / 2;
+        Ok((0..image.width * image.height)
+            .map(|i| match i % image.width {
+                x if x < half => 255,
+                x if x == half => SOFT,
+                _ => 0,
+            })
+            .collect())
     }
 
     fn install(&self, progress: &dyn Fn(f32, &str), _: &dyn Fn() -> bool) -> Result<(), ModelError> {
@@ -49,6 +59,9 @@ impl SubjectModel for LeftHalf {
         Ok(())
     }
 }
+
+/// The coverage [`LeftHalf`] answers on the column at its edge.
+const SOFT: u8 = 102;
 
 fn ready() -> ModelStatus {
     ModelStatus::Ready { model: "Stand-in".into() }
@@ -82,9 +95,18 @@ fn remove_background_uses_a_ready_model_and_keeps_its_mask_as_it_is() {
     assert_eq!(*model.seen.lock().unwrap(), Some((64, 48)));
     assert_eq!(mask_value(&s, 10, 10), 1.0);
     assert_eq!(mask_value(&s, 50, 10), 0.0);
-    // No edge refinement on top: the boundary stays where the model put it.
+    // No edge refinement on top: the boundary stays where the model put it, soft where it is soft.
     assert_eq!(mask_value(&s, 31, 10), 1.0);
-    assert_eq!(mask_value(&s, 32, 10), 0.0);
+    assert!((mask_value(&s, 32, 10) - f32::from(SOFT) / 255.0).abs() < 0.01, "{}", mask_value(&s, 32, 10));
+    assert_eq!(mask_value(&s, 33, 10), 0.0);
+}
+
+#[test]
+fn select_subject_keeps_the_models_soft_coverage() {
+    let mut s = session(Some(LeftHalf::new(ready())));
+    s.execute("select.subject", json!({})).unwrap();
+    let selection = s.active().unwrap().doc.selection.clone().unwrap();
+    assert!((selection.sample_channel(32, 10, 0) - f32::from(SOFT) / 255.0).abs() < 0.01);
 }
 
 #[test]
@@ -109,12 +131,16 @@ fn select_subject_uses_a_ready_model_and_remembers_its_answer() {
     s.execute("select.deselect", json!({})).unwrap();
     s.execute("select.subject", json!({})).unwrap();
     assert_eq!(model.calls(), 1, "the same pixels are not read again");
+    // Another model (chosen in another Craft app) answers for itself.
+    *model.status.lock().unwrap() = ModelStatus::Ready { model: "Another".into() };
+    s.execute("select.subject", json!({})).unwrap();
+    assert_eq!(model.calls(), 2);
 }
 
 #[test]
 fn the_selection_reports_the_bounds_of_what_the_model_covered() {
     let mut s = session(Some(LeftHalf::new(ready())));
-    assert_eq!(s.execute("select.subject", json!({})).unwrap()["bounds"], json!([0, 0, 32, 48]));
+    assert_eq!(s.execute("select.subject", json!({})).unwrap()["bounds"], json!([0, 0, 33, 48]));
 }
 
 #[test]
@@ -238,6 +264,49 @@ fn the_download_needs_the_terms_accepted_and_then_the_model_is_used() {
     assert!(matches!(model.status(), ModelStatus::Offer(_)));
     assert_eq!(s.execute(super::INSTALL_CMD, json!({"acceptTerms": true})).unwrap()["installed"], true);
     assert_eq!(s.execute("layer.removeBackground", json!({})).unwrap()["method"], "model");
+}
+
+#[test]
+fn the_model_reads_a_cmyk_document_in_its_own_profile() {
+    let profile = photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams {
+        description: "Subject Test Uncoated".into(),
+        tvi: [0.26, 0.26, 0.26, 0.3],
+        grid_a2b: 5,
+        grid_b2a: 9,
+        ..Default::default()
+    })
+    .to_bytes();
+    for command in ["layer.removeBackground", "select.subject"] {
+        let model = LeftHalf::new(ready());
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 24, "mode": "cmyk", "background": "white"})).unwrap();
+        s.edit("icc", |doc, _| {
+            doc.icc_profile = Some(profile.clone());
+            Ok(())
+        })
+        .unwrap();
+        s.set_subject_model(Some(model.clone() as crate::subject_model::SharedSubjectModel));
+        s.execute(command, json!({})).unwrap();
+        assert_eq!(*model.cmyk.lock().unwrap(), Some(true), "{command}");
+    }
+}
+
+#[test]
+fn batch_plays_the_commands_with_the_apps_model() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("in.png").to_string_lossy().into_owned();
+    let mut source = Session::new();
+    source.execute("file.new", json!({"width": 16, "height": 12})).unwrap();
+    crate::file_cmds::save_doc(&source.active().unwrap().doc, &input, None).unwrap();
+    let out = dir.path().join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let model = LeftHalf::new(ready());
+    let mut s = session(Some(model.clone()));
+    let result = s
+        .execute("file.automate.batch", json!({"steps": [["select.subject", {"method": "model"}]], "input": [input], "output": out.to_string_lossy()}))
+        .unwrap();
+    assert_eq!(result["errors"], json!([]), "{result}");
+    assert_eq!(model.calls(), 1);
 }
 
 #[test]

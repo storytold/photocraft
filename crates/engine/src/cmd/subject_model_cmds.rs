@@ -24,6 +24,11 @@ const MAX_PIXELS: u64 = 400_000_000;
 /// The model `p` asks for: `"method": "auto"` (the default) takes it when it is ready, `"model"`
 /// fails if it is not, and `"classic"` is always the built-in method.
 pub(crate) fn pick(s: &Session, cmd: &str, p: &Value) -> Result<Option<SharedSubjectModel>> {
+    Ok(pick_named(s, cmd, p)?.map(|(model, _)| model))
+}
+
+/// [`pick`] with the model's name, which tells one model's answers from another's.
+pub(crate) fn pick_named(s: &Session, cmd: &str, p: &Value) -> Result<Option<(SharedSubjectModel, String)>> {
     let method = p.get("method").and_then(Value::as_str).unwrap_or("auto");
     if !matches!(method, "auto" | "model" | "classic") {
         return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("method must be auto, model or classic, not \"{method}\"") });
@@ -35,7 +40,7 @@ pub(crate) fn pick(s: &Session, cmd: &str, p: &Value) -> Result<Option<SharedSub
         return if method == "model" { Err(EngineError::Other("this build has no subject model".into())) } else { Ok(None) };
     };
     match model.status() {
-        ModelStatus::Ready { .. } => Ok(Some(model)),
+        ModelStatus::Ready { model: name } => Ok(Some((model, name))),
         _ if method == "auto" => Ok(None),
         ModelStatus::Offer(offer) => Err(EngineError::Other(format!("{} is not downloaded yet", offer.model))),
         ModelStatus::Unavailable { reason } => Err(EngineError::Other(reason)),
@@ -77,6 +82,22 @@ pub(crate) fn find(model: &SharedSubjectModel, sampler: &dyn Sampler, area: Rect
         return Err(EngineError::Other("the subject model answered with a mask of the wrong size".into()));
     }
     Ok(mask.iter().any(|v| *v >= 128).then(|| tight(area, &mask)))
+}
+
+/// [`find`] over `layer`'s pixels in `doc` (or the composite), read in the document's CMYK profile:
+/// the job runs on a worker thread, where no document's profile is active.
+pub(crate) fn find_in(
+    model: &SharedSubjectModel,
+    doc: &photocraft_doc::Document,
+    layer: Option<photocraft_doc::LayerId>,
+    all_layers: bool,
+    area: Rect,
+    ctx: &JobCtx,
+) -> Result<Option<Region>> {
+    let cmyk = photocraft_compose::cmyk_space(doc);
+    photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        crate::smartselect_cmds::with_doc_sampler(doc, layer, all_layers, |smp, _| find(model, smp, area, ctx))
+    })
 }
 
 /// `mask` over `area`, cut down to the pixels it covers. `mask` covers something.

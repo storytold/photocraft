@@ -3644,7 +3644,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Subject Model	Motivmodell
 	Download	Herunterladen
 	Use Built-in Method	Eingebaute Methode verwenden
-	Always use the built-in method	Immer die eingebaute Methode verwenden
+	Don't offer the download again	Download nicht mehr anbieten
 	{model} finds subjects, hair and fur much better than the built-in method. It runs on this computer, so your pictures stay there. It needs a one-time download of {size} MB.	{model} erkennt Motive, Haare und Fell deutlich besser als die eingebaute Methode. Es läuft auf diesem Computer, deine Bilder bleiben also dort. Dafür ist einmalig ein Download von {size} MB nötig.
 	It will be saved in {folder}.	Es wird in {folder} gespeichert.
 	Download Subject Model	Motivmodell herunterladen
+	The document or layer changed. Please run the command again.	Das Dokument oder die Ebene hat sich geändert. Bitte den Befehl erneut ausführen.

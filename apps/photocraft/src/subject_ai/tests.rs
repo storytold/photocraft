@@ -62,6 +62,32 @@ fn a_file_that_is_set_up_is_ready() {
 }
 
 #[test]
+fn a_download_is_offered_again_when_the_set_up_file_is_gone() {
+    let w = world();
+    let weights = w.dir.path().join("inspyrenet.safetensors");
+    std::fs::write(&weights, b"stands in for the model").unwrap();
+    let launcher = AiClient::new(ToolDesk::app().unwrap(), w.model.shared.clone(), Arc::clone(&w.model.secrets));
+    ToolDesk::new(launcher, w.model.shared.clone(), None).enable_native(&w.model.feature, &weights).unwrap();
+    assert_eq!(native_connection(), w.model.shared.load().unwrap().defaults[0].connection.as_str(), "the id the shared layer saves");
+    std::fs::remove_file(&weights).unwrap();
+    assert!(matches!(w.model.status(), ModelStatus::Offer(_)), "{:?}", w.model.status());
+}
+
+#[test]
+fn a_download_is_not_offered_over_another_choice() {
+    let w = world();
+    let mut store = w.model.shared.load().unwrap();
+    store.defaults.push(craft_ai_core::Binding {
+        role: w.model.role.id.clone(),
+        connection: craft_ai_core::ConnectionId::new("comfy-at-home").unwrap(),
+        model: craft_ai_core::ModelId::new("birefnet").unwrap(),
+    });
+    w.model.shared.replace(&store).unwrap();
+    let ModelStatus::Unavailable { reason } = w.model.status() else { panic!("expected no offer: {:?}", w.model.status()) };
+    assert!(reason.contains("Craft launcher"), "{reason}");
+}
+
+#[test]
 fn a_file_that_is_not_the_model_fails_in_words_a_person_can_read() {
     let w = world();
     let weights = w.dir.path().join("inspyrenet.safetensors");
@@ -123,7 +149,8 @@ fn the_real_model_downloads_and_answers() {
     let (width, height) = (decoded.width(), decoded.height());
     let channels = decoded.layout().channels();
     assert_eq!(decoded.sample_type(), SampleType::U8);
-    let rgb = decoded.data().chunks_exact(channels).flat_map(|px| [px[0], px[1], px[2]]).collect();
+    // A gray picture repeats its one value; colour keeps its first three channels.
+    let rgb = decoded.data().chunks_exact(channels).flat_map(|px| if channels >= 3 { [px[0], px[1], px[2]] } else { [px[0]; 3] }).collect();
     let image = SubjectImage { width, height, rgb };
     for run in 1..=2 {
         let started = std::time::Instant::now();
