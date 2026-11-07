@@ -26,8 +26,9 @@ fn stroke_backwards_compatible() {
     assert_eq!(r["damage"].as_array().unwrap().len(), 4);
     assert_eq!(rgba(&s, 30, 20), [0.0, 0.0, 1.0, 1.0]);
     assert_eq!(rgba(&s, 30, 30)[3], 0.0);
-    // [x, y, pressure] with the default pressure-size brush: light pressure → thinner line.
-    s.execute("paint.stroke", json!({"points": [[4, 5, 0.2], [60, 5, 0.2]], "size": 10})).unwrap();
+    // [x, y, pressure] with Pressure for Size on: light pressure → a thinner line. The default
+    // brush has it off since #11809, so this stroke asks for it.
+    s.execute("paint.stroke", json!({"points": [[4, 5, 0.2], [60, 5, 0.2]], "size": 10, "brush": {"pressureSize": true}})).unwrap();
     assert!(rgba(&s, 30, 5)[3] > 0.9 && rgba(&s, 30, 8)[3] < 0.01);
 }
 

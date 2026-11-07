@@ -5,6 +5,13 @@ use crate::channel_transform;
 impl Session {
     /// Undo a document step or restore Clear History's rows and source without editing pixels.
     pub fn undo(&mut self) -> bool {
+        let before = self.active_layer_stamp();
+        let taken = self.undo_step();
+        self.note_layer_change(before);
+        taken
+    }
+
+    fn undo_step(&mut self) -> bool {
         // A background job is computing from the current state: it must not move under it.
         if self.active_job().is_some() || self.active().is_some_and(|st| st.channel_transform.is_some()) {
             return false;
@@ -56,6 +63,13 @@ impl Session {
 
     /// Restore the next document state and its selection/visibility bookkeeping through the ordinary history path.
     pub fn redo(&mut self) -> bool {
+        let before = self.active_layer_stamp();
+        let taken = self.redo_step();
+        self.note_layer_change(before);
+        taken
+    }
+
+    fn redo_step(&mut self) -> bool {
         if self.active_job().is_some() || self.active().is_some_and(|st| st.channel_transform.is_some()) {
             return false;
         }
@@ -93,6 +107,13 @@ impl Session {
     /// last of them). Falls back to Undo plus forgetting the redo states when the history
     /// changed since that step. Returns whether a step was taken back.
     pub fn rollback(&mut self) -> bool {
+        let before = self.active_layer_stamp();
+        let taken = self.rollback_step();
+        self.note_layer_change(before);
+        taken
+    }
+
+    fn rollback_step(&mut self) -> bool {
         if self.active_job().is_some() || channel_transform::locked(self) {
             return false;
         }

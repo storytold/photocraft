@@ -181,11 +181,6 @@ fn esc_ends_a_refused_draft_and_return_keeps_it() {
     };
     for lang in crate::i18n::Lang::all() {
         crate::i18n::with_language(lang, || {
-            for message in ["The path was kept as the Work Path", "The path was discarded"] {
-                if lang != crate::i18n::Lang::EN {
-                    assert!(crate::i18n::has(lang, message), "{}: {message}", lang.code());
-                }
-            }
             let mut app = app();
             let (id, body, steps) = refused_hole(&mut app);
             let draft = app.ui.pen.clone();

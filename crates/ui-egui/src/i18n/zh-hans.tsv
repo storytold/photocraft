@@ -3298,3 +3298,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	请为每个通道选择不同的文档。
 	A picked document is no longer open.	所选的一个文档已不再打开。
 	A picked document is no longer a grayscale document of the same size.	所选的一个文档已不再是同样大小的灰度文档。
+# Move tool options bar (#11381)
+	Align top edges	顶端对齐
+	Align vertical centers	垂直居中对齐
+	Align bottom edges	底端对齐
+	Distribute vertically	垂直分布
+	Distribute horizontally	水平分布
+	Show layer bounds on hover	悬停时显示图层边界
+	Expand layer group on click	单击时展开图层组
+	Show hover bounds from Layers	显示来自图层面板的悬停边界
