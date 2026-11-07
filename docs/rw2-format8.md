@@ -41,7 +41,8 @@ used only as an independent executable oracle for the local sample comparison.
   reads honor the stated bit length even within a final byte.
 - Unknown values of the measured fixed fields are `Unsupported`; malformed
   tables, layouts and truncated streams are errors. Sample predictors cannot
-  wrap around. Tile buffers are decoded in parallel on native builds and
+  wrap around or exceed the declared bit depth (4095, 16383 or 65535).
+  Tile buffers are decoded in parallel on native builds and
   sequentially on WebAssembly; the tile buffers and assembled plane are both
   charged against `Limits` before allocation.
 - Format 8 uses the recorded black levels without the format-3/4 offset of 15.
@@ -56,6 +57,8 @@ used only as an independent executable oracle for the local sample comparison.
 - An independently hand-coded cell that detects exchanged green sites.
 - The camera's 12-bit prefix table, including shadowed codes, and partial cells.
 - Black levels, white balance, crop and full-resolution 16-bit development.
+- Exact sample-depth boundaries, including 16-bit 65535, and rejection of
+  above-depth values at every site of small strip and multi-row tile fixtures.
 - Overlaps, holes, invalid dimensions/counts, unknown fields, duplicate codes,
   allocation limits and every truncation of a small fixture.
 - 1,000 deterministic mutations under small allocation limits.

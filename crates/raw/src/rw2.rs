@@ -230,6 +230,7 @@ fn decode_compressed(src: &[u8], width: usize, height: usize, bits: u32) -> Resu
     Ok(data)
 }
 
+/// Decode supported RW2 sensor encodings and retain their levels, CFA, crop and orientation.
 pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     let ifd = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("RW2 has no IFD0"))?;
     let raw_format = t.tag_uint(&ifd, RAW_FORMAT);

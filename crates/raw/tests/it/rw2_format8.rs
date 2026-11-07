@@ -5,10 +5,12 @@ use photocraft_raw::{DevelopOptions, Limits, RawError, RawFormat, Rect, decode, 
 
 type Tags = Vec<(u16, Val)>;
 
+/// Store Panasonic word arrays as little-endian TIFF UNDEFINED bytes.
 fn words(values: impl IntoIterator<Item = u16>) -> Val {
     Val::Undefined(values.into_iter().flat_map(u16::to_le_bytes).collect())
 }
 
+/// Encode a count-prefixed metadata list, with optional low/high word pairs.
 fn list(values: &[u32], wide: bool) -> Val {
     let mut out = vec![values.len() as u16];
     for &v in values {
@@ -20,11 +22,13 @@ fn list(values: &[u32], wide: bool) -> Val {
     words(out)
 }
 
+/// Replace one fixture tag without leaving a duplicate that could hide the intended mutation.
 fn replace(tags: &mut Tags, tag: u16, value: Val) {
     tags.retain(|(t, _)| *t != tag);
     tags.push((tag, value));
 }
 
+/// Encode synthetic cell differences independently of the fixture's declared sample depth.
 fn encode(pixels: &[u16], width: usize, height: usize, table: &[(u16, u16); 17]) -> (Vec<u8>, u32) {
     let mut stream = Vec::new();
     let mut put = |n: u32, value: u32| stream.extend((0..n).rev().map(|i| ((value >> i) & 1) as u8));
@@ -52,6 +56,7 @@ fn encode(pixels: &[u16], width: usize, height: usize, table: &[(u16, u16); 17])
     (bytes, bits)
 }
 
+/// Build a tiled RW2 container with a supplied code table and optional hostile metadata edits.
 fn fixture_with(pixels: &[u16], columns: &[usize], rows: &[usize], depth: u16, table: &[(u16, u16); 17], tweak: impl FnOnce(&mut Tags)) -> Vec<u8> {
     let (width, height): (usize, usize) = (columns.iter().sum(), rows.iter().sum());
     let mut payload = Vec::new();
@@ -118,14 +123,17 @@ fn fixture_with(pixels: &[u16], columns: &[usize], rows: &[usize], depth: u16, t
     file
 }
 
+/// Use disjoint five-bit prefixes so synthetic streams can exercise every difference category.
 fn table() -> [(u16, u16); 17] {
     std::array::from_fn(|i| (5, i as u16))
 }
 
+/// Build a fixture with the synthetic prefix table and the requested tile geometry.
 fn fixture(pixels: &[u16], columns: &[usize], rows: &[usize], depth: u16, tweak: impl FnOnce(&mut Tags)) -> Vec<u8> {
     fixture_with(pixels, columns, rows, depth, &table(), tweak)
 }
 
+/// All supported depths and strip/tile layouts must preserve sensor samples and metadata.
 #[test]
 fn strips_and_tiles_decode_exactly_at_all_supported_depths() {
     let (w, h) = (48, 30);
@@ -150,6 +158,38 @@ fn strips_and_tiles_decode_exactly_at_all_supported_depths() {
     }
 }
 
+/// Every sensor site must reject values above the declared 12- or 14-bit range.
+#[test]
+fn rejects_samples_above_declared_depth() {
+    for (depth, value) in [(12, 4096), (12, 5000), (14, 16384), (14, 20000)] {
+        for site in 0..16 {
+            let mut pixels = [0; 16];
+            pixels[site] = value;
+            for (columns, rows) in [(vec![4], vec![4]), (vec![2, 2], vec![2, 2])] {
+                let bytes = fixture(&pixels, &columns, &rows, depth, |_| {});
+                assert!(
+                    matches!(decode(&bytes, &Limits::default()), Err(RawError::Malformed(_))),
+                    "accepted {value} at site {site} of a {depth}-bit {columns:?} × {rows:?} image"
+                );
+            }
+        }
+    }
+}
+
+/// Zero and the exact declared maximum remain legal, including the full 16-bit range.
+#[test]
+fn declared_depth_boundaries_decode_exactly() {
+    for depth in [12, 14, 16] {
+        let max = ((1u32 << depth) - 1) as u16;
+        let pixels = [0, max, 1, max, max, 0, max, 1];
+        for columns in [vec![4], vec![2, 2]] {
+            let bytes = fixture(&pixels, &columns, &[2], depth, |_| {});
+            assert_eq!(decode(&bytes, &Limits::default()).unwrap().data, pixels, "{depth}-bit {columns:?}");
+        }
+    }
+}
+
+/// A hand-coded cell checks the green-site order without relying on the fixture encoder.
 #[test]
 fn known_answer_cell_has_column_major_sites() {
     // Hand-written 28 bits with five-bit category codes: differences 1, 2, 3, 4.
@@ -161,6 +201,7 @@ fn known_answer_cell_has_column_major_sites() {
     assert_eq!(sensor.data, [1, 3, 2, 4]);
 }
 
+/// Real-camera prefix shadowing and partial 2×2 cells must retain exact samples.
 #[test]
 fn camera_prefix_table_and_partial_cells() {
     // Camera-supplied 12-bit table: the final two codes are shadowed by the
@@ -191,6 +232,7 @@ fn camera_prefix_table_and_partial_cells() {
     }
 }
 
+/// Border cropping must produce the requested dimensions without reducing development to 8 bits.
 #[test]
 fn crop_and_development_keep_full_resolution() {
     let pixels: Vec<_> = (0..32 * 24).map(|i| 400 + (i % 1700) as u16).collect();
@@ -207,6 +249,7 @@ fn crop_and_development_keep_full_resolution() {
     assert!(rgb.rgb.iter().any(|v| v % 257 != 0), "development must retain more than eight bits");
 }
 
+/// Corrupt tile metadata and streams must fail instead of returning incomplete sensor data.
 #[test]
 fn malformed_layouts_and_streams_are_rejected() {
     let pixels = vec![400; 32 * 24];
@@ -229,6 +272,7 @@ fn malformed_layouts_and_streams_are_rejected() {
     }
 }
 
+/// Peak buffer accounting and byte-level truncation must fail before an unsafe read or allocation.
 #[test]
 fn allocations_and_truncation_stay_bounded() {
     let pixels = vec![400; 16 * 12];
@@ -240,6 +284,7 @@ fn allocations_and_truncation_stay_bounded() {
     }
 }
 
+/// Bounded deterministic mutations must either fail gracefully or return a complete sensor plane.
 #[test]
 fn mutated_format8_inputs_never_panic() {
     let pixels: Vec<_> = (0..16 * 12).map(|i| (128 + i * 7) as u16).collect();

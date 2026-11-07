@@ -26,6 +26,7 @@ const FIXED: [(u16, &[u16]); 8] = [
     (0x0041, &[17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
 ];
 
+/// Attach the codec name to a malformed-container or bitstream error.
 fn malformed(message: &str) -> RawError {
     RawError::malformed(format!("RW2 format 8: {message}"))
 }
@@ -44,6 +45,7 @@ fn words(t: &Tiff, ifd: &Ifd, tag: u16) -> Result<Vec<u16>> {
     (0..count).map(|i| e.at.checked_add(i * 2).and_then(|at| t.u16_at(at)).ok_or_else(|| malformed("truncated tag"))).collect()
 }
 
+/// Read a bounded count-prefixed list, combining low/high words for wide entries.
 fn list(t: &Tiff, ifd: &Ifd, tag: u16, wide: bool) -> Result<Vec<u32>> {
     let data = words(t, ifd, tag)?;
     let n = usize::from(data.first().copied().unwrap_or(0));
@@ -60,6 +62,7 @@ fn list(t: &Tiff, ifd: &Ifd, tag: u16, wide: bool) -> Result<Vec<u32>> {
     Ok(out)
 }
 
+/// A borrowed payload and its rectangle in the sensor plane.
 struct Tile<'a> {
     data: &'a [u8],
     bits: u64,
@@ -69,6 +72,7 @@ struct Tile<'a> {
     height: usize,
 }
 
+/// Validate payload ranges and tile geometry, requiring exact non-overlapping sensor coverage.
 fn tiles<'a>(t: &Tiff<'a>, ifd: &Ifd, width: usize, height: usize) -> Result<Vec<Tile<'a>>> {
     let offsets = list(t, ifd, 0x0044, true)?;
     let origins = list(t, ifd, 0x0045, true)?;
@@ -109,12 +113,14 @@ fn tiles<'a>(t: &Tiff<'a>, ifd: &Ifd, width: usize, height: usize) -> Result<Vec
     Ok(out)
 }
 
+/// One lookup-table entry: the consumed prefix length and signed-difference category.
 #[derive(Clone, Copy, Default)]
 struct Code {
     length: u8,
     category: u8,
 }
 
+/// Expand the file's prefix codes into a fixed lookup table, preserving shorter-prefix priority.
 fn codes(t: &Tiff, ifd: &Ifd) -> Result<[Code; TABLE_SIZE]> {
     let data = words(t, ifd, 0x0040)?;
     if data.first() != Some(&17) || data.len() < 35 {
@@ -156,10 +162,12 @@ struct Bits<'a> {
 }
 
 impl<'a> Bits<'a> {
+    /// Start a tile stream with its exact declared bit length, excluding trailing byte padding.
     fn new(tile: &Tile<'a>) -> Self {
         Self { bytes: tile.data.iter(), remaining: tile.bits, reservoir: 0, buffered: 0 }
     }
 
+    /// Look ahead at up to 16 bits without consuming them; absent lookahead bits are zero.
     fn peek(&mut self, n: u32) -> u32 {
         while self.buffered < n {
             let Some(byte) = self.bytes.next() else { break };
@@ -170,6 +178,7 @@ impl<'a> Bits<'a> {
         (value & ((1u64 << n) - 1)) as u32
     }
 
+    /// Consume bits only when both the declared bit length and stored bytes contain them.
     fn take(&mut self, n: u32) -> Option<u32> {
         if u64::from(n) > self.remaining {
             return None;
@@ -183,6 +192,7 @@ impl<'a> Bits<'a> {
         Some(value)
     }
 
+    /// Decode one T.81 signed difference using the file's category prefix and magnitude bits.
     fn difference(&mut self, codes: &[Code; TABLE_SIZE]) -> Option<i32> {
         let code = codes.get(self.peek(PREFIX_BITS) as usize)?;
         if code.length == 0 {
@@ -198,7 +208,8 @@ impl<'a> Bits<'a> {
     }
 }
 
-fn decode_tile(tile: &Tile, table: &[Code; TABLE_SIZE]) -> Result<Vec<u16>> {
+/// Reconstruct a tile's column-major cells, rejecting samples outside the declared sensor range.
+fn decode_tile(tile: &Tile, table: &[Code; TABLE_SIZE], max_sample: u16) -> Result<Vec<u16>> {
     let mut data = vec![0; tile.width * tile.height];
     let mut bits = Bits::new(tile);
     let mut first = [0i32; 4];
@@ -208,7 +219,9 @@ fn decode_tile(tile: &Tile, table: &[Code; TABLE_SIZE]) -> Result<Vec<u16>> {
             for (site, value) in predicted.iter_mut().enumerate() {
                 let delta = bits.difference(table).ok_or_else(|| malformed("invalid or truncated difference"))?;
                 *value = value.checked_add(delta).ok_or_else(|| malformed("predictor overflow"))?;
-                let sample = u16::try_from(*value).map_err(|_| malformed("sample outside the 16-bit range"))?;
+                // A u16 conversion alone admits malformed 12/14-bit values above the sensor range.
+                let sample =
+                    u16::try_from(*value).ok().filter(|&sample| sample <= max_sample).ok_or_else(|| malformed("sample outside the declared bit depth"))?;
                 let (x, y) = (column + site / 2, row + site % 2);
                 if x < tile.width && y < tile.height {
                     let pixel = data.get_mut(y * tile.width + x).ok_or_else(|| malformed("sample outside tile"))?;
@@ -223,10 +236,12 @@ fn decode_tile(tile: &Tile, table: &[Code; TABLE_SIZE]) -> Result<Vec<u16>> {
     Ok(data)
 }
 
+/// Decode the validated tiles into one sensor plane, charging both retained and final buffers.
 pub(super) fn decode(t: &Tiff, ifd: &Ifd, width: usize, height: usize, depth: u32, limits: &Limits) -> Result<Vec<u16>> {
     if !matches!(depth, 12 | 14 | 16) {
         return Err(RawError::unsupported(format!("RW2 format 8 with {depth}-bit samples")));
     }
+    let max_sample = ((1u32 << depth) - 1) as u16;
     for (tag, expected) in FIXED {
         if ifd.has(tag) && words(t, ifd, tag)? != expected {
             return Err(RawError::unsupported(format!("RW2 format 8 with unknown tag {tag:#06x} values")));
@@ -237,7 +252,7 @@ pub(super) fn decode(t: &Tiff, ifd: &Ifd, width: usize, height: usize, depth: u3
     // Parallel tile buffers and the assembled plane coexist. Charge both before allocating;
     // metadata is capped at 64 tiles and the lookup table has a fixed size.
     limits.check(width as u64, height as u64, 4)?;
-    let decoded = par::map(tiles.len(), |i| tiles.get(i).ok_or_else(|| malformed("missing tile")).and_then(|tile| decode_tile(tile, &table)));
+    let decoded = par::map(tiles.len(), |i| tiles.get(i).ok_or_else(|| malformed("missing tile")).and_then(|tile| decode_tile(tile, &table, max_sample)));
     let decoded: Vec<_> = decoded.into_iter().collect::<Result<_>>()?;
     let mut out = vec![0; width * height];
     for (tile, pixels) in tiles.iter().zip(decoded) {
