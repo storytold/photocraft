@@ -730,9 +730,11 @@ impl LiveStroke {
         let fmt = self.pre.format();
         let mut history: Option<Vec<Vec<StrokePoint>>> = None;
         for k in 0..=self.mirrors.len() {
+            // With the smoothing tail the commit paints at the end: a tail alone can reach an edge.
+            let reach = |r: &StrokeRenderer| r.bounds().union(&r.tail_bounds());
             let bounds = match k.checked_sub(1) {
-                None => self.renderer.bounds(),
-                Some(m) if self.mirror_distinct.get(m).copied().unwrap_or(false) => self.mirrors.get(m).map_or(Rect::EMPTY, StrokeRenderer::bounds),
+                None => reach(&self.renderer),
+                Some(m) if self.mirror_distinct.get(m).copied().unwrap_or(false) => self.mirrors.get(m).map_or(Rect::EMPTY, reach),
                 Some(_) => continue,
             };
             for d in self.shifts.clone() {

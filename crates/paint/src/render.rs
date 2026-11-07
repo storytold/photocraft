@@ -970,6 +970,16 @@ impl StrokeRenderer {
     /// a lone first dab), for live previews: a renderer holding copies of the coverage tiles the
     /// tail touches with the tail rendered in, so its `composite` draws exactly those tiles as
     /// [`finish`](Self::finish) would leave them. `None` when finishing adds nothing.
+    /// What [`finish`](Self::finish) would add to [`bounds`](Self::bounds): the smoothing tail's
+    /// dabs (empty when finishing adds nothing). Pattern Preview reads it to start the wrapped
+    /// copies a tail alone brings to an edge.
+    pub fn tail_bounds(&self) -> Rect {
+        let mut generator = self.generator.clone();
+        let (mut dabs, mut duals) = (Vec::new(), Vec::new());
+        generator.finish(&mut dabs, &mut duals);
+        dabs.iter().map(|d| self.ctx.dab_rect(d, false)).chain(duals.iter().map(|d| self.ctx.dab_rect(d, true))).fold(Rect::EMPTY, |a, r| a.union(&r))
+    }
+
     pub fn tail_preview(&self) -> Option<StrokeRenderer> {
         let mut generator = self.generator.clone();
         let (mut dabs, mut duals) = (Vec::new(), Vec::new());

@@ -1529,3 +1529,22 @@ fn pattern_preview_strokes_wrap_round_the_canvas() {
     assert!(same_pixels(&shown, &surface(&s), Rect::new(-10, -10, 70, 50)));
     assert!(shown.rgba(58, 24)[3] > 0.1, "the preview wraps too");
 }
+
+/// #8883 review: with smoothing on, the brush lags the pointer and only the catch-up tail drawn at
+/// the stroke's end reaches the edge; the live preview still starts the wrapped copy the commit
+/// paints.
+#[test]
+fn pattern_preview_wraps_a_smoothing_tail_that_alone_reaches_an_edge() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 60, "height": 40, "background": "transparent"})).unwrap();
+    let mut p = json!({"points": [[30, 20]], "size": 8, "hardness": 1.0, "smoothing": 0.8, "wrap": true, "target": "pixels"});
+    let mut live = LiveStroke::begin(&s, &p).unwrap();
+    live.push(&[StrokePoint::new(16.0, 20.0, 1.0), StrokePoint::new(1.0, 20.0, 1.0)]).unwrap();
+    p["points"] = json!([[30, 20], [16, 20], [1, 20]]);
+    p["seed"] = json!(live.seed);
+    s.execute("paint.stroke", p).unwrap();
+    let committed = surface(&s);
+    assert!(committed.rgba(59, 20)[3] > 0.5, "the commit wraps the tail");
+    let shown = live.doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().clone();
+    assert!(same_pixels(&shown, &committed, Rect::new(-10, -10, 70, 50)), "the preview shows the commit");
+}
