@@ -67,7 +67,11 @@ pub(super) fn split(s: &mut Session, p: &Value) -> Result<Value> {
     let (px, n) = match inks {
         Some(buf) => {
             let n = doc.pixel_format().channels();
-            (buf.px.iter().flat_map(|p| p.iter().copied().take(n)).collect(), n)
+            let px: Vec<f32> = buf.px.iter().flat_map(|p| p.iter().copied().take(n)).collect();
+            if px.len() != buf.px.len() * n {
+                return Err(EngineError::Other(format!("Split Channels: an ink pixel has fewer than {n} values")));
+            }
+            (px, n)
         }
         None => native_pixels(&doc, None)?,
     };

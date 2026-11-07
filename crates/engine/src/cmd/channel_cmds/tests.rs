@@ -904,11 +904,14 @@ fn split_and_merge_channels() {
 fn split_and_merge_cmyk_keep_ink_dark() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 40, "height": 20, "mode": "cmyk", "background": "white"})).unwrap();
+    // Rich black (#8359): its inks don't survive a trip through RGB, so the old path fails here.
+    let rgb = photocraft_color::convert::cmyk_to_rgb([1.0, 1.0, 1.0, 0.0]).map(|c| c.clamp(0.0, 1.0));
+    s.execute("tools.setColors", json!({"foreground": rgb, "foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
-    s.execute("edit.fill", json!({"color": "#0080ff"})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
     s.execute("select.deselect", json!({})).unwrap();
     let (ink, paper) = (px(&s, 1, 1), px(&s, 30, 1));
-    assert!(ink[0] > 0.5 && paper[..4].iter().all(|v| *v < 0.01), "{ink:?} {paper:?}");
+    assert!(ink[..3].iter().all(|v| *v > 0.99) && paper[..4].iter().all(|v| *v < 0.01), "{ink:?} {paper:?}");
     s.execute("channel.split", json!({})).unwrap();
     assert_eq!(s.documents().len(), 4);
     for (i, ink) in ink[..4].iter().enumerate() {
