@@ -258,7 +258,10 @@ pub fn apply_with(s: &Surface, p: &Params, area: Rect, domain: Rect, selection: 
     if p.channels.as_ref().is_some_and(|v| !v.is_empty() && v.len() != s.channels()) {
         return Err(Error::InvalidParameter);
     }
-    dimensions(domain)?;
+    // The owner only bounds edge sampling; preflight admits the clipped output and halo.
+    if domain.is_empty() {
+        return Err(Error::InvalidGeometry);
+    }
     if ctl.cancelled() {
         return Err(Error::Cancelled);
     }
@@ -378,6 +381,63 @@ pub(crate) fn run_image(src: &Image, out: Rect, ctx: &Ctx, p: &Params) -> Vec<f3
 mod tests {
     use super::*;
     use photocraft_color::ColorMode;
+
+    /// Sparse owner size must not change small native edits, repeated-edge samples or selection publication.
+    #[test]
+    fn small_percentile_edits_on_large_owners_match_clamped_oracle() {
+        let interior = Rect::new(11, 13, 13, 15);
+        let large = Rect::new(0, 0, 9000, 9000);
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+                let mut s = source(mode, depth, Rect::new(10, 12, 14, 16));
+                s.fill_rect(Rect::new(0, 0, 3, 3), &vec![0.6; s.channels()]);
+                s.fill_rect(Rect::new(-2, -2, 0, 0), &vec![1.; s.channels()]);
+                let before = s.clone();
+                for shape in [Neighborhood::Disc, Neighborhood::Square, Neighborhood::Diamond] {
+                    let p = params(1, shape, 17., 83.);
+                    for domain in [Rect::new(0, 0, 100, 100), large, Rect::new(0, 0, 90_000, 9000)] {
+                        for area in [interior, Rect::new(-1, -1, 2, 2)] {
+                            let clipped = area.intersect(&domain);
+                            let mut expected = s.clone();
+                            expected.try_write_region(clipped, &oracle(&s, &p, clipped, domain)).unwrap();
+                            assert_eq!(apply_with(&s, &p, area, domain, None, &Interrupt::NONE).unwrap(), expected, "{mode:?}/{depth:?}/{shape:?}");
+                        }
+                    }
+                    let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+                    selection.fill_rect(interior, &[0.37]);
+                    let selected = apply_with(&s, &p, interior, large, Some(&selection), &Interrupt::NONE).unwrap();
+                    let small = apply_with(&s, &p, interior, Rect::new(0, 0, 100, 100), Some(&selection), &Interrupt::NONE).unwrap();
+                    assert_eq!(selected, small);
+                }
+                assert_eq!(s, before);
+            }
+        }
+    }
+
+    /// Sampling bounds need no dense admission, while clipped output, padded workspace and cancellation retain their limits.
+    #[test]
+    fn large_percentile_owners_keep_geometry_work_and_cancellation_guards() {
+        let s = Surface::with_default(PixelFormat::RGBA32F, &[0.25; 4]);
+        let area = Rect::new(11, 13, 13, 15);
+        let domain = Rect::new(0, 0, 9000, 9000);
+        let p = params(1, Neighborhood::Square, 50., 50.);
+        assert_eq!(s.tile_count(), 0);
+        let shifted = Rect::new(11, 13, 9011, 9013);
+        let out = apply_with(&s, &p, Rect::new(-100_000, -100_000, 13, 15), shifted, None, &Interrupt::NONE).unwrap();
+        assert_eq!(out.read_region(area), vec![0.25; 16]);
+        for invalid in [Rect::new(0, 0, 0, 9000), Rect::new(0, 1, 9000, 1), Rect::new(2, 0, 1, 9000), Rect::new(0, 2, 9000, 1)] {
+            assert_eq!(apply_with(&s, &p, area, invalid, None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+        }
+        assert_eq!(apply_with(&s, &p, domain, domain, None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+        let wide = Rect::new(0, 0, 90_000, 9000);
+        assert_eq!(apply_with(&s, &p, Rect::new(0, 0, 65_537, 1), wide, None, &Interrupt::NONE), Err(Error::InvalidGeometry));
+        let costly = params(500, Neighborhood::Square, 50., 50.);
+        assert_eq!(apply_with(&s, &costly, Rect::new(0, 0, 8192, 8192), domain, None, &Interrupt::NONE), Err(Error::WorkspaceLimit));
+        let cancelled = || true;
+        assert_eq!(apply_with(&s, &p, area, domain, None, &Interrupt::cancel_only(&cancelled)), Err(Error::Cancelled));
+        assert_eq!(apply_with(&s, &p, Rect::new(9001, 9001, 9003, 9003), domain, None, &Interrupt::NONE).unwrap(), s);
+        assert_eq!(s.tile_count(), 0);
+    }
     /// Build an all-channel percentile request with independently controlled color and alpha ranks.
     fn params(radius: u16, shape: Neighborhood, q: f32, a: f32) -> Params {
         Params { radius, shape, color_percentile: q, alpha_percentile: a, channels: None }
