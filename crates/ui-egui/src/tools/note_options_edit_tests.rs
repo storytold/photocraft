@@ -165,3 +165,16 @@ fn enter_on_an_unchanged_author_runs_nothing() {
     assert_eq!(journaled_notes_set(app), 0, "no notes.set for an action to record");
     assert_eq!(steps(app), before, "no history step");
 }
+
+#[test]
+fn ok_on_the_unchanged_colour_leaves_the_note_alone() {
+    let mut app = app();
+    select(&mut app, 0);
+    let before = steps(&app);
+    let shown = app.ui.analysis.note_color;
+    let id = crate::color_picker_ui::open_for_target(&mut app, "noteColor", "Color", shown);
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(note(&app, 0).color.to_rgb(), BLUE, "the note's finer colour is kept");
+    assert_eq!(steps(&app), before, "no \"Note Color\" step");
+    assert_eq!(journaled_notes_set(&app), 0, "no notes.set for an action to record");
+}

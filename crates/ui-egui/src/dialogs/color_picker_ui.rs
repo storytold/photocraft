@@ -1002,6 +1002,10 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     if target == "noteColor" {
         let rgb = parse_hex(color).ok_or("not a colour")?;
         if let Some(i) = crate::analysis_ui::selected_note(app) {
+            // OK on the colour it opened with leaves the note's own (possibly finer) colour alone.
+            if f.get("color") == f.get("__orig") {
+                return Ok(json!({ "color": color }));
+            }
             app.run("notes.set", json!({"index": i, "color": color}))?;
         } else {
             app.ui.analysis.note_default_color = rgb;
