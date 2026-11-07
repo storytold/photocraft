@@ -40,7 +40,9 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     if crate::adjust_preview::on_layer(app, idx) {
         return None;
     }
-    let d = app.ui.dialogs.iter().find(|d| d.fields.contains_key("__filter"))?;
+    let dialog = app.ui.dialogs.iter().position(|d| d.fields.contains_key("__filter"))?;
+    crate::filter_dialog::refresh_match_color_sources(&app.session, &mut app.ui.dialogs[dialog].fields);
+    let d = &app.ui.dialogs[dialog];
     if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) {
         return None;
     }
@@ -63,6 +65,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     let request = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
+        sources: crate::filter_dialog::preview_source_revisions(&app.session, &cmd, &params),
         dialog: d.id,
         active: st.active_layer,
         target: st.channel_view.target,
