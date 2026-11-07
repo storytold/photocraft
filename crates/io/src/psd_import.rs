@@ -710,7 +710,7 @@ impl Ctx<'_> {
                 crate::linked::embedded_payload_in_blocks(global.iter().map(|(_, key, data)| (key, data.as_slice())), &id).map(|(_, source)| source)
             })
         });
-        LayerContent::Smart(SmartObject {
+        let mut sm = SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
             vector_preview,
@@ -723,7 +723,9 @@ impl Ctx<'_> {
             warp,
             stack_mode: None,
             perspective,
-        })
+        };
+        crate::smart_map::pin_puppet_meshes(&mut sm);
+        LayerContent::Smart(sm)
     }
 
     /// Typed vector mask from `vsms`/`vmsk` (non-shape layers). A user mask that Photoshop
