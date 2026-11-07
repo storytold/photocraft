@@ -1073,6 +1073,7 @@
 	Control:	Vezérlés:
 	Corners	Sarkok
 	Could not complete the Free Transform command because the layer is locked.	A szabad alakítás nem hajtható végre, mert a réteg zárolva van.
+	Could not transform because the layer is locked.	Az alakítás nem hajtható végre, mert a réteg zárolva van.
 	Could not transform: the layer is empty	Az alakítás nem hajtható végre: a réteg üres
 	Could not use Puppet Warp: no opaque pixels	A bábtorzítás nem használható: nincsenek átlátszatlan pixelek
 	Could not use Puppet Warp: the layer is empty	A bábtorzítás nem használható: a réteg üres

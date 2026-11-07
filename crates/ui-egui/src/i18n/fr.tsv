@@ -1840,6 +1840,7 @@
 	Move Tool	Outil Déplacement
 	Could not use the move tool because the layer is locked.	Impossible d'utiliser l'outil Déplacement, car le calque est verrouillé.
 	Could not complete the Free Transform command because the layer is locked.	Impossible d'exécuter la commande Transformation libre, car le calque est verrouillé.
+	Could not transform because the layer is locked.	Impossible de transformer, car le calque est verrouillé.
 	Multiply	Produit
 	My Brushes	Mes pinceaux
 	Neutrals	Neutres

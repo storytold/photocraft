@@ -1272,7 +1272,10 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
                 continue;
             }
             if app.ui.tool == Tool::Move && !gesture.secondary && !gesture.middle && !gesture.space && matches!(sample.ev, ToolEvent::Down { .. }) {
-                app.begin_move_transform_controls(ctx, sample.x, sample.y);
+                // A press the controls refused (the Background among the layers) goes nowhere else (#11101).
+                if app.begin_move_transform_controls(ctx, sample.x, sample.y) == crate::canvas::ControlsPress::Refused {
+                    continue;
+                }
             }
             forward_pointer_event(app, &gesture, sample);
         }
