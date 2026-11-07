@@ -1230,7 +1230,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "colorLookup",
             "Color Lookup…",
-            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":text,"dataEncoding":"text|base64"="text","fileName":text?,"lutFormat":"cube|3dl|look"?} (file: LUT path; data: file text or encoded bytes; lutFormat overrides format detection)"##,
+            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":json,"dataEncoding":json,"fileName":json,"lutFormat":json} (file: LUT path; data: the LUT file's text, or its bytes in base64 with "dataEncoding":"base64" (default "text"); fileName: a name whose extension gives data's format; lutFormat: "cube"|"3dl"|"look", overriding format detection; data and its options are json here so the Color Lookup dialog leaves them unset)"##,
         ),
     ];
     for &(kind, label, params) in ADJ {

@@ -24,6 +24,7 @@ macro_rules! tl {
         $crate::i18n::t($s)
     };
 }
+pub(crate) mod automation_preview;
 mod brush_mode_menu;
 pub mod canvas;
 pub mod control;
@@ -559,6 +560,13 @@ pub struct PhotocraftApp {
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// Open dialogs a control request or synthetic input opened or edited: their live previews
+    /// pass the automation policy as confirming them would (`automation_preview`).
+    pub(crate) automation_dialogs: Vec<u64>,
+    /// The open dialogs as they were when this UI pass's synthetic input began, so a preview
+    /// drawn during the pass is judged only for the dialogs that input opened or edited. None
+    /// outside such a pass, or when the input began mid-pass (then every open dialog is judged).
+    pub(crate) automation_pass_dialogs: Option<automation_preview::Snapshot>,
     /// How many `run_command` calls are on the stack. Only the outermost one writes the frame's
     /// command stage: a nested run (`file.save` → `layer.smartObjects.saveContents`,
     /// `actions.play` → its steps) is already inside the outer call's time.

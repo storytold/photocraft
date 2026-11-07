@@ -1642,3 +1642,21 @@ fn replace_color_localized_color_clusters() {
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
 }
+
+/// Image › Adjustments › Color Lookup opens with only the dialog's own fields: the embedded-LUT
+/// params agents and recorded actions pass (`data`, `dataEncoding`, `fileName`, `lutFormat`)
+/// stay unset. Defaulted from the schema, an empty `data` and a numeric `fileName` made every
+/// preview and OK of the dialog fail, and `lutFormat` forced a .3dl or .look file to read as .cube.
+#[test]
+fn color_lookup_dialog_leaves_the_embedded_lut_params_unset() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let id = open(&mut app, "image.adjustments.colorLookup").expect("Color Lookup has a schema dialog");
+    let fields = app.ui.dialogs.iter().find(|d| d.id == id).map(|d| d.fields.clone()).unwrap();
+    for key in ["data", "dataEncoding", "fileName", "lutFormat"] {
+        assert!(!fields.contains_key(key), "{key}: {fields:?}");
+    }
+    let mut params = params_of(&fields);
+    params["lut"] = json!("warm");
+    app.session.execute("image.adjustments.colorLookup", params).expect("the dialog's values run");
+}
