@@ -198,3 +198,35 @@ fn the_dragged_and_the_new_marker_are_drawn_at_the_pointer() {
     let shown = numbers_at(&app);
     assert!(shown.iter().any(|(t, q)| t == "2" && (q.x - at.x).abs() < 20.0 && (q.y - at.y).abs() < 20.0), "the new #2 follows the pointer: {shown:?}");
 }
+
+#[test]
+fn at_the_ten_point_limit_a_drag_off_a_point_previews_no_new_marker() {
+    let mut app = app();
+    for i in 0..10 {
+        app.run("view.colorSamplers.add", json!({"x": 10 + 15 * i, "y": 10})).unwrap();
+    }
+    let ctx = egui::Context::default();
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 100.0)),
+        zoom: 1.0,
+        center: [100.0, 50.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    down(&mut app, 50.0, 70.0, NONE);
+    mv(&mut app, 60.0, 80.0);
+    let mut o = ctx.run_ui(Default::default(), |ui| draw_overlay(&app, ui.painter(), &xf));
+    o.textures_delta.clear();
+    let numbers: Vec<String> = o
+        .shapes
+        .into_iter()
+        .filter_map(|c| match c.shape {
+            egui::Shape::Text(t) => Some(t.galley.text().to_owned()),
+            _ => None,
+        })
+        .collect();
+    assert!(!numbers.iter().any(|t| t == "11"), "no 11th marker that the release cannot place: {numbers:?}");
+    up(&mut app, 60.0, 80.0);
+    assert_eq!(samplers(&app).len(), 10);
+}

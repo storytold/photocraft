@@ -480,11 +480,11 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     }
     // Color Sampler points (#1046): persistent numbered markers, drawn whatever the active tool is.
     // While one is dragged its marker follows the pointer, and a new one shows the next number
-    // there (#11729).
+    // there (#11729), unless the limit is reached and the release cannot place it.
     let mut samplers = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     match app.ui.analysis.drag {
         Some(Drag::Sampler(i, at)) if app.ui.tool == Tool::ColorSampler && i < samplers.len() => samplers[i] = at,
-        Some(Drag::SamplerNew(at)) if app.ui.tool == Tool::ColorSampler => samplers.push(at),
+        Some(Drag::SamplerNew(at)) if app.ui.tool == Tool::ColorSampler && samplers.len() < photocraft_engine::sampler_cmds::MAX_SAMPLERS => samplers.push(at),
         _ => {}
     }
     for (i, p) in samplers.iter().enumerate() {
