@@ -630,7 +630,8 @@ impl Default for BrushSettings {
             spacing_enabled: true,
             opacity: 1.0,
             flow: 1.0,
-            pressure_size: true,
+            // Off, as the reference application leaves it after Reset Tool (#11809).
+            pressure_size: false,
             pressure_opacity: false,
             color: [0.0, 0.0, 0.0, 1.0],
             color_cmyk: None,
