@@ -10,8 +10,10 @@ The native build renders Bengali through the generic non-CJK script fallback:
 the first time Bengali text is drawn, the font loader tries the system
 candidates for `Script::Bengali` (Noto Sans Bengali on Linux, Bangla MN on
 macOS, Nirmala UI on Windows; see `photocraft_text::scripts`). The web build
-has no automatic Bengali font fallback, so Bengali labels may appear as boxes
-where no Bengali-capable font is served.
+bundles no Bengali font: it fetches the first font the host lists for the
+`Beng` script in `fonts/manifest.txt` (see `photocraft_text::served`) when
+বাংলা is selected or Bengali text is drawn. Where the host serves none,
+Bengali labels appear as boxes.
 
 ## Files and integration
 
