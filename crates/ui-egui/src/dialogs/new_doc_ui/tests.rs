@@ -63,30 +63,42 @@ fn the_artboards_box_creates_an_artboard_document() {
 
 #[test]
 fn units_round_trip_through_pixels() {
-    assert_eq!(to_unit(2100.0, "in", 300.0), 7.0);
-    assert_eq!(from_unit(7.0, "in", 300.0), 2100.0);
-    assert_eq!(from_unit(2.54, "cm", 300.0), 300.0);
-    assert_eq!(to_unit(640.0, "px", 72.0), 640.0);
+    assert_eq!(to_unit(2100.0, "in", 300.0, 72.0), 7.0);
+    assert_eq!(from_unit(7.0, "in", 300.0, 72.0), 2100.0);
+    assert_eq!(from_unit(2.54, "cm", 300.0, 72.0), 300.0);
+    assert_eq!(to_unit(640.0, "px", 72.0, 72.0), 640.0);
+}
+
+/// Points and picas follow Preferences › Point/Pica Size, as Image Size's do: 7227 traditional
+/// points are 100 in, not 7227 / 72.
+#[test]
+fn points_and_picas_follow_the_point_size_preference() {
+    assert_eq!(from_unit(7227.0, "pt", 100.0, 72.27), 10_000.0);
+    assert_eq!(from_unit(602.25, "pica", 100.0, 72.27), 10_000.0);
+    assert_eq!(from_unit(7200.0, "pt", 100.0, 72.0), 10_000.0);
+    assert!((to_unit(10_000.0, "pt", 100.0, 72.27) - 7227.0).abs() < 0.01);
+    // A preference that isn't a positive number converts at PostScript points.
+    assert_eq!(from_unit(7200.0, "pt", 100.0, f32::NAN), 10_000.0);
 }
 
 /// #1147: 5 mm at 72 ppi is 14 px, which is 4.94 mm. The field must keep showing the typed 5.
 #[test]
 fn typed_size_in_a_physical_unit_shows_as_typed() {
     let mut f = crate::state::UiState::new_document_fields();
-    set_size(&mut f, "height", 5.0, "mm", 72.0);
+    set_size(&mut f, "height", 5.0, "mm", 72.0, 72.0);
     assert_eq!(command_params(&f)["height"], json!(14));
-    assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0), 5.0);
+    assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0, 72.0), 5.0);
     // Another unit, or pixels changed elsewhere (a preset, the orientation swap): converted.
-    assert_eq!(shown_size(&f, "height", 1080.0, "cm", 72.0), to_unit(14.0, "cm", 72.0));
+    assert_eq!(shown_size(&f, "height", 1080.0, "cm", 72.0, 72.0), to_unit(14.0, "cm", 72.0, 72.0));
     f.insert("height".into(), json!(1080));
-    assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0), to_unit(1080.0, "mm", 72.0));
+    assert_eq!(shown_size(&f, "height", 1080.0, "mm", 72.0, 72.0), to_unit(1080.0, "mm", 72.0, 72.0));
     // Pixels show whole pixels.
-    set_size(&mut f, "width", 512.4, "px", 72.0);
-    assert_eq!(shown_size(&f, "width", 1920.0, "px", 72.0), 512.0);
+    set_size(&mut f, "width", 512.4, "px", 72.0, 72.0);
+    assert_eq!(shown_size(&f, "width", 1920.0, "px", 72.0, 72.0), 512.0);
     // Over the 300000 px limit the field shows the limit.
-    set_size(&mut f, "width", 300_000.0, "mm", 72.0);
+    set_size(&mut f, "width", 300_000.0, "mm", 72.0, 72.0);
     assert_eq!(command_params(&f)["width"], json!(300_000));
-    assert_eq!(shown_size(&f, "width", 1920.0, "mm", 72.0), to_unit(300_000.0, "mm", 72.0));
+    assert_eq!(shown_size(&f, "width", 1920.0, "mm", 72.0, 72.0), to_unit(300_000.0, "mm", 72.0, 72.0));
 }
 
 /// #5661: 1 px at 300 ppi is 0.0033 in. Showing it in inches clamped the field to 0.01 in and
@@ -117,12 +129,12 @@ fn tiny_size_in_inches_is_not_changed_by_showing_it() {
 #[test]
 fn orientation_swap_keeps_the_typed_values() {
     let mut f = crate::state::UiState::new_document_fields();
-    set_size(&mut f, "width", 841.0, "mm", 72.0);
-    set_size(&mut f, "height", 1189.0, "mm", 72.0);
+    set_size(&mut f, "width", 841.0, "mm", 72.0, 72.0);
+    set_size(&mut f, "height", 1189.0, "mm", 72.0, 72.0);
     swap_size(&mut f);
     let p = command_params(&f);
     assert_eq!((p["width"].clone(), p["height"].clone()), (json!(3370), json!(2384)));
-    assert_eq!((shown_size(&f, "width", 1920.0, "mm", 72.0), shown_size(&f, "height", 1080.0, "mm", 72.0)), (1189.0, 841.0));
+    assert_eq!((shown_size(&f, "width", 1920.0, "mm", 72.0, 72.0), shown_size(&f, "height", 1080.0, "mm", 72.0, 72.0)), (1189.0, 841.0));
 }
 
 #[test]
