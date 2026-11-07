@@ -36,6 +36,7 @@ mod marching_ants_pixels;
 mod marquee_autoscroll;
 mod paint_bucket_all_layers;
 mod pattern_preview_canvas;
+mod print_done_records_settings;
 mod radial_blur_center;
 mod remove_channel_target;
 mod system_locale;
