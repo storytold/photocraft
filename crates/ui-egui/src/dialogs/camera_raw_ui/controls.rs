@@ -195,7 +195,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    let Some(d) = app.camera_raw.as_ref() else { return };
+    let reveal_id = egui::Id::unique("camera-raw-window-reveal");
+    let Some(d) = app.camera_raw.as_ref() else {
+        ctx.data_mut(|m| m.remove::<Reveal>(reveal_id));
+        return;
+    };
     // Where the platform has no extra windows (the web build), draw over the main window.
     if ctx.embed_viewports() {
         draw(app, ctx, false);
@@ -210,17 +214,77 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
     });
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
-    let builder = crate::os_window::builder().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
+    // Sized to the monitor (a fixed 1360×900 overflows a 1536×864 laptop screen) and centred over
+    // the main window, as Photoshop opens it.
+    let (monitor, outer) = ctx.input(|i| (i.viewport().monitor_size, i.viewport().outer_rect));
+    let size = window_size(monitor);
+    let mut builder =
+        crate::os_window::builder().with_title(window_title).with_inner_size(size).with_min_inner_size(window_min_size(monitor)).with_visible(false);
+    if let Some(outer) = outer {
+        // Never above the main window's top edge, so the title bar stays on its monitor and in reach.
+        let mut pos = outer.center() - size / 2.0;
+        pos.y = pos.y.max(outer.top());
+        builder = builder.with_position(pos);
+    }
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
     let mut close = false;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
+    ctx.show_viewport_immediate(window, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
         }
         draw(app, ui.ctx(), class != egui::ViewportClass::EmbeddedWindow);
     });
+    // The window opens hidden and is shown once its content has been drawn twice, so it doesn't
+    // flash black, then grey, then white while the OS window and its first frame come up. An
+    // immediate viewport is drawn inside the main window's frame, so this counts the main
+    // window's frames and shows the window from here: it never waits on frames the hidden window
+    // itself might not get (Wayland sends an unmapped surface no frame callbacks), so the dialog
+    // can't stay hidden behind a dimmed main window that takes no input.
+    if ctx.data_mut(|m| m.get_temp_mut_or_default::<Reveal>(reveal_id).step()) {
+        ctx.send_viewport_cmd_to(window, egui::ViewportCommand::Visible(true));
+    }
+    if !ctx.data(|m| m.get_temp::<Reveal>(reveal_id).is_some_and(|r| r.shown)) {
+        ctx.request_repaint();
+    }
     if close && app.camera_raw.is_some() {
         cancel(app);
     }
+}
+
+/// When the hidden Camera Raw window is shown (see `show`).
+#[derive(Clone, Copy, Debug, Default)]
+struct Reveal {
+    /// Main-window frames that drew the window's content since it opened.
+    frames: u8,
+    /// Whether the window has been shown.
+    shown: bool,
+}
+
+impl Reveal {
+    /// Record one main-window frame that drew the window. True exactly once, after the second.
+    fn step(&mut self) -> bool {
+        if self.shown {
+            return false;
+        }
+        self.frames = self.frames.saturating_add(1);
+        self.shown = self.frames >= 2;
+        self.shown
+    }
+}
+
+/// The Camera Raw window's first size: two thirds of the monitor's width and three quarters of its
+/// height, at most the full 1360×900 and at least `window_min_size`.
+fn window_size(monitor: Option<egui::Vec2>) -> egui::Vec2 {
+    let Some(m) = monitor else { return vec2(1010.0, 630.0) };
+    let min = window_min_size(Some(m));
+    vec2((m.x * 0.66).clamp(min.x, 1360.0), (m.y * 0.73).clamp(min.y, 900.0))
+}
+
+/// The smallest Camera Raw window: 900×600, or less on a screen too small for it, leaving room
+/// for the title bar and the taskbar so the OK and Cancel buttons stay on screen.
+fn window_min_size(monitor: Option<egui::Vec2>) -> egui::Vec2 {
+    let full = vec2(900.0, 600.0);
+    monitor.map_or(full, |m| full.min(vec2(m.x - 40.0, m.y - 90.0)).max(vec2(400.0, 300.0)))
 }
 
 impl CameraRawDialog {
@@ -520,5 +584,40 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             report_file_error(app, r);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod window_size_tests {
+    use super::{Reveal, window_min_size, window_size};
+
+    /// The hidden window is shown after the second main-window frame that drew it, and only once.
+    #[test]
+    fn the_window_is_revealed_once_after_two_frames() {
+        let mut reveal = Reveal::default();
+        assert!(!reveal.step(), "the first frame");
+        assert!(reveal.step(), "the second frame shows it");
+        assert!(!reveal.step() && !reveal.step(), "shown only once");
+    }
+    use egui::vec2;
+
+    /// A 1536×864 laptop screen gets a window that fits it; big screens stop at 1360×900 and small
+    /// ones at the 900×600 minimum; an unknown monitor gets the laptop-sized default.
+    #[test]
+    fn the_first_size_fits_the_monitor() {
+        assert_eq!(window_size(Some(vec2(1536.0, 864.0))), vec2(1536.0 * 0.66, 864.0 * 0.73));
+        assert_eq!(window_size(Some(vec2(3840.0, 2160.0))), vec2(1360.0, 900.0));
+        assert_eq!(window_size(Some(vec2(1024.0, 700.0))), vec2(900.0, 600.0));
+        assert_eq!(window_size(None), vec2(1010.0, 630.0));
+    }
+
+    /// On a screen shorter than the 600-point minimum plus the title bar and taskbar, both the
+    /// first and the minimum size shrink to fit it.
+    #[test]
+    fn a_small_screen_lowers_the_minimum_to_fit() {
+        let small = Some(vec2(1093.0, 614.0));
+        assert_eq!(window_min_size(small), vec2(900.0, 524.0));
+        assert_eq!(window_size(small), vec2(900.0, 524.0));
+        assert_eq!(window_min_size(None), vec2(900.0, 600.0));
     }
 }
