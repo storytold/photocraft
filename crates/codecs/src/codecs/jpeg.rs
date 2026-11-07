@@ -150,8 +150,13 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
     loop {
         let Some(&byte) = b.get(i) else { return cut(scan_data, scanned) };
         if byte != 0xFF {
-            // Not where a marker should be: too odd to judge.
-            return (DataEnd::Complete, scanned);
+            // Not where a marker should be: skip to the next one, as a lenient decoder does, so
+            // segments after the stray bytes (padding among them) are still recognised. Stray
+            // bytes are not scan data, so they never count (junk would buy budget as padding
+            // did); with no marker left, the image data ends here.
+            let Some(p) = b.get(i..).and_then(|r| r.iter().position(|&v| v == 0xFF)) else { return cut(scan_data, scanned) };
+            i += p;
+            continue;
         }
         let Some(&code) = b.get(i + 1) else { return cut(scan_data, scanned) };
         match code {
@@ -189,6 +194,54 @@ fn data_end(b: &[u8]) -> (DataEnd, u64) {
 
 fn err(e: impl std::fmt::Display) -> CodecError {
     CodecError::malformed(F, e)
+}
+
+const EXTENDED_XMP_HEADER: &[u8] = b"http://ns.adobe.com/xmp/extension/\0";
+
+/// The file without its Extended XMP APP1 segments (`None` when it has none), for `zune-jpeg`.
+///
+/// zune-jpeg keeps every Extended XMP fragment until a GUID's set is complete and re-sorts and
+/// re-checks all pending fragments after every marker it parses, so many small, consistent but
+/// incomplete fragments (or a few followed by many other markers) cost quadratic time before a
+/// pixel is decoded. Nothing here reads its reassembled Extended XMP ([`scan_metadata`] works on
+/// the original bytes), so the fragments are left out of what it parses. The walk stops at the
+/// first scan, as the header parse does, and skips stray bytes to the next `FF` as it does.
+fn without_extended_xmp(b: &[u8]) -> Option<Vec<u8>> {
+    let mut drop: Vec<std::ops::Range<usize>> = Vec::new();
+    let mut i = 2; // past SOI
+    while let Some(&byte) = b.get(i) {
+        if byte != 0xFF {
+            i += b.get(i..)?.iter().position(|&v| v == 0xFF)?;
+            continue;
+        }
+        let Some(&code) = b.get(i + 1) else { break };
+        match code {
+            0xFF => i += 1,
+            0x01 | 0xD0..=0xD8 => i += 2,
+            0xD9 | 0xDA => break,
+            _ => {
+                let Some(len) = b.get(i + 2..i + 4).and_then(|s| <[u8; 2]>::try_from(s).ok()).map(u16::from_be_bytes) else { break };
+                let end = i.saturating_add(2 + usize::from(len));
+                if code == 0xE1 && b.get(i + 4..).is_some_and(|p| p.starts_with(EXTENDED_XMP_HEADER)) {
+                    drop.push(i..end.min(b.len()));
+                }
+                i = end;
+            }
+        }
+    }
+    if drop.is_empty() {
+        return None;
+    }
+    // Reserve what is kept, not the input: the dropped fragments may be most of it.
+    let kept = b.len().saturating_sub(drop.iter().map(|r| r.end - r.start).sum::<usize>());
+    let mut out = Vec::with_capacity(kept);
+    let mut at = 0;
+    for r in drop {
+        out.extend_from_slice(b.get(at..r.start)?);
+        at = r.end;
+    }
+    out.extend_from_slice(b.get(at..)?);
+    Some(out)
 }
 
 /// Whether `craft-jpeg` (rather than `zune-jpeg`) decodes the file: arithmetic coding
@@ -232,9 +285,10 @@ fn decode_craft_jpeg(bytes: &[u8], limits: &Limits, adobe_transform: Option<u8>)
     Ok((img, d.damaged))
 }
 
-/// Most pixels one byte of truncated scan data may account for. Even a flat image costs a few
-/// bits per 8×8 block, and truncated photographs are far above this.
-const MAX_TRUNCATED_PIXELS_PER_BYTE: u64 = 2048;
+/// Most pixels one byte of a JPEG may account for. Every 8×8 block of a frame needs at least a
+/// one-bit DC code (512 pixels a byte for a flat image under ideal Huffman tables), and real files,
+/// truncated or not, are far above this.
+const MAX_PIXELS_PER_BYTE: u64 = 2048;
 
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (end, scan_bytes) = data_end(bytes);
@@ -252,7 +306,9 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         }
         if let Some((w, h, _)) = meta.frame
             && end == DataEnd::Truncated
-            && u64::from(w) * u64::from(h) / MAX_TRUNCATED_PIXELS_PER_BYTE > scan_bytes
+            // Only truncated scans: arithmetic coding (SOF9–SOF11) can spend well under a bit on
+            // a flat block, so a complete scan may be shorter than this bound.
+            && u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes
         {
             return Err(err("the truncated scan is too short for the frame it declares"));
         }
@@ -265,7 +321,8 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         return Ok(img);
     }
     let options = DecoderOptions::default().set_strict_mode(false).set_max_width(65535).set_max_height(65535);
-    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), options);
+    let stripped = without_extended_xmp(bytes);
+    let mut dec = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(stripped.as_deref().unwrap_or(bytes)), options);
     dec.decode_headers().map_err(err)?;
     let (w, h) = dec.dimensions().ok_or_else(|| err("no dimensions"))?;
     let (w, h) = (w as u32, h as u32);
@@ -277,12 +334,14 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
         _ => (ColorSpace::RGB, ChannelLayout::Rgb),
     };
     limits.check(w, h, layout, SampleType::U8)?;
-    // The backend fills whatever the scan no longer describes, so a short scan under a large
-    // frame is a gigabyte of synthesized output from a few kilobytes of file. The budget is
-    // measured on the scan data itself: APP padding can inflate `bytes.len()` arbitrarily
-    // without describing one more pixel.
-    if end == DataEnd::Truncated && u64::from(w) * u64::from(h) / MAX_TRUNCATED_PIXELS_PER_BYTE > scan_bytes {
-        return Err(err("the truncated scan is too short for the frame it declares"));
+    // The backend fills whatever the scan no longer describes, and allocates the whole output
+    // once a scan holds a byte, so a short scan under a large frame is a gigabyte of synthesized
+    // output from a few kilobytes of file (#8597), truncated or not. The budget is the scan data
+    // itself, not `bytes.len()`, which APP padding can inflate without describing one more pixel;
+    // where the walk stops early on an odd layout, what it couldn't read counts as scan data.
+    if u64::from(w) * u64::from(h) / MAX_PIXELS_PER_BYTE > scan_bytes {
+        let what = if end == DataEnd::Truncated { "the truncated scan" } else { "the scan data" };
+        return Err(err(format!("{what} is too short for the frame it declares")));
     }
     dec.set_options(dec.options().jpeg_set_out_colorspace(out_cs));
     let mut px = dec.decode().map_err(err)?;
@@ -515,6 +574,36 @@ mod tests {
         bytes.get(2..11) == Some(b"\xff\xe0\0\x10JFIF\0")
     }
 
+    /// An APP1 Extended XMP fragment (GUID, total size, offset, data).
+    fn extended_xmp(offset: u32) -> Vec<u8> {
+        let mut seg = EXTENDED_XMP_HEADER.to_vec();
+        seg.extend_from_slice(&[b'A'; 32]);
+        seg.extend_from_slice(&1_000_000u32.to_be_bytes());
+        seg.extend_from_slice(&offset.to_be_bytes());
+        seg.push(b'x');
+        let mut out = vec![0xFF, 0xE1];
+        out.extend_from_slice(&u16::try_from(seg.len() + 2).unwrap().to_be_bytes());
+        out.extend_from_slice(&seg);
+        out
+    }
+
+    #[test]
+    fn extended_xmp_fragments_are_left_out_of_the_backend_parse() {
+        let img = Image::from_raw(16, 16, ChannelLayout::Rgb, SampleType::U8, vec![120; 16 * 16 * 3]).unwrap();
+        let plain = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        assert!(without_extended_xmp(&plain).is_none());
+        // 20000 consistent but incomplete fragments right after SOI: zune-jpeg would re-sort and
+        // re-check the growing pending list after each one.
+        let mut hostile = plain[..2].to_vec();
+        for k in 0..20_000u32 {
+            hostile.extend_from_slice(&extended_xmp(k * 2));
+        }
+        hostile.extend_from_slice(&plain[2..]);
+        assert_eq!(without_extended_xmp(&hostile).as_deref(), Some(&plain[..]));
+        let back = decode(&hostile, &Limits::default()).unwrap();
+        assert_eq!(back.dimensions(), (16, 16));
+    }
+
     /// A tiny truncated scan under a frame patched to 20000×20000 is refused before the backend
     /// fills 400 million pixels from it; the same file with its real size still recovers.
     #[test]
@@ -552,13 +641,64 @@ mod tests {
         assert_eq!(data_end(&padded).0, DataEnd::Truncated);
         // Well above the frame's pixels / budget, yet far above the scan data: the old
         // file-length bound admitted this frame.
-        assert!(padded.len() > (u64::from(20_000u32) * u64::from(20_000u32) / MAX_TRUNCATED_PIXELS_PER_BYTE) as usize, "padding too small");
+        assert!(padded.len() > (u64::from(20_000u32) * u64::from(20_000u32) / MAX_PIXELS_PER_BYTE) as usize, "padding too small");
         assert!(crate::decode_as(Format::Jpeg, &padded).is_ok());
         let sof = padded.windows(2).position(|w| w == [0xFF, 0xC0] || w == [0xFF, 0xC2]).unwrap();
         let mut huge = padded.clone();
         huge[sof + 5..sof + 9].copy_from_slice(&[0x4E, 0x20, 0x4E, 0x20]);
         let e = crate::decode_as(Format::Jpeg, &huge).unwrap_err();
         assert!(e.to_string().contains("too short"), "{e}");
+    }
+
+    /// A complete file is measured on its scan data too: padding can't admit an oversized frame.
+    /// The same padded file at its real size decodes, and so does an odd layout whose unread tail
+    /// counts as scan data.
+    #[test]
+    fn app_padding_cannot_admit_an_oversized_complete_frame() {
+        let img = Image::from_raw(16, 16, ChannelLayout::Rgb, SampleType::U8, vec![128; 16 * 16 * 3]).unwrap();
+        let full = crate::encode(&img, Format::Jpeg, &EncodeOptions::default()).unwrap();
+        let fill = [b'p'; 65533];
+        let mut padded = full[..2].to_vec();
+        for _ in 0..4 {
+            padded.extend_from_slice(&[0xFF, 0xFE]);
+            padded.extend_from_slice(&0xFFFFu16.to_be_bytes());
+            padded.extend_from_slice(&fill);
+        }
+        padded.extend_from_slice(&full[2..]);
+        let (end, scanned) = data_end(&padded);
+        assert_eq!(end, DataEnd::Complete);
+        assert!(scanned < 1024, "the padding isn't scan data: {scanned}");
+        assert!(padded.len() as u64 > u64::from(20_000u32) * 20_000 / MAX_PIXELS_PER_BYTE, "padding too small");
+        assert!(crate::decode_as(Format::Jpeg, &padded).is_ok());
+        let sof = padded.windows(2).position(|w| w == [0xFF, 0xC0] || w == [0xFF, 0xC2]).unwrap();
+        let mut huge = padded.clone();
+        huge[sof + 5..sof + 9].copy_from_slice(&[0x4E, 0x20, 0x4E, 0x20]);
+        let e = crate::decode_as(Format::Jpeg, &huge).unwrap_err();
+        assert!(e.to_string().contains("too short"), "{e}");
+        // A stray byte where a marker should be, before the padding: the walk skips it and still
+        // recognises the padding, so an oversized frame is refused there too.
+        let mut odd = huge.clone();
+        odd.insert(2, 0x00);
+        let (end, scanned) = data_end(&odd);
+        assert_eq!(end, DataEnd::Complete);
+        assert!(scanned < 1024, "the padding after a stray byte isn't scan data: {scanned}");
+        let e = crate::decode_as(Format::Jpeg, &odd).unwrap_err();
+        assert!(e.to_string().contains("too short"), "{e}");
+        // Stray bytes never count: 256 KiB of junk where a marker should be (the decoder skips
+        // it), then the oversized frame's segments, is refused. (Bytes after a scan starts are
+        // entropy-coded data, any value, and count as such.)
+        let mut junk = huge[..2].to_vec();
+        junk.extend(std::iter::repeat_n(0x00u8, 4 * 65536));
+        junk.extend_from_slice(&huge[2..]);
+        let (end, scanned) = data_end(&junk);
+        assert_eq!(end, DataEnd::Complete);
+        assert!(scanned < 1024, "junk isn't scan data: {scanned}");
+        let e = crate::decode_as(Format::Jpeg, &junk).unwrap_err();
+        assert!(e.to_string().contains("too short"), "{e}");
+        // Junk with no marker after it: no image data at all.
+        let mut tail = vec![0xFF, 0xD8];
+        tail.extend(std::iter::repeat_n(0x00u8, 4096));
+        assert_eq!(data_end(&tail), (DataEnd::Empty, 0));
     }
 
     /// CMYK JPEG output must omit JFIF while retaining Adobe's CMYK marker.
