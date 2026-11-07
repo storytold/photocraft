@@ -210,7 +210,10 @@ fn ref_adjust(adj: &Adjustment, p: Cmyka) -> Cmyka {
                 let x = v.clamp(0.0, 1.0) * (t.len() - 1) as f32;
                 let i = x.floor() as usize;
                 let j = (i + 1).min(t.len() - 1);
-                t[i] + (t[j] - t[i]) * (x - i as f32)
+                let f = x - i as f32;
+                // Keep the RGB/native sampler's weighted form: rearranging it can cross an
+                // 8-bit rounding tie after a nonlinear blend such as Vivid Light (#11947).
+                t[i] * (1.0 - f) + t[j] * f
             }
         };
         o[c] = 1.0 - r;
@@ -760,6 +763,37 @@ fn clips_onto_pass_through(layers: &[LayerSpec]) -> bool {
         matches!(w[0], LayerSpec::Group { pass_through: true, fill, .. } if fill >= 1.0)
             && matches!(w[1], LayerSpec::Pixels { clipped: true, visible: true, .. })
     }) || layers.iter().any(|l| matches!(l, LayerSpec::Group { children, .. } if clips_onto_pass_through(children)))
+}
+
+/// The shrunk #11947 stack: a Curves inversion in Vivid Light rounds differently inside
+/// isolated groups even though the clipped raster has no base beneath it.
+#[test]
+fn vivid_light_curves_inversion_in_isolated_groups_matches_the_reference() {
+    let pixels = LayerSpec::Pixels {
+        kind: Kind::Raster,
+        blend: BlendMode::Normal,
+        fills: vec![(Rect::new(0, 0, 1, 1), [0.82432437, 0.0, 0.0, 0.0, 1.0])],
+        opacity: 1.0,
+        fill: 1.0,
+        clipped: true,
+        visible: true,
+        mask: None,
+    };
+    let curves = LayerSpec::Pixels {
+        kind: Kind::Adjust(AdjSpec::Curves { channel: 0, points: vec![(0.0, 1.0), (1.0, 0.0)] }),
+        blend: BlendMode::VividLight,
+        fills: vec![(Rect::new(0, 0, 1, 1), [0.0; 5])],
+        opacity: 1.0,
+        fill: 1.0,
+        clipped: false,
+        visible: true,
+        mask: None,
+    };
+    let group = |children| LayerSpec::Group { children, pass_through: false, blend: BlendMode::Normal, opacity: 1.0, fill: 1.0, mask: None };
+    let s = Spec { w: 5, h: 2, layers: vec![group(vec![group(vec![pixels, curves])])] };
+    let mut d = doc(s.w as u32, s.h as u32);
+    d.layers = s.layers.iter().map(build).collect();
+    assert_matches_reference(&d);
 }
 
 proptest! {
