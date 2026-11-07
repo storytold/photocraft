@@ -8,6 +8,7 @@ const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
 const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
 const KA: fn() -> Lang = || Lang::from_code("ka").expect("ka registered");
+const BG: fn() -> Lang = || Lang::from_code("bg").expect("bg registered");
 
 #[test]
 fn hindi_has_the_reveal_and_camera_raw_rows() {
@@ -284,6 +285,18 @@ fn lookups_fall_back_to_english() {
 
 /// Romanian: 1 is one; 0 and counts ending in 01–19 are few ("2 straturi", "119 straturi");
 /// the rest take "de" ("20 de straturi", "121 de straturi").
+#[test]
+fn bulgarian_plural_forms_are_ordered_one_then_other() {
+    let bg = BG();
+    // The catalog stores the pair as "one|other"; a reversed pair would read "1 обекта".
+    assert_eq!(trn(bg, 1, "{n} item", "{n} items"), "1 обект");
+    assert_eq!(trn(bg, 2, "{n} item", "{n} items"), "2 обекта");
+    assert_eq!(trn(bg, 5, "{n} item", "{n} items"), "5 обекта");
+    // "Group · {n} layer|Group · {n} layers" keeps the same order.
+    assert_eq!(trn(bg, 1, "Group · {n} layer", "Group · {n} layers"), "Група · 1 слой");
+    assert_eq!(trn(bg, 3, "Group · {n} layer", "Group · {n} layers"), "Група · 3 слоя");
+}
+
 #[test]
 fn romanian_plural_rule() {
     let ro = Lang::from_code("ro").expect("ro registered");

@@ -41,6 +41,7 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | اردو | `ur` | one / other |
 | Română | `ro` | one / few (0, 2–19, 101–119 …) / other (20–100, 120 …) |
 | Azərbaycanca | `az` | one (1) / other (all other integer counts) |
+| Български | `bg` | one / other |
 
 Azerbaijani (`az`, Latin script) is registered with a complete menu catalog. Regional tags
 such as `az-AZ` and `az-Latn-AZ` select it. The catalog includes the existing catalogs'
