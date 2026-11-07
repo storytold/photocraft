@@ -1352,9 +1352,8 @@ fn reset_tools_clear_the_remembered_options_and_brushes() {
     tick(&mut app, &ctx);
     let saved = stored(&store);
     assert!(saved["toolOptions"].is_null(), "{saved}");
-    let starting = |brushes: &[(Tool, photocraft_engine::BrushSettings)]| {
-        brushes.iter().all(|(t, b)| *b == crate::paint_mouse::fresh_brush(*t, b) && b.size != 77.0)
-    };
+    let starting =
+        |brushes: &[(Tool, photocraft_engine::BrushSettings)]| brushes.iter().all(|(t, b)| *b == crate::paint_mouse::fresh_brush(*t, b) && b.size != 77.0);
     assert!(starting(&app.ui.tool_brushes), "{saved}");
     let (app2, _) = app_with_saved(store.lock().unwrap().clone());
     assert_eq!(app2.ui.tool_options, crate::state::ToolOptions::default());
