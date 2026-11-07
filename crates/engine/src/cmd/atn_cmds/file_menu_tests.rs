@@ -28,7 +28,7 @@ fn saved(s: &mut Session) -> Vec<AtnItem> {
 #[test]
 fn package_notes_and_data_set_steps_load_and_save_back() {
     let package = desc("null").with("T   ", path_value("/work/packages"));
-    let notes = desc("null").with("Usng", path_value("/work/review.pdf"));
+    let notes = desc("null").with("Usng", path_value("/work/review.psd"));
     let data_set = desc("null").with("null", name_ref("dataSetClass", "Summer sale"));
     let items = vec![
         named("packageFile", "Package", package.clone()),
@@ -41,7 +41,7 @@ fn package_notes_and_data_set_steps_load_and_save_back() {
         s.actions.list[0].steps,
         [
             ("file.package".to_string(), json!({"dir": "/work/packages"})),
-            ("file.import.notes".to_string(), json!({"path": "/work/review.pdf"})),
+            ("file.import.notes".to_string(), json!({"path": "/work/review.psd"})),
             ("image.applyDataSet".to_string(), json!({"name": "Summer sale"})),
         ]
     );
@@ -95,4 +95,18 @@ fn an_empty_data_set_name_keeps_the_photoshop_step() {
     assert_ne!(s.actions.list[0].steps[0].0, "image.applyDataSet", "{:?}", s.actions.list[0].steps);
     let back = saved(&mut s);
     assert_eq!((back[0].event.id(), back[0].descriptor.as_ref()), ("apply".to_string(), Some(&empty)));
+}
+
+/// Import Notes plays only from the files `file.import.notes` reads (.psd, .psb, .pcraft). Notes
+/// recorded from a PDF or FDF keep the Photoshop step, so the load reports them as unsupported
+/// rather than failing on playback (CodeRabbit review on steps_file_menu.rs:20-39).
+#[test]
+fn notes_from_a_pdf_keep_the_photoshop_step() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for path in ["/work/review.pdf", "/work/review.PDF", "/work/review.fdf", "/work/notes"] {
+        assert!(kept(steps_file_menu::notes_from(&desc("null").with("Usng", path_value(path)))), "{path}");
+    }
+    for path in ["/work/review.psd", "/work/review.PSB", "/work/review.pcraft"] {
+        assert!(!kept(steps_file_menu::notes_from(&desc("null").with("Usng", path_value(path)))), "{path}");
+    }
 }

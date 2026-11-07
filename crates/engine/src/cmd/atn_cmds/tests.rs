@@ -743,7 +743,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("filter.blur.blur", json!({})),
         ("file.automate.createDroplet", json!({"path": "/d/Sharpen.pcdroplet", "action": "Sharpen", "set": "Tools", "output": "/d/out", "overrideOpen": true})),
         ("file.package", json!({"dir": "/work/packages"})),
-        ("file.import.notes", json!({"path": "/work/review.pdf"})),
+        ("file.import.notes", json!({"path": "/work/review.psd"})),
         ("image.applyDataSet", json!({"name": "Summer sale"})),
         ("filter.distort.shear", json!({"points": [[0,0], [0.5,0.25], [1,0]], "undefinedAreas": "repeat"})),
         ("filter.distort.pinch", json!({"amount": -30})),
