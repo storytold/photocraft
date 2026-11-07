@@ -86,7 +86,7 @@ Rows and evidence: [target-app-parity › Feature areas](docs/target-app-parity.
 
 ## Languages
 
-Measured with the `cargo xtask i18n-coverage` key universe (2,400 keys at e6ba4aca4). `partial` everywhere
+Measured with the `cargo xtask i18n-coverage` key universe (2,400 keys at e6ba4aca4). "UI strings" is the share of those keys a catalog has a non-empty entry for; an entry counts even when its text matches the English (`parse_catalog` in `xtask/src/i18n_coverage.rs`), so it is not the share of visible text in that language. `partial` everywhere
 because engine messages are still English. Detail: [localization-parity](docs/localization-parity.md).
 
 | Language | Code | UI strings | Status |
