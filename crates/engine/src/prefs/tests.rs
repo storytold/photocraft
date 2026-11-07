@@ -1209,9 +1209,19 @@ fn the_smart_object_cache_budgets_are_capped_on_32_bit_builds() {
         assert!(check_value(path, &json!(u64::from(max) + 1)).is_err());
         assert!(help(path).is_some_and(|h| h.contains('0')), "{path} explains what it trades, and what 0 does");
         // A value saved above the cap (by a 64-bit build) loads as the cap, so Apply from another
-        // Preferences tab, which validates every value, isn't rejected.
+        // Preferences tab, which validates every value, isn't rejected. Loading applies the
+        // budgets process-wide: only values that raise them (the cap), never 0, which would stop
+        // caching for tests running alongside, and the defaults are put back however this ends.
+        struct RestoreBudgets;
+        impl Drop for RestoreBudgets {
+            fn drop(&mut self) {
+                crate::smart_cmds::set_source_cache_budget(crate::smart_cmds::SOURCE_CACHE_BYTES);
+                crate::smart_cmds::set_stage_cache_budget(crate::smart_cmds::STAGE_CACHE_BYTES);
+            }
+        }
+        let _restore = RestoreBudgets;
         let leaf = path.trim_start_matches("performance.");
-        for (saved, loaded) in [(u64::from(max) + 1, max), (u64::from(u32::MAX), max), (0, 0)] {
+        for (saved, loaded) in [(u64::from(max) + 1, max), (u64::from(u32::MAX), max)] {
             let mut s = session();
             let invalid = s.load_prefs_json(&json!({"performance": {leaf: saved}}).to_string()).unwrap();
             assert!(invalid.is_empty(), "{path} {saved} MB reads: {invalid:?}");
