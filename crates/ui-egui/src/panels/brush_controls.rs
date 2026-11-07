@@ -14,8 +14,21 @@ pub(super) fn tool_mode_dropdown(ui: &mut egui::Ui, id: &str, modes: &[Option<Bl
 /// The Brush's or Pencil's Mode dropdown: the blend modes, with Photoshop's painting-only Clear
 /// after Dissolve (#3439). Clear erases with the brush (`clear`); it shows while chosen, or while
 /// `~` is held (`held`). The wheel over it steps the mode, as over the Layers panel's (#2061).
-pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraft_engine::BrushSettings, clear: &mut bool, held: bool) {
-    let opts = crate::brush_mode_menu::choices();
+/// `modes` greys what the document can't paint with and names Normal Threshold where it should (#11815).
+pub(super) fn paint_mode_dropdown(
+    ui: &mut egui::Ui,
+    id: &str,
+    b: &mut photocraft_engine::BrushSettings,
+    clear: &mut bool,
+    held: bool,
+    modes: &crate::brush_mode_menu::PaintModes,
+) {
+    let mut opts = crate::brush_mode_menu::choices();
+    if modes.threshold
+        && let Some(normal) = opts.iter_mut().find(|o| o.0 == (Some(BlendMode::Normal), false))
+    {
+        normal.1 = "Threshold";
+    }
     let mut mode = if *clear || held {
         (None, false)
     } else if b.behind {
@@ -23,7 +36,8 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
     } else {
         (Some(b.mode), false)
     };
-    if !widgets::dropdown_wheel_grouped(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, |m| m.0.is_some_and(starts_blend_group)).0.is_empty() {
+    let on = |m: &(Option<BlendMode>, bool)| !modes.disabled.contains(m);
+    if !widgets::dropdown_wheel_grouped_enabled(ui, id, tl!("Mode"), &mut mode, &opts, 96.0, |m| m.0.is_some_and(starts_blend_group), on).0.is_empty() {
         *clear = mode == (None, false);
         b.behind = mode.1;
         if mode.1 {

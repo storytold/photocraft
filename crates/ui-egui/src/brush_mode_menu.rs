@@ -113,16 +113,99 @@ pub(crate) fn labels(tool: Tool) -> Vec<&'static str> {
     items(tool).into_iter().filter_map(Item::label).collect()
 }
 
-/// Is a row available? Behind and Clear need transparency: greyed on the Background layer.
+/// Is a row available? Behind and Clear need transparency: greyed on the Background layer. The
+/// Brush's and Pencil's modes also follow the document ([`painting_enabled`]).
 pub(crate) fn enabled(app: &PhotocraftApp, item: Item) -> bool {
+    let painting = matches!(app.ui.tool, Tool::Brush | Tool::Pencil);
     match item {
         Item::Separator => false,
-        Item::Behind | Item::Clear => !app
-            .session
-            .active()
-            .is_some_and(|st| st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| crate::doc_props_ui::is_background(&st.doc, l))),
+        Item::Behind | Item::Clear | Item::Blend(_) if painting => painting_enabled(app, item),
+        Item::Behind | Item::Clear => !on_background(app),
         _ => true,
     }
+}
+
+fn on_background(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| crate::doc_props_ui::is_background(&st.doc, l)))
+}
+
+/// The modes a 32-bit RGB document can't paint with (#11815, measured in the reference).
+const NOT_IN_RGB32: [BlendMode; 12] = [
+    BlendMode::ColorBurn,
+    BlendMode::LinearBurn,
+    BlendMode::Screen,
+    BlendMode::ColorDodge,
+    BlendMode::Overlay,
+    BlendMode::SoftLight,
+    BlendMode::HardLight,
+    BlendMode::VividLight,
+    BlendMode::LinearLight,
+    BlendMode::PinLight,
+    BlendMode::HardMix,
+    BlendMode::Exclusion,
+];
+
+/// Can the Brush or Pencil paint in this Mode row on the active layer and document (#11815)?
+/// Behind and Clear need transparency (not the Background). Indexed documents paint only in
+/// Threshold (the Normal row) and Dissolve, Bitmap ones also in Darken and Lighten, and 32-bit
+/// RGB loses Behind, Clear and the [`NOT_IN_RGB32`] modes. Other documents keep every row.
+pub(crate) fn painting_enabled(app: &PhotocraftApp, item: Item) -> bool {
+    use photocraft_color::{ColorMode, SampleType};
+    let Some(st) = app.session.active() else { return true };
+    let (mode, depth) = (st.doc.mode, st.doc.depth);
+    let blend = match item {
+        Item::Blend(m) => Some(m),
+        Item::Behind | Item::Clear => None,
+        _ => return true,
+    };
+    match (mode, blend) {
+        (ColorMode::Indexed, b) => matches!(b, Some(BlendMode::Normal | BlendMode::Dissolve)),
+        (ColorMode::Bitmap, b) => matches!(b, Some(BlendMode::Normal | BlendMode::Dissolve | BlendMode::Darken | BlendMode::Lighten)),
+        (ColorMode::Rgb, Some(m)) if depth == SampleType::F32 => !NOT_IN_RGB32.contains(&m),
+        (ColorMode::Rgb, None) if depth == SampleType::F32 => false,
+        (_, None) => !on_background(app),
+        _ => true,
+    }
+}
+
+/// [`painting_enabled`] for an options-bar Mode choice: `(mode, behind)`, `(None, false)` Clear.
+pub(crate) fn choice_enabled(app: &PhotocraftApp, choice: (Option<BlendMode>, bool)) -> bool {
+    painting_enabled(
+        app,
+        match choice {
+            (Some(m), _) => Item::Blend(m),
+            (None, true) => Item::Behind,
+            (None, false) => Item::Clear,
+        },
+    )
+}
+
+/// The Brush's or Pencil's options-bar Mode list for the active document, worked out before the
+/// dropdown borrows the tool options: the choices it greys, and whether Normal reads Threshold.
+pub(crate) struct PaintModes {
+    pub(crate) disabled: Vec<(Option<BlendMode>, bool)>,
+    pub(crate) threshold: bool,
+}
+
+impl PaintModes {
+    pub(crate) fn of(app: &PhotocraftApp) -> Self {
+        let disabled = choices().into_iter().map(|(c, _)| c).filter(|c| !choice_enabled(app, *c)).collect();
+        Self { disabled, threshold: threshold_label(app) }
+    }
+}
+
+/// Indexed and Bitmap documents call the first painting mode Threshold, not Normal (#11815).
+pub(crate) fn threshold_label(app: &PhotocraftApp) -> bool {
+    app.session.active().is_some_and(|st| matches!(st.doc.mode, photocraft_color::ColorMode::Indexed | photocraft_color::ColorMode::Bitmap))
+}
+
+/// A row's label as the menu shows it: Normal reads Threshold for the Brush and Pencil in an
+/// Indexed or Bitmap document.
+fn shown_label(app: &PhotocraftApp, item: Item) -> Option<&'static str> {
+    if item == Item::Blend(BlendMode::Normal) && matches!(app.ui.tool, Tool::Brush | Tool::Pencil) && threshold_label(app) {
+        return Some("Threshold");
+    }
+    item.label()
 }
 
 /// The checked row: `tool`'s current mode, as its options bar shows it.
@@ -361,7 +444,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &Context) {
             ui.spacing_mut().item_spacing.y = 0.0;
             crate::widgets::menu_scroll(ui, |ui| {
                 for (item, on) in rows {
-                    let Some(label) = item.label() else {
+                    let Some(label) = shown_label(app, item) else {
                         ui.separator();
                         continue;
                     };

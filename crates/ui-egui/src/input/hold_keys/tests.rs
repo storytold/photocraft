@@ -829,6 +829,8 @@ fn clear_in_the_mode_dropdown_erases_until_another_mode_is_chosen() {
     use egui_kittest::kittest::{NodeT, Queryable};
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 120, "height": 80})).unwrap();
+    // A pixel layer: on the Background, Clear is greyed (#11815).
+    app.run("layer.new.layer", json!({})).unwrap();
     app.ui.tool = Tool::Pencil;
     let mut h = Harness::builder().with_size(vec2(1600.0, 400.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {

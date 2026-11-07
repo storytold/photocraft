@@ -11,13 +11,13 @@ pub fn dropdown<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current
 /// [`dropdown`] whose option labels are shown exactly as given: names the user typed (a channel
 /// or layer name) must not be translated, unlike the built-in labels [`dropdown`] translates (#5335).
 pub fn dropdown_literal<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> bool {
-    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false, &|_| false);
+    let (chosen, _) = dropdown_with(ui, id, name, current, options, width, false, false, &|_| false, &|_| true);
     !chosen.is_empty()
 }
 
 /// [`dropdown`], also returning the option under the pointer in its open list (live previews).
 pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str)], width: f32) -> (bool, Option<T>) {
-    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false);
+    let (chosen, hovered) = dropdown_with(ui, id, name, current, options, width, false, true, &|_| false, &|_| true);
     (!chosen.is_empty(), hovered)
 }
 
@@ -35,7 +35,7 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     options: &[(T, &str)],
     width: f32,
 ) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, name, current, options, width, true, true, &|_| false)
+    dropdown_with(ui, id, name, current, options, width, true, true, &|_| false, &|_| true)
 }
 
 /// [`dropdown_wheel_hovered`] whose open list draws a line above each option (but the first) that
@@ -50,7 +50,23 @@ pub fn dropdown_wheel_grouped<T: PartialEq + Clone>(
     width: f32,
     starts_group: impl Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
-    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group)
+    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &|_| true)
+}
+
+/// [`dropdown_wheel_grouped`] whose options `enabled` rejects are drawn greyed: they can't be
+/// clicked, and the wheel, the arrow keys and a typed letter skip them (#11815).
+#[allow(clippy::too_many_arguments)]
+pub fn dropdown_wheel_grouped_enabled<T: PartialEq + Clone>(
+    ui: &mut Ui,
+    id: &str,
+    name: &str,
+    current: &mut T,
+    options: &[(T, &str)],
+    width: f32,
+    starts_group: impl Fn(&T) -> bool,
+    enabled: impl Fn(&T) -> bool,
+) -> (Vec<T>, Option<T>) {
+    dropdown_with(ui, id, name, current, options, width, true, true, &starts_group, &enabled)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -64,6 +80,7 @@ fn dropdown_with<T: PartialEq + Clone>(
     wheel: bool,
     translate: bool,
     starts_group: &dyn Fn(&T) -> bool,
+    enabled: &dyn Fn(&T) -> bool,
 ) -> (Vec<T>, Option<T>) {
     let shown = |l: &str| if translate { tl!(l).to_string() } else { l.to_string() };
     let label = options.iter().find(|(v, _)| v == current).map(|(_, l)| shown(l)).unwrap_or_else(|| "—".into());
@@ -85,7 +102,7 @@ fn dropdown_with<T: PartialEq + Clone>(
             // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
             let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
             let shown = options.iter().position(|(v, _)| v == current);
-            if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
+            if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)).filter(|(v, _)| enabled(v)) {
                 *current = v.clone();
                 chosen.push(v.clone());
                 reveal = true;
@@ -94,7 +111,7 @@ fn dropdown_with<T: PartialEq + Clone>(
             // Over the open list the wheel steps the value too, instead of scrolling the list.
             over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
             if over_list {
-                let stepped = wheel_steps(ui, wheel_id, true, current, options);
+                let stepped = wheel_steps(ui, wheel_id, true, current, options, enabled);
                 wheeled = !stepped.is_empty();
                 reveal |= wheeled;
                 chosen.extend(stepped);
@@ -106,7 +123,8 @@ fn dropdown_with<T: PartialEq + Clone>(
                 if i > 0 && starts_group(v) {
                     list_separator(ui);
                 }
-                let item = ui.selectable_label(v == current, text.as_str());
+                let on = enabled(v);
+                let item = ui.add_enabled(on, egui::Button::selectable(v == current, text.as_str()));
                 if reveal && v == current {
                     item.scroll_to_me(None);
                 }
@@ -119,7 +137,7 @@ fn dropdown_with<T: PartialEq + Clone>(
                         nearest = Some((d, v));
                     }
                 }
-                if press.chosen(ui, &item) {
+                if on && press.chosen(ui, &item) {
                     *current = v.clone();
                     chosen.push(v.clone());
                 }
@@ -136,11 +154,11 @@ fn dropdown_with<T: PartialEq + Clone>(
         None => response.response.accessible_name(name),
     };
     press.after(&response);
-    if combo_box_arrow_keys(ui, &response, current, options) {
+    if combo_box_arrow_keys(ui, &response, current, options, enabled) {
         chosen.push(current.clone());
     }
     if wheel && !over_list {
-        let stepped = wheel_steps(ui, wheel_id, response.hovered(), current, options);
+        let stepped = wheel_steps(ui, wheel_id, response.hovered(), current, options, enabled);
         wheeled = !stepped.is_empty();
         if wheeled && craft_ui::ComboBox::is_open(ui.ctx(), response.id) {
             ui.data_mut(|d| d.insert_temp(reveal_id, true));
@@ -191,7 +209,7 @@ fn wheel_rests(ui: &Ui, id: egui::Id, wheeled: bool) -> bool {
 /// The options the wheel over dropdown `id` (while `hovered`) steps `current` through this frame,
 /// one per notch, in order; the last is the new `current`. While the pointer is over it the wheel
 /// scrolls nothing else.
-fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)]) -> Vec<T> {
+fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, current: &mut T, options: &[(T, &str)], enabled: &dyn Fn(&T) -> bool) -> Vec<T> {
     if hovered {
         ui.input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
     }
@@ -200,10 +218,12 @@ fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, c
     let mut chosen = Vec::new();
     // Down (negative) is the next option. No more steps than there are options.
     for _ in 0..(notches.abs().min(options.len() as f32) as usize) {
-        let next = if notches < 0.0 { index.checked_add(1) } else { index.checked_sub(1) };
-        let Some((next, (v, _))) = next.and_then(|i| options.get(i).map(|o| (i, o))) else { break };
+        // The next option that can be chosen: greyed ones are passed over.
+        let Some(next) = next_enabled(options, index, notches < 0.0, enabled) else { break };
         index = next;
-        chosen.push(v.clone());
+        if let Some((v, _)) = options.get(next) {
+            chosen.push(v.clone());
+        }
     }
     if let Some(v) = chosen.last() {
         *current = v.clone();
@@ -211,10 +231,19 @@ fn wheel_steps<T: PartialEq + Clone>(ui: &mut Ui, id: egui::Id, hovered: bool, c
     chosen
 }
 
+/// The index of the first option after (`down`) or before `index` that `enabled` accepts.
+fn next_enabled<T>(options: &[(T, &str)], index: usize, down: bool, enabled: &dyn Fn(&T) -> bool) -> Option<usize> {
+    if down {
+        (index + 1..options.len()).find(|&i| options.get(i).is_some_and(|(v, _)| enabled(v)))
+    } else {
+        (0..index).rev().find(|&i| options.get(i).is_some_and(|(v, _)| enabled(v)))
+    }
+}
+
 /// Give a dropdown keyboard focus when it opens, then use the arrow keys to move through its
 /// choices. `craft_ui::ComboBox` opens a popup but leaves focus on the canvas by default, which makes
 /// controls such as the Layers panel's Blend Mode dropdown unreachable from the keyboard.
-fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, current: &mut T, options: &[(T, &str)]) -> bool {
+fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, current: &mut T, options: &[(T, &str)], enabled: &dyn Fn(&T) -> bool) -> bool {
     if response.clicked() {
         response.request_focus();
     }
@@ -231,7 +260,7 @@ fn combo_box_arrow_keys<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, 
         return false;
     };
     let index = options.iter().position(|(value, _)| value == current).unwrap_or(0);
-    let next = if step > 0 { (index + 1).min(options.len() - 1) } else { index.saturating_sub(1) };
+    let next = next_enabled(options, index, step > 0, enabled).unwrap_or(index);
     match options.get(next) {
         Some((value, _)) if next != index => {
             *current = value.clone();

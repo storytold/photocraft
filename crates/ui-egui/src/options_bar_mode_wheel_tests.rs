@@ -51,6 +51,9 @@ fn brush_mode(h: &Harness<'_, PhotocraftApp>) -> BlendMode {
 #[test]
 fn the_wheel_over_the_brush_mode_dropdown_steps_the_painting_mode() {
     let mut h = harness(Tool::Brush);
+    // A pixel layer: on the Background, Behind and Clear are greyed and skipped (#11815).
+    h.state_mut().run("layer.new.layer", json!({})).unwrap();
+    h.run_steps(3);
     let at = mode_dropdown(&h).center();
     assert_eq!(brush_mode(&h), BlendMode::Normal);
     wheel(&mut h, at, -1.0);
