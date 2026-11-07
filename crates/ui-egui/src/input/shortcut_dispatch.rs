@@ -273,6 +273,8 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             // panels instead, #1313): the shortcut took it, so cancel that move.
             ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
         }
+        let layers_row = ctx.pointer_hover_pos().is_some_and(|pos| crate::layer_row_ui::recorded(ctx).iter().any(|row| row.row.contains(pos)));
+        let id = if id == "select.all" && layers_row { "select.allLayers".into() } else { id };
         let id = clip_key_command(app, delete_key_command(app, id));
         let owner = key_owner(app, ctx);
         dispatch_as(app, ctx, &id, last);

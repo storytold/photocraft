@@ -264,7 +264,8 @@ fn every_displayed_shortcut_dispatches_from_where_focus_usually_is() {
             }
             let enabled = items.iter().find(|i| i.id == id).map_or_else(|| crate::menus::is_enabled(h.state(), &id), |i| i.enabled);
             match log.as_slice() {
-                [(bound, Outcome::Ran)] if same(&id, bound) && enabled => {}
+                [(bound, Outcome::Ran)]
+                    if (same(&id, bound) || (id == "select.all" && matches!(place, Place::LayersRow) && bound == "select.allLayers")) && enabled => {}
                 [(bound, Outcome::Disabled(why))] if same(&id, bound) && !enabled && !why.is_empty() => {}
                 other => failures.push(format!("{place:?}: {sc} ({id}, menu enabled: {enabled}) -> {other:?}")),
             }
@@ -562,6 +563,21 @@ fn a_shortcut_opening_a_dialog_takes_the_frames_later_keys() {
 
 fn names(h: &Harness<'_, PhotocraftApp>) -> Vec<String> {
     h.state().session.active().unwrap().doc.walk().into_iter().map(|(_, _, l)| l.name.clone()).collect()
+}
+
+/// #11293: Cmd/Ctrl+A in the Layers panel selects every unlocked layer, not the canvas selection.
+#[test]
+fn select_all_from_layers_row_selects_layers() {
+    let mut h = harness();
+    put_focus(&mut h, Place::LayersRow);
+
+    press(&mut h, "Cmd+A");
+
+    let st = h.state().session.active().unwrap();
+    let selected = st.selected_layers();
+    let layers = st.doc.walk().into_iter().filter(|(_, _, layer)| !st.doc.is_background(layer.id)).map(|(_, _, layer)| layer.id).collect::<Vec<_>>();
+    assert_eq!(selected, layers, "Cmd+A selects every non-background layer in the Layers panel");
+    assert_eq!(logged(&h), ["select.allLayers"]);
 }
 
 /// #1077: with nothing selected, Delete (and Backspace) deletes the selected layer whatever its
