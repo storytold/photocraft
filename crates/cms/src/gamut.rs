@@ -2,7 +2,7 @@
 
 use crate::clut::Clut;
 use crate::pipeline::{Pipeline, Stage};
-use crate::profile::Profile;
+use crate::profile::{ColorSpace, Profile};
 use crate::transform::link_stages;
 use crate::{CmsError, Intent};
 
@@ -22,6 +22,7 @@ const PAR_CHUNK_PIXELS: usize = 16 * 1024;
 #[derive(Debug)]
 pub struct GamutCheck {
     inputs: usize,
+    source_space: ColorSpace,
     grid: Option<Clut>,
     exact: (Pipeline, Pipeline),
     pub threshold: f32,
@@ -49,7 +50,7 @@ impl GamutCheck {
             4 => Some(Clut::sample(vec![17; 4], 1, de)),
             _ => None,
         };
-        Ok(GamutCheck { inputs: n, grid, exact: (direct, via), threshold })
+        Ok(GamutCheck { inputs: n, source_space: src.color_space, grid, exact: (direct, via), threshold })
     }
 
     pub fn inputs(&self) -> usize {
@@ -87,12 +88,12 @@ impl GamutCheck {
     /// the result is identical to calling [`Self::out_of_gamut`] per pixel.
     ///
     /// # Errors
-    /// [`CmsError::Invalid`] when the check was not built from a three-channel (RGB) source
-    /// profile: an RGBA pixel carries only three colour channels, so it cannot be tested
-    /// against a CMYK or gray source. Nothing is written to `mask` in that case.
+    /// [`CmsError::Invalid`] when the check was not built from an RGB source profile: an RGBA
+    /// pixel carries only RGB colour channels, so it cannot be tested against a CMYK, gray or
+    /// Lab source. Nothing is written to `mask` in that case.
     pub fn mask_rgba(&self, px: &[[f32; 4]], mask: &mut [u8]) -> Result<usize, CmsError> {
-        if self.inputs != 3 {
-            return Err(CmsError::Invalid(format!("gamut mask needs a 3-channel (RGB) source profile, got {} channels", self.inputs)));
+        if self.source_space != ColorSpace::Rgb || self.inputs != 3 {
+            return Err(CmsError::Invalid(format!("gamut mask needs an RGB source profile, got {:?} with {} channels", self.source_space, self.inputs)));
         }
         let n = px.len().min(mask.len());
         let (px, mask) = (&px[..n], &mut mask[..n]);
@@ -150,8 +151,8 @@ mod tests {
 
     #[test]
     fn mask_rgba_rejects_non_rgb_source() {
-        // A CMYK (4-channel) and a gray (1-channel) source cannot be tested from RGBA pixels.
-        for src in [Builtin::CoatedCmyk, Builtin::GrayGamma22] {
+        // A CMYK (4-channel), gray (1-channel) and Lab (3-channel, not RGB) source cannot be tested from RGBA pixels.
+        for src in [Builtin::CoatedCmyk, Builtin::GrayGamma22, Builtin::LabD50] {
             let check = GamutCheck::new(src.profile(), Builtin::Srgb.profile(), 4.0).unwrap();
             let px = image(64);
             let mut mask = vec![9u8; 64];
