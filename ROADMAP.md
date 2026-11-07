@@ -86,24 +86,24 @@ Rows and evidence: [target-app-parity › Feature areas](docs/target-app-parity.
 
 ## Languages
 
-Measured 2026-11-05 with the `cargo xtask i18n-coverage` key universe (2,321 keys; the ~90 keys
-added since late October are why most catalogs are at 96%). `partial` everywhere because engine
+Measured 2026-11-07 with the `cargo xtask i18n-coverage` key universe (2,400 keys; the 114–148 keys
+added since late October are why most catalogs are at 95%). `partial` everywhere because engine
 messages are still English. Detail: [localization-parity](docs/localization-parity.md).
 
 | Language | Code | UI strings | Status |
 |---|---|---:|---|
 | English | `en` | 100% | full |
-| Simplified Chinese | `zh-hans` | 96% | partial |
-| Spanish | `es` | 96% | partial |
+| Simplified Chinese | `zh-hans` | 95% | partial |
+| Spanish | `es` | 95% | partial |
 | Hindi | `hi` | 100% | partial |
-| Arabic | `ar` | 95% (RTL shell only) | partial |
-| French | `fr` | 96% | partial |
-| Portuguese (Brazil) | `pt-br` | 96% | partial |
-| Indonesian | `id` | 96% | partial |
-| Japanese | `ja` | 96% | partial |
-| German | `de` | 96% | partial |
-| Korean | `ko` | 96% | partial |
-| Vietnamese | `vi` | 96% | partial |
+| Arabic | `ar` | 94% (RTL shell only) | partial |
+| French | `fr` | 95% | partial |
+| Portuguese (Brazil) | `pt-br` | 95% | partial |
+| Indonesian | `id` | 95% | partial |
+| Japanese | `ja` | 95% | partial |
+| German | `de` | 95% | partial |
+| Korean | `ko` | 95% | partial |
+| Vietnamese | `vi` | 95% | partial |
 
 Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/localization-ru.md)), Ukrainian, Czech, Polish, Greek, Dutch, Italian (8).
 

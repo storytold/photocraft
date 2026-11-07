@@ -65,7 +65,7 @@
 	Close	बंद करें
 	Close All	सभी बंद करें
 	Close Others	अन्य सभी बंद करें
-	New Document…	New Document…
+	New Document…	नया दस्तावेज़…
 	Open Document…	खोलें…
 	Consolidate All to Here	सभी को यहाँ समेकित करें
 	Move to New Window	नई विंडो में ले जाएँ
@@ -658,7 +658,7 @@ cameraRaw	Yellow	पीला
 	{key} to subtract	घटाने के लिए {key}
 	{key}-click to set the source	स्रोत सेट करने के लिए {key}-क्लिक करें
 	{label} is not available: {reason}	{label} उपलब्ध नहीं है: {reason}
-	{label} is writing the file and can no longer be cancelled	{label} फ़ाइल लिख रहा है और अब इसे रद्द नहीं किया जा सकता
+	{label} is writing the file and can no longer be canceled	{label} फ़ाइल लिख रहा है और अब इसे रद्द नहीं किया जा सकता
 	{message} (notes: {n}; {warning})	{message} (नोट्स: {n}; {warning})
 	{message} into “{group}”	“{group}” में {message}
 	{mode} Color · {bits} bit	{mode} रंग · {bits} बिट
@@ -733,7 +733,7 @@ cameraRaw	Yellow	पीला
 	90%	90%
 	95%	95%
 	A brush preset with this name already exists	इस नाम का ब्रश प्रीसेट पहले से मौजूद है
-	A command was cancelled or stopped during batch processing. Continue with the next file or stop?	बैच प्रोसेसिंग के दौरान एक कमांड रद्द या बंद कर दिया गया। अगली फ़ाइल के साथ जारी रखें या रोकें?
+	A command was canceled or stopped during batch processing. Continue with the next file or stop?	बैच प्रोसेसिंग के दौरान एक कमांड रद्द या बंद कर दिया गया। अगली फ़ाइल के साथ जारी रखें या रोकें?
 	A save to {name} is still running; try again when it finishes	{name} में सहेजना अभी जारी है; इसके पूरा होने पर फिर से प्रयास करें
 	A:	A:
 	About	परिचय
@@ -1281,8 +1281,8 @@ cameraRaw	Yellow	पीला
 	Click to pick · Esc to cancel	चुनने के लिए क्लिक करें · रद्द करने के लिए Esc
 	Click to place · Alt-click or drag off-canvas to remove	रखने के लिए क्लिक करें · हटाने के लिए Alt-क्लिक करें या कैनवास से बाहर ड्रैग करें
 	Click to refresh histogram with uncached data	बिना कैश किए डेटा से हिस्टोग्राम रीफ़्रेश करने के लिए क्लिक करें
-	Click to restore the current colour	वर्तमान रंग पुनर्स्थापित करने के लिए क्लिक करें
-	Click to sample the foreground colour  ·  {key}-click for background	फ़ोरग्राउंड रंग का नमूना लेने के लिए क्लिक करें  ·  बैकग्राउंड के लिए {key}-क्लिक
+	Click to restore the current color	वर्तमान रंग पुनर्स्थापित करने के लिए क्लिक करें
+	Click to sample the foreground color  ·  {key}-click for background	फ़ोरग्राउंड रंग का नमूना लेने के लिए क्लिक करें  ·  बैकग्राउंड के लिए {key}-क्लिक
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	ज़ूम इन करने के लिए क्लिक करें  ·  ज़ूम आउट के लिए {key}-क्लिक  ·  ज़ूम इन/आउट के लिए दाएँ/बाएँ ड्रैग करें
 	Click to zoom in  ·  ⌥-click to zoom out	ज़ूम इन करने के लिए क्लिक करें  ·  ज़ूम आउट के लिए ⌥-क्लिक
 	Click with the Note tool to add a note.	नोट जोड़ने के लिए नोट टूल से क्लिक करें।
@@ -1328,8 +1328,8 @@ cameraRaw	Yellow	पीला
 	Color & Swatches	रंग और स्वॉचेस
 	Color Adaptation	रंग अनुकूलन
 	Color Balance	कलर बैलेंस
-	Color Blindness — Deuteranopia-type	वर्णांधता — ड्यूटेरानोपिया प्रकार
-	Color Blindness — Protanopia-type	वर्णांधता — प्रोटानोपिया प्रकार
+	Color Blindness - Deuteranopia-type	वर्णांधता - ड्यूटेरानोपिया प्रकार
+	Color Blindness - Protanopia-type	वर्णांधता - प्रोटानोपिया प्रकार
 	Color Burn	कलर बर्न
 	Color Burn (Paint.NET)	कलर बर्न (Paint.NET)
 	Color Decontaminate	रंग शुद्ध करें
@@ -1830,7 +1830,7 @@ cameraRaw	Yellow	पीला
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	क्रॉप बॉक्स खींचें · खिसकाने के लिए अंदर खींचें · किनारे साइज़ बदलते हैं ({ratio} अनुपात, {centre} केंद्र) · बनाते समय Space खिसकाता है · {commit} लागू करता है · Esc रद्द करता है
 	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	क्रॉप बॉक्स खींचें · खिसकाने के लिए अंदर खींचें · किनारे साइज़ बदलते हैं ({ratio} अनुपात, {centre} केंद्र) · बनाते समय Space खिसकाता है · ऐरो कुंजियाँ थोड़ा खिसकाती हैं · X ओरिएंटेशन बदलता है · {commit} लागू करता है · Esc रद्द करता है
 	Drag a rectangle around the object	ऑब्जेक्ट के चारों ओर आयत खींचें
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	दृश्य घुमाने के लिए केंद्र के चारों ओर खींचें  ·  Shift 15° के चरणों तक सीमित करता है
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	दृश्य घुमाने के लिए केंद्र के चारों ओर खींचें  ·  Shift 15° के चरणों तक सीमित करता है
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	कंस्ट्रेंट जोड़ने के लिए इमेज पर खींचें; क्षैतिज/लंबवत के लिए Shift; किसी कंस्ट्रेंट को बदलने या हटाने के लिए उस पर राइट-क्लिक करें।
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	खींचें या बहुभुज के पॉइंट्स पर क्लिक करें · सीधे खंडों के लिए लैस्सो के दौरान Alt दबाए रखें · {add} जोड़ें · बनाने से पहले {sub} घटाता है
 	Drag the arrow to set the angle, the dots to set the roundness	कोण सेट करने के लिए तीर को और राउंडनेस सेट करने के लिए बिंदुओं को खींचें
@@ -3068,7 +3068,7 @@ cameraRaw	Yellow	पीला
 	Nonlinear History	नॉन-लीनियर हिस्ट्री
 	Normal	सामान्य
 	Normal tip	सामान्य टिप
-	Not a web colour: click for the nearest web colour	वेब रंग नहीं: निकटतम वेब रंग के लिए क्लिक करें
+	Not a web color: click for the nearest web color	वेब रंग नहीं: निकटतम वेब रंग के लिए क्लिक करें
 	Not Clipped	क्लिप्ड नहीं
 	Not Empty	खाली नहीं
 	Not in Dictionary:	शब्दकोश में नहीं:
@@ -3121,7 +3121,7 @@ cameraRaw	Yellow	पीला
 	Opacity must be between 0% and 100%.	ओपेसिटी 0% और 100% के बीच होनी चाहिए।
 	Opacity Threshold	ओपेसिटी थ्रेशहोल्ड
 	Open a document to define variables.	वेरिएबल परिभाषित करने के लिए कोई दस्तावेज़ खोलें।
-	Open a document to select a colour range.	रंग श्रेणी का चयन करने के लिए कोई दस्तावेज़ खोलें।
+	Open a document to select a color range.	रंग श्रेणी का चयन करने के लिए कोई दस्तावेज़ खोलें।
 	Open a document to use the timeline.	टाइमलाइन का उपयोग करने के लिए कोई दस्तावेज़ खोलें।
 	Open anyway	फिर भी खोलें
 	Open As	इस रूप में खोलें
@@ -3171,7 +3171,7 @@ cameraRaw	Yellow	पीला
 	Out Black	आउटपुट काला
 	Out From Center	केंद्र से बाहर
 	Out Of Gamut	गैमट से बाहर
-	Out of gamut for printing: click for the nearest printable colour	प्रिंटिंग गैमट से बाहर: निकटतम प्रिंट करने योग्य रंग के लिए क्लिक करें
+	Out of gamut for printing: click for the nearest printable color	प्रिंटिंग गैमट से बाहर: निकटतम प्रिंट करने योग्य रंग के लिए क्लिक करें
 	Out of memory	मेमोरी समाप्त
 	Out White	आउटपुट सफ़ेद
 	Outer Bevel	बाहरी बेवल
@@ -3554,7 +3554,7 @@ cameraRaw	Yellow	पीला
 	Relink to File…	फ़ाइल से फिर से लिंक करें…
 	Reload Frame	फ़्रेम फिर से लोड करें
 	Remember this choice for future images	भविष्य की इमेजेज़ के लिए यह विकल्प याद रखें
-	Remember to turn off the printer's own colour management in Print Settings…	प्रिंटर का अपना रंग प्रबंधन बंद करना याद रखें: प्रिंट सेटिंग्स…
+	Remember to turn off the printer's own color management in Print Settings…	प्रिंटर का अपना रंग प्रबंधन बंद करना याद रखें: प्रिंट सेटिंग्स…
 	Remember workspace changes	कार्यस्थान के बदलाव याद रखें
 	Remove	हटाएँ
 	Remove {name} from Recent	{name} को हाल की सूची से हटाएँ
@@ -3710,7 +3710,7 @@ cameraRaw	Yellow	पीला
 	Sample Size	नमूना साइज़
 	Sample Size:	नमूना साइज़:
 	Sample:	नमूना:
-	Sample: foreground colour	नमूना: फ़ोरग्राउंड रंग
+	Sample: foreground color	नमूना: फ़ोरग्राउंड रंग
 	Sampled Colors	नमूना लिए गए रंग
 	Sampler	सैंपलर
 	Sampling Area	सैंपलिंग क्षेत्र
@@ -3734,7 +3734,7 @@ cameraRaw	Yellow	पीला
 	Save as PDF	PDF के रूप में सहेजें
 	Save As Preset	प्रीसेट के रूप में सहेजें
 	Save before closing?	बंद करने से पहले सहेजें?
-	Save cancelled	सहेजना रद्द किया गया
+	Save canceled	सहेजना रद्द किया गया
 	Save Changes	बदलाव सहेजें
 	Save Contours…	कंटूर सहेजें…
 	Save Default Type Styles	डिफ़ॉल्ट टाइप स्टाइल सहेजें
@@ -4777,3 +4777,41 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	कैनवास का आकार स्वचालित रूप से बदलें
 	Keep Relative Position During Layer Reordering	लेयर्स का क्रम बदलते समय सापेक्ष स्थिति बनाए रखें
 	Shrinkwrap Canvas on Save	सहेजते समय कैनवास को सामग्री के अनुसार छोटा करें
+
+# Keys added on main since 2026-11-05
+	Always use Pressure for Opacity. When off, Brush Preset controls pressure	ओपेसिटी के लिए हमेशा दबाव का उपयोग करें। बंद होने पर ब्रश प्रीसेट दबाव नियंत्रित करता है
+	Always use Pressure for Size. When off, Brush Preset controls pressure	साइज़ के लिए हमेशा दबाव का उपयोग करें। बंद होने पर ब्रश प्रीसेट दबाव नियंत्रित करता है
+	Center the gradient (offset 0, 0)	ग्रेडिएंट को केंद्र में रखें (ऑफ़सेट 0, 0)
+	Click to open the Brush Preset picker	ब्रश प्रीसेट पिकर खोलने के लिए क्लिक करें
+	Clip Thumbnails to Document Bounds	थंबनेल को दस्तावेज़ सीमाओं तक क्लिप करें
+	Default Foreground and Background Colors (D)	डिफ़ॉल्ट फ़ोरग्राउंड और बैकग्राउंड रंग (D)
+	Delete Note	नोट हटाएँ
+	Delete this note?	यह नोट हटाएँ?
+	Equalize Entire Image Based On Selected Area	चयनित क्षेत्र के आधार पर पूरी इमेज इक्वलाइज़ करें
+	Equalize Selected Area Only	केवल चयनित क्षेत्र इक्वलाइज़ करें
+	Internet Standard RGB (sRGB)	इंटरनेट स्टैंडर्ड RGB (sRGB)
+	Large Thumbnails	बड़े थंबनेल
+	Legacy Macintosh RGB (Gamma 1.8)	लेगेसी Macintosh RGB (गामा 1.8)
+	Little memory would be left after opening this file. Close other apps first, or PhotoCraft may run out of memory.	यह फ़ाइल खोलने के बाद बहुत कम मेमोरी बचेगी। पहले अन्य ऐप्स बंद करें, नहीं तो PhotoCraft की मेमोरी खत्म हो सकती है।
+	Make Shape	शेप बनाएँ
+	Medium Thumbnails	मध्यम थंबनेल
+	No Thumbnails	कोई थंबनेल नहीं
+	No note to delete	हटाने के लिए कोई नोट नहीं है
+	No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.	शेप बनाने के लिए कोई पाथ नहीं है: पेन टूल से एक पाथ बनाएँ या पाथ्स पैनल में एक चुनें।
+	No slices are selected. Click a slice in the preview to select it.	कोई स्लाइस चयनित नहीं है। चुनने के लिए पूर्वावलोकन में किसी स्लाइस पर क्लिक करें।
+	Note deleted, but the preference could not be saved: {error}	नोट हटा दिया गया, लेकिन प्राथमिकता सहेजी नहीं जा सकी: {error}
+	Nudge	खिसकाएँ
+	Painting Mode	पेंटिंग मोड
+	Plugins…	प्लग-इन्स…
+	Selected Slices	चयनित स्लाइस
+	Set flow rate for stroke	स्ट्रोक के लिए प्रवाह दर सेट करें
+	Set opacity for stroke	स्ट्रोक के लिए ओपेसिटी सेट करें
+	Set smoothing for stroke\nUse higher values to reduce the shakiness of brush strokes	स्ट्रोक के लिए स्मूदिंग सेट करें\nब्रश स्ट्रोक का कंपन कम करने के लिए अधिक मान का उपयोग करें
+	Set symmetry options for Painting	पेंटिंग के लिए सिमेट्री विकल्प सेट करें
+	Small Thumbnails	छोटे थंबनेल
+	Smoothing Options	स्मूदिंग विकल्प
+	Switch Foreground and Background Colors (X)	फ़ोरग्राउंड और बैकग्राउंड रंग आपस में बदलें (X)
+	The current scratch directory ({path}) doesn't report its free space, so PhotoCraft can't stop before it fills up, and large files get no extra room from it without a Scratch Size Limit. This warning applies to the current configuration; changes above take effect on Apply or OK. Set a limit or use a local disk.	वर्तमान स्क्रैच डायरेक्टरी ({path}) अपनी खाली जगह नहीं बताती, इसलिए PhotoCraft उसके भरने से पहले रुक नहीं सकता, और स्क्रैच साइज़ सीमा के बिना बड़ी फ़ाइलों को उससे अतिरिक्त जगह नहीं मिलती। यह चेतावनी वर्तमान कॉन्फ़िगरेशन पर लागू होती है; ऊपर के बदलाव "लागू करें" या "ठीक है" पर प्रभावी होते हैं। सीमा सेट करें या लोकल डिस्क का उपयोग करें।
+	The document or its notes changed. Please delete the note again.	दस्तावेज़ या उसके नोट्स बदल गए हैं। कृपया नोट फिर से हटाएँ।
+	Working CMY Plates	वर्किंग CMY प्लेट्स
+@plural	{what}: {n} file failed|{what}: {n} files failed	{what}: {n} फ़ाइल विफल रही|{what}: {n} फ़ाइलें विफल रहीं
