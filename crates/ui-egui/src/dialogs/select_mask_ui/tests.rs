@@ -1065,10 +1065,10 @@ fn brush_circles(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> Vec<(egui::Pos
         .collect()
 }
 
-/// While the brush is resized its circle stays where the drag began, at the new size, and the
-/// Diameter/Hardness readout follows the pointer, as on the main canvas (FredApps on #10559).
+/// While the brush is resized its circle stays where the drag began, at the new size, and so does
+/// the Diameter/Hardness readout beside it, as on the main canvas (#10559, #11702).
 #[test]
-fn the_resize_circle_stays_put_while_the_readout_follows_the_pointer() {
+fn the_resize_circle_and_its_readout_stay_put_while_the_pointer_moves() {
     use egui::PointerButton;
     let (mut h, over) = resize_harness("brush");
     let zoom = h.state().distort.select_mask.as_ref().unwrap().zoom;
@@ -1081,12 +1081,11 @@ fn the_resize_circle_stays_put_while_the_readout_follows_the_pointer() {
         pointer_move(&mut h, over, by);
         // The cursor is drawn before the frame's input, so it shows the new size a frame later.
         h.run_steps(1);
-        let at = over + by;
         let w = h.state().distort.select_mask.as_ref().unwrap();
         let (size, hardness) = (w.brush_size, w.hardness);
         assert_eq!(brush_circles(&h), [(over, size as f32 * 0.5 * zoom)], "the circle stays at the anchor at the new size ({by:?})");
         let rect = h.ctx.memory(|m| m.area_rect(readout())).expect("the readout shows");
-        assert_eq!(rect.min, at + vec2(16.0, 18.0), "the readout is beside the pointer");
+        assert_eq!(rect.min, over + vec2(16.0, 18.0), "the readout stays beside the anchor ({by:?})");
         assert!(h.query_by_label(&format!("{} px", size.round() as i64)).is_some(), "it shows the diameter");
         assert!(h.query_by_label(&format!("{}%", hardness.round() as i64)).is_some(), "and the hardness");
     }
