@@ -1042,7 +1042,10 @@ impl Session {
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
-        self.dispatch(id, params, true)
+        let before = self.active_layer_stamp();
+        let started = self.dispatch(id, params, true);
+        self.note_layer_change(before);
+        started
     }
 
     pub const MAX_PENDING_PREFLIGHTS: usize = 32;
@@ -1924,7 +1927,13 @@ impl Session {
     }
 
     /// Apply (or report the failure of) a job whose worker has delivered `r`.
-    fn finish_job(&mut self, mut job: Running, r: Result<Payload>) {
+    fn finish_job(&mut self, job: Running, r: Result<Payload>) {
+        let before = self.active_layer_stamp();
+        self.finish_job_step(job, r);
+        self.note_layer_change(before);
+    }
+
+    fn finish_job_step(&mut self, mut job: Running, r: Result<Payload>) {
         let apply = job.apply.take();
         // Keep the typed error beside its display text, so `wait_job` and `JobEvent` can still
         // report a hard budget's required/limit or an approval request's limits.
