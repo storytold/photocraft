@@ -1638,6 +1638,7 @@
 	Move Tool	Flytteverktøy
 	Could not use the move tool because the layer is locked.	Kunne ikke bruke flytteverktøyet fordi laget er låst.
 	Could not complete the Free Transform command because the layer is locked.	Kunne ikke fullføre Fri transformering fordi laget er låst.
+	Could not transform because the layer is locked.	Kunne ikke transformere fordi laget er låst.
 	Rectangular Marquee Tool	Rektangulær markeringsramme
 	Elliptical Marquee Tool	Elliptisk markeringsramme
 	Single Row Marquee Tool	Markeringsramme for enkeltrad
@@ -4817,3 +4818,12 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	A picked document is no longer a grayscale document of the same size.	Et av de valgte dokumentene er ikke lenger et dokument i gråtoner av samme størrelse.
 	Automation read folder	Lesemappe for automatisering
 	Automation write folder	Skrivemappe for automatisering
+# Move tool options bar (#11381)
+	Align top edges	Juster øverste kanter
+	Align vertical centers	Juster loddrette midtpunkter
+	Align bottom edges	Juster nederste kanter
+	Distribute vertically	Fordel loddrett
+	Distribute horizontally	Fordel vannrett
+	Show layer bounds on hover	Vis lagets grenser ved hovring
+	Expand layer group on click	Utvid lagergruppe ved klikk
+	Show hover bounds from Layers	Vis hovringsgrenser fra Lag

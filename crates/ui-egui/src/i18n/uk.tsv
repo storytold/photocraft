@@ -1719,6 +1719,7 @@
 	Move Tool	Інструмент «Переміщення»
 	Could not use the move tool because the layer is locked.	Не вдалося використати інструмент «Переміщення», бо шар заблоковано.
 	Could not complete the Free Transform command because the layer is locked.	Не вдалося виконати команду «Вільна трансформація», бо шар заблоковано.
+	Could not transform because the layer is locked.	Не вдалося трансформувати, бо шар заблоковано.
 	Rectangular Marquee Tool	Інструмент «Прямокутне виділення»
 	Elliptical Marquee Tool	Інструмент «Еліптичне виділення»
 	Single Row Marquee Tool	Інструмент «Виділення одного рядка»
@@ -4318,3 +4319,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	A picked document is no longer a grayscale document of the same size.	Один із вибраних документів більше не є документом у градаціях сірого того самого розміру.
 	Automation read folder	Тека читання для автоматизації
 	Automation write folder	Тека запису для автоматизації
+# Move tool options bar (#11381)
+	Align top edges	Вирівняти верхні краї
+	Align vertical centers	Вирівняти центри по вертикалі
+	Align bottom edges	Вирівняти нижні краї
+	Distribute vertically	Розподілити по вертикалі
+	Distribute horizontally	Розподілити по горизонталі
+	Show layer bounds on hover	Показувати межі шару під час наведення
+	Expand layer group on click	Розгортати групу шарів за клацанням
+	Show hover bounds from Layers	Показувати межі під час наведення з панелі «Шари»
