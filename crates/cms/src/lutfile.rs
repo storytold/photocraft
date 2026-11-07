@@ -186,7 +186,9 @@ pub fn parse_cube(text: &str) -> Result<LutFile, LutError> {
             }
             k if k.starts_with(|c: char| c.is_ascii_digit() || c == '-' || c == '+' || c == '.') => {
                 let mut v = vec![k.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?];
-                v.extend(it.filter_map(|s| s.parse::<f32>().ok()));
+                for value in it {
+                    v.push(value.parse::<f32>().map_err(|_| LutError(format!("bad number in `{line}`")))?);
+                }
                 if v.len() != 3 {
                     return err(format!("bad data line `{line}`"));
                 }
@@ -740,6 +742,12 @@ mod tests {
         // As many knots as nodes stays within reach.
         let same: Vec<u32> = (0..17u32).map(|i| (1023.0 * (f64::from(i) / 16.0).powi(2)).round() as u32).collect();
         assert!(parse_3dl(&identity_3dl(&same, 17)).is_ok());
+    }
+
+    #[test]
+    fn cube_rejects_invalid_numeric_fields() {
+        let text = "LUT_3D_SIZE 2\n0.25 nope 0.5 0.75\n0 0 1\n0 1 0\n0 1 1\n1 0 0\n1 0 1\n1 1 0\n1 1 1\n";
+        assert!(parse_cube(text).is_err(), "invalid numeric field must not be ignored");
     }
 
     #[test]
