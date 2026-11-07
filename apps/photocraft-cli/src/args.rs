@@ -95,6 +95,59 @@ pub(crate) struct ExportArgs {
     pub(crate) no_maximize_compatibility: bool,
 }
 
+// How a PDF input opens, as Photoshop's Import PDF dialog asks: shared by `convert` and `info`.
+// Other inputs ignore these.
+#[derive(Args)]
+pub(crate) struct PdfArgs {
+    /// PDF input: the page to open, from 1 (default 1)
+    #[arg(long, value_name = "N", help_heading = "PDF input")]
+    pub(crate) page: Option<u64>,
+    /// PDF input: open embedded image N instead of a page (Import PDF's Images mode)
+    #[arg(long, value_name = "N", help_heading = "PDF input")]
+    pub(crate) image: Option<u64>,
+    /// PDF input: pixels per inch (default 300)
+    #[arg(long, value_name = "PPI", help_heading = "PDF input", allow_negative_numbers = true)]
+    pub(crate) resolution: Option<f64>,
+    /// PDF input: the box to crop to (default boundingBox)
+    #[arg(long, value_name = "boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox", help_heading = "PDF input")]
+    pub(crate) crop: Option<String>,
+    /// PDF input: the colour mode (default rgb)
+    #[arg(long, value_name = "rgb|gray|cmyk|lab", help_heading = "PDF input")]
+    pub(crate) mode: Option<String>,
+    /// PDF input: bits per channel (default 8)
+    #[arg(long, value_name = "8|16", help_heading = "PDF input")]
+    pub(crate) depth: Option<u64>,
+    /// PDF input: render without anti-aliasing
+    #[arg(long, help_heading = "PDF input")]
+    pub(crate) no_antialias: bool,
+}
+
+impl PdfArgs {
+    /// The Import PDF answers these flags give, validated as `file.openAs` validates them;
+    /// `None` when none is given (a PDF then opens with Photoshop's defaults).
+    pub(crate) fn options(&self) -> Result<Option<photocraft_io::pdf_import::PdfOpenOptions>, photocraft_engine::EngineError> {
+        // JSON has no NaN or infinity: they would become `null`, which counts as absent, and the
+        // PDF would silently open at the default resolution.
+        if self.resolution.is_some_and(|r| !r.is_finite()) {
+            return Err(photocraft_engine::EngineError::Other("resolution: pixels per inch".into()));
+        }
+        let mut p = serde_json::Map::new();
+        let mut put = |key: &str, v: Option<serde_json::Value>| {
+            if let Some(v) = v {
+                p.insert(key.into(), v);
+            }
+        };
+        put("page", self.page.map(Into::into));
+        put("image", self.image.map(Into::into));
+        put("resolution", self.resolution.map(Into::into));
+        put("crop", self.crop.clone().map(Into::into));
+        put("mode", self.mode.clone().map(Into::into));
+        put("depth", self.depth.map(Into::into));
+        put("antiAlias", self.no_antialias.then_some(false.into()));
+        photocraft_engine::file_cmds::pdf_options(&serde_json::Value::Object(p))
+    }
+}
+
 /// Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …)
 ///
 /// An <OUT> that is the <IN> file is refused, as the result would replace the original;
@@ -117,6 +170,8 @@ pub(crate) struct ConvertArgs {
     pub(crate) gpu: GpuArgs,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
+    #[command(flatten)]
+    pub(crate) pdf: PdfArgs,
 }
 
 /// Print the document as JSON (size, mode, depth, layer tree)
@@ -129,6 +184,8 @@ pub(crate) struct InfoArgs {
     /// Explicitly approve high-memory PSD/PSB imports within the hard memory budget
     #[arg(long)]
     pub(crate) approve_high_memory: bool,
+    #[command(flatten)]
+    pub(crate) pdf: PdfArgs,
     /// Also list every text run and paragraph run, anti-aliasing and full layer-effect settings
     #[arg(long)]
     pub(crate) detail: bool,

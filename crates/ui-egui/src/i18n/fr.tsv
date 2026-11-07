@@ -3443,6 +3443,37 @@ curves	Smooth	Lisser
 	Replace	Remplacer
 	{name} was changed by another app after it was opened or saved here.	{name} a été modifié par une autre application après avoir été ouvert ou enregistré ici.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Remplacez-le par ce document, ou annulez et utilisez Fichier › Enregistrer sous pour garder les deux.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Importer un PDF
+	The PDF is no longer available.	Le PDF n'est plus disponible.
+	The PDF is protected by a password.	Le PDF est protégé par un mot de passe.
+	Password:	Mot de passe :
+	Pages	Pages
+	Images	Images
+	Select one or more images	Sélectionnez une ou plusieurs images
+	{n} of {total} image(s) selected	{n} image(s) sur {total} sélectionnée(s)
+	{n} of {total} page(s) selected	{n} page(s) sur {total} sélectionnée(s)
+	Thumbnail Size:	Taille des vignettes :
+	Page Options	Options de page
+	Crop To:	Recadrer selon :
+	Image Size: --	Taille de l'image : --
+	Image Size: {size}	Taille de l'image : {size}
+	Constrain Proportions	Conserver les proportions
+	Bit Depth:	Profondeur :
+	Suppress Warnings	Supprimer les avertissements
+	Open In Reverse Order	Ouvrir dans l'ordre inverse
+	Fit Page	Page entière
+	Bounding Box	Cadre de sélection
+	Media Box	Zone de support
+	Crop Box	Zone de recadrage
+	Bleed Box	Zone de fond perdu
+	Trim Box	Zone de rognage
+	Art Box	Zone graphique
+	That isn't the PDF's password.	Ce n'est pas le mot de passe du PDF.
+	The PDF couldn't be read.	Le PDF n'a pas pu être lu.
+	Select one or more pages.	Sélectionnez une ou plusieurs pages.
+	Select one or more images.	Sélectionnez une ou plusieurs images.
 	Decrease Brush Size	Réduire la taille du pinceau
 	Increase Brush Size	Augmenter la taille du pinceau
 	Decrease Brush Hardness	Réduire la dureté du pinceau

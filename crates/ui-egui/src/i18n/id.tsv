@@ -3451,6 +3451,37 @@ curves	Smooth	Haluskan
 	Replace	Ganti
 	{name} was changed by another app after it was opened or saved here.	{name} diubah oleh aplikasi lain setelah dibuka atau disimpan di sini.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ganti dengan dokumen ini, atau batalkan dan gunakan Berkas › Simpan Sebagai untuk menyimpan keduanya.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Impor PDF
+	The PDF is no longer available.	PDF tidak lagi tersedia.
+	The PDF is protected by a password.	PDF dilindungi kata sandi.
+	Password:	Kata sandi:
+	Pages	Halaman
+	Images	Gambar
+	Select one or more images	Pilih satu gambar atau lebih
+	{n} of {total} image(s) selected	{n} dari {total} gambar dipilih
+	{n} of {total} page(s) selected	{n} dari {total} halaman dipilih
+	Thumbnail Size:	Ukuran Gambar Mini:
+	Page Options	Opsi Halaman
+	Crop To:	Pangkas ke:
+	Image Size: --	Ukuran Gambar: --
+	Image Size: {size}	Ukuran Gambar: {size}
+	Constrain Proportions	Pertahankan Proporsi
+	Bit Depth:	Kedalaman Bit:
+	Suppress Warnings	Sembunyikan Peringatan
+	Open In Reverse Order	Buka dalam Urutan Terbalik
+	Fit Page	Pas Halaman
+	Bounding Box	Kotak Pembatas
+	Media Box	Kotak Media
+	Crop Box	Kotak Pangkas
+	Bleed Box	Kotak Bleed
+	Trim Box	Kotak Trim
+	Art Box	Kotak Seni
+	That isn't the PDF's password.	Itu bukan kata sandi PDF ini.
+	The PDF couldn't be read.	PDF tidak dapat dibaca.
+	Select one or more pages.	Pilih satu halaman atau lebih.
+	Select one or more images.	Pilih satu gambar atau lebih.
 	Decrease Brush Size	Perkecil ukuran kuas
 	Increase Brush Size	Perbesar ukuran kuas
 	Decrease Brush Hardness	Kurangi kekerasan kuas

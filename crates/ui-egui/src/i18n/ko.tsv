@@ -3652,6 +3652,37 @@ curves	Smooth	매끄럽게
 	Replace	대치
 	{name} was changed by another app after it was opened or saved here.	{name}이(가) 여기서 열거나 저장한 뒤 다른 앱에서 변경되었습니다.
 	Replace it with this document, or cancel and use File › Save As to keep both.	이 문서로 대치하거나, 취소하고 파일 › 다른 이름으로 저장을 사용해 둘 다 보관하세요.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	PDF 가져오기
+	The PDF is no longer available.	PDF를 더 이상 사용할 수 없습니다.
+	The PDF is protected by a password.	PDF가 암호로 보호되어 있습니다.
+	Password:	암호:
+	Pages	페이지
+	Images	이미지
+	Select one or more images	이미지를 하나 이상 선택하십시오
+	{n} of {total} image(s) selected	{total}개 중 {n}개 이미지 선택됨
+	{n} of {total} page(s) selected	{total}개 중 {n}개 페이지 선택됨
+	Thumbnail Size:	축소판 크기:
+	Page Options	페이지 옵션
+	Crop To:	자르기 기준:
+	Image Size: --	이미지 크기: --
+	Image Size: {size}	이미지 크기: {size}
+	Constrain Proportions	비율 제한
+	Bit Depth:	비트 심도:
+	Suppress Warnings	경고 표시 안 함
+	Open In Reverse Order	역순으로 열기
+	Fit Page	페이지에 맞추기
+	Bounding Box	테두리 상자
+	Media Box	미디어 상자
+	Crop Box	자르기 상자
+	Bleed Box	도련 상자
+	Trim Box	재단 상자
+	Art Box	아트 상자
+	That isn't the PDF's password.	PDF의 암호가 아닙니다.
+	The PDF couldn't be read.	PDF를 읽을 수 없습니다.
+	Select one or more pages.	페이지를 하나 이상 선택하십시오.
+	Select one or more images.	이미지를 하나 이상 선택하십시오.
 	Decrease Brush Size	브러시 크기 줄이기
 	Increase Brush Size	브러시 크기 늘리기
 	Decrease Brush Hardness	브러시 경도 줄이기

@@ -296,12 +296,43 @@ pub fn start_open(
     }
 }
 
+/// [`start_open`] for a PDF page or embedded image chosen in Import PDF (`pdf` holds the
+/// dialog's answers): untitled when it opens, as in Photoshop.
+pub fn start_open_pdf(
+    app: &mut PhotocraftApp,
+    name: &str,
+    path: Option<String>,
+    source: OpenSource,
+    pdf: photocraft_io::pdf_import::PdfOpenOptions,
+    order: Option<OpenOrder>,
+) -> Result<(), String> {
+    let name = &app.open_name(name);
+    match app.session.start_open_pdf(name, source, pdf, app.background_jobs).map_err(|e| e.to_string())? {
+        Started::Done(v) => finish_open(app, name, path.as_deref(), &v, None, order),
+        Started::Job(job) => {
+            app.jobs.opens.push(OpenTab { job, name: name.to_string(), path, slot: None, order });
+            app.jobs.focus = Some(job);
+            app.ui.chrome.home = None;
+            app.ui.status = crate::i18n::fmt(tl!("Opening {name}…"), &[("name", name)]);
+            app.ui.status_error = false;
+            Ok(())
+        }
+    }
+}
+
 /// Start a set of files opened together: the `batch` of their [`OpenOrder`]s. Its tabs follow the
 /// documents and opens already there. Call [`end_batch`] once every member has been started.
 pub(crate) fn begin_batch(app: &mut PhotocraftApp) -> u64 {
+    begin_batch_at(app, None)
+}
+
+/// [`begin_batch`] for a set whose tabs start at `slot` (the pages of a PDF dropped between
+/// tabs) rather than after everything open; a slot past the end means the end.
+pub(crate) fn begin_batch_at(app: &mut PhotocraftApp, slot: Option<usize>) -> u64 {
     let id = app.jobs.next_batch;
     app.jobs.next_batch = app.jobs.next_batch.wrapping_add(1);
-    let base = app.session.documents().len() + app.jobs.opens.len();
+    let end = app.session.documents().len() + app.jobs.opens.len();
+    let base = slot.map_or(end, |s| s.min(end));
     app.jobs.batches.push(OpenBatch { id, base, opened: Vec::new() });
     id
 }

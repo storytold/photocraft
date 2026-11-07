@@ -4794,6 +4794,36 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
 
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Importér PDF
+	The PDF is no longer available.	PDF-filen er ikke længere tilgængelig.
+	The PDF is protected by a password.	PDF-filen er beskyttet med en adgangskode.
+	Password:	Adgangskode:
+	Pages	Sider
+	Images	Billeder
+	Select one or more images	Vælg et eller flere billeder
+	{n} of {total} image(s) selected	{n} af {total} billede(r) valgt
+	{n} of {total} page(s) selected	{n} af {total} side(r) valgt
+	Thumbnail Size:	Miniaturestørrelse:
+	Page Options	Sideindstillinger
+	Crop To:	Beskær til:
+	Image Size: --	Billedstørrelse: --
+	Image Size: {size}	Billedstørrelse: {size}
+	Constrain Proportions	Bevar proportioner
+	Bit Depth:	Bitdybde:
+	Suppress Warnings	Undertryk advarsler
+	Open In Reverse Order	Åbn i omvendt rækkefølge
+	Fit Page	Tilpas side
+	Bounding Box	Afgrænsningsramme
+	Media Box	Medieramme
+	Crop Box	Beskæringsramme
+	Bleed Box	Udfaldsramme
+	Trim Box	Skæreramme
+	Art Box	Grafikramme
+	That isn't the PDF's password.	Det er ikke PDF-filens adgangskode.
+	The PDF couldn't be read.	PDF-filen kunne ikke læses.
+	Select one or more pages.	Vælg en eller flere sider.
+	Select one or more images.	Vælg et eller flere billeder.
 # Action Stop message (#8386)
 	Message	Meddelelse
 # Playback Options (#5212)

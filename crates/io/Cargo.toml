@@ -10,6 +10,9 @@ rust-version.workspace = true
 workspace = true
 
 [features]
+# `pdf_budget_wasm`: the PDF image-budget check as a binary, run under node as wasm32 (see
+# wasm/pdf_budget_wasm.rs); off, so ordinary builds and installs don't carry it.
+wasm-budget-check = []
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
 # HEIC/HEIF decode (forwarded to photocraft-codecs; see its `heif` feature).
@@ -45,6 +48,10 @@ flate2 = { workspace = true }
 roxmltree = "0.21"
 # Reuse usvg's locked header reader to bound embedded SVG raster data before decoding.
 imagesize = "0.13"
+# PDF import (pdf_import.rs): hayro interprets and rasterises pages on the CPU in pure Rust; its
+# `embed-fonts` are the base-14 stand-ins for fonts a PDF doesn't embed, `embed-cmaps` the
+# predefined CJK CMaps. Accepted by the maintainers in #2011.
+hayro = { version = "0.8", default-features = false, features = ["embed-fonts", "embed-cmaps"] }
 # SVG import (svg.rs): usvg parses, resvg rasterises what the shape model can't hold. Both are
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -69,3 +76,11 @@ proptest = { workspace = true }
 zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
 zune-core = { workspace = true }
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
+
+[[bin]]
+name = "pdf_budget_wasm"
+path = "wasm/pdf_budget_wasm.rs"
+required-features = ["wasm-budget-check"]
+test = false
+bench = false
+doc = false

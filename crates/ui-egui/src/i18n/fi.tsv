@@ -4795,6 +4795,36 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
 
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Tuo PDF
+	The PDF is no longer available.	PDF-tiedosto ei ole enää käytettävissä.
+	The PDF is protected by a password.	PDF-tiedosto on suojattu salasanalla.
+	Password:	Salasana:
+	Pages	Sivut
+	Images	Kuvat
+	Select one or more images	Valitse yksi tai useampi kuva
+	{n} of {total} image(s) selected	{n}/{total} kuvaa valittu
+	{n} of {total} page(s) selected	{n}/{total} sivua valittu
+	Thumbnail Size:	Pikkukuvan koko:
+	Page Options	Sivuasetukset
+	Crop To:	Rajaa:
+	Image Size: --	Kuvan koko: --
+	Image Size: {size}	Kuvan koko: {size}
+	Constrain Proportions	Säilytä mittasuhteet
+	Bit Depth:	Bittisyvyys:
+	Suppress Warnings	Ohita varoitukset
+	Open In Reverse Order	Avaa käänteisessä järjestyksessä
+	Fit Page	Sovita sivu
+	Bounding Box	Ympäröivä kehys
+	Media Box	Mediakehys
+	Crop Box	Rajauskehys
+	Bleed Box	Leikkuuvarakehys
+	Trim Box	Leikkauskehys
+	Art Box	Grafiikkakehys
+	That isn't the PDF's password.	Tämä ei ole PDF-tiedoston salasana.
+	The PDF couldn't be read.	PDF-tiedostoa ei voitu lukea.
+	Select one or more pages.	Valitse yksi tai useampi sivu.
+	Select one or more images.	Valitse yksi tai useampi kuva.
 # Action Stop message (#8386)
 	Message	Viesti
 # Playback Options (#5212)

@@ -4053,6 +4053,37 @@ curves	Smooth	Wygładź
 	Replace	Zastąp
 	{name} was changed by another app after it was opened or saved here.	Plik {name} został zmieniony przez inną aplikację po otwarciu lub zapisaniu go tutaj.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zastąp go tym dokumentem albo anuluj i użyj Plik › Zapisz jako, aby zachować oba.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Importuj PDF
+	The PDF is no longer available.	Plik PDF nie jest już dostępny.
+	The PDF is protected by a password.	Plik PDF jest chroniony hasłem.
+	Password:	Hasło:
+	Pages	Strony
+	Images	Obrazy
+	Select one or more images	Wybierz jeden lub więcej obrazów
+	{n} of {total} image(s) selected	Wybrano obrazów: {n} z {total}
+	{n} of {total} page(s) selected	Wybrano stron: {n} z {total}
+	Thumbnail Size:	Rozmiar miniatur:
+	Page Options	Opcje strony
+	Crop To:	Przytnij do:
+	Image Size: --	Rozmiar obrazu: --
+	Image Size: {size}	Rozmiar obrazu: {size}
+	Constrain Proportions	Zachowaj proporcje
+	Bit Depth:	Głębia bitowa:
+	Suppress Warnings	Pomiń ostrzeżenia
+	Open In Reverse Order	Otwieraj w odwrotnej kolejności
+	Fit Page	Dopasuj do strony
+	Bounding Box	Ramka ograniczająca
+	Media Box	Ramka nośnika
+	Crop Box	Ramka kadrowania
+	Bleed Box	Ramka spadu
+	Trim Box	Ramka przycięcia
+	Art Box	Ramka grafiki
+	That isn't the PDF's password.	To nie jest hasło do tego pliku PDF.
+	The PDF couldn't be read.	Nie udało się odczytać pliku PDF.
+	Select one or more pages.	Wybierz jedną lub więcej stron.
+	Select one or more images.	Wybierz jeden lub więcej obrazów.
 	Decrease Brush Size	Zmniejsz rozmiar pędzla
 	Increase Brush Size	Zwiększ rozmiar pędzla
 	Decrease Brush Hardness	Zmniejsz twardość pędzla

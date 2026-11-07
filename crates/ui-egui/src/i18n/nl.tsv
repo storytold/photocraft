@@ -4194,6 +4194,37 @@ curves	Smooth	Vloeiend maken
 	{path}: the path is not valid Unicode; save under another name.	{path}: het pad is geen geldige Unicode; sla op onder een andere naam.
 	{name} was changed by another app after it was opened or saved here.	{name} is door een andere app gewijzigd nadat het hier is geopend of bewaard.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Vervang het door dit document, of annuleer en gebruik Bestand › Opslaan als om beide te houden.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	PDF importeren
+	The PDF is no longer available.	De PDF is niet meer beschikbaar.
+	The PDF is protected by a password.	De PDF is beveiligd met een wachtwoord.
+	Password:	Wachtwoord:
+	Pages	Pagina's
+	Images	Afbeeldingen
+	Select one or more images	Selecteer een of meer afbeeldingen
+	{n} of {total} image(s) selected	{n} van {total} afbeelding(en) geselecteerd
+	{n} of {total} page(s) selected	{n} van {total} pagina('s) geselecteerd
+	Thumbnail Size:	Miniatuurgrootte:
+	Page Options	Pagina-opties
+	Crop To:	Uitsnijden tot:
+	Image Size: --	Afbeeldingsgrootte: --
+	Image Size: {size}	Afbeeldingsgrootte: {size}
+	Constrain Proportions	Verhoudingen behouden
+	Bit Depth:	Bitdiepte:
+	Suppress Warnings	Waarschuwingen onderdrukken
+	Open In Reverse Order	In omgekeerde volgorde openen
+	Fit Page	Passend op pagina
+	Bounding Box	Selectiekader
+	Media Box	Mediakader
+	Crop Box	Uitsnijkader
+	Bleed Box	Afloopkader
+	Trim Box	Bijsnijkader
+	Art Box	Illustratiekader
+	That isn't the PDF's password.	Dat is niet het wachtwoord van de PDF.
+	The PDF couldn't be read.	De PDF kon niet worden gelezen.
+	Select one or more pages.	Selecteer een of meer pagina's.
+	Select one or more images.	Selecteer een of meer afbeeldingen.
 	Decrease Brush Size	Penseelgrootte verkleinen
 	Increase Brush Size	Penseelgrootte vergroten
 	Decrease Brush Hardness	Penseelhardheid verlagen

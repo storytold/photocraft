@@ -82,15 +82,51 @@ impl PhotocraftApp {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
+        // A PDF asks how to open first (Import PDF), as Photoshop does.
+        if crate::pdf_import_ui::wants_dialog(name, bytes) {
+            return crate::pdf_import_ui::open_placed(self, name, path, bytes, slot).map(|_| Vec::new());
+        }
+        self.open_decoded(name, bytes, path, slot, order, None)
+    }
+
+    /// Opens a PDF page or embedded image chosen in Import PDF (`pdf` holds the dialog's
+    /// answers). The document is untitled: Save goes to Save As, never into the PDF.
+    pub(crate) fn open_pdf_choice(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        path: Option<&str>,
+        pdf: photocraft_io::pdf_import::PdfOpenOptions,
+        order: Option<crate::jobs_ui::OpenOrder>,
+    ) -> Result<Vec<String>, String> {
+        self.open_decoded(name, bytes, path, None, order, Some(pdf))
+    }
+
+    /// The decode half of [`Self::open_bytes_placed`], after preset files and the Import PDF
+    /// question: `pdf`, when set, is how a PDF opens.
+    fn open_decoded(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        path: Option<&str>,
+        slot: Option<usize>,
+        order: Option<crate::jobs_ui::OpenOrder>,
+        pdf: Option<photocraft_io::pdf_import::PdfOpenOptions>,
+    ) -> Result<Vec<String>, String> {
         let name = &self.open_name(name);
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
-            jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?;
+            match pdf {
+                Some(pdf) => jobs_ui::start_open_pdf(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), pdf, order)?,
+                None => jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), slot, order)?,
+            }
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        opts.pdf = pdf;
+        let pdf_page = pdf_untitled(name, bytes, &opts);
         // A PSD and a magic-detected TIFF both go through the typed IO path: only it carries
         // `PsdApprovalRequired` (and, for a PSD, the structured damaged flag), so a layered
         // TIFF's high-memory decision can raise its prompt instead of becoming a terminal
@@ -127,7 +163,7 @@ impl PhotocraftApp {
             self,
             open_prompt::Held {
                 doc,
-                read_only: photocraft_io::affinity::is_affinity(bytes),
+                read_only: photocraft_io::affinity::is_affinity(bytes) || pdf_page,
                 damage_pending: damaged,
                 name: name.to_string(),
                 path: path.map(str::to_string),
@@ -177,7 +213,7 @@ impl PhotocraftApp {
         // The caller records the path it read from.
         self.session.add_document(doc, None);
         if let Some(st) = self.session.active_mut() {
-            st.source_read_only = photocraft_io::affinity::is_affinity(bytes);
+            st.source_read_only = photocraft_io::affinity::is_affinity(bytes) || pdf_untitled(name, bytes, &opts);
         }
         self.sync_views();
         self.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
@@ -853,6 +889,15 @@ impl PhotocraftApp {
         }
         f
     }
+}
+
+/// Whether a document opened from `name`'s `bytes` with `opts` must stay untitled rather than
+/// take the PDF as its file, as Photoshop leaves it: a rasterised page, or anything Import PDF
+/// opened (a page or an embedded image). Only a one-image PDF opened directly, like a picture,
+/// keeps the PDF. (The importer says the same through `source_read_only`, which the import hook
+/// doesn't pass on.)
+fn pdf_untitled(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> bool {
+    photocraft_io::is_pdf_input(name, bytes) && (opts.pdf.is_some() || !photocraft_io::pdf_import::opens_as_image(bytes, None))
 }
 
 /// Refuses a save that won't fit in memory, before any encoding starts (#10024): on the web a

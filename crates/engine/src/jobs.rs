@@ -1176,7 +1176,7 @@ impl Session {
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
     ) -> Result<Started> {
-        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background)
+        self.start_open_inner(name, source, confirm_damage, true, approved_estimate, expected_fingerprint, background, None)
     }
 
     /// Open a file in the background: read (for a path) and decode on a worker, with progress
@@ -1189,7 +1189,7 @@ impl Session {
     /// result is `{held, name, warnings, color}` (`color` the question): take it with
     /// [`Session::take_held_open`] once answered.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false, false, None, None, true)
+        self.start_open_inner(name, source, false, false, None, None, true, None)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
@@ -1202,7 +1202,14 @@ impl Session {
     /// Interactive open with an explicit background/inline choice: damaged PSD content and
     /// high-memory preflights wait for the user instead of opening non-interactively.
     pub fn start_open_for_user_with_background(&mut self, name: &str, source: OpenSource, background: bool) -> Result<Started> {
-        self.start_open_inner(name, source, true, false, None, None, background)
+        self.start_open_inner(name, source, true, false, None, None, background, None)
+    }
+
+    /// [`Self::start_open_for_user_with_background`] for a PDF page or embedded image chosen in
+    /// Import PDF: `pdf` holds the dialog's answers. What it opens is untitled (the importer marks
+    /// it `source_read_only`), as in Photoshop.
+    pub fn start_open_pdf(&mut self, name: &str, source: OpenSource, pdf: photocraft_io::pdf_import::PdfOpenOptions, background: bool) -> Result<Started> {
+        self.start_open_inner(name, source, true, false, None, None, background, Some(pdf))
     }
 
     /// Place a file's bytes in the background, like `file.placeEmbedded` (`linked`: `file.placeLinked`
@@ -1236,6 +1243,7 @@ impl Session {
         approved_estimate: Option<u64>,
         expected_fingerprint: Option<SourceFingerprint>,
         background: bool,
+        pdf: Option<photocraft_io::pdf_import::PdfOpenOptions>,
     ) -> Result<Started> {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
@@ -1243,6 +1251,7 @@ impl Session {
         let mut opts = import_options(self.prefs());
         opts.psd_high_memory_approved = approve_high_memory;
         opts.psd_approved_estimate = approved_estimate;
+        opts.pdf = pdf;
         let test_memory_scope = photocraft_io::memory::TestMemoryScope::capture();
         enum WorkResult {
             Decoded(Box<(photocraft_io::ImportResult, bool)>),

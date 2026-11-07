@@ -4157,6 +4157,37 @@ cameraData	Lens	Lens
 	{path}: the path is not valid Unicode; save under another name.	{path}: yol geçerli bir Unicode değil; başka bir adla kaydedin.
 	{name} was changed by another app after it was opened or saved here.	{name}, burada açıldıktan veya kaydedildikten sonra başka bir uygulama tarafından değiştirildi.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Bu belgeyle değiştirin ya da iptal edip ikisini de korumak için Dosya › Farklı Kaydet'i kullanın.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	PDF İçe Aktar
+	The PDF is no longer available.	PDF artık kullanılamıyor.
+	The PDF is protected by a password.	PDF parola korumalı.
+	Password:	Parola:
+	Pages	Sayfalar
+	Images	Görüntüler
+	Select one or more images	Bir veya daha fazla görüntü seçin
+	{n} of {total} image(s) selected	{total} görüntüden {n} tanesi seçildi
+	{n} of {total} page(s) selected	{total} sayfadan {n} tanesi seçildi
+	Thumbnail Size:	Küçük Resim Boyutu:
+	Page Options	Sayfa Seçenekleri
+	Crop To:	Kırpma Alanı:
+	Image Size: --	Görüntü Boyutu: --
+	Image Size: {size}	Görüntü Boyutu: {size}
+	Constrain Proportions	Oranları Koru
+	Bit Depth:	Bit Derinliği:
+	Suppress Warnings	Uyarıları Gizle
+	Open In Reverse Order	Ters Sırada Aç
+	Fit Page	Sayfaya Sığdır
+	Bounding Box	Sınırlayıcı Kutu
+	Media Box	Ortam Kutusu
+	Crop Box	Kırpma Kutusu
+	Bleed Box	Taşma Payı Kutusu
+	Trim Box	Kesim Kutusu
+	Art Box	Resim Kutusu
+	That isn't the PDF's password.	Bu, PDF'nin parolası değil.
+	The PDF couldn't be read.	PDF okunamadı.
+	Select one or more pages.	Bir veya daha fazla sayfa seçin.
+	Select one or more images.	Bir veya daha fazla görüntü seçin.
 	Decrease Brush Size	Fırça boyutunu küçült
 	Increase Brush Size	Fırça boyutunu büyüt
 	Decrease Brush Hardness	Fırça sertliğini azalt

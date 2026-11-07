@@ -170,6 +170,66 @@ pub fn open_bytes_as(s: &mut Session, name: &str, bytes: &[u8], as_ext: Option<&
     open_bytes_as_with_options(s, name, bytes, as_ext, path, false)
 }
 
+/// The Import PDF answers in a command's params (`page`, `resolution`, `crop`, `mode`, `depth`,
+/// `antiAlias`, `name`, `password`, `image`, `suppressWarnings`), or `None` when it names none:
+/// a PDF then opens with Photoshop's defaults (page 1, Bounding Box, 300 ppi, RGB, 8 bits).
+pub fn pdf_options(p: &Value) -> Result<Option<photocraft_io::pdf_import::PdfOpenOptions>> {
+    use photocraft_io::pdf_import::{CropTo, PdfOpenOptions};
+    // A key set to `null` counts as absent, as in the other format params (`tgaBits`).
+    let get = |k: &str| p.get(k).filter(|v| !v.is_null());
+    let keys = ["page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
+    if !keys.iter().any(|k| get(k).is_some()) {
+        return Ok(None);
+    }
+    let mut o = PdfOpenOptions::default();
+    if let Some(v) = get("page") {
+        o.page = v.as_u64().filter(|n| *n >= 1).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| EngineError::Other("page: a page number from 1".into()))?;
+    }
+    if let Some(v) = get("image") {
+        o.image = Some(
+            v.as_u64().filter(|n| *n >= 1).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| EngineError::Other("image: an image number from 1".into()))?,
+        );
+    }
+    if let Some(v) = get("resolution") {
+        let r = v.as_f64().filter(|r| r.is_finite() && *r > 0.0).ok_or_else(|| EngineError::Other("resolution: pixels per inch".into()))?;
+        // Clamped while still f64: a huge value would otherwise become an infinite f32, which
+        // the importer replaces with the 300 ppi default instead of the maximum.
+        o.resolution = r.clamp(f64::from(photocraft_io::pdf_import::MIN_RESOLUTION), f64::from(photocraft_io::pdf_import::MAX_RESOLUTION)) as f32;
+    }
+    if let Some(v) = get("crop") {
+        let c = v.as_str().and_then(CropTo::from_id).ok_or_else(|| EngineError::Other("crop: boundingBox|mediaBox|cropBox|bleedBox|trimBox|artBox".into()))?;
+        o.crop = c;
+    }
+    if let Some(v) = get("mode") {
+        o.mode = match v.as_str().map(str::to_ascii_lowercase).as_deref() {
+            Some("rgb") => photocraft_doc::ColorMode::Rgb,
+            Some("gray" | "grayscale") => photocraft_doc::ColorMode::Grayscale,
+            Some("cmyk") => photocraft_doc::ColorMode::Cmyk,
+            Some("lab") => photocraft_doc::ColorMode::Lab,
+            _ => return Err(EngineError::Other("mode: rgb|gray|cmyk|lab".into())),
+        };
+    }
+    if let Some(v) = get("depth") {
+        o.depth = match v.as_u64() {
+            Some(8) => photocraft_color::SampleType::U8,
+            Some(16) => photocraft_color::SampleType::U16,
+            _ => return Err(EngineError::Other("depth: 8|16".into())),
+        };
+    }
+    if let Some(v) = get("antiAlias") {
+        o.anti_alias = v.as_bool().ok_or_else(|| EngineError::Other("antiAlias: true|false".into()))?;
+    }
+    if let Some(v) = get("suppressWarnings") {
+        o.suppress_warnings = v.as_bool().ok_or_else(|| EngineError::Other("suppressWarnings: true|false".into()))?;
+    }
+    let text = |k: &str| -> Result<Option<String>> {
+        get(k).map(|v| v.as_str().map(str::to_string).ok_or_else(|| EngineError::Other(format!("{k}: a string")))).transpose()
+    };
+    o.name = text("name")?;
+    o.password = text("password")?;
+    Ok(Some(o))
+}
+
 /// [`open_bytes_as`] with the caller's high-memory approval for these bytes.
 ///
 /// A one-shot approved estimate is deliberately not forwarded: these bytes may be a fresh copy
@@ -182,6 +242,20 @@ pub fn open_bytes_as_with_options(
     path: Option<String>,
     approve_high_memory: bool,
 ) -> Result<Value> {
+    open_bytes_with_pdf(s, name, bytes, as_ext, path, approve_high_memory, None)
+}
+
+/// [`open_bytes_as_with_options`] with the Import PDF answers a PDF opens with (`None`:
+/// Photoshop's defaults).
+pub fn open_bytes_with_pdf(
+    s: &mut Session,
+    name: &str,
+    bytes: &[u8],
+    as_ext: Option<&str>,
+    path: Option<String>,
+    approve_high_memory: bool,
+    pdf: Option<photocraft_io::pdf_import::PdfOpenOptions>,
+) -> Result<Value> {
     crate::allocation::checkpoint("importing document")?;
     let decode_name = match as_ext {
         Some(ext) => format!("{}.{}", stem(name), ext.trim_start_matches('.')),
@@ -190,6 +264,7 @@ pub fn open_bytes_as_with_options(
     let mut opts = crate::jobs::import_options(s.prefs());
     opts.psd_high_memory_approved = approve_high_memory;
     opts.psd_approved_estimate = None;
+    opts.pdf = pdf;
     let raw = super::raw_open::prepare(s, &decode_name, path.as_deref(), bytes)?;
     let (r, raw_settings) = if let Some((imported, settings)) = raw {
         (imported, Some(settings))
@@ -209,7 +284,10 @@ pub fn open_bytes_as_with_options(
             None
         }
         None => {
-            doc.name = file_name(name);
+            // A PDF page is named by its import (`multi-2.pdf`): the file name would hide it.
+            if !photocraft_io::is_pdf_input(&decode_name, bytes) {
+                doc.name = file_name(name);
+            }
             path
         }
     };
@@ -240,8 +318,9 @@ pub(super) fn open_as(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::BadParams { cmd: "file.openAs".into(), msg: "expected boolean for \"approveHighMemory\"".into() });
         }
     };
+    let pdf = pdf_options(p)?;
     let bytes = read_file(&path)?;
-    let result = open_bytes_as_with_options(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory)?;
+    let result = open_bytes_with_pdf(s, &path, &bytes, as_ext, Some(path.clone()), approve_high_memory, pdf)?;
     remember_batch_open(s);
     Ok(result)
 }
@@ -396,6 +475,16 @@ impl PlaceInput {
         let mut opts = crate::jobs::import_options(prefs);
         opts.psd_high_memory_approved = approve;
         opts.psd_approved_estimate = None;
+        opts.pdf = pdf_options(p)?;
+        // A linked smart object keeps only the path, so Update Modified Content would reopen the
+        // PDF with the defaults (page 1, 300 ppi) and lose these answers. Refuse rather than drift.
+        if linked.is_some() && opts.pdf.is_some() {
+            return Err(EngineError::BadParams {
+                cmd: "file.placeLinked".into(),
+                msg: "Import PDF options (page, resolution, crop, mode, depth, image, password…) aren't kept with a linked file yet; place it embedded instead"
+                    .into(),
+            });
+        }
         Ok(Self {
             name: name.to_string(),
             canvas,

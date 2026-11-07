@@ -30,7 +30,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
-    let import_opts = photocraft_io::ImportOptions { psd_high_memory_approved: a.approve_high_memory, ..Default::default() };
+    let import_opts = photocraft_io::ImportOptions { psd_high_memory_approved: a.approve_high_memory, pdf: a.pdf.options()?, ..Default::default() };
     let mut o = files::open_with_options(input, &import_opts)?;
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
@@ -56,7 +56,8 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let opened = h.open_with_approval(file, a.approve_high_memory)?;
+    let import_opts = photocraft_io::ImportOptions { psd_high_memory_approved: a.approve_high_memory, pdf: a.pdf.options()?, ..Default::default() };
+    let opened = h.open_with_options(file, &import_opts)?;
     let mut doc = match (a.detail, h.session.active()) {
         (true, Some(st)) => photocraft_engine::inspect::document_detail(st),
         _ => h.inspect(None)?,

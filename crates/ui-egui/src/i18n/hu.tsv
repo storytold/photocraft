@@ -4348,6 +4348,37 @@ cameraRaw	Yellow	Sárga
 	{path}: the path is not valid Unicode; save under another name.	{path}: az elérési út nem érvényes Unicode-szöveg. Mentsd más néven.
 	{name} was changed by another app after it was opened or saved here.	A(z) {name} fájlt egy másik alkalmazás módosította, miután itt megnyitották vagy mentették.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Cserélje le erre a dokumentumra, vagy válassza a Mégse gombot, és a Fájl › Mentés másként paranccsal tartsa meg mindkettőt.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	PDF importálása
+	The PDF is no longer available.	A PDF már nem érhető el.
+	The PDF is protected by a password.	A PDF jelszóval védett.
+	Password:	Jelszó:
+	Pages	Oldalak
+	Images	Képek
+	Select one or more images	Válasszon ki egy vagy több képet
+	{n} of {total} image(s) selected	{n} / {total} kép kijelölve
+	{n} of {total} page(s) selected	{n} / {total} oldal kijelölve
+	Thumbnail Size:	Bélyegkép mérete:
+	Page Options	Oldalbeállítások
+	Crop To:	Vágás erre:
+	Image Size: --	Képméret: --
+	Image Size: {size}	Képméret: {size}
+	Constrain Proportions	Arányok megtartása
+	Bit Depth:	Bitmélység:
+	Suppress Warnings	Figyelmeztetések elrejtése
+	Open In Reverse Order	Megnyitás fordított sorrendben
+	Fit Page	Teljes oldal
+	Bounding Box	Határolókeret
+	Media Box	Médiakeret
+	Crop Box	Vágókeret
+	Bleed Box	Kifutókeret
+	Trim Box	Körülvágási keret
+	Art Box	Grafikakeret
+	That isn't the PDF's password.	Ez nem a PDF jelszava.
+	The PDF couldn't be read.	A PDF nem olvasható.
+	Select one or more pages.	Válasszon ki egy vagy több oldalt.
+	Select one or more images.	Válasszon ki egy vagy több képet.
 	Decrease Brush Size	Ecsetméret csökkentése
 	Increase Brush Size	Ecsetméret növelése
 	Decrease Brush Hardness	Ecsetkeménység csökkentése

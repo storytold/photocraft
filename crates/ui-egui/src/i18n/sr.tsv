@@ -4501,6 +4501,37 @@ shape	Appearance	Izgled
 	{path}: the path is not valid Unicode; save under another name.	{path}: putanja nije ispravan Unicode; sačuvajte pod drugim imenom.
 	{name} was changed by another app after it was opened or saved here.	Datoteku {name} je izmenila druga aplikacija nakon što je ovde otvorena ili sačuvana.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Zameni je ovim dokumentom ili otkaži i koristi Datoteka › Sačuvaj kao da zadržiš obe.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Uvezi PDF
+	The PDF is no longer available.	PDF više nije dostupan.
+	The PDF is protected by a password.	PDF je zaštićen lozinkom.
+	Password:	Lozinka:
+	Pages	Stranice
+	Images	Slike
+	Select one or more images	Izaberite jednu ili više slika
+	{n} of {total} image(s) selected	Izabrano slika: {n} od {total}
+	{n} of {total} page(s) selected	Izabrano stranica: {n} od {total}
+	Thumbnail Size:	Veličina sličica:
+	Page Options	Opcije stranice
+	Crop To:	Iseci na:
+	Image Size: --	Veličina slike: --
+	Image Size: {size}	Veličina slike: {size}
+	Constrain Proportions	Zadrži proporcije
+	Bit Depth:	Dubina bita:
+	Suppress Warnings	Sakrij upozorenja
+	Open In Reverse Order	Otvori obrnutim redosledom
+	Fit Page	Cela stranica
+	Bounding Box	Granični okvir
+	Media Box	Okvir medija
+	Crop Box	Okvir isecanja
+	Bleed Box	Okvir napusta
+	Trim Box	Okvir obrezivanja
+	Art Box	Okvir grafike
+	That isn't the PDF's password.	To nije lozinka ovog PDF-a.
+	The PDF couldn't be read.	PDF nije moguće pročitati.
+	Select one or more pages.	Izaberite jednu ili više stranica.
+	Select one or more images.	Izaberite jednu ili više slika.
 	Decrease Brush Size	Smanji veličinu četkice
 	Increase Brush Size	Povećaj veličinu četkice
 	Decrease Brush Hardness	Smanji tvrdoću četkice

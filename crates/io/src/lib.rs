@@ -65,6 +65,7 @@ pub use ora::losses as ora_losses;
 pub mod pattern_map;
 mod pcraft_cache;
 pub mod pdf;
+pub mod pdf_import;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
@@ -164,6 +165,9 @@ pub enum IoError {
     /// An SVG that does not parse (or is too large to rasterise).
     #[error("SVG: {0}")]
     Svg(String),
+    /// A PDF that can't be read or rasterised (see [`pdf_import`]).
+    #[error("PDF: {0}")]
+    Pdf(String),
     /// The file could not be read.
     #[error("{0}")]
     Read(String),
@@ -513,8 +517,8 @@ pub enum ImportPreflight {
     /// A flat raster decoded into one image, bounded by
     /// [`ImportOptions::flat_max_pixel_bytes`].
     Flat,
-    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, camera raw and `.pcraft` files: this build has
-    /// no header-only estimate of their pixel memory before decoding.
+    /// Affinity, OpenRaster, Krita, XCF, PDN, SVG, PDF, camera raw and `.pcraft` files: this build
+    /// has no header-only estimate of their pixel memory before decoding.
     Unbounded,
 }
 
@@ -549,6 +553,9 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     if raw::is_raw(bytes) {
         return ImportPreflight::Unbounded;
     }
+    if is_pdf_input(name, bytes) {
+        return ImportPreflight::Unbounded;
+    }
     if is_svg_input(name, bytes) {
         return ImportPreflight::Unbounded;
     }
@@ -558,8 +565,8 @@ pub fn import_preflight(name: &str, bytes: &[u8]) -> ImportPreflight {
     if photocraft_codecs::detect(bytes) == Some(photocraft_codecs::Format::Tiff) { ImportPreflight::Tiff } else { ImportPreflight::Flat }
 }
 
-/// Imports a file. PSD/PSB, Affinity containers and camera raws are detected by magic; everything
-/// else is decoded with `photocraft-codecs`.
+/// Imports a file. PSD/PSB, Affinity containers, PDFs and camera raws are detected by magic;
+/// everything else is decoded with `photocraft-codecs`.
 pub fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     import_with_svg_group_depth(name, bytes, photocraft_doc::MAX_GROUP_DEPTH)
 }
@@ -587,7 +594,7 @@ pub fn import_with_svg_group_depth_and_interrupt(
 }
 
 /// The user's settings that shape an import.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ImportOptions {
     /// SVG groups nested deeper than this are rasterised.
     pub max_group_depth: usize,
@@ -606,6 +613,9 @@ pub struct ImportOptions {
     /// Optional estimate limit for high-memory approval. When set, approval only applies if
     /// the fresh preflight estimate does not exceed this amount.
     pub psd_approved_estimate: Option<u64>,
+    /// How a PDF page opens (the Import PDF dialog's answers); Photoshop's defaults when `None`:
+    /// page 1, Bounding Box, 300 ppi, RGB, 8 bits, anti-aliased.
+    pub pdf: Option<pdf_import::PdfOpenOptions>,
 }
 
 impl Default for ImportOptions {
@@ -617,6 +627,7 @@ impl Default for ImportOptions {
             flat_max_pixel_bytes: 0,
             psd_high_memory_approved: false,
             psd_approved_estimate: None,
+            pdf: None,
         }
     }
 }
@@ -918,6 +929,8 @@ pub(crate) enum Route {
     GzippedXcf,
     Pdn,
     Raw,
+    /// A PDF, through the Import PDF options.
+    Pdf,
     Svg,
     /// A `.psd`/`.psb`/`.psdt` with no raster signature.
     NamedPsd,
@@ -961,6 +974,10 @@ pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     if raw::is_raw(bytes) {
         return Route::Raw;
     }
+    // A PDF opens through the Import PDF options (a plain `import` takes Photoshop's defaults).
+    if is_pdf_input(name, bytes) {
+        return Route::Pdf;
+    }
     if is_svg_input(name, bytes) {
         return Route::Svg;
     }
@@ -988,9 +1005,25 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
         Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
         Route::Pdn => pdn::import(name, bytes, ctl),
         Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
+        Route::Pdf => {
+            let Some(chosen) = opts.pdf.as_ref() else { return pdf_import::import_pdf(name, bytes, &pdf_import::PdfOpenOptions::default(), ctl) };
+            // What Import PDF answers open (a page, an embedded image) is untitled, as in Photoshop:
+            // only a one-image PDF opened directly, like a picture, takes the PDF as its file.
+            let mut r = pdf_import::import_pdf(name, bytes, chosen, ctl)?;
+            r.source_read_only = true;
+            Ok(r)
+        }
         Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
         Route::Flat => flat::import_flat_with_options(name, bytes, opts, ctl),
     }
+}
+
+/// Whether `name`'s `bytes` open as a PDF: a file that starts with `%PDF-`, or one with the marker
+/// later in its first kilobyte (after a byte-order mark or a shell line, as the specification
+/// allows) that the SVG and raster importers don't take (an SVG may mention `%PDF-1.4` in a
+/// comment near its start).
+pub fn is_pdf_input(name: &str, bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF-") || (pdf_import::is_pdf(bytes) && !is_svg_input(name, bytes) && photocraft_codecs::detect(bytes).is_none())
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
@@ -1380,6 +1413,7 @@ mod tests {
         assert_eq!(import_preflight("x.svg", b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"), ImportPreflight::Unbounded);
         assert_eq!(import_preflight("x.pcraft", b"PCF1"), ImportPreflight::Unbounded);
         assert_eq!(import_preflight("x.afphoto", b"Affinity"), ImportPreflight::Unbounded);
+        assert_eq!(import_preflight("x.pdf", b"%PDF-1.7"), ImportPreflight::Unbounded);
         // A Photoshop extension whose bytes are a readable flat image follows the image.
         assert_eq!(import_preflight("misnamed.psd", png), ImportPreflight::Flat);
     }

@@ -217,6 +217,32 @@ fn fill_dialog_draws_in_the_selected_language() {
 }
 
 #[test]
+fn import_pdf_dialog_choices_have_translations() {
+    let literals = [
+        "Import PDF",
+        "Pages",
+        "Images",
+        "Page Options",
+        "Crop To:",
+        "Thumbnail Size:",
+        "Bit Depth:",
+        "Suppress Warnings",
+        "Open In Reverse Order",
+        "{n} of {total} page(s) selected",
+    ];
+    for language in Lang::all().filter(|language| language.complete_menus()) {
+        let crops = photocraft_io::pdf_import::CropTo::ALL.iter().map(|c| c.label());
+        let sizes = crate::pdf_import_ui::THUMB_SIZES.iter().map(|(_, l)| *l);
+        let modes = crate::pdf_import_ui::MODES.iter().map(|(_, l)| *l);
+        let depths = crate::pdf_import_ui::DEPTHS.iter().map(|(_, l)| *l);
+        let res = crate::pdf_import_ui::RES_UNITS.iter().map(|(_, l)| *l);
+        for text in literals.into_iter().chain(crops).chain(sizes).chain(modes).chain(depths).chain(res) {
+            assert!(has(language, text), "{}: untranslated {text}", language.code());
+        }
+    }
+}
+
+#[test]
 fn file_info_camera_data_draws_in_the_selected_language_read_only() {
     with_language(Lang::EN, || {
         let mut h = harness();

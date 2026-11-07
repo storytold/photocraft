@@ -4171,6 +4171,153 @@ fn open_as_and_place_keep_the_typed_hard_budget_fields() {
     });
 }
 
+/// Writes a two-page PDF: page 1 a red square, page 2 a 2 × 2 grey image beside a blue one.
+fn pdf_file(dir: &str, name: &str) -> String {
+    let c1 = "1 0 0 rg 0 0 50 50 re f";
+    let c2 = "q 40 0 0 40 10 10 cm /Im0 Do Q 0 0 1 rg 60 60 10 10 re f";
+    let mut objs: Vec<Vec<u8>> = vec![
+        b"<< /Type /Catalog /Pages 2 0 R >>".to_vec(),
+        b"<< /Type /Pages /Kids [3 0 R 5 0 R] /Count 2 >>".to_vec(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Contents 4 0 R >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{c1}\nendstream", c1.len()).into_bytes(),
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 100 100] /Resources << /XObject << /Im0 7 0 R >> >> /Contents 6 0 R >>".to_vec(),
+        format!("<< /Length {} >>\nstream\n{c2}\nendstream", c2.len()).into_bytes(),
+    ];
+    let mut img = b"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n".to_vec();
+    img.extend_from_slice(&[10, 200, 90, 30]);
+    img.extend_from_slice(b"\nendstream");
+    objs.push(img);
+    let mut out = b"%PDF-1.7\n".to_vec();
+    let mut offsets = Vec::new();
+    for (i, body) in objs.iter().enumerate() {
+        offsets.push(out.len());
+        out.extend_from_slice(format!("{} 0 obj\n", i + 1).as_bytes());
+        out.extend_from_slice(body);
+        out.extend_from_slice(b"\nendobj\n");
+    }
+    let xref = out.len();
+    out.extend_from_slice(format!("xref\n0 {}\n0000000000 65535 f \n", objs.len() + 1).as_bytes());
+    for o in offsets {
+        out.extend_from_slice(format!("{o:010} 00000 n \n").as_bytes());
+    }
+    out.extend_from_slice(format!("trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objs.len() + 1).as_bytes());
+    let path = join(dir, name);
+    std::fs::write(&path, out).unwrap();
+    path
+}
+
+/// Bad Import PDF answers are refused, naming the parameter, before anything opens or is placed.
+#[test]
+fn bad_pdf_options_are_refused_before_opening_or_placing() {
+    let dir = tmp("pdf-options");
+    let pdf = pdf_file(&dir, "doc.pdf");
+    let bad = [
+        ("page", json!(0)),
+        ("page", json!("two")),
+        ("image", json!(0)),
+        ("image", json!(-1)),
+        ("resolution", json!(-72)),
+        ("resolution", json!("high")),
+        ("crop", json!("pageBox")),
+        ("crop", json!(3)),
+        ("mode", json!("hsb")),
+        ("depth", json!(32)),
+        ("depth", json!("8")),
+        ("antiAlias", json!("yes")),
+        ("suppressWarnings", json!(1)),
+        ("name", json!(7)),
+        ("password", json!(["secret"])),
+    ];
+    let mut s = session(100, 100, 8);
+    let (count, revision, layers) = (s.documents().len(), s.active().unwrap().revision, doc(&s).layers.len());
+    for (key, value) in bad {
+        let e = s.execute("file.openAs", json!({"path": pdf, key: value})).expect_err("openAs refuses");
+        assert!(e.to_string().starts_with(key), "openAs {key} = {value}: {e}");
+        for cmd in ["file.placeEmbedded", "file.placeLinked"] {
+            let e = s.execute(cmd, json!({"path": pdf, key: value})).expect_err("place refuses");
+            assert!(e.to_string().starts_with(key), "{cmd} {key} = {value}: {e}");
+        }
+        assert_eq!(s.documents().len(), count, "{key}: nothing opened");
+        assert_eq!(s.active_index(), Some(0));
+        assert_eq!((s.active().unwrap().revision, doc(&s).layers.len()), (revision, layers), "{key}: nothing placed");
+    }
+    // Good answers open and place.
+    s.execute("file.placeEmbedded", json!({"path": pdf, "page": 2, "resolution": 72})).unwrap();
+    assert_eq!(doc(&s).layers.len(), layers + 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A PDF option given as `null` counts as absent, as `tgaBits` does: it neither errors nor
+/// replaces the default.
+#[test]
+fn null_pdf_options_count_as_absent() {
+    let keys = ["page", "resolution", "crop", "mode", "depth", "antiAlias", "name", "password", "image", "suppressWarnings"];
+    let all_null: serde_json::Map<String, Value> = keys.iter().map(|k| (k.to_string(), Value::Null)).collect();
+    assert!(pdf_options(&Value::Object(all_null)).unwrap().is_none(), "only nulls: no Import PDF answers");
+    let o = pdf_options(&json!({"page": null, "resolution": 72, "name": null, "image": null})).unwrap().expect("resolution was given");
+    assert_eq!((o.page, o.resolution, o.name, o.image), (1, 72.0, None, None));
+    let dir = tmp("pdf-null-options");
+    let pdf = pdf_file(&dir, "doc.pdf");
+    let mut s = Session::new();
+    s.execute("file.openAs", json!({"path": pdf, "page": null, "crop": null})).expect("null options open with the defaults");
+    assert_eq!(s.documents().len(), 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A linked placement keeps only the path, so Import PDF answers would be lost on Update
+/// Modified Content: they're refused for `file.placeLinked`, and a linked PDF with none places.
+#[test]
+fn linked_pdf_placements_refuse_options_they_cannot_keep() {
+    let dir = tmp("pdf-linked-options");
+    let pdf = pdf_file(&dir, "doc.pdf");
+    let mut s = session(100, 100, 8);
+    let layers = doc(&s).layers.len();
+    let e = s.execute("file.placeLinked", json!({"path": pdf, "page": 2})).expect_err("options can't be kept");
+    assert!(e.to_string().contains("embedded"), "{e}");
+    assert_eq!(doc(&s).layers.len(), layers, "nothing placed");
+    s.execute("file.placeLinked", json!({"path": pdf, "page": null})).expect("no options: places");
+    assert_eq!(doc(&s).layers.len(), layers + 1);
+    s.execute("file.placeEmbedded", json!({"path": pdf, "page": 2})).expect("embedded keeps them");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A resolution past f32's range keeps the maximum instead of becoming infinite (which the
+/// importer would replace with the 300 ppi default), and a page or image number that doesn't fit
+/// `usize` is refused rather than truncated (wasm32's `usize` is 32 bits).
+#[test]
+fn huge_pdf_numbers_clamp_or_are_refused_not_wrapped() {
+    let o = pdf_options(&json!({"resolution": 1e300})).unwrap().expect("given");
+    assert_eq!(o.resolution, photocraft_io::pdf_import::MAX_RESOLUTION);
+    let o = pdf_options(&json!({"resolution": 1e-300})).unwrap().expect("given");
+    assert_eq!(o.resolution, photocraft_io::pdf_import::MIN_RESOLUTION);
+    let past = u64::try_from(usize::MAX).map_or(None, |m| m.checked_add(1));
+    if let Some(n) = past {
+        assert!(pdf_options(&json!({"page": n})).is_err());
+        assert!(pdf_options(&json!({"image": n})).is_err());
+    }
+    assert_eq!(pdf_options(&json!({"page": 3})).unwrap().expect("given").page, 3);
+}
+
+/// A page or an embedded image opened with Import PDF answers is untitled (not tied to the PDF
+/// for Save), as in Photoshop; so is a rasterised page opened with the defaults.
+#[test]
+fn pdf_pages_and_images_open_untitled() {
+    let dir = tmp("pdf-untitled");
+    let pdf = pdf_file(&dir, "doc.pdf");
+    let mut s = Session::new();
+    for (params, name, size) in [
+        (json!({"path": pdf}), "doc-1.pdf", (208, 208)),
+        (json!({"path": pdf, "page": 2, "resolution": 72, "crop": "mediaBox"}), "doc-2.pdf", (100, 100)),
+        (json!({"path": pdf, "image": 1}), "doc-1", (2, 2)),
+    ] {
+        s.execute("file.openAs", params).unwrap();
+        let st = s.active().unwrap();
+        assert_eq!((st.doc.name.as_str(), st.doc.size.width, st.doc.size.height), (name, size.0, size.1));
+        assert!(st.path.is_none() && st.source_read_only, "{name}: Save must not write into the PDF");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 thread_local! { static REVIEW_CANCEL: std::cell::RefCell<Option<crate::jobs::JobCtx>> = const { std::cell::RefCell::new(None) }; }
 
 fn cancel_at_marker(id: &str, params: &Value) -> Result<()> {

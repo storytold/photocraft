@@ -4112,6 +4112,37 @@ curves	Smooth	スムーズ
 	Replace	置き換え
 	{name} was changed by another app after it was opened or saved here.	{name} は、ここで開くか保存した後に別のアプリで変更されました。
 	Replace it with this document, or cancel and use File › Save As to keep both.	この書類で置き換えるか、キャンセルしてファイル › 名前を付けて保存で両方を残してください。
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	PDF の読み込み
+	The PDF is no longer available.	この PDF は利用できなくなりました。
+	The PDF is protected by a password.	この PDF はパスワードで保護されています。
+	Password:	パスワード:
+	Pages	ページ
+	Images	画像
+	Select one or more images	画像を 1 つ以上選択してください
+	{n} of {total} image(s) selected	{total} 件中 {n} 件の画像を選択
+	{n} of {total} page(s) selected	{total} 件中 {n} 件のページを選択
+	Thumbnail Size:	サムネールサイズ:
+	Page Options	ページオプション
+	Crop To:	切り抜き:
+	Image Size: --	画像サイズ: --
+	Image Size: {size}	画像サイズ: {size}
+	Constrain Proportions	縦横比を固定
+	Bit Depth:	ビット数:
+	Suppress Warnings	警告を表示しない
+	Open In Reverse Order	逆順で開く
+	Fit Page	ページに合わせる
+	Bounding Box	バウンディングボックス
+	Media Box	メディアボックス
+	Crop Box	トリミングボックス
+	Bleed Box	裁ち落としボックス
+	Trim Box	仕上がりボックス
+	Art Box	アートボックス
+	That isn't the PDF's password.	この PDF のパスワードではありません。
+	The PDF couldn't be read.	PDF を読み込めませんでした。
+	Select one or more pages.	ページを 1 つ以上選択してください。
+	Select one or more images.	画像を 1 つ以上選択してください。
 	Decrease Brush Size	ブラシサイズを小さく
 	Increase Brush Size	ブラシサイズを大きく
 	Decrease Brush Hardness	ブラシの硬さを下げる

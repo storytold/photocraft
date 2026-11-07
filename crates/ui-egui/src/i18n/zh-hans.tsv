@@ -3105,6 +3105,37 @@ curves	Smooth	平滑
 	Replace	替换
 	{name} was changed by another app after it was opened or saved here.	{name} 在此处打开或存储后已被其他应用更改。
 	Replace it with this document, or cancel and use File › Save As to keep both.	用此文档替换它，或取消并使用“文件 › 另存为”以保留两者。
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	导入 PDF
+	The PDF is no longer available.	该 PDF 已不可用。
+	The PDF is protected by a password.	该 PDF 受密码保护。
+	Password:	密码：
+	Pages	页面
+	Images	图像
+	Select one or more images	请选择一个或多个图像
+	{n} of {total} image(s) selected	已选择 {n} 个图像（共 {total} 个）
+	{n} of {total} page(s) selected	已选择 {n} 个页面（共 {total} 个）
+	Thumbnail Size:	缩览图大小：
+	Page Options	页面选项
+	Crop To:	裁剪到：
+	Image Size: --	图像大小：--
+	Image Size: {size}	图像大小：{size}
+	Constrain Proportions	约束比例
+	Bit Depth:	位深度：
+	Suppress Warnings	不显示警告
+	Open In Reverse Order	按相反顺序打开
+	Fit Page	适合页面
+	Bounding Box	外框
+	Media Box	媒体框
+	Crop Box	裁剪框
+	Bleed Box	出血框
+	Trim Box	裁切框
+	Art Box	作品框
+	That isn't the PDF's password.	这不是该 PDF 的密码。
+	The PDF couldn't be read.	无法读取该 PDF。
+	Select one or more pages.	请选择一个或多个页面。
+	Select one or more images.	请选择一个或多个图像。
 	Decrease Brush Size	减小画笔大小
 	Increase Brush Size	增大画笔大小
 	Decrease Brush Hardness	减小画笔硬度

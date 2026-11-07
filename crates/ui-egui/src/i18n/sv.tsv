@@ -4792,6 +4792,36 @@ cameraRaw	White Balance: As Shot	Vitbalans: som tagen
 	The path was kept as the Work Path	Banan behölls som arbetsbana
 	Edit Brush…	Redigera pensel…
 
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Importera PDF
+	The PDF is no longer available.	PDF-filen är inte längre tillgänglig.
+	The PDF is protected by a password.	PDF-filen är skyddad med ett lösenord.
+	Password:	Lösenord:
+	Pages	Sidor
+	Images	Bilder
+	Select one or more images	Välj en eller flera bilder
+	{n} of {total} image(s) selected	{n} av {total} bild(er) markerade
+	{n} of {total} page(s) selected	{n} av {total} sida/sidor markerade
+	Thumbnail Size:	Miniatyrstorlek:
+	Page Options	Sidalternativ
+	Crop To:	Beskär till:
+	Image Size: --	Bildstorlek: --
+	Image Size: {size}	Bildstorlek: {size}
+	Constrain Proportions	Behåll proportioner
+	Bit Depth:	Bitdjup:
+	Suppress Warnings	Undertryck varningar
+	Open In Reverse Order	Öppna i omvänd ordning
+	Fit Page	Anpassa sida
+	Bounding Box	Avgränsningsram
+	Media Box	Mediaram
+	Crop Box	Beskärningsram
+	Bleed Box	Utfallsram
+	Trim Box	Skärram
+	Art Box	Grafikram
+	That isn't the PDF's password.	Det är inte PDF-filens lösenord.
+	The PDF couldn't be read.	PDF-filen kunde inte läsas.
+	Select one or more pages.	Välj en eller flera sidor.
+	Select one or more images.	Välj en eller flera bilder.
 # Action Stop message (#8386)
 	Message	Meddelande
 # Playback Options (#5212)

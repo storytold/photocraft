@@ -3936,6 +3936,37 @@ curves	Smooth	Làm mượt
 	Replace	Thay thế
 	{name} was changed by another app after it was opened or saved here.	{name} đã bị một ứng dụng khác thay đổi sau khi được mở hoặc lưu ở đây.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Thay thế bằng tài liệu này, hoặc hủy và dùng Tệp › Lưu thành để giữ cả hai.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Nhập PDF
+	The PDF is no longer available.	Tệp PDF không còn khả dụng.
+	The PDF is protected by a password.	Tệp PDF được bảo vệ bằng mật khẩu.
+	Password:	Mật khẩu:
+	Pages	Trang
+	Images	Hình ảnh
+	Select one or more images	Chọn một hoặc nhiều hình ảnh
+	{n} of {total} image(s) selected	Đã chọn {n} trên {total} hình ảnh
+	{n} of {total} page(s) selected	Đã chọn {n} trên {total} trang
+	Thumbnail Size:	Kích thước hình thu nhỏ:
+	Page Options	Tùy chọn trang
+	Crop To:	Cắt theo:
+	Image Size: --	Kích thước hình ảnh: --
+	Image Size: {size}	Kích thước hình ảnh: {size}
+	Constrain Proportions	Giữ tỷ lệ
+	Bit Depth:	Độ sâu bit:
+	Suppress Warnings	Ẩn cảnh báo
+	Open In Reverse Order	Mở theo thứ tự ngược
+	Fit Page	Vừa trang
+	Bounding Box	Hộp giới hạn
+	Media Box	Hộp phương tiện
+	Crop Box	Hộp cắt
+	Bleed Box	Hộp tràn lề
+	Trim Box	Hộp xén
+	Art Box	Hộp ảnh
+	That isn't the PDF's password.	Đó không phải là mật khẩu của tệp PDF.
+	The PDF couldn't be read.	Không thể đọc tệp PDF.
+	Select one or more pages.	Chọn một hoặc nhiều trang.
+	Select one or more images.	Chọn một hoặc nhiều hình ảnh.
 	Decrease Brush Size	Giảm kích thước cọ
 	Increase Brush Size	Tăng kích thước cọ
 	Decrease Brush Hardness	Giảm độ cứng của cọ

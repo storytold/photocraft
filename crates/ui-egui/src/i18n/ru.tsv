@@ -3667,6 +3667,37 @@ curves	Smooth	Сгладить
 	Date	Дата
 	Day For Night	День как ночь
 	De-Interlace	Устранение чересстрочности
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Импорт PDF
+	The PDF is no longer available.	PDF больше недоступен.
+	The PDF is protected by a password.	PDF защищён паролем.
+	Password:	Пароль:
+	Pages	Страницы
+	Images	Изображения
+	Select one or more images	Выберите одно или несколько изображений
+	{n} of {total} image(s) selected	Выбрано изображений: {n} из {total}
+	{n} of {total} page(s) selected	Выбрано страниц: {n} из {total}
+	Thumbnail Size:	Размер миниатюр:
+	Page Options	Параметры страницы
+	Crop To:	Обрезать по:
+	Image Size: --	Размер изображения: --
+	Image Size: {size}	Размер изображения: {size}
+	Constrain Proportions	Сохранять пропорции
+	Bit Depth:	Глубина цвета:
+	Suppress Warnings	Не показывать предупреждения
+	Open In Reverse Order	Открывать в обратном порядке
+	Fit Page	По размеру страницы
+	Bounding Box	Ограничивающая рамка
+	Media Box	Границы носителя
+	Crop Box	Область обрезки
+	Bleed Box	Область выпуска за обрез
+	Trim Box	Область после обрезки
+	Art Box	Область иллюстрации
+	That isn't the PDF's password.	Это не пароль от этого PDF.
+	The PDF couldn't be read.	Не удалось прочитать PDF.
+	Select one or more pages.	Выберите одну или несколько страниц.
+	Select one or more images.	Выберите одно или несколько изображений.
 	Decrease Brush Hardness	Уменьшить жёсткость кисти
 	Decrease Brush Size	Уменьшить размер кисти
 	Decrease Type Size	Уменьшить размер текста

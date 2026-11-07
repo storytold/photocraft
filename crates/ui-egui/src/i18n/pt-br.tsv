@@ -4232,6 +4232,37 @@ layerLabel	No Color	Sem cor
 	{path}: the path is not valid Unicode; save under another name.	{path}: o caminho não é Unicode válido; salve com outro nome.
 	{name} was changed by another app after it was opened or saved here.	{name} foi alterado por outro app depois de ser aberto ou salvo aqui.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Substitua-o por este documento, ou cancele e use Arquivo › Salvar como para manter os dois.
+
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	Importar PDF
+	The PDF is no longer available.	O PDF não está mais disponível.
+	The PDF is protected by a password.	O PDF está protegido por senha.
+	Password:	Senha:
+	Pages	Páginas
+	Images	Imagens
+	Select one or more images	Selecione uma ou mais imagens
+	{n} of {total} image(s) selected	{n} de {total} imagem(ns) selecionada(s)
+	{n} of {total} page(s) selected	{n} de {total} página(s) selecionada(s)
+	Thumbnail Size:	Tamanho da miniatura:
+	Page Options	Opções de página
+	Crop To:	Cortar para:
+	Image Size: --	Tamanho da imagem: --
+	Image Size: {size}	Tamanho da imagem: {size}
+	Constrain Proportions	Restringir proporções
+	Bit Depth:	Profundidade de bits:
+	Suppress Warnings	Suprimir avisos
+	Open In Reverse Order	Abrir em ordem inversa
+	Fit Page	Ajustar à página
+	Bounding Box	Caixa delimitadora
+	Media Box	Caixa de mídia
+	Crop Box	Caixa de corte
+	Bleed Box	Caixa de sangria
+	Trim Box	Caixa de aparo
+	Art Box	Caixa de arte
+	That isn't the PDF's password.	Essa não é a senha do PDF.
+	The PDF couldn't be read.	Não foi possível ler o PDF.
+	Select one or more pages.	Selecione uma ou mais páginas.
+	Select one or more images.	Selecione uma ou mais imagens.
 	Decrease Brush Size	Diminuir tamanho do pincel
 	Increase Brush Size	Aumentar tamanho do pincel
 	Decrease Brush Hardness	Diminuir dureza do pincel

@@ -3575,6 +3575,36 @@ curves	Smooth	تنعيم
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
 
+# Import PDF (File › Open on a PDF, as Photoshop's dialog)
+	Import PDF	استيراد PDF
+	The PDF is no longer available.	لم يعد ملف PDF متاحًا.
+	The PDF is protected by a password.	ملف PDF محمي بكلمة مرور.
+	Password:	كلمة المرور:
+	Pages	الصفحات
+	Images	الصور
+	Select one or more images	حدد صورة واحدة أو أكثر
+	{n} of {total} image(s) selected	تم تحديد {n} من {total} صورة
+	{n} of {total} page(s) selected	تم تحديد {n} من {total} صفحة
+	Thumbnail Size:	حجم الصورة المصغرة:
+	Page Options	خيارات الصفحة
+	Crop To:	اقتصاص إلى:
+	Image Size: --	حجم الصورة: --
+	Image Size: {size}	حجم الصورة: {size}
+	Constrain Proportions	تقييد النسب
+	Bit Depth:	عمق البت:
+	Suppress Warnings	إخفاء التحذيرات
+	Open In Reverse Order	فتح بترتيب عكسي
+	Fit Page	ملاءمة الصفحة
+	Bounding Box	المربع المحيط
+	Media Box	مربع الوسائط
+	Crop Box	مربع الاقتصاص
+	Bleed Box	مربع النزف
+	Trim Box	مربع القص
+	Art Box	مربع العمل الفني
+	That isn't the PDF's password.	هذه ليست كلمة مرور ملف PDF.
+	The PDF couldn't be read.	تعذرت قراءة ملف PDF.
+	Select one or more pages.	حدد صفحة واحدة أو أكثر.
+	Select one or more images.	حدد صورة واحدة أو أكثر.
 # Action Stop message (#8386)
 	Message	رسالة
 # Playback Options (#5212)
