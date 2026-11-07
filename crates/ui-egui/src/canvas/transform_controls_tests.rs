@@ -334,7 +334,7 @@ fn move_transform_controls_show_resize_and_rotate_cursors_before_first_interacti
         assert_eq!(transform_controls_cursor(r, p), Some(expected), "hover at {p:?}");
         assert!(transform_controls_hit(r, p), "same region must start a transform");
     }
-    assert_eq!(transform_controls_cursor(r, r.center()), Some(egui::CursorIcon::Default), "interior stays Move");
+    assert_eq!(transform_controls_cursor(r, r.center()), Some(egui::CursorIcon::Default), "interior uses the default arrow");
     assert_eq!(transform_controls_cursor(r, pos2(r.center().x, r.top() - 30.0)), Some(egui::CursorIcon::None));
     // The rotate arrow points into the nearest edge or corner. Handles and the interior have none.
     let into = |p: Pos2| transform_controls_turn(r, p);
