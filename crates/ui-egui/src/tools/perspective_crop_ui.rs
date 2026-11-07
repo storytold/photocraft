@@ -10,17 +10,21 @@
 //!   document in one undo step. Its size comes from the options bar's W x H (and the resolution),
 //!   which are the Crop tool's fields (`crop_size`), or with them empty from the quad's mean side
 //!   lengths. Esc (or ⊘) cancels.
+//! - a document holding a type layer or a smart object, and a Bitmap document, refuse the press
+//!   with the reference's alert (message + OK) and start nothing: no box, no corner, no session
+//!   (#11799). `image.perspectiveCrop` answers with the same text, so ↵ is refused the same way.
 //!
 //! A pending quad belongs to the document it was drawn on, like the Crop tool's frame.
 
 use egui::{Color32, Pos2, Stroke};
 use photocraft_algo::transform::{Homography, convex_quad};
+use photocraft_engine::perspective_crop_cmds::{BITMAP_MODE_ERROR, UNSUPPORTED_LAYERS_ERROR};
 use photocraft_engine::prefs::Unit;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, ViewXform};
-use crate::state::Tool;
+use crate::state::{DialogKind, Tool};
 
 /// A drag shorter than this (screen px) is a click: it places a corner.
 const CLICK_PX: f64 = 3.0;
@@ -87,6 +91,24 @@ pub(crate) fn cancel_stale(app: &mut PhotocraftApp) {
     app.pcrop.doc = doc;
 }
 
+/// The alert this document gets instead of a perspective crop (#11799): `Some(text)` means the tool
+/// refuses the press. The check is the engine's, so the press and `image.perspectiveCrop` can never
+/// disagree about what is cropped.
+fn document_alert(app: &PhotocraftApp) -> Option<&'static str> {
+    app.session.active().and_then(|st| photocraft_engine::perspective_crop_cmds::refusal(&st.doc))
+}
+
+/// The alert as `image.perspectiveCrop`'s error text (#11799), so ↵ shows what the press shows
+/// rather than only the status bar.
+fn error_alert(error: &str) -> Option<&'static str> {
+    [UNSUPPORTED_LAYERS_ERROR, BITMAP_MODE_ERROR].into_iter().find(|text| *text == error)
+}
+
+/// Opens the alert: the message and an OK button, as a refused Move does (`move_lock::prompt`).
+fn refuse(app: &mut PhotocraftApp, message: &str) {
+    app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(message)}).as_object().cloned().unwrap_or_default());
+}
+
 /// Four points in quad order: clockwise on screen around their centre, starting top-left.
 pub fn ordered(points: [[f64; 2]; 4]) -> [[f64; 2]; 4] {
     let c = [points.iter().map(|p| p[0]).sum::<f64>() / 4.0, points.iter().map(|p| p[1]).sum::<f64>() / 4.0];
@@ -115,6 +137,15 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } | ToolEvent::Up { x, y } => [x, y],
     };
     if app.session.active().is_none() || !p[0].is_finite() || !p[1].is_finite() {
+        return true;
+    }
+    // A document the tool can't crop (#11799): the press shows the reference's alert and starts
+    // nothing - no box, no clicked corner, no drag - and the document is left as it is. Only the
+    // press answers: the drag that follows it has nothing to move.
+    if matches!(ev, ToolEvent::Down { .. })
+        && let Some(message) = document_alert(app)
+    {
+        refuse(app, message);
         return true;
     }
     cancel_stale(app);
@@ -205,8 +236,15 @@ pub fn commit(app: &mut PhotocraftApp) {
     let Some(q) = app.ui.perspective_crop else { return };
     let mut p = json!({"corners": q});
     size_params(app, &mut p);
-    if app.run("image.perspectiveCrop", p).is_ok() {
-        cancel(app);
+    match app.run("image.perspectiveCrop", p) {
+        Ok(_) => cancel(app),
+        // A document the crop refuses (#11799) gets the alert the press gets, not just the status
+        // bar; the quad stays for fixing or cancelling after the document can be cropped.
+        Err(e) => {
+            if let Some(message) = error_alert(&e) {
+                refuse(app, message);
+            }
+        }
     }
 }
 
@@ -319,7 +357,113 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
+    use photocraft_doc::{Color, ColorMode, Document, Layer, LayerContent, SampleType, ShapeLayer, Size, SmartObject, SmartSource, TextLayer};
+
+    /// #11799: a document holding a type layer or a smart object (hidden or not), and a Bitmap
+    /// document, refuse the press with the reference's alert - the message and an OK button - and
+    /// start nothing: no quad, no clicked corner, no drag, and the document is untouched.
+    #[test]
+    fn a_press_on_a_refused_document_shows_the_alert_and_starts_nothing() {
+        /// The reference's two alerts, as measured.
+        const UNSUPPORTED: &str = "Could not use the perspective crop tool because the image contains unsupported layers types.";
+        const NOT_BITMAP: &str =
+            "Could not use the perspective crop tool because it does not work with Bitmap images (convert image to Grayscale mode to edit).";
+
+        /// A 200 x 150 RGB document with `extra` on the Background.
+        fn doc(mode: ColorMode, extra: Option<Layer>) -> Document {
+            let mut d = Document::with_background("p", Size::new(200, 150), mode, SampleType::U8, Color::WHITE);
+            if let Some(l) = extra {
+                d.insert_above(None, l);
+            }
+            d
+        }
+
+        fn text(visible: bool) -> Layer {
+            let mut l = Layer::new("Hello", LayerContent::Text(TextLayer { text: "Hello".into(), ..Default::default() }));
+            l.visible = visible;
+            l
+        }
+
+        fn smart(visible: bool) -> Layer {
+            let mut l = Layer::new(
+                "Photo",
+                LayerContent::Smart(SmartObject::new(SmartSource::Linked { path: "photo.psd".into() }, photocraft_geom::Affine::IDENTITY, None)),
+            );
+            l.visible = visible;
+            l
+        }
+
+        let cases = [
+            ("visible type layer", doc(ColorMode::Rgb, Some(text(true))), UNSUPPORTED),
+            ("hidden type layer", doc(ColorMode::Rgb, Some(text(false))), UNSUPPORTED),
+            ("visible smart object", doc(ColorMode::Rgb, Some(smart(true))), UNSUPPORTED),
+            ("hidden smart object", doc(ColorMode::Rgb, Some(smart(false))), UNSUPPORTED),
+            ("Bitmap", doc(ColorMode::Bitmap, None), NOT_BITMAP),
+        ];
+        for (case, document, want) in cases {
+            let mut s = photocraft_engine::Session::new();
+            s.add_document(document, None);
+            let mut app = PhotocraftApp::new(s, crate::Services::default());
+            app.ui.tool = Tool::PerspectiveCrop;
+            let st = app.session.active().unwrap();
+            let (size, layer_kinds, steps) = (st.doc.size, kinds(&st.doc), st.history.past_len());
+            let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e), "{case}");
+            // The first press-and-drag: one alert with the reference's text (`DialogKind::Error`
+            // shows the message and an OK button), and no box.
+            ev(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 });
+            ev(&mut app, ToolEvent::Move { x: 120.0, y: 90.0, pressure: 1.0 });
+            ev(&mut app, ToolEvent::Up { x: 120.0, y: 90.0 });
+            assert_eq!(alerts(&app), [want], "{case}: the alert, with its text");
+            assert!(app.ui.perspective_crop.is_none(), "{case}: no quad");
+            assert!(app.pcrop.drag.is_none(), "{case}: no drag");
+            // OK closes the alert: `DialogKind::Error` answers with nothing but closing.
+            let open: Vec<u64> = app.ui.dialogs.iter().map(|d| d.id).collect();
+            for id in open {
+                app.ui.close_dialog(id);
+            }
+            // A press after that is refused the same way: it places no corner.
+            ev(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 });
+            ev(&mut app, ToolEvent::Up { x: 30.0, y: 30.0 });
+            assert_eq!(alerts(&app), [want], "{case}: the click is refused too");
+            assert!(app.pcrop.clicks.is_empty(), "{case}: no clicked corner");
+            let st = app.session.active().unwrap();
+            assert_eq!(st.doc.size, size, "{case}: canvas untouched");
+            assert_eq!(kinds(&st.doc), layer_kinds, "{case}: layers untouched");
+            assert_eq!(st.history.past_len(), steps, "{case}: no history step");
+        }
+    }
+
+    /// Every layer's kind, bottom to top.
+    fn kinds(doc: &Document) -> Vec<&'static str> {
+        doc.walk().iter().map(|(_, _, l)| l.content.kind_name()).collect()
+    }
+
+    /// The message of every open error dialog, in the order they were opened.
+    fn alerts(app: &PhotocraftApp) -> Vec<&str> {
+        app.ui.dialogs.iter().filter(|d| d.kind == DialogKind::Error).filter_map(|d| d.fields.get("message").and_then(|m| m.as_str())).collect()
+    }
+
+    /// #11799: a document of only pixel, shape and fill layers takes the press as before, and a
+    /// commit on such a document keeps working (the refusal is about type and smart object layers
+    /// and the Bitmap mode alone).
+    #[test]
+    fn a_press_on_a_cropable_document_still_draws_the_quad() {
+        let mut d = Document::with_background("p", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+        let path = photocraft_vector::shapes::rect(20.0, 20.0, 40.0, 30.0);
+        d.insert_above(None, Layer::new("Rectangle 1", LayerContent::Shape(ShapeLayer { path, ..Default::default() })));
+        let mut s = photocraft_engine::Session::new();
+        s.add_document(d, None);
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.ui.tool = Tool::PerspectiveCrop;
+        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e));
+        ev(&mut app, ToolEvent::Down { x: 20.0, y: 10.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Move { x: 120.0, y: 90.0, pressure: 1.0 });
+        ev(&mut app, ToolEvent::Up { x: 120.0, y: 90.0 });
+        assert_eq!(app.ui.perspective_crop, Some([[20.0, 10.0], [120.0, 10.0], [120.0, 90.0], [20.0, 90.0]]));
+        assert!(app.ui.dialogs.iter().all(|d| d.kind != DialogKind::Error), "no alert");
+        commit(&mut app);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 80), "the quad's mean side lengths");
+    }
 
     /// A straight drag (no width or no height) leaves no zero-area box that only Esc could clear,
     /// and a plain click still counts as a corner click.

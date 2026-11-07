@@ -119,6 +119,8 @@ pub(super) mod path_edit_cmds;
 pub mod pattern_cmds;
 pub mod pattern_fill_cmds;
 pub mod perspective_crop_cmds;
+#[cfg(test)]
+mod perspective_crop_refuse_tests;
 pub mod photo_cmds;
 pub mod pick_cmds;
 pub mod plugin_cmds;
