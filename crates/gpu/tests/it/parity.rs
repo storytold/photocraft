@@ -3287,6 +3287,122 @@ fn soft_shapes_match_the_cpu() {
     }
 }
 
+/// A stack of `n` noise layers over an opaque background, cycling Normal, Multiply and Screen,
+/// every third one with a Multiply drop shadow: affine in its backdrop all the way up.
+fn affine_stack(depth: SampleType, n: u32) -> Document {
+    let mut d = Document::new("suffix", Size::new(320, 180), ColorMode::Rgb, depth);
+    let fmt = d.pixel_format();
+    d.layers.push(noise_layer("bg", fmt, d.bounds(), 1, 1.0));
+    for i in 0..n {
+        let mut l = noise_layer("layer", fmt, Rect::new(10 * i as i32, 0, 320, 180), 10 + i, 0.15);
+        l.blend = [BlendMode::Normal, BlendMode::Multiply, BlendMode::Screen][i as usize % 3];
+        l.opacity = 0.6 + 0.03 * i as f32;
+        if i % 3 == 2 {
+            l.effects.items = vec![Effect::DropShadow(shadow(BlendMode::Multiply, 0.75, 135.0, 6.0, 8.0, 0.0))];
+        }
+        d.layers.push(l);
+    }
+    d
+}
+
+/// #5973 (P60/P61): the layers above a layer edited twice in a row are cached as three renders
+/// of them and drawn in one pass from then on. Every render stays within the CPU tolerance, the
+/// cache survives hiding and showing the edited layer, and an edit above it drops it.
+#[test]
+fn stack_above_a_repeated_edit_is_cached_and_matches_the_cpu() {
+    let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut g) = gpu() else { return };
+    // A translucent background too: there the formula's `x.a` term (F1 − F0) carries weight.
+    for (depth, bg_alpha) in [(SampleType::U8, 1.0), (SampleType::U16, 1.0), (SampleType::U8, 0.3)] {
+        let mut doc = affine_stack(depth, 12);
+        doc.layers[0] = noise_layer("bg", doc.pixel_format(), doc.bounds(), 1, bg_alpha);
+        let mid = 4;
+        check(&mut g, &doc, "first render");
+        // The first edit draws everything; the second in a row builds the cache and applies it.
+        for (i, opacity) in [0.5, 0.8, 0.3, 0.9].into_iter().enumerate() {
+            doc.layers[mid].opacity = opacity;
+            let s = diff_rect(&mut g, &doc, doc.bounds(), "opacity").unwrap_or_else(|e| panic!("{depth:?}: {e}"));
+            assert_eq!((s.suffix_builds > 0, s.suffix_hits > 0), (i == 1, i >= 1), "{depth:?}, edit {i}: {s:?}");
+        }
+        // Hiding the layer removes its passes below the boundary: the cache still applies.
+        for visible in [false, true, false, true] {
+            doc.layers[mid].visible = visible;
+            let s = diff_rect(&mut g, &doc, doc.bounds(), "visibility").unwrap_or_else(|e| panic!("{depth:?}: {e}"));
+            assert!(s.suffix_hits > 0 && s.suffix_builds == 0 && s.suffix_passes_skipped > 0, "{depth:?}: {s:?}");
+        }
+        // A partial refresh never uses it (entries are whole chunks), and stays correct.
+        let part = Rect::new(40, 30, 200, 120);
+        let s = diff_rect(&mut g, &doc, part, "partial").unwrap_or_else(|e| panic!("{depth:?}: {e}"));
+        assert_eq!(s.suffix_hits, 0, "{depth:?}: {s:?}");
+        // An edit above the boundary invalidates it.
+        doc.layers[mid + 4].opacity = 0.4;
+        let s = diff_rect(&mut g, &doc, doc.bounds(), "edit above").unwrap_or_else(|e| panic!("{depth:?}: {e}"));
+        assert_eq!(s.suffix_hits, 0, "{depth:?}: {s:?}");
+    }
+}
+
+/// Above a layer edited twice in a row, a stack that isn't affine in its backdrop (a blend mode
+/// other than Normal, Multiply or Screen, an adjustment layer, Blend If) is never cached, and
+/// renders as before. Too few passes above aren't worth caching either.
+#[test]
+fn stacks_that_arent_affine_in_their_backdrop_are_never_cached() {
+    let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(mut g) = gpu() else { return };
+    let mut overlay = affine_stack(SampleType::U8, 12);
+    overlay.layers[9].blend = BlendMode::Overlay;
+    let mut adjusted = affine_stack(SampleType::U8, 12);
+    adjusted.layers.insert(8, Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert)));
+    let mut blend_if = affine_stack(SampleType::U8, 12);
+    blend_if.layers[10].blend_if.set(0, [photocraft_doc::BlendRange::FULL, photocraft_doc::BlendRange { black: [30, 140], white: [150, 230] }]);
+    // One layer above the edited one: a single pass, not worth three renders.
+    let short = affine_stack(SampleType::U8, 5);
+    for (what, mut doc) in [("overlay", overlay), ("adjustment", adjusted), ("blend if", blend_if), ("few passes", short)] {
+        check(&mut g, &doc, what);
+        for opacity in [0.5, 0.8, 0.3] {
+            doc.layers[4].opacity = opacity;
+            let s = diff_rect(&mut g, &doc, doc.bounds(), what).unwrap_or_else(|e| panic!("{e}"));
+            assert_eq!((s.suffix_builds, s.suffix_hits), (0, 0), "{what}: {s:?}");
+        }
+    }
+}
+
+/// With the composite caches switched off nothing above the edit is cached either.
+#[test]
+fn no_composite_cache_budget_caches_nothing_above_the_edit() {
+    let Some(g) = gpu() else { return };
+    let mut comp = Compositor::new(&g.device);
+    comp.set_composite_cache_budget(0);
+    let mut doc = affine_stack(SampleType::U8, 12);
+    for opacity in [0.5, 0.8, 0.3] {
+        doc.layers[4].opacity = opacity;
+        let (_, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+        assert_eq!((s.suffix_builds, s.suffix_hits), (0, 0), "{s:?}");
+    }
+    assert_eq!(comp.composite_cache_bytes(), 0);
+}
+
+/// A composite-cache allowance too small for what the stack-above cache holds drops it, so
+/// `composite_cache_bytes` never stays above the allowance it was given.
+#[test]
+fn a_smaller_composite_cache_budget_drops_the_cached_stack_above() {
+    let Some(g) = gpu() else { return };
+    let mut comp = Compositor::new(&g.device);
+    let mut doc = affine_stack(SampleType::U8, 12);
+    for opacity in [0.5, 0.8, 0.3] {
+        doc.layers[4].opacity = opacity;
+        photocraft_gpu::render_to_vec(&mut comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    }
+    let held = comp.composite_cache_bytes();
+    assert!(held > 0);
+    comp.set_composite_cache_budget(held);
+    assert_eq!(comp.composite_cache_bytes(), held, "an allowance that still holds both keeps both");
+    comp.set_composite_cache_budget(held - 1);
+    assert!(comp.composite_cache_bytes() < held, "{} of {}", comp.composite_cache_bytes(), held - 1);
+    doc.layers[4].opacity = 0.9;
+    let (_, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    assert_eq!(s.suffix_hits, 0, "nothing cached above is left to apply: {s:?}");
+}
+
 /// An adjustment has no standalone source alpha: its opacity and mask gate binary coverage.
 #[test]
 fn dissolve_adjustment_matches_cpu() {

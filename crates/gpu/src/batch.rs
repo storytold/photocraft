@@ -141,6 +141,22 @@ pub(crate) fn batch_runs(plan: &Plan<'_>) -> Vec<usize> {
         .collect()
 }
 
+/// Shortens every run of `runs` that would cross pass `at` to the longest one ending at or before
+/// it whose last pass doesn't write the slot its first reads (the rule of [`batch_runs`]).
+pub(crate) fn break_runs_at(plan: &Plan<'_>, runs: &mut [usize], at: usize) {
+    for i in 0..at.min(runs.len()) {
+        let Some(len) = runs.get(i).copied() else { continue };
+        if i + len <= at {
+            continue;
+        }
+        let first = plan.passes.get(i).and_then(|p| p.a);
+        let k = (2..=at - i).rev().find(|&k| plan.passes.get(i + k - 1).is_some_and(|p| Some(p.dst) != first)).unwrap_or(1);
+        if let Some(r) = runs.get_mut(i) {
+            *r = k;
+        }
+    }
+}
+
 /// For each pass and the end of the plan, whether the executor draws `runs` (`batch_runs`) so
 /// that a pass starts there rather than inside a run.
 pub(crate) fn run_starts(runs: &[usize]) -> Vec<bool> {

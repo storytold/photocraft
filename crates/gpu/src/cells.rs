@@ -1,7 +1,7 @@
 use super::batch::{batch_kernel, batch_op_words, op_words, submit_batch};
 use super::consts::{FLUSH_OPS, MAP32, STRIDE};
 use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words};
-use super::kit::{Bound, FrameRes, texture_group, uniform_group};
+use super::kit::{Bound, FrameRes, clear_slot, texture_group, uniform_group};
 use super::paging::cell_rect;
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
 use super::{Arc, Compositor, DocId, HashMap, I, Kernel, Pattern, Plan, Rect, Role, Surface, TILE_SIZE, TileCoord, plan};
@@ -79,6 +79,7 @@ impl Compositor {
         fr: &FrameRes,
         chunks: &[Rect],
         checkpoint: Option<plan::Checkpoint>,
+        suffix: Option<suffix::Use>,
         stats: &mut Stats,
         sink: &mut dyn FnMut(&mut wgpu::CommandEncoder, ChunkOut<'_>),
         // The previous intermediate submit, when this refresh may submit in between.
@@ -175,6 +176,7 @@ impl Compositor {
             bg1.push(Some(texture_group(device, &self.kit.bgl1, &[slot(p.a), slot(p.b), tv, mv, lv, slot(p.c), map, pat])));
         }
 
+        let n = plan.passes.len();
         for (ci, c) in chunks.iter().enumerate() {
             let mut resume = 0;
             if let Some(cp) = checkpoint.and_then(|_| self.prefix.restore_point(*c))
@@ -185,119 +187,251 @@ impl Compositor {
                 stats.prefix_hits = stats.prefix_hits.saturating_add(1);
                 stats.prefix_passes_skipped = stats.prefix_passes_skipped.saturating_add(resume);
             }
-            // Passes drawn inside the previous `fs_layerbatch` pass.
-            let mut batched_to = 0;
-            for (i, p) in plan.passes.iter().enumerate() {
-                if i < resume || i < batched_to {
-                    continue;
+            // The cached stack above the edit (`suffix`): whole chunks only, its entries are per chunk.
+            let su = suffix.filter(|s| *c == prefix::cell_of(*c, self.chunk as i32).intersect(&s.canvas) && s.at.pass_end >= resume);
+            let mut applied = false;
+            if let Some(s) = su
+                && (s.build || self.suffix.entry(*c).is_some())
+            {
+                if !self.draw_passes(device, queue, encoder, plan, runs, &bg0, &bg1, op_base, ci, *c, resume..s.at.pass_end, resume, checkpoint, stats, batch) {
+                    return;
                 }
-                // Chunk textures, uniforms and bind groups outlive the submit, and the queue
-                // keeps the order, so a chunk may continue in the next command buffer.
-                if self.recorded >= FLUSH_OPS
-                    && let Some(last) = batch.as_deref_mut()
-                {
-                    submit_batch(device, queue, encoder, self.health.as_ref(), self.timer.as_mut(), last);
-                    self.staged = 0;
-                    self.recorded = 0;
-                    stats.flushes += 1;
-                    if self.fault().is_some() {
-                        return;
-                    }
+                let side = self.chunk;
+                let size = wgpu::Extent3d { width: c.width(), height: c.height(), depth_or_array_layers: 1 };
+                fn at(t: &wgpu::Texture) -> wgpu::TexelCopyTextureInfo<'_> {
+                    wgpu::TexelCopyTextureInfo { texture: t, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All }
                 }
-                // Also after resuming from a lower checkpoint: the chunk moves up to this one.
-                if resume < i
-                    && let Some(cp) = checkpoint.filter(|cp| cp.pass_end == i)
-                    && let Some((src, _)) = self.pool.get(cp.slot as usize)
-                {
-                    self.prefix.capture(device, encoder, *c, src, cp);
-                }
-                let scissor = match p.clip {
-                    Some(clip) => {
-                        let r = clip.intersect(c);
-                        if r.is_empty() {
-                            continue;
+                let backdrop = &self.suffix.backdrop(device, side, self.acc_format).0;
+                encoder.copy_texture_to_texture(at(&self.pool[s.at.slot as usize].0), at(backdrop), size);
+                let mut ready = self.suffix.entry(*c).is_some();
+                if !ready {
+                    let room = self.prefix.budget().saturating_sub(self.prefix.bytes()).saturating_sub(self.suffix.bytes());
+                    if self.suffix.admit(device, *c, self.acc_format, room).is_some() {
+                        ready = true;
+                        for (k, color) in suffix::BACKDROPS.iter().enumerate() {
+                            clear_slot(encoder, &self.pool[s.at.slot as usize].1, *color);
+                            let ok = self.draw_passes(
+                                device,
+                                queue,
+                                encoder,
+                                plan,
+                                runs,
+                                &bg0,
+                                &bg1,
+                                op_base,
+                                ci,
+                                *c,
+                                s.at.pass_end..n,
+                                s.at.pass_end,
+                                None,
+                                stats,
+                                batch,
+                            );
+                            if !ok {
+                                self.suffix.remove(*c);
+                                return;
+                            }
+                            if let Some(e) = self.suffix.entry(*c) {
+                                encoder.copy_texture_to_texture(at(&self.pool[plan.root as usize].0), at(&e.tex[k]), size);
+                            }
                         }
-                        Rect::new(r.x0 - c.x0, r.y0 - c.y0, r.x1 - c.x0, r.y1 - c.y0)
-                    }
-                    None => Rect::new(0, 0, c.width() as i32, c.height() as i32),
-                };
-                match p.kernel {
-                    Kernel::CopyRect | Kernel::CopyFull => {
-                        // The planner always gives copies a source.
-                        let Some(a) = p.a else { continue };
-                        let src = &self.pool[a as usize].0;
-                        let dst = &self.pool[p.dst as usize].0;
-                        encoder.copy_texture_to_texture(
-                            wgpu::TexelCopyTextureInfo {
-                                texture: src,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d { x: scissor.x0 as u32, y: scissor.y0 as u32, z: 0 },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::TexelCopyTextureInfo {
-                                texture: dst,
-                                mip_level: 0,
-                                origin: wgpu::Origin3d { x: scissor.x0 as u32, y: scissor.y0 as u32, z: 0 },
-                                aspect: wgpu::TextureAspect::All,
-                            },
-                            wgpu::Extent3d { width: scissor.width(), height: scissor.height(), depth_or_array_layers: 1 },
-                        );
-                        self.recorded += 1;
-                        continue;
-                    }
-                    _ => {}
-                }
-                self.recorded += 1;
-                // A run draws as one pass into the slot its last layer writes.
-                let run = runs.get(i).copied().unwrap_or(1);
-                let (kernel, dst) = match plan.passes.get(i + run - 1) {
-                    Some(last) if run > 1 => {
-                        batched_to = i + run;
-                        stats.layers_batched = stats.layers_batched.saturating_add(run - 1);
-                        let kernel = plan.passes.get(i..i + run).map_or(Kernel::LayerBatch, batch_kernel);
-                        if kernel == Kernel::LayerBatchNormal {
-                            stats.normal_batches = stats.normal_batches.saturating_add(1);
+                        stats.suffix_builds = stats.suffix_builds.saturating_add(1);
+                    } else {
+                        // No room: the backdrop is still in its slot, finish as usual.
+                        if !self.draw_passes(
+                            device,
+                            queue,
+                            encoder,
+                            plan,
+                            runs,
+                            &bg0,
+                            &bg1,
+                            op_base,
+                            ci,
+                            *c,
+                            s.at.pass_end..n,
+                            s.at.pass_end,
+                            checkpoint,
+                            stats,
+                            batch,
+                        ) {
+                            return;
                         }
-                        (kernel, last.dst)
                     }
-                    _ => (p.kernel, p.dst),
-                };
-                let target = &self.pool[dst as usize].1;
-                let clear = p.kernel == Kernel::Clear;
-                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("pc_compose_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: target,
-                        resolve_target: None,
-                        depth_slice: None,
-                        ops: wgpu::Operations {
-                            load: if clear { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
-                    depth_stencil_attachment: None,
-                    timestamp_writes: None,
-                    occlusion_query_set: None,
-                    multiview_mask: None,
-                });
-                if clear {
-                    continue;
                 }
-                pass.set_pipeline(&self.kit.pipelines[&(kernel, self.acc_format)]);
-                pass.set_scissor_rect(scissor.x0 as u32, scissor.y0 as u32, scissor.width(), scissor.height());
-                pass.set_bind_group(0, &bg0, &[(ci as u64 * STRIDE) as u32, (op_base + i as u64 * STRIDE) as u32]);
-                pass.set_bind_group(1, bg1[i].as_ref(), &[]);
-                pass.draw(0..3, 0..1);
+                if ready && let (Some(e), Some((_, backdrop))) = (self.suffix.entry(*c), self.suffix.backdrop_view()) {
+                    let dummy = &self.kit.dummy;
+                    let group = texture_group(device, &self.kit.bgl1, &[backdrop, &e.views[0], &e.views[2], dummy, dummy, &e.views[1], dummy, dummy]);
+                    let target = &self.pool[plan.root as usize].1;
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("pc_compose_suffix"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    pass.set_pipeline(&self.kit.pipelines[&(Kernel::Suffix, self.acc_format)]);
+                    pass.set_scissor_rect(0, 0, c.width(), c.height());
+                    // The op record is unused; any pass's offset is valid.
+                    pass.set_bind_group(0, &bg0, &[(ci as u64 * STRIDE) as u32, op_base as u32]);
+                    pass.set_bind_group(1, &group, &[]);
+                    pass.draw(0..3, 0..1);
+                    self.recorded += 1;
+                    applied = true;
+                    stats.suffix_hits = stats.suffix_hits.saturating_add(1);
+                    stats.suffix_passes_skipped = stats.suffix_passes_skipped.saturating_add(n - s.at.pass_end);
+                }
+            } else if !self.draw_passes(device, queue, encoder, plan, runs, &bg0, &bg1, op_base, ci, *c, resume..n, resume, checkpoint, stats, batch) {
+                return;
             }
-            if resume < plan.passes.len()
-                && let Some(cp) = checkpoint.filter(|cp| cp.pass_end == plan.passes.len())
+            // Not after the cached stack: its result is within rounding of a full render, and
+            // the lower-stack cache only holds exact composites.
+            if !applied
+                && resume < n
+                && let Some(cp) = checkpoint.filter(|cp| cp.pass_end == n)
                 && let Some((src, _)) = self.pool.get(cp.slot as usize)
             {
-                self.prefix.capture(device, encoder, *c, src, cp);
+                self.prefix.capture(device, encoder, *c, src, cp, self.suffix.bytes());
             }
             let (t, v) = &self.pool[plan.root as usize];
             sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
         }
+    }
+
+    /// Draws `passes` of chunk `c` (index `ci`), capturing the lower-stack composite at
+    /// `checkpoint` on the way when the chunk didn't resume at or above it. False when the
+    /// device was lost in a submit: issue no more work.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_passes(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        plan: &Plan<'_>,
+        runs: &[usize],
+        bg0: &wgpu::BindGroup,
+        bg1: &[Option<wgpu::BindGroup>],
+        op_base: u64,
+        ci: usize,
+        c: Rect,
+        passes: std::ops::Range<usize>,
+        resume: usize,
+        checkpoint: Option<plan::Checkpoint>,
+        stats: &mut Stats,
+        batch: &mut Option<&mut Option<wgpu::SubmissionIndex>>,
+    ) -> bool {
+        let c = &c;
+        // Passes drawn inside the previous `fs_layerbatch` pass.
+        let mut batched_to = 0;
+        for (i, p) in plan.passes.iter().enumerate().take(passes.end) {
+            if i < passes.start || i < batched_to {
+                continue;
+            }
+            // Chunk textures, uniforms and bind groups outlive the submit, and the queue
+            // keeps the order, so a chunk may continue in the next command buffer.
+            if self.recorded >= FLUSH_OPS
+                && let Some(last) = batch.as_deref_mut()
+            {
+                submit_batch(device, queue, encoder, self.health.as_ref(), self.timer.as_mut(), last);
+                self.staged = 0;
+                self.recorded = 0;
+                stats.flushes += 1;
+                if self.fault().is_some() {
+                    return false;
+                }
+            }
+            // Also after resuming from a lower checkpoint: the chunk moves up to this one.
+            if resume < i
+                && let Some(cp) = checkpoint.filter(|cp| cp.pass_end == i)
+                && let Some((src, _)) = self.pool.get(cp.slot as usize)
+            {
+                self.prefix.capture(device, encoder, *c, src, cp, self.suffix.bytes());
+            }
+            let scissor = match p.clip {
+                Some(clip) => {
+                    let r = clip.intersect(c);
+                    if r.is_empty() {
+                        continue;
+                    }
+                    Rect::new(r.x0 - c.x0, r.y0 - c.y0, r.x1 - c.x0, r.y1 - c.y0)
+                }
+                None => Rect::new(0, 0, c.width() as i32, c.height() as i32),
+            };
+            match p.kernel {
+                Kernel::CopyRect | Kernel::CopyFull => {
+                    // The planner always gives copies a source.
+                    let Some(a) = p.a else { continue };
+                    let src = &self.pool[a as usize].0;
+                    let dst = &self.pool[p.dst as usize].0;
+                    encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: src,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: scissor.x0 as u32, y: scissor.y0 as u32, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: dst,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d { x: scissor.x0 as u32, y: scissor.y0 as u32, z: 0 },
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d { width: scissor.width(), height: scissor.height(), depth_or_array_layers: 1 },
+                    );
+                    self.recorded += 1;
+                    continue;
+                }
+                _ => {}
+            }
+            self.recorded += 1;
+            // A run draws as one pass into the slot its last layer writes.
+            let run = runs.get(i).copied().unwrap_or(1);
+            let (kernel, dst) = match plan.passes.get(i + run - 1) {
+                Some(last) if run > 1 => {
+                    batched_to = i + run;
+                    stats.layers_batched = stats.layers_batched.saturating_add(run - 1);
+                    let kernel = plan.passes.get(i..i + run).map_or(Kernel::LayerBatch, batch_kernel);
+                    if kernel == Kernel::LayerBatchNormal {
+                        stats.normal_batches = stats.normal_batches.saturating_add(1);
+                    }
+                    (kernel, last.dst)
+                }
+                _ => (p.kernel, p.dst),
+            };
+            let target = &self.pool[dst as usize].1;
+            let clear = p.kernel == Kernel::Clear;
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("pc_compose_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    depth_slice: None,
+                    ops: wgpu::Operations {
+                        load: if clear { wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT) } else { wgpu::LoadOp::Load },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if clear {
+                continue;
+            }
+            pass.set_pipeline(&self.kit.pipelines[&(kernel, self.acc_format)]);
+            pass.set_scissor_rect(scissor.x0 as u32, scissor.y0 as u32, scissor.width(), scissor.height());
+            pass.set_bind_group(0, bg0, &[(ci as u64 * STRIDE) as u32, (op_base + i as u64 * STRIDE) as u32]);
+            pass.set_bind_group(1, bg1[i].as_ref(), &[]);
+            pass.draw(0..3, 0..1);
+        }
+        true
     }
 
     /// Upload changed tiles of `surface` within `region` (its tile area inside one page cell);

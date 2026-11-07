@@ -96,6 +96,23 @@ pub(crate) fn uniform_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayou
     })
 }
 
+/// Fills a pool slot with `color` (a render pass that only clears).
+pub(crate) fn clear_slot(encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, color: wgpu::Color) {
+    let _ = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("pc_compose_suffix_backdrop"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target: None,
+            depth_slice: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(color), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+}
+
 pub(crate) fn texture_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, views: &[&wgpu::TextureView]) -> wgpu::BindGroup {
     let e: Vec<wgpu::BindGroupEntry> =
         views.iter().enumerate().map(|(b, v)| wgpu::BindGroupEntry { binding: b as u32, resource: wgpu::BindingResource::TextureView(v) }).collect();
