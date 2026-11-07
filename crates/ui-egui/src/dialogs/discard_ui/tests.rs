@@ -393,6 +393,65 @@ fn macos_asks_dont_save_cancel_save_with_the_default_last() {
     assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
 }
 
+/// ⌘D presses Don't Save as in Photoshop on macOS, and Ctrl plus an answer's letter presses it on
+/// the other platforms (#11282).
+#[test]
+fn command_plus_the_answer_key_presses_it() {
+    let mut h = prompt_on(egui::os::OperatingSystem::Mac);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
+    h.run_steps(2);
+    assert_eq!(docs_left(&h), Some(1), "⌘D answered Don't Save for the first document");
+    assert_eq!(h.state().session.documents().len(), 1, "Don't Save closed it");
+
+    // Save and Yes take the save path: with ⌘ / Ctrl too they open the save dialog.
+    for (os, key) in [(egui::os::OperatingSystem::Mac, Key::S), (egui::os::OperatingSystem::Windows, Key::Y)] {
+        let mut h = prompt_on(os);
+        let (show, asked) = crate::file_dialog::fake(vec![None]);
+        h.state_mut().services.file_dialog = Some(show);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, key);
+        h.run_steps(2);
+        assert_eq!(asked.borrow().len(), 1, "{os:?} ⌘/Ctrl+{key:?} opens the save dialog");
+        assert_eq!(docs_left(&h), Some(2), "cancelling the save dialog keeps the prompt");
+    }
+
+    let mut h = prompt_on(egui::os::OperatingSystem::Windows);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::N);
+    h.run_steps(2);
+    assert_eq!(docs_left(&h), Some(1), "Ctrl+N answered No for the first document");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::C);
+    h.run_steps(2);
+    assert!(h.state().discard.is_none(), "Ctrl+C cancelled");
+    assert_eq!(h.state().session.documents().len(), 1, "Cancel keeps the unanswered document");
+}
+
+/// In the whole app, ⌘D with the close prompt up answers Don't Save rather than reaching Select ›
+/// Deselect (also ⌘D) behind it (#11282).
+#[test]
+fn command_d_in_the_app_answers_dont_save_not_deselect() {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for _ in 0..2 {
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("select.all", json!({})).unwrap();
+        }
+        app
+    });
+    // The harness picks its own OS while building; the prompt reads it each frame.
+    h.ctx.set_os(egui::os::OperatingSystem::Mac);
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.close", json!({})).unwrap();
+    h.run_steps(2);
+    assert!(h.state().discard.is_some(), "closing a changed document asks first");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, Key::D);
+    h.run_steps(2);
+    assert!(h.state().discard.is_none(), "⌘D answered the prompt");
+    assert_eq!(h.state().session.documents().len(), 1, "Don't Save closed the document");
+    assert!(h.state().session.active().is_some_and(|d| d.doc.selection.is_some()), "the other document keeps its selection");
+}
+
 #[test]
 fn macos_plain_labels_keep_save_and_escape_shortcuts() {
     for key in [Key::S, Key::Enter] {
