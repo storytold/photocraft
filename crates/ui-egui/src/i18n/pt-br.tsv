@@ -4533,3 +4533,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar limites da camada ao passar o cursor
 	Expand layer group on click	Expandir grupo de camadas ao clicar
 	Show hover bounds from Layers	Mostrar limites ao passar o cursor em Camadas
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribuir larguras
+	Distribute Heights	Distribuir alturas
+	Auto-nest Layers	Aninhar camadas automaticamente
+	Auto-size Canvas	Ajustar tamanho da tela automaticamente
+	Keep Relative Position During Layer Reordering	Manter a posição relativa ao reordenar camadas
+	Shrinkwrap Canvas on Save	Reduzir a tela ao conteúdo ao salvar

@@ -4196,3 +4196,10 @@ shape	Appearance	화면 모양
 	Show layer bounds on hover	마우스를 올리면 레이어 경계 표시
 	Expand layer group on click	클릭하면 레이어 그룹 펼치기
 	Show hover bounds from Layers	레이어 패널에서 마우스를 올릴 때 경계 표시
+# Artboard tool options bar (#11385)
+	Distribute Widths	너비 분포
+	Distribute Heights	높이 분포
+	Auto-nest Layers	레이어 자동 중첩
+	Auto-size Canvas	캔버스 크기 자동 조정
+	Keep Relative Position During Layer Reordering	레이어 순서 변경 시 상대 위치 유지
+	Shrinkwrap Canvas on Save	저장 시 캔버스를 내용에 맞게 축소

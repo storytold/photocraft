@@ -4319,3 +4319,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Εμφάνιση ορίων στρώσης στο πέρασμα του δείκτη
 	Expand layer group on click	Ανάπτυξη ομάδας στρώσεων με κλικ
 	Show hover bounds from Layers	Εμφάνιση ορίων στο πέρασμα από τις Στρώσεις
+# Artboard tool options bar (#11385)
+	Distribute Widths	Κατανομή πλατών
+	Distribute Heights	Κατανομή υψών
+	Auto-nest Layers	Αυτόματη ένθεση επιπέδων
+	Auto-size Canvas	Αυτόματη αλλαγή μεγέθους καμβά
+	Keep Relative Position During Layer Reordering	Διατήρηση σχετικής θέσης κατά την αναδιάταξη επιπέδων
+	Shrinkwrap Canvas on Save	Σμίκρυνση καμβά στο περιεχόμενο κατά την αποθήκευση

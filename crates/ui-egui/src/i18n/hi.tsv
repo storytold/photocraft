@@ -696,3 +696,10 @@ cameraRaw	Yellow	पीला
 	Show layer bounds on hover	होवर पर लेयर की सीमाएँ दिखाएँ
 	Expand layer group on click	क्लिक पर लेयर समूह विस्तृत करें
 	Show hover bounds from Layers	लेयर्स से होवर सीमाएँ दिखाएँ
+# Artboard tool options bar (#11385)
+	Distribute Widths	चौड़ाइयाँ वितरित करें
+	Distribute Heights	ऊंचाइयाँ वितरित करें
+	Auto-nest Layers	लेयर्स को स्वचालित रूप से नेस्ट करें
+	Auto-size Canvas	कैनवास का आकार स्वचालित रूप से बदलें
+	Keep Relative Position During Layer Reordering	लेयर्स का क्रम बदलते समय सापेक्ष स्थिति बनाए रखें
+	Shrinkwrap Canvas on Save	सहेजते समय कैनवास को सामग्री के अनुसार छोटा करें
