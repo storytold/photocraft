@@ -134,10 +134,12 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Some(other) => return Err(bad("layer.translate", format!("unknown units `{other}` (px|pt)"))),
     };
-    let carry = match p.get("selection") {
-        None | Some(Value::Null) => false,
-        Some(v) => v.as_bool().ok_or_else(|| bad("layer.translate", "`selection` must be a boolean"))?,
+    let flag = |key: &str| match p.get(key) {
+        None | Some(Value::Null) => Ok(false),
+        Some(v) => v.as_bool().ok_or_else(|| bad("layer.translate", format!("`{key}` must be a boolean"))),
     };
+    let carry = flag("selection")?;
+    let nest = flag("nest")?;
     if dx == 0 && dy == 0 {
         return Ok(Value::Null);
     }
@@ -150,7 +152,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
-    s.edit("Move", |doc, _| {
+    let nested = s.edit("Move", |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));
         let mut ids = move_targets(doc, &rest);
         if ids.is_empty() && alone.is_empty() {
@@ -158,6 +160,8 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let moves: Vec<_> = ids.iter().map(|&id| (id, dx, dy)).collect();
         move_layers(doc, &before, &moves)?;
+        // In the same step, so Undo takes the move and the change of board back together.
+        let nested = if nest { auto_nest(doc, &ids) } else { Vec::new() };
         for id in alone {
             let locks = doc.effective_locks(id);
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -178,9 +182,113 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         if carry {
             doc.selection = doc.selection.as_ref().map(|sel| shift_surface(sel, dx, dy));
         }
-        Ok(ids)
+        Ok(nested)
     })?;
-    Ok(Value::Null)
+    if nested.is_empty() {
+        return Ok(Value::Null);
+    }
+    Ok(json!({"nested": nested.iter().map(|id| id.0).collect::<Vec<_>>()}))
+}
+
+/// The artboard a layer at `bounds` is on: the topmost board holding the centre of its bounds
+/// ([`crate::layer_place::centre`]), the rule a new layer is placed by. `boards` are top to bottom.
+fn board_under(boards: &[(LayerId, photocraft_geom::Rect)], bounds: photocraft_geom::Rect) -> Option<LayerId> {
+    let (cx, cy) = crate::layer_place::centre(bounds);
+    boards.iter().find(|(_, r)| r.contains(cx, cy)).map(|(id, _)| *id)
+}
+
+/// One planned auto-nest move: its order (walk order, then its place above a clip base), the
+/// layer, and the boards it leaves and joins.
+type Nest = ((usize, usize), LayerId, Option<LayerId>, Option<LayerId>);
+
+/// Move-tool auto-nesting, as in Photoshop: after a Move drag, a layer now on another artboard
+/// joins that board, on top of its stack, and a layer moved off every board leaves its board for
+/// the top level, directly above the board it left. Artboards share one canvas, so without this a
+/// layer dragged onto another board stayed in its old board and was clipped away by it.
+///
+/// A clipping group moves as one: a base that changes board takes the layers clipped to it along,
+/// directly above it and still clipped. Left behind, they were released (their base gone) and
+/// covered their old board. A clipped layer never changes board by itself, moved or not: it shows
+/// only over its base, so it goes where its base goes (with it, or nowhere). The group stays
+/// whole where it is when any of it can't go.
+///
+/// `ids` are the moved layers ([`move_targets`]), already at their new positions. Left where they
+/// are: artboards themselves, the Background, empty layers, layers whose board doesn't change, a
+/// group that would nest past [`photocraft_doc::MAX_GROUP_DEPTH`], and layers locked against it
+/// with Lock › Prevent Auto-Nesting (on the layer, a group around it, or the board it would join).
+/// Returns the layers that changed board, bottom to top.
+fn auto_nest(doc: &mut Document, ids: &[LayerId]) -> Vec<LayerId> {
+    let boards: Vec<(LayerId, photocraft_geom::Rect)> = doc.artboards().into_iter().rev().map(|(id, _, board)| (id, board.rect)).collect();
+    if boards.is_empty() {
+        return Vec::new();
+    }
+    let locked_board = |doc: &Document, id: LayerId| doc.layer(id).is_some_and(|l| l.locks.artboard || l.locks.all);
+    // Bottom to top, so layers moving together keep their order in their new parent: by walk
+    // order, and a carried clipped layer by its base's and then its place above the base.
+    let mut plan: Vec<Nest> = Vec::new();
+    // The paths of the layers planned so far: a layer inside one of them goes with it.
+    let mut carried: Vec<Vec<usize>> = Vec::new();
+    for (order, (path, _, l)) in doc.walk().into_iter().enumerate() {
+        if !ids.contains(&l.id) || l.artboard().is_some() || doc.is_background(l.id) || carried.iter().any(|c| path.starts_with(c)) {
+            continue;
+        }
+        if l.clipped && crate::clip_group::base_of(doc, l.id).is_some() {
+            continue;
+        }
+        let bounds = crate::layer_multi_cmds::layer_bounds(l);
+        let Some(bounds) = bounds.filter(|b| !b.is_empty()) else { continue };
+        let (from, to) = (doc.artboard_of(l.id), board_under(&boards, bounds));
+        let clipped = if l.clipped { Vec::new() } else { crate::clip_group::clipped_above(doc, l.id) };
+        let group: Vec<&Layer> = std::iter::once(l).chain(clipped.iter().filter_map(|id| doc.layer(*id))).collect();
+        if from == to || to.is_some_and(|b| locked_board(doc, b)) || group.iter().any(|m| doc.effective_locks(m.id).artboard) {
+            continue;
+        }
+        if to.is_some() && group.iter().any(|m| 1 + crate::layer_place::subtree_depth(m) > photocraft_doc::MAX_GROUP_DEPTH) {
+            continue;
+        }
+        for (k, m) in group.into_iter().enumerate() {
+            plan.push(((order, k), m.id, from, to));
+            carried.extend(doc.path_of(m.id));
+        }
+    }
+    if plan.is_empty() {
+        return Vec::new();
+    }
+    plan.sort_by_key(|p| p.0);
+    let moving: Vec<LayerId> = plan.iter().map(|p| p.1).collect();
+    let before = crate::clip_group::Before::read(doc, &moving);
+    let mut nested = Vec::with_capacity(plan.len());
+    // How many layers have left each board so far: each goes above the last one.
+    let mut left: Vec<(LayerId, usize)> = Vec::new();
+    for (_, id, from, to) in plan {
+        let Some(layer) = doc.remove(id) else { continue };
+        match to {
+            Some(board) => match doc.layer_mut(board).and_then(Layer::children_mut) {
+                Some(children) => children.push(layer),
+                None => doc.layers.push(layer),
+            },
+            None => {
+                let above = from.and_then(|b| doc.layers.iter().position(|t| t.id == b)).map_or(doc.layers.len(), |i| i + 1);
+                let count = left.iter_mut().find(|(b, _)| Some(*b) == from);
+                let n = match count {
+                    Some((_, n)) => {
+                        *n += 1;
+                        *n - 1
+                    }
+                    None => {
+                        if let Some(b) = from {
+                            left.push((b, 1));
+                        }
+                        0
+                    }
+                };
+                doc.layers.insert((above + n).min(doc.layers.len()), layer);
+            }
+        }
+        nested.push(id);
+    }
+    crate::clip_group::settle(doc, &nested, &before, false);
+    nested
 }
 
 /// The layers a move of `roots` takes along: their linked layers, without layers whose group
