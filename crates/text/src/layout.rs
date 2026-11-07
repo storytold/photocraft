@@ -17,7 +17,10 @@
 use std::borrow::Cow;
 use std::ops::Range;
 
-use parley::{FontData, FontFamily, FontFeatures, FontStyle, FontVariations, FontWeight, Layout, LayoutContext, PositionedLayoutItem, StyleProperty};
+use parley::{
+    FontData, FontFamily, FontFeatures, FontStyle, FontVariations, FontWeight, Layout, LayoutContext, LineBreakContext, LineBreakOverrideFn,
+    PositionedLayoutItem, StyleProperty,
+};
 use photocraft_doc::TextLayer;
 use photocraft_doc::text::{Caps, CharStyle, FontBaseline, Kerning, Orientation, ParagraphStyle, TextShape};
 use skrifa::raw::types::Tag;
@@ -57,6 +60,42 @@ fn run_index_at(run_starts: &[usize], off: usize) -> usize {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RunBrush(pub u32, pub u8);
 
+/// JIS X 4051 line-start prohibition (行頭禁則): characters that must not begin a line in Japanese
+/// type — closing brackets and quotation marks, sentence punctuation, small kana, the long-vowel
+/// mark, iteration marks and voiced-sound marks. [`line_start_keep_ranges`] applies it to vertical
+/// type; horizontal type keeps Unicode's UAX #14 breaks (Photoshop's behaviour). Line-end
+/// prohibition (行末禁則) and hanging punctuation (ぶら下げ) are not implemented yet.
+pub(crate) fn forbidden_line_start(c: char) -> bool {
+    matches!(
+        c,
+        // Closing brackets and quotation marks.
+        '）' | '］' | '｝' | '〕' | '〉' | '》' | '」' | '』' | '】' | '〗' | '〙' | '〛' | '〟' | '｣' | '｠'
+            | '”' | '’' | '\'' | '"'
+            // Sentence punctuation.
+            | '、' | '。' | '，' | '．' | '・' | '：' | '；' | '？' | '！' | '｡' | '､' | '･'
+            // Small kana (hiragana and katakana) and their half-width forms.
+            | 'ぁ' | 'ぃ' | 'ぅ' | 'ぇ' | 'ぉ' | 'っ' | 'ゃ' | 'ゅ' | 'ょ' | 'ゎ' | 'ゕ' | 'ゖ'
+            | 'ァ' | 'ィ' | 'ゥ' | 'ェ' | 'ォ' | 'ッ' | 'ャ' | 'ュ' | 'ョ' | 'ヮ' | 'ヵ' | 'ヶ'
+            | 'ㇰ'
+            ..='ㇿ'
+            | 'ｧ' | 'ｨ' | 'ｩ' | 'ｪ' | 'ｫ' | 'ｬ' | 'ｭ' | 'ｮ' | 'ｯ'
+            // Long-vowel and voiced-sound marks.
+            | 'ー' | 'ｰ' | '゛' | '゜'
+            // Iteration marks.
+            | 'ヽ' | 'ヾ' | 'ゝ' | 'ゞ' | '々' | '〻'
+    )
+}
+
+/// The line-break override that applies 行頭禁則 in vertical type: it suppresses the break before
+/// a character that must not begin a line, and leaves every other decision to ICU's UAX #14
+/// rules. The break then moves one character earlier (追い出し) instead of the forbidden character
+/// starting the next column. Mandatory breaks — a forced line break or a paragraph end — are
+/// parley's and are never suppressed.
+static KINSOKU_LINE_BREAK_OVERRIDE: &LineBreakOverrideFn = &(kinsoku_break_override as fn(LineBreakContext) -> Option<bool>);
+
+fn kinsoku_break_override(cx: LineBreakContext) -> Option<bool> {
+    forbidden_line_start(cx.after).then_some(false)
+}
 /// How a placed glyph's outline is oriented in text space.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum GlyphOrient {
