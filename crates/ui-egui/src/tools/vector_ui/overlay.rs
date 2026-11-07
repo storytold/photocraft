@@ -170,7 +170,12 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         if let Some(l) = st.and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id)))
             && let LayerContent::Shape(sh) = &l.content
         {
-            draw_path(&sh.path, anchors);
+            // Hide the stale shape path while its transform preview is active.
+            let transforming_this_shape =
+                app.ui.transform.as_ref().is_some_and(|t| t.layer == l.id.0 && !t.selection && t.target.is_none() && t.path.is_none());
+            if !transforming_this_shape {
+                draw_path(&sh.path, anchors);
+            }
         }
         // A targeted vector mask shows its path with any tool (#196).
         if let Some((_, p)) = targeted_vector_mask(app) {
@@ -188,6 +193,10 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             for k in app.ui.direct_selection.anchors.iter().filter_map(|[s, k]| path.subpaths.get(*s).and_then(|sp| sp.knots.get(*k))) {
                 draw_anchor(painter, to_scr([k.anchor.x, k.anchor.y]), true, accent);
             }
+        }
+        // Only over the active document, whose selected layers the box frames.
+        if st.is_some_and(|s| s.doc.id == doc.id) {
+            crate::shape_bounds_box::draw(app, painter, &to_scr, accent);
         }
         crate::corner_radius::draw(app, painter, &to_scr, accent);
     }

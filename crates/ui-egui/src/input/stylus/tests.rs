@@ -350,3 +350,22 @@ fn eraser_end_switches_tools_once_and_never_mid_drag() {
     assert!(!Stylus::sync_eraser_tool(&mut app));
     assert_eq!(app.ui.tool, Tool::Eraser);
 }
+
+/// The pen's eraser end is a tool switch like any other: Add New Artboard's placing mode ends
+/// (#11386), and coming back to the Artboard tool on the tip leaves it off.
+#[test]
+fn the_eraser_end_ends_the_artboard_placing_mode() {
+    use crate::state::Tool;
+    let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.execute("file.new", serde_json::json!({"width": 60, "height": 60})).unwrap();
+    app.ui.tool = Tool::Artboard;
+    app.ui.artboard_tool.adding = true;
+    let pen = |eraser| Some(PenSample { pressure: 0.5, eraser, ..Default::default() });
+    app.stylus.feed.set(pen(true));
+    assert!(Stylus::sync_eraser_tool(&mut app));
+    assert!(!app.ui.artboard_tool.adding, "the eraser end ends the mode");
+    app.stylus.feed.set(pen(false));
+    assert!(Stylus::sync_eraser_tool(&mut app));
+    assert_eq!(app.ui.tool, Tool::Artboard);
+    assert!(!app.ui.artboard_tool.adding);
+}

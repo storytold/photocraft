@@ -912,3 +912,158 @@ fn row_values_round_to_their_own_decimals() {
     assert!((row_value(1.234, 0.01, 9.99, None) - 1.23).abs() < 1e-6, "small ranges keep two decimals");
     assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
 }
+
+fn photo_filter_color(a: &Adjustment) -> [f32; 3] {
+    match a {
+        Adjustment::PhotoFilter { color, .. } => *color,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Click the Photo Filter swatch, wait for its Color Picker and show `hex` in it.
+fn photo_filter_picker_shows(h: &mut Harness<'_, PhotocraftApp>, hex: &str) {
+    h.get_by_label("Color Picker (Photo Filter)").click();
+    h.run_steps(3);
+    let d = h.state().ui.dialogs.last().expect("the swatch opens the Color Picker");
+    assert_eq!(d.fields["__label"], "Color Picker (Photo Filter)");
+    let id = d.id;
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!(hex));
+    h.run_steps(3);
+}
+
+#[test]
+fn photo_filter_colour_picker_previews_live_cancel_restores_and_ok_is_one_step() {
+    let mut h = app_harness("photoFilter", "rgb", 8);
+    let (id, _) = layer(&h);
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "color": "#336699"})).unwrap();
+    h.run_steps(4);
+    // The Color: radio enables the swatch.
+    h.get_by_label("Color:").click();
+    h.run_steps(3);
+    let start = photo_filter_color(&layer(&h).1);
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let before = steps(&h);
+
+    // While the picker is open, the canvas previews its colour; nothing is committed yet.
+    photo_filter_picker_shows(&mut h, "#ff0000");
+    let live = h.state().live_adjust.clone();
+    assert!(matches!(&live, Some((l, v)) if *l == id && v["color"] == "#ff0000"), "live preview while the picker is open: {live:?}");
+    assert_eq!(photo_filter_color(&layer(&h).1), start);
+    assert_eq!(steps(&h), before);
+
+    // Cancel: back to the opening colour, no history step.
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    assert!(h.state().live_adjust.is_none(), "Cancel ends the preview");
+    assert_eq!(photo_filter_color(&layer(&h).1), start);
+    assert_eq!(steps(&h), before);
+
+    // OK: the colour, as one history step however long it previewed.
+    photo_filter_picker_shows(&mut h, "#00ff80");
+    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("color".into(), json!("#00ff00"));
+    h.run_steps(3);
+    assert_eq!(steps(&h), before);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    assert!(h.state().live_adjust.is_none());
+    assert_eq!(photo_filter_color(&layer(&h).1), [0.0, 1.0, 0.0]);
+    assert_eq!(steps(&h), before + 1, "OK: one history step");
+}
+
+/// Opening a Gradient Map stop's Color Picker and closing it without a new colour (Cancel, or OK
+/// unchanged) edits nothing: a stop at a location finer than the editor's 0.001 grid (a PSD's
+/// 30 % is 1229/4096) stays as it is, with no history step.
+#[test]
+fn gradient_map_stop_picker_closed_without_a_colour_changes_nothing() {
+    let mut h = app_harness("gradientMap", "rgb", 16);
+    let (id, _) = layer(&h);
+    let fine = 1229.0 / 4096.0;
+    h.state_mut().run("layer.setAdjustment", json!({"layer": id.0, "stops": [[0, "#000000"], [fine, "#ff0000"], [1, "#ffffff"]]})).unwrap();
+    h.run_steps(4);
+    let before = layer(&h).1;
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let history = steps(&h);
+    for button in ["Cancel", "OK"] {
+        h.get_by_label("Color Picker (Stop Color)").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.dialogs.last().expect("the stop's Color Picker").fields["__label"], "Color Picker (Stop Color)");
+        h.get_by_label(button).click();
+        h.run_steps(4);
+        assert!(h.state().ui.dialogs.is_empty());
+        assert_eq!(layer(&h).1, before, "{button}: the stops are untouched");
+        assert_eq!(steps(&h), history, "{button}: no history step");
+        assert!(h.state().live_adjust.is_none());
+    }
+}
+
+/// Selective Color in Properties: the Colors dropdown's choice lives in editor memory, so
+/// switching colour commits nothing, and each colour keeps its own row.
+#[test]
+fn selective_color_properties_switch_colour_without_committing() {
+    let mut h = app_harness("selectiveColor", "rgb", 8);
+    let (_, before) = layer(&h);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let nudge = |h: &mut Harness<'static, PhotocraftApp>| {
+        let r =
+            h.query_all_by_role(egui::accesskit::Role::Slider).rfind(|n| n.accesskit_node().label().as_deref() == Some("Cyan")).expect("Cyan slider").rect();
+        drag(h, r.center(), Pos2::new(r.right() + 40.0, r.center().y));
+    };
+    nudge(&mut h);
+    let (_, reds) = layer(&h);
+    assert_ne!(reds, before);
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    // Switch to Blues through the Colors dropdown: press it, drag onto the option, release.
+    let named = |n: &egui_kittest::Node<'_>| {
+        let a = n.accesskit_node();
+        a.value().as_deref() == Some("Reds") || a.label().as_deref() == Some("Reds")
+    };
+    let at = h.query_all_by_role(egui::accesskit::Role::ComboBox).find(|n| named(n)).expect("the Colors dropdown").rect().center();
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(3);
+    let blues = h.query_by_label("Blues").expect("the list opened on the press").rect().center();
+    for k in 1..=6 {
+        h.hover_at(at + (blues - at) * (k as f32 / 6.0));
+        h.run_steps(1);
+    }
+    h.drop_at(blues);
+    h.run_steps(4);
+    assert!(
+        h.query_all_by_role(egui::accesskit::Role::ComboBox).any(|n| {
+            let a = n.accesskit_node();
+            a.value().as_deref() == Some("Blues") || a.label().as_deref() == Some("Blues")
+        }),
+        "the dropdown keeps its choice"
+    );
+    assert_eq!(layer(&h).1, reds, "switching colour changes nothing");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+    assert!(h.state().live_adjust.is_none());
+    nudge(&mut h);
+    let (Adjustment::SelectiveColor { adjustments: first, .. }, (_, Adjustment::SelectiveColor { adjustments: now, .. })) = (&reds, layer(&h)) else {
+        panic!("Selective Color layer")
+    };
+    assert_eq!(now[0], first[0], "Reds untouched by editing Blues");
+    assert_ne!(now[4], [0.0; 4], "Blues edited");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 2);
+}
+
+/// The Method radios in Properties commit through the real controls; the current one is a no-op.
+#[test]
+fn selective_color_properties_method_radios_commit() {
+    let mut h = app_harness("selectiveColor", "rgb", 8);
+    let steps = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let start = steps(&h);
+    let radio = |h: &mut Harness<'static, PhotocraftApp>, text: &str| {
+        let at = h.query_all_by_role_and_label(egui::accesskit::Role::RadioButton, text).last().expect("method radio").rect().center();
+        click(h, at);
+    };
+    radio(&mut h, "Absolute");
+    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: false, .. }));
+    assert_eq!(steps(&h), start + 1);
+    radio(&mut h, "Absolute");
+    assert_eq!(steps(&h), start + 1, "the current method is no step");
+    radio(&mut h, "Relative");
+    assert!(matches!(layer(&h).1, Adjustment::SelectiveColor { relative: true, .. }));
+    assert_eq!(steps(&h), start + 2);
+}
