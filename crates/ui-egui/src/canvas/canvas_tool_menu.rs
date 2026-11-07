@@ -506,8 +506,10 @@ fn choose_notes(app: &mut PhotocraftApp, ctx: &Context, n: &NotesMenu, command: 
             Ok(())
         }
         (NOTE_DELETE_ALL, _) => {
+            // Deselect only once the notes went: a refused delete keeps the Notes panel's note.
+            app.run("notes.delete", json!({"all": true}))?;
             app.ui.analysis.note_selected = None;
-            app.run("notes.delete", json!({"all": true})).map(|_| ())
+            Ok(())
         }
         _ => Ok(()),
     }

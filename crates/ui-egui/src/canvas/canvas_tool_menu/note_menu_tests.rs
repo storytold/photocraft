@@ -189,3 +189,14 @@ fn a_menu_whose_note_moved_acts_on_no_other_note() {
     app.run("notes.delete", json!({"index": 0})).unwrap();
     assert!(!entry_enabled(&app, &menu, NOTE_OPEN), "Open Note greys for a note that is gone");
 }
+
+#[test]
+fn a_rejected_delete_all_keeps_the_selected_note() {
+    let (mut app, ctx) = app();
+    crate::analysis_ui::open_note(&mut app, 1);
+    right_click(&mut app, &ctx, Tool::Note, [80.0, 80.0]);
+    app.session.authorize = Some(|id, _| if id == "notes.delete" { Err(photocraft_engine::EngineError::Other("test rejection".into())) } else { Ok(()) });
+    choose(&mut app, &ctx, NOTE_DELETE_ALL);
+    assert_eq!(notes(&app), 2, "nothing deleted");
+    assert_eq!(app.ui.analysis.note_selected, Some(1), "the Notes panel keeps its note");
+}
