@@ -2718,6 +2718,7 @@ shape	Appearance	Diện mạo
 	Measurement Scale Marker	Dấu tỉ lệ đo
 	Could not use the move tool because the layer is locked.	Không thể dùng công cụ di chuyển vì lớp đã bị khoá.
 	Could not complete the Free Transform command because the layer is locked.	Không thể hoàn tất lệnh Biến đổi tự do vì lớp đã bị khoá.
+	Could not transform because the layer is locked.	Không thể biến đổi vì lớp đã bị khoá.
 	My Brushes	Cọ của tôi
 	Neutrals	Vùng trung tính
 	New Workspace	Không gian làm việc mới

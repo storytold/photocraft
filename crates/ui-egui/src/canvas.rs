@@ -118,6 +118,7 @@ use textures::{clamp_texture_side, preview_bounds, texture_factor};
 use textures::{ensure_gpu, redraw_focus, visible_doc_rect};
 pub use tool_input::{ToolEvent, selection_drag_kind, tool_event};
 pub(crate) use tool_input::{command_guide_at, command_moves_layer, event_tool};
+pub(crate) use transform_controls::ControlsPress;
 pub(crate) use transform_controls::{LAYER_EDGES, layer_edges_rect};
 use transform_controls::{begin_transform_controls_at, draw_transform_controls, transform_controls_cursor, transform_controls_rect, transform_controls_turn};
 #[cfg(test)]
@@ -1036,12 +1037,13 @@ fn handle_canvas_tool_stroke(
     if buttons.started
         && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p)).or(response.interact_pointer_pos())
     {
-        if tool == Tool::Move && app.ui.transform.is_none() {
-            begin_transform_controls_at(app, ctx, xf, p);
+        // A press the controls refused (the Background among the layers) goes nowhere else (#11101).
+        let refused = tool == Tool::Move && app.ui.transform.is_none() && begin_transform_controls_at(app, ctx, xf, p) == ControlsPress::Refused;
+        if !refused {
+            let d = xf.to_doc(p);
+            let press_mods = if capture_press { ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods) } else { mods };
+            tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
         }
-        let d = xf.to_doc(p);
-        let press_mods = if capture_press { ctx.data(|d| d.get_temp(tool_press)).unwrap_or(mods) } else { mods };
-        tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
     }
     // A stroke started on the press takes its moves from the press on, not only once egui
     // recognises a drag (past its click distance): otherwise the first few points are lost
@@ -1200,10 +1202,10 @@ fn handle_canvas_tool_clicks(
                     app.ui.status = e;
                 }
             }
+            // A click the transform controls refused (the Background among the layers) goes
+            // nowhere else (#11101).
+            _ if tool == Tool::Move && app.ui.transform.is_none() && begin_transform_controls_at(app, ctx, xf, p) == ControlsPress::Refused => {}
             _ => {
-                if tool == Tool::Move && app.ui.transform.is_none() {
-                    begin_transform_controls_at(app, ctx, xf, p);
-                }
                 // If this tool was not handled on pointer-down, fall back to a
                 // click-sized gesture while preserving pen pressure (mouse stays at 1).
                 tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);

@@ -220,6 +220,15 @@ Validation on Linux, full sweep, serial tests and CI's pinned fonts:
 
 Evidence is retained in `plan/merge-main-20261104/` (gitignored).
 
+## Main integration (2026-11-07)
+
+Integrated upstream main `8df2b7a2e`, then `048ae7977` after three more upstream PRs landed. The Smart Filter conflicts preserve captured tone targets and precision while adopting main's replacement of adjustment parameters. Consumed aliases and smoothing counts disappear when the filter saves. Both sides' regressions are retained, with additional fractional Lab Levels and Curves records in the round-trip test. The Action dialog setup moved into a helper to keep playback within Clippy's complexity limit and preserve the authorization and receiver checks.
+
+- Full Linux engine/UI suite at `8df2b7a2e` with pinned CI fonts and the full serial sweep: **9,486 passed, 0 failed, 46 normally ignored**, including doctest builds.
+- At `048ae7977`, **1,222 focused tests passed, 0 failed, 6 normally ignored**. They cover tone targets, Smart Filters, Actions, transforms, crop, marquee, lasso, and localization.
+- Strict all-target Clippy, formatting, layering, wasm, and the ignored full-registry adversarial command test passed at `048ae7977`. Changed-corpus checking skipped because the PR diff contains no corpus-critical paths.
+- Offscreen captures verified both addressed and unavailable mask targets for Action dialogs. Lab Smart Filters reopened with Lightness selected and their recorded settings while an alpha channel was selected. The three Smart Filter captures were byte-identical on the final snapshot.
+
 ## 24 MP release comparison
 
 Dense synthetic 6000 × 4000 RGB8 raster layer, raster mask, saved alpha channel and Quick Mask, each filled with 25% gray. The central selection is a 3000 × 2000 rectangle at 0.5 coverage. Proxy factor 4 (1500 × 1000). AMD Ryzen 7 9700X, 16 logical CPUs, Ubuntu 26.04.1, Rust 1.99.0, default optimized release profile (thin LTO).
