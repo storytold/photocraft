@@ -14,8 +14,8 @@ What exists on `main` today. The numbered sections below are the original design
   `xtask/src/layers.rs` (enforced by `cargo xtask layers`).
 - **UI toolkit:** decided: egui/eframe on wgpu (no webview, no JavaScript). The same Rust builds
   to WebAssembly for the browser (trunk + wasm-bindgen).
-- **Engine:** ~990 commands registered in `crates/engine` (`CommandSpec` in `cmd.rs`); the
-  UI, CLI, JSON control channel and MCP server all dispatch by command id. 660 Photoshop menu items
+- **Engine:** ~995 commands registered in `crates/engine` (`CommandSpec` in `cmd.rs`); the
+  UI, CLI, JSON control channel and MCP server all dispatch by command id. 661 Photoshop menu items
   map to them (`crates/ui-egui/src/menu_catalog.rs`).
 - **Rendering:** CPU compositor (`compose`, the oracle) and wgpu compositor (`gpu`, ≤ 1/255 of the
   CPU); colour through our own ICC engine (`cms`), GPU display conversion through matrix/shaper stages or a 3D LUT fallback.

@@ -207,8 +207,8 @@ the CLI and MCP always use the English ids and labels.
 
 Languages shipped ("complete" means the catalog sets `complete_menus`: it covers every menu string. No
 catalog covers every `tl!` literal yet; `cargo xtask i18n-coverage` lists what each catalog lacks. For
-example, Arabic, Bosnian, Danish, Finnish, Norwegian Bokmål and Swedish lack 13 of the Frame tool's 28,
-including Fit Content to Frame):
+example, Arabic, Bosnian, Danish, Finnish, Norwegian Bokmål, Swedish, Tamil and Thai lack 13 of the Frame
+tool's 28, including Fit Content to Frame):
 
 - English (`en`), the source language.
 - Japanese (`ja`), complete.
@@ -227,10 +227,13 @@ including Fit Content to Frame):
 - Polish (`pl`), complete, with three plural forms.
 - Brazilian Portuguese (`pt-br`), complete, with two plural forms (0 and 1 use the singular).
 - German (`de`), Greek (`el`), Dutch (`nl`), Italian (`it`), Swedish (`sv`), Finnish (`fi`),
-  Danish (`da`) and Norwegian Bokmål (`nb`), complete, with two plural forms.
-- Hungarian (`hu`), Turkish (`tr`) and Vietnamese (`vi`), complete, with one plural form.
+  Danish (`da`), Norwegian Bokmål (`nb`) and Tamil (`ta`), complete, with two plural forms.
+- Hungarian (`hu`), Turkish (`tr`), Vietnamese (`vi`) and Thai (`th`), complete, with one plural form.
 - Arabic (`ar`), complete, with six plural forms; the shell mirrors right to left.
+- Hebrew (`he`) and Urdu (`ur`), complete, with two plural forms; the shell mirrors right to left.
+- Romanian (`ro`), complete, with three plural forms (`one|few|other`, see `plural_romanian`).
 - Hindi (`hi`), not yet complete, with two plural forms.
+- Azerbaijani (`az`, Latin script), complete, with two integer plural forms (1 / other).
 
 - `tr(lang, s)` plain strings; `tr_ctx` when one English word needs different translations;
   `tr_id(lang, command_id, label)` for menu items (keyed by command id, English label as the

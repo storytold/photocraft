@@ -331,7 +331,7 @@ fn marquee_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// Lasso family: selection mode, feather, anti-alias, magnetic settings and the drawing hints.
 fn lasso_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    selection_mode_buttons(app, ui);
+    selection_mode_buttons(&mut app.ui.selection_mode, ui);
     widgets::vline(ui, 22.0);
     opt_label(ui, tl!("Feather"));
     widgets::value_field(ui, &mut app.ui.tool_options.feather, 0.0..=1000.0, "px", 62.0);
@@ -379,7 +379,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             lasso_options(app, ui);
         }
         Tool::MagicWand => {
-            selection_mode_buttons(app, ui);
+            selection_mode_buttons(&mut app.ui.selection_mode, ui);
             widgets::vline(ui, 22.0);
             opt_label(ui, tl!("Tolerance"));
             widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
@@ -618,6 +618,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             widgets::checkbox(ui, &mut o.move_show_transform, tl!("Show Transform Controls"));
             widgets::vline(ui, 22.0);
             crate::align_bar::options(app, ui);
+            crate::align_bar::gear(app, ui);
         }
         Tool::Eyedropper => crate::eyedropper_ui::options(app, ui),
         Tool::Zoom => {
@@ -653,7 +654,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             }
         }
         Tool::RotateView => {
-            hint(ui, tl!("Drag around the centre to rotate the view  ·  Shift constrains to 15°"));
+            hint(ui, tl!("Drag around the center to rotate the view  ·  Shift constrains to 15°"));
             if let Some(i) = app.session.active_index() {
                 ui.label(tl!("Angle"));
                 let mut angle = app.ui.views.get(i).map(|v| v.rotation).unwrap_or(0.0);
