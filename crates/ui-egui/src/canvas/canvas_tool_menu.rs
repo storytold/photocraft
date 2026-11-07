@@ -422,6 +422,24 @@ pub const NO_SELECTION_MENU: &[Row] = &[
     Some(("Load Selection…", "select.loadSelection")),
 ];
 
+/// The Perspective Crop session's menu (#11805): Crop, then Cancel, no separator.
+pub const PCROP_COMMIT: &str = "canvasMenu.perspectiveCrop.crop";
+pub const PCROP_CANCEL: &str = "canvasMenu.perspectiveCrop.cancel";
+pub const PERSPECTIVE_CROP_MENU: &[Row] = &[Some(("Crop", PCROP_COMMIT)), Some(("Cancel", PCROP_CANCEL))];
+
+/// Is `menu` the Perspective Crop session's own menu (not the pasteboard, guide or transform menu
+/// the tool can also open)?
+fn is_perspective_crop(menu: &CanvasToolMenu) -> bool {
+    menu.tool == Tool::PerspectiveCrop
+        && menu.crop.is_none()
+        && !menu.guide
+        && !menu.pasteboard
+        && !menu.transform
+        && menu.anchor.is_none()
+        && !menu.text
+        && !menu.type_layer
+}
+
 /// Photoshop's Pen context menu order. Rows whose operation is not applicable to the current
 /// path or layer stay visible and disabled.
 pub const PEN_MENU: &[Row] = &[
@@ -567,6 +585,8 @@ pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
         PEN_MENU
     } else if sampler_menu(menu) {
         SAMPLER_MENU
+    } else if is_perspective_crop(menu) {
+        PERSPECTIVE_CROP_MENU
     } else {
         selection_rows(menu.has_selection)
     }
@@ -768,6 +788,36 @@ pub fn pasteboard_at(app: &PhotocraftApp, tool: Tool, doc: [f64; 2]) -> bool {
     outside && !path_menu(tool) && !crate::paint_mouse::has_brush_picker(tool) && !crate::paint_mouse::right_erases(app, tool) && app.ui.text_edit.is_none()
 }
 
+/// Right-click on the image with the Perspective Crop tool while a quad is pending (#11805): its
+/// Crop / Cancel menu at screen point `pos`. False (today's behaviour) with no quad, while a drag
+/// is held or corners are still being clicked: those cases weren't measured.
+pub fn open_perspective_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -> bool {
+    if tool != Tool::PerspectiveCrop || app.ui.perspective_crop.is_none() || app.pcrop.drag.is_some() || !pos.iter().all(|v| v.is_finite()) {
+        return false;
+    }
+    app.ui.brush_picker = None;
+    app.ui.layer_menu = None;
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu {
+        pos,
+        tool,
+        has_selection: false,
+        has_path: false,
+        path_name: None,
+        transform: false,
+        pasteboard: false,
+        anchor: None,
+        text: false,
+        type_layer: false,
+        guide: false,
+        spelling: None,
+        crop: None,
+        sampler: None,
+        sampler_at: None,
+    });
+    crate::canvas_popup::mark_open(ctx, menu_id());
+    true
+}
+
 /// Right-click on the pasteboard: its colour menu at screen point `pos`.
 pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]) -> bool {
     if !pos.iter().all(|v| v.is_finite()) {
@@ -846,6 +896,9 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
+    if is_perspective_crop(menu) {
+        return matches!(command, PCROP_COMMIT | PCROP_CANCEL);
+    }
     if menu.crop.is_some() {
         return crop_enabled(app, menu, command);
     }
@@ -1043,6 +1096,15 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     } else if sampler_menu(&menu) {
         let (id, params) = engine_call(app, &menu, command);
         app.run(&id, params).map(|_| ())
+    } else if is_perspective_crop(&menu) {
+        // Crop is Enter's commit (a quad left from another document is dropped, nothing cropped);
+        // Cancel is Esc's.
+        if command == PCROP_COMMIT {
+            crate::perspective_crop_ui::commit(app);
+        } else {
+            crate::perspective_crop_ui::cancel(app);
+        }
+        Ok(())
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
         spec_dialog(app, command, "Make Work Path", r##"{"tolerance":0.5..10=2}"##, serde_json::Map::new());
@@ -1306,3 +1368,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../tools/perspective_crop_menu_tests.rs"]
+mod perspective_crop_menu_tests;

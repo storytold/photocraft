@@ -1467,6 +1467,13 @@ fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &
         }
         return true;
     }
+    // A pending Perspective Crop quad: its Crop / Cancel menu, as on the canvas (#11805).
+    if app.ui.tool == crate::state::Tool::PerspectiveCrop && app.ui.perspective_crop.is_some() && app.pcrop.drag.is_none() {
+        if down {
+            crate::canvas_tool_menu::open_perspective_crop(app, ctx, app.ui.tool, screen_point(app, x, y));
+        }
+        return true;
+    }
     if crate::canvas_tool_menu::is_view_tool(app.ui.tool) {
         if down {
             crate::canvas_tool_menu::open_view(app, ctx, app.ui.tool, screen_point(app, x, y), [x, y]);
