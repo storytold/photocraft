@@ -19,8 +19,8 @@ written from the meaning of PhotoCraft's own English label.
 
 ## Dynamic UI coverage
 
-After merging the newer upstream catalog rows, the catalog has 4,010 entries. It covers the
-complete Italian runtime key set and retains two Spanish profile-prompt labels that other
+After merging the newer upstream catalog rows, the catalog had 4,010 entries. It covered the
+complete Italian runtime key set of the time and retained two Spanish profile-prompt labels that other
 catalogs also use. The additional labels include filter and adjustment parameters and choices,
 Filter Gallery names, Camera Raw, Lighting Effects, History and Layers controls, metadata,
 dialogs, status wrappers and System Info labels. Before this pass, those controls fell back to
@@ -53,7 +53,7 @@ unused legacy labels are retained so the complete catalogs stay aligned.
 | Feather | Calar | Desvanecer (clashed with *Fade*) |
 | Fade | Transición | Desvanecer |
 | Color Range | Gama de colores | Intervalo de colores |
-| Select and Mask | Seleccionar y aplicar máscara | Selección y máscara |
+| Select and Mask | Selección y máscara | |
 | Selective Color | Corrección selectiva | Color selectivo |
 | Shadows/Highlights; Highlights | Sombras/iluminaciones; Iluminaciones | Sombras/luces; Luces |
 | Color Lookup | Consulta de colores | Búsqueda de color |
@@ -61,7 +61,7 @@ unused legacy labels are retained so the complete catalogs stay aligned.
 | Adaptive Wide Angle | Gran angular adaptable | Ángulo ancho adaptativo |
 | Constrain proportions | Restringir proporciones | **Construir** proporciones |
 | Render (filter menu) | Interpretar | Renderizar |
-| Smart Sharpen | Enfoque suavizado | Enfoque inteligente |
+| Smart Sharpen | Enfoque inteligente | |
 | Blend If | Fusionar si | Combinar si |
 | Knockout (blending options) | Extraer | Cobertura |
 | Lights / Darks (Camera Raw) | Claros / Oscuros | Tonos claros / Tonos oscuros |

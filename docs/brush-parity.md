@@ -1,10 +1,10 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (the eraser end of the pen switches to the Eraser on Windows with Windows Ink on, #2285; no estimate changed; Art History Brush Opacity on the options bar, #10263; no estimate changed; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-07 · **Change:** minor (accuracy pass against the code at 6d408847a; the eraser end of the pen switches to the Eraser on Windows with Windows Ink on, #2285; no estimate changed; Art History Brush Opacity on the options bar, #10263; no estimate changed; Shift+right-click menu for the painting tools: Edit Brush… and the tool's own Mode list where its options bar has one (no menu for Spot Healing); Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
-(`crates/ui-egui/src/brush_sections.rs`), the live stroke renderer, pen input
+(`crates/ui-egui/src/panels/brush_sections.rs`), the live stroke renderer, pen input
 ([`hardware-parity.md`](hardware-parity.md)), and the brush-based tools. Status words as in
 [`ui-parity.md`](ui-parity.md).
 
@@ -26,15 +26,15 @@ tablets against Photoshop side by side.
 | Color Dynamics (FG/BG, hue/sat/brightness jitter, purity, per tip) | done | |
 | Hue Jitter uses a standard percentage-amount track instead of a hue spectrum | done | #3825 (Hue Jitter appearance only); rendered track checked in all 14 themes; numeric and pointer edits retain percentage units and engine command routing. |
 | Transfer (opacity/flow/wetness/mix jitter and controls) | done | |
-| Transfer Wetness/Mix blocks disabled outside Mixer Brush, retaining their settings | done | #3825 (tool applicability only); UI regressions cover all 14 themes and 67 tools, disabled input, section/Control Off, command routing and per-tool settings |
+| Transfer Wetness/Mix blocks disabled outside Mixer Brush, retaining their settings | done | #3825 (tool applicability only); UI regressions cover all 14 themes and 68 tools, disabled input, section/Control Off, command routing and per-tool settings |
 | Shape Dynamics and Transfer minimum fields disabled when their Control is Off, retaining their values | done | #3825 (minimum-field interaction only); `brush_sections.rs` UI regressions cover all six fields, reactivation and disabled input |
 | Brush Pose (tilt, rotation, pressure overrides) | done | |
 | Brush Pose: separate Override Tilt X/Y flags, preserved through ABR import, presets and commands | done | #3825 (axis overrides only); imported single-axis flags retain the other live stylus component; dab/pixel tests cover 8/16/32-bit RGBA; legacy combined inputs migrate and command deltas contain only the edited axis. |
 | Noise, Wet Edges, Build-up, Protect Texture | done | |
-| Smoothing: amount, Pulled String, Stroke Catch-up, Catch-up on End, Adjust for Zoom | done | `brush.rs:428-438` |
-| Section locks | done | #174; `brush_panel_tests.rs` verifies section-specific accessible names and locked state for all 12 controls in 14 themes, plus visible themed focus, Tab blur, Space activation, minimal command patches and replay without selecting or enabling a section. |
-| Noise, Wet Edges, Build-up, Smoothing and Protect Texture: checkbox-only rows keep the selected controls open | done | `brush_panel_tests.rs`, #4283; Smoothing enable/disable preserves its amount and options, including imported ABR tool settings |
-| Brush tip from an image file | missing | TOOL-213-12 |
+| Smoothing: amount, Pulled String, Stroke Catch-up, Catch-up on End, Adjust for Zoom | done | `brush.rs:521-541` |
+| Section locks | done | #174; `brush_panel/tests.rs` verifies section-specific accessible names and locked state for all 12 controls in 14 themes, plus visible themed focus, Tab blur, Space activation, minimal command patches and replay without selecting or enabling a section. |
+| Noise, Wet Edges, Build-up, Smoothing and Protect Texture: checkbox-only rows keep the selected controls open | done | `brush_panel/tests.rs`, #4283; Smoothing enable/disable preserves its amount and options, including imported ABR tool settings |
+| Brush tip from an image file | done | TOOL-213-12 (`brush.presets.importImage`) |
 | Erodible, Airbrush and Bristle tips (Photoshop's special tips) | partial | not audited in detail; "3D-based brushes don't work" (#1660) |
 | Anti-aliasing off for brushes | missing | #1666 (Pencil is the aliased path) |
 
@@ -44,8 +44,8 @@ tablets against Photoshop side by side.
 |---|---|---|
 | Pressure drives size/opacity/flow per sample (no shared pressure within a frame) | done | #2112 |
 | Global pressure curve in Preferences | done | #2195 |
-| Per-control pressure curves | missing | TOOL-213-11 |
-| Quick taps keep their pressure | partial | #1967 fixed one case; tap paints a full blob (#1798), tap sensitivity (#1933) |
+| Per-control pressure curves | done | TOOL-213-11 |
+| Quick taps keep their pressure | done | #1967; #1798: `stroke_timing_tests.rs` `a_tap_shorter_than_a_frame_paints_at_the_pens_pressure` |
 | Smooth pressure on Windows | partial | "jumpy" (#2046) |
 | Tilt and rotation drive angle/roundness | partial | macOS, X11, web; not Windows; rotation not applied (#1301) |
 | Eraser end of the pen switches to Eraser | partial | macOS, Windows (WinTab; Windows Ink not yet confirmed on hardware, #2285); X11 and web partial |
@@ -63,7 +63,7 @@ tablets against Photoshop side by side.
 | Latency: dab to screen within a frame | partial | budgets P13/P16/P33 over (scorecard); big-brush lag #2619, #1994; cursor lag #2566, #1343 |
 | No hitch at mouse-up on a long stroke | not measurable | P32 needs a frame harness |
 | Live stroke for Brush and Eraser | done | |
-| Live stroke for every brush-based retouch tool | partial | TOOL-213-7: all live but the Mixer Brush (PR #3627); Spot Healing shows the area it heals and heals on release, as Photoshop does |
+| Live stroke for every brush-based retouch tool | partial | TOOL-213-7: all live, the Mixer Brush too (PR #3627), but the Art History Brush, which shows a footprint trail until release; Spot Healing shows the area it heals and heals on release, and Remove tints the area it will remove, as Photoshop does |
 | No OS arrow cursor over the canvas with a pen | partial | TOOL-213-14 |
 
 ## Gestures and cursors
@@ -77,8 +77,8 @@ tablets against Photoshop side by side.
 | Hold `~` with the Brush or Pencil to erase with its brush: Clear mode while held (rebindable under Tools › Temporary) | done | `hold_keys.rs`, #3439 |
 | Clear painting mode in the Brush and Pencil Mode menus | done | `paint_mode_dropdown` in `panels.rs`, `"mode": "clear"`, #3439 |
 | Shift+right-click opens the painting tool's menu: Edit Brush… and its own Mode list (Brush/Pencil painting modes with Behind and Clear, stamps and History Brush blend modes, Eraser Brush/Pencil/Block, Dodge/Burn Range, Sponge mode, Healing Brush, Gradient and Paint Bucket modes); Behind and Clear greyed on the Background; Alt and Command/Ctrl keep their existing gestures | partial | #4929, `brush_mode_menu.rs`; rows set the options-bar state (`tools.setBrush` or the tool option); kittest and control regressions. Missing because the options bar lacks the setting: Behind for the stamps, History Brush, Gradient and Paint Bucket; the Blur/Sharpen/Smudge modes; the Spot Healing modes (no menu); the Healing Brush's Sampled/Pattern source and Replace; the History Brush source |
-| Right-click opens the Brush Preset picker | done | [`context-menu-parity.md`](context-menu-parity.md); XP-Pen right-click not (#1980), macOS issue #2360 |
-| Precise / normal / full-size tip cursors, crosshair in the tip | partial | Caps Lock precise cursor not audited; round Pencil cursor requested (#2662, #1057) |
+| Right-click opens the Brush Preset picker | done | [`context-menu-parity.md`](context-menu-parity.md); XP-Pen right-click not (#1980); macOS trackpad taps fixed (#2360) |
+| Precise / normal / full-size tip cursors, crosshair in the tip | partial | Caps Lock precise cursor not audited; round Pencil cursor done (#2662, `pencil_tests.rs` `the_cursor_is_round_exactly_when_the_pencil_dab_is`); pencil cursor parity open (#1057) |
 | Brush choice kept per tool (Brush, Eraser, Blur each their own) | partial | #2542 |
 
 ## Symmetry
@@ -93,13 +93,13 @@ tablets against Photoshop side by side.
 
 | Tool | Status | Notes |
 |---|---|---|
-| Brush, Pencil (aliased, Auto Erase), Eraser (Brush/Pencil/Block) | done | Pencil 1 px quality #2139 |
-| Mixer Brush (Wet, Load, Mix, Flow, Sample All Layers, Current Brush Load with Load Brush and Clean Brush, automatic Load and Clean) | partial | No live result while dragging, no Alt-click loading (#2247) |
+| Brush, Pencil (aliased, Auto Erase), Eraser (Brush/Pencil/Block) | done | Pencil 1 px quality fixed (#2139) |
+| Mixer Brush (Wet, Load, Mix, Flow, Sample All Layers, Current Brush Load with Load Brush and Clean Brush, automatic Load and Clean) | partial | No Alt-click loading (#2247) |
 | Clone Stamp (mode, opacity, flow, aligned, sample, overlay) | partial | Clone Source W/H link and Alt target cursor (TOOL-213-8) |
 | Pattern Stamp (mode, aligned, impressionist) | done | |
 | History Brush (mode) | done | |
 | Art History Brush (styles, Area, Tolerance) | partial | 8 of 10 styles (no Tight Curl Long / Loose Curl Long); Area scales spacing, not Photoshop's coverage; no Mode on the options bar, no pen pressure (TOOL-213-20) |
-| Spot Healing, Healing (Healing mode: Normal, Multiply, Screen, Darken, Lighten, Color, Luminosity) | partial | Healing's Replace mode and Spot Healing's Mode missing; grain not matched on flat colour (#2104), "horrible in general" (#1092), stops responding after switching (#1751) |
+| Spot Healing, Healing (Healing mode: Normal, Multiply, Screen, Darken, Lighten, Color, Luminosity) | partial | Healing's Replace mode and Spot Healing's Mode missing; "horrible in general" (#1092), stops responding after switching (#1751) |
 | Blur, Sharpen, Smudge (premultiplied, Sample All Layers, spacing) | done | BUG-207-2/3, #2171 |
 | Dodge, Burn, Sponge | done | |
 | Background Eraser, Magic Eraser | done | |
@@ -110,9 +110,9 @@ tablets against Photoshop side by side.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
-| .abr import (v1/v2/v6) and export, persistent presets, folders | done | `psd/src/abr.rs` |
-| Brushes panel: drag a folder into a folder | missing | #2014 |
-| Dragged brush preset preview | done | Cached, translucent tip thumbnail plus name in panel list/grid and the preset picker; `ui-egui/src/brushes_tab.rs`, real pointer-drag test in `brushes_tab_tests.rs` (#4225, partial) |
+| .abr import (v1/v2, v6–v10) and export, persistent presets, folders | done | `psd/src/abr.rs` |
+| Brushes panel: drag a folder into a folder | done | #2014; engine `brush_preset_cmds/tests.rs` `folders_move_into_folders_and_groups` |
+| Dragged brush preset preview | done | Cached, translucent tip thumbnail plus name in panel list/grid and the preset picker; `ui-egui/src/panels/brushes_tab.rs`, real pointer-drag test in `brushes_tab/tests.rs` (#4225, partial) |
 | Tool presets (.tpl) | partial | Tool Presets panel exists; .tpl import not found |
 | Import 500 brushes without blocking the UI | not run | P24 |
 
@@ -120,6 +120,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-07 | minor | Accuracy pass against the code at 6d408847a: image brush tips (TOOL-213-12), per-control pressure curves (TOOL-213-11), quick-tap pressure (#1798) and dragging a folder into a folder (#2014) marked done; the Mixer Brush draws live (#3627), Spot Healing keeps film grain (#2104), round Pencil cursor (#2662); moved files and line references. No estimate changed |
 | 2026-11-06 | minor | Eraser end of the pen switches to the Eraser on Windows with Windows Ink on (#2285); row stays partial (X11, web); no estimate changed |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |

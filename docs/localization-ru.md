@@ -12,7 +12,7 @@ labels; no proprietary translation resources, fonts, screenshots or user documen
 
 ## Register and style
 
-Commands are imperatives in the second person plural (*Сохранить*, *Удалить*, *Заново*);
+Commands are infinitives (*Сохранить*, *Удалить*, *Повторить*);
 where the catalog already uses a noun it is kept (*Уровни…*, *Кривые…*). Sentence case after the
 first word, as in the rest of the catalog. Ellipses on dialog commands are preserved (`Ветер…`
 → `Ветер…`). Decimals use a comma (the file format's own labels keep their dots, e.g.
@@ -42,7 +42,7 @@ Existing choices were followed rather than re-invented, so the new rows use:
 | Amount | Величина | `Штрихи`, never *количество*, when it is a strength |
 | Fill Opacity | Непрозрачность заливки | distinct from layer *Непрозрачность* |
 | Feather Radius | Радиус растушёвки | |
-| Sharpen | Резкость | `Smart Sharpen` → *Умная резкость*, `Unsharp Mask` → *Контурная резкость* |
+| Sharpen | Резкость | `Smart Sharpen` → *Умная резкость*, `Unsharp Mask` → *Нерезкое маскирование* |
 | Noise | Шум | `Reduce Noise` → *Уменьшить шум* |
 | Content-Aware | С учётом содержимого | |
 | Camera Raw | Camera Raw | the panel name stays Latin (as German/Spanish do; Greek translates it) |

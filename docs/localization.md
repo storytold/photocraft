@@ -26,12 +26,14 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Ελληνικά | `el` | one / other |
 | Nederlands | `nl` | one / other |
 | Magyar | `hu` | one form |
+| Türkçe | `tr` | one form |
 | Tiếng Việt | `vi` | one form |
 | ไทย | `th` | one form |
 | தமிழ் | `ta` | one / other |
 | Srpski | `sr` | one / few / many (teens use many) |
 | Bosanski | `bs` | one / few / other (teens use other) |
 | हिन्दी | `hi` | one / other |
+| العربية | `ar` | zero / one / two / few / many / other |
 | Svenska | `sv` | one / other |
 | Suomi | `fi` | one / other (partitive after every count but 1) |
 | Dansk | `da` | one / other |
@@ -47,13 +49,12 @@ dynamic labels, contextual translations and two integer plural forms. Machine-as
 drafts have edited core terminology; native-speaker review is pending. See
 [`localization-az.md`](localization-az.md) for terminology, provenance and validation limits.
 
-Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
-mode names, and generated preference labels. A string a catalog lacks shows in English:
+Languages registered with `complete_menus` (every catalog but Hindi) cover 89.2–97.6% of the
+measured keys (`cargo xtask i18n-coverage` at 6d408847a). A string a catalog lacks shows in English:
 `cargo xtask i18n-coverage` lists the missing strings per language, and `cargo xtask ci` prints
 that list as its last step without failing. Vietnamese (`vi`) is
-selectable, resolves regional tags such as `vi-VN`, and covers all current stable localization
-keys. `complete_menus` remains false while generated/dynamic long-tail labels are still under
-review. This does not include every engine error or status message: those remain English, as do
+selectable, resolves regional tags such as `vi-VN`, covers 2,281 of the 2,389 measured keys and is
+registered with `complete_menus`. This does not include every engine error or status message: those remain English, as do
 automation command IDs and user-provided document, layer and preset names.
 
 UI search and access-key comparisons use locale-aware dotted/dotless I rules for Azerbaijani
@@ -116,8 +117,8 @@ updates the labels in the same rendered frame. Drawing language is local to the 
 a scoped preview restores the previous language even if drawing unwinds. Menu and dialog
 identity continues to use command IDs, independent of translated labels.
 
-This is hot switching among the bundled catalogs. Catalog files are embedded with
-`include_str!`; editing a TSV file requires a rebuild. External catalog watching and
+This is hot switching among the bundled catalogs. Catalog files are embedded (packed and
+deflated by `build.rs`); editing a TSV file requires a rebuild. External catalog watching and
 file-resource hot reload are not implemented.
 
 ## Right-to-left languages
@@ -125,7 +126,7 @@ file-resource hot reload are not implemented.
 Arabic, Hebrew, Persian, Urdu and the other right-to-left languages listed in
 `i18n::dir_for_code` mirror the window's chrome when chosen: the menu bar starts at the right
 with File, the toolbox docks on the right and the panel dock and its rail on the left, and the
-title, options and status bars read from the right (`crates/ui-egui/src/direction.rs`). The
+title, options and status bars read from the right (`crates/ui-egui/src/text/direction.rs`). The
 direction follows the language code, so a catalog needs no extra setting.
 
 Not mirrored yet: panel interiors, dialogs, menu rows (shortcuts stay on the right), submenus
@@ -154,8 +155,9 @@ Other languages retain the system's CJK fallback preference for document names a
 
 Font files are not added to this repository. Native rendering uses installed system fonts
 and the optional craft-fonts build input; see [Fonts](development.md#fonts-craft-fonts).
-The web build can select every catalog, but CJK glyph delivery and automatic browser-locale
-detection remain separate outstanding work. Switching catalogs does not supply missing fonts.
+The web build can select every catalog; it draws CJK and other non-Latin labels with the fonts the
+host serves (`packaging/web/README.md` › Fonts), and automatic browser-locale detection remains
+outstanding work. Switching catalogs does not supply missing fonts.
 
 ## Add or maintain a catalog
 
