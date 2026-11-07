@@ -756,7 +756,7 @@
 	Working Magenta Plate	Radna magenta ploča
 	Working Yellow Plate	Radna žuta ploča
 	Working Black Plate	Radna crna ploča
-	Working CMY Plates	Radna CMY ploča
+	Working CMY Plates	Radne CMY ploče
 	Legacy Macintosh RGB (Gamma 1.8)	Stari Macintosh RGB (Gamma 1.8)
 	Internet Standard RGB (sRGB)	Internet standard RGB (sRGB)
 	Monitor RGB	RGB monitora
@@ -911,6 +911,12 @@
 	Timeline	Vremenska linija
 	Tool Presets	Šabloni alatki
 	Tools	Alatke
+	Contextual Task Bar	Kontekstualna traka zadataka
+	Hide bar	Sakrij traku
+	Reset bar position	Vrati položaj trake
+	Pin bar position	Zakači položaj trake
+	Move bar	Pomeri traku
+	More options	Više opcija
 	About PhotoCraft	O programu PhotoCraft
 	PhotoCraft Website	Veb-sajt PhotoCraft-a
 	PhotoCraft on GitHub	PhotoCraft na GitHub-u
@@ -1841,6 +1847,7 @@
 	Move Tool	Alatka za pomeranje
 	Could not use the move tool because the layer is locked.	Alatka za pomeranje ne može da se koristi jer je sloj zaključan.
 	Could not complete the Free Transform command because the layer is locked.	Komanda Slobodna transformacija ne može da se izvrši jer je sloj zaključan.
+	Could not transform because the layer is locked.	Transformacija nije moguća jer je sloj zaključan.
 	Multiply	Množenje
 	My Brushes	Moje četkice
 	Neutrals	Neutralne
@@ -1976,6 +1983,7 @@
 	Allow scripts to connect	Dozvoli skriptama da se povežu
 	Always	Uvek
 	Always create smart objects when placing	Uvek pravi pametne objekte pri postavljanju
+	Skip transform when placing	Preskoči transformaciju pri postavljanju
 	Animated zoom	Animirano zumiranje
 	Apply auto tone	Primeni automatski ton
 	Ask	Pitaj
@@ -2509,6 +2517,7 @@
 	Path to Illustrator…	Putanja u Illustrator…
 	Make Work Path	Napravi radnu putanju
 	Make Selection	Napravi selekciju
+	Make Shape	Napravi oblik
 	Fill Path	Popuni putanju
 	Stroke Path	Ocrtaj putanju
 	Clipping Path	Putanja isecanja
@@ -4664,3 +4673,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Izaberite drugi dokument za svaki kanal.
 	A picked document is no longer open.	Jedan izabrani dokument više nije otvoren.
 	A picked document is no longer a grayscale document of the same size.	Jedan izabrani dokument više nije dokument u nijansama sive iste veličine.
+# Move tool options bar (#11381)
+	Align top edges	Poravnaj gornje ivice
+	Align vertical centers	Poravnaj vertikalne centre
+	Align bottom edges	Poravnaj donje ivice
+	Distribute vertically	Raspodeli vertikalno
+	Distribute horizontally	Raspodeli horizontalno
+	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
+	Expand layer group on click	Proširi grupu slojeva klikom
+	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi

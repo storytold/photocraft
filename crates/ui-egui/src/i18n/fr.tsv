@@ -736,7 +736,7 @@
 	Working Magenta Plate	Plaque magenta de travail
 	Working Yellow Plate	Plaque jaune de travail
 	Working Black Plate	Plaque noire de travail
-	Working CMY Plates	Plaque CMJ de travail
+	Working CMY Plates	Plaques CMJ de travail
 	Legacy Macintosh RGB (Gamma 1.8)	RVB Macintosh (ancien) (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RVB standard d'Internet (sRGB)
 	Monitor RGB	RVB du moniteur
@@ -891,6 +891,12 @@
 	Timeline	Montage
 	Tool Presets	Préréglages d'outils
 	Tools	Outils
+	Contextual Task Bar	Barre des tâches contextuelle
+	Hide bar	Masquer la barre
+	Reset bar position	Réinitialiser la position de la barre
+	Pin bar position	Épingler la position de la barre
+	Move bar	Déplacer la barre
+	More options	Plus d'options
 	About PhotoCraft	À propos de PhotoCraft
 	PhotoCraft Website	Site web de PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft sur GitHub
@@ -1834,6 +1840,7 @@
 	Move Tool	Outil Déplacement
 	Could not use the move tool because the layer is locked.	Impossible d'utiliser l'outil Déplacement, car le calque est verrouillé.
 	Could not complete the Free Transform command because the layer is locked.	Impossible d'exécuter la commande Transformation libre, car le calque est verrouillé.
+	Could not transform because the layer is locked.	Impossible de transformer, car le calque est verrouillé.
 	Multiply	Produit
 	My Brushes	Mes pinceaux
 	Neutrals	Neutres
@@ -1966,6 +1973,7 @@
 	Allow scripts to connect	Autoriser la connexion des scripts
 	Always	Toujours
 	Always create smart objects when placing	Toujours créer des objets intelligents lors du placement
+	Skip transform when placing	Ignorer la transformation lors du placement
 	Animated zoom	Zoom animé
 	Apply auto tone	Appliquer la tonalité automatique
 	Ask	Demander
@@ -2493,6 +2501,7 @@
 	Path to Illustrator…	Tracé vers Illustrator…
 	Make Work Path	Créer un tracé de travail
 	Make Selection	Créer une sélection
+	Make Shape	Créer une forme
 	Fill Path	Remplir le tracé
 	Stroke Path	Contourner le tracé
 	Clipping Path	Tracé de détourage
@@ -4621,3 +4630,12 @@ shape	Appearance	Apparence
 	Pick a different document for each channel.	Choisissez un document différent pour chaque canal.
 	A picked document is no longer open.	Un des documents choisis n'est plus ouvert.
 	A picked document is no longer a grayscale document of the same size.	Un des documents choisis n'est plus un document en niveaux de gris de même taille.
+# Move tool options bar (#11381)
+	Align top edges	Aligner les bords supérieurs
+	Align vertical centers	Aligner les centres verticaux
+	Align bottom edges	Aligner les bords inférieurs
+	Distribute vertically	Répartir verticalement
+	Distribute horizontally	Répartir horizontalement
+	Show layer bounds on hover	Afficher les limites du calque au survol
+	Expand layer group on click	Développer le groupe de calques au clic
+	Show hover bounds from Layers	Afficher les limites au survol depuis Calques

@@ -49,6 +49,7 @@ pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
 pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>, anchor: Option<LayerId>) -> Result<()> {
+    let before = s.active_layer_stamp();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if let Some(bad) = ids.iter().chain(active.iter()).find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*bad));
@@ -70,6 +71,7 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
         st.saved_revision = st.revision;
     }
     st.last_damage = Some(Rect::EMPTY);
+    s.note_layer_change(before);
     Ok(())
 }
 
