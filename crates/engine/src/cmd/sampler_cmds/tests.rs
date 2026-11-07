@@ -351,3 +351,134 @@ fn document_helpers_are_not_disturbed() {
     assert_eq!(pixel(&d, 3.9, 3.9), Some([3.0, 3.0]));
     assert_eq!(pixel(&d, 4.0, 0.0), None);
 }
+
+/// The four pure inks, as a CMYK document stores them (ink fractions, 1.0 = 100 %).
+const PURE_INKS: [[f32; 4]; 4] = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]];
+
+/// A CMYK document of `depth` with one 20×20 square of each pure ink, like the CMYK test chart a
+/// reporter opened in #11640.
+fn ink_chart(depth: u32) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 80, "height": 20, "mode": "cmyk", "depth": depth, "background": "white"})).unwrap();
+    s.edit("paint", |doc, _| {
+        let surf = doc.layers[0].surface_mut().unwrap();
+        for (i, ink) in PURE_INKS.iter().enumerate() {
+            surf.fill_rect(Rect::new(i as i32 * 20, 0, (i as i32 + 1) * 20, 20), &[ink[0], ink[1], ink[2], ink[3], 1.0]);
+        }
+        Ok(())
+    })
+    .unwrap();
+    s
+}
+
+/// #11640: a CMYK document's sampled colour is its own ink values, not its RGB composite
+/// re-separated through the profile. Opening a CMYK file of pure C, M, Y and K squares and reading
+/// them back showed 73/15/0/0, 2/99/3/0, 5/1/92/0 and 18/11/12/91 (the lossy sRGB round trip)
+/// where Photoshop and Krita report the pure inks.
+#[test]
+fn a_cmyk_document_reads_its_own_inks() {
+    for depth in [8, 16] {
+        let mut s = ink_chart(depth);
+        for (i, ink) in PURE_INKS.iter().enumerate() {
+            let x = i as i64 * 20 + 10;
+            let r = s.execute("view.colorSamplers.add", json!({"x": x, "y": 10})).unwrap();
+            let want: Vec<i64> = ink.iter().map(|v| (v * 100.0).round() as i64).collect();
+            assert_eq!(r["point"]["cmyk"], json!(want), "depth {depth}, square {i}");
+        }
+    }
+}
+
+/// The ink readout averages on ink values, so a flat area reads the same at every Sample Size
+/// that stays inside the square (larger ones are clipped to the canvas and mix neighbours).
+#[test]
+fn a_cmyk_ink_readout_averages_on_inks() {
+    let s = ink_chart(8);
+    let doc = &s.active().unwrap().doc;
+    for size in [1, 3, 5, 11] {
+        assert_eq!(ink_cmyk(doc, [10.5, 10.5], size), Some([100, 0, 0, 0]), "size {size}");
+    }
+    // Off the canvas and an unknown size read no ink.
+    assert_eq!(ink_cmyk(doc, [900.0, 10.0], 1), None);
+    assert_eq!(ink_cmyk(doc, [10.0, 10.0], 7), None);
+}
+
+/// Only a CMYK document has inks to read: an RGB document keeps the colour-managed conversion of
+/// its composite (#8101), so the readout of its CMYK row is unchanged.
+#[test]
+fn an_rgb_document_keeps_the_converted_cmyk_readout() {
+    let mut s = session();
+    assert_eq!(ink_cmyk(&s.active().unwrap().doc, [50.0, 40.0], 1), None, "an RGB document has no ink composite");
+    let r = s.execute("view.colorSamplers.add", json!({"x": 50, "y": 40})).unwrap();
+    assert_eq!(r["point"]["cmyk"], json!(device_cmyk(1.0, 1.0, 1.0)));
+}
+
+/// A CMYK document the ink compositor declines (a non-separable blend mode) still reads in range
+/// through the RGB conversion, with no crash.
+#[test]
+fn a_cmyk_document_without_an_ink_composite_falls_back() {
+    let mut s = ink_chart(8);
+    s.edit("paint", |doc, _| {
+        doc.layers[0].blend = photocraft_color::BlendMode::Hue;
+        Ok(())
+    })
+    .unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert_eq!(ink_cmyk(doc, [10.5, 10.5], 1), None, "the ink path is declined");
+    let c = cmyk_readout(doc, [10.5, 10.5], 1, [0.0, 0.62, 0.89, 1.0]);
+    assert!(c.iter().all(|v| (0..=100).contains(v)), "{c:?}");
+    // A sample with no coverage keeps the reading it had before.
+    assert_eq!(cmyk_readout(doc, [10.5, 10.5], 1, [0.0, 0.0, 0.0, 0.0]), device_cmyk(0.0, 0.0, 0.0));
+}
+
+/// #11681 review: a document whose inks only the plane-splitting route renders (a layer effect) is
+/// not sampled through it. That route stands the whole document up twice per call, hundreds of
+/// milliseconds for one pointer pixel on a six-megapixel page, so the readout keeps the RGB
+/// conversion for it - the reading it had before the ink readout existed.
+#[test]
+fn a_cmyk_document_with_layer_effects_is_not_sampled_on_the_split_route() {
+    use photocraft_doc::effects::{Contour, Effect, FxCommon, Shadow};
+    let mut s = ink_chart(8);
+    s.edit("paint", |doc, _| {
+        let l = &mut doc.layers[0];
+        l.effects.enabled = true;
+        l.effects.items.push(Effect::DropShadow(Shadow {
+            common: FxCommon::new(photocraft_color::BlendMode::Multiply, 0.75),
+            color: photocraft_color::Color { mode: ColorMode::Cmyk, c: [0.0, 0.0, 0.0, 1.0], alpha: 1.0 },
+            angle: 135.0,
+            use_global_light: false,
+            distance: 2.0,
+            spread: 0.0,
+            size: 6.0,
+            contour: Contour::Linear,
+            anti_alias: true,
+            noise: 0.0,
+            knocks_out: false,
+        }));
+        Ok(())
+    })
+    .unwrap();
+    let doc = &s.active().unwrap().doc;
+    assert!(!photocraft_compose::cmyk::supports(doc), "the effect declines the native ink path");
+    assert!(photocraft_compose::cmyk::renders_inks(doc), "only the split route would render its inks");
+    assert_eq!(ink_cmyk(doc, [10.5, 10.5], 1), None, "and a pointer sample does not ask for it");
+    let rgba = crate::sample_cmds::sample_color(doc, None, 10.0, 10.0, 1, crate::sample_cmds::SampleLayers::All);
+    assert_eq!(cmyk_readout(doc, [10.0, 10.0], 1, rgba), device_cmyk(rgba[0], rgba[1], rgba[2]), "it reads the RGB conversion it had before");
+    let (_rgb, cmyk) = readout(doc, [10.0, 10.0]);
+    assert!(cmyk.iter().all(|v| (0..=100).contains(v)), "{cmyk:?}");
+}
+
+/// Gating on the native ink path changes no value: for a stack it does take, the readout is the
+/// ink composite's own pixel.
+#[test]
+fn the_ink_readout_is_the_ink_composite_itself() {
+    let s = ink_chart(8);
+    let doc = &s.active().unwrap().doc;
+    assert!(photocraft_compose::cmyk::supports(doc), "the native ink path renders this stack");
+    for i in 0..4 {
+        let at = [f64::from(i * 20) + 10.5, 10.5];
+        let rect = crate::sample_cmds::sample_rect(at[0], at[1], 1, doc.bounds()).unwrap();
+        let composite = photocraft_compose::cmyk::render_cmyk(doc, rect).expect("the ink composite");
+        let want = composite.px.first().map(|p| [0, 1, 2, 3].map(|c| (p[c] * 100.0).round() as i32));
+        assert_eq!(ink_cmyk(doc, at, 1), want, "square {i}");
+    }
+}

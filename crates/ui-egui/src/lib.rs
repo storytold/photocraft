@@ -338,8 +338,13 @@ use widgets::tab_strip;
 pub use widgets::text_field_menu;
 pub use widgets::tone;
 
-/// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
-type InfoSampleKey = (i32, i32, u64, u32);
+/// The Info panel's cached sample: the document it was read from, then pixel x, y, document
+/// revision and Eyedropper Sample Size. The document is part of the key because two open documents
+/// can hold the same revision number, and switching back to one must re-read the pixel instead of
+/// showing the other document's RGB and CMYK (#11681 review).
+type InfoSampleKey = (photocraft_doc::DocId, i32, i32, u64, u32);
+/// What that sample reads: the composite RGBA and the CMYK percentages shown with it.
+type InfoSample = ([f32; 4], [i32; 4]);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -642,8 +647,8 @@ pub struct PhotocraftApp {
     /// Layer hovered on the canvas, highlighted in the Layers panel.
     pub(crate) canvas_hover_layer: Option<photocraft_doc::LayerId>,
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
-    /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
-    info_sample: Option<(InfoSampleKey, [f32; 4])>,
+    /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA and CMYK readout).
+    info_sample: Option<(InfoSampleKey, InfoSample)>,
     /// Guide being dragged (from a ruler or with the Move tool).
     pub(crate) guide_drag: Option<rulers::GuideDrag>,
     /// Move tool marquee selecting layers (`move_box`).

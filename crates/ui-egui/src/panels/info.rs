@@ -6,21 +6,30 @@ pub(crate) fn hover_pixel(app: &PhotocraftApp) -> Option<(i32, i32)> {
     app.hover_doc.map(|p| (p[0].floor() as i32, p[1].floor() as i32)).filter(|(x, y)| *x >= 0 && *y >= 0 && *x < size.width as i32 && *y < size.height as i32)
 }
 
-/// The colour the Info panel reads at document pixel `(x, y)`, straight RGBA 0..1: averaged over
-/// the Eyedropper's Sample Size, as in Photoshop (#1649), and cached per pixel and revision.
-pub(crate) fn pointer_sample(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<[f32; 4]> {
-    let rev = app.session.active()?.revision;
+/// The colours the Info panel reads at document pixel `(x, y)`: the composite RGB (straight RGBA
+/// 0..1, averaged over the Eyedropper's Sample Size, as in Photoshop (#1649)) and its CMYK
+/// percentages. Both are cached per document, pixel, revision and Sample Size, so neither the
+/// composite nor the ink composite runs again on a frame that shows the same pixel of the same
+/// document (#4528) — and a switch to another document re-reads (#11681 review).
+pub(crate) fn pointer_readout(app: &mut PhotocraftApp, (x, y): (i32, i32)) -> Option<crate::InfoSample> {
+    let st = app.session.active()?;
+    let (doc, rev) = (st.doc.id, st.revision);
     let sample_size = app.ui.tool_options.eyedropper_size;
-    if let Some(((cx, cy, cr, cs), v)) = app.info_sample
-        && (cx, cy, cr, cs) == (x, y, rev, sample_size)
+    if let Some(((cd, cx, cy, cr, cs), v)) = app.info_sample
+        && (cd, cx, cy, cr, cs) == (doc, x, y, rev, sample_size)
     {
         return Some(v);
     }
-    let params = json!({"x": f64::from(x) + 0.5, "y": f64::from(y) + 0.5, "size": sample_size});
+    let at = [f64::from(x) + 0.5, f64::from(y) + 0.5];
+    let params = json!({"x": at[0], "y": at[1], "size": sample_size});
     let v: Vec<f32> = serde_json::from_value(app.session.execute("document.sampleColor", params).ok()?).ok()?;
-    let v = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
-    app.info_sample = Some(((x, y, rev, sample_size), v));
-    Some(v)
+    let rgba = [*v.first()?, *v.get(1)?, *v.get(2)?, *v.get(3)?];
+    // The CMYK row through the engine, as the Color Sampler points do: the document's own inks for
+    // a CMYK document, so a pure ink reads 100 % (#11640), else the colour-managed conversion of
+    // its RGB composite, the same one the Color Picker uses (#8101).
+    let cmyk = app.session.active().map(|st| photocraft_engine::sampler_cmds::cmyk_readout(&st.doc, at, sample_size, rgba))?;
+    app.info_sample = Some(((doc, x, y, rev, sample_size), (rgba, cmyk)));
+    Some((rgba, cmyk))
 }
 
 /// The Info panel's W and H for a size of `wh` px (the selection's or the pending crop frame's):
@@ -37,7 +46,6 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         return;
     };
     let (size, origin) = (st.doc.size, st.doc.ruler_origin);
-    let cmyk_space = photocraft_compose::cmyk_space(&st.doc);
     // Positions and sizes in the ruler unit (Preferences › Units & Rulers).
     let units = app.session.prefs().units_and_rulers.clone();
     let dpi = st.doc.resolution_dpi as f64;
@@ -57,7 +65,8 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some(d) => (None, Some(d.pos)),
         None => (None, None),
     };
-    let rgba = pos.and_then(|p| pointer_sample(app, p));
+    let sample = pos.and_then(|p| pointer_readout(app, p));
+    let (rgba, cmyk) = (sample.map(|s| s.0), sample.map(|s| s.1));
     let mono = theme::mono(11.5);
     let row = |ui: &mut egui::Ui, k: &str, v: String| {
         ui.horizontal(|ui| {
@@ -71,10 +80,8 @@ pub(super) fn info_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         row(&mut cols[0], "R:", rgba.map_or_else(dash, |c| q(c[0]).to_string()));
         row(&mut cols[0], "G:", rgba.map_or_else(dash, |c| q(c[1]).to_string()));
         row(&mut cols[0], "B:", rgba.map_or_else(dash, |c| q(c[2]).to_string()));
-        // Colour-managed CMYK in percent like Photoshop's readout, through the same conversion as
-        // the Color Picker (#8101) and the Color Sampler readout (`sampler_cmds::device_cmyk`).
-        let cmyk =
-            rgba.map(|c| photocraft_color::convert::with_cmyk_space(cmyk_space.as_ref(), || photocraft_engine::sampler_cmds::device_cmyk(c[0], c[1], c[2])));
+        // CMYK in percent like Photoshop's readout: the document's inks, or the same conversion as
+        // the Color Picker and the Color Sampler points (`sampler_cmds::cmyk_readout`).
         for (i, k) in ["C:", "M:", "Y:", "K:"].iter().enumerate() {
             row(&mut cols[1], k, cmyk.map_or_else(dash, |c| format!("{}%", c[i])));
         }
