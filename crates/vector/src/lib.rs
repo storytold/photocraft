@@ -24,6 +24,7 @@ pub mod edit;
 pub mod feather;
 pub mod flatten;
 pub mod map;
+mod pixel_align;
 pub mod raster;
 pub mod shapes;
 pub mod stroke;
@@ -40,6 +41,14 @@ pub use stroke::{StrokeStyle, stroke_polygons};
 
 /// Default flattening tolerance in pixels (curve-to-chord distance).
 pub const DEFAULT_TOLERANCE: f64 = 0.01;
+
+/// Render-only fill path for an eligible aligned live Line/ArrowLine, in document pixels.
+/// Previews apply their view transform afterwards, matching committed document rendering.
+/// Returns `None` for unpainted paths or geometry that must retain legacy placement.
+pub fn pixel_aligned_line_fill_path(shape: &ShapeLayer) -> Option<Path> {
+    shape.fill.as_ref()?;
+    pixel_align::line_fill_path(shape)
+}
 
 /// Compiles the fill area of `path`: one component per subpath (filled with the path's rule)
 /// folded with the subpath operations; open subpaths are closed implicitly.
@@ -571,10 +580,15 @@ impl FillCoverage {
 
 /// Everything needed to render a shape layer, compiled once.
 pub struct CompiledShape {
+    pixel_stroke: pixel_align::PixelRuns,
+    pixel_dash_caps: pixel_align::PixelRuns,
+    pixel_dash_threshold: f32,
+    pixel_dash_bias: Option<Rasterizer>,
+    pixel_rectangle: Option<(f64, f64, f64, f64)>,
     fill: Option<(FillCoverage, Paint)>,
     stroke: Option<(Rasterizer, Paint, f32)>,
     /// Fill area used to clip inside/outside strokes.
-    align: Option<(Rasterizer, bool)>,
+    align: Option<(Rasterizer, bool, f32)>,
     bounds: Option<Rect>,
 }
 
@@ -594,20 +608,47 @@ impl CompiledShape {
         let area = fill_rasterizer(&shape.path, tol);
         let mut bounds = None;
         let fill = shape.fill.as_ref().map(|f| {
-            let coverage = FillCoverage::new(shape, &area, coverage);
+            let aligned = pixel_align::line_fill_path(shape).map(|p| fill_rasterizer(&p, tol));
+            let coverage = FillCoverage::new(shape, aligned.as_ref().unwrap_or(&area), coverage);
             bounds = coverage.bounds();
             (coverage, Paint::from_fill(f, pb, cb))
         });
         let all_closed = shape.path.subpaths.iter().all(|s| s.closed);
         let mut align = None;
+        let coordinate_tolerance = pixel_align::coordinate_tolerance(shape, gradient_frame);
+        let pixel_rectangle = pixel_align::rectangle_bounds(shape, coordinate_tolerance);
+        let mut pixel_stroke = pixel_align::PixelRuns::stroke(shape, tol, coordinate_tolerance);
+        // The stroker's round caps preserve circular area. Their half-circle
+        // outside an integer dash boundary has area pi/8 at width 1. Use that
+        // tie instead of 1/2, retaining the caps' extra pixel of raster length.
+        let pixel_dash_threshold =
+            if shape.stroke.as_ref().is_some_and(|s| s.cap == photocraft_doc::LineCap::Round) { std::f32::consts::PI / 8.0 } else { 0.5 };
+        let pixel_dash_caps = if shape.stroke.as_ref().is_some_and(|s| !s.dashes.is_empty()) {
+            pixel_align::PixelRuns::stroke(shape, tol, coordinate_tolerance)
+        } else {
+            pixel_align::PixelRuns::default()
+        };
+        let mut pixel_dash_bias = None;
         let stroke = shape.stroke.as_ref().filter(|s| s.width > 0.0 && s.opacity > 0.0).map(|s| {
             let mut st = stroke_style(s);
             if all_closed && s.align != StrokeAlign::Center {
                 // Inside/outside strokes: a centred stroke twice as wide, clipped by the fill area.
                 st.width *= 2.0;
-                align = Some((area.clone(), s.align == StrokeAlign::Inside));
+                align = Some((area.clone(), s.align == StrokeAlign::Inside, 1.0));
+            }
+            if let Some((x0, y0, x1, y1)) = pixel_rectangle {
+                pixel_stroke = pixel_align::PixelRuns::default();
+                // Preserve dash positions from the original vector path.
+                // Select the interior pixel row for crisp 1px strokes.
+                let mask = shapes::rect(x0.round(), y0.round(), x1.round() - x0.round(), y1.round() - y0.round());
+                align = Some((fill_rasterizer(&mask, tol), true, 2.0));
             }
             let r = stroke_rasterizer(&shape.path, &st, tol);
+            if !pixel_dash_caps.is_empty() {
+                // A tiny positive translation resolves only otherwise indistinguishable cap
+                // ties. Reuse the compiled outline so dash lengths, phase and budgets agree.
+                pixel_dash_bias = Some(r.translated(1.0 / 1024.0, 1.0 / 1024.0));
+            }
             let sb = r.pixel_bounds();
             bounds = match (bounds, sb) {
                 (Some(a), Some(b)) => Some(a.union(&b)),
@@ -618,7 +659,7 @@ impl CompiledShape {
         if shape.path.inverted && shape.fill.is_some() {
             bounds = Some(Rect::new(i32::MIN / 4, i32::MIN / 4, i32::MAX / 4, i32::MAX / 4));
         }
-        CompiledShape { fill, stroke, align, bounds }
+        CompiledShape { fill, stroke, align, bounds, pixel_stroke, pixel_dash_caps, pixel_dash_threshold, pixel_dash_bias, pixel_rectangle }
     }
 
     /// Pixel bounds of the rendering (`None` = nothing visible).
@@ -644,12 +685,27 @@ impl CompiledShape {
         }
         if let Some((r, paint, opacity)) = &self.stroke {
             let mut cov = r.render(rect);
-            if let Some((area, inside)) = &self.align {
+            self.pixel_stroke.apply(rect, &mut cov, |region| r.render(region));
+            if let Some((area, inside, scale)) = &self.align {
                 let a = area.render(rect);
-                for (c, f) in cov.iter_mut().zip(&a) {
-                    *c *= if *inside { *f } else { 1.0 - *f };
+                for (i, (c, f)) in cov.iter_mut().zip(&a).enumerate() {
+                    if *c <= 0.0 {
+                        continue;
+                    }
+                    let clip = if *inside { *f } else { 1.0 - *f };
+                    let scale = self
+                        .pixel_rectangle
+                        .map_or(*scale, |bounds| pixel_align::rectangle_coverage_scale(bounds, rect.x0 + (i % w) as i32, rect.y0 + (i / w) as i32));
+                    *c = (*c * clip * scale).min(1.0);
                 }
             }
+            self.pixel_dash_caps.sharpen_dash_caps(
+                rect,
+                &mut cov,
+                self.pixel_dash_threshold,
+                |region| r.render(region),
+                |region| self.pixel_dash_bias.as_ref().map_or_else(Vec::new, |biased| biased.render(region)),
+            );
             for (i, (o, c)) in out.iter_mut().zip(&cov).enumerate() {
                 if *c <= 0.0 {
                     continue;

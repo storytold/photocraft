@@ -1592,3 +1592,106 @@ fn path_rows_dragged_onto_the_trash_are_deleted() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!((doc.layers.len(), doc.paths.len()), (layers, 1), "nothing is deleted");
 }
+
+/// The Shape toolbar edits its selected layer even when the next-shape preference differs.
+#[test]
+fn pixel_align_checkbox_edits_selected_shape_and_undo_restores_its_value() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = app();
+    finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default());
+    // The selected layer, rather than the next-shape preference, supplies the checkbox.
+    app.ui.tool_options.pixel_align_stroke = true;
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal_centered(|ui| options_bar(app, ui, Tool::Rectangle));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(4);
+
+    h.get_by_label("Pixel Align Stroke").click();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
+    assert!(shape.pixel_align_stroke);
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    let LayerContent::Shape(shape) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
+    assert!(!shape.pixel_align_stroke);
+    h.state_mut().ui.tool_options.shape_mode = "path".into();
+    h.run_steps(3);
+    assert!(h.query_by_label("Pixel Align Stroke").is_none(), "Path mode has no stroke controls");
+}
+
+/// Keeping alignment in preview metadata must not add paint to Path-mode outlines.
+#[test]
+fn pixel_align_preview_preserves_shape_and_path_modes() {
+    let mut app = app();
+    app.ui.tool_options.pixel_align_stroke = true;
+    app.ui.tool_options.shape_fill = true;
+    app.ui.tool_options.stroke_width = 1.0;
+    for mode in ["shape", "path"] {
+        app.ui.tool_options.shape_mode = mode.into();
+        let preview = super::shapes::shape_preview(&app, Tool::Rectangle, [20.0, 20.0], [120.0, 100.0], Default::default()).unwrap();
+        assert!(preview.pixel_align_stroke);
+        assert_eq!(preview.fill.is_some(), mode == "shape");
+        assert_eq!(preview.stroke.is_some(), mode == "shape");
+    }
+}
+
+/// A filled Line Tool preview must render the same crisp pixels as its committed shape.
+#[test]
+fn pixel_align_live_line_preview_matches_commit() {
+    let clip = photocraft_geom::Rect::new(0, 0, 200, 200);
+    for vertical in [false, true] {
+        for arrows in [false, true] {
+            let mut app = app();
+            app.ui.tool_options.pixel_align_stroke = true;
+            app.ui.tool_options.stroke_width = 0.0;
+            app.ui.tool_options.line_weight = 1.0;
+            app.ui.tool_options.arrow_end = arrows;
+            let (start, end) = if vertical { ([80.0, 20.0], [80.0, 150.0]) } else { ([20.0, 80.0], [150.0, 80.0]) };
+            let preview = shape_preview(&app, Tool::Line, start, end, Default::default()).unwrap();
+            finish_shape(&mut app, Tool::Line, start, end, Default::default());
+            let st = app.session.active().unwrap();
+            let LayerContent::Shape(committed) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("shape") };
+            assert_eq!(preview.path, committed.path);
+            let render =
+                |s: &photocraft_doc::ShapeLayer| photocraft_vector::CompiledShape::new(s, photocraft_vector::DEFAULT_TOLERANCE, clip).render_rgba(clip);
+            let actual = render(&preview);
+            let expected = render(committed);
+            let mismatch = actual.iter().zip(&expected).enumerate().find(|(_, (a, b))| a != b);
+            assert_eq!(mismatch, None, "vertical={vertical}, arrows={arrows}");
+            for zoom in [0.5, 1.0, 3.0] {
+                for angle in [0.0, 0.3, std::f64::consts::FRAC_PI_2] {
+                    let transform = photocraft_geom::Affine::scale(zoom)
+                        .then(&photocraft_geom::Affine::rotate(angle))
+                        .then(&photocraft_geom::Affine::translate(7.25, 13.5));
+                    let projected = super::shapes::preview_for_view(preview.clone(), &transform, zoom);
+                    let alignment = photocraft_geom::Affine::translate(if vertical { 0.5 } else { 0.0 }, if vertical { 0.0 } else { 0.5 });
+                    assert_eq!(projected.path, preview.path.transform(&alignment).transform(&transform));
+                    assert!(projected.live.is_none(), "view-space rendering must not apply alignment twice");
+                }
+            }
+        }
+    }
+}
+
+/// Shape-tool resets clear alignment and restore Shape mode without changing Pen's mode.
+#[test]
+fn pixel_align_reset_restores_shape_mode_without_resetting_pen_mode() {
+    let mut app = app();
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::CustomShape, Tool::Line] {
+        app.ui.tool_options.shape_mode = "path".into();
+        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.pixel_align_stroke = true;
+        crate::tool_reset::reset_options(&mut app.ui.tool_options, tool);
+        assert_eq!(app.ui.tool_options.shape_mode, "shape", "{tool:?}");
+        assert_eq!(app.ui.tool_options.vector_mode, "shape", "{tool:?}: Pen preference must remain independent");
+        assert!(!app.ui.tool_options.pixel_align_stroke);
+    }
+}

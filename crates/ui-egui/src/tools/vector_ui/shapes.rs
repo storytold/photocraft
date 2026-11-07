@@ -147,6 +147,7 @@ pub(super) fn fill_param(app: &PhotocraftApp) -> Value {
 pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Value, String> {
     geometry["fill"] = fill_param(app);
     geometry["stroke"] = stroke_param(app);
+    geometry["pixelAlignStroke"] = json!(app.ui.tool_options.pixel_align_stroke);
     app.run("shape.create", geometry)
 }
 
@@ -211,26 +212,52 @@ pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], en
     let o = &app.ui.tool_options;
     let path = shape_outline(app, tool, start, end, mods)?;
     let paint = !draws_path(o);
+    let live = if tool == Tool::Line {
+        let geometry = shape_geometry(o, tool, start, end, mods)?;
+        Some(photocraft_doc::LiveShape::ArrowLine {
+            from: serde_json::from_value(geometry.get("from")?.clone()).ok()?,
+            to: serde_json::from_value(geometry.get("to")?.clone()).ok()?,
+            weight: geometry.get("weight")?.as_f64()?,
+            start: o.arrow_start,
+            end: o.arrow_end,
+            width: f64::from(o.arrow_width),
+            length: f64::from(o.arrow_length),
+            concavity: f64::from(o.arrow_concavity),
+        })
+    } else {
+        None
+    };
     Some(photocraft_doc::ShapeLayer {
         path,
         fill: (paint && o.shape_fill).then(|| tool_paint(app, false)),
         stroke: (paint && o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
+        pixel_align_stroke: o.pixel_align_stroke,
+        live,
         ..Default::default()
     })
 }
 
+/// Align eligible filled lines in document pixels before mapping them into view space.
+/// Clear live metadata afterwards so screen-space rasterization cannot align them twice.
+pub(super) fn preview_for_view(mut shape: photocraft_doc::ShapeLayer, transform: &Affine, zoom: f64) -> photocraft_doc::ShapeLayer {
+    let path = photocraft_vector::pixel_aligned_line_fill_path(&shape).unwrap_or_else(|| shape.path.clone());
+    shape.path = path.transform(transform);
+    shape.live = None;
+    if let Some(stroke) = &mut shape.stroke {
+        stroke.width *= zoom as f32;
+    }
+    shape
+}
+
 /// Shape-tool drag preview using the same path and vector stroke geometry as the commit.
 pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
-    let Some(mut shape) = shape_preview(app, tool, start, end, mods) else { return };
+    let Some(shape) = shape_preview(app, tool, start, end, mods) else { return };
     let path = shape.path.clone();
     let origin = xf.to_screen(0.0, 0.0);
     let x = xf.to_screen(1.0, 0.0) - origin;
     let y = xf.to_screen(0.0, 1.0) - origin;
     let transform = Affine { m: [x.x as f64, x.y as f64, y.x as f64, y.y as f64, origin.x as f64, origin.y as f64] };
-    shape.path = shape.path.transform(&transform);
-    if let Some(stroke) = &mut shape.stroke {
-        stroke.width *= xf.zoom;
-    }
+    let shape = preview_for_view(shape, &transform, f64::from(xf.zoom));
     // This lightweight screen overlay retains the existing display-colour behaviour; document
     // rendering still goes through its format/profile path when the shape is committed.
     crate::shape_stroke_ui::paint_shape_preview(painter, &shape);

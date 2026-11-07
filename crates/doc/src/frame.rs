@@ -50,6 +50,16 @@ impl Frame {
     }
     pub fn stroke_shape(&self) -> Option<ShapeLayer> {
         let stroke = self.stroke.clone()?;
-        Some(ShapeLayer { path: self.outline(), fill: None, stroke: Some(stroke), cache: None, psd_raw: None, live: None, density: 1.0, feather: 0.0 })
+        Some(ShapeLayer {
+            path: self.outline(),
+            fill: None,
+            stroke: Some(stroke),
+            pixel_align_stroke: false,
+            cache: None,
+            psd_raw: None,
+            live: None,
+            density: 1.0,
+            feather: 0.0,
+        })
     }
 }

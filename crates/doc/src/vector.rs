@@ -338,6 +338,8 @@ pub struct ShapeLayer {
     /// `None` = no fill (Photoshop's fill "none").
     pub fill: Option<Fill>,
     pub stroke: Option<ShapeStroke>,
+    /// Opt-in pixel alignment; false preserves legacy stroke rendering.
+    pub pixel_align_stroke: bool,
     pub live: Option<LiveShape>,
     /// Rasterized appearance (from PSD or `photocraft-vector`).
     pub cache: Option<Surface>,
@@ -353,7 +355,17 @@ pub struct ShapeLayer {
 
 impl Default for ShapeLayer {
     fn default() -> Self {
-        ShapeLayer { path: Path::default(), fill: None, stroke: None, live: None, cache: None, psd_raw: None, density: 1.0, feather: 0.0 }
+        ShapeLayer {
+            path: Path::default(),
+            fill: None,
+            stroke: None,
+            pixel_align_stroke: false,
+            live: None,
+            cache: None,
+            psd_raw: None,
+            density: 1.0,
+            feather: 0.0,
+        }
     }
 }
 

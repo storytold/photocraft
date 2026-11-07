@@ -769,6 +769,35 @@ mod tests {
         assert_eq!(app.ui.crop_rect, Some([8.0, 0.0, 56.0, 48.0]));
     }
 
+    /// Every shape and Pen preset restores alignment after Reset Tool clears it.
+    #[test]
+    fn pixel_alignment_tool_presets_roundtrip_and_reset_for_shape_and_pen_tools() {
+        for tool in [
+            Tool::Rectangle,
+            Tool::EllipseShape,
+            Tool::Triangle,
+            Tool::Polygon,
+            Tool::CustomShape,
+            Tool::Line,
+            Tool::Pen,
+            Tool::CurvaturePen,
+            Tool::FreeformPen,
+        ] {
+            let (mut app, _) = app();
+            app.ui.tool = tool;
+            app.ui.tool_options.pixel_align_stroke = true;
+            let params = new_tool_preset_params(&app, tool);
+            assert_eq!(params["options"]["toolOptions"]["pixel_align_stroke"], true, "{tool:?}");
+            let name = app.run("tool.presets.new", params).unwrap()["name"].as_str().unwrap().to_string();
+            crate::tool_reset::reset_options(&mut app.ui.tool_options, tool);
+            assert!(!app.ui.tool_options.pixel_align_stroke, "{tool:?}");
+            app.ui.tool_options.feather = 11.0;
+            select_tool_preset(&mut app, &name);
+            assert_eq!(app.ui.tool, tool);
+            assert!(app.ui.tool_options.pixel_align_stroke, "{tool:?}");
+            assert_eq!(app.ui.tool_options.feather, 11.0);
+        }
+    }
     /// #7356: a preset made with + keeps only its own tool's options, so choosing it doesn't
     /// reset the Crop tool's Delete Cropped Pixels or the Move tool's Auto-Select.
     #[test]

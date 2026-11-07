@@ -1091,3 +1091,48 @@ fn arrow_document_is_backward_compatible() {
     let loaded = load_from_bytes(&bytes).unwrap();
     assert_eq!(loaded, doc);
 }
+/// Native files keep enabled alignment; missing or disabled fields preserve legacy rendering.
+#[test]
+fn pixel_align_stroke_roundtrips_and_defaults_for_legacy_files() {
+    use photocraft_doc::{ShapeLayer, ShapeStroke};
+    use photocraft_format::manifest::ContentM;
+
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+
+    doc.layers.push(Layer::new(
+        "Pixel aligned rectangle",
+        LayerContent::Shape(ShapeLayer {
+            path: photocraft_doc::Path::new(vec![photocraft_doc::Subpath::polygon(&[(10.0, 10.0), (70.0, 10.0), (70.0, 70.0), (10.0, 70.0)])]),
+            stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+            pixel_align_stroke: true,
+            ..Default::default()
+        }),
+    ));
+
+    // The enabled option survives a complete save/load cycle.
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let reopened = load_from_bytes(&bytes).unwrap();
+    assert_eq!(reopened, doc);
+
+    let manifest = read_manifest(&bytes).unwrap();
+    let layer = manifest.document.layers.iter().find(|l| l.name == "Pixel aligned rectangle").unwrap();
+
+    let stored = serde_json::to_value(&layer.content).unwrap();
+    assert_eq!(stored["pixel_align_stroke"], true);
+
+    // A legacy manifest without the new property defaults to false.
+    let mut legacy = stored.clone();
+    legacy.as_object_mut().unwrap().remove("pixel_align_stroke");
+
+    let old_content: ContentM = serde_json::from_value(legacy).unwrap();
+    assert!(matches!(old_content, ContentM::Shape { pixel_align_stroke: false, .. }));
+
+    // Disabled alignment must not add a new field to legacy-style manifests.
+    let mut disabled = layer.content.clone();
+    if let ContentM::Shape { pixel_align_stroke, .. } = &mut disabled {
+        *pixel_align_stroke = false;
+    }
+
+    let disabled_json = serde_json::to_value(disabled).unwrap();
+    assert!(disabled_json.get("pixel_align_stroke").is_none());
+}

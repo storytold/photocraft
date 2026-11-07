@@ -412,7 +412,7 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
         r
     } else if let (Some(op), Some(layer), "shape") = (op, into_shape, app.ui.tool_options.vector_mode.as_str()) {
         // The selected shape layer keeps its fill and stroke; the new component cuts, intersects…
-        app.run("shape.create", json!({"kind": "path", "path": path, "addTo": layer, "op": op}))
+        app.run("shape.create", json!({"kind": "path", "path": path, "addTo": layer, "op": op, "pixelAlignStroke": app.ui.tool_options.pixel_align_stroke}))
     } else if app.ui.tool_options.vector_mode == "shape" {
         let fill = if closed { fill_param(app) } else { Value::Null };
         let stroke = if closed {
@@ -423,7 +423,17 @@ fn commit_path_current(app: &mut PhotocraftApp, pen: &PenPath, closed: bool) -> 
             stroke["color"] = json!(app.session.tools.foreground);
             stroke
         };
-        app.run("shape.create", json!({"kind": "path", "path": path, "fill": fill, "stroke": stroke}))
+        let pixel_align_stroke = app.ui.tool_options.pixel_align_stroke;
+        app.run(
+            "shape.create",
+            json!({
+                "kind": "path",
+                "path": path,
+                "fill": fill,
+                "stroke": stroke,
+                "pixelAlignStroke": pixel_align_stroke
+            }),
+        )
     } else if let Some((name, p)) =
         pen.resumes.as_ref().and_then(|r| app.session.active().and_then(|st| with_resumed_subpath(&st.doc, r, &path)).map(|p| (r.path.clone(), p)))
     {
@@ -598,6 +608,9 @@ fn commit_resumed_on_layer(app: &mut PhotocraftApp, pen: &PenPath, path: &Value,
         return Some(app.run("layer.vectorMask.edit", json!({"layer": id, "path": p})));
     };
     let mut params = json!({"layer": id, "path": p});
+    if app.ui.tool_options.vector_mode == "shape" {
+        params["pixelAlignStroke"] = json!(app.ui.tool_options.pixel_align_stroke);
+    }
     if closed && sh.fill.is_none() && sh.path.subpaths.iter().all(|s| !s.closed) {
         params["fill"] = fill_param(app);
         params["stroke"] = stroke_param(app);

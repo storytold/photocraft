@@ -152,6 +152,18 @@ impl Rasterizer {
         self.inverted
     }
 
+    /// Translate compiled edges by a finite render-only offset without retessellating dashes.
+    pub(crate) fn translated(&self, dx: f64, dy: f64) -> Self {
+        let mut shifted = self.clone();
+        for edge in &mut shifted.edges {
+            edge.x0 += dx;
+            edge.y0 += dy;
+            edge.y1 += dy;
+        }
+        shifted.bounds = shifted.bounds.map(|(x0, y0, x1, y1)| (x0 + dx, y0 + dy, x1 + dx, y1 + dy));
+        shifted
+    }
+
     /// Whether the combined shape is inside given per-component winding numbers.
     #[inline]
     fn inside(&self, wind: &[i32], union_count: i32) -> bool {

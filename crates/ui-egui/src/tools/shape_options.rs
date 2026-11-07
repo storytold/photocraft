@@ -21,13 +21,21 @@ struct SelectedShape {
     fill: Option<photocraft_doc::Fill>,
     stroke: Option<photocraft_doc::ShapeStroke>,
     live: Option<photocraft_doc::LiveShape>,
+    pixel_align_stroke: bool,
 }
 
 fn selected_shape(session: &photocraft_engine::Session) -> Option<SelectedShape> {
     let st = session.active()?;
     let layer = st.active_layer?;
     match &st.doc.layer(layer)?.content {
-        LayerContent::Shape(sh) => Some(SelectedShape { doc: st.doc.id, layer, fill: sh.fill.clone(), stroke: sh.stroke.clone(), live: sh.live.clone() }),
+        LayerContent::Shape(sh) => Some(SelectedShape {
+            doc: st.doc.id,
+            layer,
+            fill: sh.fill.clone(),
+            stroke: sh.stroke.clone(),
+            live: sh.live.clone(),
+            pixel_align_stroke: sh.pixel_align_stroke,
+        }),
         _ => None,
     }
 }
@@ -101,6 +109,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             o.stroke_width = enabled_stroke_width(o.stroke_width);
         }
     }
+    edit = pixel_align_option(ui, &mut o.pixel_align_stroke, target.as_ref().map(|s| s.pixel_align_stroke), paint).or(edit);
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
@@ -196,6 +205,19 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     if let Some(rgb) = recent {
         crate::paint_picker::remember(app, rgb);
     }
+}
+
+fn pixel_align_option(ui: &mut egui::Ui, preference: &mut bool, selected: Option<bool>, paint: bool) -> Option<Value> {
+    if !paint {
+        return None;
+    }
+    crate::widgets::vline(ui, 22.0);
+    let mut pixel_align = selected.unwrap_or(*preference);
+    if !crate::widgets::checkbox(ui, &mut pixel_align, tl!("Pixel Align Stroke")).changed() {
+        return None;
+    }
+    *preference = pixel_align;
+    Some(json!({"pixelAlignStroke": pixel_align}))
 }
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.

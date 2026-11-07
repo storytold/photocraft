@@ -209,6 +209,7 @@ pub fn vscg_bytes(f: &Fill) -> Vec<u8> {
 pub struct VstkInfo {
     pub stroke: Option<ShapeStroke>,
     pub fill_enabled: bool,
+    pub pixel_align_stroke: bool,
 }
 
 fn content_fill(d: &Descriptor) -> Option<Fill> {
@@ -233,9 +234,10 @@ fn unit_px(v: Option<&Value>, dpi: f32) -> Option<f64> {
 
 pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
     let d = parse_prefix_versioned(data)?;
+    let pixel_align_stroke = bool_of(&d, "strokeStyleStrokeAdjust");
     let fill_enabled = !matches!(d.get("fillEnabled"), Some(Value::Boolean(false)));
     if !bool_of(&d, "strokeEnabled") {
-        return Some(VstkInfo { stroke: None, fill_enabled });
+        return Some(VstkInfo { stroke: None, fill_enabled, pixel_align_stroke });
     }
     let e = |k: &str| enum_of(&d, k).map(<[u8]>::to_vec).unwrap_or_default();
     let cap = match &e("strokeStyleLineCapType")[..] {
@@ -279,7 +281,7 @@ pub fn parse_vstk(data: &[u8], dpi: f32) -> Option<VstkInfo> {
         dashes,
         dash_offset: num(d.get("strokeStyleLineDashOffset")).unwrap_or(0.0) as f32,
     };
-    Some(VstkInfo { stroke: Some(stroke), fill_enabled })
+    Some(VstkInfo { stroke: Some(stroke), fill_enabled, pixel_align_stroke })
 }
 
 fn en(ty: &str, v: &str) -> Value {
@@ -301,6 +303,10 @@ fn fold_stroke_color_alpha(s: &ShapeStroke) -> ShapeStroke {
 }
 
 pub fn vstk_bytes(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32) -> Vec<u8> {
+    vstk_bytes_aligned(stroke, fill_enabled, dpi, false)
+}
+
+fn vstk_bytes_aligned(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32, pixel_align_stroke: bool) -> Vec<u8> {
     let default = ShapeStroke::default();
     let folded = stroke.map(fold_stroke_color_alpha);
     let s = folded.as_ref().unwrap_or(&default);
@@ -355,7 +361,7 @@ pub fn vstk_bytes(stroke: Option<&ShapeStroke>, fill_enabled: bool, dpi: f32) ->
             ),
         )
         .with("strokeStyleScaleLock", Value::Boolean(false))
-        .with("strokeStyleStrokeAdjust", Value::Boolean(false))
+        .with("strokeStyleStrokeAdjust", Value::Boolean(pixel_align_stroke))
         .with("strokeStyleLineDashSet", Value::List(s.dashes.iter().map(|v| Value::UnitFloat { unit: *b"#Nne", value: f64::from(*v) }).collect()))
         .with("strokeStyleBlendMode", en("BlnM", "Nrml"))
         .with("strokeStyleOpacity", Value::UnitFloat { unit: *b"#Prc", value: f64::from(s.opacity * 100.0) })
@@ -516,6 +522,7 @@ pub fn shape_from_blocks(sh: &mut ShapeLayer, block: &dyn Fn(&[u8; 4]) -> Option
     }
     if let Some(v) = block(b"vstk").and_then(|d| parse_vstk(&d, dpi)) {
         sh.stroke = v.stroke;
+        sh.pixel_align_stroke = v.pixel_align_stroke;
         if !v.fill_enabled {
             sh.fill = None;
         }
@@ -568,13 +575,22 @@ pub fn shape_blocks(sh: &ShapeLayer, raw: &mut Vec<([u8; 4], Vec<u8>)>, w: u32, 
     }
     // Stroke (+ fill enabled flag). A fill we could not decode counts as unchanged.
     let undecodable_fill = sh.fill.is_none() && present && !has_fill_block(raw);
-    let same = |v: &VstkInfo| v.stroke == sh.stroke && (v.fill_enabled == sh.fill.is_some() || (v.fill_enabled && undecodable_fill));
+    let same_appearance = |v: &VstkInfo| v.stroke == sh.stroke && (v.fill_enabled == sh.fill.is_some() || (v.fill_enabled && undecodable_fill));
     match find(raw, b"vstk") {
-        Some(i) if parse_vstk(&raw[i].1, dpi).as_ref().is_some_and(same) => {}
-        Some(i) => raw[i].1 = vstk_bytes(sh.stroke.as_ref(), sh.fill.is_some(), dpi),
+        Some(i) if parse_vstk(&raw[i].1, dpi).as_ref().is_some_and(same_appearance) => {
+            if let Some(mut d) = parse_prefix_versioned(&raw[i].1)
+                && bool_of(&d, "strokeStyleStrokeAdjust") != sh.pixel_align_stroke
+            {
+                // Toggling alignment must retain unknown stroke descriptor entries.
+                d.items.retain(|(k, _)| !k.is("strokeStyleStrokeAdjust"));
+                d.items.push((Id::new("strokeStyleStrokeAdjust"), Value::Boolean(sh.pixel_align_stroke)));
+                raw[i].1 = VersionedDescriptor::new(d).to_bytes();
+            }
+        }
+        Some(i) => raw[i].1 = vstk_bytes_aligned(sh.stroke.as_ref(), sh.fill.is_some(), dpi, sh.pixel_align_stroke),
         // "No fill" needs a vstk only when a fill block would otherwise paint.
-        None if sh.stroke.is_some() || (sh.fill.is_none() && has_fill_block(raw)) => {
-            raw.push((*b"vstk", vstk_bytes(sh.stroke.as_ref(), sh.fill.is_some(), dpi)));
+        None if sh.pixel_align_stroke || sh.stroke.is_some() || (sh.fill.is_none() && has_fill_block(raw)) => {
+            raw.push((*b"vstk", vstk_bytes_aligned(sh.stroke.as_ref(), sh.fill.is_some(), dpi, sh.pixel_align_stroke)));
         }
         None => {}
     }
@@ -777,5 +793,78 @@ mod tests {
         assert!(!raw.iter().any(|(k, _)| k == b"vogk"));
         let (p, _) = path_from_vmsk(&raw[0].1, 64, 64).unwrap();
         assert_eq!(p, edited.path);
+    }
+}
+
+#[cfg(test)]
+mod pixel_align_tests {
+    use super::*;
+    #[test]
+    fn pixel_alignment_psd_roundtrip_including_disabled_stroke_and_unknown_entries() {
+        for enabled in [false, true] {
+            for stroke in [None, Some(ShapeStroke::default())] {
+                let mut sh = ShapeLayer { pixel_align_stroke: enabled, stroke, ..Default::default() };
+                // Use a locally built path below; the stroke-disabled case matters for Line Tool.
+                sh.path = Path::new(vec![Subpath::polygon(&[(10.0, 10.0), (50.0, 10.0), (50.0, 50.0), (10.0, 50.0)])]);
+                let mut raw = Vec::new();
+                shape_blocks(&sh, &mut raw, 100, 100, 72.0);
+                let mut loaded = ShapeLayer::default();
+                shape_from_blocks(&mut loaded, &|key| raw.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()), 100, 100, 72.0);
+                assert_eq!(loaded.pixel_align_stroke, enabled);
+                assert_eq!(loaded.stroke.is_some(), sh.stroke.is_some());
+                let at = raw.iter().position(|(k, _)| k == b"vstk").expect("stroke settings block");
+                {
+                    let d = parse_prefix_versioned(&raw[at].1).unwrap().with("futureStrokeKey", Value::Integer(73));
+                    raw[at].1 = VersionedDescriptor::new(d).to_bytes();
+                    sh.pixel_align_stroke = !enabled;
+                    shape_blocks(&sh, &mut raw, 100, 100, 72.0);
+                    let d = parse_prefix_versioned(&raw[at].1).unwrap();
+                    assert_eq!(d.get("futureStrokeKey"), Some(&Value::Integer(73)));
+                    assert_eq!(bool_of(&d, "strokeStyleStrokeAdjust"), !enabled);
+                    let unchanged = raw.clone();
+                    shape_blocks(&sh, &mut raw, 100, 100, 72.0);
+                    assert_eq!(raw, unchanged);
+                }
+            }
+        }
+        let mut d = parse_prefix_versioned(&vstk_bytes(None, true, 72.0)).unwrap();
+        d.items.retain(|(k, _)| !k.is("strokeStyleStrokeAdjust"));
+        assert!(!parse_vstk(&VersionedDescriptor::new(d).to_bytes(), 72.0).unwrap().pixel_align_stroke);
+    }
+
+    /// PSD's 8.24 path coordinates must not turn an aligned stroke soft after an appearance edit.
+    #[test]
+    fn pixel_alignment_survives_psd_quantization_and_appearance_edits() {
+        use photocraft_color::Color;
+        use photocraft_geom::Rect;
+        use photocraft_vector::{CompiledShape, DEFAULT_TOLERANCE, shapes};
+        for side in [100, 1000, 300_000] {
+            let original = ShapeLayer {
+                path: shapes::rect(10.0, 10.0, 60.0, 60.0),
+                pixel_align_stroke: true,
+                stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }),
+                ..Default::default()
+            };
+            let mut raw = Vec::new();
+            shape_blocks(&original, &mut raw, side, side, 72.0);
+            let lookup = |key: &[u8; 4]| raw.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+            // The importer retains the original vector mask block alongside the decoded path.
+            let mut loaded = ShapeLayer { psd_raw: lookup(b"vsms").or_else(|| lookup(b"vmsk")).map(std::sync::Arc::new), ..Default::default() };
+            shape_from_blocks(&mut loaded, &lookup, side, side, 72.0);
+            let stored = loaded.path.clone();
+            assert_ne!(stored, original.path, "test must exercise quantized coordinates");
+            loaded.stroke.as_mut().unwrap().paint = Fill::Solid(Color::rgb(0.4, 0.2, 0.7));
+            let clip = Rect::new(0, 0, 80, 80);
+            let canvas = Rect::new(0, 0, side as i32, side as i32);
+            let compiled = CompiledShape::with_frames(&loaded, DEFAULT_TOLERANCE, clip, canvas);
+            let pixels = compiled.render_rgba(clip);
+            for y in 0..80 {
+                for x in 0..80 {
+                    let on_edge = (10..70).contains(&x) && (y == 10 || y == 69) || (10..70).contains(&y) && (x == 10 || x == 69);
+                    assert!((pixels[y * 80 + x][3] - f32::from(on_edge)).abs() < 1e-4, "side={side}, x={x}, y={y}");
+                }
+            }
+            assert_eq!(loaded.path, stored, "rendering must not round stored PSD coordinates");
+        }
     }
 }
