@@ -279,23 +279,26 @@ fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
 }
 
 /// The document to show while a lone layer mask's box is open: the mask where the box puts it
-/// now ([`LiveMask`]), built again only when the box changes. `None` for other sessions, or
-/// when the frame can't be built (past the transform budget, a degenerate box): the canvas then
-/// shows the mask vacated and [`draw_content`] the grey values.
+/// now ([`LiveMask`]), built again only when the box or the Nearest Neighbor choice changes.
+/// `None` for other sessions, or when the frame can't be built (past the transform budget, a
+/// degenerate box): the canvas then shows the mask vacated and [`draw_content`] the grey values.
 pub(crate) fn live_mask_doc(app: &mut PhotocraftApp) -> Option<(Arc<Document>, u64)> {
-    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
-    let live = pv.live_mask.as_ref()?;
-    if live.quad == Some(t.quad) {
+    let frame = app.frame;
+    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_mut()?);
+    let nearest = t.interpolation == "nearest";
+    let live = pv.live_mask.as_mut()?;
+    live.drawn = frame;
+    if live.quad == Some((t.quad, nearest)) {
         return live.shown.clone();
     }
     let key = LIVE_MASK_BASE | (app.ui.alloc_id() & (LIVE_MASK_BASE - 1));
     let started = crate::gpu_canvas::now_ms();
     let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_mut()?);
     let live = pv.live_mask.as_mut()?;
-    live.quad = Some(t.quad);
+    live.quad = Some((t.quad, nearest));
     live.shown = None;
     // Bilinear keeps a frame cheap while the box moves; the commit uses the chosen interpolation.
-    let interp = if t.interpolation == "nearest" { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bilinear };
+    let interp = if nearest { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bilinear };
     let h = Homography::rect_to_quad(t.rect, t.quad)?;
     let mut doc = (*pv.doc).clone();
     let params = json!({ "target": t.target.clone()? });

@@ -162,9 +162,14 @@ struct LiveMask {
     lifted: photocraft_raster::Surface,
     /// The revision of the document the session began from.
     revision: u64,
-    /// The box the latest frame was built for, and that frame (`None` when it couldn't be).
-    quad: Option<[[f64; 2]; 4]>,
+    /// The box and Nearest Neighbor choice the latest frame was built for, and that frame (`None`
+    /// when it couldn't be).
+    quad: Option<([[f64; 2]; 4], bool)>,
     shown: Option<(Arc<Document>, u64)>,
+    /// The app frame the canvas was last handed `shown` in. A preview that takes the canvas over
+    /// (a blend mode hovered in the Layers panel) leaves it behind: [`draw_content`] then draws
+    /// the grey values again, so the moving mask stays visible.
+    drawn: u64,
     /// Where each frame shown so far differs from `doc` (the values vacated), by preview key.
     areas: VecDeque<(u64, photocraft_geom::Rect)>,
 }

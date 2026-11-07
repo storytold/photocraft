@@ -3395,6 +3395,49 @@ fn a_lone_alpha_channel_keeps_the_grey_preview() {
     assert!(live_mask_doc(&mut app).is_none());
 }
 
+/// #9691 review: switching Nearest Neighbor on with the box still builds the lone mask's frame
+/// again, so the canvas shows the interpolation the commit uses.
+#[test]
+fn a_lone_mask_frame_follows_the_interpolation() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 2.5, y]);
+    let (smooth, k0) = crate::canvas::display_doc(&mut app, 0);
+    app.ui.transform.as_mut().unwrap().interpolation = "nearest".into();
+    let (sharp, k1) = crate::canvas::display_doc(&mut app, 0);
+    assert_ne!(k0, k1, "a new frame for Nearest Neighbor");
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let edge = |d: &Document| d.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(18, 4, 0);
+    assert!((edge(&smooth) - edge(&sharp)).abs() > 0.1, "the mask's edge pixel differs: {} vs {}", edge(&smooth), edge(&sharp));
+}
+
+/// #9691 review: a blend mode hovered in the Layers panel takes the canvas over from the lone
+/// mask's frame; the grey values then show the moving mask again.
+#[test]
+fn a_lone_mask_shows_its_grey_values_under_a_blend_mode_hover() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0)),
+        zoom: 2.0,
+        center: [32.0, 32.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    let (_, live) = crate::canvas::display_doc(&mut app, 0);
+    assert!(preview_meshes(&app, &xf).is_empty(), "the frame shows the mask");
+    app.frame += 1;
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    crate::blend_preview::hover(&mut app, &[layer], Some(photocraft_color::BlendMode::Multiply));
+    let (_, hovered) = crate::canvas::display_doc(&mut app, 0);
+    assert_ne!(hovered, live, "the blend preview is shown");
+    assert!(!preview_meshes(&app, &xf).is_empty(), "the grey values show the moving mask");
+}
+
 /// Batch 16 review: ⌥⌘T with the unlinked mask of a linked layer targeted still copies; only the
 /// layer's own pixels take the link group's box without a copy.
 #[test]
