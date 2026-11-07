@@ -478,12 +478,13 @@ impl Builder<'_> {
         // The pixel cache is optional (the shape renders from its path without it), so charge the
         // area it would cover to the import's pixel budget and go without it when that is spent:
         // geometry across a 300000 px canvas would otherwise be rasterized for every shape.
-        let reach = sh.stroke.as_ref().map_or(0, |s| (s.width.ceil() as i32).saturating_add(1));
-        let area = frame.inflate(reach).intersect(&self.canvas);
+        // The compiled bounds are what `render` covers, an acute miter reaching past the stroke width included.
+        let compiled = photocraft_vector::CompiledShape::new(&sh, photocraft_vector::DEFAULT_TOLERANCE, self.canvas);
+        let area = compiled.bounds().map_or(Rect::default(), |b| b.intersect(&self.canvas));
         // Whole tiles: even a 2x2 px shape keeps one, which 50 000 small shapes add up to gigabytes.
         let cost = crate::text_import::cache_bytes(area, self.format.bytes_per_pixel());
         if charge(&mut self.cache_budget, cost) {
-            sh.cache = Some(photocraft_vector::render_shape(&sh, self.format, self.canvas));
+            sh.cache = Some(compiled.render(self.format, self.canvas));
         } else {
             self.uncached_shapes += 1;
         }
@@ -812,6 +813,46 @@ mod tests {
         assert_eq!(b.uncached_shapes, 7);
         assert_eq!(b.cache_budget, 0);
         assert_eq!(b.pixel_budget, MAX_PIXEL_BYTES, "caches don't draw on the pool images need");
+    }
+
+    #[test]
+    fn an_acute_miter_is_charged_for_the_tiles_it_reaches() {
+        // A thin spike at x = 250 with a 4 px miter stroke reaches x = 270, into the next 256 px
+        // tile, though the stroke width alone would stay in the first.
+        let p = |x: f64, y: f64| af::Point { x, y };
+        let sub = af::SubPath {
+            start: p(250.0, 100.0),
+            segments: [p(200.0, 95.0), p(200.0, 105.0), p(250.0, 100.0)].iter().map(|c| [*c; 3]).collect(),
+            closed: true,
+        };
+        let mut d = page(vec![node(Kind::Shape {
+            path: af::Path { subpaths: vec![sub] },
+            fills: Vec::new(),
+            strokes: vec![ap::Stroke {
+                paint: ap::Paint::Solid(ap::Color::Rgb { r: 1.0, g: 0.0, b: 0.0, a: 1.0 }),
+                width: 4.0,
+                cap: Cap::Butt,
+                join: Join::Miter,
+                miter_limit: 20.0,
+                align: ap::Align::Center,
+                dash: None,
+                behind: false,
+            }],
+            even_odd: false,
+        })]);
+        d.spreads[0].bounds.x1 = 600.0;
+        d.spreads[0].bounds.y1 = 600.0;
+        let mut b = Builder::new("miter", &d).unwrap();
+        let tile = crate::text_import::cache_bytes(Rect::new(0, 0, 1, 1), b.format.bytes_per_pixel());
+        b.cache_budget = tile;
+        b.document(&d).unwrap();
+        assert_eq!(b.uncached_shapes, 1, "two tiles do not fit a budget of one");
+        assert_eq!(b.cache_budget, tile, "nothing was charged");
+        let mut b2 = Builder::new("miter", &d).unwrap();
+        b2.cache_budget = 2 * tile;
+        b2.document(&d).unwrap();
+        assert_eq!(b2.uncached_shapes, 0);
+        assert_eq!(b2.cache_budget, 0, "charged for both tiles");
     }
 
     #[test]
