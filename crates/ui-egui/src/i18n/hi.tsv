@@ -643,6 +643,18 @@ cameraRaw	Yellow	पीला
 @plural	{n} action file loaded|{n} action files loaded	{n} एक्शन फ़ाइल लोड हुई|{n} एक्शन फ़ाइलें लोड हुईं
 	{set} from {file} replaced the one from {earlier}	{file} के सेट {set} ने {earlier} वाले सेट की जगह ले ली
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} फ़ाइल लोड नहीं हो सकी: {errors}|{n} फ़ाइलें लोड नहीं हो सकीं: {errors}
+	Actual Color	वास्तविक रंग
+	Web Color	वेब रंग
+	HSB Color	HSB रंग
+	HSL Color	HSL रंग
+	Total Ink	कुल स्याही
+	Opacity	अपारदर्शिता
+	Spot Channels	स्पॉट चैनल
+	Alpha Channels	अल्फ़ा चैनल
+	Info Panel Options	जानकारी पैनल विकल्प
+	Readouts	रीडआउट
+	Panel Options…	पैनल विकल्प…
+	Total Spot Ink	कुल स्पॉट स्याही
 	Embed Linked	लिंक किए गए को एम्बेड करें
 	Embed All Linked	सभी लिंक किए गए को एम्बेड करें
 	Toggle reference point	संदर्भ बिंदु दिखाएँ/छिपाएँ
@@ -691,3 +703,4 @@ cameraRaw	Yellow	पीला
 	Auto-size Canvas	कैनवास का आकार स्वचालित रूप से बदलें
 	Keep Relative Position During Layer Reordering	लेयर्स का क्रम बदलते समय सापेक्ष स्थिति बनाए रखें
 	Shrinkwrap Canvas on Save	सहेजते समय कैनवास को सामग्री के अनुसार छोटा करें
+	Include in Total Spot Ink	कुल स्पॉट स्याही में शामिल करें

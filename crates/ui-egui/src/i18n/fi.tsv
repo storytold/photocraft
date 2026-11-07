@@ -4794,6 +4794,12 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+	HSL Color	HSL-väri
+	Spot Channels	Spottivärikanavat
+	Alpha Channels	Alfakanavat
+	Info Panel Options	Tiedot-paneelin asetukset
+	Readouts	Lukemat
+	Total Spot Ink	Spottivärin kokonaismäärä
 
 # Action Stop message (#8386)
 	Message	Viesti
@@ -4830,3 +4836,4 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	Auto-size Canvas	Muuta kankaan kokoa automaattisesti
 	Keep Relative Position During Layer Reordering	Säilytä suhteellinen sijainti tasojen järjestystä muutettaessa
 	Shrinkwrap Canvas on Save	Pienennä kangas sisältöön tallennettaessa
+	Include in Total Spot Ink	Sisällytä spottivärin kokonaismäärään

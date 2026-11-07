@@ -4465,6 +4465,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+	HSL Color	HSL-szín
+	Spot Channels	Direktszín-csatornák
+	Alpha Channels	Alfa-csatornák
+	Info Panel Options	Információ panel beállításai
+	Readouts	Kijelzések
+	Total Spot Ink	Teljes direktszín-mennyiség
 
 # Action Stop message (#8386)
 	Message	Üzenet
@@ -4527,3 +4533,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Vászonméret automatikus módosítása
 	Keep Relative Position During Layer Reordering	Relatív pozíció megtartása a rétegek átrendezésekor
 	Shrinkwrap Canvas on Save	Vászon összehúzása a tartalomra mentéskor
+	Include in Total Spot Ink	Beleszámít a teljes direktszín-mennyiségbe

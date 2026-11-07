@@ -4623,6 +4623,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Boja tačke
 	Shapes can't use patterns yet	Oblici još ne mogu koristiti uzorke
 	Edit Brush…	Uredi četkicu…
+	HSL Color	HSL boja
+	Spot Channels	Spot kanali
+	Alpha Channels	Alfa kanali
+	Info Panel Options	Opcije panela Informacije
+	Readouts	Očitanja
+	Total Spot Ink	Ukupna spot tinta
 
 # Channels panel menu (#11451)
 	Channel Options…	Opcije kanala…
@@ -4647,3 +4653,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Automatski promijeni veličinu platna
 	Keep Relative Position During Layer Reordering	Zadrži relativni položaj pri promjeni redoslijeda slojeva
 	Shrinkwrap Canvas on Save	Smanji platno na sadržaj pri sačuvanju
+	Include in Total Spot Ink	Uključi u ukupnu spot tintu

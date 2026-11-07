@@ -4657,6 +4657,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Colore del punto
 	Shapes can't use patterns yet	Le forme non possono ancora usare pattern
 	Edit Brush…	Modifica pennello…
+	HSL Color	Colore HSL
+	Spot Channels	Canali tinta piatta
+	Alpha Channels	Canali alfa
+	Info Panel Options	Opzioni pannello Info
+	Readouts	Letture
+	Total Spot Ink	Inchiostro tinta piatta totale
 
 # Action Stop message (#8386)
 	Message	Messaggio
@@ -4719,3 +4725,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ridimensiona quadro automaticamente
 	Keep Relative Position During Layer Reordering	Mantieni la posizione relativa durante il riordino dei livelli
 	Shrinkwrap Canvas on Save	Riduci il quadro al contenuto al salvataggio
+	Include in Total Spot Ink	Includi in Inchiostro tinta piatta totale

@@ -4572,3 +4572,10 @@ navigator	Zoom	תקריב
 @plural	{n} action file loaded|{n} action files loaded	נטען {n} קובץ פעולות|נטענו {n} קובצי פעולות
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	לא ניתן היה לטעון {n} קובץ: {errors}|לא ניתן היה לטעון {n} קבצים: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} פלט נכסי תמונה נכשל|{what}: {n} פלטי נכסי תמונה נכשלו
+	HSL Color	צבע HSL
+	Spot Channels	ערוצי ספוט
+	Alpha Channels	ערוצי אלפא
+	Info Panel Options	אפשרויות פאנל מידע
+	Readouts	קריאות
+	Total Spot Ink	דיו ספוט כולל
+	Include in Total Spot Ink	כלול בדיו ספוט כולל

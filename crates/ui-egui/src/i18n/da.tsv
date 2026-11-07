@@ -4793,6 +4793,12 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
 	Edit Brush…	Rediger pensel…
+	HSL Color	HSL-farve
+	Spot Channels	Spotkanaler
+	Alpha Channels	Alfakanaler
+	Info Panel Options	Indstillinger for panelet Info
+	Readouts	Aflæsninger
+	Total Spot Ink	Samlet spotfarve
 
 # Action Stop message (#8386)
 	Message	Meddelelse
@@ -4829,3 +4835,4 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Auto-size Canvas	Tilpas lærredsstørrelse automatisk
 	Keep Relative Position During Layer Reordering	Bevar relativ placering ved omorganisering af lag
 	Shrinkwrap Canvas on Save	Beskær lærredet til indholdet ved lagring
+	Include in Total Spot Ink	Medtag i samlet spotfarve

@@ -3571,6 +3571,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+	HSL Color	Warna HSL
+	Spot Channels	Channel Spot
+	Alpha Channels	Channel Alfa
+	Info Panel Options	Opsi Panel Info
+	Readouts	Pembacaan
+	Total Spot Ink	Total Tinta Spot
 
 # Action Stop message (#8386)
 	Message	Pesan
@@ -3643,3 +3649,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ubah ukuran kanvas otomatis
 	Keep Relative Position During Layer Reordering	Pertahankan posisi relatif saat mengurutkan ulang layer
 	Shrinkwrap Canvas on Save	Kecilkan kanvas sesuai konten saat menyimpan
+	Include in Total Spot Ink	Sertakan dalam Total Tinta Spot

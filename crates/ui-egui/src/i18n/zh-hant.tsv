@@ -3194,6 +3194,16 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+	Actual Color	實際色彩
+	Web Color	Web 色彩
+	HSB Color	HSB 色彩
+	HSL Color	HSL 色彩
+	Total Ink	總油墨量
+	Spot Channels	特別色色版
+	Alpha Channels	Alpha 色版
+	Info Panel Options	資訊面板選項
+	Readouts	讀數
+	Total Spot Ink	特別色油墨總量
 
 # Action Stop message (#8386)
 	Message	訊息
@@ -3269,3 +3279,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	自動調整版面尺寸
 	Keep Relative Position During Layer Reordering	重新排列圖層時保持相對位置
 	Shrinkwrap Canvas on Save	儲存時將版面縮至內容大小
+	Include in Total Spot Ink	計入特別色油墨總量
