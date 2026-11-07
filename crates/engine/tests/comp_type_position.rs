@@ -1,5 +1,6 @@
 //! A comp restores editable Type placement independently of the current glyph's ink bounds.
 
+use photocraft_doc::comps::layer_position;
 use photocraft_doc::{LayerContent, LayerId, TextLayer};
 use photocraft_engine::Session;
 use serde_json::json;
@@ -107,4 +108,30 @@ fn updating_position_recaptures_the_type_anchor_independently_of_appearance() {
     assert_eq!(text(&s, id).transform, captured);
     assert_eq!(text(&s, id).text, "M");
     assert_eq!(text(&s, id).size_pt, 72.0);
+}
+
+/// Reapplying a comp after empty Type becomes pixels preserves another layer's saved position.
+#[test]
+fn reapplying_comp_keeps_last_state_after_empty_type_is_rasterized() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 256, "height": 192})).unwrap();
+    let movable = LayerId(s.execute("type.create", json!({"x": 100, "y": 100, "text": "M", "size": 32})).unwrap()["layer"].as_u64().unwrap());
+    let emptied = LayerId(s.execute("type.create", json!({"x": 40, "y": 60, "text": "H", "size": 32})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layerComp.new", json!({"name": "Original", "visibility": false, "appearance": false})).unwrap();
+
+    let comp = &s.active().unwrap().doc.layer_comps[0];
+    assert!(comp.state(emptied).unwrap().position.is_some(), "the capture has ink bounds");
+    s.execute("layer.translate", json!({"layer": movable.0, "dx": 40, "dy": 20})).unwrap();
+    s.execute("layerComp.apply", json!({"comp": "Original"})).unwrap();
+    assert_eq!(&text(&s, movable).transform.m[4..], &[100.0, 100.0]);
+
+    s.execute("type.edit", json!({"layer": emptied.0, "text": ""})).unwrap();
+    s.execute("type.rasterize", json!({"layer": emptied.0})).unwrap();
+    let rasterized = s.active().unwrap().doc.layer(emptied).unwrap();
+    assert!(matches!(rasterized.content, LayerContent::Raster(_)));
+    assert_eq!(layer_position(rasterized), None);
+
+    s.execute("layerComp.apply", json!({"comp": "Original"})).unwrap();
+    s.execute("layerComp.restoreLastDocumentState", json!({})).unwrap();
+    assert_eq!(&text(&s, movable).transform.m[4..], &[140.0, 120.0]);
 }

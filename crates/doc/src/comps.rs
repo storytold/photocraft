@@ -39,12 +39,9 @@ impl CompLayerState {
         Some((saved.0.checked_sub(current.0)?, saved.1.checked_sub(current.1)?))
     }
 
-    /// Compare the position using the same anchor as application, including the legacy fallback.
+    /// A position matches when applying it would leave the layer in place.
     pub fn matches_position(&self, live: &Self) -> bool {
-        match (self.text_position, live.text_position) {
-            (Some(saved), Some(current)) => saved == current,
-            _ => self.position.is_none() || self.position == live.position,
-        }
+        self.position_delta(live.position, live.text_position).is_none_or(|delta| delta == (0, 0))
     }
 }
 
