@@ -4617,3 +4617,19 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 # Strings main added after this catalog was written (integration batch 20).
 	Background (default)	Fon (defolt)
 	Transparent (default)	Şəffaf (defolt)
+# Move tool options bar (#11381)
+	Align top edges	Üst kənarları hizalayın
+	Align vertical centers	Şaquli mərkəzləri hizalayın
+	Align bottom edges	Alt kənarları hizalayın
+	Distribute vertically	Şaquli yaymaq
+	Distribute horizontally	Üfüqi yaymaq
+	Show layer bounds on hover	Üzərinə gətirəndə qat sərhədlərini göstərin
+	Expand layer group on click	Klikləyəndə qat qrupunu genişləndirin
+	Show hover bounds from Layers	Üzərinə gətirmə sərhədlərini Qatlardan göstərin
+# Artboard tool options bar (#11385)
+	Distribute Widths	Enləri yaymaq
+	Distribute Heights	Hündürlükləri yaymaq
+	Auto-nest Layers	Qatları avtomatik yuvalayın
+	Auto-size Canvas	Kətanın ölçüsünü avtomatik təyin edin
+	Keep Relative Position During Layer Reordering	Qatları yenidən sıralayarkən nisbi mövqeyi saxlayın
+	Shrinkwrap Canvas on Save	Saxlayarkən kətanı məzmuna sıxın

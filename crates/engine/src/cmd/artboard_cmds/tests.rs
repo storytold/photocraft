@@ -1080,3 +1080,28 @@ fn a_layer_centred_just_left_of_a_board_at_negative_coordinates_stays_off_it() {
     s.execute("layer.translate", json!({"layer": id.0, "dx": 1, "dy": 0, "nest": true})).unwrap();
     assert_eq!(doc(&s).artboard_of(id), Some(b));
 }
+
+#[test]
+fn a_layers_array_sets_every_listed_boards_background_in_one_step() {
+    let mut s = session(8);
+    let a = LayerId(s.execute("layer.new.artboard", json!({"rect": [0, 0, 50, 50]})).unwrap()["layer"].as_u64().unwrap());
+    let b = LayerId(s.execute("layer.new.artboard", json!({"rect": [200, 0, 50, 50]})).unwrap()["layer"].as_u64().unwrap());
+    let steps = s.active().unwrap().history.entries().len();
+    s.execute("layer.artboard.set", json!({"layers": [a.0, b.0], "background": "black"})).unwrap();
+    let entries = s.active().unwrap().history.entries();
+    assert_eq!(entries.len(), steps + 1);
+    assert_eq!(entries.last().map(String::as_str), Some("Edit Artboards"));
+    for id in [a, b] {
+        assert_eq!(doc(&s).layer(id).and_then(Layer::artboard).unwrap().background, ArtboardBackground::Black);
+    }
+    s.execute("layer.artboard.set", json!({"layers": [a.0], "background": "custom", "color": "#ff0000"})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries().last().map(String::as_str), Some("Edit Artboard"));
+    // Undo is one step; errors change nothing.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(doc(&s).layer(a).and_then(Layer::artboard).unwrap().background, ArtboardBackground::Black);
+    let n = s.active().unwrap().history.entries().len();
+    assert!(s.execute("layer.artboard.set", json!({"layers": [a.0, 9999], "background": "white"})).is_err());
+    assert!(s.execute("layer.artboard.set", json!({"layers": [], "background": "white"})).is_err());
+    assert!(s.execute("layer.artboard.set", json!({"layers": [a.0]})).is_err());
+    assert_eq!(s.active().unwrap().history.entries().len(), n);
+}
