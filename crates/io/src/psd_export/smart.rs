@@ -95,11 +95,11 @@ const FX_KEYS: [&[u8; 4]; 2] = [b"FEid", b"FXid"];
 impl SmartOut {
     pub(super) fn new(doc: &Document, depth: u32) -> Self {
         let globals = doc.metadata.psd_global_blocks.clone();
-        let known = globals.iter().filter(|(_, k, _)| LINK_KEYS.contains(&k)).flat_map(|(_, _, d)| crate::linked::block_uuids(d)).collect();
+        let known = globals.iter().filter(|(_, k, _)| LINK_KEYS.contains(&k)).flat_map(|(_, _, d)| crate::linked::block_uuids(d.resident())).collect();
         let old_fx = globals
             .iter()
             .filter(|(_, k, _)| FX_KEYS.contains(&k))
-            .filter_map(|(_, _, d)| photocraft_psd::filter_effects::FilterEffects::parse(d).ok())
+            .filter_map(|(_, _, d)| photocraft_psd::filter_effects::FilterEffects::parse(d.resident()).ok())
             .flat_map(|fx| fx.items)
             .collect();
         let mut linked_contents = std::collections::HashMap::new();
@@ -134,7 +134,11 @@ impl SmartOut {
             photocraft_doc::SmartSource::Linked { path } => self
                 .globals
                 .iter()
-                .find_map(|(_, key, data)| crate::linked::embedded_payload_in_blocks([(key, data.as_slice())], path).map(|(_, bytes)| (data, bytes)))?,
+                // Exports read the blocks left in the opened file first (`with_blocks_loaded`).
+                .find_map(|(_, key, data)| {
+                    let data = data.in_memory()?;
+                    crate::linked::embedded_payload_in_blocks([(key, data.as_slice())], path).map(|(_, bytes)| (data, bytes))
+                })?,
         };
         self.vector_previews.get(preview, owner, source)
     }
@@ -143,7 +147,7 @@ impl SmartOut {
     /// date: unreferenced files dropped (when every reference is known), new files appended,
     /// filter caches kept or regenerated per smart object. Unchanged blocks stay byte-identical.
     pub(super) fn finish(&self, blocks: Vec<photocraft_doc::PsdGlobalBlock>) -> Vec<photocraft_doc::PsdGlobalBlock> {
-        use std::sync::Arc;
+        use photocraft_doc::Blob;
         let keep = |u: &str| !self.prune_ok || self.used.contains(u);
         let mut out = Vec::with_capacity(blocks.len() + 2);
         let mut added = false;
@@ -152,13 +156,13 @@ impl SmartOut {
             if LINK_KEYS.contains(&&key) {
                 let add: &[crate::linked::LinkedFile] = if !added && &key == b"lnk2" { &self.add } else { &[] };
                 added |= &key == b"lnk2";
-                match crate::linked::rebuild_block(&data, &keep, add) {
+                match crate::linked::rebuild_block(data.resident(), &keep, add) {
                     None => out.push((sig, key, data)),
                     Some(d) if d.is_empty() => {}
-                    Some(d) => out.push((sig, key, Arc::new(d))),
+                    Some(d) => out.push((sig, key, Blob::new(d))),
                 }
             } else if FX_KEYS.contains(&&key) {
-                let Ok(mut fx) = photocraft_psd::filter_effects::FilterEffects::parse(&data) else {
+                let Ok(mut fx) = photocraft_psd::filter_effects::FilterEffects::parse(data.resident()) else {
                     out.push((sig, key, data));
                     continue;
                 };
@@ -172,7 +176,7 @@ impl SmartOut {
                 if fx.items.len() == before && !fresh {
                     out.push((sig, key, data));
                 } else if !fx.items.is_empty() {
-                    out.push((sig, key, Arc::new(padded_fx(&fx))));
+                    out.push((sig, key, Blob::new(padded_fx(&fx))));
                 }
             } else {
                 out.push((sig, key, data));
@@ -180,21 +184,32 @@ impl SmartOut {
         }
         if !added && !self.add.is_empty() {
             let data: Vec<u8> = self.add.iter().flat_map(crate::linked::encode_linked_file).collect();
-            out.push((*b"8BIM", *b"lnk2", Arc::new(data)));
+            out.push((*b"8BIM", *b"lnk2", Blob::new(data)));
         }
+        // The copies of each block, appended to it once (not one copy of the block per record).
+        let mut appended: Vec<([u8; 4], [u8; 4], Vec<u8>)> = Vec::new();
         for (sig, key, data) in self.linked_copies.values() {
-            if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| s == sig && k == key) {
-                Arc::make_mut(block).extend_from_slice(data);
+            match appended.iter_mut().find(|(s, k, _)| s == sig && k == key) {
+                Some((_, _, bytes)) => bytes.extend_from_slice(data.resident()),
+                None => appended.push((*sig, *key, data.resident().to_vec())),
+            }
+        }
+        for (sig, key, extra) in appended {
+            if let Some((_, _, block)) = out.iter_mut().find(|(s, k, _)| *s == sig && *k == key) {
+                let mut joined = Vec::with_capacity(block.resident().len() + extra.len());
+                joined.extend_from_slice(block.resident());
+                joined.extend_from_slice(&extra);
+                *block = Blob::new(joined);
             } else {
-                out.push((*sig, *key, data.clone()));
+                out.push((sig, key, Blob::new(extra)));
             }
         }
         if !fx_placed && !self.new_fx.is_empty() {
             let fx = photocraft_psd::filter_effects::FilterEffects { version: 3, items: self.new_fx.clone() };
-            out.push((*b"8BIM", *b"FEid", Arc::new(padded_fx(&fx))));
+            out.push((*b"8BIM", *b"FEid", Blob::new(padded_fx(&fx))));
             if !out.iter().any(|(_, k, _)| k == b"FMsk") {
                 // Filter mask overlay: RGB red at 50 %, Photoshop's default.
-                out.push((*b"8BIM", *b"FMsk", Arc::new(vec![0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 50])));
+                out.push((*b"8BIM", *b"FMsk", Blob::new(vec![0, 0, 255, 255, 0, 0, 0, 0, 0, 0, 0, 50])));
             }
         }
         out

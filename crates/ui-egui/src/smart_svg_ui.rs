@@ -84,10 +84,11 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
         None => st.active_layer?,
     };
     let LayerContent::Smart(smart) = &st.doc.layer(layer)?.content else { return None };
-    let bytes = match &smart.source {
-        SmartSource::Embedded { bytes, .. } => bytes.as_slice(),
+    let bytes: std::borrow::Cow<'_, [u8]> = match &smart.source {
+        SmartSource::Embedded { bytes, .. } => bytes.as_slice().into(),
         SmartSource::Linked { path } => photocraft_io::linked::embedded_payload(&st.doc.metadata, path)?.1,
     };
+    let bytes = &*bytes;
     if !(photocraft_io::svg::is_svg(bytes) || bytes.starts_with(b"%PDF-") || bytes.starts_with(b"%!PS-Adobe-") || bytes.starts_with(&[0xc5, 0xd0, 0xd3, 0xc6]))
     {
         return None;

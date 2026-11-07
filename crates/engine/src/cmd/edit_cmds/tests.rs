@@ -900,7 +900,6 @@ fn paste_a_smart_object_into_another_document() {
 /// source a uuid) can still be opened after Copy + Paste into another document.
 #[test]
 fn paste_keeps_a_psd_embedded_smart_object_openable() {
-    use std::sync::Arc;
     let mut s = session();
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     let outer = s.active().unwrap().active_layer.unwrap();
@@ -910,7 +909,7 @@ fn paste_keeps_a_psd_embedded_smart_object_openable() {
         };
         sm.source = photocraft_doc::SmartSource::Linked { path: "uuid-1".into() };
         let linked = photocraft_io::linked::LinkedFile { uuid: "uuid-1".into(), file_name: "in.png".into(), bytes: vec![1, 2, 3, 4] };
-        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(photocraft_io::linked::encode_linked_file(&linked))));
+        doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(photocraft_io::linked::encode_linked_file(&linked))));
         Ok(())
     })
     .unwrap();

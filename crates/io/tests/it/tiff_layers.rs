@@ -234,7 +234,7 @@ fn photoshop_mtrn_marks_the_merged_transparency_of_a_layered_tiff() {
             assert!(names.is_empty(), "{case}: no alpha channel from the merged transparency: {names:?}");
             // The marker is kept for the next save.
             let mut want = d.clone();
-            want.metadata.psd_global_blocks = vec![(*b"8BIM", *b"MTrn", std::sync::Arc::new(Vec::new()))];
+            want.metadata.psd_global_blocks = vec![(*b"8BIM", *b"MTrn", photocraft_doc::Blob::new(Vec::new()))];
             assert_docs_eq(&want, &opened);
             let psd = PsdFile::from_bytes(&export(&opened, "x.psd", &ExportOptions::default()).expect("PSD save").bytes).expect("parse");
             assert_eq!(psd.header.channels, 4, "{case}: colour + merged transparency");
@@ -696,7 +696,7 @@ fn photoshop_transparency_and_spot_tiff(doc: &Document, layers: bool) -> Vec<u8>
     use photocraft_psd::{Compression, TaggedBlock};
 
     let opts = PsdExportOptions { merged_matte: false, merged_compression: Compression::Raw, ..Default::default() };
-    let (file, _) = document_to_psd_with(doc, &opts);
+    let (file, _) = document_to_psd_with(doc, &opts).unwrap();
     let planes = file.decode_merged().unwrap();
     let n = 16;
     assert_eq!(planes.len(), 5 * n);

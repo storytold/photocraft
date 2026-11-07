@@ -309,7 +309,7 @@ fn embedded_pdf_ai_and_eps_update_shared_instances_without_reading_linked_paths(
                     file_name: name.into(),
                     bytes: bytes.to_vec(),
                 });
-                doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", Arc::new(payload)));
+                doc.metadata.psd_global_blocks.push((*b"8BIM", *b"lnk2", photocraft_doc::Blob::new(payload)));
                 let LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart") };
                 sm.source = SmartSource::Linked { path: "owned-vector".into() };
                 let layer = doc.layer(id).unwrap().duplicate();
