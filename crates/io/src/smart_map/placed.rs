@@ -186,6 +186,9 @@ pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &
                 set(&mut d, "Trnf", quad(s, stored));
                 set(&mut d, "nonAffineTransform", quad(s, stored));
             }
+            if stored_size(t) != Some(s.size) {
+                set(&mut d, "Sz  ", Value::Descriptor(Descriptor::new("Pnt ").with("Wdth", Value::Double(s.size.0)).with("Hght", Value::Double(s.size.1))));
+            }
             set(&mut d, "warp", warp);
             // `quiltWarp` is read before `warp`, so the imported one stays only while it still
             // says what the layer's warp is (unchanged, or unreadable while the layer has none);

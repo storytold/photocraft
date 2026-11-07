@@ -842,3 +842,34 @@ fn hue_saturation_smart_filter_survives_psd_and_re_renders() {
         }
     }
 }
+
+/// `layer.smartObjects.replaceContents` on a warped smart object (#10207): the new source is
+/// placed through the same warp and transform — the warped silhouette stays put.
+#[test]
+fn replace_contents_keeps_the_warp_and_frame() {
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap().0;
+    s.execute("edit.transform", json!({"layer": id, "matrix": [0.75, 0, 0, 0.75, 10, 4]})).unwrap();
+    s.execute("layer.smartObjects.warp", json!({"style": "wave", "bend": 60})).unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let (bid, sm) = smart(&before);
+    let (name, src) = photocraft_engine::smart_cmds::contents_of(&before, photocraft_doc::LayerId(bid)).unwrap();
+    let inner = decode_source(&name, &src).unwrap();
+
+    // A same-size PNG as the replacement.
+    let png = photocraft_io::export(&inner, "png", &Default::default()).unwrap().bytes;
+    photocraft_engine::smart_cmds::replace_contents_bytes(&mut s, photocraft_doc::LayerId(bid), "new.png", png).unwrap();
+    let after = s.active().unwrap().doc.clone();
+    let (_, sm2) = smart(&after);
+    assert_eq!(sm2.warp, sm.warp, "the warp survives the replace");
+    for (a, b) in sm2.transform.m.iter().zip(sm.transform.m) {
+        assert!((a - b).abs() < 1e-9, "transform {:?} vs {:?}", sm2.transform, sm.transform);
+    }
+
+    // The silhouette (alpha > 0) position is unchanged: same warp, same frame.
+    let flat = |d: &Document| photocraft_compose::flatten(d).px;
+    let (a, b) = (flat(&before), flat(&after));
+    let covered = a.iter().zip(&b).filter(|(p, q)| (p[3] > 0.5) != (q[3] > 0.5)).count();
+    assert_eq!(covered, 0, "{covered} px changed coverage");
+}

@@ -10,15 +10,17 @@ use photocraft_algo::transform::Interp;
 use photocraft_cms::Intent;
 use photocraft_color::BlendMode;
 use photocraft_doc::{Document, Group, Layer, LayerContent, LayerId, Metadata, SmartObject, SmartSource};
+use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
+use super::placing::affine_homography;
 use super::{authorize_source, authorized_source_bytes, decode_source, detach_psd, other, placement, shift_layer, smart};
 use crate::commands::layer_param;
 use crate::{EngineError, Result, Session};
 
 /// The smart object's contents as layers in `doc`'s colour model, profile and depth, still in
 /// source pixel coordinates. A Background becomes a normal layer (it can't sit above others).
-fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
+fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<(Vec<Layer>, Rect)> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
     let mut src = decode_source(&name, &bytes)?;
@@ -33,6 +35,7 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
         crate::image_cmds::convert_layers_depth(&mut src.layers, doc.depth);
     }
     let background_id = src.background().map(|l| l.id);
+    let src_bounds = src.bounds();
     let mut layers = std::mem::take(&mut src.layers);
     for l in &mut layers {
         if Some(l.id) == background_id {
@@ -41,7 +44,7 @@ fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: 
         }
         embed_nested(&src.metadata, l);
     }
-    Ok(layers)
+    Ok((layers, src_bounds))
 }
 
 /// Nested PSD placed layers find their files in the contents' own global blocks, which stay
@@ -62,14 +65,17 @@ fn embed_nested(meta: &Metadata, l: &mut Layer) {
     }
 }
 
-/// Moves unpacked layers from source pixels to where the smart object placed them: an exact
-/// shift for whole-pixel moves, else its transform (type, shapes and nested smart objects stay
-/// live; Distort and Perspective need them rasterized, as Free Transform does).
-fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) -> Result<()> {
+/// Moves unpacked layers from source pixels to where the smart object placed them: the `Sz`
+/// stretch onto the placed box first (as the renderer applies it), then an exact shift for
+/// whole-pixel moves, else its transform (type, shapes and nested smart objects stay live;
+/// Distort and Perspective need them rasterized, as Free Transform does).
+fn place(s: &Session, doc: &Document, sm: &SmartObject, src_bounds: Rect, layers: &mut [Layer]) -> Result<()> {
     if sm.warp.as_ref().is_some_and(|w| !w.is_identity()) {
         return Err(other("a warped smart object can't be converted to layers; rasterize it instead (Layer › Smart Objects › Rasterize)"));
     }
-    let [a, b, c, d, e, f] = sm.transform.m;
+    let stretch = photocraft_algo::warp::placed_stretch(src_bounds, sm.placed_size);
+    let t = sm.transform.mul(&stretch);
+    let [a, b, c, d, e, f] = t.m;
     let whole = |v: f64| (v - v.round()).abs() < 1e-9;
     if sm.perspective.is_none() && [a - 1.0, b, c, d - 1.0].iter().all(|v| v.abs() < 1e-9) && whole(e) && whole(f) {
         // Saturating casts: a placement that far out moves the layers off any canvas either way.
@@ -87,8 +93,8 @@ fn place(s: &Session, doc: &Document, sm: &SmartObject, layers: &mut [Layer]) ->
             pending.extend(l.children().into_iter().flatten());
         }
     }
-    let h = placement(sm);
-    let affine = sm.perspective.is_none().then_some(sm.transform);
+    let h = placement(sm).mul(&affine_homography(&stretch));
+    let affine = sm.perspective.is_none().then_some(t);
     if let SmartSource::Embedded { bytes, .. } = &sm.source
         && photocraft_io::svg::is_svg(bytes)
         && let Some(transform) = affine
@@ -179,8 +185,8 @@ pub(super) fn convert_to_layers(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = &st.doc;
     let so = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let sm = smart(doc, id)?;
-    let mut layers = contents(s, doc, sm, intent, bpc)?;
-    place(s, doc, sm, &mut layers)?;
+    let (mut layers, src_bounds) = contents(s, doc, sm, intent, bpc)?;
+    place(s, doc, sm, src_bounds, &mut layers)?;
     let discarded = sm.smart_filters.len();
     let out = unpacked(so, layers);
     let (new_id, group) = (out.id, out.is_group());
