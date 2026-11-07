@@ -289,7 +289,7 @@ PhotoCraft CLI supports optional native GPU acceleration for flat exports and co
 
 `crates/format` defines the lossless native bundle. It is either a ZIP of STORE entries or a directory with the same layout:
 
-- `manifest.json`: the versioned document tree, with migrations in `format/src/migrate.rs`.
+- `manifest.json`: the versioned document tree, with migrations in `format/src/migrate.rs`. A document with responsive layout data saves at version 2 (which version-1 builds do not open); a document without it keeps saving at version 1, so older readers keep opening everything unless the feature is used. Version-1 files migrate on load by inserting the default empty responsive object.
 - `tiles/<blake3>.zst` and `blobs/<blake3>.zst`: zstd-compressed objects, content-addressed by the BLAKE3 hash of their uncompressed bytes.
 - `thumb.png` and `composite/preview.png`: previews.
 - `composite/full.png`: the flattened document at the canvas size, for other apps that read `.pcraft` files. Saves write it only when asked (`ExportOptions::pcraft_full_composite`, off by default), and may leave it out in the cases listed in [the format guide](../book/src/formats/pcraft.md). Check the manifest's `full_composite` member to confirm it was written.
