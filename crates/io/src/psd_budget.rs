@@ -6,9 +6,10 @@
 
 use photocraft_geom::TILE_SIZE;
 use photocraft_psd::{
-    PsdFile,
-    layer::{CHANNEL_REAL_USER_MASK, CHANNEL_USER_MASK, Rect},
+    Compression, PsdFile,
+    layer::{CHANNEL_REAL_USER_MASK, CHANNEL_TRANSPARENCY, CHANNEL_USER_MASK, ChannelData, LayerRecord, Rect},
 };
+use std::borrow::Cow;
 
 use crate::IoError;
 
@@ -127,6 +128,112 @@ fn mul(a: u64, b: u64) -> Result<u64, IoError> {
     a.checked_mul(b).ok_or_else(overflow)
 }
 
+/// Reads the bounded RLE row-count table without inflating channel pixels.
+/// If the table cannot be trusted, the caller retains the conservative full-plane estimate.
+fn rle_row_table<'a>(channel: &'a ChannelData, height: usize, count_bytes: usize) -> Option<Cow<'a, [u8]>> {
+    let len = height.checked_mul(count_bytes)?;
+    if u64::try_from(len).ok()? > channel.encoded_len() {
+        return None;
+    }
+    if let Some(stored) = &channel.stored { Some(Cow::Owned(stored.read_part(0, len as u64).ok()?)) } else { Some(Cow::Borrowed(channel.data.get(..len)?)) }
+}
+
+/// Peak workspace for the exact row bands used by the importer. It includes per-channel row
+/// offsets, concurrently live encoded/decoded bands, and the interleaved output when present.
+/// Invalid or unreadable RLE tables return `None`, leaving the conservative estimate in place.
+struct RleWorkspace {
+    bands: Vec<(usize, usize)>,
+    width: usize,
+    height: usize,
+    sample: u64,
+    version: photocraft_psd::Version,
+    output_channels: u64,
+    interleave_output: bool,
+}
+
+fn rle_bands_workspace(channels: &[&ChannelData], layout: RleWorkspace) -> Option<u64> {
+    let RleWorkspace { bands, width, height, sample, version, output_channels, interleave_output } = layout;
+    if channels.is_empty() || channels.iter().any(|channel| channel.compression != Some(Compression::Rle)) || bands.is_empty() {
+        return None;
+    }
+
+    let count_bytes = if version.is_psb() { 4usize } else { 2usize };
+    let table_len = height.checked_mul(count_bytes)?;
+    let mut encoded_by_band = Vec::new();
+    if encoded_by_band.try_reserve_exact(bands.len()).is_err() {
+        return None;
+    }
+    encoded_by_band.resize(bands.len(), 0u64);
+
+    let mut table_bytes = 0u64;
+    let mut row_index_bytes = 0u64;
+    for channel in channels {
+        let table = rle_row_table(channel, height, count_bytes)?;
+        let payload_len = channel.encoded_len().checked_sub(u64::try_from(table_len).ok()?)?;
+        let mut total_encoded = 0u64;
+        for (band_index, &(b0, b1)) in bands.iter().enumerate() {
+            let mut band_encoded = 0u64;
+            for row in b0..b1 {
+                let start = row.checked_mul(count_bytes)?;
+                let end = start.checked_add(count_bytes)?;
+                let bytes = table.get(start..end)?;
+                let len = match bytes {
+                    [a, b] => u64::from(u16::from_be_bytes([*a, *b])),
+                    [a, b, c, d] => u64::from(u32::from_be_bytes([*a, *b, *c, *d])),
+                    _ => return None,
+                };
+                band_encoded = band_encoded.checked_add(len)?;
+            }
+            total_encoded = total_encoded.checked_add(band_encoded)?;
+            let slot = encoded_by_band.get_mut(band_index)?;
+            *slot = slot.checked_add(band_encoded)?;
+        }
+        // A short/inconsistent row table must never lower the estimate.
+        if total_encoded > payload_len {
+            return None;
+        }
+        table_bytes = table_bytes.checked_add(u64::try_from(table_len).ok()?)?;
+        row_index_bytes = row_index_bytes.checked_add(mul((height as u64).checked_add(1)?, 8).ok()?)?;
+    }
+
+    let pixel_channels = u64::try_from(channels.len()).ok()?;
+    let range_storage = u64::try_from(bands.capacity()).ok()?.checked_mul(std::mem::size_of::<(usize, usize)>() as u64)?;
+    let mut peak = table_bytes.checked_add(row_index_bytes)?.checked_add(range_storage)?;
+    for (band_index, &(b0, b1)) in bands.iter().enumerate() {
+        let band_rows = u64::try_from(b1.checked_sub(b0)?).ok()?;
+        let band_pixels = mul(width as u64, band_rows).ok()?;
+        let decoded = mul(mul(band_pixels, pixel_channels).ok()?, sample).ok()?;
+        let interleaved = if interleave_output { mul(mul(band_pixels, output_channels).ok()?, sample).ok()? } else { 0 };
+        let encoded = *encoded_by_band.get(band_index)?;
+        // Row decoding holds encoded input beside decoded output. On return, encoded input is
+        // dropped while planar outputs overlap the interleaved output.
+        let decoding = row_index_bytes.checked_add(range_storage)?.checked_add(encoded)?.checked_add(decoded)?;
+        let interleave = row_index_bytes.checked_add(range_storage)?.checked_add(decoded)?.checked_add(interleaved)?;
+        peak = peak.max(decoding).max(interleave);
+    }
+    Some(peak)
+}
+
+fn rle_layer_workspace(rec: &LayerRecord, w: usize, h: usize, cc: u64, sample: u64, file: &PsdFile) -> Option<u64> {
+    let mut channels = Vec::new();
+    for id in 0..cc {
+        channels.extend(i16::try_from(id).ok().and_then(|id| rec.channel(id)));
+    }
+    channels.extend(rec.channel(CHANNEL_TRANSPARENCY));
+    let row_bytes = w.checked_mul(usize::try_from(cc.checked_add(1)?).ok()?)?.checked_mul(usize::try_from(sample).ok()?)?;
+    let bands = super::psd_import::band_rows(rec.rect.top, h, row_bytes);
+    rle_bands_workspace(
+        &channels,
+        RleWorkspace { bands, width: w, height: h, sample, version: file.header.version, output_channels: cc.checked_add(1)?, interleave_output: true },
+    )
+}
+
+fn rle_mask_workspace(channel: &ChannelData, rect: Rect, sample: u64, version: photocraft_psd::Version) -> Option<u64> {
+    let (width, height) = rect.size().ok()?;
+    let bands = super::psd_import::row_bands(rect.top, height, TILE_SIZE as usize);
+    rle_bands_workspace(&[channel], RleWorkspace { bands, width, height, sample, version, output_channels: 1, interleave_output: false })
+}
+
 impl ImportBudget {
     fn retain(&mut self, bytes: u64) -> Result<(), IoError> {
         self.retained = self.retained.checked_add(bytes).ok_or_else(overflow)?;
@@ -164,9 +271,8 @@ impl ImportBudget {
 
 /// Computes the conservative preflight pixel memory and workspace estimate for `file`.
 ///
-/// No decoding here: even a compact ZIP stream must be refused before inflation. The sum
-/// deliberately counts full decoded planes for every compression method, plus their row
-/// buffers, interleave output and float conversion workspace.
+/// No decoding here: even a compact ZIP stream must be refused before inflation. RLE workspace
+/// follows the importer's bounded bands; ZIP and other paths retain their conservative estimates.
 pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
     let mut budget = ImportBudget::default();
     let h = &file.header;
@@ -183,22 +289,34 @@ pub fn estimate(file: &PsdFile) -> Result<PsdMemoryEstimate, IoError> {
                 let (w, hh) = rec.rect.size()?;
                 let pixels = mul(w as u64, hh as u64)?;
                 budget.surface(rec.rect, cc + 1, sample)?;
-                // Whole ZIP planes + band planes + interleave + temporary float pixels.
-                // Counting a full layer for each band buffer also covers a single very wide row.
-                let workspace = mul(pixels, mul(cc + 1, sample * 3 + 4)?)?.checked_add(inflate_scratch(mul(pixels, sample)?, cc + 1)?).ok_or_else(overflow)?;
-                // RLE row indexes live beside decoded planes.
-                budget.scratch(workspace.checked_add(mul(hh as u64 + 1, (cc + 1) * 8)?).ok_or_else(overflow)?);
+                let workspace = match rle_layer_workspace(rec, w, hh, cc, sample, file) {
+                    Some(workspace) => workspace,
+                    None => {
+                        // ZIP, mixed compression, and malformed RLE retain the original
+                        // conservative full-plane estimate.
+                        mul(pixels, mul(cc + 1, sample * 3 + 4)?)?
+                            .checked_add(inflate_scratch(mul(pixels, sample)?, cc + 1)?)
+                            .ok_or_else(overflow)?
+                            .checked_add(mul(hh as u64 + 1, (cc + 1) * 8)?)
+                            .ok_or_else(overflow)?
+                    }
+                };
+                budget.scratch(workspace);
             }
             if let Some(mask) = rec.layer_mask() {
                 for (id, rect) in [(CHANNEL_USER_MASK, mask.rect), (CHANNEL_REAL_USER_MASK, mask.real.map_or(mask.rect, |m| m.rect))] {
-                    if rec.channel(id).is_none() || rect.is_empty() {
+                    let Some(channel) = rec.channel(id) else { continue };
+                    if rect.is_empty() {
                         continue;
                     }
                     let (w, hh) = rect.size()?;
                     budget.surface(rect, 1, sample)?;
-                    // The layer's ZIP decoders have been dropped before record_mask runs.
                     let pixels = mul(w as u64, hh as u64)?;
-                    budget.scratch(mul(pixels, sample * 3 + 4)?.checked_add(inflate_scratch(mul(pixels, sample)?, 1)?).ok_or_else(overflow)?);
+                    let workspace = match rle_mask_workspace(channel, rect, sample, h.version) {
+                        Some(workspace) => workspace,
+                        None => mul(pixels, sample * 3 + 4)?.checked_add(inflate_scratch(mul(pixels, sample)?, 1)?).ok_or_else(overflow)?,
+                    };
+                    budget.scratch(workspace);
                 }
             }
         }
