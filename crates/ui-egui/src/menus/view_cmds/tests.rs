@@ -41,6 +41,29 @@ fn place_embedded_enablement_does_not_require_native_doc() {
 }
 
 #[test]
+fn data_sets_as_files_enablement_respects_target_platform() {
+    let (app, _) = app_with(1);
+    let enabled = is_enabled_with_engine(&app, "file.export.dataSetsAsFiles", || true);
+    if cfg!(target_arch = "wasm32") {
+        assert_eq!(enabled, Some(false));
+    } else {
+        assert_eq!(enabled, Some(true));
+    }
+}
+
+#[test]
+fn data_sets_as_files_dialog_respects_target_platform() {
+    let (mut app, ctx) = app_with(1);
+    app.run("image.variables.dataSets", json!({"dataSets": [{"name": "Set 1", "values": []}]})).unwrap();
+    let res = front(&mut app, &ctx, "file.export.dataSetsAsFiles", &json!({}));
+    if cfg!(target_arch = "wasm32") {
+        assert!(matches!(res, Some(Err(msg)) if msg.contains("unavailable on the web")));
+    } else {
+        assert!(matches!(res, Some(Ok(v)) if v.get("dialog").is_some()));
+    }
+}
+
+#[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
     for id in [
@@ -352,6 +375,46 @@ fn type_menu_checkmarks_follow_the_layer() {
 }
 
 #[test]
+fn numerals_checkmark_follows_the_selection() {
+    let (mut app, ctx) = app_with(1);
+    let id = "type.openType.numerals.tabularLining";
+    assert!(!crate::menus::is_enabled(&app, id));
+    assert_eq!(checked(&app, id), None, "no type layer");
+    app.run("type.create", json!({"x": 10, "y": 50, "text": "Type", "size": 24})).unwrap();
+    assert!(crate::menus::is_enabled(&app, id));
+    assert_eq!(checked(&app, "type.openType.numerals.default"), Some(true));
+    assert_eq!(checked(&app, id), Some(false));
+    menu(&mut app, &ctx, id, json!({})).unwrap();
+    assert_eq!(checked(&app, id), Some(true));
+    assert_eq!(checked(&app, "type.openType.numerals.default"), Some(false));
+    assert_eq!(checked(&app, "type.openType.numerals.lining"), Some(false));
+    menu(&mut app, &ctx, "type.openType.numerals.default", json!({})).unwrap();
+    assert_eq!(checked(&app, "type.openType.numerals.default"), Some(true));
+    assert_eq!(checked(&app, id), Some(false));
+    assert_eq!(checked(&app, "type.openType.numerals.notAStyle"), None);
+}
+
+#[test]
+fn stylistic_set_checkmark_follows_the_toggle() {
+    let (mut app, ctx) = app_with(1);
+    let id = "type.openType.stylisticSets.set4";
+    assert!(!crate::menus::is_enabled(&app, id));
+    assert_eq!(checked(&app, id), None, "no type layer");
+    app.run("type.create", json!({"x": 10, "y": 50, "text": "Type", "size": 24})).unwrap();
+    assert!(crate::menus::is_enabled(&app, id));
+    assert_eq!(checked(&app, id), Some(false));
+    menu(&mut app, &ctx, id, json!({})).unwrap();
+    assert_eq!(checked(&app, id), Some(true));
+    assert_eq!(checked(&app, "type.openType.stylisticSets.set5"), Some(false));
+    menu(&mut app, &ctx, id, json!({})).unwrap();
+    assert_eq!(checked(&app, id), Some(false));
+    for bad in ["set0", "set21", "set04", "set", "set-1", "setx", "set100"] {
+        // Not through `checked`, which only finds catalog items: these ids must reach the resolver.
+        assert_eq!(super::dispatch::checked(&app, &format!("type.openType.stylisticSets.{bad}")), None, "{bad}");
+    }
+}
+
+#[test]
 fn batch_menu_requires_a_recorded_action() {
     let (mut app, ctx) = app_with(1);
     assert!(!crate::menus::is_enabled(&app, "file.automate.batch"));
@@ -363,6 +426,93 @@ fn batch_menu_requires_a_recorded_action() {
     assert!(crate::menus::is_enabled(&app, "file.automate.batch"));
     let dialog = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert_eq!(app.ui.dialog_mut(dialog).unwrap().fields["action"], "Invert");
+}
+
+/// Two actions of one name in sets A and B (a loaded library): the Batch form lists the name once
+/// and both sets, starts on the selected action's set, and runs that set's action.
+#[test]
+fn batch_menu_runs_the_selected_sets_action_among_same_named_ones() {
+    let (mut app, ctx) = app_with(0);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("source.png").to_string_lossy().into_owned();
+    let output = dir.path().join("out").to_string_lossy().into_owned();
+    app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
+    app.run("file.saveACopy", json!({"path": input})).unwrap();
+    let mut list = Vec::new();
+    for (set, step) in [("A", "image.adjustments.invert"), ("B", "image.imageRotation.90cw")] {
+        let mut action = photocraft_engine::actions_cmds::Action::new("Retouch", vec![(step.into(), json!({}))]);
+        action.set = Some(set.into());
+        list.push(action);
+    }
+    app.session.actions.list = list;
+    app.ui.actions.selected = Some(1);
+    let id = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
+    assert_eq!(fields["__choices"]["action"], json!(["Retouch"]));
+    assert_eq!(fields["__choices"]["set"], json!(["A", "B"]));
+    assert_eq!((&fields["action"], &fields["set"]), (&json!("Retouch"), &json!("B")));
+    fields.insert("input".into(), json!([input.clone()]));
+    fields.insert("output".into(), json!(output));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let saved = std::fs::read_dir(&output).unwrap().next().unwrap().unwrap().path();
+    let image = photocraft_io::import("out.png", &std::fs::read(saved).unwrap()).unwrap().document;
+    assert_eq!((image.size.width, image.size.height), (1, 2), "set B's action (a rotation) ran");
+}
+
+/// Choosing a different action changes the output; cancelled or deleted choices write nothing.
+#[test]
+fn batch_menu_runs_the_action_chosen_in_the_form() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _) = app_with(0);
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("source.png").to_string_lossy().into_owned();
+    let output = dir.path().join("out").to_string_lossy().into_owned();
+    app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
+    app.run("file.saveACopy", json!({"path": input})).unwrap();
+    app.session.actions.list = vec![
+        photocraft_engine::actions_cmds::Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]),
+        photocraft_engine::actions_cmds::Action::new("RotateRGB", vec![("image.imageRotation.90cw".into(), json!({}))]),
+    ];
+    app.ui.actions.selected = Some(0);
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    assert!(!fields.contains_key("steps"));
+    fields.insert("input".into(), json!([input]));
+    fields.insert("output".into(), json!(output));
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Action").click();
+    h.run_steps(2);
+    h.get_by_label("RotateRGB").click();
+    h.run_steps(2);
+    assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields["action"], "RotateRGB");
+    let result = crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    assert_eq!(result["errors"], json!([]));
+    let image = photocraft_io::import("source.png", &std::fs::read(result["files"][0].as_str().unwrap()).unwrap()).unwrap().document;
+    assert_eq!((image.size.width, image.size.height), (1, 2));
+
+    let cancelled = dir.path().join("cancelled");
+    let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("output".into(), json!(cancelled.to_string_lossy()));
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    assert!(!cancelled.exists());
+
+    let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+    fields.insert("action".into(), json!("RotateRGB"));
+    fields.insert("output".into(), json!(cancelled.to_string_lossy()));
+    h.state_mut().session.actions.list.retain(|action| action.name != "RotateRGB");
+    assert!(crate::dialogs::confirm(h.state_mut(), id).unwrap_err().contains("no action named"));
+    assert!(!cancelled.exists());
 }
 
 #[test]
@@ -533,12 +683,104 @@ fn batch_dialogs_include_all_subfolders() {
         let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
         assert_eq!(fields["includeSubfolders"], json!(false), "{id}");
         assert_eq!(fields["__labels"]["includeSubfolders"], json!("Include All Subfolders"), "{id}");
+        if id == "file.automate.batch" {
+            assert_eq!(fields["source"], json!("folder"));
+            assert_eq!(fields["stopOnError"], json!(false));
+            assert_eq!(fields["errorLog"], json!(""));
+        }
         fields.insert("input".into(), json!(input));
         fields.insert("output".into(), json!(dir.join(out).to_string_lossy()));
         fields.insert("includeSubfolders".into(), json!(true));
         let r = crate::dialogs::confirm(&mut app, d).unwrap();
         assert_eq!(r["files"].as_array().map(Vec::len), Some(1), "{id}: {r}");
-        assert!(dir.join(out).join("sub").is_dir(), "{id} keeps the subfolder: {r}");
+        if id == "file.automate.batch" {
+            assert!(dir.join(out).join("a.png").is_file(), "{id} writes subfolder inputs flat: {r}");
+            assert!(!dir.join(out).join("sub").exists());
+        } else {
+            assert!(dir.join(out).join("sub").is_dir(), "{id} keeps the subfolder: {r}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #10682 / #10113: an action recorded with the Type tool (a new type layer, typed in key by key)
+/// runs in Batch on every file of the folder and saves each into the destination.
+#[test]
+fn batch_runs_an_action_recorded_with_the_type_tool() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-type-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    for name in ["a.png", "b.png"] {
+        app.run("file.saveACopy", json!({"path": dir.join("in").join(name).to_string_lossy()})).unwrap();
+    }
+    app.run("actions.record", json!({"name": "Caption"})).unwrap();
+    let id = app.run("type.create", json!({"x": 10, "y": 40, "text": "", "size": 20})).unwrap()["layer"].as_u64().unwrap();
+    for (i, c) in "Hi".chars().enumerate() {
+        app.run("type.edit", json!({"layer": id, "replace": {"start": i, "end": i, "text": c.to_string()}, "coalesce": "typing"})).unwrap();
+    }
+    app.run("actions.stop", json!({})).unwrap();
+    app.run("file.saveACopy", json!({"path": dir.join("ref.png").to_string_lossy()})).unwrap();
+    assert_eq!(crate::actions::selected_action(&app).map(|a| a.steps.len()), Some(1), "one step for the typing");
+    // CodeRabbit on #10730: and that step makes the layer with the text typed.
+    assert_eq!(crate::actions::selected_action(&app).and_then(|a| a.steps.first()).map(|(_, p)| p["text"].clone()), Some(json!("Hi")));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
+    fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
+    let r = crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "{r}");
+    assert!(r.get("failed").is_none_or(|f| f.as_array().is_some_and(Vec::is_empty)), "{r}");
+    for name in ["a.png", "b.png"] {
+        assert!(dir.join("out").join(name).is_file(), "{name} saved: {r}");
+        // CodeRabbit on #10730: the action ran on each file: the typed text is in its pixels.
+        let pixels = |folder: &str| photocraft_codecs::decode(&std::fs::read(dir.join(folder).join(name)).unwrap()).unwrap().data().to_vec();
+        assert_ne!(pixels("out"), pixels("in"), "{name}: the text was laid on it");
+    }
+    // CodeRabbit on #10730: all of it, as typed by hand: the document the action was recorded
+    // on (the same image, with the text typed into it) has the pixels Batch wrote.
+    let decoded = |path: std::path::PathBuf| photocraft_codecs::decode(&std::fs::read(path).unwrap()).unwrap().data().to_vec();
+    for name in ["a.png", "b.png"] {
+        assert_eq!(decoded(dir.join("out").join(name)), decoded(dir.join("ref.png")), "{name}: Batch laid the whole text, as it was typed by hand");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// #10682: a Batch whose action fails on every file said nothing; the status bar and a notice now
+/// name each file that failed and why.
+#[test]
+fn a_batch_that_fails_on_its_files_says_which_and_why() {
+    let (mut app, ctx) = app_with(1);
+    let dir = std::env::temp_dir().join(format!("photocraft-ui-batch-fails-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("in")).unwrap();
+    for name in ["a.png", "b.png"] {
+        app.run("file.saveACopy", json!({"path": dir.join("in").join(name).to_string_lossy()})).unwrap();
+    }
+    // A step for a layer that only the recording document has.
+    app.session
+        .actions
+        .list
+        .push(photocraft_engine::actions_cmds::Action::new("Stale", vec![("layer.setProps".into(), json!({"layer": 424_242, "opacity": 50}))]));
+    let d = menu(&mut app, &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let fields = &mut app.ui.dialog_mut(d).unwrap().fields;
+    fields.insert("input".into(), json!(dir.join("in").to_string_lossy()));
+    fields.insert("output".into(), json!(dir.join("out").to_string_lossy()));
+    let notices = app.ui.notices.len();
+    let r = crate::dialogs::confirm(&mut app, d).unwrap();
+    assert_eq!(r["errors"].as_array().map(Vec::len), Some(2), "{r}");
+    assert!(app.ui.status_error, "the status bar reports it: {}", app.ui.status);
+    let notice = app.ui.notices.get(notices).expect("a notice lists the files");
+    assert_eq!(notice.lines.len(), 2);
+    // CodeRabbit on #10730: a failure, not a warning, and each file by its whole path.
+    assert!(notice.error && notice.title.ends_with("2 files failed"), "{}", notice.title);
+    let path = |name: &str| format!("{}: ", dir.join("in").join(name).to_string_lossy());
+    assert!(notice.lines[0].starts_with(&path("a.png")) && notice.lines[1].starts_with(&path("b.png")), "{:?}", notice.lines);
+    // CodeRabbit on #10730: each line is its file's error, word for word, path then reason.
+    let errors = r["errors"].as_array().unwrap();
+    for (line, e) in notice.lines.iter().zip(errors) {
+        assert!(!e["error"].as_str().unwrap_or_default().trim().is_empty(), "{e}");
+        assert_eq!(*line, format!("{}: {}", e["file"].as_str().unwrap(), e["error"].as_str().unwrap()));
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -698,6 +940,29 @@ fn esc_leaves_full_screen_with_the_crop_tool_showing_its_default_frame() {
     crate::crop_ui::ensure_frame(&mut app);
     press_esc(&mut app, &ctx);
     assert_eq!(app.ui.view.screen_mode, "standard");
+}
+
+/// #9275: a gesture on the default frame is something to cancel, so Esc in full screen cancels it
+/// (as in Standard Screen Mode) and full screen stays.
+#[test]
+fn esc_in_full_screen_cancels_a_crop_drag_on_the_default_frame() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let none = egui::Modifiers::NONE;
+    // Inside draws a new box, on the corner handle resizes, outside turns.
+    for (what, from) in [("draw", [20.0, 20.0]), ("resize", [100.0, 80.0]), ("turn", [130.0, 110.0])] {
+        let (mut app, ctx) = app_with(1);
+        app.ui.tool = crate::Tool::Crop;
+        crate::crop_ui::ensure_frame(&mut app);
+        menu(&mut app, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
+        tool_event(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, none);
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 50.0, pressure: 1.0 }, none);
+        assert!(app.crop.drag.is_some() && app.crop.default_frame, "{what}: mid-gesture on the default frame");
+        press_esc(&mut app, &ctx);
+        assert_eq!(app.ui.view.screen_mode, "fullScreen", "{what}: Esc cancels the gesture, full screen stays");
+        assert!(app.crop.drag.is_none(), "{what}: the gesture is cancelled");
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 50.0 }, none);
+        assert!(!crate::crop_ui::pending(&app), "{what}: the release leaves no pending crop");
+    }
 }
 
 #[test]

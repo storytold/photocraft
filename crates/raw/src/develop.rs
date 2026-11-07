@@ -707,6 +707,10 @@ pub(crate) fn source_xy(o: u16, w: usize, h: usize, x2: usize, y2: usize) -> (us
     }
 }
 
+/// Side of the square tiles orientations 5-8, which swap rows and columns, move at a time: both
+/// sides of a tile stay in L1 instead of one of them being walked a column at a time.
+const TILE: usize = 32;
+
 /// Applies a TIFF orientation (1–8) to interleaved RGB.
 pub(crate) fn orient(src: Vec<u16>, w: usize, h: usize, o: u16) -> (Vec<u16>, usize, usize) {
     if !(2..=8).contains(&o) {
@@ -715,25 +719,44 @@ pub(crate) fn orient(src: Vec<u16>, w: usize, h: usize, o: u16) -> (Vec<u16>, us
     let swap = o >= 5;
     let (ow, oh) = if swap { (h, w) } else { (w, h) };
     let mut out = vec![0u16; src.len()];
-    let band = par::band_rows(ow);
-    par::chunks_mut(&mut out, band * ow * 3, |b, chunk| {
-        for (r, row) in chunk.chunks_exact_mut(ow * 3).enumerate() {
-            let y2 = b * band + r;
-            for x2 in 0..ow {
-                let (x, y) = match o {
-                    2 => (w - 1 - x2, y2),
-                    3 => (w - 1 - x2, h - 1 - y2),
-                    4 => (x2, h - 1 - y2),
-                    5 => (y2, x2),
-                    6 => (y2, h - 1 - x2),
-                    7 => (w - 1 - y2, h - 1 - x2),
-                    _ => (w - 1 - y2, x2),
-                };
-                let i = (y * w + x) * 3;
-                row[x2 * 3..x2 * 3 + 3].copy_from_slice(&src[i..i + 3]);
+    if swap {
+        // Output pixel (x2, y2) is source pixel `base + x2 * sx + y2 * sy` (see `source_xy`).
+        let (base, sx, sy): (isize, isize, isize) = match o {
+            5 => (0, w as isize, 1),
+            6 => (((h - 1) * w) as isize, -(w as isize), 1),
+            7 => ((h * w - 1) as isize, -(w as isize), -1),
+            _ => ((w - 1) as isize, w as isize, -1),
+        };
+        let px = src.as_chunks::<3>().0;
+        par::chunks_mut(&mut out, TILE * ow * 3, |b, chunk| {
+            let rows = chunk.len() / (ow * 3);
+            for x0 in (0..ow).step_by(TILE) {
+                let x1 = (x0 + TILE).min(ow);
+                for r in 0..rows {
+                    let y2 = (b * TILE + r) as isize;
+                    for (x2, d) in (x0..x1).zip(chunk[(r * ow + x0) * 3..(r * ow + x1) * 3].as_chunks_mut::<3>().0) {
+                        *d = px[(base + x2 as isize * sx + y2 * sy) as usize];
+                    }
+                }
             }
-        }
-    });
+        });
+    } else {
+        let band = par::band_rows(ow);
+        par::chunks_mut(&mut out, band * ow * 3, |b, chunk| {
+            for (r, row) in chunk.chunks_exact_mut(ow * 3).enumerate() {
+                let y2 = b * band + r;
+                for x2 in 0..ow {
+                    let (x, y) = match o {
+                        2 => (w - 1 - x2, y2),
+                        3 => (w - 1 - x2, h - 1 - y2),
+                        _ => (x2, h - 1 - y2),
+                    };
+                    let i = (y * w + x) * 3;
+                    row[x2 * 3..x2 * 3 + 3].copy_from_slice(&src[i..i + 3]);
+                }
+            }
+        });
+    }
     (out, ow, oh)
 }
 
@@ -998,6 +1021,24 @@ mod tests {
         assert!((0..1000).map(|i| lut.encode(i as f32 / 999.0)).collect::<Vec<_>>().windows(2).all(|w| w[1] >= w[0]));
         // No curve: the plain gamma 1.8.
         assert!(near(GammaLut::with_curve(&[]).encode(0.25), code(0.25)));
+    }
+
+    #[test]
+    fn every_orientation_moves_each_pixel_to_its_source_position() {
+        // Sizes around the tile side (and 1-pixel strips), all eight orientations.
+        for (w, h) in [(1, 1), (1, 70), (70, 1), (31, 33), (32, 32), (33, 31), (65, 97), (100, 37)] {
+            let src: Vec<u16> = (0..w * h).flat_map(|i| [i as u16, (i >> 4) as u16 ^ 0x5a5a, !(i as u16)]).collect();
+            for o in 1..=8 {
+                let (out, ow, oh) = orient(src.clone(), w, h, o);
+                assert_eq!((ow, oh), if o >= 5 { (h, w) } else { (w, h) });
+                for y2 in 0..oh {
+                    for x2 in 0..ow {
+                        let (x, y) = source_xy(o, w, h, x2, y2);
+                        assert_eq!(out[(y2 * ow + x2) * 3..][..3], src[(y * w + x) * 3..][..3], "{w}x{h} orientation {o} at {x2},{y2}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
