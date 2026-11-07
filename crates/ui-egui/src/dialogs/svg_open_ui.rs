@@ -78,13 +78,16 @@ pub fn ask(app: &mut PhotocraftApp, path: &str, slot: Option<usize>) -> Result<(
 }
 
 /// A finished [`MEASURE_JOB`]: opens the dialog, or (when the file can't be read as an SVG) the
-/// usual open, which reports why. `true` when the event was one of these jobs.
+/// usual open, which reports why. A cancelled read opens nothing. `true` when the event was one
+/// of these jobs.
 pub fn on_measure_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
+    use photocraft_engine::jobs::JobOutcome;
     let Some(at) = app.svg_measures.iter().position(|m| m.job == e.id) else { return false };
     let m = app.svg_measures.remove(at);
     match &e.outcome {
-        photocraft_engine::jobs::JobOutcome::Done(v) => finish_measure(app, &m.path, m.slot, Ok(v)),
-        _ => finish_measure(app, &m.path, m.slot, Err(())),
+        JobOutcome::Done(v) => finish_measure(app, &m.path, m.slot, Ok(v)),
+        JobOutcome::Failed(_) => finish_measure(app, &m.path, m.slot, Err(())),
+        JobOutcome::Cancelled => {}
     }
     true
 }
@@ -203,5 +206,31 @@ mod tests {
         assert!(scale(&Map::new()).is_err());
         assert_eq!(asks("/a/Icon.SVG"), cfg!(not(target_arch = "wasm32")));
         assert!(!asks("/a/icon.png"));
+    }
+
+    /// Cancelling the "Reading …" job opens nothing; only a failed read falls back to the usual
+    /// open, which says why.
+    #[test]
+    fn a_cancelled_read_opens_nothing_and_a_failed_one_falls_back() {
+        use photocraft_engine::jobs::{JobEvent, JobId, JobOutcome};
+        let dir = std::env::temp_dir().join(format!("pc-svg-cancel-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("icon.svg");
+        std::fs::write(&path, br#"<svg xmlns="http://www.w3.org/2000/svg" width="20" height="10"/>"#).unwrap();
+        let path = path.to_string_lossy().to_string();
+        let event =
+            |id: u64, outcome: JobOutcome| JobEvent { id: JobId(id), command: MEASURE_JOB.into(), label: String::new(), document: None, outcome, error: None };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        // The fallback open on the window thread, so the test sees what it did.
+        app.background_jobs = false;
+        app.svg_measures.push(Measure { job: JobId(1), path: path.clone(), slot: None });
+        assert!(on_measure_event(&mut app, &event(1, JobOutcome::Cancelled)));
+        assert!(app.svg_measures.is_empty());
+        assert!(app.session.documents().is_empty() && app.ui.dialogs.is_empty() && app.ui.status.is_empty(), "a cancel opens nothing: {}", app.ui.status);
+        app.svg_measures.push(Measure { job: JobId(2), path, slot: None });
+        assert!(on_measure_event(&mut app, &event(2, JobOutcome::Failed("x".into()))));
+        // The test app has no importer, so the usual open reports that: it was tried.
+        assert!(app.ui.status.contains("icon.svg"), "a failed read opens the file the usual way: {}", app.ui.status);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

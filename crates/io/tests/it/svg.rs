@@ -687,3 +687,20 @@ fn image_hrefs_to_local_files_are_never_read() {
         LayerContent::Raster(_)
     ));
 }
+
+/// #8910 review: a drawing past the element limit opens as one pixel layer, which renders at most
+/// 24 MP; asked for at a larger size it opens at the largest that renders, with a warning, not as
+/// an empty document.
+#[test]
+fn a_one_layer_drawing_asked_for_too_large_opens_at_the_largest_that_renders() {
+    let many = format!(
+        "<svg {NS} width=\"100\" height=\"100\"><rect width=\"100\" height=\"100\" fill=\"red\"/>{}</svg>",
+        "<rect width=\"1\" height=\"1\"/>".repeat(2_000)
+    );
+    let r = svg::import_svg_scaled("many", many.as_bytes(), 64, 60.0).unwrap();
+    let size = r.document.size;
+    assert!(u64::from(size.width) * u64::from(size.height) <= 24_000_000, "{size:?}");
+    assert!(size.width > 4_000 && size.width == size.height, "as large as renders, square: {size:?}");
+    assert_eq!(r.document.layers.len(), 1, "{:?}", r.warnings);
+    assert!(r.warnings.iter().any(|w| w.contains("renders at most 24 MP")), "{:?}", r.warnings);
+}

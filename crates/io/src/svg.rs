@@ -1176,13 +1176,31 @@ fn import_parsed_with_limits(
     if over_cache_budget && reject_cache_overflow {
         return Err(IoError::Svg("the source's editable layer caches exceed the SVG cache budget".into()));
     }
+    // One pixel layer renders at most [`MAX_RASTER_PIXELS`]: a drawing asked for larger opens at
+    // the largest size that renders, and says so, instead of as an empty document.
+    let collapse = nodes > MAX_NODES || over_cache_budget;
+    let cv = if collapse && cv.size.area() > MAX_RASTER_PIXELS {
+        let k = ((MAX_RASTER_PIXELS as f64 / cv.size.area() as f64).sqrt() * 0.999) as f32;
+        let fit = canvas_at(&tree, cv.scale * k, &mut Vec::new());
+        warnings.push(format!(
+            "SVG: a drawing opened as one pixel layer renders at most {} MP; opened at {} × {} px instead of {} × {} px",
+            MAX_RASTER_PIXELS / 1_000_000,
+            fit.size.width,
+            fit.size.height,
+            cv.size.width,
+            cv.size.height
+        ));
+        fit
+    } else {
+        cv
+    };
     let mut doc = Document::new(name, cv.size, ColorMode::Rgb, SampleType::U8);
     let fmt = doc.pixel_format();
     let global = tiny_skia::Transform::from_scale(cv.scale, cv.scale);
     let max_group_depth = (max_group_depth != 0).then_some(max_group_depth.clamp(1, MAX_GROUP_DEPTH));
     let mut conv =
         Conv { fmt, canvas: doc.bounds(), global, max_group_depth, warnings, noted: Vec::new(), counts: [0; 4], pixel_budget, retained_pixel_bytes: 0 };
-    if nodes > MAX_NODES || over_cache_budget {
+    if collapse {
         if over_cache_budget {
             conv.warnings.push("SVG: combined layer caches exceed the clipboard cache budget; opened as one pixel layer instead of editable shapes".into());
         } else {
