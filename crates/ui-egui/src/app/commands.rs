@@ -6,6 +6,7 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let params = if id == "select.findLayers" { crate::layer_filter_ui::find::params_for_run(self, params) } else { params };
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }

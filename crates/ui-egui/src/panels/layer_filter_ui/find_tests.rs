@@ -150,6 +150,35 @@ fn the_menu_item_shows_a_layers_panel_closed_in_the_docking_layout() {
 }
 
 #[test]
+fn a_hidden_filter_row_stays_hidden_and_does_not_take_the_focus_later() {
+    // Measured in Photoshop: with Filter Options › Hide, Find Layers switches to Name but leaves
+    // the row hidden, and showing the row afterwards does not put the caret in the field.
+    let mut h = harness();
+    h.state_mut().ui.layers_panel_options.show_filters = false;
+    h.state_mut().ui.layer_filter_name = "lin".into();
+    h.run_steps(4);
+    find(&mut h, json!({}));
+    assert_eq!(h.state().ui.layer_filter_by, FilterBy::Name);
+    assert!(!h.state().ui.layers_panel_options.show_filters, "the filter row stays hidden");
+    h.state_mut().ui.layers_panel_options.show_filters = true;
+    h.run_steps(4);
+    assert!(h.ctx.memory(|m| m.focused()).is_none(), "showing the row later does not focus the Name field");
+    assert_eq!(h.state().ui.layer_filter_name, "lin");
+}
+
+#[test]
+fn engine_execute_without_a_name_lists_what_the_panel_lists() {
+    let mut h = harness();
+    h.state_mut().ui.layer_filter_name = "link".into();
+    let reply = h.state_mut().run("select.findLayers", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.layer_filter_name, "link", "the Name text is kept");
+    assert_eq!(reply["selected"], json!([id(&h, "LinkA").0, id(&h, "LinkB").0]), "the reply lists the layers the kept text matches");
+    assert_eq!(reply["layerFilter"], json!({"by": "name", "name": "link"}));
+    assert_eq!(listed(&h), ["LinkB", "LinkA"]);
+}
+
+#[test]
 fn engine_execute_sets_the_panel_filter_too() {
     // `engine.execute` runs engine commands through `PhotocraftApp::run`, not `menus::invoke`.
     let mut h = harness();

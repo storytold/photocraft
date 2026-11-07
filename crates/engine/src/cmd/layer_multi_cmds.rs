@@ -106,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Find Layers",
             &["Select"],
             Some("Cmd+Alt+Shift+F"),
-            r##"{"name":str?} (filters the Layers panel by Name, a case-insensitive substring, without changing the selection; replies with the matching layers)"##,
+            r##"{"name":str?} (filters the Layers panel by Name, a case-insensitive substring, selecting none of the matches; without `name` the panel's Name text is kept; replies with the matching layers)"##,
             has_doc,
             find_layers
         ),

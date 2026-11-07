@@ -18,8 +18,8 @@ fn focus_flag() -> egui::Id {
 /// shown with the field focused.
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Result<Value, String> {
     let given = params.get("name").is_some_and(|n| !n.is_null());
-    let params = if given { params } else { json!({"name": app.ui.layer_filter_name}) };
-    // `run` applies the reply's Name filter ([`apply`]).
+    // `run` keeps the Name text when no `name` is given ([`params_for_run`]) and applies the
+    // reply's Name filter ([`apply`]).
     let reply = app.run("select.findLayers", params)?;
     if !given {
         // The panel docking layout (when on) shows the Layers panel itself, else the dock group.
@@ -31,9 +31,25 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, params: Value) -> Re
             *crate::dock::Group::Layers.tab_mut(&mut app.ui.dock_tabs) = 0;
             crate::dock::reveal(app, crate::dock::Group::Layers);
         }
-        ctx.data_mut(|d| d.insert_temp(focus_flag(), true));
+        // A hidden filter row (Filter Options › Hide) stays hidden, as in Photoshop, and showing it
+        // later doesn't put the caret in the field: only a drawn row takes the focus.
+        if app.ui.layers_panel_options.show_filters {
+            ctx.data_mut(|d| d.insert_temp(focus_flag(), true));
+        }
     }
     Ok(reply)
+}
+
+/// The params `select.findLayers` runs with: without a `name` the panel's Name text is kept, so the
+/// reply lists the layers the panel lists however the command runs (the menu, the shortcut,
+/// `engine.execute` or an action step).
+pub(crate) fn params_for_run(app: &PhotocraftApp, params: Value) -> Value {
+    if params.get("name").is_some_and(|n| !n.is_null()) {
+        return params;
+    }
+    let mut params = if params.is_object() { params } else { json!({}) };
+    params["name"] = json!(app.ui.layer_filter_name);
+    params
 }
 
 /// Apply the Name filter in a `select.findLayers` reply to the Layers panel: switch to Name and set
