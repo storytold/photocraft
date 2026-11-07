@@ -77,6 +77,26 @@ fn typed_angles_are_whole_degrees_clamped_with_the_alert() {
 }
 
 #[test]
+fn an_entry_left_by_a_tool_switch_does_not_alert_later() {
+    let mut h = bar(Tool::BackgroundEraser);
+    angle_field(&h).expect("the Angle field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("400".into()));
+    h.run_steps(1);
+    // The tool changes before the entry is committed: the field goes away mid-typing.
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(3);
+    h.state_mut().ui.tool = Tool::BackgroundEraser;
+    h.run_steps(3);
+    angle_field(&h).expect("the Angle field").click();
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert!(alerts(&h).is_empty(), "nothing typed this time: {:?}", alerts(&h));
+}
+
+#[test]
 fn pressure_for_size_follows_protect_foreground_color_off_by_default() {
     let mut h = bar(Tool::BackgroundEraser);
     assert!(left(&h, "Protect Foreground Color") < left(&h, PRESSURE));
