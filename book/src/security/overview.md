@@ -11,7 +11,7 @@ PhotoCraft processes complex attacker-controlled files and exposes automation th
 | `.pcraft` | Manifest/blob/total-byte limits; bounded decompression; CRC/hash and version checks; fuzz target | Tighter complexity/entry limits and directory-bundle path-race analysis |
 | Engine commands | Error-return contract, focused bad-parameter tests, adversarial `panic_hunt` test | Continue eliminating input-derived panic and exhaustion paths |
 | Control TCP | Loopback binding; bearer-token authentication; rooted read/write authority; 1 MiB request lines; 8 MiB replies; 16 active connections; I/O timeouts | No general method capabilities, encryption, client identity, explicit JSON-depth policy, aggregate session-memory/command-duration budgets, or audit trail |
-| MCP | Stdio; typed tools; authenticated and bounded bridge; rooted read/write authority; 256-step batches with aggregate reply budgets; headless preview/output ceilings | No general tool authorization scopes, aggregate session-memory accounting, or command cancellation; transport reply caps do not bound desktop screenshot capture |
+| MCP | Stdio; typed tools; authenticated and bounded bridge; rooted read/write authority; 256-step batches with aggregate reply budgets; headless preview/output ceilings | No general tool authorization scopes, aggregate session-memory accounting, or cancellation of commands that are not background jobs; transport reply caps do not bound desktop screenshot capture |
 | Dependencies | Cargo lockfile and normal CI build/test/clippy | No `cargo-audit` or `cargo-deny` job/configuration confirmed in current tree |
 | Releases | Checksums and platform signing/notarization paths when secrets are configured | Signing can be absent; no SBOM generation confirmed in current tree |
 

@@ -12,4 +12,4 @@ Security hardening is cross-cutting rather than a replacement for those product 
 6. broader parser fuzzing and malicious-input regression corpora;
 7. dependency policy and release SBOM/provenance.
 
-Only the documentation foundation in item 1 is established by this book. Later controls remain proposed until implemented and tested.
+Only the documentation foundation in item 1 is established by this book. Bearer-token authentication of control connections (part of item 2), workspace-rooted filesystem handles (item 4) and request, batch, preview and connection budgets (item 5) are now implemented; the other controls remain proposed until implemented and tested.

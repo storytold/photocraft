@@ -9,7 +9,7 @@ The easiest way is the [PhotoCraft page on getartcraft.com](https://getartcraft.
 
 ## Windows
 
-PhotoCraft needs Windows 10 or later. On Windows 7 and 8 the installer stops with "PhotoCraft needs Windows 10 or later."
+PhotoCraft needs Windows 10 or later.
 
 1. Open the [latest release](https://github.com/storytold/photocraft/releases/latest).
 2. Download `photocraft-<version>-windows-x64.msi`. It fits most PCs (64-bit Intel and AMD).
@@ -48,7 +48,7 @@ On a Wayland session, files dropped on the PhotoCraft window do not open yet. Us
 
 ## FreeBSD and the web
 
-FreeBSD 14 (x86_64) has a tarball, `photocraft-<version>-freebsd-x86_64.tar.gz`, laid out like `/usr/local`. The web version comes as `photocraft-web-<version>.zip`, a static site you host on any web server. It runs in a modern browser.
+FreeBSD 15 has a tarball for x86_64 or aarch64, `photocraft-<version>-freebsd-x86_64.tar.gz` or `photocraft-<version>-freebsd-aarch64.tar.gz`, laid out like `/usr/local`. The web version comes as `photocraft-web-<version>.zip`, a static site you host on any web server. It runs in a modern browser.
 
 ## Check your download
 

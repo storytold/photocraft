@@ -9,10 +9,10 @@ User-facing names say **PhotoCraft**. Files, binaries and ids stay lowercase (`p
 
 ## In-app update checks
 
-The native desktop app checks the public GitHub latest-release endpoint in a background
+The native desktop app checks the public GitHub releases list in a background
 thread once at launch, with no periodic checks or automatic retries. Preferences › General › Automatically
 Check for Updates disables the startup check; Help › Check for Updates runs one manually.
-Checks use a 15-second timeout and a 1 MiB response limit, need no GitHub token, and send
+Checks use a 20-second timeout and a 16 MiB response limit, need no GitHub token, and send
 no document or personal data. Network failures are quiet during automatic checks and visible
 in the manual check window. Concurrent requests share one check.
 HTTPS validates certificates and host names against the operating system's trust store.
@@ -62,13 +62,14 @@ in the dialog.
 
 | Platform | Artifacts | Built on |
 |---|---|---|
-| macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15` |
+| macOS 11+ (universal: Apple silicon + Intel) | `photocraft-<v>-macos-universal.dmg`, `photocraft-cli-<v>-macos-universal.zip` | `macos-15-xlarge` |
 | Windows 10+ x64 | `photocraft-<v>-windows-x64.msi`, `photocraft-<v>-windows-x64-portable.zip`, `photocraft-<v>-windows-x64-symbols.zip` | `windows-latest` |
 | Windows 10+ x86 (32-bit) | `photocraft-<v>-windows-x86.msi`, `photocraft-<v>-windows-x86-portable.zip`, `photocraft-<v>-windows-x86-symbols.zip` | `windows-latest` |
-| Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04` (Flatpak: `ubuntu-24.04`) |
-| Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`) |
-| Linux riscv64 (glibc 2.39+) | `photocraft-<v>-linux-riscv64.tar.gz` | cross-compiled on `ubuntu-24.04` (ports.ubuntu.com riscv64 libs); CLI smoke-tested under QEMU |
-| FreeBSD 14 x86_64 | `photocraft-<v>-freebsd-x86_64.tar.gz` | FreeBSD 14.3 VM on `ubuntu-latest` |
+| Windows arm64 | `photocraft-<v>-windows-arm64.msi`, `photocraft-<v>-windows-arm64-portable.zip`, `photocraft-<v>-windows-arm64-symbols.zip` | cross-compiled on `windows-latest` |
+| Linux x86_64 | `photocraft-<v>-linux-x86_64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak,pkg.tar.zst}` | `ubuntu-22.04` (Flatpak and Arch package: `ubuntu-24.04`) |
+| Linux aarch64 | `photocraft-<v>-linux-aarch64.{AppImage,AppImage.zsync,deb,rpm,tar.gz,flatpak,pkg.tar.zst}` | `ubuntu-22.04-arm` (Flatpak: `ubuntu-24.04-arm`; Arch package: `ubuntu-24.04`) |
+| Linux riscv64 (glibc 2.39+) | `photocraft-<v>-linux-riscv64.{deb,rpm,tar.gz}` | cross-compiled on `ubuntu-24.04` (ports.ubuntu.com riscv64 libs); CLI smoke-tested under QEMU |
+| FreeBSD 15 x86_64, aarch64 | `photocraft-<v>-freebsd-{x86_64,aarch64}.tar.gz` | FreeBSD 15.1 x86_64 VM on `ubuntu-latest` (aarch64 cross-compiled in it) |
 | Web | `photocraft-web-<v>.zip` (static site; see [`packaging/web/README.md`](../packaging/web/README.md)) | `ubuntu-latest` |
 
 Every binary reports its version, the commit and the build date: `photocraft --version`,
@@ -133,7 +134,7 @@ open dist/release/photocraft-*-macos-*.dmg
 
 ### Windows
 
-`packaging/windows/package.ps1 -Arch x64|x86` builds with `-C target-feature=+crt-static`.
+`packaging/windows/package.ps1 -Arch x64|x86|arm64` builds with `-C target-feature=+crt-static`.
 The static C runtime means neither the MSI nor the portable zip needs the Visual C++
 redistributable, which matters for a standalone installer and costs only about 100 KB. The flag
 goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected.
@@ -251,7 +252,7 @@ Why these formats:
   stdio. A symlink named `photocraft-cli` also selects that binary via the runtime's
   `ARGV0`. Arguments and process streams pass through unchanged; the entry point
   uses `exec` so signals and exit status reach the caller directly. CLI routing is
-  covered by `packaging/linux/apprun-cli-test.sh` in the same workflow.
+  covered by `packaging/linux/apprun-cli-test.sh`, which no workflow runs yet.
 - **.deb** covers Debian, Ubuntu, Mint, Pop!_OS and elementary. **.rpm** covers Fedora, RHEL
   and its clones, and openSUSE. Both integrate with the menu, MIME and icon caches (the
   `postinst.sh` hook) and uninstall cleanly. Both are built by
@@ -277,7 +278,7 @@ Why these formats:
 
   Sandbox permissions (justified in the manifest): Wayland with X11 fallback, IPC (X11
   shared memory), `dri` for the GPU, the CUPS socket, Avahi and `~/.cups` (read-only) for
-  printing, and read/write access to Pictures and Documents. Every
+  printing, read-only access to `xdg-data/ArtCraft/versions`, and read/write access to Pictures and Documents. Every
   other file goes through the file-chooser and document portals. Network access enables update
   checks and makes the optional loopback `--control` server reachable from the host. Host fonts
   are read from `/run/host/fonts` and `/run/host/user-fonts`. Locally (on Linux, with `flatpak` and
@@ -288,7 +289,7 @@ Why these formats:
   sources (`cargo-sources.json` from `flatpak-cargo-generator.py`) and adds 20+ minutes per
   architecture. Build it by hand with the commands in the manifest's header.
 
-All Linux binaries are built on Ubuntu 22.04 and need **glibc ≥ 2.35**: Ubuntu 22.04+,
+The x86_64 and aarch64 Linux binaries are built on Ubuntu 22.04 and need **glibc ≥ 2.35**: Ubuntu 22.04+,
 Debian 12+, Fedora 36+, RHEL 10, openSUSE Tumbleweed. They link only glibc and libgcc_s. X11,
 Wayland, xkbcommon, Vulkan and EGL are loaded at runtime from the system, which is also where
 the GPU driver has to come from. That's why the .deb and .rpm declare them as dependencies
@@ -299,16 +300,17 @@ and the tarball can't declare dependencies, `photocraft` checks for the librarie
 one is missing, prints the package to install and exits with status 1 instead of crashing.
 `PHOTOCRAFT_SKIP_LIB_CHECK=1` skips the check.
 
-Locally (on Linux): install [nfpm](https://nfpm.goreleaser.com/install/), then
+Locally (on Linux): install [nfpm](https://nfpm.goreleaser.com/docs/install/), then
 `packaging/linux/package.sh` (or `--formats "deb tar"`).
 
 ### FreeBSD
 
 GitHub has no FreeBSD runners, so the `freebsd` job runs `packaging/freebsd/package.sh` in a
-FreeBSD 14.3 VM (`vmactions/freebsd-vm`, pinned by commit), with the same packages as the
-FreeBSD CI workflow (`.github/workflows/freebsd.yml`) plus `bash`. The script builds both
+FreeBSD 15.1 VM (`vmactions/freebsd-vm`, pinned by commit), with the same packages as the
+FreeBSD CI workflow (`.github/workflows/freebsd.yml`). The script builds both
 binaries with `CARGO_BUILD_JOBS=4` (more runs the 12 GB VM out of memory) and writes
-`photocraft-<v>-freebsd-x86_64.tar.gz`. FreeBSD's `uname -m` says `amd64`; the file name uses
+`photocraft-<v>-freebsd-x86_64.tar.gz`; a second run in the same x86_64 VM cross-compiles
+`photocraft-<v>-freebsd-aarch64.tar.gz` (`CARGO_BUILD_TARGET`). FreeBSD's `uname -m` says `amd64`; the file name uses
 `x86_64` like the other artifacts. The tarball is a `/usr/local`-style tree: `bin/photocraft`,
 `bin/photocraft-cli`, and under `share/` the same desktop entry, MIME type, AppStream metainfo
 and hicolor icons as Linux, plus the licences, `NOTICE` and `ATTRIBUTION.md` in
@@ -327,8 +329,8 @@ templated into the script), and the build happens in `/var/tmp` so only `dist/` 
 out of the VM. The binaries aren't signed: FreeBSD has no code-signing scheme for loose
 binaries, so check the tarball against `SHA256SUMS.txt`.
 
-The FreeBSD CI workflow runs the same script after its build and test (on pushes to `main`, and
-on PRs that touch `packaging/freebsd/`, `freebsd.yml` or `release.yml`), so the release job
+The FreeBSD CI workflow runs the same script after its build and test (nightly on `main`, on
+pushes to `release`, and on PRs that touch `packaging/freebsd/`, `packaging/env.sh` or `freebsd.yml`), so the release job
 isn't the first place it runs. Locally, on any OS, `packaging/freebsd/package.sh --dry-run` stages the tree from stub binaries
 and lists the tarball, which checks the layout without a FreeBSD machine.
 
@@ -349,15 +351,17 @@ caching, the iframe snippet and the `?webgl` / `?cpu` flags.
 
 All secrets live in the repository's **`release` environment** (*Settings → Environments →
 release*). Restrict its deployment branches to `release`. Every job in `release.yml` that
-signs or publishes declares `environment: release` (the Flatpak and FreeBSD jobs sign nothing
-and don't), so only pushes to that branch, or manual runs on it, can read the secrets. Each secret is optional. If one is missing, that platform's artifacts are unsigned and
-the run shows a `::warning::`.
+signs or publishes declares `environment: release` (the FreeBSD, Arch and web jobs sign nothing
+and don't), so only pushes to that branch, or manual runs on it, can read the secrets. On the
+`release` branch the macOS job fails without its six Apple secrets, and the Windows job fails
+without either the `.pfx` pair or all six Azure values. `LINUX_SIGNING_KEY` is optional: without
+it the Linux packages and `SHA256SUMS.txt` are published unsigned and the run shows a `::warning::`.
 
 | Secret | Used for |
 |---|---|
 | `APPLE_CERTIFICATE` | base64 `.p12` with "Developer ID Application: Learning Machines LLC (DJ6XS33FX8)" |
 | `APPLE_CERTIFICATE_PASSWORD` | password for that `.p12` |
-| `KEYCHAIN_PASSWORD` | password for the temporary CI keychain (random if unset) |
+| `KEYCHAIN_PASSWORD` | password for the temporary CI keychain (required on the `release` branch; elsewhere `import-cert.sh` makes a random one if unset) |
 | `APPLE_ID` | Apple ID used by `notarytool` |
 | `APPLE_PASSWORD` | app-specific password for that Apple ID |
 | `APPLE_TEAM_ID` | `DJ6XS33FX8` |
@@ -366,6 +370,7 @@ the run shows a `::warning::`.
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` | service principal for Azure Trusted Signing (an alternative to the `.pfx`) |
 | `AZURE_SIGNING_ENDPOINT` | e.g. `https://eus.codesigning.azure.net` |
 | `AZURE_SIGNING_ACCOUNT`, `AZURE_CERT_PROFILE` | Trusted Signing account and certificate profile names |
+| `LINUX_SIGNING_KEY` | ASCII-armored OpenPGP secret key without a passphrase; signs the Linux packages, the Flatpak bundle's commit and OCI image, and `SHA256SUMS.txt` |
 
 `GITHUB_TOKEN` creates the release. Only the final job gets `contents: write`.
 

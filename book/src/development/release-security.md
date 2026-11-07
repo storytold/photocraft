@@ -4,14 +4,14 @@ PhotoCraft's release workflow builds platform packages and a draft GitHub Releas
 
 ## Implemented workflow elements
 
-- platform-specific signing/notarization steps exist for macOS and Windows;
+- platform-specific signing/notarization steps exist for macOS, Windows and Linux packages;
 - signing secrets are scoped through the GitHub `release` environment;
 - the Azure Trusted Signing client that Windows signing loads is pinned to a version and SHA-256, and refused on a mismatch;
 - release artifacts include `SHA256SUMS.txt`;
 - the final release job receives `contents: write`, while build jobs use narrower access;
 - artifacts remain in a draft release until a maintainer publishes them.
 
-Signing is conditional. The workflow can produce unsigned artifacts when signing material is unavailable and emits warnings. Consumers and maintainers must verify the job summary and artifact signature rather than assuming every release is signed.
+Signing is conditional. The workflow can produce unsigned artifacts when signing material is unavailable and emits warnings; on the `release` branch, missing macOS or Windows signing secrets fail the build instead. Consumers and maintainers must verify the job summary and artifact signature rather than assuming every release is signed.
 
 ## Future hardening
 

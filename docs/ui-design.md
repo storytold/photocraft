@@ -6,6 +6,8 @@
 |---|---|
 | Pro | Photoshop-style Spectrum dark: flat charcoal panels (#323232), dark tab strips, Spectrum blue accent (#378ef0), pill buttons, checkboxes, compact 12 px type |
 | Pro Medium | Photoshop-style medium-gray panels and a dark canvas |
+| Pro Light Gray | Photoshop's third interface brightness: light-gray panels (#B8B8B8) with the Pro layout |
+| Pro Light | Photoshop's lightest interface brightness: #F0F0F0 panels with the Pro layout |
 | Studio | Dark studio style: near-black, rounded cards, pill tabs, violet accent, toggles |
 | Studio Light | Studio on light surfaces |
 | Classic | Windows-2000 bevels, square corners, navy selection |
@@ -23,17 +25,17 @@ Edit → Preferences → Interface shows an Appearance Mode selector (Sync with 
 
 Window → Theme and macOS PhotoCraft → Appearance also offer Sync with system. Its checkmark follows the saved Auto mode rather than the displayed palette; choosing a manual theme selects its fixed appearance mode.
 
-The toolbar's foreground and background colour chips follow the `Tokens::round_chips` flag. Pro and Classic leave it off and draw Photoshop's overlapping squares with Default Colors and Switch Colors above them. Studio, Studio Light, Solarized Dark, Adwaita, Adwaita Dark, Breeze Light, Breeze Dark, Soft Dark and Soft Light (the Studio-layout themes) turn it on and draw large round chips with a curved Switch Colors arrow centred right under them, its heads touching the chips: stacked vertically in one tool column, with Default Colors at their top-right, and side by side in two tool columns, with Default Colors at the toolbar's left edge. Another non-Pro theme can opt in by setting the flag.
+The toolbar's foreground and background colour chips follow the `Tokens::round_chips` flag. Pro, Studio and Classic leave it off and draw Photoshop's overlapping squares with Default Colors and Switch Colors above them. Studio Light, Solarized Dark, Adwaita, Adwaita Dark, Breeze Light, Breeze Dark, Soft Dark and Soft Light (the other Studio-layout themes) turn it on and draw large round chips with a curved Switch Colors arrow centred right under them, its heads touching the chips: stacked vertically in one tool column, with Default Colors at their top-right, and side by side in two tool columns, with Default Colors at the toolbar's left edge. Another non-Pro theme can opt in by setting the flag.
 
 ## Rules
 
 - **Colours and radii come from tokens.** Read them with `Tokens::get(ctx)`; never hard-code a colour in a widget.
-- **Shared widgets live in `widgets.rs`:** `card` (panel group; Pro renders a Photoshop tab strip), `value_field`, `slider`/`slider_row`, `toggle`/`checkbox`, `primary_button`/`secondary_button`, `dropdown` (with a chevron icon), `hairline`/`vline`, `elided_label`.
+- **Shared widgets live in `widgets.rs`:** `value_field`, `slider`/`slider_row`, `toggle`/`checkbox`, `primary_button`/`secondary_button`, `dropdown` (with a chevron icon), `hairline`/`vline`, `elided_label`.
 - **A label never overflows its row.** Wrap by default. Beside a fixed-width control, or anywhere the row cannot reflow, use `widgets::elided_label(ui, text, max_w)`: a longer translation shrinks with `…` and shows the full string on hover instead of running over its neighbours (#3580). A *redundant* caption may be dropped on a narrow dock where its control already carries the meaning (e.g. the Layers lock icons); an *essential* one elides. This mirrors Photoshop: a fixed layout with elision and tooltips, not per-locale reflow.
-- **Icons:** Lucide SVGs in `assets/icons` (ISC licence), embedded via `icon_data.rs`. Regenerate that file when you add icons.
+- **Icons:** Lucide SVGs (ISC licence) and a few original glyphs in `assets/icons` (sources and licences in `ATTRIBUTION.md`), embedded via `icon_data.rs`. Regenerate that file when you add icons.
 - **Fonts:** Inter (UI) and JetBrains Mono (numbers), both OFL. Named families `medium` and `semibold` are available via `theme::medium()` and `theme::semibold()`.
 - **Photoshop layout grammar (Pro):**
-  - Essentials dock order: Color | Swatches, then Properties | Adjustments, then Layers | Channels | Paths (Layers fills the remaining height).
+  - Essentials dock order: Color | Swatches | Gradients | Patterns, then Properties | Adjustments, then Layers | Channels | Paths (Layers fills the remaining height).
   - Options-bar labels end with a colon ("Size:").
   - Document tabs read "name @ 12.5% (RGB/8)".
   - Toolbar tool groups carry a corner triangle.
@@ -44,7 +46,7 @@ The toolbar's foreground and background colour chips follow the `Tokens::round_c
 ```sh
 curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-icons/lucide/main/icons/<name>.svg
 # regenerate the embedded table
-{ printf '%s\n' '//! Lucide icons (ISC licence), embedded and tinted at runtime.' '' 'pub static ICONS: &[(&str, &[u8])] = &['; \
+{ printf '%s\n' '//! Icons embedded and tinted at runtime; sources and licences are listed in `ATTRIBUTION.md`.' '' 'pub static ICONS: &[(&str, &[u8])] = &['; \
   for f in assets/icons/*.svg; do n=$(basename $f .svg); echo "    (\"$n\", include_bytes!(\"../../../assets/icons/$n.svg\")),"; done; echo '];'; } \
   > crates/ui-egui/src/icon_data.rs
 ```
@@ -61,7 +63,7 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
 | Layer masks | `panels.rs` | Clicking the mask thumbnail targets the mask (corner-bracket frame; the tab reads "Layer, Layer Mask/8"). Brush, eraser (paints background colour), gradient, bucket and moving the selected pixels (⌘-drag, `select.float`; the hole takes the background colour) then send `"target": "mask"`. Adjustment and fill layers target their mask automatically. |
 | Channels selection | `channels_panel.rs` | Load channel as selection in the footer follows the highlighted channel row. When the active layer mask is targeted for painting while the underlying channel view remains Composite, it loads that layer mask; otherwise it loads the selected composite, color, alpha or vector mask channel. |
 | Path thumbnails | `vector_ui.rs` | Ctrl/Cmd-click the thumbnail of a Work Path, saved path or layer path to load it as a selection; Shift adds, Alt subtracts, Shift+Alt intersects. Clicking the row name only selects the path. |
-| Levels / Curves | `tone.rs` | Histogram of the image *below* the adjustment. Curves: click to add a point, drag out to delete. Every change is a coalesced `layer.setAdjustment`, so one drag = one undo step and the canvas updates at full resolution on the GPU. |
+| Levels / Curves | `adjust_editors.rs`, `tone.rs` | Histogram of the image *below* the adjustment. Curves: click to add a point, drag out to delete. Every change is a coalesced `layer.setAdjustment`, so one drag = one undo step and the canvas updates at full resolution on the GPU. |
 | Radial Blur: Zoom | `filter_dialog/zoom_center.rs` | A ray diagram to the left of Center X/Y sets the centre by click or drag. Diagram, sliders and numeric fields share the same coordinates; arrow keys on the diagram step by 0.01. Ray lengths follow Amount, and the existing image preview follows every edit. OK applies the filter; Cancel discards the edits. |
 | Shape Stroke Options | `shape_stroke_ui.rs`, `vector_ui.rs` | Direct editing: valid changes apply immediately, with one numeric drag per undo step in Properties. Escape/outside click closes the popup and retains changes; a child dropdown keeps the parent open. The options bar sets new-shape defaults; Properties edits the selected shape. |
 
@@ -102,7 +104,7 @@ missing-glyph boxes. Check every new panel with the offscreen snapshot tool (`do
 
 The app's top bar (`panels::title_bar`) starts with the brand mark (the app icon, `brand.rs`), then the menus, the document title and the workspace controls, like Photoshop's Ps tile and menu row.
 
-- **Windows and Linux:** the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 5 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first.
+- **Windows and Linux:** by default the window has no OS decorations, so there is one bar, not two stacked. The top bar is the title bar (`titlebar.rs`): Minimize, Maximize/Restore and Close (red on hover, `caption_close` tokens) sit flush in the window's top-right corner, the free gap between the menus and the controls drags the window and a double-click there maximizes it, and invisible 8 pt edges (12 pt corners) resize it. Close runs File › Exit, so unsaved documents are asked about first. With Preferences › Interface › System Title Bar on, the next launch keeps the OS decorations instead, without the app's caption buttons or resize edges.
 - **macOS:** the traffic lights sit over the integrated title strip (`integrated_titlebar`).
 - **Narrow windows** drop controls that are also in a menu before anything overlaps: the theme toggle (Preferences), then search (Edit › Search), then the workspace switcher narrows (Window › Workspace).
 
@@ -115,7 +117,7 @@ controls into view and retain the existing tool actions and popups.
 
 The offscreen regression fixture uses production panels, fonts and SVG loaders across every
 theme, 800×480 and 1280×720 point viewports, and 1×, 1.5× and 2× display scales. To retain its
-60 initial/scrolled PNGs while running the compact geometry and interaction checks:
+168 initial/scrolled PNGs while running the compact geometry and interaction checks:
 
 ```sh
 CRAFT_UI_VISUAL_FIXTURES=/tmp/photocraft-compact cargo test -p photocraft-ui-egui --lib compact_visual_regressions -- --nocapture
@@ -203,8 +205,10 @@ to display text at render time from one catalog per language (`i18n/<code>.tsv`;
 documented in the header of `ja.tsv`). Command ids, menu paths used for logic, the control channel,
 the CLI and MCP always use the English ids and labels.
 
-Languages shipped (`complete_menus` marks a catalog that covers every menu string and `tl!` literal;
-`cargo xtask i18n-coverage` lists what each catalog lacks):
+Languages shipped ("complete" means the catalog sets `complete_menus`: it covers every menu string. No
+catalog covers every `tl!` literal yet; `cargo xtask i18n-coverage` lists what each catalog lacks. For
+example, Arabic, Bosnian, Danish, Finnish, Norwegian Bokmål, Swedish, Tamil and Thai lack 13 of the Frame
+tool's 28, including Fit Content to Frame):
 
 - English (`en`), the source language.
 - Japanese (`ja`), complete.
@@ -218,6 +222,17 @@ Languages shipped (`complete_menus` marks a catalog that covers every menu strin
 - French (`fr`), complete, with two plural forms (0 and 1 use the singular).
 - Czech (`cs`), complete, with three plural forms.
 - Indonesian (`id`), complete, with one plural form.
+- Ukrainian (`uk`), Serbian (`sr`, Latin script) and Bosnian (`bs`), complete, with Russian's three
+  plural forms.
+- Polish (`pl`), complete, with three plural forms.
+- Brazilian Portuguese (`pt-br`), complete, with two plural forms (0 and 1 use the singular).
+- German (`de`), Greek (`el`), Dutch (`nl`), Italian (`it`), Swedish (`sv`), Finnish (`fi`),
+  Danish (`da`), Norwegian Bokmål (`nb`) and Tamil (`ta`), complete, with two plural forms.
+- Hungarian (`hu`), Turkish (`tr`), Vietnamese (`vi`) and Thai (`th`), complete, with one plural form.
+- Arabic (`ar`), complete, with six plural forms; the shell mirrors right to left.
+- Hebrew (`he`) and Urdu (`ur`), complete, with two plural forms; the shell mirrors right to left.
+- Romanian (`ro`), complete, with three plural forms (`one|few|other`, see `plural_romanian`).
+- Hindi (`hi`), not yet complete, with two plural forms.
 - Azerbaijani (`az`, Latin script), complete, with two integer plural forms (1 / other).
 
 - `tr(lang, s)` plain strings; `tr_ctx` when one English word needs different translations;
@@ -248,7 +263,7 @@ right-to-left layout inside panels and dialogs (the shell mirrors, `direction.rs
 locale-aware number and date formats, automatic language detection on the web build (native
 builds read `LANG`/`LC_*`, the macOS preferred languages and the Windows user locale).
 
-Camera Raw has explicit coverage for all ten available languages, including Korean and
+Camera Raw has explicit coverage in every shipped catalog, including Korean and
 Simplified Chinese. Its contextual `cameraRaw` entries distinguish tonal regions,
 colour-band names and font-weight Light. The title uses a `{layer}` placeholder; user layer
 names and the universal RGB/Lab channel symbols stay unchanged. Collapse IDs use English

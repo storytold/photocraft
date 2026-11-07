@@ -2,7 +2,7 @@
 
 PhotoCraft loads and saves action sets in the reference application's `.atn` format: Load Actions and
 Save Actions in the Actions panel menu, `actions.load` / `actions.save` for agents, and
-`photocraft batch --actions set.atn` on the command line. Reading and writing the file lives in
+`photocraft-cli batch --actions set.atn` on the command line. Reading and writing the file lives in
 `photocraft-psd` (`crates/psd/src/atn.rs`, version 16 sets, exact round trip); the mapping between the
 application's events and PhotoCraft commands lives in `photocraft-engine`
 (`crates/engine/src/cmd/atn_cmds/`, table `EVENTS` in `events.rs`).
@@ -14,8 +14,8 @@ work. Kept steps with no effect on the document (tool selections and the like) a
 so playback skips them.
 
 This page covers the events PhotoCraft maps today, the settings some of them still lose, how steps name
-layers and documents, newer and older events and files, and a measured reference for the events it does not
-map yet, with everything needed to implement them without
+layers and documents, newer and older events and files, and a measured reference for events (most of them
+now mapped), with everything needed to implement them without
 the reference application.
 
 ## Action playback history
@@ -64,6 +64,7 @@ row; the action still adds only one Undo entry.
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
 | `AdNs` | addNoise | Add Noise | `filter.noise.addNoise` |
+| `AddT` | addTo | Add to Selection | `select.rect {"mode":"add"}` |
 | `Algn` | align | Align | `layer.align.leftEdges`, `layer.align.horizontalCenters`, `layer.align.rightEdges`, `layer.align.topEdges`, `layer.align.verticalCenters`, `layer.align.bottomEdges` |
 | `AppI` | applyImageEvent | Apply Image | `image.applyImage` |
 | (string ID only) | applyComp | Apply Layer Comp | `layerComp.apply` |
@@ -80,11 +81,13 @@ row; the action still adds only one Undo entry.
 | (string ID only) | Adobe Camera Raw Filter | Camera Raw Filter | `filter.cameraRaw` |
 | `CnvS` | canvasSize | Canvas Size | `image.canvasSize` |
 | `ChnM` | channelMixer | Channel Mixer | `image.adjustments.channelMixer` |
+| (string ID only) | spellCheck | Check Spelling | `edit.checkSpelling` |
 | (string ID only) | clearEvent | Clear | `select.editInQuickMaskMode`, `history.clear` |
 | `Cls ` | close | Close | `file.close` |
 | `Clds` | clouds | Clouds | `filter.render.clouds` |
 | (string ID only) | collapseAllGroupsEvent | Collapse All Groups | `layer.setExpanded` |
 | `ClrB` | colorBalance | Color Balance | `image.adjustments.colorBalance` |
+| `ClrH` | colorHalftone | Color Halftone | `filter.pixelate.colorHalftone` |
 | `ClrR` | colorRange | Color Range | `select.colorRange` |
 | (string ID only) | colorLookup | Color Lookup (embedded 3D LUT forms) | `image.adjustments.colorLookup` |
 | `Btch` | batch | Batch (supported folder and naming forms) | `file.automate.batch` |
@@ -105,6 +108,7 @@ row; the action still adds only one Undo entry.
 | `Cstm` | custom | Custom | `filter.other.custom` |
 | `cut ` | cut | Cut | `edit.cut` |
 | `Dntr` | deInterlace | De-Interlace | `filter.video.deInterlace` |
+| `DfnP` | definePattern | Define Pattern | `edit.definePattern` |
 | `Dfrg` | defringe | Defringe | `layer.matting.defringe` |
 | `Dlt ` | delete | Delete | `layer.delete`, `edit.clear`, `layer.layerMask.delete`, `layer.smartFilter.deleteFilterMask` |
 | `Dstt` | desaturate | Desaturate | `image.adjustments.desaturate` |
@@ -112,6 +116,7 @@ row; the action still adds only one Undo entry.
 | `Dspc` | despeckle | Despeckle | `filter.noise.despeckle` |
 | `DfrC` | differenceClouds | Difference Clouds | `filter.render.differenceClouds` |
 | `Dfs ` | diffuse | Diffuse | `filter.stylize.diffuse` |
+| `Dstr` | distribute | Distribute | `layer.distribute.leftEdges`, `layer.distribute.horizontalCenters`, `layer.distribute.rightEdges`, `layer.distribute.topEdges`, `layer.distribute.verticalCenters`, `layer.distribute.bottomEdges` |
 | `Dplc` | duplicate | Duplicate | `layer.duplicate`, `image.duplicate` |
 | `DstS` | dustAndScratches | Dust & Scratches | `filter.noise.dustAndScratches` |
 | (string ID only) | placedLayerEditContents | Edit Contents | `layer.smartObjects.editContents` |
@@ -121,13 +126,18 @@ row; the action still adds only one Undo entry.
 | `Expn` | expand | Expand | `select.modify.expand` |
 | `Expr` | export | Export | `file.export.saveForWebLegacy` |
 | `Exps` | exposure | Exposure | `image.adjustments.exposure` |
+| `Extr` | extrude | Extrude | `filter.stylize.extrude` |
+| `Fct ` | facet | Facet | `filter.pixelate.facet` |
+| `Fade` | fade | Fade | `edit.fade` |
 | `Fthr` | feather | Feather | `select.modify.feather` |
 | `Fbrs` |  | Fibers | `filter.render.fibers` |
 | `Fl  ` | fill | Fill | `edit.fill`, `paint.bucket` |
 | `GEfc` | filterGallery | Filter Gallery | `filter.gallery.accentedEdges`, `filter.gallery.angledStrokes`, `filter.gallery.basRelief`, `filter.gallery.chalkCharcoal`, `filter.gallery.charcoal`, `filter.gallery.chrome`, `filter.gallery.coloredPencil`, `filter.gallery.conteCrayon`, `filter.gallery.craquelure`, `filter.gallery.crosshatch`, `filter.gallery.cutout`, `filter.gallery.darkStrokes`, `filter.gallery.diffuseGlow`, `filter.gallery.dryBrush`, `filter.gallery.filmGrain`, `filter.gallery.fresco`, `filter.gallery.glass`, `filter.gallery.glowingEdges`, `filter.gallery.graphicPen`, `filter.gallery.halftonePattern`, `filter.gallery.inkOutlines`, `filter.gallery.mosaicTiles`, `filter.gallery.neonGlow`, `filter.gallery.notePaper`, `filter.gallery.oceanRipple`, `filter.gallery.paintDaubs`, `filter.gallery.paletteKnife`, `filter.gallery.patchwork`, `filter.gallery.photocopy`, `filter.gallery.plaster`, `filter.gallery.plasticWrap`, `filter.gallery.posterEdges`, `filter.gallery.reticulation`, `filter.gallery.roughPastels`, `filter.gallery.smudgeStick`, `filter.gallery.spatter`, `filter.gallery.sponge`, `filter.gallery.sprayedStrokes`, `filter.gallery.stainedGlass`, `filter.gallery.stamp`, `filter.gallery.sumiE`, `filter.gallery.texturizer`, `filter.gallery.tornEdges`, `filter.gallery.underpainting`, `filter.gallery.waterPaper`, `filter.gallery.watercolor`, `filter.gallery.grain` |
+| `FndE` | findEdges | Find Edges | `filter.stylize.findEdges` |
 | `FltI` | flattenImage | Flatten Image | `layer.flattenImage` |
 | `Flip` | flip | Flip | `image.imageRotation.flipCanvasHorizontal`, `image.imageRotation.flipCanvasVertical`, `edit.transform.flipHorizontal`, `edit.transform.flipVertical` |
 | (string ID only) | focusMask | Focus Area | `select.focusArea` |
+| `Frgm` | fragment | Fragment | `filter.pixelate.fragment` |
 | `GsnB` | gaussianBlur | Gaussian Blur | `filter.blur.gaussianBlur` |
 | `Grdn` | gradientClassEvent | Classic Gradient (custom RGB, centred midpoints) | `paint.gradient` |
 | (string ID only) | gradientMapEvent | Gradient Map | `image.adjustments.gradientMap` |
@@ -140,6 +150,7 @@ row; the action still adds only one Undo entry.
 | `HStr` | hueSaturation | Hue/Saturation | `image.adjustments.hueSaturation` |
 | (string ID only) | conditional | If | `actions.conditional` |
 | `ImgS` | imageSize | Image Size | `image.imageSize` |
+| `IntW` | intersectWith | Intersect with Selection | `select.rect {"mode":"intersect"}` |
 | `Invs` | inverse | Inverse | `select.inverse` |
 | `Invr` | invert | Invert | `image.adjustments.invert` |
 | `CpTL` | copyToLayer | Layer Via Copy | `layer.new.layerViaCopy` |
@@ -152,9 +163,12 @@ row; the action still adds only one Undo entry.
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
 | `Mdn ` | median | Median | `filter.noise.median` |
 | `Mrg2` | mergeLayersNew | Merge Layers | `layer.mergeLayers` |
+| `MrgL` | mergeLayers | Merge Layers | `layer.mergeLayers` |
 | `MSpt` | mergeSpotChannel | Merge Spot Channel | `channel.mergeSpot` |
 | `MrgV` | mergeVisible | Merge Visible | `layer.mergeVisible`, `layer.stampVisible` |
+| `Mztn` | mezzotint | Mezzotint | `filter.pixelate.mezzotint` |
 | `Mnm ` | minimum | Minimum | `filter.other.minimum` |
+| `Msc ` | mosaic | Mosaic | `filter.pixelate.mosaic` |
 | `MtnB` | motionBlur | Motion Blur | `filter.blur.motionBlur` |
 | `move` | move | Move | `layer.translate`, `layer.moveTo`, `layer.arrange.bringToFront`, `layer.arrange.sendToBack`, `layer.arrange.bringForward`, `layer.arrange.sendBackward` |
 | `NTSC` | NTSC | NTSC Colors | `filter.video.ntscColors` |
@@ -162,11 +176,14 @@ row; the action still adds only one Undo entry.
 | (string ID only) | oilPaint | Oil Paint | `filter.stylize.oilPaint` |
 | `Opn ` | open | Open | `file.openAs` |
 | `past` | paste | Paste | `edit.paste`, `edit.pasteSpecial.pasteInPlace` |
+| `PstI` | pasteInto | Paste Into | `edit.pasteSpecial.pasteInto` |
 | (string ID only) | pasteEffects | Paste Layer Style | `layer.layerStyle.pasteLayerStyle` |
+| `PstO` | pasteOutside | Paste Outside | `edit.pasteSpecial.pasteOutside` |
 | (string ID only) | photoFilter | Photo Filter | `image.adjustments.photoFilter` |
 | `Pnch` | pinch | Pinch | `filter.distort.pinch` |
 | `Plc ` | placeEvent | Place | `file.placeEmbedded`, `file.placeLinked` |
 | `Ply ` | play | Play | `actions.play` |
+| `Pntl` | pointillize | Pointillize | `filter.pixelate.pointillize` |
 | `Plr ` | polar | Polar Coordinates | `filter.distort.polarCoordinates` |
 | `Pstr` | posterize | Posterize | `image.adjustments.posterize` |
 | `Prge` | purge | Purge | `edit.purge.all`, `edit.purge.clipboard`, `edit.purge.histories`, `edit.purge.undo` |
@@ -175,6 +192,7 @@ row; the action still adds only one Undo entry.
 | `Ungr` | ungroup | Release Clipping Mask | `layer.releaseClippingMask` |
 | (string ID only) | removeBackground | Remove Background | `layer.removeBackground` |
 | `RmvB` | removeBlackMatte | Remove Black Matte | `layer.matting.removeBlackMatte` |
+| `RmvL` | removeLayerMask | Remove Layer Mask | `layer.layerMask.delete` |
 | `RmvW` | removeWhiteMatte | Remove White Matte | `layer.matting.removeWhiteMatte` |
 | `Shr ` | shear | Shear | `filter.distort.shear` |
 | `Rset` | reset | Reset | `tools.defaultColors` |
@@ -201,12 +219,16 @@ row; the action still adds only one Undo entry.
 | `SmrB` | smartBlur | Smart Blur | `filter.blur.smartBlur` |
 | (string ID only) | smartSharpen | Smart Sharpen | `filter.sharpen.smartSharpen` |
 | `Smth` | smoothness | Smooth | `select.modify.smooth` |
+| `Slrz` | solarize | Solarize | `filter.stylize.solarize` |
 | `Sphr` | spherize | Spherize | `filter.distort.spherize` |
 | `SplC` | splitChannels | Split Channels | `channel.split` |
-| `Stop` | stop | Stop | `STOP_MESSAGE` |
+| `Stop` | stop | Stop | `actions.stopMessage` |
 | `Strk` | stroke | Stroke | `edit.stroke` |
+| `SbtF` | subtractFrom | Subtract from Selection | `select.rect {"mode":"subtract"}` |
 | (string ID only) | surfaceBlur | Surface Blur | `filter.blur.surfaceBlur` |
 | `Thrs` | threshold | Threshold | `image.adjustments.threshold` |
+| `Tls ` | tiles | Tiles | `filter.stylize.tiles` |
+| `TrcC` | traceContour | Trace Contour | `filter.stylize.traceContour` |
 | `Trnf` | transform | Transform | `edit.transform`, `select.transformSelection` |
 | `Trap` | trap | Trap | `image.trap` |
 | (string ID only) | trim | Trim | `image.trim` |
@@ -218,6 +240,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | imageStackConvertSmartObject | Stack Mode: None | `layer.smartObjects.stackMode.none` |
 | (string ID only) | vibrance | Vibrance | `image.adjustments.vibrance` |
 | `Wave` | wave | Wave | `filter.distort.wave` |
+| `Wnd ` | wind | Wind | `filter.stylize.wind` |
 | `ZgZg` | zigZag | ZigZag | `filter.distort.zigZag` |
 | (string ID only) | reverse | Reverse | `layer.arrange.reverse` |
 | (string ID only) | linkSelectedLayers | Link Layers (toggles, as measured) | `layer.linkLayers` |
@@ -226,7 +249,7 @@ row; the action still adds only one Undo entry.
 | (string ID only) | disableLayerStyle | Clear Layer Style | `layer.layerStyle.clear` |
 | (string ID only) | placedLayerMakeCopy | New Smart Object via Copy | `layer.smartObjects.newSmartObjectViaCopy` |
 | (string ID only) | placedLayerConvertToLayers | Convert to Layers | `layer.smartObjects.convertToLayers` |
-| (string ID only) | placedLayerConvertToEmbedded | Embed Linked | `layer.smartObjects.convertToEmbedded` |
+| (string ID only) | placedLayerConvertToEmbedded | Convert to Embedded | `layer.smartObjects.convertToEmbedded` |
 | (string ID only) | placedLayerUpdateAllModified | Update All Modified Content | `layer.smartObjects.updateAllModifiedContent` |
 | (string ID only) | rasterizeAll | Rasterize All Layers | `layer.rasterize.allLayers` |
 | (string ID only) | addBlankVideoLayer | New Blank Video Layer | `layer.videoLayers.newBlankVideoLayer` |
@@ -264,7 +287,7 @@ even for white, black or transparent backgrounds. Other flags, extra settings,
 unknown targets and forms that cannot reconstruct exactly remain whole kept
 steps. Native geometry edits without a matching wire form refuse export.
 
-The sixteen target-only events accept an empty descriptor or the current-layer
+The target-only events other than Link Layers accept an empty descriptor or the current-layer
 `null` reference (`Lyr `/`Ordn.Trgt`). Save retains which form was imported.
 Unknown targets or extra keys stay complete kept steps. Unrepresented native
 options are refused on export. Playback uses the native command's preconditions
@@ -799,8 +822,8 @@ no new Photoshop recording or pixel-equivalence measurement is claimed.
 
 How the reference application resolves a layer or document a step names, measured on 2026-11-01 by
 playing `select` and `move` steps with each form (documents with and without a Background, a group,
-layers above and below it). A recorded step can use any of these; PhotoCraft reads names and the target
-today.
+layers above and below it). A recorded step can use any of these; PhotoCraft reads names and the target,
+and for Select and Move also indexes and the `Ordn` forms.
 
 ### Layers
 
@@ -833,7 +856,7 @@ index inside a group puts the layer into that group.
 | By offset (`rele`) | That many documents after (positive) or before (negative) the active one, in opening order, **wrapping around** at the ends. 0 fails. | -1 D1, +1 D3, -2 D3, +2 D1 |
 | By index (`indx`) | 1-based, in opening order; 0 fails. | 1 D1, 2 D2, 3 D3 |
 
-PhotoCraft's `document.activate {"offset"}` refuses to wrap (#7103); the reference application wraps.
+PhotoCraft's `document.activate {"offset"}` wraps the same way (#7103).
 
 ### Layer comps
 
@@ -850,8 +873,8 @@ Measured with three comps (CompA, CompB, CompC) that each show a different layer
 | Ordinal (`Ordn`) `Trgt`, `Nxt `, `Prvs` | Applies the current (last applied) comp; `Nxt ` and `Prvs` do not move. |
 | Ordinal `Frst`, `Lst `, `Al  ` | Applies the **first** comp (also for `Lst `). |
 
-Delete (`Dlt `) by index uses the same 1-based numbering. PhotoCraft's `applyComp` import reads only the
-name form today; the index, ID and ordinal forms load as kept steps.
+Delete (`Dlt `) by index uses the same 1-based numbering. PhotoCraft's `applyComp` import reads the
+name, index, ID and ordinal forms; the offset form loads as a kept step.
 
 ## Newer events (string ID only)
 
@@ -1132,7 +1155,15 @@ points with `Anch` in pixels).
 What the reference application records when a user works normally, measured on 2026-11-01 by recording
 an action through the panel, mouse and keyboard on a document with layers A, B and C and a second open
 document, then reading the steps back. This is the form PhotoCraft's recorder should write (AUTO-219-1);
-today it copies journal entries with explicit layer ids.
+today it drops the active layer's id when that layer is the only one selected and the command does not
+name a source layer (`layer.select`, `layer.new.frame`, `select.loadSelection` and `type.createSelection`
+keep it), and names every other layer it keeps by name when the name is unique, so
+playback acts on that named layer and fails if it is absent (`crates/engine/src/actions_record.rs`).
+`select.loadSelection` keeps the id of a source layer named `merged` or with no name.
+`edit.checkSpelling` records only `allLayers` (`type_spell_cmds::recorded_step`); with it off, playback
+checks the active layer. A
+Layers-panel move of several layers, or of a layer that is not the selected one, keeps its layer ids
+(`crates/engine/src/cmd/layer_multi_cmds/moves.rs`), so it replays only on the same document.
 
 | User action | Recorded step |
 |---|---|
@@ -1168,8 +1199,8 @@ The same recording played on two other documents (Play from step 2, skipping the
 
 ## Older files: version 12
 
-Action sets saved by the reference application's version 5 era use file version 12. PhotoCraft rejects
-them today; this is what reading them needs. Checked on 2026-11-01 on 325 real version 12 sets (all parse
+Action sets saved by the reference application's version 5 era use file version 12. PhotoCraft reads
+them (`crates/psd/src/atn/legacy.rs`); this is the layout it reads. Checked on 2026-11-01 on 325 real version 12 sets (all parse
 to the end with this layout) and against AtnKit (MIT), which reads version 12 but gets two details wrong
 (noted below).
 
@@ -1235,7 +1266,7 @@ Current support and limits of the newer events are described under [Newer event 
 - **Names:** keys are stored by their 4-character code. The string ID column is a label; where one code
   has two names in the application, the one that fits the setting is shown.
 - **Filter Gallery effects:** the "PhotoCraft today" column compares each value with PhotoCraft's own
-  effect parameters (`crates/algo/src/artistic.rs`). All ranges and defaults already match; 26 parameters
+  effect parameters (`crates/algo/src/artistic.rs`). All ranges and defaults already match; 12 parameters
   have a different name in PhotoCraft, given in that column.
 
 ### What an implementation needs to do
@@ -1253,12 +1284,12 @@ Current support and limits of the newer events are described under [Newer event 
 
 ### Group A: The 47 Filter Gallery effects
 
-Each Filter Gallery effect is recorded as its own event (one per effect), carrying a `GEfk` key with the effect id plus the effect's settings. Today only Spatter (`GEfk` = `Spt`) is mapped (to `filter.gallery.spatter`); the other effects load as kept steps that stop at playback. PhotoCraft already has every effect (`crates/algo/src/artistic.rs`) behind `filter.filterGallery`; this issue only maps them. Where our own range or default differs from the measured one, fix ours to match (marked in each table).
+Each Filter Gallery effect is recorded as its own event (one per effect), carrying a `GEfk` key with the effect id plus the effect's settings. All 47 effects are mapped, each to its `filter.gallery.*` command (`crates/engine/src/cmd/atn_cmds/steps_gallery.rs`); a stack of several effects stays a kept step. The effects themselves are in `crates/algo/src/artistic.rs`. Where our own range or default differs from the measured one, fix ours to match (marked in each table).
 
 #### Accented Edges
 
 - Event: `AccE` / `accentedEdges`
-- PhotoCraft command: `filter.filterGallery effect "accentedEdges"`
+- PhotoCraft command: `filter.gallery.accentedEdges`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1269,7 +1300,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Angled Strokes
 
 - Event: `AngS` / `angledStrokes`
-- PhotoCraft command: `filter.filterGallery effect "angledStrokes"`
+- PhotoCraft command: `filter.gallery.angledStrokes`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1280,7 +1311,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Bas Relief
 
 - Event: `BsRl` / `basRelief`
-- PhotoCraft command: `filter.filterGallery effect "basRelief"`
+- PhotoCraft command: `filter.gallery.basRelief`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1291,7 +1322,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Chalk Charcoal
 
 - Event: `ChlC` / `chalkCharcoal`
-- PhotoCraft command: `filter.filterGallery effect "chalkCharcoal"`
+- PhotoCraft command: `filter.gallery.chalkCharcoal`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1302,7 +1333,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Charcoal
 
 - Event: `Chrc` / `charcoal`
-- PhotoCraft command: `filter.filterGallery effect "charcoal"`
+- PhotoCraft command: `filter.gallery.charcoal`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1313,7 +1344,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Chrome
 
 - Event: `Chrm` / `chrome`
-- PhotoCraft command: `filter.filterGallery effect "chrome"`
+- PhotoCraft command: `filter.gallery.chrome`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1323,7 +1354,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Colored Pencil
 
 - Event: `ClrP` / `coloredPencil`
-- PhotoCraft command: `filter.filterGallery effect "coloredPencil"`
+- PhotoCraft command: `filter.gallery.coloredPencil`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1334,7 +1365,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Conte Crayon
 
 - Event: `CntC` / `conteCrayon`
-- PhotoCraft command: `filter.filterGallery effect "conteCrayon"`
+- PhotoCraft command: `filter.gallery.conteCrayon`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1349,7 +1380,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Craquelure
 
 - Event: `Crql` / `craquelure`
-- PhotoCraft command: `filter.filterGallery effect "craquelure"`
+- PhotoCraft command: `filter.gallery.craquelure`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1360,7 +1391,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Crosshatch
 
 - Event: `Crsh` / `crosshatch`
-- PhotoCraft command: `filter.filterGallery effect "crosshatch"`
+- PhotoCraft command: `filter.gallery.crosshatch`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1371,7 +1402,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Cutout
 
 - Event: `Ct  ` / `cutout`
-- PhotoCraft command: `filter.filterGallery effect "cutout"`
+- PhotoCraft command: `filter.gallery.cutout`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1382,7 +1413,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Dark Strokes
 
 - Event: `DrkS` / `darkStrokes`
-- PhotoCraft command: `filter.filterGallery effect "darkStrokes"`
+- PhotoCraft command: `filter.gallery.darkStrokes`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1393,7 +1424,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Diffuse Glow
 
 - Event: `DfsG` / `diffuseGlow`
-- PhotoCraft command: `filter.filterGallery effect "diffuseGlow"`
+- PhotoCraft command: `filter.gallery.diffuseGlow`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1404,7 +1435,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Dry Brush
 
 - Event: `DryB` / `dryBrush`
-- PhotoCraft command: `filter.filterGallery effect "dryBrush"`
+- PhotoCraft command: `filter.gallery.dryBrush`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1415,7 +1446,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Film Grain
 
 - Event: `FlmG` / `filmGrain`
-- PhotoCraft command: `filter.filterGallery effect "filmGrain"`
+- PhotoCraft command: `filter.gallery.filmGrain`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1426,7 +1457,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Fresco
 
 - Event: `Frsc` / `fresco`
-- PhotoCraft command: `filter.filterGallery effect "fresco"`
+- PhotoCraft command: `filter.gallery.fresco`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1437,7 +1468,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Glass
 
 - Event: `Gls ` / `glass`
-- PhotoCraft command: `filter.filterGallery effect "glass"`
+- PhotoCraft command: `filter.gallery.glass` (only the Frosted and Canvas textures map; a Brick, Burlap or Sandstone step stays a kept step)
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1450,7 +1481,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Glowing Edges
 
 - Event: `GlwE` / `glowingEdges`
-- PhotoCraft command: `filter.filterGallery effect "glowingEdges"`
+- PhotoCraft command: `filter.gallery.glowingEdges`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1461,7 +1492,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Graphic Pen
 
 - Event: `GraP` / `graphicPen`
-- PhotoCraft command: `filter.filterGallery effect "graphicPen"`
+- PhotoCraft command: `filter.gallery.graphicPen`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1472,7 +1503,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Halftone Screen
 
 - Event: `HlfS` / `halftoneScreen`
-- PhotoCraft command: `filter.filterGallery effect "halftonePattern"`
+- PhotoCraft command: `filter.gallery.halftonePattern`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1483,7 +1514,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Ink Outlines
 
 - Event: `InkO` / `inkOutlines`
-- PhotoCraft command: `filter.filterGallery effect "inkOutlines"`
+- PhotoCraft command: `filter.gallery.inkOutlines`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1494,7 +1525,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Mosaic  Tiles
 
 - Event: `MscT` (no string ID)
-- PhotoCraft command: `filter.filterGallery effect "mosaicTiles"`
+- PhotoCraft command: `filter.gallery.mosaicTiles`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1505,7 +1536,7 @@ Each Filter Gallery effect is recorded as its own event (one per effect), carryi
 #### Neon Glow
 
 - Event: `NGlw` / `neonGlow`
-- PhotoCraft command: `filter.filterGallery effect "neonGlow"`
+- PhotoCraft command: `filter.gallery.neonGlow`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1523,7 +1554,7 @@ Nested values as recorded (defaults):
 #### Note Paper
 
 - Event: `NtPr` / `notePaper`
-- PhotoCraft command: `filter.filterGallery effect "notePaper"`
+- PhotoCraft command: `filter.gallery.notePaper`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1534,7 +1565,7 @@ Nested values as recorded (defaults):
 #### Ocean Ripple
 
 - Event: `OcnR` / `oceanRipple`
-- PhotoCraft command: `filter.filterGallery effect "oceanRipple"`
+- PhotoCraft command: `filter.gallery.oceanRipple`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1544,7 +1575,7 @@ Nested values as recorded (defaults):
 #### Paint Daubs
 
 - Event: `PntD` / `paintDaubs`
-- PhotoCraft command: `filter.filterGallery effect "paintDaubs"`
+- PhotoCraft command: `filter.gallery.paintDaubs`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1555,7 +1586,7 @@ Nested values as recorded (defaults):
 #### Palette Knife
 
 - Event: `PltK` / `paletteKnife`
-- PhotoCraft command: `filter.filterGallery effect "paletteKnife"`
+- PhotoCraft command: `filter.gallery.paletteKnife`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1566,7 +1597,7 @@ Nested values as recorded (defaults):
 #### Patchwork
 
 - Event: `Ptch` / `patchwork`
-- PhotoCraft command: `filter.filterGallery effect "patchwork"`
+- PhotoCraft command: `filter.gallery.patchwork`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1576,7 +1607,7 @@ Nested values as recorded (defaults):
 #### Photocopy
 
 - Event: `Phtc` / `photocopy`
-- PhotoCraft command: `filter.filterGallery effect "photocopy"`
+- PhotoCraft command: `filter.gallery.photocopy`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1586,7 +1617,7 @@ Nested values as recorded (defaults):
 #### Plaster
 
 - Event: `Plst` / `plaster`
-- PhotoCraft command: `filter.filterGallery effect "plaster"`
+- PhotoCraft command: `filter.gallery.plaster`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1597,7 +1628,7 @@ Nested values as recorded (defaults):
 #### Plastic Wrap
 
 - Event: `PlsW` / `plasticWrap`
-- PhotoCraft command: `filter.filterGallery effect "plasticWrap"`
+- PhotoCraft command: `filter.gallery.plasticWrap`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1608,7 +1639,7 @@ Nested values as recorded (defaults):
 #### Poster Edges
 
 - Event: `PstE` / `posterEdges`
-- PhotoCraft command: `filter.filterGallery effect "posterEdges"`
+- PhotoCraft command: `filter.gallery.posterEdges`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1619,7 +1650,7 @@ Nested values as recorded (defaults):
 #### Reticulation
 
 - Event: `Rtcl` / `reticulation`
-- PhotoCraft command: `filter.filterGallery effect "reticulation"`
+- PhotoCraft command: `filter.gallery.reticulation`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1630,7 +1661,7 @@ Nested values as recorded (defaults):
 #### Rough Pastels
 
 - Event: `RghP` / `roughPastels`
-- PhotoCraft command: `filter.filterGallery effect "roughPastels"`
+- PhotoCraft command: `filter.gallery.roughPastels`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1645,7 +1676,7 @@ Nested values as recorded (defaults):
 #### Smudge Stick
 
 - Event: `SmdS` / `smudgeStick`
-- PhotoCraft command: `filter.filterGallery effect "smudgeStick"`
+- PhotoCraft command: `filter.gallery.smudgeStick`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1656,7 +1687,7 @@ Nested values as recorded (defaults):
 #### Spatter
 
 - Event: `Spt ` / `spatter`
-- PhotoCraft command: `filter.filterGallery effect "spatter"`
+- PhotoCraft command: `filter.gallery.spatter`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1666,7 +1697,7 @@ Nested values as recorded (defaults):
 #### Sponge
 
 - Event: `Spng` / `sponge`
-- PhotoCraft command: `filter.filterGallery effect "sponge"`
+- PhotoCraft command: `filter.gallery.sponge`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1677,7 +1708,7 @@ Nested values as recorded (defaults):
 #### Sprayed Strokes
 
 - Event: `SprS` / `sprayedStrokes`
-- PhotoCraft command: `filter.filterGallery effect "sprayedStrokes"`
+- PhotoCraft command: `filter.gallery.sprayedStrokes`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1688,7 +1719,7 @@ Nested values as recorded (defaults):
 #### Stained Glass
 
 - Event: `StnG` / `stainedGlass`
-- PhotoCraft command: `filter.filterGallery effect "stainedGlass"`
+- PhotoCraft command: `filter.gallery.stainedGlass`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1699,7 +1730,7 @@ Nested values as recorded (defaults):
 #### Stamp
 
 - Event: `Stmp` / `stamp`
-- PhotoCraft command: `filter.filterGallery effect "stamp"`
+- PhotoCraft command: `filter.gallery.stamp`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1709,7 +1740,7 @@ Nested values as recorded (defaults):
 #### Sumie
 
 - Event: `Smie` / `sumie`
-- PhotoCraft command: `filter.filterGallery effect "sumiE"`
+- PhotoCraft command: `filter.gallery.sumiE`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1720,7 +1751,7 @@ Nested values as recorded (defaults):
 #### Texturizer
 
 - Event: `Txtz` / `texturizer`
-- PhotoCraft command: `filter.filterGallery effect "texturizer"`
+- PhotoCraft command: `filter.gallery.texturizer`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1733,7 +1764,7 @@ Nested values as recorded (defaults):
 #### Torn Edges
 
 - Event: `TrnE` / `tornEdges`
-- PhotoCraft command: `filter.filterGallery effect "tornEdges"`
+- PhotoCraft command: `filter.gallery.tornEdges`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1744,7 +1775,7 @@ Nested values as recorded (defaults):
 #### Underpainting
 
 - Event: `Undr` / `underpainting`
-- PhotoCraft command: `filter.filterGallery effect "underpainting"`
+- PhotoCraft command: `filter.gallery.underpainting`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1759,7 +1790,7 @@ Nested values as recorded (defaults):
 #### Water Paper
 
 - Event: `WtrP` / `waterPaper`
-- PhotoCraft command: `filter.filterGallery effect "waterPaper"`
+- PhotoCraft command: `filter.gallery.waterPaper`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1770,7 +1801,7 @@ Nested values as recorded (defaults):
 #### Watercolor
 
 - Event: `Wtrc` / `watercolor`
-- PhotoCraft command: `filter.filterGallery effect "watercolor"`
+- PhotoCraft command: `filter.gallery.watercolor`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1781,7 +1812,7 @@ Nested values as recorded (defaults):
 #### Grain
 
 - Event: `Grn ` / `grain`
-- PhotoCraft command: `filter.filterGallery effect "grain"`
+- PhotoCraft command: `filter.gallery.grain`
 
 | Key | String ID | Type | Unit | Default | Allowed | PhotoCraft today |
 |---|---|---|---|---|---|---|
@@ -1791,7 +1822,7 @@ Nested values as recorded (defaults):
 
 ### Group B: The Render filters Clouds, Difference Clouds, Fibers and Lens Flare
 
-All four commands exist in PhotoCraft; only the `.atn` mapping is missing. Lighting Effects is covered with the events that need a recorded step (its lights are only recorded through the dialog).
+All four are mapped to their `filter.render.*` commands. Lighting Effects is covered with the events that need a recorded step (its lights are only recorded through the dialog).
 
 #### Clouds
 
@@ -1952,7 +1983,7 @@ Displace reads a displacement map from a file chosen in a dialog; record one ste
 
 ### Group D: The Stylize and Pixelate filters
 
-All commands exist in PhotoCraft (`filter.stylize.*`, `filter.pixelate.*`); only the `.atn` mapping is missing.
+All of them are mapped to their `filter.stylize.*` and `filter.pixelate.*` commands.
 
 #### Extrude
 
@@ -2069,7 +2100,7 @@ No parameters: the step carries an empty descriptor.
 
 ### Group E: Video, Other and matting filters and the direct Gradient Map / Replace Color adjustments
 
-All commands exist in PhotoCraft. The two direct adjustments, classic Gradient Map and Lab-range Replace Color, are supported above; the remaining events below still need their `.atn` mappings. These direct adjustments are separate from adjustment layers.
+All commands exist in PhotoCraft. The two direct adjustments, classic Gradient Map and Lab-range Replace Color, are supported above; the remaining events below are mapped too. These direct adjustments are separate from adjustment layers.
 
 #### De-Interlace
 

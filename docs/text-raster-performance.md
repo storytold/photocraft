@@ -11,7 +11,7 @@ of ink = 3.75 MP).
 | Stage | ms | What it does |
 |---|---:|---|
 | ink rectangle (`ink_rect_warped`) | 4.1 | its own pass over every glyph, to size the surface |
-| draw (`draw_pass` into `Coverage`) | 18.6–22.9 | glyph outlines, curve flattening (0.03 px tolerance), winding scanlines |
+| draw (`draw` into `Coverage`) | 18.6–22.9 | glyph outlines, curve flattening (0.03 px tolerance), winding scanlines |
 | prefix sum (`Coverage::finish`) | 7.0–8.1 | resolves the winding accumulator to coverage 0…1, one running sum over 3.75 M pixels |
 | composite | 22.6–33.4 | each colour's coverage over the premultiplied accumulator |
 | unpremultiply | 11.2–14.0 | divides the accumulator back to straight colour |

@@ -9,14 +9,14 @@ CUPS's errors to the user.
 ```rust
 let ep = photocraft_ipp::Endpoint::detect().ok_or("no CUPS server")?;   // socket, then localhost:631
 let printers = photocraft_ipp::printers(&ep)?;                            // name, info, state, default
-let id = photocraft_ipp::print_job(&ep, &photocraft_ipp::Job { printer: "Office", title: "photo", user: "me", copies: 2, document: &pdf, format: "application/pdf" })?;
+let id = photocraft_ipp::print_job(&ep, &photocraft_ipp::Job { printer: "Office", is_class: false, title: "photo", user: "me", copies: 2, document: &pdf, format: "application/pdf" })?;
 ```
 
-Three operations: `CUPS-Get-Printers`, `CUPS-Get-Default`, `Print-Job`. HTTP/1.1 over the CUPS
+Four operations: `CUPS-Get-Printers`, `CUPS-Get-Classes`, `CUPS-Get-Default`, `Print-Job`. HTTP/1.1 over the CUPS
 domain socket (`/run/cups/cups.sock`, or `CUPS_SERVER` as a path) or TCP (`localhost:631`, or
 `CUPS_SERVER` as `host[:port]`), chunked replies included. Replies are capped at 16 MiB and
 parsed with bounds checks; an IPP error status becomes `Error::Status` with the server's own
 message. Tests run against an in-process fake server over TCP and a Unix socket.
 
 Standalone: it depends on no other PhotoCraft crate. Used by `photocraft-engine`'s print
-commands on Unix; Windows printing lives in `photocraft-winprint`.
+commands on Unix; Windows printing goes through the shared `craft-print` crate.

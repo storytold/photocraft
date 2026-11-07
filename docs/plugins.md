@@ -5,7 +5,7 @@ arbitrary machine code and cannot work in the browser build. Instead, plug-ins a
 modules** run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web.
 
 This page is the contract for plug-in authors and the reference for the host
-(`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`).
+(`crates/plugins`, the `plugin.*` commands in `crates/engine/src/cmd/plugin_cmds.rs`).
 
 ## Using plug-ins
 
@@ -101,7 +101,7 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
   Unicode format characters (bidi overrides and marks, zero-width spaces, soft hyphens) are rejected,
   except the zero-width joiner and non-joiner, and at least one character must be visible.
   `kind`: `"filter"` (the only kind in v1).
-- `params`: in dialog order. Names are `[A-Za-z0-9_]`, not starting with `_`, not `id`/`layer`.
+- `params`: in dialog order. Names are `[A-Za-z0-9_]`, not starting with `_`, not `id`/`layer`/`target`/`channel`.
   The host validates the user's values before calling: missing values take the default, numbers are
   clamped to `min..max` (ints rounded), a wrong type or an unknown choice is an error.
 - `unit` (optional, on `number` and `int` params): `"px"` marks a length in document pixels (a

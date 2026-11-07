@@ -69,7 +69,7 @@ blur amount previously became f32::clamp's invalid upper bound. It now acts as
 identity. The regression asserts the frozen starting implementation panics and
 the corrected kernel returns the source. Valid finite parameters keep exact bits.
 
-`tests_tilt_shift_reference.rs` freezes the starting scalar Gallery/Tilt-Shift
+`crates/algo/src/gallery/tilt_shift_tests/reference.rs` freezes the starting scalar Gallery/Tilt-Shift
 expressions, using the unchanged Gaussian helpers. Differential tests compare
 every finite f32 bit (including signed zero), with matching NaN classifications:
 1–6 channels, RGB/Gray/CMYK/Lab and the expanded Bitmap/Indexed/Duotone/Multichannel

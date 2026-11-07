@@ -11,7 +11,7 @@ Current source enforces several explicit limits:
 - document width and height: at most 300,000 pixels each;
 - document channels: at most 56;
 - layer channels: at most 64;
-- decoded channel data: at most 2 GiB for one decode layout;
+- decoded channel data: at most 8 GiB for one decode layout on 64-bit targets (2 GiB elsewhere);
 - ActionDescriptor nesting: at most 64 levels;
 - pattern edge: at most 30,000 pixels;
 - arithmetic for row counts and decoded lengths uses checked operations.

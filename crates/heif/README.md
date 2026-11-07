@@ -19,7 +19,7 @@ inside it (fuzzing found two in 0.1.1) becomes `Error::Malformed`.
 ## Why it is a separate, optional crate
 
 - **A young decoder.** heic-rs is new and has a single maintainer. It is pinned exactly
-  (`=0.1.1`); moving the pin is a reviewed change (re-run `cargo fuzz run decode_heif` in
+  (`=0.1.4`); moving the pin is a reviewed change (re-run `cargo fuzz run decode_heif` in
   `crates/codecs` and `cargo xtask test-corpus`).
 - **HEVC patents are a distributor's call.** HEVC is patent-encumbered in some jurisdictions, so
   whether a build includes an HEVC decoder is a build-time choice. `photocraft-codecs` uses this

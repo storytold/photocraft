@@ -4,11 +4,13 @@ PhotoCraft already has `cargo-fuzz` workspaces next to its primary untrusted-for
 
 | Crate | Targets |
 |---|---|
-| `crates/psd` | `parse`, `descriptor` |
-| `crates/codecs` | `decode_any`, `decode_png`, `decode_jpeg`, `decode_tiff`, `decode_exr` |
+| `crates/psd` | `parse`, `descriptor`, `abr`, `asl`, `image_source_data`, `grd`, `ase`, `aco`, `patterns`, `filter_effects`, `metadata`, `tagged`, `resources`, `atn` |
+| `crates/codecs` | `decode_any`, `decode_png`, `decode_jpeg`, `decode_tiff`, `decode_exr`, `decode_heif`, `decode_gif`, `decode_webp` |
 | `crates/format` | `load` |
+| `crates/affinity` | `preview`, `import_preview`, `stream` |
+| `crates/raw` | `develop`, `ljpeg` |
 
-The main CI workflow can run these targets through a manually dispatched fuzz job. It is not currently scheduled continuous fuzzing.
+The main CI workflow can run most of these targets (not `abr`, `atn`, `decode_gif`, `decode_webp`, `stream` or the `crates/raw` targets) through a manually dispatched fuzz job. It is not currently scheduled continuous fuzzing.
 
 Run a target from its crate directory with nightly Rust and `cargo-fuzz` installed:
 
@@ -40,4 +42,4 @@ A regression entry should record the affected parser, expected error class, reso
 
 ## Future program
 
-Priority additions are PSB-specific structures, WebP, native directory bundles, ICC/LUT/pattern parsers, and embedded smart objects. Continuous scheduled fuzzing and artifact triage remain future work.
+Priority additions are PSB-specific structures, native directory bundles, ICC/LUT parsers, and embedded smart objects. Continuous scheduled fuzzing and artifact triage remain future work.

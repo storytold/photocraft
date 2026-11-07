@@ -58,8 +58,10 @@ t.eval(&[1.0, 0.0, 0.0], &mut out);                        // exact single colou
 | `adobe-rgb-compat` | Adobe RGB (1998)-compatible (published primaries, gamma 563/256) |
 | `prophoto-compat` | ProPhoto-compatible (ROMM primaries, D50, gamma 1.8) |
 | `linear-srgb` | sRGB primaries, linear |
+| `aces-cg` | ACEScg (AP1 primaries, ACES white point, linear) |
 | `rec2020` | Rec. 2020 primaries, Rec. 709 OETF |
-| `gray-gamma-2.2`, `sgray` | gray gamma 2.2; gray with the sRGB curve (default gray working space) |
+| `gray-gamma-2.2`, `sgray` | gray gamma 2.2; gray with the sRGB curve |
+| `dot-gain-20-compat` | Dot Gain 20%-compatible gray (gamma 1.732) — default gray working space |
 | `lab-d50` | Lab identity (v4 encoding) |
 | `coated-cmyk` | **PhotoCraft Coated CMYK (synthetic, 300% TAC, medium GCR)** — default CMYK |
 
