@@ -1,8 +1,9 @@
 use super::clone::{blend_param, clamp_samples, clone_mapping, clone_result, clone_sample};
+use super::periodic;
 use super::sampling::{SampleLayers, composite_region, sample_all_layers, sample_layers};
 use super::{
     BlendMode, CompleteParams, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, Session, Stroke, Surface, Value, apply_coverage, bad,
-    coverage, damage_json, flag, inpaint, json, parse_brush, poisson, reject_huge_stroke, run_stroke, string,
+    coverage, damage_json, flag, inpaint, json, parse_brush, poisson, reject_huge_stroke, run_stroke, string, wrap_coord, wrap_tile,
 };
 
 /// Grow a stroke's coverage map by `m` pixels of zero coverage (a Dirichlet boundary for the solve).
@@ -53,15 +54,30 @@ pub(super) fn healing_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let map = clone_mapping(s, p, &stroke, CMD)?;
     let off = map.offset();
     let dmg = run_stroke(s, "Healing Brush", id, p, |pre, surf, sel, lock| {
+        // Pattern Preview: source and destination repeat across the canvas edges, so a stroke over
+        // a seam heals as one patch and goes on wherever it repeats.
+        let wrap = flag(p, "wrap", false);
         let (bounds, cov) = coverage(CMD, &stroke)?;
         let (g, cov) = pad_coverage(bounds, &cov, 2);
         let fmt = surf.format();
-        let src = clone_sample(pre, id, surf, which, g, &map, false, CMD)?;
+        let src = clone_sample(pre, id, surf, which, g, &map, wrap, CMD)?;
         // The destination the texture is fitted to: the layer itself, or what the user sees when
         // sampling several layers (so healing onto an empty layer matches the composite).
-        let dst = if which == SampleLayers::Current { Region::read(surf, g) } else { composite_region(pre, id, which, g, fmt) };
+        let dst = if wrap {
+            periodic::sample(pre, id, surf, which, g, CMD)?
+        } else if which == SampleLayers::Current {
+            Region::read(surf, g)
+        } else {
+            composite_region(pre, id, which, g, fmt)
+        };
         let mask: Vec<bool> = cov.iter().map(|c| *c > 0.0).collect();
         let healed = heal_region(&fmt, &src, &dst, &mask);
+        if wrap {
+            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, |_, r| {
+                let part = healed.crop(r);
+                if part.rect == r { Ok(part) } else { Err(bad(CMD, "the healed patch does not cover the stroke")) }
+            });
+        }
         Ok(apply_coverage(surf, g, &cov, stroke.brush.opacity, sel, lock, &healed, mode))
     })?;
     Ok(clone_result(dmg, off, aligned, p, &stroke))
@@ -89,13 +105,17 @@ pub(super) fn history_brush(s: &mut Session, p: &Value) -> Result<Value> {
     let live = s.live_commit.take().filter(|l| l.matches(s, CMD, p, &stroke.points));
     let from_live = live.is_some();
     let src_surface = history_source(s, id, p, CMD)?;
-    let dmg = run_stroke(s, "History Brush", id, p, |_, surf, sel, lock| {
+    let dmg = run_stroke(s, "History Brush", id, p, |pre, surf, sel, lock| {
         if let Some(l) = live {
             *surf = l.surface;
             return Ok(l.bounds);
         }
         let fmt = surf.format();
         let src = if src_surface.format() == fmt { src_surface } else { src_surface.convert(fmt) };
+        if flag(p, "wrap", false) {
+            // Pattern Preview: the history state repeats with the canvas, as the stroke does.
+            return periodic::stroke(pre, surf, &stroke, sel, lock, mode, CMD, |_, r| periodic::sample(pre, id, &src, SampleLayers::Current, r, CMD));
+        }
         let (bounds, cov) = coverage(CMD, &stroke)?;
         let paint = Region::read(&src, bounds);
         Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
@@ -173,28 +193,68 @@ enum SpotType {
 /// Photoshop 25.4 (measured): a dab changes exactly the brush's footprint, and Content-Aware takes
 /// its texture from around it, as Edit › Fill does from its window
 /// ([`crate::fill_cmds::sampling_window`] of the stroke's bounds), which is what this samples.
-fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: SpotType, all: bool, sel: Option<&Surface>, lock: bool) -> Result<Rect> {
-    let (bounds, cov) = coverage("paint.spotHealing", stroke)?;
+///
+/// Wrapped around the canvas `wrap` (View › Pattern Preview), the window is centred on the stroke
+/// whatever the canvas edges and at most one canvas across, so it holds no second copy of the
+/// stroke; its pixels repeat across the edges, and the healed pixels go where they lie on the
+/// canvas.
+#[allow(clippy::too_many_arguments)]
+fn spot_heal_surface(
+    surf: &mut Surface,
+    pre: &Document,
+    stroke: &Stroke,
+    kind: SpotType,
+    all: bool,
+    sel: Option<&Surface>,
+    lock: bool,
+    wrap: Option<Rect>,
+) -> Result<Rect> {
+    const CMD: &str = "paint.spotHealing";
+    let (bounds, cov) = coverage(CMD, stroke)?;
     let size = stroke.brush.size;
-    let region_rect = crate::fill_cmds::sampling_window(bounds, pre.bounds());
+    let region_rect = match wrap {
+        Some(tile) => {
+            let (tw, th) = (i64::from(tile.width()), i64::from(tile.height()));
+            let x0 = (i64::from(bounds.x0) + i64::from(bounds.x1) - tw) / 2;
+            let y0 = (i64::from(bounds.y0) + i64::from(bounds.y1) - th) / 2;
+            let around = Rect::new(x0 as i32, y0 as i32, (x0 + tw) as i32, (y0 + th) as i32);
+            crate::fill_cmds::sampling_window(bounds, around)
+        }
+        None => crate::fill_cmds::sampling_window(bounds, pre.bounds()),
+    };
     if region_rect.is_empty() {
         return Ok(Rect::EMPTY);
     }
     // Proximity Match looks for its source anywhere in that window.
     let margin = (region_rect.width().max(region_rect.height()) / 2) as i32;
     let fmt = surf.format();
-    let img = if all { composite_region(pre, None, SampleLayers::All, region_rect, fmt) } else { Region::read(surf, region_rect) };
+    let img = match wrap {
+        Some(_) => periodic::sample(pre, None, surf, if all { SampleLayers::All } else { SampleLayers::Current }, region_rect, CMD)?,
+        None if all => composite_region(pre, None, SampleLayers::All, region_rect, fmt),
+        None => Region::read(surf, region_rect),
+    };
     let (w, h, ch) = (img.width(), img.height(), img.ch);
     let bw = bounds.width() as usize;
     let mut stroke_cov = vec![0.0f32; w * h];
     for (i, c) in cov.iter().enumerate() {
         let (x, y) = (bounds.x0 + (i % bw) as i32, bounds.y0 + (i / bw) as i32);
+        // A wrapped stroke longer than the window (one canvas) folds onto it: the strongest
+        // coverage of each pixel heals it once.
+        let (x, y) = match wrap {
+            Some(t) => {
+                let wrap_into = |v: i32, lo: i32, period: u32| wrap_coord(v, lo, lo.saturating_add(period as i32));
+                (wrap_into(x, region_rect.x0, t.width()), wrap_into(y, region_rect.y0, t.height()))
+            }
+            None => (x, y),
+        };
         if region_rect.contains(x, y) {
-            stroke_cov[img.index(x, y)] = *c;
+            let px = &mut stroke_cov[img.index(x, y)];
+            *px = px.max(*c);
         }
     }
     let hole: Vec<bool> = stroke_cov.iter().map(|c| *c > 0.0).collect();
-    if !hole.iter().any(|h| *h) {
+    // Nothing to heal, or (a wrapped dab covering its whole window) nothing to heal from.
+    if !hole.iter().any(|h| *h) || hole.iter().all(|h| *h) {
         return Ok(Rect::EMPTY);
     }
     // Synthesise over a slightly larger domain than the Poisson region, so the solve's boundary pixels
@@ -218,8 +278,19 @@ fn spot_heal_surface(surf: &mut Surface, pre: &Document, stroke: &Stroke, kind: 
     let src = Region { rect: region_rect, ch, data: filled };
     let healed = heal_region(&fmt, &src, &img, &heal_mask);
     let dmg = bounds.intersect(&region_rect);
-    let dmg_cov: Vec<f32> = (dmg.y0..dmg.y1).flat_map(|y| (dmg.x0..dmg.x1).map(move |x| (x, y))).map(|(x, y)| stroke_cov[img.index(x, y)]).collect();
-    Ok(apply_coverage(surf, dmg, &dmg_cov, stroke.brush.opacity, sel, lock, &healed, BlendMode::Normal))
+    let cov_of = |r: Rect, (dx, dy): (i32, i32)| -> Vec<f32> {
+        (r.y0..r.y1).flat_map(|y| (r.x0..r.x1).map(move |x| (x, y))).map(|(x, y)| stroke_cov[img.index(x + dx, y + dy)]).collect()
+    };
+    let Some(tile) = wrap else {
+        return Ok(apply_coverage(surf, dmg, &cov_of(dmg, (0, 0)), stroke.brush.opacity, sel, lock, &healed, BlendMode::Normal));
+    };
+    let mut done = Rect::EMPTY;
+    for (part, off) in photocraft_paint::wrap::pieces(dmg, tile) {
+        let mut paint = healed.crop(part.translate(off.0, off.1));
+        paint.rect = part;
+        done = done.union(&apply_coverage(surf, part, &cov_of(part, off), stroke.brush.opacity, sel, lock, &paint, BlendMode::Normal));
+    }
+    Ok(done)
 }
 
 pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
@@ -233,6 +304,7 @@ pub(super) fn spot_healing(s: &mut Session, p: &Value) -> Result<Value> {
         o => return Err(bad(CMD, format!("unknown type `{o}` (contentAware|createTexture|proximityMatch)"))),
     };
     let all = sample_all_layers(p);
-    let dmg = run_stroke(s, "Spot Healing Brush", id, p, |pre, surf, sel, lock| spot_heal_surface(surf, pre, &stroke, kind, all, sel, lock))?;
+    let dmg =
+        run_stroke(s, "Spot Healing Brush", id, p, |pre, surf, sel, lock| spot_heal_surface(surf, pre, &stroke, kind, all, sel, lock, wrap_tile(pre, p)))?;
     Ok(json!({ "damage": damage_json(dmg) }))
 }

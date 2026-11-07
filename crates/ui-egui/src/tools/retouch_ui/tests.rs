@@ -29,6 +29,42 @@ fn stripes(app: &mut PhotocraftApp, step: usize, target: &str) {
 }
 
 #[test]
+fn every_retouching_stroke_wraps_in_pattern_preview() {
+    // View › Pattern Preview (#8883): a stroke across the right edge asks its command to go
+    // on at the opposite one, and only then.
+    let tools = [
+        (Tool::Blur, "paint.blur"),
+        (Tool::Sharpen, "paint.sharpen"),
+        (Tool::Smudge, "paint.smudge"),
+        (Tool::Dodge, "paint.dodge"),
+        (Tool::Burn, "paint.burn"),
+        (Tool::Sponge, "paint.sponge"),
+        (Tool::ColorReplacement, "paint.colorReplacement"),
+        (Tool::PatternStamp, "paint.patternStamp"),
+        (Tool::Healing, "paint.healingBrush"),
+        (Tool::HistoryBrush, "paint.historyBrush"),
+        (Tool::SpotHealing, "paint.spotHealing"),
+        (Tool::BackgroundEraser, "paint.backgroundEraser"),
+    ];
+    for (tool, cmd) in tools {
+        for pattern_preview in [false, true] {
+            let mut app = app();
+            stripes(&mut app, 8, "pixels");
+            app.ui.view.pattern_preview = pattern_preview;
+            app.ui.clone_source = Some([20.0, 30.0]);
+            app.ui.tool = tool;
+            let m = egui::Modifiers::NONE;
+            tool_event(&mut app, ToolEvent::Down { x: 86.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Move { x: 112.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Up { x: 112.0, y: 30.0 }, m);
+            assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
+            let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == cmd).cloned().unwrap_or_else(|| panic!("{tool:?}: no {cmd}"));
+            assert_eq!(p.get("wrap").and_then(Value::as_bool).unwrap_or(false), pattern_preview, "{tool:?}: {p}");
+        }
+    }
+}
+
+#[test]
 fn clone_stamp_in_pattern_preview_wraps_a_dab_across_the_right_edge() {
     for pattern_preview in [false, true] {
         let mut app = app();

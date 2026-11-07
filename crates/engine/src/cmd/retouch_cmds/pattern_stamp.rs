@@ -8,12 +8,12 @@ use photocraft_color::{BlendMode, PixelFormat};
 use photocraft_compose::pattern::{Placement, Tile, render};
 use photocraft_doc::{LayerId, Pattern};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, apply_coverage, apply_dab_stroke, over_native};
+use photocraft_paint::retouch::{Footprint, Region, apply_coverage, apply_dab_stroke_wrapped, over_native};
 use photocraft_paint::{Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use serde_json::{Value, json};
 
-use super::{bad, blend_param, damage_json, flag, has_pixel_layer, parse_brush, reject_huge_stroke};
+use super::{bad, blend_param, damage_json, flag, has_pixel_layer, parse_brush, periodic, reject_huge_stroke, wrap_tile};
 use crate::{Result, Session};
 
 const STREAM_PHASE_X: u64 = 101;
@@ -88,10 +88,16 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
         let pre = doc.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(doc, st.id, p)?;
         let sel = pre.selection.as_ref();
+        // View › Pattern Preview: the stroke carries on across the canvas edges, the pattern
+        // following it as it goes.
+        let wrap = wrap_tile(&pre, p);
         if st.impressionist {
             // Halo is the dab footprint only: Impressionist jitters phase, it does not blur.
             let effect = st.impressionist_effect(surf.format());
-            Ok(apply_dab_stroke(surf, &st.stroke, sel, lock, 0, effect))
+            Ok(apply_dab_stroke_wrapped(surf, &st.stroke, sel, lock, 0, wrap, effect))
+        } else if wrap.is_some() {
+            let (place, fmt) = (st.placement(), surf.format());
+            periodic::stroke(&pre, surf, &st.stroke, sel, lock, st.mode, CMD, |_, r| Ok(paint_region(&st.tile, &place, &fmt, r)))
         } else {
             paint_aligned(surf, &st.stroke, sel, lock, &st.tile, st.placement(), st.mode, CMD)
         }
@@ -117,7 +123,7 @@ pub fn live_impressionist(s: &Session, p: &Value) -> Result<super::LiveDab> {
     }
     let (stroke, id) = (st.stroke.clone(), st.id);
     let doc = (*s.active().ok_or(crate::EngineError::NoDocument)?.doc).clone();
-    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre| st.impressionist_effect(pre.format()))?.with_tail_preview()
+    super::LiveDab::with_effect_on(doc, CMD, p, stroke, id, 0, |pre, _| st.impressionist_effect(pre.format()))?.with_tail_preview()
 }
 
 /// The pattern under destination `rect` in `fmt` (native channels): what an aligned stroke paints

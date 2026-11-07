@@ -310,6 +310,13 @@ pub(super) fn stroke_params(app: &PhotocraftApp, d: &Drag, points: &[Vec<f64>]) 
     p
 }
 
+/// View › Pattern Preview: a painting stroke goes on across the canvas edges (#8883).
+pub(crate) fn pattern_wrap(app: &PhotocraftApp, p: &mut serde_json::Value) {
+    if app.ui.view.pattern_preview {
+        p["wrap"] = json!(true);
+    }
+}
+
 /// Tools whose strokes the engine renders while they are drawn (`LiveStroke`).
 pub(crate) fn strokes_live(tool: Tool) -> bool {
     matches!(
@@ -387,6 +394,7 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
     } else if let Some(cmd) = live_retouch_command(d.tool) {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = if d.tool == Tool::HistoryBrush { crate::retouch_ui::history_brush_params(app) } else { crate::retouch_ui::clone_params(app)? };
+        pattern_wrap(app, &mut p);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
         EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))

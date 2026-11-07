@@ -499,6 +499,60 @@ fn releasing_a_sequential_dab_stroke_commits_what_a_replay_paints() {
     }
 }
 
+/// View › Pattern Preview (#8883): a Blur, Smudge or Dodge stroke dragged past the right edge
+/// carries on at the left one, and the release still commits the pixels its live stroke drew.
+#[test]
+fn a_sequential_dab_stroke_past_the_edge_in_pattern_preview_commits_its_live_pixels() {
+    for (tool, cmd) in [(Tool::Blur, "paint.blur"), (Tool::Smudge, "paint.smudge"), (Tool::Dodge, "paint.dodge")] {
+        let setup = |run: &mut dyn FnMut(&str, Value)| {
+            run("tools.setBrush", json!({"brush": {"size": 24, "hardness": 0.2}}));
+            run("paint.stroke", json!({"points": [[0, 50], [200, 50]], "size": 30, "hardness": 0.5, "color": "#c04020"}));
+            run("paint.stroke", json!({"points": [[0, 35], [200, 65]], "size": 8, "hardness": 1.0, "color": "#2060c0"}));
+        };
+        let mut h = harness();
+        setup(&mut |id, p| {
+            h.state_mut().run(id, p).unwrap();
+        });
+        let before = h.state().session.active().unwrap().doc.clone();
+        {
+            let app = h.state_mut();
+            app.ui.tool = tool;
+            app.ui.view.pattern_preview = true;
+            app.ui.views[0].zoom = 2.0;
+            app.ui.views[0].center = [100.0, 50.0];
+        }
+        h.run_steps(1);
+        move_to(&mut h, 150.0, 50.0);
+        button(&mut h, 150.0, 50.0, true);
+        for (x, y) in [(175.0, 52.0), (200.0, 50.0), (225.0, 47.0), (245.0, 50.0)] {
+            move_to(&mut h, x, y);
+        }
+        assert!(h.state().live_stroke.is_some(), "{cmd}: a live stroke");
+        h.state_mut().retouch_from_live = false;
+        button(&mut h, 245.0, 50.0, false);
+        h.run_steps(2);
+        let app = h.state();
+        assert!(app.retouch_from_live, "{cmd}: the release took the live pixels instead of rendering the stroke again");
+        let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == cmd).cloned().expect("a committed stroke");
+        assert_eq!(p["wrap"], json!(true), "{cmd}: {p}");
+        let mut fresh = photocraft_engine::Session::new();
+        fresh.execute("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
+        setup(&mut |id, p| {
+            fresh.execute(id, p).unwrap();
+        });
+        fresh.execute(cmd, p).unwrap();
+        let st = app.session.active().unwrap();
+        let (a, b, pre) = (
+            photocraft_compose::render(&st.doc, st.doc.bounds()),
+            photocraft_compose::render(&fresh.active().unwrap().doc, st.doc.bounds()),
+            photocraft_compose::render(&before, st.doc.bounds()),
+        );
+        assert!(a.px.iter().zip(&b.px).all(|(x, y)| x == y), "{cmd}: live commit and replay differ");
+        let left = |buf: &photocraft_compose::Buffer| (30..70).flat_map(|y| (0..30).map(move |x| (x, y))).map(|(x, y)| buf.px[y * 200 + x]).collect::<Vec<_>>();
+        assert_ne!(left(&a), left(&pre), "{cmd}: the stroke came back at the left edge");
+    }
+}
+
 /// Pressure changes Smudge's painted footprint, but not the square of colour it carries.
 /// Exercise the actual pen → live preview → release handoff → journal replay, then undo/redo.
 #[test]
