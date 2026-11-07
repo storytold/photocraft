@@ -74,6 +74,8 @@ mod tablet;
 mod ui_state;
 mod updates;
 mod window_frame;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_scale;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -343,6 +345,10 @@ fn main() -> eframe::Result {
     // Before anything starts a thread: may re-execute this process with glibc tuned to return
     // the memory of closed documents (#8743).
     photocraft_engine::malloc_tuning::apply();
+    // Apply before logger/font/session setup; a successful re-exec must not repeat side effects.
+    // `x11_scale::apply` skips native Wayland itself.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    x11_scale::apply();
     // Then, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     crash_guard::install_hook();
