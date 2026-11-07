@@ -156,14 +156,14 @@ fn smart_object_cylinder_is_stored_in_source_space() {
     let LayerContent::Smart(sm) = &s.active().unwrap().doc.layers[1].content else { panic!("smart") };
     let inv = crate::smart_cmds::placement(sm).inverse().unwrap();
     assert!((w.values[0] - inv.apply(-15.0, 10.0).0).abs() < 1e-9 && (w.values[2] - inv.apply(85.0, 10.0).0).abs() < 1e-9, "{:?}", w.values);
-    // Rotated: a custom mesh with the same shape.
+    // Rotated: a custom mesh, fitted over the source box (#10325).
     let mut s = session(8);
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     s.execute("edit.transform", json!({"rotate": 30})).unwrap();
     s.execute("layer.smartObjects.warp", json!({"style": "cylinder", "values": CYL, "rect": [10, 10, 60, 40]})).unwrap();
     let w = stored(&s);
     assert_eq!(w.style, WarpStyle::Custom);
-    assert_eq!(w.mesh.as_ref().map(|m| (m.nx(), m.ny())), Some((13, 4)));
+    assert_eq!(w.mesh.as_ref().map(|m| (m.nx(), m.ny())), Some((13, 13)));
 }
 
 /// Warp mode shows a stored cylinder as its mesh, and Enter commits that mesh untouched: the
@@ -457,4 +457,94 @@ fn a_cancelled_warp_stops_in_a_selected_linked_mask() {
     let ctl = Interrupt::cancel_only(&|| true);
     let r = warp_layer(Some(&sel), Locks::default(), &mut l, &w, rect, Interp::Bicubic, None, &ctl);
     assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+}
+
+/// Committing a custom warp or a cylinder on a smart object that is upright, rotated by 30 or 90
+/// degrees, flipped, sheared or in Perspective keeps the placement: the stored warp sends each
+/// source point to the source point the document warp sends its placed position to, so the
+/// rendered pixels land where the uncommitted warp showed them (#10325). The cylinder becomes a
+/// 13x13 fitted mesh when the placement isn't upright; its error stays under a pixel. The
+/// rendered smart object is compared with the uncommitted warp of its placed render as well.
+#[test]
+fn warp_keeps_the_placement_of_a_smart_object_under_any_transform() {
+    for case in ["upright", "rotate 0", "rotate 30", "rotate 90", "flip", "shear", "perspective"] {
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        let (id, r, place0) = {
+            let st = s.active().unwrap();
+            let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            let LayerContent::Smart(sm) = &l.content else { panic!("smart") };
+            (l.id, warp_bounds(&st.doc, l), crate::smart_cmds::placement(sm))
+        };
+        // The source box: where the untransformed layer's pixels come from.
+        let [x0, y0, x1, y1] = rect_f(r);
+        let inv0 = place0.inverse().unwrap();
+        let sc = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]].map(|p| hom_apply(&inv0, p));
+        let src_box = sc.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        match case {
+            "rotate 0" => {
+                s.execute("edit.transform", json!({"rotate": 0})).unwrap();
+            }
+            "rotate 30" => {
+                s.execute("edit.transform", json!({"rotate": 30})).unwrap();
+            }
+            "rotate 90" => {
+                s.execute("edit.transform", json!({"rotate": 90})).unwrap();
+            }
+            "flip" => {
+                s.execute("edit.transform.flipHorizontal", json!({})).unwrap();
+            }
+            "shear" => {
+                let quad = [[x0, y0], [x1, y0 + 10.0], [x1, y1 + 10.0], [x0, y1]];
+                s.execute("edit.transform", json!({"layer": id.0, "rect": [x0, y0, x1, y1], "quad": quad})).unwrap();
+            }
+            "perspective" => {
+                let quad = [[x0 + 8.0, y0], [x1 - 8.0, y0], [x1, y1], [x0, y1]];
+                s.execute("edit.transform", json!({"layer": id.0, "rect": [x0, y0, x1, y1], "quad": quad})).unwrap();
+            }
+            _ => {}
+        }
+        let layer = s.active().unwrap().doc.layer(id).unwrap().clone();
+        let LayerContent::Smart(sm) = &layer.content else { panic!("smart") };
+        let place = crate::smart_cmds::placement(sm);
+        let inv = place.inverse().unwrap();
+        // The document warp box: the bounds of the placed layer.
+        let pc = [[src_box[0], src_box[1]], [src_box[2], src_box[1]], [src_box[2], src_box[3]], [src_box[0], src_box[3]]].map(|p| hom_apply(&place, p));
+        let bb = pc.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |b, p| [b[0].min(p[0]), b[1].min(p[1]), b[2].max(p[0]), b[3].max(p[1])]);
+        let rect = Rect::new(bb[0].floor() as i32, bb[1].floor() as i32, bb[2].ceil() as i32, bb[3].ceil() as i32);
+        let b = rect_f(rect);
+        let mesh = BezierMesh::fit(&|u, v| [b[0] + u * (b[2] - b[0]) + 8.0 * v * (1.0 - v), b[1] + v * (b[3] - b[1])], vec![0.0, 1.0], vec![0.0, 1.0]);
+        let cylinder = Warp::cylinder(&[b[0], b[3], b[2], b[1], 0.3, 0.3, 0.5], b).unwrap();
+        for w in [Warp::custom(mesh, b), cylinder] {
+            let mut committed = layer.clone();
+            warp_layer(None, Locks::default(), &mut committed, &w, rect, Interp::Bicubic, None, &Interrupt::NONE).unwrap();
+            let LayerContent::Smart(csm) = &committed.content else { panic!("smart") };
+            let stored = csm.warp.as_ref().unwrap();
+            for (u, v) in [(0.2, 0.2), (0.5, 0.5), (0.8, 0.3), (0.3, 0.9), (0.9, 0.9)] {
+                let src = [src_box[0] + u * (src_box[2] - src_box[0]), src_box[1] + v * (src_box[3] - src_box[1])];
+                let p = hom_apply(&place, src);
+                let (wx, wy) = w.map(p[0], p[1]);
+                let want = hom_apply(&inv, [wx, wy]);
+                let got = stored.map(src[0], src[1]);
+                assert!((got.0 - want[0]).abs() < 1.0 && (got.1 - want[1]).abs() < 1.0, "{case} {:?} ({u}, {v}): {got:?} vs {want:?}", w.style);
+            }
+            // The rendered pixels: the committed smart object covers what the uncommitted warp of
+            // its placed render covered, up to the anti-aliased edge.
+            let doc = &s.active().unwrap().doc;
+            let placed = crate::smart_cmds::render(doc, sm).unwrap().unwrap();
+            let shown = warp_mesh_surface_with(&placed, rect, &|x: f64, y: f64| w.map(x, y), Interp::Bicubic, &Interrupt::NONE).unwrap();
+            let rendered = crate::smart_cmds::render(doc, csm).unwrap().unwrap();
+            let area = shown.content_bounds().union(&rendered.content_bounds());
+            let alpha = |surf: &Surface, x: i32, y: i32| surf.pixel(x, y).last().copied().unwrap_or(0.0);
+            let (mut covered, mut moved) = (0usize, 0usize);
+            for y in area.y0..area.y1 {
+                for x in area.x0..area.x1 {
+                    let (before, after) = (alpha(&shown, x, y), alpha(&rendered, x, y));
+                    covered += usize::from(before > 0.5);
+                    moved += usize::from((before - after).abs() > 0.5);
+                }
+            }
+            assert!(covered > 0 && moved * 8 <= covered, "{case} {:?}: {moved} of {covered} pixels moved", w.style);
+        }
+    }
 }
