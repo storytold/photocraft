@@ -273,8 +273,7 @@ impl Ctx<'_> {
         // A decoder per channel present (a ZIP channel is inflated here, the channels side by
         // side); the rows are then decoded and interleaved a band at a time straight into the
         // tiles, so no buffer of the whole layer (planes or interleaved) is ever held.
-        // par_map reuses the crate's worker pool (one OS thread per channel per layer would
-        // spawn thousands on a file with many layers).
+        // Channel reads keep their dedicated scoped workers, separate from export's compute pool.
         let decoders: Vec<Option<photocraft_psd::Result<photocraft_psd::RowDecoder<'_>>>> =
             crate::pixels::par_map(ids.to_vec(), |id| rec.channel(id).map(|ch| ch.row_decoder(w, h, depth, version)));
         let mut failed = false;

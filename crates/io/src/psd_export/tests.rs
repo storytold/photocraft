@@ -4,6 +4,170 @@ fn document(width: u32, height: u32) -> Document {
     Document::new("size estimate", photocraft_geom::Size::new(width, height), ColorMode::Rgb, SampleType::U8)
 }
 
+/// Compare fill-channel bytes with the allocating pixel conversion at every depth.
+#[test]
+fn fill_channels_match_allocating_pixel_conversion() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Lab] {
+        for sample in SampleType::ALL {
+            let mut doc = Document::new("fill", photocraft_geom::Size::new(13, 7), mode, sample);
+            let fill = photocraft_doc::Fill::Solid(photocraft_color::Color { mode: ColorMode::Rgb, c: [0.2, 0.4, 0.6, 0.0], alpha: 0.4 });
+            let layer = Layer::new("fill", LayerContent::Fill(fill.clone()));
+            let buf = photocraft_compose::render_fill_content(&layer, &fill, doc.bounds(), &[]);
+            let fmt = doc.pixel_format();
+            let values: Vec<_> = buf.px.iter().flat_map(|p| photocraft_raster::from_rgba(&fmt, *p)).collect();
+            let mut surface = Surface::new(fmt);
+            surface.write_region(doc.bounds(), &values);
+            let mut bytes = surface.to_interleaved(doc.bounds());
+            if mode == ColorMode::Lab && sample == SampleType::U16 {
+                crate::pixels::lab16_chroma(&mut bytes, fmt.channels(), false);
+            }
+            let planes = crate::pixels::deinterleave(&bytes, fmt.channels(), sample, &vec![false; fmt.channels()]);
+            doc.layers.push(layer);
+            let file = document_to_psd(&doc);
+            assert_eq!(
+                file.layers()[0].channels.iter().map(|c| c.id).collect::<Vec<_>>(),
+                std::iter::once(-1).chain(0..mode.color_channels() as i16).collect::<Vec<_>>()
+            );
+            for channel in &file.layers()[0].channels {
+                let c = if channel.id == -1 { mode.color_channels() } else { channel.id as usize };
+                let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
+                assert_eq!(*channel, ChannelData::encode(channel.id, compression, &planes[c], 13, 7, psd_depth(sample), file.header.version).unwrap());
+            }
+        }
+    }
+}
+
+/// Verify buffered and streamed saves preserve mask extraction error variants.
+#[test]
+fn failed_mask_channels_preserve_original_errors() {
+    use photocraft_psd::PsdError;
+    for sample in SampleType::ALL {
+        let mut doc = document(1, 1);
+        doc.depth = sample;
+        let mut layer = Layer::raster("masked", doc.pixel_format());
+        let mut mask = LayerMask::hide_all();
+        mask.surface.fill_rect(doc.bounds(), &[1.0]);
+        layer.mask = Some(mask);
+        doc.layers.push(layer);
+        for force_psb in [false, true] {
+            for error in [PsdError::LimitExceeded("mask size"), PsdError::OutOfMemory("mask bytes"), PsdError::Invalid("mask data".into())] {
+                let (mut file, _) = document_to_psd_with(&doc, &PsdExportOptions { force_psb, ..Default::default() });
+                *file.layers_mut()[0].channels.iter_mut().find(|c| c.id == -2).unwrap() = failed_mask_channel(error.clone());
+                assert_eq!(file.to_bytes(), Err(error.clone()), "{sample:?} PSB {force_psb}");
+                let streamed = file.write_to(&mut std::io::Cursor::new(Vec::new())).unwrap_err();
+                assert_eq!(streamed.get_ref().and_then(|e| e.downcast_ref::<PsdError>()), Some(&error));
+            }
+        }
+    }
+}
+
+/// Verify an unrepresentable sparse mask fails before allocating its dense rectangle.
+#[test]
+fn oversized_sparse_mask_fails_export_without_allocating_its_dense_rectangle() {
+    let mut doc = document(1, 1);
+    let mut layer = Layer::raster("masked", doc.pixel_format());
+    let mut mask = LayerMask::hide_all();
+    let far = if cfg!(target_pointer_width = "32") { 65_535 } else { 1 << 30 };
+    for p in [0, far] {
+        mask.surface.fill_rect(photocraft_geom::Rect::new(p, p, p + 1, p + 1), &[1.0]);
+    }
+    layer.mask = Some(mask);
+    doc.layers.push(layer);
+    assert!(matches!(document_to_psd(&doc).to_bytes(), Err(photocraft_psd::PsdError::LimitExceeded(_))));
+    assert!(crate::export(&doc, "psd", &Default::default()).is_err());
+}
+
+/// Compare stored-precision opacity checks with decoded alpha across depths.
+#[test]
+fn opacity_scan_matches_decoded_alpha() {
+    for sample in SampleType::ALL {
+        let fmt = PixelFormat::new(ColorMode::Rgb, sample, true);
+        let r = photocraft_geom::Rect::new(-2, -3, 260, 259);
+        for a in [0.0, 0.999_99, 1.0, 1.5, f32::NAN, f32::INFINITY] {
+            let mut s = Surface::with_default(fmt, &[0.2, 0.4, 0.6, 1.0]);
+            s.fill_rect(photocraft_geom::Rect::new(-1, -1, 259, 258), &[0.3, 0.5, 0.7, a]);
+            let bytes = s.to_interleaved(r);
+            let expected = bytes.chunks_exact(fmt.bytes_per_pixel()).all(|p| photocraft_color::read_sample(p, sample, 3) >= 1.0);
+            assert_eq!(crate::flat::opaque_surface(&s, r), expected);
+        }
+    }
+}
+
+/// Verify concurrent exports retain identical bytes in single and multiple worker pools.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn concurrent_exports_keep_bytes_in_single_and_multi_worker_pools() {
+    use rayon::prelude::*;
+    let docs: Vec<_> = [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab]
+        .into_iter()
+        .flat_map(|mode| SampleType::ALL.map(move |sample| (mode, sample)))
+        .map(|(mode, sample)| {
+            let mut doc = Document::new("concurrent", photocraft_geom::Size::new(67, 259), mode, sample);
+            let mut layer = Layer::raster("pixels", doc.pixel_format());
+            let values: Vec<_> = (0..67 * 259 * doc.pixel_format().channels()).map(|i| (i % 17) as f32 / 16.0).collect();
+            layer.surface_mut().unwrap().write_region(doc.bounds(), &values);
+            let mut mask = LayerMask::hide_all();
+            mask.surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[0.7]);
+            mask.surface.fill_rect(photocraft_geom::Rect::new(-1, -2, 68, 260), &[0.4]);
+            layer.mask = Some(mask.clone());
+            doc.channels.push(photocraft_doc::AlphaChannel::new("saved", mask.surface.clone()));
+            doc.quick_mask = Some(photocraft_doc::AlphaChannel::new("quick", mask.surface));
+            doc.layers.push(layer);
+            if mode == ColorMode::Cmyk && sample != SampleType::U16 {
+                let tvi = if sample == SampleType::U8 { 0.1 } else { 0.3 };
+                let profile =
+                    photocraft_cms::synth::cmyk_profile(&photocraft_cms::synth::CmykParams { tvi: [tvi; 4], grid_a2b: 5, grid_b2a: 5, ..Default::default() });
+                doc.icc_profile = Some(profile.to_bytes());
+                let mut hue = Layer::raster("hue", doc.pixel_format());
+                hue.blend = photocraft_doc::BlendMode::Hue;
+                doc.layers.push(hue);
+            }
+            doc
+        })
+        .collect();
+    let encode = |i: usize| {
+        let opts = PsdExportOptions { force_psb: i.is_multiple_of(2), ..Default::default() };
+        let (file, warnings) = document_to_psd_with(&docs[i], &opts);
+        assert!(warnings.is_empty(), "{warnings:?}");
+        file.to_bytes().unwrap()
+    };
+    let expected: Vec<_> = (0..docs.len()).map(encode).collect();
+    for threads in [1, 2, 4] {
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+        pool.install(|| (0..docs.len() * 2).into_par_iter().for_each(|i| assert_eq!(encode(i % docs.len()), expected[i % docs.len()])));
+    }
+}
+
+/// Compare owned layer compression with borrowed encoding across formats and depths.
+#[test]
+fn owned_layer_planes_keep_the_borrowed_encoders_bytes() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for sample in SampleType::ALL {
+            let mut doc = Document::new("owned", photocraft_geom::Size::new(129, 2), mode, sample);
+            let fmt = doc.pixel_format();
+            let mut surface = Surface::new(fmt);
+            let values: Vec<_> = (0..258 * fmt.channels()).map(|i| (i % 17) as f32 / 16.0).collect();
+            surface.write_region(doc.bounds(), &values);
+            let mut bytes = surface.to_interleaved(doc.bounds());
+            if mode == ColorMode::Lab && sample == SampleType::U16 {
+                crate::pixels::lab16_chroma(&mut bytes, fmt.channels(), false);
+            }
+            let mut invert = vec![mode == ColorMode::Cmyk; mode.color_channels()];
+            invert.push(false);
+            let planes = crate::pixels::deinterleave(&bytes, fmt.channels(), sample, &invert);
+            doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+            let file = document_to_psd(&doc);
+            let channels = &file.layers()[0].channels;
+            assert_eq!(channels.iter().map(|c| c.id).collect::<Vec<_>>(), (-1..mode.color_channels() as i16).collect::<Vec<_>>());
+            for channel in channels {
+                let index = if channel.id == -1 { mode.color_channels() } else { channel.id as usize };
+                let compression = if sample == SampleType::F32 { Compression::ZipPrediction } else { Compression::Rle };
+                assert_eq!(*channel, ChannelData::encode(channel.id, compression, &planes[index], 129, 2, psd_depth(sample), file.header.version).unwrap());
+            }
+        }
+    }
+}
+
 /// Photoshop opens a PSD's bottom layer as its Background only when that layer has no
 /// transparency channel (measured on Photoshop 27.11: with the channel written, re-exported
 /// files reopened with the Background as an ordinary layer).
@@ -31,6 +195,23 @@ fn a_background_is_written_without_a_transparency_channel() {
     let mut unlocked = doc.clone();
     unlocked.layers[0].locks.position = false;
     assert!(document_to_psd(&unlocked).layer_info.unwrap().layers[0].channels.iter().any(|c| c.id == -1));
+}
+
+/// Verify Background alpha omission preserves every colour channel's encoded bytes.
+#[test]
+fn background_colour_channels_match_an_unlocked_layer_at_every_depth() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for depth in SampleType::ALL {
+            let mut doc = Document::with_background("bg", photocraft_geom::Size::new(13, 7), mode, depth, photocraft_color::Color::rgb(0.2, 0.4, 0.6));
+            let background = document_to_psd(&doc);
+            doc.layers[0].locks.position = false;
+            let unlocked = document_to_psd(&doc);
+            let without_alpha = |file: &PsdFile| file.layers()[0].channels.iter().filter(|c| c.id != -1).cloned().collect::<Vec<_>>();
+            assert_eq!(without_alpha(&background), without_alpha(&unlocked), "{mode:?} {depth:?}");
+            assert_eq!(background.layers()[0].channels.len(), mode.color_channels());
+            assert_eq!(unlocked.layers()[0].channels.len(), mode.color_channels() + 1);
+        }
+    }
 }
 
 /// A flat 1-bit Bitmap file (no layers) opens in Photoshop as its Background; so does it in
@@ -711,6 +892,55 @@ fn export_banded(doc: &Document, options: &PsdExportOptions, banded: Option<usiz
     let out = document_to_psd_sized(doc, options, 0, &Interrupt::NONE, PSD_MAX_FILE_SIZE);
     banded::BANDS_FOR_TESTS.set(None);
     out
+}
+
+/// Direct band gathering preserves the old ZIP stream, including each input boundary.
+#[test]
+fn banded_zip_matches_interleaved_input_and_omits_background_alpha() {
+    use photocraft_psd::compression::{PlaneLayout, predict};
+    use std::io::Write as _;
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk, ColorMode::Lab] {
+        for background in [false, true] {
+            let mut doc = banding_document(mode, SampleType::F32, 23, 19);
+            if background {
+                let bounds = doc.bounds();
+                let layer = &mut doc.layers[0];
+                layer.surface_mut().unwrap().fill_rect(bounds, &vec![1.0; mode.color_channels() + 1]);
+                layer.locks.transparency = true;
+                layer.locks.position = true;
+            }
+            let s = doc.layers[0].surface().unwrap();
+            let r = s.content_bounds();
+            for force_psb in [false, true] {
+                for rows in [1, 7] {
+                    let (file, warnings) = export_banded(&doc, &PsdExportOptions { force_psb, ..Default::default() }, Some(rows));
+                    assert!(warnings.is_empty(), "{warnings:?}");
+                    let mut invert = vec![mode == ColorMode::Cmyk; mode.color_channels()];
+                    invert.push(false);
+                    let channels = &file.layers()[0].channels;
+                    assert_eq!(channels.len(), mode.color_channels() + usize::from(!background));
+                    let band_rows =
+                        ((rows * doc.size.width as usize * s.format().bytes_per_pixel() + 3) / (r.width() as usize * s.format().bytes_per_pixel())).max(1);
+                    for channel in channels {
+                        let k = if channel.id == -1 { mode.color_channels() } else { channel.id as usize };
+                        let mut zip = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                        for top in (r.y0..r.y1).step_by(band_rows) {
+                            let bottom = (top + band_rows as i32).min(r.y1);
+                            let bytes = s.to_interleaved(photocraft_geom::Rect::new(r.x0, top, r.x1, bottom));
+                            let mut planes = crate::pixels::deinterleave(&bytes, s.channels(), SampleType::F32, &invert);
+                            predict(
+                                &mut planes[k],
+                                &PlaneLayout { planes: 1, width: r.width() as usize, height: (bottom - top) as usize, depth: 32, version: file.header.version },
+                            )
+                            .unwrap();
+                            zip.write_all(&planes[k]).unwrap();
+                        }
+                        assert_eq!(channel.encoded().unwrap().as_ref(), zip.finish().unwrap(), "{mode:?} background {background} channel {k}");
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// #5333: a layer saved band by band (here every layer, in bands of a few rows) writes the bytes

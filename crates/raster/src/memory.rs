@@ -195,6 +195,10 @@ impl Drop for Reservation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Both reservation tests inspect or exhaust the same process-wide allowance.
+    static RESERVATION_TESTS: Mutex<()> = Mutex::new(());
+
     #[test]
     fn ceiling_includes_non_tile_memory_and_other_apps() {
         let s = Snapshot { total_bytes: 64 << 30, available_bytes: 10 << 30, process_resident_bytes: 20 << 30, process_virtual_bytes: 100 << 30 };
@@ -215,8 +219,10 @@ mod tests {
         assert!(b.process_ceiling_bytes < u64::MAX);
         assert_eq!(b.tile_bytes, MIB);
     }
+    /// Verify a reservation that fits alone waits for concurrent memory to be released.
     #[test]
     fn an_operation_that_fits_alone_waits_for_a_concurrent_one() {
+        let _guard = RESERVATION_TESTS.lock().unwrap_or_else(PoisonError::into_inner);
         let available = refresh().transient_bytes;
         let first = try_reserve_operation(available / 2 + 1).unwrap();
         let releaser = std::thread::spawn(move || {
@@ -228,8 +234,10 @@ mod tests {
         assert!(second.is_ok(), "overlapping work is serialized, not refused");
         assert!(try_reserve_operation(u64::MAX).is_err(), "work that can never fit is refused at once");
     }
+    /// Verify reservation limits and release while isolating the shared test counter.
     #[test]
     fn reservations_are_bounded_and_returned() {
+        let _guard = RESERVATION_TESTS.lock().unwrap_or_else(PoisonError::into_inner);
         let before = stats().2;
         let r = try_reserve(1024).unwrap();
         assert_eq!(stats().2, before + 1024);

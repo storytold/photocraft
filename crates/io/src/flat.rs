@@ -1627,17 +1627,24 @@ pub(crate) fn opaque_surface(s: &Surface, r: Rect) -> bool {
     let fmt = s.format();
     let (ch, bps) = (fmt.channels(), fmt.sample.bytes());
     let a = ch - 1;
-    let alpha_ok = |px: &[u8]| photocraft_color::read_sample(px, fmt.sample, a) >= 1.0;
+    let alpha_ok = |px: &[u8]| match fmt.sample {
+        SampleType::U8 => px.get(a).copied() == Some(u8::MAX),
+        SampleType::U16 => px.get(a * bps..(a + 1) * bps) == Some(&[255, 255]),
+        SampleType::F32 => photocraft_color::read_sample(px, fmt.sample, a) >= 1.0,
+    };
     let mut default = vec![0u8; ch * bps];
     photocraft_raster::encode_pixel(&fmt, &s.default_pixel(), &mut default);
     r.tiles().all(|tc| {
         let tr = tc.rect().intersect(&r);
         match s.tile(tc) {
             None => alpha_ok(&default),
-            Some(t) => (tr.y0..tr.y1).all(|y| {
-                let row = ((y - tc.rect().y0) as usize * TILE_SIZE as usize + (tr.x0 - tc.rect().x0) as usize) * ch * bps;
-                t.bytes()[row..row + tr.width() as usize * ch * bps].chunks_exact(ch * bps).all(alpha_ok)
-            }),
+            Some(t) => {
+                let bytes = t.bytes();
+                (tr.y0..tr.y1).all(|y| {
+                    let row = ((y - tc.rect().y0) as usize * TILE_SIZE as usize + (tr.x0 - tc.rect().x0) as usize) * ch * bps;
+                    bytes[row..row + tr.width() as usize * ch * bps].chunks_exact(ch * bps).all(alpha_ok)
+                })
+            }
         }
     })
 }

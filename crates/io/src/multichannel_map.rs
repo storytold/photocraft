@@ -114,7 +114,8 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: Optio
     if doc.channels.len() > 56 {
         warnings.push("only 56 channels fit in PSD; the rest were dropped".into());
     }
-    let mut planes = Vec::new();
+    let plane_bytes = canvas.width() as usize * canvas.height() as usize * sample.bytes();
+    let mut planes = Vec::with_capacity(plane_bytes * channels.len().max(1));
     if channels.is_empty() {
         // A PSD needs at least one channel: an empty (paper) plane.
         for _ in 0..canvas.width() as usize * canvas.height() as usize {
@@ -124,8 +125,22 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: Optio
     for ch in &channels {
         // Inks are stored as tone (0 = solid ink), alpha-type channels as-is.
         let ink = ch.spot.is_some();
-        for v in ch.surface.read_region(canvas).chunks_exact(ch.surface.channels()) {
-            encode_be(if ink { 1.0 - v[0] } else { v[0] }, sample, &mut planes);
+        if ch.surface.format().sample == sample {
+            let start = planes.len();
+            planes.resize(start + plane_bytes, 0);
+            crate::pixels::surface_planes_into(&ch.surface, canvas, &[ink], false, &mut [&mut planes[start..]]);
+        } else {
+            for y in (0..canvas.height()).step_by(photocraft_geom::TILE_SIZE as usize) {
+                let band = Rect::new(
+                    canvas.x0,
+                    canvas.y0.saturating_add_unsigned(y),
+                    canvas.x1,
+                    canvas.y0.saturating_add_unsigned(y.saturating_add(photocraft_geom::TILE_SIZE as u32).min(canvas.height())),
+                );
+                for v in ch.surface.read_region(band).chunks_exact(ch.surface.channels()) {
+                    encode_be(if ink { 1.0 - v[0] } else { v[0] }, sample, &mut planes);
+                }
+            }
         }
     }
     let big = doc.size.width > 30_000 || doc.size.height > 30_000;
@@ -203,7 +218,7 @@ pub(crate) fn layerless_file(
     let global_blocks: Vec<TaggedBlock> = crate::annotations_map::export_blocks(doc, crate::pattern_map::export_global_blocks(doc))
         .into_iter()
         .filter(|(_, key, _)| !matches!(key, b"Layr" | b"Lr16" | b"Lr32"))
-        .map(|(sig, key, data)| crate::psd_export::global_block(sig, key, &data))
+        .map(|(sig, key, data)| crate::psd_export::global_block(sig, key, data))
         .collect();
     let mut file = PsdFile {
         header,
@@ -240,5 +255,35 @@ mod import_allocation_tests {
         assert_eq!(doc.channels[0].surface.read_region(doc.bounds()), vec![1.0; 6]);
         assert_eq!(warnings.len(), 1);
         assert!(decode(&[], usize::MAX, SampleType::F32).is_none());
+    }
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    /// Compare direct and converted saved-channel planes with float staging at every depth.
+    #[test]
+    fn direct_and_converted_channels_match_float_staging() {
+        for depth in SampleType::ALL {
+            let mut doc = Document::new("inks", photocraft_geom::Size::new(5, 260), ColorMode::Multichannel, depth);
+            for source in SampleType::ALL {
+                let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, source, false));
+                let values: Vec<_> = (0..1300).map(|i| (i % 259) as f32 / 257.0 - 0.01).collect();
+                surface.write_region(doc.bounds(), &values);
+                let mut ch = AlphaChannel::new("ink", surface);
+                ch.spot = Some((photocraft_color::Color::rgb(0.2, 0.3, 0.4), 0.5));
+                doc.channels.push(ch);
+            }
+            let sample = if depth == SampleType::F32 { SampleType::U16 } else { depth };
+            let mut planes = Vec::new();
+            for ch in &doc.channels {
+                for v in ch.surface.read_region(doc.bounds()).chunks_exact(ch.surface.channels()) {
+                    encode_be(1.0 - v[0], sample, &mut planes);
+                }
+            }
+            let (file, _) = document_to_psd(&doc, false, None);
+            assert_eq!(file.image_data, ImageData::encode(Compression::Rle, &planes, &file.header).unwrap());
+        }
     }
 }

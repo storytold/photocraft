@@ -283,32 +283,40 @@ pub fn file_type(bytes: &[u8]) -> [u8; 4] {
 /// Encodes one `liFD` item (version 7: no open descriptor, empty child document id, no
 /// modification time, unlocked), length-prefixed and padded to 4 bytes.
 pub fn encode_linked_file(f: &LinkedFile) -> Vec<u8> {
-    let mut item = Vec::new();
-    item.extend_from_slice(b"liFD");
-    item.extend_from_slice(&7u32.to_be_bytes());
+    let mut out = Vec::new();
+    append_linked_file(f, &mut out);
+    out
+}
+
+/// Append a length-prefixed linked-file frame with padding relative to its own start.
+pub(crate) fn append_linked_file(f: &LinkedFile, out: &mut Vec<u8>) {
+    let start = out.len();
+    out.extend_from_slice(&0u64.to_be_bytes());
+    out.extend_from_slice(b"liFD");
+    out.extend_from_slice(&7u32.to_be_bytes());
     let id = f.uuid.as_bytes().get(..f.uuid.len().min(255)).unwrap_or_default();
-    item.push(id.len() as u8);
-    item.extend_from_slice(id);
+    out.push(id.len() as u8);
+    out.extend_from_slice(id);
     // NUL-terminated, the terminator counted (as Photoshop writes and reads it).
     let units: Vec<u16> = f.file_name.encode_utf16().chain(std::iter::once(0)).collect();
-    item.extend_from_slice(&(units.len() as u32).to_be_bytes());
+    out.extend_from_slice(&(units.len() as u32).to_be_bytes());
     for u in units {
-        item.extend_from_slice(&u.to_be_bytes());
+        out.extend_from_slice(&u.to_be_bytes());
     }
-    item.extend_from_slice(&file_type(&f.bytes));
-    item.extend_from_slice(b"8BIM");
-    item.extend_from_slice(&(f.bytes.len() as u64).to_be_bytes());
-    item.push(0);
-    item.extend_from_slice(&f.bytes);
-    item.extend_from_slice(&0u32.to_be_bytes()); // child document id (version 5)
-    item.extend_from_slice(&0f64.to_be_bytes()); // asset modification time (version 6)
-    item.push(0); // asset locked (version 7)
-    let mut out = (item.len() as u64).to_be_bytes().to_vec();
-    out.extend_from_slice(&item);
-    while !out.len().is_multiple_of(4) {
+    out.extend_from_slice(&file_type(&f.bytes));
+    out.extend_from_slice(b"8BIM");
+    out.extend_from_slice(&(f.bytes.len() as u64).to_be_bytes());
+    out.push(0);
+    out.reserve(f.bytes.len().saturating_add(16)); // payload, version-7 trailer and frame padding
+    out.extend_from_slice(&f.bytes);
+    out.extend_from_slice(&0u32.to_be_bytes()); // child document id (version 5)
+    out.extend_from_slice(&0f64.to_be_bytes()); // asset modification time (version 6)
+    out.push(0); // asset locked (version 7)
+    let len = (out.len() - start - 8) as u64;
+    out[start..start + 8].copy_from_slice(&len.to_be_bytes());
+    while !(out.len() - start).is_multiple_of(4) {
         out.push(0);
     }
-    out
 }
 
 /// The uuid of one linked-layer item (any type), if its header is readable.
@@ -351,7 +359,7 @@ pub fn rebuild_block(data: &[u8], keep: &dyn Fn(&str) -> bool, add: &[LinkedFile
         }
     }
     for f in add {
-        out.extend(encode_linked_file(f));
+        append_linked_file(f, &mut out);
     }
     Some(out)
 }
@@ -460,6 +468,53 @@ pub(crate) fn copy_item(data: &[u8], uuid: &str, new_uuid: &str) -> Option<Vec<u
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verify appended linked-file frames match staged bytes at unaligned offsets.
+    #[test]
+    fn appended_linked_files_match_staged_bytes_at_any_offset() {
+        for len in [0, 1, 2, 3, 8193] {
+            let f = LinkedFile { uuid: "é".repeat(140), file_name: "画像 ✓.psb".into(), bytes: vec![37; len] };
+            let expected = staged_linked_file(&f);
+            assert_eq!(encode_linked_file(&f), expected);
+            for prefix in 0..4 {
+                let mut actual = vec![99; prefix];
+                append_linked_file(&f, &mut actual);
+                append_linked_file(&f, &mut actual);
+                assert_eq!(actual, [vec![99; prefix], expected.clone(), expected.clone()].concat());
+            }
+        }
+    }
+
+    /// Build a linked-file frame with the previous staged serializer as a byte oracle.
+    fn staged_linked_file(f: &LinkedFile) -> Vec<u8> {
+        let mut item = Vec::new();
+        item.extend_from_slice(b"liFD");
+        item.extend_from_slice(&7u32.to_be_bytes());
+        let id = f.uuid.as_bytes().get(..f.uuid.len().min(255)).unwrap_or_default();
+        item.push(id.len() as u8);
+        item.extend_from_slice(id);
+        // NUL-terminated, the terminator counted (as Photoshop writes and reads it).
+        let units: Vec<u16> = f.file_name.encode_utf16().chain(std::iter::once(0)).collect();
+        item.extend_from_slice(&(units.len() as u32).to_be_bytes());
+        for u in units {
+            item.extend_from_slice(&u.to_be_bytes());
+        }
+        item.extend_from_slice(&file_type(&f.bytes));
+        item.extend_from_slice(b"8BIM");
+        item.extend_from_slice(&(f.bytes.len() as u64).to_be_bytes());
+        item.push(0);
+        item.extend_from_slice(&f.bytes);
+        item.extend_from_slice(&0u32.to_be_bytes()); // child document id (version 5)
+        item.extend_from_slice(&0f64.to_be_bytes()); // asset modification time (version 6)
+        item.push(0); // asset locked (version 7)
+        let mut out = (item.len() as u64).to_be_bytes().to_vec();
+        out.extend_from_slice(&item);
+        while !out.len().is_multiple_of(4) {
+            out.push(0);
+        }
+        out
+    }
+
     use std::sync::Arc;
 
     /// #2465: a placed source's size comes from its header, for every format a CS2 file embeds,

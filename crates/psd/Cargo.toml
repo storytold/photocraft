@@ -23,6 +23,9 @@ flate2 = { workspace = true }
 encoding_rs = { workspace = true }
 serde = { workspace = true, optional = true }
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon = { workspace = true }
+
 [dev-dependencies]
 proptest = { workspace = true }
 photocraft-psd = { path = ".", features = ["testgen"] }

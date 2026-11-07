@@ -340,17 +340,24 @@ fn layer_content(l: &Layer, rect: Rect, cx: &Ctx) -> CmykBuffer {
     if let Some(s) = surface {
         let ch = s.format().channels();
         let alpha = s.format().alpha;
-        let mut v = Vec::new();
-        s.read_region_into(rect, &mut v);
-        for (o, p) in out.px.iter_mut().zip(v.chunks_exact(ch.max(1))) {
-            let a = if alpha { p.get(4).copied().map_or(0.0, clean) } else { 1.0 };
-            *o = [
-                p.first().copied().map_or(0.0, clean),
-                p.get(1).copied().map_or(0.0, clean),
-                p.get(2).copied().map_or(0.0, clean),
-                p.get(3).copied().map_or(0.0, clean),
-                a,
-            ];
+        if alpha && ch == 5 {
+            s.read_region_into_slice(rect, out.px.as_flattened_mut());
+            for p in &mut out.px {
+                *p = p.map(clean);
+            }
+        } else {
+            let mut v = Vec::new();
+            s.read_region_into(rect, &mut v);
+            for (o, p) in out.px.iter_mut().zip(v.chunks_exact(ch.max(1))) {
+                let a = if alpha { p.get(4).copied().map_or(0.0, clean) } else { 1.0 };
+                *o = [
+                    p.first().copied().map_or(0.0, clean),
+                    p.get(1).copied().map_or(0.0, clean),
+                    p.get(2).copied().map_or(0.0, clean),
+                    p.get(3).copied().map_or(0.0, clean),
+                    a,
+                ];
+            }
         }
     }
     apply_mask(l, &mut out, cx);

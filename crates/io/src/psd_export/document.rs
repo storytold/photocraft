@@ -5,8 +5,8 @@ use super::resources::{global_block, guides_resource, keep_imported_resource, le
 use super::smart::{SmartOut, link_group_resource};
 use super::{
     ColorMode, Compression, Document, Ex, GlobalLayerMask, Header, ImageData, ImageResource, Interrupt, LayerContent, LayerInfo, LayerInfoPlacement,
-    MaskParameters, PixelFormat, PsdExportOptions, PsdFile, PsdMode, ResolutionInfo, SampleType, TaggedBlock, deinterleave, ids, psd_background, psd_depth,
-    psd_mode, q255, version_info_resource,
+    MaskParameters, PixelFormat, PsdExportOptions, PsdFile, PsdMode, ResolutionInfo, SampleType, TaggedBlock, ids, psd_background, psd_depth, psd_mode, q255,
+    version_info_resource,
 };
 
 /// Converts a document to a PSD file model (see [`document_to_psd_with`]).
@@ -46,6 +46,7 @@ pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, dep
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
 }
 
+/// Export a supported document with prepared layers, resources and merged channels.
 fn export_supported_document(
     doc: &Document,
     opts: &PsdExportOptions,
@@ -191,7 +192,7 @@ fn export_supported_document(
         if !ex.records.is_empty() && matches!(&key, b"Lr16" | b"Lr32" | b"Layr") {
             continue;
         }
-        let block = global_block(sig, key, &data);
+        let block = global_block(sig, key, data);
         // A kept merged-transparency marker describes the opened file's composite. Over an opaque
         // one it would make the first alpha channel read back as the transparency, and vanish.
         if !has_alpha && block.is_merged_transparency_marker() {
@@ -311,6 +312,7 @@ struct MergedExport<'a> {
     real_merged: bool,
 }
 
+/// Prepare the header and merged image, transferring raw plane ownership to the output.
 fn prepare_merged_planes<'a>(
     doc: &'a Document,
     ex: &mut Ex<'_>,
@@ -332,11 +334,13 @@ fn prepare_merged_planes<'a>(
     let mode = if duotone { PsdMode::Duotone } else { psd_mode(fmt.mode) };
     let header = Header::new(ex.version, doc.size.width, doc.size.height, channels, psd_depth(sample), mode);
     let compression = if sample == SampleType::F32 { Compression::Raw } else { opts.merged_compression };
-    let image_data = ImageData::encode(compression, &planes, &header).or_else(|_| ImageData::encode(Compression::Raw, &planes, &header)).unwrap_or(ImageData {
-        compression: Compression::Raw,
-        data: planes,
-        stored: None,
-    });
+    let image_data = if compression == Compression::Raw {
+        ImageData::new(Compression::Raw, planes.into_boxed_slice().into_vec())
+    } else {
+        ImageData::encode(compression, &planes, &header)
+            .or_else(|_| ImageData::encode(Compression::Raw, &planes, &header))
+            .unwrap_or(ImageData::new(Compression::Raw, planes))
+    };
     let image_data = match &ex.stage {
         Some(stage) => stage.image(image_data),
         None => image_data,
@@ -345,6 +349,7 @@ fn prepare_merged_planes<'a>(
     MergedExport { header, image_data, extra, has_alpha, quick_mask_id, real_merged }
 }
 
+/// Append saved alpha and Quick Mask planes within the PSD channel limit.
 fn append_extra_channels<'a>(
     doc: &'a Document,
     ex: &mut Ex<'_>,
@@ -370,13 +375,16 @@ fn append_extra_channels<'a>(
         None => None,
     };
     let canvas = doc.bounds();
+    let channel_bytes = doc.size.area() as usize * sample.bytes();
+    if let Some(bytes) = channel_bytes.checked_mul(extra.len()) {
+        // Keep raw output from retaining geometric growth slack after the planes move into it.
+        let _ = planes.try_reserve_exact(bytes);
+    }
     for channel in &extra {
         let surface = if channel.surface.format() != ex.mask_fmt { channel.surface.convert(ex.mask_fmt) } else { channel.surface.clone() };
-        let mut bytes = surface.to_interleaved(canvas);
-        if channel.spot.is_some() {
-            crate::channel_map::photoshop_spot_plane(&mut bytes, sample);
-        }
-        planes.extend(deinterleave(&bytes, 1, sample, &[false]).remove(0));
+        let start = planes.len();
+        planes.resize(start + channel_bytes, 0);
+        crate::pixels::surface_planes_into(&surface, canvas, &[channel.spot.is_some()], false, &mut [&mut planes[start..]]);
     }
     (extra, quick_mask_id)
 }
@@ -470,4 +478,45 @@ pub(super) fn mask_parameters(user: Option<(f32, f32)>, vector: Option<(f32, f32
         | u8::from(p.vector_density.is_some()) << 2
         | u8::from(p.vector_feather.is_some()) << 3;
     (flags != 0).then_some(MaskParameters { flags, ..p })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify owned raw merged planes produce the borrowed encoder's bytes.
+    #[test]
+    fn raw_merged_planes_match_the_borrowed_encoder() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+            for sample in SampleType::ALL {
+                for alpha in [0.4, 1.0] {
+                    let mut doc = Document::new("raw", photocraft_geom::Size::new(13, 7), mode, sample);
+                    let fmt = doc.pixel_format();
+                    let mut layer = photocraft_doc::Layer::raster("pixels", fmt);
+                    let mut pixel = vec![0.25; fmt.channels()];
+                    *pixel.last_mut().unwrap() = alpha;
+                    layer.surface_mut().unwrap().fill_rect(doc.bounds(), &pixel);
+                    doc.layers.push(layer);
+                    let (mut planes, has_alpha, _) = merged_planes(&doc, &fmt, cmyk_of(&fmt), false, &Interrupt::NONE);
+                    if !has_alpha {
+                        planes.truncate(mode.color_channels() * doc.size.area() as usize * sample.bytes());
+                    }
+                    if alpha < 1.0 {
+                        for _ in 0..2 {
+                            let mask_fmt = PixelFormat::new(ColorMode::Grayscale, sample, false);
+                            doc.channels.push(photocraft_doc::AlphaChannel::new("extra", photocraft_raster::Surface::with_default(mask_fmt, &[0.5])));
+                            for _ in 0..doc.size.area() {
+                                crate::pixels::encode_be(0.5, sample, &mut planes);
+                            }
+                        }
+                    }
+                    let opts = PsdExportOptions { merged_compression: Compression::Raw, merged_matte: false, ..Default::default() };
+                    let (file, warnings) = document_to_psd_with(&doc, &opts);
+                    assert!(warnings.is_empty(), "{warnings:?}");
+                    assert_eq!(file.image_data.data.capacity(), file.image_data.data.len());
+                    assert_eq!(file.image_data, ImageData::encode(Compression::Raw, &planes, &file.header).unwrap(), "{mode:?} {sample:?} alpha {alpha}");
+                }
+            }
+        }
+    }
 }

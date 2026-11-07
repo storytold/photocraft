@@ -10,6 +10,47 @@ use super::*;
 const CMYKA8: PixelFormat = PixelFormat { mode: ColorMode::Cmyk, sample: SampleType::U8, alpha: true };
 const CMYK8: PixelFormat = PixelFormat { mode: ColorMode::Cmyk, sample: SampleType::U8, alpha: false };
 
+/// Verify native CMYK reads preserve stored samples, defaults and cleanup.
+#[test]
+fn native_layer_reads_preserve_sample_bits() {
+    let rect = Rect::new(-2, -1, 260, 2);
+    let values = [0.0, -0.0, 0.2, 1.0, -2.0, 5.0, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7fa32100)];
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for alpha in [false, true] {
+            for default in [0.0, -0.0, 0.5] {
+                let fmt = PixelFormat::new(ColorMode::Cmyk, sample, alpha);
+                let mut surface = Surface::with_default(fmt, &[default; 5]);
+                for x in [-1, 0, 255, 256] {
+                    let p: [f32; 5] = std::array::from_fn(|c| values[((x + 1) as usize + c) % values.len()]);
+                    surface.write_pixel(x, 0, &p);
+                }
+                let mut document = Document::new("native", Size::new(260, 2), ColorMode::Cmyk, sample);
+                document.layers.push(Layer::new("pixels", LayerContent::Raster(surface.clone())));
+                let patterns = pattern::PreparedPatterns::new(&[], 0);
+                let actual = layer_content(&document.layers[0], rect, &Ctx::for_doc(&document, &patterns));
+                let expected: Vec<Cmyka> = surface
+                    .read_region(rect)
+                    .chunks_exact(fmt.channels())
+                    .map(|p| {
+                        std::array::from_fn(|c| {
+                            if c == 4 && !alpha {
+                                1.0
+                            } else {
+                                let v = p[c];
+                                if v.is_finite() { v } else { 0.0 }
+                            }
+                        })
+                    })
+                    .collect();
+                assert_eq!(
+                    actual.px.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                    expected.iter().flatten().map(|v| v.to_bits()).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+}
+
 fn doc(w: u32, h: u32) -> Document {
     Document::new("c", Size::new(w, h), ColorMode::Cmyk, SampleType::U8)
 }

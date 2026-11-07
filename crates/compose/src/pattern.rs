@@ -227,6 +227,8 @@ pub struct Tile {
     w: usize,
     h: usize,
     texels: Texels,
+    // Non-finite texels keep the scalar arithmetic path.
+    finite: bool,
 }
 
 impl Tile {
@@ -246,6 +248,7 @@ impl Tile {
     /// [`Tile::new_in`], held at the pattern's own depth when `compact` and it has a smaller form.
     fn build(p: &Pattern, mode: ColorMode, compact: bool) -> Option<Tile> {
         let (w, h) = (p.width as usize, p.height as usize);
+        let mut finite = true;
         let texels = match p.surface.format().sample {
             // A large pattern is held at its own depth (`Pattern::working_bytes`).
             SampleType::U8 if compact => Texels::Rgba8(quantized_rgba(p, mode, |v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8)?),
@@ -259,18 +262,25 @@ impl Tile {
                     for c in 0..3 {
                         q[c] *= q[3];
                     }
+                    finite &= q.iter().all(|v| v.is_finite());
                 }
                 Texels::Premultiplied(px)
             }
         };
-        Some(Tile { w, h, texels })
+        Some(Tile { w, h, texels, finite })
     }
 
+    /// Read premultiplied RGBA at integer coordinates, wrapping both tile axes.
     #[inline]
     fn at(&self, x: i64, y: i64) -> [f32; 4] {
         let xi = x.rem_euclid(self.w as i64) as usize;
         let yi = y.rem_euclid(self.h as i64) as usize;
-        let i = yi * self.w + xi;
+        self.at_index(yi * self.w + xi)
+    }
+
+    /// Decode one premultiplied texel at an already wrapped row-major index.
+    #[inline]
+    fn at_index(&self, i: usize) -> [f32; 4] {
         match &self.texels {
             Texels::Premultiplied(px) => px.get(i).copied().unwrap_or_default(),
             Texels::Rgba8(px) => {
@@ -317,6 +327,38 @@ impl Tile {
 
     /// Bilinear, wrapping sample, premultiplied.
     fn sample_premul(&self, u: f64, v: f64) -> [f32; 4] {
+        if !self.finite || !u.is_finite() || !v.is_finite() {
+            return self.sample_premul_scalar(u, v);
+        }
+        let (u, v) = (u - 0.5, v - 0.5);
+        let (x0, y0) = (u.floor(), v.floor());
+        let (fx, fy) = ((u - x0) as f32, (v - y0) as f32);
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        if fx == 0.0 && fy == 0.0 {
+            return self.at(x0, y0).map(|c| 0.0 + c * 1.0);
+        }
+        let xs = [(x0, 1.0 - fx), (x0.saturating_add(1), fx)].map(|(x, weight)| (if weight == 0.0 { 0 } else { x.rem_euclid(self.w as i64) as usize }, weight));
+        let mut acc = [0.0f32; 4];
+        for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+            if wy == 0.0 {
+                continue;
+            }
+            let row = y0.saturating_add(dy).rem_euclid(self.h as i64) as usize * self.w;
+            for (x, wx) in xs {
+                if wx == 0.0 {
+                    continue;
+                }
+                let p = self.at_index(row + x);
+                let k = wx * wy;
+                for c in 0..4 {
+                    acc[c] += p[c] * k;
+                }
+            }
+        }
+        acc
+    }
+    /// Keep scalar bilinear evaluation for non-finite texels or extreme coordinates.
+    fn sample_premul_scalar(&self, u: f64, v: f64) -> [f32; 4] {
         let (u, v) = (u - 0.5, v - 0.5);
         let (x0, y0) = (u.floor(), v.floor());
         let (fx, fy) = ((u - x0) as f32, (v - y0) as f32);
@@ -411,6 +453,41 @@ impl Placement {
 /// Renders `tile` over `rect` (row-major straight RGBA).
 pub fn render(tile: &Tile, place: &Placement, rect: Rect) -> Vec<[f32; 4]> {
     let mut out = Vec::with_capacity(rect.width() as usize * rect.height() as usize);
+    // Within this range, an integer translation maps every centre to an exact half-integer.
+    if tile.finite
+        && place.inv_scale == 1.0
+        && place.cs == (1.0, 0.0)
+        && [place.origin.0, place.origin.1].into_iter().all(|v| v.fract() == 0.0 && v.abs() <= f64::from(i32::MAX))
+    {
+        let (ox, oy) = (place.origin.0 as i64, place.origin.1 as i64);
+        let first = (i64::from(rect.x0) - ox).rem_euclid(tile.w as i64) as usize;
+        let width = rect.width() as usize;
+        for (n, y) in (rect.y0..rect.y1).enumerate() {
+            if n >= tile.h {
+                let start = (n % tile.h) * width;
+                out.extend_from_within(start..start + width);
+                continue;
+            }
+            let start = out.len();
+            let row = (i64::from(y) - oy).rem_euclid(tile.h as i64) as usize * tile.w;
+            let mut x = first;
+            for _ in 0..width.min(tile.w) {
+                // Keep the bilinear accumulator's zero addition, including its signed-zero result.
+                let p = tile.at_index(row + x).map(|c| 0.0 + c * 1.0);
+                out.push(if p[3] == 1.0 { p } else { unpremultiply(p) });
+                x += 1;
+                if x == tile.w {
+                    x = 0;
+                }
+            }
+            // A translated tile repeats these exact straight-RGBA bits in both axes.
+            while out.len() - start < width {
+                let copied = out.len() - start;
+                out.extend_from_within(start..start + copied.min(width - copied));
+            }
+        }
+        return out;
+    }
     for y in rect.y0..rect.y1 {
         for x in rect.x0..rect.x1 {
             out.push(tile.sample_area(place, f64::from(x) + 0.5, f64::from(y) + 0.5));
@@ -423,6 +500,123 @@ pub fn render(tile: &Tile, place: &Placement, rect: Rect) -> Vec<[f32; 4]> {
 mod tests {
     use super::*;
     use photocraft_doc::{PixelFormat, Surface};
+
+    /// Evaluate the original scalar bilinear taps as an independent arithmetic oracle.
+    fn original_sample(tile: &Tile, u: f64, v: f64) -> [f32; 4] {
+        let (u, v) = (u - 0.5, v - 0.5);
+        let (x0, y0) = (u.floor(), v.floor());
+        let (fx, fy) = ((u - x0) as f32, (v - y0) as f32);
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let mut acc = [0.0f32; 4];
+        for (dy, wy) in [(0, 1.0 - fy), (1, fy)] {
+            if wy == 0.0 {
+                continue;
+            }
+            for (dx, wx) in [(0, 1.0 - fx), (1, fx)] {
+                if wx == 0.0 {
+                    continue;
+                }
+                let p = tile.at(x0.saturating_add(dx), y0.saturating_add(dy));
+                let k = wx * wy;
+                for c in 0..4 {
+                    acc[c] += p[c] * k;
+                }
+            }
+        }
+        acc
+    }
+
+    /// Compare sampling and rendered pixels with the scalar arithmetic across depths and transforms.
+    #[test]
+    fn sampling_and_rendering_match_scalar() {
+        // Rust arithmetic may select any NaN operand's payload; all other bits stay exact.
+        let bits = |p: [f32; 4]| p.map(|v| if v.is_nan() { f32::NAN.to_bits() } else { v.to_bits() });
+        let special = [
+            0.0,
+            -0.0,
+            0.3,
+            1.0,
+            -2.0,
+            5.0,
+            f32::from_bits(1),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::from_bits(0x7fc12345),
+            f32::from_bits(0xffc34567),
+            f32::from_bits(0x7fa32100),
+        ];
+        for (w, h) in [(1, 1), (3, 5), (8, 2)] {
+            let floats = (0..w * h).map(|i| std::array::from_fn(|c| special[(i + c) % special.len()])).collect();
+            let finite_floats = (0..w * h).map(|i| std::array::from_fn(|c| special[(i + c) % 7])).collect();
+            let bytes = (0..w * h).map(|i| [i as u8, 73, 255, (i * 31) as u8]).collect();
+            let words = (0..w * h).map(|i| [i as u16, 17373, 65535, (i * 3101) as u16]).collect();
+            for texels in [
+                Texels::Premultiplied(floats),
+                Texels::Premultiplied(finite_floats),
+                Texels::Rgba8(bytes),
+                Texels::Rgba16(words),
+                Texels::Premultiplied(vec![[f32::MAX, -0.0, f32::from_bits(1), 1.0]; w * h]),
+                Texels::Rgba8(vec![[0, 73, 255, 255]; w * h]),
+                Texels::Rgba16(vec![[0, 17373, 65535, 65535]; w * h]),
+            ] {
+                let finite = match &texels {
+                    Texels::Premultiplied(px) => px.iter().flatten().all(|v| v.is_finite()),
+                    _ => true,
+                };
+                let tile = Tile { w, h, texels, finite };
+                let coords = [-1e30, -5.75, -0.5, 0.0, 0.5, 1.25, 3.5, 9.75, 1e30, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
+                for u in coords {
+                    for v in coords {
+                        assert_eq!(bits(tile.sample_premul(u, v)), bits(original_sample(&tile, u, v)), "{w}x{h} ({u},{v})");
+                    }
+                }
+                for phase in [(0.0, 0.0), (-7.0, 3.0), (0.25, -0.75), (i32::MAX as f32, -3.0), (f32::NAN, 0.0)] {
+                    for (scale, angle) in [(1.0, 0.0), (1.0, -0.0), (0.4, 17.0), (2.0, 0.0), (1.0, 90.0)] {
+                        let place = Placement::new(Rect::new(-3, 5, 17, 19), true, phase, scale, angle);
+                        for rect in [
+                            Rect::new(-7, -3, 11, 6),
+                            Rect::new(-7, -3, -7, 14),
+                            Rect::new(2, -3, 3, 14),
+                            Rect::new(i32::MAX - 3, -2, i32::MAX, 1),
+                            Rect::new(i32::MIN, -2, i32::MIN + 3, 1),
+                        ] {
+                            let actual = render(&tile, &place, rect);
+                            let mut expected = Vec::new();
+                            let n = pixel_taps(place.inv_scale);
+                            for y in rect.y0..rect.y1 {
+                                for x in rect.x0..rect.x1 {
+                                    let (x, y) = (f64::from(x) + 0.5, f64::from(y) + 0.5);
+                                    let mut acc = [0.0; 4];
+                                    if n == 1 {
+                                        let (u, v) = place.map(x, y);
+                                        acc = original_sample(&tile, u, v);
+                                    } else {
+                                        for j in 0..n {
+                                            for i in 0..n {
+                                                let (u, v) = place.map(x + tap_offset(i, n), y + tap_offset(j, n));
+                                                let q = original_sample(&tile, u, v);
+                                                for c in 0..4 {
+                                                    acc[c] += q[c];
+                                                }
+                                            }
+                                        }
+                                        let k = 1.0 / (n * n) as f32;
+                                        acc = acc.map(|v| v * k);
+                                    }
+                                    expected.push(unpremultiply(acc));
+                                }
+                            }
+                            assert_eq!(
+                                actual.iter().copied().map(bits).collect::<Vec<_>>(),
+                                expected.iter().copied().map(bits).collect::<Vec<_>>(),
+                                "{phase:?} {scale} {angle} {rect:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     fn checker() -> Pattern {
         let mut s = Surface::new(PixelFormat::RGBA8);
