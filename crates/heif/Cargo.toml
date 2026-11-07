@@ -7,13 +7,13 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-# Pure Rust, no unsafe. Pinned exactly: a young, single-owner crate that parses untrusted files;
-# moving the pin is a reviewed change (re-run the fuzz target and the heif corpus tests).
-heic-rs = { version = "=0.1.4", default-features = false, features = ["std"] }
+# Pure Rust, no unsafe. Immutable 0.1.4 + Table 8-3 correction (upstream PR #10): Canon CR3
+# 4:2:2 previews fail on released versions. Re-run HEIF and CR3 corpora when moving the pin.
+heic-rs = { git = "https://github.com/jaredt17/heic-rs", rev = "e3d0a074978323ccf49089703233d4831076ccb0", default-features = false, features = ["std"] }
 
 # The tiles of a HEIC photo decode in parallel on native; wasm stays single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "parallel"] }
+heic-rs = { git = "https://github.com/jaredt17/heic-rs", rev = "e3d0a074978323ccf49089703233d4831076ccb0", default-features = false, features = ["std", "parallel"] }
 
 [lints]
 workspace = true
