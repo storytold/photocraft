@@ -93,6 +93,34 @@ fn tolerance_in_range_stores_a_whole_number_without_an_alert() {
     assert_eq!(alert(&h), None);
 }
 
+#[test]
+fn an_expression_committed_with_enter_past_the_range_alerts() {
+    let mut h = app_harness();
+    h.query_all_by_role(egui::accesskit::Role::SpinButton)
+        .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
+        .expect("the Tolerance field")
+        .click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("50*4".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    assert_eq!(tolerance(&h), 100.0);
+    assert_eq!(alert(&h).as_deref(), Some(TOLERANCE_RANGE_ALERT));
+}
+
+#[test]
+fn a_restored_tolerance_out_of_range_shows_as_the_field_stores_it() {
+    for (saved, want) in [(0.0, 1.0), (33.6, 34.0), (f32::NAN, 50.0)] {
+        let mut h = app_harness();
+        h.state_mut().ui.tool_options.bg_tolerance = saved;
+        h.run_steps(3);
+        assert_eq!(tolerance(&h), want, "{saved}");
+        assert_eq!(alert(&h), None, "{saved}: no alert for a restored value");
+    }
+}
+
 /// The accessible descriptions (tooltips) of the widgets of `role` named `label`.
 fn descriptions(h: &Harness<'static, PhotocraftApp>, role: Option<egui::accesskit::Role>, label: &str) -> Vec<String> {
     let of = |n: egui_kittest::Node<'_>| n.accesskit_node().description().map(|d| d.to_string());
