@@ -51,6 +51,9 @@ mod hue_sat;
 mod perspective_warp;
 
 pub use displace::{embed_map as displace_embed_map, embedded_map as displace_embedded_map, without_map as displace_without_map};
+pub use perspective_warp::{
+    MAX_QUADS as MAX_PERSPECTIVE_WARP_PLANES, geometry as perspective_warp_geometry, indexed_geometry as perspective_warp_indexed_geometry,
+};
 
 mod export;
 mod import;
