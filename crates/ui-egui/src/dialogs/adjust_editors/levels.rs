@@ -78,15 +78,21 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     ui.horizontal(|ui| {
         ch = editor_channel_picker(ui, cx.mem.with("levels-ch"), &channels);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
+            // Auto reads the histogram: not one of the document as it was before its last change.
+            let ready = cx.hist.as_ref().is_some_and(|h| !h.stale);
+            auto = ui
+                .add_enabled_ui(ready, |ui| widgets::secondary_button(ui, tl!("Auto"), 0.0))
+                .inner
+                .on_disabled_hover_text(tl!("Waiting for the histogram to update"))
+                .clicked();
         });
     });
     let (chan, _, hist_i) = channels.get(ch).cloned().unwrap_or((ToneChannel { key: "", label: "" }, String::new(), 0));
     let mut l = read_levels(v, chan.key);
     let mut e = Edit::default();
     let mut changed = false;
-    if auto && let Some(h) = &cx.hist {
-        let (lo, hi) = auto_levels(&h[hist_i]);
+    if auto && let Some(h) = cx.hist.as_ref().filter(|h| !h.stale) {
+        let (lo, hi) = auto_levels(&h.hist[hist_i]);
         l[0] = lo;
         l[2] = hi;
         l[1] = 1.0;
@@ -100,7 +106,7 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let p = ui.painter_at(hr.expand(1.0));
     p.rect_filled(hr, 0.0, t.field);
     if let Some(h) = &cx.hist {
-        tone::draw_histogram(&p, hr, &h[hist_i], hist_color(&chan, &t));
+        tone::draw_histogram(&p, hr, &h.hist[hist_i], h.tint(hist_color(&chan, &t)));
     }
     p.rect_stroke(hr, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     // Input sliders: black, gamma, white.

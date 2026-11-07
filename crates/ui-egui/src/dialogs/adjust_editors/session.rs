@@ -107,7 +107,7 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
         _ => committed.clone(),
     };
     let gray = app.session.active().is_some_and(|s| is_gray(s.doc.mode));
-    let hist = needs_histogram(kind).then(|| tone::histograms(app, HistSource::BelowLayer(id), space_of(&values)));
+    let hist = needs_histogram(kind).then(|| tone::histograms(app, ui.ctx(), HistSource::BelowLayer(id), space_of(&values))).flatten();
     let cx = EditorCx {
         mem: layer_mem(id),
         hist,

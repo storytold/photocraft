@@ -475,7 +475,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
                     }
                 }
             };
-            Some(tone::histograms(app, source, adjust_editors::space_of(&values)))
+            tone::histograms(app, ui.ctx(), source, adjust_editors::space_of(&values))
         }
         _ => None,
     };

@@ -8,7 +8,6 @@
 
 use crate::point_curve as curve_edit;
 use crate::state::CurvesEditorState as CurveUi;
-use std::sync::Arc;
 
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::adjust::{HueRange, ToneSpace};
@@ -20,7 +19,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
-use crate::tone::{self, HistSource, Histograms};
+use crate::tone::{self, HistSource, ToneHistograms};
 use crate::widgets::{self, hue_color};
 
 mod basic;
@@ -109,8 +108,9 @@ impl Edit {
 pub struct EditorCx {
     /// Root of the editor's view state in egui memory (selected channel, point, range…).
     pub mem: egui::Id,
-    /// Histograms in the adjustment's space ([`needs_histogram`] kinds).
-    pub hist: Option<Arc<Histograms>>,
+    /// Histograms in the adjustment's space ([`needs_histogram`] kinds), stale while they are
+    /// counted again ([`crate::tone::histograms`]): drawn faded, and Levels' Auto waits for them.
+    pub hist: Option<ToneHistograms>,
     /// Grayscale (or Duotone/Bitmap) document: one Gray channel.
     pub gray: bool,
     /// Current foreground and background colours (Gradient Map preset).
