@@ -569,23 +569,44 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ring_w = outer - inner;
     let (h, s, b) = (v[0] / 360.0, v[1] / 100.0, v[2] / 100.0);
     ui.painter().add(ring_mesh(center, inner, outer));
-    let tri = triangle(center, inner - 1.0, h);
+    let tri = triangle(center, inner - 1.0);
     ui.painter().add(triangle_mesh(tri, h));
     // Which part a drag began on: the ring sets the hue, the triangle saturation and brightness.
-    // The ring or the triangle, from where the press began (kept for frames without a press
-    // origin), so a drag that leaves the ring keeps turning the hue.
+    // The ring or the triangle, from where the press began, picked once and kept for the whole
+    // drag: the knobs move as the colour changes, so the same origin could read differently a
+    // frame later.
     let drag_key = ui.scope_id().with("color-wheel-drag");
+    // Knobs: on the ring at the hue, in the triangle at the saturation and brightness.
+    let a = h * TAU;
+    let ring_knob = center + vec2(a.cos(), -a.sin()) * (inner + ring_w / 2.0);
+    let tri_knob = triangle_point(tri, s, b);
     if (resp.dragged() || resp.clicked())
         && let Some(p) = resp.interact_pointer_pos()
     {
-        // A click is where it landed; a drag goes by where its press began.
-        let origin = if resp.clicked() { Some(p) } else { ui.input(|i| i.pointer.press_origin()) };
+        // A click is where it landed; a drag goes by where its press began, read when it starts.
+        let origin = if resp.clicked() {
+            Some(p)
+        } else if resp.drag_started() {
+            ui.input(|i| i.pointer.press_origin())
+        } else {
+            None
+        };
         // `None`: the press began beside the wheel (the area spans the panel), which picks nothing.
         let part = match origin {
             Some(origin) => {
                 let d = origin.distance(center);
-                // The hue knob reaches past the ring's edge on a small wheel.
-                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0);
+                // The hue knob reaches past the ring's edge on a small wheel. The triangle's
+                // corners reach into the ring's inner band, and a press there is the triangle, as
+                // is one on a corner's knob just outside it (up to half the ring's width, so the
+                // ring's middle stays the ring).
+                let near = (ring_w / 2.0).min(5.0);
+                // A press on a knob, as drawn, is that knob's part, the nearer one where they
+                // overlap; inside the triangle is always the triangle.
+                let (to_tri, to_ring) = (origin.distance(tri_knob), origin.distance(ring_knob));
+                let on_tri_knob = to_tri <= KNOB_R && to_tri < to_ring;
+                let on_ring_knob = to_ring <= KNOB_R && to_ring <= to_tri;
+                let ring = !triangle_near(tri, origin, 0.0) && (on_ring_knob || (!on_tri_knob && !triangle_near(tri, origin, near)));
+                let part = (d <= outer + 7.0).then_some(d >= inner - 2.0 && ring);
                 ui.data_mut(|data| data.insert_temp(drag_key, part));
                 part
             }
@@ -607,13 +628,9 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             None => {}
         }
     }
-    // Knobs: on the ring at the hue, in the triangle at the saturation and brightness.
-    let a = h * TAU;
-    let ring_knob = center + vec2(a.cos(), -a.sin()) * (inner + ring_w / 2.0);
-    let tri_knob = triangle_point(tri, s, b);
     for k in [ring_knob, tri_knob] {
         ui.painter().circle_stroke(k, 5.0, Stroke::new(1.5, Color32::WHITE));
-        ui.painter().circle_stroke(k, 6.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
+        ui.painter().circle_stroke(k, KNOB_R - 0.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
     }
     // Photoshop's add-to-swatches button under the wheel.
     let add = Rect::from_min_size(pos2(area.right() - 16.0, area.bottom() - 16.0), vec2(14.0, 14.0));
@@ -632,6 +649,10 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         apply_values(app, ui, Model::Hsb, v);
     }
 }
+
+/// How far a Color Wheel knob reaches from its centre: its outer circle (6.5 pt) and half its
+/// 1 pt stroke.
+const KNOB_R: f32 = 7.0;
 
 /// The wheel in `area`: its centre and the hue ring's inner and outer radii.
 pub(crate) fn wheel_geometry(area: Rect) -> (Pos2, f32, f32) {
@@ -660,11 +681,12 @@ fn ring_mesh(center: Pos2, inner: f32, outer: f32) -> Mesh {
     m
 }
 
-/// The triangle's corners for hue `h` (0..1): the pure hue at the hue's angle, white 120° on and
-/// black 240° on, inside radius `r`.
-fn triangle(center: Pos2, r: f32, h: f32) -> [Pos2; 3] {
+/// The triangle's corners inside radius `r`: fixed in place whatever the hue (as Krita's), so the
+/// direction that adds saturation or brightness never changes (#10122). The pure hue is the top
+/// corner, white 120 degrees on (lower left) and black 240 degrees on (lower right).
+pub(crate) fn triangle(center: Pos2, r: f32) -> [Pos2; 3] {
     let at = |turns: f32| {
-        let a = (h + turns) * TAU;
+        let a = (0.25 + turns) * TAU;
         center + vec2(a.cos(), -a.sin()) * r
     };
     [at(0.0), at(1.0 / 3.0), at(2.0 / 3.0)]
@@ -672,8 +694,28 @@ fn triangle(center: Pos2, r: f32, h: f32) -> [Pos2; 3] {
 
 /// The point of saturation `s` and brightness `b` in the triangle: black + b·(white − black) +
 /// b·s·(hue − white).
-fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> Pos2 {
+pub(crate) fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> Pos2 {
     black + (white - black) * b + (hue - white) * (b * s)
+}
+
+/// Whether `p` lies inside the triangle or within `tol` of it; `false` for a non-finite `p` and for
+/// a triangle with no area (a wheel too small for one), which would otherwise hold every point.
+pub(crate) fn triangle_near([a, b, c]: [Pos2; 3], p: Pos2, tol: f32) -> bool {
+    let area2 = (b - a).x * (c - a).y - (b - a).y * (c - a).x;
+    if area2.is_nan() || area2.abs() < 1e-6 {
+        return false;
+    }
+    let side = |u: Pos2, v: Pos2| (v - u).x * (p - u).y - (v - u).y * (p - u).x;
+    let (s1, s2, s3) = (side(a, b), side(b, c), side(c, a));
+    let inside = (s1 >= 0.0 && s2 >= 0.0 && s3 >= 0.0) || (s1 <= 0.0 && s2 <= 0.0 && s3 <= 0.0);
+    // Distance to the segment u–v; a degenerate one is its end point.
+    let to_edge = |u: Pos2, v: Pos2| {
+        let e = v - u;
+        let len2 = e.length_sq();
+        let t = if len2 > 0.0 { ((p - u).dot(e) / len2).clamp(0.0, 1.0) } else { 0.0 };
+        p.distance(u + e * t)
+    };
+    inside || to_edge(a, b) <= tol || to_edge(b, c) <= tol || to_edge(c, a) <= tol
 }
 
 /// Saturation and brightness at `p`, clamped into the triangle; `None` for a degenerate one or a
@@ -695,7 +737,7 @@ pub(crate) fn triangle_sv([hue, white, black]: [Pos2; 3], p: Pos2) -> Option<(f3
 }
 
 /// The triangle shaded through saturation and brightness at hue `h`.
-fn triangle_mesh(tri: [Pos2; 3], h: f32) -> Mesh {
+pub(crate) fn triangle_mesh(tri: [Pos2; 3], h: f32) -> Mesh {
     let n = 16usize;
     let mut m = Mesh::default();
     for j in 0..=n {

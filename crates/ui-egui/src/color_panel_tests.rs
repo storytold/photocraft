@@ -327,9 +327,13 @@ fn color_wheel_ring_sets_hue_and_triangle_sets_saturation_and_brightness() {
     let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [0.0, 0.0, 1.0, 1.0]);
     let area = h.get_by_label("Color Wheel").rect();
     let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
-    let mid = (inner + outer) / 2.0;
     // Up on the ring: hue 90° (yellow-green). Blue is fully saturated and bright, so it keeps both.
-    press(&mut h, pos2(center.x, center.y - mid), Modifiers::NONE);
+    // Its triangle knob sits in the top corner, so the press goes to the ring's outer edge, clear
+    // of the knob.
+    let up = pos2(center.x, center.y - (outer - 1.0));
+    let [hue_c, ..] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    assert!(up.distance(hue_c) > 7.0, "the ring's edge is off the knob");
+    press(&mut h, up, Modifiers::NONE);
     let [r, g, bl] = bytes(h.state().session.tools.foreground);
     assert!(r > 100 && g > 240 && bl < 10, "hue 90: {r} {g} {bl}");
     // The triangle's centre: some saturation, some brightness, same hue.
@@ -337,6 +341,218 @@ fn color_wheel_ring_sets_hue_and_triangle_sets_saturation_and_brightness() {
     let after = bytes(h.state().session.tools.foreground);
     let hsv = photocraft_color::convert::rgb_to_hsb(after.map(|v| f32::from(v) / 255.0));
     assert!((hsv[0] - 90.0).abs() < 4.0 && hsv[1] < 0.9 && hsv[2] < 0.95, "{after:?} {hsv:?}");
+}
+
+/// The triangle stays put as the hue turns (#10122): the same point picks the same saturation and
+/// brightness at two hues, and the ring's picks are unchanged.
+#[test]
+fn color_wheel_triangle_does_not_rotate_with_the_hue() {
+    let at = |hue_deg: f32| {
+        let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [0.0, 0.0, 1.0, 1.0]);
+        let area = h.get_by_label("Color Wheel").rect();
+        let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
+        // Set the hue on the ring (angle counter-clockwise from the right).
+        let a = hue_deg.to_radians();
+        let mid = (inner + outer) / 2.0;
+        press(&mut h, center + vec2(a.cos(), -a.sin()) * mid, Modifiers::NONE);
+        let hue = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0))[0];
+        assert!((hue - hue_deg).abs() < 4.0, "ring pick {hue} vs {hue_deg}");
+        // Pick the point at saturation 0.5, brightness 0.5 of the fixed triangle.
+        let [hue_c, white, black] = crate::color_panel_ui::triangle(center, inner - 1.0);
+        press(&mut h, black + (white - black) * 0.5 + (hue_c - white) * 0.25, Modifiers::NONE);
+        let hsb = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+        assert!((hsb[0] - hue_deg).abs() < 4.0, "the hue is kept: {hsb:?}");
+        (hsb[1], hsb[2])
+    };
+    let (s1, b1) = at(20.0);
+    let (s2, b2) = at(200.0);
+    assert!((s1 - 0.5).abs() < 0.05 && (b1 - 0.5).abs() < 0.05, "{s1} {b1}");
+    assert!((s1 - s2).abs() < 0.02 && (b1 - b2).abs() < 0.02, "({s1},{b1}) vs ({s2},{b2})");
+    // A NaN centre or radius gives no panic and picks nothing.
+    let nan = crate::color_panel_ui::triangle(pos2(f32::NAN, 0.0), f32::NAN);
+    assert_eq!(crate::color_panel_ui::triangle_sv(nan, pos2(1.0, 1.0)), None);
+}
+
+/// With the hue away from the triangle's fixed top corner (#10122), a click on either marker picks
+/// the colour it shows: the triangle's knob is drawn by `triangle_point` on the same triangle the
+/// click is read from, and the ring's knob at the hue's angle.
+#[test]
+fn color_wheel_markers_pick_their_own_colour_when_the_hue_is_off_the_triangle_corner() {
+    for hsb in [[200.0, 0.6, 0.7], [20.0, 0.3, 0.9], [300.0, 0.9, 0.4]] {
+        let [r, g, b] = photocraft_color::convert::hsb_to_rgb(hsb);
+        let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+        let area = h.get_by_label("Color Wheel").rect();
+        let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
+        let tri = crate::color_panel_ui::triangle(center, inner - 1.0);
+        let before = bytes(h.state().session.tools.foreground);
+        let knob = crate::color_panel_ui::triangle_point(tri, hsb[1], hsb[2]);
+        press(&mut h, knob, Modifiers::NONE);
+        let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+        assert!((got[0] - hsb[0]).abs() < 2.0 && (got[1] - hsb[1]).abs() < 0.02 && (got[2] - hsb[2]).abs() < 0.02, "triangle knob of {hsb:?} picked {got:?}");
+        let a = hsb[0].to_radians();
+        press(&mut h, center + vec2(a.cos(), -a.sin()) * ((inner + outer) / 2.0), Modifiers::NONE);
+        let after = bytes(h.state().session.tools.foreground);
+        let diff = before.iter().zip(after).map(|(x, y)| x.abs_diff(y)).max().unwrap_or(0);
+        assert!(diff <= 4, "ring knob of {hsb:?}: {before:?} -> {after:?}");
+    }
+}
+
+/// The triangle's pure-hue corner reaches into the band where a press counts as the ring (#10122):
+/// a click just inside that corner sets saturation and brightness and keeps the hue, while a
+/// click beside it on the same radius still turns the hue.
+#[test]
+fn color_wheel_pure_hue_corner_keeps_the_hue() {
+    let [r, g, b] = photocraft_color::convert::hsb_to_rgb([200.0, 0.5, 0.5]);
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+    let area = h.get_by_label("Color Wheel").rect();
+    let (center, inner, _) = crate::color_panel_ui::wheel_geometry(area);
+    let [hue_c, ..] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    // Half a point in from the corner: inside the triangle, beyond `inner - 2`.
+    press(&mut h, hue_c + (center - hue_c).normalized() * 0.5, Modifiers::NONE);
+    let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    assert!((got[0] - 200.0).abs() < 2.0 && got[1] > 0.9 && got[2] > 0.9, "corner click picked {got:?}");
+    // The same radius 30 degrees round from the corner is the ring.
+    let a = 120f32.to_radians();
+    press(&mut h, center + vec2(a.cos(), -a.sin()) * (inner - 1.5), Modifiers::NONE);
+    let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    assert!((got[0] - 120.0).abs() < 2.0, "ring click beside the corner picked {got:?}");
+}
+
+/// A press on a corner's knob can land just outside the triangle, on the ring's inner band: it
+/// still picks from the triangle and keeps the hue. The ring's middle beside the corner is the
+/// ring while the triangle's knob is elsewhere.
+#[test]
+fn color_wheel_corner_knobs_just_outside_the_triangle_keep_the_hue() {
+    let hsb_of =
+        |h: &mut Harness<'_, PhotocraftApp>| photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    let [r, g, b] = photocraft_color::convert::hsb_to_rgb([20.0, 0.5, 0.5]);
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+    let area = h.get_by_label("Color Wheel").rect();
+    let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
+    let tri @ [hue_c, white, _] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    // The ring's middle at the top corner's angle turns the hue.
+    press(&mut h, center + vec2(0.0, -(inner + outer) / 2.0), Modifiers::NONE);
+    let got = hsb_of(&mut h);
+    assert!((got[0] - 90.0).abs() < 2.0, "ring middle picked {got:?}");
+    // The hue knob now sits over the top corner; move it away (200 degrees) so the presses below
+    // test the triangle's margin, not the knob.
+    let a = 200f32.to_radians();
+    press(&mut h, center + vec2(a.cos(), -a.sin()) * ((inner + outer) / 2.0), Modifiers::NONE);
+    // 2 pt out from each upper corner: outside the triangle, in the ring's band.
+    let out = |corner: Pos2, by: f32| corner + (corner - center).normalized() * by;
+    for p in [out(hue_c, 2.0), out(white, 2.0)] {
+        assert!(!crate::color_panel_ui::triangle_near(tri, p, 0.0) && p.distance(center) >= inner - 2.0);
+    }
+    press(&mut h, out(hue_c, 2.0), Modifiers::NONE);
+    let got = hsb_of(&mut h);
+    assert!((got[0] - 200.0).abs() < 2.0 && got[1] > 0.95 && got[2] > 0.95, "hue knob picked {got:?}");
+    // White has no hue to keep: the ring would turn the hue to 210 degrees and keep full saturation.
+    press(&mut h, out(white, 2.0), Modifiers::NONE);
+    let got = hsb_of(&mut h);
+    assert!(got[1] < 0.05 && got[2] > 0.95, "white knob picked {got:?}");
+}
+
+/// The triangle's knob takes a press anywhere on its drawn outline (7 pt), beyond the triangle's
+/// own margin: at full saturation and brightness the knob sits in the top corner, and a press
+/// 6 pt out from it keeps the hue instead of turning it to 90 degrees.
+#[test]
+fn color_wheel_triangle_knob_outline_picks_the_triangle() {
+    let [r, g, b] = photocraft_color::convert::hsb_to_rgb([20.0, 1.0, 1.0]);
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+    let area = h.get_by_label("Color Wheel").rect();
+    let (center, inner, _) = crate::color_panel_ui::wheel_geometry(area);
+    let tri @ [hue_c, ..] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    let p = hue_c + (hue_c - center).normalized() * 6.0;
+    assert!(!crate::color_panel_ui::triangle_near(tri, p, 5.0), "beyond the triangle's margin");
+    press(&mut h, p, Modifiers::NONE);
+    let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    assert!((got[0] - 20.0).abs() < 2.0 && got[1] > 0.95 && got[2] > 0.95, "knob outline picked {got:?}");
+}
+
+/// A wheel too small for a triangle (8 pt across: radius 0) holds no point, so its ring still
+/// takes presses.
+#[test]
+fn a_zero_area_triangle_is_near_nothing() {
+    let (center, inner, _) = crate::color_panel_ui::wheel_geometry(Rect::from_min_size(pos2(0.0, 0.0), vec2(8.0, 8.0)));
+    let tri = crate::color_panel_ui::triangle(center, inner - 1.0);
+    for p in [center, center + vec2(1.0, 0.0), center + vec2(3.0, 0.0)] {
+        assert!(!crate::color_panel_ui::triangle_near(tri, p, 5.0), "{p:?}");
+    }
+    let nan = crate::color_panel_ui::triangle(pos2(f32::NAN, 0.0), 10.0);
+    assert!(!crate::color_panel_ui::triangle_near(nan, pos2(0.0, 0.0), 5.0));
+}
+
+/// A drag keeps the part its press picked (#10122 review): one that starts on the hue knob while
+/// the triangle's knob sits in the top corner turns the hue all the way, even after the hue knob
+/// has moved off the press point and the triangle's knob is the nearer one there.
+#[test]
+fn color_wheel_drag_keeps_the_part_its_press_picked() {
+    let [r, g, b] = photocraft_color::convert::hsb_to_rgb([90.0, 1.0, 1.0]);
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+    let area = h.get_by_label("Color Wheel").rect();
+    let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
+    let at = |deg: f32| {
+        let a = deg.to_radians();
+        center + vec2(a.cos(), -a.sin()) * ((inner + outer) / 2.0)
+    };
+    // On the way from the top corner (the triangle's knob) to the hue knob, 6 pt out: past the
+    // triangle's 5 pt margin, within the triangle knob's 7 pt, but nearer the hue knob.
+    let ring_w = outer - inner;
+    let [hue_c, ..] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    let start = hue_c + vec2(0.0, -6.0);
+    assert!(start.distance(at(90.0)) < 6.0, "nearer the hue knob (ring width {ring_w})");
+    h.hover_at(start);
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: start, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    // Every step turns the hue to the pointer and leaves saturation and brightness full.
+    for deg in (95..=150).step_by(5) {
+        h.hover_at(at(deg as f32));
+        h.run_steps(1);
+        let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+        assert!((got[0] - deg as f32).abs() < 2.0 && got[1] > 0.99 && got[2] > 0.99, "at {deg}: {got:?}");
+    }
+    h.event(egui::Event::PointerButton { pos: at(150.0), button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    assert!((got[0] - 150.0).abs() < 2.0 && got[1] > 0.99 && got[2] > 0.99, "drag picked {got:?}");
+}
+
+/// Within the triangle's 5 pt margin, a press on the hue knob and nearer it than the triangle's
+/// knob turns the hue (#10122 review): at hue 92 the hue knob sits just off the top corner, and a
+/// press 3 pt above the corner sets hue 90 and keeps the saturation.
+#[test]
+fn color_wheel_hue_knob_wins_over_the_triangle_margin() {
+    let [r, g, b] = photocraft_color::convert::hsb_to_rgb([92.0, 0.5, 0.5]);
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+    let area = h.get_by_label("Color Wheel").rect();
+    let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
+    let tri @ [hue_c, ..] = crate::color_panel_ui::triangle(center, inner - 1.0);
+    let p = hue_c + vec2(0.0, -3.0);
+    let a = 92f32.to_radians();
+    let ring_knob = center + vec2(a.cos(), -a.sin()) * ((inner + outer) / 2.0);
+    assert!(crate::color_panel_ui::triangle_near(tri, p, 5.0) && !crate::color_panel_ui::triangle_near(tri, p, 0.0), "in the margin");
+    assert!(p.distance(ring_knob) <= 7.0, "on the hue knob");
+    press(&mut h, p, Modifiers::NONE);
+    let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+    assert!((got[0] - 90.0).abs() < 1.0 && (got[1] - 0.5).abs() < 0.03, "margin press picked {got:?}");
+}
+
+/// The painted triangle is the one clicks are read from, whatever the hue (#10122): vertex
+/// `j * 17 + i` of the fill sits at saturation `i / 16` and brightness `j / 16` of the fixed
+/// triangle.
+#[test]
+fn color_wheel_paints_the_fixed_triangle_at_every_hue() {
+    let tri = crate::color_panel_ui::triangle(pos2(150.0, 120.0), 90.0);
+    for hue in [20.0f32, 200.0] {
+        let mesh = crate::color_panel_ui::triangle_mesh(tri, hue / 360.0);
+        assert_eq!(mesh.vertices.len(), 17 * 17);
+        for (k, v) in mesh.vertices.iter().enumerate() {
+            let (i, j) = (k % 17, k / 17);
+            let want = crate::color_panel_ui::triangle_point(tri, i as f32 / 16.0, j as f32 / 16.0);
+            assert!(v.pos.distance(want) < 1e-3, "hue {hue}, vertex {k}: {:?} vs {want:?}", v.pos);
+        }
+    }
 }
 
 /// Picking a mode from the panel menu changes the panel; the theme never does.
