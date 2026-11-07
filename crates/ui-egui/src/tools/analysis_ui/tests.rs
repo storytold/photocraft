@@ -310,13 +310,34 @@ fn placing_color_sampler_reveals_closed_info_panel() {
     down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
     up(&mut app, 25.0, 30.0);
     assert!(app.ui.panels.navigator);
-    assert_eq!(app.ui.dock_tabs.navigator, 2);
+    assert_eq!(app.ui.dock_tabs.navigator, INFO_DOCK_TAB);
+
+    // Placing a second sampler while the panel is already open leaves it open without error.
+    down(&mut app, 45.0, 50.0, egui::Modifiers::NONE);
+    up(&mut app, 45.0, 50.0);
+    assert!(app.ui.panels.navigator);
+    assert_eq!(app.ui.dock_tabs.navigator, INFO_DOCK_TAB);
 
     // A click on an existing sampler (starting a move or selection) does not reopen a closed panel.
     app.ui.panels.navigator = false;
     down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
     up(&mut app, 25.0, 30.0);
     assert!(!app.ui.panels.navigator);
+}
+
+#[test]
+fn placing_color_sampler_activates_info_panel_in_docking_workspace() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    // Initialise docking mode and close the Info panel.
+    app.run("window.panel.move", json!({"panel": "info", "anchor": "layers", "zone": "top"})).unwrap();
+    app.run("window.panel.close", json!({"panel": "info"})).unwrap();
+    assert_eq!(crate::panels::panel_docking::checked(&app, "window.panel.info"), Some(false));
+
+    // Placing a sampler inside the canvas activates and reveals the Info panel (#11745).
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert_eq!(crate::panels::panel_docking::checked(&app, "window.panel.info"), Some(true));
 }
 
 #[test]
@@ -331,14 +352,43 @@ fn color_sampler_limit_opens_alert_dialog_instead_of_status_note() {
     assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
     assert!(app.ui.dialogs.is_empty());
 
+    // Prepare non-empty status and closed Navigator group to verify state is cleared and panel is untouched.
+    app.ui.status = "Previous status".into();
+    app.ui.status_error = true;
+    app.ui.panels.navigator = false;
+    app.ui.dock_tabs.navigator = 0;
+
     // The 11th click opens the limit alert dialog instead of a status-bar note (#11743).
     down(&mut app, 150.0, 20.0, egui::Modifiers::NONE);
     up(&mut app, 150.0, 20.0);
     assert_eq!(app.session.active().unwrap().color_samplers.len(), 10);
     assert_eq!(app.ui.status, "");
     assert!(!app.ui.status_error);
+    // Limit rejection does not reveal or change the Info panel.
+    assert!(!app.ui.panels.navigator);
+    assert_eq!(app.ui.dock_tabs.navigator, 0);
 
     let alerts: Vec<_> =
         app.ui.dialogs.iter().filter(|d| d.kind == crate::state::DialogKind::Error).filter_map(|d| d.fields.get("message")?.as_str()).collect();
     assert_eq!(alerts, [MAX_SAMPLERS_ALERT]);
+}
+
+#[test]
+fn color_sampler_drag_error_reports_to_status_bar_without_dialog() {
+    let (mut app, _) = app();
+    app.ui.tool = Tool::ColorSampler;
+    // Place a sampler
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    up(&mut app, 25.0, 30.0);
+    assert_eq!(app.session.active().unwrap().color_samplers.len(), 1);
+
+    // Start dragging the sampler point
+    down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);
+    // Clear samplers while drag is in flight
+    app.run("view.colorSamplers.clear", json!({})).unwrap();
+
+    // Release the drag inside canvas: move fails because point no longer exists
+    up(&mut app, 50.0, 50.0);
+    assert!(app.ui.status.contains("no sample point"), "status was: {}", app.ui.status);
+    assert!(app.ui.dialogs.is_empty());
 }

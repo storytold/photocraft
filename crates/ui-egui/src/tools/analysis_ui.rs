@@ -359,14 +359,14 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 // ⌥-click on empty space does nothing; a plain click inside places a new point.
                 None if mods.alt => {}
                 None if (0.0..f64::from(doc.size.width)).contains(&x) && (0.0..f64::from(doc.size.height)).contains(&y) => {
+                    let at_limit = app.session.active().is_some_and(|st| st.color_samplers.len() >= photocraft_engine::sampler_cmds::MAX_SAMPLERS);
+                    if at_limit {
+                        open_max_samplers_alert(app);
+                        return true;
+                    }
                     let r = app.run("view.colorSamplers.add", json!({"x": x, "y": y}));
                     match r {
                         Ok(_) => reveal_info_panel(app),
-                        Err(e) if e.contains("Color Sampler limit reached") => {
-                            app.ui.status.clear();
-                            app.ui.status_error = false;
-                            app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(MAX_SAMPLERS_ALERT)}).as_object().cloned().unwrap_or_default());
-                        }
                         Err(e) => status_on_err(app, Err(e)),
                     }
                 }
@@ -400,16 +400,44 @@ fn nearest_sampler(points: &[[f64; 2]], at: [f64; 2], tol: f64) -> Option<usize>
     points.iter().enumerate().filter(|(_, q)| dist(**q, at) <= tol).min_by(|a, b| dist(*a.1, at).total_cmp(&dist(*b.1, at))).map(|(i, _)| i)
 }
 
+/// The tab index of the Info panel within the Navigator dock card group.
+pub(crate) const INFO_DOCK_TAB: usize = 2;
+
+/// The template for the Color Sampler limit alert (#11743).
+pub const MAX_SAMPLERS_ALERT_TEMPLATE: &str = "Could not create a new sampler because the maximum number of samplers is {max}.";
+
 /// The alert when the 11th Color Sampler is clicked (#11743).
 pub const MAX_SAMPLERS_ALERT: &str = "Could not create a new sampler because the maximum number of samplers is 10.";
 
+/// Open the alert dialog when the Color Sampler limit is reached (#11743).
+fn open_max_samplers_alert(app: &mut PhotocraftApp) {
+    app.ui.status.clear();
+    app.ui.status_error = false;
+    let message = crate::i18n::fmt(tl!(MAX_SAMPLERS_ALERT_TEMPLATE), &[("max", &photocraft_engine::sampler_cmds::MAX_SAMPLERS.to_string())]);
+    let mut fields = Map::new();
+    fields.insert("message".into(), json!(message));
+    app.ui.open_dialog(DialogKind::Error, fields);
+}
+
 /// Open the closed Info panel (or bring it to the front) when a Color Sampler point is placed (#11745).
 pub(crate) fn reveal_info_panel(app: &mut PhotocraftApp) {
+    let already_open = if app.ui.docking.is_some() {
+        crate::panels::panel_docking::checked(app, "window.panel.info").unwrap_or(false)
+    } else {
+        app.ui.panels.navigator && app.ui.dock_tabs.navigator == INFO_DOCK_TAB
+    };
+    if already_open {
+        return;
+    }
     if app.ui.docking.is_some() {
-        let _ = app.run("window.panel.activate", json!({"panel": "info"}));
+        if app.run("window.panel.activate", json!({"panel": "info"})).is_err() {
+            app.ui.panels.navigator = true;
+            app.ui.dock_tabs.navigator = INFO_DOCK_TAB;
+            crate::dock::reveal(app, crate::dock::Group::Navigator);
+        }
     } else {
         app.ui.panels.navigator = true;
-        app.ui.dock_tabs.navigator = 2;
+        app.ui.dock_tabs.navigator = INFO_DOCK_TAB;
         crate::dock::reveal(app, crate::dock::Group::Navigator);
     }
 }
