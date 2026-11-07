@@ -1832,6 +1832,7 @@
 	Move Tool	Herramienta Mover
 	Could not use the move tool because the layer is locked.	No se pudo usar la herramienta Mover porque la capa está bloqueada.
 	Could not complete the Free Transform command because the layer is locked.	No se pudo completar el comando Transformación libre porque la capa está bloqueada.
+	Could not transform because the layer is locked.	No se pudo transformar porque la capa está bloqueada.
 	Multiply	Multiplicar
 	My Brushes	Mis pinceles
 	Neutrals	Neutros

@@ -1639,6 +1639,7 @@
 	Move Tool	Siirtotyökalu
 	Could not use the move tool because the layer is locked.	Siirtotyökalua ei voitu käyttää, koska taso on lukittu.
 	Could not complete the Free Transform command because the layer is locked.	Vapaa muunnos -komentoa ei voitu suorittaa, koska taso on lukittu.
+	Could not transform because the layer is locked.	Muuntaminen ei onnistunut, koska taso on lukittu.
 	Rectangular Marquee Tool	Suorakulmainen valintakehys
 	Elliptical Marquee Tool	Elliptinen valintakehys
 	Single Row Marquee Tool	Yhden rivin valintakehys

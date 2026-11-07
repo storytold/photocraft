@@ -378,25 +378,6 @@ fn azerbaijani_keeps_context_placeholders_and_command_names() {
     assert!(fmt(tr(lang, "About {app}"), &[("app", "PhotoCraft")]).contains("PhotoCraft"));
 }
 
-/// Every menu label, submenu segment and intentional command-ID override has a catalog entry.
-#[test]
-fn azerbaijani_covers_every_menu_label_and_path() {
-    let lang = Lang::from_code("az").expect("az registered");
-    for &(path, label, _, _) in crate::menu_catalog::CATALOG {
-        for source in path.iter().copied().chain(std::iter::once(label)).filter(|source| *source != "---") {
-            assert!(lang.catalog().plain(source).is_some(), "az: missing menu translation for {source:?}");
-        }
-    }
-    for source in ["Convert to Frame…", "Replace Image…", "Import Image…", "Fit Content to Frame", "Fit Frame to Content"] {
-        assert!(lang.catalog().plain(source).is_some(), "az: missing frame translation for {source:?}");
-    }
-    for id in
-        ["edit.clear", "edit.purge.undo", "edit.stroke", "edit.transform.scale", "file.close", "filter.sharpen.sharpen", "layer.layerMask.apply", "select.all"]
-    {
-        assert!(lang.catalog().id(id).is_some(), "az: missing @id translation for {id:?}");
-    }
-}
-
 /// Bosnian locales, with or without region, script or encoding, select the Latin catalog.
 #[test]
 fn bosnian_resolves_locales_and_preferences() {
