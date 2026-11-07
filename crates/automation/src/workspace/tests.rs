@@ -930,11 +930,14 @@ fn relative_configured_root_accepts_resolved_absolute_paths() {
 }
 
 #[cfg(unix)]
+/// Trusted absolute roots may have names forbidden in relative request paths.
 #[test]
 fn trusted_root_names_are_not_validated_as_relative_request_names() {
     let (inside, outside, _) = roots("trusted-root-names");
     let root = inside.join("aux");
     std::fs::create_dir(&root).unwrap();
+    // macOS can spell the temporary directory as /var while canonicalize resolves /private/var.
+    let root = std::fs::canonicalize(&root).unwrap();
     let alias = outside.join("CON");
     link_directory(&root, &alias);
     let workspace = AuthorizedWorkspace::new(Some(&alias), Some(&alias)).unwrap();

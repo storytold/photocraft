@@ -68,6 +68,7 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     }
 }
 
+/// Serve stdio MCP through either the live app bridge or a headless engine.
 pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
     let server = match &a.bridge {
         Some(addr) => {
@@ -91,6 +92,69 @@ pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
             PhotocraftMcp::with_headless(h)
         }
     };
-    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let rt = mcp_runtime()?;
     Ok(rt.block_on(server.serve_stdio())?)
+}
+
+/// Use one async worker for idle stdio MCP unless Tokio's worker override is set.
+fn mcp_runtime() -> Result<tokio::runtime::Runtime> {
+    let mut rt_builder = tokio::runtime::Builder::new_multi_thread();
+    // A stdio MCP server is usually idle. Keep one async worker by default; image work runs on
+    // the blocking pool, and Tokio still honors an explicitly configured worker count.
+    if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
+        rt_builder.worker_threads(1);
+    }
+    Ok(rt_builder.enable_all().build()?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mcp_runtime;
+    use std::time::{Duration, Instant};
+
+    /// Check the default and explicit worker counts in separate processes.
+    #[test]
+    fn mcp_stdio_defaults_to_one_worker_and_honors_override() {
+        if let Ok(expected) = std::env::var("PHOTOCRAFT_MCP_TEST_EXPECTED_WORKERS") {
+            let expected = expected.parse::<usize>().unwrap();
+            let workers = mcp_runtime().unwrap().metrics().num_workers();
+            assert_eq!(workers, expected, "TOKIO_WORKER_THREADS={:?}", std::env::var_os("TOKIO_WORKER_THREADS"));
+            return;
+        }
+
+        // Spawn the test in a fresh process for each environment: Rust 2024 cannot safely mutate
+        // another test's process environment, and Tokio reads its override at runtime startup.
+        for (worker_override, expected) in [(None, 1), (Some("2"), 2)] {
+            let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+            command.args(["--exact", "automation::tests::mcp_stdio_defaults_to_one_worker_and_honors_override"]);
+            command.env_remove("TOKIO_WORKER_THREADS").env("PHOTOCRAFT_MCP_TEST_EXPECTED_WORKERS", expected.to_string());
+            if let Some(workers) = worker_override {
+                command.env("TOKIO_WORKER_THREADS", workers);
+            }
+            let mut child = command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                if child.try_wait().unwrap().is_some() {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let output = child.wait_with_output().unwrap();
+                    panic!(
+                        "TOKIO_WORKER_THREADS={worker_override:?}: child test timed out; stdout: {}; stderr: {}",
+                        String::from_utf8_lossy(&output.stdout),
+                        String::from_utf8_lossy(&output.stderr)
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let output = child.wait_with_output().unwrap();
+            assert!(
+                output.status.success(),
+                "TOKIO_WORKER_THREADS={worker_override:?}: stdout: {}; stderr: {}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
 }

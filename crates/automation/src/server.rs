@@ -3,7 +3,7 @@
 
 use std::io::Write as _;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 
 use base64::Engine as _;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -14,12 +14,16 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, tool, t
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::sync::Semaphore;
 
 use crate::bridge::BridgeClient;
 use crate::budgets::{BatchReplyBudget, MAX_PREVIEW_SIDE, check_png, json_bytes};
 use crate::headless::Headless;
 use crate::security::MAX_BATCH_STEPS;
 use crate::{AuthorizedWorkspace, AutomationError, files};
+
+const SCREENSHOT_DOWNSCALE_CONCURRENCY: usize = 2;
+static SCREENSHOT_DOWNSCALE_LIMIT: LazyLock<Arc<Semaphore>> = LazyLock::new(|| Arc::new(Semaphore::new(SCREENSHOT_DOWNSCALE_CONCURRENCY)));
 
 /// Where tools are executed.
 pub enum Backend {
@@ -646,6 +650,7 @@ impl PhotocraftMcp {
         }
     }
 
+    /// Fetch a live screenshot and enforce the preview bound before returning PNG data.
     async fn screenshot(&self, b: &BridgeClient, max_side: Option<u32>) -> Result<CallToolResult, McpError> {
         if max_side.is_some_and(|side| side > MAX_PREVIEW_SIDE) {
             return Ok(fail(format!("automation preview side exceeds {MAX_PREVIEW_SIDE} pixels")));
@@ -661,9 +666,8 @@ impl PhotocraftMcp {
             Ok(bytes) => bytes,
             Err(error) => return Ok(fail(format!("app screenshot data: {error}"))),
         };
-        let bytes = match downscale_png(&bytes, max_side.unwrap_or(0)) {
-            Ok(Some(small)) => small,
-            Ok(None) => bytes,
+        let bytes = match downscale_screenshot(bytes, max_side.unwrap_or(0)).await {
+            Ok(bytes) => bytes,
             Err(error) => return Ok(fail(error)),
         };
         if let Err(error) = check_png(bytes.len()) {
@@ -671,6 +675,23 @@ impl PhotocraftMcp {
         }
         Ok(png_result(&bytes, "screenshot of the live app window".into()))
     }
+}
+
+/// Run PNG decoding and resizing off the async worker, retaining untouched bytes.
+async fn downscale_screenshot(bytes: Vec<u8>, max_side: u32) -> Result<Vec<u8>, AutomationError> {
+    screenshot_blocking(SCREENSHOT_DOWNSCALE_LIMIT.clone(), move || Ok(downscale_png(&bytes, max_side)?.unwrap_or(bytes))).await?
+}
+
+/// Keep the permit in the blocking closure so a cancelled request still occupies capacity until
+/// its blocking work finishes.
+async fn screenshot_blocking<T: Send + 'static>(limit: Arc<Semaphore>, work: impl FnOnce() -> T + Send + 'static) -> Result<T, AutomationError> {
+    let permit = limit.acquire_owned().await.map_err(|error| AutomationError::Other(format!("screenshot downscale limit unavailable: {error}")))?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
+    .map_err(|error| AutomationError::Other(format!("screenshot downscale task failed: {error}")))
 }
 
 fn downscale_png(png: &[u8], max_side: u32) -> Result<Option<Vec<u8>>, AutomationError> {
@@ -1346,6 +1367,89 @@ mod tests {
         assert!(downscale_png(&png, 1024).is_err());
     }
 
+    /// Verify no-resize byte preservation, resized dimensions, and decode errors.
+    #[tokio::test(flavor = "current_thread")]
+    async fn bridge_screenshot_blocking_downscale_preserves_bytes_and_errors() {
+        let image = photocraft_codecs::Image::from_u8(64, 32, photocraft_codecs::ChannelLayout::Rgba, vec![128; 64 * 32 * 4]).unwrap();
+        let png = photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+        assert_eq!(downscale_screenshot(png.clone(), 0).await.unwrap(), png);
+        assert_eq!(downscale_screenshot(png.clone(), 64).await.unwrap(), png);
+        let small = downscale_screenshot(png, 32).await.unwrap();
+        let decoded = photocraft_codecs::decode_as(photocraft_codecs::Format::Png, &small).unwrap();
+        assert_eq!(decoded.dimensions(), (32, 16));
+        assert!(downscale_screenshot(b"not a png".to_vec(), 32).await.is_err());
+    }
+
+    /// A panic in blocking work must become an automation error.
+    #[tokio::test(flavor = "current_thread")]
+    async fn screenshot_blocking_reports_panics_as_errors() {
+        let error = screenshot_blocking::<()>(Arc::new(Semaphore::new(1)), || panic!("downscale panic")).await.unwrap_err();
+        assert!(matches!(error, AutomationError::Other(message) if message.contains("screenshot downscale task failed")));
+    }
+
+    /// A third screenshot job must wait while both shared permits are held.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn screenshot_downscale_limit_starts_only_two_jobs() {
+        let limit = SCREENSHOT_DOWNSCALE_LIMIT.clone();
+        let mut active = Vec::new();
+        let mut releases = Vec::new();
+        for _ in 0..SCREENSHOT_DOWNSCALE_CONCURRENCY {
+            let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+            let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+            active.push(tokio::spawn(screenshot_blocking(limit.clone(), move || {
+                let _ = started_tx.send(());
+                let _ = release_rx.blocking_recv();
+            })));
+            releases.push(release_tx);
+            tokio::time::timeout(std::time::Duration::from_secs(10), started_rx).await.unwrap().unwrap();
+        }
+        assert_eq!(limit.available_permits(), 0);
+
+        let (queued_tx, queued_rx) = tokio::sync::oneshot::channel();
+        let (third_started_tx, mut third_started_rx) = tokio::sync::oneshot::channel();
+        let third = tokio::spawn(async move {
+            let _ = queued_tx.send(());
+            screenshot_blocking(limit, move || {
+                let _ = third_started_tx.send(());
+            })
+            .await
+        });
+        queued_rx.await.unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), &mut third_started_rx).await.is_err(),
+            "a third blocking job started before either permit was released"
+        );
+
+        releases.remove(0).send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(10), &mut third_started_rx).await.unwrap().unwrap();
+        third.await.unwrap().unwrap();
+        for release in releases {
+            release.send(()).unwrap();
+        }
+        for task in active {
+            task.await.unwrap().unwrap();
+        }
+    }
+
+    /// Cancelling the request must not release a permit held by blocking work.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn screenshot_downscale_permit_survives_request_cancellation() {
+        let limit = Arc::new(Semaphore::new(1));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let task = tokio::spawn(screenshot_blocking(limit.clone(), move || {
+            let _ = started_tx.send(());
+            let _ = release_rx.blocking_recv();
+        }));
+        started_rx.await.unwrap();
+        task.abort();
+        let _ = task.await;
+        assert_eq!(limit.available_permits(), 0);
+        release_tx.send(()).unwrap();
+        let permit = tokio::time::timeout(std::time::Duration::from_secs(10), limit.acquire_owned()).await.unwrap().unwrap();
+        drop(permit);
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn mcp_reports_invalid_filter_parameters_without_changing_history() {
         let mcp = PhotocraftMcp::headless();
@@ -1408,8 +1512,10 @@ mod tests {
         .unwrap();
         let before = mcp.headless_op(|h| h.inspect(None)).await.unwrap().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(100), waited).await.is_err(), "the blur ended before it was dropped");
+        // Stay within the bounded working-set admission even on a many-core CI host.
+        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 50}), &mut waiter, (0, 1));
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), waited).await;
+        assert!(result.is_err(), "the blur ended before it was dropped: {result:?}");
         let t = std::time::Instant::now();
         loop {
             let (running, cancelled) =
@@ -1446,7 +1552,7 @@ mod tests {
         });
         is_locked.recv().unwrap();
         let mut waiter = Waiter::new(None);
-        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 1000}), &mut waiter, (0, 1));
+        let waited = mcp.headless_wait("filter.blur.gaussianBlur".into(), json!({"radius": 50}), &mut waiter, (0, 1));
         assert!(tokio::time::timeout(std::time::Duration::from_millis(50), waited).await.is_err(), "the start waits for the lock");
         holder.join().unwrap();
         let t = std::time::Instant::now();

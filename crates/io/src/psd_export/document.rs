@@ -46,6 +46,7 @@ pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, dep
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
 }
 
+/// Write supported document modes, ending layer progress before merged-image export.
 fn export_supported_document(
     doc: &Document,
     opts: &PsdExportOptions,
@@ -100,15 +101,16 @@ fn export_supported_document(
     let records = doc.walk().len() as f32;
     let units = records + MERGED_WEIGHT;
     let layers_share = records / units;
-    let mut done = 0.0f32;
-    let mut tick = || {
-        done += 1.0;
-        ctl.progress(done / units);
-        !ctl.cancelled()
-    };
-    let space = photocraft_compose::cmyk_space(doc);
-    photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers, &mut tick));
-    drop(tick);
+    {
+        let mut done = 0.0f32;
+        let mut tick = || {
+            done += 1.0;
+            ctl.progress(done / units);
+            !ctl.cancelled()
+        };
+        let space = photocraft_compose::cmyk_space(doc);
+        photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers, &mut tick));
+    }
     ctl.progress(layers_share);
 
     let merged = prepare_merged_planes(doc, &mut ex, opts, ctl, fmt, duotone_inks.is_some(), layers_share);
