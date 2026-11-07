@@ -496,30 +496,22 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
             return;
         }
     };
-    let Some(id) = crate::adjust_dialog::open(app, &f.command).or_else(|| {
+    let Some(id) = crate::adjust_dialog::open_smart_filter(app, &f.command, &f.params, target.clone()).or_else(|| {
         let id = crate::filter_dialog::has_dialog(&f.command).then(|| crate::filter_dialog::open(app, &f.command)).flatten()?;
         // The filter dialog opens on the user's last-used values; a recorded filter that lacks a
         // key must show (and save) the schema default instead.
         let mut fields = app.ui.dialog_mut(id)?.fields.clone();
         crate::filter_dialog::reset_fields(app, &mut fields);
+        if let Value::Object(p) = &f.params {
+            fields.extend(p.iter().filter(|(key, _)| !key.starts_with("__")).map(|(key, value)| (key.clone(), value.clone())));
+        }
         app.ui.dialog_mut(id)?.fields = fields;
         Some(id)
     }) else {
         return;
     };
-    let mode = app.session.active().map(|st| st.doc.mode);
     if let Some(d) = app.ui.dialog_mut(id) {
         d.fields.insert("__smartFilter".into(), target);
-        if let Value::Object(p) = &f.params {
-            for (k, v) in p {
-                if !k.starts_with("__") {
-                    d.fields.insert(k.clone(), v.clone());
-                }
-            }
-        }
-        if let Some(mode) = mode {
-            crate::adjust_dialog::seed_from_recorded(&mut d.fields, &f.params, mode);
-        }
     }
 }
 

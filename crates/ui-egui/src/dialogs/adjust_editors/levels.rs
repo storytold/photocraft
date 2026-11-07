@@ -60,6 +60,7 @@ pub(super) fn nearest(xs: &[f32], x: f32) -> Option<u8> {
     xs.iter().enumerate().min_by(|a, b| (a.1 - x).abs().total_cmp(&(b.1 - x).abs())).map(|(i, _)| i as u8)
 }
 
+/// Edit the selected Levels record using its own channel label, histogram and Auto endpoints.
 pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let channels = editor_channels(cx, space_of(v));
