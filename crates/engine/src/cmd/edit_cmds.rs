@@ -1169,7 +1169,8 @@ const PIXEL_ASPECT_RANGE: std::ops::RangeInclusive<f64> = 0.1..=10.0;
 
 /// View › Pixel Aspect Ratio (`view.setPixelAspectRatio`): the document's pixel width over its
 /// height. Stored with the document (PSD resource 1064), so each document keeps its own; undoable
-/// like the guides. Setting the ratio it already has is not a step.
+/// like the guides. Setting the ratio it already has is not a step. A 1064 record that couldn't be
+/// read when the file opened is kept for the save only until a ratio is set over it.
 fn pixel_aspect_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     let ratio = p
         .get("ratio")
@@ -1179,6 +1180,7 @@ fn pixel_aspect_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     if s.active().ok_or(EngineError::NoDocument)?.doc.pixel_aspect != ratio {
         s.edit("Pixel Aspect Ratio", |doc, _| {
             doc.pixel_aspect = ratio;
+            doc.metadata.psd_resources.retain(|(id, _, _)| *id != photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO);
             Ok(())
         })?;
     }

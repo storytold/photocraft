@@ -766,14 +766,21 @@ fn pixel_aspect_ratio_resource_round_trips_with_the_document() {
     assert_eq!(par(&document_to_psd(&d)), [1.5]);
     d.pixel_aspect = 1.0;
     assert_eq!(par(&document_to_psd(&d)), [1.0], "square pixels write 1, as Photoshop does");
-    for bad in [photocraft_psd::PixelAspectRatio::new(f64::NAN).to_bytes(), photocraft_psd::PixelAspectRatio::new(0.0).to_bytes(), vec![0, 0, 0, 2, 63]] {
+    // A version this reader doesn't know (only 1 and 2 are) is not taken as the ratio.
+    let unknown_version = photocraft_psd::PixelAspectRatio { version: 99, ratio: 2.0 }.to_bytes();
+    for bad in [
+        photocraft_psd::PixelAspectRatio::new(f64::NAN).to_bytes(),
+        photocraft_psd::PixelAspectRatio::new(0.0).to_bytes(),
+        vec![0, 0, 0, 2, 63],
+        unknown_version.clone(),
+    ] {
         let mut f = testgen::small(Version::Psd, Compression::Raw);
         f.resources.push(photocraft_psd::ImageResource::new(1064, bad));
         assert_eq!(psd_to_document(&f).0.pixel_aspect, 1.0);
     }
     // A record that can't be read or drawn goes back as it came, once, until a ratio replaces it.
     let records = |f: &PsdFile| f.resources.iter().filter(|r| r.id == 1064).map(|r| r.data.clone()).collect::<Vec<_>>();
-    for bad in [vec![0, 0, 0], photocraft_psd::PixelAspectRatio::new(0.0).to_bytes()] {
+    for bad in [vec![0, 0, 0], photocraft_psd::PixelAspectRatio::new(0.0).to_bytes(), unknown_version] {
         let mut f = testgen::small(Version::Psd, Compression::Raw);
         f.resources.push(photocraft_psd::ImageResource::new(1064, bad.clone()));
         let (mut d, _) = psd_to_document(&f);

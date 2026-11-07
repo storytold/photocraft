@@ -29,9 +29,14 @@ pub(crate) fn pascal_names_resource(names: &[&str]) -> Vec<u8> {
     v
 }
 
-/// The ratio of a pixel aspect ratio record, when it can be read and drawn.
+/// The ratio of a pixel aspect ratio record, when it can be read and drawn. Only versions 1 and 2
+/// are known: a record of another version is kept as it came, not rewritten as version 2.
 pub(crate) fn readable_pixel_aspect(data: &[u8]) -> Option<f64> {
-    photocraft_psd::PixelAspectRatio::from_bytes(data).ok().map(|par| par.ratio).filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+    photocraft_psd::PixelAspectRatio::from_bytes(data)
+        .ok()
+        .filter(|par| matches!(par.version, 1 | 2))
+        .map(|par| par.ratio)
+        .filter(|ratio| ratio.is_finite() && *ratio > 0.0)
 }
 
 /// View › Pixel Aspect Ratio (resource 1064). Photoshop writes it in every file, square or not, so

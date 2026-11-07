@@ -1286,6 +1286,25 @@ fn pixel_aspect_ratio_is_the_active_documents_and_undoable() {
     assert!(Session::new().execute("view.setPixelAspectRatio", json!({"ratio": 2})).is_err());
 }
 
+/// A 1064 record that couldn't be read when the file opened is dropped once a ratio is set, so
+/// setting a ratio and then square pixels again saves square pixels, not that record; undo
+/// brings it back.
+#[test]
+fn setting_a_pixel_aspect_ratio_drops_an_unreadable_record() {
+    use photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO;
+    let mut s = session();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let unreadable = std::sync::Arc::new(vec![0u8, 0, 0]);
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).metadata.psd_resources.push((PIXEL_ASPECT_RATIO, String::new(), unreadable));
+    let kept = |s: &Session| s.active().unwrap().doc.metadata.psd_resources.iter().filter(|r| r.0 == PIXEL_ASPECT_RATIO).count();
+    s.execute("view.setPixelAspectRatio", json!({"ratio": 2.0})).unwrap();
+    s.execute("view.setPixelAspectRatio", json!({"ratio": 1.0})).unwrap();
+    assert_eq!(kept(&s), 0, "square pixels set over the record replace it");
+    s.undo();
+    s.undo();
+    assert_eq!(kept(&s), 1, "undo brings the record back");
+}
+
 /// The last guide added in `orientation` for `position`.
 fn new_guide(s: &mut Session, orientation: &str, position: Value) -> f64 {
     s.execute("view.newGuide", json!({"orientation": orientation, "position": position})).unwrap();
