@@ -639,6 +639,17 @@ fn target_type_layer(app: &mut PhotocraftApp, id: photocraft_doc::LayerId) -> bo
     }
 }
 
+/// Are the type layer menu's faux rows live? They run `type.setStyle` on the selected type
+/// layers, so they are offered exactly when that command takes them (#12043 review): at least
+/// one selected type layer, and none of them under Lock All - `check_text_unlocked`'s one
+/// rejection. A position lock styles fine, as the command does.
+fn faux_rows_enabled(app: &PhotocraftApp) -> bool {
+    let Some(st) = app.session.active() else { return false };
+    let targets: Vec<photocraft_doc::LayerId> =
+        st.selected_layers().into_iter().filter(|id| st.doc.layer(*id).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))).collect();
+    !targets.is_empty() && targets.iter().all(|id| !st.doc.effective_locks(*id).all)
+}
+
 /// The text shape of the menu's target layer, which is active after [`target_type_layer`]:
 /// point or paragraph text get their single Convert row, anything else the pair (#12043).
 fn active_type_shape(app: &PhotocraftApp) -> TypeShape {
@@ -884,8 +895,9 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     if menu.type_layer {
         return match command {
             // #12043: over committed type the faux rows toggle the whole layer: they run as
-            // `type.setStyle` on its type layers, so they are live whenever there is one.
-            FAUX_BOLD | FAUX_ITALIC => crate::type_tool::target_text(app).is_some(),
+            // `type.setStyle` on its type layers, so they are live exactly when that command
+            // takes them.
+            FAUX_BOLD | FAUX_ITALIC => faux_rows_enabled(app),
             c => type_layer_rows(menu).iter().flatten().any(|(_, id)| *id == c) && crate::menus::is_enabled(app, c),
         };
     }
@@ -1239,7 +1251,7 @@ fn menu_id() -> egui::Id {
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
-    let Some(menu) = app.ui.canvas_tool_menu.clone() else { return };
+    let Some(mut menu) = app.ui.canvas_tool_menu.clone() else { return };
     if ctx.input(|i| i.key_pressed(egui::Key::Escape))
         || app.ui.tool != menu.tool
         || (menu.transform && app.ui.transform.is_none())
@@ -1249,6 +1261,19 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     {
         app.ui.canvas_tool_menu = None;
         return;
+    }
+    // The committed text's shape can change while its menu is open - a Convert, or an Undo of
+    // one: the Convert row follows the shape frame by frame instead of freezing on the value
+    // captured when the menu opened (#12043 review). The stored menu is refreshed too, so the
+    // control channel's entries and a row pick see the same list the canvas draws.
+    if menu.type_layer {
+        let fresh = Some(active_type_shape(app));
+        if menu.type_shape != fresh {
+            if let Some(m) = app.ui.canvas_tool_menu.as_mut() {
+                m.type_shape = fresh;
+            }
+            menu.type_shape = fresh;
+        }
     }
     let id = menu_id();
     let screen = ctx.content_rect();

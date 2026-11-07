@@ -4,7 +4,8 @@
 //! (`TYPE_EDIT_MENU`) is unchanged.
 
 use super::*;
-use egui::Context;
+use egui::{Context, Modifiers, PointerButton, Pos2, vec2};
+use egui_kittest::Harness;
 
 /// A committed type layer reading "Hello" over the middle of a 32 px canvas, no edit running.
 fn app_with_type() -> (PhotocraftApp, u64) {
@@ -153,4 +154,81 @@ fn the_type_edit_menu_is_unchanged() {
     let has = |id: &str| TYPE_EDIT_MENU.iter().flatten().any(|(_, i)| *i == id);
     assert!(has("type.convertToParagraphText") && has("type.convertToPointText"), "while editing, both Convert rows stay");
     assert!(!has("type.editText") && !has("layer.layerStyle.blendingOptions"));
+}
+
+/// A drawn harness over the committed type, as in the canvas gesture tests.
+fn menu_harness(mut app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    app.sync_views();
+    let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+    h.run_steps(4);
+    h
+}
+
+fn right_click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.event(egui::Event::PointerMoved(p));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+fn listed(h: &Harness<'static, PhotocraftApp>) -> Vec<String> {
+    let menu = h.state().ui.canvas_tool_menu.clone().expect("the menu stays open over the type");
+    rows(&menu).iter().flatten().map(|(_, id)| id.to_string()).collect()
+}
+
+/// Review c4503573355: the faux rows grey out for what `type.setStyle` rejects - a targeted
+/// type layer under Lock All - and stay live under a position lock, which the command takes.
+#[test]
+fn faux_rows_grey_only_for_what_the_command_would_reject() {
+    let (mut app, id) = app_with_type();
+    let menu = open_over_type(&mut app);
+    assert!(entry_enabled(&app, &menu, FAUX_BOLD), "unlocked: live");
+    app.run("layer.setProps", json!({"locks": {"all": true}})).unwrap();
+    let menu = open_over_type(&mut app);
+    assert!(!entry_enabled(&app, &menu, FAUX_BOLD), "Lock All is the command's rejection, so the row is greyed");
+    assert!(!available(&app, &menu, FAUX_ITALIC), "and the other faux row with it");
+    choose(&mut app, &Context::default(), FAUX_BOLD);
+    assert!(text_of(&app, id).char_runs().iter().all(|r| !r.style.faux_bold), "a greyed row changes nothing");
+    // `check_text_unlocked` (the command's only rejection) takes Lock Position: styling
+    // re-renders the text, it does not move the layer.
+    app.run("layer.setProps", json!({"locks": {"all": false, "position": true}})).unwrap();
+    let menu = open_over_type(&mut app);
+    assert!(entry_enabled(&app, &menu, FAUX_BOLD), "a position lock keeps the row live, as the command does");
+    choose(&mut app, &Context::default(), FAUX_BOLD);
+    assert!(text_of(&app, id).char_runs().iter().all(|r| r.style.faux_bold), "and the style still applies");
+}
+
+/// Review c4503573358: with the menu open, a Convert and its Undo move the Convert row along
+/// with the text's shape instead of freezing on the one captured when the menu opened.
+#[test]
+fn the_convert_row_follows_an_undo_that_changes_the_shape() {
+    let (app, id) = app_with_type();
+    let mut h = menu_harness(app);
+    let center = h.state().last_canvas_rect.center();
+    right_click(&mut h, center);
+    assert!(listed(&h).contains(&"type.convertToParagraphText".into()), "point text under the open menu");
+    h.state_mut().run("type.convertToParagraphText", json!({"layer": id})).unwrap();
+    h.run_steps(2);
+    let after = listed(&h);
+    assert!(
+        after.contains(&"type.convertToPointText".into()) && !after.contains(&"type.convertToParagraphText".into()),
+        "the row follows the shape: {after:?}"
+    );
+    assert!(h.state_mut().session.undo(), "the Undo turns the paragraph box back into point text");
+    h.run_steps(2);
+    let back = listed(&h);
+    assert!(back.contains(&"type.convertToParagraphText".into()) && !back.contains(&"type.convertToPointText".into()), "and follows it back: {back:?}");
 }
