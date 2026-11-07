@@ -2,8 +2,8 @@ use super::basic::{sliders, track_stops};
 use super::curves::gradient_bar;
 use super::levels::nearest;
 use super::{
-    Color32, Edit, EditorCx, HUE_RANGES, HueRange, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, Value, color32, flag, hue_color, json, num, nums, pos2,
-    vec2, widgets,
+    Color32, Edit, EditorCx, HUE_RANGES, HueRange, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, Value, color32, flag, hue_color, json, label, num, nums,
+    pos2, vec2, widgets,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -62,8 +62,32 @@ pub(super) fn spectrum_bar(p: &egui::Painter, r: Rect, colors: &[Color32]) {
     }
 }
 
+/// The Hue/Saturation Preset menu (#9245): choosing a preset replaces the settings, as one edit.
+fn hue_sat_preset_row(ui: &mut egui::Ui, v: &mut Value) -> Edit {
+    use super::hue_sat_presets::{PRESETS, matching, params};
+    let mut e = Edit::default();
+    ui.horizontal(|ui| {
+        label(ui, tl!("Preset:"));
+        let current = matching(v).unwrap_or("custom");
+        let mut options: Vec<(&str, &str)> = PRESETS.iter().map(|(id, l)| (*id, tl!(l))).collect();
+        if current == "custom" {
+            options.push(("custom", tl!("Custom")));
+        }
+        let mut picked = current;
+        if widgets::dropdown(ui, "hue-sat-preset", tl!("Preset"), &mut picked, &options, ui.available_width().min(190.0))
+            && picked != current
+            && let Some(p) = params(picked)
+        {
+            *v = p;
+            e.add(Edit::discrete(true));
+        }
+    });
+    e
+}
+
 pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
+    let preset = hue_sat_preset_row(ui, v);
     let range_id = cx.mem.with("hs-range");
     let mut range: usize = ui.data(|d| d.get_temp(range_id)).unwrap_or(0);
     let colorize = flag(v, "colorize", false);
@@ -75,7 +99,7 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
         ui.add_enabled_ui(!colorize, |ui| widgets::dropdown(ui, &format!("{range_id:?}"), tl!("Range"), &mut range, &opts, 120.0));
     });
     ui.data_mut(|d| d.insert_temp(range_id, range));
-    let mut e = Edit::default();
+    let mut e = preset;
     let hue_grad = widgets::hue_stops();
     if range == 0 {
         let (hlo, hhi, slo) = if colorize { (0.0, 360.0, 0.0) } else { (-180.0, 180.0, -100.0) };
