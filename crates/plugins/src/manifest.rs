@@ -139,11 +139,14 @@ impl Manifest {
         Ok(man)
     }
 
+    /// Checks the stored manifest fields without normalizing their contents.
+    /// Names retain valid edge spaces and Unicode, but every original character
+    /// must pass the display rules and count toward the 64-character limit.
     fn validate(&self) -> Result<()> {
         if !valid_id(&self.id) {
             return Err(Error::Manifest(format!("invalid id {:?}: use 1-64 characters from A-Z a-z 0-9 . _ -", self.id)));
         }
-        let name = self.name.trim();
+        let name = &self.name;
         let printable = name.chars().all(|c| !c.is_control() && !hidden_format(c)) && name.chars().any(visible);
         if !printable || name.chars().count() > 64 {
             return Err(Error::Manifest("`name` must be 1-64 printable characters".into()));
@@ -618,6 +621,8 @@ mod tests {
         Manifest::parse(json!({"id": "org.example.tone", "name": name, "kind": "filter"}).to_string().as_bytes())
     }
 
+    /// Rejects invisible or reordered labels while retaining script joiners,
+    /// emoji and the character-count boundary independently of UTF-8 byte length.
     #[test]
     fn name_must_be_printable_unicode() {
         for bad in [
@@ -641,5 +646,35 @@ mod tests {
         // The documented limit counts characters, not bytes.
         assert!(with_name(&"é".repeat(64)).is_ok());
         assert!(with_name(&"é".repeat(65)).is_err());
+    }
+
+    /// Edge controls must be rejected before any trimming can hide them.
+    #[test]
+    fn name_rejects_controls_at_either_edge() {
+        for control in ['\n', '\r', '\t', '\u{b}', '\u{c}'] {
+            for name in [format!("{control}Tone"), format!("Tone{control}")] {
+                assert!(with_name(&name).is_err(), "accepted edge control in {name:?}");
+            }
+        }
+    }
+
+    /// Leading and trailing spaces consume the stored label's character budget.
+    #[test]
+    fn name_limit_counts_the_original_label() {
+        for name in [format!("{}Tone", " ".repeat(65)), format!("Tone{}", " ".repeat(65))] {
+            assert!(with_name(&name).is_err(), "accepted {}-character label", name.chars().count());
+        }
+    }
+
+    /// Accepted names round-trip unchanged, including edge spaces and a
+    /// 64-character multibyte label; validation must not silently trim them.
+    #[test]
+    fn name_preserves_valid_edge_spaces_and_unicode() {
+        for name in [" Tone ", "می\u{200C}خواهم", "\u{1F469}\u{200D}\u{1F4BB} Code", "色调"] {
+            assert_eq!(with_name(name).map(|m| m.name).ok().as_deref(), Some(name));
+        }
+        let boundary = format!(" {} ", "é".repeat(62));
+        assert_eq!(boundary.chars().count(), 64);
+        assert_eq!(with_name(&boundary).map(|m| m.name).ok().as_deref(), Some(boundary.as_str()));
     }
 }
