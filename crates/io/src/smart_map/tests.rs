@@ -255,16 +255,44 @@ fn smart_sharpen_photoshop_entry_opens_and_writes_back() {
     assert_eq!(written_fltr(&sf("filter.sharpen.smartSharpen", json!({}))), smart_sharpen(100.0, 1.0, 10.0, "GsnB"));
 }
 
-/// Lens Blur (Photoshop's default), Motion Blur and legacy mode render differently from
-/// PhotoCraft's Smart Sharpen, so those entries stay verbatim.
+/// Lens Blur (Photoshop's default) and Motion Blur (with its `Angl`) open as Smart Sharpen and
+/// write back in the measured shape (#8116), so a re-save doesn't turn them into Gaussian Blur.
 #[test]
-fn smart_sharpen_settings_we_dont_render_stay_verbatim() {
+fn smart_sharpen_lens_and_motion_blur_open_and_write_back() {
     let mut default_entry = Descriptor::new("smartSharpen").with("presetKind", enumv("presetKindType", "presetKindDefault"));
     default_entry.items.extend(smart_sharpen(200.0, 1.0, 10.0, "lensBlur").items);
-    let motion = smart_sharpen(80.0, 1.5, 0.0, "MtnB").with("Angl", Value::Integer(30));
+    let f = filter_from_item(&Descriptor::from_bytes(&ps_item("Smart Sharpen...", default_entry, 1131).to_bytes()).unwrap());
+    assert_eq!(f.command, "filter.sharpen.smartSharpen");
+    assert_eq!(f.params, json!({"amount": 200.0, "radius": 1.0, "reduceNoise": 10.0, "remove": "lensBlur"}));
+    assert_eq!(written_fltr(&f), smart_sharpen(200.0, 1.0, 10.0, "lensBlur"));
+
+    let motion = smart_sharpen(80.0, 1.5, 0.0, "MtnB").with("Angl", Value::Integer(-30));
+    let f = filter_from_item(&Descriptor::from_bytes(&ps_item("Smart Sharpen...", motion.clone(), 1131).to_bytes()).unwrap());
+    assert_eq!(f.command, "filter.sharpen.smartSharpen");
+    assert_eq!(f.params, json!({"amount": 80.0, "radius": 1.5, "reduceNoise": 0.0, "remove": "motionBlur", "angle": -30}));
+    assert_eq!(written_fltr(&f), motion);
+    let bytes = item_for_filter(&f).unwrap().to_bytes();
+    assert_eq!(count(&bytes, b"\0\0\0\0blurenum\0\0\0\x08blurType\0\0\0\0MtnB"), 1);
+
+    // PhotoCraft's own filters write the same shapes; the angle goes out in whole degrees.
+    let ours = sf("filter.sharpen.smartSharpen", json!({"remove": "motionBlur", "angle": 44.6}));
+    assert_eq!(written_fltr(&ours), smart_sharpen(100.0, 1.0, 10.0, "MtnB").with("Angl", Value::Integer(45)));
+    let ours = sf("filter.sharpen.smartSharpen", json!({"remove": "lensBlur", "angle": 30}));
+    assert_eq!(written_fltr(&ours), smart_sharpen(100.0, 1.0, 10.0, "lensBlur"));
+}
+
+/// Legacy mode renders differently from PhotoCraft's Smart Sharpen, and an angle outside the
+/// dialog's range or on a blur without one isn't a shape Photoshop writes, so those entries stay
+/// verbatim.
+#[test]
+fn smart_sharpen_settings_we_dont_render_stay_verbatim() {
     let mut legacy = smart_sharpen(100.0, 1.0, 10.0, "GsnB");
     set(&mut legacy, "useLegacy", Value::Boolean(true));
-    for fltr in [default_entry, motion, legacy] {
+    let motion_without_angle = smart_sharpen(80.0, 1.5, 0.0, "MtnB");
+    let motion_too_far = smart_sharpen(80.0, 1.5, 0.0, "MtnB").with("Angl", Value::Integer(400));
+    let lens_with_angle = smart_sharpen(80.0, 1.5, 0.0, "lensBlur").with("Angl", Value::Integer(30));
+    let other_blur = smart_sharpen(80.0, 1.5, 0.0, "Xxxx");
+    for fltr in [legacy, motion_without_angle, motion_too_far, lens_with_angle, other_blur] {
         let item = ps_item("Smart Sharpen...", fltr, 1131);
         let f = filter_from_item(&item);
         assert_eq!(f.command, UNSUPPORTED_FILTER);

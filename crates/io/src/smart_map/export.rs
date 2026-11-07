@@ -1,8 +1,8 @@
 use super::import::{
     CHANNELS, CUSTOM_CELL, CUSTOM_OFFSET, CUSTOM_SCALE, DIFFUSE_MODES, EXTRUDE_DEPTH, EXTRUDE_DEPTHS, EXTRUDE_SIZE, EXTRUDE_TYPES, GALLERY_COMMAND, Known,
     LENSES, MEZZOTINT_TYPES, NO_OPTIONS, OFFSET_FILL, POLAR_MODE, RADIAL_METHOD, RADIAL_QUALITY, RIPPLE_SIZE, SMART_BLUR_MODE, SMART_BLUR_QUALITY,
-    SMART_SHARPEN, SPHERIZE_MODE, TILE_COUNT, TILE_FILLS, TILE_OFFSET, TRACE_EDGES, UNDEFINED_AREAS, WAVE_TYPE, WIND_DIRECTIONS, WIND_METHODS, ZIGZAG_STYLE,
-    colour_rgbc, enum_param, from_hex, gallery_item, known_by_command, pf_range, pi_range, seed_param,
+    SMART_SHARPEN, SMART_SHARPEN_BLUR, SPHERIZE_MODE, TILE_COUNT, TILE_FILLS, TILE_OFFSET, TRACE_EDGES, UNDEFINED_AREAS, WAVE_TYPE, WIND_DIRECTIONS,
+    WIND_METHODS, ZIGZAG_STYLE, colour_rgbc, enum_param, from_hex, gallery_item, known_by_command, pf_range, pi_range, seed_param,
 };
 use super::placed::enumv;
 use super::{
@@ -179,12 +179,18 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         }
         "Embs" => d.with("Angl", pi(p, "angle", 135.0)).with("Hght", pi(p, "height", 3.0)).with("Amnt", pi(p, "amount", 100.0)),
         SMART_SHARPEN => {
-            // The engine's defaults and ranges (it clamps the same way when rendering).
-            d.with("useLegacy", Value::Boolean(false))
+            // The engine's defaults and ranges (it clamps the same way when rendering, and
+            // renders a `remove` it doesn't know as Gaussian Blur).
+            let remove = p.get("remove").and_then(J::as_str).unwrap_or("gaussianBlur");
+            let (code, remove) = SMART_SHARPEN_BLUR.iter().find(|(_, r)| *r == remove).copied().unwrap_or(("GsnB", "gaussianBlur"));
+            let d = d
+                .with("useLegacy", Value::Boolean(false))
                 .with("Amnt", unit(b"#Prc", pf(p, "amount", 100.0).clamp(1.0, 500.0)))
                 .with("Rds ", unit(b"#Pxl", pf(p, "radius", 1.0).clamp(0.1, 64.0)))
                 .with("noiseReduction", unit(b"#Prc", pf(p, "reduceNoise", 10.0).clamp(0.0, 100.0)))
-                .with("blur", enumv("blurType", "GsnB"))
+                .with("blur", enumv("blurType", code));
+            // Photoshop stores Motion Blur's direction in whole degrees, and only for Motion Blur.
+            if remove == "motionBlur" { d.with("Angl", pi_in(p, "angle", 0.0, -360, 360)) } else { d }
         }
         // Photoshop stores whole pixels and levels.
         "DstS" => {

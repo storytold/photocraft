@@ -42,16 +42,7 @@ pub(crate) fn unsharp(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f3
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn smart(
-    src: &Image,
-    out: Rect,
-    ctx: &Ctx,
-    amount: f32,
-    radius: f32,
-    reduce_noise: f32,
-    remove: SharpenRemove,
-    angle: f32,
-) -> Vec<f32> {
+pub(crate) fn smart(src: &Image, out: Rect, ctx: &Ctx, amount: f32, radius: f32, reduce_noise: f32, remove: SharpenRemove, angle: f32) -> Vec<f32> {
     let k = amount / 100.0;
     let nr = (reduce_noise / 100.0).clamp(0.0, 1.0);
     // Suppress small (noise-level) differences.
