@@ -22,6 +22,12 @@ pub(super) fn lightness_track() -> [Color32; 3] {
     [Color32::BLACK, Color32::from_gray(128), Color32::WHITE]
 }
 
+/// The hue range that affects every hue `b` leaves alone (#9248): the old fall-offs stay where they
+/// are, facing the other way, and the fully affected band becomes the rest of the circle.
+pub(super) fn invert_hue_range(b: [f32; 4]) -> [f32; 4] {
+    HueRange::canonical_bounds([b[2], b[3], b[0] + 360.0, b[1] + 360.0])
+}
+
 pub(super) fn move_hue_range_handle(bounds: [f32; 4], k: usize, deg: f32) -> [f32; 4] {
     let mut b = HueRange::canonical_bounds(bounds);
     if k >= b.len() {
@@ -204,7 +210,13 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
         ui.data_mut(|d| d.insert_temp(drag_id, which));
         let lab =
             format!("{:.0}° / {:.0}°  ·  {:.0}° \\ {:.0}°", b[0].rem_euclid(360.0), b[1].rem_euclid(360.0), b[2].rem_euclid(360.0), b[3].rem_euclid(360.0));
-        ui.label(RichText::new(lab).font(crate::theme::mono(11.0)).color(t.text_faint));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(lab).font(crate::theme::mono(11.0)).color(t.text_faint));
+            if widgets::secondary_button(ui, tl!("Invert Range"), 0.0).on_hover_text(tl!("Affect every hue outside the range instead")).clicked() {
+                v[key]["range"] = json!(invert_hue_range(b).map(|x| x.round()));
+                e.add(Edit::discrete(true));
+            }
+        });
     }
     e
 }
