@@ -825,7 +825,7 @@
 	Consolidate All to Tabs	Gabungkan Semua ke Tab
 	Float in Window	Mengambang di Jendela
 	Float All in Windows	Mengambangkan Semua di Jendela
-	New Window	Jendela Baru untuk Dokumen
+	New Window	Jendela Baru
 	Workspace	Ruang Kerja
 	Essentials	Esensial
 	Graphic and Web	Grafis dan Web
@@ -887,6 +887,12 @@
 	Timeline	Timeline
 	Tool Presets	Preset Alat
 	Tools	Alat
+	Contextual Task Bar	Bilah Tugas Kontekstual
+	Hide bar	Sembunyikan bilah
+	Reset bar position	Atur ulang posisi bilah
+	Pin bar position	Sematkan posisi bilah
+	Move bar	Pindahkan bilah
+	More options	Opsi lainnya
 	About PhotoCraft	Tentang PhotoCraft
 	PhotoCraft Website	Situs Web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft di GitHub
@@ -1845,6 +1851,7 @@
 	Move Tool	Alat Pindah
 	Could not use the move tool because the layer is locked.	Tidak dapat menggunakan alat Pindahkan karena layer terkunci.
 	Could not complete the Free Transform command because the layer is locked.	Tidak dapat menyelesaikan perintah Transformasi Bebas karena layer terkunci.
+	Could not transform because the layer is locked.	Tidak dapat mentransformasi karena layer terkunci.
 	Multiply	Multiply
 	My Brushes	Kuas Saya
 	Neutrals	Netral
@@ -1977,6 +1984,7 @@
 	Allow scripts to connect	Izinkan skrip terhubung
 	Always	Selalu
 	Always create smart objects when placing	Selalu buat smart object saat menempatkan
+	Skip transform when placing	Lewati transformasi saat menempatkan
 	Animated zoom	Zoom beranimasi
 	Apply auto tone	Terapkan auto tone
 	Ask	Tanya
@@ -2501,6 +2509,7 @@
 	Path to Illustrator…	Path ke Illustrator…
 	Make Work Path	Buat Work Path
 	Make Selection	Buat Seleksi
+	Make Shape	Buat Bentuk
 	Fill Path	Isi Path
 	Stroke Path	Stroke Path
 	Clipping Path	Clipping Path
@@ -3621,3 +3630,12 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
 	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
 	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
+# Move tool options bar (#11381)
+	Align top edges	Ratakan tepi atas
+	Align vertical centers	Ratakan pusat vertikal
+	Align bottom edges	Ratakan tepi bawah
+	Distribute vertically	Distribusikan secara vertikal
+	Distribute horizontally	Distribusikan secara horizontal
+	Show layer bounds on hover	Tampilkan batas layer saat kursor di atasnya
+	Expand layer group on click	Perluas grup layer saat diklik
+	Show hover bounds from Layers	Tampilkan batas saat kursor di atas dari Layer
