@@ -192,6 +192,17 @@ fn marker_hit(ends: [(Pos2, Vec2); 2], p: Pos2) -> Option<(usize, f32)> {
         .min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
+/// What a press on marker `index` grabs when it is a marker hit: `(endpoint, either)`. Where the
+/// two markers coincide on screen, a closed path's full lap moves the whole text (the double
+/// cursor), and an empty or end-clamped range waits for the first motion to pick a marker
+/// (`either`): backward takes the beginning and forward the end, so the range can always open.
+fn marker_grab(ends: [(Pos2, Vec2); 2], index: usize, closed: bool, range: [f64; 2], length: f64) -> (Option<usize>, bool) {
+    if ends[0].0.distance(ends[1].0) >= 1.0 {
+        return (Some(index), false);
+    }
+    if closed && range[1] - range[0] >= length - 1e-3 { (None, false) } else { (None, true) }
+}
+
 /// Whether Direct Selection should edit the path instead of moving a marker at document point
 /// `(x, y)`: that tool reshapes paths, so an anchor or handle under a marker (an open path's
 /// default end marker sits on its last anchor) keeps the click. Path Selection always takes the
@@ -244,7 +255,10 @@ pub(crate) fn cursor(app: &mut PhotocraftApp, xf: &ViewXform, p: Pos2) -> Option
     let ends = markers_with_geometry(text, &geometry, xf)?;
     let d = xf.to_doc(p);
     if let Some((index, _)) = marker_hit(ends, p) {
-        return (!anchor_wins(app, d[0], d[1])).then_some(Grab::of(Some(index)));
+        let TextShape::Path { path, .. } = &text.shape else { return None };
+        let range = effective_range(text, &geometry)?;
+        let (endpoint, _) = marker_grab(ends, index, path.closed, range, geometry.length());
+        return (!anchor_wins(app, d[0], d[1])).then_some(Grab::of(endpoint));
     }
     (crate::type_tool::hit_layer(app, d[0], d[1]) == Some(layer)).then_some(Grab::Body)
 }
@@ -411,6 +425,9 @@ pub struct Drag {
     pub(crate) reversed_geometry: Arc<PathGeometry>,
     closed: bool,
     endpoint: Option<usize>,
+    /// Coincident markers were pressed: the first motion picks the beginning (backward) or the
+    /// end (forward) as `endpoint`.
+    either: bool,
     alignment: f64,
     original: [f64; 2],
     proposed: [f64; 2],
@@ -433,6 +450,7 @@ impl PartialEq for Drag {
             && self.inverse == other.inverse
             && self.closed == other.closed
             && self.endpoint == other.endpoint
+            && self.either == other.either
             && self.alignment == other.alignment
             && self.original == other.original
             && self.proposed == other.proposed
@@ -500,6 +518,10 @@ impl Drag {
         }
         self.delta += delta;
         self.previous = arc;
+        if self.either && self.delta != 0.0 {
+            self.endpoint = Some(if self.delta < 0.0 { 0 } else { 1 });
+            self.either = false;
+        }
         if self.delta == 0.0 && self.proposed == self.original {
             return;
         }
@@ -637,15 +659,15 @@ pub(crate) fn pointer_with_context(
     let Some(original) = effective_range(&text, &geometry) else { return false };
     let Some(xf) = view.copied().or_else(|| ViewXform::active(app)) else { return false };
     let p = xf.to_screen(x as f32, y as f32);
-    let best = markers_with_geometry(&text, &geometry, &xf).and_then(|ends| marker_hit(ends, p));
+    let best = markers_with_geometry(&text, &geometry, &xf).and_then(|ends| Some((ends, marker_hit(ends, p)?)));
     let active_layer = app.session.active().and_then(|st| st.active_layer);
-    let endpoint = if let Some((index, _)) = best {
+    let (endpoint, either) = if let Some((ends, (index, _))) = best {
         if anchor_wins(app, x, y) {
             return false;
         }
-        Some(index)
+        marker_grab(ends, index, path.closed, original, geometry.length())
     } else if crate::type_tool::hit_layer(app, x, y) == active_layer && active_layer.is_some() {
-        None
+        (None, false)
     } else {
         return false;
     };
@@ -669,6 +691,7 @@ pub(crate) fn pointer_with_context(
         reversed_geometry,
         closed: path.closed,
         endpoint,
+        either,
         alignment: text.paragraph_runs().first().map_or(0.0, |run| alignment_factor(run.style.align)),
         original,
         proposed: original,
@@ -1025,7 +1048,8 @@ mod tests {
     #[test]
     fn marker_drags_commit_once_and_undo() {
         for tool in [Tool::PathSelection, Tool::DirectSelection] {
-            for (from, to, expected) in [([40.0, 90.0], [50.0, 90.0], (30.0, Some(100.0), false)), ([120.0, 110.0], [130.0, 110.0], (20.0, Some(110.0), false))]
+            for (from, to, expected) in
+                [([40.0, 100.0], [50.0, 100.0], (30.0, Some(100.0), false)), ([120.0, 100.0], [130.0, 100.0], (20.0, Some(110.0), false))]
             {
                 let mut app = app(tool);
                 let before = shape(&app);
@@ -1095,6 +1119,37 @@ mod tests {
             assert_eq!(pointer(&mut app, ToolEvent::Down { x: doc[0], y: doc[1], pressure: 1.0 }), marker, "{tool:?}");
             assert_eq!(app.ui.type_path_drag.as_ref().map(|d| d.endpoint), marker.then_some(Some(1)));
         }
+    }
+
+    /// On a closed path whose range is a full lap the two markers coincide; pressing them moves the
+    /// whole text round the path (the double cursor) instead of collapsing the lap.
+    #[test]
+    fn coincident_markers_on_a_full_lap_move_the_whole_text() {
+        let mut app = app(Tool::PathSelection);
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.session
+            .edit("full lap", |doc, _| {
+                let LayerContent::Text(text) = &mut doc.layer_mut(id).unwrap().content else { panic!("expected text") };
+                text.shape = TextShape::Path {
+                    path: photocraft_doc::vector::Subpath::polygon(&[(20.0, 20.0), (180.0, 20.0), (180.0, 180.0), (20.0, 180.0)]),
+                    start: 20.0,
+                    end: Some(660.0),
+                    flip: false,
+                };
+                Ok(())
+            })
+            .unwrap();
+        let xf = ViewXform::active(&app).unwrap();
+        let ends = markers(active_text(&app).unwrap(), &xf).unwrap();
+        assert!(ends[0].0.distance(ends[1].0) < 1.0, "{ends:?}");
+        assert_eq!(cursor(&mut app, &xf, ends[0].0), Some(Grab::Body));
+        let doc = xf.to_doc(ends[0].0);
+        down(&mut app, doc[0], doc[1]);
+        assert_eq!(app.ui.type_path_drag.as_ref().map(|d| (d.endpoint, d.either)), Some((None, false)));
+        move_to(&mut app, doc[0] + 10.0, doc[1]);
+        up(&mut app, doc[0] + 10.0, doc[1]);
+        let (start, end, flip) = placement(&app);
+        assert!((start - 30.0).abs() < 1e-3 && end.is_some_and(|end| (end - start - 640.0).abs() < 1e-3) && !flip, "{start} {end:?}");
     }
 
     /// Proves dragging text body translates the placement range even when one boundary touches the open path endpoint.
@@ -1661,6 +1716,7 @@ mod tests {
         let doc1 = xf.to_doc(tip1);
         down(&mut app, doc1[0], doc1[1]);
         assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(1));
+        // The layer is translated, so move relative to the press: 10 px back along the path.
         move_to(&mut app, doc1[0] - 10.0, doc1[1]);
         up(&mut app, doc1[0] - 10.0, doc1[1]);
         assert_eq!(steps(&app), initial_steps + 1);
@@ -1700,15 +1756,17 @@ mod tests {
         let ends = markers(active_text(&app).unwrap(), &xf).expect("markers must remain visible when start is beyond length");
         let tip0 = ends[0].0;
         let tip1 = ends[1].0;
-        assert_eq!(cursor(&mut app, &xf, tip0), Some(Grab::Start));
-        assert_eq!(cursor(&mut app, &xf, tip1), Some(Grab::End));
+        // Both are clamped to the path's end, so they coincide: either can be pulled out.
+        assert!(tip0.distance(tip1) < 1.0);
+        assert_eq!(cursor(&mut app, &xf, tip0), Some(Grab::Body));
+        assert_eq!(cursor(&mut app, &xf, tip1), Some(Grab::Body));
 
         // Click and release or cancel preserves original stored shape.
         let before = shape(&app);
         let initial_steps = steps(&app);
         let doc0 = xf.to_doc(tip0);
         down(&mut app, doc0[0], doc0[1]);
-        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
+        assert_eq!(app.ui.type_path_drag.as_ref().map(|d| (d.endpoint, d.either)), Some((None, true)));
         assert!(cancel(&mut app));
         assert_eq!(shape(&app), before);
         assert_eq!(steps(&app), initial_steps);
@@ -1718,10 +1776,12 @@ mod tests {
         assert_eq!(shape(&app), before);
         assert_eq!(steps(&app), initial_steps);
 
-        // Dragging start marker backward brings start onto the path and commits valid endpoints.
+        // Dragging the coincident markers backward pulls the start out and commits valid endpoints.
         down(&mut app, doc0[0], doc0[1]);
-        assert_eq!(app.ui.type_path_drag.as_ref().unwrap().endpoint, Some(0));
+        // The layer is translated, so move relative to the press: 25 px back along the path.
         move_to(&mut app, doc0[0] - 25.0, doc0[1]);
+        assert_eq!(app.ui.type_path_drag.as_ref().map(|d| (d.endpoint, d.either)), Some((Some(0), false)));
+        assert_eq!(cursor(&mut app, &xf, tip0), Some(Grab::Start));
         up(&mut app, doc0[0] - 25.0, doc0[1]);
         assert_eq!(steps(&app), initial_steps + 1);
         let (new_start, new_end, new_flip) = placement(&app);
