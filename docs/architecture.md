@@ -415,6 +415,18 @@ psd/src/
   - `thumb.png` and `composite/` mips for quick look and previews.
 - **Saving is incremental.** Tiles are content-addressed, so a save writes only new tiles plus the manifest, and garbage-collects unreferenced ones.
 - **Autosave and crash recovery** reuse the same writer into a recovery directory, reading from a snapshot on a background thread.
+- **Adjustment data:** small Color Lookup and Unsupported payloads retain the legacy
+  inline representation (up to 4096 elements in total across the LUT and source bytes, or in raw).
+  Larger payloads are stored in content-addressed blobs; LUTs use little-endian f32 values.
+  Files with blob-backed adjustments use `format_version: 2`, including adjustments inside groups;
+  all other files retain version 1. Older readers check the version before parsing the document and return
+  `FormatError::TooNew { found: 2, supported: 1 }`, prompting the user to update the application.
+  New readers accept both versions and legacy inline entries without data conversion.
+  The current build also reads existing experimental version 1 blob files.
+  Decoded LUTs are shared by hash within a single load. The cache is limited to 65,536 entries,
+  `max_blob_bytes` per table and `max_total_bytes` overall; exceeding a limit returns
+  `FormatError::LimitExceeded` before decoding. This decoded-table budget is separate from
+  the existing tile/blob byte budget; repeated references consume no additional quota.
 - **PSD is the interchange format,** and `.pcraft` is the lossless native one.
 
 ---
