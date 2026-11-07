@@ -43,6 +43,7 @@ pub(super) fn displace_from(d: &Descriptor) -> Mapped {
     displace_params(d).map_or(Mapped::Unsupported { harmless: false }, |params| step("filter.distort.displace", params))
 }
 
+/// Decode only the measured, byte-preserving Windows descriptor.
 fn displace_params(d: &Descriptor) -> Option<Value> {
     if d.class_id != code("null")
         || d.items.len() != 5
@@ -68,16 +69,20 @@ fn displace_params(d: &Descriptor) -> Option<Value> {
     Some(json!({"horizontal":horizontal,"vertical":vertical,"fit":"stretch","undefinedAreas":"repeat","mapPath":path}))
 }
 
-/// Write the measured form without dropping settings the descriptor cannot represent.
+/// Write the measured form with native defaults for omitted settings, without dropping
+/// settings the descriptor cannot represent.
 pub(super) fn displace_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !pixel_target(p) || !sets_only(p, &["horizontal", "vertical", "fit", "undefinedAreas", "mapPath", "target"]) {
         return None;
     }
-    if jstr(p, "fit") != Some("stretch") || jstr(p, "undefinedAreas") != Some("repeat") {
+    if p.get("fit").is_some_and(|v| v.as_str() != Some("stretch")) || p.get("undefinedAreas").is_some_and(|v| v.as_str() != Some("repeat")) {
         return None;
     }
     let scale = |key| {
-        let number = p.get(key)?.as_f64()?;
+        let number = match p.get(key) {
+            None => 10.0,
+            Some(value) => value.as_f64()?,
+        };
         let value = number as i32;
         ((-999..=999).contains(&value) && f64::from(value) == number).then_some(D::Integer(value))
     };

@@ -5609,6 +5609,7 @@ fn custom_outside_the_commands_range_is_kept_and_refused() {
     }
 }
 
+/// The selected-map descriptor measured in a Windows Displace recording.
 fn displace_descriptor(path: D) -> Descriptor {
     desc("null")
         .with("HrzS", D::Integer(10))
@@ -5618,6 +5619,7 @@ fn displace_descriptor(path: D) -> Descriptor {
         .with("DspF", path)
 }
 
+/// Preserve the typed path and materialize native defaults when saving sparse steps.
 #[test]
 fn recorded_displace_round_trips_text_event_and_typed_path() {
     // Synthetic Windows path, encoded independently of the production path writer.
@@ -5631,9 +5633,21 @@ fn recorded_displace_round_trips_text_event_and_typed_path() {
     assert_eq!(*params, json!({"horizontal":10,"vertical":10,"fit":"stretch","undefinedAreas":"repeat","mapPath":r"C:\máp.psd"}));
     let exported = export_item(id, params, "Maps").unwrap();
     assert_eq!(exported.event, AtnEvent::name("displace"));
-    assert_eq!(exported.descriptor, Some(descriptor));
+    assert_eq!(exported.descriptor, Some(descriptor.clone()));
+    let minimal = json!({"mapPath":r"C:\máp.psd"});
+    assert_eq!(export_item(id, &minimal, "Maps").unwrap().descriptor, Some(descriptor.clone()));
+    for key in ["horizontal", "vertical", "fit", "undefinedAreas"] {
+        let mut sparse = params.clone();
+        sparse.as_object_mut().unwrap().remove(key);
+        assert_eq!(export_item(id, &sparse, "Maps").unwrap().descriptor, Some(descriptor.clone()), "{key}");
+    }
+    let custom = json!({"horizontal":-7,"mapPath":r"C:\máp.psd"});
+    let mut expected = descriptor;
+    expected.items[0].1 = D::Integer(-7);
+    assert_eq!(export_item(id, &custom, "Maps").unwrap().descriptor, Some(expected));
 }
 
+/// Keep unmeasured inputs intact and refuse settings that would be changed by export.
 #[test]
 fn unmeasured_displace_stays_opaque_and_lossy_export_is_refused() {
     let path = r"C:\map.psd";
@@ -5683,8 +5697,13 @@ fn unmeasured_displace_stays_opaque_and_lossy_export_is_refused() {
     let good = json!({"horizontal":10,"vertical":10,"fit":"stretch","undefinedAreas":"repeat","mapPath":path});
     for (key, value) in [
         ("horizontal", json!(10.5)),
+        ("horizontal", json!(1000)),
+        ("vertical", json!(-1000)),
+        ("vertical", json!("10")),
         ("fit", json!("tile")),
+        ("fit", Value::Null),
         ("undefinedAreas", json!("wrap")),
+        ("undefinedAreas", json!(false)),
         ("mapPath", json!("x\0y.psd")),
         ("mapPath", json!("")),
         ("mapLayer", json!(1)),
@@ -5697,6 +5716,7 @@ fn unmeasured_displace_stays_opaque_and_lossy_export_is_refused() {
     }
 }
 
+/// Loading needs no map; playback reads it only after authorization and stretches it.
 #[test]
 fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
     use photocraft_geom::Rect;
@@ -5710,28 +5730,34 @@ fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
     assert_eq!(loaded["unsupported"], json!([]));
     assert!(!path.exists(), "loading the ATN needs no map");
 
-    let paint_split = |s: &mut Session, split: i32, right: [f32; 4]| {
-        s.execute("file.new", json!({"width":64,"height":64})).unwrap();
+    let paint_split = |s: &mut Session, side: i32, split: i32, right: [f32; 4]| {
+        s.execute("file.new", json!({"width":side,"height":side})).unwrap();
         s.edit("Two-tone fixture", |doc, _| {
             let id = doc.layers[0].id;
             let surface = doc.layer_mut(id).unwrap().surface_mut().unwrap();
-            surface.fill_rect(Rect::new(0, 0, split, 64), &[0.0, 0.0, 0.0, 1.0]);
-            surface.fill_rect(Rect::new(split, 0, 64, 64), &right);
+            surface.fill_rect(Rect::new(0, 0, split, side), &[0.0, 0.0, 0.0, 1.0]);
+            surface.fill_rect(Rect::new(split, 0, side, side), &right);
             Ok(())
         })
         .unwrap();
     };
-    let mut map = Session::new();
-    paint_split(&mut map, 32, [1.0, 1.0, 1.0, 1.0]);
-    let encoded = photocraft_io::export(&map.active().unwrap().doc, "psd", &Default::default()).unwrap();
-    std::fs::write(&path, encoded.bytes).unwrap();
     // Offset the source edge so the positive shift crosses it within the white part of the map.
-    paint_split(&mut source, 48, [1.0, 0.0, 0.0, 1.0]);
+    paint_split(&mut source, 64, 48, [1.0, 0.0, 0.0, 1.0]);
     let snapshot = |s: &Session| {
         let active = s.active().unwrap();
         (active.revision, active.history.past_len(), photocraft_compose::render(&active.doc, active.doc.bounds()).into_px())
     };
     let before = snapshot(&source);
+    let missing = source.execute("actions.play", json!({"action":"A"})).unwrap();
+    assert_eq!(missing["ran"], 0);
+    assert_eq!(missing["failed"]["id"], "filter.distort.displace");
+    assert!(missing["failed"]["error"].as_str().unwrap().contains("cannot read displacement map"));
+    assert_eq!(snapshot(&source), before);
+
+    let mut map = Session::new();
+    paint_split(&mut map, 16, 8, [1.0, 1.0, 1.0, 1.0]);
+    let encoded = photocraft_io::export(&map.active().unwrap().doc, "psd", &Default::default()).unwrap();
+    std::fs::write(&path, encoded.bytes).unwrap();
     source.authorize = Some(|id, p| {
         if id == "filter.distort.displace" && p["mapPath"].is_string() {
             return Err(EngineError::Other("test denied the map path".into()));
@@ -5748,7 +5774,11 @@ fn recorded_displace_loads_without_map_and_plays_through_the_step_gate() {
     let played = source.execute("actions.play", json!({"action":"A"})).unwrap();
     assert_eq!(played["ran"], 1, "{played}");
     assert!(played.get("failed").is_none(), "{played}");
-    assert_ne!(snapshot(&source).2, before.2, "the selected PSD map shifts the source pixels");
+    let pixels = snapshot(&source).2;
+    // With stretch, x=38 samples the white half and shifts into red; tiling samples black.
+    assert_eq!(before.2[32 * 64 + 38], [0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(pixels[32 * 64 + 38], [1.0, 0.0, 0.0, 1.0]);
+    assert_eq!(pixels[32 * 64 + 20], [0.0, 0.0, 0.0, 1.0]);
 }
 
 /// The step `d` of Photoshop event `code`, as PhotoCraft loads it.
