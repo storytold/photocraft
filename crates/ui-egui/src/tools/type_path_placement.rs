@@ -1209,6 +1209,7 @@ mod tests {
             let end = end.expect("an explicit range");
             assert!((start - expected[0] as f32).abs() < 0.01 && (end - expected[1] as f32).abs() < 0.01, "{grab:?}: {start} {end}");
             assert!(end - start < 640.0 - 1.0, "shorter than one lap");
+            assert!(!flip, "a drag along the path does not flip");
             let TextShape::Path { path, .. } = shape(&app) else { panic!("expected path") };
             assert_eq!(path, square, "the path is not reshaped");
             assert_eq!(steps(&app), n + 1);
