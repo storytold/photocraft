@@ -173,7 +173,17 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         });
         ui.end_row();
         let position_label = ui.label(tl!("Position"));
-        ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
+        let response = ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
+        if ui.is_enabled() {
+            crate::field_tab::register(ui.ctx(), response.id);
+        }
+        if response.gained_focus() {
+            crate::field_tab::select_all(ui.ctx(), response.id, &position);
+        }
+        if response.changed() && f.contains_key(EDIT) {
+            // A deliberately retyped rounded readout is a new position, not the untouched one.
+            f.insert("__positionEdited".into(), json!(true));
+        }
         ui.end_row();
         ui.label(tl!("Color"));
         ui.horizontal(|ui| {
