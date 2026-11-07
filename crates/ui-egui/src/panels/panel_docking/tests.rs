@@ -143,6 +143,41 @@ fn drag(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2) {
     h.run_steps(3);
 }
 
+/// Dock dividers stay thin while drags on either side of the line still resize the column.
+#[test]
+fn dock_separator_is_a_hairline_with_a_wide_resize_target() {
+    use craft_ui::docking::{Divider, Hit};
+
+    for customized in [false, true] {
+        for offset in [-3.0, 3.0] {
+            let mut app = app();
+            app.ui.theme = crate::theme::ThemeKind::ProMedium;
+            if customized {
+                app.run("window.panel.move", json!({"panel":"swatches", "anchor":"layers"})).unwrap();
+            }
+            let mut h = harness(app, vec2(1280.0, 800.0));
+            let divider = hit_rect(&h, Hit::Divider(Divider::Column("color".into())));
+            let canvas = last_bodies(&h.ctx).into_iter().find(|(id, _)| id == CANVAS).unwrap().1;
+            assert!((divider.center().x - canvas.right() - 1.0).abs() < 0.1, "one-point separator: {divider:?}, {canvas:?}");
+            assert!(divider.width() >= 8.0, "the column resize hit target stays wide: {divider:?}");
+            let separator = egui::pos2(canvas.right() + 0.5, divider.center().y);
+            let t = crate::theme::Tokens::get(&h.ctx);
+            assert!(
+                h.output().shapes.iter().any(|s| matches!(&s.shape,
+                    egui::Shape::Rect(r) if r.fill == t.separator && r.rect.contains(separator)
+                )),
+                "the gap has a themed background"
+            );
+
+            // Grab either side of the thin line, outside its visible bounds.
+            let from = divider.center() + vec2(offset, 0.0);
+            drag(&mut h, from, from - vec2(60.0, 0.0));
+            let after = hit_rect(&h, Hit::Divider(Divider::Column("color".into())));
+            assert!((after.center().x - divider.center().x + 60.0).abs() < 1.0, "resize from {offset}: {divider:?} -> {after:?}");
+        }
+    }
+}
+
 /// The canvas's rect: from the area's start to the dock column's inner edge.
 fn canvas_rect(h: &Harness<'static, PhotocraftApp>) -> egui::Rect {
     let hits = craft_ui::docking::DockArea::<String>::hit_rects(&h.ctx, area_id());
