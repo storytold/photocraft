@@ -11,6 +11,15 @@
 # Licensed MIT OR Apache-2.0, as the code.
 # Product and technology names retain their spelling. See docs/localization-zh-hans.md.
 
+# macOS application menu (keep the app-name placeholder for native menu labels)
+	About {app}	关于 {app}
+	Settings	设置
+	Services	服务
+	Hide {app}	隐藏 {app}
+	Hide Others	隐藏其他
+	Show All	全部显示
+	Quit {app}	退出 {app}
+
 # Layer Mask Display Options (the layer mask rubylith's colour and opacity)
 
 # Channel Options and New Spot Channel (#3761)
