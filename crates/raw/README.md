@@ -1,6 +1,7 @@
 # photocraft-raw
 
-A clean-room, pure-Rust camera raw decoder and developer. The crate is standalone (no workspace
+A pure-Rust camera raw decoder and developer. Packed-ORF provenance remains under review
+(see [the source audit below](#packed-orf-provenance-review-2026-11-06)). The crate is standalone (no workspace
 dependencies; its decoding dependencies are `flate2` for Deflate DNG and `jxl-oxide`, a pure-Rust
 JPEG XL decoder, for DNG 1.7, native builds only), has no `unsafe`, does no I/O (`&[u8]` in), builds for `wasm32-unknown-unknown`
 (sequential there, rayon-parallel on native) and never panics on hostile input: every offset is
@@ -17,9 +18,11 @@ let dev = develop(&bytes, &DevelopOptions { demosaic: Demosaic::Ahd, ..Default::
 `photocraft-io` uses it so opening a raw file yields a normal 16-bit RGB document tagged with the
 built-in ProPhoto-compatible profile.
 
-## Sources (clean-room)
+## Sources and provenance
 
-Implemented only from public specifications, papers and observation of files:
+The project requires implementation from public specifications and observation, without copying
+incompatible decoder code. The source notes below describe the recorded inputs; they do not
+resolve the packed-ORF provenance questions documented below:
 
 * TIFF 6.0, TIFF/EP (ISO 12234-2) and the Adobe DNG Specification 1.7.
 * ITU-T T.81 (ISO 10918-1) Annex H: lossless JPEG, process 14 ("LJ92").
@@ -43,7 +46,7 @@ Implemented only from public specifications, papers and observation of files:
   the exact bit layout and tone-curve scale were established by observation of sample files.
   Encrypted SR2SubIFD metadata with key bytes `11 22 33 44` was measured independently against
   ExifTool's metadata dumps; see [Sony metadata evidence](../../docs/sony-arw-metadata.md).
-* Panasonic RW2 RawFormat 5, uncompressed Olympus ORF and uncompressed Fujifilm RAF: established
+* Panasonic RW2 RawFormat 5, uncompressed 16-bit Olympus ORF and uncompressed Fujifilm RAF: established
   by observation of sample files (bit packing, page layout, sample justification; for RAF the
   three sample storages and the reversed order of the X-Trans / Bayer layout records, each
   verified by developing with every candidate phase against the camera's preview).
@@ -51,6 +54,20 @@ Implemented only from public specifications, papers and observation of files:
   predictor groups with per-parity predictors, the 2/4/8-bit field widths, the page-permuted
   downward bit order and the black level sitting 15 counts above the recorded tags were all
   established by observation of sample files.
+* Padded uncompressed Olympus ORF: attributed to the prose in
+  [LightCraft #651](https://github.com/storytold/lightcraft/pull/651), contributed by radialmonster
+  with earlier padded-layout work by voshart in
+  [LightCraft #360](https://github.com/storytold/lightcraft/pull/360). The layout is ten LSB-first
+  12-bit samples in 15 bytes followed by one padding byte, with whole blocks per row. The original
+  contribution records checks of CC0 E-300 / E-500 / E-330 and E-M5 II / PEN-F high-resolution files.
+  These are attributed historical claims, not an independently verified clean-room certification.
+* Packed uncompressed Olympus ORF: attributed to the prose in
+  [LightCraft #600](https://github.com/storytold/lightcraft/pull/600), contributed by radialmonster.
+  Whole rows of MSB-first 12-bit samples form two fields separated by one gap; the strip table
+  omits the final row beyond the declared image. The file's EXIF CFA and maker-note red/blue
+  balance entries are used. The original contribution separately records checking the XZ-2 /
+  XZ-10 / SH-2 single-strip layout, with MSB-first 12-bit samples in little-endian 32-bit words.
+  The historical measurement records and source-exposure questions remain unresolved below.
 * Demosaicing: Malvar, He & Cutler (ICASSP 2004); Hirakawa & Parks, "Adaptive
   homogeneity-directed demosaicing" (IEEE TIP 2005); for X-Trans and other non-Bayer CFAs,
   gradient-weighted green interpolation (Lu & Tan, "Color filter array demosaicking: new method
@@ -62,8 +79,62 @@ Implemented only from public specifications, papers and observation of files:
   regression (Ayer et al., 1955), Tukey's biweight (Beaton & Tukey, 1974), ridge regression
   (Hoerl & Kennard, 1970) and the CIE 1976 L\*a\*b\* colour difference.
 
-No code from dcraw, LibRaw, rawspeed, rawler, rawloader or darktable was read or used, and no
-camera colour tables were copied.
+The implementation policy excludes copying incompatible decoder code or camera colour tables.
+The packed-ORF review below qualifies the earlier blanket statement about source exposure.
+
+### Packed ORF provenance review (2026-11-06)
+
+This review separates what the public records say from what can be independently established.
+It does not certify clean-room origin or determine whether a contribution is legally derived.
+
+* **LightCraft #600:** its author reports black-box analysis of six CC0 files. The
+  [published commit](https://github.com/radialmonster/lightcraft/commit/37d36215056838bc705900984a5f503961a1b14d)
+  changes two Rust files and does not include the referenced investigation log. The report of
+  independent measurement is an author claim; the underlying chronology cannot be checked from
+  that patch alone.
+* **LightCraft #651:** its author discloses that an analyst model recalled the broad packing
+  pattern before the reported comparison of 384 alternatives. The
+  [maintainer discussion](https://github.com/storytold/lightcraft/pull/651#issuecomment-6094472505)
+  and [follow-up commit](https://github.com/radialmonster/lightcraft/commit/82566817e6b16bd82bcdd3a60551b516394f5faf)
+  explicitly remove references to missing analysis files. The named
+  `data/testing/retry-olympus-e300/log.md` and `tools/retry-olympus-e300/` paths are absent from
+  both the [initial public tree](https://github.com/radialmonster/lightcraft/tree/44b126274d3a4e0e8237de3eec67a8ad1064a5f4)
+  and the final public tree at `82566817e6b16bd82bcdd3a60551b516394f5faf`.
+  The model's recollection and subsequent correctness checks establish neither copying nor
+  absence of prior decoder knowledge.
+* **Earlier padded-layout work:** the pinned
+  [format record](https://github.com/voshart/Rust-Olympus-RAW-decoder/blob/9d8c927b8f181c6eea4358db30b3a71641922aaf/research/orf12-format.md)
+  claims that packing hypotheses came from byte measurements before comparison with reference
+  pixels. The accompanying
+  [provenance record](https://github.com/voshart/Rust-Olympus-RAW-decoder/blob/9d8c927b8f181c6eea4358db30b3a71641922aaf/research/orf12-provenance.md)
+  identifies later comparisons with a rawpy 0.27.1 / LibRaw 0.22.1 binary. It also discloses later
+  exposure to RawSpeed/LibRaw-attributed prose during compressed-decoder research. That disclosure
+  remains relevant to the broader project, but is not evidence that the earlier padded-layout
+  hypothesis was source-derived. This chronology is the author's recorded account.
+* **This PhotoCraft contribution:** its
+  [original README](https://github.com/harrisonoconnorhover/photocraft/blob/8a8cb43035641e3ed86466b168d2c77943caedb7/crates/raw/README.md)
+  records independent implementation, direct CC0 measurements, and no LightCraft implementation
+  being read or copied. The original local measurement and implementation records could not be
+  recovered for this review, so those historical statements cannot be newly certified. The
+  present audit inspected public source records and diffs; that audit-time exposure must not be
+  confused with evidence about the earlier implementation process.
+
+The scope still excludes the compressed `olympus_load_raw` predictor. Its absence is not proof
+of independent origin: related packed-storage operations also occur in the generic
+`packed_load_raw` routines in
+[dcraw (unofficial mirror, pinned)](https://github.com/ncruces/dcraw/blob/8fe4d3825595816ea7d6880d9253f9edd143cacb/dcraw.c#L1921-L1957)
+and [LibRaw 0.21.4 (pinned)](https://github.com/LibRaw/LibRaw/blob/9646d776c7c61976080a8f2be67928df0750493e/src/decoders/generic.cpp#L40-L85).
+These include word-oriented input, field reordering and per-block padding checks; the routines
+are not asserted to be identical. This audit inspected these external readers read-only; no
+implementation was copied from those readers during this review. Similar bit operations, numerical agreement,
+maintainer invitations and prior merges do not independently establish or disprove derivation.
+The rebase and current tests check correctness, not historical provenance; the decoding algorithm
+has not been replaced as part of this review.
+
+The unresolved evidence is the original #600/#651 investigation logs and tools, their chronology
+and source-exposure details, and PhotoCraft's original measurement/implementation records. Until
+those can be evaluated, or maintainers decide that the accurately disclosed source chain meets
+their contribution policy, the packed-ORF provenance review remains open.
 
 ## Support matrix
 
@@ -79,6 +150,8 @@ camera colour tables were copied.
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
 | Panasonic / Leica RW2, RawFormat 3 and 4 (vendor-compressed, 12-bit) | Decoded; the black level is read 15 counts above the recorded tag; PanasonicRaw white / WB / sensor borders |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
+| Olympus ORF, padded uncompressed 12-bit (E-300, E-500, E-330, E-M5 II and PEN-F high-resolution) | Decoded, including files declaring 16-bit samples; exact single-strip 12.8-bit-per-pixel storage only. Reuses the file's CFA / ImageProcessing metadata and existing uncalibrated colour fallback |
+| Olympus ORF, packed uncompressed 12-bit (XZ-2, XZ-10, SH-2; two-field C-5060WZ, C-7070WZ, SP-510UZ, SP-550UZ, SP-565UZ, SP-570UZ) | Decoded from measured storage layouts and the file's CFA. Two-field storage requires the exact strip/gap layout; no crop is guessed when its origin is absent. Camera colour rendering remains uncalibrated |
 | Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
 | Fujifilm RAF, uncompressed (X-Trans I–V, GFX and Bayer bodies since about 2010) | Decoded: 16-bit containers (either byte order), 12-bit LSB-first packing, 14-bit packing in 32-bit words; X-Trans 6×6 or Bayer 2×2 layout, black, as-shot WB, crop, RawExposureBias, orientation from the preview's EXIF |
 | Fujifilm compressed RAF, early FinePix / SuperCCD RAF (no CFA TIFF) | Unsupported (no public description of the compression); preview fallback |
