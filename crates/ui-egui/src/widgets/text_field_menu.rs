@@ -345,6 +345,20 @@ mod tests {
         rename(&h.ctx).expect("still renaming").text
     }
 
+    /// A focused harness for the production layering: menu first, then the modal dialog.
+    fn modal_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
+        let h = Harness::builder().with_size(size).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                super::show(&ctx);
+                crate::dialogs::show(app, &ctx);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h
+    }
+
     #[test]
     fn right_click_in_a_text_field_opens_its_edit_menu_not_the_canvas_menu() {
         let (mut h, field) = renaming();
@@ -376,5 +390,42 @@ mod tests {
         assert_eq!(choose(&mut h, "Cut").as_deref(), Some("Alpha"), "Cut copies the selected text");
         assert_eq!(text(&h), "", "and removes it from the field");
         assert!(h.ctx.memory(|m| m.has_focus(field)), "the rename is still being typed");
+    }
+
+    /// The Color Picker's modal hex field uses the same menu as fields outside dialogs. Copy
+    /// must target its selected six digits, not a field behind the modal.
+    #[test]
+    fn right_click_in_the_color_picker_hex_field_opens_its_edit_menu() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.tools.foreground = [0.2, 0.4, 0.6, 1.0];
+        let mut h = modal_harness(app, vec2(760.0, 480.0));
+        crate::color_picker_ui::open(h.state_mut(), "foreground");
+        h.run_steps(4);
+
+        let field = h.ctx.memory(|m| m.focused()).expect("the Color Picker hex field has focus");
+        right_click(&mut h, field);
+        assert!(item(&h, "Copy").is_some(), "Copy is shown for the selected hex text");
+        assert_eq!(h.state().ui.dialogs.len(), 1, "opening the menu leaves the modal open");
+        assert_eq!(choose(&mut h, "Copy").as_deref(), Some("336699"), "Copy reads the modal's selected field");
+        assert_eq!(h.state().ui.dialogs.len(), 1, "choosing a menu item does not close the modal");
+    }
+
+    /// The New Layer name starts selected. Cut through its context menu edits the modal's name
+    /// field while keeping the dialog open.
+    #[test]
+    fn right_click_in_the_new_layer_name_opens_its_edit_menu() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let mut h = modal_harness(app, vec2(900.0, 600.0));
+        crate::new_layer_ui::open(h.state_mut()).unwrap();
+        h.run_steps(4);
+
+        let field = h.ctx.memory(|m| m.focused()).expect("the New Layer name field has focus");
+        right_click(&mut h, field);
+        assert!(item(&h, "Cut").is_some(), "Cut is shown for the selected layer name");
+        assert_eq!(h.state().ui.dialogs.len(), 1, "opening the menu leaves the modal open");
+        assert_eq!(choose(&mut h, "Cut").as_deref(), Some("Layer 1"), "Cut reads the modal's selected field");
+        assert_eq!(h.state().ui.dialogs[0].fields["name"].as_str(), Some(""), "Cut changes only the layer name field");
+        assert_eq!(h.state().ui.dialogs.len(), 1, "choosing a menu item does not close the modal");
     }
 }

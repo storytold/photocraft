@@ -12,7 +12,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
-use crate::resample::{Resample, resize_surface};
+use crate::resample::{Resample, resize_surface_in_canvas};
 
 /// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -331,7 +331,9 @@ fn warp(
     // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
     if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
         let f = scale.max(1.0 / 64.0);
-        reduced = resize_surface(src, f, f, Resample::Bicubic);
+        // This prefilter is bounded to the same source rect as the warp below: repeat its edge
+        // while reducing so a covered opaque edge does not fade into the surface's default pixel.
+        reduced = resize_surface_in_canvas(src, f, f, Resample::Bicubic, src_rect);
         src = &reduced;
         h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
         src_rect = crate::resample::scaled_rect(src_rect, f, f);

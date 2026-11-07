@@ -829,8 +829,8 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
     let selected_set = selected_set.filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
     let set = set.or(selected_set).or_else(|| selected_action(app).and_then(|a| a.set.clone()));
     let params = match &set {
-        Some(set) => json!({"set": set, "skipUnsupported": true}),
-        None => json!({"skipUnsupported": true}),
+        Some(set) => json!({"set": set}),
+        None => json!({}),
     };
     let r = app.run("actions.save", params)?;
     let bytes = r["data"].as_str().and_then(photocraft_engine::paint::tile::b64_decode).ok_or("the export returned no data")?;

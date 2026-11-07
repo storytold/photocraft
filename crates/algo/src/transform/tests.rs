@@ -324,6 +324,49 @@ fn large_downscale_is_prefiltered() {
     assert!((p[0] - 0.5).abs() < 0.1, "{p:?}");
 }
 
+/// An opaque source that exactly fills its target must not acquire transparent edge pixels
+/// from bicubic pre-reduction (including the reported 800×600 → 400×300 case and a 1/3 scale).
+#[test]
+fn bicubic_downscales_keep_fully_covered_opaque_edges() {
+    for (sw, sh, dw, dh) in [(800, 600, 400, 300), (1200, 900, 400, 300)] {
+        let mut src = rgba();
+        let src_rect = Rect::new(0, 0, sw, sh);
+        src.fill_rect(src_rect, &[0.25, 0.5, 0.75, 1.0]);
+        let h = Homography::rect_to_quad(
+            [0.0, 0.0, f64::from(sw), f64::from(sh)],
+            [[0.0, 0.0], [f64::from(dw), 0.0], [f64::from(dw), f64::from(dh)], [0.0, f64::from(dh)]],
+        )
+        .unwrap();
+        let out = warp_surface(&src, src_rect, &h, Interp::Bicubic).unwrap();
+        for (x, y) in [(0, 0), (dw / 2, 0), (dw - 1, 0), (0, dh / 2), (dw - 1, dh / 2), (0, dh - 1), (dw / 2, dh - 1), (dw - 1, dh - 1)] {
+            let alpha = out.sample_channel(x, y, 3);
+            assert_eq!(alpha, 1.0, "{sw}×{sh} → {dw}×{dh}: opaque source edge ({x},{y}) became transparent (alpha {alpha})");
+        }
+    }
+}
+
+/// A real rotated outline still has antialiased and transparent pixels outside the quad; the
+/// opaque-edge guarantee above applies only where the source rectangle covers the target.
+#[test]
+fn rotated_downscale_keeps_legitimate_transparent_edges() {
+    let mut src = rgba();
+    let src_rect = Rect::new(0, 0, 1200, 900);
+    src.fill_rect(src_rect, &[0.25, 0.5, 0.75, 1.0]);
+    let (cx, cy, k) = (200.0, 150.0, std::f64::consts::FRAC_1_SQRT_2);
+    let rotate = |x: f64, y: f64| {
+        let (x, y) = (x / 3.0 - cx, y / 3.0 - cy);
+        [cx + k * (x - y), cy + k * (x + y)]
+    };
+    let q = [rotate(0.0, 0.0), rotate(1200.0, 0.0), rotate(1200.0, 900.0), rotate(0.0, 900.0)];
+    let h = Homography::rect_to_quad([0.0, 0.0, 1200.0, 900.0], q).unwrap();
+    let out = warp_surface(&src, src_rect, &h, Interp::Bicubic).unwrap();
+    assert!(out.sample_channel(200, 150, 3) > 0.99, "the rotated opaque interior remains covered");
+    let bounds = warp_output_bounds(src_rect, &h).unwrap();
+    let pixels = out.read_region(bounds);
+    assert!(pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 0.0 && p[3] < 0.99), "the rotated outline retains antialiased coverage");
+    assert_eq!(out.sample_channel(bounds.x0, bounds.y0, 3), 0.0, "the bounding-box corner outside the rotated quad remains transparent");
+}
+
 #[test]
 fn surfaces_without_alpha_gain_it() {
     let mut s = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8, false));
