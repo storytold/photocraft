@@ -221,7 +221,7 @@
 	Flip Canvas Vertical	Vászon függőleges tükrözése
 	Flip Horizontal	Vízszintes tükrözés
 	Flip Vertical	Függőleges tükrözés
-	Free Transform	Szabad alakítás
+	Free Transform	Szabad átalakítás
 	Generate	Előállítás
 	Gradient Map…	Színátmenet-leképezés…
 	Guides, Grid & Slices…	Segédvonalak, rács és szeletek…
@@ -914,6 +914,12 @@
 	Titling Alternates	Címbetű-változatok
 	Tool Presets	Eszköz-előbeállítások
 	Tools	Eszközök
+	Contextual Task Bar	Környezetfüggő feladatsáv
+	Hide bar	Sáv elrejtése
+	Reset bar position	Sáv helyzetének visszaállítása
+	Pin bar position	Sáv helyzetének rögzítése
+	Move bar	Sáv áthelyezése
+	More options	További beállítások
 	Trace Contour…	Kontúrkövetés…
 	Transform Symmetry	Szimmetria alakítása
 	Tree…	Fa…
@@ -1072,8 +1078,9 @@
 	Contiguous	Összefüggő
 	Control:	Vezérlés:
 	Corners	Sarkok
-	Could not complete the Free Transform command because the layer is locked.	A szabad alakítás nem hajtható végre, mert a réteg zárolva van.
-	Could not transform: the layer is empty	Az alakítás nem hajtható végre: a réteg üres
+	Could not complete the Free Transform command because the layer is locked.	A szabad átalakítás nem hajtható végre, mert a réteg zárolva van.
+	Could not transform because the layer is locked.	Az átalakítás nem hajtható végre, mert a réteg zárolva van.
+	Could not transform: the layer is empty	Az átalakítás nem hajtható végre: a réteg üres
 	Could not use Puppet Warp: no opaque pixels	A bábtorzítás nem használható: nincsenek átlátszatlan pixelek
 	Could not use Puppet Warp: the layer is empty	A bábtorzítás nem használható: a réteg üres
 	Could not use the move tool because the layer is locked.	A Mozgatás eszköz nem használható, mert a réteg zárolva van.
@@ -1444,7 +1451,7 @@
 	Stylus Wheel	Tollkerék
 	Suggestions:	Javaslatok:
 	Swaps height and width	Felcseréli a magasságot és a szélességet
-	Switch between free transform and warp modes	Váltás a szabad alakítás és a hajlítás mód között
+	Switch between free transform and warp modes	Váltás a szabad átalakítás és a hajlításmód között
 	Symbols	Szimbólumok
 	Symmetry Off	Szimmetria ki
 	Text color	Szövegszín
@@ -1481,7 +1488,7 @@
 	Use Classic Mode	Klasszikus mód használata
 	Use esc to commit	Véglegesítés az Esc billentyűvel
 	Use finite lengths and a positive pattern total	Véges hosszakat adjon meg, a mintázat teljes hossza pedig legyen pozitív
-	Use legacy free transform	Régi szabad alakítás használata
+	Use legacy free transform	Örökölt szabad átalakítás használata
 	Vary round brush hardness on hud	Kerek ecset keménységének állítása a HUD-on
 	Version	Verzió
 	Vertical	Függőleges
@@ -3449,6 +3456,7 @@ cameraRaw	Yellow	Sárga
 	Magnetic Lasso	Mágneses lasszó
 	Magnetic Lasso Tool	Mágneses lasszó
 	Make Selection	Kijelölés készítése
+	Make Shape	Alakzat készítése
 	Make work path from selection	Munkaútvonal készítése a kijelölésből
 	Manual	Kézi
 	manual	kézi
