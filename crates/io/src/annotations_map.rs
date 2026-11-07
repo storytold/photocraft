@@ -355,7 +355,7 @@ fn count_groups_from_resource(data: &[u8]) -> Option<Vec<CountGroup>> {
 /// Decode the fields the Count tool can use without coercing unrecognized data.
 fn count_group_from_descriptor(value: &Value) -> Option<CountGroup> {
     let Value::Descriptor(d) = value else { return None };
-    if !d.class_id.is("countGroup") || d.items.len() != 7 {
+    if !d.class_id.is("countGroup") || d.items.len() != 8 {
         return None;
     }
     let integer = |key| match d.get(key)? {
