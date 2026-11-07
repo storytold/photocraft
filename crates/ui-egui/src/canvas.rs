@@ -68,7 +68,7 @@ pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
-pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
+pub use drag::{Drag, DragDocument, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
 pub(crate) use drag::{angle_readout, doc_box_corners, draw_readout, draw_value_readout};
 #[cfg(test)]
 pub(crate) use drag::{marquee_drag_ants, marquee_preview_px};
@@ -79,7 +79,7 @@ pub(crate) use filter_preview::{ensure_filter_preview, filter_channel_preview, f
 #[cfg(test)]
 pub(crate) use gesture::constrained_polygon_point;
 pub use gesture::{commit_crop, commit_polygon, polygon_cancel_stale, polygon_replaces_selection, polygon_retract};
-pub(crate) use gesture::{finish_gesture, selection_mode};
+pub(crate) use gesture::{finish_gesture, polygon_close_reach, selection_mode};
 pub(crate) use navigator::NavigatorCache;
 #[cfg(test)]
 use navigator::navigator_waits_for_drag;
@@ -248,8 +248,20 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
         Some(None) => (None, 1),
         Some(Some((proxy, k))) => (proxy.selection.as_ref(), (*k).max(1)),
     };
+    // ⌥'s "is anything selected" (`tool_feedback::document_selection_mode`) reads the active
+    // document's selection bounds every frame: cache them here even while the ants are hidden
+    // (Selection Edges off, a lasso replacing them), or each frame would scan the selection.
+    if app.session.active_index() == Some(input.idx)
+        && let Some(sel) = input.doc.selection.as_ref()
+    {
+        app.cached_bounds(u64::MAX - input.doc.id.0, sel);
+    }
     // Selection outline: true boundary, animated marching ants (cached per revision).
-    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
+    // A Patch lasso drag replaces the active document's selection, not a floating piece or Select
+    // and Mask's refined preview; other documents keep their ants.
+    let patch_replaces =
+        || refined.is_none() && floated.is_none() && app.session.active_index() == Some(input.idx) && crate::retouch_ui::patch_replaces_selection(app);
+    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app) && !patch_replaces()) {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
