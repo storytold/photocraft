@@ -162,7 +162,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 
 | Behaviour | Status | Evidence |
 |---|---|---|
-| Snap to guides, grid, layers, document bounds and centre, selection, slices; Ctrl disables other gestures, while Distort corners snap to guides and intersections | done | `engine/src/snap.rs`, `snap_ui.rs` (actual-corner grab-offset regressions, #3632) |
+| Snap to guides, grid, layers, document bounds and centre, selection, slices; Ctrl held to start a layer move keeps snapping, a fresh Ctrl press during a drag disables it, and Distort corners snap to guides and intersections | done | `engine/src/snap.rs`, `snap_ui.rs` (actual-corner grab-offset regressions, #3632) |
 | Snap vector tools and transforms to the pixel grid | done | `snap_ui.rs:196` |
 | Smart guides (magenta alignment lines) | done | |
 | Smart guide distance and spacing labels | missing | |
