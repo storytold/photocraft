@@ -63,6 +63,13 @@ used only as an independent executable oracle for the local sample comparison.
 The original implementation fails the new successful-decode tests with
 `Panasonic RW2 raw format 8 ... is not decoded yet`.
 
+This was reproduced against `f68e227026701cf24e0e182530694240e2d3cfe4`:
+an isolated copy of the RAW crate with that revision's `rw2.rs` and the new
+`strips_and_tiles_decode_exactly_at_all_supported_depths` test fails with
+`Unsupported("Panasonic RW2 raw format 8 (vendor-compressed) is not decoded yet")`.
+The isolated crate uses the same registry dependency versions and checksums as
+the repository's lockfile.
+
 A locally supplied DC-S9 12-bit file was also checked without distributing it:
 all **24,160,256 sensor samples** (6016×4016) match LibRaw 0.22.2 through rawpy
 0.28.0 exactly, with zero differing samples. Its (8,8) 6000×4000 crop develops
