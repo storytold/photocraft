@@ -384,7 +384,11 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     if (rx.changed() || ry.changed())
         && let Some(s) = app.ui.transform.as_mut()
     {
-        set_position(s, relative, [px as f64, py as f64]);
+        // An axis the user didn't edit keeps its full-precision value: the field's f32 would
+        // nudge the box by its rounding.
+        let x = if rx.changed() { f64::from(px) } else { shown[0] };
+        let y = if ry.changed() { f64::from(py) } else { shown[1] };
+        set_position(s, relative, [x, y]);
     }
     crate::widgets::vline(ui, 22.0);
     // W and H in the unit picked from their right-click menu: the scale in percent, or the box's

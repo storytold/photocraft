@@ -136,3 +136,21 @@ fn a_drag_updates_the_offset_and_turning_it_off_shows_the_position_again() {
     assert!(!h.state().ui.tool_options.transform_relative_position);
     assert_eq!(shown(&h), (75.0, 43.0), "off again: the reference point's position");
 }
+
+/// Typing X leaves Y exactly where it was, even when Y is a fraction the field's f32 can't hold
+/// (CodeRabbit review on options_bar.rs:308): the field's rounding must not nudge the box.
+#[test]
+fn a_typed_x_leaves_a_fractional_y_exactly_where_it_was() {
+    let mut app = transforming();
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x, y + 0.1]);
+    t.pivot[1] += 0.1;
+    let mut h = harness(app);
+    let before = quad(&h);
+    let pivot_y = h.state().ui.transform.as_ref().unwrap().pivot[1];
+    type_x(&mut h, "90");
+    let after = quad(&h);
+    assert!(same(after, moved(before, 20.0)), "the box moved 20 px right: {after:?}");
+    assert_eq!(after.map(|p| p[1]), before.map(|p| p[1]), "Y is untouched");
+    assert_eq!(h.state().ui.transform.as_ref().unwrap().pivot[1], pivot_y);
+}
