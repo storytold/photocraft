@@ -203,16 +203,16 @@ fn color_sampler_tool_places_moves_and_removes_points() {
     up(&mut app, 20.0, 20.0);
     down(&mut app, 60.0, 40.0, egui::Modifiers::NONE);
     up(&mut app, 60.0, 40.0);
-    assert_eq!(pts(&app), vec![[20.0, 20.0], [60.0, 40.0]]);
+    assert_eq!(pts(&app), vec![[20.5, 20.5], [60.5, 40.5]], "each on its pixel's centre");
     // Drag the first point to a new pixel (committed on release).
     down(&mut app, 20.0, 20.0, egui::Modifiers::NONE);
     mv(&mut app, 30.0, 25.0, egui::Modifiers::NONE);
     up(&mut app, 30.0, 25.0);
-    assert_eq!(pts(&app)[0], [30.0, 25.0]);
+    assert_eq!(pts(&app)[0], [30.5, 25.5]);
     // A click on a point, with no drag, leaves it where it is.
     down(&mut app, 30.0, 25.0, egui::Modifiers::NONE);
     up(&mut app, 30.0, 25.0);
-    assert_eq!(pts(&app)[0], [30.0, 25.0]);
+    assert_eq!(pts(&app)[0], [30.5, 25.5]);
     // ⌥-click removes that one point.
     down(&mut app, 60.0, 40.0, egui::Modifiers::ALT);
     up(&mut app, 60.0, 40.0);
@@ -251,11 +251,11 @@ fn color_sampler_readout_and_crop_removal_report() {
     let l = app.run("view.colorSamplers.list", json!({})).unwrap();
     assert_eq!(l["samplers"].as_array().unwrap().len(), 2);
     assert_eq!(l["samplers"][0]["number"], 1);
-    assert_eq!(l["samplers"][1]["position"], json!([150.0, 90.0]));
+    assert_eq!(l["samplers"][1]["position"], json!([150.5, 90.5]));
     assert!(l["samplers"][0]["rgb"].as_array().is_some_and(|a| a.len() == 3));
     // Cropping to the top-left drops the outside point and reports how many went.
     app.run("image.crop", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
-    assert_eq!(app.session.active().unwrap().color_samplers, vec![[5.0, 5.0]]);
+    assert_eq!(app.session.active().unwrap().color_samplers, vec![[5.5, 5.5]]);
     assert!(app.ui.status.contains("removed"), "{}", app.ui.status);
     assert!(!app.ui.status_error);
 }
@@ -271,9 +271,9 @@ fn color_sampler_is_per_document_and_inert_without_one() {
     assert!(app.session.active().unwrap().color_samplers.is_empty());
     down(&mut app, 20.0, 20.0, egui::Modifiers::NONE);
     up(&mut app, 20.0, 20.0);
-    assert_eq!(app.session.active().unwrap().color_samplers, vec![[20.0, 20.0]]);
+    assert_eq!(app.session.active().unwrap().color_samplers, vec![[20.5, 20.5]]);
     app.run("document.activate", json!({"document": 0})).unwrap();
-    assert_eq!(app.session.active().unwrap().color_samplers, vec![[10.0, 10.0]]);
+    assert_eq!(app.session.active().unwrap().color_samplers, vec![[10.5, 10.5]]);
     // With no document the tool says so (no dialog, no panic) and the commands error.
     let mut empty = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     empty.ui.tool = Tool::ColorSampler;
