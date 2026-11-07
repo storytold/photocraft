@@ -1249,6 +1249,23 @@ impl Session {
         }
         Ok(())
     }
+
+    /// Retry loading the active brush's stored bitmaps, replacing it only after every load
+    /// succeeds. This keeps a late successful retry shared by painting and the brush cursor,
+    /// while a missing or corrupt tip leaves the active brush exactly as it was.
+    pub fn retry_active_brush_tips(&mut self) -> Result<bool, String> {
+        let unloaded = |t: &TipShape| matches!(t, TipShape::Stored(r) if r.full.is_none());
+        let needs = unloaded(&self.tools.brush.tip)
+            || unloaded(&self.tools.brush.dual_brush.tip)
+            || matches!(&self.tools.brush.texture.pattern, Pattern::Stored(r) if r.full.is_none());
+        if !needs {
+            return Ok(false);
+        }
+        let mut loaded = self.tools.brush.clone();
+        self.load_brush_tips(&mut loaded)?;
+        self.tools.brush = loaded;
+        Ok(true)
+    }
 }
 
 /// After a sync, an embedded bitmap of the tool's brush that the store now holds (the brush was

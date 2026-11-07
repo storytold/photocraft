@@ -326,6 +326,15 @@ mod tests {
         }
     }
 
+    #[test]
+    fn sampled_contour_reaches_a_fully_covered_bitmap_edge() {
+        let tip = GrayTile::from_fn(8, 6, |x, y| if x == 0 || (x < 5 && y > 1) { 1.0 } else { 0.0 });
+        let b = BrushSettings { size: 80.0, tip: TipShape::Sampled(tip), ..Default::default() };
+        let rings = tip_outline(&b, false).unwrap();
+        let left = rings.iter().flatten().map(|p| p[0]).fold(f32::INFINITY, f32::min);
+        assert!((left + 1.0).abs() < 1e-4, "the covered left edge was inset to {left}");
+    }
+
     fn max_radius(rings: &[Vec<[f32; 2]>]) -> f32 {
         rings.iter().flatten().fold(0.0f32, |m, p| m.max(p[0].hypot(p[1])))
     }

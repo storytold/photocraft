@@ -1577,7 +1577,10 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                         let pencil_brush = pencil.then(|| crate::brush_cursor::pencil_outline_brush(brush));
                         let brush = pencil_brush.as_ref().unwrap_or(brush);
                         let axes = crate::brush_cursor::pen_axes(xf, brush, app.stylus.sample());
-                        crate::brush_cursor::cursor(painter, p, brush, full, axes, pencil || cur.painting == PaintingCursor::NormalTip, centre)
+                        // A hard computed Pencil tip keeps its legacy hard contour. Sampled tips
+                        // still honor the user's Normal/Full Size Tip preference.
+                        let normal = cur.painting == PaintingCursor::NormalTip || (pencil && matches!(brush.tip, photocraft_paint::brush::TipShape::Round));
+                        crate::brush_cursor::cursor(painter, p, brush, full, axes, normal, centre)
                     }
                 }
             }

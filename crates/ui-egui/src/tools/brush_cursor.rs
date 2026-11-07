@@ -31,6 +31,7 @@ struct Cached {
 #[derive(Clone)]
 struct Key {
     tip: TipShape,
+    size: f32,
     angle: f32,
     roundness: f32,
     hardness: f32,
@@ -41,19 +42,28 @@ struct Key {
 
 impl Key {
     fn of(b: &BrushSettings, full: bool) -> Self {
-        Self { tip: b.tip.clone(), angle: b.angle, roundness: b.roundness, hardness: b.hardness, flip_x: b.flip_x, flip_y: b.flip_y, full }
+        Self { tip: b.tip.clone(), size: b.size, angle: b.angle, roundness: b.roundness, hardness: b.hardness, flip_x: b.flip_x, flip_y: b.flip_y, full }
     }
     fn matches(&self, b: &BrushSettings, full: bool) -> bool {
         self.tip == b.tip
             // Stored tips compare by store key, even when their preview is
             // replaced by the full bitmap. That replacement needs a new trace.
-            && self.tip.bitmap() == b.tip.bitmap()
+            && same_bitmap(self.tip.bitmap(), b.tip.bitmap())
+            && self.size == b.size
             && self.angle == b.angle
             && self.roundness == b.roundness
             && self.hardness == b.hardness
             && self.flip_x == b.flip_x
             && self.flip_y == b.flip_y
             && self.full == full
+    }
+}
+
+fn same_bitmap(a: Option<&photocraft_paint::GrayTile>, b: Option<&photocraft_paint::GrayTile>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => Arc::ptr_eq(&a.data, &b.data) || a == b,
+        (None, None) => true,
+        _ => false,
     }
 }
 
@@ -191,6 +201,17 @@ mod tests {
         b.tip = TipShape::Stored(stored);
         let outline = rings(&ctx, &b, true).expect("loading the full tip must replace the cached fallback");
         assert_eq!(outline[0], vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]);
+    }
+
+    #[test]
+    fn flattened_pencil_outline_cache_refreshes_when_size_changes() {
+        let ctx = egui::Context::default();
+        let small = pencil_outline_brush(&BrushSettings { size: 1.0, ..Default::default() });
+        let first = rings(&ctx, &small, true).unwrap();
+        let large = pencil_outline_brush(&BrushSettings { size: 3.0, ..Default::default() });
+        let second = rings(&ctx, &large, true).unwrap();
+        assert!(!Arc::ptr_eq(&first, &second), "the size change invalidates the cached Pencil outline");
+        assert_eq!(on_screen(&second, tip_axes(&view(0.0, false, 1.0), large.size))[0][2], egui::vec2(3.0, 3.0));
     }
 
     fn view(rotation: f32, flip: bool, aspect: f32) -> ViewXform {
