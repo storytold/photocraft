@@ -406,7 +406,6 @@ fn undo_with_released_frame_modifiers(h: &mut App) {
     let before = pending(h);
     // Bypass Harness::event's per-event queue: these events must share one native input batch.
     let input = h.input_mut();
-    input.modifiers = Modifiers::NONE;
     input.events.extend([
         Event::ModifiersChanged(command(false)),
         Event::Key { key: Key::Z, physical_key: Some(Key::Z), pressed: true, repeat: false, modifiers: command(false) },
