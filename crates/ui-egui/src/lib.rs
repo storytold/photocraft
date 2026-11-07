@@ -564,6 +564,8 @@ pub struct PhotocraftApp {
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// The direct control-command route keeps Actions playback synchronous and dialog-free.
+    pub(crate) programmatic_playback: bool,
     /// How many `run_command` calls are on the stack. Only the outermost one writes the frame's
     /// command stage: a nested run (`file.save` → `layer.smartObjects.saveContents`,
     /// `actions.play` → its steps) is already inside the outer call's time.
@@ -728,6 +730,8 @@ pub struct PhotocraftApp {
     pub(crate) prompt_order: std::collections::VecDeque<open_prompt::PromptKind>,
     /// A brush or gradient file waiting on the group-name prompt (see `preset_group_prompt`).
     pub(crate) held_preset_import: Option<preset_group_prompt::Held>,
+    pub(crate) held_record_again: Option<actions::record_again::Held>,
+    pub(crate) held_insert_menu: Option<actions::menu_item::Held>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
     pub(crate) allow_close: bool,
     /// Pen pressure/tilt from the platform (see `stylus`).
@@ -860,6 +864,9 @@ mod transform_type_tests;
 mod transform_reference_point_tests;
 
 #[cfg(test)]
+mod transform_relative_position_tests;
+
+#[cfg(test)]
 mod transform_several_tests;
 
 #[cfg(test)]
@@ -872,6 +879,9 @@ mod save_identity_tests;
 
 #[cfg(test)]
 mod move_auto_select_tests;
+
+#[cfg(test)]
+mod move_target_default_tests;
 
 #[cfg(test)]
 mod move_history_names_tests;
