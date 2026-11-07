@@ -976,7 +976,7 @@ impl ColorBvh {
 
     fn reserve_nodes(capacity: usize) -> Result<Vec<ColorNode>, &'static str> {
         let mut nodes = Vec::new();
-        nodes.try_reserve_exact(capacity).map_err(|_| "not enough memory to index selection colours")?;
+        nodes.try_reserve_exact(capacity).map_err(|_| "not enough memory to index selection colors")?;
         Ok(nodes)
     }
 
@@ -1072,10 +1072,10 @@ impl ColorMatcher {
             let key = [norm(c[0]), norm(c[1]), norm(c[2]), norm(c[3])];
             if !seen.contains(&key) {
                 if seen.len() >= limit {
-                    return Err("the selection contains too many distinct colours to match; select a smaller area");
+                    return Err("the selection contains too many distinct colors to match; select a smaller area");
                 }
-                seen.try_reserve(1).map_err(|_| "not enough memory to index selection colours")?;
-                opaque_or_semi.try_reserve(1).map_err(|_| "not enough memory to index selection colours")?;
+                seen.try_reserve(1).map_err(|_| "not enough memory to index selection colors")?;
+                opaque_or_semi.try_reserve(1).map_err(|_| "not enough memory to index selection colors")?;
                 seen.insert(key);
                 opaque_or_semi.push(c);
             }
