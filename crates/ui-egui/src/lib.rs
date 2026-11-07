@@ -41,6 +41,7 @@ mod icon_data;
 pub mod icons;
 pub mod jobs_ui;
 pub(crate) mod last_brush;
+pub mod levels_clipping;
 pub mod links;
 pub mod memory_warning;
 pub mod menu_catalog;
@@ -260,8 +261,8 @@ pub use services::{
     AdoptAutosaveFn, AppendTextFn, AutomationCommandFn, AutomationOpenPcraftFn, AutomationReadFn, AutomationWriteFn, AutosaveFn, AutosaveResultsFn, CapsLockFn,
     CaptionStyleFn, ClipboardGetFn, ClipboardGetSvgFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn,
     ExportSettings, ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox,
-    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn,
-    SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
+    LoadTextFn, OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PenEndFn, PhotoshopShortcutsFn, PlaceInbox, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
+    SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, TabletPollFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -430,6 +431,11 @@ pub struct PhotocraftApp {
     pub(crate) brush_resize: Option<brush_resize::Resize>,
     /// A ⌘⌥⌃-click layer pick is in progress; its drag and release are swallowed (`quick_pick`).
     pub(crate) quick_pick: bool,
+    /// The layer a canvas click picked the Move tool way (its Auto-Select, or a ⌘-click from another
+    /// tool) and the engine's active-layer change count right after that pick
+    /// (`Session::active_layer_changes`). The Layers panel's reveal reads it when it next draws, and
+    /// accepts it only if nothing changed the active layer since, however long ago (`layer_reveal`, #11381).
+    pub(crate) move_pick: Option<(photocraft_doc::LayerId, u64)>,
     /// The next tool `Down` is an Alt+right-drag that resizes the brush (#297). `tool_event`
     /// takes it on every event, so a press another handler consumes can't leave it set.
     pub(crate) brush_resize_armed: bool,
@@ -534,6 +540,8 @@ pub struct PhotocraftApp {
     /// The Properties panel's live adjustment-layer drag: its damage region and coverage
     /// (`adjust_preview::live_key`).
     pub(crate) live_adjust_preview: Option<adjust_preview::LiveAdjust>,
+    /// The Levels dialog's Alt-drag clipping display over the canvas.
+    pub(crate) levels_clipping: Option<levels_clipping::Cache>,
     /// Synthetic input events queued by automation (`ui.click`, `ui.key`, …), injected next frame.
     pub(crate) synthetic: Vec<egui::Event>,
     /// The one synthetic batch currently being delivered.
@@ -762,6 +770,10 @@ impl SyntheticTarget {
 #[cfg(test)]
 mod artboard_add_mode_tests;
 #[cfg(test)]
+mod brush_options_tooltips_tests;
+#[cfg(test)]
+mod brush_picker_escape_tests;
+#[cfg(test)]
 mod shape_bounds_box_tests;
 
 #[cfg(test)]
@@ -885,6 +897,9 @@ mod blur_pins_tests;
 mod move_outline_tests;
 
 #[cfg(test)]
+mod move_bar_distribute_gear_tests;
+
+#[cfg(test)]
 mod layer_thumb_bounds_tests;
 #[cfg(test)]
 mod mask_thumb_refresh_tests;
@@ -980,6 +995,8 @@ mod pen_path_ownership_tests;
 
 #[cfg(test)]
 mod brush_opacity_minimum_tests;
+#[cfg(test)]
+mod artboard_options_bar_tests;
 #[cfg(test)]
 mod doc_tab_menu_tests;
 #[cfg(test)]
