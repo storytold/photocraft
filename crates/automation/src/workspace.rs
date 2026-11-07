@@ -44,6 +44,18 @@ impl AuthorizedWorkspace {
         Ok(Self { read: open_root(read_root, "read")?, write: open_root(write_root, "write")? })
     }
 
+    /// This workspace with `other`'s read authority instead of its own (the write authority
+    /// stays). Combines roots opened separately without opening them again.
+    pub fn with_read_from(self, other: Self) -> Self {
+        Self { read: other.read, ..self }
+    }
+
+    /// This workspace with `other`'s write authority instead of its own (the read authority
+    /// stays).
+    pub fn with_write_from(self, other: Self) -> Self {
+        Self { write: other.write, ..self }
+    }
+
     /// Read one regular file below the configured read root.
     pub fn read(&self, path: &str) -> Result<Vec<u8>, AutomationError> {
         let relative = request_path(path, self.read.as_ref())?;
@@ -484,8 +496,12 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
     let mut segments = path.split('.').filter(|segment| !segment.is_empty());
     let Some(section) = segments.next() else { return true };
     // File Handling's LUT folder (#6558) is listed from disk; the rest of that section is not.
+    // Integrations' automation roots are what this policy grants at the next launch: an agent must
+    // not widen its own file access.
+    let key = segments.next();
     matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
-        || (section == "fileHandling" && segments.next().is_none_or(|key| key == "lutFolder"))
+        || (section == "fileHandling" && key.is_none_or(|key| key == "lutFolder"))
+        || (section == "integrations" && key.is_none_or(|key| matches!(key, "readRoot" | "writeRoot")))
 }
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {

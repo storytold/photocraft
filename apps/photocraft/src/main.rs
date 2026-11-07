@@ -95,8 +95,10 @@ fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
 }
 
 /// Preferences › Integrations, read before the window opens the way [`custom_titlebar`] is:
-/// whether agents may drive this launch at all, and the port to listen on when no `--control`
-/// was given (0 = only with `--control`). A missing or unreadable file keeps the defaults.
+/// whether agents may drive this launch at all, the port to listen on when no `--control`
+/// was given (0 = only with `--control`) and the automation folders used when no
+/// `--automation-read-root` / `--automation-write-root` was given. A missing or unreadable file
+/// keeps the defaults.
 ///
 /// The section is read on its own, and when it doesn't read as a whole each value on its own,
 /// as the app's lenient load reads them (#6611): a wrong-typed value elsewhere in the file, or
@@ -117,7 +119,94 @@ fn integrations(prefs_file: Option<&std::path::Path>) -> photocraft_engine::pref
     if let Some(port) = section.get("controlPort").and_then(Value::as_u64).and_then(|p| u32::try_from(p).ok()) {
         out.control_port = port;
     }
+    if let Some(root) = section.get("readRoot").and_then(Value::as_str) {
+        root.clone_into(&mut out.read_root);
+    }
+    if let Some(root) = section.get("writeRoot").and_then(Value::as_str) {
+        root.clone_into(&mut out.write_root);
+    }
     out
+}
+
+/// The automation roots: `--automation-read-root` / `--automation-write-root` (or their
+/// variables) win; a direction without one takes Preferences › Integrations' folder. A flag's
+/// root that can't be opened stops the launch (exit status 2) as before. A preference's root that
+/// can't be opened, or isn't an absolute path (it would depend on the folder the app was started
+/// from), is left out, so that direction fails closed, and the warning says why: a folder moved
+/// since it was chosen must not stop the app from starting. Each folder is opened once, so one
+/// that goes away during the launch can't turn into an error.
+fn automation_workspace(
+    flags: &photocraft_automation::args::AutomationArgs,
+    prefs: &photocraft_engine::prefs::Integrations,
+) -> Result<(photocraft_automation::workspace::AuthorizedWorkspace, Option<String>), photocraft_automation::AutomationError> {
+    use photocraft_automation::{agent_link::folder, workspace::AuthorizedWorkspace};
+    let mut workspace = flags.workspace()?;
+    let mut warnings = Vec::new();
+    let mut from_pref = |flag: &Option<std::path::PathBuf>, pref: &str, read: bool| -> Option<AuthorizedWorkspace> {
+        if flag.is_some() {
+            return None;
+        }
+        let root = folder(pref)?;
+        let opened = if !root.is_absolute() {
+            Err(format!("`{}` is not an absolute path", root.display()))
+        } else if read {
+            AuthorizedWorkspace::new(Some(&root), None).map_err(|e| e.to_string())
+        } else {
+            AuthorizedWorkspace::new(None, Some(&root)).map_err(|e| e.to_string())
+        };
+        opened
+            .map_err(|e| {
+                let which = if read { "Automation Read Folder" } else { "Automation Write Folder" };
+                warnings.push(format!("Preferences › Integrations › {which} is not used: {e}"));
+            })
+            .ok()
+    };
+    if let Some(read) = from_pref(&flags.automation_read_root, &prefs.read_root, true) {
+        workspace = workspace.with_read_from(read);
+    }
+    if let Some(write) = from_pref(&flags.automation_write_root, &prefs.write_root, false) {
+        workspace = workspace.with_write_from(write);
+    }
+    Ok((workspace, (!warnings.is_empty()).then(|| warnings.join("\n"))))
+}
+
+/// The connection file a launch published ([`photocraft_automation::agent_link`]); dropping it
+/// removes the file. (Quitting through AppKit ends the process without returning from the event
+/// loop, so on macOS the next launch, or a client's probe, finds a file left behind.)
+struct Published(std::path::PathBuf);
+
+impl Drop for Published {
+    fn drop(&mut self) {
+        photocraft_automation::agent_link::remove_connection(&self.0, std::process::id());
+    }
+}
+
+/// Publish the control server started from the preferences in the settings folder `dir`, so a
+/// local client finds its port and token file. Failing to write it is logged, not fatal: the
+/// server still runs, as with `--control`.
+fn publish_connection(dir: &std::path::Path, port: u16, token_file: &std::path::Path) -> Option<Published> {
+    use photocraft_automation::agent_link::{Connection, write_connection};
+    // A relative `--control-token-file` is relative to this process's folder, not the client's:
+    // publish nothing rather than a path a client would resolve somewhere else.
+    let token_file = match std::path::absolute(token_file) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("photocraft: couldn't publish the control connection: {}: {e}", token_file.display());
+            log::warn!("couldn't publish the control connection: {}: {e}", token_file.display());
+            return None;
+        }
+    };
+    match write_connection(dir, &Connection::new(port, token_file)) {
+        Ok(()) => {
+            eprintln!("photocraft: control connection published in {}", dir.join(photocraft_automation::agent_link::CONNECTION_FILE).display());
+            Some(Published(dir.to_path_buf()))
+        }
+        Err(e) => {
+            eprintln!("photocraft: couldn't publish the control connection: {e}");
+            log::warn!("couldn't publish the control connection: {e}");
+            None
+        }
+    }
 }
 
 /// The control port this launch listens on, and the warning to print when a request was refused.
@@ -282,17 +371,61 @@ fn linux_display_session() -> linux_libs::DisplaySession {
     session
 }
 
+/// The control server: its listener, token and workspace.
+type Control = (std::net::TcpListener, String, photocraft_automation::workspace::AuthorizedWorkspace);
+
+/// What [`control_setup`] set up: the control server when it is on, the connection file it
+/// published, and a notice for the window (a preference's automation folder that wasn't used, or
+/// a token file the preferences needed that couldn't be written).
+struct ControlSetup {
+    control: Option<Control>,
+    published: Option<Published>,
+    warning: Option<ControlNotice>,
+}
+
+/// A notice for the window about the control server: a Dock launch has no console.
+struct ControlNotice {
+    title: &'static str,
+    lines: Vec<String>,
+}
+
 /// The control server's port, token and workspace, when it is on (exits 2 on a bad configuration).
+///
+/// Started from Preferences › Integrations (no `--control`) and given no token, it keeps its token
+/// in the settings folder (`agent-control.token`, as with `--control-token-file`) and publishes
+/// the connection there ([`photocraft_automation::agent_link`]), so a client can drive an app
+/// started from the Dock. When that token file can't be written (a read-only or full settings
+/// folder), the app starts with the control server off and says why, as for a preference's
+/// automation folder, instead of exiting before its window opens.
 fn control_setup(
     cli_port: Option<u16>,
     auth: photocraft_automation::args::ControlArgs,
     automation: &photocraft_automation::args::AutomationArgs,
-) -> Option<(std::net::TcpListener, String, photocraft_automation::workspace::AuthorizedWorkspace)> {
-    let (port, warning) = control_port_for(cli_port, &integrations(services::prefs_file().as_deref()));
+) -> ControlSetup {
+    control_setup_in(services::config_dir(), &integrations(services::prefs_file().as_deref()), cli_port, auth, automation)
+}
+
+/// [`control_setup`] with the settings folder and Preferences › Integrations given.
+fn control_setup_in(
+    settings: Option<std::path::PathBuf>,
+    prefs: &photocraft_engine::prefs::Integrations,
+    cli_port: Option<u16>,
+    auth: photocraft_automation::args::ControlArgs,
+    automation: &photocraft_automation::args::AutomationArgs,
+) -> ControlSetup {
+    use photocraft_automation::agent_link;
+    let (port, warning) = control_port_for(cli_port, prefs);
     if let Some(warning) = &warning {
         eprint!("{warning}");
     }
-    let port = port?;
+    // A file a crashed (or, on macOS, quit) launch left behind names a port nothing serves. Before
+    // binding, so this launch's own listener doesn't keep it.
+    if let Some(dir) = &settings {
+        agent_link::remove_stale_connection(dir);
+    }
+    let Some(port) = port else {
+        return ControlSetup { control: None, published: None, warning: None };
+    };
     let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
         Ok(listener) => listener,
         Err(error) => {
@@ -300,29 +433,55 @@ fn control_setup(
             std::process::exit(2);
         }
     };
+    let from_prefs = cli_port.is_none();
     let (supplied, token_file) = (auth.control_token, auth.control_token_file);
+    let settings_token = token_file.is_none() && supplied.is_none() && from_prefs;
+    let token_file = match (token_file, &settings) {
+        (Some(file), _) => Some(file),
+        (None, Some(dir)) if settings_token => Some(dir.join(agent_link::TOKEN_FILE)),
+        (None, _) => None,
+    };
     let token = match photocraft_automation::security::server_token(supplied.as_deref(), token_file.as_deref()) {
         Ok(token) => token,
+        // The token file the preferences need, in the settings folder: fail closed (no server, so
+        // no token to leak) and say so in the window.
+        Err(e) if settings_token => {
+            let line = format!("Preferences › Integrations › Control Port is not used: the token file could not be written: {e}");
+            eprintln!("photocraft: {line}");
+            log::warn!("{line}");
+            return ControlSetup { control: None, published: None, warning: Some(ControlNotice { title: "Agent control is off", lines: vec![line] }) };
+        }
         Err(e) => {
             eprintln!("photocraft: cannot configure control authentication: {e}");
             std::process::exit(2);
         }
     };
-    if let Some(path) = token_file {
+    if let Some(path) = &token_file {
         eprintln!("photocraft: control token file: {}", path.display());
     } else if supplied.is_none() {
         eprintln!("photocraft: control token: {token}");
     } else {
         eprintln!("photocraft: using supplied control token");
     }
-    let workspace = match automation.workspace() {
+    let (workspace, warning) = match automation_workspace(automation, prefs) {
         Ok(workspace) => workspace,
         Err(error) => {
             eprintln!("photocraft: cannot configure automation workspace: {error}");
             std::process::exit(2);
         }
     };
-    Some((listener, token, workspace))
+    if let Some(warning) = &warning {
+        eprintln!("photocraft: {warning}");
+        log::warn!("{warning}");
+    }
+    // Only a server the preferences started is published: a `--control` launch was told its port
+    // and token by whoever started it. A token given as a value has no file to point at.
+    let published = match (&settings, &token_file, listener.local_addr()) {
+        (Some(dir), Some(file), Ok(addr)) if from_prefs => publish_connection(dir, addr.port(), file),
+        _ => None,
+    };
+    let warning = warning.map(|w| ControlNotice { title: "Automation folder not used", lines: w.lines().map(str::to_owned).collect() });
+    ControlSetup { control: Some((listener, token, workspace)), published, warning }
 }
 
 /// Record this start's backend in the GPU startup marker, if the marker is locked.
@@ -398,7 +557,7 @@ fn main() -> eframe::Result {
     let _ = (new_instance, &launch_options);
 
     // Bind and authenticate the authorized control listener before display/GPU initialization.
-    let control = control_setup(control_port, auth, &automation);
+    let ControlSetup { control, published, warning: control_warning } = control_setup(control_port, auth, &automation);
 
     #[cfg(target_os = "linux")]
     let native_session = linux_libs::session_from_env(|name| std::env::var(name).ok());
@@ -693,9 +852,16 @@ fn main() -> eframe::Result {
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], false, None);
             }
+            // A preference's automation folder that couldn't be opened, or a token file it couldn't
+            // write: a Dock launch has no console.
+            if let Some(ControlNotice { title, lines }) = control_warning {
+                photocraft_ui_egui::notices::post(&mut app, title, lines, false, None);
+            }
             Ok(Box::new(app))
         }),
     );
+    // The window is gone: no client should find this launch any more.
+    drop(published);
     // The window is gone: refuse further files and free the lock, so a launch that is waiting (or
     // the CPU-compatibility relaunch below) becomes the primary instead of handing its files to a
     // process that is exiting.
@@ -975,9 +1141,9 @@ mod tests {
     #[test]
     fn integrations_preferences_decide_the_control_port() {
         use photocraft_engine::prefs::Integrations;
-        let off = Integrations { allow_agent_control: false, control_port: 0 };
-        let on = Integrations { allow_agent_control: true, control_port: 0 };
-        let preferred = Integrations { allow_agent_control: true, control_port: 7878 };
+        let off = Integrations { allow_agent_control: false, control_port: 0, ..Default::default() };
+        let on = Integrations { allow_agent_control: true, control_port: 0, ..Default::default() };
+        let preferred = Integrations { allow_agent_control: true, control_port: 7878, ..Default::default() };
 
         // Nothing asked for, nothing listening.
         assert_eq!(super::control_port_for(None, &on), (None, None));
@@ -992,11 +1158,11 @@ mod tests {
         let (port, warning) = super::control_port_for(Some(9000), &off);
         assert_eq!(port, None);
         assert!(warning.is_some_and(|w| w.contains("Allow Agent Control") && w.contains("9000")), "the refusal names the port");
-        let off_with_port = Integrations { allow_agent_control: false, control_port: 7878 };
+        let off_with_port = Integrations { allow_agent_control: false, control_port: 7878, ..Default::default() };
         assert_eq!(super::control_port_for(None, &off_with_port), (None, None), "off beats a preferred port");
 
         // A port a hand-edited file could hold, outside 1..=65535, is refused and named.
-        let huge = Integrations { allow_agent_control: true, control_port: 70_000 };
+        let huge = Integrations { allow_agent_control: true, control_port: 70_000, ..Default::default() };
         let (port, warning) = super::control_port_for(None, &huge);
         assert_eq!(port, None);
         assert!(warning.is_some_and(|w| w.contains("70000")), "the refusal names the value");
@@ -1047,13 +1213,186 @@ mod tests {
         assert_eq!(r.control_port, 0, "the bad port alone takes its default");
         // A bad Allow Agent Control alone takes its default.
         let r = read(r#"{"integrations":{"allowAgentControl":"no","controlPort":7878}}"#);
-        assert_eq!(r, photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: 7878 });
+        assert_eq!(r, photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: 7878, ..Default::default() });
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":-1}}"#);
         read(r#"{"integrations":{"allowAgentControl":false,"controlPort":4294967296}}"#);
         read(r#"{"integrations":"off"}"#);
         // serde reads a struct from a list too; the app does.
         assert!(!read(r#"{"integrations":[false]}"#).allow_agent_control, "a list");
         assert_eq!(read(r#"{"integrations":[false,7878]}"#).control_port, 7878);
+        // The automation folders: a bad one takes its default alone, too.
+        let r = read(r#"{"integrations":{"allowAgentControl":false,"readRoot":5,"writeRoot":"/w"}}"#);
+        assert!(!r.allow_agent_control, "a bad folder");
+        assert_eq!((r.read_root.as_str(), r.write_root.as_str()), ("", "/w"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pc-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn flags(read: Option<&std::path::Path>, write: Option<&std::path::Path>) -> photocraft_automation::args::AutomationArgs {
+        photocraft_automation::args::AutomationArgs { automation_read_root: read.map(Into::into), automation_write_root: write.map(Into::into) }
+    }
+
+    fn roots(read: &std::path::Path, write: &std::path::Path) -> photocraft_engine::prefs::Integrations {
+        photocraft_engine::prefs::Integrations {
+            read_root: read.to_string_lossy().into_owned(),
+            write_root: write.to_string_lossy().into_owned(),
+            ..Default::default()
+        }
+    }
+
+    /// Preferences › Integrations' folders are the automation roots when no flag names one, and
+    /// a flag wins over its preference, direction by direction.
+    #[test]
+    fn automation_folders_come_from_the_preferences_unless_a_flag_names_one() {
+        let dir = temp_dir("automation-roots");
+        let (pref, flag) = (dir.join("pref"), dir.join("flag"));
+        std::fs::create_dir_all(&pref).unwrap();
+        std::fs::create_dir_all(&flag).unwrap();
+
+        // No flags: both directions from the preferences.
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &roots(&pref, &pref)).unwrap();
+        assert_eq!(warning, None);
+        ws.write("a.txt", b"pref").unwrap();
+        assert_eq!(std::fs::read(pref.join("a.txt")).unwrap(), b"pref");
+        assert_eq!(ws.read("a.txt").unwrap(), b"pref");
+
+        // A write flag wins over the write folder; reads still come from the preference.
+        let (ws, _) = super::automation_workspace(&flags(None, Some(&flag)), &roots(&pref, &pref)).unwrap();
+        ws.write("b.txt", b"flag").unwrap();
+        assert!(flag.join("b.txt").is_file() && !pref.join("b.txt").exists(), "the flag's folder takes the write");
+        assert_eq!(ws.read("a.txt").unwrap(), b"pref");
+
+        // Empty preferences grant nothing, as no flags do.
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &photocraft_engine::prefs::Integrations::default()).unwrap();
+        assert_eq!(warning, None);
+        assert!(ws.read("a.txt").is_err() && ws.write("c.txt", b"x").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A preference's folder that can't be opened is left out (that direction fails closed) and
+    /// named in the warning; the app still starts. A flag's still stops the launch.
+    #[test]
+    fn a_missing_preference_folder_is_left_out_and_a_missing_flag_root_is_an_error() {
+        let dir = temp_dir("automation-roots-missing");
+        let missing = dir.join("gone");
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &roots(&dir, &missing)).unwrap();
+        let warning = warning.expect("the missing write folder is named");
+        assert!(warning.contains("Automation Write Folder") && !warning.contains("Read Folder"), "{warning}");
+        std::fs::write(dir.join("in.txt"), b"x").unwrap();
+        assert_eq!(ws.read("in.txt").unwrap(), b"x", "the read folder still applies");
+        assert!(ws.write("out.txt", b"x").is_err(), "no write access without its folder");
+
+        assert!(super::automation_workspace(&flags(Some(&missing), None), &roots(&dir, &dir)).is_err(), "a flag's root must open");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_published_connection_goes_when_dropped() {
+        use photocraft_automation::agent_link;
+        let dir = temp_dir("published");
+        let token = dir.join(agent_link::TOKEN_FILE);
+        let published = super::publish_connection(&dir, 7878, &token).expect("published");
+        let c = agent_link::read_connection(&dir).unwrap().expect("a connection");
+        assert_eq!((c.port, c.pid, c.token_file.as_path()), (7878, std::process::id(), token.as_path()));
+        drop(published);
+        assert_eq!(agent_link::read_connection(&dir).unwrap(), None);
+        // Nowhere to write (the settings folder's place is a file): no connection, no panic.
+        let blocker = dir.join("blocker");
+        std::fs::write(&blocker, b"").unwrap();
+        assert!(super::publish_connection(&blocker.join("settings"), 7878, &token).is_none());
+        // A relative token file is published as absolute: the client runs from another folder.
+        let published = super::publish_connection(&dir, 7878, std::path::Path::new("relative.token")).expect("published");
+        let c = agent_link::read_connection(&dir).unwrap().expect("a connection");
+        assert_eq!(c.token_file, std::env::current_dir().unwrap().join("relative.token"));
+        drop(published);
+        // One that can't be made absolute (empty) is not published as given.
+        assert!(super::publish_connection(&dir, 7878, std::path::Path::new("")).is_none());
+        assert_eq!(agent_link::read_connection(&dir).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A relative folder preference would depend on the folder the app was started from: left
+    /// out with a warning, like a missing one.
+    #[test]
+    fn a_relative_preference_folder_is_left_out() {
+        let dir = temp_dir("automation-roots-relative");
+        let relative = photocraft_engine::prefs::Integrations { read_root: ".".into(), ..roots(&dir, &dir) };
+        let (ws, warning) = super::automation_workspace(&flags(None, None), &relative).unwrap();
+        let warning = warning.expect("the relative read folder is named");
+        assert!(warning.contains("Automation Read Folder") && warning.contains("not an absolute path"), "{warning}");
+        assert!(ws.read("anything").is_err(), "no read access from a relative folder");
+        ws.write("out.txt", b"x").unwrap();
+        assert!(dir.join("out.txt").is_file(), "the absolute write folder still applies");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A launch the preferences start (no `--control`, no token): the token goes in the settings
+    /// folder, the connection is published there, and the token in the file it names opens the
+    /// control server.
+    #[test]
+    fn a_preference_started_server_publishes_a_connection_that_authenticates() {
+        use photocraft_automation::{agent_link, security};
+        use std::io::{BufRead, Write};
+        let settings = temp_dir("preference-started");
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let prefs = photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: u32::from(port), ..Default::default() };
+        let auth = photocraft_automation::args::ControlArgs { control_token: None, control_token_file: None };
+        let setup = super::control_setup_in(Some(settings.clone()), &prefs, None, auth, &flags(None, None));
+        let (listener, token, _) = setup.control.expect("the preference starts the server");
+        assert!(setup.published.is_some() && setup.warning.is_none());
+
+        let c = agent_link::read_connection(&settings).unwrap().expect("a published connection");
+        assert_eq!((c.port, c.token_file.clone()), (port, settings.join(agent_link::TOKEN_FILE)));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&c.token_file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        let from_file = security::client_token(None, Some(&c.token_file)).unwrap();
+        assert_eq!(from_file, token);
+
+        let _requests = crate::control_server::start(listener, token, eframe::egui::Context::default());
+        let mut stream = std::net::TcpStream::connect(c.addr()).unwrap();
+        stream.set_read_timeout(Some(std::time::Duration::from_secs(5))).unwrap();
+        let mut replies = std::io::BufReader::new(stream.try_clone().unwrap());
+        writeln!(stream, "{}", serde_json::json!({"id": "auth", "method": "auth", "params": {"token": from_file}})).unwrap();
+        let mut line = String::new();
+        replies.read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&line).unwrap()["result"]["authenticated"], true, "{line}");
+
+        // `--control` publishes nothing.
+        drop(setup.published);
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let auth = photocraft_automation::args::ControlArgs { control_token: None, control_token_file: Some(settings.join("cli.token")) };
+        let setup = super::control_setup_in(Some(settings.clone()), &prefs, Some(port), auth, &flags(None, None));
+        assert!(setup.control.is_some() && setup.published.is_none());
+        assert_eq!(agent_link::read_connection(&settings).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&settings);
+    }
+
+    /// A token file the preferences need but can't write (here the "settings folder" is a file)
+    /// leaves the control server off with a notice, and its port free, instead of exiting before
+    /// the window opens.
+    #[test]
+    fn a_token_file_that_cannot_be_written_turns_preference_control_off() {
+        let dir = temp_dir("unwritable-token");
+        let settings = dir.join("not-a-folder");
+        std::fs::write(&settings, b"").unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        let prefs = photocraft_engine::prefs::Integrations { allow_agent_control: true, control_port: u32::from(port), ..Default::default() };
+        let auth = photocraft_automation::args::ControlArgs { control_token: None, control_token_file: None };
+        let setup = super::control_setup_in(Some(settings.clone()), &prefs, None, auth, &flags(None, None));
+        assert!(setup.control.is_none() && setup.published.is_none());
+        let notice = setup.warning.expect("a notice says why");
+        assert_eq!(notice.title, "Agent control is off");
+        assert!(notice.lines.iter().any(|l| l.contains("token file")), "{:?}", notice.lines);
+        std::net::TcpListener::bind(("127.0.0.1", port)).expect("the port was let go");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

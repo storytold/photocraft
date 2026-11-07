@@ -17,6 +17,35 @@ photocraft --control 7878 --control-token-file /private/path/photocraft-control.
 
 If the file does not exist, PhotoCraft creates it with a fresh 256-bit token. On Unix the new file is mode `0600`; on Windows, protect it with an appropriate user-only ACL. An existing file is reused. If neither a token nor token file is configured, PhotoCraft generates a token for that launch and writes it to standard error. `PHOTOCRAFT_CONTROL_TOKEN` and `PHOTOCRAFT_CONTROL_TOKEN_FILE` are the environment-variable equivalents. A flag wins over its variable and an empty variable counts as unset; with `--control` (or `PHOTOCRAFT_CONTROL_PORT`), a token together with a token file, from flags or variables, is a usage error (exit status 2). Without it no token is read, so the pair is ignored.
 
+### Without `--control`: Preferences › Integrations
+
+An app started from the Dock, the Start menu or a file manager has no command line. Preferences › Integrations sets the same things for every launch (read when the app starts):
+
+| Preference | Launch option it stands in for |
+|---|---|
+| `integrations.allowAgentControl` (default on) | Off refuses the control server, `--control` included |
+| `integrations.controlPort` (default 0) | `--control <port>`; 0 = only with `--control` |
+| `integrations.readRoot` (default empty) | `--automation-read-root` |
+| `integrations.writeRoot` (default empty) | `--automation-write-root` |
+
+Each launch option, or its environment variable, wins over its preference; the two folders are decided separately. A folder named by a flag that can't be opened stops the launch (exit status 2), as before. A folder named only in the preferences that can't be opened, or isn't an absolute path, is left out, so that direction of file access fails closed; the app still starts, prints the reason on standard error and shows it in a notice. Automation can't change the two folders (`prefs.set` refuses `integrations.readRoot`, `integrations.writeRoot` and the whole `integrations` section): an agent must not widen its own file access.
+
+When the control server is started by `controlPort` (no `--control`) and no token was given, the app keeps its token in its settings folder, in `agent-control.token`, exactly as `--control-token-file <settings folder>/agent-control.token` would (created mode `0600` with a fresh token when missing, reused otherwise; delete it to get a new token). If that file can't be written or read (a read-only or full settings folder), the control server stays off for that launch: the app still starts, prints the reason on standard error and shows it in a notice. A token file named by `--control-token-file` that can't be used still stops the launch (exit status 2). Otherwise the app publishes the connection beside it, in `agent-connection.json`:
+
+```json
+{
+  "version": 1,
+  "pid": 41234,
+  "port": 7878,
+  "tokenFile": "/Users/me/Library/Application Support/Photocraft/agent-control.token",
+  "app": "0.20.1 (8e9277e20, 2026-11-04)"
+}
+```
+
+A local client reads that file, then the token from `tokenFile`, connects to `127.0.0.1:<port>` and authenticates as above. The file holds no secret. With `--control-token-file` or `PHOTOCRAFT_CONTROL_TOKEN_FILE` (and `controlPort`), `tokenFile` names that file instead; with a token given as a value (`--control-token`, `PHOTOCRAFT_CONTROL_TOKEN`) nothing is published. A `--control` launch publishes nothing: whoever started it chose the port and token.
+
+On Windows and Linux the app removes the file when it quits. On macOS (quitting ends the process inside AppKit) and after a crash the file stays behind, naming a `port` nothing listens on: a client should treat a refused connection as "not running", and the next launch replaces or removes the file. Until then, another local program could be listening on that port. A program running as the same user can read the token file anyway, so this matters only against one that can listen on a loopback port but can't read that `0600` file (another user's, or a sandboxed app). A client must check that the process `pid` names is still running before it sends the token, and treat the file as stale otherwise. That check narrows the gap but doesn't close it: the pid can be reused, and the app can quit between the check and the connection. A client that must rule this out should not send the token on the strength of this file at all; it should use a challenge exchange that never sends the token to the listener (#9778) once that is available, with no fallback to sending the token. `version` changes only with an incompatible format. The settings folder is the one that holds `preferences.json` (see [Preferences](#preferences); `PHOTOCRAFT_CONFIG_DIR` moves it).
+
 The first request on every TCP connection must authenticate. No other method is dispatched before this succeeds:
 
 ```json
@@ -264,6 +293,8 @@ the same commands work in the app, the CLI and headless MCP. Paths are dotted ca
 `unitsAndRulers`, `guidesGridAndSlices`, `plugIns`, `type`, `enhancedControls`, `rawDefaults`,
 `integrations`, plus `shortcuts.<command id>`, `menus` (`hidden`, `colors.<id>`), `toolbar`
 (`hidden`, `order`) and `colorSettings` (Edit › Color Settings).
+`integrations` (`allowAgentControl`, `controlPort`, `readRoot`, `writeRoot`) is read when the
+desktop app starts; see [Without `--control`](#without---control-preferences--integrations).
 
 | Command | Params |
 |---|---|
@@ -407,7 +438,8 @@ lines are visible. The protocol is unencrypted and must remain on loopback; do n
 it to an untrusted host.
 
 Filesystem access fails closed unless launch-time read and/or write roots are granted with
-`--automation-read-root` and `--automation-write-root`. The environment-variable equivalents
+`--automation-read-root` and `--automation-write-root` (or, for the desktop app, Preferences ›
+Integrations' `readRoot` / `writeRoot`, see [Without `--control`](#without---control-preferences--integrations)). The environment-variable equivalents
 (`PHOTOCRAFT_AUTOMATION_READ_ROOT` / `PHOTOCRAFT_AUTOMATION_WRITE_ROOT`) are supported by
 the desktop `photocraft` process, but not by headless `photocraft-cli mcp` or `serve`;
 for those CLI modes, supply the flags explicitly. In MCP bridge mode, configure roots on the

@@ -4278,6 +4278,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	チャンネルごとに別のドキュメントを選択してください。
 	A picked document is no longer open.	選択したドキュメントの一つが開かれていません。
 	A picked document is no longer a grayscale document of the same size.	選択したドキュメントの一つが、同じサイズのグレースケールのドキュメントではなくなりました。
+	Automation read folder	自動化の読み取りフォルダー
+	Automation write folder	自動化の書き込みフォルダー
 # Move tool options bar (#11381)
 	Align top edges	上端を揃える
 	Align vertical centers	垂直方向中央を揃える

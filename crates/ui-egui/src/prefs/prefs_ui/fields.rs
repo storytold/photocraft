@@ -34,6 +34,9 @@ pub(super) fn humanize(key: &str) -> String {
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
+        // Integrations: the automation roots (`--automation-read-root` / `--automation-write-root`).
+        "readRoot" => return "Automation read folder".into(),
+        "writeRoot" => return "Automation write folder".into(),
         _ => {}
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
@@ -520,6 +523,11 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 let mut s = s.clone();
                 ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(tl!(&label));
                 obj.insert(k, json!(s));
+                if read_at_launch(&path) {
+                    ui.end_row();
+                    ui.label("");
+                    ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                }
             }
             Value::Number(n) => {
                 let value_label = ui.label(RichText::new(tl!(&label)).color(t.text_dim));

@@ -1581,6 +1581,8 @@ fn unimplemented_preferences_are_hidden_from_the_dialog() {
     assert!(has_visible_fields(&values, "integrations"));
     assert!(!prefs::is_hidden("integrations.allowAgentControl"));
     assert!(!prefs::is_hidden("integrations.controlPort"));
+    assert!(!prefs::is_hidden("integrations.readRoot"));
+    assert!(!prefs::is_hidden("integrations.writeRoot"));
     // "Fill new type layers with placeholder text" and "Use Escape to Commit" are live; other Type rows stay hidden.
     assert!(has_visible_fields(&values, "type"));
     assert!(!prefs::is_hidden("type.fillNewTypeLayersWithPlaceholder"));
@@ -1825,18 +1827,23 @@ fn rendering_mode_explains_next_launch() {
     assert!(h.query_by_label("Applies at next launch.").is_none());
 }
 
-/// #4097: Allow Agent Control and Control Port are read when the app starts, and say so.
+/// #4097: Allow Agent Control, Control Port and the automation folders are read when the app
+/// starts, and say so.
 #[test]
 fn integrations_explain_next_launch() {
     use egui_kittest::{Harness, kittest::Queryable};
-    let obj = json!({"allowAgentControl": true, "controlPort": 0}).as_object().unwrap().clone();
+    let obj = json!({"allowAgentControl": true, "controlPort": 0, "readRoot": "", "writeRoot": ""}).as_object().unwrap().clone();
     let mut h = Harness::new_ui_state(
         |ui, obj: &mut Map<String, Value>| section_fields(ui, "integrations", obj, &[], crate::i18n::Lang::from_pref("en"), None, ""),
         obj,
     );
     h.run_steps(4);
     h.get_by_label("Allow agent control");
-    assert_eq!(h.query_all_by_label("Applies at next launch.").count(), 2, "one notice under each row");
+    // The label and the text field it names.
+    for folder in ["Automation read folder", "Automation write folder"] {
+        h.get_by_role_and_label(egui::accesskit::Role::TextInput, folder);
+    }
+    assert_eq!(h.query_all_by_label("Applies at next launch.").count(), 4, "one notice under each row");
 }
 
 #[test]
