@@ -52,21 +52,36 @@ pub fn fields(app: &PhotocraftApp) -> Map<String, Value> {
     f
 }
 
+/// Open Stroke with the current editing target, retaining the command's channel-view behavior.
 pub fn open(app: &mut PhotocraftApp) -> u64 {
-    let f = fields(app);
+    let mut f = fields(app);
+    let target = app.with_mask_target(COMMAND, json!({}));
+    f.insert("__target".into(), target.get("target").cloned().unwrap_or_else(|| crate::canvas::paint_target(app)));
+    if let Some(st) = app.session.active() {
+        f.insert("__document".into(), json!(st.doc.id.0));
+        f.insert("__layer".into(), json!(st.active_layer));
+    }
     app.ui.open_dialog(crate::state::DialogKind::Command, f)
 }
 
-/// Only Stroke params are passed to the engine; private UI markers are ignored.
+/// Pass Stroke choices and the captured editing target, leaving other private markers out.
 pub fn params(f: &Map<String, Value>) -> Value {
-    Value::Object(KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect())
+    let mut p: Map<String, Value> = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+    if let Some(target) = f.get("__target") {
+        p.insert("target".into(), target.clone());
+    }
+    Value::Object(p)
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    let remembered = params(f);
-    let result = app.run(COMMAND, remembered.clone());
+    let st = app.session.active().ok_or(tl!("The document is closed"))?;
+    if f.get("__document").and_then(Value::as_u64) != Some(st.doc.id.0) || f.get("__layer") != Some(&json!(st.active_layer)) {
+        return Err(tl!("The document or active layer changed. Open Stroke again.").into());
+    }
+    let result = app.run(COMMAND, params(f));
     if result.is_ok() {
-        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), remembered));
+        let remembered = KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+        app.session.prefs.edit(|p| p.dialogs.insert(COMMAND.into(), Value::Object(remembered)));
     }
     result
 }
