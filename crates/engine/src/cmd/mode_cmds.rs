@@ -299,7 +299,10 @@ fn hex(c: [u8; 3]) -> String {
 fn parse_color(v: &Value) -> Option<[u8; 3]> {
     match v {
         Value::String(s) => {
-            let s = s.trim_start_matches('#');
+            let s = s.strip_prefix('#').unwrap_or(s);
+            if s.len() != 6 || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return None;
+            }
             let b = |i: usize| u8::from_str_radix(s.get(i..i + 2)?, 16).ok();
             Some([b(0)?, b(2)?, b(4)?])
         }
