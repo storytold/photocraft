@@ -1,4 +1,4 @@
-use super::appearance::{canvas_style, sync_animations, sync_appearance, sync_display_scale, sync_tooltips};
+use super::appearance::{canvas_style, sync_appearance, sync_display_scale, sync_tooltips};
 use super::startup::{load, presets_store, recovery, sync_rulers};
 use super::{DocId, HashMap, PhotocraftApp, Value, prefs};
 
@@ -16,7 +16,6 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     crate::actions_folder::tick(app, ctx);
     sync_tooltips(app, ctx);
-    sync_animations(app, ctx);
     app.sync_recent();
     // Monotonic, not `ctx.input(|i| i.time)`: logic also runs on hidden ticks, where egui's input
     // time is that of the last UI pass.

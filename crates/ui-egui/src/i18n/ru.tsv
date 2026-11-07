@@ -272,6 +272,7 @@
 	Right	Правый
 	Open Recent	Открыть недавние
 	Clear Recent Files	Очистить список недавних файлов
+	Clear Recent File List	Очистить список недавних файлов
 	Remove from Recent	Удалить из недавних
 	Remove {name} from Recent	Удалить {name} из недавних
 	Close	Закрыть
@@ -280,6 +281,10 @@
 	Restore	Свернуть в окно
 	Close All	Закрыть все
 	Close Others	Закрыть остальные
+	New Document…	Новый документ…
+	Open Document…	Открыть…
+	Consolidate All to Here	Объединить всё здесь
+	Move to New Window	Переместить в новое окно
 	Save	Сохранить
 	Save As…	Сохранить как…
 	Save a Copy…	Сохранить копию…
@@ -676,7 +681,6 @@
 	Match Location	Согласовать положение
 	Match Rotation	Согласовать поворот
 	Match All	Согласовать всё
-	New Window for Document	Новое окно документа
 	Workspace	Рабочая среда
 	Extensions	Расширения
 	Panels	Панели
@@ -706,6 +710,12 @@
 	Timeline	Шкала времени
 	Tool Presets	Наборы инструментов
 	Tools	Инструменты
+	Contextual Task Bar	Контекстная панель задач
+	Hide bar	Скрыть панель
+	Reset bar position	Сбросить положение панели
+	Pin bar position	Закрепить положение панели
+	Move bar	Переместить панель
+	More options	Другие параметры
 	Libraries	Библиотеки
 	3D	3D
 	Toolbars	Панели инструментов
@@ -846,6 +856,7 @@
 	Units & Rulers…	Единицы и линейки…
 	Guides, Grid & Slices…	Направляющие, сетка и фрагменты…
 	Plug-ins…	Плагины…
+	Plugins…	Плагины…
 	Technology Previews	Предпросмотр технологий
 	Scratch Disks…	Рабочие диски…
 	Export Preferences…	Экспорт настроек…
@@ -1068,8 +1079,8 @@
 	ACES	ACES
 	Industry Standard	Отраслевой стандарт
 	Web	Web
-	Internet Standard RGB	Стандартный RGB для Интернета
-	Legacy Macintosh RGB	Устаревший RGB Macintosh
+	Internet Standard RGB (sRGB)	Стандартный RGB для Интернета (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Устаревший RGB Macintosh (Gamma 1.8)
 	Monitor RGB	Монитор RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Мелованная бумага CMYK
@@ -1341,6 +1352,7 @@
 	Path to Illustrator…	Контур в Illustrator…
 	Make Work Path	Создать рабочий контур
 	Make Selection	Создать выделение
+	Make Shape	Создать фигуру
 	Fill Path	Залить контур
 	Stroke Path	Обвести контур
 	Clipping Path	Обтравочный контур
@@ -1355,6 +1367,7 @@
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Щелчок: выбрать узел · Перетаскивание: переместить узел, маркер или сегмент · {shift}-щелчок: добавить · {alt}-щелчок: весь подконтур
 	Draw with the Pen tool (P) or make a work path from a selection.	Нарисуйте пером (P) или создайте рабочий контур из выделения.
 	Source: not set ({key}-click with Clone Stamp)	Источник: не задан ({key}-клик штампом)
+	Source: {name}	Источник: {name}
 	Clone source {n} ({key}-click with Clone Stamp to set)	Источник клонирования {n} ({key}-клик штампом, чтобы задать)
 	{key}-click to set the source	{key}-клик, чтобы задать источник
 	Option-click to define a source point to clone from	Option-клик, чтобы задать точку источника клонирования
@@ -1736,6 +1749,7 @@
 	Move Tool	Перемещение
 	Could not use the move tool because the layer is locked.	Не удалось использовать инструмент «Перемещение», потому что слой заблокирован.
 	Could not complete the Free Transform command because the layer is locked.	Не удалось выполнить команду «Свободное трансформирование», потому что слой заблокирован.
+	Could not transform because the layer is locked.	Не удалось выполнить трансформирование, потому что слой заблокирован.
 	Rectangular Marquee Tool	Прямоугольная область
 	Elliptical Marquee Tool	Овальная область
 	Single Row Marquee Tool	Область (горизонтальная строка)
@@ -1852,6 +1866,7 @@
 	Saved	Сохранено
 	Reveal in Finder	Показать в Finder
 	Show in Explorer	Показать в Проводнике
+	Reveal in Explorer	Показать в Проводнике
 	Show in Folder	Показать в папке
 	Before (Y)	До (Y)
 	Save Settings…	Сохранить настройки…
@@ -2017,6 +2032,8 @@
 	Combine Shapes	Комбинировать фигуры
 	Contract…	Сжать…
 	Convert to Embedded	Преобразовать во встроенный
+	Embed Linked	Встроить связанный
+	Embed All Linked	Встроить все связанные
 	Convert to Layers	Преобразовать в слои
 	Convert to Linked…	Преобразовать в связанный…
 	Count	Счёт
@@ -2105,6 +2122,7 @@
 	Pixelate	Оформление пикселями
 	Place Scale Marker…	Шкала масштаба…
 	Plug-ins	Плагины
+	Plugins	Плагины
 	Print One Copy	Печать одной копии
 	Print…	Печать…
 	Range	Диапазон
@@ -2149,7 +2167,7 @@
 	Vertical Centers	Центры по вертикали
 	Video Frames to Layers…	Видеокадры в слои…
 	WIA Support…	Поддержка WIA…
-	Working CMY Plate	Рабочая голубая форма
+	Working CMY Plates	Рабочие формы CMY
 	Absolute	Абсолютный
 	Action	Операция
 	Adaptive	Адаптивный
@@ -2430,6 +2448,11 @@
 	Show canvas dots	Показывать точки холста
 	Clip thumbnails to layer bounds	Обрезать миниатюры по границам слоя
 	Clip Thumbnails to Layer Bounds	Обрезать миниатюры по границам слоя
+	No Thumbnails	Без миниатюр
+	Small Thumbnails	Мелкие миниатюры
+	Medium Thumbnails	Средние миниатюры
+	Large Thumbnails	Крупные миниатюры
+	Clip Thumbnails to Document Bounds	Обрезать миниатюры по границам документа
 	Canvas color	Цвет холста
 	Canvas custom color	Свой цвет холста
 	Classic	Классическая
@@ -2556,7 +2579,6 @@
 	Show only crosshair while painting	Только перекрестье при рисовании
 	Show slice numbers	Показывать номера фрагментов
 	Show tooltips	Показывать подсказки
-	Enable animations	Включить анимацию
 	Show highlight on rollover	Показывать подсветку при наведении
 	Show bounding box when dragging layer	Показывать рамку при перетаскивании слоя
 	System title bar	Системная строка заголовка
@@ -3245,6 +3267,8 @@ curves	Smooth	Сгладить
 	Step {step} is waiting for its dialog	Шаг {step} ожидает своего диалога
 @plural	{n} action|{n} actions	{n} операция|{n} операции|{n} операций
 	Background (Default)	Фон (по умолчанию)
+	Background (default)	Фон (по умолчанию)
+	Transparent (default)	Прозрачный (по умолчанию)
 	Content-Aware Fill	Заливка с учётом содержимого
 	Include All Subfolders	Включить все вложенные папки
 	Auto Add/Delete	Автодобавление/удаление
@@ -3267,6 +3291,7 @@ curves	Smooth	Сгладить
 	Shadow Tint	Оттенок теней
 	Paints from the History panel's source state	Рисует из исходного состояния панели «История»
 	Sets the source for the history brush	Задаёт источник для кисти истории
+	The History Brush source was deleted: set a new source in the History panel	Источник кисти истории был удалён: задайте новый источник на панели «История»
 	Select Inverse	Инвертировать выделение
 	Pro (Light)	Pro (светлая)
 	Pro (Light Gray)	Pro (светло-серая)
@@ -4694,6 +4719,8 @@ shape	Appearance	Оформление
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Недопустимое числовое значение. Требуется целое число от {min}% до {max}%. Вставлено предыдущее значение.
 	Color Aware	С учетом цвета
 	Decontaminate Colors	Очистить цвета
@@ -4717,3 +4744,50 @@ shape	Appearance	Оформление
 	Stop Color	Цвет контрольной точки
 	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
+
+# Action Stop message (#8386)
+	Message	Сообщение
+# Playback Options (#5212)
+	Playback Options…	Параметры воспроизведения…
+	Playback Options	Параметры воспроизведения
+	Accelerated	Ускоренное
+	Step by Step	Пошаговое
+	Pause For:	Пауза на:
+	Pause For	Пауза на
+	seconds	с
+	Create a single history state	Создавать одно состояние истории
+	Drag to move the active shape's path or the Work Path	Перетащите, чтобы переместить контур активной фигуры или рабочий контур
+	Generator enabled	Генератор включён
+	Hidden	Скрыто
+	Move Up	Переместить вверх
+	Move Down	Переместить вниз
+	On your computer	На вашем компьютере
+	New file	Новый файл
+	Learn	Обучение
+	Website	Сайт
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Рамка поддерживает аффинные преобразования; для перспективных преобразований выберите её изображение
+	A frame supports affine transforms; select its image to warp it	Рамка поддерживает аффинные преобразования; для деформации выберите её изображение
+	Convert to Frame…	Преобразовать в рамку…
+	Create a new custom frame	Создать новую произвольную рамку
+	Create a new polygonal frame	Создать новую многоугольную рамку
+	Create a new triangular frame	Создать новую треугольную рамку
+	Fit Content to Frame	Подогнать содержимое под рамку
+	Fit Frame to Content	Подогнать рамку под содержимое
+	Frame coordinates must be finite and within 600000 pixels	Координаты рамки должны быть конечными и находиться в пределах 600000 пикселей
+	Import Image…	Импортировать изображение…
+	Invalid frame transform	Недопустимое преобразование рамки
+	Invalid nested file drop	Недопустимое вложенное перетаскивание файла
+	New Frame	Новая рамка
+	Replace Image…	Заменить изображение…
+	The frame is locked	Рамка заблокирована
+	The frame is unavailable	Рамка недоступна
+
+# Channels panel menu (#11451)
+	Channel Options…	Параметры канала…
+	Specify Channels:	Указать каналы:
+	Not enough grayscale documents for this mode.	Недостаточно документов в градациях серого для этого режима.
+	Pick a different document for each channel.	Выберите отдельный документ для каждого канала.
+	A picked document is no longer open.	Один из выбранных документов больше не открыт.
+	A picked document is no longer a grayscale document of the same size.	Один из выбранных документов больше не является документом в градациях серого того же размера.
