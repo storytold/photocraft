@@ -265,8 +265,9 @@ pub fn hdr_toning(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning) {
     });
     let mut base = logl.clone();
     gauss_blur_n(&mut base, w, h, 1, p.radius.max(1.0) / 2.0);
-    let n = px.iter().filter(|q| q[3] > 0.0).count().max(1) as f32;
-    let mean = base.iter().zip(px.iter()).filter(|(_, q)| q[3] > 0.0).map(|(b, _)| *b).sum::<f32>() / n;
+    let n = px.iter().filter(|q| q[3] > 0.0).count().max(1) as f64;
+    // Match the checked path: narrow sums lose log-luminance samples on large scenes.
+    let mean = (base.iter().zip(px.iter()).filter(|(_, q)| q[3] > 0.0).map(|(b, _)| f64::from(*b)).sum::<f64>() / n) as f32;
     let compress = 1.0 / (1.0 + p.strength.max(0.0));
     let detail = 1.0 + p.detail / 100.0;
     let exposure = 2f32.powf(p.exposure);

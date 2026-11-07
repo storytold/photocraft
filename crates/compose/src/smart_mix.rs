@@ -75,7 +75,7 @@ fn normal_native(base: &[f32], filtered: &[f32], out: &mut [f32], alpha: bool, o
 /// Mix an ordinary filter result with its input over `area`, preserving base data outside it.
 ///
 /// `area` is the caller's native mixing extent, normally the union of input/result content
-/// bounds. Non-Normal coverage changes select source-over only at the affected pixel.
+/// bounds. Non-Normal coverage changes select source-over for the complete mixing extent.
 /// Alpha-preserving filters instead edit existing coverage, including at fractional opacity.
 /// Processed F32 samples are validated before blending and after native color conversion.
 /// The caller must admit the retained output tiles; scratch is bounded to three tile buffers.
@@ -92,6 +92,22 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
     }
     let fmt = base.format();
     let n = fmt.channels();
+    // Decide once for the whole operation, as the engine's original mixer did.
+    // Per-pixel equality makes a one-ULP alpha change switch adjacent pixels
+    // between coverage editing and source-over (e.g. 0.5 versus 0.75 alpha).
+    let mut composite_coverage = false;
+    if mode != BlendMode::Normal && fmt.alpha {
+        for tile in area.tiles() {
+            check(ctl)?;
+            let rect = tile.rect().intersect(&area);
+            let b = base.try_read_region(rect)?;
+            let t = filtered.try_read_region(rect)?;
+            if b.chunks_exact(n).zip(t.chunks_exact(n)).any(|(bp, tp)| bp.last() != tp.last()) {
+                composite_coverage = true;
+                break;
+            }
+        }
+    }
     let mut out = base.clone();
     for tile in area.tiles() {
         check(ctl)?;
@@ -118,7 +134,7 @@ pub fn mix(base: &Surface, filtered: &Surface, area: Rect, mode: BlendMode, opac
             }
             let b = photocraft_raster::to_rgba(&fmt, bp);
             let t = photocraft_raster::to_rgba(&fmt, tp);
-            if mode != BlendMode::Normal && fmt.alpha && bp.last() != tp.last() {
+            if composite_coverage {
                 let rgba =
                     if fmt.sample == SampleType::F32 { composite_hdr(mode, b, t, opacity) } else { photocraft_color::blend::composite(mode, b, t, opacity) };
                 photocraft_raster::from_rgba_into(&fmt, rgba, op);
@@ -298,8 +314,8 @@ mod tests {
     }
 
     #[test]
-    /// A changed-alpha edge in another tile must not increase untouched interior coverage.
-    fn non_normal_coverage_is_classified_per_pixel_across_tiles() {
+    /// A changed-alpha edge selects the same source-over rule across the entire mixing extent.
+    fn non_normal_coverage_is_classified_once_across_tiles() {
         let area = Rect::new(0, 0, 257, 1);
         for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
             for sample in SampleType::ALL {
@@ -313,18 +329,28 @@ mod tests {
                     for x in [0, 256] {
                         let b = photocraft_raster::to_rgba(&format, &base.pixel(x, 0));
                         let t = photocraft_raster::to_rgba(&format, &filtered.pixel(x, 0));
-                        let expected = if x == 0 {
-                            let color = photocraft_color::blend::blend_rgb(blend, [b[0], b[1], b[2]], [t[0], t[1], t[2]]);
-                            [0.5 * (b[0] + color[0]), 0.5 * (b[1] + color[1]), 0.5 * (b[2] + color[2]), b[3]]
-                        } else {
-                            photocraft_color::blend::composite(blend, b, t, 0.5)
-                        };
+                        let expected = photocraft_color::blend::composite(blend, b, t, 0.5);
                         let expected = surface(format, expected, Rect::new(x, 0, x + 1, 1));
                         for (got, want) in mixed.pixel(x, 0).into_iter().zip(expected.pixel(x, 0)) {
                             assert!((got - want).abs() <= tolerance(sample), "{mode:?}/{sample:?}/{blend:?}/x{x}: {got}/{want}");
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// A one-ULP alpha difference cannot tear otherwise identical neighboring pixels or tile edges.
+    #[test]
+    fn fractional_alpha_rounding_uses_one_coverage_rule() {
+        let area = Rect::new(0, 0, 257, 1);
+        let base = surface(PixelFormat::RGBA32F, [0.2, 0.4, 0.6, 0.5], area);
+        let mut filtered = surface(PixelFormat::RGBA32F, [0.8, 0.6, 0.4, 0.5], area);
+        filtered.write_pixel(256, 0, &[0.8, 0.6, 0.4, f32::from_bits(0.5f32.to_bits() + 1)]);
+        for blend in [BlendMode::Multiply, BlendMode::Screen, BlendMode::Luminosity] {
+            let result = mix(&base, &filtered, area, blend, 1., &Interrupt::NONE).unwrap();
+            for x in [0, 1, 255, 256] {
+                assert!((result.pixel(x, 0)[3] - 0.75).abs() < 1e-6);
             }
         }
     }

@@ -166,18 +166,19 @@ pub fn process_with(px: &mut [[f32; 4]], w: usize, h: usize, p: &HdrToning, ctl:
     })?;
     let mut scratch = zeroes(w.max(h), 0f32, ctl)?;
     blur(&mut base, w, h, &mut scratch, p.radius / 2., ctl)?;
-    let mut total = 0f32;
+    // F32 loses successive log-luminance additions on ordinary megapixel images.
+    let mut total = 0f64;
     let mut visible = 0usize;
     for (qs, bs) in px.chunks(2048).zip(base.chunks(2048)) {
         check(ctl)?;
         for (q, b) in qs.iter().zip(bs) {
             if q[3] > 0. {
-                total += b;
+                total += f64::from(*b);
                 visible += 1;
             }
         }
     }
-    let mean = total / visible.max(1) as f32;
+    let mean = (total / visible.max(1) as f64) as f32;
     let mut curve = zeroes(p.curve.len(), (0f32, 0f32), ctl)?;
     curve.copy_from_slice(&p.curve);
     // Stable bounded in-place insertion avoids slice::sort's infallible temporary allocation.
@@ -365,6 +366,22 @@ pub(crate) fn run_image(src: &crate::Image, out: Rect, ctx: &crate::Ctx, p: &Hdr
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Uniform ten-megapixel scenes retain their exposure regardless of the reduction length.
+    #[test]
+    fn megapixel_scene_exposure_matches_single_pixel_reference() {
+        let p = HdrToning { radius: 1., detail: 0., saturation: 0., ..Default::default() };
+        let sample = [0.18, 0.18, 0.18, 1.];
+        let mut reference = [sample];
+        process_with(&mut reference, 1, 1, &p, &Interrupt::NONE).unwrap();
+        let mut pixels = vec![sample; 4000 * 2500];
+        process_with(&mut pixels, 4000, 2500, &p, &Interrupt::NONE).unwrap();
+        for pixel in pixels {
+            for (value, expected) in pixel.into_iter().zip(reference[0]) {
+                assert!((value - expected).abs() < 2e-6, "{value} versus {expected}");
+            }
+        }
+    }
     #[test]
     /// Preserve skipped transparent CMYK and Lab samples bit for bit, with and without selection mixing.
     fn skipped_transparent_native_samples_survive_toning_and_selection_bit_for_bit() {

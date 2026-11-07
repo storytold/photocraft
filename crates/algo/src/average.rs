@@ -171,8 +171,11 @@ pub(crate) fn run_image(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) 
         Ok(values)
     };
     let mut run = || -> Result<Vec<f32>, Error> {
+        let domain = src.rect.intersect(&ctx.bounds);
         surface.try_write_region(src.rect, &src.data).map_err(|_| Error::Allocation)?;
-        apply_with(&surface, ctx.bounds, ctx.bounds, None, &Interrupt::NONE)?.try_read_region(out).map_err(|_| Error::Allocation)
+        // Average the complete supplied image, even when only one output tile is
+        // requested. Unpopulated canvas pixels are not part of this image.
+        apply_with(&surface, domain, domain, None, &Interrupt::NONE)?.try_read_region(out).map_err(|_| Error::Allocation)
     };
     run().unwrap_or_else(|_| identity().unwrap_or_default())
 }
@@ -181,6 +184,37 @@ pub(crate) fn run_image(src: &crate::image::Image, out: Rect, ctx: &crate::Ctx) 
 mod tests {
     use super::*;
     use photocraft_color::{ColorMode, PixelFormat, SampleType};
+
+    /// Canvas size and output tiling must not dilute a small offset image's color or alpha mean.
+    #[test]
+    fn raw_average_uses_image_domain_and_keeps_global_mean_across_output_tiles() {
+        let rect = Rect::new(12, 15, 14, 16);
+        for alpha in [false, true] {
+            let format = PixelFormat::new(ColorMode::Rgb, SampleType::F32, alpha);
+            let mut data = vec![0.2, 0.4, 0.6];
+            if alpha {
+                data.push(0.5);
+            }
+            data.extend([0.8, 0.6, 0.4]);
+            if alpha {
+                data.push(1.);
+            }
+            let image = crate::Image { rect, ch: format.channels(), data };
+            for bounds in [Rect::new(0, 0, 20, 20), Rect::new(0, 0, 10_000, 10_000)] {
+                let ctx = crate::Ctx { bounds, mode: ColorMode::Rgb, alpha };
+                let expected = if alpha { vec![0.6, 8. / 15., 7. / 15., 0.75] } else { vec![0.5, 0.5, 0.5] };
+                for out in [rect, Rect::new(12, 15, 13, 16), Rect::new(13, 15, 14, 16)] {
+                    let result = run_image(&image, out, &ctx);
+                    assert_eq!(result.len(), out.size().area() as usize * format.channels());
+                    for pixel in result.chunks_exact(format.channels()) {
+                        for (value, want) in pixel.iter().zip(&expected) {
+                            assert!((value - want).abs() < 1e-6);
+                        }
+                    }
+                }
+            }
+        }
+    }
     #[test]
     /// Keep unselected CMYK separations and out-of-gamut Lab samples unchanged at every native depth.
     fn zero_coverage_preserves_native_cmyk_and_out_of_gamut_lab_samples() {
