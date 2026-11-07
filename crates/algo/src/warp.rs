@@ -72,24 +72,42 @@ pub fn place_source(
 const MAX_SCALED_SIDE: f64 = (1u32 << 20) as f64;
 
 /// A smart object scaled and moved (no rotation, skew or flip: `[sx, sy, dx, dy]`, source →
-/// document), as the reference application draws one: its box is snapped to whole pixels (its
-/// left and top edges rounded, and its width and height), and the contents are resized to fill
-/// it with Image Size's Bicubic Automatic: Bicubic Sharper where they shrink, Smoother where
-/// they grow. Past the contents' edges the filter reads transparency, and nothing is drawn
-/// outside the box. Measured against the reference application at 16 scales from 10 % to 200 %:
-/// within 0.02 levels. `None` for a flip or a size this path doesn't take.
-fn place_scaled(src: &Surface, src_rect: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Option<Surface> {
-    if src_rect.is_empty() || !(sx > 0.0 && sy > 0.0) {
+/// document), as the reference application draws one ([`scale_snapped`]), its contents being the
+/// pixels of `src` inside `src_rect`. `None` for a flip or a size this path doesn't take.
+fn place_scaled(src: &Surface, src_rect: Rect, t: [f64; 4]) -> Option<Surface> {
+    snapped_scale(src_rect, t)?;
+    scale_snapped(&crate::resample::crop_surface(src, src_rect), src_rect, t)
+}
+
+/// Where the reference application puts a smart object whose box (its contents' canvas) is
+/// `bounds`, scaled and moved by `[sx, sy, dx, dy]` (source → document): the box's left and top
+/// edges and its width and height are each rounded to whole pixels, halves up (a move to 106.5
+/// lands on 107). Returns the map that fills that snapped box, as `[sx, sy, dx, dy]`, or `None`
+/// for a flip, an empty box, or a size past [`MAX_SCALED_SIDE`].
+pub fn snapped_scale(bounds: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Option<[f64; 4]> {
+    if bounds.is_empty() || !(sx > 0.0 && sy > 0.0) {
         return None;
     }
-    let (w, h) = (f64::from(src_rect.width()), f64::from(src_rect.height()));
-    let (x0, y0) = ((dx + sx * f64::from(src_rect.x0)).round(), (dy + sy * f64::from(src_rect.y0)).round());
-    let (pw, ph) = ((sx * w).round().max(1.0), (sy * h).round().max(1.0));
+    let (w, h) = (f64::from(bounds.width()), f64::from(bounds.height()));
+    let snap = |v: f64| (v + 0.5).floor();
+    let (x0, y0) = (snap(dx + sx * f64::from(bounds.x0)), snap(dy + sy * f64::from(bounds.y0)));
+    let (pw, ph) = (snap(sx * w).max(1.0), snap(sy * h).max(1.0));
     let fits = |v: f64| v.is_finite() && v.abs() < MAX_SCALED_SIDE;
     if !(fits(x0) && fits(y0) && fits(pw) && fits(ph)) {
         return None;
     }
-    let (x0, y0) = (x0 as i32, y0 as i32);
+    let (kx, ky) = (pw / w, ph / h);
+    Some([kx, ky, x0 - kx * f64::from(bounds.x0), y0 - ky * f64::from(bounds.y0)])
+}
+
+/// `src` scaled and moved by `t` the way the reference application draws a smart object with
+/// the box `bounds` ([`snapped_scale`]): resized to fill the snapped box with Image Size's Bicubic
+/// Automatic, Bicubic Sharper where it shrinks and Smoother where it grows. Past the pixels the
+/// filter reads transparency. Measured against the reference application at 16 scales from 10 %
+/// to 200 %: within 0.02 levels. Shared with Convert to Layers, so the layers it makes look as
+/// the smart object did.
+pub fn scale_snapped(src: &Surface, bounds: Rect, t: [f64; 4]) -> Option<Surface> {
+    let [kx, ky, dx, dy] = snapped_scale(bounds, t)?;
     let fmt = src.format();
     let with_alpha;
     let src = if fmt.alpha {
@@ -98,10 +116,13 @@ fn place_scaled(src: &Surface, src_rect: Rect, [sx, sy, dx, dy]: [f64; 4]) -> Op
         with_alpha = src.convert(PixelFormat::new(fmt.mode, fmt.sample, true));
         &with_alpha
     };
-    // The contents at the origin, so the resize (about the origin) fills [0, pw) x [0, ph).
-    let at_origin = crate::resample::crop_surface(src, src_rect).translated(-src_rect.x0, -src_rect.y0, src_rect);
+    // At the box's origin the resize (about the origin) fills [0, width) x [0, height) exactly.
+    let (bx, by) = (bounds.x0, bounds.y0);
+    let at_origin = src.translated(-bx, -by, src.content_bounds());
     let resized =
-        if pw == w && ph == h { at_origin } else { crate::resample::resize_surface(&at_origin, pw / w, ph / h, crate::resample::Resample::BicubicAutomatic) };
+        if kx == 1.0 && ky == 1.0 { at_origin } else { crate::resample::resize_surface(&at_origin, kx, ky, crate::resample::Resample::BicubicAutomatic) };
+    // The snapped box's corner: whole pixels by construction.
+    let (x0, y0) = ((dx + kx * f64::from(bx)).round() as i32, (dy + ky * f64::from(by)).round() as i32);
     Some(crate::resample::translate_surface(&resized, x0, y0))
 }
 
@@ -1073,6 +1094,18 @@ mod tests {
         assert_eq!(row[276], 0.0);
         assert!(row[277] > 100.0 && row[361] > 100.0, "{} {}", row[277], row[361]);
         assert_eq!(row[362], 0.0);
+    }
+
+    /// The snapped box rounds halves up on both sides of 0, as the reference application does
+    /// (a move to 106.5 lands on 107): a box from -6 moved by half a pixel starts at -5, not -6.
+    #[test]
+    fn snapping_rounds_halves_up() {
+        let r = Rect::new(-6, 5, 40, 38);
+        assert_eq!(snapped_scale(r, [1.0, 1.0, 0.5, 0.25]), Some([1.0, 1.0, 1.0, 0.0]));
+        assert_eq!(snapped_scale(r, [1.0, 1.0, 106.5, -7.25]).map(|t| t[2] - 6.0), Some(101.0));
+        assert_eq!(snapped_scale(r, [-1.0, 1.0, 0.0, 0.0]), None, "a flip takes the general path");
+        assert_eq!(snapped_scale(r, [f64::NAN, 1.0, 0.0, 0.0]), None);
+        assert_eq!(snapped_scale(r, [1e300, 1.0, 0.0, 0.0]), None);
     }
 
     /// Shrinking resamples with Bicubic Sharper and enlarging with Bicubic Smoother (Image Size's

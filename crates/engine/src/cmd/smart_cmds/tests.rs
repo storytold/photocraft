@@ -490,7 +490,8 @@ fn transforms_re_render_from_source_losslessly() {
     let (es, er) = (mean_diff(&smart_result, &original), mean_diff(&raster_result, &original));
     assert!(es < 1e-6, "smart error {es}");
     assert!(er > 0.02, "raster error {er}");
-    // A non-integer move re-renders with bicubic; moving back is exact again.
+    // A non-integer move snaps to whole pixels, halves up (-5.5 to -5), as the reference
+    // application draws it; moving back is exact again.
     smart.execute("edit.transform", json!({"layer": sid, "matrix": [1, 0, 0, 1, 0.5, 0.25]})).unwrap();
     assert!(max_diff(&flat(&smart), &original) > 0.01);
     smart.execute("edit.transform", json!({"layer": sid, "matrix": [1, 0, 0, 1, -0.5, -0.25]})).unwrap();
