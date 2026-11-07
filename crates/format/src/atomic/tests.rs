@@ -29,15 +29,6 @@ fn assert_no_temp(dir: &Path) {
     assert!(leftovers.is_empty(), "temporary files left behind: {leftovers:?}");
 }
 
-/// The sorted entry names of `dir`, or `None` when it cannot be read
-/// (missing, or not a directory): callers compare before/after listings and
-/// skip the comparison when either side is unreadable.
-fn entry_names(dir: &Path) -> Option<Vec<std::ffi::OsString>> {
-    let mut names: Vec<_> = std::fs::read_dir(dir).ok()?.filter_map(|e| e.ok().map(|e| e.file_name())).collect();
-    names.sort();
-    Some(names)
-}
-
 const ORIGINAL: &[u8] = b"the user's precious original document";
 
 /// Real file system with failures injected at chosen steps.
@@ -458,7 +449,7 @@ fn document_portal_saves_run_and_failed_ones_name_the_portal() {
     let Some(runtime) = std::env::var_os("XDG_RUNTIME_DIR") else { return };
     let dir = PathBuf::from(runtime).join("doc").join(format!("pc-atomic-portal-{}", std::process::id()));
     let p = dir.join("file.psd");
-    let run = (|| {
+    let run = || {
         atomic_write(&p, b"new").unwrap();
         assert_eq!(std::fs::read(&p).unwrap(), b"new");
         assert_no_temp(&dir);
@@ -467,7 +458,7 @@ fn document_portal_saves_run_and_failed_ones_name_the_portal() {
         assert!(e.to_string().contains("document portal"), "{e}");
         assert_eq!(std::fs::read(&p).unwrap(), b"new");
         assert_no_temp(&dir);
-    });
+    };
     run();
     let _ = std::fs::remove_dir_all(&dir);
 }
