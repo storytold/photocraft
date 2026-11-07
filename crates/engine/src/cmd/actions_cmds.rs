@@ -54,14 +54,51 @@ pub struct Action {
     /// Button Mode colour. Empty is none; otherwise one of [`BUTTON_COLORS`].
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub color: String,
+    /// Written by automation: loaded, recorded, or had its steps edited while
+    /// [`Session::authorize`] was installed (a control, MCP or synthetic-input request).
+    /// Playback keeps automation's gate ([`Session::automation_gate`]) for it even when the user
+    /// starts it (a key, the Actions panel), so a client confined to its automation roots
+    /// can't plant steps that later run with the user's file access. Batch and droplets copy
+    /// steps instead of the action, so they do not keep the gate yet.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub automation: bool,
+}
+
+/// Mark action `idx` as written by automation when an automation gate is installed.
+pub(crate) fn note_automation_edit(s: &mut Session, idx: usize) {
+    if s.authorize.is_some()
+        && let Some(action) = s.actions.list.get_mut(idx)
+    {
+        action.automation = true;
+    }
+}
+
+/// Mark the action being recorded as automation's when `id` (with `params`) becomes one of its
+/// steps while an automation gate is installed: a step a control client, MCP or synthetic input
+/// runs during the user's recording keeps automation's gate when the action plays.
+pub fn note_automation_step(s: &mut Session, id: &str, params: &Value) {
+    if s.authorize.is_some()
+        && recorded(id, params)
+        && let Some((_, idx)) = s.actions.recording
+    {
+        note_automation_edit(s, idx);
+    }
+}
+
+/// The gate to install while `action` plays: automation's, for an action automation wrote that
+/// plays with none installed. `None` when the session's own gate (or none) applies.
+pub fn kept_gate(s: &Session, action: &Action) -> Option<fn(&str, &Value) -> Result<()>> {
+    if action.automation && s.authorize.is_none() { s.automation_gate } else { None }
 }
 
 /// Button Mode colours, in Photoshop's order. Empty is no colour.
 pub const BUTTON_COLORS: [&str; 8] = ["", "red", "orange", "yellow", "green", "blue", "violet", "gray"];
 
 impl Action {
+    /// A new action named `name` with `steps`: every step on, no dialogs, no set or colour,
+    /// and not written by automation (see [`Action::automation`]).
     pub fn new(name: impl Into<String>, steps: Vec<(String, Value)>) -> Self {
-        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new() }
+        Self { name: name.into(), steps, disabled: BTreeSet::new(), dialogs: BTreeSet::new(), set: None, color: String::new(), automation: false }
     }
 
     /// Apply `f` to every per-step index set (`disabled`, `dialogs`) after steps moved.
@@ -492,6 +529,8 @@ fn get(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": action.name, "steps": steps, "disabled": action.disabled, "dialogs": action.dialogs, "set": action.set, "color": action.color}))
 }
 
+/// `actions.record`: start recording into an existing `action` or a new one named `name`, and mark
+/// it as automation's when an automation gate is installed.
 fn record(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.record")?;
     if s.actions.recording.is_some() {
@@ -528,6 +567,7 @@ fn record(s: &mut Session, p: &Value) -> Result<Value> {
         s.actions.list.len() - 1
     };
     s.actions.recording = Some((s.journal.len(), idx));
+    note_automation_edit(s, idx);
     s.actions.take = s.actions.take.wrapping_add(1);
     let name = s.actions.list.get(idx).map(|a| a.name.clone()).unwrap_or_default();
     Ok(json!({"action": name, "index": idx}))
@@ -768,11 +808,25 @@ pub fn nested_failure(id: &str, value: &Value) -> Option<String> {
     })
 }
 
+/// `actions.play`: run an action's enabled steps from `from`, under automation's kept gate
+/// ([`kept_gate`]) when automation wrote it and no gate is installed. A call journaled into a
+/// recording while a gate is installed marks the recorded action ([`note_automation_step`]).
 fn play(s: &mut Session, p: &Value) -> Result<Value> {
     let (action, from) = playback_plan(s, p)?;
     let recording = begin_playback(s, &action)?;
+    // Nested calls and commands the steps run on their own behalf see the kept gate too.
+    let kept = kept_gate(s, &action);
+    if kept.is_some() {
+        s.authorize = kept;
+    }
     let (ran, failed) = run_recorded(s, &action, from);
+    if kept.is_some() {
+        s.authorize = None;
+    }
     finish_playback(s, recording, &action, from);
+    // The call journaled into a recording is automation's step when its caller runs under a gate
+    // (the kept gate is already removed, so the user's own play of a marked action is not).
+    note_automation_step(s, "actions.play", p);
     Ok(match failed {
         Some(f) => json!({"action": action.name, "ran": ran, "failed": f}),
         None => json!({"action": action.name, "ran": ran}),
@@ -808,6 +862,7 @@ fn move_item(s: &mut Session, p: &Value) -> Result<Value> {
         action.steps.insert(to, moved);
         action.remap_steps(|i| Some(moved_index(i, step, to)));
         let result = json!({"action": action.name, "step": to});
+        note_automation_edit(s, idx);
         s.actions.touch();
         Ok(result)
     } else {
@@ -838,6 +893,8 @@ pub fn moved_index(index: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// `actions.delete`: delete an action, or with `step` one of its steps (which marks the action
+/// as automation's when an automation gate is installed).
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     not_playing(s, "actions.delete")?;
     let idx = resolve(&s.actions.list, p, "actions.delete")?;
@@ -864,6 +921,7 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             }
         });
         let result = json!({"action": action.name, "deletedStep": step, "steps": action.steps.len()});
+        note_automation_edit(s, idx);
         s.actions.touch();
         return Ok(result);
     }
@@ -917,6 +975,7 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         None => action.disabled = (0..action.steps.len()).collect(),
     }
     let result = json!({"action": action.name, "disabled": action.disabled});
+    note_automation_edit(s, idx);
     s.actions.touch();
     Ok(result)
 }

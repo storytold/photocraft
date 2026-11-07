@@ -690,7 +690,9 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
             return Ok(json!({"path": path, "warnings": []}));
         }
         let r = write_copy(app, &doc, &path, crate::FormatChoices::default())?;
-        app.session.journal.push(("file.saveACopy".into(), json!({"path": path})));
+        let step = json!({"path": path});
+        photocraft_engine::actions_cmds::note_automation_step(&mut app.session, "file.saveACopy", &step);
+        app.session.journal.push(("file.saveACopy".into(), step));
         Ok(r)
     })
 }

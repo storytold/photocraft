@@ -9,7 +9,7 @@
 
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{flush_recording, not_playing, pending_steps, resolve};
+use crate::actions_cmds::{flush_recording, not_playing, note_automation_edit, pending_steps, resolve};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -34,6 +34,8 @@ fn is_step_command(id: &str) -> bool {
     crate::commands::find(id).is_some() || id == "actions.play" || crate::actions_cmds::shell_save_command(id) || crate::actions_cmds::shell_view_command(id)
 }
 
+/// `actions.insert`: insert a step into an action, marking the action as automation's when an
+/// automation gate is installed.
 fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "actions.insert";
     not_playing(s, cmd)?;
@@ -74,6 +76,7 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
         action.dialogs.insert(at);
     }
     let result = json!({"action": action.name, "step": at, "id": id, "steps": action.steps.len()});
+    note_automation_edit(s, idx);
     s.actions.touch();
     Ok(result)
 }

@@ -33,8 +33,13 @@ pub(crate) use thumbs::layer_thumb_frame;
 pub use thumbs::surface_fingerprint;
 
 impl PhotocraftApp {
+    /// The app around `session` with the platform's `services`; the session keeps the services'
+    /// automation policy as the gate actions automation wrote play under.
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
+        // Actions automation wrote keep this gate when the user plays them. Batch and droplets
+        // copy steps instead of the action, so they do not keep the gate yet.
+        session.automation_gate = session.automation_gate.or(services.automation_authorize);
         let mut app = Self {
             session,
             ui: UiState::default(),
