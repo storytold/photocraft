@@ -1,7 +1,7 @@
 //! Catch-up on Stroke End starts unchecked, as in Photoshop (#11887).
 
-use crate::brush::{BrushSettings, Smoothing};
 use crate::StrokePoint;
+use crate::brush::{BrushSettings, Smoothing};
 use crate::dynamics::smooth_points;
 
 /// A quick drag from x = 100 to x = 300 in 40 steps.
