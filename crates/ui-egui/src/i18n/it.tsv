@@ -4721,3 +4721,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ridimensiona quadro automaticamente
 	Keep Relative Position During Layer Reordering	Mantieni la posizione relativa durante il riordino dei livelli
 	Shrinkwrap Canvas on Save	Riduci il quadro al contenuto al salvataggio
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Dimensioni stimate del file

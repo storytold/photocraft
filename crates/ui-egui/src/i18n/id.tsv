@@ -3645,3 +3645,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ubah ukuran kanvas otomatis
 	Keep Relative Position During Layer Reordering	Pertahankan posisi relatif saat mengurutkan ulang layer
 	Shrinkwrap Canvas on Save	Kecilkan kanvas sesuai konten saat menyimpan
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Perkiraan ukuran file

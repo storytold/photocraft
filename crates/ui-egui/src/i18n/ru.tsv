@@ -4807,3 +4807,6 @@ shape	Appearance	Оформление
 	Auto-size Canvas	Автоматически менять размер холста
 	Keep Relative Position During Layer Reordering	Сохранять относительное положение при изменении порядка слоев
 	Shrinkwrap Canvas on Save	Уменьшать холст до содержимого при сохранении
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Примерный размер файла
