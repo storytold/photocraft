@@ -317,6 +317,14 @@ impl PhotocraftApp {
                 panels::properties_window(self, &ctx);
             }
         }
+        // Auto-show hidden panels (#4096 rework): the pointer at the canvas edge brings back
+        // panels Tab or Shift+Tab hid, as an overlay over the canvas. The peek only draws
+        // when the main dock does not (dock hidden, not tabbed in), so the two DockAreas
+        // never draw in the same frame. Home has no panels to bring back.
+        let peek = crate::peek::compute_peek(self, &ctx, chrome && !home, tabbed_in);
+        if peek.toolbar || peek.dock {
+            crate::peek::draw_peek(self, &ctx, &peek);
+        }
         // The floating editor windows belong to the editor: Home covers them (dialogs and notices
         // below stay).
         if !home {
