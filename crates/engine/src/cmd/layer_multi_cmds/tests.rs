@@ -530,6 +530,43 @@ fn select_all(s: &mut Session, ids: &[LayerId]) {
     }
 }
 
+/// Selection enumeration keeps tree order, closed groups and stale-state fallbacks.
+#[test]
+fn selected_layers_preserve_nested_order_and_stale_state() {
+    let mut doc = Document::new("Selection", photocraft_geom::Size::new(1, 1), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let fmt = doc.pixel_format();
+    let a = Layer::raster("Bottom", fmt);
+    let b = Layer::raster("Middle", fmt);
+    let c = Layer::raster("Inner", fmt);
+    let d = Layer::raster("Top", fmt);
+    let (a_id, b_id, c_id, d_id) = (a.id, b.id, c.id, d.id);
+    let inner = Layer::group("Inner group", vec![c]);
+    let inner_id = inner.id;
+    let mut group = Layer::group("Closed group", vec![b, inner]);
+    let group_id = group.id;
+    if let LayerContent::Group(g) = &mut group.content {
+        g.expanded = false;
+    }
+    doc.layers = vec![a, group, d];
+    let mut st = DocState::new(doc, None);
+    let stale = LayerId(u64::MAX);
+    for (active, raw, expected) in [
+        (None, vec![a_id, b_id], vec![]),
+        (Some(d_id), vec![], vec![d_id]),
+        (Some(d_id), vec![a_id, b_id], vec![d_id]),
+        (Some(stale), vec![a_id], vec![]),
+        (Some(stale), vec![stale, a_id], vec![a_id]),
+        (Some(b_id), vec![d_id, c_id, inner_id, b_id, group_id, a_id, b_id, stale], vec![a_id, group_id, b_id, inner_id, c_id, d_id]),
+        (Some(group_id), vec![c_id, group_id], vec![group_id, c_id]),
+    ] {
+        st.active_layer = active;
+        st.selected_layers = raw.clone();
+        assert_eq!(st.selected_layers(), expected);
+        assert_eq!(st.selected_layers, raw, "enumerating must not reorder stored selection");
+        assert_eq!(st.active_layer, active);
+    }
+}
+
 #[test]
 fn toggle_and_range_selection() {
     let mut s = session(8);
