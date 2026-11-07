@@ -114,7 +114,8 @@ fn the_main_window_gaining_focus_or_a_click_raises_the_camera_raw_window() {
     let window = egui::ViewportId::from_hash_of("camera-raw-window");
     let raised = [egui::ViewportCommand::Minimized(false), egui::ViewportCommand::Focus];
     let frame = |app: &mut PhotocraftApp, focused: bool, events: Vec<egui::Event>| {
-        let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
+        let mut input =
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
         input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(focused);
         let mut out = ctx.run_ui(input, |ui| show(app, ui.ctx()));
         out.textures_delta.clear();
