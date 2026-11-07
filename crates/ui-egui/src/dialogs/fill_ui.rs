@@ -6,7 +6,6 @@
 //! drive it like any dialog. OK remembers the choices in the preferences (`dialogs["edit.fill"]`),
 //! which are saved to disk, so the dialog opens with them again after a restart.
 
-use egui::{Align2, Sense, pos2, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -133,11 +132,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(COMMAND, params(f))
 }
 
-fn label(ui: &mut egui::Ui, text: &str) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(112.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
-}
+/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and a cap.
+const LABEL_MIN_W: f32 = 112.0;
+const LABEL_MAX_W: f32 = 240.0;
+/// The labels above the Blending section, measured with its own in the current language.
+const LABELS: [&str; 3] = ["Contents:", "Color:", "Custom Pattern:"];
 
 fn get_str(f: &Map<String, Value>, k: &str, d: &str) -> String {
     f.get(k).and_then(Value::as_str).unwrap_or(d).to_string()
@@ -151,6 +150,11 @@ fn parse_hex(h: &str) -> [u8; 3] {
 /// The dialog body.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
+    let labels: Vec<&str> = LABELS.iter().chain(&crate::dialog_blend_ui::LABELS).copied().map(crate::i18n::t).collect();
+    let label_w = crate::widgets::label_column_width(ui, &labels, LABEL_MIN_W, LABEL_MAX_W);
+    let label = |ui: &mut egui::Ui, text: &str| {
+        crate::widgets::column_label(ui, text, label_w);
+    };
     let mut contents = get_str(f, "contents", "foreground");
     ui.horizontal(|ui| {
         label(ui, tl!("Contents:"));
@@ -201,7 +205,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
         }
         _ => {}
     }
-    crate::dialog_blend_ui::body(ui, f, "fill");
+    crate::dialog_blend_ui::body(ui, f, "fill", label_w);
 }
 
 #[cfg(test)]
