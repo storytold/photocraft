@@ -59,24 +59,13 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
                     app.ui.presets_ui.clear_selected(panel);
                 }
                 app.ui.presets_ui.delete_hierarchy_item_at_path(panel, group, group_path, key);
+                app.ui.presets_ui.clear_browser_selection(panel);
                 true
             } else {
                 false
             }
         }
         BrowserAction::Move(k, g) => run(app, &edit, json!({"action": "move", "preset": k, "to": g})).is_some(),
-        BrowserAction::MoveItem(k, g, index) => {
-            // Patterns have no engine reorder command: their shared-browser sibling sequence is
-            // the persisted view order and has already been updated by the drag resolver.
-            if prefix == "pattern.presets" {
-                return true;
-            }
-            let mut params = json!({"action": "move", "preset": k, "to": g});
-            if let Some(index) = index {
-                params["index"] = json!(index);
-            }
-            run(app, &edit, params).is_some()
-        }
         BrowserAction::RenameGroup(g, n) => {
             if run(app, &edit, json!({"action": "renameGroup", "group": g, "name": n})).is_some() {
                 app.ui.presets_ui.rename_group(panel, g, n);
@@ -87,7 +76,11 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
         }
         BrowserAction::DeleteGroup(g) => {
             if run(app, &edit, json!({"action": "deleteGroup", "group": g})).is_some() {
+                if app.ui.presets_ui.selected_group.get(panel) == Some(g) {
+                    app.ui.presets_ui.clear_selected(panel);
+                }
                 app.ui.presets_ui.delete_group(panel, g);
+                app.ui.presets_ui.clear_browser_selection(panel);
                 true
             } else {
                 false
@@ -118,9 +111,6 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
         | BrowserAction::ActivateItem { .. }
         | BrowserAction::Drop(_, _)
         | BrowserAction::RenameNestedGroup { .. }
-        | BrowserAction::DeleteNestedGroup { .. }
-        | BrowserAction::MoveItemToGroup { .. }
-        | BrowserAction::MoveGroup { .. }
-        | BrowserAction::MoveInto { .. } => false,
+        | BrowserAction::DeleteNestedGroup { .. } => false,
     }
 }

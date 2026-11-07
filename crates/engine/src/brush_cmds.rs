@@ -789,7 +789,30 @@ fn presets_delete(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "brush.presets.delete";
     let name = name_param(p, cmd)?;
     let before = s.tools.presets.len();
-    s.tools.presets.retain(|x| !x.name.eq_ignore_ascii_case(&name));
+    let group = match p.get("group") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(group)) => Some(group.as_str()),
+        Some(_) => return Err(bad(cmd, "`group` must be a string")),
+    };
+    let folder = match p.get("folder") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(parts)) => Some(
+            parts
+                .iter()
+                .map(|part| part.as_str().map(str::to_owned).ok_or_else(|| bad(cmd, "`folder` must contain only strings")))
+                .collect::<Result<Vec<_>>>()?,
+        ),
+        Some(_) => return Err(bad(cmd, "`folder` must be an array of strings")),
+    };
+    if folder.is_some() && group.is_none() {
+        return Err(bad(cmd, "`group` is required when `folder` is supplied"));
+    }
+    s.tools.presets.retain(|preset| {
+        let same_occurrence = preset.name.eq_ignore_ascii_case(&name)
+            && group.is_none_or(|group| preset.group == group)
+            && folder.as_ref().is_none_or(|folder| &preset.folder == folder);
+        !same_occurrence
+    });
     if s.tools.presets.len() == before {
         return Err(bad(cmd, format!("no brush preset named `{name}`")));
     }
@@ -1165,7 +1188,14 @@ pub fn specs() -> Vec<CommandSpec> {
             presets_update,
             true
         ),
-        spec!("brush.presets.delete", "Delete Brush Preset", r##"{"name":string}"##, always, presets_delete, true),
+        spec!(
+            "brush.presets.delete",
+            "Delete Brush Preset",
+            r##"{"name":string,"group":string?,"folder":[string]? (requires group; exact folder path)}"##,
+            always,
+            presets_delete,
+            true
+        ),
         spec!("brush.presets.setCurrent", "Set Current Brush Preset", r##"{"name":string}"##, always, presets_set_current, true),
         spec!("brush.defineFromSelection", "Define Brush Preset…", r##"{"name":string}"##, has_selection_and_pixels, define_from_selection, true),
         spec!("brush.get", "Get Brush", "{}", always, |s, _| Ok(brush_json(&s.tools.brush)), false),

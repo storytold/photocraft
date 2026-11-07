@@ -723,7 +723,12 @@ fn shared_picker_menu_is_scoped_and_preserves_domain_extensions() {
     ordinary_menu.run_steps(2);
     assert!(ordinary_menu.query_all_by_label("New Brush Preset…").count() > 0, "ordinary panel-specific actions remain available");
     assert!(ordinary_menu.query_all_by_label("Clear Brush Controls").count() > 0);
-    assert_eq!(ordinary_menu.query_all_by_label("Text Only").count(), 0, "ordinary panel menus do not inherit picker controls");
+    assert_eq!(ordinary_menu.query_all_by_label("Text Only").count(), 3, "Brush Settings keeps its three domain-owned picker display sections");
+    assert_eq!(
+        ordinary_menu.query_all_by_label("Show Search Bar").count(),
+        0,
+        "ordinary panel menus do not inherit the shared picker search-visibility control"
+    );
 }
 
 #[test]

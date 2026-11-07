@@ -132,7 +132,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             },
             // Cross-group membership uses the Swatches domain command; sibling/group order is saved
             // in the canonical picker layout state.
-            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
@@ -199,16 +199,10 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
                     app.ui.presets_ui.clear_selected(PANEL);
                 }
                 app.ui.presets_ui.delete_hierarchy_item_in_group(PANEL, &group, &key);
+                app.ui.presets_ui.clear_browser_selection(PANEL);
             }
         }
         BrowserAction::Move(k, g) => drop(run(app, "swatches.move", json!({"swatch": k, "to": g}))),
-        BrowserAction::MoveItem(k, g, index) => {
-            let mut params = json!({"swatch": k, "to": g});
-            if let Some(index) = index {
-                params["position"] = json!(index);
-            }
-            drop(run(app, "swatches.move", params));
-        }
         BrowserAction::RenameGroup(g, n) => {
             if run(app, "swatches.renameGroup", json!({"group": g, "name": n})).is_some() {
                 app.ui.presets_ui.rename_group(PANEL, &g, &n);
@@ -216,15 +210,15 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
         }
         BrowserAction::DeleteGroup(g) => {
             if run(app, "swatches.deleteGroup", json!({"group": g})).is_some() {
+                if app.ui.presets_ui.selected_group.get(PANEL) == Some(&g) {
+                    app.ui.presets_ui.clear_selected(PANEL);
+                }
                 app.ui.presets_ui.delete_group(PANEL, &g);
+                app.ui.presets_ui.clear_browser_selection(PANEL);
             }
         }
         // Only the brush browser supports nested-group context actions.
-        BrowserAction::RenameNestedGroup { .. }
-        | BrowserAction::DeleteNestedGroup { .. }
-        | BrowserAction::MoveItemToGroup { .. }
-        | BrowserAction::MoveGroup { .. }
-        | BrowserAction::MoveInto { .. } => {}
+        BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
         BrowserAction::NewGroup => new_group_from_app(app),
         BrowserAction::New => new_swatch_from_app(app),
     }

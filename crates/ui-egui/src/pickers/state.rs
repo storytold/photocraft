@@ -114,9 +114,6 @@ pub struct PresetUi {
     pub(crate) browser_selection: BTreeMap<String, std::collections::BTreeSet<crate::pickers::browser::path_identity_model::PickerId>>,
     #[serde(skip)]
     pub(crate) browser_selection_anchor: BTreeMap<String, crate::pickers::browser::path_identity_model::PickerId>,
-    /// Transient per-picker feedback from rejected hierarchy operations. Never persisted.
-    #[serde(skip)]
-    pub(crate) browser_feedback: BTreeMap<String, String>,
     /// Tool Presets: Current Tool Only.
     pub current_tool_only: bool,
     /// Custom Shape tool: the shape it draws.
@@ -287,6 +284,11 @@ impl PresetUi {
         self.browser_selection.get(panel).is_some_and(|selection| selection.contains(id))
     }
 
+    pub(crate) fn clear_browser_selection(&mut self, panel: &str) {
+        self.browser_selection.entry(panel.to_owned()).or_default().clear();
+        self.browser_selection_anchor.remove(panel);
+    }
+
     pub(crate) fn select_browser_node(&mut self, panel: &str, id: crate::pickers::browser::path_identity_model::PickerId, additive: bool) {
         let selection = self.browser_selection.entry(panel.to_owned()).or_default();
         if !additive {
@@ -429,6 +431,7 @@ impl PresetUi {
     }
 
     /// Remove a child token from a parent's sibling sequence after it changes parent.
+    #[cfg(test)]
     pub(crate) fn remove_hierarchy_entry(&mut self, panel: &str, parent: &str, entry: &HierarchyOrderEntry) {
         if let Some(entries) = self.hierarchy_order.get_mut(panel).and_then(|parents| parents.get_mut(parent)) {
             entries.retain(|candidate| candidate != entry);
@@ -444,6 +447,7 @@ impl PresetUi {
     }
 
     /// Move one peer before another peer in the same parent, or append it when `before` is None.
+    #[cfg(test)]
     pub(crate) fn move_hierarchy_entry(
         &mut self,
         panel: &str,
@@ -680,6 +684,7 @@ impl PresetUi {
     }
 
     /// Move a root group before `before` (`None` = last) in the canonical root sibling sequence.
+    #[cfg(test)]
     pub(crate) fn move_group(&mut self, panel: &str, names: &[String], from: &str, before: Option<&str>) {
         if before == Some(from) {
             return;
@@ -728,6 +733,7 @@ impl PresetUi {
 
     /// Make `child` a child of `parent`, or a root group when `parent` is `None`. Reject cycles and
     /// stale names; expansion keys intentionally remain unchanged across the move.
+    #[cfg(test)]
     pub(crate) fn nest_group(&mut self, panel: &str, names: &[String], child: &str, parent: Option<&str>) {
         if !names.iter().any(|n| n == child) || parent.is_some_and(|p| !names.iter().any(|n| n == p) || p == child) {
             return;

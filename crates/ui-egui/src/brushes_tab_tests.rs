@@ -207,7 +207,7 @@ fn canonical_brush_folder_drop_maps_to_authoritative_move_into_action() {
 }
 
 #[test]
-fn canonical_brush_folder_item_rejection_is_reported_without_a_domain_action() {
+fn canonical_brush_folder_item_rejection_is_silent_without_a_domain_action() {
     let h = drag_in_brush_picker(
         vec![brush_test_preset("Twin", &["Soft"]), brush_test_preset("Twin", &["Other"]), brush_test_preset("Hard brush", &["Hard"])],
         "Twin",
@@ -215,12 +215,8 @@ fn canonical_brush_folder_item_rejection_is_reported_without_a_domain_action() {
     );
 
     assert!(h.state().1.is_empty(), "an unaddressable duplicate-name preset must not emit a lossy Brush command: {:?}", h.state().1);
-    assert!(
-        h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous.\"").next().is_some()
-            || h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous in the library.\"").next().is_some(),
-        "the canonical adapter's error must be visible to the user: {:?}",
-        h.state().0.browser_feedback,
-    );
+    assert!(h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous.\"").next().is_none());
+    assert!(h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous in the library.\"").next().is_none());
 }
 
 #[test]

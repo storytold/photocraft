@@ -14,9 +14,10 @@ use crate::pickers::browser::asset_browser::{
     item_context_targets,
 };
 pub(crate) use crate::pickers::browser::browser_interaction::AssetDrag as BrushDrag;
-use crate::pickers::browser::browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_group_drop};
+use crate::pickers::browser::browser_interaction::{ContextMenuAction, draw_group_context_menu, draw_item_context_menu};
 use crate::pickers::browser::dragging_model::DropMoveIntent;
 use crate::pickers::browser::hierarchy::{HierarchyGroup, HierarchyNode, hierarchy_tree};
+use crate::pickers::browser::hierarchy_utils::{HierarchyDrop, hierarchy_group_drop};
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::browser::path_identity_model::{
     ContainerId, DropPosition, HierarchyNode as PickerHierarchyNode, PickerBrowserHierarchy, PickerId, PickerIdRegistry,
@@ -213,6 +214,12 @@ pub enum Action {
     /// Commit a rename typed in the rename bar.
     Rename(Renaming),
     Delete(String),
+    /// Delete one exact preset occurrence, qualified by its owning group and folder path.
+    DeleteOccurrence {
+        name: String,
+        group: String,
+        folder: Vec<String>,
+    },
     /// Delete a root group (`folder` empty) or one of its nested groups, with their presets.
     DeleteGroup {
         group: String,
@@ -695,14 +702,7 @@ pub(crate) fn picker_browser(
             // Brush folders are projected from each item's full `group_path` by the canonical tree.
             // The shared resolver emits path-aware domain actions; Brush dispatches those through its
             // engine commands rather than persisting folder structure in generic `PresetUi` state.
-            capabilities: BrowserCapabilities {
-                item_drag: true,
-                item_drop: true,
-                group_drag: true,
-                selection: true,
-                activation: true,
-                canonical_hierarchy_drag: true,
-            },
+            capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
             item_context_menu: Some(brush_item_context_menu),
             group_context_menu: Some(brush_group_context_menu),
             nested_group_context_menu: Some(brush_nested_group_context_menu),
@@ -735,18 +735,13 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
             BrowserAction::RenameItem { group: _, group_path, key, text } => {
                 occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: group_path, text }))
             }
-            BrowserAction::DeleteItem { key, .. } => occurrence_name(presets, &key).map(Action::Delete),
+            BrowserAction::DeleteItem { group: _, group_path: _, key } => preset_by_identity(presets, &key).map(|preset| Action::DeleteOccurrence {
+                name: preset.name.clone(),
+                group: preset.group.clone(),
+                folder: preset.folder.clone(),
+            }),
             BrowserAction::Move(key, group) => {
                 occurrence_name(presets, &key).map(|name| Action::Move { name, group: group_key(presets, &group), folder: Some(Vec::new()), index: None })
-            }
-            BrowserAction::MoveItem(key, group, index) => {
-                occurrence_name(presets, &key).map(|name| Action::Move { name, group: group_key(presets, &group), folder: Some(Vec::new()), index })
-            }
-            BrowserAction::MoveItemToGroup { key, group, group_path, before: Some(before) } => occurrence_name(presets, &key)
-                .zip(occurrence_name(presets, &before))
-                .map(|(name, before)| Action::MoveBefore { name, group: group_key(presets, &group), folder: Some(group_path), before }),
-            BrowserAction::MoveItemToGroup { key, group, group_path, before: None } => {
-                occurrence_name(presets, &key).map(|name| Action::Move { name, group: group_key(presets, &group), folder: Some(group_path), index: None })
             }
             BrowserAction::RenameGroup(group, text) => {
                 Some(Action::Rename(Renaming { group: true, name: group_key(presets, &group), folder: Vec::new(), text }))
@@ -756,26 +751,6 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
                 Some(Action::Rename(Renaming { group: true, name: group_key(presets, &group), folder: group_path, text }))
             }
             BrowserAction::DeleteNestedGroup { group, group_path } => Some(Action::DeleteGroup { group: group_key(presets, &group), folder: group_path }),
-            BrowserAction::MoveGroup { group, group_path, before } => Some(Action::MoveGroup {
-                group: group_key(presets, &group),
-                before: if group_path.is_empty() { before.map(|name| group_key(presets, &name)) } else { before },
-                folder: group_path,
-            }),
-            BrowserAction::MoveInto { group, group_path, into, before, before_item } => {
-                let before_is_group = into.is_none();
-                let before_item = match before_item.map(|key| resolve_before_item_name(presets, &key)) {
-                    Some(Ok(name)) => Some(name),
-                    Some(Err(message)) => return Some(Action::Status(message)),
-                    None => None,
-                };
-                Some(Action::MoveInto {
-                    group: group_key(presets, &group),
-                    folder: group_path,
-                    into: into.map(|(target, path)| (group_key(presets, &target), path)),
-                    before: if before_is_group { before.map(|name| group_key(presets, &name)) } else { before },
-                    before_item,
-                })
-            }
             BrowserAction::Drop(_, _) | BrowserAction::NewGroup | BrowserAction::New => None,
         })
         .collect()
@@ -1224,7 +1199,14 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
                     app.ui.status = format!("Cannot delete brush `{name}` because multiple presets share that name.");
                     continue;
                 }
-                run_or_status(app, "brush.presets.delete", json!({ "name": name }));
+                if run_or_status(app, "brush.presets.delete", json!({ "name": name })) {
+                    clear_brush_browser_selections(&mut app.ui.presets_ui);
+                }
+            }
+            Action::DeleteOccurrence { name, group, folder } => {
+                if run_or_status(app, "brush.presets.delete", json!({ "name": name, "group": group, "folder": folder })) {
+                    clear_brush_browser_selections(&mut app.ui.presets_ui);
+                }
             }
             Action::DeleteGroup { group, folder } => {
                 let label = group_label_for_key(&app.session.tools.presets, &group);
@@ -1232,13 +1214,27 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
                 if !folder.is_empty() {
                     p["folder"] = json!(folder);
                 }
-                if run_or_status(app, "brush.presets.deleteGroup", p)
-                    && let Some(label) = label
-                {
-                    remove_collapsed_prefix(&mut app.ui.brushes_panel.collapsed, &group_view_key(&label, &folder));
+                if run_or_status(app, "brush.presets.deleteGroup", p) {
+                    if let Some(label) = label {
+                        for panel in ["brushes", "brush-picker"] {
+                            if app.ui.presets_ui.selected_group.get(panel) == Some(&label)
+                                && app.ui.presets_ui.selected_group_path.get(panel).is_some_and(|path| path.starts_with(&folder))
+                            {
+                                app.ui.presets_ui.clear_selected(panel);
+                            }
+                        }
+                        remove_collapsed_prefix(&mut app.ui.brushes_panel.collapsed, &group_view_key(&label, &folder));
+                    }
+                    clear_brush_browser_selections(&mut app.ui.presets_ui);
                 }
             }
         }
+    }
+}
+
+fn clear_brush_browser_selections(state: &mut PresetUi) {
+    for panel in ["brushes", "brush-picker"] {
+        state.clear_browser_selection(panel);
     }
 }
 
@@ -1443,14 +1439,7 @@ pub fn preset_list(
                 root_item_group: None,
             },
             // Use the same canonical path-aware hierarchy as the floating Brush picker.
-            capabilities: BrowserCapabilities {
-                item_drag: true,
-                item_drop: true,
-                group_drag: true,
-                selection: true,
-                activation: true,
-                canonical_hierarchy_drag: true,
-            },
+            capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
             item_context_menu: Some(brush_item_context_menu),
             group_context_menu: Some(brush_group_context_menu),
             nested_group_context_menu: Some(brush_nested_group_context_menu),
@@ -1559,9 +1548,6 @@ fn sync_browser_state_to_brush_state(st: &mut BrushesPanelState, browser: &Prese
 fn paint_brush_hierarchy_drag_label(ui: &egui::Ui, scope: &str, id: egui::Id) {
     let Some(drag) = egui::DragAndDrop::payload::<BrushDrag>(ui.ctx()) else { return };
     let (drag_scope, name) = match &*drag {
-        BrushDrag::Group { scope, name, path } => {
-            (scope.as_str(), path.last().cloned().unwrap_or_else(|| if name.is_empty() { UNGROUPED.to_string() } else { name.clone() }))
-        }
         BrushDrag::CanonicalGroup { scope, label, .. } => (scope.as_str(), label.clone()),
         BrushDrag::Preset { .. } => return,
     };
@@ -1632,11 +1618,11 @@ mod preview_regression_tests {
 #[cfg(test)]
 mod hierarchy_anchor_identity_tests {
     use super::{
-        Action, PickerNodeIdentity, Renaming, browser_actions_to_actions, brush_drop_intent_to_action, brush_group_views, brush_projection_keys,
-        brush_root_sequence, picker_browser, preview_identity, rekey_brush_hierarchy,
+        Action, PickerNodeIdentity, Renaming, brush_drop_intent_to_action, brush_group_views, brush_projection_keys, brush_root_sequence, picker_browser,
+        preview_identity, rekey_brush_hierarchy,
     };
     use crate::PhotocraftApp;
-    use crate::pickers::browser::asset_browser::{BrowserAction, GroupView, ItemView};
+    use crate::pickers::browser::asset_browser::{GroupView, ItemView};
     use crate::pickers::browser::dragging_model::DropMoveIntent;
     use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, PickerId, PickerIdRegistry};
     use crate::pickers::browser::projection::build_hierarchy_projection;
@@ -1801,44 +1787,6 @@ mod hierarchy_anchor_identity_tests {
         let saved = serde_json::to_value(rename).unwrap();
         assert_eq!(saved["folder"], json!(["Soft"]));
         assert!(saved.get("groupPath").is_none());
-    }
-
-    #[test]
-    fn hierarchy_anchor_converts_preview_identity_to_engine_preset_name() {
-        let presets = [preset("Parent A", "Parent"), preset("Anchor brush", "Parent"), preset("Child brush", "Child")];
-        let anchor_key = preview_identity(&presets[1]);
-
-        let actions = browser_actions_to_actions(
-            &presets,
-            vec![BrowserAction::MoveInto {
-                group: "Child".into(),
-                group_path: Vec::new(),
-                into: Some(("Parent".into(), Vec::new())),
-                before: None,
-                before_item: Some(anchor_key),
-            }],
-        );
-
-        assert!(matches!(actions.as_slice(), [Action::MoveInto { before_item: Some(name), .. }] if name == "Anchor brush"));
-    }
-
-    #[test]
-    fn hierarchy_anchor_rejects_duplicate_engine_names() {
-        let presets = [preset("Anchor brush", "Parent"), preset("Anchor brush", "Other"), preset("Child brush", "Child")];
-        let anchor_key = preview_identity(&presets[0]);
-
-        let actions = browser_actions_to_actions(
-            &presets,
-            vec![BrowserAction::MoveInto {
-                group: "Child".into(),
-                group_path: Vec::new(),
-                into: Some(("Parent".into(), Vec::new())),
-                before: None,
-                before_item: Some(anchor_key),
-            }],
-        );
-
-        assert!(matches!(actions.as_slice(), [Action::Status(message)] if message.contains("multiple presets share that name")));
     }
 
     #[test]

@@ -22,10 +22,9 @@ use crate::pickers::browser::asset_browser::{BrowserAction, BrowserAdapter, Brow
 use crate::pickers::browser::asset_browser::{standard_group_context_menu, standard_item_context_menu};
 use crate::pickers::browser::browser_interaction::canvas_drop_rect;
 #[cfg(test)]
-use crate::pickers::browser::browser_interaction::{AssetDrag, asset_browser_header_payload, header_drop_before};
+use crate::pickers::browser::hierarchy::HierarchyNode;
 #[cfg(test)]
 use crate::pickers::browser::hierarchy::hierarchy_tree;
-pub use crate::pickers::browser::hierarchy::{HierarchyGroup, HierarchyNode};
 use crate::pickers::browser::identity::{PickerIdentityKey, PickerNodeIdentity, PickerProjectionKeys, ProjectionNodeRef};
 use crate::pickers::footer::FooterOptions;
 #[cfg(test)]
@@ -36,7 +35,8 @@ use crate::theme::Tokens;
 
 use crate::pickers::commands::{generic, run};
 use crate::pickers::preset_previews::{cached_texture, content_fingerprint};
-pub use crate::pickers::state::PresetUi;
+#[cfg(test)]
+use crate::pickers::state::PresetUi;
 
 const PANELS: [&str; 7] = [
     "window.panel.gradients",
@@ -165,7 +165,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             },
             // Cross-group membership uses the Style domain command; sibling/group order is saved
             // in the canonical picker layout state.
-            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
@@ -250,14 +250,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // The projection also contains the derived `Custom Shapes` group, whose items live in
             // edit_state.custom_shapes and have no move command. Until that source supports the same
             // canonical move contract, keep drag semantics disabled for this mixed-source adapter.
-            capabilities: BrowserCapabilities {
-                item_drag: false,
-                item_drop: false,
-                group_drag: false,
-                selection: true,
-                activation: true,
-                canonical_hierarchy_drag: false,
-            },
+            capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: true, activation: true },
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
@@ -885,26 +878,6 @@ mod tests {
     }
 
     #[test]
-    fn every_point_on_a_shared_header_is_a_drop_onto_target() {
-        let header = Rect::from_min_size(pos2(10.0, 20.0), vec2(120.0, 24.0));
-        assert!(!header_drop_before(header, pos2(30.0, 29.0)));
-        assert!(!header_drop_before(header, pos2(30.0, 25.0)));
-        assert!(!header_drop_before(header, pos2(30.0, 40.0)));
-    }
-
-    #[test]
-    fn shared_header_payload_keeps_root_and_nested_group_identity() {
-        assert_eq!(
-            asset_browser_header_payload("patterns", "Textures", &[]),
-            AssetDrag::Group { scope: "patterns".into(), name: "Textures".into(), path: Vec::new() }
-        );
-        assert_eq!(
-            asset_browser_header_payload("brushes", "Ink", &["Imported".into(), "Dry".into()]),
-            AssetDrag::Group { scope: "brushes".into(), name: "Ink".into(), path: vec!["Imported".into(), "Dry".into()] }
-        );
-    }
-
-    #[test]
     fn short_preset_library_keeps_the_allocated_browser_height() {
         use egui_kittest::Harness;
 
@@ -1067,14 +1040,7 @@ mod tests {
                 domain_hierarchy_actions: false,
                 root_item_group: None,
             },
-            capabilities: BrowserCapabilities {
-                item_drag: false,
-                item_drop: false,
-                group_drag: false,
-                selection: false,
-                activation: false,
-                canonical_hierarchy_drag: false,
-            },
+            capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: false, activation: false },
             item_context_menu: None,
             group_context_menu: None,
             nested_group_context_menu: None,

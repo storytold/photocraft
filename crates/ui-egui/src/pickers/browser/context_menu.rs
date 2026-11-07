@@ -99,9 +99,22 @@ pub(crate) fn delete_item_actions(targets: &[(String, ItemView)]) -> Vec<Browser
 
 /// Projection data needed to expand a context-menu deletion to the active browser selection.
 pub(super) struct BrowserDeleteContext<'a> {
-    pub(super) selection_order: &'a [PickerId],
     pub(super) hierarchy: &'a PickerBrowserHierarchy,
     pub(super) identities: &'a std::collections::BTreeMap<PickerId, PickerNodeIdentity>,
+}
+
+fn hierarchy_selection_order(hierarchy: &PickerBrowserHierarchy) -> Vec<PickerId> {
+    fn visit(node: &super::path_identity_model::HierarchyNode, order: &mut Vec<PickerId>) {
+        order.push(node.id().clone());
+        for child in node.children() {
+            visit(child, order);
+        }
+    }
+    let mut order = Vec::new();
+    for root in hierarchy.roots() {
+        visit(root, &mut order);
+    }
+    order
 }
 
 /// Resolve selected nodes to independent domain deletions, omitting descendants covered by a selected group.
@@ -110,7 +123,8 @@ pub(super) fn selected_delete_actions(selection: &BTreeSet<PickerId>, clicked: &
         return None;
     }
     let mut actions = Vec::new();
-    for id in context.selection_order.iter().filter(|id| selection.contains(*id)) {
+    let selection_order = hierarchy_selection_order(context.hierarchy);
+    for id in selection_order.iter().filter(|id| selection.contains(*id)) {
         let mut parent = context.hierarchy.parent_of(id);
         let mut covered = false;
         while let Some(ContainerId::Group(parent_id)) = parent {

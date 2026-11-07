@@ -163,7 +163,7 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             },
             // Cross-group membership uses the Pattern domain command; sibling/group order is saved
             // in the canonical picker layout state.
-            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(crate::pickers::browser::asset_browser::standard_item_context_menu),
             group_context_menu: Some(crate::pickers::browser::asset_browser::standard_group_context_menu),
             nested_group_context_menu: None,
@@ -332,14 +332,7 @@ pub(crate) fn compact_pattern_browser(
         // Compact pickers have no domain-command context for committing item or group moves.
         // Keep selection/activation available, but do not expose drag semantics that could only
         // mutate this popup's transient PresetUi projection.
-        capabilities: BrowserCapabilities {
-            item_drag: false,
-            item_drop: false,
-            group_drag: false,
-            selection: true,
-            activation: true,
-            canonical_hierarchy_drag: false,
-        },
+        capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: true, activation: true },
         item_context_menu: Some(compact_item_context_menu),
         group_context_menu: Some(compact_group_context_menu),
         nested_group_context_menu: None,
@@ -406,39 +399,5 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, panel: &'st
                 app.ui.presets_ui.selected.insert(panel.into(), selected);
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod hierarchy_drop_tests {
-    use crate::pickers::browser::browser_interaction::card_drop_hit;
-    use crate::pickers::browser::dragging_model::{PointerRegion, resolve_drop_candidate};
-    use crate::pickers::browser::path_identity_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
-    use egui::{Pos2, Rect};
-
-    #[test]
-    fn list_and_grid_card_edges_resolve_to_the_same_sibling_positions() {
-        let moving = PickerId::item("Patterns", "moving-pattern");
-        let target = PickerId::item("Patterns", "target-pattern");
-        let hierarchy = PickerBrowserHierarchy::new(vec![HierarchyNode::group(
-            PickerId::group("Patterns"),
-            vec![HierarchyNode::item(moving.clone()), HierarchyNode::item(target.clone())],
-        )])
-        .unwrap();
-        let rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(110.0, 80.0));
-
-        let grid_before = card_drop_hit(rect, Pos2::new(20.0, 50.0), true, target.clone(), 1, 0);
-        let list_before = card_drop_hit(rect, Pos2::new(60.0, 25.0), false, target.clone(), 1, 0);
-        let grid_after = card_drop_hit(rect, Pos2::new(100.0, 50.0), true, target.clone(), 1, 0);
-        let list_after = card_drop_hit(rect, Pos2::new(60.0, 75.0), false, target.clone(), 1, 0);
-
-        assert_eq!(grid_before.region, PointerRegion::LeadingEdge);
-        assert_eq!(list_before.region, PointerRegion::LeadingEdge);
-        assert_eq!(grid_after.region, PointerRegion::TrailingEdge);
-        assert_eq!(list_after.region, PointerRegion::TrailingEdge);
-        assert_eq!(resolve_drop_candidate(&moving, &grid_before, &hierarchy).unwrap().position, DropPosition::Before { target: target.clone() });
-        assert_eq!(resolve_drop_candidate(&moving, &list_before, &hierarchy).unwrap().position, DropPosition::Before { target: target.clone() });
-        assert_eq!(resolve_drop_candidate(&moving, &grid_after, &hierarchy).unwrap().position, DropPosition::After { target: target.clone() });
-        assert_eq!(resolve_drop_candidate(&moving, &list_after, &hierarchy).unwrap().position, DropPosition::After { target });
     }
 }

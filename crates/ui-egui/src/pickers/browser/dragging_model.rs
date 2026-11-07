@@ -1,14 +1,17 @@
 //! Drag/drop resolution for the canonical picker-browser hierarchy.
 //!
-//! Hit testing supplies a [`PointerRegion`] with geometry captured from the existing layout. This
-//! module maps that region to one exact [`DropPosition`]. The indicator is carried by the same
-//! candidate, so preview and release can consume the same resolved result.
+//! Object-owned hit areas resolve directly to one exact [`DropPosition`]. This module validates
+//! that structural intent against the hierarchy and carries its indicator in the same candidate,
+//! so preview and release consume the same resolved result.
 
 use egui::{Pos2, Rect};
 
-use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyError, PickerBrowserHierarchy, PickerId};
+#[cfg(test)]
+use crate::pickers::browser::path_identity_model::ContainerId;
+use crate::pickers::browser::path_identity_model::{DropPosition, HierarchyError, PickerBrowserHierarchy, PickerId};
 
 /// The geometric part of a hit target, independent of its semantic destination.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PointerRegion {
     /// Leading edge of a node: insert before it.
@@ -22,6 +25,7 @@ pub(crate) enum PointerRegion {
 }
 
 /// Geometry captured by the renderer for one possible drop target.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DropHitRegion {
     /// Identity of the node under the pointer, when the region is node-relative.
@@ -132,14 +136,6 @@ pub(crate) struct DragSession {
     pub(crate) candidate: Option<DropCandidate>,
 }
 
-/// Order a multi-node hierarchy commit so repeated insertions at one anchor retain the browser's
-/// visible selection order. Before/append insertions advance naturally; after/prepend insertions
-/// must be applied in reverse because each operation uses the same stable anchor.
-pub(crate) fn hierarchy_move_sources(selection: &[PickerId], position: &DropPosition) -> Vec<PickerId> {
-    let reverse = matches!(position, DropPosition::After { .. } | DropPosition::PrependTo { .. });
-    if reverse { selection.iter().rev().cloned().collect() } else { selection.to_vec() }
-}
-
 impl DragSession {
     /// Start tracking a drag from a hierarchy node.
     pub(crate) fn new(source: PickerId, selection: Vec<PickerId>) -> Self {
@@ -147,6 +143,7 @@ impl DragSession {
     }
 
     /// Update the pointer and resolve a candidate from the hit region under it.
+    #[cfg(test)]
     pub(crate) fn resolve(&mut self, pointer: Pos2, hit: &DropHitRegion, hierarchy: &PickerBrowserHierarchy) -> Option<&DropCandidate> {
         self.pointer = Some(pointer);
         self.candidate = resolve_drop_candidate_with_selection(&self.source, &self.selection, hit, hierarchy);
@@ -176,12 +173,6 @@ impl DragSession {
             },
         }
     }
-}
-
-/// Return the winning hit's index so the browser can take the payload from that exact response.
-/// Deepest targets win; equal-depth targets prefer later (more specific) registrations.
-pub(crate) fn arbitrate_hit_index(pointer: Pos2, hits: &[DropHitRegion]) -> Option<usize> {
-    hits.iter().enumerate().filter(|(_, hit)| hit.hit_rect.contains(pointer)).max_by_key(|(_, hit)| (hit.depth, hit.order)).map(|(index, _)| index)
 }
 
 /// Paint the indicator carried by a valid resolved candidate. Invalid destinations intentionally
@@ -227,6 +218,7 @@ pub(crate) fn resolve_drop_candidate(source: &PickerId, hit: &DropHitRegion, hie
 /// Resolve a drop for the effective selection, falling back to the pointer source when there is
 /// no selection payload. The destination is accepted only when every node that will move can be
 /// moved there. `source` remains the pointer identity even when a selected ancestor subsumes it.
+#[cfg(test)]
 pub(crate) fn resolve_drop_candidate_with_selection(
     source: &PickerId,
     selection: &[PickerId],
@@ -254,6 +246,28 @@ pub(crate) fn resolve_drop_candidate_with_selection(
             (DropPosition::AppendTo { container }, indicator)
         }
     };
+    Some(validate_drop_candidate(source, selection, position, indicator, hierarchy))
+}
+
+/// Validate an already object-resolved structural position. Object-owned hit areas should use
+/// this entry point rather than translating their meaning through generic pointer regions.
+pub(crate) fn resolve_drop_position_candidate_with_selection(
+    source: &PickerId,
+    selection: &[PickerId],
+    position: DropPosition,
+    indicator: DropIndicator,
+    hierarchy: &PickerBrowserHierarchy,
+) -> DropCandidate {
+    validate_drop_candidate(source, selection, position, indicator, hierarchy)
+}
+
+fn validate_drop_candidate(
+    source: &PickerId,
+    selection: &[PickerId],
+    position: DropPosition,
+    indicator: DropIndicator,
+    hierarchy: &PickerBrowserHierarchy,
+) -> DropCandidate {
     let move_roots: Vec<&PickerId> = if selection.is_empty() { vec![source] } else { selection.iter().collect() };
     let validity = match move_roots.into_iter().try_for_each(|selected| hierarchy.validate_position(selected, &position)) {
         Ok(()) => DropValidity::Valid,
@@ -266,15 +280,16 @@ pub(crate) fn resolve_drop_candidate_with_selection(
         Err(HierarchyError::InvalidTree) => DropValidity::Invalid(DropRejection::InvalidHierarchy),
         Err(HierarchyError::DepthExceeded) => DropValidity::Invalid(DropRejection::DepthExceeded),
     };
-    Some(DropCandidate { position, indicator, validity })
+    DropCandidate { position, indicator, validity }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        DragSession, DropCommitResult, DropHitRegion, DropIndicator, DropRejection, DropValidity, PointerRegion, arbitrate_hit_index, container_outline_rects,
-        hierarchy_move_sources, resolve_drop_candidate, resolve_drop_candidate_with_selection,
+        DragSession, DropCommitResult, DropHitRegion, DropIndicator, DropRejection, DropValidity, PointerRegion, container_outline_rects,
+        resolve_drop_candidate, resolve_drop_candidate_with_selection,
     };
+    use crate::pickers::browser::hierarchy_utils::hierarchy_move_sources;
     use crate::pickers::browser::path_identity_model::{ContainerId, DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
     use egui::{Pos2, Rect};
 
@@ -355,39 +370,6 @@ mod tests {
                 .unwrap();
         assert_eq!(candidate.validity, DropValidity::Invalid(DropRejection::WouldCreateCycle));
         assert!(!candidate.is_valid());
-    }
-
-    #[test]
-    fn arbitration_prefers_deepest_then_latest_hit() {
-        let pointer = Pos2::new(20.0, 25.0);
-        let mut shallow = hit(PointerRegion::LeadingEdge, Some("other"), None);
-        let mut deep = hit(PointerRegion::TrailingEdge, Some("other"), None);
-        shallow.depth = 1;
-        deep.depth = 2;
-        assert_eq!(arbitrate_hit_index(pointer, &[deep.clone(), shallow.clone()]), Some(0));
-        deep.depth = 1;
-        assert_eq!(arbitrate_hit_index(pointer, &[shallow, deep.clone()]), Some(1));
-    }
-
-    #[test]
-    fn overlapping_drop_regions_always_select_exactly_one_deepest_latest_candidate() {
-        let pointer = Pos2::new(20.0, 25.0);
-        for depth_count in 1..=5 {
-            for order_count in 1..=5 {
-                let mut hits = Vec::new();
-                for depth in 0..depth_count {
-                    for order in 0..order_count {
-                        let mut candidate = hit(PointerRegion::LeadingEdge, Some("target"), None);
-                        candidate.depth = depth;
-                        candidate.order = order;
-                        hits.push(candidate);
-                    }
-                }
-                let expected = hits.iter().enumerate().max_by_key(|(_, candidate)| (candidate.depth, candidate.order)).map(|(index, _)| index);
-                assert_eq!(arbitrate_hit_index(pointer, &hits), expected, "depth_count={depth_count}, order_count={order_count}");
-                assert!(arbitrate_hit_index(Pos2::new(500.0, 500.0), &hits).is_none());
-            }
-        }
     }
 
     #[test]

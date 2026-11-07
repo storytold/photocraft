@@ -237,6 +237,26 @@ fn presets_save_load_delete_round_trip() {
     assert!(s.execute("brush.presets.save", json!({})).is_err());
 }
 
+#[test]
+fn scoped_preset_delete_removes_only_the_selected_duplicate_occurrence() {
+    let mut s = Session::new();
+    let mut first = s.tools.presets[0].clone();
+    first.name = "Shared name".into();
+    first.group = "First group".into();
+    first.folder = vec!["Folder".into()];
+    let mut second = first.clone();
+    second.group = "Second group".into();
+    second.folder.clear();
+    s.tools.presets = vec![first, second];
+
+    s.execute("brush.presets.delete", json!({"name": "Shared name", "group": "First group", "folder": ["Folder"]})).unwrap();
+
+    assert_eq!(s.tools.presets.len(), 1);
+    assert_eq!(s.tools.presets[0].name, "Shared name");
+    assert_eq!(s.tools.presets[0].group, "Second group");
+    assert!(s.execute("brush.presets.delete", json!({"name": "Shared name", "folder": []})).is_err());
+}
+
 /// The New Brush Preset dialog's boxes (#4490): a preset saved without Capture Brush Size or
 /// Include Tool Settings leaves the tool's size, mode, opacity, flow and pressure buttons as they
 /// are when picked; one saved with Include Color brings its colour back as the foreground. A preset

@@ -147,7 +147,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             },
             // Cross-group membership uses the Gradient domain command; sibling/group order is saved
             // in the canonical picker layout state.
-            capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+            capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,

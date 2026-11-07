@@ -5,6 +5,7 @@
 //! arbitration, hierarchy resolver, and transient persistence are the system under test.
 
 use super::*;
+use crate::pickers::browser::dragging::DropArea;
 use crate::pickers::browser::dragging_model::DropMoveIntent;
 use crate::pickers::browser::identity::PickerIdentityKey;
 use crate::pickers::browser::path_identity_model::PickerId;
@@ -57,14 +58,7 @@ fn harness_with_state_layout(groups: Vec<GroupView>, size: Vec2, mut initial_sta
                     domain_hierarchy_actions: false,
                     root_item_group: None,
                 },
-                capabilities: BrowserCapabilities {
-                    item_drag: true,
-                    item_drop: true,
-                    group_drag: true,
-                    selection: true,
-                    activation: true,
-                    canonical_hierarchy_drag: true,
-                },
+                capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
                 item_context_menu: None,
                 group_context_menu: None,
                 nested_group_context_menu: None,
@@ -116,14 +110,7 @@ fn harness_with_intent_capture(
                     domain_hierarchy_actions: false,
                     root_item_group: None,
                 },
-                capabilities: BrowserCapabilities {
-                    item_drag: true,
-                    item_drop: true,
-                    group_drag: true,
-                    selection: true,
-                    activation: true,
-                    canonical_hierarchy_drag: true,
-                },
+                capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
                 item_context_menu: None,
                 group_context_menu: None,
                 nested_group_context_menu: None,
@@ -501,14 +488,7 @@ fn item_drag_preview_presses_against_asset_browser_viewport_edge() {
                     domain_hierarchy_actions: false,
                     root_item_group: None,
                 },
-                capabilities: BrowserCapabilities {
-                    item_drag: true,
-                    item_drop: false,
-                    group_drag: false,
-                    selection: false,
-                    activation: false,
-                    canonical_hierarchy_drag: true,
-                },
+                capabilities: BrowserCapabilities { item_drag: true, item_drop: false, group_drag: false, selection: false, activation: false },
                 item_context_menu: None,
                 group_context_menu: None,
                 nested_group_context_menu: None,
@@ -595,14 +575,7 @@ fn item_drag_preview_follows_cursor_with_original_pickup_offset_after_leaving_as
                     domain_hierarchy_actions: false,
                     root_item_group: None,
                 },
-                capabilities: BrowserCapabilities {
-                    item_drag: true,
-                    item_drop: false,
-                    group_drag: false,
-                    selection: false,
-                    activation: false,
-                    canonical_hierarchy_drag: true,
-                },
+                capabilities: BrowserCapabilities { item_drag: true, item_drop: false, group_drag: false, selection: false, activation: false },
                 item_context_menu: None,
                 group_context_menu: None,
                 nested_group_context_menu: None,
@@ -680,8 +653,8 @@ fn mixed_tree() -> Vec<GroupView> {
 }
 
 #[test]
-fn actual_open_nonempty_group_header_drops_into_the_group_across_its_full_height() {
-    for y in [-12.0, -5.0, 0.0] {
+fn actual_open_nonempty_group_header_body_drops_into_the_group() {
+    for y in [-5.0, 0.0, 5.0] {
         let mut h = harness(mixed_tree(), vec2(520.0, 900.0));
         drag_labels(&mut h, "C", "A", vec2(0.0, y));
         let children = &h.state().0.hierarchy_order[PANEL]["A"];
@@ -690,7 +663,7 @@ fn actual_open_nonempty_group_header_drops_into_the_group_across_its_full_height
         assert_eq!(h.state().0.parent_of(PANEL, "C"), Some("A"));
     }
 
-    for y in [5.0, 12.0] {
+    for y in [5.0] {
         let mut h = harness(mixed_tree(), vec2(520.0, 900.0));
         drag_labels(&mut h, "C", "A", vec2(0.0, y));
         let children = &h.state().0.hierarchy_order[PANEL]["A"];
@@ -751,7 +724,7 @@ fn actual_card_edge_drop_reorders_mixed_siblings_at_both_halves_across_many_card
 }
 
 #[test]
-fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
+fn actual_parent_indent_lane_and_child_header_before_area_resolve_distinct_destinations() {
     for offset in [-5.0, -4.0, -2.0, -1.0] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         let source = h.get_by_label("C").rect().center();
@@ -774,7 +747,7 @@ fn actual_six_pixel_group_gap_selects_upper_append_and_lower_sibling_levels() {
 }
 
 #[test]
-fn actual_card_above_group_upper_half_shows_only_its_right_vertical_marker() {
+fn actual_group_header_before_band_owns_the_row_above_its_header() {
     let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_root_item_before_group("A", "a1", "B"));
     let source = h.get_by_label("C").rect().center();
     let card = h.get_by_label("A card 1").rect();
@@ -794,21 +767,6 @@ fn actual_card_above_group_upper_half_shows_only_its_right_vertical_marker() {
     let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
     let image = h.render().expect("render card-to-group sibling marker");
     let ppp = h.ctx.pixels_per_point();
-    let x = (card.right() * ppp).round() as i32;
-    let y0 = (card.top() * ppp).round() as i32;
-    let y1 = (card.bottom() * ppp).round() as i32;
-    let has_accent = |y: i32| {
-        (x - 3..=x + 3).any(|px| {
-            px >= 0 && y >= 0 && (px as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(px as u32, y as u32).0[..3] == accent[..3]
-        })
-    };
-    assert!(
-        (y0..=y1).filter(|y| has_accent(*y)).count() > (y1 - y0) as usize * 3 / 4,
-        "upper half of a card→group boundary must paint only the card's right vertical edge; card={card:?}, group={lower_group:?}, x={x}, accent_pixels={}, height={}, order={:?}",
-        (y0..=y1).filter(|y| has_accent(*y)).count(),
-        y1 - y0,
-        h.state().0.hierarchy_order[PANEL]
-    );
     let group_line_y = (lower_group.top() * ppp).round() as i32;
     let group_x0 = (lower_group.left() * ppp).round() as i32;
     let group_x1 = (lower_group.right() * ppp).round() as i32;
@@ -817,8 +775,8 @@ fn actual_card_above_group_upper_half_shows_only_its_right_vertical_marker() {
             .any(|y| x >= 0 && y >= 0 && (x as u32) < image.width() && (y as u32) < image.height() && image.get_pixel(x as u32, y as u32).0[..3] == accent[..3])
     };
     assert!(
-        (group_x0..=group_x1).filter(|x| has_group_line(*x)).count() < (group_x1 - group_x0) as usize / 4,
-        "upper half must not also paint the lower group's horizontal boundary; group={lower_group:?}, y={group_line_y}"
+        (group_x0..=group_x1).filter(|x| has_group_line(*x)).count() > (group_x1 - group_x0) as usize * 3 / 4,
+        "the group's full-width Before area owns the space above its header; group={lower_group:?}, y={group_line_y}"
     );
     h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
     h.run_steps(2);
@@ -826,10 +784,8 @@ fn actual_card_above_group_upper_half_shows_only_its_right_vertical_marker() {
     let card_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "A".into(), key: "a1".into() }).unwrap();
     let dragged_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group("C".into())).unwrap();
     let lower_index = root_order.iter().position(|entry| *entry == HierarchyOrderEntry::Group("B".into())).unwrap();
-    assert!(
-        card_index < dragged_index && dragged_index < lower_index,
-        "the upper half of the card→group boundary should insert the dragged group after the card and before the lower group: {root_order:?}"
-    );
+    assert_eq!(dragged_index, card_index + 1, "the group Before target inserts immediately after the preceding card: {root_order:?}");
+    assert_eq!(lower_index, dragged_index + 1, "the target group remains after the moved group: {root_order:?}");
 }
 
 #[test]
@@ -907,7 +863,7 @@ fn actual_nested_item_above_group_lower_half_drops_group_as_parent_sibling() {
 
 #[test]
 fn actual_parent_indent_gutter_drops_into_parent_across_nested_child_header() {
-    for offset in [-1.0, 1.0] {
+    for offset in [1.0] {
         let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
         let source = h.get_by_label("C").rect().center();
         let parent_header = h.get_by_label("A").rect();
@@ -934,7 +890,7 @@ fn actual_parent_indent_gutter_drops_into_parent_across_nested_child_header() {
 }
 
 #[test]
-fn actual_gap_after_a_nested_subtree_anchors_after_the_preceding_root_group() {
+fn actual_group_header_before_area_inserts_after_the_preceding_root_subtree() {
     for (offset, upper) in [(-5.0, true), (-1.0, false)] {
         let mut groups = nested_group_tree();
         groups.push(group("D", vec![]));
@@ -961,8 +917,8 @@ fn actual_gap_after_a_nested_subtree_anchors_after_the_preceding_root_group() {
 }
 
 #[test]
-fn actual_gap_between_a_group_and_root_card_offers_append_and_root_sibling_destinations() {
-    for (offset, append_into_group) in [(-1.0, true), (1.0, false)] {
+fn actual_open_group_bottom_is_a_sibling_boundary_after_its_visible_subtree() {
+    for offset in [1.0] {
         let groups = vec![group("A", vec![item("a1", "A card", &[])]), group("B", vec![item("b1", "B card", &[])])];
         let mut h = harness_with_state(groups, vec2(520.0, 900.0), with_root_item_between_groups("B", "b1"));
         let group_card = h.get_by_label("A card").rect();
@@ -972,27 +928,45 @@ fn actual_gap_between_a_group_and_root_card_offers_append_and_root_sibling_desti
         let point = pos2(group_card.center().x, boundary + offset);
         pointer_drag(&mut h, source, point);
 
-        let a = h.state().0.hierarchy_order[PANEL].get("A").cloned().unwrap_or_default();
+        let group_after = test_drop_geometry(&h)
+            .hits
+            .into_iter()
+            .find(|(object, area, _, _)| object == &format!("GroupHeader({:?})", PickerId::group("A")) && *area == DropArea::After)
+            .expect("open group should own its trailing boundary");
+        assert!(group_after.2.top() > group_card.bottom(), "group boundary hit target must start after the final child's hit target");
+        assert_eq!(group_after.2.height(), 9.0, "open-group bottom hit area should extend three pixels farther down");
+        assert_eq!(group_after.3.center().y, group_card.bottom(), "open-group indicator should sit in the gap immediately after the final child");
+        assert!(group_after.2.top() >= group_after.3.bottom(), "the lower hit area should remain below and connected to the visible indicator");
+
         let root = h.state().0.hierarchy_order[PANEL].get("").cloned().unwrap_or_default();
-        if append_into_group {
-            assert!(
-                a.contains(&HierarchyOrderEntry::Item("b1".into())),
-                "upper half should append the root card to Group A: {a:?}; root={root:?}; all={:?}",
-                h.state().0.hierarchy_order
-            );
-            assert!(!root.contains(&HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }));
-        } else {
-            assert!(!a.contains(&HierarchyOrderEntry::Item("b1".into())), "lower half should keep the card at the root level: {a:?}");
-            let group_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("A".into())).unwrap();
-            let card_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }).unwrap();
-            assert_eq!(card_index, group_index + 1, "root card should remain immediately after Group A: {root:?}");
-        }
+        let group_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::Group("A".into())).unwrap();
+        let card_index = root.iter().position(|entry| *entry == HierarchyOrderEntry::RootItem { group: "B".into(), key: "b1".into() }).unwrap();
+        assert_eq!(card_index, group_index + 1, "group After keeps the card as the next root sibling at offset {offset}: {root:?}");
     }
 }
 
 #[test]
-fn actual_gap_between_nested_group_and_its_sibling_card_works_at_nested_depth() {
-    for (offset, append_into_group) in [(-1.0, true), (1.0, false)] {
+fn actual_open_empty_group_uses_the_same_bottom_drop_area_as_a_closed_group() {
+    let groups = vec![group("A", vec![]), group("B", vec![item("b1", "B card", &[])])];
+    let mut h = harness(groups, vec2(520.0, 900.0));
+    let header =
+        test_last_group_headers(&h.ctx, PANEL).into_iter().find(|(name, _)| name == "A").map(|(_, rect)| rect).expect("empty group header should be laid out");
+    let source = h.get_by_label("B card").rect().center();
+    pointer_drag(&mut h, source, pos2(header.center().x, header.bottom() + 2.0));
+
+    let group_after = test_drop_geometry(&h)
+        .hits
+        .into_iter()
+        .find(|(object, area, _, _)| object == &format!("GroupHeader({:?})", PickerId::group("A")) && *area == DropArea::After)
+        .expect("empty open group should own its trailing boundary");
+    assert_eq!(group_after.2.top(), header.bottom() - 6.0, "empty open group should retain the closed-group bottom hit area's upper edge");
+    assert_eq!(group_after.2.bottom(), header.bottom() + 6.0, "empty open group should retain the closed-group bottom hit area's lower edge");
+    assert_eq!(group_after.3.center().y, header.bottom(), "empty open group indicator should sit at the header's bottom edge");
+}
+
+#[test]
+fn actual_open_nested_group_bottom_inserts_after_its_visible_subtree() {
+    for offset in [3.0] {
         let groups =
             vec![group("A", vec![item("a1", "A card", &[])]), group("B", vec![item("b1", "B card", &[])]), group("C", vec![item("c1", "C card", &[])])];
         let mut initial = PresetUi::default();
@@ -1002,44 +976,17 @@ fn actual_gap_between_nested_group_and_its_sibling_card_works_at_nested_depth() 
         let group_card = h.get_by_label("A card").rect();
         let sibling_card = h.get_by_label("B card").rect();
         let source = h.get_by_label("C card").rect().center();
-        let group_header = h.get_by_label("A").rect();
         let boundary = (group_card.bottom() + sibling_card.top()) * 0.5;
         let point = pos2(group_card.center().x, boundary + offset);
-        if append_into_group {
-            pointer_drag(&mut h, source, point);
-        } else {
-            h.event(Event::PointerMoved(source));
-            h.run_steps(1);
-            h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
-            h.run_steps(1);
-            for step in 1..=8 {
-                h.event(Event::PointerMoved(source + (point - source) * (step as f32 / 8.0)));
-                h.run_steps(1);
-            }
-            let accent = crate::theme::Tokens::get(&h.ctx).accent;
-            let ppp = h.ctx.pixels_per_point();
-            let image = h.render().expect("render lower group-boundary drop preview");
-            let x = (group_header.center().x * ppp).round() as u32;
-            let y = (group_card.bottom() * ppp).round() as u32;
-            assert!(
-                (y.saturating_sub(2)..=(y + 2)).any(|py| x < image.width() && py < image.height() && image.get_pixel(x, py).0[..3] == accent.to_array()[..3]),
-                "lower half should paint a horizontal marker on Group A's lower border, not a vertical card-edge marker"
-            );
-            h.event(Event::PointerButton { pos: point, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
-            h.run_steps(3);
-        }
+        pointer_drag(&mut h, source, point);
 
-        if append_into_group {
-            let children = &h.state().0.hierarchy_order[PANEL]["A"];
-            assert!(children.contains(&HierarchyOrderEntry::Item("c1".into())), "upper half should append into nested Group A: {children:?}");
-        } else {
-            let siblings = &h.state().0.hierarchy_order[PANEL]["B"];
-            let group_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Group("A".into())).unwrap();
-            let moved_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Item("c1".into())).unwrap();
-            let next_card_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Item("b1".into())).unwrap();
-            assert_eq!(moved_index, group_index + 1, "lower half should insert immediately after Group A at parent X: {siblings:?}");
-            assert_eq!(next_card_index, moved_index + 1, "the existing sibling card should remain after the moved card: {siblings:?}");
-        }
+        let siblings = &h.state().0.hierarchy_order[PANEL]["B"];
+        let group_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Group("A".into())).unwrap();
+        let moved_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Item("c1".into())).unwrap();
+        let next_card_index = siblings.iter().position(|entry| *entry == HierarchyOrderEntry::Item("b1".into())).unwrap();
+        assert_eq!(moved_index, group_index + 1, "group After inserts the dragged card immediately after Group A at offset {offset}: {siblings:?}");
+        assert_eq!(next_card_index, moved_index + 1, "the existing sibling card remains after the moved card: {siblings:?}");
+        assert!(!h.state().0.hierarchy_order[PANEL]["A"].contains(&HierarchyOrderEntry::Item("c1".into())));
     }
 }
 
@@ -1126,14 +1073,7 @@ fn domain_active_item_does_not_select_a_card_in_a_fresh_browser() {
                     domain_hierarchy_actions: false,
                     root_item_group: None,
                 },
-                capabilities: BrowserCapabilities {
-                    item_drag: false,
-                    item_drop: false,
-                    group_drag: false,
-                    selection: true,
-                    activation: true,
-                    canonical_hierarchy_drag: false,
-                },
+                capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: true, activation: true },
                 item_context_menu: None,
                 group_context_menu: None,
                 nested_group_context_menu: None,
@@ -1181,14 +1121,7 @@ fn browser_selection_clears_only_when_empty_browser_space_is_clicked() {
                     domain_hierarchy_actions: false,
                     root_item_group: None,
                 },
-                capabilities: BrowserCapabilities {
-                    item_drag: false,
-                    item_drop: false,
-                    group_drag: false,
-                    selection: true,
-                    activation: true,
-                    canonical_hierarchy_drag: false,
-                },
+                capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: true, activation: true },
                 item_context_menu: None,
                 group_context_menu: None,
                 nested_group_context_menu: None,
@@ -1284,14 +1217,7 @@ fn root_cards_from_different_backing_groups_share_one_grid_and_keep_owner_identi
                     domain_hierarchy_actions: false,
                     root_item_group: None,
                 },
-                capabilities: super::BrowserCapabilities {
-                    item_drag: true,
-                    item_drop: true,
-                    group_drag: true,
-                    selection: true,
-                    activation: true,
-                    canonical_hierarchy_drag: true,
-                },
+                capabilities: super::BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
                 item_context_menu: None,
                 group_context_menu: None,
                 nested_group_context_menu: None,
@@ -1361,7 +1287,14 @@ fn actual_root_cards_reorder_each_other_without_losing_owner_identity() {
         let source_rect = h.get_by_label(source_label).rect();
         assert_eq!(source_rect.top(), target_rect.top(), "cross-owner root cards must be one horizontal grid before drag");
         assert!(source_rect.left() != target_rect.left(), "the two cards must have distinct columns");
-        let target = if after { pos2(target_rect.right() - 2.0, target_rect.center().y) } else { pos2(target_rect.left() + 2.0, target_rect.center().y) };
+        let target_id = if target_label == "A card 1" { PickerId::item("A", "a1") } else { PickerId::item("B", "b1") };
+        let target_area = if after { DropArea::After } else { DropArea::Before };
+        let target_geometry = test_drop_geometry(&h)
+            .hits
+            .into_iter()
+            .find(|(object, area, _, _)| object == &format!("Card({target_id:?})") && *area == target_area)
+            .expect("the root card should register its own edge target");
+        let target = target_geometry.2.center();
 
         pointer_drag(&mut h, source, target);
 
@@ -1374,7 +1307,8 @@ fn actual_root_cards_reorder_each_other_without_losing_owner_identity() {
                 HierarchyOrderEntry::Group("B".into()),
                 HierarchyOrderEntry::Group("C".into()),
             ],
-            "source={source_label}, target={target_label}, after={after}"
+            "source={source_label}, target={target_label}, after={after}, full hierarchy={:?}",
+            h.state().0.hierarchy_order[PANEL]
         );
     }
 }
@@ -1410,6 +1344,34 @@ fn active_root_card_drop_between_cards_paints_a_vertical_insertion_marker() {
     let ppp = h.ctx.pixels_per_point();
     let x = (target_card.left() * ppp).round() as i32;
     let y = (target_card.center().y * ppp).round() as i32;
+    let geometry = test_drop_geometry(&h);
+    let browser_clip = geometry.browser_parent_clip;
+    let leading_marker = geometry
+        .hits
+        .iter()
+        .find(|(object, area, hit, _)| object.starts_with("Card(") && *area == DropArea::Before && (hit.center().y - target_card.center().y).abs() < 0.1)
+        .map(|(_, _, _, marker)| *marker)
+        .expect("the target card's leading insertion marker");
+    assert_eq!(leading_marker.width(), 3.0, "leading insertion marker should retain its standard thickness");
+    let first_pixel = (leading_marker.left() * ppp).floor() as i32;
+    let end_pixel = (leading_marker.right() * ppp).ceil() as i32;
+    let top_pixel = (leading_marker.top() * ppp).floor() as i32;
+    let bottom_pixel = (leading_marker.bottom() * ppp).ceil() as i32;
+    let visible_columns = (first_pixel..end_pixel)
+        .filter(|px| {
+            (top_pixel..bottom_pixel).any(|py| {
+                *px >= 0
+                    && py >= 0
+                    && (*px as u32) < image.width()
+                    && (py as u32) < image.height()
+                    && image.get_pixel(*px as u32, py as u32).0[..3] == accent[..3]
+            })
+        })
+        .count();
+    assert_eq!(
+        visible_columns, 4,
+        "all four columns of the leading insertion marker must be visible; marker={leading_marker:?}, card={target_card:?}, clip={browser_clip:?}"
+    );
     let has_accent = (x - 2..=x + 2).any(|px| {
         (y - 2..=y + 2).any(|py| {
             px >= 0 && py >= 0 && (px as u32) < image.width() && (py as u32) < image.height() && image.get_pixel(px as u32, py as u32).0[..3] == accent[..3]
@@ -1454,7 +1416,7 @@ fn actual_list_row_drag_commits_before_and_after_positions() {
         let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), PresetUi::default(), true);
         let source = h.get_by_label("A card 1").rect().center();
         let target_row = h.get_by_label("A card 2").rect();
-        let target = pos2(target_row.center().x, if after { target_row.bottom() - 2.0 } else { target_row.top() + 2.0 });
+        let target = pos2(target_row.center().x, target_row.center().y + if after { 1.0 } else { -1.0 });
 
         pointer_drag(&mut h, source, target);
 
@@ -1514,7 +1476,7 @@ fn actual_multi_card_drag_preserves_selection_order_for_every_drop_region() {
                 "before" | "after" => {
                     let rect = h.get_by_label("B card 1").rect();
                     if list {
-                        pos2(rect.center().x, if region == "before" { rect.top() + 2.0 } else { rect.bottom() - 2.0 })
+                        pos2(rect.center().x, rect.center().y + if region == "before" { -1.0 } else { 1.0 })
                     } else {
                         pos2(if region == "before" { rect.left() + 2.0 } else { rect.right() - 2.0 }, rect.center().y)
                     }
@@ -1795,7 +1757,7 @@ fn actual_multiple_group_drag_uses_before_after_prepend_and_append_targets() {
     for list in [false, true] {
         for (region, expected) in [
             ("before", DropPosition::Before { target: PickerId::group("D") }),
-            ("after", DropPosition::After { target: PickerId::group("C") }),
+            ("shared_boundary", DropPosition::Before { target: PickerId::group("D") }),
             ("prepend", DropPosition::PrependTo { group: PickerId::group("C") }),
             ("append", DropPosition::AppendTo { container: ContainerId::Root }),
         ] {
@@ -1806,7 +1768,7 @@ fn actual_multiple_group_drag_uses_before_after_prepend_and_append_targets() {
             let mut h = harness_with_intent_capture(groups, vec2(520.0, 900.0), initial, list);
             let source = h.get_by_label("A").rect().center();
             let target = match region {
-                "before" | "after" => {
+                "before" | "shared_boundary" => {
                     let lower = h.get_by_label("D").rect();
                     pos2(lower.center().x, lower.top() + if region == "before" { -1.0 } else { -5.0 })
                 }
@@ -1839,7 +1801,7 @@ fn actual_mixed_group_and_card_selection_uses_every_drop_position_from_either_so
         for source_kind in ["group", "card"] {
             for (region, expected) in [
                 ("before", DropPosition::Before { target: PickerId::group("D") }),
-                ("after", DropPosition::After { target: PickerId::group("C") }),
+                ("shared_boundary", DropPosition::Before { target: PickerId::group("D") }),
                 ("prepend", DropPosition::PrependTo { group: PickerId::group("C") }),
                 ("append", DropPosition::AppendTo { container: ContainerId::Root }),
             ] {
@@ -1850,7 +1812,7 @@ fn actual_mixed_group_and_card_selection_uses_every_drop_position_from_either_so
                 let mut h = harness_with_intent_capture(groups, vec2(520.0, 900.0), initial, list);
                 let source = if source_kind == "group" { h.get_by_label("A").rect().center() } else { h.get_by_label("B card 1").rect().center() };
                 let target = match region {
-                    "before" | "after" => {
+                    "before" | "shared_boundary" => {
                         let lower = h.get_by_label("D").rect();
                         pos2(lower.center().x, lower.top() + if region == "before" { -1.0 } else { -5.0 })
                     }
@@ -1882,6 +1844,41 @@ fn actual_mixed_group_and_card_selection_uses_every_drop_position_from_either_so
                 assert_eq!(intent.position, expected, "destination for source={source_kind}, region={region}, list={list}");
             }
         }
+    }
+}
+
+#[test]
+fn actual_group_drop_on_a_card_uses_the_cards_owned_before_area() {
+    use crate::pickers::browser::path_identity_model::DropPosition;
+
+    for list in [false, true] {
+        let groups = vec![group("A", Vec::new()), group("B", vec![item("b1", "B card 1", &[]), item("b2", "B card 2", &[])]), group("C", Vec::new())];
+        let mut h = harness_with_intent_capture(groups, vec2(520.0, 900.0), PresetUi::default(), list);
+        let source = h.get_by_label("A").rect().center();
+        let card = h.get_by_label("B card 1").rect();
+        let target = if list { pos2(card.center().x, card.top() + 1.0) } else { pos2(card.left() + 1.0, card.center().y) };
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(h.state().1.len(), 1, "list={list}");
+        assert_eq!(h.state().1[0].position, DropPosition::Before { target: PickerId::item("B", "b1") }, "list={list}");
+    }
+}
+
+#[test]
+fn actual_parent_to_first_child_group_boundary_is_owned_by_the_child_header() {
+    use crate::pickers::browser::path_identity_model::DropPosition;
+
+    for list in [false, true] {
+        let mut h = harness_with_intent_capture(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a(), list);
+        let source = h.get_by_label("C").rect().center();
+        let child_header = last_group_headers(&h.ctx, PANEL).into_iter().find(|(name, _)| name == "B").map(|(_, rect)| rect).unwrap();
+        let target = pos2(child_header.center().x, child_header.top() - 2.0);
+
+        pointer_drag(&mut h, source, target);
+
+        assert_eq!(h.state().1.len(), 1, "list={list}");
+        assert_eq!(h.state().1[0].position, DropPosition::Before { target: PickerId::group("B") }, "list={list}");
     }
 }
 
@@ -1945,7 +1942,7 @@ fn actual_list_row_accepts_an_item_drop_from_a_different_group() {
     let mut h = harness_with_state_layout(nested_group_tree(), vec2(520.0, 900.0), PresetUi::default(), true);
     let source = h.get_by_label("B card 1").rect().center();
     let target_row = h.get_by_label("A card 2").rect();
-    let target = pos2(target_row.center().x, target_row.bottom() - 2.0);
+    let target = pos2(target_row.center().x, target_row.center().y + 1.0);
 
     pointer_drag(&mut h, source, target);
 
@@ -2063,10 +2060,11 @@ fn actual_nested_card_drop_at_root_append_area_promotes_card_to_root_level() {
 }
 
 #[test]
-fn root_append_indicator_spans_the_full_browser_width() {
+fn root_append_after_group_uses_the_root_group_row_width() {
     let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
     let source = h.get_by_label("B card 1").rect().center();
     let last_card = h.get_by_label("C card 1").rect();
+    let last_group = test_last_group_headers(&h.ctx, PANEL).into_iter().find(|(name, _)| name == "C").map(|(_, rect)| rect).unwrap();
     let target = pos2(last_card.center().x, last_card.bottom() + 8.0);
 
     h.event(Event::PointerMoved(source));
@@ -2083,8 +2081,15 @@ fn root_append_indicator_spans_the_full_browser_width() {
     let ppp = h.ctx.pixels_per_point();
     let y = (last_card.bottom() * ppp).round() as i32;
     let has_accent_at = |x: u32| (y - 3..=y + 3).any(|py| py >= 0 && (py as u32) < image.height() && image.get_pixel(x, py as u32).0[..3] == accent[..3]);
-    assert!(has_accent_at(2), "root append marker should reach the left edge of the browser; image width={}", image.width());
-    assert!(has_accent_at(image.width() - 3), "root append marker should reach the right edge of the browser; image width={}", image.width());
+    assert!(
+        has_accent_at((last_group.left() * ppp).round() as u32),
+        "root append marker should reach the left edge of the root group row; group={last_group:?}"
+    );
+    assert!(
+        has_accent_at((last_group.right() * ppp).round() as u32 - 1),
+        "root append marker should stop at the right edge of the root group row; group={last_group:?}, image width={}",
+        image.width()
+    );
 }
 
 #[test]
@@ -2102,6 +2107,13 @@ fn root_end_after_a_card_uses_the_cards_vertical_trailing_marker() {
     let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), state);
     let source = h.get_by_label("A").rect().center();
     let last_card = h.get_by_label("B card 1").rect();
+    let trailing_marker = test_drop_geometry(&h)
+        .hits
+        .into_iter()
+        .find(|(object, area, _, _)| object == "RootSequence(None)" && *area == DropArea::Append)
+        .map(|(_, _, _, marker)| marker)
+        .expect("root trailing-card marker");
+    assert_eq!(trailing_marker.center().x, last_card.right() + 1.0, "root trailing marker should be centered in the 2px gap after the card");
     let target = pos2(last_card.center().x, last_card.bottom() + 8.0);
     h.event(Event::PointerMoved(source));
     h.run_steps(1);
@@ -2115,7 +2127,7 @@ fn root_end_after_a_card_uses_the_cards_vertical_trailing_marker() {
     let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
     let image = h.render().expect("render root card append preview");
     let ppp = h.ctx.pixels_per_point();
-    let x = (last_card.right() * ppp).round() as i32;
+    let x = ((last_card.right() + 1.0) * ppp).round() as i32;
     let y = (last_card.center().y * ppp).round() as i32;
     let has_accent = |px: i32, py: i32| {
         (px - 2..=px + 2).any(|x| {
@@ -2133,6 +2145,111 @@ fn root_end_after_a_card_uses_the_cards_vertical_trailing_marker() {
     );
     assert!(!has_accent(2, (last_card.bottom() * ppp).round() as i32), "card append should not draw a full-width line");
     assert!(!has_accent(image.width() as i32 - 3, (last_card.bottom() * ppp).round() as i32), "card append should not draw a full-width line");
+}
+
+#[test]
+fn empty_open_groups_do_not_register_indentation_drop_areas() {
+    let groups = vec![group("Empty", Vec::new()), group("Has cards", vec![item("b1", "Card", &[])])];
+    let h = harness_with_state(groups, vec2(520.0, 900.0), PresetUi::default());
+    let geometry = test_drop_geometry(&h);
+
+    assert!(
+        geometry.indentation_lanes.iter().all(|(name, _)| name != "Empty"),
+        "an expanded group with no visible container height must not own an indentation lane: {:?}",
+        geometry.indentation_lanes
+    );
+}
+
+#[test]
+fn indentation_drop_indicator_spans_the_full_row_while_hit_area_stays_in_the_gutter() {
+    use crate::pickers::browser::dragging::DropArea;
+
+    let h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+    let geometry = test_drop_geometry(&h);
+    let lane = geometry.indentation_lanes.iter().find(|(name, _)| name == "A").map(|(_, rect)| *rect).expect("parent A indentation lane");
+    let (hit, marker) = geometry
+        .hits
+        .iter()
+        .find(|(object, area, _, _)| object.starts_with("IndentationLane") && *area == DropArea::Append)
+        .map(|(_, _, hit, marker)| (*hit, *marker))
+        .expect("indentation lane insertion marker");
+    let group_row = test_last_group_headers(&h.ctx, PANEL).into_iter().find(|(name, _)| name == "A").map(|(_, rect)| rect).expect("parent A row");
+
+    assert_eq!(marker.left(), lane.left(), "marker should start at the lane's left edge");
+    assert_eq!(marker.right(), group_row.right(), "marker should span the full row to its right edge");
+    assert_eq!(hit, lane, "the hit area should remain confined to the existing indentation gutter");
+}
+
+#[test]
+fn root_end_after_a_group_uses_the_group_row_width_not_the_browser_viewport() {
+    use crate::pickers::browser::dragging::DropArea;
+
+    let h = harness(nested_group_tree(), vec2(520.0, 900.0));
+    let geometry = test_drop_geometry(&h);
+    let last_group = test_last_group_headers(&h.ctx, PANEL).into_iter().find(|(name, _)| name == "C").map(|(_, rect)| rect).expect("last root group header");
+    let marker = geometry
+        .hits
+        .iter()
+        .find(|(object, area, _, _)| object == "RootSequence(None)" && *area == DropArea::Append)
+        .map(|(_, _, _, marker)| *marker)
+        .expect("root-end insertion marker");
+
+    assert_eq!(marker.left(), last_group.left(), "root-end marker should align with the root group's left edge");
+    assert_eq!(marker.right(), last_group.right(), "root-end marker should stop at the root group's right edge");
+}
+
+#[test]
+fn horizontal_insertion_markers_are_four_points_thick() {
+    use crate::pickers::browser::dragging::DropArea;
+
+    let h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), with_b_nested_in_a());
+    let geometry = test_drop_geometry(&h);
+    let group_before = geometry
+        .hits
+        .iter()
+        .find(|(object, area, _, _)| object.starts_with("GroupHeader") && *area == DropArea::Before)
+        .map(|(_, _, _, marker)| *marker)
+        .expect("group Before marker");
+    let indentation = geometry
+        .hits
+        .iter()
+        .find(|(object, area, _, _)| object.starts_with("IndentationLane") && *area == DropArea::Append)
+        .map(|(_, _, _, marker)| *marker)
+        .expect("indentation marker");
+
+    assert_eq!(group_before.height(), 4.0, "group boundary line should be centered in the 2px row gap");
+    assert_eq!(indentation.height(), 4.0, "indentation line should be centered in the 2px row gap");
+}
+
+#[test]
+fn grid_card_before_and_after_hit_areas_meet_at_the_card_center() {
+    use crate::pickers::browser::dragging::DropArea;
+
+    let h = harness(nested_group_tree(), vec2(520.0, 900.0));
+    let geometry = test_drop_geometry(&h);
+    let card = h.get_by_label("A card 1").rect();
+    let card_debug = format!("{:?}", PickerId::item("A", "a1"));
+    let (before, after, before_marker, after_marker) = geometry.hits.iter().filter(|(object, _, _, _)| object.contains(&card_debug)).fold(
+        (None, None, None, None),
+        |(before, after, before_marker, after_marker), (_, area, hit, marker)| match area {
+            DropArea::Before => (Some(*hit), after, Some(*marker), after_marker),
+            DropArea::After => (before, Some(*hit), before_marker, Some(*marker)),
+            _ => (before, after, before_marker, after_marker),
+        },
+    );
+    let before = before.expect("card Before hit area");
+    let after = after.expect("card After hit area");
+    let before_marker = before_marker.expect("card Before indicator");
+    let after_marker = after_marker.expect("card After indicator");
+
+    assert_eq!(before.left(), card.left());
+    assert_eq!(before.right(), card.center().x, "the Before area should own the full left half of the card");
+    assert_eq!(after.left(), card.center().x, "the After area should begin where the Before area ends");
+    assert_eq!(after.right(), card.right());
+    assert_eq!(before_marker.width(), 4.0, "vertical card separators should be four pixels thick");
+    assert_eq!(after_marker.width(), 4.0, "vertical card separators should be four pixels thick");
+    assert_eq!(before_marker.center().x, card.left() - 1.0, "Before indicator should be centered in the 2px gap before the card");
+    assert_eq!(after_marker.center().x, card.right() + 1.0, "After indicator should be centered in the 2px gap after the card");
 }
 
 #[test]
@@ -2186,6 +2303,15 @@ fn root_leading_card_uses_its_vertical_leading_marker() {
     );
     let mut h = harness_with_state(nested_group_tree(), vec2(520.0, 900.0), state);
     let first_card = h.get_by_label("A card 1").rect();
+    let group_sibling = h.get_by_label("A").rect();
+    assert_eq!(first_card.left(), group_sibling.left(), "root-level cards should align with root group siblings, without an extra indentation");
+    let leading_marker = test_drop_geometry(&h)
+        .hits
+        .into_iter()
+        .find(|(object, area, _, _)| object.starts_with("RootSequence(Some") && *area == DropArea::Before)
+        .map(|(_, _, _, marker)| marker)
+        .expect("root leading-card marker");
+    assert_eq!(leading_marker.center().x, first_card.left() - 1.0, "root leading marker should be centered in the 2px gap before the card");
     let source = h.get_by_label("A card 2").rect().center();
     let target = pos2(first_card.center().x, first_card.top() + 0.5);
     h.event(Event::PointerMoved(source));
@@ -2200,7 +2326,7 @@ fn root_leading_card_uses_its_vertical_leading_marker() {
     let accent = crate::theme::Tokens::get(&h.ctx).accent.to_array();
     let image = h.render().expect("render root leading card preview");
     let ppp = h.ctx.pixels_per_point();
-    let x = (first_card.left() * ppp).round() as i32;
+    let x = ((first_card.left() - 1.0) * ppp).round() as i32;
     let y = (first_card.center().y * ppp).round() as i32;
     let has_accent = |px: i32, py: i32| {
         (px - 2..=px + 2).any(|x| {
@@ -2312,21 +2438,39 @@ fn pos2(x: f32, y: f32) -> Pos2 {
 
 #[cfg(test)]
 mod filter_tests {
-    use super::super::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, ItemPaintState, browser, last_group_headers};
+    use super::super::{BrowserAdapter, BrowserCapabilities, BrowserOptions, ItemPaintState, browser, last_group_headers};
     use super::{group, item};
-    use crate::pickers::state::{HierarchyOrderEntry, PresetUi};
+    use crate::pickers::browser::dragging_model::DropMoveIntent;
+    use crate::pickers::browser::identity::PickerNodeIdentity;
+    use crate::pickers::browser::path_identity_model::DropPosition;
+    use crate::pickers::state::PresetUi;
     use egui_kittest::kittest::Queryable;
 
-    fn nested_group_drop_harness(domain_hierarchy_actions: bool, target_nested_card: bool) -> egui_kittest::Harness<'static, (PresetUi, Vec<BrowserAction>)> {
+    type CapturedMove = (DropPosition, Option<PickerNodeIdentity>);
+
+    fn nested_group_drop_harness(domain_hierarchy_actions: bool, target_nested_card: bool) -> egui_kittest::Harness<'static, (PresetUi, Vec<CapturedMove>)> {
         use egui_kittest::Harness;
 
         let groups = vec![group("A", vec![item("nested-card", "Nested item", &["Nested"])]), group("B", vec![item("root-card", "Root item", &[])])];
         let mut h = Harness::builder().with_size(egui::vec2(420.0, 360.0)).build_ui_state(
-            move |ui, state: &mut (PresetUi, Vec<BrowserAction>)| {
+            move |ui, state: &mut (PresetUi, Vec<CapturedMove>)| {
                 if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
                     return;
                 }
                 let mut paint_item = |_: &egui::Ui, _: egui::Rect, _: usize, _: usize, _: ItemPaintState| {};
+                let (preset_ui, moves) = state;
+                let mut canonical_move = |intent: &DropMoveIntent, identities: &std::collections::BTreeMap<_, _>| {
+                    if !domain_hierarchy_actions {
+                        return Err("This adapter does not support path-aware hierarchy moves.".to_owned());
+                    }
+                    let receiving_identity = match &intent.position {
+                        DropPosition::Before { target } | DropPosition::After { target } => identities.get(target).cloned(),
+                        DropPosition::PrependTo { group } => identities.get(group).cloned(),
+                        DropPosition::AppendTo { .. } => None,
+                    };
+                    moves.push((intent.position.clone(), receiving_identity));
+                    Ok(())
+                };
                 let mut adapter = BrowserAdapter {
                     panel: "hierarchy-drop-test",
                     groups: &groups,
@@ -2337,29 +2481,21 @@ mod filter_tests {
                         center_grid: false,
                         all_groups_open: true,
                         compact_context_menus: false,
-                        domain_hierarchy_actions,
+                        domain_hierarchy_actions: true,
                         root_item_group: None,
                     },
-                    capabilities: BrowserCapabilities {
-                        item_drag: false,
-                        item_drop: false,
-                        group_drag: true,
-                        selection: false,
-                        activation: false,
-                        canonical_hierarchy_drag: false,
-                    },
+                    capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: true, selection: false, activation: false },
                     item_context_menu: None,
                     group_context_menu: None,
                     nested_group_context_menu: None,
-                    canonical_hierarchy_move: None,
+                    canonical_hierarchy_move: Some(&mut canonical_move),
                     rekey_hierarchy_after_move: None,
                     hierarchy_item_move: None,
                     paint_group: None,
                     paint_item: &mut paint_item,
                     paint_list_item: None,
                 };
-                let (preset_ui, actions) = state;
-                actions.extend(browser(ui, preset_ui, &mut adapter, 300.0));
+                let _ = browser(ui, preset_ui, &mut adapter, 300.0);
             },
             (PresetUi::default(), Vec::new()),
         );
@@ -2385,18 +2521,18 @@ mod filter_tests {
     #[test]
     fn root_group_drop_on_nested_header_resolves_once_in_domain_mode() {
         let h = nested_group_drop_harness(true, false);
+        assert_eq!(h.state().1.len(), 1, "the nested header must resolve exactly one canonical destination");
         assert!(matches!(
-            h.state().1.as_slice(),
-            [BrowserAction::MoveInto { group, into: Some((target, path)), before: None, before_item: None, .. }]
-                if group == "B" && target == "A" && path == &["Nested".to_string()]
+            &h.state().1[0],
+            (DropPosition::PrependTo { group: _ }, Some(PickerNodeIdentity::Folder { group, path }))
+                if group == "A" && path == &["Nested".to_string()]
         ));
-        assert_eq!(h.state().1.len(), 1, "the nested header's MoveInto must suppress the source header's root MoveGroup");
     }
 
     #[test]
     fn unsupported_root_group_drop_on_nested_header_or_card_is_not_reinterpreted_as_root_reorder() {
         let h = nested_group_drop_harness(false, false);
-        assert!(h.state().1.is_empty(), "unsupported nested header must not consume or misroute the release");
+        assert!(h.state().1.is_empty(), "unsupported nested header must not commit or misroute the release");
         assert_eq!(h.state().0.parent_of("hierarchy-drop-test", "B"), None);
         assert!(
             !h.state().0.hierarchy_order.get("hierarchy-drop-test").is_some_and(|orders| orders.contains_key("")),
@@ -2407,32 +2543,13 @@ mod filter_tests {
     #[test]
     fn root_group_drop_on_nested_card_updates_the_unified_sibling_sequence() {
         let h = nested_group_drop_harness(false, true);
-        assert!(h.state().1.is_empty(), "the transient shared hierarchy handles the drop without a domain command");
-        assert_eq!(h.state().0.parent_of("hierarchy-drop-test", "B"), Some("A"));
-        assert!(
-            h.state().0.hierarchy_order["hierarchy-drop-test"]["A"].contains(&HierarchyOrderEntry::Group("B".into())),
-            "the moved group must occupy the same sibling sequence as the target card"
-        );
+        assert!(h.state().1.is_empty(), "a path-aware card boundary requires an adapter commit, not a lossy flat-group fallback");
+        assert_eq!(h.state().0.parent_of("hierarchy-drop-test", "B"), None);
     }
 }
 
 // Unit and projection tests for private asset-browser behavior.
 // Kept in this sibling test module so asset_browser.rs contains production code only.
-const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
-fn hit_debug_label_position(hit: &DropHitRegion) -> Pos2 {
-    let label_y = if hit.hit_rect.height() <= 6.1 {
-        match hit.region {
-            // The upper label must not be placed above the gap: that part can be clipped by
-            // the preceding group's row. Stack both labels below the gap instead.
-            PointerRegion::TrailingEdge => hit.hit_rect.bottom() + 3.0,
-            PointerRegion::LeadingEdge => hit.hit_rect.bottom() + HIT_DEBUG_LABEL_HEIGHT,
-            _ => hit.hit_rect.top() + 2.0,
-        }
-    } else {
-        hit.hit_rect.top() + 2.0
-    };
-    pos2(hit.hit_rect.left() + 3.0, label_y)
-}
 /// Test helper for the shared browser's root-group/nested-group/item query contract.
 #[cfg(test)]
 pub(crate) fn filter_groups(groups: &[GroupView], query: &str) -> Vec<GroupView> {
@@ -2491,15 +2608,6 @@ pub(super) fn test_projection_keys(groups: &[GroupView]) -> PickerProjectionKeys
     }
     keys
 }
-fn full_hierarchy_selection_order(hierarchy: &PickerBrowserHierarchy) -> Vec<PickerId> {
-    let mut order = Vec::new();
-    let mut pending: Vec<_> = hierarchy.roots().iter().rev().collect();
-    while let Some(node) = pending.pop() {
-        order.push(node.id().clone());
-        pending.extend(node.children().iter().rev());
-    }
-    order
-}
 /// Group header rects drawn last frame (name ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢ rect), in display order; for tests and automation.
 pub(crate) fn test_last_group_headers(ctx: &egui::Context, panel: &str) -> Vec<(String, Rect)> {
     ctx.data(|d| d.get_temp(egui::Id::new(("preset-group-headers", panel)))).unwrap_or_default()
@@ -2507,6 +2615,10 @@ pub(crate) fn test_last_group_headers(ctx: &egui::Context, panel: &str) -> Vec<(
 /// The allocated viewport from the last frame; useful to verify the shared browser's layout.
 pub(crate) fn test_last_browser_rect(ctx: &egui::Context, panel: &str) -> Option<Rect> {
     ctx.data(|d| d.get_temp(egui::Id::new(("preset-browser-rect", panel))))
+}
+
+fn test_drop_geometry(h: &Harness<'static, UiTestState>) -> super::BrowserDropGeometrySnapshot {
+    h.ctx.data(|data| data.get_temp(egui::Id::new(("preset-browser-drop-geometry", PANEL)))).expect("browser drop geometry should be captured after layout")
 }
 
 mod moved_unit_tests {
@@ -2569,169 +2681,136 @@ mod moved_unit_tests {
             assert_eq!(state.item_renaming.as_ref().map(|rename| rename.key.as_str()), Some("third"));
             assert!(state.item_rename_queue.is_empty());
         }
-    }
-    #[cfg(test)]
-    mod browser_drag_ghost_tests {
-        use super::{Rect, browser_drag_ghost_position, clamp_drag_ghost, pos2, vec2};
+        #[cfg(test)]
+        mod browser_drag_ghost_tests {
+            use crate::pickers::browser::browser_interaction::{browser_drag_ghost_position, clamp_drag_ghost};
+            use egui::{Rect, pos2, vec2};
 
-        #[test]
-        fn pointer_leaving_the_window_returns_the_ghost_to_its_exact_pickup_bounds() {
-            let origin = Rect::from_min_size(pos2(12.0, 18.0), vec2(80.0, 40.0));
-            let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
-            assert_eq!(browser_drag_ghost_position(None, origin, vec2(15.0, 10.0), picker), origin);
-        }
-
-        #[test]
-        fn pointer_outside_the_picker_shell_follows_cursor_with_original_pickup_offset() {
-            let origin = Rect::from_min_size(pos2(30.0, 45.0), vec2(80.0, 40.0));
-            let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
-            let expected = Rect::from_min_size(pos2(85.0, 160.0), origin.size());
-            assert_eq!(browser_drag_ghost_position(Some(pos2(100.0, 170.0)), origin, vec2(15.0, 10.0), picker), expected);
-        }
-
-        #[test]
-        fn ghost_stays_fully_inside_browser_window_when_pointer_reaches_its_edges() {
-            let origin = Rect::from_min_size(pos2(30.0, 45.0), vec2(80.0, 40.0));
-            let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
-            let expected = Rect::from_min_size(pos2(140.0, 110.0), vec2(80.0, 40.0));
-            assert_eq!(browser_drag_ghost_position(Some(pos2(215.0, 145.0)), origin, vec2(15.0, 10.0), picker), expected);
-        }
-
-        #[test]
-        fn dragged_cards_and_groups_press_against_each_window_edge() {
-            let window = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
-            let ghost = Rect::from_min_size(pos2(-15.0, 130.0), vec2(80.0, 40.0));
-            assert_eq!(clamp_drag_ghost(ghost, window), Rect::from_min_size(pos2(20.0, 110.0), vec2(80.0, 40.0)));
-        }
-
-        #[test]
-        fn oversized_drag_ghosts_anchor_to_the_window_origin() {
-            let window = Rect::from_min_size(pos2(20.0, 30.0), vec2(80.0, 40.0));
-            let ghost = Rect::from_min_size(pos2(-15.0, -15.0), vec2(100.0, 60.0));
-            assert_eq!(clamp_drag_ghost(ghost, window), Rect::from_min_size(pos2(20.0, 30.0), vec2(100.0, 60.0)));
-        }
-    }
-    #[cfg(test)]
-    mod selected_drag_nodes_tests {
-        use std::collections::BTreeMap;
-
-        use super::{plan_hierarchy_item_moves, selected_drag_nodes};
-        use crate::pickers::browser::identity::PickerNodeIdentity;
-        use crate::pickers::browser::path_identity_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
-        use crate::pickers::state::PresetUi;
-
-        #[test]
-        fn selected_ancestor_subsumes_descendants_and_keeps_independent_nodes_in_visible_order() {
-            let hierarchy = PickerBrowserHierarchy::new(vec![
-                HierarchyNode::group("A", vec![HierarchyNode::item("a1"), HierarchyNode::group("Nested", vec![HierarchyNode::item("nested-card")])]),
-                HierarchyNode::group("B", vec![HierarchyNode::item("b1")]),
-            ])
-            .unwrap();
-            let visible = ["A", "a1", "Nested", "nested-card", "B", "b1"].map(PickerId::from);
-            let mut state = PresetUi::default();
-            for (index, id) in ["A", "a1", "Nested", "nested-card", "b1"].into_iter().map(PickerId::from).enumerate() {
-                state.select_browser_node("panel", id, index != 0);
+            #[test]
+            fn pointer_leaving_the_window_returns_the_ghost_to_its_exact_pickup_bounds() {
+                let origin = Rect::from_min_size(pos2(12.0, 18.0), vec2(80.0, 40.0));
+                let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+                assert_eq!(browser_drag_ghost_position(None, origin, vec2(15.0, 10.0), picker), origin);
             }
 
-            assert_eq!(selected_drag_nodes(&state, "panel", &visible, &PickerId::from("a1"), &hierarchy), [PickerId::from("A"), PickerId::from("b1")]);
-        }
+            #[test]
+            fn pointer_outside_the_picker_shell_follows_cursor_with_original_pickup_offset() {
+                let origin = Rect::from_min_size(pos2(30.0, 45.0), vec2(80.0, 40.0));
+                let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+                let expected = Rect::from_min_size(pos2(85.0, 160.0), origin.size());
+                assert_eq!(browser_drag_ghost_position(Some(pos2(100.0, 170.0)), origin, vec2(15.0, 10.0), picker), expected);
+            }
 
-        #[test]
-        fn dragging_an_unselected_node_does_not_move_the_other_selected_nodes() {
-            let hierarchy = PickerBrowserHierarchy::new(vec![HierarchyNode::group("A", vec![HierarchyNode::item("a1")])]).unwrap();
-            let mut state = PresetUi::default();
-            state.select_browser_node("panel", PickerId::from("A"), false);
+            #[test]
+            fn ghost_stays_fully_inside_browser_window_when_pointer_reaches_its_edges() {
+                let origin = Rect::from_min_size(pos2(30.0, 45.0), vec2(80.0, 40.0));
+                let picker = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+                let expected = Rect::from_min_size(pos2(140.0, 110.0), vec2(80.0, 40.0));
+                assert_eq!(browser_drag_ghost_position(Some(pos2(215.0, 145.0)), origin, vec2(15.0, 10.0), picker), expected);
+            }
 
-            assert!(selected_drag_nodes(&state, "panel", &[PickerId::from("A"), PickerId::from("a1")], &PickerId::from("a1"), &hierarchy).is_empty());
-        }
+            #[test]
+            fn dragged_cards_and_groups_press_against_each_window_edge() {
+                let window = Rect::from_min_size(pos2(20.0, 30.0), vec2(200.0, 120.0));
+                let ghost = Rect::from_min_size(pos2(-15.0, 130.0), vec2(80.0, 40.0));
+                assert_eq!(clamp_drag_ghost(ghost, window), Rect::from_min_size(pos2(20.0, 110.0), vec2(80.0, 40.0)));
+            }
 
-        #[test]
-        fn item_callback_indices_follow_prior_selected_moves_for_every_insertion_position() {
-            let hierarchy = PickerBrowserHierarchy::new(vec![
-                HierarchyNode::group(
-                    PickerId::group("A"),
-                    vec![
-                        HierarchyNode::item(PickerId::item("A", "a1")),
-                        HierarchyNode::item(PickerId::item("A", "a2")),
-                        HierarchyNode::item(PickerId::item("A", "a3")),
-                    ],
-                ),
-                HierarchyNode::group(
-                    PickerId::group("B"),
-                    vec![HierarchyNode::item(PickerId::item("B", "b1")), HierarchyNode::item(PickerId::item("B", "b2"))],
-                ),
-            ])
-            .unwrap();
-            let identities = BTreeMap::from([
-                (PickerId::group("A"), PickerNodeIdentity::Group("A".into())),
-                (PickerId::item("A", "a1"), PickerNodeIdentity::Item { group: "A".into(), key: "a1".into() }),
-                (PickerId::item("A", "a2"), PickerNodeIdentity::Item { group: "A".into(), key: "a2".into() }),
-                (PickerId::item("A", "a3"), PickerNodeIdentity::Item { group: "A".into(), key: "a3".into() }),
-                (PickerId::group("B"), PickerNodeIdentity::Group("B".into())),
-                (PickerId::item("B", "b1"), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
-                (PickerId::item("B", "b2"), PickerNodeIdentity::Item { group: "B".into(), key: "b2".into() }),
-            ]);
-            let sources = [PickerId::item("A", "a1"), PickerId::item("A", "a2")];
-            let cases = [
-                (DropPosition::Before { target: PickerId::item("B", "b1") }, vec![("a1", 0), ("a2", 1)]),
-                (DropPosition::After { target: PickerId::item("B", "b1") }, vec![("a2", 1), ("a1", 1)]),
-                (DropPosition::PrependTo { group: PickerId::group("B") }, vec![("a2", 0), ("a1", 0)]),
-                (
-                    DropPosition::AppendTo { container: crate::pickers::browser::path_identity_model::ContainerId::Group(PickerId::group("B")) },
-                    vec![("a1", 2), ("a2", 3)],
-                ),
-                (DropPosition::After { target: PickerId::item("A", "a3") }, vec![("a2", 2), ("a1", 1)]),
-            ];
-
-            for (position, expected) in cases {
-                let actual = plan_hierarchy_item_moves(&hierarchy, &sources, &position, &identities, None).unwrap();
-                assert_eq!(actual.iter().map(|(_, key, _, index)| (key.as_str(), *index)).collect::<Vec<_>>(), expected, "position={position:?}");
+            #[test]
+            fn oversized_drag_ghosts_anchor_to_the_window_origin() {
+                let window = Rect::from_min_size(pos2(20.0, 30.0), vec2(80.0, 40.0));
+                let ghost = Rect::from_min_size(pos2(-15.0, -15.0), vec2(100.0, 60.0));
+                assert_eq!(clamp_drag_ghost(ghost, window), Rect::from_min_size(pos2(20.0, 30.0), vec2(100.0, 60.0)));
             }
         }
-    }
-    #[cfg(test)]
-    mod group_drop_tests {
-        use super::{AssetDrag, hierarchy_drop_accepts, is_group_descendant};
-        use std::collections::BTreeMap;
+        #[cfg(test)]
+        mod selected_drag_nodes_tests {
+            use std::collections::BTreeMap;
 
-        #[test]
-        fn rejects_dropping_a_group_into_any_descendant() {
-            let parents = BTreeMap::from([
-                ("Child".to_string(), "Parent".to_string()),
-                ("Grandchild".to_string(), "Child".to_string()),
-                ("Other".to_string(), "Elsewhere".to_string()),
-            ]);
+            use crate::pickers::browser::asset_browser::selected_drag_nodes;
+            use crate::pickers::browser::hierarchy_utils::plan_hierarchy_item_moves;
+            use crate::pickers::browser::identity::PickerNodeIdentity;
+            use crate::pickers::browser::path_identity_model::{DropPosition, HierarchyNode, PickerBrowserHierarchy, PickerId};
+            use crate::pickers::state::PresetUi;
 
-            assert!(is_group_descendant(&parents, "Parent", "Child"));
-            assert!(is_group_descendant(&parents, "Parent", "Grandchild"));
-            assert!(!is_group_descendant(&parents, "Parent", "Other"));
-            assert!(!is_group_descendant(&parents, "Parent", "Parent"));
-        }
+            #[test]
+            fn selected_ancestor_subsumes_descendants_and_keeps_independent_nodes_in_visible_order() {
+                let hierarchy = PickerBrowserHierarchy::new(vec![
+                    HierarchyNode::group("A", vec![HierarchyNode::item("a1"), HierarchyNode::group("Nested", vec![HierarchyNode::item("nested-card")])]),
+                    HierarchyNode::group("B", vec![HierarchyNode::item("b1")]),
+                ])
+                .unwrap();
+                let visible = ["A", "a1", "Nested", "nested-card", "B", "b1"].map(PickerId::from);
+                let mut state = PresetUi::default();
+                for (index, id) in ["A", "a1", "Nested", "nested-card", "b1"].into_iter().map(PickerId::from).enumerate() {
+                    state.select_browser_node("panel", id, index != 0);
+                }
 
-        #[test]
-        fn hierarchy_card_targets_keep_root_and_nested_group_rules_consistent() {
-            let parents = BTreeMap::from([("Child".to_string(), "Parent".to_string()), ("Grandchild".to_string(), "Child".to_string())]);
-            let root_drag = AssetDrag::Group { scope: "panel".into(), name: "Parent".into(), path: Vec::new() };
-            let nested_drag = AssetDrag::Group { scope: "panel".into(), name: "Parent".into(), path: vec!["Folder".into()] };
+                assert_eq!(selected_drag_nodes(&state, "panel", &visible, &PickerId::from("a1"), &hierarchy), [PickerId::from("A"), PickerId::from("b1")]);
+            }
 
-            assert!(!hierarchy_drop_accepts(&root_drag, "panel", "Parent", &[], &parents, true));
-            assert!(!hierarchy_drop_accepts(&root_drag, "panel", "Child", &[], &parents, true));
-            assert!(hierarchy_drop_accepts(&root_drag, "panel", "Grandchild", &[], &parents, false));
-            assert!(!hierarchy_drop_accepts(&nested_drag, "panel", "Parent", &["Folder".into(), "Inner".into()], &parents, true));
-            assert!(hierarchy_drop_accepts(&nested_drag, "panel", "Parent", &["Other".into()], &parents, true));
-            assert!(!hierarchy_drop_accepts(&nested_drag, "other-panel", "Parent", &["Other".into()], &parents, true));
+            #[test]
+            fn dragging_an_unselected_node_does_not_move_the_other_selected_nodes() {
+                let hierarchy = PickerBrowserHierarchy::new(vec![HierarchyNode::group("A", vec![HierarchyNode::item("a1")])]).unwrap();
+                let mut state = PresetUi::default();
+                state.select_browser_node("panel", PickerId::from("A"), false);
+
+                assert!(selected_drag_nodes(&state, "panel", &[PickerId::from("A"), PickerId::from("a1")], &PickerId::from("a1"), &hierarchy).is_empty());
+            }
+
+            #[test]
+            fn item_callback_indices_follow_prior_selected_moves_for_every_insertion_position() {
+                let hierarchy = PickerBrowserHierarchy::new(vec![
+                    HierarchyNode::group(
+                        PickerId::group("A"),
+                        vec![
+                            HierarchyNode::item(PickerId::item("A", "a1")),
+                            HierarchyNode::item(PickerId::item("A", "a2")),
+                            HierarchyNode::item(PickerId::item("A", "a3")),
+                        ],
+                    ),
+                    HierarchyNode::group(
+                        PickerId::group("B"),
+                        vec![HierarchyNode::item(PickerId::item("B", "b1")), HierarchyNode::item(PickerId::item("B", "b2"))],
+                    ),
+                ])
+                .unwrap();
+                let identities = BTreeMap::from([
+                    (PickerId::group("A"), PickerNodeIdentity::Group("A".into())),
+                    (PickerId::item("A", "a1"), PickerNodeIdentity::Item { group: "A".into(), key: "a1".into() }),
+                    (PickerId::item("A", "a2"), PickerNodeIdentity::Item { group: "A".into(), key: "a2".into() }),
+                    (PickerId::item("A", "a3"), PickerNodeIdentity::Item { group: "A".into(), key: "a3".into() }),
+                    (PickerId::group("B"), PickerNodeIdentity::Group("B".into())),
+                    (PickerId::item("B", "b1"), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
+                    (PickerId::item("B", "b2"), PickerNodeIdentity::Item { group: "B".into(), key: "b2".into() }),
+                ]);
+                let sources = [PickerId::item("A", "a1"), PickerId::item("A", "a2")];
+                let cases = [
+                    (DropPosition::Before { target: PickerId::item("B", "b1") }, vec![("a1", 0), ("a2", 1)]),
+                    (DropPosition::After { target: PickerId::item("B", "b1") }, vec![("a2", 1), ("a1", 1)]),
+                    (DropPosition::PrependTo { group: PickerId::group("B") }, vec![("a2", 0), ("a1", 0)]),
+                    (
+                        DropPosition::AppendTo { container: crate::pickers::browser::path_identity_model::ContainerId::Group(PickerId::group("B")) },
+                        vec![("a1", 2), ("a2", 3)],
+                    ),
+                    (DropPosition::After { target: PickerId::item("A", "a3") }, vec![("a2", 2), ("a1", 1)]),
+                ];
+
+                for (position, expected) in cases {
+                    let actual = plan_hierarchy_item_moves(&hierarchy, &sources, &position, &identities, None).unwrap();
+                    assert_eq!(actual.iter().map(|(_, key, _, index)| (key.as_str(), *index)).collect::<Vec<_>>(), expected, "position={position:?}");
+                }
+            }
         }
     }
     #[cfg(test)]
     mod selected_delete_tests {
-        use super::{
-            BrowserAction, BrowserDeleteContext, PickerNodeIdentity, full_hierarchy_selection_order, replace_selected_delete_actions, selected_delete_actions,
-        };
+        use super::{BrowserAction, BrowserDeleteContext, PickerNodeIdentity, replace_selected_delete_actions, selected_delete_actions};
         use crate::pickers::browser::path_identity_model::{HierarchyNode as HNode, PickerBrowserHierarchy, PickerId};
         use crate::pickers::state::PresetUi;
         use std::collections::{BTreeMap, BTreeSet};
 
-        fn fixture() -> (PickerBrowserHierarchy, BTreeMap<PickerId, PickerNodeIdentity>, Vec<PickerId>) {
+        fn fixture() -> (PickerBrowserHierarchy, BTreeMap<PickerId, PickerNodeIdentity>) {
             let a = PickerId::group("A");
             let a_card = PickerId::item("A", "a1");
             let b = PickerId::group("B");
@@ -2750,15 +2829,14 @@ mod moved_unit_tests {
                 (b_card.clone(), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
                 (c.clone(), PickerNodeIdentity::Group("C".into())),
             ]);
-            let order = full_hierarchy_selection_order(&hierarchy);
-            (hierarchy, identities, order)
+            (hierarchy, identities)
         }
 
         #[test]
         fn mixed_selection_deletes_groups_and_cards_in_visual_order() {
-            let (hierarchy, identities, visible) = fixture();
+            let (hierarchy, identities) = fixture();
             let selected = BTreeSet::from([PickerId::group("A"), PickerId::item("B", "b1"), PickerId::group("C")]);
-            let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
+            let context = BrowserDeleteContext { hierarchy: &hierarchy, identities: &identities };
             let actions = selected_delete_actions(&selected, &PickerId::group("A"), &context);
             assert!(matches!(actions.as_deref(), Some([
         BrowserAction::DeleteGroup(a),
@@ -2769,9 +2847,9 @@ mod moved_unit_tests {
 
         #[test]
         fn selected_group_subsumes_its_selected_descendant_and_unselected_click_falls_back() {
-            let (hierarchy, identities, visible) = fixture();
+            let (hierarchy, identities) = fixture();
             let selected = BTreeSet::from([PickerId::group("A"), PickerId::item("A", "a1")]);
-            let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
+            let context = BrowserDeleteContext { hierarchy: &hierarchy, identities: &identities };
             let actions = selected_delete_actions(&selected, &PickerId::item("A", "a1"), &context);
             assert!(matches!(actions.as_deref(), Some([BrowserAction::DeleteGroup(group)]) if group == "A"));
             assert!(selected_delete_actions(&selected, &PickerId::group("B"), &context).is_none());
@@ -2799,21 +2877,19 @@ mod moved_unit_tests {
                 ),
                 (root_item.clone(), PickerNodeIdentity::Item { group: "A".into(), key: "root-card".into() }),
             ]);
-            let visible = vec![root, folder.clone(), nested.clone(), folder_item.clone(), root_item.clone()];
-
             let selected = BTreeSet::from([folder.clone(), nested, folder_item.clone()]);
-            let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
+            let context = BrowserDeleteContext { hierarchy: &hierarchy, identities: &identities };
             let actions = selected_delete_actions(&selected, &folder, &context);
             assert!(matches!(actions.as_deref(), Some([BrowserAction::DeleteNestedGroup { group, group_path }]) if group == "A" && group_path == &["Folder"]));
 
-            let selected = BTreeSet::from([root_item]);
-            let actions = selected_delete_actions(&selected, &visible[4], &context);
+            let selected = BTreeSet::from([root_item.clone()]);
+            let actions = selected_delete_actions(&selected, &root_item, &context);
             assert!(
                 matches!(actions.as_deref(), Some([BrowserAction::DeleteItem { group, group_path, key }]) if group == "A" && group_path.is_empty() && key == "root-card")
             );
 
-            let selected = BTreeSet::from([folder_item]);
-            let actions = selected_delete_actions(&selected, &visible[3], &context);
+            let selected = BTreeSet::from([folder_item.clone()]);
+            let actions = selected_delete_actions(&selected, &folder_item, &context);
             assert!(
                 matches!(actions.as_deref(), Some([BrowserAction::DeleteItem { group, group_path, key }]) if group == "A" && group_path == &["Folder", "Nested"] && key == "nested-card")
             );
@@ -2831,8 +2907,7 @@ mod moved_unit_tests {
                 (child.clone(), PickerNodeIdentity::Group("B".into())),
                 (card.clone(), PickerNodeIdentity::Item { group: "B".into(), key: "b1".into() }),
             ]);
-            let visible = vec![root.clone(), child.clone(), card.clone()];
-            let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
+            let context = BrowserDeleteContext { hierarchy: &hierarchy, identities: &identities };
 
             let selected = BTreeSet::from([root, child.clone(), card]);
             let actions = selected_delete_actions(&selected, &child, &context);
@@ -2841,13 +2916,13 @@ mod moved_unit_tests {
 
         #[test]
         fn group_context_menu_delete_expands_to_the_mixed_selection() {
-            let (hierarchy, identities, visible) = fixture();
+            let (hierarchy, identities) = fixture();
             let selected = BTreeSet::from([PickerId::group("A"), PickerId::item("B", "b1")]);
             let mut state = PresetUi::default();
             state.browser_selection.insert("panel".into(), selected);
             let mut events = vec![BrowserAction::DeleteGroup("A".into())];
 
-            let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
+            let context = BrowserDeleteContext { hierarchy: &hierarchy, identities: &identities };
             replace_selected_delete_actions(&mut events, 0, &state, "panel", &PickerId::group("A"), &context);
 
             assert!(
@@ -2857,14 +2932,14 @@ mod moved_unit_tests {
 
         #[test]
         fn card_context_menu_delete_expands_to_the_mixed_selection() {
-            let (hierarchy, identities, visible) = fixture();
+            let (hierarchy, identities) = fixture();
             let clicked = PickerId::item("B", "b1");
             let selected = BTreeSet::from([PickerId::group("A"), clicked.clone()]);
             let mut state = PresetUi::default();
             state.browser_selection.insert("panel".into(), selected);
             let mut events = vec![BrowserAction::DeleteItem { group: "B".into(), group_path: Vec::new(), key: "b1".into() }];
 
-            let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
+            let context = BrowserDeleteContext { hierarchy: &hierarchy, identities: &identities };
             replace_selected_delete_actions(&mut events, 0, &state, "panel", &clicked, &context);
 
             assert!(
@@ -2874,13 +2949,13 @@ mod moved_unit_tests {
 
         #[test]
         fn unselected_context_menu_target_keeps_its_original_delete_action() {
-            let (hierarchy, identities, visible) = fixture();
+            let (hierarchy, identities) = fixture();
             let mut state = PresetUi::default();
             state.browser_selection.insert("panel".into(), BTreeSet::from([PickerId::group("A")]));
             let original = BrowserAction::DeleteGroup("B".into());
             let mut events = vec![original.clone()];
 
-            let context = BrowserDeleteContext { selection_order: &visible, hierarchy: &hierarchy, identities: &identities };
+            let context = BrowserDeleteContext { hierarchy: &hierarchy, identities: &identities };
             replace_selected_delete_actions(&mut events, 0, &state, "panel", &PickerId::group("B"), &context);
 
             assert!(matches!(events.as_slice(), [BrowserAction::DeleteGroup(group)] if group == "B"));
@@ -2956,10 +3031,7 @@ mod moved_unit_tests {
     }
     #[cfg(test)]
     mod filter_projection_tests {
-        use super::{
-            GroupView, HIT_DEBUG_LABEL_HEIGHT, HierarchyOrderEntry, ItemView, best_drop_target_index, best_indent_drop_target_index, filter_groups,
-            group_render_segments, hit_debug_label_position, item_hierarchy_insertion_anchor, item_occurrence_position, test_projection_keys,
-        };
+        use super::{GroupView, HierarchyOrderEntry, ItemView, filter_groups, group_render_segments, item_occurrence_position, test_projection_keys};
 
         fn group(name: &str, items: Vec<ItemView>) -> GroupView {
             GroupView { name: name.into(), root_only: false, items }
@@ -3082,83 +3154,6 @@ mod moved_unit_tests {
             assert_eq!(segments[3].group_index, 0);
             assert!(segments[4].show_header);
             assert_eq!(segments[4].group_index, 1);
-        }
-
-        #[test]
-        fn best_drop_target_is_the_last_eligible_candidate() {
-            let candidates = [false, true, false, true, false];
-
-            assert_eq!(best_drop_target_index(&candidates, |eligible| *eligible), Some(3));
-            assert_eq!(best_drop_target_index(&[false, false], |eligible| *eligible), None);
-        }
-
-        #[test]
-        fn card_drop_target_wins_over_an_overlapping_group_indent_column() {
-            let columns = [false, true, true];
-
-            assert_eq!(best_indent_drop_target_index(&columns, true, |eligible| *eligible), None);
-            assert_eq!(best_indent_drop_target_index(&columns, false, |eligible| *eligible), Some(2));
-        }
-
-        #[test]
-        fn card_drop_anchor_tracks_the_next_item_or_nested_group_at_the_same_level() {
-            let items = vec![item("a", "A", &[]), item("b", "B", &[]), item("nested", "Nested item", &["Nested"]), item("c", "C", &[])];
-
-            assert_eq!(item_hierarchy_insertion_anchor(&items, 1, &[], false, None), (None, Some("b".into())));
-            assert_eq!(item_hierarchy_insertion_anchor(&items, 0, &[], true, None), (None, Some("b".into())));
-            assert_eq!(item_hierarchy_insertion_anchor(&items, 1, &[], true, None), (Some("Nested".into()), None));
-            assert_eq!(item_hierarchy_insertion_anchor(&items, 3, &[], true, None), (None, None));
-        }
-
-        #[test]
-        fn card_drop_after_skips_the_group_being_moved_when_it_is_the_next_sibling() {
-            let items = vec![item("a", "A", &[]), item("f1", "F1", &["F"]), item("f2", "F2", &["F"]), item("b", "B", &[])];
-
-            // F already follows A. It cannot be its own `before` anchor after the engine
-            // partitions F out of the source group; B is the stable next sibling instead.
-            assert_eq!(item_hierarchy_insertion_anchor(&items, 0, &[], true, Some(&["F".into()])), (None, Some("b".into())));
-        }
-
-        #[test]
-        fn card_drop_after_skips_a_moving_group_before_the_target_card() {
-            let items = vec![item("f", "F", &["F"]), item("a", "A", &[]), item("b", "B", &[])];
-
-            assert_eq!(item_hierarchy_insertion_anchor(&items, 1, &[], true, Some(&["F".into()])), (None, Some("b".into())));
-        }
-
-        #[test]
-        fn upper_and_lower_gap_debug_labels_do_not_overwrite_each_other() {
-            let gap = egui::Rect::from_min_max(egui::pos2(10.0, 100.0), egui::pos2(210.0, 106.0));
-            let hits = crate::pickers::browser::browser_interaction::group_gap_drop_hits(crate::pickers::browser::browser_interaction::GroupGapDropSpec {
-                rect: gap,
-                upper: crate::pickers::browser::path_identity_model::PickerId::from("upper"),
-                lower: crate::pickers::browser::path_identity_model::PickerId::from("lower"),
-                upper_bounds: egui::Rect::from_min_max(egui::pos2(20.0, 60.0), egui::pos2(120.0, 90.0)),
-                lower_bounds: egui::Rect::from_min_max(egui::pos2(20.0, 106.0), egui::pos2(210.0, 135.0)),
-                upper_depth: 0,
-                lower_depth: 1,
-                order: 0,
-            });
-            let upper_label = hit_debug_label_position(&hits[0]);
-            let lower_label = hit_debug_label_position(&hits[1]);
-
-            assert!(upper_label.y >= gap.bottom(), "upper label starts above the visible gap: y={}", upper_label.y);
-            assert!(upper_label.y + HIT_DEBUG_LABEL_HEIGHT <= lower_label.y, "upper label at y={} overlaps lower label at y={}", upper_label.y, lower_label.y,);
-        }
-
-        #[test]
-        fn nested_card_drop_after_skips_the_moving_group_and_anchors_to_the_next_sibling_group() {
-            let items = vec![
-                item("a", "A", &["Parent"]),
-                item("f1", "F1", &["Parent", "Moving"]),
-                item("f2", "F2", &["Parent", "Moving"]),
-                item("g1", "G1", &["Parent", "Next"]),
-            ];
-
-            assert_eq!(
-                item_hierarchy_insertion_anchor(&items, 0, &["Parent".into()], true, Some(&["Parent".into(), "Moving".into()])),
-                (Some("Next".into()), None)
-            );
         }
 
         fn segment_summary(segments: &[crate::pickers::browser::projection::GroupRenderSegment], groups: &[GroupView]) -> Vec<(String, bool, Vec<String>)> {

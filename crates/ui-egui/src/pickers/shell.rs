@@ -67,11 +67,29 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
         let footer_top = ui.min_rect().bottom();
         ui.add_space(4.0);
         let footer_actions = crate::pickers::footer::draw(ui, st, &panel, footer);
-        events.extend(footer_actions.into_iter().map(|action| match action {
-            crate::pickers::footer::FooterAction::DeleteItem { group, group_path, key } => BrowserAction::DeleteItem { group, group_path, key },
-            crate::pickers::footer::FooterAction::New => BrowserAction::New,
-            crate::pickers::footer::FooterAction::NewGroup => BrowserAction::NewGroup,
-        }));
+        for action in footer_actions {
+            match action {
+                crate::pickers::footer::FooterAction::DeleteItem { group, group_path, key } => {
+                    events.push(BrowserAction::DeleteItem { group, group_path, key })
+                }
+                crate::pickers::footer::FooterAction::DeleteSelection => {
+                    let selected = ui.ctx().data_mut(|data| {
+                        data.remove_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", panel.as_str()))).unwrap_or_default()
+                    });
+                    if selected.is_empty() {
+                        if let (Some(key), Some(group), Some(group_path)) =
+                            (st.selected.get(&panel).cloned(), st.selected_group.get(&panel).cloned(), st.selected_group_path.get(&panel).cloned())
+                        {
+                            events.push(BrowserAction::DeleteItem { group, group_path, key });
+                        }
+                    } else {
+                        events.extend(selected);
+                    }
+                }
+                crate::pickers::footer::FooterAction::New => events.push(BrowserAction::New),
+                crate::pickers::footer::FooterAction::NewGroup => events.push(BrowserAction::NewGroup),
+            }
+        }
         let measured = ui.min_rect().bottom() - footer_top;
         if measured.is_finite() && (measured - footer_h).abs() > 0.5 {
             ui.data_mut(|d| d.insert_temp(footer_id, measured));

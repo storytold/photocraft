@@ -51,6 +51,8 @@ pub enum Pick {
     List(Action),
     /// Open the Brush Settings panel (Window › Brush Settings, F5).
     OpenSettings,
+    /// Open the picker options menu anchored to its header button.
+    OpenMenu(egui::Id),
     /// Save the current brush as a new preset, then name it in the rename bar.
     NewPreset,
     /// Import brushes (.abr) with the file dialog.
@@ -111,6 +113,15 @@ pub fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, picks: Vec<Pick>) {
         match pick {
             Pick::List(a) => brushes_tab::apply(app, vec![a]),
             Pick::OpenSettings => open_settings(app, ctx),
+            Pick::OpenMenu(id) => {
+                if let Some(response) = ctx.read_response(id) {
+                    egui::Popup::menu(&response).show(|ui| {
+                        widgets::style_spectrum_popup_menu(ui);
+                        ui.set_min_width(180.0);
+                        crate::brush_panel::panel_menu(app, ui);
+                    });
+                }
+            }
             // Photoshop asks for the new preset's name and what it captures first, in a dialog that
             // takes the picker's place.
             Pick::NewPreset => {
@@ -218,6 +229,10 @@ pub fn body(
         }
         if named(icons::button(ui, "sliders-horizontal", 24.0, false, tl!(settings_tip)), "Brush Settings…").clicked() {
             picks.borrow_mut().push(Pick::OpenSettings);
+        }
+        let menu = widgets::panel_menu_button(ui, "Brush Preset Options");
+        if menu.clicked() {
+            picks.borrow_mut().push(Pick::OpenMenu(menu.id));
         }
     };
     let mut search = |ui: &mut egui::Ui| {

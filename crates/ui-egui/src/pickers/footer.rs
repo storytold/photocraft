@@ -24,8 +24,20 @@ impl<'a> FooterOptions<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum FooterAction {
     DeleteItem { group: String, group_path: Vec<String>, key: String },
+    DeleteSelection,
     New,
     NewGroup,
+}
+
+fn delete_action(st: &PresetUi, panel: &str) -> Option<FooterAction> {
+    if st.browser_selection.get(panel).is_some_and(|selection| !selection.is_empty()) {
+        Some(FooterAction::DeleteSelection)
+    } else {
+        let key = st.selected.get(panel)?.clone();
+        let group = st.selected_group.get(panel)?.clone();
+        let group_path = st.selected_group_path.get(panel)?.clone();
+        Some(FooterAction::DeleteItem { group, group_path, key })
+    }
 }
 
 /// Draw the standard footer controls and return requested actions without dispatching them.
@@ -43,12 +55,10 @@ pub(crate) fn draw(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str, footer: Fo
             }
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if footer.delete
-                && crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
-                && let Some(key) = st.selected.get(panel).cloned()
-                && let (Some(group), Some(group_path)) = (st.selected_group.get(panel).cloned(), st.selected_group_path.get(panel).cloned())
-            {
-                actions.push(FooterAction::DeleteItem { group, group_path, key });
+            if footer.delete && crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked() {
+                if let Some(action) = delete_action(st, panel) {
+                    actions.push(action);
+                }
             }
             if footer.new_item && crate::icons::button(ui, "plus", 24.0, false, footer.new_tip).clicked() {
                 actions.push(FooterAction::New);
@@ -59,4 +69,33 @@ pub(crate) fn draw(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str, footer: Fo
         });
     });
     actions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FooterAction, delete_action};
+    use crate::pickers::browser::path_identity_model::PickerId;
+    use crate::pickers::state::PresetUi;
+
+    #[test]
+    fn footer_delete_prefers_the_complete_browser_selection() {
+        let mut state = PresetUi::default();
+        state.set_selected_item("panel", "A", &[], "active");
+        state.select_browser_node("panel", PickerId::group("A"), false);
+        state.select_browser_node("panel", PickerId::item("B", "other"), true);
+
+        assert!(matches!(delete_action(&state, "panel"), Some(FooterAction::DeleteSelection)));
+    }
+
+    #[test]
+    fn footer_delete_falls_back_to_the_active_item_without_a_browser_selection() {
+        let mut state = PresetUi::default();
+        state.set_selected_item("panel", "A", &["Folder".into()], "active");
+
+        assert!(matches!(
+            delete_action(&state, "panel"),
+            Some(FooterAction::DeleteItem { group, group_path, key })
+                if group == "A" && group_path == ["Folder"] && key == "active"
+        ));
+    }
 }
