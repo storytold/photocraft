@@ -1285,7 +1285,8 @@ fn nested_shared_patterns_add_up_their_depth() {
     }
     let body: String = (0..k).rev().map(|i| format!("<rect width=\"10\" height=\"10\" fill=\"url(#D{i})\"/>")).collect();
     let svg = format!("<svg {NS} width=\"100\" height=\"100\"><defs>{defs}</defs>{body}</svg>");
-    let err = check_only(&svg, 100, 100).unwrap_err();
+    // 9,500 nested groups: usvg's conversion overflows the 2 MiB test-thread stack on Windows.
+    let err = std::thread::Builder::new().stack_size(64 << 20).spawn(move || check_only(&svg, 100, 100).unwrap_err()).unwrap().join().unwrap();
     assert!(err.message.contains("layers"), "{err:?}");
 }
 
