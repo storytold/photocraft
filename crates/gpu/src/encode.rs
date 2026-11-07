@@ -2,9 +2,11 @@ use super::batch::{batch_runs, run_starts, submit_batch, tile_grid};
 use super::consts::{FLUSH_BYTES, FLUSH_OPS, FLUSH_WORK, PATTERN_IDLE_FRAMES};
 use super::convert::lut_texture;
 use super::kit::FrameRes;
-use super::paging::{OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_rects, lru_victims, scoped_work, uniform_buffer_len};
+use super::paging::{
+    OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_rects, group_depth, lru_victims, operator_fingerprints, scoped_work, uniform_buffer_len,
+};
 use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};
-use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};
+use super::{Compositor, Document, LayerId, LayerOperator, Plan, Rect, Role, Surface, Unsupported, plan, timing};
 
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is
@@ -93,6 +95,9 @@ impl Compositor {
         // texture uploads or effect maps, so none of those cached pixels can be trusted.
         self.prefix.clear();
         self.residents.clear();
+        self.op_made.clear();
+        self.op_pins.clear();
+        self.op_scratch = None;
         self.fx.clear();
         self.patterns.clear();
         self.temps.clear();
@@ -132,7 +137,23 @@ impl Compositor {
     ) -> Result<Stats, Unsupported> {
         let canvas = doc.bounds();
         let region = region.intersect(&canvas);
-        let plan = plan(doc)?;
+        self.frame_region = tile_grid(region);
+        let ops: Vec<LayerOperator> = self.operators.get(&doc.id).cloned().unwrap_or_default();
+        if !ops.is_empty() && !self.operators_supported(device) {
+            return Err(Unsupported("GPU layer operators are unavailable on this device".into()));
+        }
+        // Operators run on the page texels (RGB); the CPU filters CMYK, Lab and the other modes'
+        // own channels.
+        // Operator lookups walk groups to a bounded depth: deeper documents (past the model's own
+        // limit) can't have one missed.
+        if !ops.is_empty() && group_depth(&doc.layers, 0) > photocraft_doc::MAX_GROUP_DEPTH {
+            return Err(Unsupported("layer operators in a document nested too deeply".into()));
+        }
+        if !ops.is_empty() && !matches!(doc.mode, photocraft_color::ColorMode::Rgb | photocraft_color::ColorMode::Grayscale) {
+            return Err(Unsupported("layer operators need an RGB or Grayscale document (previewed on the CPU)".into()));
+        }
+        let plan = plan::plan_with(doc, ops.iter().map(|o| o.layer).collect())?;
+        self.frame_ops = ops.clone();
         self.check_fx(doc, &plan)?;
         self.pattern_mode = doc.pixel_format().mode;
         self.pattern_doc = doc.id;
@@ -169,7 +190,7 @@ impl Compositor {
         let checkpoint = if flush {
             let starts = run_starts(&runs);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
-            self.prefix.prepare(doc, &resumable)
+            self.prefix.prepare(doc, &resumable, &operator_fingerprints(doc, &ops))
         } else {
             None
         };
@@ -183,7 +204,7 @@ impl Compositor {
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
-        let fr = self.frame_res(device, queue, canvas, &plan);
+        let fr = self.frame_res(device, queue, canvas, &plan, &ops);
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -283,6 +304,10 @@ impl Compositor {
         let frame = self.frame;
         let live: std::collections::HashSet<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
         self.residents.retain(|(id, _, _), r| r.doc != doc.id || r.last_used == frame || live.contains(id));
+        // Fingerprints of operator pages that were evicted or dropped.
+        let residents = &self.residents;
+        self.op_made.retain(|k, _| residents.contains_key(k));
+        self.op_pins.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|(id, _), e| e.doc != doc.id || e.last_used == frame || live.contains(id));
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
@@ -408,13 +433,18 @@ impl Compositor {
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
-    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>) -> FrameRes {
+    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, ops: &[LayerOperator]) -> FrameRes {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
+        // An operator's output covers the layer's tiles and whatever it changes beyond them.
+        let tex_area = |t: &plan::TexUse<'_>| match ops.iter().find(|o| o.layer == t.layer && t.role == Role::Content) {
+            Some(o) => tile_grid(t.surface.get().tile_bounds().union(&o.program.changed_area())).intersect(&grid),
+            None => area(t.surface.get()),
+        };
         let areas = plan
             .passes
             .iter()
-            .map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, |t| area(t.surface.get())), p.mask.as_ref().map_or(Rect::EMPTY, |m| area(m.surface.get()))))
+            .map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, tex_area), p.mask.as_ref().map_or(Rect::EMPTY, |m| area(m.surface.get()))))
             .collect();
         let luts = plan.passes.iter().map(|p| p.lut.as_ref().map(|rows| lut_texture(device, queue, rows))).collect();
         let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat))).collect();
