@@ -148,6 +148,30 @@ fn layered_tiff_keeps_exif_without_claiming_a_loss() {
     assert!(back.metadata.text.iter().any(|(k, v)| k == "Artist" && v == artist), "{:?}", back.metadata.text);
 }
 
+/// #9099: a layered or flat TIFF keeps the IPTC record in tag 33723, where Photoshop writes it, and
+/// opens it back into the document.
+#[test]
+fn layered_tiff_keeps_iptc_in_its_own_tag() {
+    let iptc = vec![0x1C, 0x02, 0x00, 0x00, 0x02, 0x00, 0x04, 0x1C, 0x02, 0x78, 0x00, 0x03, b'c', b'a', b'p'];
+    let mut d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);
+    d.metadata.psd_resources.push((1028, String::new(), std::sync::Arc::new(iptc.clone())));
+
+    let r = tiff(&d, true);
+    assert_eq!(photocraft_codecs::decode(&r.bytes).unwrap().meta.iptc.as_deref(), Some(&iptc[..]), "tag 33723");
+    let back = import("x.tif", &r.bytes).unwrap().document;
+    let kept: Vec<_> = back.metadata.psd_resources.iter().filter(|(id, ..)| *id == 1028).map(|(.., data)| data.to_vec()).collect();
+    assert_eq!(kept, std::slice::from_ref(&iptc));
+
+    // A flat TIFF keeps it the same way, and Metadata: None leaves it out.
+    let flat = tiff(&d, false);
+    assert_eq!(photocraft_codecs::decode(&flat.bytes).unwrap().meta.iptc.as_deref(), Some(&iptc[..]), "flat tag 33723");
+    let back = import("x.tif", &flat.bytes).unwrap().document;
+    let kept: Vec<_> = back.metadata.psd_resources.iter().filter(|(id, ..)| *id == 1028).map(|(.., data)| data.to_vec()).collect();
+    assert_eq!(kept, [iptc]);
+    let none = export(&d, "x.tif", &ExportOptions { xmp: XmpEmbed::None, ..Default::default() }).unwrap();
+    assert_eq!(photocraft_codecs::decode(&none.bytes).unwrap().meta.iptc, None);
+}
+
 #[test]
 fn discard_layers_writes_a_flat_file() {
     let d = gen_doc(ColorMode::Rgb, SampleType::U8, Features::PIXELS);

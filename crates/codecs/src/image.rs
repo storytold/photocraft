@@ -135,6 +135,8 @@ pub struct Metadata {
     pub exif: Option<Vec<u8>>,
     /// XMP packet as UTF-8.
     pub xmp: Option<String>,
+    /// IPTC-NAA record (TIFF tag 33723, Photoshop resource 1028), kept opaque.
+    pub iptc: Option<Vec<u8>>,
     /// Horizontal and vertical resolution in dots per inch.
     pub dpi: Option<(f32, f32)>,
     /// Free-form key/value text (PNG tEXt/iTXt, TIFF ASCII tags).
@@ -169,6 +171,7 @@ impl Metadata {
     pub fn is_empty(&self) -> bool {
         self.exif.is_none()
             && self.xmp.is_none()
+            && self.iptc.is_none()
             && self.dpi.is_none()
             && self.text.is_empty()
             && self.photoshop_resources.is_none()
