@@ -230,6 +230,23 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
     let _ = app.run("image.analysis.rulerTool", json!({"start": r.start, "end": r.end, "protractor": r.protractor}));
 }
 
+#[cfg(test)]
+#[path = "note_show_on_new_tests.rs"]
+mod note_show_on_new_tests;
+
+/// Create a note at the rounded document position using the Note tool's options.
+/// After `notes.add` succeeds, select the note and open the Notes panel. Enable Show Notes
+/// while leaving the master Extras switch alone.
+pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Value, String> {
+    let a = &app.ui.analysis;
+    let params = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": a.note_color});
+    let result = app.run("notes.add", params)?;
+    app.ui.analysis.note_selected = result["index"].as_u64().map(|v| v as usize);
+    app.ui.analysis.notes = true;
+    app.ui.view.show.notes = true;
+    Ok(result)
+}
+
 /// Pointer input for the Ruler, Count, Note and Color Sampler tools. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let tool = app.active_tool();
@@ -318,12 +335,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                     app.ui.analysis.drag = Some(Drag::Note(i, [x - doc.notes[i].position[0], y - doc.notes[i].position[1]]));
                 }
                 None => {
-                    let a = &app.ui.analysis;
-                    let p = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": [a.note_color[0], a.note_color[1], a.note_color[2]]});
-                    if let Ok(r) = app.run("notes.add", p) {
-                        app.ui.analysis.note_selected = r["index"].as_u64().map(|v| v as usize);
-                        app.ui.analysis.notes = true;
-                    }
+                    let _ = create_note(app, x, y);
                 }
             }
         }
