@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-31 · **Change:** minor (Art History Brush Opacity on the options bar, #10263; no estimate changed; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-11-06 · **Change:** minor (the eraser end of the pen switches to the Eraser on Windows with Windows Ink on, #2285; no estimate changed; Art History Brush Opacity on the options bar, #10263; no estimate changed; Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -48,7 +48,7 @@ tablets against Photoshop side by side.
 | Quick taps keep their pressure | partial | #1967 fixed one case; tap paints a full blob (#1798), tap sensitivity (#1933) |
 | Smooth pressure on Windows | partial | "jumpy" (#2046) |
 | Tilt and rotation drive angle/roundness | partial | macOS, X11, web; not Windows; rotation not applied (#1301) |
-| Eraser end of the pen switches to Eraser | partial | macOS; flipped Wacom on Windows not (#2285) |
+| Eraser end of the pen switches to Eraser | partial | macOS, Windows (WinTab; Windows Ink not yet confirmed on hardware, #2285); X11 and web partial |
 
 ## Stroke quality and feel
 
@@ -120,6 +120,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-06 | minor | Eraser end of the pen switches to the Eraser on Windows with Windows Ink on (#2285); row stays partial (X11, web); no estimate changed |
 | 2026-10-30 | minor | Art History Brush Opacity on the options bar, #10263; no estimate changed |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
 | 2026-10-23 | minor | Hard-round built-in presets use 5% spacing (#8842); rendered large-tip outline and pressure-opacity continuity tests cover 8/16/32-bit and 0/49% smoothing. Other presets and user settings retain their spacing; percentages and estimates unchanged. |
