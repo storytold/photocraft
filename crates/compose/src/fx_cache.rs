@@ -184,18 +184,19 @@ pub(crate) fn fx_over_budget(layers: &[Layer], canvas: Rect) -> bool {
 /// Raw whole-region bytes [`fx_over_budget`] compares with the budget. Keep regions over the
 /// build limit here so oversized local maps are clipped before the renderer applies that limit.
 pub(crate) fn fx_region_bytes(layers: &[Layer], canvas: Rect) -> u64 {
-    effect_map_bytes(layers, canvas, None, PREPARE_DEPTH as usize)
+    effect_map_bytes(layers, canvas, None, PREPARE_DEPTH as usize).unwrap_or(u64::MAX)
 }
 
 /// Estimates the effect maps a render can retain, including maps built on demand in deep groups.
 /// A group may read a child's whole map even when drawing that child into the render rectangle
 /// uses a clipped map, so reserve both versions when their regions differ. Clipped layers under
-/// a hidden base are skipped, and regions past the renderer's build limit contribute zero.
-pub fn estimated_effect_map_bytes(layers: &[Layer], canvas: Rect, render: Rect) -> u64 {
+/// a hidden base are skipped. Returns `None` when the build limit would omit all usable regions
+/// of an effect, allowing callers that need complete effects to refuse the operation.
+pub fn estimated_effect_map_bytes(layers: &[Layer], canvas: Rect, render: Rect) -> Option<u64> {
     effect_map_bytes(layers, canvas, Some(render), photocraft_doc::MAX_GROUP_DEPTH)
 }
 
-fn effect_map_bytes(layers: &[Layer], canvas: Rect, render: Option<Rect>, depth_left: usize) -> u64 {
+fn effect_map_bytes(layers: &[Layer], canvas: Rect, render: Option<Rect>, depth_left: usize) -> Option<u64> {
     let mut total = 0u64;
     let mut base_visible = true;
     for l in layers {
@@ -217,16 +218,19 @@ fn effect_map_bytes(layers: &[Layer], canvas: Rect, render: Option<Rect>, depth_
                     pixels = pixels.saturating_add(effect_build_region(l, clipped).size().area());
                 }
             }
+            if !region.is_empty() && pixels == 0 {
+                return None;
+            }
             let maps = effects::map_count(l) as u64;
             total = total.saturating_add(maps.saturating_mul(pixels).saturating_mul(std::mem::size_of::<f32>() as u64));
         }
         if let LayerContent::Group(g) = &l.content
             && depth_left > 0
         {
-            total = total.saturating_add(effect_map_bytes(&g.children, canvas, render, depth_left - 1));
+            total = total.saturating_add(effect_map_bytes(&g.children, canvas, render, depth_left - 1)?);
         }
     }
-    total
+    Some(total)
 }
 
 /// Most bytes one layer's effect maps and source may take to build, whatever the cache budget.
@@ -354,17 +358,17 @@ mod tests {
     fn effect_map_admission_skips_clipped_subtrees_with_hidden_bases() {
         let canvas = Rect::new(0, 0, 32, 24);
         let styled = styled_layer(BlendMode::Normal);
-        let expected = estimated_effect_map_bytes(std::slice::from_ref(&styled), canvas, canvas);
+        let expected = estimated_effect_map_bytes(std::slice::from_ref(&styled), canvas, canvas).unwrap();
         assert!(expected > 0);
         let mut hidden = Layer::raster("hidden base", PixelFormat::RGBA8);
         hidden.visible = false;
         let mut clipped_group = Layer::group("clipped", vec![styled.clone()]);
         clipped_group.clipped = true;
         let mut layers = vec![hidden, clipped_group];
-        assert_eq!(estimated_effect_map_bytes(&layers, canvas, canvas), 0);
+        assert_eq!(estimated_effect_map_bytes(&layers, canvas, canvas), Some(0));
         assert_eq!(fx_region_bytes(&layers, canvas), expected, "raw cache sizing preserves its clipping decision");
         layers.push(styled);
-        assert_eq!(estimated_effect_map_bytes(&layers, canvas, canvas), expected, "a new base restores visibility");
+        assert_eq!(estimated_effect_map_bytes(&layers, canvas, canvas), Some(expected), "a new base restores visibility");
     }
 
     #[test]
@@ -376,13 +380,13 @@ mod tests {
         let whole = whole_effect_region(&local, canvas, effects::margin(&local));
         assert_eq!(effect_build_region(&local, whole), Rect::EMPTY);
         assert!(fx_region_bytes(layers, canvas) > MAX_FX_BUILD_BYTES, "raw sizing must still trigger clipping");
-        assert_eq!(estimated_effect_map_bytes(layers, canvas, canvas), 0);
+        assert_eq!(estimated_effect_map_bytes(layers, canvas, canvas), None);
         let clipped = whole.intersect(&render.inflate(2 * effects::margin(&local)));
-        assert_eq!(estimated_effect_map_bytes(layers, canvas, render), clipped.size().area() * 4);
+        assert_eq!(estimated_effect_map_bytes(layers, canvas, render), Some(clipped.size().area() * 4));
 
         let non_local = styled_layer(BlendMode::Dissolve);
         assert!(!effects::maps_are_local(&non_local));
-        assert_eq!(estimated_effect_map_bytes(std::slice::from_ref(&non_local), canvas, render), 0);
+        assert_eq!(estimated_effect_map_bytes(std::slice::from_ref(&non_local), canvas, render), None);
     }
 
     #[test]

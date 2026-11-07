@@ -232,7 +232,9 @@ fn check_conversion_budget(region: Rect, canvas: Rect, fmt: PixelFormat, layers:
             limit >> 20
         )));
     }
-    let total = bytes.saturating_add(photocraft_compose::estimated_effect_map_bytes(layers, canvas, region));
+    let effect_bytes = photocraft_compose::estimated_effect_map_bytes(layers, canvas, region)
+        .ok_or_else(|| other("Smart Object conversion effect maps exceed the renderer's working-memory limit. Reduce the canvas or effects"))?;
+    let total = bytes.saturating_add(effect_bytes);
     if cfg!(target_pointer_width = "32") && total > crate::image_cmds::MAX_RESAMPLE_BYTES {
         return Err(other(format!(
             "Smart Object conversion at {width} x {height} px needs about {} MiB including effect maps, exceeding the {} MiB working-memory limit. Reduce the canvas or effects",

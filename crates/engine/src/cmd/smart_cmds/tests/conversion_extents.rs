@@ -223,6 +223,26 @@ fn conversion_review_regression_reports_size_limit_without_changing_document() {
 }
 
 #[test]
+fn conversion_rejects_effects_above_the_renderer_build_limit() {
+    let mut s = shadow_fixture(8, 400, 180, 128);
+    s.edit("Oversized effect maps on sparse content", |doc, active| {
+        doc.size = Size::new(6_000, 6_000);
+        let layer = doc.layer_mut(active.unwrap()).unwrap();
+        layer.advanced.transparency_shapes = false;
+        let shadow = layer.effects.items.first().unwrap().clone();
+        layer.effects.items.extend(std::iter::repeat_n(shadow, 24));
+        // Dissolve requires the whole effect region even when local maps could be clipped.
+        layer.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Dissolve, 1.0), color: Color::BLACK });
+        Ok(())
+    })
+    .unwrap();
+    let before = s.active().unwrap().doc.clone();
+    let error = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap_err().to_string();
+    assert!(error.contains("effect maps exceed the renderer's working-memory limit"), "{error}");
+    assert_eq!(s.active().unwrap().doc, before);
+}
+
+#[test]
 fn conversion_rejects_nested_effect_working_memory_before_rendering() {
     let mut s = shadow_fixture(8, 400, 180, 128);
     let mut layer = s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().clone();
