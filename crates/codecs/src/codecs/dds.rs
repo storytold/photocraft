@@ -31,6 +31,7 @@ const DDPF_FOURCC: u32 = 0x4;
 const DDPF_RGB: u32 = 0x40;
 const DDPF_LUMINANCE: u32 = 0x2_0000;
 const DDSCAPS2_CUBEMAP: u32 = 0x200;
+const DDSCAPS2_CUBEMAP_FACES: u32 = 0xfc00;
 const DDSCAPS2_VOLUME: u32 = 0x20_0000;
 const DIMENSION_TEXTURE2D: u32 = 3;
 const MISC_TEXTURECUBE: u32 = 0x4;
@@ -44,6 +45,16 @@ fn unsupported(reason: impl Into<String>) -> CodecError {
 fn le32(b: &[u8], at: usize) -> Result<u32, CodecError> {
     let bytes = b.get(at..at + 4).and_then(|s| <[u8; 4]>::try_from(s).ok()).ok_or_else(|| bad("truncated header"))?;
     Ok(u32::from_le_bytes(bytes))
+}
+
+/// Header-declared extra subresources cannot survive a single-image rewrite, even without presence flags.
+pub(crate) fn has_additional_images(bytes: &[u8]) -> Result<bool, CodecError> {
+    let depth = le32(bytes, 24)?;
+    let mips = le32(bytes, 28)?;
+    let faces = (le32(bytes, 112)? & DDSCAPS2_CUBEMAP_FACES).count_ones();
+    let dx10 = le32(bytes, 80)? & DDPF_FOURCC != 0 && bytes.get(84..88) == Some(b"DX10");
+    let (cube, array) = if dx10 { (le32(bytes, 136)? & MISC_TEXTURECUBE != 0, le32(bytes, 140)?) } else { (false, 0) };
+    Ok(depth > 1 || mips > 1 || faces > 1 || cube || array > 1)
 }
 
 /// A FourCC as text when it is printable, else as the number legacy writers store there.
@@ -117,15 +128,29 @@ impl Encoding {
         }
     }
 
-    /// Bytes of the top mip level.
-    fn level_size(&self, width: u32, height: u32) -> Option<usize> {
-        let (w, h) = (usize::try_from(width).ok()?, usize::try_from(height).ok()?);
-        let block = match self {
-            Encoding::Masks { bytes, .. } => return w.checked_mul(*bytes)?.checked_mul(h),
-            Encoding::Bc1 => 8,
-            Encoding::Bc2 | Encoding::Bc3 => 16,
+    /// Stored row stride and byte size of the top mip level (block rows for BC).
+    fn level_layout(&self, width: u32, height: u32, pitch: Option<u32>) -> Result<(usize, usize), CodecError> {
+        let overflow = || bad("pixel data size overflow");
+        let (w, h) = (usize::try_from(width).map_err(|_| overflow())?, usize::try_from(height).map_err(|_| overflow())?);
+        let (row_bytes, rows) = match self {
+            Encoding::Masks { bytes, .. } => {
+                let packed = w.checked_mul(*bytes).ok_or_else(overflow)?;
+                let row_bytes = match pitch {
+                    Some(pitch) => usize::try_from(pitch).map_err(|_| overflow())?,
+                    None => packed,
+                };
+                if row_bytes < packed {
+                    return Err(bad(format!("row pitch {row_bytes} is smaller than the {packed}-byte pixel row")));
+                }
+                (row_bytes, h)
+            }
+            Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 => {
+                let block = if matches!(self, Encoding::Bc1) { 8 } else { 16 };
+                (w.div_ceil(4).checked_mul(block).ok_or_else(overflow)?, h.div_ceil(4))
+            }
         };
-        w.div_ceil(4).checked_mul(h.div_ceil(4))?.checked_mul(block)
+        let size = row_bytes.checked_mul(rows).ok_or_else(overflow)?;
+        Ok((row_bytes, size))
     }
 }
 
@@ -195,19 +220,25 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     let (encoding, start) = if dx10 { (dx10_encoding(b)?, HEADER + DX10_HEADER) } else { (legacy_encoding(b)?, HEADER) };
     let layout = encoding.layout();
     limits.check(width, height, layout, SampleType::U8)?;
-    let size = encoding.level_size(width, height).ok_or_else(|| bad("pixel data size overflow"))?;
+    // The same header field is a total level size for BC, but a row stride when DDSD_PITCH is set.
+    let pitch = if flags & DDSD_PITCH != 0 { Some(le32(b, 20)?) } else { None };
+    let (row_pitch, size) = encoding.level_layout(width, height, pitch)?;
     let data = b.get(start..).and_then(|d| d.get(..size)).ok_or_else(|| bad(format!("truncated pixel data: {size} bytes needed")))?;
     let (w, h) = (width as usize, height as usize);
     let channels = layout.channels();
-    let total = w.checked_mul(h).and_then(|n| n.checked_mul(channels)).ok_or_else(|| bad("pixel size overflow"))?;
+    let row_size = w.checked_mul(channels).ok_or_else(|| bad("pixel size overflow"))?;
+    let total = row_size.checked_mul(h).ok_or_else(|| bad("pixel size overflow"))?;
     let mut pixels = vec![0u8; total];
     match encoding {
         Encoding::Masks { bytes, gray, fields } => {
-            for (src, dst) in data.chunks_exact(bytes).zip(pixels.chunks_exact_mut(channels)) {
-                let pixel = src.iter().rev().fold(0u32, |v, &byte| v << 8 | u32::from(byte));
-                let channel = |i: usize| fields[i].map_or(0, |f| f.get(pixel));
-                let values = if gray { [channel(0), channel(3), 0, 0] } else { [channel(0), channel(1), channel(2), channel(3)] };
-                dst.copy_from_slice(&values[..channels]);
+            for (src_row, dst_row) in data.chunks_exact(row_pitch).zip(pixels.chunks_exact_mut(row_size)) {
+                // Stop at the output width, leaving any stored row padding unread.
+                for (src, dst) in src_row.chunks_exact(bytes).zip(dst_row.chunks_exact_mut(channels)) {
+                    let pixel = src.iter().rev().fold(0u32, |v, &byte| v << 8 | u32::from(byte));
+                    let channel = |i: usize| fields[i].map_or(0, |f| f.get(pixel));
+                    let values = if gray { [channel(0), channel(3), 0, 0] } else { [channel(0), channel(1), channel(2), channel(3)] };
+                    dst.copy_from_slice(&values[..channels]);
+                }
             }
         }
         Encoding::Bc1 | Encoding::Bc2 | Encoding::Bc3 => {
