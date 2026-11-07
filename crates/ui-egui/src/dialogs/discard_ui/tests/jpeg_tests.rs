@@ -270,3 +270,20 @@ fn a_save_can_choose_where_the_prompt_starts() {
     assert_eq!(writes.borrow().as_slice(), &[("s.jpg".to_string(), asked(Some(70), JpegFormat::Progressive))]);
     assert_eq!(h.state().session.actions.list[0].steps, [("file.saveAs".into(), json!({"path": "s.jpg", "jpegFormat": "progressive"}))]);
 }
+
+/// While the JPEG Options prompt of a Save a Copy is open, menu edits (native or over the control
+/// channel) are refused, so the copy is the document as it was when asked (#11448).
+#[test]
+fn an_open_jpeg_prompt_blocks_menu_edits_until_answered() {
+    let (mut h, writes) = jpeg_app("copy.jpg");
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.saveACopy", json!({})).unwrap();
+    h.run_steps(3);
+    assert!(h.state().jpeg_options.is_some());
+    assert!(!crate::menus::modal_allows(h.state(), "image.imageRotation.90cw"));
+    assert!(crate::menus::modal_allows(h.state(), "view.zoomIn"), "navigation stays free");
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(writes.borrow().len(), 1);
+    assert!(crate::menus::modal_allows(h.state(), "image.imageRotation.90cw"), "edits are free again once answered");
+}
