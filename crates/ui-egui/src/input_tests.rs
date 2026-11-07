@@ -1505,3 +1505,67 @@ fn marquee_drag_after_hiding_extras_restores_selection_visibility() {
     h.state_mut().run("edit.fill", json!({"color": "#22cc44"})).unwrap();
     assert!(!h.state().ui.view.extras, "painting an existing selection must preserve the user's hide choice");
 }
+
+/// #3726: a driver's shortcut release can go missing (an XP-Pen remote over Xwayland): the key
+/// stays held, so every later press arrives flagged a repeat. Repeats of the effective
+/// Undo/Redo bindings are dropped — a stuck key can't drain the History on its own; fresh
+/// presses still undo and redo, and other shortcuts keep repeating while held.
+#[test]
+fn a_missed_undo_release_cant_keep_undoing() {
+    let mut h = harness();
+    h.state_mut().session.execute("layer.new.layer", json!({})).unwrap();
+    h.state_mut().session.execute("layer.new.layer", json!({})).unwrap();
+    let past = |h: &Harness<'static, PhotocraftApp>| h.state().session.active().unwrap().history.past_len();
+    let n = past(&h);
+    // ⌘Z as the platform reports it: `command`, with `ctrl` set off the Mac.
+    let mods = Modifiers { command: true, ctrl: !cfg!(target_os = "macos"), mac_cmd: cfg!(target_os = "macos"), ..Default::default() };
+    let z = |pressed: bool, repeat: bool, m: Modifiers| egui::Event::Key { key: Key::Z, physical_key: None, pressed, repeat, modifiers: m };
+    h.event(egui::Event::ModifiersChanged(mods));
+    h.event(z(true, false, mods));
+    h.run_steps(2);
+    assert_eq!(past(&h), n - 1, "the press undoes once");
+    // A still-held (stuck) key's later presses are repeats: none of them undoes again.
+    for _ in 0..6 {
+        h.event(z(true, true, mods));
+    }
+    h.event(egui::Event::PointerMoved(pos2(40.0, 40.0)));
+    h.run_steps(4);
+    assert_eq!(past(&h), n - 1, "repeats don't keep undoing");
+    // ⇧⌘Z repeats are dropped too.
+    let shift = mods | Modifiers::SHIFT;
+    for _ in 0..6 {
+        h.event(z(true, true, shift));
+    }
+    h.run_steps(2);
+    assert_eq!(past(&h), n - 1, "⇧⌘Z repeats don't redo");
+    // The next real press is still a repeat while the key looks held (egui derives repeat from
+    // its held set), then its release finally clears it: after that cycle fresh presses work.
+    h.event(z(true, true, mods));
+    h.event(z(false, false, mods));
+    h.event(z(true, false, shift));
+    h.event(z(false, false, shift));
+    h.run_steps(3);
+    assert_eq!(past(&h), n, "a fresh ⇧⌘Z still redoes");
+    // Other bindings still repeat while held: ⌘= zooms on each repeat.
+    for _ in 0..2 {
+        let z0 = zoom(&h);
+        h.event(egui::Event::Key { key: Key::Equals, physical_key: None, pressed: true, repeat: true, modifiers: mods });
+        h.run_steps(1);
+        assert!(zoom(&h) > z0, "an unrelated repeat still runs");
+    }
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    // A user's configured alternate repeats the same way: ⌥⇧Z on edit.undo undoes once and its
+    // stuck-key repeats are dropped like the default binding's.
+    h.state_mut().run("prefs.set", json!({"path": "alternateShortcuts.edit.undo", "value": ["Alt+Shift+Z"]})).unwrap();
+    h.run_steps(1);
+    let altz = Modifiers { alt: true, shift: true, ..Default::default() };
+    let az = |pressed: bool, repeat: bool| egui::Event::Key { key: Key::Z, physical_key: None, pressed, repeat, modifiers: altz };
+    h.event(az(true, false));
+    h.run_steps(2);
+    assert_eq!(past(&h), n - 1, "the alternate undoes once");
+    for _ in 0..6 {
+        h.event(az(true, true));
+    }
+    h.run_steps(4);
+    assert_eq!(past(&h), n - 1, "alternate repeats don't keep undoing");
+}

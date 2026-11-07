@@ -467,6 +467,7 @@ pub(crate) fn handle_forwarded(app: &mut PhotocraftApp, ctx: &egui::Context, eve
 /// once the main window or no window of the app has the keyboard, or one of its widgets takes
 /// keyboard focus, so the keys count as released then.
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    drop_history_repeats(app, ctx);
     let held = !ctx.input(|i| i.focused) && crate::panel_docking::other_window_keyboard(ctx) == Some(false);
     if !held {
         ctx.data_mut(|d| d.remove_temp::<std::collections::BTreeSet<Key>>(forwarded_down_id()));
@@ -477,6 +478,28 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !added.is_empty() {
         ctx.input_mut(|i| added.iter().for_each(|k| _ = i.keys_down.remove(k)));
     }
+}
+
+/// A lost release (a driver's shortcut button over Xwayland, #3726) leaves the key held, so
+/// every later press arrives flagged a repeat and each one used to run Undo again, draining
+/// the History on its own. Repeats of the effective Undo/Redo bindings are dropped before any
+/// handler runs; fresh presses and other repeating shortcuts are unaffected — Undo and Redo
+/// step once per physical press, never on a held (or stuck) key.
+fn drop_history_repeats(app: &PhotocraftApp, ctx: &egui::Context) {
+    if !ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, repeat: true, .. }))) {
+        return;
+    }
+    let mut bound = Vec::new();
+    for id in ["edit.undo", "edit.redo", "history.undo", "history.redo"] {
+        let main = effective_shortcut(app, id, default_shortcut(id).as_deref());
+        bound.extend(effective_alternates(app, id).into_iter().chain(main).filter_map(|s| parse(&s)));
+    }
+    ctx.input_mut(|i| {
+        i.events.retain(|e| {
+            !matches!(e, egui::Event::Key { key, pressed: true, repeat: true, modifiers, .. }
+                if bound.iter().any(|sc| key_matches(sc, *key, *modifiers)))
+        });
+    });
 }
 
 fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
