@@ -59,6 +59,12 @@ pub(crate) fn background_eraser_params(app: &PhotocraftApp, points: &[[f64; 3]])
     })
 }
 
+/// The tool a drag with `tool` runs as: the History Brush for an Eraser that erases to history. ⌥
+/// at the press reverses the option for that stroke, as in Photoshop.
+pub fn drag_tool(app: &PhotocraftApp, tool: Tool, alt: bool) -> Tool {
+    if tool == Tool::Eraser && app.ui.tool_options.erase_to_history != alt { Tool::HistoryBrush } else { tool }
+}
+
 /// Whether `tool` is the Eraser in Pencil mode: it erases hard, aliased pixels through
 /// `paint.pencil` (`"erase": true`) and shows the Pencil's pixel-grid cursor (#2662).
 pub fn pencil_mode(app: &PhotocraftApp, tool: Tool) -> bool {
