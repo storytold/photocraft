@@ -289,7 +289,7 @@ pub fn pick_shape_at(doc: &Document, at: [f64; 2], tol: f64) -> Option<photocraf
             continue;
         }
         if let LayerContent::Shape(sh) = &l.content {
-            if photocraft_vector::edit::hit(&sh.path, photocraft_geom::Point::new(at[0], at[1]), tol, &[]).is_some() {
+            if near_outline(&sh.path, at, tol) && photocraft_vector::edit::hit(&sh.path, photocraft_geom::Point::new(at[0], at[1]), tol, &[]).is_some() {
                 return Some(l.id);
             }
             if sh.fill.is_some() {
@@ -329,6 +329,18 @@ pub fn pick_shape_at(doc: &Document, at: [f64; 2], tol: f64) -> Option<photocraf
         }
     }
     None
+}
+
+/// Whether `at` lies within `tol` of the box round `path`'s anchors and control points, which
+/// holds every curve of it (each segment stays inside its control points' hull). Outside it
+/// `edit::hit` can't find an anchor or a segment, so the pick skips its curve sampling: the box's
+/// side band asks on every hover frame, past every shape layer (#11473). The box is grown a hair
+/// more than `tol` so rounding in the sampled distances never drops a hit.
+fn near_outline(path: &Path, at: [f64; 2], tol: f64) -> bool {
+    let Some((x0, y0, x1, y1)) = path.control_bounds() else { return false };
+    let pad = tol * 1.001 + 1e-9 * (1.0 + at[0].abs() + at[1].abs());
+    // Written so a NaN bound keeps the check (`edit::hit` decides), as an infinite one does.
+    !(at[0] < x0 - pad || at[0] > x1 + pad || at[1] < y0 - pad || at[1] > y1 + pad)
 }
 
 pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
