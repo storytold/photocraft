@@ -188,8 +188,9 @@ pub fn plan_with_mode(pref: GpuBackend, mode: RenderingMode, crashed: Option<&Ma
     plan(backend, crashed, env, safe_gpu, os)
 }
 
-/// Persist successful hardware fallbacks, but never silently pin CPU mode.
-/// The recovery dialog explicitly stores CPU mode when the user chooses it.
+/// Remember the backend that let the app start, never the CPU one: a fallback to CPU is
+/// session-only (the recovery dialog never stores it), so the next launch tries the GPU
+/// again (GPU is on by default).
 pub fn backend_to_remember(plan: &Plan) -> Option<GpuBackend> {
     (plan.remember && plan.backend != GpuBackend::Cpu).then_some(plan.backend)
 }

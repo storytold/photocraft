@@ -231,18 +231,22 @@ fn retry_now(app: &mut PhotocraftApp) -> bool {
     true
 }
 
-/// Store the next-launch choice without restarting or risking unsaved documents. Retry GPU after
-/// an error on a working device also builds a new GPU canvas at once (see [`retry_now`]).
+/// Record one recovery choice without restarting or risking unsaved documents. GPU
+/// acceleration is on by default, so "Keep Using CPU" is session-only: nothing is stored, so
+/// the next launch tries the GPU again. "Retry GPU" still records the GPU choice and, after an
+/// error on a working device, also builds a new GPU canvas at once (see [`retry_now`]).
 fn choose_recovery(app: &mut PhotocraftApp, retry: bool) -> Result<(), String> {
-    app.run(
-        "prefs.set",
-        json!({"values": {
-            "performance.renderingMode": if retry { "gpu" } else { "cpu" },
-            "performance.useGpu": retry,
-            "performance.gpuBackend": "auto"
-        }}),
-    )?;
-    crate::prefs_ui::save_preferences(app)?;
+    if retry {
+        app.run(
+            "prefs.set",
+            json!({"values": {
+                "performance.renderingMode": "gpu",
+                "performance.useGpu": true,
+                "performance.gpuBackend": "auto"
+            }}),
+        )?;
+        crate::prefs_ui::save_preferences(app)?;
+    }
     app.ui.gpu_fallback_notice = None;
     if retry && can_retry_now(app) && retry_now(app) {
         return Ok(());
@@ -364,7 +368,9 @@ mod tests {
     }
 
     #[test]
-    fn recovery_choices_save_next_launch_mode_without_restarting() {
+    fn recovery_choices_store_only_the_gpu_choice() {
+        // GPU is on by default: "Keep Using CPU" is session-only (nothing is stored, so the
+        // next launch tries the GPU again); "Retry GPU" still records the GPU choice.
         let saves = std::rc::Rc::new(std::cell::Cell::new(0));
         let count = saves.clone();
         let services = crate::Services {
@@ -377,17 +383,18 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         queue_fallback_notice(&mut app, "device unavailable");
         choose_recovery(&mut app, false).unwrap();
-        assert!(!app.session.prefs().performance.use_gpu);
-        assert_eq!(app.session.prefs().get("performance.renderingMode"), Some(json!("cpu")));
+        assert!(app.session.prefs().performance.use_gpu);
+        assert!(app.session.prefs().performance.rendering_mode.is_none());
         assert!(app.ui.gpu_fallback_notice.is_none());
         crate::prefs_ui::tick(&mut app, &egui::Context::default());
-        assert_eq!(saves.get(), 1, "recovery choice writes once");
+        assert_eq!(saves.get(), 0, "keeping CPU writes nothing");
+        queue_fallback_notice(&mut app, "device unavailable");
         choose_recovery(&mut app, true).unwrap();
         assert!(app.session.prefs().performance.use_gpu);
         assert_eq!(app.session.prefs().get("performance.renderingMode"), Some(json!("gpu")));
         assert!(app.gpu.is_none());
         crate::prefs_ui::tick(&mut app, &egui::Context::default());
-        assert_eq!(saves.get(), 2, "retry choice writes once");
+        assert_eq!(saves.get(), 1, "retry choice writes once");
     }
 
     /// #6564: an out-of-memory error on a device that still works rebuilds the GPU canvas by itself,
