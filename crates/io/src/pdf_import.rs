@@ -10,12 +10,19 @@
 //! or shipped, and a malformed file is reported as an error rather than taking the process down.
 
 use crate::{ImportOptions, ImportResult, IoError};
+#[cfg(not(target_arch = "wasm32"))]
 use craft_pdf::interpret::InterpreterSettings;
+#[cfg(not(target_arch = "wasm32"))]
 use craft_pdf::raster::{self, RenderCache};
+#[cfg(not(target_arch = "wasm32"))]
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
+#[cfg(not(target_arch = "wasm32"))]
 use photocraft_doc::{Artboard, Document, Group, Layer, LayerContent};
+#[cfg(not(target_arch = "wasm32"))]
 use photocraft_geom::{Rect, Size};
-use photocraft_raster::{Interrupt, Surface};
+use photocraft_raster::Interrupt;
+#[cfg(not(target_arch = "wasm32"))]
+use photocraft_raster::Surface;
 
 /// `%PDF-` magic. `.ai` files that start with it are PDFs and render through this importer.
 pub fn is_pdf(bytes: &[u8]) -> bool {
