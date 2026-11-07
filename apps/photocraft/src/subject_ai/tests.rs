@@ -90,18 +90,40 @@ fn a_download_is_offered_again_when_the_set_up_file_is_gone() {
     assert!(matches!(w.model.status(), ModelStatus::Offer(_)), "{:?}", w.model.status());
 }
 
+/// A choice of `connection` for the tool.
+fn binding(w: &World, connection: &str) -> craft_ai_core::Binding {
+    craft_ai_core::Binding {
+        role: w.model.role.id.clone(),
+        connection: craft_ai_core::ConnectionId::new(connection).unwrap(),
+        model: craft_ai_core::ModelId::new("birefnet").unwrap(),
+    }
+}
+
 #[test]
 fn a_download_is_not_offered_over_another_choice() {
     let w = world();
     let mut store = w.model.shared.load().unwrap();
-    store.defaults.push(craft_ai_core::Binding {
-        role: w.model.role.id.clone(),
-        connection: craft_ai_core::ConnectionId::new("comfy-at-home").unwrap(),
-        model: craft_ai_core::ModelId::new("birefnet").unwrap(),
-    });
+    store.defaults.push(binding(&w, "comfy-at-home"));
     w.model.shared.replace(&store).unwrap();
     let ModelStatus::Unavailable { reason } = w.model.status() else { panic!("expected no offer: {:?}", w.model.status()) };
     assert!(reason.contains("Craft launcher"), "{reason}");
+}
+
+#[test]
+fn photocrafts_own_choice_comes_before_the_launchers() {
+    // PhotoCraft's own choice of another model: no download, whatever the launcher has.
+    let w = world();
+    let mut store = w.model.shared.load().unwrap();
+    store.apps.entry(app_id().unwrap()).or_default().overrides.push(binding(&w, "comfy-at-home"));
+    w.model.shared.replace(&store).unwrap();
+    assert!(matches!(w.model.status(), ModelStatus::Unavailable { .. }), "{:?}", w.model.status());
+    // PhotoCraft's own choice of this build's model goes before another launcher choice.
+    let w = world();
+    let mut store = w.model.shared.load().unwrap();
+    store.defaults.push(binding(&w, "comfy-at-home"));
+    store.apps.entry(app_id().unwrap()).or_default().overrides.push(binding(&w, &native_connection()));
+    w.model.shared.replace(&store).unwrap();
+    assert!(matches!(w.model.status(), ModelStatus::Offer(_)), "{:?}", w.model.status());
 }
 
 #[test]
