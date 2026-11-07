@@ -69,6 +69,20 @@ fn ok_runs_the_two_decimal_angle() {
     assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(441), Some(441)), "442 would mean the 33.7 round ran");
 }
 
+/// The f32 double-rounding the review caught: a 43x27 ruler line (here 100,100 to 143,127)
+/// is 32.1249984 degrees, and the f32 cast of that full-precision pre-fill lands exactly on
+/// 32.125 - rounding the widened value half away from zero opened the dialog at 32.13. The
+/// hundredths round in f64 before the field narrows, so it opens at 32.12, Counter clockwise.
+#[test]
+fn the_ruler_angle_rounds_at_full_precision_before_the_field_narrows() {
+    let (_app, _id, f) = ruler_dialog([143, 127]);
+    let a = f["angle"].as_f64().unwrap();
+    assert!((a - 32.12).abs() < 1e-3, "the 43x27 ruler opens at {a}, want 32.12");
+    assert_eq!(crate::widgets::fmt_num2(a), "32.12", "the Angle field shows 32.12, not the 32.13 the f32 round gives");
+    assert!((a - 32.13).abs() > 1e-3, "the f32 double-round must not reach the dialog: {a}");
+    assert_eq!(f["direction"], json!("ccw"));
+}
+
 /// The fix is per-field: unrelated number fields keep the precision they have today —
 /// wide ranges round to one decimal (in another dialog, and under the same key name),
 /// small ranges keep their two.

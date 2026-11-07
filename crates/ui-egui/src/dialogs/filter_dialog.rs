@@ -901,7 +901,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         match p.kind {
             Kind::Range { min, max, default } => {
-                let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
+                let src = f.get(&p.key).and_then(Value::as_f64);
+                let mut v = src.unwrap_or(default as f64) as f32;
+                // A widget edit this frame makes the field's f32 value authoritative (#12035).
+                let mut edited = false;
                 if cmd == "image.mode.indexedColor" && p.key == "colors" {
                     let mut count = v.round().clamp(2.0, 256.0) as u32;
                     crate::widgets::color_count_row(ui, &label(&p.key), &mut count);
@@ -944,13 +947,23 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     } else {
                         // A double-click on the slider puts it back to the filter's default.
                         let gestures = crate::widgets::RowGestures { reset: Some(default), wheel_step: None, ..Default::default() };
-                        crate::widgets::slider_row_prec(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures, wide_field_decimals(&cmd, &p.key));
+                        edited =
+                            crate::widgets::slider_row_prec(ui, &label(&p.key), &mut v, min..=max, unit, None, gestures, wide_field_decimals(&cmd, &p.key))
+                                .changed();
                     }
                 });
                 // The field's shown precision: small ranges keep their two decimals, and so
                 // does the Arbitrary angle; the other wide fields round to one (#12035).
                 let scale = field_scale(&cmd, &p.key, min, max);
-                f.insert(p.key, json!((v * scale).round() / scale));
+                // A field showing two decimals rounds while the value is still f64: a 43x27
+                // ruler is 32.1249984°, whose f32 cast lands exactly on 32.125, and rounding
+                // that widened value half-away shows 32.13 where the pre-fill says 32.12.
+                // Values the user typed or dragged are f32 already, so they round as before.
+                let w = match (wide_field_decimals(&cmd, &p.key), src) {
+                    (Some(_), Some(raw)) if !edited => ((raw * f64::from(scale)).round() / f64::from(scale)) as f32,
+                    _ => (v * scale).round() / scale,
+                };
+                f.insert(p.key, json!(w));
             }
             Kind::Choice { options, default } => {
                 ui.horizontal(|ui| {
