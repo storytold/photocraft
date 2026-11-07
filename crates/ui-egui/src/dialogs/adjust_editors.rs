@@ -229,23 +229,35 @@ mod tests {
     #[test]
     fn reflect_swaps_input_and_output() {
         use super::curves::{reflect_map, reflect_points};
-        assert_eq!(reflect_points(&[[0.0, 0.0], [64.0, 128.0], [255.0, 255.0]]), [[0.0, 0.0], [128.0, 64.0], [255.0, 255.0]]);
-        assert_eq!(reflect_points(&[[0.0, 255.0], [255.0, 0.0]]), [[0.0, 255.0], [255.0, 0.0]], "an inverted curve is its own reflection");
-        // A flat run keeps one point per input.
-        assert_eq!(reflect_points(&[[0.0, 0.0], [100.0, 0.0], [255.0, 255.0]]), [[0.0, 0.0], [255.0, 255.0]]);
+        let pts = |p: &[[f32; 2]]| reflect_points(p);
+        assert_eq!(pts(&[[0.0, 0.0], [64.0, 128.0], [255.0, 255.0]]), Some(vec![[0.0, 0.0], [128.0, 64.0], [255.0, 255.0]]));
+        assert_eq!(pts(&[[0.0, 255.0], [255.0, 0.0]]), Some(vec![[0.0, 255.0], [255.0, 0.0]]), "an inverted curve is its own reflection");
+        // A constant curve, a flat run and a curve that turns back have no reflection: Reflect is off.
+        assert_eq!(pts(&[[0.0, 128.0], [255.0, 128.0]]), None, "constant");
+        assert_eq!(pts(&[[0.0, 0.0], [100.0, 0.0], [255.0, 255.0]]), None, "plateau");
+        assert_eq!(pts(&[[0.0, 0.0], [128.0, 255.0], [255.0, 0.0]]), None, "not monotonic");
+        assert_eq!(pts(&[[0.0, 0.0]]), None, "one point");
         // The drawn map of a gamma curve, reflected, is its inverse.
         let n = photocraft_doc::adjust::CURVE_MAP_LEN;
         let last = (n - 1) as f32;
         let gamma: Vec<f32> = (0..n).map(|k| (k as f32 / last).powf(2.0) * 255.0).collect();
-        let back = reflect_map(&gamma);
+        let back = reflect_map(&gamma).expect("a gamma curve rises throughout");
         for (k, o) in back.iter().enumerate() {
             let want = (k as f32 / last).sqrt() * 255.0;
             assert!((o - want).abs() < 2.0, "level {k}: {o} vs {want}");
         }
         let identity: Vec<f32> = (0..n).map(|k| k as f32 / last * 255.0).collect();
-        for (a, b) in reflect_map(&identity).iter().zip(&identity) {
+        for (a, b) in reflect_map(&identity).expect("identity rises").iter().zip(&identity) {
             assert!((a - b).abs() < 1e-3);
         }
+        // The same three cases drawn with the pencil.
+        assert_eq!(reflect_map(&vec![128.0; n]), None, "constant");
+        let plateau: Vec<f32> = (0..n).map(|k| (k as f32 / last * 255.0).max(64.0)).collect();
+        assert_eq!(reflect_map(&plateau), None, "plateau");
+        let peak: Vec<f32> = (0..n).map(|k| 255.0 - (k as f32 / last * 510.0 - 255.0).abs()).collect();
+        assert_eq!(reflect_map(&peak), None, "not monotonic");
+        let falling: Vec<f32> = identity.iter().rev().copied().collect();
+        assert!(reflect_map(&falling).is_some(), "an inverted drawn curve still reflects");
     }
 
     #[test]
