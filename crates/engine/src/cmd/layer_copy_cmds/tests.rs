@@ -88,6 +88,30 @@ fn places_the_copies_centred_on_the_canvas_on_a_point_or_offset() {
     assert_eq!(doc(&s, 1).layers.len(), 4);
 }
 
+/// #9684: an unlinked mask stays put when the layer moves, but a copy carries the whole layer, so
+/// an offset copy keeps its masks where they were on the content, as Photoshop's Copy/Paste does.
+#[test]
+fn an_offset_copy_carries_unlinked_masks_with_the_content() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    s.execute("layer.layerMask.linked", json!({"linked": false})).unwrap();
+    let square = json!({"subpaths": [{"closed": true, "knots": [[0, 8], [40, 8], [40, 30], [0, 30]]}]});
+    s.execute("layer.vectorMask.add", json!({"path": square})).unwrap();
+    s.execute("layer.vectorMask.linked", json!({"linked": false})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "offset": [20, 10]})).unwrap();
+    let l = doc(&s, 1).layer(copied(&r)).unwrap();
+    let mask = l.mask.as_ref().unwrap();
+    let reveals = |x: i32, y: i32| mask.surface.read_region(Rect::new(x, y, x + 1, y + 1))[0] > 0.5;
+    assert!(!reveals(28, 20) && reveals(29, 20), "the bitmap mask's edge moved from x 9 to 29");
+    assert!(!mask.linked, "and it stays unlinked");
+    let vm = l.vector_mask.as_ref().unwrap();
+    assert_eq!(vm.path.control_bounds(), Some((20.0, 18.0, 60.0, 40.0)), "the vector mask moved with it");
+    assert!(!vm.linked);
+    let src = doc(&s, 0).layer(paint).unwrap();
+    assert!(src.mask.as_ref().unwrap().surface.read_region(Rect::new(9, 20, 10, 21))[0] > 0.5, "the source is untouched");
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);
