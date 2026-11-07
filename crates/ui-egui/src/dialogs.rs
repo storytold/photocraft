@@ -464,6 +464,8 @@ fn button_row(
             tl!("Reset")
         } else if d.kind == DialogKind::NewDocument {
             tl!("Close")
+        } else if crate::analysis_ui::owns_delete_note(fields) {
+            tl!("No")
         } else {
             tl!("Cancel")
         };
@@ -531,20 +533,32 @@ fn button_row(
     (outcome, apply_requested)
 }
 
-/// A prompt that asks before a command runs: deleting from the Layers panel, or the subject
-/// model's offer.
+/// A prompt that asks before a command runs: deleting a layer from the Layers panel's trash or a
+/// note (#11788), or the subject model's offer.
 fn is_short_prompt(fields: &serde_json::Map<String, Value>) -> bool {
-    crate::delete_layer_prompt::owns(fields) || crate::subject_model_prompt::owns(fields)
+    crate::delete_layer_prompt::owns(fields) || crate::analysis_ui::owns_delete_note(fields) || crate::subject_model_prompt::owns(fields)
 }
 
 /// The body of a prompt [`is_short_prompt`] names.
 fn short_prompt_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
-    if crate::subject_model_prompt::owns(fields) { crate::subject_model_prompt::body(ui, fields) } else { crate::delete_layer_prompt::body(ui, fields) }
+    if crate::subject_model_prompt::owns(fields) {
+        crate::subject_model_prompt::body(ui, fields);
+    } else if crate::analysis_ui::owns_delete_note(fields) {
+        crate::analysis_ui::delete_note_body(ui, fields);
+    } else {
+        crate::delete_layer_prompt::body(ui, fields);
+    }
 }
 
 /// The OK of a prompt [`is_short_prompt`] names.
 fn short_prompt_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
-    if crate::subject_model_prompt::owns(fields) { crate::subject_model_prompt::confirm(app, fields) } else { crate::delete_layer_prompt::confirm(app, fields) }
+    if crate::subject_model_prompt::owns(fields) {
+        crate::subject_model_prompt::confirm(app, fields)
+    } else if crate::analysis_ui::owns_delete_note(fields) {
+        crate::analysis_ui::confirm_delete_note(app, fields)
+    } else {
+        crate::delete_layer_prompt::confirm(app, fields)
+    }
 }
 
 /// The default button's label: what OK means for this dialog.
@@ -559,6 +573,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Delete")
     } else if crate::subject_model_prompt::owns(&d.fields) {
         tl!("Download")
+    } else if crate::analysis_ui::owns_delete_note(&d.fields) {
+        tl!("Yes")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
         tl!("Replace")
     } else if d.fields.contains_key("__export") {
@@ -891,6 +907,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::shape_dialog::owns,
     crate::delete_layer_prompt::owns,
     crate::subject_model_prompt::owns,
+    crate::analysis_ui::owns_delete_note,
     crate::disk_change_prompt::owns,
     crate::actions::owns_stop_message,
     crate::actions::owns_insert_stop,
@@ -944,6 +961,24 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
     }
 }
 
+/// Batch and the other folder runs (Image Processor, …) go on past a file that fails and list it
+/// in their result's `errors`; the status bar and a notice say which files failed and why, so a run
+/// that fails on every file isn't silent (#10682). Each file is named by its whole path: files of
+/// the same name in different subfolders are told apart.
+fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
+    let Some(errors) = r.get("errors").and_then(Value::as_array).filter(|e| !e.is_empty()) else { return };
+    let lines: Vec<String> = errors
+        .iter()
+        .map(|e| {
+            let file = e.get("file").and_then(Value::as_str).unwrap_or_default();
+            format!("{file}: {}", e.get("error").and_then(Value::as_str).unwrap_or_default())
+        })
+        .collect();
+    let label = d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command");
+    let what = crate::i18n::t(label).trim_end_matches('…').to_string();
+    crate::notices::file_failures(app, &what, &lines);
+}
+
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
 fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
@@ -978,6 +1013,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         }
     };
     let result = crate::actions::run_step_dialog(app, &d.fields, &cmd, params.clone());
+    if let Ok(r) = &result {
+        report_file_errors(app, &d, r);
+    }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =

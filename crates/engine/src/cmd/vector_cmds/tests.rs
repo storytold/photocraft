@@ -653,6 +653,9 @@ fn stroke_path_simulate_pressure_tapers_both_ends() {
     let coverage = |simulate: bool, x: i32| -> usize {
         let mut s = session(200, 60, 8);
         s.execute("layer.new.layer", json!({})).unwrap();
+        // Simulate Pressure tapers a brush that follows pen pressure; the default brush stopped
+        // doing that on its own (#11809).
+        s.execute("tools.setBrush", json!({"brush": {"pressureSize": true}})).unwrap();
         s.execute("path.set", json!({"path": {"subpaths": [{"closed": false, "knots": [[20, 30], [180, 30]]}]}})).unwrap();
         let p = json!({"tool": "brush", "size": 20, "hardness": 1.0, "color": "#000000", "opacity": 100, "simulatePressure": simulate});
         s.execute("path.stroke", p).unwrap();
