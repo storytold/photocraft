@@ -202,6 +202,30 @@ fn custom_stroke_styles_roundtrip_through_psd_vstk() {
     }
 }
 
+#[test]
+fn shape_layers_write_pixel_data_irrelevance_flag() {
+    let mut d = doc();
+    let solid = ShapeLayer {
+        path: photocraft_vector::shapes::rect(16.0, 16.0, 96.0, 96.0),
+        fill: Some(Fill::Solid(Color::rgb(1.0, 0.0, 0.0))),
+        ..ShapeLayer::default()
+    };
+    let gradient = ShapeLayer {
+        path: photocraft_vector::shapes::rect(128.0, 128.0, 96.0, 96.0),
+        fill: Some(Fill::gradient(vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))], 90.0, 1.0, Default::default(), false)),
+        ..ShapeLayer::default()
+    };
+    d.layers.push(shape_layer(solid));
+    d.layers.push(shape_layer(gradient));
+
+    let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
+    let file = photocraft_psd::PsdFile::from_bytes(&bytes).unwrap();
+
+    for record in file.layers().iter().rev().take(2) {
+        assert_eq!(record.flags.0 & 0x10, 0x10, "shape layer flags");
+    }
+}
+
 /// A shape layer's Density and Feather (#5846) live in the PSD mask parameters, as Photoshop
 /// writes a shape's vector-mask density and feather; with and without a vector stroke, at 8 and
 /// 16 bits, the shape comes back a shape with both and renders its soft fill again.
