@@ -102,10 +102,21 @@ fn halves(s: &[Point; 4]) -> ([Point; 4], [Point; 4]) {
     ([s[0], ab, abc, m], [m, bcd, cd, s[3]])
 }
 
-/// Distance from `p` to the line through `a` and `b` (to `a` when they coincide).
-fn off_line(p: Point, a: Point, b: Point) -> f64 {
+/// Distance from `p` to the segment between `a` and `b` (to `a` when they coincide).
+fn off_segment(p: Point, a: Point, b: Point) -> f64 {
     let l = dist(a, b);
-    if l < 1e-12 { dist(p, a) } else { ((b.x - a.x) * (a.y - p.y) - (a.x - p.x) * (b.y - a.y)).abs() / l }
+    if l < 1e-12 {
+        return dist(p, a);
+    }
+    let (dx, dy) = ((b.x - a.x) / l, (b.y - a.y) / l);
+    let along = (p.x - a.x) * dx + (p.y - a.y) * dy;
+    if along < 0.0 {
+        dist(p, a)
+    } else if along > l {
+        dist(p, b)
+    } else {
+        ((p.x - a.x) * dy - (p.y - a.y) * dx).abs()
+    }
 }
 
 const PROBES: [f64; 3] = [0.25, 0.5, 0.75];
@@ -114,7 +125,8 @@ fn map_segment(seg: &[Point; 4], f: &impl Fn(Point) -> Point, tol: f64, depth: u
     // A straight segment (retracted handles) whose image is straight stays one.
     if seg[1] == seg[0] && seg[2] == seg[3] {
         let (a, b) = (f(seg[0]), f(seg[3]));
-        if PROBES.iter().all(|&t| off_line(f(lerp(seg[0], seg[3], t)), a, b) <= tol) {
+        // Collinearity alone loses folds that extend past either mapped endpoint.
+        if PROBES.iter().all(|&t| off_segment(f(lerp(seg[0], seg[3], t)), a, b) <= tol) {
             return vec![[a, a, b, b]];
         }
         // Curved by the map: the same line as an evenly parametrized cubic, then split.
@@ -155,6 +167,32 @@ mod tests {
         assert_eq!(k.len(), 4);
         assert_eq!(k[2].anchor, Point::new(20.0, 20.0));
         assert_eq!(k[2].in_ctrl, k[2].anchor);
+    }
+
+    #[test]
+    fn map_path_preserves_collinear_folds_beyond_the_endpoints() {
+        for (dx, dy) in [(1.0, 0.0), (0.0, 1.0), (0.6, 0.8)] {
+            for sign in [-1.0, 1.0] {
+                let path = Path::new(vec![Subpath::polyline(&[(0.0, 0.0), (10.0 * dx, 10.0 * dy)])]);
+                let fold = |p: Point| {
+                    let t = p.x * dx + p.y * dy;
+                    let q = if sign > 0.0 { 5.0 * t - 0.4 * t * t } else { 0.4 * t * t - 3.0 * t };
+                    Point::new(q * dx, q * dy)
+                };
+                let mapped = map_path(&path, fold, 0.001);
+                let samples = mapped.subpaths[0].segments().into_iter().flat_map(|seg| {
+                    (0..=100).map(move |i| {
+                        let p = eval(&seg, f64::from(i) / 100.0);
+                        p.x * dx + p.y * dy
+                    })
+                });
+                let extreme = if sign > 0.0 { samples.fold(f64::NEG_INFINITY, f64::max) } else { samples.fold(f64::INFINITY, f64::min) };
+                let expected = if sign > 0.0 { 15.625 } else { -5.625 };
+                assert!((extreme - expected).abs() < 0.01, "direction ({dx}, {dy}), sign {sign}: {extreme}");
+                assert_eq!(mapped.subpaths[0].knots[0].anchor, fold(Point::new(0.0, 0.0)));
+                assert!(!mapped.subpaths[0].closed);
+            }
+        }
     }
 
     #[test]
