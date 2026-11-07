@@ -120,11 +120,10 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     let mut doc = Document::new(name, Size::new(doc_width as u32, doc_height as u32), ColorMode::Rgb, SampleType::U8);
     doc.resolution_dpi = dpi as f32;
     let mut x: u32 = 0;
-    for index in 0..count {
+    for (index, &(width_pt, height_pt)) in sizes.iter().enumerate() {
         ctl.check().map_err(|_| IoError::Cancelled)?;
         let page_number = first + index;
         let page = &pdf.pages()[page_number - 1];
-        let (width_pt, height_pt) = sizes[index];
         let width = page_pixels(width_pt, dpi);
         let height = page_pixels(height_pt, dpi);
         // The DPI solve keeps these inside the renderer's bounds; re-check rather than panic if

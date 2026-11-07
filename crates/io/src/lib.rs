@@ -1651,7 +1651,7 @@ mod tests {
         pdf.trailer.set("Root", catalog);
         let mut bytes = Vec::new();
         pdf.save_to(&mut bytes).expect("writing the .ai fixture");
-        assert!(pdf_import::is_pdf(&bytes));
+        assert!(crate::pdf_import::is_pdf(&bytes));
         assert_eq!(import_preflight("illustration.ai", &bytes), ImportPreflight::Unbounded);
         let result = import("illustration.ai", &bytes).expect("an .ai starting with %PDF- takes the PDF importer");
         assert_eq!(result.document.artboards().len(), 1);
