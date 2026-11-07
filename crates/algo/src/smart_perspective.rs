@@ -28,7 +28,7 @@ use crate::smart_scale::{Depth, Image, MAX_SAMPLES, ONE, bleed, keys};
 /// Taps of the projective pass: `floor(u) − 3 ..= floor(u) + 3` (Smoother reaches 2.3 samples).
 const TAPS: usize = 7;
 /// Below this a perspective coefficient counts as zero.
-const FLAT: f64 = 1e-12;
+const FLAT: f64 = 1e-9;
 
 /// 14-bit weights of the [`TAPS`] taps for each of the 128 phases, for Keys `a` stretched by `st`.
 fn table(a: f64, st: f64) -> Vec<[i64; TAPS]> {
@@ -174,8 +174,12 @@ pub fn render(src: &Surface, bounds: Rect, h: [f64; 9]) -> Option<Surface> {
         return None;
     }
     let h = h.map(|v| v / h[8]);
-    let (side, down) = (h[6].abs() > FLAT, h[7].abs() > FLAT);
-    if side == down {
+    // One-way: converging along rows only with each document column a straight walk (h7 = h1 =
+    // 0), or the same along columns (h6 = h3 = 0).
+    let flat = |v: f64| v.abs() <= FLAT;
+    let side = !flat(h[6]) && flat(h[7]) && flat(h[1] / h[0].abs().max(FLAT));
+    let down = !flat(h[7]) && flat(h[6]) && flat(h[3] / h[4].abs().max(FLAT));
+    if !(side || down) {
         return None;
     }
     let depth = Depth::of(fmt.sample);
@@ -241,6 +245,8 @@ mod tests {
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.01, 0.0, 1.0]).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.01, 1.0]).is_some());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, f64::NAN, 0.0, 1.0]).is_none());
+        // A one-way perspective turned afterwards: the columns are no longer straight walks.
+        assert!(render(&s, r, [0.94, -0.34, 0.0, 0.34, 0.94, 0.0, 0.01, 0.0, 1.0]).is_none());
         assert!(render(&s, r, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 0.0, 1.0]).is_none());
     }
 
@@ -265,6 +271,45 @@ mod tests {
             let px = r.map(|r| r.read_region(Rect::new(0, 0, 320, 320))).unwrap_or_else(|| vec![0.0; 320 * 320 * 4]);
             let b: Vec<u8> = px.iter().map(|v| (v * 255.0).round().clamp(0.0, 255.0) as u8).collect();
             std::fs::write(format!("{out}/{}.rust.rgba", f[0]), b).expect("write");
+        }
+    }
+
+    /// General-quad experiments: each line of `$GEN_CASES` is `name source.rgba depth mode ...`
+    /// (128 px 8-bit RGBA source, rendered at `depth` 8 or 16): `direct h0..h8` (the pixel-layer
+    /// sampler on the source) or `scaled nw nh ox oy g0..g8` (the smart-object scaling to
+    /// `nw x nh` at `(ox, oy)`, then the pixel-layer sampler through `g`). Writes
+    /// `$GEN_OUT/<name>.f32` (320 x 320 RGBA, 0..1).
+    #[test]
+    #[ignore]
+    fn dump_general_cases() {
+        use crate::transform::{Homography, Interp, warp_surface};
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let cases = std::env::var("GEN_CASES").expect("GEN_CASES");
+        let out = std::env::var("GEN_OUT").expect("GEN_OUT");
+        for line in std::fs::read_to_string(cases).expect("cases").lines() {
+            let f: Vec<&str> = line.split_whitespace().collect();
+            let bytes = std::fs::read(f[1]).expect("source");
+            let sample = if f[2] == "16" { SampleType::U16 } else { SampleType::U8 };
+            let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+            let data: Vec<f32> = bytes.iter().map(|&b| f32::from(b) / 255.0).collect();
+            s.write_region(Rect::new(0, 0, 128, 128), &data);
+            let nums: Vec<f64> = f[4..].iter().map(|v| v.parse().expect("number")).collect();
+            let r = match f[3] {
+                "direct" => {
+                    let h: [f64; 9] = nums[..9].try_into().expect("nine");
+                    warp_surface(&s, Rect::new(0, 0, 128, 128), &Homography(h), Interp::Bicubic).expect("warp")
+                }
+                _ => {
+                    let (nw, nh, ox, oy) = (nums[0] as u32, nums[1] as u32, nums[2] as i32, nums[3] as i32);
+                    let inter = crate::smart_scale::scale(&s, Rect::new(0, 0, 128, 128), nw, nh, (ox, oy)).expect("scale");
+                    let g: [f64; 9] = nums[4..13].try_into().expect("nine");
+                    let ib = Rect::new(ox, oy, ox + nw as i32, oy + nh as i32);
+                    warp_surface(&inter, ib, &Homography(g), Interp::Bicubic).expect("warp")
+                }
+            };
+            let px = r.read_region(Rect::new(0, 0, 320, 320));
+            let b: Vec<u8> = px.iter().flat_map(|v| v.to_le_bytes()).collect();
+            std::fs::write(format!("{out}/{}.f32", f[0]), b).expect("write");
         }
     }
 }
