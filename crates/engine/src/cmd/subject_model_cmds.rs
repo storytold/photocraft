@@ -114,6 +114,7 @@ fn tight(area: Rect, mask: &[u8]) -> Region {
     Region { bbox: Rect::new(area.x0 + left as i32, area.y0 + top as i32, area.x0 + right as i32, area.y0 + bottom as i32), mask }
 }
 
+/// The model's answer as the engine's error: a cancel stays a cancel.
 fn job_error(e: ModelError) -> EngineError {
     match e {
         ModelError::Cancelled => EngineError::Cancelled,
@@ -121,6 +122,7 @@ fn job_error(e: ModelError) -> EngineError {
     }
 }
 
+/// Whether the download can start: only while the model is offered. The error says why not.
 fn enabled(s: &Session) -> std::result::Result<(), String> {
     match s.subject_model().map(|m| m.status()) {
         Some(ModelStatus::Offer(_)) => Ok(()),
@@ -130,6 +132,8 @@ fn enabled(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// `select.subjectModel.install`: downloads the model as a job that locks the document, after
+/// `acceptTerms: true`.
 fn install(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("acceptTerms").and_then(Value::as_bool) != Some(true) {
         return Err(EngineError::BadParams { cmd: INSTALL_CMD.into(), msg: "the download needs acceptTerms: true, after a person read the terms".into() });

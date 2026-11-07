@@ -537,10 +537,12 @@ fn is_short_prompt(fields: &serde_json::Map<String, Value>) -> bool {
     crate::delete_layer_prompt::owns(fields) || crate::subject_model_prompt::owns(fields)
 }
 
+/// The body of a prompt [`is_short_prompt`] names.
 fn short_prompt_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
     if crate::subject_model_prompt::owns(fields) { crate::subject_model_prompt::body(ui, fields) } else { crate::delete_layer_prompt::body(ui, fields) }
 }
 
+/// The OK of a prompt [`is_short_prompt`] names.
 fn short_prompt_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
     if crate::subject_model_prompt::owns(fields) { crate::subject_model_prompt::confirm(app, fields) } else { crate::delete_layer_prompt::confirm(app, fields) }
 }

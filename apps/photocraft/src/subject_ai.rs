@@ -53,6 +53,7 @@ fn tool() -> Result<(Feature, Role), AiError> {
     found.ok_or_else(|| AiError::new(ErrorKind::Internal, "The shared AI catalogue has no Remove background tool."))
 }
 
+/// PhotoCraft's id in the shared settings.
 fn app_id() -> Result<AppId, AiError> {
     AppId::new(APP).map_err(|e| AiError::new(ErrorKind::Internal, e.to_string()))
 }
@@ -81,6 +82,8 @@ impl CraftSubject {
         self.feature.engine_recipe(ENGINE)?.native.iter().find(|n| n.provider == ENGINE)
     }
 
+    /// What a person is asked to agree to: the model, its size, its folder and the terms of the
+    /// built-in route and its files. `None` when this build has no route for the tool.
     fn offer(&self) -> Option<ModelOffer> {
         let recipe = self.feature.engine_recipe(ENGINE)?;
         let route = self.route()?;
@@ -115,10 +118,12 @@ impl CraftSubject {
     }
 }
 
+/// The shared layer's error for the engine: a cancel stays a cancel, anything else keeps its words.
 fn model_error(e: AiError) -> ModelError {
     if e.kind == ErrorKind::Cancelled { ModelError::Cancelled } else { ModelError::Failed(e.message) }
 }
 
+/// A failure with `message` as its words.
 fn failed(message: impl ToString) -> ModelError {
     ModelError::Failed(message.to_string())
 }
@@ -150,6 +155,7 @@ fn decode_mask(png: &[u8], image: &SubjectImage) -> Result<Vec<u8>, ModelError> 
 }
 
 impl SubjectModel for CraftSubject {
+    /// Ready only for a model on this computer; otherwise the download when it would help.
     fn status(&self) -> ModelStatus {
         match self.client.status(&self.role) {
             RoleStatus::Ready(ready) if ready.locality == Locality::Local => ModelStatus::Ready { model: ready.model_label },
@@ -165,6 +171,8 @@ impl SubjectModel for CraftSubject {
         }
     }
 
+    /// Runs the chosen model on `image` through the shared client, refusing anything that would
+    /// send it off the computer.
     fn matte(&self, image: &SubjectImage, cancelled: &dyn Fn() -> bool) -> Result<Vec<u8>, ModelError> {
         let request = Request::new(self.role.capability.clone()).with_input(InputRole::Source, encode(image)?);
         let plan = self.client.plan(&self.role, request).map_err(model_error)?;
@@ -205,6 +213,8 @@ impl SubjectModel for CraftSubject {
         decode_mask(&answer.ok_or_else(|| failed("The model finished without a mask."))?, image)
     }
 
+    /// Downloads and checks the built-in route's files in the suite's model folder, then makes
+    /// them the tool's model.
     fn install(&self, progress: &dyn Fn(f32, &str), cancelled: &dyn Fn() -> bool) -> Result<(), ModelError> {
         progress(0.0, DOWNLOADING);
         let folders = FolderDesk::new(self.shared.clone());

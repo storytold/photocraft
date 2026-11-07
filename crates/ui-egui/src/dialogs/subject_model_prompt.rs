@@ -22,11 +22,13 @@ struct Target {
     layer: Option<u64>,
 }
 
+/// The active document and layer now.
 fn target(app: &PhotocraftApp) -> Option<Target> {
     let d = app.session.active()?;
     Some(Target { document: d.doc.id.0, layer: d.active_layer.map(|id| id.0) })
 }
 
+/// The document and layer the offer was asked on.
 fn recorded(fields: &Map<String, Value>) -> Option<Target> {
     let document = fields.get("__document")?.as_u64()?;
     let layer = match fields.get("__layer")? {
@@ -36,14 +38,18 @@ fn recorded(fields: &Map<String, Value>) -> Option<Target> {
     Some(Target { document, layer })
 }
 
+/// The message when the document or layer changed under the offer.
 fn changed() -> String {
     tl!("The document or layer changed. Please run the command again.").into()
 }
 
+/// Whether `fields` are this offer's dialog.
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
 }
 
+/// Opens the offer before Remove Background or Select Subject when the model can be downloaded
+/// and the person has not been asked to stop seeing it. `None` lets the command run as asked.
 pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Option<Result<Value, String>> {
     if app.automation_input
         || !matches!(command, "layer.removeBackground" | "select.subject")
@@ -71,6 +77,7 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
     Some(Ok(json!({"dialog": id, "confirmationPending": true})))
 }
 
+/// The offer: what the model does, where it goes, its terms and the checkbox.
 pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     ui.set_max_width(460.0);
     ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
