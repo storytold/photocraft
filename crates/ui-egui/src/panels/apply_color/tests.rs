@@ -10,8 +10,13 @@ const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 
 /// Two type layers and two shape layers (black, the default colours), all selected.
 fn app(tool: Tool) -> (PhotocraftApp, Vec<LayerId>, Vec<LayerId>) {
+    app_at(tool, 8)
+}
+
+/// The same selected objects at each document depth, including float RGB storage.
+fn app_at(tool: Tool, depth: u32) -> (PhotocraftApp, Vec<LayerId>, Vec<LayerId>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 300, "height": 200})).unwrap();
+    app.run("file.new", json!({"width": 300, "height": 200, "depth": depth})).unwrap();
     app.sync_views();
     app.run("tools.setColors", json!({"foreground": "#000000"})).unwrap();
     let mut texts = Vec::new();
@@ -28,6 +33,41 @@ fn app(tool: Tool) -> (PhotocraftApp, Vec<LayerId>, Vec<LayerId>) {
     }
     app.ui.tool = tool;
     (app, texts, shapes)
+}
+
+/// Foreground picker values reach selected layers, selected characters and newly created text.
+#[test]
+fn foreground_picker_keeps_float_rgb_through_text_callbacks_and_creation() {
+    for depth in [8, 16, 32] {
+        let (mut app, texts, shapes) = app_at(Tool::Type, depth);
+        let first = [0.12345, 2.0, -0.25];
+        let expected = if depth == 32 { first } else { crate::color_picker_ui::parse_hex(&crate::color_picker_ui::hex(first)).unwrap() };
+        let dialog = crate::color_picker_ui::open(&mut app, "foreground");
+        let value = if depth == 32 { json!(first) } else { json!(crate::color_picker_ui::hex(first)) };
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), value);
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert!(texts.iter().all(|id| text_rgb(&app, *id) == expected));
+        assert!(shapes.iter().all(|id| fill_rgb(&app, *id) == Some([0.0; 3])));
+
+        app.run("layer.select", json!({"layer": texts[0].0})).unwrap();
+        crate::type_tool::edit_active(&mut app).unwrap();
+        crate::type_tool::select_all(&mut app);
+        let second = [0.54321, 3.0, -0.125];
+        let selected = if depth == 32 { second } else { crate::color_picker_ui::parse_hex(&crate::color_picker_ui::hex(second)).unwrap() };
+        let dialog = crate::color_picker_ui::open(&mut app, "foreground");
+        let value = if depth == 32 { json!(second) } else { json!(crate::color_picker_ui::hex(second)) };
+        app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), value);
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        assert_eq!(text_rgb(&app, texts[0]), selected);
+        assert_eq!(text_rgb(&app, texts[1]), expected, "only the selected character range changes");
+        crate::type_tool::commit(&mut app);
+
+        crate::type_tool::pointer_down(&mut app, 250.0, 150.0, egui::Modifiers::NONE);
+        crate::type_tool::pointer_up(&mut app, [250.0, 150.0], [250.0, 150.0]);
+        let created = LayerId(app.ui.text_edit.as_ref().unwrap().layer);
+        assert!(!texts.contains(&created));
+        assert_eq!(text_rgb(&app, created), selected, "new text uses the exact foreground colour");
+    }
 }
 
 fn text_rgb(app: &PhotocraftApp, id: LayerId) -> [f32; 3] {

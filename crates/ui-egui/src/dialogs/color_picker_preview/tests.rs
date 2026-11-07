@@ -2,6 +2,29 @@ use super::*;
 use photocraft_doc::{LayerContent, TextLayer};
 use serde_json::json;
 
+/// Float text previews use the same full-precision command value as OK; Cancel edits nothing.
+#[test]
+fn float_text_picker_previews_and_commits_exact_hdr_components() {
+    let mut app = app_at(32);
+    let layer = new_type_layer(&mut app, "Hello");
+    let (before, revision, dirty, history) = committed(&app);
+    let rgb = [0.12345, 2.0, -0.25];
+    let dialog = crate::type_tool::open_color_picker(&mut app, [0.0; 3]);
+    app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(rgb));
+    let (preview, _) = display_doc(&mut app, 0).unwrap();
+    assert_eq!(text_in(&preview, layer).char_runs()[0].style.color.to_rgb(), rgb);
+    crate::dialogs::cancel(&mut app, dialog).unwrap();
+    assert!(display_doc(&mut app, 0).is_none());
+    let after = committed(&app);
+    assert!(Arc::ptr_eq(&before, &after.0));
+    assert_eq!((after.1, after.2, after.3), (revision, dirty, history));
+    let dialog = crate::type_tool::open_color_picker(&mut app, [0.0; 3]);
+    app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(rgb));
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(text_in(&app.session.active().unwrap().doc, layer).char_runs(), text_in(&preview, layer).char_runs());
+    assert_eq!(committed(&app).3, history + 1);
+}
+
 thread_local! {
     /// How often this thread built a preview copy (`display_doc` runs the command).
     pub(super) static BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -339,12 +362,17 @@ fn every_selected_type_layer_is_previewed_and_refreshed() {
     assert_eq!(d.union(&bounds), d, "covers both layers' bounds: {d:?} vs {bounds:?}");
 }
 
-/// Colour stop `i` (by location) of gradient fill layer `id`, as 8-bit RGB.
-fn stop_rgb(doc: &Document, id: LayerId, i: usize) -> [u8; 3] {
+/// Colour stop `i` (by location) of gradient fill layer `id`, without display quantization.
+fn stop_color(doc: &Document, id: LayerId, i: usize) -> [f32; 3] {
     let LayerContent::Fill(photocraft_doc::Fill::Gradient { stops, .. }) = &doc.layer(id).unwrap().content else { panic!("not a gradient fill") };
     let mut sorted = stops.clone();
     sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
-    sorted[i].1.to_rgb().map(|v| (v * 255.0).round() as u8)
+    sorted[i].1.to_rgb()
+}
+
+/// The same stop projected to the legacy eight-bit display domain.
+fn stop_rgb(doc: &Document, id: LayerId, i: usize) -> [u8; 3] {
+    stop_color(doc, id, i).map(|v| (v * 255.0).round() as u8)
 }
 
 fn new_gradient_fill(app: &mut PhotocraftApp) -> LayerId {
@@ -379,19 +407,29 @@ fn a_gradient_stop_colour_is_previewed_before_ok_and_cancel_changes_nothing() {
 
 #[test]
 fn ok_commits_the_previewed_gradient_stop_in_one_history_step() {
-    let mut app = app_at(8);
-    let id = new_gradient_fill(&mut app);
-    let history = committed(&app).3;
-    crate::gradient_ui::edit_stop_color(&mut app, id, 1);
-    let dialog = app.ui.dialogs.last().unwrap().id;
-    set_color(&mut app, "#00ff00");
-    let (shown, _) = display_doc(&mut app, 0).unwrap();
-
-    crate::dialogs::confirm(&mut app, dialog).unwrap();
-    let doc = app.session.active().unwrap().doc.clone();
-    assert_eq!(stop_rgb(&doc, id, 1), stop_rgb(&shown, id, 1), "the preview is the committed edit");
-    assert_eq!(stop_rgb(&doc, id, 1), [0, 255, 0]);
-    assert_eq!(committed(&app).3, history + 1);
+    for depth in [8, 16, 32] {
+        let mut app = app_at(depth);
+        let id = new_gradient_fill(&mut app);
+        let history = committed(&app).3;
+        crate::gradient_ui::edit_stop_color(&mut app, id, 1);
+        let dialog = app.ui.dialogs.last().unwrap().id;
+        let expected = if depth == 32 { [0.12345, 0.67891, 0.33333] } else { [0.0, 1.0, 0.0] };
+        if depth == 32 {
+            let mut invalid = app.ui.dialog_mut(dialog).unwrap().fields.clone();
+            invalid.insert("color".into(), json!([2.0, 0.0, 0.0]));
+            assert!(preview_params(&invalid).is_none(), "gradient stops keep the engine's bounded RGB domain");
+            assert!(crate::color_picker_ui::confirm(&mut app, &invalid).is_err());
+            app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!(expected));
+        } else {
+            set_color(&mut app, "#00ff00");
+        }
+        let (shown, _) = display_doc(&mut app, 0).unwrap();
+        crate::dialogs::confirm(&mut app, dialog).unwrap();
+        let doc = app.session.active().unwrap().doc.clone();
+        assert_eq!(stop_color(&doc, id, 1), stop_color(&shown, id, 1), "the preview is the committed edit");
+        assert_eq!(stop_color(&doc, id, 1), expected);
+        assert_eq!(committed(&app).3, history + 1);
+    }
 }
 
 #[test]

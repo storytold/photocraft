@@ -16,7 +16,7 @@ use photocraft_geom::Rect;
 use serde_json::{Map, Value};
 
 use crate::PhotocraftApp;
-use crate::color_picker_ui::{hex, parse_hex};
+use crate::color_picker_ui::{color_value, unchanged};
 
 /// The commands previewed: the text colour (`type_tool::open_color_picker`) and a gradient fill
 /// layer's colour stop (`gradient_ui::edit_stop_color`). Only commands that edit the active
@@ -61,9 +61,8 @@ pub(crate) fn owns(fields: &Map<String, Value>) -> bool {
 /// name no target layer.
 fn preview_params(fields: &Map<String, Value>) -> Option<(&'static str, Value)> {
     let command = command_of(fields)?;
-    let color = fields.get("color").and_then(Value::as_str).and_then(parse_hex).map(hex)?;
-    let orig = fields.get("__orig").and_then(Value::as_str).and_then(parse_hex).map(hex);
-    if orig.as_deref() == Some(color.as_str()) {
+    let color = color_value(fields)?;
+    if unchanged(fields) {
         return None;
     }
     let mut params = fields.get("__params")?.as_object()?.clone();
@@ -74,7 +73,7 @@ fn preview_params(fields: &Map<String, Value>) -> Option<(&'static str, Value)> 
     }
     // The preview is a throwaway session: it has no typing session to merge into.
     params.remove("coalesce");
-    params.insert("color".into(), Value::String(color));
+    params.insert("color".into(), color);
     Some((command, Value::Object(params)))
 }
 

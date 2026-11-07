@@ -121,7 +121,7 @@ fn which(f: &Map<String, Value>) -> Paint {
 
 /// The picker's colour as `shape.edit` stores it: RGB with the original paint's alpha.
 fn picked(f: &Map<String, Value>) -> Option<Color> {
-    let [r, g, b] = color_picker_ui::parse_hex(f.get("color")?.as_str()?)?;
+    let [r, g, b] = color_picker_ui::parse_color(f.get("color")?)?;
     let alpha = f.get("__params").and_then(|p| p.get("alpha")).and_then(Value::as_f64).map_or(1.0, |a| a as f32);
     Some(Color::rgba(r, g, b, if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 }))
 }
@@ -178,7 +178,7 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result
 /// colour keeps the stored one as it is.
 fn edit_paint(app: &mut PhotocraftApp, f: &Map<String, Value>, layer: LayerId, which: Paint, rgba: [f32; 4]) -> Result<Value, String> {
     let solid = f.get("__shapePaintSolid").and_then(Value::as_bool).unwrap_or(true);
-    if solid && f.get("color") == f.get("__orig") {
+    if solid && color_picker_ui::unchanged(f) {
         return Ok(json!({"layer": layer.0, "unchanged": true}));
     }
     let paint = match which {
@@ -211,7 +211,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     // OK on the opening colour changes a paint that isn't solid yet (No Color, a gradient), so
     // that one previews too.
     let solid = d.fields.get("__shapePaintSolid").and_then(Value::as_bool).unwrap_or(true);
-    if solid && d.fields.get("color") == d.fields.get("__orig") {
+    if solid && color_picker_ui::unchanged(&d.fields) {
         return None;
     }
     let layer = target(app, &d.fields, Some(idx)).ok()??;

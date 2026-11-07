@@ -32,7 +32,7 @@ struct Target {
     revision: u64,
     kind: Kind,
     id: u32,
-    color: String,
+    color: Value,
 }
 
 pub(crate) struct Preview {
@@ -81,8 +81,9 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: Kind, id: u32) -> Result<u64, 
         return Err("invalid text style color".into());
     }
     // Style colors use encoded RGB, just like the existing compact style picker.
-    let t = Target { document: st.doc.id, revision: st.revision, kind, id, color: color_picker_ui::hex(rgb) };
+    let t = Target { document: st.doc.id, revision: st.revision, kind, id, color: color_picker_ui::document_color(app, rgb) };
     let mut fields = color_picker_ui::fields_with_web(app, "dialog", "Color Picker (Text Color)", rgb);
+    color_picker_ui::enable_float(app, &mut fields, rgb);
     fields.insert(TARGET.into(), serde_json::to_value(t).map_err(|e| e.to_string())?);
     let panels = &mut app.ui.type_panels;
     panels.styles = true;
@@ -91,8 +92,9 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: Kind, id: u32) -> Result<u64, 
     Ok(app.ui.open_dialog(DialogKind::Command, fields))
 }
 
-fn chosen(fields: &Map<String, Value>) -> Result<String, String> {
-    fields.get("color").and_then(Value::as_str).and_then(color_picker_ui::parse_hex).map(color_picker_ui::hex).ok_or("invalid picker color".into())
+/// Preview and OK share one normalized colour, including hex edits of a float picker.
+fn chosen(fields: &Map<String, Value>) -> Result<Value, String> {
+    color_picker_ui::color_value(fields).ok_or("invalid picker color".into())
 }
 
 pub(crate) fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
@@ -137,7 +139,7 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         app.text_style_preview = None;
         return None;
     }
-    let key = (egui::Id::unique((t.document.0, t.revision, d.id, t.kind.paragraph(), t.id, &color)).value() & ((1 << 60) - 1)) | (1 << 60);
+    let key = (egui::Id::unique((t.document.0, t.revision, d.id, t.kind.paragraph(), t.id, color.to_string())).value() & ((1 << 60) - 1)) | (1 << 60);
     if app.text_style_preview.as_ref().map(|p| p.key) != Some(key) {
         let shown = photocraft_engine::type_styles_cmds::preview_options(&st.doc, &json!({"id": t.id, "attrs": {"color": color}}), t.kind.paragraph())
             .map(Arc::new)
