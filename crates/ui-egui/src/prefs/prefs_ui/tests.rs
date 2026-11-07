@@ -1866,6 +1866,51 @@ fn preferences_confirm_after_apply_commits_later_edits() {
     assert_eq!(app.session.prefs().units_and_rulers.rulers, prefs::Unit::Inches);
 }
 
+/// #11120: a live theme change made while Preferences is open survives Apply (and OK) of an
+/// unrelated setting, and the next draft shows it.
+#[test]
+fn preferences_apply_keeps_a_live_theme_change_made_while_open() {
+    let ctx = egui::Context::default();
+    for ok in [false, true] {
+        let (mut app, store) = app_with_store();
+        app.set_theme(&ctx, ThemeKind::Studio);
+        let id = open_preferences(&mut app, "interface");
+        assert_eq!(app.ui.dialog_mut(id).unwrap().fields["values"]["interface"]["theme"], "studio");
+        app.set_theme(&ctx, ThemeKind::Classic);
+        assert!(!preferences_changed(&app, &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields), "a change made elsewhere is not a dialog edit");
+        app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["uiScale"] = json!("200");
+        assert!(preferences_changed(&app, &app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields));
+        if ok {
+            crate::dialogs::confirm(&mut app, id).unwrap();
+            assert!(app.ui.dialogs.iter().all(|d| d.id != id));
+        } else {
+            apply(&mut app, id).unwrap();
+            let d = app.ui.dialogs.iter().find(|d| d.id == id).unwrap();
+            assert_eq!(d.fields["values"]["interface"]["theme"], "classic", "the next draft follows the live theme");
+            assert!(!preferences_changed(&app, &d.fields));
+        }
+        let p = app.session.prefs();
+        assert_eq!((p.interface.theme, p.interface.ui_scale), (Theme::Classic, prefs::UiScale::P200), "ok: {ok}");
+        assert_eq!(app.ui.theme, ThemeKind::Classic);
+        tick(&mut app, &ctx);
+        let saved = stored(&store);
+        assert_eq!((saved["interface"]["theme"].as_str(), saved["interface"]["uiScale"].as_str()), (Some("classic"), Some("200")));
+    }
+}
+
+/// A setting edited both in the dialog and elsewhere while it is open takes the dialog's value.
+#[test]
+fn preferences_apply_prefers_the_dialog_edit_of_a_setting_changed_elsewhere() {
+    let ctx = egui::Context::default();
+    let (mut app, _) = app_with_store();
+    app.set_theme(&ctx, ThemeKind::Studio);
+    let id = open_preferences(&mut app, "interface");
+    app.set_theme(&ctx, ThemeKind::Classic);
+    app.ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["interface"]["theme"] = json!("studioLight");
+    apply(&mut app, id).unwrap();
+    assert_eq!(app.session.prefs().interface.theme, Theme::StudioLight);
+}
+
 #[test]
 fn preferences_apply_rejects_invalid_drafts_and_keeps_them_open() {
     let (mut app, _) = app_with_store();
