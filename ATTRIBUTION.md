@@ -106,6 +106,7 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 |---|---|---|---|---|
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
+| `docs/images/wayland-pen-pressure.png` | Wacom CTL-472 pressure test in PhotoCraft (no artwork) | mqf080-bit | Screenshot of PhotoCraft with a Wacom One CTL-472 on KDE Plasma 6.8 Wayland | MIT OR Apache-2.0 |
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |
 | `docs/images/guide-position-*-tab.png` | New Guide before and after focusing Position with Tab (no artwork) | PhotoCraft contributors | Offscreen `snapshot` example with `ui.key Tab` | MIT OR Apache-2.0 |
 | `docs/images/embedded-vector-editor-en.png` | Embedded AI/PDF/EPS conversion warning and editor chooser (no artwork) | Don Omondi | Offscreen `smart_svg_ui::tests::capture_embedded_vector_conversion_prompt` with authored bytes and mock services | MIT OR Apache-2.0 |
