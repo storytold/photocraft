@@ -140,11 +140,17 @@ fn a_move_tool_selection_drag_onto_a_tab_copies_selected_pixels_to_destination()
     h.run_steps(2);
 
     let grab = ViewXform::active(h.state()).unwrap().to_screen(6.0, 11.0);
+    let grab_doc = ViewXform::active(h.state()).unwrap().to_doc(grab);
     let over_tab = tab(&h, "dest-doc");
     let drop = h.state().last_canvas_rect.center();
     drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
 
-    // Destination now has the copied selection layer
+    // Destination now has the copied 5x10 selection layer placed at the drop point
+    let at = ViewXform::active(h.state()).unwrap().to_doc(drop);
+    let (_, r) = copy(&h);
+    assert_eq!(r.size(), vec2(5.0, 10.0), "only the 5x10 selected region is copied");
+    let want = egui::pos2((6.5 + at[0] - grab_doc[0]) as f32, (11.0 + at[1] - grab_doc[1]) as f32);
+    assert!((r.center() - want).length() <= 1.5, "{r:?} around {want:?}");
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
     // Source layer keeps its pixels intact (not cut)
     let src_bounds = source_square(&h, paint);
@@ -170,12 +176,27 @@ fn a_move_tool_selection_drag_in_arranged_view_transfers_directly_to_neighbour_c
     let xf_src =
         crate::canvas::ViewXform { rect: src_cell, zoom: view_src.zoom / h.state().ppp, center: view_src.center, flip: false, rotation: 0.0, aspect: 1.0 };
     let grab = xf_src.to_screen(6.0, 11.0);
+    let grab_doc = xf_src.to_doc(grab);
+    let view_dest = h.state().ui.views[1].clone();
+    let xf_dest = crate::canvas::ViewXform {
+        rect: crate::rulers::content_rect(h.state(), dest_cell),
+        zoom: view_dest.zoom / h.state().canvas_ppp(),
+        center: view_dest.center,
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
     let drop = dest_cell.center();
+    let at = xf_dest.to_doc(drop);
 
     // Drag directly from src canvas to dest canvas (no tab hover!)
     drag_along(&mut h, &[grab, drop], Modifiers::NONE);
 
-    // Destination now has the transferred layer!
+    // Destination now has the transferred 5x10 selection layer at the drop point!
+    let (_, r) = copy(&h);
+    assert_eq!(r.size(), vec2(5.0, 10.0), "only the 5x10 selected region is copied");
+    let want = egui::pos2((6.5 + at[0] - grab_doc[0]) as f32, (11.0 + at[1] - grab_doc[1]) as f32);
+    assert!((r.center() - want).length() <= 1.5, "{r:?} around {want:?}");
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 2);
     // Source layer keeps its pixels intact (not cut)
     let src_bounds = source_square(&h, paint);

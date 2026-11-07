@@ -242,7 +242,8 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         *crate::pixels_mut(&mut l)? = clip.surface;
         copies.layers.push(l);
 
-        let content = clip.bounds;
+        let float_off = crate::float_cmds::floating(from).map_or((0, 0), |f| f.offset);
+        let content = clip.bounds.translate(float_off.0, float_off.1);
         adapt_copies(s, &mut copies, &ddoc)?;
         let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
             let (c, d) = (center(content), center(ddoc.bounds()));
@@ -253,11 +254,13 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         } else {
             point(p, "offset")?.map_or((0.0, 0.0), |o| (o[0], o[1]))
         };
-        let (dx, dy) = (dx.round() as i32, dy.round() as i32);
+        let (dx, dy) = (dx.round() as i32 + float_off.0, dy.round() as i32 + float_off.1);
         translate_copies(&mut copies, &ddoc, dx, dy);
 
         let cut = p.get("cut").and_then(Value::as_bool).unwrap_or(false);
         if cut {
+            sdoc.scratch_health().map_err(EngineError::Other)?;
+            ddoc.scratch_health().map_err(EngineError::Other)?;
             let bg = s.tools.background;
             s.set_active(src);
             s.edit("Cut Pixels", |doc, _| {
@@ -268,7 +271,7 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         }
 
         s.set_active(dest);
-        let edited = s.edit("Duplicate Layer", |doc, active| {
+        let edited = match s.edit("Duplicate Layer", |doc, active| {
             let mut above = *active;
             let mut new = Vec::with_capacity(copies.layers.len());
             let mut place = crate::layer_place::Place::AutoEditable;
@@ -280,7 +283,16 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
             }
             *active = above;
             Ok(new)
-        })?;
+        }) {
+            Ok(edited) => edited,
+            Err(e) => {
+                if cut {
+                    s.set_active(src);
+                    s.rollback();
+                }
+                return Err(e);
+            }
+        };
         return Ok(json!({
             "layers": edited.into_iter().map(|id| id.0).collect::<Vec<_>>(),
             "offset": [dx, dy],
@@ -465,7 +477,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Copy Layers to Document",
         menu: &[],
         shortcut: None,
-        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
+        params: r##"{"document":index (destination),"layers":[id,…]?=the source's selected layers,"source":index?=active,"selection":bool=false (copy the active layer's selected pixels instead of whole layers),"cut":bool=false (when selection is true: clear the selected pixels in the source),"center":bool=false (centre on the destination's canvas),"at":[x,y]? (centre the copies on this point),"offset":[dx,dy]?=[0,0] (from their place in the source),"name":str? (one layer: the copy's name)}"##,
         enabled,
         run: copy_to_document,
         journal: true,

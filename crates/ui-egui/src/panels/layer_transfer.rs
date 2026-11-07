@@ -127,7 +127,9 @@ fn arm_move_drag(app: &mut PhotocraftApp, ctx: &egui::Context, drag: MoveDrag) {
         }
         MoveDrag::Selection { grab, .. } => {
             if let Some(st) = app.session.active_mut() {
-                st.floating = None;
+                if st.floating.as_ref().is_some_and(|f| !f.moved && f.offset == (0, 0)) {
+                    st.floating = None;
+                }
             }
             begin_selection(app, ctx, grab);
         }
@@ -166,7 +168,8 @@ pub fn finish(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if !down {
             clear(ctx);
         } else if let Some(p) = pos
-            && app.session.active().is_some_and(|st| st.doc.id != t.source)
+            && (target.is_some_and(|(d, _)| app.session.documents().get(d).is_some_and(|st| st.doc.id != t.source))
+                || app.session.active().is_some_and(|st| st.doc.id != t.source))
         {
             ghost(ctx, p, &t.label);
             if target.is_some() {
@@ -190,10 +193,10 @@ fn target_at(app: &PhotocraftApp, p: egui::Pos2) -> Option<(usize, Option<[f64; 
         Some(cells) => {
             let (d, r) = cells.into_iter().find(|(_, r)| r.contains(p))?;
             let view = app.ui.views.get(d)?;
-            let ppp = app.ppp;
+            let ppp = app.canvas_ppp();
             let aspect = app.ui.view.display_aspect();
             let xf = crate::canvas::ViewXform {
-                rect: r,
+                rect: crate::rulers::content_rect(app, r),
                 zoom: view.zoom / ppp,
                 center: view.center,
                 flip: app.ui.view.flip_horizontal,
@@ -241,6 +244,7 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
                 },
                 None => p["center"] = json!(!same_size),
             }
+            app.session.set_active(dest);
             if let Err(e) = app.run("layer.copyToDocument", p) {
                 app.ui.status = e;
                 app.ui.status_error = true;
@@ -260,6 +264,7 @@ fn drop(app: &mut PhotocraftApp, ctx: &egui::Context, dest: usize, at: Option<[f
                 },
                 None => p["center"] = json!(!same_size),
             }
+            app.session.set_active(dest);
             if let Err(e) = app.run("layer.copyToDocument", p) {
                 app.ui.status = e;
                 app.ui.status_error = true;
