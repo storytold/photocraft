@@ -473,3 +473,347 @@ fn unlocked_or_position_locked_smart_objects_take_distortions() {
         }
     }
 }
+
+/// #10457: with a layer mask (or the Quick Mask) targeted, Photoshop applies Liquify, Filter
+/// Gallery and Camera Raw Filter to the mask and greys out Lens Correction, Adaptive Wide Angle and
+/// Vanishing Point. They all edited the layer's pixels.
+#[test]
+fn dialog_filters_follow_a_targeted_mask_as_photoshops_do() {
+    let mask_of = |s: &Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.read_region(st.doc.bounds())
+    };
+    let masked = || {
+        let mut s = session(8);
+        s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        // Reveal Selection uses the selection up, as in Photoshop.
+        assert!(s.active().unwrap().doc.selection.is_none());
+        s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+        s
+    };
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    let edits = [
+        (LIQUIFY, stroke.clone()),
+        ("filter.filterGallery", json!({"effects": [{"filter": "spatter", "params": {}}]})),
+        (crate::lens_cmds::RAW, json!({"exposure": -1.5})),
+    ];
+    for (id, params) in edits {
+        let mut s = masked();
+        let (pixels, mask) = (active_surface(&s), mask_of(&s));
+        s.execute(id, params).unwrap();
+        assert_eq!(active_surface(&s), pixels, "{id}: the layer's pixels are untouched");
+        assert_ne!(mask_of(&s), mask, "{id}: the mask is filtered");
+    }
+    for id in [crate::lens_cmds::LENS, crate::lens_cmds::WIDE, crate::vp_cmds::VP] {
+        let mut s = masked();
+        assert!(s.execute(id, json!({})).is_err(), "{id} is disabled on a targeted mask");
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        assert!(s.is_enabled(id), "{id} is enabled on the layer again");
+    }
+    // Quick Mask: Liquify deforms it, not the layer.
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    let pixels = active_surface(&s);
+    let quick = |s: &Session| s.active().unwrap().doc.quick_mask.as_ref().unwrap().surface.read_region(s.active().unwrap().doc.bounds());
+    let before = quick(&s);
+    s.execute(LIQUIFY, stroke).unwrap();
+    assert_eq!(active_surface(&s), pixels, "Quick Mask: the layer's pixels are untouched");
+    assert_ne!(quick(&s), before, "Quick Mask: deformed");
+}
+
+/// #10457 (CodeRabbit on #10469): Lens Correction, Adaptive Wide Angle and Vanishing Point refuse
+/// a mask named in their params as they do a mask targeted in the Channels panel, so a caller's
+/// `"target":"mask"` neither filters the mask nor slips past to the layer.
+#[test]
+fn lens_filters_and_vanishing_point_refuse_an_explicit_mask_target() {
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let mask_of = |s: &Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.read_region(st.doc.bounds())
+    };
+    let (pixels, mask) = (active_surface(&s), mask_of(&s));
+    let calls = [
+        (crate::lens_cmds::LENS, json!({"target": "mask", "distortion": 10})),
+        (crate::lens_cmds::WIDE, json!({"target": "mask", "model": "perspective", "scale": 90})),
+        (crate::vp_cmds::VP, json!({"target": "mask"})),
+    ];
+    for (id, params) in calls {
+        assert!(s.is_enabled(id), "{id} is enabled on the layer");
+        assert!(!s.is_enabled_with(id, &params), "{id} is disabled on a mask named in its params");
+        let err = s.execute(id, params).unwrap_err();
+        assert!(matches!(err, EngineError::Disabled(..)), "{id}: {err}");
+        assert_eq!(active_surface(&s), pixels, "{id}: the layer's pixels are untouched");
+        assert_eq!(mask_of(&s), mask, "{id}: the mask is untouched");
+    }
+}
+
+/// #10457: a set of colour channels is still the layer's pixels, so the lens filters and Vanishing
+/// Point stay enabled there; only a mask or channel greys them out.
+#[test]
+fn lens_filters_and_vanishing_point_stay_enabled_on_a_colour_set() {
+    let mut s = session(8);
+    s.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
+    for id in [crate::lens_cmds::LENS, crate::lens_cmds::WIDE, crate::vp_cmds::VP] {
+        assert!(s.is_enabled(id), "{id} is enabled on a colour set: {:?}", s.disabled_reason(id));
+    }
+}
+
+/// A levels adjustment layer whose mask reveals a 30×20 block, in a document of `mode`.
+fn adjustment_with_mask(mode: &str) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 80, "height": 60, "mode": mode})).unwrap();
+    s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    s
+}
+
+/// An adjustment layer's mask (the active layer's), and the Quick Mask, over the canvas.
+fn adjustment_mask(s: &Session) -> Vec<f32> {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.read_region(st.doc.bounds())
+}
+
+/// Checks that dialog filter `id` with `params` filters an adjustment layer's mask, whether it is
+/// targeted in the Channels panel or named in the params, and the Quick Mask over one.
+fn filters_an_adjustment_layers_mask(id: &str, params: &Value) {
+    let mut s = adjustment_with_mask("rgb");
+    assert!(!s.is_enabled(id), "{id}: no pixels to filter on the layer itself");
+    let mut explicit = params.clone();
+    explicit["target"] = json!("mask");
+    assert!(s.is_enabled_with(id, &explicit), "{id}: enabled on a mask named in its params");
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    assert!(s.is_enabled(id), "{id}: enabled on the targeted mask");
+    let mask = adjustment_mask(&s);
+    s.execute(id, params.clone()).unwrap();
+    assert_ne!(adjustment_mask(&s), mask, "{id}: the mask is filtered");
+    // The Quick Mask, with the adjustment layer active.
+    let mut s = adjustment_with_mask("rgb");
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    assert!(s.is_enabled(id), "{id}: enabled in Quick Mask on an adjustment layer");
+    let quick = |s: &Session| s.active().unwrap().doc.quick_mask.as_ref().unwrap().surface.read_region(s.active().unwrap().doc.bounds());
+    let before = quick(&s);
+    s.execute(id, params.clone()).unwrap();
+    assert_ne!(quick(&s), before, "{id}: the Quick Mask is filtered");
+}
+
+/// #10457 (CodeRabbit on #10469): an adjustment layer's targeted mask takes Liquify as it takes the
+/// other filters (#780), though the layer has no pixels of its own.
+#[test]
+fn liquify_deforms_an_adjustment_layers_targeted_mask() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    filters_an_adjustment_layers_mask(LIQUIFY, &stroke);
+}
+
+/// #10457 (CodeRabbit on #10469): an adjustment layer's targeted mask takes the Camera Raw Filter as
+/// it takes the other filters (#780). It still needs an RGB or Grayscale document.
+#[test]
+fn camera_raw_filters_an_adjustment_layers_targeted_mask() {
+    filters_an_adjustment_layers_mask(crate::lens_cmds::RAW, &json!({"exposure": -1.5}));
+    let mut s = adjustment_with_mask("cmyk");
+    let raw = crate::lens_cmds::RAW;
+    assert!(!s.is_enabled_with(raw, &json!({"target": "mask"})), "Camera Raw: not in CMYK, even on a mask");
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    assert!(!s.is_enabled(raw), "Camera Raw: not in CMYK, even on a targeted mask");
+}
+
+/// #10457 (CodeRabbit on #10469): an alpha channel or the Quick Mask named in the params takes Liquify
+/// and the Camera Raw Filter on an adjustment layer with the composite targeted, as it does when
+/// targeted in the Channels panel; a pixel target there still needs pixels.
+#[test]
+fn dialog_filters_take_a_channel_named_in_their_params_on_an_adjustment_layer() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    for (id, params) in [(LIQUIFY, stroke), (crate::lens_cmds::RAW, json!({"exposure": -1.5}))] {
+        let mut s = adjustment_with_mask("rgb");
+        s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+        s.execute("select.saveSelection", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        assert!(!s.is_enabled(id), "{id}: no pixels to filter on the layer itself");
+        let mut explicit = params.clone();
+        explicit["target"] = json!({"channel": 0});
+        assert!(s.is_enabled_with(id, &explicit), "{id}: enabled on an alpha channel named in its params");
+        let alpha = |s: &Session| s.active().unwrap().doc.channels[0].surface.read_region(s.active().unwrap().doc.bounds());
+        let before = alpha(&s);
+        s.execute(id, explicit).unwrap();
+        assert_ne!(alpha(&s), before, "{id}: the alpha channel is filtered");
+        let mut missing = params.clone();
+        missing["target"] = json!({"channel": 5});
+        assert!(!s.is_enabled_with(id, &missing), "{id}: no such alpha channel");
+    }
+    let mut s = adjustment_with_mask("cmyk");
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.saveSelection", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    assert!(!s.is_enabled_with(crate::lens_cmds::RAW, &json!({"target": {"channel": 0}})), "Camera Raw: not in CMYK, even on a channel");
+}
+
+/// #10457 (CodeRabbit on #10469): Liquify naming its layer (`"layer"`) runs wherever it reads as
+/// enabled: on an adjustment layer with its mask or an alpha channel targeted in the Channels
+/// panel, the command judges the target the panel fills in, as `is_enabled_with` does.
+#[test]
+fn liquify_naming_its_layer_runs_wherever_it_is_enabled() {
+    for target in [json!("mask"), json!(0)] {
+        let mut s = adjustment_with_mask("rgb");
+        s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+        s.execute("select.saveSelection", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("channel.target", json!({"channel": target})).unwrap();
+        let layer = s.active().unwrap().active_layer.unwrap();
+        let p = json!({"layer": layer.0, "strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+        assert!(s.is_enabled_with(LIQUIFY, &p), "{target}: enabled");
+        let r = s.execute(LIQUIFY, p);
+        assert!(r.is_ok(), "{target}: enabled, so it runs: {r:?}");
+    }
+}
+
+/// #10457 (CodeRabbit on #10469): Camera Raw naming its layer (`"layer"`) with a mask targeted is
+/// admitted by that layer, as it runs on that layer's mask: it runs exactly when the named layer
+/// has a mask, whatever the active layer has, and is otherwise refused up front.
+#[test]
+fn camera_raw_naming_its_layer_is_admitted_by_that_layers_mask() {
+    let raw = crate::lens_cmds::RAW;
+    let mut s = session(8);
+    let plain = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let masked = s.active().unwrap().active_layer.unwrap();
+    for (active, named) in [(masked, plain), (plain, masked)] {
+        s.execute("layer.select", json!({"layer": active.0})).unwrap();
+        let ran = s.execute(raw, json!({"layer": named.0, "target": "mask", "exposure": -1.5}));
+        assert_eq!(ran.is_ok(), named == masked, "active {active:?}, named {named:?}: runs iff the named layer has a mask: {ran:?}");
+        if let Err(e) = ran {
+            assert!(matches!(e, EngineError::Disabled(..)), "refused at admission: {e}");
+        }
+    }
+}
+
+/// The session's layer with a mask that reveals a 30×20 block at (20, 15).
+fn session_with_mask() -> Session {
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    s
+}
+
+fn active_mask(s: &Session) -> Surface {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.clone()
+}
+
+/// FredApps on #10469: Photoshop's Puppet Warp "works on image layers, layer masks, and vector
+/// masks" (Adobe's help), so with the layer mask named in its params it warps the mask, which
+/// stays a one-channel mask, and leaves the layer's pixels. A layer with no mask refuses the call
+/// up front, with no history step.
+#[test]
+fn puppet_warp_warps_a_targeted_mask_and_refuses_a_missing_one() {
+    let p = json!({"target": "mask", "pins": [{"src": [20, 20], "dst": [20, 20]}, {"src": [50, 30], "dst": [56, 34]}, {"src": [30, 35], "dst": [30, 35]}]});
+    let mut s = session_with_mask();
+    let (pixels, mask) = (active_surface(&s), active_mask(&s));
+    s.execute(PUPPET, p.clone()).unwrap();
+    let warped = active_mask(&s);
+    assert_eq!(active_surface(&s), pixels, "the layer's pixels are untouched");
+    assert_eq!(warped.format(), mask.format(), "the mask stays a one-channel mask");
+    let canvas = s.active().unwrap().doc.bounds();
+    assert_ne!(warped.read_region(canvas), mask.read_region(canvas), "the mask is warped");
+    // The pins pull the revealed block's right side down: the strip it vacates along the block's
+    // top edge takes the mask's default (black for Reveal Selection), not the white it held.
+    let default = mask.default_pixel()[0];
+    let vacated = Rect::new(40, 15, 50, 16);
+    assert!(mask.read_region(vacated).iter().all(|&v| v != default), "the strip held content: {:?}", mask.read_region(vacated));
+    assert!(warped.read_region(vacated).iter().all(|&v| v == default), "vacated: {:?}", warped.read_region(vacated));
+    // No mask: refused before it runs, and nothing is recorded.
+    let mut s = session(8);
+    let (pixels, steps) = (active_surface(&s), s.active().unwrap().history.entries().len());
+    assert!(!s.is_enabled_with(PUPPET, &p), "disabled on a layer without a mask");
+    let err = s.execute(PUPPET, p).unwrap_err();
+    assert!(matches!(&err, EngineError::Disabled(_, why) if why.contains("no layer mask")), "{err}");
+    assert_eq!(s.active().unwrap().history.entries().len(), steps, "no history step");
+    assert_eq!(active_surface(&s), pixels, "the layer's pixels are untouched");
+}
+
+/// FredApps on #10469: Adobe's help doesn't document Perspective Warp on a layer mask, so it keeps
+/// what it did before #10469 with a `"target"`: it warps the layer, and its linked mask with it,
+/// exactly as without one.
+#[test]
+fn perspective_warp_warps_the_layer_whatever_the_target() {
+    let quad = json!({"planes": [{"src": [[10, 10], [60, 10], [60, 40], [10, 40]], "dst": [[14, 10], [60, 12], [58, 40], [10, 38]]}]});
+    let mut targeted = quad.clone();
+    targeted["target"] = json!("mask");
+    let run = |p: &Value| {
+        let mut s = session_with_mask();
+        s.execute(PERSPECTIVE, p.clone()).unwrap();
+        (active_surface(&s), active_mask(&s))
+    };
+    let pixels = active_surface(&session_with_mask());
+    let (plain, mask) = run(&quad);
+    assert_ne!(plain, pixels, "the layer is warped");
+    assert!(run(&targeted) == (plain, mask), "a mask target changes nothing");
+}
+
+/// FredApps on #10469: with an alpha channel targeted in the Channels panel over a pixel layer, the
+/// Camera Raw Filter filters the channel and leaves the layer's pixels.
+#[test]
+fn camera_raw_filters_an_alpha_channel_targeted_in_the_channels_panel() {
+    let raw = crate::lens_cmds::RAW;
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.saveSelection", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": 0})).unwrap();
+    let alpha = |s: &Session| s.active().unwrap().doc.channels[0].surface.read_region(s.active().unwrap().doc.bounds());
+    let (pixels, before) = (active_surface(&s), alpha(&s));
+    assert!(s.is_enabled(raw), "enabled on the targeted channel: {:?}", s.disabled_reason(raw));
+    s.execute(raw, json!({"exposure": -1.5})).unwrap();
+    assert_eq!(active_surface(&s), pixels, "the layer's pixels are untouched");
+    assert_ne!(alpha(&s), before, "the alpha channel is filtered");
+}
+
+/// FredApps on #10469: once the composite is targeted again after Liquifying the layer mask,
+/// Liquify deforms the layer's pixels and leaves the mask as it was.
+#[test]
+fn liquify_deforms_the_pixels_again_once_the_composite_is_targeted() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    let mut s = session_with_mask();
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    let mask = active_mask(&s);
+    s.execute(LIQUIFY, stroke.clone()).unwrap();
+    assert_ne!(active_mask(&s), mask, "the targeted mask is deformed");
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    let (pixels, mask) = (active_surface(&s), active_mask(&s));
+    s.execute(LIQUIFY, stroke).unwrap();
+    assert_ne!(active_surface(&s), pixels, "the layer's pixels are deformed");
+    assert_eq!(active_mask(&s), mask, "the mask is untouched");
+}
+
+/// CodeRabbit on #10469: with a smart object's filter mask named in the params, Liquify and the
+/// Camera Raw Filter act on the smart object as the menu does (they're left out of
+/// `follows_filter_mask`: in Photoshop they add a smart filter, they don't filter the filter mask),
+/// so the filter mask stays as it was and a new smart filter records the edit.
+#[test]
+fn liquify_and_camera_raw_add_a_smart_filter_when_the_filter_mask_is_named() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    for (id, params) in [(LIQUIFY, stroke), (crate::lens_cmds::RAW, json!({"exposure": -1.5}))] {
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+        // A black stroke down x = 30 gives the smart object a filter mask that isn't plain white.
+        s.execute("paint.stroke", json!({"points": [[30, 5], [30, 55]], "size": 8, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
+        let canvas = s.active().unwrap().doc.bounds();
+        let filter_mask = |s: &Session| smart(s).filter_mask.expect("a filter mask").surface.read_region(canvas);
+        let before = filter_mask(&s);
+        let mut named = params.clone();
+        named["target"] = json!("filterMask");
+        s.execute(id, named).unwrap();
+        assert!(filter_mask(&s) == before, "{id}: the filter mask is untouched");
+        let commands: Vec<String> = smart(&s).smart_filters.iter().map(|f| f.command.clone()).collect();
+        assert_eq!(commands, ["filter.blur.gaussianBlur", id], "{id}: added as a smart filter, as from the menu");
+    }
+}
