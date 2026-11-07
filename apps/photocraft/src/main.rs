@@ -282,7 +282,24 @@ fn linux_display_session() -> linux_libs::DisplaySession {
     session
 }
 
-/// The control server's port, token and workspace, when it is on (exits 2 on a bad configuration).
+/// Bind the control listener on `port`. A port asked for with `--control` that can't be bound is
+/// an error (the launch exits 2, as scripts expect); one from Preferences › Integrations is only
+/// logged, and the app starts without agent control instead of quitting before any window shows.
+fn bind_control(port: u16, from_cli: bool) -> Result<Option<std::net::TcpListener>, String> {
+    match std::net::TcpListener::bind(("127.0.0.1", port)) {
+        Ok(listener) => Ok(Some(listener)),
+        Err(error) if from_cli => Err(format!("photocraft: control server failed to bind 127.0.0.1:{port}: {error}")),
+        Err(error) => {
+            let warning = format!("Preferences › Integrations › Control Port {port} is in use ({error}): starting without agent control");
+            eprintln!("photocraft: {warning}");
+            log::warn!("{warning}");
+            Ok(None)
+        }
+    }
+}
+
+/// The control server's port, token and workspace, when it is on (exits 2 on a bad configuration,
+/// see [`bind_control`]).
 fn control_setup(
     cli_port: Option<u16>,
     auth: photocraft_automation::args::ControlArgs,
@@ -293,10 +310,10 @@ fn control_setup(
         eprint!("{warning}");
     }
     let port = port?;
-    let listener = match std::net::TcpListener::bind(("127.0.0.1", port)) {
-        Ok(listener) => listener,
+    let listener = match bind_control(port, cli_port.is_some()) {
+        Ok(listener) => listener?,
         Err(error) => {
-            eprintln!("photocraft: control server failed to bind 127.0.0.1:{port}: {error}");
+            eprintln!("{error}");
             std::process::exit(2);
         }
     };
@@ -1000,6 +1017,15 @@ mod tests {
         let (port, warning) = super::control_port_for(None, &huge);
         assert_eq!(port, None);
         assert!(warning.is_some_and(|w| w.contains("70000")), "the refusal names the value");
+    }
+
+    #[test]
+    fn a_busy_preference_port_starts_without_control_but_a_busy_cli_port_fails() {
+        let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = taken.local_addr().unwrap().port();
+        assert!(matches!(super::bind_control(port, false), Ok(None)), "the app still opens");
+        assert!(super::bind_control(port, true).is_err_and(|e| e.contains(&port.to_string())), "--control still exits");
+        drop(taken);
     }
 
     #[test]
