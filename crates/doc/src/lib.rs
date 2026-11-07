@@ -1294,8 +1294,9 @@ impl Document {
         // Deliberately no responsive pruning here: `remove` is also the detach step of
         // operations that put the layer straight back (Reorder Layers, drag into a group,
         // Group Layers, New Frame, Background from Layer), and pruning would drop its rules
-        // and variant memberships on a mere rearrangement. True deletions prune through
-        // `responsive.remove_layers`, and the save path drops whatever still dangles
+        // and variant memberships on a mere rearrangement. No production deletion path calls
+        // `responsive.remove_layers` (tests do, to exercise it); instead the save path
+        // (`prune_absent`) drops whatever still dangles before validation
         // (#7970's review: dragging a layer must not lose the responsive setup).
         Some(sib.remove(idx))
     }

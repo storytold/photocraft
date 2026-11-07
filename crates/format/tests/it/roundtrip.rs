@@ -1319,18 +1319,24 @@ fn saving_after_master_deletion_succeeds_with_an_override_present() {
     assert!(re.responsive.variants.is_empty());
 }
 
-/// A file whose variant master is already missing (written by an older or foreign writer)
-/// loads, and the load-side prune keeps it savable: the override goes with the variant.
+/// A file whose variant master names a layer the file does not contain (an older or foreign
+/// writer, or a corrupt edit) loads, and the load-side prune keeps it savable: `remap_ids`
+/// drops the variant and the override goes with it. The fixture reaches the load path by
+/// editing a clean archive's manifest in place — saving a document with a dangling master
+/// would prune it first (the save path runs `prune_absent` before validation).
 #[test]
 fn loading_a_dangling_master_keeps_the_document_savable() {
     let mut doc = Document::new("dangling-master", photocraft_doc::Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+    doc.layers.push(Layer::group("Master", vec![]));
+    doc.layers[0].id = LayerId(40);
     doc.layers.push(Layer::group("Variant", vec![]));
-    doc.layers[0].id = LayerId(41);
+    doc.layers[1].id = LayerId(41);
     doc.layers.push(Layer::group("Inside", vec![]));
-    doc.layers[1].id = LayerId(42);
+    doc.layers[2].id = LayerId(42);
+    doc.responsive.master = Some(LayerId(40));
     doc.responsive.variants.push(photocraft_doc::responsive::ResponsiveVariant {
         artboard: LayerId(41),
-        master: LayerId(99),
+        master: LayerId(40),
         name: "V".into(),
         layers: vec![],
     });
@@ -1339,14 +1345,32 @@ fn loading_a_dangling_master_keeps_the_document_savable() {
         layer: LayerId(42),
         rule: photocraft_doc::responsive::LayerLayoutRule { layer: LayerId(42), ..test_rule() },
     });
-    // Serialize with the dangling master present (validation only counts, so this passes).
+    // A clean save carries the variant and its override (the file is v2).
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
-    let back = load_from_bytes(&bytes).unwrap();
-    // The remap drops the variant (master missing); the override must follow, and a
-    // re-save must succeed.
+    assert_eq!(persisted_version(&bytes), 2);
+    // Corrupt it the way a foreign writer would: the variant's master names a layer the
+    // file does not contain. Validation only counts entries, so this still passes its check.
+    let r = zip::ZipReader::new(&bytes).unwrap();
+    let mut manifest: serde_json::Value = serde_json::from_slice(&r.read_by_name("manifest.json", usize::MAX).unwrap()).unwrap();
+    assert!(manifest["document"]["responsive"].is_object(), "responsive key: {}", manifest);
+    assert!(manifest["document"]["responsive"]["variants"].is_array(), "variants: {}", manifest["document"]["responsive"]);
+    manifest["document"]["responsive"]["variants"][0]["master"] = serde_json::Value::from(99);
+    let mut z = zip::ZipWriter::new();
+    z.add("manifest.json", &serde_json::to_vec_pretty(&manifest).unwrap()).unwrap();
+    for e in r.entries.iter().filter(|e| e.name != "manifest.json") {
+        z.add(&e.name, &r.read(e, usize::MAX).unwrap()).unwrap();
+    }
+    let dangling = z.finish().unwrap();
+    // The load path's `remap_ids` drops the variant (master missing); the override goes
+    // with it, so the document opens and re-saves cleanly.
+    let back = load_from_bytes(&dangling).unwrap();
+    assert!(back.responsive.variants.is_empty(), "the variant whose master is absent is dropped on load");
+    assert!(back.responsive.overrides.is_empty(), "the override follows its variant");
+    assert_eq!(back.responsive.master, Some(LayerId(40)), "the document master stays");
     let again = save_to_bytes(&back, &SaveOptions::default()).expect("re-save of a dangling-master file");
     let re = load_from_bytes(&again).unwrap();
     assert!(re.responsive.overrides.is_empty());
+    assert!(re.responsive.variants.is_empty());
 }
 
 fn test_rule() -> photocraft_doc::responsive::LayerLayoutRule {
