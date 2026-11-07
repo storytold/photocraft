@@ -147,7 +147,7 @@ impl PhotocraftApp {
     }
 
     /// Handle direct control requests with refusal logging off (see `InputReplies::direct`).
-    pub(super) fn set_direct_request(&mut self, direct: bool) {
+    pub(crate) fn set_direct_request(&mut self, direct: bool) {
         self.input_replies.direct = direct;
     }
 
@@ -211,7 +211,7 @@ impl PhotocraftApp {
     }
 
     /// All queued synthetic input has been handled: answer the waiting requests.
-    pub(super) fn settle_input_replies(&mut self) {
+    pub(crate) fn settle_input_replies(&mut self) {
         self.input_replies.settle();
     }
 

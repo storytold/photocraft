@@ -485,3 +485,25 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     app.distort.gallery = None;
     assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
 }
+
+/// A native menu click refused in a frame where synthetic input is being handled is the user's,
+/// not the input's: the status bar shows it, and the waiting input reply stays `ok` (#11579).
+#[test]
+fn a_refused_native_menu_click_during_synthetic_input_is_not_the_inputs() {
+    let synced = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let mut app = app(false);
+    let ctx = egui::Context::default();
+    app.services.native_menu = Some(NativeMenu::new(Box::new(Fake { synced, events: vec![Event::Click("file.save".into())] })));
+    let mut raw = egui::RawInput::default();
+    if let Some(m) = app.services.native_menu.as_mut() {
+        m.raw_input(&mut raw);
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    app.wait_for_input(tx);
+    app.automation_input = true;
+    frame(&ctx, raw, |ui| run(&mut app, ui.ctx()));
+    app.automation_input = false;
+    assert!(app.ui.status_error, "the refusal shows in the status bar: {}", app.ui.status);
+    app.settle_input_replies();
+    assert_eq!(rx.recv().unwrap(), json!({"ok": true, "result": null}));
+}
