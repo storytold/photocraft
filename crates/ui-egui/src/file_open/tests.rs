@@ -1628,3 +1628,113 @@ fn queued_drop_waits_for_an_external_document_job() {
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
     assert!(app.drop_places.is_empty());
 }
+
+/// #10225: Wayland `file_drag_pos` routes canvas and tab-strip drops even when the ordinary
+/// pointer position is absent (`None`) or stale (pointing elsewhere), stays retained across
+/// delayed file-delivery frames via `egui::RawInput::take()`, and does not leak after leaving the
+/// window, cancellation, or completed drops while keeping non-Wayland `Services::cursor_pos`
+/// behavior unchanged.
+#[test]
+fn wayland_drag_pos_routes_canvas_and_tabs_with_stale_pointer_and_delayed_delivery() {
+    let dir = std::env::temp_dir().join(format!("photocraft-wayland-dnd-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("layer.png");
+    std::fs::write(&file, png_bytes(32, 24)).unwrap();
+
+    // 1. Verify RawInput::take() retains file_drag_pos across frames until dropped_files arrive,
+    // then consumes it on the delivery frame:
+    let drag_pos = egui::pos2(160.0, 120.0);
+    let mut raw = egui::RawInput { file_drag_pos: Some(drag_pos), ..Default::default() };
+    let pass_before_eof = raw.take();
+    assert_eq!(pass_before_eof.file_drag_pos, Some(drag_pos), "retained while pipe reads");
+    assert_eq!(raw.file_drag_pos, Some(drag_pos), "retained on RawInput until files arrive");
+    raw.dropped_files.push(dropped(file.clone(), Err("read from path".into())));
+    let pass_on_eof = raw.take();
+    assert_eq!(pass_on_eof.file_drag_pos, Some(drag_pos), "available on drop delivery frame");
+    assert_eq!(raw.file_drag_pos, None, "consumed once dropped_files are taken");
+
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(8).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut s = photocraft_engine::Session::new();
+        for _ in 0..2 {
+            s.execute("file.new", json!({"width": 320, "height": 240, "background": "white"})).unwrap();
+        }
+        // Wayland: no OS cursor_pos service (None), is_wayland: true.
+        let mut app = PhotocraftApp::new(s, Services { is_wayland: true, ..Default::default() });
+        app.background_jobs = true;
+        app
+    });
+    h.run_steps(4);
+    let ctx = h.ctx.clone();
+
+    let strip = h.state().tab_strip.clone().expect("tab strip drawn");
+    let canvas_center = h.state().drop_canvas_rect.expect("canvas rect drawn").center();
+    let tab0_left = egui::pos2(strip.tabs[0].1.left() + 4.0, strip.tabs[0].1.center().y);
+    let stale_outside = egui::pos2(4.0, 4.0);
+
+    // 2. Ordinary pointer is stale (outside canvas and tabs), while file_drag_pos hovers tab
+    // slot 0: hover feedback and drop routing select Tabs(0).
+    h.input_mut().events.push(egui::Event::PointerMoved(stale_outside));
+    h.input_mut().file_drag_pos = Some(tab0_left);
+    h.input_mut().hovered_files.push(egui::HoveredFile { path: Some(file.clone()), ..Default::default() });
+    h.step();
+    let at = h.state_mut().cursor_pos(&ctx);
+    assert_eq!(at, Some(tab0_left), "file_drag_pos overrides stale ordinary pointer");
+    assert_eq!(h.state().drop_target(&ctx, at), crate::file_open::DropTarget::Tabs(0));
+
+    h.input_mut().hovered_files.clear();
+    h.input_mut().dropped_files.push(dropped(file.clone(), Err("read from the path".into())));
+    h.step();
+    let t = std::time::Instant::now();
+    while !h.state().jobs.opens.is_empty() && t.elapsed() < std::time::Duration::from_secs(30) {
+        h.step();
+    }
+    h.run_steps(2);
+    assert_eq!(doc_names(h.state())[0], "layer.png", "tab drop opened at slot 0");
+    assert_eq!(h.state_mut().cursor_pos(&ctx), None, "completed tab drop consumes file_drag_pos");
+
+    // 3. Leave window / cancel drag (HoveredFileCancelled clears hovered_files and file_drag_pos):
+    // position does not leak into later drags or fall back to the stale ordinary pointer.
+    h.input_mut().file_drag_pos = Some(canvas_center);
+    h.input_mut().hovered_files.push(egui::HoveredFile { path: Some(file.clone()), ..Default::default() });
+    h.step();
+    h.input_mut().hovered_files.clear();
+    h.input_mut().file_drag_pos = None;
+    h.step();
+    assert_eq!(h.state_mut().cursor_pos(&ctx), None, "leave-window/cancelled drag position does not leak");
+
+    // 4. Drag over canvas with absent/stale ordinary pointer and delayed file delivery:
+    // drop_performed + wl_data_device.leave happens a frame before pipe EOF delivers DroppedFile.
+    let layers_before = h.state().session.active().unwrap().doc.layers.len();
+    h.input_mut().events.push(egui::Event::PointerMoved(tab0_left));
+    h.input_mut().file_drag_pos = Some(canvas_center);
+    h.input_mut().hovered_files.push(egui::HoveredFile { path: Some(file.clone()), ..Default::default() });
+    h.step();
+    // Intermediate frame before pipe EOF: hovered_files cleared, but final file_drag_pos is retained.
+    h.input_mut().hovered_files.clear();
+    h.step();
+    assert_eq!(h.state_mut().cursor_pos(&ctx), Some(canvas_center), "retained until file delivery");
+
+    // Pipe EOF delivers dropped_files on the next frame: placed as a canvas layer in Free Transform.
+    h.input_mut().dropped_files.push(dropped(file.clone(), Err("read from the path".into())));
+    h.run_steps(2);
+    let started = std::time::Instant::now();
+    while h.state().jobs.place.is_some() && started.elapsed() < std::time::Duration::from_secs(30) {
+        h.step();
+    }
+    assert!(h.state().jobs.place.is_none(), "placement completed");
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers_before + 1);
+    assert_eq!(h.state().ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+
+    // 5. After the completed canvas drop, file_drag_pos was consumed and does not leak into later frames.
+    h.step();
+    assert_eq!(h.state_mut().cursor_pos(&ctx), None, "completed drop clears file_drag_pos");
+
+    // 6. Existing non-Wayland drop behavior via Services::cursor_pos remains unchanged when file_drag_pos is None.
+    h.state_mut().services.cursor_pos = Some(Box::new(move |_: &egui::Context| Some(canvas_center)));
+    assert_eq!(h.state_mut().cursor_pos(&ctx), Some(canvas_center));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

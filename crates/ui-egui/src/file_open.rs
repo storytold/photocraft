@@ -20,9 +20,10 @@ pub enum OsEvent {
     Quit,
 }
 
-/// Where files dropped on the window land, as in the reference app. winit 0.30's drops carry no
-/// position, so it comes from the OS ([`Services::cursor_pos`](crate::Services::cursor_pos));
-/// unknown counts as elsewhere.
+/// Where files dropped on the window land, as in the reference app. The position comes from the
+/// active native file drag (`egui::RawInput::file_drag_pos`, e.g. Wayland `wl_data_device`) or the
+/// OS cursor service ([`Services::cursor_pos`](crate::Services::cursor_pos)); unknown counts as
+/// elsewhere.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DropTarget {
     /// The active document's canvas: placed as layers (Place Embedded), each in Free Transform.
@@ -334,16 +335,23 @@ impl PhotocraftApp {
         }
     }
 
+    /// The pointer position for file-drop routing and hover feedback: uses the native file-drag
+    /// position when present (Wayland `wl_data_device` enter and motion), else the OS cursor
+    /// service ([`Services::cursor_pos`](crate::Services::cursor_pos)).
+    pub(crate) fn cursor_pos(&mut self, ctx: &egui::Context) -> Option<egui::Pos2> {
+        ctx.input(|i| i.raw.file_drag_pos).or_else(|| self.services.cursor_pos.as_mut().and_then(|f| f(ctx)))
+    }
+
     /// Which of the files called `names`, dropped onto the window just now, are placed on the
     /// active document's canvas rather than opened, for a shell that reads dropped files itself
     /// (the browser reads them asynchronously, so the web shell can't hand them to
     /// [`open_dropped`](Self::open_dropped)). It delivers those through
     /// [`Services::place_inbox`](crate::Services::place_inbox) and the rest through
     /// [`Services::inbox`](crate::Services::inbox). The pointer comes from
-    /// [`Services::cursor_pos`](crate::Services::cursor_pos). As with a desktop canvas drop, a Free
+    /// [`cursor_pos`](Self::cursor_pos). As with a desktop canvas drop, a Free
     /// Transform still open is applied first (#4833).
     pub fn dropped_on_canvas(&mut self, ctx: &egui::Context, names: &[String]) -> Vec<bool> {
-        let at = self.services.cursor_pos.as_mut().and_then(|f| f(ctx));
+        let at = self.cursor_pos(ctx);
         let canvas = self.drop_target(ctx, at) == DropTarget::Canvas;
         let places: Vec<bool> = names.iter().map(|n| canvas && !crate::preset_files_ui::is_preset_file(n)).collect();
         if places.contains(&true) {
