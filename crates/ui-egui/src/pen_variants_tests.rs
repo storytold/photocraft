@@ -210,6 +210,39 @@ fn the_pen_carries_on_an_open_path_from_either_end() {
     assert_eq!((work.subpaths.len(), work.subpaths[1].closed, work.subpaths[1].knots.len()), (2, true, 3));
 }
 
+/// #10638: the continue-path pointer shows exactly where a Pen click carries a path on: either
+/// endpoint of an open subpath, with no other path being drawn; not a middle anchor, a closed
+/// subpath, empty canvas or another pen tool.
+#[test]
+fn continue_pointer_shows_where_a_click_carries_on() {
+    let mut app = app(Tool::Pen);
+    click(&mut app, 20.0, 20.0);
+    click(&mut app, 80.0, 20.0);
+    click(&mut app, 80.0, 80.0);
+    crate::vector_ui::pen_commit(&mut app, false);
+    let at = |app: &PhotocraftApp, x, y| crate::vector_ui::continues_path_at(app, Tool::Pen, x, y);
+    assert!(at(&app, 20.0, 20.0) && at(&app, 80.0, 80.0), "both ends");
+    assert!(at(&app, 81.0, 79.0), "within the hit tolerance");
+    assert!(!at(&app, 80.0, 20.0), "a middle anchor");
+    assert!(!at(&app, 150.0, 150.0), "empty canvas");
+    assert!(!crate::vector_ui::continues_path_at(&app, Tool::CurvaturePen, 20.0, 20.0), "only the Pen");
+    // Drawing another path: a click there adds an anchor instead.
+    click(&mut app, 150.0, 150.0);
+    assert!(!at(&app, 20.0, 20.0), "not while drawing");
+    crate::vector_ui::pen_commit(&mut app, false);
+    // The pointer agrees with the click: pressing there resumes the path.
+    tool_event(&mut app, ToolEvent::Down { x: 80.0, y: 80.0, pressure: 1.0 }, Modifiers::NONE);
+    assert!(app.ui.pen.as_ref().is_some_and(|p| p.resumes.is_some()), "the click carries it on");
+    tool_event(&mut app, ToolEvent::Up { x: 80.0, y: 80.0 }, Modifiers::NONE);
+    crate::vector_ui::pen_commit(&mut app, false);
+    // A closed subpath has no endpoints to carry on.
+    click(&mut app, 150.0, 20.0);
+    click(&mut app, 200.0, 20.0);
+    click(&mut app, 175.0, 60.0);
+    click(&mut app, 150.0, 20.0);
+    assert!(!at(&app, 150.0, 20.0), "closed");
+}
+
 /// #6593 review: carrying on a subpath keeps its path operation, and a draft whose subpath changed
 /// meanwhile refuses without overwriting newer work. The historical test name is retained
 /// for reviewed-head provenance; captured-revision validation supersedes its stale fallback.

@@ -1233,6 +1233,46 @@ fn pen_shows_the_close_path_pointer_over_the_first_anchor() {
     assert_eq!(pointer(&mut h, 50.0, 50.0), close, "back on the first anchor");
 }
 
+/// Over an endpoint of an open path the Pen shows the continue-path pointer (#10638), a bitmap of
+/// its own, where a click carries the path on (#6593); not over a middle anchor, on empty canvas,
+/// while another path is being drawn, or with precise Other Cursors.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn pen_shows_the_continue_path_pointer_over_an_open_endpoint() {
+    let mut h = harness();
+    h.state_mut().ui.tool = crate::state::Tool::Pen;
+    let owner = crate::vector_ui::capture_pen_owner(h.state());
+    let knots = vec![[[50.0, 50.0]; 3], [[100.0, 80.0]; 3], [[150.0, 50.0]; 3]];
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots, owner, ..Default::default() });
+    crate::vector_ui::pen_commit(h.state_mut(), false);
+    assert!(h.state().ui.pen.is_none(), "an open work path");
+    let screen = |h: &Harness<'static, PhotocraftApp>, x: f32, y: f32| {
+        let v = &h.state().ui.views[0];
+        let c = h.state().last_canvas_rect.center();
+        pos2(c.x + (x - v.center[0]) * v.zoom, c.y + (y - v.center[1]) * v.zoom)
+    };
+    let pointer = |h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32| {
+        let p = screen(h, x, y);
+        h.hover_at(p);
+        h.run_steps(2);
+        let out = &h.output().platform_output;
+        (out.cursor_icon, out.cursor_image.as_ref().map(|i| i.rgba.clone()))
+    };
+    let plain = pointer(&mut h, 200.0, 150.0);
+    let last = pointer(&mut h, 150.0, 50.0);
+    assert!(last.1.is_some(), "a bitmap");
+    assert_ne!(last, plain, "the endpoint shows the continue pointer");
+    assert_eq!(pointer(&mut h, 50.0, 50.0), last, "the first endpoint too");
+    assert_ne!(pointer(&mut h, 100.0, 80.0).1, last.1, "a middle anchor doesn't carry on");
+    // While another path is drawn, a click there adds an anchor: the plain Pen.
+    let owner = crate::vector_ui::capture_pen_owner(h.state());
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[200.0, 200.0]; 3]], owner, ..Default::default() });
+    assert_ne!(pointer(&mut h, 150.0, 50.0), last, "not while drawing");
+    h.state_mut().ui.pen = None;
+    h.state_mut().caps_lock = true;
+    assert_eq!(pointer(&mut h, 150.0, 50.0).0, egui::CursorIcon::Crosshair, "precise: the crosshair");
+}
+
 /// Esc with no active operation deselects (#2674), like ⌘D.
 #[test]
 fn escape_deselects_when_nothing_else_needs_cancelling() {

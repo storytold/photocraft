@@ -142,6 +142,17 @@ pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon 
     egui::CursorIcon::None
 }
 
+/// The Pen over an open path's endpoint (#10638): the pen with a small square on a line, as the
+/// reference application shows where a click carries the path on.
+pub fn pen_continue_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
+    let variant = crate::tool_cursor::PenVariant::Continue;
+    if let Some(icon) = crate::tool_cursor::pen_variant(ctx, variant) {
+        return icon;
+    }
+    crate::icons::cursor(ctx, variant.icon_name(), p, variant.hotspot_in_box() / 24.0, 22.0);
+    egui::CursorIcon::None
+}
+
 /// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
 /// OS cursor to set (hidden).
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {

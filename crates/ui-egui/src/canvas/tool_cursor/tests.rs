@@ -885,6 +885,12 @@ fn pen_variants_have_distinct_hotspots_and_geometry() {
     assert_ne!(standard.rgba, add.rgba, "Add Anchor keeps its plus badge");
     assert_ne!(standard.rgba, delete.rgba, "Delete Anchor keeps its minus badge");
     assert_ne!(add.rgba, delete.rgba, "the two anchor badges differ");
+    let cont = super::pen::rasterize(super::PenVariant::Continue, 1.0).unwrap();
+    assert_eq!(cont.hotspot, standard.hotspot, "the continue pointer keeps the Pen's nib (#10638)");
+    assert_ne!(cont.rgba, standard.rgba, "the continue pointer has its badge");
+    assert_ne!(cont.rgba, add.rgba);
+    assert_eq!(super::PenVariant::Continue.icon_name(), "pen-continue");
+    assert!(super::PenVariant::all().iter().all(|v| v.icon_name() != "pen-continue" || *v == super::PenVariant::Continue));
 
     // Pin every tool-to-variant and variant-to-icon mapping so a swapped glyph cannot pass.
     for (tool, variant, icon) in [
