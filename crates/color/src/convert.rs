@@ -278,6 +278,21 @@ mod tests {
     }
 
     #[test]
+    fn dark_saturated_inks_survive_a_trip_through_rgb() {
+        // Colours a CMYK document can hold, so the pair of profiles has to bring them back: the
+        // separation's GCR black was too small for these and the round trip moved them by up to
+        // 29 of 255 (a dark cyan came back 25 levels lighter and bluer).
+        assert!(cmyk_to_srgb_transform().is_some() && srgb_to_cmyk_transform().is_some(), "the built-in profiles must link, or the naive formulas answer");
+        for inks in [[0.0f32, 0.0, 1.0, 1.0 / 3.0], [1.0, 0.0, 0.0, 0.5], [0.8, 0.9, 0.2, 0.3]] {
+            let rgb = cmyk_to_rgb(inks);
+            let back = cmyk_to_rgb(rgb_to_cmyk(rgb));
+            for i in 0..3 {
+                assert!((rgb[i] - back[i]).abs() < 8.0 / 255.0, "{inks:?}: {rgb:?} came back {back:?}");
+            }
+        }
+    }
+
+    #[test]
     fn managed_cmyk() {
         let white = cmyk_to_rgb([0.0; 4]);
         assert!(white.iter().all(|v| *v > 0.99), "{white:?}");
