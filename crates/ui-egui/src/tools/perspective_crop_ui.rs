@@ -147,6 +147,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
                     }
                 } else {
                     app.pcrop.clicks.clear();
+                    let start = snap_start(app, start);
                     let (x0, y0, x1, y1) = (start[0].min(cur[0]), start[1].min(cur[1]), start[0].max(cur[0]), start[1].max(cur[1]));
                     // A straight drag has no area: no box (it could neither be committed nor
                     // replaced by a new drag).
@@ -157,6 +158,31 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
         }
     }
     true
+}
+
+/// Where a new quad's drag starts, with View › Snap and Snap To › Document Bounds on (#11803): a
+/// press on the pasteboard beyond a canvas corner (outside on both axes) starts at that corner,
+/// and one within the snap distance of a canvas edge starts on it. Clicked corners keep their place.
+fn snap_start(app: &PhotocraftApp, p: [f64; 2]) -> [f64; 2] {
+    let Some(size) = app.session.active().map(|s| s.doc.size) else { return p };
+    if !(app.ui.extras.snap && crate::snap_ui::options(app).document) {
+        return p;
+    }
+    let tol = crate::snap_ui::tolerance(app);
+    let (w, h) = (f64::from(size.width), f64::from(size.height));
+    let corner = !(0.0..=w).contains(&p[0]) && !(0.0..=h).contains(&p[1]);
+    let snap = |v: f64, max: f64| {
+        if corner {
+            v.clamp(0.0, max)
+        } else if v.abs() <= tol {
+            0.0
+        } else if (v - max).abs() <= tol {
+            max
+        } else {
+            v
+        }
+    };
+    [snap(p[0], w), snap(p[1], h)]
 }
 
 fn drag_to(app: &mut PhotocraftApp, p: [f64; 2]) {
@@ -618,3 +644,7 @@ mod tests {
         assert!(app.pcrop.drag.is_none() && app.pcrop.clicks.is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "perspective_crop_snap_tests.rs"]
+mod perspective_crop_snap_tests;
