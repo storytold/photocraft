@@ -1727,6 +1727,22 @@ fn save_a_copy_writes_the_dds_options_asked_for() {
     }
 }
 
+/// `pngCompression` is unset when absent or null, one of four named levels, or a bad parameter.
+#[test]
+fn png_compression_param_names_the_four_levels_and_refuses_anything_else() {
+    use photocraft_codecs::PngCompression;
+    assert_eq!(png_compression_param(&json!({}), "doc.save").unwrap(), None);
+    assert_eq!(png_compression_param(&json!({"pngCompression": null}), "doc.save").unwrap(), None);
+    for (name, level) in [("none", PngCompression::None), ("fast", PngCompression::Fast), ("default", PngCompression::Default), ("best", PngCompression::Best)]
+    {
+        assert_eq!(png_compression_param(&json!({"pngCompression": name}), "doc.save").unwrap(), Some(level));
+    }
+    for v in [json!("turbo"), json!("Fast"), json!(6), json!(true)] {
+        let e = png_compression_param(&json!({"pngCompression": v}), "doc.save").unwrap_err().to_string();
+        assert!(e.contains("pngCompression"), "{v}: {e}");
+    }
+}
+
 #[test]
 fn dds_params_are_none_until_one_is_given() {
     use photocraft_io::{DdsCompression, DdsOptions};

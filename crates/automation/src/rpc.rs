@@ -15,7 +15,7 @@
 //!   `doc.exportLayers {dir, format?, prefix?, visibleOnly?, quality?, index?}`,
 //!   `doc.exportDataSets {dir, format?, dataSets?, naming?, index?}`,
 //!   `doc.importDataSets {path, delimiter?, index?}` (#3216: the same treatment for the export
-//!   and CSV half of #2810), `doc.save {path?, format?, quality?, index?}`, `doc.inspect {index?}`,
+//!   and CSV half of #2810), `doc.save {path?, format?, quality?, pngCompression?, index?}`, `doc.inspect {index?}`,
 //!   `doc.render {index?, maxSide?, path?}` (writes a PNG to `path`, else
 //!   returns it base64-encoded; adds `warnings` when a renderer fell back), `doc.select {index}`, `doc.close {index?}`
 //! - `batch {steps: [{command, params?, wait?} | {method, params?}], stopOnError?}`
@@ -180,6 +180,9 @@ impl Headless {
                 opts.encode.dds = photocraft_engine::file_cmds::dds_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?.unwrap_or_default();
                 if let Some(c) = photocraft_engine::file_cmds::tiff_compression_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
                     opts.encode.tiff_compression = c;
+                }
+                if let Some(c) = photocraft_engine::file_cmds::png_compression_param(&p, "doc.save").map_err(|e| bad(e.to_string()))? {
+                    opts.encode.png_compression = c;
                 }
                 let tiff_bool = |key| photocraft_engine::file_cmds::tiff_bool_param(&p, key, "doc.save").map_err(|e| bad(e.to_string()));
                 opts.tiff_transparency = tiff_bool("tiffTransparency")?;

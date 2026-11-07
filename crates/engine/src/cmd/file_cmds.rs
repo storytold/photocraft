@@ -63,8 +63,8 @@ use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatte
 use save::save_a_copy;
 pub(crate) use save::{SaveOpts, encode, save_doc};
 pub use save::{
-    dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, pcraft_full_composite_param, tga_bits_param, tiff_bool_param, tiff_compression_param,
-    tiff_would_write_layers,
+    dds_param, dpx_bits_param, jpeg_format_param, jpeg_quality, pcraft_full_composite_param, png_compression_param, tga_bits_param, tiff_bool_param,
+    tiff_compression_param, tiff_would_write_layers,
 };
 
 mod batch_naming;

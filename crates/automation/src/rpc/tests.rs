@@ -303,6 +303,64 @@ fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// `doc.save`'s `pngCompression` sets the PNG encoder's deflate effort; a value it doesn't name is
+/// refused before a file is written.
+#[test]
+fn doc_save_png_compression_reaches_the_encoder() {
+    let base = std::env::temp_dir().join(format!("pc-doc-save-png-{}", std::process::id()));
+    // Fresh, so a file left by an earlier run can't make the workspace refuse a write.
+    let _ = std::fs::remove_dir_all(&base);
+    std::fs::create_dir_all(&base).unwrap();
+    let mut seed = 1u32;
+    let noise: Vec<u8> = (0..128 * 96 * 3)
+        .map(|i| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            // Smooth enough for deflate to find something, noisy enough to differ by level.
+            ((i / 3 % 128) as u32 + (seed >> 29)) as u8
+        })
+        .collect();
+    let img = photocraft_codecs::Image::from_u8(128, 96, photocraft_codecs::ChannelLayout::Rgb, noise).unwrap();
+    std::fs::write(base.join("in.png"), photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()).unwrap();
+    let mut h = Headless::with_workspace(crate::AuthorizedWorkspace::new(Some(&base), Some(&base)).unwrap());
+    h.handle("doc.open", json!({"path": "in.png"})).unwrap();
+    // Each level's file is what exporting the document at that level writes, and the four
+    // differ on this image, so a level that reached the encoder as another can't pass.
+    use photocraft_codecs::PngCompression;
+    let doc = h.session.active().unwrap().doc.clone();
+    let mut saved = Vec::new();
+    for (name, level) in [("none", PngCompression::None), ("fast", PngCompression::Fast), ("default", PngCompression::Default), ("best", PngCompression::Best)]
+    {
+        let file = format!("{name}.png");
+        h.handle("doc.save", json!({"path": file, "pngCompression": name})).unwrap();
+        let bytes = std::fs::read(base.join(&file)).unwrap();
+        let mut opts = photocraft_io::ExportOptions::default();
+        opts.encode.png_compression = level;
+        let reference = photocraft_io::export(&doc, "png", &opts).unwrap().bytes;
+        assert!(bytes == reference, "{name}: saved {} bytes, an export at that level is {}", bytes.len(), reference.len());
+        assert!(
+            saved.iter().all(|(_, b): &(&str, Vec<u8>)| *b != bytes),
+            "{name} wrote the same file as {:?}",
+            saved.iter().find(|(_, b)| *b == bytes).map(|(n, _)| n)
+        );
+        saved.push((name, bytes));
+    }
+    // Stored deflate is far larger than any compressed level.
+    assert!(saved[1..].iter().all(|(_, b)| b.len() < saved[0].1.len()), "{:?}", saved.iter().map(|(n, b)| (n, b.len())).collect::<Vec<_>>());
+    // Without `pngCompression`, or with null, the encoder's default level is used.
+    for (file, params) in [("omitted.png", json!({"path": "omitted.png"})), ("null.png", json!({"path": "null.png", "pngCompression": null}))] {
+        h.handle("doc.save", params).unwrap();
+        let default = &saved.iter().find(|(n, _)| *n == "default").unwrap().1;
+        assert!(std::fs::read(base.join(file)).unwrap() == *default, "{file}: not the default level's file");
+    }
+    for level in [json!("turbo"), json!(9), json!(true)] {
+        let refused = h.handle("doc.save", json!({"path": "x.png", "pngCompression": level})).unwrap_err().to_string();
+        assert!(refused.contains("pngCompression"), "{level}: {refused}");
+        assert!(!base.join("x.png").exists(), "{level} wrote a file");
+    }
+    drop(h);
+    std::fs::remove_dir_all(base).unwrap();
+}
+
 #[test]
 fn automation_preview_rejects_oversized_full_size_and_numeric_wraparound() {
     let mut h = Headless::new();
