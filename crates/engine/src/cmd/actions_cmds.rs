@@ -630,13 +630,16 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
 /// is already on top (#8453). The CLI's `run` and `batch` scripts skip these too (#8802).
 pub fn noop_step(s: &Session, id: &str, params: &Value) -> bool {
     let Some(d) = s.active() else { return false };
-    let dir = match id {
+    let (dir, single) = match id {
         "select.deselect" => return d.doc.selection.is_none(),
-        "layer.arrange.bringForward" | "layer.arrange.bringToFront" => 1,
-        "layer.arrange.sendBackward" | "layer.arrange.sendToBack" => -1,
+        "layer.arrange.bringForward" => (1, true),
+        "layer.arrange.bringToFront" => (1, false),
+        "layer.arrange.sendBackward" => (-1, true),
+        "layer.arrange.sendToBack" => (-1, false),
         _ => return false,
     };
-    crate::commands::layer_param(s, params).is_ok_and(|layer| super::ops::arrange_at_end(&d.doc, layer, dir))
+    let at_end = if single { super::ops::step_at_end } else { super::ops::arrange_at_end };
+    crate::commands::layer_param(s, params).is_ok_and(|layer| at_end(&d.doc, layer, dir))
 }
 
 pub const SAVE_CONTENTS: &str = "layer.smartObjects.saveContents";
