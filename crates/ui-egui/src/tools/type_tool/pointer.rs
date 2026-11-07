@@ -221,7 +221,8 @@ fn arc_length_to(sub: &photocraft_doc::Subpath, seg: usize, t: f64) -> f64 {
 /// of the active shape layer's path, else of the work path, type on that path; inside a closed
 /// one, area type. The work path's inside counts only while the canvas draws it (selected in the
 /// Paths panel, #6551): a hidden Work Path left after Load as Selection must not turn a plain
-/// click into area type. None while View › Show › Target Path (or Extras) hides paths.
+/// click into area type. Otherwise, inside the topmost shown closed shape layer, area type in
+/// that shape, active or not. None while View › Show › Target Path (or Extras) hides paths.
 pub(crate) fn path_target(app: &PhotocraftApp, x: f64, y: f64) -> Option<PathClick> {
     use photocraft_vector::edit::{Hit, hit};
     if !app.ui.view.shows(app.ui.view.show.target_path) {
@@ -261,11 +262,21 @@ pub(crate) fn path_target(app: &PhotocraftApp, x: f64, y: f64) -> Option<PathCli
             return Some(PathClick::Area { shape: Some(*id) });
         }
     }
-    let w = work.as_ref().filter(|w| small(w))?;
-    if let Some(c) = outline(w, None) {
-        return Some(c);
+    if let Some(w) = work.as_ref().filter(|w| small(w)) {
+        if let Some(c) = outline(w, None) {
+            return Some(c);
+        }
+        if work_shown && inside(w) {
+            return Some(PathClick::Area { shape: None });
+        }
     }
-    (work_shown && inside(w)).then_some(PathClick::Area { shape: None })
+    // Inside the topmost shown closed shape under the pointer, area type, even when that shape
+    // layer is not the active one (#10714).
+    let doc = &app.session.active()?.doc;
+    doc.walk().iter().rev().find_map(|(lp, _, l)| match &l.content {
+        photocraft_doc::LayerContent::Shape(sh) if doc.shown_at(lp) && small(&sh.path) && inside(&sh.path) => Some(PathClick::Area { shape: Some(l.id.0) }),
+        _ => None,
+    })
 }
 
 /// What the Type tool's pointer over document `(x, y)` shows (#218): the path click a press there
