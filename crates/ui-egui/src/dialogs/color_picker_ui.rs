@@ -430,8 +430,9 @@ fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) ->
 }
 
 /// Room for both component columns, including units, without overflowing the title's width; with
-/// the frame and title the window fits Photoshop's (about 534 x 376 points).
-pub(crate) const CONTENT_WIDTH: f32 = 488.0;
+/// the shared header the window stays compact (within 534 x 376 points). Include the component
+/// grids' full width so they do not widen the frame beyond the header and right-aligned actions.
+pub(crate) const CONTENT_WIDTH: f32 = 498.0;
 /// Translated action labels can be substantially wider than their English equivalents.
 pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
     let labels = ["OK", "Cancel", "Add to Swatches"];

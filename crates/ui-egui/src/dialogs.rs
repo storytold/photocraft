@@ -7,6 +7,8 @@ use crate::PhotocraftApp;
 use crate::state::{Dialog, DialogKind};
 use crate::widgets::{ButtonRole, DialogButton, dialog_buttons};
 
+mod header;
+
 /// A dialog body sets this field to the key of the text field whose Browse… button was clicked;
 /// [`show`] takes it out again and opens the matching file or folder dialog.
 pub(crate) const BROWSE_FIELD: &str = "__browse";
@@ -256,22 +258,6 @@ fn show_modal<T>(
 /// Whether dialogs have a close box (×) in their title bar (#5496). Photoshop's modal dialogs have
 /// one on Windows, where clicking it is Cancel, and none on macOS; Linux and the web follow Windows.
 pub(crate) const CLOSE_BOX: bool = !cfg!(target_os = "macos");
-
-/// The side of the close box's square, in points.
-const CLOSE_BOX_SIZE: f32 = 20.0;
-
-/// The close box's square: flush with the title band's right end `right`, centred on the title
-/// row at height `centre_y`.
-fn close_box_rect(right: f32, centre_y: f32) -> egui::Rect {
-    egui::Rect::from_min_size(egui::pos2(right - CLOSE_BOX_SIZE, centre_y - CLOSE_BOX_SIZE / 2.0), egui::vec2(CLOSE_BOX_SIZE, CLOSE_BOX_SIZE))
-}
-
-/// Draws a title bar's close box in `rect`, the same × icon button the floating panels close with,
-/// and says whether it was clicked. Its own child `Ui`, so the title row's layout is unchanged.
-pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::right_to_left(egui::Align::Center)));
-    crate::icons::button(&mut child, "x", CLOSE_BOX_SIZE, false, tl!("Close")).clicked()
-}
 
 /// The dialog's contents under the title rule, picked by its kind and the marker field that routes
 /// it. Returns `Some(true)` / `Some(false)` when the body itself answered OK / Cancel.
@@ -576,6 +562,7 @@ fn default_max_width(d: &Dialog, compact: bool, curves: bool, about_tabs: bool, 
     }
 }
 
+/// Draw the open modal stack, handle title dragging and resizing, and apply dialog outcomes.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if crate::guide_edit::sync(app) {
         ctx.request_repaint();
@@ -622,10 +609,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.move_to_top(area.layer());
         }
         let color_picker = crate::color_picker_ui::owns(&fields);
-        let mut modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT);
-        if color_picker {
-            modal = modal.frame(egui::Frame::popup(&ctx.global_style()).inner_margin(16));
-        }
+        let modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT).frame(header::frame(ctx));
         // Tab / ⇧Tab walk the topmost dialog's text fields, not every widget (field_tab.rs).
         let tab = if top == Some(d.id) && !egui::Popup::is_any_open(ctx) { crate::field_tab::take_step(ctx) } else { 0 };
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
@@ -684,22 +668,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if color_picker {
                 ui.set_width(crate::color_picker_ui::content_width(ui));
             }
-            let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
-            let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
-            // The whole title band drags (#1921): the full width plus a little of the popup's
-            // padding around it and the gap above the hairline, but none of the controls below.
-            // The close box (#5496) sits at the band's right end and is left out of the drag area:
-            // egui would let a drag that starts on a button move the dialog.
-            let close_rect = CLOSE_BOX.then(|| close_box_rect(ui.max_rect().right(), t.center().y));
-            let bar_right = close_rect.map_or(ui.max_rect().right() + 7.0, |r| r.left());
-            let bar = egui::Rect::from_min_max(t.min - egui::vec2(7.0, 7.0), egui::pos2(bar_right, t.bottom() + 4.0));
-            drag = ui.interact(bar, id.with("title"), egui::Sense::drag()).drag_delta();
-            if let Some(r) = close_rect {
-                close_clicked = close_box(ui, r);
-            }
-            ui.add_space(4.0);
-            crate::widgets::hairline(ui);
-            ui.add_space(8.0);
+            (drag, close_clicked) = header::show(ui, id, &d, &title);
             crate::field_tab::begin(ui.ctx());
             if let Some(done) = dialog_body(app, ui, &d, &mut fields, id, interactive) {
                 outcome = Some(done);
@@ -729,11 +698,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     apply_requested |= apply;
                 });
             }
-            // The frame around the content (Frame::popup's margin and stroke).
-            ui.min_rect().expand(ui.spacing().menu_margin.sum().max_elem() + 2.0)
         });
-        // The picker has a larger frame margin; include that whole frame in the canvas hit guard.
-        shown.push(if color_picker { modal.response.rect } else { modal.inner });
+        header::paint_border(ctx, &modal.response);
+        // Include the entire shared frame, including header and padding, in the canvas hit guard.
+        shown.push(modal.response.rect);
         // The size Curves was given (dragged or grown to fit) is the one it reopens at (#8984).
         // A size at the window's limit is the window's, not the user's: a large remembered size
         // squeezed into a small window is kept for a larger one.
@@ -1305,7 +1273,8 @@ mod preference_resize_tests {
 
     /// Drags the dialog's resize grip (its frame's bottom-right corner) by `by`.
     fn drag_corner(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, by: egui::Vec2) {
-        let corner = frame(h).max - egui::vec2(14.0, 14.0);
+        let id = egui::Id::unique(("dialog", h.state().ui.dialogs[0].id));
+        let corner = h.ctx.read_response(id.with("resize").with("__resize_corner")).unwrap().rect.center();
         h.event(egui::Event::PointerMoved(corner));
         h.step();
         h.event(egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });

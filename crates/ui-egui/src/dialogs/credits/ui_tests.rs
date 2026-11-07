@@ -216,10 +216,11 @@ fn about_window(tab: &str, table: bool) -> (f32, f32, f32) {
     let ok = h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().as_deref() == Some("OK")).map(|n| n.rect()).expect("the OK button");
     // The dialog's contents: everything between its title and the OK button.
     let title = h.query_all_by_label("About PhotoCraft").map(|n| n.rect()).find(|r| r.top() < ok.top()).expect("the dialog title");
+    let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", h.state().ui.dialogs[0].id)))).unwrap();
     let lowest = h
         .query_all(egui_kittest::kittest::by().predicate(|n| n.bounding_box().is_some()))
         .map(|n| n.rect())
-        .filter(|r| r.top() > title.bottom() && r.bottom() < ok.top() && r.left() >= title.left() - 1.0 && r.right() <= ok.right() + 1.0 && r.height() < 100.0)
+        .filter(|r| r.top() > title.bottom() && r.bottom() < ok.top() && r.left() > window.left() && r.right() <= ok.right() + 1.0 && r.height() < 100.0)
         .map(|r| r.bottom())
         .fold(f32::MIN, f32::max);
     (title.top(), ok.top(), lowest)

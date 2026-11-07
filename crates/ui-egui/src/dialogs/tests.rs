@@ -109,7 +109,7 @@ fn the_close_box_and_the_title_drag_keep_apart() {
     let x = h.get_by_label("Close").rect();
     let frame = rects(&h.ctx)[0];
     assert!((x.center().y - title.center().y).abs() < 2.0 && x.left() > title.right(), "the × is on the title row: {x:?}, {title:?}");
-    assert!(frame.right() - x.right() < 16.0, "at its right end: {x:?} in {frame:?}");
+    assert!((frame.right() - x.right() - (x.top() - frame.top())).abs() <= 1.0, "equal horizontal and vertical inset: {x:?} in {frame:?}");
     let drag = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2| {
         h.hover_at(from);
         h.drag_at(from);
@@ -156,6 +156,7 @@ fn dragging_a_dialog_title_does_not_pan_the_canvas() {
     assert!(click.is_none(), "and the drag is not a canvas tool drag: {click:?}");
 }
 
+/// The Color Picker keeps its body and action column aligned with the shared frame insets.
 #[test]
 fn color_picker_has_inset_content_and_actions_at_the_right_edge() {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -171,12 +172,12 @@ fn color_picker_has_inset_content_and_actions_at_the_right_edge() {
         let ok = h.get_by_label("OK").rect();
         let cancel = h.get_by_label("Cancel").rect();
         let web = h.get_by_label("Only Web Colors").rect();
-        assert!((ok.right() - title.right()).abs() < 1.0, "OK aligns with the right content edge: {ok:?} vs {title:?}");
+        assert!((frame.right() - ok.right() - 16.0).abs() <= 1.0, "OK aligns with the right content edge: {ok:?} vs {frame:?}");
         assert!((cancel.right() - ok.right()).abs() < 1.0);
         assert!(frame.right() - ok.right() >= 16.0, "buttons retain the window's padding");
         assert!(web.left() - frame.left() >= 16.0, "checkbox has comfortable left padding");
         assert!(frame.bottom() - web.bottom() >= 16.0, "checkbox has comfortable bottom padding");
-        assert!(title.top() - frame.top() >= 16.0, "title has top padding");
+        assert!((title.center().y - frame.top() - 16.0).abs() <= 1.0, "title is vertically centered in the compact shared header");
         assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(frame), "padded picker fits {size:?}: {frame:?}");
         // A click anywhere inside the added margin must stay out of the canvas eyedropper.
         let margin = egui::pos2(frame.left() + 8.0, web.center().y);
@@ -216,6 +217,100 @@ fn layer_style_title_gutters_can_start_drags() {
         let delta = h.get_by_label("Layer Style").rect().min - before.min;
         assert!((delta - egui::vec2(64.0, -32.0)).length() < 2.0, "point {point}: moved {delta:?}");
         assert_eq!(h.state().ui.dialogs.len(), 1);
+    }
+}
+
+/// Translated Layer Style titles and action labels retain the frame's horizontal insets.
+#[test]
+fn translated_layer_style_aligns_header_and_actions_with_the_frame() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for language in ["en", "fr", "de"] {
+        let lang = crate::i18n::Lang::from_pref(language);
+        let text = |key| crate::i18n::with_language(lang, || crate::i18n::t(key).to_owned());
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .build_ui_state(move |ui, app| crate::i18n::with_language(lang, || show(app, ui.ctx())), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.state_mut().ui.open_dialog(DialogKind::LayerStyle, Default::default());
+        h.run_steps(4);
+        let frame = rects(&h.ctx)[0];
+        let buttons = ["OK", "Cancel", "New Style…"].map(|label| h.get_by_label(&text(label)).rect());
+        for button in buttons {
+            assert!((frame.right() - button.right() - 16.0).abs() <= 1.0, "{language}: even right inset, {button:?} in {frame:?}");
+            assert!((button.width() - buttons[0].width()).abs() < 1.0, "{language}: one action width");
+        }
+        if CLOSE_BOX {
+            let close = h.get_by_label(&text("Close")).rect();
+            assert!((frame.right() - close.right() - (close.top() - frame.top())).abs() < 1.0, "{language}: even header insets");
+        }
+    }
+}
+
+/// Translated action labels narrow the settings page, including at the 640 pt minimum width.
+#[test]
+fn translated_layer_style_pattern_controls_stay_inside_the_page() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for language in ["en", "fr", "de"] {
+        for screen_width in [680.0, 1280.0] {
+            let lang = crate::i18n::Lang::from_pref(language);
+            let text = |key| crate::i18n::with_language(lang, || crate::i18n::t(key).to_owned());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(screen_width, 800.0))
+                .build_ui_state(move |ui, app| crate::i18n::with_language(lang, || show(app, ui.ctx())), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+            crate::layer_style::open(h.state_mut(), Some("patternOverlay")).unwrap();
+            h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("patternList".into(), json!([["checker", "Checkerboard"]]));
+            h.run_steps(4);
+            let pattern = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, &text("Pattern")).rect();
+            let pattern_clip = h
+                .output()
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(r) if (r.rect.min - pattern.min).length() < 1.0 && (r.rect.max - pattern.max).length() < 1.0 => Some(shape.clip_rect),
+                    _ => None,
+                })
+                .expect("the pattern dropdown's painted background");
+            assert!(pattern_clip.expand(1.0).contains_rect(pattern), "{language}, {screen_width} pt: pattern {pattern:?} is clipped by {pattern_clip:?}");
+            // The bordered settings column is the smallest tall frame around this row.
+            let page = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(r) if r.stroke.width > 0.0 && r.rect.height() > 300.0 && r.rect.contains(pattern.left_center()) => Some(r.rect),
+                    _ => None,
+                })
+                .min_by(|a, b| a.area().total_cmp(&b.area()))
+                .expect("the settings page frame");
+            // boxed() leaves a 4 pt inset plus its 1 pt stroke around page controls.
+            let content = page.shrink(5.0).expand(1.0);
+            for label in ["Blend Mode", "Pattern"] {
+                let control = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, &text(label)).rect();
+                assert!(content.contains_rect(control), "{language}, {screen_width} pt: {label} {control:?} escapes page {content:?}");
+            }
+            let frame = rects(&h.ctx)[0];
+            // An oversized control can expand its enclosing frame instead of being clipped.
+            let body_width = (screen_width - 40.0).clamp(640.0, 800.0);
+            let expected_width = body_width + header::frame(&h.ctx).total_margin().sum().x;
+            assert!(
+                frame.width() <= expected_width + 1.0,
+                "{language}, {screen_width} pt: content widened the fixed dialog: {frame:?}, expected {expected_width}"
+            );
+            for label in ["OK", "Cancel", "New Style…"] {
+                let button = h.get_by_label(&text(label)).rect();
+                assert!((frame.right() - button.right() - 16.0).abs() <= 1.0, "{language}: action buttons keep their right inset");
+            }
+            if screen_width > 1000.0 {
+                assert!((pattern.width() - 180.0).abs() <= 1.0, "{language}: the regular dropdown width is preserved");
+            }
+        }
     }
 }
 
@@ -555,6 +650,7 @@ fn fit_image_is_as_narrow_as_its_content() {
     }
 }
 
+/// German labels fit the Color Picker's action column and its translated header.
 #[test]
 fn german_color_picker_fits_its_actions_and_translates_the_title() {
     use egui_kittest::{Harness, kittest::Queryable};
@@ -569,10 +665,11 @@ fn german_color_picker_fits_its_actions_and_translates_the_title() {
     let title = h.get_by_label("Farbwähler (Vordergrundfarbe)").rect();
     let swatch = h.get_by_label(&text("Click to restore the current colour")).rect();
     let frame = rects(&h.ctx)[0];
+    assert!((title.left() - frame.left() - 42.0).abs() <= 1.0, "translated title uses the compact icon and divider inset");
     for label in ["OK", "Cancel", "Add to Swatches"] {
         let r = h.get_by_label(&text(label)).rect();
         assert!(r.left() > swatch.right(), "{label} must stay beside the swatches: {r:?}, {swatch:?}");
-        assert!((r.right() - title.right()).abs() < 1.0, "{label} aligns with the title edge");
+        assert!((frame.right() - r.right() - 16.0).abs() <= 1.0, "{label} aligns with the right content edge");
     }
     assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 480.0)).contains_rect(frame), "{frame:?}");
 }

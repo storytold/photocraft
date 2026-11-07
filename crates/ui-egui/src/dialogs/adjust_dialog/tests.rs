@@ -260,10 +260,10 @@ fn curves_dialog_resizes_with_its_graph_and_reopens_at_that_size() {
     let window = |h: &Harness<'_, PhotocraftApp>, id: u64| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).unwrap();
     let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
     h.run_steps(4);
-    let (opened, small) = (window(&h, id), graph(&h));
+    let small = graph(&h);
     assert!(small.width() > 270.0 && small.width() < 300.0, "opens at the 300-point graph: {small:?}");
     // Drag the grip (bottom-right corner) 300 points right and 200 down.
-    let corner = opened.max - egui::vec2(12.0, 12.0);
+    let corner = h.ctx.read_response(egui::Id::unique(("dialog", id)).with("resize").with("__resize_corner")).unwrap().rect.center();
     let by = egui::vec2(300.0, 200.0);
     h.event(egui::Event::PointerMoved(corner));
     h.step();
@@ -311,7 +311,7 @@ fn curves_graph_never_pushes_the_dialog_off_a_short_window() {
     let kept = h.ctx.data_mut(|m| m.get_persisted::<egui::Vec2>(egui::Id::unique(("dialog-place", "image.adjustments.curves")).with("size")));
     assert_eq!(kept, Some(egui::vec2(1200.0, 1200.0)));
     // Dragged far wider, the dialog stops where the graph stops: no blank column.
-    let corner = window.max - egui::vec2(12.0, 12.0);
+    let corner = h.ctx.read_response(egui::Id::unique(("dialog", id)).with("resize").with("__resize_corner")).unwrap().rect.center();
     h.event(egui::Event::PointerMoved(corner));
     h.step();
     h.event(egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
