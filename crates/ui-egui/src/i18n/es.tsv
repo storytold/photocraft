@@ -4460,6 +4460,92 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
 
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Permitir el envío:
+	API key	Clave de API
+	Cancel this Generative Fill	Cancelar este relleno generativo
+	Checking…	Comprobando…
+	Connect a service	Conectar un servicio
+	Connect	Conectar
+	Connected.	Conectado.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Al conectar, se piden al servicio sus modelos con su clave. No se envía nada de sus documentos.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Las conexiones y el modelo que elija se comparten con las demás apps Craft. Las claves se guardan en el llavero de este ordenador, nunca en los ajustes de PhotoCraft.
+	Connections	Conexiones
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Describe lo que se generará en la selección, o déjalo vacío para continuar la imagen a través de ella.
+	Discard	Descartar
+	Don't Send	No enviar
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Cada área se convierte en su propio relleno generativo y su propia capa, y se generan a la vez; cada una envía sus propias solicitudes.
+	Empty: removes what is selected and continues the image through it.	Vacío: quita lo seleccionado y continúa la imagen a través de la selección.
+	Failed: {name}	Falló: {name}
+	Fill the selection from a prompt	Rellenar la selección a partir de una descripción
+	For a day	Durante un día
+	For an hour	Durante una hora
+	Generate More	Generar más
+	Generated {name}	Generado: {name}
+	Generating: {name}	Generando: {name}
+	Generating	Generando
+	Generative AI	IA generativa
+	Generative Fill failed: {error}	El relleno generativo falló: {error}
+	Generative Fill uses {model} ({connection}).	El relleno generativo usa {model} ({connection}).
+	Generative Fill will send this to {destination}:	El relleno generativo enviará esto a {destination}:
+	Generative Fill	Relleno generativo
+	Generative Fill…	Relleno generativo…
+	Always show the Generative Fill… button in the options bar	Mostrar siempre el botón Relleno generativo… en la barra de opciones
+	Generative Fills in progress	Rellenos generativos en curso
+	Go to area	Ir a la zona
+	It runs on this computer: nothing leaves it.	Se ejecuta en este ordenador: nada sale de él.
+	It runs online: PhotoCraft asks before anything is sent.	Se ejecuta en línea: PhotoCraft pregunta antes de enviar nada.
+	Locked until its layer lands	Bloqueada hasta que llegue su capa
+	Model for Generative Fill	Modelo para el relleno generativo
+	Needs your OK: {name}	Necesita su aprobación: {name}
+	Needs your OK	Necesita su aprobación
+	No connected model can do Generative Fill yet. Connect a service below.	Ningún modelo conectado puede hacer todavía el relleno generativo. Conecte un servicio abajo.
+	No key saved	No hay clave guardada
+	No prompt: continues the image	Sin descripción: continúa la imagen
+	No prompt: removes what is selected	Sin descripción: quita lo seleccionado
+	On this computer	En este ordenador
+	Online	En línea
+	Only this time	Solo esta vez
+	Other data	Otros datos
+	Prompt (optional)	Descripción (opcional)
+	Review…	Revisar…
+	Send	Enviar
+	Sends the same area and prompt again for three more.	Vuelve a enviar la misma zona y descripción para tres más.
+	Set Up Generative AI…	Configurar IA generativa…
+	Something went wrong in the shared AI layer: {error}	Algo falló en la capa de IA compartida: {error}
+	Switched off	Desactivada
+	The AI service is busy. Try again shortly.	El servicio de IA está ocupado. Vuelva a intentarlo en breve.
+	The key can't be read	No se puede leer la clave
+	The picture around the selection	La imagen alrededor de la selección
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	La selección tiene {n} áreas separadas, demasiadas para rellenarlas una por una (como máximo {max}): se rellena como una sola.
+	The selection's shape	La forma de la selección
+	Until I turn it off	Hasta que lo desactive
+	Variations	Variaciones
+	Waiting ({n})	En espera ({n})
+	Waiting: {name}	En espera: {name}
+	Your prompt	Su descripción
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} relleno generativo espera esta respuesta.|{n} rellenos generativos esperan esta respuesta.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Rellenar por separado cada una de las {n} áreas|Rellenar por separado cada una de las {n} áreas
+@plural	{n} needs your OK|{n} need your OK	{n} necesita su aprobación|{n} necesitan su aprobación
+@plural	{n} failed|{n} failed	{n} con error|{n} con error
+@plural	{n} waiting|{n} waiting	{n} en espera|{n} en espera
+@plural	{n} generating|{n} generating	{n} en curso|{n} en curso
+	Check the service's own terms for what each request costs.	Consulta las condiciones del servicio para saber cuánto cuesta cada solicitud.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Se omitió el ajuste de color de esta variación: la imagen alrededor de la selección volvió demasiado distinta para ajustarla con seguridad.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Se omitió el ajuste de color de esta variación: queda muy poca imagen fuera de la selección para medir.
+	Each request is billed by the service.	El servicio cobra cada solicitud.
+	Each request uses your subscription allowance.	Cada solicitud consume la cuota de tu suscripción.
+	Generate {n}	Generar {n}
+	Save Fill Diagnostics…	Guardar diagnóstico del relleno…
+	Saved Generative Fill diagnostics to {folder}	Diagnóstico del relleno generativo guardado en {folder}
+	Select a generative layer first.	Selecciona primero una capa generativa.
+	The connection is set up as free of charge.	La conexión está configurada como gratuita.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	El servicio devolvió una imagen de {returned} para un área de {sent}; al escalarla, coincidía con la imagen alrededor de la selección.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	El servicio devolvió una imagen de {returned} para un área de {sent}; se usó su centro.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Escribe lo que este relleno envió y recibió (las imágenes, la máscara, el prompt y un resumen) en la carpeta que elijas. No se guarda nada si no lo pides.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Se omitió el ajuste de color en {n} variación.|Se omitió el ajuste de color en {n} variaciones.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Crea {n} variación en este ordenador, con {connection}.|Crea {n} variaciones en este ordenador, con {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Crea {n} variación: {n} solicitud a {connection}.|Crea {n} variaciones: {n} solicitudes separadas a {connection}.
 # Action Stop message (#8386)
 	Message	Mensaje
 # Playback Options (#5212)

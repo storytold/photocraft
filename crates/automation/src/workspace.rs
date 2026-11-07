@@ -351,6 +351,20 @@ fn file_error(operation: &str, path: &str, error: std::io::Error) -> AutomationE
 /// directory capabilities. Automation must use `doc.open`, `doc.save` and
 /// `doc.render` for file effects until those commands are migrated.
 pub fn authorize_engine_command(id: &str, params: &Value) -> Result<(), AutomationError> {
+    // Generative Fill sends document pixels to an AI service off the computer, and the person
+    // agrees to that in the app: automation may not send them, or agree, on their behalf (#41).
+    if photocraft_engine::genai_cmds::SENDS.contains(&id) {
+        return Err(AutomationError::BadRequest(format!(
+            "automation command `{id}` sends document pixels to an AI service and is disabled; run Generative Fill from the app"
+        )));
+    }
+    // Save Fill Diagnostics writes the pictures a fill sent and got back to a folder: only the
+    // person asks for that, so it can't be used to copy document pixels out (#10903).
+    if photocraft_engine::genai_cmds::PERSON_ONLY.contains(&id) {
+        return Err(AutomationError::BadRequest(format!(
+            "automation command `{id}` writes what Generative Fill sent and got back and is disabled; save diagnostics from the app"
+        )));
+    }
     let safe_file_command = matches!(
         id,
         "file.new"

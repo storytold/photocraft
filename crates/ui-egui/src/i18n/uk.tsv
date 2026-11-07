@@ -4262,6 +4262,94 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
 
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	Дозволити надсилання:
+	API key	Ключ API
+	Cancel this Generative Fill	Скасувати цю генеративну заливку
+	Checking…	Перевірка…
+	Connect a service	Під’єднати службу
+	Connect	Під’єднати
+	Connected.	Під’єднано.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	Під час під’єднання службу питають про її моделі з вашим ключем. Нічого з ваших документів не надсилається.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	Під’єднання та вибрана модель спільні для всіх застосунків Craft. Ключі зберігаються у зв’язці ключів цього комп’ютера, ніколи не в налаштуваннях PhotoCraft.
+	Connections	Під’єднання
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	Опишіть, що створити у виділеній області, або залиште поле порожнім, щоб зображення продовжилося крізь неї.
+	Discard	Відкинути
+	Don't Send	Не надсилати
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	Кожна область стане окремою генеративною заливкою з власним шаром; вони створюються одночасно, і кожна надсилає власні запити.
+	Empty: removes what is selected and continues the image through it.	Порожньо: видаляє виділене й продовжує зображення крізь виділену область.
+	Failed: {name}	Помилка: {name}
+	Failed	Помилка
+	Fill the selection from a prompt	Заповнити виділення за описом
+	For a day	На день
+	For an hour	На годину
+	Generate More	Створити ще
+	Generated {name}	Створено: {name}
+	Generating: {name}	Створюється: {name}
+	Generating	Створюється
+	Generative AI	Генеративний ШІ
+	Generative Fill failed: {error}	Генеративна заливка не вдалася: {error}
+	Generative Fill uses {model} ({connection}).	Генеративна заливка використовує {model} ({connection}).
+	Generative Fill will send this to {destination}:	Генеративна заливка надішле до {destination} таке:
+	Generative Fill	Генеративна заливка
+	Generative Fill…	Генеративна заливка…
+	Always show the Generative Fill… button in the options bar	Завжди показувати кнопку «Генеративна заливка…» на панелі параметрів
+	Generative Fills in progress	Генеративні заливки в роботі
+	Go to area	Перейти до області
+	It runs on this computer: nothing leaves it.	Працює на цьому комп’ютері: ніщо його не залишає.
+	It runs online: PhotoCraft asks before anything is sent.	Працює онлайн: PhotoCraft питає перед будь-яким надсиланням.
+	Locked until its layer lands	Заблоковано, доки не з’явиться шар
+	Model for Generative Fill	Модель для генеративної заливки
+	Needs your OK: {name}	Потрібна ваша згода: {name}
+	Needs your OK	Потрібна ваша згода
+	No connected model can do Generative Fill yet. Connect a service below.	Жодна під’єднана модель поки не вміє генеративну заливку. Під’єднайте службу нижче.
+	No key saved	Ключ не збережено
+	No prompt: continues the image	Без опису: продовжує зображення
+	No prompt: removes what is selected	Без опису: видаляє виділене
+	On this computer	На цьому комп’ютері
+	Online	Онлайн
+	Only this time	Лише цього разу
+	Other data	Інші дані
+	Prompt (optional)	Опис (необов’язково)
+	Retry	Повторити
+	Review…	Переглянути…
+	Send	Надіслати
+	Sends the same area and prompt again for three more.	Знову надсилає ту саму область і опис, щоб отримати ще три.
+	Set Up Generative AI…	Налаштувати генеративний ШІ…
+	Something went wrong in the shared AI layer: {error}	У спільному шарі ШІ щось пішло не так: {error}
+	Switched off	Вимкнено
+	The AI service is busy. Try again shortly.	Служба ШІ зайнята. Спробуйте ще раз трохи згодом.
+	The key can't be read	Не вдається прочитати ключ
+	The picture around the selection	Зображення навколо виділення
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	У виділенні {n} окремих областей — забагато, щоб заливати їх по одній (не більше {max}): воно заливається цілком.
+	The selection's shape	Форма виділення
+	Until I turn it off	Доки я не вимкну
+	Variations	Варіанти
+	Waiting ({n})	У черзі ({n})
+	Waiting: {name}	У черзі: {name}
+	Your prompt	Ваш опис
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	На цю відповідь чекає {n} генеративна заливка.|На цю відповідь чекають {n} генеративні заливки.|На цю відповідь чекають {n} генеративних заливок.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	Залити кожну з {n} окремих областей окремо|Залити кожну з {n} окремих областей окремо|Залити кожну з {n} окремих областей окремо
+@plural	{n} needs your OK|{n} need your OK	{n} чекає на згоду|{n} чекають на згоду|{n} чекають на згоду
+@plural	{n} failed|{n} failed	{n} з помилкою|{n} з помилкою|{n} з помилкою
+@plural	{n} waiting|{n} waiting	{n} у черзі|{n} у черзі|{n} у черзі
+@plural	{n} generating|{n} generating	{n} створюється|{n} створюються|{n} створюються
+	Check the service's own terms for what each request costs.	Скільки коштує кожен запит, зазначено в умовах сервісу.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	Підбір кольору для цього варіанта пропущено: зображення навколо виділення повернулося надто зміненим, щоб надійно його підігнати.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	Підбір кольору для цього варіанта пропущено: поза виділенням замало зображення для вимірювання.
+	Each request is billed by the service.	Кожен запит оплачується в сервісі.
+	Each request uses your subscription allowance.	Кожен запит витрачає ліміт вашої підписки.
+	Generate {n}	Створити {n}
+	Save Fill Diagnostics…	Зберегти діагностику заливки…
+	Saved Generative Fill diagnostics to {folder}	Діагностику генеративної заливки збережено в {folder}
+	Select a generative layer first.	Спершу виберіть генеративний шар.
+	The connection is set up as free of charge.	Підключення налаштовано як безкоштовне.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	Сервіс повернув зображення {returned} для області {sent}; після масштабування воно збіглося із зображенням навколо виділення.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	Сервіс повернув зображення {returned} для області {sent}; використано його середину.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	Записує у вибрану теку те, що ця заливка надіслала й отримала (зображення, маску, запит і зведення). Нічого не зберігається, доки ви не попросите.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	Підбір кольору пропущено для {n} варіанта.|Підбір кольору пропущено для {n} варіантів.|Підбір кольору пропущено для {n} варіантів.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	Створює {n} варіант на цьому комп'ютері за допомогою {connection}.|Створює {n} варіанти на цьому комп'ютері за допомогою {connection}.|Створює {n} варіантів на цьому комп'ютері за допомогою {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	Створює {n} варіант: {n} запит до {connection}.|Створює {n} варіанти: {n} окремі запити до {connection}.|Створює {n} варіантів: {n} окремих запитів до {connection}.
 # Action Stop message (#8386)
 	Message	Повідомлення
 # Playback Options (#5212)
