@@ -3800,6 +3800,14 @@ fn save_a_copy_writes_the_tiff_pyramid_and_transparency_asked_for() {
 }
 
 #[test]
+fn sanitize_strips_mixed_dots_and_spaces_at_the_edges() {
+    assert_eq!(sanitize(". ."), "layer");
+    assert_eq!(sanitize(". . ."), "layer");
+    assert_eq!(sanitize("a ."), "a");
+    assert_eq!(sanitize(" . a"), "a");
+}
+
+#[test]
 fn sanitize_keeps_windows_device_names_off_the_disk() {
     assert_eq!(sanitize("nul"), "nul_");
     assert_eq!(sanitize("CON"), "CON_");
