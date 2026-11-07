@@ -11,6 +11,7 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
             continue;
         }
         let default = default_shortcut(&it.id).or(it.shortcut.clone().filter(|_| !app.session.prefs().shortcuts.contains_key(&it.id)));
+        let default = crate::shortcuts::default_in_effect(app, &it.id, default);
         out.push((it.id, it.label, it.path, default));
     }
     // Commands without a menu item: the colour and fill keys (D, X, ⌥⌫…) sit under Tools, as

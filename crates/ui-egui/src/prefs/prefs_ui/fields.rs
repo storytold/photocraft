@@ -15,6 +15,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             let system = system_theme(app, ui.ctx());
+            let extras_moves = extras_moves_with_cmd_h(app);
+            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(EXTRAS_MOVES_ID), extras_moves));
             prefs_body(ui, f, system);
         }
         "shortcuts" => shortcuts_body(app, ui, f),
@@ -23,6 +25,18 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
         "mismatch" => mismatch_body(ui, f),
         _ => {}
     }
+}
+
+const EXTRAS_MOVES_ID: &str = "prefs-extras-moves-with-cmd-h";
+
+/// Would ⌘H Hides PhotoCraft put View › Extras on ⌃⌘H? Not when the user gave Extras a key of
+/// their own or unbound it, or when another command has ⌃⌘H.
+fn extras_moves_with_cmd_h(app: &PhotocraftApp) -> bool {
+    const EXTRAS: &str = "view.extras";
+    let mut prefs = app.session.prefs().clone();
+    prefs.interface.cmd_h_hides_app = true;
+    let default = crate::shortcuts::default_shortcut(EXTRAS);
+    prefs.shortcut(EXTRAS, default.as_deref()) == prefs.interface.default_shortcut(EXTRAS, default.as_deref())
 }
 
 /// The label a preference key shows in the dialog: a few keys have their own wording, the rest
@@ -80,6 +94,9 @@ pub(super) fn humanize(key: &str) -> String {
     }
     if key == "gpuMemoryMb" {
         return "GPU Memory (MB, 0 = Automatic)".into();
+    }
+    if key == "cmdHHidesApp" {
+        return "⌘H Hides PhotoCraft".into();
     }
     let mut s = String::new();
     for (i, ch) in key.chars().enumerate() {
@@ -473,6 +490,16 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     ui.vertical(|ui| {
                         crate::widgets::checkbox(ui, &mut b, &label);
                         ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                    });
+                } else if path == "interface.cmdHHidesApp" {
+                    ui.vertical(|ui| {
+                        crate::widgets::checkbox(ui, &mut b, &label);
+                        let extras_moves = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique(EXTRAS_MOVES_ID))).unwrap_or(true);
+                        if !b {
+                            ui.label(RichText::new(tl!("Hide PhotoCraft uses ⌃⌘H.")).color(t.text_dim));
+                        } else if extras_moves {
+                            ui.label(RichText::new(tl!("View › Extras uses ⌃⌘H.")).color(t.text_dim));
+                        }
                     });
                 } else {
                     crate::widgets::checkbox(ui, &mut b, &label);

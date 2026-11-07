@@ -309,6 +309,9 @@ pub struct Interface {
     pub notification_auto_hide: bool,
     /// Seconds a notice stays on screen before it hides itself (Auto Hide Notifications).
     pub notification_duration_seconds: u32,
+    /// macOS: ⌘H hides PhotoCraft, as in every other Mac app, and View › Extras moves to ⌃⌘H.
+    /// Off (the default), Extras keeps Photoshop's ⌘H and Hide moves to ⌃⌘H.
+    pub cmd_h_hides_app: bool,
 }
 
 impl Default for Interface {
@@ -337,7 +340,20 @@ impl Default for Interface {
             show_file_name_in_title: true,
             notification_auto_hide: true,
             notification_duration_seconds: 6,
+            cmd_h_hides_app: false,
         }
+    }
+}
+
+/// View › Extras, Photoshop's ⌘H, and where it moves when ⌘H hides the app.
+const EXTRAS: &str = "view.extras";
+const EXTRAS_WHEN_CMD_H_HIDES: &str = "Ctrl+Cmd+H";
+
+impl Interface {
+    /// A command's default shortcut as these preferences have it: `default`, except that View ›
+    /// Extras gives ⌘H up to Hide PhotoCraft (`cmd_h_hides_app`).
+    pub fn default_shortcut<'a>(&self, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+        if id == EXTRAS && self.cmd_h_hides_app { Some(EXTRAS_WHEN_CMD_H_HIDES) } else { default }
     }
 }
 
@@ -456,7 +472,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, MAC_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
 use validate::{check_value, get_path, keyed, set_path};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1406,7 +1422,19 @@ impl Preferences {
         match self.shortcuts.get(id) {
             Some(s) if s.is_empty() => None,
             Some(s) => Some(s.as_str()),
-            None => default,
+            None => {
+                let key = self.interface.default_shortcut(id, default);
+                // The moved Extras default stays unbound when the user already gave ⌃⌘H to another
+                // command: their key would win in dispatch, so the menu would show a key that runs
+                // something else.
+                if id == EXTRAS && self.interface.cmd_h_hides_app && key == Some(EXTRAS_WHEN_CMD_H_HIDES) {
+                    let taken = normalize_shortcut(EXTRAS_WHEN_CMD_H_HIDES);
+                    if self.shortcuts.iter().any(|(other, s)| other != id && normalize_shortcut(s) == taken) {
+                        return None;
+                    }
+                }
+                key
+            }
         }
     }
 
@@ -1547,6 +1575,9 @@ impl Session {
         // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise
         // Apply from another Preferences tab, which validates every value, would reject it.
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
+        // ⌘H Hides PhotoCraft does nothing elsewhere and the dialog hides it there, but a file
+        // copied from a Mac would still move Extras to a key that reads Ctrl+Ctrl+H.
+        prefs.interface.cmd_h_hides_app &= cfg!(target_os = "macos");
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);

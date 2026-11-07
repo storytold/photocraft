@@ -102,8 +102,13 @@ pub fn effective_shortcut(app: &PhotocraftApp, id: &str, default: Option<&str>) 
 /// A command's further keys in effect besides its main one (#3665): the user's, else
 /// Photoshop's (F3 for Copy, Shift+F7 for Inverse…). Menus show only the main key.
 pub fn effective_alternates(app: &PhotocraftApp, id: &str) -> Vec<String> {
-    let main = effective_shortcut(app, id, default_shortcut(id).as_deref());
+    let main = effective_shortcut(app, id, default_in_effect(app, id, default_shortcut(id)).as_deref());
     app.session.prefs().alternates(id, main.as_deref())
+}
+
+/// `default` as the preferences have it: ⌘H Hides PhotoCraft moves View › Extras to ⌃⌘H.
+pub fn default_in_effect(app: &PhotocraftApp, id: &str, default: Option<String>) -> Option<String> {
+    app.session.prefs().interface.default_shortcut(id, default.as_deref()).map(str::to_string)
 }
 
 /// Default (unmodified) shortcut of a command id.

@@ -51,7 +51,8 @@ fn moved_items_leave_their_old_menus() {
     assert_eq!(titles, ["PhotoCraft", "File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"]);
 }
 
-/// PhotoCraft keeps Photoshop's ⌘H, ⌘M, ⌘W and ⌘, (Hide Layers): the system items give way.
+/// PhotoCraft keeps Photoshop's ⌘H (⌘H Hides PhotoCraft is off by default), ⌘M, ⌘W and ⌘,
+/// (Hide Layers): the system items give way.
 #[test]
 fn clashes_are_resolved_in_photocrafts_favour() {
     let l = layout(true);
@@ -67,6 +68,28 @@ fn clashes_are_resolved_in_photocrafts_favour() {
     assert!(ids(&window.children).ends_with(&["<BringAllToFront>".into(), "---".into(), "window.document.0".into()]));
     let file = l.bar.menus.iter().find(|m| m.title == "File").unwrap();
     assert!(!file.children.contains(&Node::Standard(Standard::CloseWindow)), "⌘W stays File › Close");
+}
+
+/// ⌘H Hides PhotoCraft (opt-in): Hide takes ⌘H and View › Extras moves to ⌃⌘H, in the menu
+/// and in the keys; a key the user gives Extras still wins.
+#[test]
+fn cmd_h_hides_photocraft_and_extras_moves() {
+    let mut a = app(true);
+    a.session.edit_prefs(|p| p.interface.cmd_h_hides_app = true);
+    let l = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+    assert_eq!(l.bar.find(HIDE).unwrap().shortcut.as_deref(), Some("Cmd+H"));
+    assert_eq!(l.bar.find("view.extras").unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+H"));
+    assert!(!l.clashes.iter().any(|c| c.shortcut == "Cmd+H"));
+    let keys = crate::shortcut_dispatch::bindings(&a);
+    let extras: Vec<_> = keys.iter().filter(|(id, _)| id == "view.extras").map(|(_, k)| *k).collect();
+    let key = |s: &str| crate::shortcuts::parse(s).unwrap();
+    assert_eq!(extras, [key("Ctrl+Cmd+H")]);
+    assert!(!keys.iter().any(|(_, k)| *k == key("Cmd+H")), "⌘H is left to the menu");
+
+    a.run("edit.keyboardShortcuts", json!({"set": {"view.extras": "Cmd+H"}, "allowUnknown": true})).unwrap();
+    let l = photocraft_layout(&crate::menus::menu_items(&a), Lang::EN, "auto");
+    assert_eq!(l.bar.find(HIDE).unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+H"));
+    assert_eq!(l.bar.find("view.extras").unwrap().shortcut.as_deref(), Some("Cmd+H"));
 }
 
 /// Themes and the appearance-mode cycle move from Window to the app menu's Appearance.
