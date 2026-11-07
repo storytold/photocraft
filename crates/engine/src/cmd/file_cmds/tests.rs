@@ -2634,6 +2634,38 @@ fn layers_to_files_exports_group_children_as_loose_files() {
     assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "folders"})).is_err());
 }
 
+/// Layer naming is case-insensitive (Windows destinations) and present-but-wrong-typed modes are
+/// rejected rather than silently taking the default.
+#[test]
+fn layers_to_files_folds_name_collisions_and_rejects_untyped_modes() {
+    let dir = tmp("layers-names");
+    let mut s = session(8, 8, 8);
+    s.edit("Names", |doc, _| {
+        let fmt = doc.pixel_format();
+        let child = |name: &str| photocraft_doc::Layer::new(name, photocraft_doc::LayerContent::Raster(photocraft_doc::Surface::new(fmt)));
+        doc.layers.push(photocraft_doc::Layer::new(
+            "Names",
+            photocraft_doc::LayerContent::Group(photocraft_doc::Group {
+                children: vec![child("Logo"), child("logo")],
+                expanded: true,
+                artboard: None,
+                frame_stroke: None,
+            }),
+        ));
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": "layers", "naming": "layer"})).unwrap();
+    let files: Vec<String> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().to_string()).collect();
+    assert_eq!(
+        files,
+        vec![join(&dir, "logo.png"), join(&dir, "Logo-2.png"), join(&dir, "Background.png")],
+        "layer order is top to bottom, and Logo/logo must not overwrite each other on a case-insensitive destination"
+    );
+    assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "groups": 3})).is_err(), "groups must be a string");
+    assert!(s.execute("file.export.layersToFiles", json!({"dir": dir, "naming": true})).is_err(), "naming must be a string");
+}
+
 #[test]
 fn layers_to_files_reports_groups_as_exports_and_failures_as_errors() {
     let mut s = session(4, 4, 8);

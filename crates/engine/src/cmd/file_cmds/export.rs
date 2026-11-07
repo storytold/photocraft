@@ -77,19 +77,27 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     let format = p.get("format").and_then(Value::as_str).unwrap_or("png").trim_start_matches('.').to_ascii_lowercase();
     let trim = p.get("trim").and_then(Value::as_bool).unwrap_or(false);
     let visible_only = p.get("visibleOnly").and_then(Value::as_bool).unwrap_or(true);
-    let split_groups = match p.get("groups").and_then(Value::as_str).unwrap_or("merged") {
-        "merged" => false,
-        "layers" => true,
-        other => {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("groups must be \"merged\" or \"layers\", not {other:?}") });
-        }
+    let split_groups = match p.get("groups") {
+        None => false,
+        Some(Value::String(value)) => match value.as_str() {
+            "merged" => false,
+            "layers" => true,
+            other => {
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("groups must be \"merged\" or \"layers\", not {other:?}") });
+            }
+        },
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "groups must be a string: \"merged\" or \"layers\"".into() }),
     };
-    let layer_names = match p.get("naming").and_then(Value::as_str).map(|s| s.to_ascii_lowercase()).as_deref() {
-        None | Some("numbered") => false,
-        Some("layer") => true,
-        Some(other) => {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("naming must be \"numbered\" or \"layer\", not {other:?}") });
-        }
+    let layer_names = match p.get("naming") {
+        None => false,
+        Some(Value::String(value)) => match value.to_ascii_lowercase().as_str() {
+            "numbered" => false,
+            "layer" => true,
+            other => {
+                return Err(EngineError::BadParams { cmd: cmd.into(), msg: format!("naming must be \"numbered\" or \"layer\", not {other:?}") });
+            }
+        },
+        Some(_) => return Err(EngineError::BadParams { cmd: cmd.into(), msg: "naming must be a string: \"numbered\" or \"layer\"".into() }),
     };
     // Callers outside `Session::execute` (headless workspace exports) carry the session's gate
     // into `encode`, so a PSD embeds no file a linked smart object names.
@@ -104,6 +112,10 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
     }
     let mut report = LayerExportReport::default();
     let mut used = std::collections::HashSet::new();
+    // One layer-free template: each file only puts its own layer back, instead of cloning every
+    // other layer's pixel tree per file.
+    let mut template = (*doc).clone();
+    template.layers.clear();
     // Hidden layers never consumed a filename index; adjustments that pass the visibility
     // filter did. Keep those filenames stable while reporting both kinds of omission.
     let mut i = 0usize;
@@ -117,7 +129,7 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
             Planned::Export(l) => {
                 let index = i;
                 i += 1;
-                let mut one = (*doc).clone();
+                let mut one = template.clone();
                 let mut only = l.clone();
                 only.visible = true;
                 only.clipped = false;
@@ -144,7 +156,9 @@ pub fn export_layers_report_with(s: &Session, p: &Value, mut write: impl FnMut(&
                     let base = sanitize(&l.name);
                     let mut name = format!("{base}.{format}");
                     let mut n = 2;
-                    while !used.insert(name.clone()) {
+                    // Destinations are case-insensitive on Windows: `Logo.png` and `logo.png`
+                    // would overwrite each other, so track the folded name.
+                    while !used.insert(name.to_ascii_lowercase()) {
                         name = format!("{base}-{n}.{format}");
                         n += 1;
                     }
