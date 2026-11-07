@@ -180,6 +180,7 @@ fn a_dotted_device_file_name_exports_without_the_device_stem() {
     assert!(std::path::Path::new(html).is_file());
 }
 
+/// A later write failure names its output and warns about earlier files without rolling back.
 #[test]
 fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     let mut s = session(8);
@@ -187,13 +188,223 @@ fn platform_writer_failure_stops_export_and_preserves_saved_settings() {
     save_for_web_with_writer(&mut s, &saved, &mut |_, _| Ok(())).unwrap();
     s.execute("slice.new", json!({"rect": [8, 8, 24, 24], "name": "logo"})).unwrap();
     let mut attempts = 0;
-    let failed = save_for_web_with_writer(&mut s, &json!({"format": "gif", "dir": "downloads", "html": true}), &mut |_, _| {
+    let mut failed_path = String::new();
+    let failed = save_for_web_with_writer(&mut s, &json!({"format": "gif", "dir": "downloads", "html": true}), &mut |path, _| {
         attempts += 1;
-        if attempts == 2 { Err(other("download failed")) } else { Ok(()) }
+        if attempts == 2 {
+            failed_path = path.to_string();
+            Err(other("download failed"))
+        } else {
+            Ok(())
+        }
     });
-    assert!(failed.unwrap_err().to_string().contains("download failed"));
+    let error = failed.unwrap_err().to_string();
+    assert!(error.contains("download failed") && error.contains(&failed_path) && error.contains("1 earlier output(s) may remain"), "{error}");
     assert_eq!(attempts, 2, "no later slice, spacer or HTML should be written after failure");
     assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+}
+
+/// Derived path failures identify the blocked output and count files already written.
+#[test]
+fn later_slice_output_path_rejection_reports_earlier_files() {
+    for (blocked, earlier) in [("images/right.png", 1), ("images/spacer.gif", 2), ("web.html", 3)] {
+        let dir = tmp(&format!("web-output-path-{earlier}"));
+        let mut s = session(8);
+        let saved = json!({"format": "png24", "path": "last.png"});
+        save_for_web_with_writer(&mut s, &saved, &mut |_, _| Ok(())).unwrap();
+        s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+        s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+        std::fs::create_dir_all(format!("{dir}/{blocked}")).unwrap();
+
+        let err = s.execute("file.export.saveForWebLegacy", json!({"dir": dir, "html": true})).unwrap_err().to_string();
+        assert!(err.contains(blocked) && err.contains("is not a file"), "{err}");
+        assert!(err.contains(&format!("{earlier} earlier output(s) may remain")), "{err}");
+        let outputs = ["images/left.png", "images/right.png", "images/spacer.gif", "web.html"];
+        for (i, name) in outputs.into_iter().enumerate() {
+            assert_eq!(std::path::Path::new(&dir).join(name).is_file(), i < earlier, "{blocked}: {name}");
+        }
+        assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+    }
+}
+
+/// Refuse invalid slice filters before any write while retaining estimates and valid numbered exports.
+#[test]
+fn slice_export_validates_numbered_filters() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    for mut p in [
+        json!({"slices": "selected"}),
+        json!({"slices": "selected", "numbers": null}),
+        json!({"slices": "selected", "numbers": []}),
+        json!({"numbers": []}),
+        json!({"slices": "all", "numbers": 2}),
+        json!({"slices": "all", "numbers": [1, "2"]}),
+        json!({"slices": "user", "numbers": [1.5]}),
+        json!({"numbers": [0]}),
+        json!({"numbers": [-1]}),
+        json!({"numbers": [1, 999]}),
+    ] {
+        p["dir"] = json!("downloads");
+        let err = save_for_web_with_writer(&mut s, &p, &mut |_, _| panic!("invalid filter must not write")).unwrap_err();
+        assert!(matches!(err, EngineError::BadParams { .. }), "{p}: {err}");
+        assert!(s.file_menu.last_web.is_none());
+    }
+    let estimate = save_for_web_with_writer(&mut s, &json!({"slices": "selected"}), &mut |_, _| panic!("an estimate must not write")).unwrap();
+    assert_eq!((estimate["width"].as_u64(), estimate["height"].as_u64()), (Some(64), Some(48)));
+    assert!(s.file_menu.last_web.is_none());
+
+    for mode in [None, Some("all"), Some("user"), Some("selected")] {
+        let mut p = json!({"dir": "downloads", "numbers": [2]});
+        if let Some(mode) = mode {
+            p["slices"] = json!(mode);
+        }
+        let mut files = Vec::new();
+        let result = save_for_web_with_writer(&mut s, &p, &mut |path, _| {
+            files.push(path.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(files, ["downloads/images/right.png"]);
+        assert_eq!(result["slices"], 1);
+    }
+}
+
+#[test]
+fn invalid_slice_mode_and_whole_image_destination_refuse_before_writing() {
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    let slices = photocraft_doc::slices::resolve(&s.active().unwrap().doc);
+    let right = slices.iter().find(|slice| slice.name == "right").unwrap().number;
+    let dir = tmp("web-slice-mode-destination");
+    let path = format!("{dir}/whole.png");
+    let saved = json!({"format": "png24", "path": "last.png"});
+    save_for_web_with_writer(&mut s, &saved, &mut |_, _| Ok(())).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("select.float", json!({"dx": 32})).unwrap();
+
+    for (p, expected) in [
+        (json!({"dir": dir, "slices": "selcted", "numbers": [right]}), "slices must be all, user, or selected"),
+        (json!({"dir": dir, "slices": 2}), "slices must be all, user, or selected"),
+        (json!({"path": path, "numbers": [right]}), "use `dir`"),
+        (json!({"path": path, "dir": "", "slices": null, "numbers": [right]}), "use `dir`"),
+    ] {
+        let err = save_for_web_with_writer(&mut s, &p, &mut |_, _| panic!("a refused export must not call the writer")).unwrap_err().to_string();
+        assert!(err.contains(expected), "{p}: {err}");
+        assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+        assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
+    }
+    let p = json!({"path": path, "numbers": [right]});
+    assert!(s.execute("file.export.saveForWebLegacy", p).unwrap_err().to_string().contains("use `dir`"));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    assert_eq!(s.file_menu.last_web.as_ref(), Some(&saved));
+
+    // A directory or an explicit slice mode still exports only the chosen slice.
+    for p in [json!({"path": path, "dir": dir, "numbers": [right]}), json!({"path": path, "slices": "selected", "numbers": [right]})] {
+        let mut paths = Vec::new();
+        save_for_web_with_writer(&mut s, &p, &mut |out, _| {
+            paths.push(out.to_string());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(paths.len(), 1, "{p}");
+        assert!(paths[0].ends_with("/images/right.png"), "{p}: {paths:?}");
+    }
+    // The only number in a document without slices is the whole image.
+    let result = s.execute("file.export.saveForWebLegacy", json!({"path": path})).unwrap();
+    assert_eq!(result["files"], json!([path]));
+    let result = session(8).execute("file.export.saveForWebLegacy", json!({"path": path, "numbers": [1]})).unwrap();
+    assert_eq!(result["files"], json!([path]));
+    assert_eq!(decode(&path).dimensions(), (64, 48));
+}
+
+/// A direct path can export the sole slice, but an invalid filter must never write that file.
+#[test]
+fn single_slice_path_validates_numbered_filters_without_changing_the_destination() {
+    let mut s = session(8);
+    let dir = tmp("web-single-slice-filter");
+    let path = format!("{dir}/exact.png");
+    assert_eq!(photocraft_doc::slices::resolve(&s.active().unwrap().doc).len(), 1);
+
+    for mut p in [json!({"numbers": [999]}), json!({"numbers": [1, "2"]}), json!({"slices": "selected"}), json!({"slices": "selected", "numbers": []})] {
+        p["path"] = json!(path);
+        let platform = save_for_web_with_writer(&mut s, &p, &mut |_, _| panic!("invalid filter must not write"));
+        assert!(matches!(platform, Err(EngineError::BadParams { .. })), "{p}: {platform:?}");
+        let native = s.execute("file.export.saveForWebLegacy", p.clone());
+        assert!(matches!(native, Err(EngineError::BadParams { .. })), "{p}: {native:?}");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert!(s.file_menu.last_web.is_none());
+    }
+    let estimate = s.execute("file.export.saveForWebLegacy", json!({"slices": "selected"})).unwrap();
+    assert_eq!((estimate["width"].as_u64(), estimate["height"].as_u64()), (Some(64), Some(48)));
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+
+    let p = json!({"path": path, "slices": "selected", "numbers": [1]});
+    let mut writes = 0;
+    let platform = save_for_web_with_writer(&mut s, &p, &mut |out, _| {
+        assert_eq!(out, path);
+        writes += 1;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(writes, 1);
+    assert_eq!(platform["files"], json!([path]));
+    let native = s.execute("file.export.saveForWebLegacy", p).unwrap();
+    assert_eq!(native["files"], json!([path]));
+    assert_eq!(decode(&path).dimensions(), (64, 48));
+}
+
+/// Check every chosen image before writing, preserving codec boundaries and unchosen slices.
+#[test]
+fn selected_slice_format_limits_are_checked_before_any_write() {
+    for (format, lossless, limit) in [("webp", false, 16_383_u32), ("webp", true, 16_384), ("gif", false, 65_535), ("jpeg", false, 65_535)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": limit + 2, "height": 1})).unwrap();
+        s.execute("slice.new", json!({"rect": [0, 0, 1, 1], "name": "small"})).unwrap();
+        let wide = s.execute("slice.new", json!({"rect": [1, 0, limit + 1, 1], "name": "wide"})).unwrap()["slice"].clone();
+        let mut params = json!({"format": format, "lossless": lossless, "dir": "downloads", "html": false});
+        for mode in ["all", "user", "selected"] {
+            params["slices"] = json!(mode);
+            if mode == "selected" {
+                params["numbers"] = json!([1, 2]);
+            }
+            let mut writes = 0;
+            let result = save_for_web_with_writer(&mut s, &params, &mut |_, _| {
+                writes += 1;
+                Ok(())
+            });
+            assert!(result.is_err(), "{format}/{lossless}/{mode}: the wide slice exceeds its codec limit");
+            assert_eq!(writes, 0, "{format}/{lossless}/{mode}: refuse before writing the small slice");
+            assert!(s.file_menu.last_web.is_none());
+        }
+        params["numbers"] = json!([1]);
+        let mut sizes = Vec::new();
+        save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+            sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sizes, [(1, 1)], "unselected oversized slices do not reject a valid export");
+
+        s.execute("slice.set", json!({"slice": wide, "rect": [1, 0, limit, 1]})).unwrap();
+        params["numbers"] = json!([2]);
+        sizes.clear();
+        save_for_web_with_writer(&mut s, &params, &mut |_, bytes| {
+            if format == "webp" && lossless {
+                // image-webp 0.2.4 misreads valid 16,384-pixel VP8L dimensions as zero.
+                assert_eq!(&bytes[12..16], b"VP8L");
+                assert_eq!(bytes[20], 0x2f);
+                let header = u32::from_le_bytes(bytes[21..25].try_into().unwrap());
+                sizes.push(((header & 0x3fff) + 1, ((header >> 14) & 0x3fff) + 1));
+            } else {
+                sizes.push(photocraft_codecs::decode(bytes).unwrap().dimensions());
+            }
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(sizes, [(limit, 1)], "{format}/{lossless}: the exact codec boundary remains valid");
+    }
 }
 
 #[test]

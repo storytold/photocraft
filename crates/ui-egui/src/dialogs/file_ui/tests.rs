@@ -340,12 +340,14 @@ fn save_for_web_dialog_runs_the_command() {
 fn the_save_for_web_dialog_seeds_from_the_remembered_preferences() {
     let (mut app, _) = app();
     app.session.prefs.edit(|p| {
-        p.dialogs.insert(WEB_COMMAND.into(), json!({"format": "png8", "colors": 64}));
+        p.dialogs.insert(WEB_COMMAND.into(), json!({"format": "png8", "colors": 64, "folder": "previous", "numbers": [2]}));
     });
     let id = open_web(&mut app);
     let f = &app.ui.dialog_mut(id).unwrap().fields;
     assert_eq!(f["format"], "png8");
     assert_eq!(f["colors"], 64);
+    assert!(!f.contains_key("folder"), "the destination belongs to the previous export");
+    assert!(!f.contains_key("numbers"), "slice numbers belong to the previous document");
 }
 
 /// #5305: Save for Web with the suggested name runs (and so is recorded) with only the

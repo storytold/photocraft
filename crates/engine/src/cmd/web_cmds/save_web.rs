@@ -1,6 +1,6 @@
 use super::assets::{asset_output_path, asset_path_components};
 use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
-use super::settings::{WebSettings, rgb_hex};
+use super::settings::{WebFormat, WebSettings, rgb_hex};
 use super::{EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_file};
 
 /// A file-name-safe slice name.
@@ -145,8 +145,9 @@ pub(super) fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Save for Web through a platform writer (native files or browser downloads).
-/// The writer receives every image, spacer and HTML file. A write error stops the export;
-/// only a complete export remembers its settings and fires the export event. A custom writer
+/// The writer receives every image, spacer and HTML file. A write error stops the export.
+/// Multi-file write errors identify the failed path and warn when earlier outputs may remain.
+/// Only a complete export remembers its settings and fires the export event. A custom writer
 /// that targets the local filesystem must enforce its own path confinement.
 pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>) -> Result<Value> {
     save_for_web_impl(s, p, write, false)
@@ -167,6 +168,26 @@ fn remember_web_settings(s: &mut Session, cmd: &str, settings: &Value) {
     });
 }
 
+/// Parse a nonempty numbered slice filter against the current resolved layout.
+pub fn web_slice_numbers(numbers: &Value, slices: &[ResolvedSlice]) -> Result<Vec<usize>> {
+    let cmd = "file.export.saveForWebLegacy";
+    let numbers = numbers.as_array().ok_or_else(|| bad(cmd, "numbers must be an array of slice numbers"))?;
+    if numbers.is_empty() {
+        return Err(bad(cmd, "Select one or more slices"));
+    }
+    numbers
+        .iter()
+        .map(|value| {
+            value
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .filter(|n| slices.iter().any(|slice| slice.number == *n))
+                .ok_or_else(|| bad(cmd, format!("Invalid selected slice number: {value}")))
+        })
+        .collect()
+}
+
+/// Estimate or save a web export, checking selected image sizes before any write.
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     if let Some(authorize) = s.authorize {
@@ -174,6 +195,32 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     }
     // Settings are checked first, so a refused export leaves a floating selection where it is.
     let st = WebSettings::from_params(p, cmd)?;
+    let mode = p.get("slices");
+    let pick = match mode {
+        None | Some(Value::Null) => "all",
+        Some(Value::String(mode)) if matches!(mode.as_str(), "all" | "user" | "selected") => mode.as_str(),
+        Some(_) => return Err(bad(cmd, "slices must be all, user, or selected")),
+    };
+    let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
+    let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
+    let filter = p.get("numbers").filter(|v| !v.is_null());
+    let all = slices::resolve(&s.active().ok_or(EngineError::NoDocument)?.doc);
+    // A whole-image path would ignore the requested slice numbers.
+    if single.is_some() && dir.is_none() && matches!(mode, None | Some(Value::Null)) && filter.is_some() && all.len() > 1 {
+        return Err(bad(cmd, "`path` writes the whole image as one file: to export the slices in `numbers`, use `dir`"));
+    }
+    let whole_path = single.filter(|_| dir.is_none() && (all.len() == 1 || mode.is_none()));
+    // `folder` without `path` or `dir` writes the whole image under the document's name (#5305).
+    let folder = p.get("folder").and_then(Value::as_str).filter(|_| single.is_none() && dir.is_none());
+    // A path can write the sole resolved slice directly, but still must honor the filter.
+    let numbers = if single.is_some() || dir.is_some() {
+        if pick == "selected" && filter.is_none() {
+            return Err(bad(cmd, "Select one or more slices"));
+        }
+        filter.map(|numbers| web_slice_numbers(numbers, &all)).transpose()?
+    } else {
+        None
+    };
     // Direct platform calls must export the moved selection as it appears on the canvas,
     // just as Session::execute does before dispatching the native command.
     crate::float_cmds::before_command(s, cmd)?;
@@ -190,30 +237,18 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let exif = web_exif(&doc, st.metadata);
     let dpi = wdoc.resolution_dpi;
     let warnings = web_warnings(&st, exif, dpi);
-    let all = slices::resolve(&doc);
-    let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
-    let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
-    let chosen: Vec<&ResolvedSlice> = all
-        .iter()
-        .filter(|r| match (&numbers, pick) {
-            (Some(n), _) => n.contains(&(r.number as u64)),
-            (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
-            _ => true,
-        })
-        .collect();
-    let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
-    let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
-    // `folder` (with no `path` or `dir`): the whole image into that folder under the document's
-    // own name, so an action recorded with the suggested name saves each document it is played
-    // on under that document's name, as in Photoshop (#5305).
-    let folder = p.get("folder").and_then(Value::as_str).filter(|_| single.is_none() && dir.is_none());
+    let chosen = |r: &ResolvedSlice| match (&numbers, pick) {
+        (Some(n), _) => n.contains(&r.number),
+        (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
+        _ => true,
+    };
     let mut last_web = p.clone();
     // A trusted-markup decision applies to this export only, never to another document opened
     // with the dialog's remembered settings.
     if let Some(last) = last_web.as_object_mut() {
         last.remove("trustedSliceHtml");
     }
-    // Estimate only (the dialog's annotations): the whole image, or each chosen slice.
+    // Estimate only (the dialog's annotations): the whole image.
     if single.is_none() && dir.is_none() && folder.is_none() {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
         return Ok(
@@ -230,7 +265,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let path = join(folder, &name);
         return Ok(json!({"files": [path], "bytes": o.bytes.len(), "width": o.width, "height": o.height, "colors": o.colors, "warnings": warnings}));
     }
-    if let Some(path) = single.filter(|_| dir.is_none() && (all.len() == 1 || p.get("slices").is_none())) {
+    if let Some(path) = whole_path {
         let o = optimize(&buf.px, bw, wdoc.bounds(), &st, icc, exif, xmp.as_deref(), dpi, false)?;
         write(path, &o.bytes)?;
         remember_web_settings(s, cmd, &last_web);
@@ -244,6 +279,36 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
+    let limit = match st.format {
+        WebFormat::Gif => photocraft_codecs::Format::Gif.max_dimensions(),
+        WebFormat::Jpeg => photocraft_codecs::Format::Jpeg.max_dimensions(),
+        WebFormat::Webp if st.lossless => photocraft_codecs::Format::WebP.max_dimensions(),
+        // VP8 stores each dimension in 14 bits; lossless WebP permits one more pixel.
+        WebFormat::Webp => Some((16_383, 16_383)),
+        _ => None,
+    };
+    for r in all.iter().filter(|r| chosen(r) && r.kind != SliceKind::NoImage) {
+        let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
+        if piece.is_empty() {
+            if numbers.is_some() {
+                return Err(other("A selected image slice is empty at this export size"));
+            }
+            continue;
+        }
+        if let Some((w, h)) = limit
+            && (i64::from(piece.width()) > i64::from(w) || i64::from(piece.height()) > i64::from(h))
+        {
+            return Err(other(format!("Selected image slice {} exceeds the {w}x{h} limit for {}", r.number, st.format.ext())));
+        }
+    }
+    let mut written = 0usize;
+    let mut write = |relative: &str, bytes: &[u8]| -> Result<()> {
+        let path = web_derived_path(&dir, relative, native_paths)
+            .map_err(|error| if written == 0 { error } else { other(format!("{error}; {written} earlier output(s) may remain")) })?;
+        write(&path, bytes).map_err(|error| other(format!("Could not write `{path}`: {error}; {written} earlier output(s) may remain")))?;
+        written += 1;
+        Ok(())
+    };
     let mut files = Vec::new();
     let mut cells: Vec<(Rect, String, String)> = Vec::new();
     let mut total = 0usize;
@@ -267,9 +332,18 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // `slices::resolve`), each its own image and cell, as Photoshop's subslices. A no-image cell's
     // text goes into its first piece only.
     let mut texted = std::collections::HashSet::new();
-    for r in &chosen {
+    let mut chosen_count = 0;
+    for r in &all {
+        let selected = chosen(r);
+        chosen_count += usize::from(selected);
         let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
         if piece.is_empty() {
+            continue;
+        }
+        if !selected {
+            if html {
+                cells.push((piece, String::new(), String::new()));
+            }
             continue;
         }
         let stored = r.id.and_then(|id| doc.slices.get(id));
@@ -286,7 +360,7 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let name = unique(&slice_file(&r.name), o.ext);
         let rel = if images.is_empty() { name.clone() } else { format!("{images}/{name}") };
         let out = join(&dir, &rel);
-        write(&web_derived_path(&dir, &rel, native_paths)?, &o.bytes)?;
+        write(&rel, &o.bytes)?;
         total += o.bytes.len();
         files.push(out);
         let alt = stored.map_or(String::new(), |s| html_escape(&s.alt));
@@ -306,17 +380,17 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
         let spacer = grid.then(|| if images.is_empty() { "spacer.gif".to_string() } else { format!("{images}/spacer.gif") });
         if let Some(sp) = &spacer {
             let gif = photocraft_codecs::web::encode_gif_indexed(1, 1, &[0], &[[0, 0, 0]], Some(0), false).map_err(other)?;
-            write(&web_derived_path(&dir, sp, native_paths)?, &gif)?;
+            write(sp, &gif)?;
         }
         let page = html_table(&base, wdoc.size.width, wdoc.size.height, &cells, spacer.as_deref());
-        let hp = join(&dir, &format!("{base}.html"));
-        write(&web_derived_path(&dir, &format!("{base}.html"), native_paths)?, page.as_bytes())?;
-        html_path = Some(hp);
+        let rel = format!("{base}.html");
+        write(&rel, page.as_bytes())?;
+        html_path = Some(join(&dir, &rel));
     }
     remember_web_settings(s, cmd, &last_web);
     s.file_menu.last_web = Some(last_web);
     crate::automate_cmds::fire_event(s, "export");
     Ok(
-        json!({"files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height, "warnings": warnings}),
+        json!({"files": files, "html": html_path, "bytes": total, "slices": chosen_count, "width": wdoc.size.width, "height": wdoc.size.height, "warnings": warnings}),
     )
 }

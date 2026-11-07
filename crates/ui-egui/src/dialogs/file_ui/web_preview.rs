@@ -230,10 +230,18 @@ pub fn controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     nav.write(f);
 }
 
-pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, response: &egui::Response, tex: &egui::TextureHandle, source: egui::Vec2, f: &mut Map<String, Value>) {
+/// Paint the navigable image and return its screen rectangle for overlays and hit testing.
+pub fn paint(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    response: &egui::Response,
+    tex: &egui::TextureHandle,
+    source: egui::Vec2,
+    f: &mut Map<String, Value>,
+) -> egui::Rect {
     let mut nav = Navigation::read(f);
     let ppp = ui.ctx().pixels_per_point();
-    if response.double_clicked() {
+    if response.double_clicked() && !(f.get("__hasSlices").and_then(Value::as_bool).unwrap_or(false) && ui.input(|input| input.modifiers.shift)) {
         nav.zoom = None;
         nav.center = egui::Vec2::splat(0.5);
     }
@@ -267,6 +275,71 @@ pub fn paint(ui: &mut egui::Ui, rect: egui::Rect, response: &egui::Response, tex
         f.insert("__effectiveZoom".into(), json!(scale * ppp));
     }
     nav.write(f);
+    image
+}
+
+type SliceLayout = (u64, Arc<Vec<photocraft_doc::slices::ResolvedSlice>>);
+
+/// Resolve slice numbering once per document revision, shared by all preview panes.
+pub fn slice_layout(ui: &egui::Ui, doc: &photocraft_doc::Document, revision: u64) -> Arc<Vec<photocraft_doc::slices::ResolvedSlice>> {
+    let key = egui::Id::unique(("web-slice-layout", doc.id.0));
+    if let Some((_, slices)) = ui.data(|data| data.get_temp::<SliceLayout>(key)).filter(|(rev, _)| *rev == revision) {
+        return slices;
+    }
+    let slices = Arc::new(photocraft_doc::slices::resolve(doc));
+    ui.data_mut(|data| data.insert_temp(key, (revision, slices.clone())));
+    slices
+}
+
+/// Read the dialog's selected slice numbers for the preview and checkbox list.
+pub(super) fn selected_numbers(fields: &Map<String, Value>) -> Vec<usize> {
+    fields.get("__selectedSlices").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok())).collect()
+}
+
+/// Draw numbered slices in image coordinates; click to select, Shift-click to toggle.
+pub fn slice_overlay(
+    ui: &egui::Ui,
+    doc: &photocraft_doc::Document,
+    slices: &[photocraft_doc::slices::ResolvedSlice],
+    image: egui::Rect,
+    response: &egui::Response,
+    fields: &mut Map<String, Value>,
+) {
+    let source = egui::vec2(doc.size.width.max(1) as f32, doc.size.height.max(1) as f32);
+    let mut selected = selected_numbers(fields);
+    if response.clicked()
+        && let Some(at) = response.interact_pointer_pos().filter(|at| image.contains(*at))
+    {
+        let at = (at - image.min) / image.size() * source;
+        if let Some(slice) = slices.iter().find(|slice| slice.rect.contains(at.x.floor() as i32, at.y.floor() as i32)) {
+            if ui.input(|input| input.modifiers.shift) {
+                if selected.contains(&slice.number) {
+                    selected.retain(|n| *n != slice.number);
+                } else {
+                    selected.push(slice.number);
+                }
+            } else {
+                selected = vec![slice.number];
+            }
+            fields.insert("__selectedSlices".into(), json!(selected));
+        }
+    }
+    let tokens = Tokens::get(ui.ctx());
+    let painter = ui.painter().with_clip_rect(response.rect.intersect(image).intersect(ui.clip_rect()));
+    for slice in slices {
+        let to_screen = |x, y| image.min + egui::vec2(x as f32, y as f32) / source * image.size();
+        let rect = egui::Rect::from_two_pos(to_screen(slice.rect.x0, slice.rect.y0), to_screen(slice.rect.x1, slice.rect.y1));
+        let picked = selected.contains(&slice.number);
+        let color = if picked || slice.origin != photocraft_doc::SliceOrigin::Auto { tokens.accent } else { tokens.text_dim };
+        painter.rect_stroke(rect, 0.0, egui::Stroke::new(if picked { 2.0 } else { 1.0 }, color), egui::StrokeKind::Inside);
+        if rect.width() > 18.0 && rect.height() > 12.0 {
+            let text = if picked { tokens.accent_text } else { tokens.text };
+            let galley = painter.layout_no_wrap(format!("{:02}", slice.number), crate::theme::semibold(10.0), text);
+            let badge = egui::Rect::from_min_size(rect.min + egui::vec2(2.0, 2.0), galley.size() + egui::vec2(6.0, 2.0));
+            painter.rect_filled(badge, tokens.radius_sm, if picked { tokens.accent } else { tokens.accent_soft });
+            painter.galley(badge.min + egui::vec2(3.0, 1.0), galley, text);
+        }
+    }
 }
 
 #[cfg(test)]
