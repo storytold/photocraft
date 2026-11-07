@@ -1,0 +1,166 @@
+//! Free Transform's contextual task bar through the real canvas and existing commands.
+
+use egui::{Key, Rect, pos2};
+use egui_kittest::Harness;
+use egui_kittest::kittest::Queryable;
+use serde_json::{Value, json};
+
+use crate::PhotocraftApp;
+use crate::canvas::ViewXform;
+use crate::control::{ControlRequest, Outcome, handle};
+use crate::transform_undo_tests::{begin, harness};
+
+type AppHarness = Harness<'static, PhotocraftApp>;
+
+/// Settle the floating area's measured size before exercising its controls.
+fn open_box() -> AppHarness {
+    let mut h = harness();
+    begin(&mut h);
+    h.run_steps(4);
+    h
+}
+
+/// Send a synchronous command through the same control path as the offscreen example.
+fn control(h: &mut AppHarness, method: &str, params: Value) -> Value {
+    let ctx = h.ctx.clone();
+    let (request, _reply) = ControlRequest::new(method, params);
+    let Outcome::Done(reply) = handle(h.state_mut(), &ctx, &request) else { panic!("{method} should reply immediately") };
+    assert_eq!(reply["ok"], true, "{method}: {reply}");
+    reply["result"].clone()
+}
+
+/// Read the bar's current visibility and position through the public inspection route.
+fn bar(h: &mut AppHarness) -> Value {
+    control(h, "ui.inspect", json!({}))["taskBar"].clone()
+}
+
+/// Count committed document edits, excluding changes made only inside the open box.
+fn history(h: &AppHarness) -> usize {
+    h.state().session.active().unwrap().history.past_len()
+}
+
+/// Click the actual accessible widget and allow the canvas to redraw.
+fn click(h: &mut AppHarness, label: &str) {
+    h.get_by_label(label).click();
+    h.run_steps(4);
+}
+
+/// Each preset must match the real right-click entry and keep the document history untouched.
+#[test]
+fn transform_task_bar_presets_match_the_context_menu() {
+    for (label, id) in [
+        ("Rotate 90° Counter Clockwise", "edit.transform.rotate90Ccw"),
+        ("Rotate 90° Clockwise", "edit.transform.rotate90Cw"),
+        ("Flip Horizontal", "edit.transform.flipHorizontal"),
+        ("Flip Vertical", "edit.transform.flipVertical"),
+    ] {
+        let mut toolbar = open_box();
+        let mut menu = open_box();
+        let before = toolbar.state().ui.transform.as_ref().unwrap().quad;
+        let (toolbar_history, menu_history) = (history(&toolbar), history(&menu));
+        click(&mut toolbar, label);
+        control(&mut menu, "ui.pointer", json!({"button": "secondary", "events": [{"kind": "down", "x": 150, "y": 130}, {"kind": "up", "x": 150, "y": 130}]}));
+        control(&mut menu, "ui.context.choose", json!({"id": id}));
+        let quad = toolbar.state().ui.transform.as_ref().unwrap().quad;
+        assert_ne!(quad, before, "{label}");
+        assert_eq!(quad, menu.state().ui.transform.as_ref().unwrap().quad, "{label}");
+        assert_eq!(history(&toolbar), toolbar_history);
+        assert_eq!(history(&menu), menu_history);
+    }
+}
+
+/// Done commits once like Enter, while Cancel discards the box like Escape.
+#[test]
+fn transform_task_bar_done_and_cancel_match_the_keys() {
+    for (label, key, edits) in [("Done", Key::Enter, 1), ("Cancel", Key::Escape, 0)] {
+        let mut toolbar = open_box();
+        let mut keys = open_box();
+        for h in [&mut toolbar, &mut keys] {
+            click(h, "Rotate 90° Clockwise");
+        }
+        let (toolbar_history, key_history) = (history(&toolbar), history(&keys));
+        click(&mut toolbar, label);
+        keys.key_press(key);
+        keys.run_steps(4);
+        assert!(toolbar.state().ui.transform.is_none() && keys.state().ui.transform.is_none(), "{label}");
+        assert_eq!(history(&toolbar), toolbar_history + edits);
+        assert_eq!(history(&keys), key_history + edits);
+        assert_eq!(bar(&mut toolbar)["visible"], false);
+    }
+}
+
+/// The unpinned bar stays centered eleven points below the actual quad on screen.
+#[test]
+fn transform_task_bar_tracks_the_rotated_quad() {
+    let mut h = open_box();
+    for turn in [false, true] {
+        if turn {
+            click(&mut h, "Rotate 90° Clockwise");
+        }
+        let app = h.state();
+        let view = &app.ui.views[0];
+        let xf = ViewXform {
+            rect: crate::rulers::content_rect(app, app.last_canvas_rect),
+            zoom: view.zoom,
+            center: view.center,
+            flip: app.ui.view.flip_horizontal,
+            rotation: view.rotation,
+            aspect: app.ui.view.display_aspect(),
+        };
+        let quad = app.ui.transform.as_ref().unwrap().quad.map(|[x, y]| xf.to_screen(x as f32, y as f32));
+        let anchor = Rect::from_points(&quad);
+        let [x0, y0, x1, y1] = app.ui.task_bar_shown.unwrap();
+        let shown = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
+        assert!((shown.center().x - anchor.center().x).abs() <= 1.0, "{shown:?} below {anchor:?}");
+        assert!((shown.top() - anchor.bottom() - crate::widgets::task_bar::GAP).abs() <= 1.0, "{shown:?} below {anchor:?}");
+        assert_eq!(bar(&mut h)["visible"], true);
+    }
+}
+
+/// Warp and Content-Aware Scale keep their own controls, and the Crop bar still draws.
+#[test]
+fn transform_task_bar_keeps_warp_content_aware_scale_and_crop_separate() {
+    let mut warp = open_box();
+    control(&mut warp, "ui.menu.invoke", json!({"id": "edit.transform.warp"}));
+    warp.run_steps(4);
+    assert!(warp.state().ui.transform.as_ref().unwrap().warp.is_some());
+    assert_eq!(bar(&mut warp)["visible"], false);
+
+    let mut scale = harness();
+    control(&mut scale, "ui.menu.invoke", json!({"id": "edit.contentAwareScale"}));
+    scale.run_steps(4);
+    assert!(scale.state().ui.transform.as_ref().unwrap().content_aware.is_some());
+    assert_eq!(bar(&mut scale)["visible"], false);
+
+    let mut crop = harness();
+    control(&mut crop, "ui.set", json!({"tool": "crop"}));
+    crop.state_mut().ui.crop_rect = Some([100.0, 100.0, 200.0, 160.0]);
+    crop.run_steps(4);
+    assert!(crate::crop_task_bar::eligible(crop.state()));
+    assert!(!crate::transform_task_bar::eligible(crop.state()));
+    assert_eq!(bar(&mut crop)["visible"], true);
+}
+
+/// The shared menu pins, resets and hides the bar, and the Window command restores it.
+#[test]
+fn transform_task_bar_uses_the_shared_menu_and_window_toggle() {
+    let mut h = open_box();
+    click(&mut h, "More options");
+    click(&mut h, "Pin bar position");
+    assert_eq!(bar(&mut h)["pinned"], true);
+    assert!(h.state().ui.panels.task_bar.at.is_some());
+
+    click(&mut h, "More options");
+    click(&mut h, "Reset bar position");
+    assert_eq!(bar(&mut h)["pinned"], false);
+    assert!(h.state().ui.panels.task_bar.at.is_none());
+
+    click(&mut h, "More options");
+    click(&mut h, "Hide bar");
+    assert_eq!(bar(&mut h)["enabled"], false);
+    assert_eq!(bar(&mut h)["visible"], false);
+    assert!(h.state().ui.transform.is_some());
+    control(&mut h, "ui.menu.invoke", json!({"id": "window.panel.contextualTaskBar"}));
+    h.run_steps(4);
+    assert_eq!(bar(&mut h)["visible"], true);
+}
