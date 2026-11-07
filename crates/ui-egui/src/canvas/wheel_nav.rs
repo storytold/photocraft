@@ -88,6 +88,10 @@ pub struct Input {
     pub notch: f32,
 }
 
+/// Screen points one wheel notch (a line) pans the canvas: Photoshop's 16 px (#12028). Panels and
+/// other scroll areas keep egui's `line_scroll_speed`, and so does the wheel zoom's notch.
+pub const CANVAS_PAN_PER_LINE: f32 = 16.0;
+
 /// The view change for one frame of wheel input, if any.
 pub fn classify(i: Input) -> Option<Wheel> {
     if i.pinch_zooms && i.zoom_delta.is_finite() && i.zoom_delta > 0.0 && i.zoom_delta != 1.0 {
@@ -410,7 +414,9 @@ pub fn read_with(
         }
         None => ctx.data(|d| d.get_temp::<bool>(shift_id())).unwrap_or(false),
     };
-    let scroll = if smooth { smoothed } else { unsmoothed_scroll(&wheel, (alt, shift), &options, page) };
+    let scroll = if smooth { smoothed } else { unsmoothed_scroll(&wheel, (alt, shift), &options, page, options.line_scroll_speed) };
+    // The canvas pans [`CANVAS_PAN_PER_LINE`] points per notch; zoom steps keep egui's notch.
+    let pan = (!smooth).then(|| unsmoothed_scroll(&wheel, (alt, shift), &options, page, CANVAS_PAN_PER_LINE));
     let wheel = mark_unsmoothed(ctx, wheel);
 
     if !hovered {
@@ -521,7 +527,10 @@ pub fn read_with(
             // Unsmoothed, a scroll pans by this frame's own wheel events (none: no tail).
             scroll
         };
-        classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch })
+        match (classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch }), pan) {
+            (Some(Wheel::Pan(_)), Some(p)) if p != Vec2::ZERO => Some(Wheel::Pan(p)),
+            (wheel, _) => wheel,
+        }
     }
 }
 
@@ -536,7 +545,7 @@ fn gesture_mode(m: &Modifiers) -> (bool, bool) {
 /// it sideways as egui does ([`configure`]), so every pan, plain or sideways, moves at once.
 /// Only the wheel events of the gesture in progress (`mode`, the ⌥ and ⇧ of [`gesture_mode`])
 /// count: a ⌥ zoom notch in the same frame as a plain pan notch doesn't pan too.
-fn unsmoothed_scroll(wheel: &[(MouseWheelUnit, Vec2, Modifiers, TouchPhase)], mode: (bool, bool), options: &egui::InputOptions, page: f32) -> Vec2 {
+fn unsmoothed_scroll(wheel: &[(MouseWheelUnit, Vec2, Modifiers, TouchPhase)], mode: (bool, bool), options: &egui::InputOptions, page: f32, line: f32) -> Vec2 {
     wheel.iter().fold(Vec2::ZERO, |sum, (unit, delta, modifiers, phase)| {
         // egui scrolls only by `Move` events; a trackpad's `Start`, `End` or `Cancel` delta
         // (`WheelState::on_wheel_event`) is not a scroll.
@@ -550,7 +559,7 @@ fn unsmoothed_scroll(wheel: &[(MouseWheelUnit, Vec2, Modifiers, TouchPhase)], mo
         let d = *delta
             * match unit {
                 MouseWheelUnit::Point => 1.0,
-                MouseWheelUnit::Line => options.line_scroll_speed,
+                MouseWheelUnit::Line => line,
                 MouseWheelUnit::Page => page,
             };
         let sideways = modifiers.matches_any(options.horizontal_scroll_modifier);
@@ -612,5 +621,7 @@ pub fn pinch_factor(i: &InputState, touch_gestures: bool) -> f32 {
         .product()
 }
 
+#[cfg(test)]
+mod scroll_step_tests;
 #[cfg(test)]
 mod tests;
