@@ -1,6 +1,6 @@
 //! Panasonic / Leica RW2: the bit-packed stream of recent Lumix bodies
 //! (PanasonicRaw RawFormat 5) and the vendor-compressed stream of the earlier
-//! ones (RawFormat 3 and 4).
+//! ones (RawFormat 3 and 4), plus prefix-coded RawFormat 8 strips and tiles.
 //!
 //! The container is TIFF-like (`IIU\0`); IFD0 holds Panasonic's own tags,
 //! whose ids and meanings are public (ExifTool's PanasonicRaw table):
@@ -39,7 +39,10 @@
 //!   (measured on the darkest pixels of sample files), so 15 is added when
 //!   they are read.
 //!
+//! RawFormat 8 is described in `rw2/format8.rs` and `docs/rw2-format8.md`.
 //! Every other RawFormat value is not decoded.
+
+mod format8;
 
 use crate::error::{RawError, Result};
 use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
@@ -231,7 +234,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     let ifd = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("RW2 has no IFD0"))?;
     let raw_format = t.tag_uint(&ifd, RAW_FORMAT);
     let compressed = match raw_format {
-        Some(5) => false,
+        Some(5 | 8) => false,
         Some(3 | 4) => true,
         other => {
             let f = other.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into());
@@ -250,11 +253,16 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         _ => return Err(RawError::unsupported("Panasonic RW2 without a CFA pattern")),
     };
     let cfa = Cfa::bayer(cfa).ok_or_else(|| RawError::malformed("bad CFA"))?;
-    let offset =
-        t.tag_uint(&ifd, RAW_DATA_OFFSET).or_else(|| t.tag_uint(&ifd, tag::STRIP_OFFSETS)).ok_or_else(|| RawError::malformed("RW2 has no raw data offset"))?
-            as usize;
-    let src = t.data.get(offset..).ok_or_else(|| RawError::malformed("RW2 raw data lies outside the file"))?;
-    let data = if compressed { decode_compressed(src, width, height, bits)? } else { decode_packed(src, width, height, bits)? };
+    let data = if raw_format == Some(8) {
+        format8::decode(t, &ifd, width, height, bits, limits)?
+    } else {
+        let offset = t
+            .tag_uint(&ifd, RAW_DATA_OFFSET)
+            .or_else(|| t.tag_uint(&ifd, tag::STRIP_OFFSETS))
+            .ok_or_else(|| RawError::malformed("RW2 has no raw data offset"))? as usize;
+        let src = t.data.get(offset..).ok_or_else(|| RawError::malformed("RW2 raw data lies outside the file"))?;
+        if compressed { decode_compressed(src, width, height, bits)? } else { decode_packed(src, width, height, bits)? }
+    };
 
     let full = Rect::new(0, 0, width, height);
     let level = |tg: u16| t.tag_uint(&ifd, tg).map(f64::from);

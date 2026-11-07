@@ -51,6 +51,9 @@ Implemented only from public specifications, papers and observation of files:
   predictor groups with per-parity predictors, the 2/4/8-bit field widths, the page-permuted
   downward bit order and the black level sitting 15 counts above the recorded tags were all
   established by observation of sample files.
+* Panasonic RW2 RawFormat 8: prefix-coded 2×2 cells in strips and multi-row tiles,
+  based on LightCraft's published format measurements (#215, #255, #1304), with
+  an independent PhotoCraft implementation; [format evidence and validation](../../docs/rw2-format8.md).
 * Demosaicing: Malvar, He & Cutler (ICASSP 2004); Hirakawa & Parks, "Adaptive
   homogeneity-directed demosaicing" (IEEE TIP 2005); for X-Trans and other non-Bayer CFAs,
   gradient-weighted green interpolation (Lu & Tan, "Color filter array demosaicking: new method
@@ -78,6 +81,7 @@ camera colour tables were copied.
 | Sony compressed ARW ("cRAW", SonyRawFileType 2) | Decoded: 11-bit min/max + 7-bit delta blocks, SonyToneCurve to 14 bits; applied WB and black from plain tags or encrypted SR2SubIFD with the measured common key. If metadata is unreadable, black falls back to 512 and WB to grey-world. Measured ILCE-7 / ILCE-6000 image area; camera colour calibration remains incomplete |
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
 | Panasonic / Leica RW2, RawFormat 3 and 4 (vendor-compressed, 12-bit) | Decoded; the black level is read 15 counts above the recorded tag; PanasonicRaw white / WB / sensor borders |
+| Panasonic RW2, RawFormat 8 (12/14/16-bit prefix-coded strips and tiles) | Decoded; exact sensor comparison on a DC-S9 file, synthetic multi-row tiles and malformed-input tests; [evidence](../../docs/rw2-format8.md) |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
 | Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
 | Fujifilm RAF, uncompressed (X-Trans I–V, GFX and Bayer bodies since about 2010) | Decoded: 16-bit containers (either byte order), 12-bit LSB-first packing, 14-bit packing in 32-bit words; X-Trans 6×6 or Bayer 2×2 layout, black, as-shot WB, crop, RawExposureBias, orientation from the preview's EXIF |

@@ -8,5 +8,6 @@ mod nef_packed;
 mod nikon_d4_depth;
 mod raf;
 mod raw_corpus;
+mod rw2_format8;
 mod vendor_codecs;
 mod vendors;
