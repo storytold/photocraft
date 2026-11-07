@@ -2,7 +2,8 @@
 //! typed quickly set an exact value (4 then 5 = 45%, 0 then 0 = 0%). With the Brush, Pencil or
 //! Eraser they set the brush's Opacity (⇧: Flow; swapped while airbrush build-up is on); with the Gradient or Paint Bucket their
 //! Opacity; with tools that have no opacity of their own (Move, the selection tools, Type…) the
-//! active layer's Opacity (⇧: Fill). Tools whose number is a strength or exposure are left alone.
+//! active layer's Opacity (⇧: Fill); with the Background Eraser its Tolerance (#11907). Tools whose
+//! number is a strength or exposure are left alone.
 
 use egui::{Event, Key};
 use serde_json::json;
@@ -25,6 +26,8 @@ enum Target {
     },
     /// The Gradient / Paint Bucket opacity option.
     ToolOpacity,
+    /// The Background Eraser's Tolerance option.
+    BgTolerance,
     /// The active layer's opacity (⇧: fill).
     Layer,
     None,
@@ -35,6 +38,7 @@ fn target(tool: Tool) -> Target {
         Tool::Brush | Tool::Eraser | Tool::CloneStamp | Tool::HistoryBrush => Target::Brush { flow: true },
         Tool::Pencil => Target::Brush { flow: false },
         Tool::Gradient | Tool::PaintBucket => Target::ToolOpacity,
+        Tool::BackgroundEraser => Target::BgTolerance,
         // Their options-bar number is a strength, exposure or tolerance, not this opacity.
         t if t.is_brushlike() || t == Tool::MagicEraser => Target::None,
         _ => Target::Layer,
@@ -117,6 +121,8 @@ fn apply(app: &mut PhotocraftApp, percent: f32, shift: bool) {
             let _ = app.run("tools.setBrush", json!({ "brush": { "flow": v.max(0.01) } }));
         }
         (Target::ToolOpacity, false) => app.ui.tool_options.fill_opacity = percent,
+        // The Tolerance field starts at 1%; `00` (0%) keeps today's value rather than guessing.
+        (Target::BgTolerance, false) if percent >= 1.0 => app.ui.tool_options.bg_tolerance = percent,
         (Target::Layer, _) => {
             // The locked Background has no opacity or fill.
             let Some(st) = app.session.active() else { return };
