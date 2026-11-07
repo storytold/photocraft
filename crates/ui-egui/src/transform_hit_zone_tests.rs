@@ -423,7 +423,7 @@ fn move_whole_edge_press_enters_scaling_at_both_zooms() {
         let steps = app.session.active().unwrap().history.past_len();
         // Away from the top edge's midpoint and corners: the native canvas first opens the
         // controls here, then forwards the same document-space press to the transform tool.
-        assert!(begin_transform_controls_at(&mut app, &ctx, &xf, xf.to_screen(180.0, 100.0)));
+        assert_eq!(begin_transform_controls_at(&mut app, &ctx, &xf, xf.to_screen(180.0, 100.0)), ControlsPress::Started);
         for event in [
             crate::canvas::ToolEvent::Down { x: 180.0, y: 100.0, pressure: 1.0 },
             crate::canvas::ToolEvent::Move { x: 180.0, y: 90.0, pressure: 1.0 },
