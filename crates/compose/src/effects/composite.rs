@@ -194,18 +194,21 @@ fn stroke_band(shape: &Map, st: &photocraft_doc::StrokeFx) -> Map {
 
 /// `true` if an enabled effect painted inside the layer (with its content) blends in a mode
 /// other than Normal.
-fn blends_inside(layer: &Layer) -> bool {
+pub(super) fn blends_inside(layer: &Layer) -> bool {
     let blends = |m: BlendMode| m != BlendMode::Normal;
+    // Stroke Emboss with its stroke wholly inside shades with the layer (`BevelPaint::Inner` in
+    // `build_maps_prepared`), as an Inner Bevel does; one reaching outside shades over the
+    // finished layer.
+    let top_stroke = layer.effects.items.iter().filter(|e| e.enabled()).find_map(|e| if let Effect::Stroke(st) = e { Some(st) } else { None });
+    let stroke_inside = top_stroke.is_some_and(|st| stroke_widths(st).1 <= 0.0);
     layer.effects.items.iter().filter(|e| e.enabled()).any(|e| match e {
         Effect::ColorOverlay { common, .. } | Effect::GradientOverlay { common, .. } | Effect::PatternOverlay { common, .. } => blends(common.blend),
         Effect::Satin(s) => blends(s.common.blend),
         Effect::InnerGlow(g) => blends(g.common.blend),
         Effect::InnerShadow(s) => blends(s.common.blend),
         Effect::Stroke(s) => stroke_widths(s).0 > 0.0 && blends(s.common.blend),
-        // Stroke Emboss shades over the finished layer, as the emboss styles do.
-        Effect::BevelEmboss(b) => {
-            b.style != BevelStyle::StrokeEmboss && bevel_geom(b).paint == BevelPaint::Inner && (blends(b.highlight.blend) || blends(b.shadow.blend))
-        }
+        Effect::BevelEmboss(b) if b.style == BevelStyle::StrokeEmboss => stroke_inside && (blends(b.highlight.blend) || blends(b.shadow.blend)),
+        Effect::BevelEmboss(b) => bevel_geom(b).paint == BevelPaint::Inner && (blends(b.highlight.blend) || blends(b.shadow.blend)),
         Effect::DropShadow(_) | Effect::OuterGlow(_) => false,
     })
 }

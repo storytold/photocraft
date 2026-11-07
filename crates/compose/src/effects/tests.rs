@@ -1047,3 +1047,30 @@ fn shifting_by_hostile_distances_does_not_overflow() {
         assert_eq!(s.v.len(), 144);
     }
 }
+
+/// #8639 review: a Stroke Emboss whose stroke lies wholly inside shades with the layer, so its
+/// non-Normal highlight or shadow counts as an interior blend, as an Inner Bevel's does; with the
+/// stroke reaching outside, or no stroke, it doesn't.
+#[test]
+fn an_inside_stroke_emboss_counts_as_an_interior_blend() {
+    let stroke = |position: StrokePosition| {
+        Effect::Stroke(photocraft_doc::StrokeFx {
+            common: photocraft_doc::FxCommon::new(BlendMode::Normal, 1.0),
+            size: 4.0,
+            position,
+            paint: photocraft_doc::FxPaint::Color(photocraft_color::Color::BLACK),
+            overprint: false,
+        })
+    };
+    let layer = |effects: Vec<Effect>| {
+        let mut l =
+            photocraft_doc::Layer::new("L", photocraft_doc::LayerContent::Raster(photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8)));
+        l.effects.items = effects;
+        l
+    };
+    let emboss = Effect::BevelEmboss(bevel_of(BevelStyle::StrokeEmboss, BevelTechnique::Smooth));
+    assert!(super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Inside), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Outside), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![stroke(StrokePosition::Center), emboss.clone()])));
+    assert!(!super::composite::blends_inside(&layer(vec![emboss])));
+}
