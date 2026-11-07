@@ -801,16 +801,15 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Selecting note `i` shows its author and colour in the Note tool's options bar, as Photoshop
-/// does (#7940); a new note then takes them unless they are changed.
 /// The note selected in the Notes panel, if it still exists in the active document.
 pub(crate) fn selected_note(app: &PhotocraftApp) -> Option<usize> {
     let n = app.session.active().map_or(0, |d| d.doc.notes.len());
     app.ui.analysis.note_selected.filter(|&i| i < n)
 }
 
-/// Load note `i`'s author and colour into the options bar (the values it shows), leaving the
-/// tool's defaults alone (#11790).
+/// Selecting note `i` shows its author and colour in the Note tool's options bar, as Photoshop
+/// does (#7940); a new note then takes them unless they are changed. The tool's defaults stay
+/// as they were (#11790).
 fn show_note_options(app: &mut PhotocraftApp, i: usize) {
     let Some(note) = app.session.active().and_then(|d| d.doc.notes.get(i)) else { return };
     let (author, color) = (note.author.clone(), note.color.to_rgb());
