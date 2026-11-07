@@ -64,6 +64,7 @@ fn a_historical_state_uses_its_own_saved_comp_and_fresh_layer_ids() {
     assert!(s.active().unwrap().doc.layer(source).unwrap().visible, "current source state remains unchanged");
 }
 
+/// A duplicate restores the copied child and still warns about a previously deleted layer.
 #[test]
 fn nested_group_states_are_remapped_but_genuinely_missing_layers_stay_missing() {
     let (mut s, _) = scene();

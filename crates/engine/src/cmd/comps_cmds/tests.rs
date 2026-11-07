@@ -275,6 +275,7 @@ fn out_of_range_comp_ids_are_rejected_not_wrapped() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// A comp still restores visibility and other layers when a saved move exceeds the translation range.
 #[test]
 fn unreachable_comp_positions_leave_the_layer_in_place() {
     // #1017: a recorded position whose distance from the layer's current one leaves i32 range

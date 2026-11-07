@@ -290,6 +290,7 @@ pub fn write_comps_resource(doc: &Document) -> Option<Vec<u8>> {
     Some(VersionedDescriptor::new(d).to_bytes())
 }
 
+/// Encode the comp's PSD displacement using the same anchor as in-memory application.
 fn setting_value(ids: &[u32], st: Option<&CompLayerState>, bounds: Option<(i32, i32)>, text: Option<(i32, i32)>) -> Value {
     let mut s = obj("null");
     if let Some(st) = st {

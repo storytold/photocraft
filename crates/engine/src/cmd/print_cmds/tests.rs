@@ -144,6 +144,80 @@ fn print_dry_run_renders_a_pdf_and_reports_the_platform_backend() {
     assert!(s.execute("file.print", json!({"colorHandling": "photocraftManages", "dryRun": true})).is_err(), "needs a printer profile");
 }
 
+/// The Japanese papers are in the table at their metric sizes, their customary names resolve (case,
+/// spaces and punctuation ignored), and the sizes that were there before are unchanged.
+#[test]
+fn japanese_paper_sizes_and_aliases() {
+    // mm -> pt, within 0.1 pt.
+    for (name, w_mm, h_mm) in [
+        ("postcard", 100.0, 148.0),
+        ("double-postcard", 148.0, 200.0),
+        ("b5", 182.0, 257.0),
+        ("b4", 257.0, 364.0),
+        ("a6", 105.0, 148.0),
+        ("l", 89.0, 127.0),
+        ("2l", 127.0, 178.0),
+        ("kg", 102.0, 152.0),
+        ("6cut", 203.0, 254.0),
+        ("4cut", 254.0, 305.0),
+    ] {
+        let (w, h) = paper_size(name).unwrap_or_else(|| panic!("{name}"));
+        let want = (w_mm * 72.0 / 25.4, h_mm * 72.0 / 25.4);
+        assert!((w - want.0).abs() < 0.1 && (h - want.1).abs() < 0.1, "{name}: {w} x {h}, wanted {want:?}");
+    }
+    // The customary and English names resolve to the same paper.
+    for (a, b) in [
+        ("はがき", "postcard"),
+        ("ハガキ", "postcard"),
+        ("葉書", "postcard"),
+        ("往復はがき", "double-postcard"),
+        ("JIS B5", "b5"),
+        ("B5 (JIS)", "b5"),
+        ("JIS B4", "b4"),
+        ("L判", "l"),
+        ("Lサイズ", "l"),
+        ("l-size", "l"),
+        ("2L判", "2l"),
+        ("KG判", "kg"),
+        ("六切", "6cut"),
+        ("6切", "6cut"),
+        ("四切", "4cut"),
+        ("4切", "4cut"),
+        ("A4", "a 4"),
+        ("4 × 6", "4x6"),
+        ("B5（JIS）", "b5"),
+        ("JIS B5.", "b5"),
+        ("JIS B5。", "b5"),
+    ] {
+        assert_eq!(paper_size(a), paper_size(b), "{a} vs {b}");
+    }
+    assert!(paper_size("napkin").is_none());
+    // The papers that were already there keep their sizes.
+    assert_eq!(paper_size("letter"), Some((612.0, 792.0)));
+    assert_eq!(paper_size("a4"), Some((595.28, 841.89)));
+    assert_eq!(paper_size("4x6"), Some((288.0, 432.0)));
+    assert_eq!(paper_size("5x7"), Some((360.0, 504.0)));
+}
+
+/// A print on はがき or L判 writes a PDF page of that paper's size: 100 × 148 mm is
+/// 283.46 × 419.53 pt and 89 × 127 mm is 252.28 × 360.00 pt. The customary names and the JIS
+/// spelling work too, and an unknown paper is still refused.
+#[test]
+fn japanese_paper_sizes_reach_the_pdf_page() {
+    let dir = tmp("jp-paper");
+    for (paper, w, h) in [("postcard", 283.46, 419.53), ("l", 252.28, 360.00), ("はがき", 283.46, 419.53), ("JIS B5", 515.91, 728.50)] {
+        let mut s = session("rgb", 8);
+        let out = format!("{dir}/{}.pdf", paper.replace(' ', "_"));
+        let r = s.execute("file.print", json!({"output": out, "paper": paper, "scaleToFit": true})).unwrap();
+        assert_eq!(r["pdf"], out);
+        let pdf = std::fs::read(&out).unwrap();
+        let text = String::from_utf8_lossy(&pdf);
+        let want = format!("/MediaBox [0 0 {w:.2} {h:.2}]");
+        assert!(text.contains(&want), "{paper}: wanted {want}");
+    }
+    assert!(session("rgb", 8).execute("file.print", json!({"paper": "napkin", "dryRun": true})).is_err());
+}
+
 #[test]
 fn photocraft_manages_colors_converts_to_the_printer_profile() {
     let mut s = session("rgb", 8);
@@ -678,6 +752,14 @@ fn spool_transport_streams_pdf_and_propagates_refusal() {
         b"#!/bin/sh\nif [ \"$2\" = Refuse ]; then echo 'queue refused' >&2; exit 1; fi\nprintf '%s\\n' \"$@\" > \"$PHOTOCRAFT_TEST_PRINT_TRANSPORT/args\"\n/bin/cat > \"$PHOTOCRAFT_TEST_PRINT_TRANSPORT/received.pdf\"\necho 'request id is Office-42 (0 file(s))'\n",
     ).unwrap();
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+    // `lp` takes a job only when CUPS lists a printer (`lp_route`), so the fake CUPS lists its queues.
+    let lpstat = dir.path().join("lpstat");
+    std::fs::write(
+        &lpstat,
+        b"#!/bin/sh\nif [ \"$1\" = -e ]; then printf 'Office\\nRefuse\\n'; else printf 'printer Office is idle.\\nprinter Refuse is idle.\\n'; fi\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&lpstat, std::fs::Permissions::from_mode(0o700)).unwrap();
     let result = std::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "cmd::print_cmds::tests::spool_transport_streams_pdf_and_propagates_refusal", "--nocapture"])
         .env(CHILD, dir.path())
@@ -970,6 +1052,50 @@ fn a_preferred_app_spooler_takes_the_job() {
     let r = s.execute("file.print", json!({"output": out})).unwrap();
     assert_eq!((r["sent"].as_bool(), r["pdf"].as_str()), (Some(false), Some(out.as_str())));
     assert!(std::path::Path::new(&out).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_printer_listing_past_its_deadline_is_killed_and_reaped() {
+    let soon = || std::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut echo = std::process::Command::new("sh");
+    echo.args(["-c", "echo printer Office is idle."]);
+    assert_eq!(output_by(echo, soon()), Some((true, "printer Office is idle.\n".to_string())));
+    let mut failed = std::process::Command::new("sh");
+    failed.args(["-c", "exit 1"]);
+    assert_eq!(output_by(failed, soon()), Some((false, String::new())), "a failed listing is told apart from an empty one");
+    let mut flood = std::process::Command::new("sh");
+    flood.args(["-c", "head -c 2000000 /dev/zero"]);
+    assert_eq!(output_by(flood, soon()), None, "an oversized listing is no answer");
+    // A hung lpstat: given up at the deadline, and killed, so nothing is left waiting on it.
+    let dir = tempfile::tempdir().unwrap();
+    let pid_file = dir.path().join("pid");
+    let mut hung = std::process::Command::new("sh");
+    hung.arg("-c").arg(format!("echo $$ > '{}'; exec sleep 30", pid_file.display()));
+    let started = std::time::Instant::now();
+    assert_eq!(output_by(hung, started + std::time::Duration::from_millis(300)), None);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5), "the deadline must cut the wait short");
+    let pid = std::fs::read_to_string(&pid_file).unwrap();
+    // `kill -0` fails for a process that no longer exists, on every Unix.
+    let alive = std::process::Command::new("kill").args(["-0", pid.trim()]).stderr(std::process::Stdio::null()).status().unwrap().success();
+    assert!(!alive, "the hung process must be killed and reaped");
+    assert_eq!(output_by(std::process::Command::new("/nonexistent/lpstat"), soon()), None);
+}
+
+#[test]
+fn lp_takes_the_job_only_when_cups_lists_a_printer_and_picks_the_only_one() {
+    let p = |name: &str, default: bool| craft_print::Printer { name: name.into(), default, two_sided: None, description: String::new() };
+    let job = craft_print::Job::default();
+    // No printers: no lp route, so the portal still gets the job.
+    assert!(lp_route(&job, &[]).is_none());
+    assert_eq!(lp_route(&job, &[p("Office", false)]).and_then(|j| j.printer), Some("Office".into()));
+    assert_eq!(lp_route(&job, &[p("Office", false), p("Lab", true)]).and_then(|j| j.printer), None, "lp picks the default itself");
+    assert_eq!(lp_route(&job, &[p("Office", false), p("Lab", false)]).and_then(|j| j.printer), None);
+    let asked = craft_print::Job { printer: Some("Lab".into()), ..Default::default() };
+    assert_eq!(lp_route(&asked, &[p("Office", false)]).and_then(|j| j.printer), Some("Lab".into()));
+    // A named printer goes to lp even when CUPS lists none: listing can be forbidden while
+    // printing is not, and the portal can't honour a name.
+    assert_eq!(lp_route(&asked, &[]).and_then(|j| j.printer), Some("Lab".into()));
 }
 
 #[cfg(not(target_os = "windows"))]

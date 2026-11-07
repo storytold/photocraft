@@ -249,6 +249,7 @@ mod tests {
     use super::*;
     use crate::{ColorMode, PixelFormat, SampleType, Size};
 
+    /// Empty Type still has an anchor. Legacy captures use bounds once the layer has ink.
     #[test]
     fn type_position_uses_placement_even_without_ink_and_retains_legacy_fallback() {
         let mut layer =
@@ -272,6 +273,7 @@ mod tests {
         assert_eq!(unreachable.position_delta(layer_position(&layer), text_position(&layer)), None);
     }
 
+    /// Non-finite or out-of-range transforms leave the Type anchor absent.
     #[test]
     fn malformed_type_transform_does_not_create_a_saturated_position() {
         for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, f64::from(i32::MAX) + 1.0] {

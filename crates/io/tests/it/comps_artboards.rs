@@ -273,6 +273,7 @@ fn doc_with_raw_comp_offset(dx: i32) -> Document {
     d
 }
 
+/// Keep visibility and the original PSD data when a saved position overflows.
 #[test]
 fn out_of_range_comp_offsets_import_and_export_without_panic() {
     // #1017: an `Ofst` that puts the layer past i32 range panicked on import and on export (the

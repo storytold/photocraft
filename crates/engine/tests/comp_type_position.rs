@@ -9,6 +9,8 @@ fn text(s: &Session, id: LayerId) -> &TextLayer {
     t
 }
 
+/// Applying a Position comp moves the edited Type back to its captured baseline.
+/// Reapplying that comp must keep the same Last Document State for restoration.
 #[test]
 fn comp_restores_edited_type_origin_without_reverting_content_or_style() {
     for depth in [8, 16, 32] {
@@ -53,6 +55,7 @@ fn comp_restores_edited_type_origin_without_reverting_content_or_style() {
     }
 }
 
+/// Reopen files saved with the edited Type away from the comp anchor to exercise the PSD offset.
 #[test]
 fn edited_type_comp_placement_survives_native_and_psd_reopening() {
     for depth in [8, 16, 32] {
@@ -86,6 +89,7 @@ fn edited_type_comp_placement_survives_native_and_psd_reopening() {
     }
 }
 
+/// A later appearance update preserves the anchor recorded by a position-only update.
 #[test]
 fn updating_position_recaptures_the_type_anchor_independently_of_appearance() {
     let mut s = Session::new();

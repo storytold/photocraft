@@ -1,9 +1,10 @@
 //! Image menu: Image Size, Canvas Size, Crop, Trim, Mode (colour model and
 //! bit depth) conversions, Duplicate.
 
+use std::collections::HashSet;
 use std::convert::Infallible;
 
-use photocraft_algo::resample::{Resample, crop_surface, resize_surface_in_canvas, translate_surface};
+use photocraft_algo::resample::{Resample, crop_surface, largest_resize_rect, resize_surface_in_canvas, scaled_rect, translate_surface};
 use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Effect, Effects, FxPaint, Layer, LayerContent, LayerId, Size};
 use photocraft_geom::Rect;
@@ -11,6 +12,7 @@ use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
+use crate::document_preset_cmds::MAX_RESOLUTION;
 use crate::{EngineError, Result, Session};
 
 fn has_doc(s: &Session) -> std::result::Result<(), String> {
@@ -191,7 +193,24 @@ fn parse_resample(s: &str) -> Method {
 }
 
 /// The largest raster Image Size resamples to: the decoders' default allocation budget.
-const MAX_RESAMPLE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 8 << 30 } else { 2 << 30 };
+pub(crate) const MAX_RESAMPLE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 8 << 30 } else { 2 << 30 };
+
+/// Keep pixel defaults while rejecting an explicit unsupported dimension unit.
+fn size_units<'a>(p: &'a Value, cmd: &str, allowed: &[&str]) -> Result<&'a str> {
+    let Some(value) = p.get("units") else { return Ok("px") };
+    let units = value.as_str().filter(|unit| allowed.contains(unit)).ok_or_else(|| bad(cmd, "unsupported `units` for these dimensions"))?;
+    Ok(units)
+}
+
+/// Resolve a positive dimension before rounding, rejecting invalid or overflowing conversions.
+fn scaled_dimension(p: &Value, key: &str, scale: f64, cmd: &str) -> Result<Option<f64>> {
+    let Some(value) = p.get(key).filter(|value| !value.is_null()) else { return Ok(None) };
+    let value = value.as_f64().filter(|value| value.is_finite() && *value > 0.0).ok_or_else(|| bad(cmd, format!("`{key}` must be a positive number")))? * scale;
+    if !value.is_finite() || value <= 0.0 {
+        return Err(bad(cmd, format!("`{key}` cannot be converted to pixels")));
+    }
+    Ok(Some(value))
+}
 
 /// Image → Image Size.
 fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
@@ -206,21 +225,39 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let mut pw = p.get("width").and_then(Value::as_f64);
     let mut ph = p.get("height").and_then(Value::as_f64);
+    if size_units(p, "image.imageSize", &["px", "pt"])? == "pt" && !matches!(resample, Method::None) {
+        // Recorded points are 1/72 inch, resolved against this document at playback.
+        let scale = f64::from(d.doc.resolution_dpi) / 72.0;
+        pw = scaled_dimension(p, "width", scale, "image.imageSize")?;
+        ph = scaled_dimension(p, "height", scale, "image.imageSize")?;
+    }
     // `percent` scales both sides (what a Photoshop action records as "200%"); an explicit side wins.
     if let Some(pc) = p.get("percent") {
         let pc = pc.as_f64().filter(|v| v.is_finite() && *v > 0.0).ok_or_else(|| bad("image.imageSize", "`percent` must be a positive number"))?;
         pw = pw.or(Some(ow as f64 * pc / 100.0));
         ph = ph.or(Some(oh as f64 * pc / 100.0));
     }
+    // The document range File › New and the dialog's field allow; outside it, refuse rather than
+    // clamp (#9260: 1e39 became inf as f32, then silently 10000 ppi). The document's own
+    // resolution always passes: an imported file may have one outside the range, and the dialog
+    // sends it back unchanged (exactly: a value that only rounds to it as f32 is refused).
+    let own_dpi = f64::from(d.doc.resolution_dpi);
+    let dpi = match p.get("resolution") {
+        None | Some(Value::Null) => None,
+        Some(v) => {
+            let r = v.as_f64().filter(|&r| r.is_finite() && ((1.0..=MAX_RESOLUTION).contains(&r) || r == own_dpi));
+            Some(r.ok_or_else(|| bad("image.imageSize", format!("`resolution` = {v} must be a number of pixels per inch from 1 to {MAX_RESOLUTION}")))?)
+        }
+    };
     // `keepPrintSize`: only the resolution given, the pixels follow it (Photoshop's Image Size
-    // with Resample on, as an action records it).
+    // with Resample on, as an action records it). An unchanged resolution keeps the pixels.
     if p.get("keepPrintSize").and_then(Value::as_bool) == Some(true)
         && pw.is_none()
         && ph.is_none()
-        && let Some(r) = p.get("resolution").and_then(Value::as_f64)
+        && let Some(r) = dpi
+        && r != own_dpi
     {
-        let r = r.clamp(1.0, 10_000.0);
-        let old = f64::from(d.doc.resolution_dpi).max(1.0);
+        let old = own_dpi.max(1.0);
         pw = Some(ow as f64 * r / old);
         ph = Some(oh as f64 * r / old);
     }
@@ -237,8 +274,10 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
         check_resample_budget("image.imageSize", &d.doc, nw, nh, ", or turn Resample off to change only the resolution")?;
     }
-    let dpi = p.get("resolution").and_then(Value::as_f64).map(|v| v as f32);
+    let scale_styles = p.get("scaleStyles").and_then(Value::as_bool).unwrap_or(true);
     if !matches!(resample, Method::None) && (nw, nh) != (ow, oh) {
+        // Before the sampler map or the document change: a resize that doesn't fit would trap on the web (#10024).
+        crate::memory_gate::ensure(&format!("resize the image to {nw} x {nh} px"), crate::memory_gate::image_size_need(&d.doc, nw, nh))?;
         // Color Sampler points scale with the pixels (same map `transform_geometry` applies).
         let (sx, sy) = (f64::from(nw) / f64::from(ow.max(1)), f64::from(nh) / f64::from(oh.max(1)));
         s.set_sampler_map(photocraft_geom::Affine { m: [sx, 0.0, 0.0, sy, 0.0, 0.0] });
@@ -246,7 +285,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     s.edit("Image Size", |doc, _| {
         if let Some(r) = dpi {
             // Type keeps its pixel size; resampling below then scales it with the pixels.
-            crate::canvas_geom::set_resolution(doc, r.clamp(1.0, 10_000.0));
+            crate::canvas_geom::set_resolution(doc, r as f32);
         }
         let filter = match resample {
             Method::None => return Ok(()),
@@ -254,8 +293,7 @@ fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
             Method::Automatic if nw > ow || nh > oh => Resample::PreserveDetails,
             Method::Automatic => Resample::BicubicSharper,
         };
-        resample_doc(doc, nw, nh, filter);
-        Ok(())
+        resample_doc_with_styles(doc, "image.imageSize", nw, nh, filter, scale_styles)
     })?;
     // The size the document has now: without resampling `width`/`height` are ignored (#1815).
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
@@ -290,13 +328,20 @@ pub(crate) fn check_working_budget(cmd: &str, doc: &Document, nw: u32, nh: u32, 
 
 /// Resamples the whole document (pixels, masks, channels, selection, effects, vectors, guides) to
 /// `nw` x `nh` px with `filter`: the body of Image Size, shared by the Crop tool's W x H x Resolution
-/// mode. Callers check [`check_resample_budget`] first.
-pub(crate) fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resample) {
+/// mode. Callers check [`check_resample_budget`] for the new canvas first; the pixels outside the
+/// canvas are scaled too, so a surface they would grow past the budget is refused here (#9212).
+pub(crate) fn resample_doc(doc: &mut Document, cmd: &str, nw: u32, nh: u32, filter: Resample) -> Result<()> {
+    resample_doc_with_styles(doc, cmd, nw, nh, filter, true)
+}
+
+/// Resize document content while optionally retaining layer-effect sizes in pixels.
+fn resample_doc_with_styles(doc: &mut Document, cmd: &str, nw: u32, nh: u32, filter: Resample, scale_styles: bool) -> Result<()> {
     let (ow, oh) = (doc.size.width, doc.size.height);
     let (sx, sy) = (nw as f64 / ow.max(1) as f64, nh as f64 / oh.max(1) as f64);
     if (sx - 1.0).abs() < 1e-12 && (sy - 1.0).abs() < 1e-12 {
-        return;
+        return Ok(());
     }
+    check_hidden_resample_budget(cmd, doc, sx, sy, filter)?;
     // Content that reaches the canvas edge keeps it: a Background stays opaque to the border.
     let canvas = Rect::from_xywh(0, 0, ow, oh);
     let taken = crate::smart_cmds::take_caches(&mut doc.layers);
@@ -305,7 +350,9 @@ pub(crate) fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resampl
     });
     let k = ((sx + sy) / 2.0) as f32;
     for_each_layer(&mut doc.layers, &mut |l| {
-        scale_effects(&mut l.effects, k);
+        if scale_styles {
+            scale_effects(&mut l.effects, k);
+        }
         // Canvas resampling scales the whole appearance, including shape strokes (#8341).
         // Dash lengths and offsets are already expressed in multiples of this width.
         if let LayerContent::Shape(sh) = &mut l.content
@@ -325,6 +372,76 @@ pub(crate) fn resample_doc(doc: &mut Document, nw: u32, nh: u32, filter: Resampl
     doc.size = Size::new(nw, nh);
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
     let Ok(()) = crate::smart_cmds::restore_unrendered(doc, taken, |c| Ok::<_, Infallible>(resize_surface_in_canvas(c, sx, sy, filter, canvas)));
+    Ok(())
+}
+
+/// [`check_resample_budget`] for the largest surface [`resample_doc`] stores while scaling by
+/// `sx` x `sy` with `filter` (masks, channels and the selection with Bilinear): each keeps its
+/// pixels outside the canvas (a crop that didn't delete them, a layer moved off the canvas), and
+/// those grow with the scale like the rest. A bicubic shrink also stores the image between its
+/// two passes, one axis still at its old size ([`largest_resize_rect`]). The refusal suggests
+/// Delete Cropped Pixels only when the surfaces over the budget are all ones it clips
+/// ([`delete_cropped_pixels`]).
+fn check_hidden_resample_budget(cmd: &str, doc: &mut Document, sx: f64, sy: f64, filter: Resample) -> Result<()> {
+    let new_canvas = scaled_rect(doc.bounds(), sx, sy);
+    // The surfaces Delete Cropped Pixels clips; masks, channels, the selection, type, shapes and
+    // smart objects keep their pixels outside the crop.
+    let mut clipped: HashSet<*const Surface> = HashSet::new();
+    for_each_layer(&mut doc.layers, &mut |l| {
+        clipped.extend(l.fill_cache.as_ref().map(|fc| std::ptr::from_ref(&fc.surface)));
+        if let Some(v) = &l.video {
+            clipped.extend(v.frames.iter().chain(v.original_frames.iter().flatten()).map(std::ptr::from_ref));
+        }
+        if let LayerContent::Raster(s) = &l.content {
+            clipped.insert(std::ptr::from_ref(s));
+        }
+    });
+    let bytes = |(w, h, bpp): (u32, u32, u64)| u64::from(w).saturating_mul(u64::from(h)).saturating_mul(bpp);
+    // The largest surface by bytes, and the largest one Delete Cropped Pixels doesn't clip: its
+    // width, height and bytes per pixel (a mask has one channel, the layers the document's).
+    let (mut largest, mut largest_kept) = ((0u32, 0u32, 1u64), (0u32, 0u32, 1u64));
+    let mut visit = |surf: &Surface, filter: Resample| {
+        let r = largest_resize_rect(surf.content_bounds(), sx, sy, filter);
+        // What stays within the new canvas is already budgeted.
+        if r.is_empty() || new_canvas.union(&r) == new_canvas {
+            return;
+        }
+        let this = (r.width(), r.height(), surf.format().bytes_per_pixel().max(1) as u64);
+        if bytes(this) > bytes(largest) {
+            largest = this;
+        }
+        if !clipped.contains(&std::ptr::from_ref(surf)) && bytes(this) > bytes(largest_kept) {
+            largest_kept = this;
+        }
+    };
+    // The surfaces `resample_doc` scales, smart object caches included.
+    for_each_surface(&mut doc.layers, true, &mut |surf, is_mask| visit(surf, if is_mask { Resample::Bilinear } else { filter }));
+    for ch in doc.channels.iter().chain(doc.quick_mask.as_ref()) {
+        visit(&ch.surface, Resample::Bilinear);
+    }
+    if let Some(sel) = &doc.selection {
+        visit(sel, Resample::Bilinear);
+    }
+    let (kept, (w, h, bpp)) = if bytes(largest_kept) > MAX_RESAMPLE_BYTES {
+        (true, largest_kept)
+    } else if bytes(largest) > MAX_RESAMPLE_BYTES {
+        (false, largest)
+    } else {
+        return Ok(());
+    };
+    let hint = if kept {
+        "choose a smaller size (layer masks, channels, the quick mask, the selection, type, shapes and smart objects keep theirs through Crop with Delete Cropped Pixels)"
+    } else {
+        "choose a smaller size, or delete them first (Crop with Delete Cropped Pixels)"
+    };
+    let max_mp = MAX_RESAMPLE_BYTES / bpp / 1_000_000;
+    Err(bad(
+        cmd,
+        format!(
+            "{w} x {h} px is {} megapixels; resampling at this bit depth is limited to {max_mp} megapixels. The pixels outside the canvas are resampled too: {hint}",
+            u64::from(w).saturating_mul(u64::from(h)) / 1_000_000
+        ),
+    ))
 }
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
@@ -334,10 +451,23 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
 /// The flattened document, or an error when the canvas is over the compositor's render cap
 /// ([`photocraft_compose::MAX_RENDER_PIXELS`]; `flatten` returns an empty buffer then).
 fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer> {
-    let buf = photocraft_compose::flatten(doc);
     let (w, h) = (doc.size.width, doc.size.height);
-    if buf.px.len() as u64 != u64::from(w) * u64::from(h) {
-        return Err(bad(cmd, format!("the document ({w} x {h} px) is too large to flatten (limit {} pixels)", photocraft_compose::MAX_RENDER_PIXELS)));
+    let count = u64::from(w) * u64::from(h);
+    let operation = if cmd == "image.trim" {
+        "trim"
+    } else if cmd == "image.duplicate" {
+        "duplicate merged"
+    } else {
+        "flatten"
+    };
+    let too_large =
+        || bad(cmd, format!("the document ({w} x {h} px) is too large to {operation} (flatten limit {} pixels)", photocraft_compose::MAX_RENDER_PIXELS));
+    if count > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(too_large());
+    }
+    let buf = photocraft_compose::flatten(doc);
+    if buf.px.len() as u64 != count {
+        return Err(too_large());
     }
     Ok(buf)
 }
@@ -395,10 +525,34 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
     });
 }
 
+/// The document's only artboard, when it covers exactly the canvas. The Crop tool frames that
+/// board, so its straight crop fits the board to the new canvas, as the reference application's
+/// Crop tool resizes the artboard to the frame. Several boards, or one that covers only part of
+/// the canvas, keep their own layout.
+fn canvas_artboard(doc: &Document) -> Option<LayerId> {
+    match doc.artboards().as_slice() {
+        [(id, _, board)] if board.rect == doc.bounds() => Some(*id),
+        _ => None,
+    }
+}
+
+/// Fits the board [`canvas_artboard`] found before the crop to the new canvas. A new size drops
+/// the size preset it was made from, which no longer describes it; a frame of the board's own size
+/// keeps it, as Artboard Options does.
+fn fit_canvas_artboard(doc: &mut Document, id: Option<LayerId>) {
+    let bounds = doc.bounds();
+    if let Some(board) = id.and_then(|id| doc.layer_mut(id)).and_then(|l| l.artboard_mut()) {
+        if board.rect.width() != bounds.width() || board.rect.height() != bounds.height() {
+            board.preset.clear();
+        }
+        board.rect = bounds;
+    }
+}
+
 /// Crops the document to `r` (in current document coordinates).
 /// A frame that extends past the canvas fills the Background's new area with `extension` (the
 /// background colour, as Photoshop's Crop tool does); other layers get transparent pixels there.
-fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extension: [f32; 4]) -> Result<()> {
+pub(crate) fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extension: [f32; 4]) -> Result<()> {
     // The origin moves to (0, 0); `-i32::MIN` has no i32 value (#959).
     let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
         return Err(bad(cmd, format!("the crop origin ({}, {}) can't be moved to (0, 0) within the 32-bit coordinate range", r.x0, r.y0)));
@@ -513,8 +667,20 @@ fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let relative = p.get("relative").and_then(Value::as_bool).unwrap_or(false);
-    let w = p.get("width").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { ow });
-    let h = p.get("height").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { oh });
+    let (w, h) = if size_units(p, "image.canvasSize", &["px", "percent"])? == "percent" {
+        if relative {
+            return Err(bad("image.canvasSize", "percentage dimensions require an absolute canvas size"));
+        }
+        (
+            scaled_dimension(p, "width", ow / 100.0, "image.canvasSize")?.unwrap_or(ow),
+            scaled_dimension(p, "height", oh / 100.0, "image.canvasSize")?.unwrap_or(oh),
+        )
+    } else {
+        (
+            p.get("width").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { ow }),
+            p.get("height").and_then(Value::as_f64).unwrap_or(if relative { 0.0 } else { oh }),
+        )
+    };
     let (nw, nh) = if relative { (ow + w, oh + h) } else { (w, h) };
     let (nw, nh) = (nw.round().clamp(1.0, 300_000.0) as u32, nh.round().clamp(1.0, 300_000.0) as u32);
     let (ax, ay) = anchor_factors("image.canvasSize", p.get("anchor").and_then(Value::as_str).unwrap_or("center"))?;
@@ -558,6 +724,26 @@ const MAX_CROP_SIDE: i32 = 300_000;
 
 /// Image → Crop (to the selection bounds).
 fn crop(s: &mut Session, p: &Value) -> Result<Value> {
+    crop_with(s, p, false)
+}
+
+/// Image › Reveal All's crop: as `image.crop` with Delete Cropped Pixels off, but the Background
+/// stays a Background and an extension takes the background colour (Reveal All keeps its own
+/// behaviour; only the Crop tool's was measured, #10867).
+pub(crate) fn crop_keeping_background(s: &mut Session, p: &Value) -> Result<Value> {
+    crop_with(s, p, true)
+}
+
+/// A Delete Cropped Pixels off crop turns the Background into a normal layer ("Layer 0", as Layer ›
+/// New › Layer from Background names it), as in Photoshop: it keeps the pixels past the canvas,
+/// and an extension is transparent on every layer (#10867).
+fn unlock_background_for_crop(doc: &mut Document) {
+    if let Some(bg) = doc.background_mut() {
+        crate::extra_cmds::unlock_background(bg);
+    }
+}
+
+fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value> {
     let delete = p.get("deleteCroppedPixels").and_then(Value::as_bool).unwrap_or(true);
     // The Crop tool's Fill: Content-Aware Fill of what the crop uncovers (#3823).
     let content_aware = match p.get("contentAware") {
@@ -565,6 +751,8 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::Bool(b)) => *b,
         Some(v) => return Err(bad("image.crop", format!("`contentAware` must be true or false, not {v}"))),
     };
+    // Content-Aware Fill with Delete off wasn't measured: it keeps filling the Background (#10867).
+    let unlock = !delete && !content_aware && !keep_background;
     // Values beyond i32 would wrap through the narrowing casts into a rectangle unrelated to
     // the numbers passed; reject them (see `commands::int_i32`).
     let explicit = match (
@@ -596,7 +784,7 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     }
     if let Some(a) = crop_angle(p)? {
         let rect = explicit.ok_or_else(|| bad("image.crop", "an `angle` needs an explicit `x`, `y`, `width` and `height`"))?;
-        return rotated_crop(s, rect, a, delete, content_aware, &target);
+        return rotated_crop(s, rect, a, delete, content_aware, unlock, &target);
     }
     // An explicit rectangle (the Crop tool) may extend past the canvas; a selection crop is clamped.
     let r = explicit
@@ -607,18 +795,29 @@ fn crop(s: &mut Session, p: &Value) -> Result<Value> {
     }
     s.set_sampler_map(target.sampler_map(r));
     let extension = s.tools.background;
+    // Only the Crop tool's frame (an explicit rectangle) resizes a canvas-sized artboard; a
+    // selection crop leaves boards as they are.
+    let tool_frame = explicit.is_some();
+    let mut filled = false;
     s.edit("Crop", |doc, active| {
         let original = doc.size;
+        let board = if tool_frame { canvas_artboard(doc) } else { None };
+        if unlock {
+            unlock_background_for_crop(doc);
+        }
         crop_doc(doc, "image.crop", r, delete, extension)?;
+        fit_canvas_artboard(doc, board);
         // A straight crop fills all of the area past the old canvas, pixels an earlier Delete Cropped
         // Pixels off crop hid there included, as Photoshop does; only a turned frame keeps them (#8060).
         if content_aware {
-            crate::crop_fill::fill_uncovered(doc, *active, &crate::crop_fill::Coverage::crop(r, original.width, original.height))?;
+            filled = crate::crop_fill::fill_uncovered(doc, *active, &crate::crop_fill::Coverage::crop(r, original.width, original.height), delete)?;
         }
         doc.selection = None;
-        target.apply(doc);
-        Ok(())
+        target.apply(doc)
     })?;
+    if filled && let Some(st) = s.active_mut() {
+        st.history.set_current_label("Content-aware Crop");
+    }
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height() })))
 }
 
@@ -632,15 +831,16 @@ struct CropTarget {
 
 impl CropTarget {
     /// Applies the target to a document that has just been cropped (inside the crop's history step).
-    fn apply(&self, doc: &mut Document) {
+    fn apply(&self, doc: &mut Document) -> Result<()> {
         if let Some((w, h)) = self.size {
             // As for Image Size: an Indexed Color document holds only its colour table's colours (#6019).
             let filter = if doc.mode == ColorMode::Indexed { Resample::Nearest } else { self.filter };
-            resample_doc(doc, w, h, filter);
+            resample_doc(doc, "image.crop", w, h, filter)?;
         }
         if let Some(r) = self.resolution {
             doc.resolution_dpi = r;
         }
+        Ok(())
     }
 
     /// Where Color Sampler points go: shifted by the crop's origin, then scaled with the pixels
@@ -740,8 +940,10 @@ fn crop_angle(p: &Value) -> Result<Option<f64>> {
 /// background colour, other layers keep transparency there and every pixel of theirs), which makes
 /// the frame upright, then cropped to it (`deleteCroppedPixels` as for an unrotated crop), all in
 /// one undo step. With `content_aware`, the corners the rotation uncovers (and any area past the
-/// rotated image) are then filled from their surroundings, in the same step (#3823).
-fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_aware: bool, crop_target: &CropTarget) -> Result<Value> {
+/// rotated image) are then filled from their surroundings, in the same step (#3823). With `unlock`
+/// the Background becomes a normal layer before the turn, so it turns like the others, keeping its
+/// overhang and leaving the uncovered corners transparent (#10867).
+fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_aware: bool, unlock: bool, crop_target: &CropTarget) -> Result<Value> {
     const CMD: &str = "image.crop";
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
     let (w, h) = (f64::from(r.width()), f64::from(r.height()));
@@ -781,6 +983,9 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
     } else {
         coverage
     };
+    // The canvas board, found before the turn, fits the frame as in a straight crop.
+    let board = s.active().and_then(|d| canvas_artboard(&d.doc));
+    let mut filled = false;
     crate::analysis_cmds::compound(s, "Crop", |s| {
         // Pixels the crop deletes needn't be turned first: keeping only what lands in the frame
         // makes the rotation cost the frame's size, not the canvas's (a small turned crop of a
@@ -804,20 +1009,29 @@ fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_awar
                 Ok(())
             })?;
         }
+        if unlock {
+            s.edit("Crop", |doc, _| {
+                unlock_background_for_crop(doc);
+                Ok(())
+            })?;
+        }
         crate::mode_cmds::rotate_arbitrary(s, &json!({"angle": angle, "direction": "ccw"}))?;
         // Color Sampler points follow the crop's origin shift too (the rotation moved them above).
         s.set_sampler_map(crop_target.sampler_map(target));
         let extension = s.tools.background;
         s.edit("Crop", |doc, active| {
             crop_doc(doc, CMD, target, delete, extension)?;
+            fit_canvas_artboard(doc, board);
             if content_aware {
-                crate::crop_fill::fill_uncovered(doc, *active, &coverage)?;
+                filled = crate::crop_fill::fill_uncovered(doc, *active, &coverage, delete)?;
             }
             doc.selection = None;
-            crop_target.apply(doc);
-            Ok(())
+            crop_target.apply(doc)
         })
     })?;
+    if filled && let Some(st) = s.active_mut() {
+        st.history.set_current_label("Content-aware Crop");
+    }
     Ok(crop_result(s, json!({ "x": r.x0, "y": r.y0, "width": r.width(), "height": r.height(), "angle": angle })))
 }
 
@@ -853,8 +1067,14 @@ fn trim(s: &mut Session, p: &Value) -> Result<Value> {
         "bottomRight" => buf.px.last().copied(),
         _ => None,
     };
+    // Transparency is judged on the image as stored at its depth: alpha under half a step rounds to 0.
+    let half_step = match d.doc.depth {
+        SampleType::U8 => Some(0.5 / 255.0),
+        SampleType::U16 => Some(0.5 / 65535.0),
+        SampleType::F32 => None,
+    };
     let differs = |q: [f32; 4]| match reference {
-        None => q[3] > 0.0,
+        None => half_step.map_or(q[3] > 0.0, |h| q[3] >= h),
         Some(r) => (0..4).any(|c| (q[c] * q[3] - r[c] * r[3]).abs() > 0.5 / 255.0 || (c == 3 && (q[3] - r[3]).abs() > 0.5 / 255.0)),
     };
     let mut b = Rect::EMPTY;
@@ -970,7 +1190,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.imageSize",
             "Image Size…",
             ["Image"],
-            r##"{"width":px,"height":px,"percent":%? (both sides; an explicit side wins),"resolution":ppi,"keepPrintSize":bool=false (with only a resolution: resample the pixels to keep the print size),"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
+            r##"{"width":number,"height":number,"units":"px|pt"="px" (points use the document's current resolution),"percent":%? (both sides; an explicit side wins),"resolution":ppi,"keepPrintSize":bool=false (with only a resolution: resample the pixels to keep the print size),"scaleStyles":bool=true (scale layer effects with the pixels),"resample":"automatic|preserveDetails|bicubicSmoother|bicubicSharper|bicubicAutomatic|bicubic|nearest|bilinear|lanczos|none"="bicubic"} → {width,height} (the document's size after the command; "none" changes the resolution only)"##,
             has_doc,
             image_size
         ),
@@ -978,7 +1198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.canvasSize",
             "Canvas Size…",
             ["Image"],
-            r##"{"width":px,"height":px,"relative":bool=false,"anchor":"topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight"="center","extensionColor":"background|foreground|white|black|transparent|#rrggbb"="background"}"##,
+            r##"{"width":number,"height":number,"units":"px|percent"="px" (percent uses each current side; absolute sizes only),"relative":bool=false,"anchor":"topLeft|top|topRight|left|center|right|bottomLeft|bottom|bottomRight"="center","extensionColor":"background|foreground|white|black|transparent|#rrggbb"="background"}"##,
             has_doc,
             canvas_size
         ),
@@ -986,7 +1206,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.crop",
             "Crop",
             ["Image"],
-            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; contentAware: the Crop tool's Fill › Content-Aware Fill, the area a rotated or extending crop uncovers filled from its surroundings on the Background, else the active pixel layer)"##,
+            r##"{"x":px,"y":px,"width":px,"height":px,"angle":-3600..3600=0,"deleteCroppedPixels":bool=true,"contentAware":bool=false,"targetWidth":px,"targetHeight":px,"resolution":ppi,"resample":"bicubic|bilinear|nearest|lanczos|preserveDetails"="bicubic"} → {x,y,width,height,documentWidth,documentHeight,resolution} (targetWidth/targetHeight, both or neither: the cropped area is resampled to exactly that size, as Image Size, in the same undo step; resolution: the document's new ppi; deleteCroppedPixels false: the pixels past the frame are kept and, unless contentAware, the Background becomes a normal layer, "Layer 0", so an extension is transparent on every layer (with contentAware the Background stays); contentAware: the Crop tool's Fill › Content-Aware Fill uses surrounding pixels to fill areas uncovered by a rotated or extending crop. The fill targets the Background, or the active pixel layer if there is no Background. With Delete Cropped Pixels on, it also targets a separate active pixel layer if it is visible and unlocked.)"##,
             has_doc,
             crop
         ),
