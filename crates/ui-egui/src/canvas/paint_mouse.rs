@@ -437,14 +437,22 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
 /// edits the session brush like the Brushes panel; a press outside, Escape, Enter or a
 /// double-click on a preset closes it.
 pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some([x, y]) = app.ui.brush_picker else { return };
+    let opened_id = crate::brush_picker::opened_id();
+    let Some([x, y]) = app.ui.brush_picker else {
+        ctx.data_mut(|d| d.remove_temp::<crate::brush_picker::Opened>(opened_id));
+        return;
+    };
     if !has_brush_picker(app.ui.tool) {
         app.ui.brush_picker = None;
+        ctx.data_mut(|d| d.remove_temp::<crate::brush_picker::Opened>(opened_id));
         return;
     }
+    let mut opened = ctx.data_mut(|d| d.get_temp_mut_or_insert_with(opened_id, || crate::brush_picker::Opened::new(&app.session.tools.brush)).clone());
     // Escape and Enter close it once this frame's edits are in (a typed size applies), unless they
-    // end a rename in its rename bar.
-    let key_close = app.ui.brush_picker_list.renaming.is_none() && ctx.input(|i| i.key_pressed(egui::Key::Escape) || i.key_pressed(egui::Key::Enter));
+    // end a rename in its rename bar. Escape then reverts what was typed (#11816).
+    let typing_done = app.ui.brush_picker_list.renaming.is_none();
+    let escape = typing_done && ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let key_close = escape || (typing_done && ctx.input(|i| i.key_pressed(egui::Key::Enter)));
     let screen = ctx.content_rect();
     // The picker's content size: the one its grip was dragged to, or the one it last closed with
     // (kept in egui's own memory, which outlives the app's), or the default. The frame's chrome
@@ -472,10 +480,25 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
             app.ui.brush_picker_size = Some([new.x, new.y]);
         }
         crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &b);
+        if b != before {
+            opened.typed(&b);
+        }
         let closes = picks.iter().any(crate::brush_picker::Pick::closes);
+        let picked =
+            picks.iter().any(|p| matches!(p, crate::brush_picker::Pick::List(crate::brushes_tab::Action::Select(_) | crate::brushes_tab::Action::Choose(_))));
         crate::brush_picker::apply(app, ui.ctx(), picks);
+        // A preset picked stays picked, Escape or not.
+        if picked {
+            opened = crate::brush_picker::Opened::new(&app.session.tools.brush);
+        }
         closes
     });
+    ctx.data_mut(|d| d.insert_temp(opened_id, opened.clone()));
+    if escape {
+        let now = app.session.tools.brush.clone();
+        let back = opened.revert(&now);
+        crate::brush_panel::commit_gesture(app, ctx, &now, &back);
+    }
     // Not a press on a menu the picker opened (the gear, a preset's context menu), nor on the
     // options-bar chip, whose click toggles the picker. A menu floats over the picker in the
     // foreground order, so the press is told apart by the layer it lands on, not by any popup
