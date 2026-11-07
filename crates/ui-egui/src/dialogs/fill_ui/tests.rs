@@ -168,6 +168,45 @@ fn shift_f5_and_shift_backspace_open_the_dialog() {
     }
 }
 
+/// Shift+F5 admits a targeted Smart Object mask and fills only the selected mask pixels.
+#[test]
+fn shift_f5_fills_the_selected_area_of_a_smart_object_mask() {
+    let mut h = harness();
+    let app = h.state_mut();
+    app.run("layer.new.layer", json!({"name": "Fill target"})).unwrap();
+    app.run(COMMAND, json!({"contents": "white"})).unwrap();
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true;
+    app.run("select.rect", json!({"x": 2, "y": 3, "width": 8, "height": 6})).unwrap();
+
+    let st = app.session.active().unwrap();
+    let layer_id = st.active_layer.unwrap();
+    let original = st.doc.layer(layer_id).unwrap().clone();
+    let history = st.history.past_len();
+    assert!(matches!(&original.content, photocraft_doc::LayerContent::Smart(_)));
+    assert_eq!(original.mask.as_ref().unwrap().surface.sample_channel(4, 5, 0), 1.0);
+
+    press(&mut h, Key::F5, Modifiers::SHIFT);
+    let app = h.state_mut();
+    let id = app.ui.dialogs.iter().find(|d| owns(&d.fields)).expect("Shift+F5 opens Fill for a Smart Object mask").id;
+    let st = app.session.active().unwrap();
+    assert_eq!(st.history.past_len(), history);
+    assert_eq!(st.doc.layer(layer_id), Some(&original));
+    app.ui.dialog_mut(id).unwrap().fields.insert("contents".into(), json!("black"));
+    crate::dialogs::confirm(app, id).unwrap();
+
+    let st = app.session.active().unwrap();
+    let layer = st.doc.layer(layer_id).unwrap();
+    let mask = &layer.mask.as_ref().unwrap().surface;
+    assert_eq!(mask.sample_channel(4, 5, 0), 0.0);
+    assert_eq!(mask.sample_channel(20, 20, 0), 1.0);
+    assert_eq!(layer.content, original.content);
+    assert_eq!(st.history.past_len(), history + 1);
+    app.run("edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().doc.layer(layer_id), Some(&original));
+}
+
 /// Dialog admission must resolve the same mask target as menu enablement and execution.
 #[test]
 fn menu_and_context_fill_edit_non_raster_masks_and_undo() {
