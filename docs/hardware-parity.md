@@ -54,6 +54,10 @@ fails when `WAYLAND_SOCKET` is set (PhotoCraft cannot open its own probe connect
 compositor takes the fallback even when it offers tablet-v2. The fallback needs a detected pen,
 a nonempty `DISPLAY` and the X11 libraries; without them the window stays on native Wayland.
 
+![A light-to-heavy stroke from a Wacom CTL-472 in PhotoCraft](images/wayland-pen-pressure.png)
+
+A pressure-sized brush stroked with a Wacom One CTL-472 on KDE Plasma 6.8 Wayland.
+
 ## Displays and colour
 
 | Feature | Photoshop | PhotoCraft | Status |
