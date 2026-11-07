@@ -4499,6 +4499,21 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The frame is locked	El marco está bloqueado
 	The frame is unavailable	El marco no está disponible
 
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	CPU Rendering	Procesamiento de CPU
+	Calculating…	Calculando…
+	Click to refresh histogram with uncached data	Haga clic para actualizar el histograma con datos no almacenados en caché
+	Count:	Recuento:
+	Drawn on the CPU: {reason}. Click for System Info.	Dibujado en la CPU: {reason}. Haga clic para obtener información del sistema.
+	Level:	Nivel:
+	Percentile:	Percentil:
+	Release Notes	Notas de la versión
+	Show Channels in Color	Mostrar canales en color
+	Show Statistics	Mostrar estadísticas
+	Source:	Origen:
+	Uncached Refresh	Actualización sin caché
+	Update and Restart	Actualizar y reiniciar
+
 # Channels panel menu (#11451)
 	Channel Options…	Opciones de canal…
 	Specify Channels:	Especificar canales:

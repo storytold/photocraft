@@ -350,6 +350,40 @@ fn picks_preferred_script_skips_unreadable_and_exhausts() {
     assert!(fb.next_font('あ', CjkChar::Kana).is_none());
 }
 
+/// Verifies that a non-covering script of higher priority is not permanently marked as tried
+/// when a lower-priority script successfully resolves a character.
+#[test]
+fn non_covering_higher_priority_script_is_not_prematurely_exhausted() {
+    let mut fb = CjkFallback::new(Sources {
+        locale: || Some("ko_KR".into()),
+        files: |s| match s {
+            CjkScript::Korean => vec![fake("korean.ttf")],
+            CjkScript::TraditionalChinese => vec![fake("hant.ttf")],
+            _ => vec![],
+        },
+        last_resort: Vec::new,
+        pending: || false,
+        scripts: |_| Vec::new(),
+        covers: scripts::covering_face,
+        embedded: no_embedded,
+        eager_craft_fonts: false,
+    });
+    // Han character '龍' (0x9F8D): Korean is checked first due to ko_KR locale, lacks '龍',
+    // but Traditional Chinese has it and gets registered.
+    let (name, data) = fb.next_font('龍', CjkChar::Han).expect("resolved via TC font");
+    assert!(name.starts_with(FONT_PREFIX));
+    assert_eq!(data.index, 0);
+    // Korean was not covering '龍' but has not been exhausted because TC succeeded.
+    assert!(!fb.tried.contains(&CjkScript::Korean));
+    assert!(fb.tried.contains(&CjkScript::TraditionalChinese));
+
+    // Later, Hangul arrives: Korean must still be usable.
+    let (name, data) = fb.next_font('카', CjkChar::Hangul).expect("korean font is still usable");
+    assert!(name.starts_with(FONT_PREFIX));
+    assert_eq!(data.index, 0);
+    assert!(fb.tried.contains(&CjkScript::Korean));
+}
+
 #[test]
 fn han_follows_locale() {
     for (loc, first) in [
@@ -434,27 +468,45 @@ fn two_face_ttc(first: &[u8], second: &[u8]) -> Vec<u8> {
 /// A minimal TrueType font mapping the `ranges` (inclusive) to box glyphs, so tests have a
 /// font for a script without committing font files.
 pub(crate) fn synthetic_font(ranges: &[(u32, u32)]) -> Vec<u8> {
+    synthetic_font_impl(ranges, true)
+}
+
+/// Generates a synthetic TrueType font with empty glyphs (zero contours) for the specified ranges.
+pub(crate) fn synthetic_font_with_empty_glyphs(ranges: &[(u32, u32)]) -> Vec<u8> {
+    synthetic_font_impl(ranges, false)
+}
+
+/// Builds a minimal TrueType font with or without drawable glyph outlines for testing.
+fn synthetic_font_impl(ranges: &[(u32, u32)], with_outlines: bool) -> Vec<u8> {
     let be16 = |v: &mut Vec<u8>, x: i32| v.extend((x as u16).to_be_bytes());
     let be32 = |v: &mut Vec<u8>, x: u32| v.extend(x.to_be_bytes());
     let chars: u32 = ranges.iter().map(|(a, b)| b - a + 1).sum();
     let glyphs = chars as i32 + 1;
-    // One 500x700 box (contour of four on-curve points); glyph 0 (.notdef) is empty.
-    let mut boxed = Vec::new();
-    for x in [1, 50, 0, 550, 700, 3, 0] {
-        be16(&mut boxed, x);
-    }
-    boxed.extend([1u8; 4]);
-    for x in [50, 0, 500, 0, 0, 700, 0, -700] {
-        be16(&mut boxed, x);
-    }
-    boxed.extend([0, 0]);
-    let glyf: Vec<u8> = boxed.repeat(chars as usize);
-    let mut loca = Vec::new();
-    be32(&mut loca, 0);
-    for i in 0..chars {
-        be32(&mut loca, i * boxed.len() as u32);
-    }
-    be32(&mut loca, chars * boxed.len() as u32);
+    let (glyf, loca) = if with_outlines {
+        let mut boxed = Vec::new();
+        for x in [1, 50, 0, 550, 700, 3, 0] {
+            be16(&mut boxed, x);
+        }
+        boxed.extend([1u8; 4]);
+        for x in [50, 0, 500, 0, 0, 700, 0, -700] {
+            be16(&mut boxed, x);
+        }
+        boxed.extend([0, 0]);
+        let glyf: Vec<u8> = boxed.repeat(chars as usize);
+        let mut loca = Vec::new();
+        be32(&mut loca, 0);
+        for i in 0..chars {
+            be32(&mut loca, i * boxed.len() as u32);
+        }
+        be32(&mut loca, chars * boxed.len() as u32);
+        (glyf, loca)
+    } else {
+        let mut loca = Vec::new();
+        for _ in 0..=chars {
+            be32(&mut loca, 0);
+        }
+        (Vec::new(), loca)
+    };
     let mut head = Vec::new();
     for x in [0x0001_0000, 0x0001_0000, 0, 0x5F0F_3CF5] {
         be32(&mut head, x);
@@ -1917,4 +1969,90 @@ fn system_fonts_cover_cjk_samples() {
     crate::theme::install_fonts(&ctx);
     let all: String = samples.iter().filter(|(_, s)| available(*s)).map(|(t, _)| *t).collect::<Vec<_>>().join(" ");
     assert!(render(&ctx, &all), "{all}");
+}
+/// A candidate font whose cmap maps `c` but whose glyph has 0 contours (empty glyph)
+/// must be skipped in favor of a candidate that actually contains drawable outlines.
+#[test]
+fn empty_glyph_candidate_is_skipped_in_favor_of_usable_face() {
+    let empty_path = fake_dir().join("empty-glyph-thai.ttf");
+    let usable_path = fake_dir().join("usable-thai.ttf");
+    let empty_bytes = synthetic_font_with_empty_glyphs(&[(0x0E01, 0x0E5B)]);
+    let usable_bytes = synthetic_font(&[(0x0E01, 0x0E5B)]);
+    std::fs::write(&empty_path, &empty_bytes).unwrap();
+    std::fs::write(&usable_path, &usable_bytes).unwrap();
+
+    assert!(scripts::face_covers(&empty_bytes, 0, 'ก'), "empty candidate maps character in cmap");
+    assert!(!scripts::face_has_glyph_outline(&empty_bytes, 0, 'ก'), "empty candidate has no contours");
+    assert!(scripts::face_has_glyph_outline(&usable_bytes, 0, 'ก'), "usable candidate has contours");
+
+    // 1. Eager provider system_insert_files
+    let provider = test_provider(|| Some("en".into()));
+    let candidates = vec![FontFile { path: empty_path.clone(), family: String::new() }, FontFile { path: usable_path.clone(), family: String::new() }];
+    let insert = provider.system_insert_files(candidates.clone(), 'ก').expect("the usable alternative is reached");
+    assert_eq!(insert.data.bytes(), usable_bytes.as_slice(), "system_insert_files skips empty glyph candidate");
+
+    // 2. Lazy loader load_first
+    let mut fallback = CjkFallback::new(test_sources(|| Some("en".into())));
+    let (_, data) = fallback.load_first(&candidates, 'ก').expect("the usable alternative is reached");
+    assert_eq!(data.bytes(), usable_bytes.as_slice(), "load_first skips empty glyph candidate");
+
+    // 3. Static candidate craft_face_installs_coverage
+    let empty_craft = CraftFont { family: "Empty", style: "Regular", scripts: &["Thai"], bytes: Box::leak(empty_bytes.into_boxed_slice()) };
+    let usable_craft = CraftFont { family: "Usable", style: "Regular", scripts: &["Thai"], bytes: Box::leak(usable_bytes.into_boxed_slice()) };
+    assert!(!craft_face_installs_coverage(&empty_craft, 'ก'), "static candidate with empty glyph skipped");
+    assert!(craft_face_installs_coverage(&usable_craft, 'ก'), "static candidate with outline accepted");
+}
+
+/// Whitespace such as U+3000 IDEOGRAPHIC SPACE must only be accepted if the face's character
+/// map actually contains it, allowing selection to continue to a later covering face.
+#[test]
+fn ideographic_space_requires_character_map_coverage() {
+    let non_covering_path = fake_dir().join("latin-only.ttf");
+    let covering_path = fake_dir().join("cjk-with-space.ttf");
+    let non_covering_bytes = synthetic_font(&[(0x0041, 0x0041)]);
+    let covering_bytes = synthetic_font(&[(0x3000, 0x3000)]);
+    std::fs::write(&non_covering_path, &non_covering_bytes).unwrap();
+    std::fs::write(&covering_path, &covering_bytes).unwrap();
+
+    let ideographic_space = '\u{3000}';
+    assert!(!scripts::face_covers(&non_covering_bytes, 0, ideographic_space));
+    assert!(scripts::face_covers(&covering_bytes, 0, ideographic_space));
+
+    // 1. Eager provider system_insert_files
+    let provider = test_provider(|| Some("en".into()));
+    let candidates = vec![FontFile { path: non_covering_path.clone(), family: String::new() }, FontFile { path: covering_path.clone(), family: String::new() }];
+    let insert = provider.system_insert_files(candidates.clone(), ideographic_space).expect("covering face is reached");
+    assert_eq!(insert.data.bytes(), covering_bytes.as_slice());
+
+    // 2. Lazy loader load_first
+    let mut fallback = CjkFallback::new(test_sources(|| Some("en".into())));
+    let (_, data) = fallback.load_first(&candidates, ideographic_space).expect("covering face is reached");
+    assert_eq!(data.bytes(), covering_bytes.as_slice());
+
+    // 3. Static candidate craft_face_installs_coverage
+    let non_cov_craft = CraftFont { family: "LatinOnly", style: "Regular", scripts: &["Latin"], bytes: Box::leak(non_covering_bytes.into_boxed_slice()) };
+    let cov_craft = CraftFont { family: "CjkSpace", style: "Regular", scripts: &["Japanese"], bytes: Box::leak(covering_bytes.into_boxed_slice()) };
+    assert!(!craft_face_installs_coverage(&non_cov_craft, ideographic_space));
+    assert!(craft_face_installs_coverage(&cov_craft, ideographic_space));
+}
+
+/// Verifies that when a preferred script is repeated by the locale order and fails to cover a character,
+/// it is skipped via the local failed collection and not queried twice in the same invocation.
+#[test]
+fn fallback_tries_each_failed_script_once_when_preferred_script_repeats_order() {
+    PROVIDER_SCRIPT_CALLS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+    let mut fb = CjkFallback::new(Sources {
+        locale: || Some("ko_KR".into()),
+        files: recorded_provider_files,
+        last_resort: Vec::new,
+        pending: || false,
+        scripts: |_| Vec::new(),
+        covers: scripts::covering_face,
+        embedded: no_embedded,
+        eager_craft_fonts: false,
+    });
+    // For Han under ko_KR, Korean is kind.preferred(&order) and also the first item of order.
+    assert!(fb.next_font('龍', CjkChar::Han).is_none());
+    let calls = PROVIDER_SCRIPT_CALLS.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone();
+    assert_eq!(calls, vec![CjkScript::Korean, CjkScript::TraditionalChinese, CjkScript::SimplifiedChinese, CjkScript::Japanese]);
 }
