@@ -456,7 +456,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, help, is_color, is_hidden, parse_hex, range};
 use validate::{check_value, get_path, keyed, set_path};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -601,6 +601,20 @@ fn effect_cache_max_mb(small: bool) -> u32 {
 /// both.
 fn accepted_effect_cache_mb(stored: u32, small: bool) -> u32 {
     stored.clamp(EFFECT_CACHE_MIN_MB, effect_cache_max_mb(small))
+}
+
+/// The largest smart-object source or stage cache the Preferences dialog and `prefs.set` accept,
+/// in MB: as for the effect cache, the 32-bit cap on a build with a 32-bit address space (`small`),
+/// where a larger budget would never trim before allocation fails.
+fn smart_cache_max_mb(small: bool) -> u32 {
+    effect_cache_max_mb(small)
+}
+
+/// The smart-object cache budget a build honours for a `stored` preference, in bytes: at most
+/// [`smart_cache_max_mb`] (0 keeps nothing between commands). Separate from the target check so
+/// native tests exercise both.
+fn smart_cache_budget_bytes_for(stored: u32, small: bool) -> u64 {
+    u64::from(stored.min(smart_cache_max_mb(small))) << 20
 }
 
 /// The layer-effect cache budget a build honours for a `stored` preference, in bytes: within the
@@ -1470,9 +1484,10 @@ impl Session {
         }
         photocraft_compose::set_effect_cache_budget(budget);
         let perf = &self.prefs().performance;
-        // Saturating: a `usize` is 32 bits on wasm32, where 4096 MB would shift out to 0.
-        crate::smart_cmds::set_source_cache_budget((perf.smart_source_cache_mb as usize).saturating_mul(1 << 20));
-        crate::smart_cmds::set_stage_cache_budget((perf.smart_stage_cache_mb as usize).saturating_mul(1 << 20));
+        // Capped on a 32-bit address space, so the bytes fit its `usize`.
+        let bytes = |mb| usize::try_from(smart_cache_budget_bytes_for(mb, SMALL_ADDRESS_SPACE)).unwrap_or(usize::MAX);
+        crate::smart_cmds::set_source_cache_budget(bytes(perf.smart_source_cache_mb));
+        crate::smart_cmds::set_stage_cache_budget(bytes(perf.smart_stage_cache_mb));
         crate::transform_cmds::set_budget(u64::from(self.prefs().performance.effective_memory_usage_mb()) << 20);
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
@@ -1560,6 +1575,10 @@ impl Session {
         // or by a 64-bit build; a hand-edited 0) loads as the nearest value it does. Otherwise
         // Apply from another Preferences tab, which validates every value, would reject it.
         prefs.performance.effect_cache_mb = accepted_effect_cache_mb(prefs.performance.effect_cache_mb, SMALL_ADDRESS_SPACE);
+        // Likewise the smart-object caches (above the 32-bit cap, saved by a 64-bit build).
+        let max = smart_cache_max_mb(SMALL_ADDRESS_SPACE);
+        prefs.performance.smart_source_cache_mb = prefs.performance.smart_source_cache_mb.min(max);
+        prefs.performance.smart_stage_cache_mb = prefs.performance.smart_stage_cache_mb.min(max);
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);

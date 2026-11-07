@@ -1185,3 +1185,40 @@ fn an_effect_cache_above_the_cap_loads_clamped_and_does_not_block_apply() {
         assert_eq!(s.execute("prefs.get", json!({"path": "fileHandling.recentFileCount"})).unwrap(), json!(7), "{saved} MB");
     }
 }
+
+/// The smart-object source and stage cache fields accept what the build honours: up to 1536 MB on
+/// a 32-bit address space, where 65536 MB saturated to an unbounded budget, and 65536 MB
+/// elsewhere; 0 keeps nothing between commands. Both kinds of build are checked on every target,
+/// in `u64` so the expectations can't overflow a 32-bit `usize`.
+#[test]
+fn the_smart_object_cache_budgets_are_capped_on_32_bit_builds() {
+    const MB: u64 = 1 << 20;
+    let cap = WASM_MEMORY_USAGE_CAP_MB;
+    assert_eq!((smart_cache_max_mb(true), smart_cache_max_mb(false)), (cap, 65536));
+    for (stored, small_mb, large_mb) in [(0, 0, 0), (256, 256, 256), (cap, cap, cap), (cap + 1, cap, cap + 1), (65536, cap, 65536), (u32::MAX, cap, 65536)] {
+        assert_eq!(smart_cache_budget_bytes_for(stored, true), u64::from(small_mb) * MB, "32-bit, {stored} MB");
+        assert_eq!(smart_cache_budget_bytes_for(stored, false), u64::from(large_mb) * MB, "64-bit, {stored} MB");
+    }
+    let max = smart_cache_max_mb(SMALL_ADDRESS_SPACE);
+    let defaults = Performance::default();
+    assert!(defaults.smart_source_cache_mb.max(defaults.smart_stage_cache_mb) <= max, "the defaults fit this build's cap");
+    for path in ["performance.smartSourceCacheMb", "performance.smartStageCacheMb"] {
+        assert_eq!(range(path), Some((0.0, f64::from(max))));
+        assert!(check_value(path, &json!(0)).is_ok());
+        assert!(check_value(path, &json!(max)).is_ok());
+        assert!(check_value(path, &json!(u64::from(max) + 1)).is_err());
+        assert!(help(path).is_some_and(|h| h.contains('0')), "{path} explains what it trades, and what 0 does");
+        // A value saved above the cap (by a 64-bit build) loads as the cap, so Apply from another
+        // Preferences tab, which validates every value, isn't rejected.
+        let leaf = path.trim_start_matches("performance.");
+        for (saved, loaded) in [(u64::from(max) + 1, max), (u64::from(u32::MAX), max), (0, 0)] {
+            let mut s = session();
+            let invalid = s.load_prefs_json(&json!({"performance": {leaf: saved}}).to_string()).unwrap();
+            assert!(invalid.is_empty(), "{path} {saved} MB reads: {invalid:?}");
+            assert_eq!(s.execute("prefs.get", json!({"path": path})).unwrap(), json!(loaded), "{path} {saved} MB");
+            let mut values = s.execute("prefs.get", json!({"path": ""})).unwrap();
+            values["fileHandling"]["recentFileCount"] = json!(7);
+            s.execute("prefs.set", json!({"path": "", "value": values})).unwrap();
+        }
+    }
+}

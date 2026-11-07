@@ -522,11 +522,18 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 obj.insert(k, json!(s));
             }
             Value::Number(n) => {
-                let value_label = ui.label(RichText::new(tl!(&label)).color(t.text_dim));
+                // What the setting trades, on hovering its name or its field.
+                let help = |r: egui::Response| match prefs::help(&path) {
+                    Some(h) => r.on_hover_text(tl!(h)),
+                    None => r,
+                };
+                let value_label = help(ui.label(RichText::new(tl!(&label)).color(t.text_dim)));
                 let (lo, hi) = prefs::range(&path).unwrap_or((-1e9, 1e9));
                 if n.is_u64() || n.is_i64() {
                     let mut x = n.as_i64().unwrap_or(0);
-                    ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num)).labelled_by(value_label.id);
+                    help(
+                        ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num)).labelled_by(value_label.id),
+                    );
                     obj.insert(k, json!(x));
                     // A row of its own, so the label stays level with its field.
                     if read_at_launch(&path) {

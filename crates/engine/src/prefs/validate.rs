@@ -126,7 +126,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "performance.cacheLevels" => (1.0, 8.0),
         "performance.cacheTileSize" => (256.0, 16384.0),
         "performance.effectCacheMb" => (f64::from(super::EFFECT_CACHE_MIN_MB), f64::from(super::effect_cache_max_mb(super::SMALL_ADDRESS_SPACE))),
-        "performance.smartSourceCacheMb" | "performance.smartStageCacheMb" => (0.0, 65536.0),
+        "performance.smartSourceCacheMb" | "performance.smartStageCacheMb" => (0.0, f64::from(super::smart_cache_max_mb(super::SMALL_ADDRESS_SPACE))),
         "transparencyAndGamut.gamutWarningOpacity" => (1.0, 100.0),
         "unitsAndRulers.columnWidth" | "unitsAndRulers.gutter" => (0.0, 10_000.0),
         "unitsAndRulers.printResolution" | "unitsAndRulers.screenResolution" | "rawDefaults.resolution" => (1.0, 10_000.0),
@@ -135,6 +135,20 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
         "layerMaskOverlay.opacity" => (0.0, 100.0),
         "type.recentFonts" => (0.0, 50.0),
         "integrations.controlPort" => (0.0, 65535.0),
+        _ => return None,
+    })
+}
+
+/// What a preference trades, for a row whose name alone doesn't say it: the Preferences dialog
+/// shows it when the row is hovered.
+pub fn help(path: &str) -> Option<&'static str> {
+    Some(match path {
+        "performance.smartSourceCacheMb" => {
+            "Memory for the decoded contents of smart objects (the embedded or linked files). More keeps more files ready, so re-rendering them skips decoding; 0 keeps none between commands, using the least memory and decoding again each time."
+        }
+        "performance.smartStageCacheMb" => {
+            "Memory for rendered smart-object placements and smart filter results. More makes changing a filter or a placement faster, since the steps below it are kept; 0 keeps none between commands, using the least memory and rendering again each time."
+        }
         _ => return None,
     })
 }
