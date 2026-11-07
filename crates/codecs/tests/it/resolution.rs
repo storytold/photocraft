@@ -511,10 +511,12 @@ fn exports_drop_the_source_exif_thumbnail() {
             assert!(out.windows(6).any(|w| w == b"NIKON\0"), "the rest of the EXIF is kept");
             near(exif_resolution(&out), ppi.map_or(300.0, |p| p.0));
         }
-        // Only the pointer changes.
+        // Only the pointer and the thumbnail's own bytes (the JPEG at the end) change.
         let out = export_exif(&exif, None);
+        let thumb_len = b"\xFF\xD8stale thumbnail\xFF\xD9".len();
         let differing: Vec<usize> = (0..exif.len()).filter(|&i| exif[i] != out[i]).collect();
-        assert!(differing.iter().all(|&i| (8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4).contains(&i)), "{differing:?}");
+        assert!(differing.iter().all(|&i| (8 + 2 + 4 * 12..8 + 2 + 4 * 12 + 4).contains(&i) || i >= exif.len() - thumb_len), "{differing:?}");
+        assert!(!out.windows(5).any(|w| w == b"stale"), "the thumbnail bytes are blanked, not just unlinked");
         // With a JPEG-style prefix too.
         let prefixed = [b"Exif\0\0".as_slice(), &exif].concat();
         assert_eq!(next_ifd(e, &export_exif(&prefixed, None)[6..]), 0);
@@ -531,6 +533,27 @@ fn exports_drop_the_source_exif_thumbnail() {
             let body = got.strip_prefix(b"Exif\0\0").unwrap_or(&got);
             assert_eq!(next_ifd(e, body), 0, "{format:?}");
         }
+    }
+}
+
+/// A thumbnail range that covers IFD0, or tags that are not one SHORT/LONG value, are not blanked.
+#[test]
+fn thumbnail_blanking_keeps_ifd0_and_ignores_malformed_tags() {
+    for e in [&LE, &BE] {
+        let exif = exif_with_thumbnail(e);
+        let ifd1 = camera_exif(e).len();
+        let table = 8..8 + 2 + 4 * 12;
+        // Offset 8, length 60: the range covers IFD0's table.
+        let mut over = exif.clone();
+        over[ifd1 + 2 + 8..ifd1 + 2 + 12].copy_from_slice(&e.u32(8));
+        over[ifd1 + 2 + 12 + 8..ifd1 + 2 + 12 + 12].copy_from_slice(&e.u32(60));
+        let out = export_exif(&over, None);
+        assert_eq!(next_ifd(e, &out), 0, "IFD1 is still unlinked");
+        assert_eq!(out[table.start..table.end], over[table.start..table.end], "IFD0's table is untouched");
+        // A count of 2 on the offset tag: the thumbnail bytes are not blanked.
+        let mut counted = exif.clone();
+        counted[ifd1 + 2 + 4..ifd1 + 2 + 8].copy_from_slice(&e.u32(2));
+        assert!(export_exif(&counted, None).windows(5).any(|w| w == b"stale"));
     }
 }
 

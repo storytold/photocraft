@@ -381,6 +381,8 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError>
             match out16 {
                 Some(out) => Image::from_u16(w, hgt, layout, &out)?,
                 None => {
+                    // Admission above assumed 16-bit samples; the float fallback is twice that.
+                    limits.check(w, hgt, layout, SampleType::F32)?;
                     let max = (0..n).filter_map(physical).fold(0.0f64, f64::max);
                     let white = if max <= 2.0 {
                         1.0
