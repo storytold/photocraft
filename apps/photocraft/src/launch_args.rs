@@ -31,8 +31,8 @@ pub(crate) struct LaunchArgs {
     /// Start with the CPU renderer for this launch (after a graphics driver crash)
     #[arg(long)]
     pub(crate) safe_gpu: bool,
-    /// macOS: keep the menus inside the window instead of the menu bar (the variable: 0, false, no
-    /// or off is off; empty is unset)
+    /// macOS and Linux: keep the menus inside the window instead of the menu bar or desktop global
+    /// menu (the variable: 0, false, no or off is off; empty is unset)
     #[arg(long, env = "PHOTOCRAFT_IN_WINDOW_MENUS", value_parser = FalseyValueParser::new())]
     pub(crate) in_window_menus: bool,
     /// Windows and Linux: start a separate PhotoCraft instead of opening the files in the one
