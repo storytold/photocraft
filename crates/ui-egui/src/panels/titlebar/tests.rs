@@ -26,6 +26,8 @@ struct Win {
     width: f32,
     time: f64,
     maximized: bool,
+    /// The display's scale (`native_pixels_per_point`); `None` is egui's 1.
+    native: Option<f32>,
 }
 
 impl Win {
@@ -34,7 +36,7 @@ impl Win {
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
         app.custom_titlebar = true;
-        Self { ctx, app, width, time: 0.0, maximized: false }
+        Self { ctx, app, width, time: 0.0, maximized: false, native: None }
     }
 
     fn frame(&mut self, events: Vec<Event>) -> egui::FullOutput {
@@ -47,6 +49,7 @@ impl Win {
             RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(self.width, 600.0))), time: Some(self.time), events, ..Default::default() };
         if let Some(v) = input.viewports.get_mut(&ViewportId::ROOT) {
             v.maximized = Some(self.maximized);
+            v.native_pixels_per_point = self.native.or(v.native_pixels_per_point);
         }
         // What `PhotocraftApp::raw_input_hook` does.
         release_after_os_resize(&self.ctx, &mut input);
@@ -488,4 +491,72 @@ fn theme_icons_are_cached_and_fall_back() {
     });
     out.textures_delta.clear();
     assert_eq!(calls.load(Ordering::Relaxed), 3, "each icon and size rendered once; absurd sizes never");
+}
+
+/// #2554: on macOS the strip fits around the traffic lights where AppKit measured them: its
+/// controls are centred on the lights and short enough to keep a margin, and its content starts
+/// after them. The strip was 32 pt (38 outside Pro) with 28 pt icons, so the lights sat high.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_strip_fits_around_the_measured_traffic_lights() {
+    let mut w = Win::new(1440.0);
+    w.app.custom_titlebar = false;
+    w.app.integrated_titlebar = true;
+    // Classic 12 pt lights centred 14 pt down, the zoom button ending at 70 pt.
+    w.app.mac_titlebar = Some(crate::MacTitleBar::around_lights(70.0, 14.0, 12.0));
+    w.frame(vec![]);
+    w.frame(vec![]);
+    let widgets = w.bar_widgets();
+    assert!(!widgets.is_empty());
+    for r in &widgets {
+        assert!((r.center().y - 14.0).abs() <= 1.0, "centred on the lights: {r:?}");
+        // The icons are 22 pt; the menu titles this rig draws in the strip (a real macOS build has
+        // them in the system menu bar) 24.
+        assert!(r.height() <= 24.0, "a margin above and below: {r:?}");
+    }
+    let mark = crate::brand::mark_rect(&w.ctx).expect("the brand mark is painted");
+    assert!(mark.left() >= 78.0, "content starts after the lights: {mark:?}");
+}
+
+/// #2554: AppKit measures the traffic lights in window points, which are egui points only at the
+/// display's own scale. A fixed UI Scale (an absolute pixels-per-point: 100% is 1 on a 2x display)
+/// zooms egui, so the strip and its content start convert by `native_pixels_per_point /
+/// pixels_per_point`; a content start past `egui::Margin`'s `i8` still clears the lights. A large
+/// UI Scale shrinks the lights below what the strip's controls need: the strip keeps its 28 pt
+/// floor, so nothing is clipped, and its controls stay on the lights as far as they fit.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_macos_strip_converts_the_measured_lights_at_any_ui_scale() {
+    // A 2x display at UI Scale Auto (200%), 100% and 250%; a 1x display at 300%.
+    for (native, ppp) in [(2.0, 2.0), (2.0, 1.0), (2.0, 2.5), (1.0, 3.0)] {
+        let mut w = Win::new(1440.0);
+        w.native = Some(native);
+        w.ctx.set_zoom_factor(ppp / native);
+        w.app.custom_titlebar = false;
+        w.app.integrated_titlebar = true;
+        // Classic 12 pt lights centred 14 pt down, the zoom button ending at 70 pt: in AppKit
+        // points, a 28 pt strip with content from 78 pt.
+        w.app.mac_titlebar = Some(crate::MacTitleBar::around_lights(70.0, 14.0, 12.0));
+        w.frame(vec![]);
+        w.frame(vec![]);
+        w.frame(vec![]);
+        assert_eq!(w.ctx.pixels_per_point(), ppp);
+        let to_egui = native / ppp;
+        let strip =
+            egui::containers::panel::PanelState::load(&w.ctx, crate::panels::panel_state_id(&w.ctx, "title_bar")).expect("the strip is drawn").outer_rect;
+        assert!(strip.height() >= 28.0 - 0.01, "the strip keeps its floor at {ppp}: {strip:?}");
+        let widgets = w.bar_widgets();
+        assert!(!widgets.is_empty(), "at {ppp}");
+        let tallest = widgets.iter().map(|r| r.height()).fold(0.0, f32::max);
+        // On the lights, or as near them as the tallest control fits below the strip's top.
+        let centre = (14.0 * to_egui).max(tallest / 2.0);
+        for r in &widgets {
+            assert!((r.center().y - centre).abs() <= 1.0, "centred on the lights at {ppp}: {r:?}");
+            assert!(r.top() >= strip.top() - 0.01 && r.bottom() <= strip.bottom() + 0.01, "inside the strip at {ppp}: {r:?} in {strip:?}");
+        }
+        let mark = crate::brand::mark_rect(&w.ctx).expect("the brand mark is painted");
+        assert!(mark.top() >= strip.top() - 0.01 && mark.bottom() <= strip.bottom() + 0.01, "the mark inside the strip at {ppp}: {mark:?} in {strip:?}");
+        assert!(mark.left() >= 78.0 * to_egui - 0.5, "content starts after the lights at {ppp}: {mark:?}");
+        assert!(mark.left() <= 78.0 * to_egui + 1.0, "and right after them at {ppp}: {mark:?}");
+    }
 }

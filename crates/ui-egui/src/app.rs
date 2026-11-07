@@ -94,6 +94,7 @@ impl PhotocraftApp {
             low_memory: crate::memory_warning::Watch::default(),
             styled: false,
             integrated_titlebar: false,
+            mac_titlebar: None,
             custom_titlebar: false,
             last_window_title: String::new(),
             fonts_ready: false,
