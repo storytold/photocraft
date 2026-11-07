@@ -158,6 +158,7 @@ fn renders_in_object(f: &SmartFilter) -> bool {
 fn apply_smart_filter(f: &SmartFilter, cur: &Surface, canvas: Rect, extent: Rect, mask: Option<&photocraft_doc::LayerMask>, ctx: &JobCtx) -> Result<Surface> {
     crate::jobs::authorize_render_command(&f.command, &f.params)?;
     let rendered = if f.command == "image.adjustments.equalize" {
+        ctx.check()?;
         crate::adjust_cmds::adjust_as_filter("equalize", &f.params, cur, mask)
     } else {
         crate::filters::apply_filter_to_surface_in(&f.command, &f.params, cur, canvas, None, extent, ctx)?
