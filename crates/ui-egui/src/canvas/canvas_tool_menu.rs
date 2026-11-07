@@ -55,7 +55,7 @@ pub struct CanvasToolMenu {
     /// becomes active, the index may name a different sampler, so the menu closes and Delete greys.
     #[serde(default)]
     pub sampler_at: Option<(usize, [f64; 2])>,
-    /// Opened with the Note tool, or on a note with any tool: the notes menu (#11789).
+    /// Opened with the Note tool, or on a note with the Move tool: the notes menu (#11789).
     #[serde(default)]
     pub notes: Option<NotesMenu>,
 }
@@ -67,7 +67,7 @@ pub struct NotesMenu {
     pub note: Option<usize>,
     /// The document point right-clicked: where New Note puts the note.
     pub at: [f64; 2],
-    /// Opened with the Note tool (another tool gets the menu only on a note).
+    /// Opened with the Note tool (the Move tool gets the menu only on a note).
     pub note_tool: bool,
 }
 
@@ -1024,9 +1024,10 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         return false;
     }
     let type_layer = !text && doc.and_then(|d| type_layer_at(app, tool, d)).is_some_and(|id| target_type_layer(app, id));
-    // The notes menu (#11789): with the Note tool anywhere, and on a note with any tool.
-    let note = if text { None } else { doc.and_then(|d| crate::analysis_ui::note_at(app, d)) };
-    if let Some(at) = doc.filter(|_| !text && (tool == Tool::Note || note.is_some())) {
+    // The notes menu (#11789), as measured: with the Note tool anywhere, and on a note with the
+    // Move tool. Other tools on a note were not measured and keep their own right-click.
+    let note = if matches!(tool, Tool::Note | Tool::Move) { doc.and_then(|d| crate::analysis_ui::note_at(app, d)) } else { None };
+    if let Some(at) = doc.filter(|_| tool == Tool::Note || note.is_some()) {
         app.ui.brush_picker = None;
         app.ui.layer_menu = None;
         app.ui.canvas_tool_menu = Some(CanvasToolMenu {

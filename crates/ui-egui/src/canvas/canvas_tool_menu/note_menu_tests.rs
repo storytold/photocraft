@@ -1,4 +1,4 @@
-//! #11789: a right-click with the Note tool, or on a note with any tool, opens the notes menu:
+//! #11789: a right-click with the Note tool, or on a note with the Move tool, opens the notes menu:
 //! New Note · Import Notes… ― Open Note · Close Note · Delete Note · Delete All Notes, greyed as
 //! measured for off a note, on a note, and on the note open in the Notes panel.
 
@@ -151,4 +151,16 @@ fn over_the_control_channel_the_rows_are_listed_and_chosen() {
     assert_eq!(listed, want([true, true, false, false, false, true]));
     assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": NOTE_NEW}))["ok"], true);
     assert_eq!(notes(&app), 3);
+}
+
+#[test]
+fn tools_not_measured_on_a_note_keep_their_own_menus() {
+    // Measured on a note: the Note and Move tools. The Pen keeps its path menu, a marquee its
+    // selection menu, the Brush and the Type tool their own right-click.
+    for tool in [Tool::Pen, Tool::RectMarquee, Tool::Brush, Tool::Type] {
+        let (mut app, ctx) = app();
+        app.ui.canvas_tool_menu = None;
+        open_at(&mut app, &ctx, tool, [10.0, 10.0], Some([24.0, 25.0]));
+        assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.notes.is_none()), "{tool:?} on a note: not the notes menu");
+    }
 }

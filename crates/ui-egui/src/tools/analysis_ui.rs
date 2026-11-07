@@ -795,7 +795,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Selecting note `i` shows its author and colour in the Note tool's options bar, as Photoshop
 /// does (#7940); a new note then takes them unless they are changed.
 /// The note whose icon is under document point `at` (the topmost), or `None`: the hit test a Note
-/// tool click uses, also for the notes context menu with any tool (#11789).
+/// tool click uses, also for the notes context menu with the Move tool (#11789).
 pub(crate) fn note_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<usize> {
     let doc = app.session.active().map(|d| d.doc.clone())?;
     let z = f64::from(app.point_zoom().max(0.01));
