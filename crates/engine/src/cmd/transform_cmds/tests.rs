@@ -497,6 +497,41 @@ fn targeted_unlinked_mask_transforms_alone() {
     assert_eq!(active_bounds(&s), Rect::new(10, 10, 30, 20), "pixels untouched");
 }
 
+/// The live preview's mask is the one the commit leaves, with and without a selection.
+#[test]
+fn moved_gray_matches_the_committed_mask() {
+    for selected in [false, true] {
+        let mut s = masked(&[Rect::new(10, 10, 20, 20)], false);
+        if selected {
+            s.execute("select.rect", json!({"x": 10, "y": 10, "width": 5, "height": 10})).unwrap();
+        }
+        let st = s.active().unwrap();
+        let id = st.active_layer;
+        let surf = lone_target(&st.doc, id, &json!({"target": "mask"})).unwrap().unwrap().clone();
+        let sel = st.doc.selection.clone().unwrap_or_else(|| {
+            let mut w = Surface::new(PixelFormat::GRAY8);
+            w.fill_rect(target_frame(&st.doc, &surf), &[1.0]);
+            w
+        });
+        let (lifted, rest) = split_gray_selected(&surf, &sel).unwrap().unwrap();
+        let h = Homography([1.0, 0.0, 7.0, 0.0, 1.0, 30.0, 0.0, 0.0, 1.0]);
+        let live = moved_gray(&rest, &lifted, &h, Interp::Bicubic).unwrap();
+        s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 7, 30], "target": "mask"})).unwrap();
+        let st = s.active().unwrap();
+        let committed = &st.doc.layer(id.unwrap()).unwrap().mask.as_ref().unwrap().surface;
+        let area = Rect::new(0, 0, 64, 64);
+        assert_eq!(live.read_region(area), committed.read_region(area), "selected: {selected}");
+    }
+    // Past the budget it is refused, not built.
+    let s = masked(&[Rect::new(10, 10, 20, 20)], false);
+    let surf = lone_target(&s.active().unwrap().doc, s.active().unwrap().active_layer, &json!({"target": "mask"})).unwrap().unwrap().clone();
+    let mut sel = Surface::new(PixelFormat::GRAY8);
+    sel.fill_rect(Rect::new(0, 0, 64, 64), &[1.0]);
+    let (lifted, rest) = split_gray_selected(&surf, &sel).unwrap().unwrap();
+    let huge = Homography([1e6, 0.0, 0.0, 0.0, 1e6, 0.0, 0.0, 0.0, 1.0]);
+    assert!(moved_gray(&rest, &lifted, &huge, Interp::Bilinear).is_err());
+}
+
 #[test]
 fn targeted_linked_mask_moves_with_its_layer() {
     // Photoshop: a linked mask can't move without its layer.
