@@ -155,6 +155,16 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     // `exposure` becomes `2^exposure`, which overflows f32 to infinity from 128 up (and then
     // writes inf/NaN into 32-bit layers). Clamp to the documented -5..5.
     cr.exposure = cr.exposure.clamp(-5.0, 5.0);
+    if camera_raw::geometry::Upright::parse(&cr.perspective_upright).is_none() {
+        return Err(bad(cmd, "perspectiveUpright must be off, auto, level, vertical, full or guided"));
+    }
+    if cr.upright_guides.len() > camera_raw::geometry::MAX_GUIDES {
+        return Err(bad(cmd, format!("at most {} upright guides", camera_raw::geometry::MAX_GUIDES)));
+    }
+    if cr.upright_guides.iter().flatten().flatten().any(|v| !v.is_finite()) {
+        return Err(bad(cmd, "upright guide coordinates must be finite"));
+    }
+    camera_raw::masks::validate(&cr.masks).map_err(|e| bad(cmd, e))?;
     Ok(cr)
 }
 
@@ -193,7 +203,9 @@ pub fn try_camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> std:
 }
 
 fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, strict: bool) -> std::result::Result<Surface, String> {
-    let area = area.intersect(&surf.content_bounds().union(&area));
+    // Geometry turns the image about its centre: the canvas's, not that of content past its edge.
+    let geometry = !p.geometry_neutral();
+    let area = if geometry { area } else { area.intersect(&surf.content_bounds().union(&area)) };
     if area.is_empty() || p.is_identity() {
         return Ok(surf.clone());
     }
@@ -211,9 +223,15 @@ fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, strict: bool) -> s
     let orig = surf.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
     for (i, (q, o)) in px.iter().zip(data.chunks_exact_mut(n)).enumerate() {
+        if geometry && !fmt.alpha {
+            // No transparency to leave: what the warp uncovers turns white.
+            let a = q[3].clamp(0.0, 1.0);
+            from_rgba_into(&fmt, [q[0] * a + 1.0 - a, q[1] * a + 1.0 - a, q[2] * a + 1.0 - a, 1.0], o);
+            continue;
+        }
         from_rgba_into(&fmt, *q, o);
-        if fmt.alpha {
-            // Alpha is untouched.
+        if fmt.alpha && !geometry {
+            // Alpha is untouched (Geometry moves it with the pixels).
             o[n - 1] = orig[i * n + n - 1];
         }
     }
@@ -461,8 +479,9 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let t0 = Stopwatch::start();
+    let geometry = !cr.geometry_neutral();
     let id = run_filter(s, RAW, "RAW Develop Filter", p, p.clone(), false, &|surf, canvas| {
-        try_camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr).map_err(|e| bad(RAW, e))
+        try_camera_raw_surface(surf, if geometry { canvas } else { canvas.union(&surf.content_bounds()) }, &cr).map_err(|e| bad(RAW, e))
     })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
@@ -518,7 +537,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "RAW Develop Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase"}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the result}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise"}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -800,6 +819,46 @@ mod tests {
             }
         }
         assert!(worst < 0.012, "P3 develops off by {worst}");
+    }
+
+    #[test]
+    fn camera_raw_geometry_moves_alpha_and_rejects_bad_upright() {
+        // A pixel layer: Scale 50 leaves its edges transparent and its middle opaque.
+        let mut s = session(8);
+        s.execute(RAW, json!({"perspectiveScale": 50})).unwrap();
+        let d = s.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let fmt = surf.format();
+        assert!(fmt.alpha);
+        let a = fmt.channels() - 1;
+        assert!(surf.sample_channel(2, 2, a) < 0.01, "edge left opaque");
+        assert!(surf.sample_channel(60, 40, a) > 0.99, "centre lost");
+        // The background: uncovered pixels turn white where there is no alpha to clear.
+        let mut b = Session::new();
+        b.execute("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
+        b.execute(RAW, json!({"perspectiveRotate": 10})).unwrap();
+        let d = b.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let fmt = surf.format();
+        if fmt.alpha {
+            assert!(surf.sample_channel(0, 0, fmt.channels() - 1) < 0.01);
+        } else {
+            assert!(surf.sample_channel(0, 0, 0) > 0.99);
+        }
+        assert!(surf.sample_channel(32, 24, 0) < 0.01, "the middle stays black");
+        for bad in [
+            json!({"perspectiveUpright": "sideways"}),
+            json!({"perspectiveUpright": 3}),
+            json!({"uprightGuides": vec![[[0, 0], [1, 1]]; 5]}),
+            json!({"masks": [{"components": [{"kind": "depth"}], "adjust": {"exposure": 1}}]}),
+            json!({"masks": [{"components": [{"kind": "teleport"}]}]}),
+            json!({"uprightGuides": [[[0, 0], [1]]]}),
+            json!({"perspectiveVertical": "steep"}),
+        ] {
+            assert!(s.execute(RAW, bad.clone()).is_err(), "{bad}");
+        }
+        // Hostile but well-typed numbers are clamped, not fatal.
+        s.execute(RAW, json!({"perspectiveVertical": 1e30, "perspectiveScale": -4, "perspectiveUpright": "full"})).unwrap();
     }
 
     #[test]

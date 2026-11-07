@@ -63,6 +63,9 @@ mod colour_lut;
 mod contrast;
 mod exposure;
 mod hsv_table;
+
+pub mod geometry;
+pub mod masks;
 mod local_detail;
 mod local_detail_tables;
 mod local_tone;
@@ -299,6 +302,29 @@ pub struct CameraRaw {
     pub calibration_hue: [f32; 3],
     /// Red, Green and Blue Primary › Saturation: −100 (grey) … 100 (purer).
     pub calibration_sat: [f32; 3],
+    // Geometry (Camera Raw's Geometry panel, see `geometry`)
+    /// Upright: `off | auto | level | vertical | full | guided`.
+    pub perspective_upright: String,
+    /// Guided Upright's guides, `[[x0, y0], [x1, y1]]` in 0 … 1 image coordinates (at most four).
+    pub upright_guides: Vec<[[f32; 2]; 2]>,
+    /// Transform › Vertical, −100 … 100.
+    pub perspective_vertical: f32,
+    /// Transform › Horizontal, −100 … 100.
+    pub perspective_horizontal: f32,
+    /// Transform › Rotate, degrees −10 … 10.
+    pub perspective_rotate: f32,
+    /// Transform › Aspect, −100 … 100.
+    pub perspective_aspect: f32,
+    /// Transform › Scale, percent 50 … 150.
+    pub perspective_scale: f32,
+    /// Transform › Offset X, −100 … 100.
+    pub perspective_x: f32,
+    /// Transform › Offset Y, −100 … 100.
+    pub perspective_y: f32,
+    /// Constrain Crop: scale the result up so no uncovered (transparent) area shows.
+    pub constrain_crop: bool,
+    /// The Masks panel: local adjustments through masks (see `masks`).
+    pub masks: Vec<masks::Mask>,
 }
 
 impl Default for CameraRaw {
@@ -359,6 +385,17 @@ impl Default for CameraRaw {
             shadow_tint: 0.0,
             calibration_hue: [0.0; 3],
             calibration_sat: [0.0; 3],
+            perspective_upright: "off".into(),
+            upright_guides: Vec::new(),
+            perspective_vertical: 0.0,
+            perspective_horizontal: 0.0,
+            perspective_rotate: 0.0,
+            perspective_aspect: 0.0,
+            perspective_scale: 100.0,
+            perspective_x: 0.0,
+            perspective_y: 0.0,
+            constrain_crop: false,
+            masks: Vec::new(),
         }
     }
 }
@@ -676,7 +713,8 @@ impl CameraRaw {
         ] {
             validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
         }
-        Ok(())
+        geometry::validate(self)?;
+        masks::validate(&self.masks)
     }
     /// [`validate`](Self::validate) for an edit of `stored` settings: a curve left as stored is
     /// accepted, so editing another control of an older Smart Filter still works.
@@ -691,7 +729,9 @@ impl CameraRaw {
                 validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
             }
         }
-        Ok(())
+        // Geometry and Masks are new: always checked (they have no lenient older form).
+        geometry::validate(self)?;
+        masks::validate(&self.masks)
     }
     fn wb_neutral(&self) -> bool {
         self.temperature == 0.0 && self.tint == 0.0 && self.exposure == 0.0
@@ -721,6 +761,10 @@ impl CameraRaw {
     pub(crate) fn encoding(&self) -> Encoding {
         Encoding::with_primaries(self.encoding_gamma, self.document_primaries)
     }
+    /// The Geometry panel at rest (no Upright, no Transform).
+    pub fn geometry_neutral(&self) -> bool {
+        geometry::neutral(self)
+    }
     /// True when every control is neutral (the filter is an identity).
     pub fn is_identity(&self) -> bool {
         self.wb_neutral()
@@ -737,6 +781,8 @@ impl CameraRaw {
             && self.noise_color == 0.0
             && self.grain_amount == 0.0
             && self.vignette_amount == 0.0
+            && self.geometry_neutral()
+            && !self.masks.iter().any(masks::Mask::is_active)
     }
 }
 
@@ -889,6 +935,14 @@ pub fn try_develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float
     // 8. Detail.
     if p.noise_luminance > 0.0 || p.noise_color > 0.0 || p.sharpen_amount > 0.0 {
         detail(px, w, h, p, ps);
+    }
+    // 8b. Geometry: Upright and Transform (pixels the warp uncovers become transparent).
+    if !p.geometry_neutral() {
+        geometry::apply(px, w, h, p, float);
+    }
+    // 8c. Masks: local adjustments, in the coordinates of the result.
+    if p.masks.iter().any(masks::Mask::is_active) {
+        masks::apply(px, w, h, p, float);
     }
     // 9. Effects.
     if p.vignette_amount != 0.0 {

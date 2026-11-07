@@ -198,6 +198,8 @@ impl CameraRaw {
             || self.sharpen_amount > 0.0
             || self.noise_luminance > 0.0
             || self.noise_color > 0.0
+            || !self.geometry_neutral()
+            || self.masks.iter().any(super::masks::Mask::is_active)
     }
 }
 
