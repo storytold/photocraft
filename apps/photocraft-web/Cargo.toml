@@ -32,8 +32,11 @@ log = { workspace = true }
 # `wgpu` pulls egui-wgpu's defaults: WebGPU plus the WebGL2 fallback.
 eframe = { workspace = true, features = ["wgpu", "accesskit", "clipboard"] }
 rfd = { workspace = true }
+serde_json = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
+# The page command API (storytold/craft-libs#413): the functions behind window.photocraft.
+craft-web-api = { git = "https://github.com/storytold/craft-libs", rev = "39ba66c11ecea2c397ce51d9e343d25394857e3c", version = "0.1.0" }
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlCanvasElement", "DomRect", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "Location", "CssStyleDeclaration", "Storage", "Event", "EventTarget", "MouseEvent", "PointerEvent", "BeforeUnloadEvent", "AbortController", "AbortSignal", "DomException", "Response", "IdbFactory", "IdbOpenDbRequest", "IdbDatabase", "IdbRequest", "IdbTransaction", "IdbTransactionMode", "IdbObjectStore", "IdbCursor", "IdbCursorWithValue", "RequestInit", "RequestMode", "Navigator", "ErrorEvent", "PromiseRejectionEvent"] }
 

@@ -475,6 +475,50 @@ The MCP server has the same batching as the `command_batch` tool (`{steps:[{id, 
 in headless and bridge mode. A step with `wait: false` returns `{job, pending}` at once, as `command_run`
 does; later steps that edit the same document fail with a message naming the job until it ends.
 
+## In the browser: `window.photocraft`
+
+The web build has no TCP server (a page can't listen on a socket), so it offers the same methods to the
+page itself, on `window.photocraft` (`apps/photocraft-web/src/api.rs`), like VectorCraft's
+`window.vectorcraft` and FilmCraft's `window.filmcraft`. An agent driving PhotoCraft in a browser tab, or
+a host page on the same origin that shows it in an `<iframe>`, uses the commands it would send to the desktop app:
+
+| Call | |
+|---|---|
+| `photocraft.request(method, params)` | any control method of this document → its `result` |
+| `photocraft.execute(command, params)` | `engine.execute` |
+| `photocraft.commands()` / `photocraft.uiInspect(params)` | `engine.commands` / `ui.inspect` |
+| `photocraft.screenshot(params)` | `ui.screenshot` (no `path`: the PNG comes back inline, as `data` and as `base64`) |
+| `photocraft.openFile(name, bytes)` | opens the bytes the way a dropped file opens |
+
+`request`, `execute`, `commands`, `uiInspect` and `screenshot` come from
+[`craft-web-api`](https://github.com/storytold/craft-libs/tree/main/crates/web-api) (storytold/craft-libs#413),
+the same functions every Craft web build has, and return promises. PhotoCraft has no `document.inspect`, so
+there is no `docInspect`. `openFile` is PhotoCraft's own and returns at once: `true` when the file is queued to
+open on the next frame, `false` when the app isn't running yet.
+
+Errors reject with an `Error` carrying the method's message, and params that are not an object (a number, `NaN`, a string, an array, a function) or have no JSON (a cyclic object) reject without running anything. Requests run on the UI's next frame, so a
+hidden tab (whose frames the browser pauses) answers when it is shown again. A call the app doesn't answer
+within 30 seconds rejects, and the app drops it unrun if it had not started it.
+
+**Who can call it.** `window.photocraft` is on the page's own `window`, so it can be called by scripts that
+run in that page (the page's own scripts, anything it includes, the browser console) and by a page on the
+same origin that holds this page's `window` (a parent that frames it, or the page that opened it). A page on
+another origin can't reach it, even one that frames PhotoCraft, because the browser doesn't let it read the
+frame's `window`; and PhotoCraft adds no `message` listener for it. So a host that wants to drive a framed
+PhotoCraft serves it from its own origin, and is then trusted with it; to keep a host out, serve PhotoCraft
+from another origin. The scripts that can call it can already do anything the page can, so it adds no one
+who can control the app.
+
+There is no token. The desktop server needs one because any local process can open its TCP port. In the
+page there is nothing outside it to keep out, and a token kept in the page could be read by the scripts it
+would be meant to stop. A page that runs scripts it doesn't trust shouldn't host PhotoCraft.
+
+**What it reaches.** Every method of this document (`METHODS` in `crates/ui-egui/src/control.rs`), as on
+the desktop. Files stay in the browser: the page has no file system, so a path never reaches the device's
+files. A write the app makes goes through `Services::write`, which on the web only starts a browser
+download named after the path's last part; folders can't be picked; and the app reads only files a person
+picks or a page passes to `openFile`.
+
 ## Transport limits
 
 The desktop and headless TCP listeners currently enforce:

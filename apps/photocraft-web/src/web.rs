@@ -14,7 +14,7 @@ use photocraft_ui_egui::theme::ThemeKind;
 use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
 use wasm_bindgen::JsCast as _;
 
-type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
+pub(crate) type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
 type PlaceInbox = photocraft_ui_egui::PlaceInbox;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
@@ -49,6 +49,11 @@ type Served = Arc<Mutex<ServedFonts>>;
 
 pub fn start() {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    // `window.photocraft` (crate::api) is there from the start: until the app runs, its requests
+    // reject with "not running yet" and `openFile` returns false.
+    if let Err(e) = crate::api::install() {
+        log::error!("photocraft-web: couldn't install window.photocraft: {e:?}");
+    }
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
@@ -103,6 +108,10 @@ pub fn start() {
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
                     let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    // `window.photocraft`: the page's control channel (crate::api).
+                    let (control_tx, control_rx) = std::sync::mpsc::channel();
+                    crate::api::connect(control_tx, inbox.clone(), cc.egui_ctx.clone());
+                    app = app.with_control(control_rx);
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
