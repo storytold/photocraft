@@ -1452,6 +1452,10 @@ fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context
 fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
     let (x, y) = (s.x, s.y);
     let down = matches!(s.ev, ToolEvent::Down { .. });
+    // A Magnetic Lasso border being drawn: no menu over it, as on the canvas (#11689).
+    if crate::canvas_tool_menu::magnetic_drawing(app) {
+        return true;
+    }
     if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
         if down {
             crate::canvas_tool_menu::open_pasteboard(app, ctx, app.ui.tool, screen_point(app, x, y));

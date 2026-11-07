@@ -546,7 +546,6 @@
 	Deselect	إلغاء التحديد
 	Reselect	إعادة التحديد
 	Inverse	عكس التحديد
-	Inverse Selection	عكس التحديد
 	Similar	مشابه
 	Color Range…	نطاق الألوان…
 	Focus Area…	منطقة التركيز…
@@ -684,8 +683,8 @@
 	Legacy Macintosh RGB (Gamma 1.8)	RGB القديم لنظام Macintosh (Gamma 1.8)
 	Internet Standard RGB (sRGB)	RGB القياسي للإنترنت (sRGB)
 	Monitor RGB	RGB الشاشة
-	Color Blindness — Protanopia-type	عمى الألوان — نوع بروتانوبيا
-	Color Blindness — Deuteranopia-type	عمى الألوان — نوع ديوتيرانوبيا
+	Color Blindness - Protanopia-type	عمى الألوان — نوع بروتانوبيا
+	Color Blindness - Deuteranopia-type	عمى الألوان — نوع ديوتيرانوبيا
 	Zoom In	تكبير
 	Zoom Out	تصغير
 	Fit on Screen	ملاءمة للشاشة
@@ -993,7 +992,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	انقر لإضافة نقطة · اسحبها بعيدًا أو {key}+نقر أو Delete للإزالة
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	انقر للتطبيق، {key}+نقر لمسح التجاوزات، نقر مزدوج لخيارات النمط
 	Click to edit the gradient	انقر لتحرير التدرج
-	Click to restore the current colour	انقر لاستعادة اللون الحالي
+	Click to restore the current color	انقر لاستعادة اللون الحالي
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	انقر للتكبير  ·  {key}+نقر للتصغير  ·  اسحب يمينًا/يسارًا للتكبير/التصغير
 	Click with the Note tool to add a note.	انقر بأداة الملاحظة لإضافة ملاحظة.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	نقر: زاوية · سحب: ناعم · نقر على النقطة الأولى: إغلاق · {key} إنهاء · Esc إلغاء
@@ -1079,7 +1078,7 @@
 	Darks	الدرجات الداكنة
 	Data Sets	مجموعات البيانات
 	Default	افتراضي
-	Default colours (D)	الألوان الافتراضية (D)
+	Default Foreground and Background Colors (D)	لونا المقدمة والخلفية الافتراضيان (D)
 	Default printer	الطابعة الافتراضية
 	Default restored.	تمت استعادة الإعدادات الافتراضية.
 	Define	تعريف
@@ -1365,7 +1364,7 @@
 	Opacity Jitter	تذبذب العتامة
 	Opacity:	العتامة:
 	Open a document to define variables.	افتح مستندًا لتعريف المتغيرات.
-	Open a document to select a colour range.	افتح مستندًا لتحديد نطاق ألوان.
+	Open a document to select a color range.	افتح مستندًا لتحديد نطاق ألوان.
 	Open a document to use the timeline.	افتح مستندًا لاستخدام المخطط الزمني.
 	Optical	بصري
 	Optimized	محسّن
@@ -1441,7 +1440,6 @@
 	Purity	النقاء
 	Quality	الجودة
 	Quick Actions	إجراءات سريعة
-	Quick Export As PNG	تصدير سريع بتنسيق PNG
 	Radial Gradient	تدرج شعاعي
 	Radius	نصف القطر
 	Radius:	نصف القطر:
@@ -1583,7 +1581,7 @@
 	Subtract from Sample	طرح من العينة
 	Subtract from selection  ({key})	طرح من التحديد ({key})
 	Suggestions:	الاقتراحات:
-	Swap colours (X)	تبديل الألوان (X)
+	Switch Foreground and Background Colors (X)	تبديل لوني المقدمة والخلفية (X)
 	Swaps height and width	يبدّل الارتفاع والعرض
 	Switch between free transform and warp modes	التبديل بين وضعي التحويل الحر والالتواء
 	Switch theme	تبديل السمة
@@ -1686,7 +1684,7 @@
 	Choke	تضييق
 	Classic	كلاسيكي
 	Click to add text	انقر لإضافة نص
-	Click to fill similar colours	انقر لتعبئة الألوان المتشابهة
+	Click to fill similar colors	انقر لتعبئة الألوان المتشابهة
 	Clone Stamp Tool	أداة ختم النسخ
 	Color Burn	تغميق اللون
 	Color Dodge	تفتيح اللون
@@ -1846,7 +1844,7 @@
 	Rectangular Marquee Tool	أداة إطار التحديد المستطيل
 	Reds	درجات الأحمر
 	Reflected	منعكس
-	Sample: foreground colour	العينة: لون المقدمة
+	Sample: foreground color	العينة: لون المقدمة
 	Sampled Colors	الألوان المأخوذة كعينات
 	Satin	ساتان
 	Save Pixel Aspect Ratio	حفظ نسبة أبعاد البكسل
@@ -1884,7 +1882,7 @@
 	Transfer	نقل
 	Triangle Tool	أداة المثلث
 	Unsaved changes	تغييرات غير محفوظة
-	Uses the foreground and background colours.	يستخدم لوني المقدمة والخلفية.
+	Uses the foreground and background colors.	يستخدم لوني المقدمة والخلفية.
 	Web	الويب
 	Web Large	ويب كبير
 	Web Minimum	ويب أدنى
@@ -2156,7 +2154,7 @@
 	Graphics	الرسومات
 	Reset GPU Backend	إعادة تعيين واجهة GPU الخلفية
 	Applies at next launch.	يُطبّق عند التشغيل التالي.
-	Click to sample the foreground colour  ·  {key}-click for background	انقر لأخذ عينة من لون المقدمة  ·  {key}+نقر للون الخلفية
+	Click to sample the foreground color  ·  {key}-click for background	انقر لأخذ عينة من لون المقدمة  ·  {key}+نقر للون الخلفية
 	{key}-click to set the source	{key}+نقر لضبط المصدر
 	{key} to subtract	{key} للطرح
 	Clone source {n} ({key}-click with Clone Stamp to set)	مصدر النسخ {n} ({key}+نقر بأداة ختم النسخ للضبط)
@@ -2217,7 +2215,7 @@
 	Gradient Options	خيارات التدرج
 	Align with layer	محاذاة مع الطبقة
 	Reset Alignment	إعادة تعيين المحاذاة
-	Centre the gradient (offset 0, 0)	توسيط التدرج (إزاحة 0، 0)
+	Center the gradient (offset 0, 0)	توسيط التدرج (إزاحة 0، 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	محرر التدرج
 	Gradient picker	منتقي التدرج
@@ -2252,7 +2250,7 @@
 	Alt-click to define a source point to clone from	انقر مع Alt لتحديد نقطة مصدر للنسخ منها
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	لا يوجد مسار لإنشاء تحديد منه: ارسم مسارًا بأداة القلم أو حدد مسارًا في لوحة المسارات.
 	Cancel opening	إلغاء الفتح
-	Cancelled opening {name}	تم إلغاء فتح {name}
+	Canceled opening {name}	تم إلغاء فتح {name}
 	Damaged Photoshop document	مستند Photoshop تالف
 	The document “{name}” may be damaged.	قد يكون المستند «{name}» تالفًا.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	تعذرت قراءة بعض الطبقات أو البكسلات أو الأقنعة. هل تريد متابعة فتحه؟
@@ -2262,7 +2260,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	يحتوي المستند «{name}» على ملف تعريف ألوان مضمّن لا يطابق مساحة عمل {mode} الحالية.
 	Working: {working}	مساحة العمل: {working}
 	Developing {name}	جارٍ معالجة {name}
-	Cancelled {label}	تم إلغاء {label}
+	Canceled {label}	تم إلغاء {label}
 	Esc to cancel	Esc للإلغاء
 	Opened {name}	تم فتح {name}
 	Opening {name}	جارٍ فتح {name}
@@ -2270,7 +2268,7 @@
 	Saving {name}	جارٍ حفظ {name}
 	Saving {percent}	جارٍ الحفظ {percent}
 	A save to {name} is still running; try again when it finishes	لا تزال عملية حفظ في {name} جارية؛ حاول مرة أخرى عند انتهائها
-	{label} is writing the file and can no longer be cancelled	{label} يكتب الملف ولم يعد بالإمكان إلغاؤه
+	{label} is writing the file and can no longer be canceled	{label} يكتب الملف ولم يعد بالإمكان إلغاؤه
 	Opening {name}…	جارٍ فتح {name}…
 	Opening…	جارٍ الفتح…
 	Reading…	جارٍ القراءة…
@@ -2333,7 +2331,7 @@
 	Pixel	بكسل
 	Adjustment	تعديل
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	اسحب (حبل) أو انقر على النقاط (مضلع) · {add} إضافة · {sub} طرح
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	اسحب مربع اقتصاص · اسحب من الداخل للتحريك · الحواف لتغيير الحجم ({ratio} للنسبة، {centre} للمركز) · Space للتحريك أثناء الرسم · الأسهم للدفع الدقيق · X لتبديل الاتجاه · {commit} للتأكيد · Esc للإلغاء
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	اسحب مربع اقتصاص · اسحب من الداخل للتحريك · الحواف لتغيير الحجم ({ratio} للنسبة، {centre} للمركز) · Space للتحريك أثناء الرسم · الأسهم للدفع الدقيق · X لتبديل الاتجاه · {commit} للتأكيد · Esc للإلغاء
 	{mode} Color · {bits} bit	لون {mode} · {bits} بت
 	Scrubby Zoom	تكبير سحبي
 	Auto Erase	محو تلقائي
@@ -2428,7 +2426,7 @@
 	Discard Layers and Save a Copy	تجاهل الطبقات وحفظ نسخة
 	Don't show again	عدم الإظهار مرة أخرى
 	Save failed: {error}	فشل الحفظ: {error}
-	Save cancelled	تم إلغاء الحفظ
+	Save canceled	تم إلغاء الحفظ
 
 # Layer Style dialog: style presets and per-effect defaults
 	Style {name} saved	تم حفظ النمط {name}
@@ -2581,7 +2579,7 @@ fontWeight	Italic	مائل
 	Rotate View	تدوير العرض
 	Rotate View Tool	أداة تدوير العرض
 	Reset View	إعادة تعيين العرض
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	اسحب حول المركز لتدوير العرض  ·  Shift يقيّد الزاوية بخطوات 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	اسحب حول المركز لتدوير العرض  ·  Shift يقيّد الزاوية بخطوات 15°
 
 # Painting symmetry presets.
 	Dual Axis	محور مزدوج
@@ -2602,8 +2600,8 @@ fontWeight	Italic	مائل
 	Show Sampling Ring	إظهار حلقة أخذ العينات
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	خارج النطاق اللوني للطباعة: انقر لأقرب لون قابل للطباعة
-	Not a web colour: click for the nearest web colour	ليس لون ويب: انقر لأقرب لون ويب
+	Out of gamut for printing: click for the nearest printable color	خارج النطاق اللوني للطباعة: انقر لأقرب لون قابل للطباعة
+	Not a web color: click for the nearest web color	ليس لون ويب: انقر لأقرب لون ويب
 	Color to Alpha…	اللون إلى ألفا…
 	Transparency Threshold	عتبة الشفافية
 	Opacity Threshold	عتبة العتامة
@@ -3315,7 +3313,7 @@ curves	Smooth	تنعيم
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	لا تُحدد أيضًا صورة معكوسة في إعدادات الطباعة…: فالانعكاسان يلغي كل منهما الآخر.
 	Print Settings…	إعدادات الطباعة…
-	Remember to turn off the printer's own colour management in Print Settings…	تذكر إيقاف إدارة الألوان الخاصة بالطابعة في إعدادات الطباعة…
+	Remember to turn off the printer's own color management in Print Settings…	تذكر إيقاف إدارة الألوان الخاصة بالطابعة في إعدادات الطباعة…
 	Sent to {printer}	تم الإرسال إلى {printer}
 	set in Print Settings…	يتم ضبطه في إعدادات الطباعة…
 	ICO is limited to 256 × 256 pixels	ملفات ICO محدودة بـ 256 × 256 بكسل
@@ -3456,12 +3454,12 @@ curves	Smooth	تنعيم
 	{name} was changed by another app after it was opened or saved here.	تم تغيير {name} بواسطة تطبيق آخر بعد فتحه أو حفظه هنا.
 	Replace it with this document, or cancel and use File › Save As to keep both.	استبدله بهذا المستند، أو ألغِ واستخدم ملف › حفظ باسم للاحتفاظ بكليهما.
 	Demosaic	إزالة الفسيفساء
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	طريقة ملء فسيفساء مرشح الألوان في الكاميرا. تُطبَّق عند فتح الملف؛ وتعرض المعاينة الطريقة التي فُتح بها.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	طريقة ملء فسيفساء مرشح الألوان في الكاميرا. تُطبَّق عند فتح الملف؛ وتعرض المعاينة الطريقة التي فُتح بها.
 	AHD (adaptive homogeneity)	AHD (التجانس التكيفي)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: أنظف الحواف وأقل هالات لونية، والأبطأ.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	استيفاء مصحح بالتدرج: حاد وسريع، مع بعض الهالات اللونية في التفاصيل الدقيقة.
-	The fastest and the softest, with colour fringing on fine detail.	الأسرع والأنعم، مع هالات لونية في التفاصيل الدقيقة.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: أنظف الحواف وأقل هالات لونية، والأبطأ.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	استيفاء مصحح بالتدرج: حاد وسريع، مع بعض الهالات اللونية في التفاصيل الدقيقة.
+	The fastest and the softest, with color fringing on fine detail.	الأسرع والأنعم، مع هالات لونية في التفاصيل الدقيقة.
 	“{name}” already exists. Replace it?	“{name}” موجود بالفعل. هل تريد استبداله؟
 	The name in the save dialog was “{name}”.	كان الاسم في مربع حوار الحفظ “{name}”.
 	Move Up	تحريك لأعلى
@@ -3603,3 +3601,19 @@ curves	Smooth	تنعيم
 	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
 	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
 	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.
+# Move tool options bar (#11381)
+	Align top edges	محاذاة الحواف العلوية
+	Align vertical centers	محاذاة المراكز الرأسية
+	Align bottom edges	محاذاة الحواف السفلية
+	Distribute vertically	توزيع رأسي
+	Distribute horizontally	توزيع أفقي
+	Show layer bounds on hover	إظهار حدود الطبقة عند التمرير
+	Expand layer group on click	توسيع مجموعة الطبقات عند النقر
+	Show hover bounds from Layers	إظهار حدود التمرير من الطبقات
+# Artboard tool options bar (#11385)
+	Distribute Widths	توزيع العروض
+	Distribute Heights	توزيع الارتفاعات
+	Auto-nest Layers	تداخل الطبقات تلقائيًا
+	Auto-size Canvas	تحديد حجم مساحة الرسم تلقائيًا
+	Keep Relative Position During Layer Reordering	الإبقاء على الموضع النسبي عند إعادة ترتيب الطبقات
+	Shrinkwrap Canvas on Save	تقليص مساحة الرسم إلى المحتوى عند الحفظ
