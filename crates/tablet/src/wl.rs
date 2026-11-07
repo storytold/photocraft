@@ -214,11 +214,14 @@ impl Tool {
                     _ => return None,
                 };
                 if pressed {
-                    if *held || *deferred {
+                    // A press outside proximity is not ours to deliver (the same guard `Down`
+                    // uses); a compositor must not create a phantom barrel click on the next
+                    // surface.
+                    if self.surface.is_none() || *held || *deferred {
                         return None;
                     }
-                    // A press needs the pen over a surface, at a known position there (never a
-                    // click at a stale one); before the first motion it waits for one.
+                    // A press needs a known position on the surface (never a click at a stale
+                    // one); before the first motion it waits for one.
                     if self.placed {
                         *held = true;
                         self.push(Pending::Button(button, true, None));
@@ -280,6 +283,9 @@ impl Tool {
 
     /// Out of proximity: release whatever is held so the UI never sees a stuck button, then leave.
     fn leave(&mut self) {
+        // A deferred barrel press belongs to the surface it was seen on; never carry it into the
+        // next one, even when a malformed stream sends the press outside proximity.
+        self.unplaced_barrel = [false; 2];
         if self.surface.is_none() {
             return;
         }
@@ -287,7 +293,6 @@ impl Tool {
         if std::mem::take(&mut self.unplaced_down) {
             self.down = false;
         }
-        self.unplaced_barrel = [false; 2];
         for p in &mut self.pending {
             if let Pending::Button(_, _, pos @ None) = p {
                 *pos = Some(at);
@@ -593,6 +598,17 @@ mod tests {
             &[Raw::ProximityIn { surface: 7 }, Raw::Button { code: BTN_STYLUS, pressed: true }, Raw::Button { code: BTN_STYLUS, pressed: false }, Raw::Frame],
         );
         assert_eq!(out[0].events, vec![PenEvent::Enter { surface: 7 }]);
+    }
+
+    /// A barrel press outside proximity is dropped, not carried into the next surface.
+    #[test]
+    fn barrel_presses_outside_proximity_are_ignored() {
+        let mut t = pen();
+        assert!(run(&mut t, &[Raw::Button { code: BTN_STYLUS, pressed: true }, Raw::Frame]).is_empty());
+        let out = run(&mut t, &[Raw::ProximityIn { surface: 1 }, Raw::Motion { x: 1.0, y: 2.0 }, Raw::Frame]);
+        assert_eq!(out[0].events, vec![PenEvent::Enter { surface: 1 }, PenEvent::Move { x: 1.0, y: 2.0 }]);
+        // Releasing the press it never accepted is a no-op too.
+        assert!(run(&mut t, &[Raw::Button { code: BTN_STYLUS, pressed: false }, Raw::Frame]).is_empty());
     }
 
     /// Entering another surface without proximity-out leaves the first, releasing its buttons;
