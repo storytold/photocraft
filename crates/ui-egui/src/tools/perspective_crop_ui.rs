@@ -27,10 +27,11 @@ const CLICK_PX: f64 = 3.0;
 
 #[derive(Clone, Copy, Debug)]
 pub enum Drag {
-    /// Drawing a box from `start`.
-    New { start: [f64; 2], cur: [f64; 2] },
-    /// Moving one corner; `offset` is the press's distance from it.
-    Corner { index: usize, offset: [f64; 2] },
+    /// Drawing a box from `start`; ⇧ makes it a square, ⌥ centres it on `start` (#11802).
+    New { start: [f64; 2], cur: [f64; 2], square: bool, centred: bool },
+    /// Moving one corner; `offset` is the press's distance from it, `press` where the press was
+    /// and `quad` the quad then (⇧ keeps one axis, ⌥ keeps a rectangle one, #11802).
+    Corner { index: usize, offset: [f64; 2], press: [f64; 2], quad: [[f64; 2]; 4] },
     /// Moving the whole quad.
     Move { start: [f64; 2], quad: [[f64; 2]; 4] },
 }
@@ -59,7 +60,7 @@ pub fn pending(app: &PhotocraftApp) -> bool {
 pub fn dragging(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::PerspectiveCrop
         && match app.pcrop.drag {
-            Some(Drag::New { start, cur }) => !is_click(app, start, cur),
+            Some(Drag::New { start, cur, .. }) => !is_click(app, start, cur),
             Some(_) => true,
             None => false,
         }
@@ -105,8 +106,33 @@ fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
     })
 }
 
-/// Pointer events (document px) with the tool. True when consumed.
-pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
+/// The box a new drag from `start` to `cur` draws (document px, x0, y0, x1, y1): ⇧ makes it a
+/// square of the shorter drag side in the drag's direction, ⌥ centres it on `start` at twice the
+/// drag, both together a centred square (#11802). `None` without area.
+pub(crate) fn new_box(start: [f64; 2], cur: [f64; 2], square: bool, centred: bool) -> Option<[[f64; 2]; 4]> {
+    let (mut dx, mut dy) = (cur[0] - start[0], cur[1] - start[1]);
+    if square {
+        let side = dx.abs().min(dy.abs());
+        (dx, dy) = (side.copysign(dx), side.copysign(dy));
+    }
+    let (a, b) = if centred { ([start[0] - dx, start[1] - dy], [start[0] + dx, start[1] + dy]) } else { (start, [start[0] + dx, start[1] + dy]) };
+    let (x0, y0, x1, y1) = (a[0].min(b[0]), a[1].min(b[1]), a[0].max(b[0]), a[1].max(b[1]));
+    // A straight drag has no area: no box (it could neither be committed nor replaced by a new
+    // drag).
+    (x1 > x0 && y1 > y0).then_some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+}
+
+/// Whether every side of `q` is either horizontal or vertical: a rectangle on the image's axes,
+/// which ⌥ keeps one while a corner is dragged.
+fn axis_rect(q: &[[f64; 2]; 4]) -> bool {
+    (0..4).all(|i| {
+        let (a, b) = (q[i], q[(i + 1) % 4]);
+        (a[0] == b[0]) != (a[1] == b[1])
+    })
+}
+
+/// Pointer events (document px) with the tool and the held modifiers. True when consumed.
+pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     if app.ui.tool != Tool::PerspectiveCrop {
         app.pcrop.drag = None;
         return false;
@@ -127,18 +153,18 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
                         .filter(|&i| (q[i][0] - p[0]).hypot(q[i][1] - p[1]) <= tol)
                         .min_by(|&i, &j| (q[i][0] - p[0]).hypot(q[i][1] - p[1]).total_cmp(&(q[j][0] - p[0]).hypot(q[j][1] - p[1])));
                     match near {
-                        Some(index) => Some(Drag::Corner { index, offset: [p[0] - q[index][0], p[1] - q[index][1]] }),
+                        Some(index) => Some(Drag::Corner { index, offset: [p[0] - q[index][0], p[1] - q[index][1]], press: p, quad: q }),
                         None if inside(&q, p) => Some(Drag::Move { start: p, quad: q }),
                         None => None,
                     }
                 }
-                None => Some(Drag::New { start: p, cur: p }),
+                None => Some(Drag::New { start: p, cur: p, square: mods.shift, centred: mods.alt }),
             };
         }
-        ToolEvent::Move { .. } => drag_to(app, p),
+        ToolEvent::Move { .. } => drag_to(app, p, mods),
         ToolEvent::Up { .. } => {
-            drag_to(app, p);
-            if let Some(Drag::New { start, cur }) = app.pcrop.drag {
+            drag_to(app, p, mods);
+            if let Some(Drag::New { start, cur, square, centred }) = app.pcrop.drag {
                 if is_click(app, start, cur) {
                     app.pcrop.clicks.push(start);
                     if let [a, b, c, d] = app.pcrop.clicks[..] {
@@ -147,10 +173,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
                     }
                 } else {
                     app.pcrop.clicks.clear();
-                    let (x0, y0, x1, y1) = (start[0].min(cur[0]), start[1].min(cur[1]), start[0].max(cur[0]), start[1].max(cur[1]));
-                    // A straight drag has no area: no box (it could neither be committed nor
-                    // replaced by a new drag).
-                    app.ui.perspective_crop = (x1 > x0 && y1 > y0).then_some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]);
+                    app.ui.perspective_crop = new_box(start, cur, square, centred);
                 }
             }
             app.pcrop.drag = None;
@@ -159,12 +182,35 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
     true
 }
 
-fn drag_to(app: &mut PhotocraftApp, p: [f64; 2]) {
+fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
     match app.pcrop.drag {
-        Some(Drag::New { start, .. }) => app.pcrop.drag = Some(Drag::New { start, cur: p }),
-        Some(Drag::Corner { index, offset }) => {
-            if let Some(c) = app.ui.perspective_crop.as_mut().and_then(|q| q.get_mut(index)) {
-                *c = [p[0] - offset[0], p[1] - offset[1]];
+        // The modifiers held now shape the box, as the Frame tool's (not measured mid-drag).
+        Some(Drag::New { start, .. }) => app.pcrop.drag = Some(Drag::New { start, cur: p, square: mods.shift, centred: mods.alt }),
+        Some(Drag::Corner { index, offset, press, quad }) => {
+            let Some(from) = quad.get(index).copied() else { return };
+            let mut c = [p[0] - offset[0], p[1] - offset[1]];
+            // ⇧: along the axis the drag mostly follows since the press; the other stays.
+            if mods.shift {
+                if (p[0] - press[0]).abs() >= (p[1] - press[1]).abs() {
+                    c[1] = from[1];
+                } else {
+                    c[0] = from[0];
+                }
+            }
+            let Some(q) = app.ui.perspective_crop.as_mut() else { return };
+            // ⌥ on a rectangle: the neighbours follow, one coordinate each, the opposite corner
+            // stays. On any other quad (not measured) the corner moves alone.
+            if mods.alt && axis_rect(&quad) {
+                for j in [(index + 1) % 4, (index + 3) % 4] {
+                    if quad[j][0] == from[0] {
+                        q[j][0] = c[0];
+                    } else {
+                        q[j][1] = c[1];
+                    }
+                }
+            }
+            if let Some(corner) = q.get_mut(index) {
+                *corner = c;
             }
         }
         Some(Drag::Move { start, quad }) => {
@@ -241,10 +287,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
     let scr = |p: [f64; 2]| xf.to_screen(p[0] as f32, p[1] as f32);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     let quad = match app.pcrop.drag {
-        Some(Drag::New { start, cur }) => {
-            let (x0, y0, x1, y1) = (start[0].min(cur[0]), start[1].min(cur[1]), start[0].max(cur[0]), start[1].max(cur[1]));
-            (x1 > x0 && y1 > y0).then_some([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
-        }
+        Some(Drag::New { start, cur, square, centred }) => new_box(start, cur, square, centred),
         _ => app.ui.perspective_crop,
     };
     if let Some(q) = quad.filter(|q| q.iter().flatten().all(|v| v.is_finite())) {
@@ -317,6 +360,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 #[cfg(test)]
+#[path = "perspective_crop_modifiers_tests.rs"]
+mod perspective_crop_modifiers_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use photocraft_doc::{Color, ColorMode, Document, SampleType, Size};
@@ -330,7 +377,7 @@ mod tests {
         s.add_document(doc, None);
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::PerspectiveCrop;
-        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e));
+        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e, egui::Modifiers::NONE));
         for (x1, y1) in [(10.0, 60.0), (90.0, 10.0)] {
             ev(&mut app, ToolEvent::Down { x: 10.0, y: 10.0, pressure: 1.0 });
             ev(&mut app, ToolEvent::Move { x: x1, y: y1, pressure: 1.0 });
@@ -549,7 +596,7 @@ mod tests {
         s.add_document(doc, None);
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::PerspectiveCrop;
-        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e));
+        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e, egui::Modifiers::NONE));
         ev(&mut app, ToolEvent::Down { x: 20.0, y: 10.0, pressure: 1.0 });
         ev(&mut app, ToolEvent::Move { x: 120.0, y: 90.0, pressure: 1.0 });
         ev(&mut app, ToolEvent::Up { x: 120.0, y: 90.0 });
@@ -606,7 +653,7 @@ mod tests {
         s.set_active(0);
         let mut app = PhotocraftApp::new(s, crate::Services::default());
         app.ui.tool = Tool::PerspectiveCrop;
-        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e));
+        let ev = |app: &mut PhotocraftApp, e| assert!(pointer(app, e, egui::Modifiers::NONE));
         ev(&mut app, ToolEvent::Down { x: 20.0, y: 10.0, pressure: 1.0 });
         ev(&mut app, ToolEvent::Move { x: 120.0, y: 90.0, pressure: 1.0 });
         ev(&mut app, ToolEvent::Up { x: 120.0, y: 90.0 });

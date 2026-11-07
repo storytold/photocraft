@@ -145,7 +145,7 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::distort_ui::pointer(app, ev, mods) {
         return None;
     }
-    if crate::perspective_crop_ui::pointer(app, ev) {
+    if crate::perspective_crop_ui::pointer(app, ev, mods) {
         return None;
     }
     // Window › Modifier Keys: sticky Shift/⌘/⌥ act as held keys.
