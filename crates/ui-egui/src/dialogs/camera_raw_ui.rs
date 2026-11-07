@@ -1,5 +1,6 @@
 //! Filter › Camera Raw Filter…: a large dialog like Adobe Camera Raw's (preview on the left,
-//! edit panels on the right: Light, Color, Effects, Curve, Color Mixer, Color Grading, Detail).
+//! edit panels on the right in Camera Raw's order: Light, Color, Effects, Curve, Detail, Color
+//! Mixer, Color Grading, Calibration; the tool strip at the far right).
 //!
 //! The preview runs [`photocraft_algo::camera_raw::develop`] on a CPU proxy of the layer
 //! (≤ 900 px, `pixel_scale` keeps pixel radii true to the full image), recomputed when a
@@ -31,9 +32,13 @@ use crate::widgets;
 
 mod controls;
 mod convert;
+mod edit_panel;
 mod filmstrip;
+mod geometry_panel;
+mod masks_panel;
 mod menu;
 mod open;
+mod panels;
 mod proxy;
 mod sidecar;
 
@@ -59,7 +64,8 @@ const PROXY_SIDE: usize = 900;
 /// split costs more than the work.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) const PARALLEL_MIN_PIXELS: usize = 16 * 1024;
-const PANEL_W: f32 = 330.0;
+/// The Edit column, scroll bar included: Camera Raw 18.6 measures 272 pt at 100 % display scale.
+const PANEL_W: f32 = 272.0;
 const BANDS: [&str; 8] = ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"];
 
 pub struct CameraRawDialog {
@@ -103,7 +109,8 @@ pub struct CameraRawDialog {
     histogram_ms: f64,
     pub(crate) dirty: bool,
     pub show_before: bool,
-    mixer_tab: usize,
+    /// Which Edit panels are open or hidden, the Color Mixer's mode and the Curve channel.
+    panels: panels::PanelState,
     pub render_ms: f64,
     /// Set for the open-time dialog ([`Target::OpenRaw`]).
     raw_open: Option<RawOpen>,
@@ -171,6 +178,7 @@ impl CameraRawDialog {
         result["hoverSample"] = json!(self.hover_sample(view.vectorscope));
         result["vectorscopeRect"] = json!(self.scope.vectorscope_rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
         result["scopeRect"] = json!(self.scope.rect.map(|r| [r.left(), r.top(), r.right(), r.bottom()]));
+        result["panels"] = self.panels.describe();
         result
     }
 
@@ -180,8 +188,16 @@ impl CameraRawDialog {
 
     /// Params for the engine: only the settings that differ from the defaults.
     pub fn command_params(&self) -> Value {
-        non_defaults(&self.params)
+        non_defaults(&self.effective_params())
     }
+
+    /// The settings the preview and OK apply: [`Self::params`] without the panels hidden by
+    /// their eye button.
+    pub(crate) fn effective_params(&self) -> CameraRaw {
+        self.panels.effective(&self.params)
+    }
+
+
 
     fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {
         // Bands copied straight from `px`, converted in parallel (#4682), not a whole copy of the
@@ -210,7 +226,7 @@ impl CameraRawDialog {
             proxy: self.proxy.clone(),
             selection: self.selection.clone(),
             raw_curve: self.raw_curve.clone(),
-            params: self.params.clone(),
+            params: self.effective_params(),
             float: self.float,
             size: (self.pw, self.ph),
             full_w: self.full_w,

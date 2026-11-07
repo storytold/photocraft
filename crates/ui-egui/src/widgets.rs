@@ -49,7 +49,7 @@ pub use dropdown::{
     combo_list, dropdown, dropdown_enabled, dropdown_hovered, dropdown_literal, dropdown_wheel_grouped, dropdown_wheel_grouped_enabled, dropdown_wheel_hovered,
     dropdown_with_tooltips, menu_scroll, swatch_popup,
 };
-pub(crate) use fields::compact_wrapping_value_field;
+pub(crate) use fields::{camera_raw_value_field, compact_wrapping_value_field};
 #[cfg(test)]
 use fields::{FieldOpts, NUMERIC_INPUT_LIMIT, value_field_in};
 pub use fields::{

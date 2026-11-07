@@ -38,7 +38,7 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         let tr = |s| i18n::tr_ctx(lang, "cameraRaw", s);
         let before = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
         for section in ["Light", "Color", "Effects", "Curve", "Color Mixer", "Color Grading", "Detail"] {
-            // egui 0.37 exposes a CollapsingHeader as a DisclosureTriangle, not a Button.
+            // Each panel header is a DisclosureTriangle.
             assert!(h.query_by_role_and_label(Role::DisclosureTriangle, tr(section)).is_some(), "{}: {section}", lang.code());
         }
         assert!(h.query_by_role_and_label(Role::Slider, tr("Blacks")).is_some());
@@ -46,7 +46,7 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         h.run_steps(2);
         h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color")).click();
         h.run_steps(2);
-        assert!(h.query_by_role_and_label(Role::Label, tr("White Balance: As Shot")).is_some(), "{}: White Balance", lang.code());
+        assert!(h.query_by_role_and_label(Role::Label, tr("White Balance")).is_some(), "{}: White Balance", lang.code());
         for label in ["Temperature", "Tint", "Vibrance", "Saturation"] {
             assert!(h.query_by_role_and_label(Role::Slider, tr(label)).is_some(), "{}: {label}", lang.code());
         }
@@ -54,7 +54,7 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         h.run_steps(2);
         h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color Mixer")).click();
         h.run_steps(2);
-        for tab in ["Hue", "Saturation", "Luminance"] {
+        for tab in ["Hue", "Saturation", "Luminance", "All"] {
             assert!(h.get_by_role_and_label(Role::Button, tr(tab)).rect().right() <= 1426.0, "{}: mixer tabs overflow the panel", lang.code());
         }
         for band in ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"] {
@@ -63,9 +63,9 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color Mixer")).click();
         h.run_steps(2);
         for (section, labels) in [
-            ("Effects", vec!["Texture", "Clarity", "Dehaze", "Vignetting", "Grain", "Roughness"]),
+            ("Effects", vec!["Texture", "Clarity", "Dehaze", "Vignetting", "Grain"]),
             ("Curve", vec!["Highlights", "Lights", "Darks", "Shadows"]),
-            ("Color Grading", vec!["Midtones", "Global", "Hue", "Saturation", "Luminance", "Blending", "Balance"]),
+            ("Color Grading", vec!["Adjust", "3-Way", "Midtones", "Shadows", "Global", "Luminance", "Blending", "Balance"]),
             ("Detail", vec!["Sharpening", "Masking", "Noise Reduction", "Luminance Detail", "Color Detail"]),
         ] {
             h.get_by_role_and_label(Role::DisclosureTriangle, tr(section)).click();

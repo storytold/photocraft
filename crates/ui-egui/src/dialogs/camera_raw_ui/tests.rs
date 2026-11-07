@@ -6,17 +6,17 @@ fn take_queued(app: &mut PhotocraftApp) -> Option<RawOpen> {
 }
 
 /// #9550: a Color Mixer Hue track runs through the neighbouring bands' hues (Reds: magenta to
-/// orange, wrapping round), not from grey; Saturation and Luminance keep grey to the colour.
+/// orange, wrapping round), not from grey; Saturation runs grey to the colour, Luminance dark to
+/// light through it.
 #[test]
 fn hue_tracks_run_between_the_neighbouring_bands() {
-    use super::controls::mixer_gradient;
+    use super::edit_panel::mixer_gradient;
     let hue = |d: f32| widgets::hue_color(d);
     assert_eq!(mixer_gradient(0, 0), vec![hue(300.0), hue(0.0), hue(30.0)], "Reds");
     assert_eq!(mixer_gradient(0, 7), vec![hue(270.0), hue(300.0), hue(0.0)], "Magentas");
     assert_eq!(mixer_gradient(0, 3), vec![hue(60.0), hue(120.0), hue(180.0)], "Greens");
-    for tab in [1, 2] {
-        assert_eq!(mixer_gradient(tab, 3), vec![Color32::from_gray(128), hue(120.0)]);
-    }
+    assert_eq!(mixer_gradient(1, 3), vec![Color32::from_gray(128), hue(120.0)], "Saturation: grey to the band");
+    assert_eq!(mixer_gradient(2, 3), vec![Color32::from_gray(24), hue(120.0), Color32::from_gray(232)], "Luminance: dark to light");
 }
 
 #[test]
@@ -1429,6 +1429,44 @@ fn save_and_load_settings_round_trip_through_xmp_files() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"loadSettings": true}})).unwrap().unwrap();
     frame(&mut app);
     assert_eq!(app.camera_raw.as_ref().unwrap().params.clarity, 25.0);
+}
+
+/// A Color Grading wheel puts hue round the rim (red at 3 o'clock, counter-clockwise) and
+/// saturation outwards; picking where the handle is drawn gives the same hue and saturation back.
+#[test]
+fn grading_wheel_handle_and_pick_agree() {
+    use super::edit_panel::{wheel_pick, wheel_point};
+    let c = pos2(100.0, 100.0);
+    assert_eq!(wheel_point(c, 50.0, 0.0, 100.0), pos2(150.0, 100.0), "red at 3 o'clock, on the rim");
+    let up = wheel_point(c, 50.0, 90.0, 50.0);
+    assert!((up.x - 100.0).abs() < 1e-3 && (up.y - 75.0).abs() < 1e-3, "90 degrees is up: {up:?}");
+    for (hue, sat) in [(30.0, 40.0), (200.0, 100.0), (359.0, 5.0)] {
+        let (h, s) = wheel_pick(c, 50.0, wheel_point(c, 50.0, hue, sat));
+        assert!((h - hue).abs() < 0.01 && (s - sat).abs() < 0.01, "{hue}/{sat} -> {h}/{s}");
+    }
+    assert_eq!(wheel_pick(c, 50.0, pos2(400.0, 100.0)).1, 100.0, "past the rim is full saturation");
+    assert_eq!(wheel_point(c, 50.0, f32::NAN, 50.0), c, "a NaN hue stays at the centre");
+    assert_eq!(wheel_pick(c, 0.0, c), (0.0, 0.0), "a zero-size wheel picks neutral");
+}
+
+/// The parametric curve's regions follow the splits: Shadows below the first, Highlights past the last.
+#[test]
+fn parametric_regions_follow_the_splits() {
+    use super::edit_panel::parametric_region;
+    let s = [25.0, 50.0, 75.0];
+    assert_eq!([0.0, 0.24, 0.25, 0.6, 0.75, 1.0].map(|x| parametric_region(x, s)), [0, 0, 1, 2, 3, 3]);
+    assert_eq!(parametric_region(0.5, [10.0, 20.0, 30.0]), 3);
+}
+
+/// Camera Raw's decimal places: Exposure two, Radius and Rotate one, the -100 to 100 sliders none.
+#[test]
+fn camera_raw_slider_places() {
+    use super::edit_panel::places;
+    assert_eq!(places("Exposure", -5.0, 5.0), 2);
+    assert_eq!(places("Contrast", -100.0, 100.0), 0);
+    assert_eq!(places("Radius", 0.5, 3.0), 1);
+    assert_eq!(places("Rotate", -10.0, 10.0), 1);
+    assert_eq!(places("Size", 0.1, 25.0), 1);
 }
 
 /// Done keeps the settings in the raw's sidecar and opens nothing,

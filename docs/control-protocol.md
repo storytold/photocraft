@@ -646,8 +646,18 @@ RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens 
 Camera Raw smart filter instead (as double-clicking the filter in the Layers panel does): the
 stored settings over the pixels below that filter, previewed through the filter mask; commit
 then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (true: the Light
-sliders from the image's histogram, the panel's Auto button), `commit` and
-`cancel`, and while a raw file opens also `demosaic` (below). All parts of one request are validated before any is applied; a rejected request
+sliders from the image's histogram, the Edit header's Auto button), `reset` (`"default"` or
+`"open"`: the Edit menu's Reset to Default / Reset to Open), `panels` (`{open?, hidden?}`: lists of
+panel ids `light`, `color`, `effects`, `curve`, `detail`, `colorMixer`, `colorGrading`, `geometry`,
+`calibration`; a hidden panel, its eye button off, keeps its settings in the dialog but neither the
+preview nor commit applies them), `mixer` (`{adjust?: "hsl"|"color", tab?: "hue"|"saturation"|
+"luminance"|"all", color?: band name}`), `curve` (`"parametric"`, `"point"`, `"red"`, `"green"`,
+`"blue"`: the Curve panel's channel), `grading` (`"threeWay"`, `"shadows"`, `"midtones"`,
+`"highlights"`, `"global"`: the Color Grading view), `compare` (`"single"`, `"sideBySide"`, `"split"`:
+the preview's Before/After view, Before at the left), `masks` (the Masking panel: `open`,
+`selected`, `component`, `tool`, `overlay`, `overlayMode`, `brush`; the reply's `masking` describes it), `commit` and
+`cancel`, and while a raw file opens also `demosaic` (below). The reply's `panels` describes the
+panel state. All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it
 opened). Unknown `ui` or settings properties, non-boolean `before` / `auto` / `commit` / `cancel`, and
 `commit` together with `cancel` are errors. Point curves (`pointCurve`, `pointCurveRed`,

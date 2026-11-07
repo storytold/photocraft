@@ -248,17 +248,15 @@ pub(crate) fn interact(
     (state.image_rect(viewport, size), response, panning || temporary_zoom, zoom_box)
 }
 
-pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: Rect, size: Vec2, sampler: &mut bool) {
-    let zoom_tool = crate::icons::button(ui, "zoom-in", 28.0, !state.hand && !*sampler, tl!("Zoom Tool"));
-    zoom_tool.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Zoom Tool")));
-    if zoom_tool.double_clicked() {
-        state.fit();
+/// The tool strip's view tools, bottom up (Camera Raw puts them at the foot of its strip): Zoom,
+/// Hand and the Color Sampler. Double-clicking Zoom or Hand fits the image in the view.
+pub(crate) fn tools(ui: &mut Ui, state: &mut CameraRawPreviewState, sampler: &mut bool) {
+    let sampler_tool = crate::icons::button(ui, "sampler", 30.0, *sampler, tl!("Color Sampler Tool (S)"));
+    sampler_tool.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), *sampler, tl!("Color Sampler Tool (S)")));
+    if sampler_tool.clicked() {
+        *sampler = !*sampler;
     }
-    if zoom_tool.clicked() {
-        state.hand = false;
-        *sampler = false;
-    }
-    let hand_tool = crate::icons::button(ui, "hand", 28.0, state.hand && !*sampler, tl!("Hand Tool"));
+    let hand_tool = crate::icons::button(ui, "hand", 30.0, state.hand && !*sampler, tl!("Hand Tool"));
     hand_tool.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Hand Tool")));
     if hand_tool.double_clicked() {
         state.fit();
@@ -267,23 +265,37 @@ pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: 
         state.hand = true;
         *sampler = false;
     }
-    if widgets::secondary_button(ui, tl!("Fit in View"), 84.0).clicked() {
+    let zoom_tool = crate::icons::button(ui, "zoom-in", 30.0, !state.hand && !*sampler, tl!("Zoom Tool"));
+    zoom_tool.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Zoom Tool")));
+    if zoom_tool.double_clicked() {
         state.fit();
     }
-    if widgets::secondary_button(ui, tl!("100%"), 52.0).clicked() {
-        state.zoom_at(1.0, viewport.center(), viewport, size);
+    if zoom_tool.clicked() {
+        state.hand = false;
+        *sampler = false;
     }
+}
+
+/// Under the preview: the zoom level menu (Fit in View and the fixed steps), as Camera Raw's.
+pub(crate) fn toolbar(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport: Rect, size: Vec2) {
     let mut zoom = state.zoom;
     let mut options = vec![(None, tl!("Fit in View"))];
     let labels = ["25%", "50%", "100%", "200%", "400%", "800%", "1600%"];
     for (z, label) in [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0].into_iter().zip(labels) {
         options.push((Some(z), label));
     }
+    // Fit in View names the scale it shows, as Camera Raw's "Fit (24%)".
     let current_label = format!("{:.1}%", state.scale(viewport, size) * 100.0);
+    let fit_label = format!("{} ({:.0}%)", tl!("Fit in View"), state.scale(viewport, size) * 100.0);
+    if zoom.is_none()
+        && let Some(fit) = options.first_mut()
+    {
+        fit.1 = &fit_label;
+    }
     if !options.iter().any(|(z, _)| *z == zoom) {
         options.push((zoom, &current_label));
     }
-    if widgets::dropdown(ui, "cr-preview-zoom", tl!("Zoom"), &mut zoom, &options, 80.0) {
+    if widgets::dropdown(ui, "cr-preview-zoom", tl!("Zoom"), &mut zoom, &options, 170.0) {
         match zoom {
             Some(z) => state.zoom_at(z, viewport.center(), viewport, size),
             None => state.fit(),
