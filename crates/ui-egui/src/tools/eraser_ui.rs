@@ -155,6 +155,11 @@ fn tolerance_field(ui: &mut egui::Ui, value: &mut f32) -> bool {
     let mut typed = *value;
     let r = widgets::value_field(ui, &mut typed, -1.0e9..=1.0e9, "%", 62.0).on_hover_text(tl!("Erase range of similar colors"));
     let out_id = r.id.with("out-of-range");
+    // An edit the field never got to finish (the options bar was hidden while it had the
+    // keyboard) has nothing left to say once the field is entered again.
+    if r.gained_focus() {
+        ui.ctx().data_mut(|d| d.remove_temp::<bool>(out_id));
+    }
     if r.changed() && typed.is_finite() {
         *value = typed.round().clamp(1.0, 100.0);
         // Only what was typed alerts, also an expression committed as the field is left

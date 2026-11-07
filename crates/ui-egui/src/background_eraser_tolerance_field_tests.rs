@@ -135,8 +135,8 @@ fn a_restored_fraction_reaches_the_stroke_as_a_whole_number() {
 #[test]
 fn a_label_scrub_past_100_does_not_alert() {
     let mut h = app_harness();
-    type_tolerance(&mut h, "100");
-    // The field keeps the keyboard while the caption is scrubbed past the end.
+    type_tolerance(&mut h, "90");
+    // The field keeps the keyboard while the caption is scrubbed from 90 past the end.
     let field = h
         .query_all_by_role(egui::accesskit::Role::SpinButton)
         .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
@@ -159,8 +159,37 @@ fn a_label_scrub_past_100_does_not_alert() {
     h.run_steps(3);
     h.key_press(egui::Key::Tab);
     h.run_steps(3);
-    assert_eq!(tolerance(&h), 100.0);
+    assert_eq!(tolerance(&h), 100.0, "the scrub reached the end");
     assert_eq!(alert(&h), None, "a scrub stops at 100 without an alert");
+}
+
+#[test]
+fn an_edit_cut_off_by_hiding_the_bar_leaves_no_stale_alert() {
+    let mut h = app_harness();
+    let field = |h: &Harness<'static, PhotocraftApp>| {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton)
+            .find(|n| n.accesskit_node().label().as_deref() == Some("Tolerance:"))
+            .expect("the Tolerance field")
+            .rect()
+            .center()
+    };
+    // 150 typed, then the bar goes away before the field is left.
+    let at = field(&h);
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("150".into()));
+    h.run_steps(1);
+    h.state_mut().ui.panels.options_bar = false;
+    h.run_steps(3);
+    h.state_mut().ui.panels.options_bar = true;
+    h.run_steps(3);
+    assert_eq!(tolerance(&h), 100.0);
+    // Back in the field and out again without a change: nothing to say.
+    type_tolerance(&mut h, "100");
+    assert_eq!(alert(&h), None, "no alert for an edit that was already cut off");
 }
 
 /// The accessible descriptions (tooltips) of the widgets of `role` named `label`.
