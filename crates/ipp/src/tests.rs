@@ -609,6 +609,80 @@ fn the_chunk_walk_resumes_instead_of_starting_over() {
     assert!(at > 0, "it moved past the chunks already walked");
 }
 
+/// A reader handing out `step` bytes per read, like a print server dripping its reply, that then
+/// keeps the connection open: a read past the reply times out instead of ending the stream.
+struct Trickle<'a>(&'a [u8], usize);
+
+impl Read for Trickle<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.0.is_empty() {
+            return Err(std::io::ErrorKind::TimedOut.into());
+        }
+        let n = self.1.min(buf.len()).min(self.0.len());
+        buf[..n].copy_from_slice(&self.0[..n]);
+        self.0 = &self.0[n..];
+        Ok(n)
+    }
+}
+
+/// The raw HTTP response the fake server writes for `reply`.
+fn http_bytes(reply: &[u8], chunked: bool, http_status: u16) -> Vec<u8> {
+    let mut resp = format!("HTTP/1.1 {http_status} OK\r\nContent-Type: application/ipp\r\n").into_bytes();
+    if chunked {
+        resp.extend_from_slice(b"Transfer-Encoding: chunked\r\n\r\n");
+        for chunk in reply.chunks(7) {
+            resp.extend_from_slice(format!("{:x}\r\n", chunk.len()).as_bytes());
+            resp.extend_from_slice(chunk);
+            resp.extend_from_slice(b"\r\n");
+        }
+        resp.extend_from_slice(b"0\r\n\r\n");
+    } else {
+        resp.extend_from_slice(format!("Content-Length: {}\r\n\r\n", reply.len()).as_bytes());
+        resp.extend_from_slice(reply);
+    }
+    resp
+}
+
+/// The fuzz entry point decodes a reply exactly as a request over a socket does, read in one go or
+/// a byte at a time, ending at `Content-Length` or the last chunk without waiting for the server to
+/// close, so what the fuzzer finds there is what a print server can reach.
+#[test]
+fn the_fuzz_entry_point_decodes_replies_like_a_request_does() {
+    let two = ipp(
+        0,
+        &[
+            ok_header(),
+            (
+                TAG_PRINTER_GROUP,
+                &[(TAG_NAME, "printer-name", &[b"Office"]), (TAG_TEXT, "printer-info", &[b"HP"]), (TAG_ENUM, "printer-state", &[&4u32.to_be_bytes()])],
+            ),
+            (TAG_PRINTER_GROUP, &[(TAG_BOOLEAN, "printer-is-accepting-jobs", &[&[0]]), (TAG_NAME, "printer-name", &[b"Stopped"])]),
+        ],
+    );
+    for chunked in [false, true] {
+        let (ep, _rx) = fake(two.clone(), chunked, 200);
+        // The one request the fake answers: `printers` would go on to ask for classes and the
+        // default, and those can reach the listener before it closes and wait out the timeout.
+        let over_socket = queues(&ep, OP_CUPS_GET_PRINTERS, false).unwrap();
+        for step in [1, 5, 16 * 1024] {
+            let (reply, list) = fuzz_reply(&mut Trickle(&http_bytes(&two, chunked, 200), step)).unwrap();
+            assert_eq!(reply, Reply::parse(&two).unwrap(), "chunked {chunked}, step {step}");
+            assert_eq!(list, over_socket, "chunked {chunked}, step {step}");
+            assert_eq!(list.iter().map(|p| (p.name.as_str(), p.state, p.accepting_jobs)).collect::<Vec<_>>(), [("Office", 4, true), ("Stopped", 3, false)]);
+        }
+    }
+    // Bytes past `Content-Length` are not part of the reply.
+    let mut padded = http_bytes(&two, false, 200);
+    padded.extend_from_slice(b"\x01\x02junk");
+    assert_eq!(fuzz_reply(&mut Trickle(&padded, 4)).unwrap().0, Reply::parse(&two).unwrap());
+    // The same refusals as over a socket: an HTTP error, an IPP error status, a broken chunk.
+    assert!(matches!(fuzz_reply(&mut Trickle(&http_bytes(&two, false, 500), 3)), Err(Error::Protocol(m)) if m == "HTTP 500"));
+    let refused = ipp(0x0406, &[ok_header()]);
+    assert!(matches!(fuzz_reply(&mut Trickle(&http_bytes(&refused, true, 200), 1)), Err(Error::Status(0x0406, _))));
+    let broken = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nffffffffffffffff\r\nab\r\n";
+    assert!(matches!(fuzz_reply(&mut Trickle(broken, 2)), Err(Error::Protocol(_))));
+}
+
 /// A chunk size that cannot be satisfied (`usize::MAX`, `usize::MAX - 1`, anything past the
 /// reply cap) is a protocol error, through the real reader, never an overflow panic.
 #[test]
