@@ -400,6 +400,14 @@ fn status_on_err(app: &mut PhotocraftApp, r: Result<Value, String>) {
     }
 }
 
+/// The count marker a Count tool click at document point `at` would grab (the click's own hit
+/// test, with its tolerance), or `None`. The cursor uses it too, so it never says "1" where a click
+/// adds a marker (#11773).
+pub(crate) fn count_marker_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<(usize, usize)> {
+    let doc = app.session.active().map(|d| d.doc.clone())?;
+    nearest_marker(&doc, at, tolerance(app))
+}
+
 fn nearest_marker(d: &Document, at: [f64; 2], tol: f64) -> Option<(usize, usize)> {
     let mut best: Option<(f64, usize, usize)> = None;
     for (gi, g) in d.measurement.count_groups.iter().enumerate().filter(|(_, g)| g.visible) {

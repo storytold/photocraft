@@ -1654,6 +1654,13 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 pipette_cursor(ui.ctx(), p)
             }
         }
+        // The Count tool (#11773): an arrow with "1+", "1" over a marker (the click's own hit
+        // test) or "1−" with ⌥ there. Precise Other Cursors keeps today's crosshair.
+        Tool::Count if !precise_other_cursor(app) => {
+            let alt = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)).alt;
+            let over = crate::analysis_ui::count_marker_at(app, xf.to_doc(p)).is_some();
+            crate::tool_cursor::count(ui.ctx(), p, crate::tool_cursor::CountCursor::pick(over, alt))
+        }
         // The Color Sampler: a pipette, or the crosshair for precise Other Cursors.
         Tool::ColorSampler => {
             if precise_other_cursor(app) {
