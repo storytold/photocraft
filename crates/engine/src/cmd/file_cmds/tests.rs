@@ -2022,6 +2022,120 @@ fn file_info_round_trips_through_xmp_and_psd() {
     assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
 }
 
+#[test]
+fn file_info_keeps_a_packet_whose_rdf_end_tag_is_spaced_or_prefixed() {
+    // #11116: only the literal `</rdf:RDF>` retained the imported packet, so the valid
+    // spellings below — XML allows whitespace before the `>`, RDF allows any declared
+    // prefix — were replaced by a blank packet and unrelated properties were lost.
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    let cases = [
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF ></x:xmpmeta>"#
+        ),
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>"#
+        ),
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><RDF xmlns="{NS}"><Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></RDF></x:xmpmeta>"#
+        ),
+        // Whitespace around the declaration's `=` (REC-xml 3.1 allows it) still binds the prefix.
+        format!(
+            r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r = "{NS}"><r:Description r:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>"#
+        ),
+    ];
+    for packet in cases {
+        let out = write_file_info(Some(&packet), &json!({"authorTitle": "Artist"}));
+        assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the unrelated property survives: {out}");
+        assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist", "the edit landed: {out}");
+        // Whatever the packet binds, the inserted description binds every prefix it uses.
+        let desc = out[out.find("<rdf:Description rdf:about=\"\"").unwrap()..].lines().next().unwrap().to_string();
+        for p in ["rdf", "dc", "photoshop", "xmpRights"] {
+            assert!(desc.contains(&format!("xmlns:{p}=\"")) || packet.contains(&format!("xmlns:{p}=\"")), "prefix {p} unbound: {desc}");
+        }
+    }
+    // A `</rdf:RDF>` that only appears inside a comment must not be taken as the packet's end
+    // tag: the edit inserts before the real one, keeping it inside the RDF element (#11116).
+    let commented = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF><!-- </rdf:RDF> --></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&commented), &json!({"authorTitle": "Artist"}));
+    assert!(out.find("AuthorsPosition").unwrap() < out.find("<!--").unwrap(), "the edit is not inside the comment: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A `</rdf:RDF>` inside a CDATA section neither hides the real end tag (which would replace
+    // the packet) nor tricks the writer into inserting inside the section (#11116).
+    let cdata = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/><rdf:li><![CDATA[ </rdf:RDF> fake ]]></rdf:li></rdf:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&cdata), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the CDATA packet keeps its properties: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.rfind("</rdf:RDF>").unwrap(), "the edit is before the real end tag: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A foreign element whose name merely starts like the RDF one (`<rdf:RDFjunk>`) is not the
+    // RDF start tag, and its `</rdf:RDFjunk>` is not the end tag (#11116).
+    let lookalike = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"><rdf:RDFjunk xmlns:rdf="http://example.com/other"><r:Thing/></rdf:RDFjunk></rdf:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&lookalike), &json!({"authorTitle": "Artist"}));
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist", "{out}");
+    assert!(out.rfind("<rdf:Description rdf:about=\"\"").unwrap() < out.rfind("</rdf:RDF>").unwrap(), "the edit sits inside the RDF element: {out}");
+    // A packet with no RDF end tag at all (self-closing) still gets the canonical packet.
+    let selfclosed = format!(r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"/></x:xmpmeta>"#);
+    let out = write_file_info(Some(&selfclosed), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("<?xpacket begin="), "the canonical packet: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
+/// Review follow-ups on the RDF end-tag finder (#11116): an XML Name prefix is not ASCII-only;
+/// character references decode before a namespace URI is compared; an `xmlns` mention inside
+/// character data binds nothing; and only the start tag of the element that is still open
+/// reaches the insertion point.
+#[test]
+fn file_info_reads_declarations_the_way_an_xml_reader_does() {
+    const NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    // A Unicode prefix (NCName covers XML letters, not just ASCII): the packet is kept.
+    let unicode_prefix = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><ü:RDF xmlns:ü="{NS}"><ü:Description about="" xmlns:rdf="{NS}" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></ü:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&unicode_prefix), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the Unicode-prefixed packet keeps its properties: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // `&#35;` decodes to `#`: the declaration binds the RDF namespace as far as XML is concerned.
+    let encoded = r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns&#35;"><rdf:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></rdf:RDF></x:xmpmeta>"#.to_string();
+    let out = write_file_info(Some(&encoded), &json!({"authorTitle": "Artist"}));
+    assert!(!out.contains("<?xpacket begin="), "the packet is kept, not rebuilt: {out}");
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "{out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // An `xmlns` mention in the document's own text — after the real end tag — binds nothing:
+    // a fake `</z:RDF>` written there must not capture the insertion.
+    let textual = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><r:RDF xmlns:r="{NS}"><r:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF>note: xmlns:z="{NS}" then </z:RDF> as words</x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&textual), &json!({"authorTitle": "Artist"}));
+    let edit = out.find("AuthorsPosition").unwrap();
+    assert!(edit < out.find("</r:RDF>").unwrap(), "the edit inserts inside the RDF element: {out}");
+    assert!(out.find("</r:RDF>").unwrap() < out.find("</z:RDF>").unwrap(), "the text mention stays where it was written: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // Declarations written inside a processing instruction or a quoted attribute value are text,
+    // and bind nothing: a later `</q:RDF>` must not capture the insertion.
+    let hidden = format!(
+        r#"<?xml-stylesheet xmlns:q="{NS}"?><x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="xmlns:q='{NS}'"><r:RDF xmlns:r="{NS}"><r:Description rdf:about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></r:RDF></x:xmpmeta>trailing words</q:RDF>"#
+    );
+    let out = write_file_info(Some(&hidden), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the packet is kept: {out}");
+    assert!(out.find("AuthorsPosition").unwrap() < out.find("</r:RDF>").unwrap(), "the edit inserts inside the RDF element: {out}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+    // A self-closed `<rdf:RDF>` earlier in the packet does not reach the insertion point in a
+    // later RDF-spelled element: the inserted description re-declares its `rdf` prefix.
+    let re_opened = format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="{NS}"/><q:RDF xmlns:q="{NS}"><q:Description about="" xmlns:xmp="http://ns.adobe.com/xap/1.0/" xmp:CreatorTool="Other App"/></q:RDF></x:xmpmeta>"#
+    );
+    let out = write_file_info(Some(&re_opened), &json!({"authorTitle": "Artist"}));
+    assert!(out.contains("xmp:CreatorTool=\"Other App\""), "the second RDF-spelled element is kept: {out}");
+    let desc = out[out.rfind("<rdf:Description rdf:about=\"\"").unwrap()..].lines().next().unwrap().to_string();
+    assert!(desc.contains(&format!("xmlns:rdf=\"{NS}\"")), "the inserted description binds rdf itself: {desc}");
+    assert_eq!(read_file_info(Some(&out))["authorTitle"], "Artist");
+}
+
 fn camera_exif() -> Vec<u8> {
     photocraft_algo::exif::build(&photocraft_algo::exif::CameraInfo {
         make: Some("SONY".into()),
