@@ -947,3 +947,94 @@ fn history_brush_options_bar_shows_source_name() {
     h.run_steps(4);
     h.get_by_label("The History Brush source was deleted: set a new source in the History panel");
 }
+
+#[test]
+fn quick_selection_options_bar_has_new_add_subtract_mode_buttons() {
+    use crate::theme::ThemeKind;
+    use egui::vec2;
+    use egui_kittest::kittest::Queryable;
+
+    let mut app = app();
+    app.ui.tool = Tool::QuickSelection;
+    assert_eq!(app.ui.tool_options.quick_selection_mode, 1, "Quick Selection defaults to Add mode");
+
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 60.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            crate::panels::options_bar(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, ThemeKind::Studio);
+    h.run_steps(4);
+
+    // Verify New, Add, and Subtract buttons exist in the options bar
+    let add_tip = crate::i18n::fmt(tl!("Add to selection  ({key})"), &[("key", &crate::shortcuts::pretty("Shift"))]);
+    let sub_tip = crate::i18n::fmt(tl!("Subtract from selection  ({key})"), &[("key", &crate::shortcuts::pretty("Alt"))]);
+
+    // Clicking Subtract switches to Subtract mode (2)
+    h.get_by_label(&sub_tip).click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 2);
+
+    // Clicking New switches to New mode (0)
+    h.get_by_label("New selection").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 0);
+
+    // Clicking Add switches to Add mode (1)
+    h.get_by_label(&add_tip).click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 1);
+
+    // Test selection_mode feedback across modes
+    let none = egui::Modifiers::NONE;
+    let alt = egui::Modifiers::ALT;
+    let shift = egui::Modifiers::SHIFT;
+
+    assert_eq!(crate::canvas::tool_feedback::selection_mode(Tool::QuickSelection, 1, none), "add");
+    assert_eq!(crate::canvas::tool_feedback::selection_mode(Tool::QuickSelection, 1, alt), "subtract");
+
+    assert_eq!(crate::canvas::tool_feedback::selection_mode(Tool::QuickSelection, 2, none), "subtract");
+    assert_eq!(crate::canvas::tool_feedback::selection_mode(Tool::QuickSelection, 2, alt), "add");
+
+    assert_eq!(crate::canvas::tool_feedback::selection_mode(Tool::QuickSelection, 0, none), "replace");
+    assert_eq!(crate::canvas::tool_feedback::selection_mode(Tool::QuickSelection, 0, alt), "subtract");
+    assert_eq!(crate::canvas::tool_feedback::selection_mode(Tool::QuickSelection, 0, shift), "add");
+
+    // After drawing a stroke in New mode (0), it automatically flips back to Add mode (1)
+    h.state_mut().ui.tool_options.quick_selection_mode = 0;
+    let modifiers = egui::Modifiers::NONE;
+    tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, modifiers);
+    tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, modifiers);
+    assert!(!h.state().ui.status_error, "{}", h.state().ui.status);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some(), "select.quick created a selection");
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 1, "New mode automatically flips to Add mode after stroke");
+
+    // An empty stroke (outside canvas, changed: false) or failed stroke (no points) in New mode keeps New mode (0)
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.state_mut().ui.tool_options.quick_selection_mode = 0;
+    tool_event(h.state_mut(), ToolEvent::Down { x: -20.0, y: -20.0, pressure: 1.0 }, none);
+    tool_event(h.state_mut(), ToolEvent::Up { x: -20.0, y: -20.0 }, none);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none());
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 0, "Empty stroke keeps New mode");
+
+    finish_stroke(h.state_mut(), Tool::QuickSelection, &[], none);
+    assert!(h.state().ui.status_error);
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 0, "Failed stroke keeps New mode");
+    h.state_mut().ui.status_error = false;
+
+    // Shift and Alt modifiers in New mode (0) run add/subtract and transition to Add mode (1) when changed
+    tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, shift);
+    tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, shift);
+    assert!(h.state().session.active().unwrap().doc.selection.is_some());
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 1);
+
+    h.state_mut().ui.tool_options.quick_selection_mode = 0;
+    tool_event(h.state_mut(), ToolEvent::Down { x: 20.0, y: 20.0, pressure: 1.0 }, alt);
+    tool_event(h.state_mut(), ToolEvent::Up { x: 20.0, y: 20.0 }, alt);
+    assert!(h.state().session.active().unwrap().doc.selection.is_none());
+    assert_eq!(h.state().ui.tool_options.quick_selection_mode, 1);
+}

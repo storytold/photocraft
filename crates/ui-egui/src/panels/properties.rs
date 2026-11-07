@@ -251,7 +251,7 @@ pub(super) fn adjustments_grid(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The options bar's Select and Mask… button: greyed out, as the menu item is, until there is a
 /// selection (or a layer mask) to refine (#7520).
-pub(super) fn select_and_mask_button(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+pub(crate) fn select_and_mask_button(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let enabled = crate::menus::is_enabled(app, "select.selectAndMask");
     let clicked = ui.add_enabled_ui(enabled, |ui| widgets::secondary_button(ui, tl!("Select and Mask…"), 0.0).clicked()).inner;
     if clicked {
@@ -273,6 +273,24 @@ pub(super) fn selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui)
     {
         if icons::button(ui, icon, 24.0, app.ui.selection_mode == i as u8, tip).clicked() {
             app.ui.selection_mode = i as u8;
+        }
+    }
+    ui.spacing_mut().item_spacing.x = 8.0;
+}
+
+/// New / add / subtract selection buttons for Quick Selection tool.
+pub(super) fn quick_selection_mode_buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    ui.spacing_mut().item_spacing.x = 2.0;
+    for (i, (icon, tip)) in [
+        ("quick-selection", tl!("New selection").to_string()),
+        ("quick-selection-add", crate::i18n::fmt(tl!("Add to selection  ({key})"), &[("key", &crate::shortcuts::pretty("Shift"))])),
+        ("quick-selection-subtract", crate::i18n::fmt(tl!("Subtract from selection  ({key})"), &[("key", &crate::shortcuts::pretty("Alt"))])),
+    ]
+    .iter()
+    .enumerate()
+    {
+        if icons::button(ui, icon, 24.0, app.ui.tool_options.quick_selection_mode == i as u8, tip).clicked() {
+            app.ui.tool_options.quick_selection_mode = i as u8;
         }
     }
     ui.spacing_mut().item_spacing.x = 8.0;

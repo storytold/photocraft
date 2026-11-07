@@ -171,11 +171,16 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         },
         Tool::QuickSelection => {
             let size = app.session.tools.brush.size;
-            let mode = if mods.alt { "subtract" } else { "add" };
+            let bar = o.quick_selection_mode;
+            let mode = crate::canvas::tool_feedback::selection_mode(tool, bar, mods);
             let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
             let (sample_all, enhance) = (o.sample_all.quick_selection, o.enhance_edge);
             let r = app.run("select.quick", json!({"points": xy, "size": size, "mode": mode, "enhanceEdge": enhance, "sampleAllLayers": sample_all}));
+            let changed = matches!(r, Ok(ref v) if v.get("changed").and_then(Value::as_bool) == Some(true));
             report_smart_result(app, r, tl!("Quick Selection found nothing there"));
+            if o.quick_selection_mode == 0 && changed {
+                app.ui.tool_options.quick_selection_mode = 1;
+            }
             return true;
         }
         _ => return false,
@@ -721,6 +726,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 let r = app.run("select.subject", json!({}));
                 report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
+            crate::widgets::vline(ui, 22.0);
+            crate::panels::properties::select_and_mask_button(app, ui);
         }
         Tool::ObjectSelection => {
             crate::widgets::checkbox(ui, &mut o.object_finder, tl!("Object Finder"));

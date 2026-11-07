@@ -89,6 +89,9 @@ pub struct ToolOptions {
     pub finger_painting: bool,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
+    /// Quick Selection selection mode: 0 New, 1 Add (default), 2 Subtract.
+    #[serde(default = "default_quick_selection_mode")]
+    pub quick_selection_mode: u8,
     /// Pen: "path" (work path) or "shape" (shape layer).
     pub vector_mode: String,
     /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397): how a new path combines with
@@ -299,6 +302,10 @@ fn default_pen_path_op() -> String {
     "newLayer".into()
 }
 
+fn default_quick_selection_mode() -> u8 {
+    1
+}
+
 fn default_curve_fit() -> f32 {
     2.0
 }
@@ -446,6 +453,7 @@ impl Default for ToolOptions {
             protect_detail: true,
             finger_painting: false,
             enhance_edge: false,
+            quick_selection_mode: 1,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
             shape_mode: "shape".into(),
