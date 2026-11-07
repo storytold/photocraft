@@ -232,7 +232,16 @@ impl PhotocraftApp {
         extensions: &[&str],
         then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
     ) -> Result<Value, String> {
-        let initial_dir = last_used_dir(&self.ui.recent_files);
+        self.pick_file_bytes_in(extensions, None, then)
+    }
+
+    pub(crate) fn pick_file_bytes_in(
+        &mut self,
+        extensions: &[&str],
+        initial_dir: Option<String>,
+        then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
+        let initial_dir = initial_dir.or_else(|| last_used_dir(&self.ui.recent_files));
         let extensions = (!extensions.is_empty()).then(|| extensions.iter().map(|s| (*s).to_string()).collect());
         self.ask_file(FileDialogRequest::Open { multiple: false, initial_dir, extensions }, move |app, answer| {
             let (name, bytes) = read_picked(answer)?;

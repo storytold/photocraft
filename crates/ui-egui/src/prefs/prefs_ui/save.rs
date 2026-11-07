@@ -13,6 +13,8 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     sync_appearance(app, ctx);
     crate::theme::set_ui_font_size(ctx, app.session.prefs().interface.ui_font_size);
     presets_store(app);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::actions_folder::tick(app, ctx);
     sync_tooltips(app, ctx);
     app.sync_recent();
     // Monotonic, not `ctx.input(|i| i.time)`: logic also runs on hidden ticks, where egui's input

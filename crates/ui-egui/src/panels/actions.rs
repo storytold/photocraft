@@ -744,9 +744,21 @@ fn load_source(app: &mut PhotocraftApp, name: &str, params: Value) -> Result<Val
     Ok(r)
 }
 
+fn actions_directory(app: &PhotocraftApp) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::actions_folder::directory(app)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = app;
+        None
+    }
+}
+
 /// Load every chosen action file in order, retaining failures and unsupported-step warnings.
 fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let initial_dir = crate::file_dialog::last_used_dir(&app.ui.recent_files);
+    let initial_dir = actions_directory(app).or_else(|| crate::file_dialog::last_used_dir(&app.ui.recent_files));
     app.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: Some(vec!["atn".into()]) }, |app, answer| {
         let files: Vec<_> = match answer {
             FileDialogAnswer::Paths(paths) => paths.into_iter().map(|name| (name, None)).collect(),
@@ -852,6 +864,7 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
     }
     stem.truncate(cut);
     let file = format!("{stem}.atn");
+    let file = actions_directory(app).map(|dir| std::path::Path::new(&dir).join(&file).to_string_lossy().into_owned()).unwrap_or(file);
     app.pick_save(&file, move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
@@ -1448,6 +1461,39 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let set_selected = app.ui.actions.selected_set.as_ref().is_some_and(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
     if ui.add_enabled(any || set_selected, egui::Button::new(tl!("Save Actions…"))).clicked() {
         act = Some("save");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let files = crate::actions_folder::files(app).to_vec();
+        if !files.is_empty() {
+            let mut picked = None;
+            ui.menu_button(tl!("Actions Folder"), |ui| {
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for path in &files {
+                        if ui.button(crate::file_open::display_name(path)).clicked() {
+                            picked = Some(path.clone());
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            if let Some(path) = picked {
+                ui.close();
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        if let Err(error) = load_bytes(app, &path, &bytes) {
+                            app.ui.status = error;
+                            app.ui.status_error = true;
+                        }
+                    }
+                    Err(error) => {
+                        app.ui.status = error.to_string();
+                        app.ui.status_error = true;
+                    }
+                }
+                return;
+            }
+        }
     }
     let Some(a) = act else { return };
     ui.close();
