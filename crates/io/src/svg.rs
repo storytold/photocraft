@@ -1738,7 +1738,15 @@ impl Conv {
             } else {
                 "exceeds a rasterising limit"
             };
-            self.note("raster-scratch", format!("SVG: an element was dropped because it {why}: {}", refusal.message));
+            // one key per reason: a refusal for one reason must not hide a later one for another
+            let key = if refusal.complex {
+                "raster-scratch-complex"
+            } else if refusal.memory {
+                "raster-scratch-memory"
+            } else {
+                "raster-scratch-limit"
+            };
+            self.note(key, format!("SVG: an element was dropped because it {why}: {}", refusal.message));
             return None;
         }
         // resvg renders the node in its parent's space after shifting its absolute bounding box

@@ -1357,3 +1357,23 @@ fn a_skewed_fe_image_scales_its_pattern_tile() {
     let err = check_only(&svg, 100, 100).unwrap_err();
     assert!(err.message.contains("pattern tile"), "{err:?}");
 }
+
+#[test]
+fn every_raster_refusal_reason_is_reported_once() {
+    // One element over a filter-primitive limit, then one over the memory limit: the second must
+    // not be dropped silently because the first already reported a refusal.
+    let many = "<feOffset/>".repeat(65);
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="4096" height="4096">
+            <filter id="many" x="0" y="0" width="1" height="1">{many}</filter>
+            <filter id="big" x="0" y="0" width="1" height="1">{}</filter>
+            <rect width="16" height="16" fill="red" filter="url(#many)"/>
+            <rect width="4096" height="4096" fill="blue" filter="url(#big)"/>
+        </svg>"##,
+        "<feGaussianBlur stdDeviation=\"3\"/>".repeat(60)
+    );
+    let result = import_svg("refusals", svg.as_bytes()).unwrap();
+    let dropped = |what: &str| result.warnings.iter().filter(|w| w.contains("was dropped because") && w.contains(what)).count();
+    assert_eq!(dropped("rasterising limit"), 1, "{:?}", result.warnings);
+    assert_eq!(dropped("too much memory"), 1, "{:?}", result.warnings);
+}
