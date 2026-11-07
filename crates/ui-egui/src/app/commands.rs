@@ -370,6 +370,10 @@ impl PhotocraftApp {
         self.snapshot_thumbs.retain(|(doc, _), _| ids.contains(doc));
         // Closing a document cancels its page work; its GPU pages go with `retain_gpu_documents`.
         self.streams.retain(|doc, _| ids.contains(doc));
+        if self.outline_cache.as_ref().is_some_and(|(doc, _, _)| !ids.contains(doc)) {
+            self.outline_cache = None;
+            self.outline_cache_source = None;
+        }
         self.view_docs = ids;
         self.prune_thumbs();
         self.sync_mask_targets();
