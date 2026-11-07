@@ -185,7 +185,7 @@ On a Wayland session with a fractional display scale, the interface is sharp onl
 Wayland window, where the window is drawn at the display's physical resolution
 (`wp_fractional_scale_v1`). Through Xwayland the compositor enlarges a lower-resolution window, so
 everything is blurred and looks larger than the chosen scale (#1072). The window opens through
-Xwayland when a pen is attached (#639), with Preferences › Performance › Linux display server =
+Xwayland when a pen is attached and the compositor has no tablet protocol (#639, #79), with Preferences › Performance › Linux display server =
 X11, or with `WAYLAND_DISPLAY=` cleared; those are also the ways to get file drag and drop, which
 native Wayland lacks (#386). Sharp text or drag and drop: on such a desktop it is one or the other
 until winit supports Wayland drops.

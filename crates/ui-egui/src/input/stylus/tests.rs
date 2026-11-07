@@ -90,6 +90,7 @@ fn the_feed_queues_every_sample_in_order_and_keeps_the_latest() {
     assert_eq!(feed.drain().len(), FEED_QUEUE);
 }
 
+/// Each pointer move of a frame takes its share of the frame's pen samples.
 #[test]
 fn each_move_takes_its_share_of_the_frames_pen_samples() {
     let mut s = Stylus::default();
@@ -111,6 +112,26 @@ fn each_move_takes_its_share_of_the_frames_pen_samples() {
     assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
     s.clear_selection();
     assert_eq!(s.pressure(), 0.8, "back to the current sample");
+}
+
+/// A frame with one contact sample per move gives each move its own; hover samples drop out.
+#[test]
+fn a_frame_with_one_contact_sample_per_move_gives_each_move_its_own() {
+    // The Wayland pen pairs them: hover samples around the contact ones drop out.
+    let mut s = Stylus::default();
+    let want = [0.2, 0.1, 1.0, 0.9, 0.9];
+    for p in [0.0].iter().chain(&want).chain(&[0.0]) {
+        s.feed.set(Some(pen(*p)));
+    }
+    s.update(&[]);
+    s.begin_stroke();
+    let got: Vec<f32> = (0..want.len())
+        .map(|k| {
+            s.select(k, want.len());
+            s.pressure()
+        })
+        .collect();
+    assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() < 1e-6), "{got:?}");
 }
 
 #[test]
@@ -135,8 +156,17 @@ fn a_second_update_in_the_same_frame_keeps_its_samples() {
     let mut s = Stylus::default();
     s.feed.set(Some(pen(0.4)));
     s.feed.set(Some(pen(0.8)));
-    s.update_for_frame(7, &[]);
-    s.update_for_frame(7, &[]);
+    s.update_for_frame(egui::ViewportId::ROOT, 7, &[]);
+    s.update_for_frame(egui::ViewportId::ROOT, 7, &[]);
+    s.select(0, 2);
+    assert!((s.pressure() - 0.4).abs() < 1e-6, "{}", s.pressure());
+    // A document window counts its own frames: its frame 7 is a new frame with its own samples.
+    s.feed.set(Some(pen(0.2)));
+    s.update_for_frame(egui::ViewportId::from_hash_of("docwin"), 7, &[]);
+    s.select(0, 1);
+    assert!((s.pressure() - 0.2).abs() < 1e-6, "{}", s.pressure());
+    // The root's pass run again in the same frame, after the window's: the root's samples again.
+    s.update_for_frame(egui::ViewportId::ROOT, 7, &[]);
     s.select(0, 2);
     assert!((s.pressure() - 0.4).abs() < 1e-6, "{}", s.pressure());
 }

@@ -186,7 +186,9 @@ impl PhotocraftApp {
             return;
         }
         let t0 = gpu_canvas::now_ms();
-        self.perf.stage.ui_start(t0, frame.info().cpu_usage);
+        // The OS's moves, the control channel's and the Wayland pen reader's.
+        let moves = ctx.input(|i| i.raw.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count());
+        self.perf.stage.ui_start(t0, frame.info().cpu_usage, moves);
         // A software adapter or CPU mode chosen at startup is every document's reason.
         crate::render_path::frame(self);
         // Every frame that started its stage record closes it, whichever way `ui_body` returns.

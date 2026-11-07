@@ -283,9 +283,7 @@ impl eframe::App for PhotocraftApp {
         if self.custom_titlebar {
             titlebar::release_after_os_resize(ctx, raw_input);
         }
-        // The OS's moves and the control channel's (injected just above).
-        let moves = raw_input.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count();
-        self.perf.stage.start(frame_start, moves);
+        self.perf.stage.start(frame_start);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {

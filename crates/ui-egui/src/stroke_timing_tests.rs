@@ -370,6 +370,7 @@ fn a_committed_stroke_repaints_a_gradient_overlay_over_the_whole_layer() {
     assert!(missed.contains(25, 25), "the gradient around the first stroke is repainted: {missed:?}");
 }
 
+/// The stroke trace records each frame of a stroke and ends on the release.
 #[test]
 fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
     // The app's hooks around the canvas (`raw_input_hook` starts a frame, `ui` ends it); the
@@ -387,8 +388,8 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
             }
             let t0 = crate::gpu_canvas::now_ms();
             let moves = ctx.input(|i| i.raw.events.iter().filter(|e| matches!(e, egui::Event::PointerMoved(_))).count());
-            app.perf.stage.start(t0, moves);
-            app.perf.stage.ui_start(t0, Some(0.004));
+            app.perf.stage.start(t0);
+            app.perf.stage.ui_start(t0, Some(0.004), moves);
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
             app.finish_frame(crate::gpu_canvas::now_ms() - t0);
         },
