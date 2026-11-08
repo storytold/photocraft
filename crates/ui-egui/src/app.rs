@@ -13,6 +13,7 @@ mod clipboard;
 mod commands;
 mod control;
 mod files;
+pub(crate) use files::ensure_memory_to_save;
 mod frame;
 mod gpu;
 mod ime;
@@ -43,8 +44,10 @@ impl PhotocraftApp {
             display_memo: HashMap::new(),
             navigator_gpu: HashMap::new(),
             navigator_plain: std::collections::HashSet::new(),
+            streams: HashMap::new(),
             info_samplers: None,
             monitors: Default::default(),
+            thumbnail_cache: std::sync::Arc::new(std::sync::Mutex::new(crate::home_recent_ui::ThumbnailCache::default())),
             checker: None,
             drag: None,
             cancelled_vector_drag: false,
@@ -75,6 +78,7 @@ impl PhotocraftApp {
             last_stroke_end: None,
             brush_resize: None,
             quick_pick: false,
+            move_pick: None,
             brush_resize_armed: false,
             alt_sampling: false,
             mixer_sampling: false,
@@ -87,6 +91,7 @@ impl PhotocraftApp {
             live_adjust: None,
             frame: 0,
             notices_hovered: false,
+            low_memory: crate::memory_warning::Watch::default(),
             styled: false,
             integrated_titlebar: false,
             custom_titlebar: false,
@@ -97,6 +102,8 @@ impl PhotocraftApp {
             ppp: 1.0,
             drop_canvas_rect: None,
             tab_strip: None,
+            frame_tool_ctx: None,
+            frame_preview: None,
             drop_places: Default::default(),
             view_docs: Vec::new(),
             path_document: None,
@@ -110,6 +117,7 @@ impl PhotocraftApp {
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
+            guide_edit: None,
             filter_preview: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
@@ -119,11 +127,13 @@ impl PhotocraftApp {
             color_range: None,
             adjust_preview: None,
             live_adjust_preview: None,
+            levels_clipping: None,
             synthetic: Vec::new(),
             synthetic_batch: None,
             synthetic_reinject: false,
             synthetic_snapshot: None,
             automation_input: false,
+            programmatic_playback: false,
             run_depth: 0,
             paused_playbacks: Default::default(),
             channel_thumbs: None,
@@ -160,11 +170,13 @@ impl PhotocraftApp {
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
-            pending_raw_open: None,
+            raw_shelf: Vec::new(),
             raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
+            color_picker_live: Vec::new(),
             pending_after_prompt: None,
+            after_transform_commit: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,
@@ -187,6 +199,7 @@ impl PhotocraftApp {
             discard: None,
             file_dialog: None,
             tiff_options: None,
+            tiff_remembered: Default::default(),
             save_dirs: HashMap::new(),
             disk_stamps: HashMap::new(),
             targa_options: None,
@@ -196,6 +209,8 @@ impl PhotocraftApp {
             held_memory_prompts: Default::default(),
             prompt_order: Default::default(),
             held_preset_import: None,
+            held_record_again: None,
+            held_insert_menu: None,
             allow_close: false,
             stylus: Default::default(),
             control_click: Default::default(),
@@ -212,7 +227,6 @@ impl PhotocraftApp {
         histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
-        notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app
@@ -222,7 +236,7 @@ impl PhotocraftApp {
 impl eframe::App for PhotocraftApp {
     fn on_exit(&mut self) {
         if let Err(err) = tool_memory::save_on_exit(self) {
-            log::warn!("Preferences: could not save the final tool selection: {err}");
+            log::warn!("Preferences: could not save the final tool state: {err}");
         }
         // Release a pending screenshot's image budget and answer its control request; the
         // callback is inert afterwards (it holds only a weak slot).
@@ -235,8 +249,12 @@ impl eframe::App for PhotocraftApp {
         self.finish_type_reset_logic(ctx);
     }
 
+    /// Drain the platform's optional WinTab queue before the frame's input is processed.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         let frame_start = gpu_canvas::now_ms();
+        if let Some(tablet_poll) = self.services.tablet_poll.as_mut() {
+            tablet_poll(raw_input.focused);
+        }
         // An undecorated window gets its caption back when the toolkit changes its flags
         // (maximize, restore, …): take it off again before the frame is laid out (#2246).
         if let Some(window_frame) = self.services.window_frame.as_mut() {

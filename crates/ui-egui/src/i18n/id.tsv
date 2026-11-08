@@ -164,6 +164,7 @@
 	Right	Kanan
 	Open Recent	Terakhir Dibuka
 	Clear Recent Files	Hapus Daftar Berkas Terakhir
+	Clear Recent File List	Hapus Daftar Berkas Terakhir
 	Remove from Recent	Hapus dari Daftar Terakhir
 	Remove {name} from Recent	Hapus {name} dari Daftar Terakhir
 	Close	Tutup
@@ -172,6 +173,10 @@
 	Restore	Pulihkan
 	Close All	Tutup Semua
 	Close Others	Tutup Lainnya
+	New Document…	Dokumen Baru…
+	Open Document…	Buka…
+	Consolidate All to Here	Gabungkan Semua ke Sini
+	Move to New Window	Pindahkan ke Jendela Baru
 	Save	Simpan
 	Save As…	Simpan Sebagai…
 	Save a Copy…	Simpan Salinan…
@@ -224,6 +229,7 @@
 	Create Smart Object after Loading Layers	Buat Smart Object setelah Memuat Layer
 	Reveal in Finder	Tampilkan di Finder
 	Show in Explorer	Tampilkan di Explorer
+	Reveal in Explorer	Tampilkan di Explorer
 	Show in Folder	Tampilkan di Folder
 	File Info…	Info Berkas…
 	Print…	Cetak…
@@ -310,6 +316,7 @@
 	Units & Rulers…	Satuan & Penggaris…
 	Guides, Grid & Slices…	Panduan, Grid & Slice…
 	Plug-ins…	Plug-in…
+	Plugins…	Plug-in…
 	Type…	Teks…
 	Enhanced Controls…	Kontrol Lanjutan…
 	Camera Raw…	Camera Raw…
@@ -358,6 +365,8 @@
 	Match Color…	Cocokkan Warna…
 	Replace Color…	Ganti Warna…
 	Equalize	Ekualisasi
+	Equalize Selected Area Only	Ekualisasi seleksi saja
+	Equalize Entire Image Based On Selected Area	Ekualisasi seluruh gambar berdasarkan seleksi
 	Auto Tone	Auto Tone
 	Auto Contrast	Auto Kontras
 	Auto Color	Auto Warna
@@ -459,6 +468,8 @@
 	Smart Object	Smart Object
 	Convert to Smart Object	Konversi ke Smart Object
 	Convert to Embedded	Konversi ke Tertanam
+	Embed Linked	Tanamkan yang Tertaut
+	Embed All Linked	Tanamkan Semua yang Tertaut
 	Convert to Layers	Konversi ke Layer
 	Convert to Linked…	Konversi ke Tertaut…
 	Edit Contents	Edit Isi
@@ -526,7 +537,9 @@
 	Unite Shapes	Satukan Bentuk
 	Subtract Front Shape	Kurangi Bentuk Depan
 	Intersect Shape Areas	Irisan Area Bentuk
+	Unite Shapes at Overlap	Irisan Area Bentuk
 	Exclude Overlapping Shapes	Kecualikan Bentuk yang Tumpang Tindih
+	Subtract Shapes at Overlap	Kecualikan Bentuk yang Tumpang Tindih
 	Merge Shape Components	Gabungkan Komponen Bentuk
 	Path operations	Operasi path
 	Align	Rata
@@ -603,7 +616,6 @@
 	Deselect	Batalkan Seleksi
 	Reselect	Pilih Ulang
 	Inverse	Kebalikan
-	Inverse Selection	Balik Seleksi
 	Similar	Serupa
 	Color Range…	Rentang Warna…
 	Focus Area…	Area Fokus…
@@ -711,6 +723,7 @@
 	Minimum…	Minimum…
 	Offset…	Offset…
 	Plug-ins	Plug-in
+	Plugins	Plug-in
 	Proof Setup	Pengaturan Proof
 	Proof Colors	Warna Proof
 	Gamut Warning	Peringatan Gamut
@@ -719,12 +732,12 @@
 	Working Magenta Plate	Pelat Magenta Kerja
 	Working Yellow Plate	Pelat Kuning Kerja
 	Working Black Plate	Pelat Hitam Kerja
-	Working CMY Plate	Pelat CMY Kerja
-	Legacy Macintosh RGB	RGB Macintosh Lawas
-	Internet Standard RGB	RGB Standar Internet
+	Working CMY Plates	Pelat CMY Kerja
+	Legacy Macintosh RGB (Gamma 1.8)	RGB Macintosh Lawas (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB Standar Internet (sRGB)
 	Monitor RGB	RGB Monitor
-	Color Blindness — Protanopia-type	Buta Warna — Tipe Protanopia
-	Color Blindness — Deuteranopia-type	Buta Warna — Tipe Deuteranopia
+	Color Blindness - Protanopia-type	Buta Warna - Tipe Protanopia
+	Color Blindness - Deuteranopia-type	Buta Warna - Tipe Deuteranopia
 	Zoom In	Perbesar
 	Zoom Out	Perkecil
 	Fit on Screen	Pas di Layar
@@ -813,7 +826,7 @@
 	Consolidate All to Tabs	Gabungkan Semua ke Tab
 	Float in Window	Mengambang di Jendela
 	Float All in Windows	Mengambangkan Semua di Jendela
-	New Window for Document	Jendela Baru untuk Dokumen
+	New Window	Jendela Baru
 	Workspace	Ruang Kerja
 	Essentials	Esensial
 	Graphic and Web	Grafis dan Web
@@ -875,6 +888,12 @@
 	Timeline	Timeline
 	Tool Presets	Preset Alat
 	Tools	Alat
+	Contextual Task Bar	Bilah Tugas Kontekstual
+	Hide bar	Sembunyikan bilah
+	Reset bar position	Atur ulang posisi bilah
+	Pin bar position	Sematkan posisi bilah
+	Move bar	Pindahkan bilah
+	More options	Opsi lainnya
 	About PhotoCraft	Tentang PhotoCraft
 	PhotoCraft Website	Situs Web PhotoCraft
 	PhotoCraft on GitHub	PhotoCraft di GitHub
@@ -1053,7 +1072,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	Klik untuk menambah titik · seret keluar atau {key}-klik atau Delete untuk menghapus
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Klik untuk menerapkan, {key}-klik untuk menghapus override, klik dua kali untuk Opsi Gaya
 	Click to edit the gradient	Klik untuk mengedit gradien
-	Click to restore the current colour	Klik untuk memulihkan warna saat ini
+	Click to restore the current color	Klik untuk memulihkan warna saat ini
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Klik untuk zoom in  ·  {key}-klik untuk zoom out  ·  seret kanan/kiri untuk zoom in/out
 	Click with the Note tool to add a note.	Klik dengan alat Catatan untuk menambah catatan.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Klik: sudut · Seret: halus · Klik titik pertama: tutup · {key} selesai · Esc batal
@@ -1136,7 +1155,7 @@
 	Darks	Gelap
 	Data Sets	Data Set
 	Default	Default
-	Default colours (D)	Warna default (D)
+	Default Foreground and Background Colors (D)	Warna default (D)
 	Default printer	Printer default
 	Default restored.	Default dipulihkan.
 	Define	Tentukan
@@ -1413,7 +1432,7 @@
 	Opacity Jitter	Jitter Opasitas
 	Opacity:	Opasitas:
 	Open a document to define variables.	Buka dokumen untuk menentukan variabel.
-	Open a document to select a colour range.	Buka dokumen untuk memilih rentang warna.
+	Open a document to select a color range.	Buka dokumen untuk memilih rentang warna.
 	Open a document to use the timeline.	Buka dokumen untuk memakai timeline.
 	Optical	Optik
 	Optimized	Dioptimalkan
@@ -1489,7 +1508,6 @@
 	Purity	Kemurnian
 	Quality	Kualitas
 	Quick Actions	Aksi Cepat
-	Quick Export As PNG	Ekspor Cepat Sebagai PNG
 	Radial Gradient	Gradien Radial
 	Radius	Radius
 	Radius:	Radius:
@@ -1630,7 +1648,7 @@
 	Subtract from Sample	Kurangi dari Sampel
 	Subtract from selection  ({key})	Kurangi dari seleksi  ({key})
 	Suggestions:	Saran:
-	Swap colours (X)	Tukar warna (X)
+	Switch Foreground and Background Colors (X)	Tukar warna (X)
 	Swaps height and width	Tukar tinggi dan lebar
 	Switch between free transform and warp modes	Beralih antara mode transformasi bebas dan warp
 	Switch theme	Ganti tema
@@ -1732,7 +1750,7 @@
 	Choke	Choke
 	Classic	Klasik
 	Click to add text	Klik untuk menambah teks
-	Click to fill similar colours	Klik untuk mengisi warna serupa
+	Click to fill similar colors	Klik untuk mengisi warna serupa
 	Clone Stamp Tool	Alat Clone Stamp
 	Color Burn	Color Burn
 	Color Dodge	Color Dodge
@@ -1833,6 +1851,7 @@
 	Move Tool	Alat Pindah
 	Could not use the move tool because the layer is locked.	Tidak dapat menggunakan alat Pindahkan karena layer terkunci.
 	Could not complete the Free Transform command because the layer is locked.	Tidak dapat menyelesaikan perintah Transformasi Bebas karena layer terkunci.
+	Could not transform because the layer is locked.	Tidak dapat mentransformasi karena layer terkunci.
 	Multiply	Multiply
 	My Brushes	Kuas Saya
 	Neutrals	Netral
@@ -1891,7 +1910,7 @@
 	Rectangular Marquee Tool	Alat Rectangular Marquee
 	Reds	Merah
 	Reflected	Pantulan
-	Sample: foreground colour	Sampel: warna foreground
+	Sample: foreground color	Sampel: warna foreground
 	Sampled Colors	Warna Sampel
 	Satin	Satin
 	Save Pixel Aspect Ratio	Simpan Rasio Aspek Piksel
@@ -1912,6 +1931,7 @@
 	Soften	Lembutkan
 	Source	Sumber
 	Source: set	Sumber: sudah diatur
+	Source: {name}	Sumber: {name}
 	Sponge Tool	Alat Sponge
 	Spot Healing Brush Tool	Alat Spot Healing Brush
 	Spread	Sebar
@@ -1929,7 +1949,6 @@
 	Transfer	Transfer
 	Triangle Tool	Alat Triangle
 	Unsaved changes	Perubahan belum disimpan
-	Uses the foreground and background colours.	Memakai warna foreground dan background.
 	Web	Web
 	Web Large	Web Besar
 	Web Minimum	Web Minimum
@@ -1964,6 +1983,7 @@
 	Allow scripts to connect	Izinkan skrip terhubung
 	Always	Selalu
 	Always create smart objects when placing	Selalu buat smart object saat menempatkan
+	Skip transform when placing	Lewati transformasi saat menempatkan
 	Animated zoom	Zoom beranimasi
 	Apply auto tone	Terapkan auto tone
 	Ask	Tanya
@@ -1986,6 +2006,11 @@
 	Show canvas dots	Tampilkan titik kanvas
 	Clip thumbnails to layer bounds	Pangkas thumbnail ke batas layer
 	Clip Thumbnails to Layer Bounds	Pangkas Thumbnail ke Batas Layer
+	No Thumbnails	Tanpa Thumbnail
+	Small Thumbnails	Thumbnail Kecil
+	Medium Thumbnails	Thumbnail Sedang
+	Large Thumbnails	Thumbnail Besar
+	Clip Thumbnails to Document Bounds	Pangkas Thumbnail ke Batas Dokumen
 	Canvas color	Warna kanvas
 	Canvas custom color	Warna kustom kanvas
 	Color picker	Pemilih warna
@@ -2103,7 +2128,6 @@
 	Show only crosshair while painting	Tampilkan crosshair saja saat melukis
 	Show slice numbers	Tampilkan nomor slice
 	Show tooltips	Tampilkan tooltip
-	Enable animations	Aktifkan animasi
 	Show highlight on rollover	Tampilkan sorotan saat kursor melintas
 	Show transformation values	Tampilkan nilai transformasi
 	Slice color	Warna slice
@@ -2193,7 +2217,7 @@
 	Graphics	Grafis
 	Reset GPU Backend	Reset Backend GPU
 	Applies at next launch.	Berlaku saat dibuka berikutnya.
-	Click to sample the foreground colour  ·  {key}-click for background	Klik untuk mengambil sampel warna foreground  ·  {key}-klik untuk background
+	Click to sample the foreground color  ·  {key}-click for background	Klik untuk mengambil sampel warna foreground  ·  {key}-klik untuk background
 	{key}-click to set the source	{key}-klik untuk mengatur sumber
 	{key} to subtract	{key} untuk mengurangi
 	Clone source {n} ({key}-click with Clone Stamp to set)	Sumber clone {n} ({key}-klik dengan Clone Stamp untuk mengatur)
@@ -2251,7 +2275,7 @@
 	Gradient Options	Opsi Gradien
 	Align with layer	Sejajarkan dengan layer
 	Reset Alignment	Reset Penyelarasan
-	Centre the gradient (offset 0, 0)	Tengahkan gradien (offset 0, 0)
+	Center the gradient (offset 0, 0)	Tengahkan gradien (offset 0, 0)
 	Gradient Editor	Editor Gradien
 	Gradient picker	Pemilih gradien
 	Save As Preset	Simpan sebagai Preset
@@ -2283,7 +2307,7 @@
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Tidak ada path untuk dibuat seleksi: gambar dengan alat Pen atau pilih salah satu di panel Path.
 	Cancel opening	Batalkan pembukaan
-	Cancelled opening {name}	Pembukaan {name} dibatalkan
+	Canceled opening {name}	Pembukaan {name} dibatalkan
 	Damaged Photoshop document	Dokumen Photoshop rusak
 	The document “{name}” may be damaged.	Dokumen “{name}” mungkin rusak.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Beberapa layer, piksel, atau mask tidak dapat dibaca. Lanjutkan membukanya?
@@ -2293,7 +2317,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokumen “{name}” memiliki profil warna tertanam yang tidak cocok dengan working space {mode} saat ini.
 	Working: {working}	Working space: {working}
 	Developing {name}	Mengembangkan {name}
-	Cancelled {label}	{label} dibatalkan
+	Canceled {label}	{label} dibatalkan
 	Esc to cancel	Esc untuk batal
 	Opened {name}	Dibuka: {name}
 	Opening {name}	Membuka {name}
@@ -2301,7 +2325,7 @@
 	Saving {name}	Menyimpan {name}
 	Saving {percent}	Menyimpan {percent}
 	A save to {name} is still running; try again when it finishes	Penyimpanan ke {name} masih berjalan; coba lagi setelah selesai
-	{label} is writing the file and can no longer be cancelled	{label} sedang menulis berkas dan tidak dapat dibatalkan lagi
+	{label} is writing the file and can no longer be canceled	{label} sedang menulis berkas dan tidak dapat dibatalkan lagi
 	Opening {name}…	Membuka {name}…
 	Opening…	Membuka…
 	Reading…	Membaca…
@@ -2484,6 +2508,7 @@
 	Path to Illustrator…	Path ke Illustrator…
 	Make Work Path	Buat Work Path
 	Make Selection	Buat Seleksi
+	Make Shape	Buat Bentuk
 	Fill Path	Isi Path
 	Stroke Path	Stroke Path
 	Clipping Path	Clipping Path
@@ -2664,7 +2689,7 @@
 	Pixel	Piksel
 	Adjustment	Penyesuaian
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Seret (lasso) atau klik titik (polygonal) · {add} tambah · {sub} kurangi
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Seret kotak crop · seret di dalam untuk memindah · tepi mengubah ukuran (rasio {ratio}, tengah {centre}) · Space memindah saat menggambar · panah menggeser · X menukar orientasi · {commit} menerapkan · Esc batal
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Seret kotak crop · seret di dalam untuk memindah · tepi mengubah ukuran (rasio {ratio}, tengah {centre}) · Space memindah saat menggambar · panah menggeser · X menukar orientasi · {commit} menerapkan · Esc batal
 	{mode} Color · {bits} bit	Warna {mode} · {bits} bit
 	Drag to move the layer	Seret untuk memindah layer
 	Scrubby Zoom	Zoom Scrubby
@@ -2858,7 +2883,7 @@ cameraRaw	Blending	Pembauran
 	Discard Layers and Save a Copy	Buang Layer dan Simpan Salinan
 	Don't show again	Jangan tampilkan lagi
 	Save failed: {error}	Gagal menyimpan: {error}
-	Save cancelled	Penyimpanan dibatalkan
+	Save canceled	Penyimpanan dibatalkan
 	Couldn't place {name}: {error}	Tidak dapat menempatkan {name}: {error}
 	Magnetic Lasso Tool	Alat Magnetic Lasso
 	Frequency	Frekuensi
@@ -2987,7 +3012,7 @@ fontWeight	Italic	Miring
 	Impressionist	Impresionis
 	Rotate View Tool	Alat Putar Tampilan
 	Reset View	Atur Ulang Tampilan
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Seret di sekitar pusat untuk memutar tampilan  ·  Shift membatasi ke 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Seret di sekitar pusat untuk memutar tampilan  ·  Shift membatasi ke 15°
 	Dual Axis	Sumbu Ganda
 	Diagonal	Diagonal
 	Transform Symmetry	Transformasi Simetri
@@ -3002,8 +3027,8 @@ fontWeight	Italic	Miring
 	All Layers No Adjustments	Semua Layer Tanpa Penyesuaian
 	Current & Below No Adjustments	Saat Ini & Di Bawahnya Tanpa Penyesuaian
 	Show Sampling Ring	Tampilkan Cincin Sampel
-	Out of gamut for printing: click for the nearest printable colour	Di luar gamut cetak: klik untuk warna cetak terdekat
-	Not a web colour: click for the nearest web colour	Bukan warna web: klik untuk warna web terdekat
+	Out of gamut for printing: click for the nearest printable color	Di luar gamut cetak: klik untuk warna cetak terdekat
+	Not a web color: click for the nearest web color	Bukan warna web: klik untuk warna web terdekat
 	Color to Alpha…	Warna ke Alpha…
 	Transparency Threshold	Ambang transparansi
 	Opacity Threshold	Ambang opasitas
@@ -3293,12 +3318,14 @@ curves	Smooth	Haluskan
 	Step {step} is waiting for its dialog	Langkah {step} menunggu dialognya
 @plural	{n} action|{n} actions	{n} tindakan
 	Background (Default)	Background (Default)
+	Background (default)	Background (Default)
+	Transparent (default)	Transparan (bawaan)
 	Content-Aware Fill	Isi Content-Aware
 	Include All Subfolders	Sertakan semua subfolder
 	Auto Add/Delete	Tambah/Hapus Otomatis
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Jangan aktifkan juga Gambar Cermin di Pengaturan Cetak: kedua pembalikan saling meniadakan.
 	Print Settings…	Pengaturan Cetak…
-	Remember to turn off the printer's own colour management in Print Settings…	Ingat untuk menonaktifkan pengelolaan warna milik printer di Pengaturan Cetak…
+	Remember to turn off the printer's own color management in Print Settings…	Ingat untuk menonaktifkan pengelolaan warna milik printer di Pengaturan Cetak…
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
@@ -3346,6 +3373,7 @@ curves	Smooth	Haluskan
 	Automatically Check for Updates	Periksa Pembaruan Secara Otomatis
 	Paints from the History panel's source state	Melukis dari status sumber panel Riwayat
 	Sets the source for the history brush	Menetapkan sumber untuk kuas riwayat
+	The History Brush source was deleted: set a new source in the History panel	Sumber kuas riwayat telah dihapus: atur sumber baru di panel Riwayat
 	Highlight Mode	Mode Sorotan
 	Highlight Color	Warna Sorotan
 	Highlight Opacity	Opasitas Sorotan
@@ -3430,12 +3458,12 @@ curves	Smooth	Haluskan
 	Decrease Brush Hardness	Kurangi kekerasan kuas
 	Increase Brush Hardness	Tambah kekerasan kuas
 	Demosaic	Demosaik
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cara mosaik filter warna kamera diisi. Diterapkan saat berkas dibuka; pratinjau menampilkan metode yang dipakai saat dibuka.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cara mosaik filter warna kamera diisi. Diterapkan saat berkas dibuka; pratinjau menampilkan metode yang dipakai saat dibuka.
 	AHD (adaptive homogeneity)	AHD (homogenitas adaptif)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: tepi paling bersih dan pinggiran warna paling sedikit, paling lambat.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolasi terkoreksi gradien: tajam dan cepat, dengan sedikit pinggiran warna pada detail halus.
-	The fastest and the softest, with colour fringing on fine detail.	Paling cepat dan paling lembut, dengan pinggiran warna pada detail halus.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: tepi paling bersih dan pinggiran warna paling sedikit, paling lambat.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolasi terkoreksi gradien: tajam dan cepat, dengan sedikit pinggiran warna pada detail halus.
+	The fastest and the softest, with color fringing on fine detail.	Paling cepat dan paling lembut, dengan pinggiran warna pada detail halus.
 	“{name}” already exists. Replace it?	“{name}” sudah ada. Ganti?
 	The name in the save dialog was “{name}”.	Nama di dialog simpan adalah “{name}”.
 	Previous Brush	Kuas sebelumnya
@@ -3515,6 +3543,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entri numerik tidak valid. Diperlukan bilangan bulat antara {min}% dan {max}%. Nilai sebelumnya telah disisipkan.
 	Clear Selection	Hapus Seleksi
 	Color Aware	Berbasis Warna
@@ -3543,3 +3573,81 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+
+# Action Stop message (#8386)
+	Message	Pesan
+# Playback Options (#5212)
+	Playback Options…	Opsi pemutaran…
+	Playback Options	Opsi pemutaran
+	Accelerated	Dipercepat
+	Step by Step	Langkah demi langkah
+	Pause For:	Jeda selama:
+	Pause For	Jeda selama
+	seconds	detik
+	Create a single history state	Buat satu status riwayat
+	Generator enabled	Generator aktif
+	Move Up	Pindah ke atas
+	Move Down	Pindah ke bawah
+	Grid view	Tampilan kisi
+	List view	Tampilan daftar
+	On your computer	Di komputer Anda
+	New file	File baru
+	Learn	Pelajari
+	No recent files	Tidak ada file terbaru
+	Website	Situs web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Bingkai mendukung transformasi afin; pilih gambarnya untuk transformasi perspektif
+	A frame supports affine transforms; select its image to warp it	Bingkai mendukung transformasi afin; pilih gambarnya untuk dilengkungkan
+	Convert to Frame…	Konversi ke Bingkai…
+	Create a new custom frame	Buat bingkai kustom baru
+	Create a new polygonal frame	Buat bingkai poligon baru
+	Create a new triangular frame	Buat bingkai segitiga baru
+	Fit Content to Frame	Sesuaikan Konten ke Bingkai
+	Fit Frame to Content	Sesuaikan Bingkai ke Konten
+	Frame coordinates must be finite and within 600000 pixels	Koordinat bingkai harus berhingga dan berada dalam batas 600000 piksel
+	Import Image…	Impor Gambar…
+	Invalid frame transform	Transformasi bingkai tidak valid
+	Invalid nested file drop	Penjatuhan berkas bersarang tidak valid
+	New Frame	Bingkai Baru
+	Replace Image…	Ganti Gambar…
+	The frame is locked	Bingkai terkunci
+	The frame is unavailable	Bingkai tidak tersedia
+	Frame	Bingkai
+
+# Channels panel menu (#11451)
+	New Channel…	Channel Baru…
+	Duplicate Channel	Duplikat Channel
+	Delete Channel	Hapus Channel
+	New Spot Channel…	Spot Channel Baru…
+	Merge Spot Channel	Gabungkan Spot Channel
+	Channel Options…	Opsi Channel…
+	Split Channels	Pisahkan Channel
+	Merge Channels…	Gabungkan Channel…
+	Specify Channels:	Tentukan Channel:
+	Not enough grayscale documents for this mode.	Dokumen grayscale tidak cukup untuk mode ini.
+	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
+	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
+	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
+	Netscape Gray	Abu-abu Netscape
+# Move tool options bar (#11381)
+	Align top edges	Ratakan tepi atas
+	Align vertical centers	Ratakan pusat vertikal
+	Align bottom edges	Ratakan tepi bawah
+	Distribute vertically	Distribusikan secara vertikal
+	Distribute horizontally	Distribusikan secara horizontal
+	Show layer bounds on hover	Tampilkan batas layer saat kursor di atasnya
+	Expand layer group on click	Perluas grup layer saat diklik
+	Show hover bounds from Layers	Tampilkan batas saat kursor di atas dari Layer
+	Saved Camera Raw settings to {file}	Pengaturan Camera Raw disimpan ke {file}
+	Save the settings to each raw's sidecar without opening it	Simpan pengaturan ke file sidecar setiap raw tanpa membukanya
+	No settings saved: these raws can't keep a sidecar here	Tidak ada yang disimpan: raw ini tidak dapat memiliki file sidecar di sini
+	Some settings could not be saved; the raws stay open	Beberapa pengaturan tidak dapat disimpan; raw tetap terbuka
+	Nothing to save: these raws are at their default settings	Tidak ada yang perlu disimpan: raw ini memakai pengaturan default
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribusi lebar
+	Distribute Heights	Distribusi tinggi
+	Auto-nest Layers	Sarangkan layer secara otomatis
+	Auto-size Canvas	Ubah ukuran kanvas otomatis
+	Keep Relative Position During Layer Reordering	Pertahankan posisi relatif saat mengurutkan ulang layer
+	Shrinkwrap Canvas on Save	Kecilkan kanvas sesuai konten saat menyimpan

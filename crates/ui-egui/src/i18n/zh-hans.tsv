@@ -174,6 +174,7 @@
 	Right	右
 	Open Recent	打开最近文件
 	Clear Recent Files	清除最近文件
+	Clear Recent File List	清除最近文件
 	Remove from Recent	从最近文件中移除
 	Remove {name} from Recent	从最近文件中移除 {name}
 	Close	关闭
@@ -182,6 +183,10 @@
 	Restore	向下还原
 	Close All	关闭全部
 	Close Others	关闭其他
+	New Document…	新建文档…
+	Open Document…	打开…
+	Consolidate All to Here	将所有窗口合并到此处
+	Move to New Window	移到新窗口
 	Save	保存
 	Save As…	另存为…
 	Save a Copy…	保存副本…
@@ -234,6 +239,7 @@
 	Create Smart Object after Loading Layers	载入图层后创建智能对象
 	Reveal in Finder	在 Finder 中显示
 	Show in Explorer	在文件资源管理器中显示
+	Reveal in Explorer	在文件资源管理器中显示
 	Show in Folder	在文件夹中显示
 	File Info…	文件信息…
 	Print…	打印…
@@ -323,6 +329,7 @@
 	Units & Rulers…	单位与标尺…
 	Guides, Grid & Slices…	参考线、网格与切片…
 	Plug-ins…	插件…
+	Plugins…	插件…
 	Type…	文字…
 	3D…	3D…
 	Enhanced Controls…	增强控件…
@@ -378,6 +385,8 @@
 	Match Color…	匹配颜色…
 	Replace Color…	替换颜色…
 	Equalize	色调均化
+	Equalize Selected Area Only	仅色调均化选区
+	Equalize Entire Image Based On Selected Area	基于选区色调均化整个图像
 	Auto Tone	自动色调
 	Auto Contrast	自动对比度
 	Auto Color	自动颜色
@@ -482,6 +491,8 @@
 	Smart Object	智能对象
 	Convert to Smart Object	转换为智能对象
 	Convert to Embedded	转换为嵌入对象
+	Embed Linked	嵌入链接对象
+	Embed All Linked	嵌入所有链接对象
 	Convert to Layers	转换为图层
 	Convert to Linked…	转换为链接对象…
 	Edit Contents	编辑内容
@@ -555,7 +566,9 @@
 	Unite Shapes	合并形状
 	Subtract Front Shape	减去前面形状
 	Intersect Shape Areas	形状区域相交
+	Unite Shapes at Overlap	形状区域相交
 	Exclude Overlapping Shapes	排除重叠形状
+	Subtract Shapes at Overlap	排除重叠形状
 	Merge Shape Components	合并形状组件
 	Path operations	路径操作
 	Align	对齐
@@ -632,7 +645,6 @@
 	Deselect	取消选择
 	Reselect	重新选择
 	Inverse	反向
-	Inverse Selection	反选选区
 	Similar	选择相似
 	Color Range…	色彩范围…
 	Focus Area…	焦点区域…
@@ -740,6 +752,7 @@
 	Minimum…	最小值…
 	Offset…	位移…
 	Plug-ins	插件
+	Plugins	插件
 	Proof Setup	校样设置
 	Proof Colors	校样颜色
 	Gamut Warning	色域警告
@@ -748,12 +761,12 @@
 	Working Magenta Plate	工作洋红版
 	Working Yellow Plate	工作黄色版
 	Working Black Plate	工作黑色版
-	Working CMY Plate	工作 CMY 版
-	Legacy Macintosh RGB	旧版 Macintosh RGB
-	Internet Standard RGB	互联网标准 RGB
+	Working CMY Plates	工作 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	旧版 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	互联网标准 RGB (sRGB)
 	Monitor RGB	显示器 RGB
-	Color Blindness — Protanopia-type	色盲 — 红色盲型
-	Color Blindness — Deuteranopia-type	色盲 — 绿色盲型
+	Color Blindness - Protanopia-type	色盲 - 红色盲型
+	Color Blindness - Deuteranopia-type	色盲 - 绿色盲型
 	Zoom In	放大
 	Zoom Out	缩小
 	Fit on Screen	适合屏幕
@@ -842,7 +855,7 @@
 	Consolidate All to Tabs	将所有窗口合并为选项卡
 	Float in Window	在窗口中浮动
 	Float All in Windows	使所有文档在窗口中浮动
-	New Window for Document	为文档新建窗口
+	New Window	新建窗口
 	Workspace	工作区
 	Essentials	基本功能
 	Graphic and Web	图形与 Web
@@ -905,6 +918,12 @@
 	Timeline	时间轴
 	Tool Presets	工具预设
 	Tools	工具
+	Contextual Task Bar	上下文任务栏
+	Hide bar	隐藏栏
+	Reset bar position	重置栏位置
+	Pin bar position	固定栏位置
+	Move bar	移动栏
+	More options	更多选项
 	About PhotoCraft	关于 PhotoCraft
 	PhotoCraft Website	PhotoCraft 网站
 	PhotoCraft on GitHub	PhotoCraft 的 GitHub 页面
@@ -1084,7 +1103,7 @@
 	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	单击添加点 · 拖离、按 ⌘/Ctrl 单击或按 Delete 移除
 	Click to apply, ⌥-click to clear overrides, double-click for Style Options	单击应用，按 ⌥ 单击清除覆盖设置，双击打开样式选项
 	Click to edit the gradient	单击编辑渐变
-	Click to restore the current colour	单击恢复当前颜色
+	Click to restore the current color	单击恢复当前颜色
 	Click to zoom in  ·  ⌥-click to zoom out	单击放大  ·  按 ⌥ 单击缩小
 	Click with the Note tool to add a note.	使用注释工具单击以添加注释。
 	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	单击：角点 · 拖动：平滑点 · 单击起点：闭合 · ↩ 完成 · Esc 取消
@@ -1171,7 +1190,7 @@
 	Darks	暗部
 	Data Sets	数据组
 	Default	默认
-	Default colours (D)	默认颜色（D）
+	Default Foreground and Background Colors (D)	默认颜色（D）
 	Default printer	默认打印机
 	Default restored.	已恢复默认值。
 	Define	定义
@@ -1459,7 +1478,7 @@
 	Opacity Jitter	不透明度抖动
 	Opacity:	不透明度：
 	Open a document to define variables.	打开文档以定义变量。
-	Open a document to select a colour range.	打开文档以选择色彩范围。
+	Open a document to select a color range.	打开文档以选择色彩范围。
 	Open a document to use the timeline.	打开文档以使用时间轴。
 	Open…     ⌘O	打开…     ⌘O
 	Optical	视觉
@@ -1536,7 +1555,6 @@
 	Purity	纯度
 	Quality	品质
 	Quick Actions	快速操作
-	Quick Export As PNG	快速导出为 PNG
 	Radial Gradient	径向渐变
 	Radius	半径
 	Radius:	半径：
@@ -1681,7 +1699,7 @@
 	Subtract from Sample	从采样中减去
 	Subtract from selection  (⌥)	从选区中减去  (⌥)
 	Suggestions:	建议：
-	Swap colours (X)	交换颜色 (X)
+	Switch Foreground and Background Colors (X)	交换颜色 (X)
 	Swaps height and width	交换高度和宽度
 	Switch between free transform and warp modes	在自由变换和变形模式之间切换
 	Switch theme	切换主题
@@ -1789,7 +1807,7 @@
 	Choke	收缩
 	Classic	经典
 	Click to add text	单击以添加文字
-	Click to fill similar colours	单击以填充相近颜色
+	Click to fill similar colors	单击以填充相近颜色
 	Clone Stamp Tool	仿制图章工具
 	Color Burn	颜色加深
 	Color Dodge	颜色减淡
@@ -1894,6 +1912,7 @@
 	Move Tool	移动工具
 	Could not use the move tool because the layer is locked.	无法使用移动工具，因为图层已锁定。
 	Could not complete the Free Transform command because the layer is locked.	无法完成“自由变换”命令，因为图层已锁定。
+	Could not transform because the layer is locked.	无法变换，因为图层已锁定。
 	Multiply	正片叠底
 	My Brushes	我的画笔
 	Neutrals	中性色
@@ -1952,7 +1971,7 @@
 	Rectangular Marquee Tool	矩形选框工具
 	Reds	红色
 	Reflected	对称
-	Sample: foreground colour	采样：前景色
+	Sample: foreground color	采样：前景色
 	Sampled Colors	采样颜色
 	Satin	光泽
 	Save Pixel Aspect Ratio	保存像素长宽比
@@ -1973,6 +1992,7 @@
 	Soften	柔化
 	Source	源
 	Source: set	源：已设置
+	Source: {name}	源：{name}
 	Sponge Tool	海绵工具
 	Spot Healing Brush Tool	污点修复画笔工具
 	Spread	扩展
@@ -1992,7 +2012,6 @@
 	Triangle Tool	三角形工具
 	Up	向上
 	Unsaved changes	未保存的更改
-	Uses the foreground and background colours.	使用前景色和背景色。
 	Watercolour look: lighter interior, darker rims.	水彩效果：内部较浅，边缘较深。
 	Web	Web
 	Web Large	Web 大尺寸
@@ -2029,6 +2048,7 @@
 	Allow scripts to connect	允许脚本连接
 	Always	始终
 	Always create smart objects when placing	置入时始终创建智能对象
+	Skip transform when placing	置入时跳过变换
 	Animated zoom	动画缩放
 	Apply auto tone	应用自动色调
 	Ask	询问
@@ -2051,6 +2071,11 @@
 	Show canvas dots	显示画布圆点
 	Clip thumbnails to layer bounds	将缩略图裁剪到图层边界
 	Clip Thumbnails to Layer Bounds	将缩略图裁剪到图层边界
+	No Thumbnails	无缩略图
+	Small Thumbnails	小缩略图
+	Medium Thumbnails	中缩略图
+	Large Thumbnails	大缩略图
+	Clip Thumbnails to Document Bounds	将缩略图裁剪到文档边界
 	Canvas color	画布颜色
 	Canvas custom color	画布自定颜色
 	Color picker	拾色器
@@ -2168,7 +2193,6 @@
 	Show only crosshair while painting	绘画时仅显示十字线
 	Show slice numbers	显示切片编号
 	Show tooltips	显示工具提示
-	Enable animations	启用动画
 	Show highlight on rollover	鼠标悬停时显示高亮
 	Show bounding box when dragging layer	拖动图层时显示边界框
 	System title bar	系统标题栏
@@ -2315,7 +2339,7 @@ cameraRaw	Blending	混合
 	Graphics	图形
 	Reset GPU Backend	重置 GPU 后端
 	Applies at next launch.	下次启动时生效。
-	Click to sample the foreground colour  ·  {key}-click for background	单击拾取前景色  ·  按 {key} 单击拾取背景色
+	Click to sample the foreground color  ·  {key}-click for background	单击拾取前景色  ·  按 {key} 单击拾取背景色
 	{key}-click to set the source	按 {key} 单击设置源点
 	{key} to subtract	按 {key} 从选区中减去
 	Clone source {n} ({key}-click with Clone Stamp to set)	仿制源 {n}（使用仿制图章时按 {key} 单击设置）
@@ -2374,7 +2398,7 @@ cameraRaw	Blending	混合
 	Gradient Options	渐变选项
 	Align with layer	与图层对齐
 	Reset Alignment	重置对齐
-	Centre the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
+	Center the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
 	Gradient Editor	渐变编辑器
 	Gradient picker	渐变拾色器
 	Save As Preset	存储为预设
@@ -2406,7 +2430,7 @@ cameraRaw	Blending	混合
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	没有可用于生成选区的路径：请用钢笔工具绘制路径，或在路径面板中选择路径。
 	Cancel opening	取消打开
-	Cancelled opening {name}	已取消打开 {name}
+	Canceled opening {name}	已取消打开 {name}
 	Damaged Photoshop document	已损坏的 Photoshop 文档
 	The document “{name}” may be damaged.	文档“{name}”可能已损坏。
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	无法读取某些图层、像素或蒙版。是否继续打开？
@@ -2416,7 +2440,7 @@ cameraRaw	Blending	混合
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	文档“{name}”嵌入的颜色配置文件与当前的 {mode} 工作空间不匹配。
 	Working: {working}	工作空间：{working}
 	Developing {name}	正在处理 {name}
-	Cancelled {label}	已取消 {label}
+	Canceled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opened {name}	已打开 {name}
 	Opening {name}	正在打开 {name}
@@ -2424,7 +2448,7 @@ cameraRaw	Blending	混合
 	Saving {name}	正在保存 {name}
 	Saving {percent}	正在保存 {percent}
 	A save to {name} is still running; try again when it finishes	仍在保存到 {name}；请在完成后重试
-	{label} is writing the file and can no longer be cancelled	{label} 正在写入文件，已无法取消
+	{label} is writing the file and can no longer be canceled	{label} 正在写入文件，已无法取消
 	Opening {name}…	正在打开 {name}…
 	Opening…	正在打开…
 	Reading…	正在读取…
@@ -2474,7 +2498,7 @@ cameraRaw	Blending	混合
 	Discard Layers and Save a Copy	扔掉图层并存储副本
 	Don't show again	不再显示
 	Save failed: {error}	存储失败：{error}
-	Save cancelled	已取消存储
+	Save canceled	已取消存储
 	Magnetic Lasso Tool	磁性套索工具
 	Frequency	频率
 	Use tablet pressure to change pen width	使用绘图板压力以更改钢笔宽度
@@ -2608,7 +2632,7 @@ fontWeight	Italic	斜体
 	Rotate View	旋转视图
 	Rotate View Tool	旋转视图工具
 	Reset View	重置视图
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
 	Dual Axis	双轴
 	Diagonal	对角线
 	Transform Symmetry	变换对称轴
@@ -2623,8 +2647,8 @@ fontWeight	Italic	斜体
 	All Layers No Adjustments	所有图层（不含调整）
 	Current & Below No Adjustments	当前及下方图层（不含调整）
 	Show Sampling Ring	显示采样环
-	Out of gamut for printing: click for the nearest printable colour	超出打印色域：单击使用最接近的可打印颜色
-	Not a web colour: click for the nearest web colour	不是 Web 颜色：单击使用最接近的 Web 颜色
+	Out of gamut for printing: click for the nearest printable color	超出打印色域：单击使用最接近的可打印颜色
+	Not a web color: click for the nearest web color	不是 Web 颜色：单击使用最接近的 Web 颜色
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
@@ -2718,7 +2742,7 @@ fontWeight	Italic	斜体
 	How often fastening points are placed by themselves	自动放置紧固点的频率
 	Scrubby Zoom	细微缩放
 	{mode} Color · {bits} bit	{mode} 颜色 · {bits} 位
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移绘制裁剪框 · 在框内拖移以移动 · 拖移边缘调整大小（{ratio} 比例，{centre} 中心）· 绘制时按 Space 移动 · 方向键微移 · X 切换方向 · {commit} 确认 · Esc 取消
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移绘制裁剪框 · 在框内拖移以移动 · 拖移边缘调整大小（{ratio} 比例，{centre} 中心）· 绘制时按 Space 移动 · 方向键微移 · X 切换方向 · {commit} 确认 · Esc 取消
 	Appearance Settings…	外观设置…
 	Add to favorites	添加到收藏
 	Remove from favorites	从收藏中移除
@@ -2938,15 +2962,20 @@ curves	Smooth	平滑
 	Step {step} is waiting for its dialog	步骤 {step} 正在等待其对话框
 @plural	{n} action|{n} actions	{n} 个动作
 	Background (Default)	背景（默认）
+	Background (default)	背景（默认）
+	Transparent (default)	透明（默认）
 	Content-Aware Fill	内容识别填充
 	Include All Subfolders	包含所有子文件夹
 	Auto Add/Delete	自动添加/删除
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	不要同时勾选打印设置中的镜像：两次翻转会相互抵消。
 	Print Settings…	打印设置…
-	Remember to turn off the printer's own colour management in Print Settings…	请记得在打印设置中关闭打印机自身的色彩管理…
+	Remember to turn off the printer's own color management in Print Settings…	请记得在打印设置中关闭打印机自身的色彩管理…
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
+	Automatically Create First Snapshot	自动创建第一幅快照
+	Automatically Create New Snapshot When Saving	存储时自动创建新快照
+	Show New Snapshot Dialog by Default	默认显示新建快照对话框
 	Memory usage percent	内存使用比例 (%)
 	Show Favorite Fonts	显示收藏的字体
 	No favorite fonts yet: click the star beside a font to add it.	还没有收藏的字体：点击字体旁边的星标即可添加。
@@ -2991,6 +3020,7 @@ curves	Smooth	平滑
 	Automatically Check for Updates	自动检查更新
 	Paints from the History panel's source state	从历史记录面板的源状态绘画
 	Sets the source for the history brush	设置历史记录画笔的源
+	The History Brush source was deleted: set a new source in the History panel	历史记录画笔的源已被删除：请在“历史记录”面板中设置新的源
 	Highlight Mode	高光模式
 	Highlight Color	高光颜色
 	Highlight Opacity	高光不透明度
@@ -3016,6 +3046,7 @@ curves	Smooth	平滑
 	Edit Selected Guides	编辑所选参考线
 	Clear Selected Guides	清除所选参考线
 	Make Selection	建立选区
+	Make Shape	建立形状
 	Bicubic Automatic	双三次（自动）
 	Bicubic Smoother	双三次（较平滑）
 	Bicubic Sharper	双三次（较锐利）
@@ -3059,6 +3090,7 @@ curves	Smooth	平滑
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} 由系统保留，无法指定。
 	Low-Latency Drawing (vsync off, applies at next launch)	低延迟绘画（关闭垂直同步，下次启动时生效）
 	Reference point location	参考点位置
+	Toggle reference point	切换参考点
 	Free Transform is still being applied; try again when it has finished.	自由变换仍在应用中；请在完成后重试。
 	The transform couldn't be applied.	无法应用变换。
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	其图层需要 {needed} GPU 内存；预算只留给它们 {budget}。
@@ -3080,12 +3112,12 @@ curves	Smooth	平滑
 	Decrease Brush Hardness	减小画笔硬度
 	Increase Brush Hardness	增大画笔硬度
 	Demosaic	去马赛克
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填补相机彩色滤镜阵列的马赛克。在打开文件时应用；预览显示打开时所用的方法。
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填补相机彩色滤镜阵列的马赛克。在打开文件时应用；预览显示打开时所用的方法。
 	AHD (adaptive homogeneity)	AHD（自适应同质性）
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：边缘最干净、色边最少，速度最慢。
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	梯度校正插值：锐利且快速，细节处有些许色边。
-	The fastest and the softest, with colour fringing on fine detail.	最快也最柔和，细节处有色边。
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks：边缘最干净、色边最少，速度最慢。
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	梯度校正插值：锐利且快速，细节处有些许色边。
+	The fastest and the softest, with color fringing on fine detail.	最快也最柔和，细节处有色边。
 	“{name}” already exists. Replace it?	“{name}”已存在。要替换它吗？
 	The name in the save dialog was “{name}”.	存储对话框中的名称是“{name}”。
 	Previous Brush	上一个画笔
@@ -3177,6 +3209,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	数值输入无效。需要介于 {min}% 和 {max}% 之间的整数。已插入先前的值。
 	Clear Selection	清除选区
 	Color Aware	颜色识别
@@ -3205,3 +3239,84 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	纯色
 	Tint Color	色调颜色
 	Edit Brush…	编辑画笔…
+
+# Action Stop message (#8386)
+	Message	信息
+# Playback Options (#5212)
+	Playback Options…	回放选项…
+	Playback Options	回放选项
+	Accelerated	加速
+	Step by Step	逐步
+	Pause For:	暂停：
+	Pause For	暂停
+	seconds	秒
+	Create a single history state	创建单个历史记录状态
+	Drag to move the active shape's path or the Work Path	拖动以移动当前形状的路径或工作路径
+	Generator enabled	启用生成器
+	Move Up	上移
+	Move Down	下移
+	Grid view	网格视图
+	List view	列表视图
+	On your computer	在您的计算机上
+	New file	新建文件
+	Learn	学习
+	No recent files	没有最近使用的文件
+	Website	网站
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	框架支持仿射变换；要进行透视变换，请选择框架中的图像
+	A frame supports affine transforms; select its image to warp it	框架支持仿射变换；要进行变形，请选择框架中的图像
+	Convert to Frame…	转换为框架…
+	Create a new custom frame	创建新的自定义框架
+	Create a new polygonal frame	创建新的多边形框架
+	Create a new triangular frame	创建新的三角形框架
+	Fit Content to Frame	使内容适合框架
+	Fit Frame to Content	使框架适合内容
+	Frame coordinates must be finite and within 600000 pixels	框架坐标必须为有限值，且在 600000 像素范围内
+	Import Image…	导入图像…
+	Invalid frame transform	无效的框架变换
+	Invalid nested file drop	无效的嵌套文件拖放
+	New Frame	新建框架
+	Replace Image…	替换图像…
+	The frame is locked	框架已锁定
+	The frame is unavailable	框架不可用
+	Frame	框架
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	新建通道…
+	Duplicate Channel	复制通道
+	Delete Channel	删除通道
+	New Spot Channel…	新建专色通道…
+	Merge Spot Channel	合并专色通道
+	Channel Options…	通道选项…
+	Split Channels	分离通道
+	Merge Channels…	合并通道…
+	Specify Channels:	指定通道:
+	Not enough grayscale documents for this mode.	灰度文档不足，无法使用此模式。
+	Pick a different document for each channel.	请为每个通道选择不同的文档。
+	A picked document is no longer open.	所选的一个文档已不再打开。
+	A picked document is no longer a grayscale document of the same size.	所选的一个文档已不再是同样大小的灰度文档。
+	Netscape Gray	Netscape 灰色
+# Move tool options bar (#11381)
+	Align top edges	顶端对齐
+	Align vertical centers	垂直居中对齐
+	Align bottom edges	底端对齐
+	Distribute vertically	垂直分布
+	Distribute horizontally	水平分布
+	Show layer bounds on hover	悬停时显示图层边界
+	Expand layer group on click	单击时展开图层组
+	Show hover bounds from Layers	显示来自图层面板的悬停边界
+	Saved Camera Raw settings to {file}	已将 Camera Raw 设置保存到 {file}
+	Save the settings to each raw's sidecar without opening it	将设置保存到每个 Raw 的附属文件，不打开它
+	No settings saved: these raws can't keep a sidecar here	未保存任何内容：这些 Raw 在此处无法拥有附属文件
+	Some settings could not be saved; the raws stay open	部分设置无法保存；Raw 保持打开
+	Nothing to save: these raws are at their default settings	无需保存：这些 Raw 均为默认设置
+# Artboard tool options bar (#11385)
+	Distribute Widths	分布宽度
+	Distribute Heights	分布高度
+	Auto-nest Layers	自动嵌套图层
+	Auto-size Canvas	自动调整画布大小
+	Keep Relative Position During Layer Reordering	重新排列图层时保持相对位置
+	Shrinkwrap Canvas on Save	保存时将画布缩至内容大小
