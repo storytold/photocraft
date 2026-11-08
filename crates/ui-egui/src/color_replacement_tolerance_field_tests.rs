@@ -110,3 +110,15 @@ fn the_command_runs_tolerance_below_one_as_one() {
     let spec = photocraft_engine::command_specs().iter().find(|s| s.id == "paint.colorReplacement").unwrap();
     assert!(spec.params.contains("\"tolerance\":1..100"), "{}", spec.params);
 }
+
+#[test]
+fn a_restored_fraction_reaches_the_stroke_as_a_whole_number() {
+    // The options bar need not have drawn: the stroke's params round it themselves, so a stroke
+    // replaces the same pixels before and after the bar shows the setting.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for (saved, want) in [(12.5, 13.0), (23.4, 23.0), (0.0, 1.0), (150.0, 100.0)] {
+        app.ui.tool_options.cr_tolerance = saved;
+        let p = crate::retouch_ui::color_replacement_params(&app);
+        assert_eq!(p["tolerance"].as_f64(), Some(want), "{saved}");
+    }
+}

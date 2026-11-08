@@ -195,7 +195,7 @@ pub(crate) fn whole_tolerance_field(ui: &mut egui::Ui, value: &mut f32, draft: &
 /// A Tolerance as the field stores it: a whole number in 1..=100, the default 50 for a value
 /// that is no number. Strokes use it too, so a restored setting erases the same before and after
 /// the options bar shows it.
-fn stored_tolerance(v: f32) -> f32 {
+pub(crate) fn stored_tolerance(v: f32) -> f32 {
     if v.is_finite() { v.round().clamp(1.0, 100.0) } else { 50.0 }
 }
 

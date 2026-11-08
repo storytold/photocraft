@@ -84,7 +84,9 @@ pub(crate) fn color_replacement_params(app: &PhotocraftApp) -> Value {
         "mode": o.cr_mode,
         "sampling": o.cr_sampling,
         "limits": o.cr_limits,
-        "tolerance": o.cr_tolerance,
+        // As the field stores it (#11930), so a restored fraction replaces the same pixels before
+        // and after the options bar shows it.
+        "tolerance": crate::eraser_ui::stored_tolerance(o.cr_tolerance),
         "antiAlias": o.cr_anti_alias,
         // A mask or channel target is refused: the tool recolours layer pixels only.
         "target": crate::canvas::paint_target(app),
