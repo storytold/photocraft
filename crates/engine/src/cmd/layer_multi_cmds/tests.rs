@@ -586,9 +586,23 @@ fn find_layers_by_name() {
     s.execute("layer.renameLayer", json!({"layer": a.0, "name": "Sky photo"})).unwrap();
     s.execute("layer.renameLayer", json!({"layer": b.0, "name": "Photo of sea"})).unwrap();
     assert_eq!(doc(&s).layer(a).unwrap().name, "Sky photo");
-    let r = s.execute("select.findLayers", json!({"name": "PHOTO"})).unwrap();
-    assert_eq!(r["selected"], json!([a.0, b.0]));
-    assert!(s.execute("select.findLayers", json!({"name": "nothing"})).is_err());
+    // #10884: Find Layers filters the Layers panel by Name and leaves the selection alone.
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    let r = s.execute("select.findLayers", json!({"name": " PHOTO "})).unwrap();
+    assert_eq!(r["selected"], json!([a.0, b.0]), "the matching layers, trimmed and ignoring case");
+    assert_eq!(r["layerFilter"], json!({"by": "name", "name": " PHOTO "}), "the app sets the Name text as given");
+    assert_eq!(s.active().unwrap().selected_layers(), [a], "the selection is unchanged");
+    let r = s.execute("select.findLayers", json!({"name": "nothing"})).unwrap();
+    assert_eq!(r["selected"], json!([]), "no match lists nothing and is no error");
+    let all: Vec<u64> = doc(&s).walk().into_iter().map(|(_, _, l)| l.id.0).collect();
+    for blank in ["", "  "] {
+        let r = s.execute("select.findLayers", json!({"name": blank})).unwrap();
+        assert_eq!(r["selected"], json!(all), "a blank name filters nothing, as in the panel: {blank:?}");
+    }
+    let r = s.execute("select.findLayers", json!({})).unwrap();
+    assert_eq!((&r["selected"], &r["layerFilter"]), (&json!([]), &json!({"by": "name"})), "without a name it only switches to Name");
+    assert_eq!(s.active().unwrap().selected_layers(), [a]);
+    assert!(s.execute("select.findLayers", json!({"name": 3})).is_err());
     assert!(s.execute("layer.renameLayer", json!({})).is_err());
 }
 
