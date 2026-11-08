@@ -248,7 +248,8 @@ fn bucket_fills_with_a_pattern() {
 #[test]
 fn gradient_tool_with_selection_and_reverse() {
     let mut s = session();
-    s.execute("paint.gradient", json!({"from": [0, 0], "to": [20, 0], "colors": ["#000000", "#ffffff"]})).unwrap();
+    // Pixels are sampled a pixel up and left of their centre (#12018), so pixel 19 reads 18.5 of 19.
+    s.execute("paint.gradient", json!({"from": [0, 0], "to": [19, 0], "colors": ["#000000", "#ffffff"]})).unwrap();
     assert!(px(&s, 0, 5)[0] < 0.05 && px(&s, 19, 5)[0] > 0.95);
     s.execute("paint.gradient", json!({"from": [0, 0], "to": [20, 0], "colors": ["#000000", "#ffffff"], "reverse": true})).unwrap();
     assert!(px(&s, 0, 5)[0] > 0.95);
