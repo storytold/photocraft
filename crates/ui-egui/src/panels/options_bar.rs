@@ -634,7 +634,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 "move-target",
                 tl!("Auto-Select:"),
                 &mut o.move_target,
-                &[("layer".to_string(), tl!("Layer")), ("group".to_string(), tl!("Group"))],
+                &[("group".to_string(), tl!("Group")), ("layer".to_string(), tl!("Layer"))],
                 76.0,
             );
             widgets::vline(ui, 22.0);

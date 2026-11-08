@@ -4714,6 +4714,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostra i limiti del livello al passaggio del mouse
 	Expand layer group on click	Espandi il gruppo di livelli al clic
 	Show hover bounds from Layers	Mostra i limiti al passaggio dal pannello Livelli
+	Saved Camera Raw settings to {file}	Impostazioni Camera Raw salvate in {file}
+	Save the settings to each raw's sidecar without opening it	Salva le impostazioni nel file sidecar di ogni raw senza aprirlo
+	No settings saved: these raws can't keep a sidecar here	Nulla salvato: questi raw non possono avere un file sidecar qui
+	Some settings could not be saved; the raws stay open	Alcune impostazioni non sono state salvate; i raw restano aperti
+	Nothing to save: these raws are at their default settings	Niente da salvare: questi raw hanno le impostazioni predefinite
 # Artboard tool options bar (#11385)
 	Distribute Widths	Distribuisci larghezze
 	Distribute Heights	Distribuisci altezze

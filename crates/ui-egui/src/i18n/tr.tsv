@@ -4346,6 +4346,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Üzerine gelince katman sınırlarını göster
 	Expand layer group on click	Tıklayınca katman grubunu genişlet
 	Show hover bounds from Layers	Katmanlar'dan üzerine gelme sınırlarını göster
+	Saved Camera Raw settings to {file}	Camera Raw ayarları {file} dosyasına kaydedildi
+	Save the settings to each raw's sidecar without opening it	Ayarları her raw dosyasının yan dosyasına kaydet, açmadan
+	No settings saved: these raws can't keep a sidecar here	Hiçbir şey kaydedilmedi: bu raw dosyaları burada yan dosyaya sahip olamaz
+	Some settings could not be saved; the raws stay open	Bazı ayarlar kaydedilemedi; raw dosyaları açık kalıyor
+	Nothing to save: these raws are at their default settings	Kaydedilecek bir şey yok: bu raw dosyaları varsayılan ayarlarda
 # Artboard tool options bar (#11385)
 	Distribute Widths	Genişlikleri Dağıt
 	Distribute Heights	Yükseklikleri Dağıt

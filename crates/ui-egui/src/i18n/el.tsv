@@ -4315,6 +4315,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Εμφάνιση ορίων στρώσης στο πέρασμα του δείκτη
 	Expand layer group on click	Ανάπτυξη ομάδας στρώσεων με κλικ
 	Show hover bounds from Layers	Εμφάνιση ορίων στο πέρασμα από τις Στρώσεις
+	Saved Camera Raw settings to {file}	Οι ρυθμίσεις Camera Raw αποθηκεύτηκαν στο {file}
+	Save the settings to each raw's sidecar without opening it	Αποθήκευση των ρυθμίσεων στο συνοδευτικό αρχείο κάθε raw χωρίς άνοιγμα
+	No settings saved: these raws can't keep a sidecar here	Δεν αποθηκεύτηκε τίποτα: αυτά τα raw δεν μπορούν να έχουν συνοδευτικό αρχείο εδώ
+	Some settings could not be saved; the raws stay open	Ορισμένες ρυθμίσεις δεν ήταν δυνατό να αποθηκευτούν· τα raw παραμένουν ανοιχτά
+	Nothing to save: these raws are at their default settings	Τίποτα για αποθήκευση: αυτά τα raw έχουν τις προεπιλεγμένες ρυθμίσεις
 # Artboard tool options bar (#11385)
 	Distribute Widths	Κατανομή πλατών
 	Distribute Heights	Κατανομή υψών
