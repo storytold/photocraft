@@ -279,32 +279,104 @@ fn contains(l: &photocraft_doc::Layer, id: LayerId) -> bool {
 }
 
 /// The document to show while a lone layer mask's box is open: the mask where the box puts it
-/// now ([`LiveMask`]), built again only when the box or the Nearest Neighbor choice changes.
+/// now ([`LiveMask`]), built again only when the box or the Nearest Neighbor choice changes. A
+/// large mask's frame is built on a worker thread, and the frame before it shows until it lands.
 /// `None` for other sessions, or when the frame can't be built (past the transform budget, a
 /// degenerate box): the canvas then shows the mask vacated and [`draw_content`] the grey values.
 pub(crate) fn live_mask_doc(app: &mut PhotocraftApp) -> Option<(Arc<Document>, u64)> {
+    use std::sync::mpsc::TryRecvError;
     let frame = app.frame;
     let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_mut()?);
-    let nearest = t.interpolation == "nearest";
+    let want = (t.quad, t.interpolation == "nearest");
     let live = pv.live_mask.as_mut()?;
     live.drawn = frame;
-    if live.quad == Some((t.quad, nearest)) {
+    if let Some((quad, rx)) = &live.running {
+        let quad = *quad;
+        match rx.try_recv() {
+            Ok(moved) => {
+                live.running = None;
+                show_live_mask(app, quad, moved);
+            }
+            Err(TryRecvError::Disconnected) => {
+                live.running = None;
+                show_live_mask(app, quad, None);
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+    }
+    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_ref()?);
+    let live = pv.live_mask.as_ref()?;
+    // The frame for this box is shown, or on its way (the one shown stays until then).
+    if live.quad == Some(want) || live.running.is_some() {
         return live.shown.clone();
     }
-    let key = LIVE_MASK_BASE | (app.ui.alloc_id() & (LIVE_MASK_BASE - 1));
     let started = crate::gpu_canvas::now_ms();
-    let (t, pv) = (app.ui.transform.as_ref()?, app.transform_preview.as_mut()?);
-    let live = pv.live_mask.as_mut()?;
-    live.quad = Some((t.quad, nearest));
-    live.shown = None;
-    // Bilinear keeps a frame cheap while the box moves; the commit uses the chosen interpolation.
-    let interp = if nearest { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bilinear };
-    let h = Homography::rect_to_quad(t.rect, t.quad)?;
-    let mut doc = (*pv.doc).clone();
     let params = json!({ "target": t.target.clone()? });
-    let surf = photocraft_engine::transform_cmds::lone_target_mut(&mut doc, Some(LayerId(t.layer)), &params).ok()??;
-    *surf = photocraft_engine::transform_cmds::moved_gray(surf, &live.lifted, &h, interp).ok()?;
-    let (min, max) = t.quad.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), q| ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])]));
+    let rest = photocraft_engine::transform_cmds::lone_target(&pv.doc, Some(LayerId(t.layer)), &params).ok()??.clone();
+    let lifted = live.lifted.clone();
+    // Bilinear keeps a frame cheap while the box moves; the commit uses the chosen interpolation.
+    let interp = if want.1 { photocraft_algo::transform::Interp::Nearest } else { photocraft_algo::transform::Interp::Bilinear };
+    let h = Homography::rect_to_quad(t.rect, t.quad);
+    let build = move || h.and_then(|h| photocraft_engine::transform_cmds::moved_gray(&rest, &lifted, &h, interp).ok());
+    let (lo, hi) = quad_bounds(&t.quad);
+    let pixels = |w: f64, h: f64| if (w * h).is_finite() { (w * h).max(0.0) as u64 } else { u64::MAX };
+    let src = live.lifted.content_bounds();
+    let cost = pixels(src.width() as f64, src.height() as f64).max(pixels(hi[0] - lo[0], hi[1] - lo[1]));
+    let mut built = None;
+    if cost <= live.sync_limit {
+        built = Some(build());
+    } else {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctx = live.ctx.clone();
+        // Without threads (the browser) the frame is built here, as a small one is.
+        let job = std::sync::Arc::new(std::sync::Mutex::new(Some(build)));
+        let worker = job.clone();
+        let spawned = std::thread::Builder::new()
+            .name("transform-mask-preview".into())
+            .spawn(move || {
+                let build = worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+                if let Some(build) = build {
+                    let _ = tx.send(build());
+                    ctx.request_repaint();
+                }
+            })
+            .is_ok();
+        if spawned {
+            if let Some(live) = app.transform_preview.as_mut().and_then(|pv| pv.live_mask.as_mut()) {
+                live.running = Some((want, rx));
+            }
+        } else {
+            let build = job.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+            built = build.map(|build| build());
+        }
+    }
+    if let Some(moved) = built {
+        show_live_mask(app, want, moved);
+    }
+    app.perf.span("transform mask preview", crate::gpu_canvas::now_ms() - started);
+    app.transform_preview.as_ref()?.live_mask.as_ref()?.shown.clone()
+}
+
+/// The corners' bounding box.
+fn quad_bounds(q: &[[f64; 2]; 4]) -> ([f64; 2], [f64; 2]) {
+    q.iter().fold(([f64::MAX; 2], [f64::MIN; 2]), |(lo, hi), q| ([lo[0].min(q[0]), lo[1].min(q[1])], [hi[0].max(q[0]), hi[1].max(q[1])]))
+}
+
+/// Show the live frame `moved` (the mask moved through `quad`; `None` when it couldn't be built).
+fn show_live_mask(app: &mut PhotocraftApp, quad: super::LiveBox, moved: Option<photocraft_raster::Surface>) {
+    let key = LIVE_MASK_BASE | (app.ui.alloc_id() & (LIVE_MASK_BASE - 1));
+    let Some((t, Some(target))) = app.ui.transform.as_ref().map(|t| (t, t.target.clone())) else { return };
+    let params = json!({ "target": target });
+    let layer = LayerId(t.layer);
+    let Some(pv) = app.transform_preview.as_mut() else { return };
+    let mut doc = (*pv.doc).clone();
+    let Some(live) = pv.live_mask.as_mut() else { return };
+    live.quad = Some(quad);
+    live.shown = None;
+    let Some(moved) = moved else { return };
+    let Ok(Some(surf)) = photocraft_engine::transform_cmds::lone_target_mut(&mut doc, Some(layer), &params) else { return };
+    *surf = moved;
+    let (min, max) = quad_bounds(&quad.0);
     let edge = |v: f64| v.clamp(-1e9, 1e9) as i32;
     let area =
         photocraft_geom::Rect::new(edge(min[0].floor()), edge(min[1].floor()), edge(max[0].ceil()), edge(max[1].ceil())).inflate(2).intersect(&doc.bounds());
@@ -313,9 +385,6 @@ pub(crate) fn live_mask_doc(app: &mut PhotocraftApp) -> Option<(Arc<Document>, u
     }
     live.areas.push_back((key, area));
     live.shown = Some((Arc::new(doc), key));
-    let shown = live.shown.clone();
-    app.perf.span("transform mask preview", crate::gpu_canvas::now_ms() - started);
-    shown
 }
 
 /// What changed between preview keys `seen` and `now` of document `doc` at `revision` while a lone

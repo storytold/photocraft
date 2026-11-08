@@ -164,7 +164,7 @@ struct LiveMask {
     revision: u64,
     /// The box and Nearest Neighbor choice the latest frame was built for, and that frame (`None`
     /// when it couldn't be).
-    quad: Option<([[f64; 2]; 4], bool)>,
+    quad: Option<LiveBox>,
     shown: Option<(Arc<Document>, u64)>,
     /// The app frame the canvas was last handed `shown` in. A preview that takes the canvas over
     /// (a blend mode hovered in the Layers panel) leaves it behind: [`draw_content`] then draws
@@ -172,7 +172,22 @@ struct LiveMask {
     drawn: u64,
     /// Where each frame shown so far differs from `doc` (the values vacated), by preview key.
     areas: VecDeque<(u64, photocraft_geom::Rect)>,
+    /// A frame being built on a worker thread, for this box: a mask moving more than
+    /// `sync_limit` pixels would stall the UI for each box change (about 250 ms at 24 MP).
+    /// `shown` stays on screen until it lands.
+    running: Option<(LiveBox, std::sync::mpsc::Receiver<Option<photocraft_raster::Surface>>)>,
+    /// Frames moving at most this many pixels are built on the UI thread ([`LIVE_MASK_SYNC_PIXELS`]).
+    sync_limit: u64,
+    /// Wakes the canvas when a worker's frame lands.
+    ctx: egui::Context,
 }
+
+/// A live mask frame's box and Nearest Neighbor choice.
+type LiveBox = ([[f64; 2]; 4], bool);
+
+/// A lone mask moving at most this many pixels builds its live frames on the UI thread, in a
+/// few milliseconds; larger ones on a worker thread.
+const LIVE_MASK_SYNC_PIXELS: u64 = 1 << 20;
 
 /// The moving pixels of a box over several layers ([`begin_several`]): the layers composited on
 /// their own, with their styles, opacity and masks. Composited again when an edit made while the

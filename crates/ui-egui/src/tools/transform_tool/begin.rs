@@ -474,7 +474,17 @@ fn begin_lone(
     // Alpha channels and the Quick Mask keep the grey preview: only a layer mask shows through
     // a layer.
     let revision = app.session.active().map_or(0, |st| st.revision);
-    let live_mask = (target == json!("mask")).then(|| LiveMask { lifted: lifted.clone(), revision, quad: None, shown: None, drawn: 0, areas: VecDeque::new() });
+    let live_mask = (target == json!("mask")).then(|| LiveMask {
+        lifted: lifted.clone(),
+        revision,
+        quad: None,
+        shown: None,
+        drawn: 0,
+        areas: VecDeque::new(),
+        running: None,
+        sync_limit: super::LIVE_MASK_SYNC_PIXELS,
+        ctx: ctx.clone(),
+    });
     let layer = app.session.active().and_then(|st| st.active_layer).map_or(0, |l| l.0);
     let mut pd = (*doc).clone();
     let tp = json!({ "target": target });

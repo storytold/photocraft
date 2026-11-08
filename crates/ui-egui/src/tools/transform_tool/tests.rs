@@ -3381,7 +3381,7 @@ fn a_lone_mask_previews_live_through_its_layer() {
     // A box the engine refuses falls back to the grey values over the vacated mask.
     let t = app.ui.transform.as_mut().unwrap();
     t.quad = [[0.0, 0.0], [1e7, 0.0], [1e7, 1e7], [0.0, 1e7]];
-    let (_, k3) = crate::canvas::display_doc(&mut app, 0);
+    let (_, k3) = settled_live_mask(&mut app);
     assert_eq!(k3, vacated);
     assert!(!preview_meshes(&app, &xf).is_empty(), "the grey values show instead");
     // The commit leaves the mask the preview showed.
@@ -3393,6 +3393,68 @@ fn a_lone_mask_previews_live_through_its_layer() {
     for x in [2, 20, 23, 40] {
         assert!((mask_at(&st.doc, x, 4) - mask_at(&moved, x, 4)).abs() < 0.01, "x {x}");
     }
+}
+
+/// The canvas document once no live mask frame is building on a worker thread.
+fn settled_live_mask(app: &mut PhotocraftApp) -> (Arc<Document>, u64) {
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let shown = crate::canvas::display_doc(app, 0);
+        let running = app.transform_preview.as_ref().and_then(|pv| pv.live_mask.as_ref()).is_some_and(|l| l.running.is_some());
+        if !running || std::time::Instant::now() > until {
+            return shown;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// #9691: a large mask's frame builds on a worker thread, so a box change never stalls the UI
+/// (about 250 ms a frame at 24 MP). The frame before it shows meanwhile, and the box as it is
+/// once the worker is done wins.
+#[test]
+fn a_large_lone_mask_builds_its_frames_off_the_ui_thread() {
+    let mut app = masked_app(false);
+    app.ui.mask_target = true;
+    begin(&mut app, &gpu_ctx()).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    let (id, revision) = {
+        let st = app.session.active().unwrap();
+        (st.doc.id, st.revision)
+    };
+    let mask_at = |d: &Document, x, y| d.layer(layer).unwrap().mask.as_ref().unwrap().surface.sample_channel(x, y, 0);
+    let running = |app: &PhotocraftApp| app.transform_preview.as_ref().unwrap().live_mask.as_ref().unwrap().running.is_some();
+    // Every frame counts as large.
+    app.transform_preview.as_mut().unwrap().live_mask.as_mut().unwrap().sync_limit = 0;
+    let vacated = PREVIEW_BASE + app.transform_preview.as_ref().unwrap().session;
+    let (_, k) = crate::canvas::display_doc(&mut app, 0);
+    assert_eq!(k, vacated, "nothing built on this thread");
+    assert!(running(&app));
+    let (first, k0) = settled_live_mask(&mut app);
+    assert_ne!(k0, vacated);
+    assert!(mask_at(&first, 4, 4) < 0.01 && mask_at(&first, 30, 4) > 0.99, "the mask where it is");
+    // The box moves twice while the first move builds: the frame before stays on screen.
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (stale, k1) = crate::canvas::display_doc(&mut app, 0);
+    assert!(k1 == k0 && Arc::ptr_eq(&stale, &first) && running(&app));
+    let t = app.ui.transform.as_mut().unwrap();
+    t.quad = t.quad.map(|[x, y]| [x + 6.0, y]);
+    let (_, k2) = crate::canvas::display_doc(&mut app, 0);
+    assert_eq!(k2, k0);
+    // Then the latest box shows.
+    let (moved, k3) = settled_live_mask(&mut app);
+    assert_ne!(k3, k0);
+    assert!(mask_at(&moved, 26, 4) < 0.01 && mask_at(&moved, 30, 4) > 0.99 && mask_at(&moved, 2, 4) > 0.99, "moved 12 px");
+    assert_eq!(live_mask_damage(&app, id, revision, k0, k3), Some(photocraft_geom::Rect::new(0, 0, 30, 64)));
+    let xf = ViewXform {
+        rect: egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(128.0, 128.0)),
+        zoom: 2.0,
+        center: [32.0, 32.0],
+        flip: false,
+        rotation: 0.0,
+        aspect: 1.0,
+    };
+    assert!(preview_meshes(&app, &xf).is_empty(), "no grey mesh over the layer");
 }
 
 /// An alpha channel keeps the grey preview: it masks no layer.
