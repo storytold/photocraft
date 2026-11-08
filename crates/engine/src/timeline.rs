@@ -311,7 +311,8 @@ pub(crate) fn pin_patterns(s: &Session, id: &str, mut params: Value) -> Value {
         }
     }
     walk(s, &mut params, 0);
-    let paints_one = matches!(id, "paint.patternStamp" | crate::pattern_fill_cmds::CREATE)
+    // These fall back to the current (else first) library pattern when none is named.
+    let paints_one = matches!(id, "paint.patternStamp" | crate::pattern_fill_cmds::CREATE | "pattern.presets.apply" | "layer.layerStyle.patternOverlay")
         || ["contents", "source", "method"].iter().any(|k| params.get(*k).and_then(Value::as_str).is_some_and(|v| matches!(v, "pattern" | "customPattern")));
     if paints_one
         && params.get(PATTERN).is_none_or(|v| v.as_str() == Some(""))

@@ -1337,4 +1337,36 @@ fn a_pattern_replaced_under_its_id_is_not_held() {
     s.patterns.items[i].surface = crate::pattern_cmds::resolve(&s, &b).unwrap().surface;
     assert_eq!((s.patterns.items.len(), s.patterns.pixels_rev), (len, rev));
     assert!(!crate::timeline::holds(&s, &held));
+    // A saved pattern held as a preview isn't the installed one either.
+    s.patterns.items[i] = held[0].clone();
+    s.patterns.stored.insert(a.clone(), (4, 4));
+    assert!(!crate::timeline::holds(&s, &held), "stored");
+    // Nor is one whose second tile changed.
+    s.execute("file.new", json!({"width": 512, "height": 8})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 300, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let wide = s.execute("edit.definePattern", json!({"name": "Wide"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    let held = vec![crate::pattern_cmds::resolve(&s, &wide).unwrap()];
+    assert!(held[0].surface.tiles().count() > 1, "spans tiles");
+    let i = s.patterns.items.iter().position(|p| p.id == wide).unwrap();
+    s.patterns.items[i] = held[0].clone();
+    assert!(crate::timeline::holds(&s, &held));
+    let surface = &mut s.patterns.items[i].surface;
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let n = surface.format().channels();
+    surface.fill_rect(photocraft_geom::Rect::from_xywh(290, 0, 4, 4), &blue[..n]);
+    assert!(!crate::timeline::holds(&s, &held), "its last tile");
+}
+
+/// Applying the selected pattern records which one: a replay doesn't take whatever the
+/// library selects by then (a deleted pattern the replay put back, say).
+#[test]
+fn applying_the_selected_pattern_records_it() {
+    let mut s = started();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Mine"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute("pattern.presets.select", json!({"pattern": id})).unwrap();
+    s.execute("pattern.presets.apply", json!({})).unwrap();
+    assert_eq!(steps(&mut s).last().unwrap()["params"]["pattern"], json!(id));
 }
