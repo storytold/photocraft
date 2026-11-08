@@ -112,6 +112,9 @@ fn crop_with_no_document_left_is_no_panic() {
     assert!(open_perspective_crop(&mut empty, &ctx2, Tool::PerspectiveCrop, [10.0, 10.0]));
     empty.run("file.close", json!({})).unwrap();
     choose(&mut empty, &ctx2, PCROP_COMMIT);
+    assert!(empty.session.active().is_none());
+    assert!(empty.ui.perspective_crop.is_none(), "the stale quad is dropped");
+    assert!(empty.ui.canvas_tool_menu.is_none(), "the menu is closed");
 }
 
 /// Two documents; the quad is pending on the second (active) one, then the first becomes active
@@ -155,4 +158,20 @@ fn after_a_tool_switch_the_menu_does_nothing() {
     }
     assert_eq!(size(&app), (200, 150), "nothing cropped");
     assert_eq!(app.ui.perspective_crop, Some(QUAD), "the quad is kept");
+}
+
+#[test]
+fn an_unknown_id_is_rejected_and_keeps_the_session() {
+    let (mut app, ctx) = app();
+    app.ui.perspective_crop = Some(QUAD);
+    right_click(&mut app, &ctx, 100.0, 70.0);
+    for id in ["canvasMenu.perspectiveCrop.bogus", "crop.commit", "select.all"] {
+        assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": id}))["ok"], false, "{id}");
+        assert!(app.ui.canvas_tool_menu.is_some(), "{id}: the menu stays open");
+    }
+    assert_eq!(app.ui.perspective_crop, Some(QUAD), "the session is not cancelled");
+    // Called directly (not through the control channel) too.
+    choose(&mut app, &ctx, "canvasMenu.perspectiveCrop.bogus");
+    assert_eq!(app.ui.perspective_crop, Some(QUAD));
+    assert_eq!(size(&app), (200, 150));
 }

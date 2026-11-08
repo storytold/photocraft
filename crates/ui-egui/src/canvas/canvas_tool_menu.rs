@@ -1105,11 +1105,11 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
         app.run(&id, params).map(|_| ())
     } else if is_perspective_crop(&menu) {
         // Crop is Enter's commit (a quad left from another document is dropped, nothing cropped);
-        // Cancel is Esc's.
-        if command == PCROP_COMMIT {
-            crate::perspective_crop_ui::commit(app);
-        } else {
-            crate::perspective_crop_ui::cancel(app);
+        // Cancel is Esc's. `available` already turned away any other id; it does nothing here too.
+        match command {
+            PCROP_COMMIT => crate::perspective_crop_ui::commit(app),
+            PCROP_CANCEL => crate::perspective_crop_ui::cancel(app),
+            _ => {}
         }
         Ok(())
     } else if command == "select.toWorkPath" {
