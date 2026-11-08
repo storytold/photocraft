@@ -356,6 +356,35 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
     if let Some(result) = invoke_view_command(app, ctx, id, &params) {
         return result;
     }
+    if !app.ui.dialogs.is_empty() || app.ui.layers_panel_dialog.is_some() || app.discard.is_some() {
+        match id {
+            "edit.cut" => {
+                ctx.input_mut(|i| i.events.push(egui::Event::Cut));
+                return Ok(Value::Null);
+            }
+            "edit.copy" => {
+                ctx.input_mut(|i| i.events.push(egui::Event::Copy));
+                return Ok(Value::Null);
+            }
+            "edit.paste" => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                return Ok(Value::Null);
+            }
+            "select.all" => {
+                ctx.input_mut(|i| {
+                    i.events.push(egui::Event::Key {
+                        key: egui::Key::A,
+                        physical_key: None,
+                        pressed: true,
+                        repeat: false,
+                        modifiers: egui::Modifiers::COMMAND,
+                    });
+                });
+                return Ok(Value::Null);
+            }
+            _ => {}
+        }
+    }
     match id {
         "edit.search" => {
             app.ui.palette_open = !app.ui.palette_open;

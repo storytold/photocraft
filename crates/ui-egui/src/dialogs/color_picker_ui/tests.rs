@@ -231,6 +231,18 @@ fn hex_field_takes_every_paste_with_or_without_hash() {
 }
 
 #[test]
+fn hex_field_typing_leading_hash_updates_color() {
+    let mut h = picker("#000000");
+    h.get_by_role(Role::TextInput).click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(1);
+    type_keys(&mut h, "#336699");
+    assert_eq!(color(&h), "#336699", "typing 7 characters with leading hash updates color");
+    assert_eq!(h.get_by_role(Role::TextInput).value().as_deref(), Some("336699"));
+}
+
+#[test]
 fn color_picker_opens_with_hex_focused_and_selected() {
     let mut h = picker("#336699");
     let hex_field = h.get_by_role(Role::TextInput);
