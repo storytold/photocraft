@@ -405,26 +405,26 @@ pub(crate) fn commit_shortcut(app: &mut PhotocraftApp, ctx: &egui::Context) -> b
     true
 }
 
-/// [`commit`] with the modifiers held while committing: a Type Mask adds its glyphs to the
-/// selection with ⇧, subtracts them with ⌥ and intersects with ⇧⌥ (Photoshop); with none it
-/// replaces the selection.
-pub fn commit_with(app: &mut PhotocraftApp, mods: egui::Modifiers) {
+/// [`commit`] from a click, button or key that has modifiers held. They no longer change the
+/// result, since a Type Mask always replaces the selection (#12073); the parameter stays so its
+/// callers don't change.
+pub fn commit_with(app: &mut PhotocraftApp, _mods: egui::Modifiers) {
     app.ui.type_insertion_style = None;
     crate::type_font_preview::clear(app);
     let current = app.session.active_index();
     let Some(home) = app.ui.text_edit.as_ref().map(|ed| edit_home(app, ed)) else {
-        return commit_here(app, mods);
+        return commit_here(app);
     };
     match home {
         Some(home) if Some(home) != current => {
             // An edit left in a background document commits there, in its own history (#6483).
             app.session.set_active(home);
-            commit_here(app, mods);
+            commit_here(app);
             if let Some(i) = current {
                 app.session.set_active(i);
             }
         }
-        Some(_) => commit_here(app, mods),
+        Some(_) => commit_here(app),
         // Its document closed: there is nothing to commit into, and the layer id may name a
         // layer of another document.
         None => {
@@ -445,7 +445,7 @@ pub(super) fn edit_home(app: &PhotocraftApp, ed: &TextEdit) -> Option<usize> {
 }
 
 /// [`commit_with`] in the active document, which is the edit's own.
-fn commit_here(app: &mut PhotocraftApp, mods: egui::Modifiers) {
+fn commit_here(app: &mut PhotocraftApp) {
     if app.ui.tool.is_type() {
         crate::type_transform::finish(app);
     }
@@ -459,11 +459,11 @@ fn commit_here(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     }
     let Some(text) = current_text(app, LayerId(ed.layer)) else { return };
     if ed.mask {
-        // Type Mask: the text's glyphs become (or combine with) the selection and the working
-        // layer goes, all in the session's one history step. No text: nothing changes.
-        let operation = crate::tool_feedback::selection_mode(crate::state::Tool::HorizontalTypeMask, 0, mods);
+        // Type Mask: the text's glyphs replace the selection, with ⇧ or ⌥ held too, as in the
+        // reference application (#12073), and the working layer goes, all in the session's one
+        // history step. No text: nothing changes.
         if !text.trim().is_empty()
-            && let Err(e) = app.run("type.createSelection", json!({"layer": ed.layer, "removeLayer": true, "operation": operation, "coalesce": ed.session}))
+            && let Err(e) = app.run("type.createSelection", json!({"layer": ed.layer, "removeLayer": true, "operation": "new", "coalesce": ed.session}))
         {
             app.ui.status = e;
             app.ui.status_error = true;

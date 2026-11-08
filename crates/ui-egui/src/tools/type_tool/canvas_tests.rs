@@ -3005,19 +3005,18 @@ fn multi_click_without_a_session_does_nothing() {
     assert_eq!((ed.anchor, ed.caret), (5, 5));
 }
 
-/// #3036: ⇧ on the click that commits a Type Mask adds the glyphs to the selection and ⌥
-/// subtracts them, as in Photoshop; while typing, the working text has no Layers panel row.
+/// #3036: while typing, the working text has no Layers panel row. ⇧ or ⌥ on the click that
+/// commits a Type Mask no longer combine: the glyphs replace the selection (#12073,
+/// `mask_replace_selection_tests`).
 #[test]
-fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
+fn type_mask_shift_and_alt_replace_without_a_layer_row() {
     use crate::canvas::{ToolEvent, tool_event};
     use crate::state::Tool;
-    use photocraft_geom::Rect;
     let mut app = new_app();
     type_with(&mut app, Tool::HorizontalTypeMask, "I");
     let glyphs = selection_bounds(&app).unwrap();
     let mut app = new_app();
     app.ui.extras.snap = false; // the second text would snap to the first one's selected edge
-    let rect = Rect::new(1000, 100, 1100, 200);
     app.run("select.rect", json!({"x": 1000, "y": 100, "width": 100, "height": 100})).unwrap();
     // Type, then commit with a click outside the text holding `m`.
     let type_and_commit = |app: &mut PhotocraftApp, m: Modifiers| {
@@ -3032,14 +3031,10 @@ fn type_mask_shift_adds_and_alt_subtracts_without_a_layer_row() {
         tool_event(app, ToolEvent::Up { x: 1500.0, y: 800.0 }, m);
         assert!(app.ui.text_edit.is_none());
     };
-    let at = |app: &PhotocraftApp, x: i32, y: i32| app.session.active().unwrap().doc.selection.as_ref().map_or(0.0, |s| s.sample_channel(x, y, 0));
-    let stem = ((glyphs.x0 + glyphs.x1) / 2, (glyphs.y0 + glyphs.y1) / 2);
     type_and_commit(&mut app, Modifiers::SHIFT);
-    assert_eq!(selection_bounds(&app), Some(rect.union(&glyphs)), "⇧ adds");
-    assert!(at(&app, stem.0, stem.1) > 0.99 && at(&app, 1050, 150) > 0.99);
+    assert_eq!(selection_bounds(&app), Some(glyphs), "⇧ replaces");
     type_and_commit(&mut app, Modifiers::ALT);
-    assert!(at(&app, stem.0, stem.1) < 0.01, "⌥ subtracts the glyphs");
-    assert!(at(&app, 1050, 150) > 0.99, "and keeps the rest");
+    assert_eq!(selection_bounds(&app), Some(glyphs), "⌥ replaces");
 }
 
 /// #7713: justification needs a paragraph box. On point text the Paragraph panel's four justify
