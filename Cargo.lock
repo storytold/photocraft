@@ -5242,6 +5242,7 @@ dependencies = [
  "clap_complete",
  "clap_mangen",
  "photocraft-automation",
+ "photocraft-cms",
  "photocraft-codecs",
  "photocraft-doc",
  "photocraft-engine",
