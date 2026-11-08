@@ -428,6 +428,9 @@ pub struct Workspace {
     pub large_tabs: bool,
     pub enable_narrow_options_bar: bool,
     pub remember_workspace_changes: bool,
+    /// The narrow strip of panel icons between the canvas and the dock (#11180). Off by default:
+    /// the panels it opens are in the dock and the Window menu already.
+    pub show_panel_icon_rail: bool,
 }
 
 impl Default for Workspace {
@@ -440,6 +443,7 @@ impl Default for Workspace {
             large_tabs: false,
             enable_narrow_options_bar: false,
             remember_workspace_changes: true,
+            show_panel_icon_rail: false,
         }
     }
 }

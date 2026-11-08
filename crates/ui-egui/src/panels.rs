@@ -1629,11 +1629,18 @@ mod embedding_tests {
     use egui_kittest::kittest::Queryable;
 
     fn whole_app(rail: bool, menu_bar: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        with_rail_pref(rail, menu_bar, true)
+    }
+
+    fn with_rail_pref(rail: bool, menu_bar: bool, show_rail: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut session = photocraft_engine::Session::new();
             // An empty workspace with its docks, not the Home screen.
-            session.edit_prefs(|p| p.general.auto_show_home_screen = false);
+            session.edit_prefs(|p| {
+                p.general.auto_show_home_screen = false;
+                p.workspace.show_panel_icon_rail = show_rail;
+            });
             let mut app = PhotocraftApp::new(session, crate::Services::default());
             app.ui.panels.rail = rail;
             app.ui.panels.menu_bar = menu_bar;
@@ -1668,6 +1675,24 @@ mod embedding_tests {
         assert!(!drawn(&h, "title_bar"), "the title bar is drawn");
         assert!(h.query_by_label("File").is_none(), "the menus are drawn");
         assert!(crate::panel_docking::last_bodies(&h.ctx).iter().any(|(id, _)| id == "layers"), "the dock itself stays");
+    }
+
+    /// Preferences › Workspace › Show Panel Icon Rail hides the rail, off by default (#11180);
+    /// the embedding flag still hides it with the preference on.
+    #[test]
+    fn the_icon_rail_follows_its_preference_and_is_hidden_by_default() {
+        assert!(!photocraft_engine::prefs::Preferences::default().workspace.show_panel_icon_rail);
+        let mut h = with_rail_pref(true, true, false);
+        assert!(!rail_drawn(&h), "hidden by default");
+        assert!(crate::panel_docking::last_bodies(&h.ctx).iter().any(|(id, _)| id == "layers"), "the dock stays");
+        h.state_mut().session.execute("prefs.set", serde_json::json!({"values": {"workspace.showPanelIconRail": true}})).unwrap();
+        h.run_steps(2);
+        assert!(rail_drawn(&h), "the preference shows it without a restart");
+        h.state_mut().session.execute("prefs.set", serde_json::json!({"values": {"workspace.showPanelIconRail": false}})).unwrap();
+        h.run_steps(2);
+        assert!(!rail_drawn(&h), "and hides it again");
+        let h = with_rail_pref(false, true, true);
+        assert!(!rail_drawn(&h), "an embedding app's flag wins");
     }
 
     /// Settings saved before the flags existed load with both on.

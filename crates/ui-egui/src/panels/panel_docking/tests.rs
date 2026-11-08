@@ -694,6 +694,7 @@ fn custom_group_commands_preserve_members_and_workspace_timeline() {
 #[test]
 fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
     let mut app = app();
+    app.session.edit_prefs(|p| p.workspace.show_panel_icon_rail = true);
     app.run("window.panel.float", json!({"panel":"swatches","x":20,"y":40})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     assert!(h.query_all_by_label("Panel menu").count() > 0);
