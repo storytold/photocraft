@@ -52,8 +52,12 @@ fn type_layers_offer_free_transform_but_not_distort_or_perspective() {
         pasteboard: false,
         anchor: None,
         text: false,
+        type_layer: false,
         guide: false,
         spelling: None,
+        crop: None,
+        sampler: None,
+        sampler_at: None,
     };
     assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.freeTransform"));
     assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.distort"));
