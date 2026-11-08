@@ -118,6 +118,19 @@ const SCALARS: &[(&str, Field, f32, f32)] = &[
     ("PostCropVignetteRoundness", |p| &mut p.vignette_roundness, -100.0, 100.0),
     ("PostCropVignetteFeather", |p| &mut p.vignette_feather, 0.0, 100.0),
     ("PostCropVignetteHighlightContrast", |p| &mut p.vignette_highlights, 0.0, 100.0),
+    // Black & White Mixer (used when Treatment is Black & White, `ConvertToGrayscale`).
+    ("GrayMixerRed", |p| &mut p.bw_mix[0], -100.0, 100.0),
+    ("GrayMixerOrange", |p| &mut p.bw_mix[1], -100.0, 100.0),
+    ("GrayMixerYellow", |p| &mut p.bw_mix[2], -100.0, 100.0),
+    ("GrayMixerGreen", |p| &mut p.bw_mix[3], -100.0, 100.0),
+    ("GrayMixerAqua", |p| &mut p.bw_mix[4], -100.0, 100.0),
+    ("GrayMixerBlue", |p| &mut p.bw_mix[5], -100.0, 100.0),
+    ("GrayMixerPurple", |p| &mut p.bw_mix[6], -100.0, 100.0),
+    ("GrayMixerMagenta", |p| &mut p.bw_mix[7], -100.0, 100.0),
+    // Optics › Distortion and Vignetting.
+    ("LensManualDistortionAmount", |p| &mut p.lens_distortion, -100.0, 100.0),
+    ("VignetteAmount", |p| &mut p.lens_vignette, -100.0, 100.0),
+    ("VignetteMidpoint", |p| &mut p.lens_vignette_midpoint, 0.0, 100.0),
     // Calibration
     ("ShadowTint", |p| &mut p.shadow_tint, -100.0, 100.0),
     ("RedHue", |p| &mut p.calibration_hue[0], -100.0, 100.0),
@@ -237,6 +250,18 @@ fn apply_text(params: &mut CameraRaw, report: &mut LoadReport, name: &str, value
                 report.applied += 1;
             }
             None => report.ignored.push(name.to_string()),
+        }
+    } else if name == "ConvertToGrayscale" {
+        match value.trim() {
+            v if v.eq_ignore_ascii_case("true") => {
+                params.treatment = "bw".into();
+                report.applied += 1;
+            }
+            v if v.eq_ignore_ascii_case("false") => {
+                params.treatment = "color".into();
+                report.applied += 1;
+            }
+            _ => report.ignored.push(name.to_string()),
         }
     } else if name == "PostCropVignetteStyle" {
         match STYLES.iter().find(|(n, _)| *n == value.trim()) {
@@ -398,6 +423,7 @@ pub fn save_with_crop(params: &CameraRaw, crop: Option<Crop>) -> Result<String, 
     settings.set("Version", "18.4");
     settings.set("ProcessVersion", "15.4");
     settings.set("WhiteBalance", wb);
+    settings.set("ConvertToGrayscale", if p.treatment.eq_ignore_ascii_case("bw") { "True" } else { "False" });
     for (name, field, lo, _) in SCALARS {
         let v = *field(&mut p);
         let text = match *name {
@@ -503,8 +529,9 @@ mod tests {
         assert!(p.point_curve.is_empty());
         assert_eq!(p.point_curve_red, vec![[0.0, 0.0], [128.0, 140.0], [255.0, 255.0]]);
         assert_eq!(p.dehaze, 12.0);
-        // Lens vignetting, calibration and geometry have no counterpart.
-        assert_eq!(r.ignored, vec!["VignetteAmount".to_string()], "the Calibration panel's keys load now");
+        // Lens vignetting (Optics) and the Calibration panel's keys load too.
+        assert!(r.ignored.is_empty(), "{:?}", r.ignored);
+        assert_eq!(p.lens_vignette, -20.0);
         assert_eq!(p.calibration_hue[0], -5.0);
     }
 
@@ -598,7 +625,11 @@ mod tests {
         p.grade_shadows.hue = 210.0;
         p.grade_shadows.sat = 40.0;
         p.grade_global.lum = 7.0;
+        p.treatment = "bw".into();
+        p.bw_mix[2] = 25.0;
+        (p.lens_distortion, p.lens_vignette, p.lens_vignette_midpoint) = (-12.0, 30.0, 65.0);
         let text = save(&p).unwrap();
+        assert!(text.contains("crs:ConvertToGrayscale=\"True\"") && text.contains("crs:LensManualDistortionAmount=\"-12\""), "{text}");
         assert!(text.contains("crs:Exposure2012=\"+1.25\""));
         assert!(text.contains("crs:WhiteBalance=\"Custom\""));
         let mut back = CameraRaw::default();

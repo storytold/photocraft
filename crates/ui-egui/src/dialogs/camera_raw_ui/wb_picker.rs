@@ -8,13 +8,15 @@ use photocraft_algo::transform::Homography;
 
 use super::{CameraRawDialog, ERect, Pos2};
 
-/// Where the point `u` (0 … 1 across the shown image) comes from in the proxy (0 … 1).
+/// Where the point `u` (0 … 1 across the shown image) comes from in the proxy (0 … 1): through
+/// the Geometry that is shown (none in the Before view or with the Geometry panel hidden).
 pub(super) fn source_point(d: &CameraRawDialog, u: [f32; 2]) -> Option<[f32; 2]> {
-    if d.params.geometry_neutral() {
+    let p = d.effective_params();
+    if d.show_before || p.geometry_neutral() {
         return Some(u);
     }
     let (w, h) = (d.pw.max(1) as f64, d.ph.max(1) as f64);
-    let m = geometry::homography(&d.proxy, d.pw.max(1), d.ph.max(1), &d.params);
+    let m = geometry::homography(&d.proxy, d.pw.max(1), d.ph.max(1), &p);
     let inv = Homography(m).inverse()?.0;
     let (x, y) = (f64::from(u[0]) * w - w / 2.0, f64::from(u[1]) * h - h / 2.0);
     let z = inv[6] * x + inv[7] * y + inv[8];
@@ -26,26 +28,28 @@ pub(super) fn source_point(d: &CameraRawDialog, u: [f32; 2]) -> Option<[f32; 2]>
     out.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v)).then_some(out)
 }
 
-/// The mean colour of the proxy's 3 × 3 block around `u` (0 … 1), ignoring non-finite pixels.
+/// The mean colour of the proxy's 3 × 3 block around `u` (0 … 1), weighted by alpha and
+/// ignoring non-finite and fully transparent pixels (their colour is hidden).
 pub(super) fn sample(px: &[[f32; 4]], pw: usize, ph: usize, u: [f32; 2]) -> Option<[f32; 3]> {
     if pw == 0 || ph == 0 || !u.iter().all(|v| v.is_finite()) {
         return None;
     }
     let cx = ((u[0].clamp(0.0, 1.0) * pw as f32) as usize).min(pw - 1);
     let cy = ((u[1].clamp(0.0, 1.0) * ph as f32) as usize).min(ph - 1);
-    let (mut sum, mut n) = ([0.0f32; 3], 0u32);
+    let (mut sum, mut n) = ([0.0f32; 3], 0.0f32);
     for y in cy.saturating_sub(1)..=(cy + 1).min(ph - 1) {
         for x in cx.saturating_sub(1)..=(cx + 1).min(pw - 1) {
             let Some(p) = y.checked_mul(pw).and_then(|i| i.checked_add(x)).and_then(|i| px.get(i)) else { continue };
-            if p[..3].iter().all(|v| v.is_finite()) {
+            let a = p[3].min(1.0);
+            if p.iter().all(|v| v.is_finite()) && a > 0.0 {
                 for c in 0..3 {
-                    sum[c] += p[c];
+                    sum[c] += p[c] * a;
                 }
-                n += 1;
+                n += a;
             }
         }
     }
-    (n > 0).then(|| sum.map(|s| s / n as f32))
+    (n > 0.0).then(|| sum.map(|s| s / n))
 }
 
 /// The Temperature and Tint that neutralise the shown point `u` (0 … 1), or `None` when that
@@ -95,5 +99,13 @@ mod tests {
         assert!(sample(&px, 10, 10, [0.9, 0.9]).is_none(), "pixels missing from a short buffer are skipped");
         let bad = vec![[f32::NAN, 0.0, 0.0, 1.0]; 9];
         assert!(sample(&bad, 3, 3, [0.5, 0.5]).is_none());
+    }
+
+    #[test]
+    fn transparent_pixels_do_not_tint_the_sample() {
+        let px: Vec<[f32; 4]> = (0..9).map(|i| if i % 2 == 0 { [0.5, 0.5, 0.5, 1.0] } else { [0.0, 0.0, 1.0, 0.0] }).collect();
+        assert_eq!(sample(&px, 3, 3, [0.5, 0.5]), Some([0.5; 3]));
+        let clear = vec![[0.3, 0.3, 0.3, 0.0]; 9];
+        assert!(sample(&clear, 3, 3, [0.5, 0.5]).is_none(), "nothing visible to read");
     }
 }

@@ -101,3 +101,18 @@ fn the_white_balance_tool_neutralises_the_clicked_spot() {
     h.run_steps(2);
     assert_eq!(inspect(&h)["panels"]["whiteBalanceTool"], false);
 }
+
+/// The Color Sampler (S) can be picked while the White Balance tool is on: it takes over, as
+/// the White Balance tool takes over from it.
+#[test]
+fn the_color_sampler_replaces_the_white_balance_tool() {
+    let mut h = warm();
+    let ctx = h.ctx.clone();
+    menu(h.state_mut(), &ctx, json!({"ui":{"whiteBalanceTool":true}})).unwrap();
+    h.run_steps(3);
+    assert_eq!(inspect(&h)["panels"]["whiteBalanceTool"], true);
+    h.event(Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert_eq!(inspect(&h)["panels"]["whiteBalanceTool"], false);
+    assert!(h.state().ui.camera_raw_scope.sampler_tool, "the sampler stayed on");
+}

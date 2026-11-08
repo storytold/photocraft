@@ -75,7 +75,8 @@ const CURVES: &[(&str, &str)] = &[("pointCurve", "Crv "), ("pointCurveRed", "Crv
 // retained in the template; active values must keep the entire filter opaque.
 const NEUTRAL_ONLY: &[(&str, i32)] = &[("LNRC", 0), ("CNRS", 50), ("MDis", 0), ("VigA", 0), ("VigM", 50), ("crfs", 100), ("TMMs", 0), ("PGTM", 0), ("RGBt", 0)];
 
-/// Geometry and Masks settings, which no observed descriptor carries yet.
+/// Geometry, Masks, B&W and Optics settings, which no observed descriptor carries yet (Optics'
+/// keys have only been seen at their neutral values).
 const GEOMETRY: &[&str] = &[
     "perspectiveUpright",
     "uprightGuides",
@@ -88,6 +89,11 @@ const GEOMETRY: &[&str] = &[
     "perspectiveY",
     "constrainCrop",
     "masks",
+    "treatment",
+    "bwMix",
+    "lensDistortion",
+    "lensVignette",
+    "lensVignetteMidpoint",
 ];
 
 fn default_params() -> Option<J> {
@@ -264,7 +270,7 @@ pub(super) fn export_item(params: &J) -> Result<Descriptor, String> {
             && v != d
             && !(v.is_number() && d.is_number() && v.as_f64() == d.as_f64())
         {
-            return Err(format!("Camera Raw setting `{key}` (Geometry / Masks) has no verified PSD mapping"));
+            return Err(format!("Camera Raw setting `{key}` (Geometry, Masks, B&W or Optics) has no verified PSD mapping"));
         }
     }
     for wheel in ["gradeShadows", "gradeMidtones", "gradeHighlights", "gradeGlobal"] {

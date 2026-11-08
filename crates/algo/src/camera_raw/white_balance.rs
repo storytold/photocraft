@@ -105,8 +105,8 @@ pub fn white_balance_from_sample(rgb: [f32; 3], encoding_gamma: f32) -> Option<(
         let o = curves(t, n).map_or(q, |b| pixel(q, &b, enc));
         cast([o[0], o[1], o[2]], enc)
     };
-    score(0.0, 0.0)?;
-    let (mut best, mut at) = (f32::INFINITY, (0.0f32, 0.0f32));
+    // The neutral setting is the one to beat: a candidate must read strictly greyer.
+    let (mut best, mut at) = (score(0.0, 0.0)?, (0.0f32, 0.0f32));
     for (step, span) in [(10.0f32, 10i32), (2.0, 5), (0.5, 4)] {
         let centre = at;
         for i in -span..=span {
@@ -124,13 +124,13 @@ pub fn white_balance_from_sample(rgb: [f32; 3], encoding_gamma: f32) -> Option<(
 /// Auto White Balance on rendered pixels (`px` straight, encoded as `encoding_gamma` says): the
 /// eyedropper ([`white_balance_from_sample`]) on the image's mean neutral-ish colour, the mean of
 /// its mid-tone pixels whose darkest channel is at least half the brightest (a grey-world estimate
-/// that ignores strongly coloured areas and the clipped ends). Not measured against Camera
+/// that ignores strongly coloured areas, the clipped ends and fully transparent pixels). Not measured against Camera
 /// Raw's own Auto, which is not documented. `(0, 0)` when nothing qualifies.
 pub fn auto_white_balance(px: &[[f32; 4]], encoding_gamma: f32) -> (f32, f32) {
     let enc = Encoding::of(encoding_gamma);
     let (mut sum, mut n) = ([0.0f64; 3], 0usize);
     let step = (px.len() / 200_000).max(1);
-    for q in px.iter().step_by(step) {
+    for q in px.iter().step_by(step).filter(|q| q[3] > 0.0) {
         let lin = [q[0], q[1], q[2]].map(|v| enc.decode(v));
         if lin.iter().any(|v| !v.is_finite()) {
             continue;
@@ -307,6 +307,14 @@ mod tests {
             assert!(white_balance_from_sample(bad, 0.0).is_none(), "{bad:?}");
         }
         assert!(white_balance_from_sample([0.6, 0.5, 0.4], 1.8).is_some());
+        // A neutral highlight just under clipping: nothing reads greyer than leaving it alone.
+        assert_eq!(white_balance_from_sample([0.998; 3], 0.0), Some((0.0, 0.0)));
+    }
+
+    #[test]
+    fn auto_ignores_transparent_pixels() {
+        let grey: Vec<[f32; 4]> = (0..400).map(|i| if i % 2 == 0 { [0.5, 0.5, 0.5, 1.0] } else { [0.3, 0.35, 0.6, 0.0] }).collect();
+        assert_eq!(auto_white_balance(&grey, 0.0), (0.0, 0.0), "the hidden blue under clear pixels is no cast");
     }
 
     #[test]

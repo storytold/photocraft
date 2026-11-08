@@ -407,6 +407,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             super::masks_panel::store(ctx, s);
         }
         super::masks_panel::strip_button(&mut strip_ui);
+        // Picking the Color Sampler (its button or S) turns the White Balance tool off; the
+        // other way round happens above, when the White Balance tool is on.
+        let sampler_was = scope.sampler_tool;
         strip_ui.with_layout(egui::Layout::bottom_up(egui::Align::Center), |ui| {
             crate::camera_raw_preview_ui::tools(ui, navigation, &mut scope.sampler_tool);
         });
@@ -435,6 +438,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         });
         crate::camera_raw_scope_ui::floating(ctx, d, scope, right);
         crate::camera_raw_scope_ui::shortcuts(ctx, scope);
+        if scope.sampler_tool && !sampler_was {
+            d.panels.wb_tool = false;
+        }
         d.dirty |= dirty;
         if d.dirty {
             ctx.request_repaint();

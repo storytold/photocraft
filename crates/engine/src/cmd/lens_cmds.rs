@@ -220,7 +220,7 @@ fn develop_surface(surf: &Surface, area: Rect, p: &CameraRaw, opaque: bool, stri
     // Geometry turns the image about its centre: the canvas's, not that of content past its edge.
     // Without it every pixel of the content is developed, also what an earlier Smart Filter moved
     // past `area` (when that would exceed what one pass can develop, `area` alone still is).
-    let geometry = !p.geometry_neutral();
+    let geometry = p.moves_pixels();
     let canvas = area;
     let area = if geometry {
         area
@@ -519,7 +519,7 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     cr.validate().map_err(|e| bad(RAW, e))?;
     // The document's primaries, when its profile's aren't the ones the transfer curve implies.
     cr.document_primaries = s.active().and_then(|d| document_primaries(&d.doc));
-    let geometry = !cr.geometry_neutral();
+    let geometry = cr.moves_pixels();
     // The pixel path works on the canvas plus the layer's content in one buffer; a legal
     // 65536×65536 canvas is 2^32 pixels, which overflowed the u32 size arithmetic (#962).
     if !cr.is_identity() {
@@ -620,7 +620,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "RAW Develop Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase":false,"auto":false (Auto Mask: only over colours like the one under the dab's centre)}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the canvas}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise","colorHue":0..360 deg,"colorSat":0..100 (the Color swatch),"moire":0..100,"defringe":0..100}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0,"treatment":"color|bw"="color","bwMix":[8] -100..100 (the B&W Mixer, red to magenta, used when treatment is "bw"),"lensDistortion":-100..100=0,"lensVignette":-100..100=0,"lensVignetteMidpoint":0..100=50 (the Optics panel; what Distortion uncovers becomes transparent, white on a layer without transparency),"perspectiveUpright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x0,y0],[x1,y1]]] (Guided: up to 4, 0..1 image coordinates),"perspectiveVertical":-100..100=0,"perspectiveHorizontal":-100..100=0,"perspectiveRotate":-10..10=0,"perspectiveAspect":-100..100=0,"perspectiveScale":50..150=100,"perspectiveX":-100..100=0,"perspectiveY":-100..100=0,"constrainCrop":false (the Geometry panel; uncovered pixels become transparent, white on a layer without transparency such as the Background),"masks":[{"name":"","visible":true,"invert":false,"amount":0..200=100,"components":[{"op":"add|subtract|intersect","invert":false,"kind":"brush|linear|radial|color|luminance|subject|sky|background|people|objects", …shape fields: brush {"dabs":[{"x","y","size","feather","flow","density","erase":false,"auto":false (Auto Mask: only over colours like the one under the dab's centre)}]}, linear {"zero":[x,y],"full":[x,y]}, radial {"center":[x,y],"radius":[rx,ry],"angle","feather"}, color {"samples":[[r,g,b]],"amount"}, luminance {"range":[lo,hi],"smoothness"}, objects {"rect":[x0,y0,x1,y1]}; coordinates 0..1 of the canvas}],"adjust":{"temperature","tint","exposure","contrast","highlights","shadows","whites","blacks","texture","clarity","dehaze","hue","saturation","sharpness","noise","colorHue":0..360 deg,"colorSat":0..100 (the Color swatch),"moire":0..100,"defringe":0..100}}] (the Masks panel, at most 32; AI kinds use PhotoCraft's own segmentation)}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -1018,6 +1018,37 @@ mod tests {
         // Without Geometry the whole extent is developed, which does not.
         let err = s.execute(RAW, json!({"exposure": 1})).unwrap_err();
         assert!(err.to_string().contains("too large"), "{err}");
+    }
+
+    /// Optics › Distortion moves pixels like Geometry does: what it uncovers turns transparent
+    /// (white on the Background), never the black of a restored opaque alpha.
+    #[test]
+    fn camera_raw_distortion_leaves_uncovered_pixels_transparent() {
+        for amount in [-100, 100] {
+            let mut s = session(8);
+            s.execute(RAW, json!({"lensDistortion": amount})).unwrap();
+            let d = s.active().unwrap();
+            let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+            let a = surf.format().channels() - 1;
+            let clear = (0..120).flat_map(|x| [(x, 0), (x, 79)]).chain((0..80).flat_map(|y| [(0, y), (119, y)])).filter(|&(x, y)| surf.sample_channel(x, y, a) < 0.5).count();
+            let black = (0..120).flat_map(|x| [(x, 0), (x, 79)]).filter(|&(x, y)| surf.sample_channel(x, y, a) > 0.5 && active_px(&s, x, y)[..3].iter().all(|v| *v < 0.01)).count();
+            if amount < 0 {
+                assert!(clear > 0, "{amount}: nothing uncovered");
+            }
+            assert_eq!(black, 0, "{amount}: uncovered pixels turned opaque black");
+            assert!(surf.sample_channel(60, 40, a) > 0.99, "{amount}: centre lost");
+        }
+        let mut b = Session::new();
+        b.execute("file.new", json!({"width": 64, "height": 48, "background": "black"})).unwrap();
+        b.execute(RAW, json!({"lensDistortion": -100})).unwrap();
+        let d = b.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        let fmt = surf.format();
+        if fmt.alpha {
+            assert!(surf.sample_channel(0, 0, fmt.channels() - 1) < 0.01);
+        } else {
+            assert!(surf.sample_channel(0, 0, 0) > 0.99, "uncovered Background pixels turn white");
+        }
     }
 
     #[test]

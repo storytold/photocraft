@@ -112,7 +112,7 @@ impl ProxyJob {
         let input = retoned.as_deref().unwrap_or(&self.proxy);
         // With Geometry on, the filter develops (and warps about the centre of) the canvas only;
         // the layer past it stays as it is. The preview does the same on the canvas's blocks.
-        let frame = self.canvas_frame.filter(|_| !p.geometry_neutral());
+        let frame = self.canvas_frame.filter(|_| p.moves_pixels());
         // The GPU runs only without active masks (they are spatial); its result is then what the
         // masks see, unless Vignette or Grain (after the masks) changed it.
         let gpu = self.gpu.as_ref().filter(|_| p.masks.is_empty() || (p.vignette_amount == 0.0 && p.grain_amount <= 0.0));

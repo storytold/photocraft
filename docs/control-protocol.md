@@ -661,7 +661,11 @@ mask's components or null, checked after `selected` in the same request; `tool`:
 `"color"`, `"imageOnBlack"` or `"imageOnWhite"`; `brush`: `{size?, feather?, flow?, density?, erase?,
 autoMask?}`, with `size` clamped to 0.001–0.25 of the long side, `feather` and `density` to 0–100,
 `flow` to 1–100, and `erase` / `autoMask` booleans; unknown fields are errors; the masks
-themselves are the `masks` setting; the reply's `masking` describes the panel), `commit` and
+themselves are the `masks` setting; the reply's `masking` describes the panel),
+`whiteBalance` (the Basic panel's White Balance menu: `"asShot"` (Temperature and Tint 0), `"auto"`
+or `{"sample": [x, y]}`, the White Balance tool's click at `x`, `y` in 0…1 across the shown image;
+a spot with no colour to read is an error, and explicit `set` values win), `whiteBalanceTool`
+(boolean: the White Balance tool, the I key; the reply's `panels.whiteBalanceTool`), `commit` and
 `cancel`, and while a raw file opens also `demosaic` (below). The reply's `panels` describes the
 panel state. All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it

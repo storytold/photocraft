@@ -814,6 +814,11 @@ impl CameraRaw {
     pub fn geometry_neutral(&self) -> bool {
         geometry::neutral(self)
     }
+    /// True when pixels move (Geometry, or Optics › Distortion): what they uncover turns
+    /// transparent, alpha moves with them, and the canvas is the frame they move in.
+    pub fn moves_pixels(&self) -> bool {
+        !self.geometry_neutral() || self.lens_distortion != 0.0
+    }
     /// True when every control is neutral (the filter is an identity).
     pub fn is_identity(&self) -> bool {
         self.wb_neutral()
