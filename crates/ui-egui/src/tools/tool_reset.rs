@@ -97,6 +97,7 @@ fn reset_all(app: &mut PhotocraftApp) {
     app.ui.tool_options = ToolOptions::default();
     app.ui.artboard_tool = Default::default();
     app.ui.selection_mode = 0;
+    app.session.tools.tool_presets.clear();
     reset_session_brush(app);
     // Every other painting tool gets its own starting brush. Left without one, it would take the
     // live brush when picked (`sync_tool_brush`), and the tools' starting tips differ (#11810).
@@ -370,6 +371,25 @@ mod tests {
         let keys: Vec<String> = Tool::ALL.iter().filter_map(|t| sample_all_key(*t)).collect();
         let distinct: std::collections::BTreeSet<&String> = keys.iter().collect();
         assert_eq!((keys.len(), distinct.len()), (12, 12), "one key per tool with the option");
+    }
+
+    /// Reset All Tools gives every tool the default brush, so no tool comes back marking the
+    /// preset its old brush was picked from (#9014): Update Brush would overwrite that preset
+    /// with the default brush.
+    #[test]
+    fn reset_all_tools_forgets_every_tools_preset() {
+        let mut app = app();
+        let preset = app.session.tools.presets[0].name.clone();
+        let switch = |app: &mut PhotocraftApp, tool: Tool| {
+            app.ui.tool = tool;
+            crate::paint_mouse::sync_tool_brush(app);
+        };
+        switch(&mut app, Tool::Brush);
+        app.run("tools.setBrush", json!({"preset": preset})).unwrap();
+        switch(&mut app, Tool::Eraser);
+        reset_all(&mut app);
+        switch(&mut app, Tool::Brush);
+        assert_eq!(app.session.tools.current_preset, None, "the Brush has the default brush, not the preset's");
     }
 }
 
