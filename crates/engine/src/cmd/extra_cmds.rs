@@ -74,13 +74,9 @@ pub(crate) fn step_key(s: &Session, what: &str) -> String {
 /// area, the pixels, and the selection coverage per pixel; results are blended back by coverage,
 /// and transparency stays locked when the layer locks it. When `p` targets an alpha channel, the
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
-/// grayscale surface is rewritten instead, as the core filters do (#935).
-fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
-    map_pixels_in(s, label, p, false, f)
-}
-
-/// [`map_pixels`], or with `whole` the whole canvas: `f` still gets the selection coverage, and
-/// every pixel takes its result in full.
+/// grayscale surface is rewritten instead, as the core filters do (#935). With `whole` the whole
+/// canvas is rewritten: `f` still gets the selection coverage, and every pixel takes its result
+/// in full.
 fn map_pixels_in(s: &mut Session, label: &str, p: &Value, whole: bool, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, p)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
