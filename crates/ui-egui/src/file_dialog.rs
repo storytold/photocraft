@@ -242,7 +242,9 @@ impl PhotocraftApp {
             self.save_dirs.insert(doc, dir.to_path_buf());
         }
         let dir = dir.to_string_lossy().into_owned();
-        self.session.prefs.edit(|p| p.file_handling.last_save_folder = dir);
+        if self.session.prefs().file_handling.last_save_folder != dir {
+            self.session.prefs.edit(|p| p.file_handling.last_save_folder = dir);
+        }
     }
 
     /// The folder the last save or export succeeded in, for any document, when Preferences ▸ File
