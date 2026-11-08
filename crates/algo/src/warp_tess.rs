@@ -78,7 +78,8 @@ impl Net {
     /// The net of the part `[u0, u1] × [v0, v1]`.
     fn sub(&self, c: Cell) -> Net {
         let rows: Vec<Vec<P>> = (0..self.nv).map(|j| segment(&(0..self.nu).map(|i| self.at(i, j)).collect::<Vec<_>>(), c[0], c[1])).collect();
-        let cols: Vec<Vec<P>> = (0..self.nu).map(|i| segment(&rows.iter().map(|r| r.get(i).copied().unwrap_or([f64::NAN; 2])).collect::<Vec<_>>(), c[2], c[3])).collect();
+        let cols: Vec<Vec<P>> =
+            (0..self.nu).map(|i| segment(&rows.iter().map(|r| r.get(i).copied().unwrap_or([f64::NAN; 2])).collect::<Vec<_>>(), c[2], c[3])).collect();
         let mut p = Vec::with_capacity(self.p.len());
         for j in 0..self.nv {
             for col in &cols {
@@ -151,10 +152,14 @@ fn need(c: &[P]) -> f64 {
         return 0.0;
     }
     let ch = [b[0] - a[0], b[1] - a[1]];
-    let d: Vec<P> = (1..n).filter_map(|k| c.get(k)).enumerate().map(|(k, p)| {
-        let s = (k + 1) as f64 / n as f64;
-        [p[0] - (a[0] + ch[0] * s), p[1] - (a[1] + ch[1] * s)]
-    }).collect();
+    let d: Vec<P> = (1..n)
+        .filter_map(|k| c.get(k))
+        .enumerate()
+        .map(|(k, p)| {
+            let s = (k + 1) as f64 / n as f64;
+            [p[0] - (a[0] + ch[0] * s), p[1] - (a[1] + ch[1] * s)]
+        })
+        .collect();
     let len = ch[0].hypot(ch[1]);
     let v = if len > 0.0 {
         let (tx, ty) = (ch[0] / len, ch[1] / len);
@@ -273,10 +278,12 @@ fn key(u: f64, v: f64) -> (u64, u64) {
 
 /// How many halvings `t` (a dyadic fraction) is from the whole: 0 for 0 and 1, 1 for ½, …
 fn level(t: f64) -> u32 {
-    (0..12).find(|&k| {
-        let s = t * f64::from(1u32 << k);
-        (s - s.round()).abs() < 1e-9
-    }).unwrap_or(12)
+    (0..12)
+        .find(|&k| {
+            let s = t * f64::from(1u32 << k);
+            (s - s.round()).abs() < 1e-9
+        })
+        .unwrap_or(12)
 }
 
 /// Tessellates the one-patch warp whose map from normalised source coordinates to the document is
@@ -316,10 +323,12 @@ fn net_of(at: &dyn Fn(f64, f64) -> P, full: bool) -> Net {
 /// The leaf cells and the record of splits, in the stored frame.
 fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<Split>) {
     let first = 1.0 / start as f64;
-    let mut level_cells: Vec<Cell> = (0..start * start).map(|k| {
-        let (i, j) = ((k / start) as f64, (k % start) as f64);
-        [i * first, (i + 1.0) * first, j * first, (j + 1.0) * first]
-    }).collect();
+    let mut level_cells: Vec<Cell> = (0..start * start)
+        .map(|k| {
+            let (i, j) = ((k / start) as f64, (k % start) as f64);
+            [i * first, (i + 1.0) * first, j * first, (j + 1.0) * first]
+        })
+        .collect();
     let (mut leaves, mut log) = (Vec::new(), Vec::new());
     while !level_cells.is_empty() {
         let mut decisions = Vec::with_capacity(level_cells.len());
