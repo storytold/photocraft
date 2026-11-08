@@ -120,8 +120,9 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
 }
 
 /// UI languages whose script has no face in the pinned central font manifest yet (code, ISO 15924).
-/// Tamil arrives with storytold/craft-fonts#63; drop the row once the pin ships it.
-const AWAITING_CENTRAL_FONT: &[(&str, &str)] = &[("ta", "Taml")];
+/// Tamil arrives with storytold/craft-fonts#63; Telugu has no central face yet. Drop a row once
+/// the pin ships its script.
+const AWAITING_CENTRAL_FONT: &[(&str, &str)] = &[("ta", "Taml"), ("te", "Telu")];
 
 /// Check central font fixtures independently of the language-switching UI assertions.
 fn assert_required_camera_raw_fonts() {
