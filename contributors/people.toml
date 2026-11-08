@@ -315,3 +315,8 @@ sync_github_name = false
 [people.davidvhk]
 real_name = "David Vanhoucke"
 sync_github_name = true
+
+[people.tronicum]
+real_name = "Stefan Sels"
+display_name = "tronicum"
+sync_github_name = false
