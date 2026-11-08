@@ -1328,7 +1328,6 @@ fn hiding_a_masked_adjustment_damages_only_its_mask() {
         let reveal = Rect::new(520, 330, 560, 370);
         s.execute("select.rect", json!({"x": reveal.x0, "y": reveal.y0, "width": 40, "height": 40})).unwrap();
         let adj = adjustment(&mut s, "invert");
-        s.execute("select.deselect", json!({})).unwrap();
         assert!(doc(&s).layer(adj).unwrap().mask.is_some());
         if depth == 32 {
             let r = bounded_step(&mut s, "layer.setProps", json!({"layer": adj.0, "visible": false}));

@@ -125,7 +125,6 @@ fn dragging_a_masked_adjustment_redraws_the_layers_its_mask_slides_over() {
         app.session.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
         app.session.execute("select.rect", json!({"x": 24, "y": 0, "width": 32, "height": 64})).unwrap();
         app.session.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
-        app.session.execute("select.deselect", json!({})).unwrap();
         app.ui.tool = Tool::Move;
         app.ui.tool_options.move_auto_select = false;
         app.ui.extras.snap = false;

@@ -1584,7 +1584,6 @@ fn masked_curves_doc(w: u32, h: u32) -> Res<(Session, u64, (i32, i32))> {
     exec(&mut s, "select.rect", json!({"x": x, "y": y, "width": mw, "height": mh}))?;
     let curves =
         exec(&mut s, "layer.newAdjustmentLayer.curves", json!({"points": [[0, 0], [90, 170], [255, 255]]}))?["layer"].as_u64().ok_or("no curves id")?;
-    exec(&mut s, "select.deselect", json!({}))?;
     let doc = s.active().ok_or("no document")?.doc.clone();
     let above = doc.layers.len() - 1 - top_index(&s, curves)?;
     if above < 4 {
