@@ -419,8 +419,8 @@
 	Artboard…	Zeichenbereich…
 	Artboard from Group…	Zeichenbereich aus Gruppe…
 	Artboard from Layers…	Zeichenbereich aus Ebenen…
-	Layer via Copy	Ebene durch Kopieren
-	Layer via Cut	Ebene durch Ausschneiden
+	Layer Via Copy	Ebene durch Kopieren
+	Layer Via Cut	Ebene durch Ausschneiden
 	Layer From Background…	Ebene aus Hintergrund…
 	Layer from Background…	Ebene aus Hintergrund…
 	Background from Layer	Hintergrund aus Ebene
@@ -3642,6 +3642,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Wählen Sie für jeden Kanal ein anderes Dokument.
 	A picked document is no longer open.	Ein ausgewähltes Dokument ist nicht mehr geöffnet.
 	A picked document is no longer a grayscale document of the same size.	Ein ausgewähltes Dokument ist kein Graustufen-Dokument derselben Größe mehr.
+	Netscape Gray	Netscape-Grau
 # Move tool options bar (#11381)
 	Align top edges	Obere Kanten ausrichten
 	Align vertical centers	Vertikale Mitten ausrichten
@@ -3651,6 +3652,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Ebenenbegrenzung beim Darüberfahren anzeigen
 	Expand layer group on click	Ebenengruppe per Klick erweitern
 	Show hover bounds from Layers	Begrenzung beim Darüberfahren aus Ebenen anzeigen
+	Saved Camera Raw settings to {file}	Camera-Raw-Einstellungen in {file} gespeichert
+	Save the settings to each raw's sidecar without opening it	Die Einstellungen in der Filialdatei jeder Raw-Datei speichern, ohne sie zu öffnen
+	No settings saved: these raws can't keep a sidecar here	Nichts gespeichert: Diese Raw-Dateien können hier keine Filialdatei haben
+	Some settings could not be saved; the raws stay open	Einige Einstellungen konnten nicht gespeichert werden; die Raw-Dateien bleiben geöffnet
+	Nothing to save: these raws are at their default settings	Nichts zu speichern: Diese Raw-Dateien haben ihre Standardeinstellungen
 # Artboard tool options bar (#11385)
 	Distribute Widths	Breiten verteilen
 	Distribute Heights	Höhen verteilen

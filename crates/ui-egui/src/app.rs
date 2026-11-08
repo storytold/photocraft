@@ -170,7 +170,7 @@ impl PhotocraftApp {
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,
-            pending_raw_open: None,
+            raw_shelf: Vec::new(),
             raw_redevelop: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
@@ -227,7 +227,6 @@ impl PhotocraftApp {
         histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);
-        notices::wayland_file_drop_guidance(&mut app);
         // File › Scripts › Script Events Manager: "Start Application".
         photocraft_engine::automate_cmds::fire_event(&mut app.session, "startApplication");
         app

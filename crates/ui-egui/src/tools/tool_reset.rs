@@ -159,10 +159,12 @@ pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
 /// The serialized name of `tool`'s own Sample All Layers inside `sample_all`, if it has one: a
 /// tool preset stores that one alone, not the other tools' (#5524, #7356).
 pub fn sample_all_key(tool: Tool) -> Option<String> {
-    let mut probe = crate::state::SampleAllLayers::default();
-    *probe.slot(tool)? = true;
-    let Ok(Value::Object(m)) = serde_json::to_value(probe) else { return None };
-    m.into_iter().find(|(_, v)| v.as_bool() == Some(true)).map(|(k, _)| k)
+    let base = crate::state::SampleAllLayers::default();
+    let mut probe = base;
+    let slot = probe.slot(tool)?;
+    *slot = !*slot;
+    let (Ok(Value::Object(b)), Ok(Value::Object(m))) = (serde_json::to_value(base), serde_json::to_value(probe)) else { return None };
+    m.into_iter().find(|(k, v)| b.get(k) != Some(v)).map(|(k, _)| k)
 }
 
 /// The [`ToolOptions`] fields `tool` shows, by their serialized names: what Reset Tool resets and
@@ -216,7 +218,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Pencil => reset!(pencil_auto_erase, pencil_clear),
         Tool::Eraser => reset!(eraser_mode),
         Tool::Remove => reset!(remove_new_layer, remove_after_each_stroke),
-        Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg),
+        Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg, bg_tolerance_control),
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
         Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, magic_eraser_opacity),
         Tool::Gradient => reset!(gradient_style, gradient_reverse, gradient_dither, gradient_classic, gradient_blend_mode, fill_opacity),
@@ -257,14 +259,14 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
             arrow_length,
             arrow_concavity,
         ),
-        Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::CustomShape => {
+        Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
             reset!(shape_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
         }
+        Tool::MixerBrush => reset!(mixer_combination),
         Tool::ColorSampler
         | Tool::Ruler
         | Tool::Note
         | Tool::Count
-        | Tool::MixerBrush
         | Tool::Hand
         | Tool::RotateView
         | Tool::HistoryBrush
@@ -370,3 +372,7 @@ mod tests {
         assert_eq!((keys.len(), distinct.len()), (12, 12), "one key per tool with the option");
     }
 }
+
+#[cfg(test)]
+#[path = "../patch_sample_all_default_tests.rs"]
+mod patch_sample_all_default_tests;
