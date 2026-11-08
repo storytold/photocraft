@@ -408,7 +408,8 @@ fn frame_parts(path: &Subpath, start: f32, end: Option<f32>, flip: bool) -> (Sub
     let end = end.map(|e| e.clamp(start, length));
     let range = match end {
         None if start <= SAME_ARC => DEFAULT,
-        None => [measure.position(start), measure.count()],
+        // A default end keeps legacy anchor alignment even when the start has moved.
+        None => [measure.position(start), -1.0],
         Some(e) => [measure.position(start), measure.position(e)],
     };
     (base, false, range)

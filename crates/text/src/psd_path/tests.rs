@@ -163,8 +163,6 @@ fn ranges_round_trip_through_frames() {
         let (a, b) = (path_range_length(&shape), path_range_length(&back));
         match (a, b) {
             (None, None) => {}
-            // No end after a moved start is written as an end at the path's end: the same type.
-            (None, Some(_)) if end.is_none() && start > 0.0 => {}
             (Some(a), Some(b)) => assert!((a - b).abs() < 0.05, "{label}: range {a} vs {b}"),
             _ => panic!("{label}: range {a:?} vs {b:?}"),
         }
@@ -492,5 +490,32 @@ fn a_collapsed_closed_range_stays_empty() {
         assert_eq!(path_range_length(&back).map(|n| n.round()), Some(0.0), "start {start}: {back:?}");
         let warp = Warp::on_path(&back).unwrap();
         assert!(matches!(warp.place_glyph(10.0), Placement::Hidden), "start {start}: the text is revealed");
+    }
+}
+
+/// A moved legacy anchor with no end must not turn into a bounded range on save: centered and
+/// right-aligned text would move by half/all of the remaining path length.
+#[test]
+fn a_legacy_open_path_anchor_keeps_alignment_through_psd() {
+    use crate::TextEngine;
+    use photocraft_doc::text::{ParagraphRun, ParagraphStyle, TextAlign};
+
+    let path = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+    let mut engine = TextEngine::new();
+    for align in [TextAlign::Center, TextAlign::Right] {
+        for flip in [false, true] {
+            let mut text = layer("hello", TextShape::Path { path: path.clone(), start: 20.0, end: None, flip });
+            text.paragraphs = vec![ParagraphRun { len: text.text.len(), style: ParagraphStyle { align, ..Default::default() } }];
+            text.sync_summary();
+            let before = engine.layout(&text, 72.0);
+            let (txt2, back) = save_and_open(&[&text], &photoshop_txt2("hello\r"));
+            assert_eq!(back[0].1, Ok(true));
+            let reopened = &back[0].0;
+            let after = engine.layout(reopened, 72.0);
+            assert!((before.lines[0].x0 - after.lines[0].x0).abs() < 0.01, "{align:?} flip {flip}: before {:?}, after {:?}", before.lines[0], after.lines[0]);
+            assert!(matches!(reopened.shape, TextShape::Path { end: None, .. }), "{align:?} flip {flip}: {:?}", reopened.shape);
+            let (again, _) = save_and_open(&[reopened], &txt2);
+            assert_eq!(again, txt2, "{align:?} flip {flip}: saving twice changes the frame");
+        }
     }
 }
