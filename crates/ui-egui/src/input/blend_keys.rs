@@ -3,8 +3,9 @@
 //! (`tool_modes`: Brush, Pencil, Paint Bucket, Gradient, the stamps, History Brush, Healing) they
 //! set that tool's mode within its menu and never the layer's. With a tool that has no blend mode
 //! (Move, the selection tools, the Erasers…) they set every selected layer's mode. With the Color
-//! Replacement tool the ⇧⌥ letters set the layers' mode too and its own Mode stays, as measured in
-//! the reference application (#11928); its ⇧+ / ⇧− do nothing.
+//! Replacement tool the ⇧⌥ letters for Normal, Multiply, Hue and Luminosity set the layers' mode too
+//! and its own Mode stays, as measured in the reference application (#11928); its other letters and
+//! ⇧+ / ⇧− do nothing.
 //! The step list wraps at either end. Each press is one call of an engine command
 //! (`tools.setBrush`, `layer.setProps` with every target layer), so it is one undo step.
 
@@ -151,9 +152,9 @@ enum Target {
     /// nothing, and never reach the layer.
     Nothing,
     Layers,
-    /// The ⇧⌥ letters set the layers' mode; ⇧+ / ⇧− do nothing (the Color Replacement tool, #11928:
-    /// only the letters were measured).
-    LayerLetters,
+    /// The ⇧⌥ letters for these modes set the layers' mode; the other letters and ⇧+ / ⇧− do
+    /// nothing (the Color Replacement tool, #11928: only these letters were measured).
+    LayerLetters(&'static [BlendMode]),
 }
 
 fn target(tool: Tool) -> Target {
@@ -163,7 +164,7 @@ fn target(tool: Tool) -> Target {
     match tool {
         Tool::SpotHealing | Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::ArtHistoryBrush => Target::Nothing,
         // Its ⇧⌥ letters set the active layer's mode and leave the tool's own Mode (#11928).
-        Tool::ColorReplacement => Target::LayerLetters,
+        Tool::ColorReplacement => Target::LayerLetters(&[BlendMode::Normal, BlendMode::Multiply, BlendMode::Hue, BlendMode::Luminosity]),
         // Photoshop's ⇧⌥S/M/H pick the Dodge and Burn Range and ⇧⌥D/S the Sponge's mode: never
         // the layer's.
         Tool::Dodge | Tool::Burn | Tool::Sponge => Target::Nothing,
@@ -249,7 +250,7 @@ pub fn press(app: &mut PhotocraftApp, step: i32) {
                 set_tool_mode(app, mode);
             }
         }
-        Target::Nothing | Target::LayerLetters => {}
+        Target::Nothing | Target::LayerLetters(_) => {}
         Target::Layers => {
             let Some(st) = app.session.active() else { return };
             let Some(layer) = st.active_layer.and_then(|id| st.doc.layer(id)) else { return };
@@ -291,8 +292,13 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
     };
     match target(app.ui.tool) {
         Target::Tool(modes) if modes.contains(&want) => set_tool_mode(app, want),
-        Target::Layers | Target::LayerLetters => {
+        Target::Layers => {
             if let Some(m) = want {
+                set_layers_mode(app, m);
+            }
+        }
+        Target::LayerLetters(modes) => {
+            if let Some(m) = want.filter(|m| modes.contains(m)) {
                 set_layers_mode(app, m);
             }
         }

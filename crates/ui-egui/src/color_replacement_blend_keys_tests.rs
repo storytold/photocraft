@@ -71,3 +71,15 @@ fn the_other_tools_that_ignore_the_keys_still_do() {
         assert_eq!((layer_blend(&app), steps(&app)), (BlendMode::Normal, n), "{tool:?}");
     }
 }
+
+#[test]
+fn letters_outside_the_measured_four_still_do_nothing() {
+    // Not measured: Shift+Alt+S (Screen), C (Color), O (Overlay) keep today's behaviour.
+    let ctx = egui::Context::default();
+    let mut app = app(Tool::ColorReplacement);
+    let n = steps(&app);
+    for letter in [Key::S, Key::C, Key::O] {
+        key(&mut app, &ctx, letter, SHIFT_ALT);
+        assert_eq!((layer_blend(&app), steps(&app)), (BlendMode::Normal, n), "{letter:?}");
+    }
+}
