@@ -233,6 +233,7 @@ fn partly_transparent_colours_keep_the_per_channel_limit() {
         [[100, 100, 100, 250], [130, 100, 70, 255], [160, 100, 40, 255]],
     ] {
         assert_eq!(run(&img, sel::ColorDistance::Spread, false).at(1, 0), 1.0, "{img:?}: every channel is within 30");
+        assert!(run(&img, sel::ColorDistance::Spread, true).at(2, 0) > 0.0, "{img:?}: the third pixel gets a fringe");
         assert_eq!(run(&img, sel::ColorDistance::Spread, true), run(&img, sel::ColorDistance::LargestChannel, true), "{img:?}: same fringe");
     }
 }
