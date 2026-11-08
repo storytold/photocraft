@@ -516,8 +516,8 @@ pub struct Services {
     pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
-    /// On Wayland, the shell command that starts this install under XWayland, where native file
-    /// drops work (#386); `None` when there is no X server to run it on.
+    /// On Wayland, the shell command that starts this install under XWayland, where the X11
+    /// clipboard works; `None` when there is no X server to run it on.
     pub xwayland_command: Option<String>,
     /// Crash-recovery autosave (Preferences › File Handling) and recovery at launch.
     pub autosave: Option<AutosaveFn>,

@@ -679,8 +679,8 @@ fn svg_clipboard_source(text: Option<String>) -> Result<Option<Vec<u8>>, String>
     Ok(Some(text.into_bytes()))
 }
 
-/// The shell command that starts this install under XWayland, where winit delivers file drops
-/// (winit 0.30 has none on Wayland, #386). A Flatpak gets the X11 socket only without the Wayland
+/// The shell command that starts this install under XWayland, where the X11 clipboard works. A
+/// Flatpak gets the X11 socket only without the Wayland
 /// one, an AppImage relaunches by its own path, and anything else is `photocraft` on the PATH.
 /// `None` outside Flatpak when there is no X server (`DISPLAY` unset) to run on.
 #[cfg(any(target_os = "linux", test))]

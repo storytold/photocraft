@@ -260,9 +260,9 @@ fn claim_single_instance(
 #[cfg(target_os = "linux")]
 fn linux_display_session() -> linux_libs::DisplaySession {
     let session = tablet::display_session();
-    // Preferences › Performance › Linux display server = X11: Xwayland on a Wayland session too,
-    // where native file drops work (winit 0.30 has none on Wayland, #386). Only when Xwayland can
-    // run the window ($DISPLAY set, X11 libraries installed); otherwise the session's own.
+    // Preferences › Performance › Linux display server = X11: Xwayland on a Wayland session too.
+    // Only when Xwayland can run the window ($DISPLAY set, X11 libraries installed); otherwise
+    // the session's own.
     let session = if session == linux_libs::DisplaySession::Wayland
         && gpu_startup::read_display_server(services::prefs_file().as_deref()) == photocraft_engine::prefs::LinuxDisplayServer::X11
         && std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty())
