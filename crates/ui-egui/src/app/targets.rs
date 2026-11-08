@@ -20,6 +20,10 @@ impl PhotocraftApp {
         // Edit › Transform, Apply Image and the dialog filters act on the smart object.
         let target = if self.filter_mask_targeted() && photocraft_engine::channel_cmds::follows_filter_mask(id) {
             "filterMask"
+        } else if self.ui.vector_mask_target && photocraft_engine::channel_cmds::follows_vector_mask_target(id) {
+            // The Layers panel targets a vector mask: the Rotate/Flip presets turn its path
+            // alone, whether it is linked or not (#12283).
+            "vectorMask"
         } else if self.layer_mask_targeted() {
             "mask"
         } else {

@@ -636,6 +636,24 @@ fn clicking_the_vector_mask_targets_it_for_the_path_tools() {
 }
 
 #[test]
+fn a_targeted_vector_mask_flips_its_path_not_the_layer_pixels() {
+    let (s, masked, _) = session();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let r = mask_rect(&h, masked, MaskKind::Vector);
+    click_with(&mut h, r.center(), Modifiers::NONE);
+    assert!(h.state().ui.vector_mask_target);
+    let before = layer(&h, masked);
+    h.state_mut().run("edit.transform.flipHorizontal", json!({})).unwrap();
+    let after = layer(&h, masked);
+    let path = after.vector_mask.as_ref().unwrap().path.clone();
+    let k = &path.subpaths[0].knots;
+    assert_eq!((k[0].anchor.x, k[0].anchor.y), (120.0, 10.0), "mirrored about the path's bounds (x = 140)");
+    assert_eq!(after.surface().unwrap().content_bounds(), before.surface().unwrap().content_bounds(), "the pixels are untouched");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(layer(&h, masked).vector_mask.unwrap().path, before.vector_mask.unwrap().path, "undo restores the path");
+}
+
+#[test]
 fn mask_view_gestures_fail_gracefully_without_a_mask() {
     let (s, masked, shape) = session();
     let mut h = harness(s, 0, 1.0, 290.0);
