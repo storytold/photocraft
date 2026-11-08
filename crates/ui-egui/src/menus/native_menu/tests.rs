@@ -170,6 +170,41 @@ fn photoshop_defaults_hold_on_every_platform() {
     assert_eq!(l.bar.find("edit.preferences.general").unwrap().shortcut.as_deref(), Some("Cmd+K"));
 }
 
+/// A Photoshop `.kys` set imported through Edit › Keyboard Shortcuts moves ⌘M to Levels and gives
+/// Fill ⌘, as its second key: each key runs the imported command, so ⌘M shows on Levels only,
+/// Minimize keeps ⌃⌘M, and Settings drops ⌘, though Fill's row shows its first key. The set's
+/// Hide Photoshop row is not ours and changes nothing.
+#[test]
+fn an_imported_kys_set_owns_the_system_keys_it_binds() {
+    const SET: &str = "\u{feff}<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<photoshop-keyboard-shortcuts version=\"4\" filename=\"$$$/FileName/Presets/KeyboardCustomization/mine=mine\">
+\t<command kind=\"static\" name=\"Levels...\" id=\"1801\"><shortcut>Cmd+M</shortcut></command>
+\t<command kind=\"static\" name=\"Fill...\" id=\"1020\"><shortcut>Shift+F5</shortcut><shortcut>Cmd+,</shortcut></command>
+\t<command kind=\"static\" name=\"Hide Photoshop\" id=\"7001\"><shortcut>Cmd+H</shortcut></command>
+</photoshop-keyboard-shortcuts>
+";
+    let mut a = app(true);
+    let r = a.session.execute("edit.keyboardShortcuts", json!({"importKys": SET})).unwrap();
+    assert_eq!(r["import"]["unknown"], json!(["Hide Photoshop"]), "{r}");
+    let keys = crate::shortcut_dispatch::bindings(&a);
+    let owner = |key: &str| keys.iter().find(|(_, sc)| Some(*sc) == crate::shortcuts::parse(key)).map(|(id, _)| id.clone());
+    assert_eq!(owner("Cmd+M").as_deref(), Some("image.adjustments.levels"));
+    let fill = owner("Cmd+,").unwrap();
+    assert_eq!(fill, "edit.fill");
+    let l = app_layout(&a, &crate::menus::menu_items(&a), Lang::EN, "auto");
+    let showing = |key: &str| -> Vec<String> {
+        let parsed = crate::shortcuts::parse(key);
+        l.bar.items().into_iter().filter(|it| it.shortcut.as_deref().and_then(crate::shortcuts::parse) == parsed).map(|it| it.id.clone()).collect()
+    };
+    assert_eq!(showing("Cmd+M"), ["image.adjustments.levels"]);
+    assert!(showing("Cmd+,").is_empty(), "{:?}", showing("Cmd+,"));
+    assert_eq!(l.bar.find(&fill).unwrap().shortcut.as_deref(), Some("Shift+F5"));
+    assert_eq!(l.bar.find(MINIMIZE).unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+M"));
+    assert_eq!(l.bar.find(HIDE).unwrap().shortcut.as_deref(), Some("Ctrl+Cmd+H"));
+    assert_eq!(showing("Cmd+H"), ["view.extras"], "Hide Photoshop was not imported");
+    assert!(l.clashes.iter().any(|c| c.shortcut == "Cmd+," && c.command == fill));
+}
+
 /// Themes and the appearance-mode cycle move from Window to the app menu's Appearance.
 #[test]
 fn themes_move_to_the_app_menus_appearance() {
