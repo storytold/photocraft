@@ -102,6 +102,8 @@ fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> b
     ui.add(icons::image("rotate-cw", 15.0, t.text_dim)).on_hover_text(tip);
     // A wider range than the angle's, so a typed 400 reaches us and can be told apart from 180.
     let mut a = b.angle;
+    // Read before the field: it consumes the arrow keys it steps with.
+    let arrow_or_wheel = ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown) || i.smooth_scroll_delta.y != 0.0);
     let r = widgets::value_field_named(ui, tl!("Angle"), &mut a, -ANGLE_TYPED_MAX..=ANGLE_TYPED_MAX, "°", 52.0);
     let out_of_range = r.id.with("bg-eraser-angle-out-of-range");
     // The flag lives only while an entry is being typed: drawn without the keyboard, the field
@@ -114,7 +116,7 @@ fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> b
         let clamped = whole.clamp(-180.0, 180.0);
         b.angle = clamped;
         // Only typing alerts: a scrub or an arrow-key step past the end just stops there.
-        let stepped = r.dragged() || ui.input(|i| i.key_pressed(egui::Key::ArrowUp) || i.key_pressed(egui::Key::ArrowDown) || i.smooth_scroll_delta.y != 0.0);
+        let stepped = r.dragged() || arrow_or_wheel;
         let typed_out = whole != clamped && !stepped;
         ui.data_mut(|d| d.insert_temp(out_of_range, typed_out));
     }

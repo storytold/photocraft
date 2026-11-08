@@ -143,7 +143,57 @@ fn the_field_shows_the_brush_settings_angle() {
 
 #[test]
 fn the_magic_eraser_has_neither() {
+    let bg = bar(Tool::BackgroundEraser);
+    assert!(bg.query_by_label("Angle").is_some(), "the Background Eraser's field is found by its name");
     let h = bar(Tool::MagicEraser);
     assert!(angle_field(&h).is_none());
+    assert!(h.query_by_label("Angle").is_none(), "no field named Angle, whatever its tooltip");
     assert!(h.query_by_label(PRESSURE).is_none());
+}
+
+/// Focus the field and press `key` `n` times, then Enter.
+fn step_angle(h: &mut Harness<'static, PhotocraftApp>, key: egui::Key, n: usize) -> f32 {
+    angle_field(h).expect("the Angle field").click();
+    h.run_steps(1);
+    for _ in 0..n {
+        h.key_press(key);
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    h.state().session.tools.brush.angle
+}
+
+#[test]
+fn arrow_steps_stop_at_the_ends_without_the_alert() {
+    let mut h = bar(Tool::BackgroundEraser);
+    type_angle(&mut h, "178");
+    assert_eq!(step_angle(&mut h, egui::Key::ArrowUp, 5), 180.0);
+    type_angle(&mut h, "-178");
+    assert_eq!(step_angle(&mut h, egui::Key::ArrowDown, 5), -180.0);
+    assert!(alerts(&h).is_empty(), "stepping is not typing: {:?}", alerts(&h));
+}
+
+#[test]
+fn a_click_away_commits_with_the_alert() {
+    let mut h = bar(Tool::BackgroundEraser);
+    angle_field(&h).expect("the Angle field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("400".into()));
+    h.run_steps(1);
+    h.get_by_label(PRESSURE).click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.tools.brush.angle, 180.0);
+    assert_eq!(alerts(&h).len(), 1, "one alert on click-away: {:?}", alerts(&h));
+}
+
+#[test]
+fn an_entry_that_is_not_a_number_keeps_the_angle_without_the_alert() {
+    let mut h = bar(Tool::BackgroundEraser);
+    type_angle(&mut h, "30");
+    for text in ["", "abc", "inf", "NaN"] {
+        assert_eq!(type_angle(&mut h, text), 30.0, "{text:?}");
+    }
+    assert!(alerts(&h).is_empty(), "{:?}", alerts(&h));
 }
