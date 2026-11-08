@@ -205,3 +205,26 @@ fn ok_on_a_padded_colour_recolours_the_note_with_it() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert!(close(note(&app, 0).color.to_rgb(), [128.0 / 255.0, 192.0 / 255.0, 1.0]), "{:?}", note(&app, 0).color.to_rgb());
 }
+
+#[test]
+fn switching_documents_shows_and_edits_that_documents_selected_note() {
+    let mut app = app();
+    app.run("notes.set", json!({"index": 0, "author": "Ann"})).unwrap();
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("notes.add", json!({"x": 20, "y": 20, "author": "Bob", "color": [1.0, 0.0, 0.0]})).unwrap();
+    // Note 0 of the first document is selected, then the second document comes to the front.
+    assert!(app.session.set_active(0));
+    select(&mut app, 0);
+    assert!(app.session.set_active(1));
+    let before = steps(&app);
+    let mut h = harness(app);
+    assert_eq!(h.state().ui.analysis.note_author, "Bob", "the bar shows this document's note");
+    assert!(close(h.state().ui.analysis.note_color, [1.0, 0.0, 0.0]));
+    h.get_by_label("Author:").click();
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let app = h.state();
+    assert_eq!(note(app, 0).author, "Bob", "the other document's author doesn't overwrite it");
+    assert_eq!(steps(app), before, "no history step");
+}
