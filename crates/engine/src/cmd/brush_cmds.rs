@@ -1172,8 +1172,8 @@ pub fn remembered_settings(b: &BrushSettings) -> Option<Value> {
 
 /// A brush remembered by [`remembered_settings`], read back at launch: `None` when the value is
 /// not a brush or fails the checks `tools.setBrush` makes (a size or scatter out of range). The
-/// options-bar values are clamped to the ranges their controls allow (size 1..max px; hardness,
-/// opacity, flow and smoothing 0..100 %), and stored tips load when the store is attached (else
+/// options-bar values are clamped to the ranges their controls allow (size 1..max px; opacity
+/// 1..100 %; hardness, flow and smoothing 0..100 %), and stored tips load when the store is attached (else
 /// they paint with their previews until `Session::attach_preset_store`).
 pub fn restored_settings(s: &Session, v: &Value) -> Option<BrushSettings> {
     if !v.is_object() {
@@ -1185,6 +1185,9 @@ pub fn restored_settings(s: &Session, v: &Value) -> Option<BrushSettings> {
     for f in [&mut b.hardness, &mut b.opacity, &mut b.flow, &mut b.smoothing.amount] {
         *f = if f.is_nan() { 1.0 } else { f.clamp(0.0, 1.0) };
     }
+    // Opacity takes 1-100 %, as `tools.setBrush` floors it: a brush remembered at 0 % (saved
+    // before that floor) would show 1 % but paint nothing (#11812).
+    b.opacity = b.opacity.max(0.01);
     let _ = s.load_brush_tips(&mut b);
     Some(b)
 }
