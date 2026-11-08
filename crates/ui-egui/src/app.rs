@@ -172,6 +172,7 @@ impl PhotocraftApp {
             camera_raw: None,
             raw_shelf: Vec::new(),
             raw_redevelop: Vec::new(),
+            svg_measures: Vec::new(),
             wide_angle: None,
             dialog_edits: Default::default(),
             color_picker_live: Vec::new(),

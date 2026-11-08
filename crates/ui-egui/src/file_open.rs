@@ -185,6 +185,18 @@ impl PhotocraftApp {
         untitled_name(tl!("Untitled"), |n| self.session.documents().iter().any(|d| d.doc.name == n) || self.jobs.opens.iter().any(|o| o.name == n))
     }
 
+    /// Open the SVG at `path` drawn at `scale` × its own size (the Open SVG dialog's answer and
+    /// `file.open`'s `svgScale`, #8910), its tab at `slot`.
+    pub fn open_svg_scaled(&mut self, path: &str, scale: f32, slot: Option<usize>) -> Result<Vec<String>, String> {
+        if !(scale.is_finite() && scale > 0.0) {
+            return Err(format!("{scale} is not a size an SVG can open at"));
+        }
+        self.session.svg_open_scale = Some(scale);
+        let r = self.open_path_placed(path, slot, None);
+        self.session.svg_open_scale = None;
+        r
+    }
+
     /// Read and open the file at `path` (see [`open_file`](Self::open_file)).
     #[cfg(not(target_arch = "wasm32"))]
     pub fn open_path(&mut self, path: &str) -> Result<Vec<String>, String> {
@@ -194,7 +206,7 @@ impl PhotocraftApp {
     /// [`Self::open_path`] for a file dropped on a tab slot or opened as one of a set: the slot
     /// and order survive an inline memory/profile prompt and the document's final placement.
     #[cfg(not(target_arch = "wasm32"))]
-    fn open_path_placed(&mut self, path: &str, slot: Option<usize>, order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
+    pub(crate) fn open_path_placed(&mut self, path: &str, slot: Option<usize>, order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
         if self.show_if_open(path) {
             return Ok(Vec::new());
         }
@@ -223,7 +235,7 @@ impl PhotocraftApp {
 
     /// The web has no filesystem paths: a drop read by the shell arrives as bytes.
     #[cfg(target_arch = "wasm32")]
-    fn open_path_placed(&mut self, path: &str, _slot: Option<usize>, _order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
+    pub(crate) fn open_path_placed(&mut self, path: &str, _slot: Option<usize>, _order: Option<crate::jobs_ui::OpenOrder>) -> Result<Vec<String>, String> {
         Err(format!("cannot open paths on the web: {path}"))
     }
 
@@ -385,7 +397,13 @@ impl PhotocraftApp {
         // The slot travels with the open through the inline document, a background tab and a
         // memory/profile prompt, so no separate move here can land on another document.
         if f.path().is_absolute() {
-            self.open_path_placed(&path_text(f.path(), false)?, slot, None)?;
+            let path = path_text(f.path(), false)?;
+            // A dropped SVG asks for its size first (#8910), keeping its tab slot for the open.
+            if crate::svg_open_ui::asks(&path) {
+                crate::svg_open_ui::ask(self, &path, slot)?;
+                return Ok(slot.is_some());
+            }
+            self.open_path_placed(&path, slot, None)?;
         } else {
             self.open_bytes_placed(name, &crate::read_dropped(&**f)?, None, slot, None)?;
         }

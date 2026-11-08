@@ -186,6 +186,7 @@ pub use dialogs::snapshot_dialog;
 pub(crate) use dialogs::solid_fill_ui;
 pub use dialogs::stack_dialog;
 pub use dialogs::stroke_ui;
+pub use dialogs::svg_open_ui;
 pub use dialogs::targa_options_ui;
 pub use dialogs::tiff_options_ui;
 pub use dialogs::vp_ui;
@@ -612,6 +613,8 @@ pub struct PhotocraftApp {
     /// The open-time re-develops (or their Camera Raw steps) running in the background, one per
     /// raw being opened.
     pub(crate) raw_redevelop: Vec<camera_raw_ui::Redevelop>,
+    /// SVGs whose size is being read before the Open SVG dialog opens (#8910).
+    pub(crate) svg_measures: Vec<svg_open_ui::Measure>,
     /// Filter › Adaptive Wide Angle dialog (wide_angle_ui).
     pub(crate) wide_angle: Option<wide_angle_ui::WideAngleDialog>,
     /// ⌘Z history of each open parameter dialog (edit_history).
