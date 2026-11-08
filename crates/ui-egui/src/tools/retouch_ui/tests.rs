@@ -182,15 +182,15 @@ fn paint_bucket_mode_reaches_the_fill() {
 
 #[test]
 fn clone_without_a_source_names_the_platform_modifier() {
-    // Option-click on the Mac, Alt-click elsewhere (#251).
-    for tool in [Tool::CloneStamp, Tool::Healing] {
-        let mut app = app();
-        app.ui.tool = tool;
-        assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE));
-        assert!(app.ui.status_error, "{tool:?}");
-        let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
-        assert!(app.ui.status.starts_with(want), "{tool:?}: {}", app.ui.status);
-    }
+    // Option-click on the Mac, Alt-click elsewhere (#251). The Healing Brush says it in an alert
+    // (#12109, healing_no_source_alert_tests.rs).
+    let tool = Tool::CloneStamp;
+    let mut app = app();
+    app.ui.tool = tool;
+    assert!(finish_stroke(&mut app, tool, &[[10.0, 30.0, 1.0], [50.0, 30.0, 1.0]], egui::Modifiers::NONE));
+    assert!(app.ui.status_error);
+    let want = if cfg!(target_os = "macos") { "Option-click" } else { "Alt-click" };
+    assert!(app.ui.status.starts_with(want), "{}", app.ui.status);
 }
 
 #[test]
