@@ -136,7 +136,7 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
     let mut doc = Document::new(name, Size::new(doc_width as u32, doc_height as u32), ColorMode::Rgb, SampleType::U8);
     doc.resolution_dpi = dpi as f32;
     #[cfg(feature = "pdf-editable")]
-    let mut text_engine: Option<photocraft_text::TextEngine> = None;
+    let mut editable_text = false;
     let mut x: u32 = 0;
     for (index, &(width_pt, height_pt)) in sizes.iter().enumerate() {
         ctl.check().map_err(|_| IoError::Cancelled)?;
@@ -152,9 +152,11 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
         #[cfg(feature = "pdf-editable")]
         if opts.pdf_editable {
-            let engine = text_engine.get_or_insert_with(photocraft_text::TextEngine::with_system_fonts);
-            match crate::pdf_editable::page(page, rect, ctl, engine) {
+            match crate::pdf_editable::page(page, rect, ctl) {
                 Ok(layers) => {
+                    if layers.iter().any(|layer| matches!(&layer.content, LayerContent::Text(_))) {
+                        editable_text = true;
+                    }
                     let group = Group { children: layers, expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
                     doc.layers.push(Layer::new(format!("Page {page_number}"), LayerContent::Group(group)));
                     x = x.saturating_add(width).saturating_add(GAP);
@@ -224,6 +226,10 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         doc.layers.push(Layer::new(format!("Page {page_number}"), LayerContent::Group(group)));
         x = x.saturating_add(width).saturating_add(GAP);
         ctl.progress((index + 1) as f32 / count as f32);
+    }
+    #[cfg(feature = "pdf-editable")]
+    if editable_text {
+        warnings.push("PDF text uses fonts embedded in the PDF; it may change font when edited or reopened".into());
     }
 
     Ok(ImportResult { warnings, document: doc, source_read_only: false, preview_only: false })

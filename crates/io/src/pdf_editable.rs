@@ -41,7 +41,7 @@ const POLL: Duration = Duration::from_millis(5);
 /// Largest gap (in em) inside one run before a space is inserted.
 const WORD_GAP: f64 = 0.2;
 /// Largest baseline offset (in em) for glyphs to share one line.
-const LINE_TOLERANCE: f64 = 0.35;
+const LINE_TOLERANCE: f64 = 0.30;
 
 /// Why an editable page could not be built.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,7 +58,7 @@ pub enum EditableError {
 /// `Page::render_dimensions()` (CropBox, rotation and UserUnit already applied), so a point maps
 /// to `rect` by the per-axis scale `rect.size / render_dimensions`. Nothing here re-applies the
 /// CropBox offset or rotation.
-pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt, text: &mut photocraft_text::TextEngine) -> Result<Vec<Layer>, EditableError> {
+pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, EditableError> {
     ctl.check().map_err(|_| EditableError::Cancelled)?;
     let (width_pt, height_pt) = page.render_dimensions();
     if !width_pt.is_finite() || !height_pt.is_finite() || width_pt <= 0.0 || height_pt <= 0.0 {
@@ -123,7 +123,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt, text: &mut photocraft_
     }
     let mut layers = device.layers;
     layers.extend(text_layers(&device.glyphs));
-    render_text_caches(&mut layers, device.dpi, device.fmt, &device.fonts, text);
+    render_text_caches(&mut layers, device.dpi, device.fmt, &device.fonts);
     Ok(layers)
 }
 
@@ -245,13 +245,28 @@ fn text_layer(text: String, run: &GlyphRun, number: usize) -> Layer {
 
 /// Registers each embedded font with the text engine, renames the runs to the family the font
 /// itself reports, and renders the caches so the page is complete before the engine refreshes it.
-fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, fonts: &[(u128, String, FontData)], engine: &mut photocraft_text::TextEngine) {
+fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, fonts: &[(u128, String, String, FontData)]) {
+    let shared = photocraft_text::shared();
+    let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
+    let mut counts = std::collections::HashMap::new();
+    for (_, postscript, _, _) in fonts {
+        *counts.entry(postscript.as_str()).or_insert(0usize) += 1;
+    }
     let mut families = std::collections::HashMap::new();
-    for (_, postscript, data) in fonts {
-        let names = engine.register_font_data(data.as_ref().as_ref().to_vec());
-        if let Some(name) = names.first() {
-            families.insert(postscript.clone(), name.clone());
-        }
+    for (key, postscript, derived, data) in fonts {
+        // Prefer an installed full family; a subset only holds the glyphs the page uses. The
+        // Device has the font program's PostScript name, not the PDF `/BaseFont`, so register
+        // the embedded face under that name (with a key suffix when two faces share it) rather
+        // than shadowing the real family.
+        let family = if engine.has_family(derived) {
+            derived.clone()
+        } else {
+            let alias =
+                if counts.get(postscript.as_str()).copied().unwrap_or(0) > 1 { format!("{postscript} {:08x}", *key as u32) } else { postscript.clone() };
+            let names = engine.register_font_data_as(data.as_ref().as_ref().to_vec(), &alias);
+            names.first().cloned().unwrap_or(alias)
+        };
+        families.insert(postscript.clone(), family);
     }
     for layer in layers {
         if let LayerContent::Text(text) = &mut layer.content {
@@ -284,8 +299,8 @@ struct PathDevice<'a> {
     glyphs: Vec<GlyphRun>,
     /// Stroked glyphs, paired with a fill at the same place to recognise fake bold.
     strokes: Vec<GlyphRun>,
-    /// Embedded fonts met on the page: cache key, PostScript name and bytes.
-    fonts: Vec<(u128, String, FontData)>,
+    /// Embedded fonts met on the page: cache key, PostScript name, derived family and bytes.
+    fonts: Vec<(u128, String, String, FontData)>,
     /// One entry per clip pushed by the interpreter: `true` for an accepted no-op clip.
     clips: Vec<bool>,
     knots: usize,
@@ -499,9 +514,11 @@ impl<'a> Device<'a> for PathDevice<'_> {
             self.unsupported("text without a usable size");
             return;
         }
-        // Skewed or mirrored text cannot be a point text layer; leave the page to raster.
-        if (a.abs() - d.abs()).abs() > 0.01 * a.abs().max(1.0e-9) || (b.abs() - c.abs()).abs() > 0.01 * a.abs().max(1.0e-9) {
-            self.unsupported("skewed text");
+        // Skewed, mirrored or sheared text cannot be a point text layer; leave the page to raster.
+        // After the view's y flip an upright or rotated run has a ≈ -d and b ≈ c.
+        let tolerance = 0.01 * (a * d - b * c).abs().sqrt();
+        if (a + d).abs() > tolerance || (b - c).abs() > tolerance {
+            self.unsupported("skewed or mirrored text");
             return;
         }
         let origin = self.doc.apply(Point::new(e, f));
@@ -515,10 +532,11 @@ impl<'a> Device<'a> for PathDevice<'_> {
         let weight = font_weight(&data, &postscript);
         let italic = data.is_italic || name_has(&postscript, &["italic", "oblique"]);
         let key = outline.font_cache_key();
-        if !self.fonts.iter().any(|(existing, _, _)| *existing == key) {
-            self.fonts.push((key, postscript.clone(), data.data.clone()));
+        let family = family_from_postscript(&postscript);
+        if !self.fonts.iter().any(|(existing, _, _, _)| *existing == key) {
+            self.fonts.push((key, postscript.clone(), family.clone(), data.data.clone()));
         }
-        let font = FontInfo { key, family: family_from_postscript(&postscript), postscript, weight, italic };
+        let font = FontInfo { key, family, postscript, weight, italic };
         let glyph = GlyphRun { text, origin, size_pt, size_px, angle, advance, font, color, fake_bold: false };
         if matches!(draw_mode, GlyphDrawMode::Stroke(_)) {
             self.strokes.push(glyph);
@@ -1038,7 +1056,7 @@ mod tests {
         let imported = import_with_options_and_interrupt("text.pdf", &bytes, &options, &Interrupt::NONE).expect("an editable text import");
         let text = text_layer(&imported.document);
         assert_eq!(text.text, "Hi");
-        assert_eq!(text.font_family, "Inter");
+        assert!(text.font_family.starts_with("Inter"), "family {}", text.font_family);
         assert!((f64::from(text.size_pt) - 24.0).abs() < 0.1, "size {}", text.size_pt);
         assert_eq!(text.color, Color::rgb(1.0, 0.0, 0.0));
         let origin = text.transform.apply(Point::new(0.0, 0.0));
@@ -1048,6 +1066,43 @@ mod tests {
         assert_eq!(style.postscript_name.as_deref(), Some("Inter-Regular"));
         assert_eq!(style.weight, 400);
         assert!(!style.italic);
+        assert!(imported.warnings.iter().any(|warning| warning.contains("fonts embedded in the PDF")), "{:?}", imported.warnings);
+    }
+
+    #[test]
+    fn imported_text_relayouts_with_the_shared_engine() {
+        let bytes = text_pdf("BT /F1 24 Tf 1 0 0 rg 20 50 Td (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("text.pdf", &bytes, &options, &Interrupt::NONE).expect("an editable text import");
+        let mut text = text_layer(&imported.document).clone();
+        text.cache = None;
+        let shared = photocraft_text::shared();
+        let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
+        assert!(engine.has_family(&text.font_family), "the app engine must know the imported family");
+        let rect = engine.render_layer(&mut text, 72.0, PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        assert!(rect.width() > 0 && rect.height() > 0, "the layer re-lays out");
+        assert!(text.cache.is_some());
+    }
+
+    #[test]
+    fn rotated_text_stays_editable() {
+        let bytes = text_pdf("BT /F1 24 Tf 0 1 -1 0 100 20 Tm (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("rotated.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
+        assert!(!imported.warnings.iter().any(|warning| warning.contains("skewed or mirrored")), "{:?}", imported.warnings);
+        assert_eq!(text_layer(&imported.document).text, "Hi");
+    }
+
+    #[test]
+    fn mirrored_text_falls_back() {
+        let bytes = text_pdf("BT /F1 24 Tf -1 0 0 1 100 50 Tm (Hi) Tj ET");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("mirror.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
+        assert!(
+            imported.warnings.iter().any(|warning| warning.contains("skewed or mirrored text") && warning.contains("rasterised")),
+            "{:?}",
+            imported.warnings
+        );
     }
 
     #[test]
@@ -1059,7 +1114,7 @@ mod tests {
             let style = &text_layer(&imported.document).runs[0].style;
             assert_eq!(style.weight, weight, "{name}");
             assert_eq!(style.italic, italic, "{name}");
-            assert_eq!(style.font_family, "Inter", "{name}");
+            assert!(style.font_family.starts_with("Inter"), "{name}: {}", style.font_family);
         }
     }
 

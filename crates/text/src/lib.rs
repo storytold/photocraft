@@ -149,6 +149,11 @@ impl TextEngine {
         self.fonts.register_font_data(bytes)
     }
 
+    /// [`Self::register_font_data`] under `family`, which cannot shadow an installed family.
+    pub fn register_font_data_as(&mut self, bytes: Vec<u8>, family: &str) -> Vec<String> {
+        self.fonts.register_font_data_as(bytes, family)
+    }
+
     /// Whether `family` is available to this engine.
     pub fn has_family(&mut self, family: &str) -> bool {
         self.fonts.has_family(family)
