@@ -73,6 +73,10 @@ impl Default for ReplaceSettings {
     }
 }
 
+#[cfg(test)]
+#[path = "replace_tolerance_falloff_tests.rs"]
+mod replace_tolerance_falloff_tests;
+
 fn dist(a: &[f32; 4], b: [f32; 3]) -> f32 {
     (a[0] - b[0]).abs().max((a[1] - b[1]).abs()).max((a[2] - b[2]).abs())
 }
@@ -103,8 +107,10 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
         if d > tol {
             0.0
         } else if soft && tol > 0.0 {
-            // Soft falloff over the last quarter of the tolerance.
-            ((tol - d) / (tol * 0.25)).clamp(0.0, 1.0)
+            // Soft across the whole tolerance, as the reference measures (#11916): each dab
+            // replaces less the further a colour is from the sample. The exponent is fitted to
+            // its eight-block table (within 6 levels at Tolerance 10, 30, 50 and 100).
+            (1.0 - (d / tol).powf(1.15)).clamp(0.0, 1.0)
         } else {
             1.0
         }
