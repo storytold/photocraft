@@ -74,7 +74,7 @@ fn import_result(name: &str, bytes: &[u8]) -> Result<photocraft_io::ImportResult
 /// The one import path every caller shares: allocation checkpoint, native `.pcraft` and format
 /// dispatch through `photocraft_io::import_with_options`, typed memory refusals, and the
 /// preview-only refusal wherever the import came from.
-fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
+pub(super) fn import_result_with(name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions) -> Result<photocraft_io::ImportResult> {
     crate::allocation::checkpoint("importing document")?;
     let r = photocraft_io::import_with_options(name, bytes, opts).map_err(|e| crate::error::io_open_error(name, e))?;
     // Auxiliary imports return only a document and cannot surface the preview's fidelity warning.

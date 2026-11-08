@@ -569,6 +569,7 @@ fn profile_cancel_cancels_whole_queue_including_memory_prompts() {
             order: None,
             question: Some(json!({"missing": false, "working": "sRGB", "embedded": "Adobe RGB"})),
             policy_applied: false,
+            smart_object: false,
         },
     );
 
@@ -600,6 +601,7 @@ fn mixed_prompts_follow_arrival_order_fifo() {
             order: None,
             question: None,
             policy_applied: false,
+            smart_object: false,
         },
     );
 

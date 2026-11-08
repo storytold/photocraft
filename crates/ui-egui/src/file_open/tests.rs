@@ -1709,6 +1709,28 @@ fn open_as_smart_object_dialog_opens_one_document_per_selected_file() {
 
     assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
     assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
-    assert!(app.ui.status_error, "the unreadable file is reported");
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// File > Open as Smart Object... runs each file as a tracked background job like File > Open
+/// does: a tab per file, the documents landing in name order, untitled, failures reported.
+#[test]
+fn open_as_smart_object_opens_in_the_background_in_name_order() {
+    let ctx = egui::Context::default();
+    let (dir, paths) = files("open-as-so-bg", &["two.png", "one.png", "bad.png"], &png_bytes(8, 6));
+    std::fs::write(&paths[2], b"not an image").unwrap();
+    let (mut app, _) = app_with(vec![Some(FileDialogAnswer::Paths(paths.clone()))]);
+    app.background_jobs = true;
+
+    menus::invoke(&mut app, &ctx, "file.openAsSmartObject", json!({})).unwrap();
+    answer(&mut app);
+    assert_eq!(app.jobs.opens.len(), 3, "a tab for each file while it opens");
+    assert!(app.session.documents().is_empty(), "nothing is on the UI thread's critical path");
+
+    tick_until(&mut app, &ctx, |app| app.jobs.opens.is_empty());
+    assert_eq!(app.session.documents().iter().map(|d| d.doc.name.as_str()).collect::<Vec<_>>(), ["one-1", "two-1"]);
+    assert!(app.session.documents().iter().all(|d| d.path.is_none() && d.doc.layers.len() == 1));
+    assert!(app.ui.notices.iter().any(|n| n.error && n.title.starts_with("Couldn't open bad.png")), "the unreadable file is reported");
     let _ = std::fs::remove_dir_all(&dir);
 }

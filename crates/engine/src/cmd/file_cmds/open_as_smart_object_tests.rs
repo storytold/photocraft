@@ -101,6 +101,8 @@ fn a_16_bit_psd_keeps_size_resolution_mode_depth_and_profile() {
     let dir = tmp("psd");
     let path = write_psd16(&dir, "c.layered.psd", 40, 30);
     let mut s = Session::new();
+    // The files were measured in the working spaces, where nothing asks; Preserve keeps Display P3.
+    s.execute("edit.colorSettings", json!({"askOnMismatch": false})).unwrap();
     s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
     let file = imported(&path);
     assert_eq!(file.resolution_dpi, 300.0);
@@ -175,8 +177,9 @@ fn several_files_open_one_document_each() {
     let a = write_png(&dir, "a_test.png", 8, 8);
     let b = write_psd16(&dir, "d_other.psd", 12, 10);
     let mut s = Session::new();
-    let r = s.execute("file.openAsSmartObject", json!({"paths": [a, b]})).unwrap();
-    assert_eq!(r["documents"].as_array().map(Vec::len), Some(2), "{r}");
+    s.execute("edit.colorSettings", json!({"askOnMismatch": false})).unwrap();
+    s.execute("file.openAsSmartObject", json!({"path": a})).unwrap();
+    s.execute("file.openAsSmartObject", json!({"path": b})).unwrap();
     assert_eq!(names(&s), ["a_test-1", "d_other-1"]);
     for st in s.documents() {
         assert_eq!(st.doc.layers.len(), 1);
@@ -202,9 +205,76 @@ fn a_missing_or_unreadable_file_is_an_error_not_a_crash() {
 #[test]
 fn bad_params_are_errors() {
     let mut s = Session::new();
-    for params in [json!({}), json!({"path": 7}), json!({"path": null}), json!({"paths": "a.png"}), json!({"paths": []}), json!({"paths": [1]})] {
+    for params in [json!({}), json!({"path": 7}), json!({"path": null})] {
         let r = s.execute("file.openAsSmartObject", params.clone());
         assert!(r.is_err(), "{params}: {r:?}");
     }
     assert!(s.documents().is_empty());
+}
+
+fn job(r: crate::jobs::Started) -> crate::jobs::JobId {
+    match r {
+        crate::jobs::Started::Job(id) => id,
+        crate::jobs::Started::Done(v) => panic!("expected a background job, ran inline: {v}"),
+    }
+}
+
+/// Poll until job `id` ends (or 60 s pass); returns its event.
+fn wait_event(s: &mut Session, id: crate::jobs::JobId) -> crate::jobs::JobEvent {
+    let t = std::time::Instant::now();
+    loop {
+        if let Some(e) = s.poll_jobs().into_iter().find(|e| e.id == id) {
+            return e;
+        }
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "job {id:?} did not finish");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+#[test]
+fn the_import_runs_as_a_job_when_started() {
+    let dir = tmp("job");
+    let path = write_png(&dir, "a_test.png", 32, 24);
+    let mut s = Session::new();
+    let id = job(s.start("file.openAsSmartObject", json!({"path": path})).unwrap());
+    assert!(s.documents().is_empty(), "nothing is admitted before the job is applied");
+    let e = wait_event(&mut s, id);
+    let crate::jobs::JobOutcome::Done(v) = &e.outcome else { panic!("{e:?}") };
+    assert!(v["docId"].is_u64(), "{v}");
+    assert_eq!(v["name"], "a_test-1", "{v}");
+    assert_eq!(s.documents().len(), 1);
+    embedded(&s);
+}
+
+#[test]
+fn the_colour_policy_matches_file_open() {
+    let dir = tmp("policy");
+    let path = write_psd16(&dir, "c.layered.psd", 40, 30);
+    let settings = json!({"askOnMismatch": false, "policyRgb": "convert"});
+    let mut open = Session::new();
+    open.execute("edit.colorSettings", settings.clone()).unwrap();
+    open.execute("file.openAs", json!({"path": path})).unwrap();
+    let mut so = Session::new();
+    so.execute("edit.colorSettings", settings).unwrap();
+    so.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    let (a, b) = (active(&open), active(&so));
+    assert_eq!(a.icc_profile, b.icc_profile, "Convert is applied as File > Open applies it");
+    assert_eq!((a.mode, a.depth, a.size), (b.mode, b.depth, b.size));
+    assert_eq!(a.resolution_dpi, b.resolution_dpi);
+}
+
+#[test]
+fn ask_when_opening_holds_the_document_like_file_open() {
+    let dir = tmp("ask");
+    let path = write_psd16(&dir, "c.layered.psd", 40, 30);
+    let mut s = Session::new();
+    let r = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    assert_eq!(r["color"]["ask"], true, "{r}");
+    assert_eq!(r["smartObject"], true, "{r}");
+    assert!(r["held"].is_u64(), "{r}");
+    assert!(s.documents().is_empty(), "held for the profile prompt, not admitted");
+    let (doc, _) = s.take_held_open(r["held"].as_u64().unwrap()).unwrap();
+    assert_eq!(doc.name, "c.layered-1");
+    assert_eq!(doc.layers.len(), 1);
+    assert!(matches!(doc.layers[0].content, LayerContent::Smart(_)));
 }
