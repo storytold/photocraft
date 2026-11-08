@@ -91,31 +91,44 @@ pub(crate) fn opened_id() -> egui::Id {
     picker_id().with("opened-with")
 }
 
-/// What Escape in the picker goes back to (#11816): the Size and Hardness it opened with (or a
-/// picked preset brought), and the values its own fields last typed. Escape reverts a value only
-/// while it is still the typed one, so a change from elsewhere (`]`, the options bar) stays.
+/// What Escape in the picker goes back to (#11816): the Size, Hardness, Angle and Roundness it
+/// opened with (or a picked preset brought), and the values its own controls last set. Escape
+/// reverts a value only while it is still the picker's, so a change from elsewhere (`]`, the
+/// options bar) stays. Angle and Roundness come from the tip widget (#11821).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Opened {
-    opened: [f32; 2],
-    typed: [f32; 2],
+    opened: [f32; 4],
+    typed: [f32; 4],
+}
+
+fn picker_values(b: &photocraft_engine::BrushSettings) -> [f32; 4] {
+    [b.size, b.hardness, b.angle, b.roundness]
 }
 
 impl Opened {
     pub(crate) fn new(b: &photocraft_engine::BrushSettings) -> Self {
-        Self { opened: [b.size, b.hardness], typed: [b.size, b.hardness] }
+        Self { opened: picker_values(b), typed: picker_values(b) }
     }
 
     pub(crate) fn typed(&mut self, b: &photocraft_engine::BrushSettings) {
-        self.typed = [b.size, b.hardness];
+        self.typed = picker_values(b);
     }
 
     pub(crate) fn revert(&self, now: &photocraft_engine::BrushSettings) -> photocraft_engine::BrushSettings {
         let mut b = now.clone();
-        if b.size == self.typed[0] {
-            b.size = self.opened[0];
+        let [size, hardness, angle, roundness] = self.opened;
+        let [typed_size, typed_hardness, typed_angle, typed_roundness] = self.typed;
+        if b.size == typed_size {
+            b.size = size;
         }
-        if b.hardness == self.typed[1] {
-            b.hardness = self.opened[1];
+        if b.hardness == typed_hardness {
+            b.hardness = hardness;
+        }
+        if b.angle == typed_angle {
+            b.angle = angle;
+        }
+        if b.roundness == typed_roundness {
+            b.roundness = roundness;
         }
         b
     }
@@ -260,35 +273,45 @@ pub fn body(
     ui.set_width(size.x);
     ui.set_min_height(size.y);
     let top = ui.cursor().min.y;
-    // The Size and Hardness controls live in one block flush with the left edge, at most
-    // [`HEAD_MAX_W`] wide: a picker dragged wider leaves the space past the block empty instead of
-    // stretching the rows across it.
-    ui.scope(|ui| {
-        ui.set_max_width(ui.available_width().min(HEAD_MAX_W));
-        // Size: value field plus a logarithmic slider (small sizes get most of the travel).
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(tl!("Size")).color(t.text_dim));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let mut size = b.size;
-                if widgets::value_field(ui, &mut size, 1.0..=MAX_BRUSH_SIZE, "px", 72.0).accessible_name(tl!("Size")).changed() {
-                    b.size = size.round().clamp(1.0, MAX_BRUSH_SIZE);
-                }
+    // The tip's angle/roundness widget at the top left (#11821), then the Size and Hardness
+    // controls in one block, at most [`HEAD_MAX_W`] wide: a picker dragged wider leaves the space
+    // past the block empty instead of stretching the rows across it.
+    ui.horizontal_top(|ui| {
+        let (angle, roundness) = (b.angle, b.roundness);
+        crate::brush_sections::ellipse_widget(ui, &mut b.angle, &mut b.roundness);
+        // A pointer position that isn't finite leaves the tip as it was.
+        let finite = |p: egui::Pos2| p.x.is_finite() && p.y.is_finite();
+        let pointer_ok = ui.input(|i| i.pointer.interact_pos().is_none_or(finite) && i.pointer.latest_pos().is_none_or(finite));
+        if !(pointer_ok && b.angle.is_finite() && b.roundness.is_finite()) {
+            (b.angle, b.roundness) = (angle, roundness);
+        }
+        ui.vertical(|ui| {
+            ui.set_max_width(ui.available_width().min(HEAD_MAX_W));
+            // Size: value field plus a logarithmic slider (small sizes get most of the travel).
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(tl!("Size")).color(t.text_dim));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let mut size = b.size;
+                    if widgets::value_field(ui, &mut size, 1.0..=MAX_BRUSH_SIZE, "px", 72.0).accessible_name(tl!("Size")).changed() {
+                        b.size = size.round().clamp(1.0, MAX_BRUSH_SIZE);
+                    }
+                });
             });
-        });
-        let mut lv = b.size.max(1.0).ln();
-        let size_slider = widgets::slider(ui, &mut lv, 0.0..=MAX_BRUSH_SIZE.ln(), None);
-        if size_slider.changed() {
-            b.size = lv.exp().round().clamp(1.0, MAX_BRUSH_SIZE);
-        }
-        dismiss_popup(&size_slider);
-        if b.tip == TipShape::Round {
-            let mut hard = b.hardness * 100.0;
-            let hardness = widgets::slider_row(ui, "Hardness", &mut hard, 0.0..=100.0, "%", None);
-            if hardness.changed() {
-                b.hardness = (hard / 100.0).clamp(0.0, 1.0);
+            let mut lv = b.size.max(1.0).ln();
+            let size_slider = widgets::slider(ui, &mut lv, 0.0..=MAX_BRUSH_SIZE.ln(), None);
+            if size_slider.changed() {
+                b.size = lv.exp().round().clamp(1.0, MAX_BRUSH_SIZE);
             }
-            dismiss_popup(&hardness);
-        }
+            dismiss_popup(&size_slider);
+            if b.tip == TipShape::Round {
+                let mut hard = b.hardness * 100.0;
+                let hardness = widgets::slider_row(ui, "Hardness", &mut hard, 0.0..=100.0, "%", None);
+                if hardness.changed() {
+                    b.hardness = (hard / 100.0).clamp(0.0, 1.0);
+                }
+                dismiss_popup(&hardness);
+            }
+        });
     });
     ui.add_space(6.0);
     widgets::hairline(ui);
@@ -437,3 +460,7 @@ fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], 
         }
     });
 }
+
+#[cfg(test)]
+#[path = "../brush_picker_angle_widget_tests.rs"]
+mod brush_picker_angle_widget_tests;

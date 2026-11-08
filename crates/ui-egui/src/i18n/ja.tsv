@@ -441,8 +441,8 @@
 	Artboard…	アートボード…
 	Artboard from Group…	グループからアートボード…
 	Artboard from Layers…	レイヤーからアートボード…
-	Layer via Copy	コピーしたレイヤー
-	Layer via Cut	切り取ったレイヤー
+	Layer Via Copy	コピーしたレイヤー
+	Layer Via Cut	切り取ったレイヤー
 	Layer From Background…	背景からレイヤーへ…
 	Layer from Background…	背景からレイヤーへ…
 	Background From Layer	レイヤーから背景
@@ -4184,8 +4184,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	グレースケールランプ
 	Current Colors	現在のカラー
 	Make Ramp Web Safe	ランプを Web セーフにする
+	Scroll All Windows	すべてのウィンドウをスクロール
 	The path was kept as the Work Path	パスは作業用パスとして保持されました
 	The path was discarded	パスは破棄されました
+# Art History Brush (#213).
 	Art History Brush Tool	アートヒストリーブラシツール
 	Tight Short	タイト・ショート
 	Tight Medium	タイト・ミディアム
@@ -4277,6 +4279,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	チャンネルごとに別のドキュメントを選択してください。
 	A picked document is no longer open.	選択したドキュメントの一つが開かれていません。
 	A picked document is no longer a grayscale document of the same size.	選択したドキュメントの一つが、同じサイズのグレースケールのドキュメントではなくなりました。
+	Netscape Gray	Netscape グレー
 # Move tool options bar (#11381)
 	Align top edges	上端を揃える
 	Align vertical centers	垂直方向中央を揃える
