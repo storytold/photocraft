@@ -17,7 +17,7 @@ use clap::parser::ValueSource;
 use clap::{ArgAction, ArgGroup, ArgMatches, Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 use photocraft_automation::args::{AutomationArgs, ControlArgs, blank_env_is_unset, conflict, control_port, name_env_vars};
 use photocraft_codecs::{JpegFormat, TiffCompression};
-use photocraft_io::{DdsCompression, DpxBits, TgaBits};
+use photocraft_io::{DdsCompression, DpxBits, TgaBits, XmpEmbed};
 use serde_json::Value;
 
 /// photocraft-cli: headless PhotoCraft
@@ -93,6 +93,12 @@ pub(crate) struct ExportArgs {
     /// real image
     #[arg(long)]
     pub(crate) no_maximize_compatibility: bool,
+    /// The document metadata a flat export embeds: all (the default) keeps the document's XMP
+    /// packet and free-form text where the format holds them, as Save As does; none leaves them
+    /// out, as Export As's Metadata: None. Nothing else changes: the ICC profile, EXIF and
+    /// resolution are written as they are without it. PSD, PSB and .pcraft always keep the XMP
+    #[arg(long, value_name = "none|all", value_parser = metadata)]
+    pub(crate) metadata: Option<XmpEmbed>,
 }
 
 /// Convert between formats (.pcraft, .psd, .png, .jpg, .tif, .webp, .exr, …)
@@ -312,6 +318,8 @@ enum ValueError {
     TiffCompression,
     #[error("expected baseline, optimized or progressive")]
     JpegFormat,
+    #[error("expected none or all")]
+    Metadata,
     #[error("expected on or off")]
     OnOff,
     /// Why a `--bridge` value, or a PHOTOCRAFT_CONTROL_PORT value for `mcp`, is refused.
@@ -384,6 +392,14 @@ fn on_off(s: &str) -> Result<bool, ValueError> {
 
 fn jpeg_format(s: &str) -> Result<JpegFormat, ValueError> {
     JpegFormat::parse(s).ok_or(ValueError::JpegFormat)
+}
+
+fn metadata(s: &str) -> Result<XmpEmbed, ValueError> {
+    match s {
+        "none" => Ok(XmpEmbed::None),
+        "all" => Ok(XmpEmbed::All),
+        _ => Err(ValueError::Metadata),
+    }
 }
 
 /// Where `mcp --bridge` connects. Shown as the address: `127.0.0.1:<PORT>` for a port.
