@@ -659,6 +659,7 @@ fn content_aware_move_tool_lassoes_then_moves_or_extends() {
         app.run("paint.pencil", json!({"points": [[20, 30], [24, 30]], "size": 6, "color": "#0000ff"})).unwrap();
         let blue = |app: &PhotocraftApp, x: i32| active(app).surface().unwrap().rgba(x, 30)[0] < 0.5;
         app.ui.tool = Tool::ContentAwareMove;
+        app.ui.tool_options.cam_transform_on_drop = false;
         app.ui.tool_options.cam_mode = mode.into();
         app.ui.tool_options.cam_structure = 7.0;
         let m = egui::Modifiers::NONE;
