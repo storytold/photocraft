@@ -19,6 +19,7 @@ use crate::{EngineError, Result, Session};
 
 /// Artboard size presets (name, width, height) in pixels, Photoshop's common devices and pages.
 pub const PRESETS: &[(&str, u32, u32)] = &[
+    ("iPhone 8/7/6", 750, 1334),
     ("iPhone 14", 390, 844),
     ("iPhone 14 Pro Max", 430, 932),
     ("Android 1080p", 360, 640),
@@ -414,6 +415,9 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
 /// Changing X/Y moves the board with its contents; changing W/H resizes it from the top left.
 fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "layer.artboard.set";
+    if p.get("layers").is_some() {
+        return set_backgrounds(s, p);
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let id = crate::commands::explicit_layer(s, p)?.or_else(|| active_artboard(s)).ok_or_else(|| bad(cmd, "no artboard selected"))?;
     let old = d.doc.layer(id).and_then(Layer::artboard).cloned().ok_or_else(|| bad(cmd, "the layer is not an artboard"))?;
@@ -467,6 +471,34 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
+}
+
+/// `layer.artboard.set` with a `layers` array: the background of every listed board in one undo
+/// step, "Edit Artboard" for one board and "Edit Artboards" for several (the options bar's
+/// background control with boards selected). Only `background`/`color` apply to several boards.
+fn set_backgrounds(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "layer.artboard.set";
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let mut ids: Vec<LayerId> = Vec::new();
+    for v in p.get("layers").and_then(Value::as_array).ok_or_else(|| bad(cmd, "`layers` must be an array of layer ids"))? {
+        let id = LayerId(v.as_u64().ok_or_else(|| bad(cmd, "`layers` must be an array of layer ids"))?);
+        d.doc.layer(id).and_then(Layer::artboard).ok_or_else(|| bad(cmd, format!("layer {} is not an artboard", id.0)))?;
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    if ids.is_empty() {
+        return Err(bad(cmd, "`layers` is empty"));
+    }
+    let background = background_param(p, cmd)?.ok_or_else(|| bad(cmd, "`layers` needs a `background`"))?;
+    let label = if ids.len() == 1 { "Edit Artboard" } else { "Edit Artboards" };
+    s.edit(label, |doc, _| {
+        for id in &ids {
+            doc.layer_mut(*id).and_then(Layer::artboard_mut).ok_or(EngineError::NoLayer(*id))?.background = background;
+        }
+        Ok(())
+    })?;
+    Ok(json!({"layers": ids.iter().map(|i| i.0).collect::<Vec<_>>()}))
 }
 
 /// The Artboard tool's "+" buttons: a board the size of board `layer` on one of its sides, a

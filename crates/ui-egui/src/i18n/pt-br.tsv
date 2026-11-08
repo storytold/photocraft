@@ -368,6 +368,8 @@
 	Match Color…	Corresponder cores…
 	Replace Color…	Substituir cor…
 	Equalize	Equalizar
+	Equalize Selected Area Only	Equalizar somente a área selecionada
+	Equalize Entire Image Based On Selected Area	Equalizar a imagem inteira com base na área selecionada
 	Auto Tone	Tom automático
 	Auto Contrast	Contraste automático
 	Auto Color	Cor automática
@@ -4319,7 +4321,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	This layer must be rasterized before proceeding.	Esta camada precisa ser rasterizada antes de continuar.
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Esta camada de texto precisa ser rasterizada antes de continuar. O texto não poderá mais ser editado. Rasterizar o texto?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Esta camada de forma precisa ser rasterizada antes de continuar. Ela não poderá mais ser editada como forma. Rasterizar a forma?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
 	Graphics adapter: {adapter}	Adaptador gráfico: {adapter}
 	Backend: {backend} ({type})	Backend: {backend} ({type})
@@ -4518,6 +4520,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Escolha um documento diferente para cada canal.
 	A picked document is no longer open.	Um dos documentos escolhidos não está mais aberto.
 	A picked document is no longer a grayscale document of the same size.	Um dos documentos escolhidos não é mais um documento em tons de cinza do mesmo tamanho.
+	Netscape Gray	Cinza Netscape
 # Move tool options bar (#11381)
 	Align top edges	Alinhar bordas superiores
 	Align vertical centers	Alinhar centros verticais
@@ -4527,3 +4530,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Mostrar limites da camada ao passar o cursor
 	Expand layer group on click	Expandir grupo de camadas ao clicar
 	Show hover bounds from Layers	Mostrar limites ao passar o cursor em Camadas
+	Saved Camera Raw settings to {file}	Configurações do Camera Raw salvas em {file}
+	Save the settings to each raw's sidecar without opening it	Salvar as configurações no arquivo sidecar de cada raw sem abri-lo
+	No settings saved: these raws can't keep a sidecar here	Nada foi salvo: estes raw não podem ter um arquivo sidecar aqui
+	Some settings could not be saved; the raws stay open	Não foi possível salvar algumas configurações; os raw continuam abertos
+	Nothing to save: these raws are at their default settings	Nada para salvar: estes raw estão nas configurações padrão
+# Artboard tool options bar (#11385)
+	Distribute Widths	Distribuir larguras
+	Distribute Heights	Distribuir alturas
+	Auto-nest Layers	Aninhar camadas automaticamente
+	Auto-size Canvas	Ajustar tamanho da tela automaticamente
+	Keep Relative Position During Layer Reordering	Manter a posição relativa ao reordenar camadas
+	Shrinkwrap Canvas on Save	Reduzir a tela ao conteúdo ao salvar

@@ -410,6 +410,8 @@
 	Match Color…	Přizpůsobit barvy…
 	Replace Color…	Nahradit barvu…
 	Equalize	Vyrovnat
+	Equalize Selected Area Only	Vyrovnat pouze výběr
+	Equalize Entire Image Based On Selected Area	Vyrovnat celý obraz podle výběru
 	Auto Tone	Automatický tón
 	Auto Contrast	Automatický kontrast
 	Auto Color	Automatické barvy
@@ -3805,7 +3807,7 @@ curves	Smooth	Vyhladit
 	Scroll menu down	Posunout nabídku dolů
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Před pokračováním je nutné tuto textovou vrstvu rastrovat. Její text už nebude možné upravovat. Rastrovat text?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Před pokračováním je nutné tuto vrstvu tvaru rastrovat. Už ji nebude možné upravovat jako tvar. Rastrovat tvar?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Před pokračováním je nutné tento chytrý objekt rastrovat. Jeho obsah už nebude možné upravovat. Rastrovat chytrý objekt?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Před pokračováním je nutné tento chytrý objekt rastrovat. Jeho obsah už nebude možné upravovat. Rastrovat chytrý objekt?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Před pokračováním je nutné tuto vrstvu výplně rastrovat. Její výplň už nebude možné upravovat. Rastrovat vrstvu?
 	This layer must be rasterized before proceeding.	Před pokračováním je nutné tuto vrstvu rastrovat.
 	Color Picker (Background Color)	Výběr barvy (barva pozadí)
@@ -4345,6 +4347,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pro každý kanál vyberte jiný dokument.
 	A picked document is no longer open.	Jeden z vybraných dokumentů už není otevřený.
 	A picked document is no longer a grayscale document of the same size.	Jeden z vybraných dokumentů už není dokument ve stupních šedi stejné velikosti.
+	Netscape Gray	Šedá Netscape
 # Move tool options bar (#11381)
 	Align top edges	Zarovnat horní okraje
 	Align vertical centers	Zarovnat svislé středy
@@ -4354,3 +4357,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Zobrazit hranice vrstvy při najetí
 	Expand layer group on click	Rozbalit skupinu vrstev kliknutím
 	Show hover bounds from Layers	Zobrazit hranice při najetí z panelu Vrstvy
+	Saved Camera Raw settings to {file}	Nastavení Camera Raw uložena do {file}
+	Save the settings to each raw's sidecar without opening it	Uložit nastavení do souboru sidecar každého snímku raw bez jeho otevření
+	No settings saved: these raws can't keep a sidecar here	Nic neuloženo: tyto snímky raw zde nemohou mít soubor sidecar
+	Some settings could not be saved; the raws stay open	Některá nastavení nelze uložit; snímky raw zůstávají otevřené
+	Nothing to save: these raws are at their default settings	Není co ukládat: tyto snímky raw mají výchozí nastavení
+# Artboard tool options bar (#11385)
+	Distribute Widths	Rozmístit šířky
+	Distribute Heights	Rozmístit výšky
+	Auto-nest Layers	Automaticky vnořovat vrstvy
+	Auto-size Canvas	Automaticky měnit velikost plátna
+	Keep Relative Position During Layer Reordering	Zachovat relativní polohu při změně pořadí vrstev
+	Shrinkwrap Canvas on Save	Při uložení zmenšit plátno na obsah
