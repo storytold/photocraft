@@ -1,8 +1,12 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod actions_duplicate;
+mod actions_panel_menu;
+mod actions_record_again;
 mod adjust_preview_gpu;
 mod arbitrary_rotation_preview;
 mod batch_export_options;
+mod brush_reset_defaults;
 mod camera_raw_histogram;
 mod camera_raw_localization;
 mod camera_raw_scope;
@@ -14,6 +18,8 @@ mod color_managed_canvas;
 mod crop_beyond_canvas;
 mod crop_ctrl_straighten;
 mod crop_default_mode;
+mod crop_defaults;
+mod crop_frame_look;
 mod crop_overlay_icons;
 mod crop_popup_keys;
 mod crop_shift_corner;
@@ -29,6 +35,7 @@ mod full_res_preview;
 mod gpu_device_loss;
 mod layout_perf;
 mod live_stroke_canvas;
+mod magnetic_lasso_right_click;
 mod marching_ants_pixels;
 mod marquee_autoscroll;
 mod paint_bucket_all_layers;

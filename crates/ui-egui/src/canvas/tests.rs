@@ -1409,14 +1409,11 @@ fn clone_overlay_is_clipped_to_a_shaped_tip() {
 }
 
 #[test]
-fn wayland_start_screen_hint_does_not_claim_file_drop_works() {
+fn wayland_start_screen_hint_offers_file_drop() {
     let x11 = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let wayland = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { is_wayland: true, ..Default::default() });
     assert!(start_screen_drop_hint(&x11).starts_with("Drop"));
-    // Pasting a copied image file works on Wayland (#338): the hint says how.
-    let hint = start_screen_drop_hint(&wayland);
-    assert!(!hint.contains("Drop"), "{hint}");
-    assert!(hint.ends_with(&format!("paste a copied image with {}.", crate::notices::paste_hint(&wayland))), "{hint}");
+    assert!(start_screen_drop_hint(&wayland).starts_with("Drop"));
 }
 
 /// A tiling window manager can hand PhotoCraft a canvas narrower than the Home card (460
@@ -3070,5 +3067,55 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         h.run_steps(3);
         let tabs = h.state().0.tab_strip.as_ref().map(|s| s.tabs.iter().map(|(doc, _)| *doc).collect::<Vec<_>>());
         assert_eq!(tabs, Some(vec![1]), "{kind:?}: only the docked document stays on the main tab strip");
+    }
+}
+
+/// #8230: Edit › Fade opens with a Preview checkbox, and the canvas shows the layer faded with the
+/// dialog's opacity, at full size, on the background worker and the inline path alike. Cancel
+/// leaves the document, its history and Fade itself as they were; OK applies what was shown.
+#[test]
+fn fade_dialog_previews_the_faded_layer_and_cancel_keeps_the_document() {
+    for background in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 30, "background": "white"})).unwrap();
+        app.run("edit.fill", json!({"color": "#000000"})).unwrap();
+        app.background_jobs = background;
+        let ctx = egui::Context::default();
+        let st = app.session.active().unwrap();
+        let (layer, steps, revision) = (st.active_layer.unwrap(), st.history.past_len(), st.revision);
+        let id = crate::filter_dialog::open(&mut app, "edit.fade").expect("Fade has a dialog");
+        let d = app.ui.dialog_mut(id).expect("the dialog");
+        assert_eq!(d.fields.get("__preview"), Some(&json!(true)), "a Preview checkbox, on");
+        d.fields.insert("opacity".into(), json!(25));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let (k, size) = loop {
+            if let Some((k, _, size)) = ensure_filter_preview(&mut app, 0, &ctx)
+                && app.filter_preview.as_ref().is_some_and(|p| p.key.params.get("opacity") == Some(&json!(25)))
+            {
+                break (k, size);
+            }
+            assert!(std::time::Instant::now() < deadline, "background jobs {background}: no preview");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        assert_eq!((k, size), (1, [40, 30]), "background jobs {background}: full size");
+        let shown = app.filter_preview.as_ref().and_then(|p| p.result.as_ref()).expect("a result").layer(layer).unwrap().surface().unwrap().pixel(3, 3);
+        assert!((shown[0] - 0.75).abs() < 0.01, "background jobs {background}: {shown:?}");
+
+        // Cancel: nothing changed, nothing previewed, and Fade is still there to use.
+        app.ui.close_dialog(id);
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "background jobs {background}: no preview after Cancel");
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.layer(layer).unwrap().surface().unwrap().pixel(3, 3)[0], 0.0, "background jobs {background}: the layer is untouched");
+        assert_eq!((st.history.past_len(), st.revision), (steps, revision), "background jobs {background}: no history step");
+        assert!(app.session.is_enabled("edit.fade"), "background jobs {background}: Fade is still available");
+
+        // OK applies the faded layer as one step.
+        let id = crate::filter_dialog::open(&mut app, "edit.fade").unwrap();
+        app.ui.dialog_mut(id).unwrap().fields.insert("opacity".into(), json!(25));
+        crate::dialogs::confirm(&mut app, id).unwrap();
+        let st = app.session.active().unwrap();
+        let faded = st.doc.layer(layer).unwrap().surface().unwrap().pixel(3, 3)[0];
+        assert!((faded - shown[0]).abs() < 1e-6, "background jobs {background}: OK applies the preview ({faded})");
+        assert_eq!(st.history.past_len(), steps + 1);
     }
 }

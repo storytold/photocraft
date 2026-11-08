@@ -36,6 +36,7 @@ fn the_rows_follow_the_reference_order() {
         "Update All Modified Content",
         "---",
         "Edit Contents",
+        "Reset Transform",
         "Relink to File…",
         "Replace Contents…",
         "Export Contents…",
