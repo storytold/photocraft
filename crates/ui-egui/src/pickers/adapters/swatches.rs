@@ -174,6 +174,23 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
         }
         // Swatches don't drop onto the canvas.
         BrowserAction::Drop(..) => {}
+        BrowserAction::AppendDefault => {}
+        BrowserAction::Import => {
+            if let Err(error) = import_dialog(app, false)
+                && error != crate::file_dialog::CANCELLED
+            {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
+        BrowserAction::ExportSelected(names) => {
+            if let Err(error) = export_dialog(app, "aco", Some(&names))
+                && error != crate::file_dialog::CANCELLED
+            {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
         action => {
             crate::pickers::browser::browser_actions::generic(app, PANEL, "swatches", &action, json!({}));
         }
@@ -243,8 +260,12 @@ fn import_dialog(app: &mut PhotocraftApp, replace: bool) -> Result<Value, String
     })
 }
 
-fn export_dialog(app: &mut PhotocraftApp, format: &str) -> Result<Value, String> {
-    let r = app.run("swatches.export", json!({"format": format}))?;
+fn export_dialog(app: &mut PhotocraftApp, format: &str, selected: Option<&[String]>) -> Result<Value, String> {
+    let mut params = json!({"format": format});
+    if let Some(names) = selected {
+        params["swatches"] = json!(names);
+    }
+    let r = app.run("swatches.export", params)?;
     let bytes = r["data"].as_str().and_then(photocraft_engine::paint::tile::b64_decode).ok_or("the export returned no data")?;
     let n = r["count"].as_u64().unwrap_or(0);
     app.pick_save(&format!("Swatches.{format}"), move |app, path| {
@@ -286,7 +307,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, _state: &mut Prese
     let r = match a {
         "import" => import_dialog(app, false),
         "replace" => import_dialog(app, true),
-        "aco" | "ase" => export_dialog(app, a),
+        "aco" | "ase" => export_dialog(app, a, None),
         _ => app.run("swatches.reset", json!({})),
     };
     if let Err(e) = r
@@ -520,7 +541,7 @@ mod tests {
         import_dialog(&mut app, true).unwrap();
         frame(&mut app);
         assert_eq!(app.session.presets.swatches.len(), 1, "replace");
-        export_dialog(&mut app, "ase").unwrap();
+        export_dialog(&mut app, "ase", None).unwrap();
         frame(&mut app);
         let out = written.lock().unwrap();
         assert_eq!(out[0].0, "out/Swatches.ase");

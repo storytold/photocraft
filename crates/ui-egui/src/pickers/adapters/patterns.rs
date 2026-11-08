@@ -203,6 +203,8 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.ui.presets_ui.set_selected_item("patterns", group, group_path, key);
                 run(app, "pattern.presets.apply", json!({"pattern": key}));
             }
+            BrowserAction::Import => crate::preset_files_ui::import_patterns_dialog(app),
+            BrowserAction::ExportSelected(names) => export_selected_patterns_dialog(app, &names),
             // Only the brush browser supports nested-group context actions.
             BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
@@ -228,8 +230,19 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// Export the complete pattern library through the native `.PAT` command and save dialog.
 /// The engine's path-based exporter is unavailable on the web, so its menu entry is disabled there.
 fn export_patterns_dialog(app: &mut PhotocraftApp) {
+    export_patterns(app, None);
+}
+
+fn export_selected_patterns_dialog(app: &mut PhotocraftApp, names: &[String]) {
+    export_patterns(app, Some(names.to_vec()));
+}
+
+fn export_patterns(app: &mut PhotocraftApp, selected: Option<Vec<String>>) {
+    let params = selected.map_or_else(|| json!({}), |patterns| json!({"patterns": patterns}));
     let result = app.pick_save("Patterns.pat", |app, path| {
-        let result = app.run("pattern.export", json!({"path": path}))?;
+        let mut params = params;
+        params["path"] = json!(path);
+        let result = app.run("pattern.export", params)?;
         let count = result.get("count").and_then(serde_json::Value::as_u64).unwrap_or(0);
         app.ui.status_error = false;
         app.ui.status = crate::i18n::fmt(

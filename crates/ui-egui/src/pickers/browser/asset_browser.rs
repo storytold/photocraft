@@ -173,6 +173,12 @@ pub(crate) enum BrowserAction {
     NewGroup,
     /// Request creation of a new item.
     New,
+    /// Append the picker's built-in defaults to its current library.
+    AppendDefault,
+    /// Open the picker-specific import flow.
+    Import,
+    /// Export the selected item identities from the picker library.
+    ExportSelected(Vec<String>),
 }
 
 /// Semantic boundary between segment rendering and the picker frame's mutable browser state.
@@ -1008,6 +1014,18 @@ pub(crate) fn browser_with_root_sequence(
             // child widgets take precedence, so only genuinely empty browser space clears the
             // multi-selection. The viewport excludes the shell-owned header and footer.
             let empty_area = ui.interact(browser_bounds, ui.id().with(("browser-empty-area", panel)), Sense::click());
+            draw_context_menu_target(ui, empty_area.clone(), compact_context_menus, |ui| {
+                sink.with_context_menu(|state, events| {
+                    let selection_actions = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-selection-actions", panel))).unwrap_or_default());
+                    let delete_actions = ui
+                        .ctx()
+                        .data(|data| data.get_temp::<Vec<BrowserAction>>(egui::Id::new(("preset-browser-delete-selection", panel))).unwrap_or_default());
+                    crate::pickers::browser::context_menu::picker_context_menu(ui, panel, groups, &selection_actions, &delete_actions, events);
+                    let _ = state;
+                });
+            });
             empty_area_clicked.set(empty_area.clicked());
             ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
             // Keep drag targets reachable when a preset or hierarchy node is dragged beyond the

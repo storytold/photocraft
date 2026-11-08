@@ -191,12 +191,68 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 new_gradient(app, &mut state);
                 app.ui.presets_ui = state;
             }
+            BrowserAction::AppendDefault => {
+                run(app, "gradient.presets.reset", json!({"append": true}));
+            }
+            BrowserAction::Import => crate::preset_files_ui::import_gradients_dialog(app),
+            BrowserAction::ExportSelected(names) => export_selected_gradients_dialog(app, &names),
             // Only the brush browser supports nested-group context actions.
             BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "gradients", "gradient.presets", &event, json!({"name": "Custom"}));
             }
         }
+    }
+}
+
+fn export_selected_gradients_dialog(app: &mut PhotocraftApp, names: &[String]) {
+    use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop};
+    let gradients: Vec<_> = app
+        .session
+        .presets
+        .gradients
+        .iter()
+        .flat_map(|group| group.items.iter())
+        .filter(|gradient| names.contains(&gradient.name))
+        .map(|gradient| GrdGradient {
+            name: gradient.name.clone(),
+            noise: false,
+            stops: gradient
+                .stops
+                .iter()
+                .map(|(location, color)| GrdStop {
+                    location: *location,
+                    midpoint: 0.5,
+                    color: match color {
+                        photocraft_engine::presets::gradients::StopColor::Foreground => GrdColor::Foreground,
+                        photocraft_engine::presets::gradients::StopColor::Background => GrdColor::Background,
+                        photocraft_engine::presets::gradients::StopColor::Rgb(rgb) => GrdColor::Rgb(*rgb),
+                    },
+                })
+                .collect(),
+            opacity: gradient.opacity.iter().map(|(location, opacity)| (*location, *opacity, 0.5)).collect(),
+        })
+        .collect();
+    if gradients.is_empty() {
+        return;
+    }
+    let bytes = photocraft_psd::grd::write(&gradients);
+    let count = gradients.len();
+    let result = app.pick_save("Gradients.grd", move |app, path| {
+        let write = app.services.write.as_mut().ok_or("no writer configured")?;
+        write(&path, &bytes)?;
+        app.ui.status_error = false;
+        app.ui.status = crate::i18n::fmt(
+            &crate::i18n::trn(crate::i18n::current(), count as u64, "Exported {n} gradient to {file}", "Exported {n} gradients to {file}"),
+            &[("n", &count.to_string()), ("file", &crate::file_open::display_name(&path))],
+        );
+        Ok(json!({"path": path, "count": count}))
+    });
+    if let Err(error) = result
+        && error != crate::file_dialog::CANCELLED
+    {
+        app.ui.status = error;
+        app.ui.status_error = true;
     }
 }
 

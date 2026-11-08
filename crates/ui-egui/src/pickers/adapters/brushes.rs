@@ -752,7 +752,12 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
                 Some(Action::Rename(Renaming { group: true, name: group_key(presets, &group), folder: group_path, text }))
             }
             BrowserAction::DeleteNestedGroup { group, group_path } => Some(Action::DeleteGroup { group: group_key(presets, &group), folder: group_path }),
-            BrowserAction::Drop(_, _) | BrowserAction::NewGroup | BrowserAction::New => None,
+            BrowserAction::Drop(_, _)
+            | BrowserAction::NewGroup
+            | BrowserAction::New
+            | BrowserAction::AppendDefault
+            | BrowserAction::Import
+            | BrowserAction::ExportSelected(_) => None,
         })
         .collect()
 }
@@ -767,7 +772,7 @@ fn brush_item_context_menu(
     let targets = item_context_targets(item, group, selected_items);
     let count = targets.len();
     let delete_label = if count > 1 { format!("{} ({count})", tl!("Delete Brushes")) } else { tl!("Delete Brush").to_string() };
-    match draw_item_context_menu(ui, tl!("Rename Brush…"), &delete_label, None) {
+    match draw_item_context_menu(ui, tl!("Rename Brush…"), &delete_label) {
         Some(ContextMenuAction::Rename) => {
             if st.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
                 st.group_renaming = None;
@@ -777,7 +782,7 @@ fn brush_item_context_menu(
         Some(ContextMenuAction::Delete) => {
             actions.extend(delete_item_actions(&targets));
         }
-        Some(ContextMenuAction::MoveTo(_)) | None => {}
+        None => {}
     }
 }
 
@@ -790,7 +795,7 @@ fn brush_group_context_menu(ui: &mut egui::Ui, st: &mut PresetUi, panel: &str, g
             st.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone()));
         }
         Some(ContextMenuAction::Delete) => actions.push(BrowserAction::DeleteGroup(group.name.clone())),
-        Some(ContextMenuAction::MoveTo(_)) | None => {}
+        None => {}
     }
 }
 
@@ -813,7 +818,7 @@ fn brush_nested_group_context_menu(
             });
         }
         Some(ContextMenuAction::Delete) => actions.push(BrowserAction::DeleteNestedGroup { group: group.name.clone(), group_path: group_path.to_vec() }),
-        Some(ContextMenuAction::MoveTo(_)) | None => {}
+        None => {}
     }
 }
 

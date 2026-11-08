@@ -199,6 +199,9 @@ pub(crate) fn generic_with_state(
         | BrowserAction::ActivateItem { .. }
         | BrowserAction::Drop(_, _)
         | BrowserAction::RenameNestedGroup { .. }
-        | BrowserAction::DeleteNestedGroup { .. } => false,
+        | BrowserAction::DeleteNestedGroup { .. }
+        | BrowserAction::AppendDefault
+        | BrowserAction::Import
+        | BrowserAction::ExportSelected(_) => false,
     }
 }
