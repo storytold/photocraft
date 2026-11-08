@@ -84,7 +84,6 @@ impl egui::plugin::Plugin for CursorLifecycle {
     }
 }
 
-/// The bucket artwork and its exact fill crosshair move as one native cursor or painted image.
 /// The Count tool's cursor (#11773): an arrow with "1+" (a click adds a marker), "1" (over a
 /// marker: a click or drag moves it) or "1−" (⌥ over a marker: a click deletes it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -131,6 +130,7 @@ pub(crate) fn count(ctx: &egui::Context, at: Pos2, kind: CountCursor) -> CursorI
     CursorIcon::Default
 }
 
+/// The bucket artwork and its exact fill crosshair move as one native cursor or painted image.
 pub(crate) fn bucket(painter: &Painter, at: Pos2) -> Result<CursorIcon, String> {
     bucket::show(painter, at)
 }
