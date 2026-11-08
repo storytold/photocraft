@@ -318,6 +318,13 @@ fn placing_color_sampler_reveals_closed_info_panel() {
     assert!(app.ui.panels.navigator);
     assert_eq!(app.ui.dock_tabs.navigator, INFO_DOCK_TAB);
 
+    // When the Navigator group is already open on another tab, placing a sampler preserves the active tab (#11745).
+    app.ui.dock_tabs.navigator = 0;
+    down(&mut app, 60.0, 50.0, egui::Modifiers::NONE);
+    up(&mut app, 60.0, 50.0);
+    assert!(app.ui.panels.navigator);
+    assert_eq!(app.ui.dock_tabs.navigator, 0);
+
     // A click on an existing sampler (starting a move or selection) does not reopen a closed panel.
     app.ui.panels.navigator = false;
     down(&mut app, 25.0, 30.0, egui::Modifiers::NONE);

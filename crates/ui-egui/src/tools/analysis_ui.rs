@@ -413,7 +413,10 @@ pub const MAX_SAMPLERS_ALERT: &str = "Could not create a new sampler because the
 fn open_max_samplers_alert(app: &mut PhotocraftApp) {
     app.ui.status.clear();
     app.ui.status_error = false;
-    let message = crate::i18n::fmt(tl!(MAX_SAMPLERS_ALERT_TEMPLATE), &[("max", &photocraft_engine::sampler_cmds::MAX_SAMPLERS.to_string())]);
+    let message = crate::i18n::fmt(
+        tl!("Could not create a new sampler because the maximum number of samplers is {max}."),
+        &[("max", &photocraft_engine::sampler_cmds::MAX_SAMPLERS.to_string())],
+    );
     let mut fields = Map::new();
     fields.insert("message".into(), json!(message));
     app.ui.open_dialog(DialogKind::Error, fields);
@@ -421,11 +424,8 @@ fn open_max_samplers_alert(app: &mut PhotocraftApp) {
 
 /// Open the closed Info panel (or bring it to the front) when a Color Sampler point is placed (#11745).
 pub(crate) fn reveal_info_panel(app: &mut PhotocraftApp) {
-    let already_open = if app.ui.docking.is_some() {
-        crate::panels::panel_docking::checked(app, "window.panel.info").unwrap_or(false)
-    } else {
-        app.ui.panels.navigator && app.ui.dock_tabs.navigator == INFO_DOCK_TAB
-    };
+    let already_open =
+        if app.ui.docking.is_some() { crate::panels::panel_docking::checked(app, "window.panel.info").unwrap_or(false) } else { app.ui.panels.navigator };
     if already_open {
         return;
     }
