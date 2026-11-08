@@ -528,8 +528,8 @@ pub use cmds::specs;
 #[cfg(test)]
 pub(crate) use files::write_files_atomically;
 pub use shortcuts::{
-    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates, normalize_shortcut,
-    reserved_shortcut,
+    ALTERNATE_SHORTCUTS, BindKind, MAX_ALTERNATES, MIXER_BRUSH_COMMANDS, TEMPORARY_TOOLS, alternate_keys, bindable_items, conflicts, default_alternates,
+    normalize_shortcut, reserved_shortcut,
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore, read_section};
