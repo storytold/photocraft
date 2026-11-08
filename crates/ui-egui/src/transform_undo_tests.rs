@@ -218,7 +218,7 @@ fn a_press_just_off_a_corner_scales_rather_than_rotates() {
         assert!(q[2][0] > 230.0, "via controls {via_controls}: scaled: {q:?}");
         // Well outside the box still rotates.
         let before = quad(&h);
-        drag(&mut h, [before[2][0] + 30.0, before[2][1] + 30.0], [before[2][0] - 10.0, before[2][1] + 60.0]);
+        drag(&mut h, [before[1][0] + 30.0, before[1][1] - 30.0], [before[1][0] - 10.0, before[1][1] - 60.0]);
         let r = quad(&h);
         assert!((r[0][1] - r[1][1]).abs() > 1.0, "via controls {via_controls}: rotated: {r:?}");
     }
