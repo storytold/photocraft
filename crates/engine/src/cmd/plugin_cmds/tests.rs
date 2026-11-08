@@ -444,10 +444,13 @@ fn skin_smooth_checks_icc_before_editing_at_every_depth() {
         s.execute(RUN, params).unwrap();
         let after = pixels(&s);
         assert_ne!(after, before);
-        for (original, filtered) in before.chunks_exact(4).zip(after.chunks_exact(4)) {
+        for (i, (original, filtered)) in before.chunks_exact(4).zip(after.chunks_exact(4)).enumerate() {
             assert_eq!(original[3], filtered[3]);
+            let (x, y) = (i % 40, i / 40);
+            if !(4..30).contains(&x) || !(4..20).contains(&y) {
+                assert_eq!(original, filtered, "{depth}: pixel {x},{y} outside selection");
+            }
         }
-        assert_eq!(&before[..16], &after[..16]); // Outside selection.
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(pixels(&s), before);
         s.execute("edit.redo", json!({})).unwrap();

@@ -1698,6 +1698,7 @@ fn plugin_viewport_preserves_selection_alpha_and_final_full_run() {
         let local = preview_document(&doc, active, "plugin.run", &json!({"id":id,"__previewRegion":[237,199,623,401]}), 1).unwrap();
         let surface = |d: &photocraft_doc::Document| d.layer(active.unwrap()).unwrap().surface().unwrap().clone();
         let (original, expected, result) = (surface(&doc), surface(&full), surface(&local));
+        assert_ne!(expected.pixel(237, 199), original.pixel(237, 199), "{depth}: the full preview changes the opaque input pixel");
         assert_eq!(local.selection.as_ref().unwrap().read_region(doc.bounds()), doc.selection.as_ref().unwrap().read_region(doc.bounds()));
         for (x, y) in [(237, 199), (400, 300), (622, 400), (236, 199), (623, 400), (700, 450)] {
             assert_eq!(result.pixel(x, y), if region.contains(x, y) { expected.pixel(x, y) } else { original.pixel(x, y) }, "{depth} at {x},{y}");
@@ -1706,5 +1707,22 @@ fn plugin_viewport_preserves_selection_alpha_and_final_full_run() {
         // The dialog's final command has no preview-only region: pixels outside it also change.
         s.execute("plugin.run", json!({"id":id})).unwrap();
         assert_eq!(surface(&s.active().unwrap().doc).read_region(doc.bounds()), expected.read_region(doc.bounds()));
+
+        // At factor 4, right=623 and bottom=401 must round outward to proxy bounds (156, 101).
+        let proxy = crate::proxy::proxy_document(&doc, 4);
+        let full = preview_document(&doc, active, "plugin.run", &json!({"id":id}), 4).unwrap();
+        let local = preview_document(&doc, active, "plugin.run", &json!({"id":id,"__previewRegion":[237,199,623,401]}), 4).unwrap();
+        let (original, expected, result) = (surface(&proxy), surface(&full), surface(&local));
+        assert_eq!(local.selection.as_ref().unwrap().read_region(proxy.bounds()), proxy.selection.as_ref().unwrap().read_region(proxy.bounds()));
+        for (x, y) in [(155, 80), (80, 100)] {
+            assert_ne!(expected.pixel(x, y), original.pixel(x, y), "{depth}: the full proxy preview changes edge pixel {x},{y}");
+        }
+        let region = Rect::new(59, 49, 156, 101);
+        for y in 0..135 {
+            for x in 0..200 {
+                assert_eq!(result.pixel(x, y), if region.contains(x, y) { expected.pixel(x, y) } else { original.pixel(x, y) }, "{depth}: proxy at {x},{y}");
+                assert_eq!(result.pixel(x, y).last(), original.pixel(x, y).last());
+            }
+        }
     }
 }
