@@ -859,6 +859,22 @@ fn a_failed_export_does_not_move_the_remembered_save_folder() {
     app.poll_file_dialog(&ctx, None);
 }
 
+/// #9656 review: an export that needs no dialog (Quick Export beside the document) still
+/// remembers its folder, for the preference and for the document.
+#[test]
+fn a_dialogless_export_remembers_its_folder() {
+    let (mut app, _, _) = app();
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().to_string_lossy().into_owned();
+    let doc = app.session.active().unwrap().doc.id;
+    app.remember_save_folder(Some(doc), &joined(&dir, "a.png"));
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, dir);
+    assert_eq!(app.save_dirs.get(&doc).map(|p| p.to_string_lossy().into_owned()), Some(dir));
+    // A bare download name (the web) has no folder to remember.
+    app.remember_save_folder(Some(doc), "b.png");
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, tmp.path().to_string_lossy());
+}
+
 /// #9656 review: a remembered folder that no longer exists is not offered; the dialog starts
 /// beside the document instead.
 #[test]

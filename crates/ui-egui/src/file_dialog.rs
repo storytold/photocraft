@@ -156,7 +156,12 @@ impl PhotocraftApp {
     /// [`Self::pick_save`]. `own_file` marks the suggestion as the active document's own file
     /// (File › Save of a flat file asking for a name): a relative one stays where it is instead
     /// of moving to the last folder saved to when Save As to Original Folder is off.
-    pub(crate) fn pick_save_for(&mut self, suggested: &str, own_file: bool, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
+    pub(crate) fn pick_save_for(
+        &mut self,
+        suggested: &str,
+        own_file: bool,
+        then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static,
+    ) -> Result<Value, String> {
         let mut suggested = std::path::PathBuf::from(suggested);
         let doc = self.session.active().map(|d| d.doc.id);
         // Closed documents' folders are no longer needed.
@@ -186,14 +191,7 @@ impl PhotocraftApp {
                 // Remember the folder only once the write was accepted: a failed or refused
                 // export must not move where the next dialog starts (#9656).
                 let done = then(app, path.clone())?;
-                // The web answers a download name, which has no folder to remember.
-                if let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()) {
-                    if let Some(doc) = doc {
-                        app.save_dirs.insert(doc, dir.to_path_buf());
-                    }
-                    let dir = dir.to_string_lossy().into_owned();
-                    app.session.prefs.edit(|p| p.file_handling.last_save_folder = dir);
-                }
+                app.remember_save_folder(doc, &path);
                 Ok(done)
             }
             _ => Err(UNEXPECTED.into()),
@@ -202,6 +200,17 @@ impl PhotocraftApp {
             p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
         }
         Ok(asked)
+    }
+
+    /// Records where `path` was just written, so the next save dialog starts there (#9656). Only
+    /// call it after the write succeeded. The web answers a download name, which has no folder.
+    pub(crate) fn remember_save_folder(&mut self, doc: Option<photocraft_doc::DocId>, path: &str) {
+        let Some(dir) = Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()) else { return };
+        if let Some(doc) = doc {
+            self.save_dirs.insert(doc, dir.to_path_buf());
+        }
+        let dir = dir.to_string_lossy().into_owned();
+        self.session.prefs.edit(|p| p.file_handling.last_save_folder = dir);
     }
 
     /// The folder the last save or export succeeded in, for any document, when Preferences ▸ File
