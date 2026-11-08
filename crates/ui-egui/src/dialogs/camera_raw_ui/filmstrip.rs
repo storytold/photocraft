@@ -176,7 +176,7 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
         let r = commit_open_raw(app, &p, &this, loaded.as_ref());
         match &r {
             Ok(v) => {
-                return_on_failure(app, v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
+                return_on_failure(app, v, &p, loaded.as_ref().unwrap_or(&CameraRaw::default()));
                 opened.push(v.clone());
                 app.raw_shelf.retain(|h| h.raw.document != *id);
             }

@@ -1496,3 +1496,38 @@ fn auto_reads_the_default_develop_when_the_proxy_is_binned() {
     assert_eq!(r["params"]["exposure"].as_f64().map(|v| v as f32), Some(expected.exposure));
     assert_eq!(r["params"]["whites"].as_f64().map(|v| v as f32), Some(expected.whites));
 }
+
+/// A held raw whose Camera Raw step is cancelled (or fails) after it became a document closes
+/// again and returns to the filmstrip with its settings: one document at most, never one opened
+/// without its settings.
+#[test]
+fn a_raw_whose_camera_raw_step_is_cancelled_goes_back_with_its_settings() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+    let before = session_state(&app);
+    app.open_bytes("one.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    // Contrast only: no re-develop, the Camera Raw step is the job.
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}}})).unwrap().unwrap();
+    app.background_jobs = true;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    if let Some(job) = r["filter"]["job"].as_u64() {
+        app.session.cancel_job(photocraft_engine::jobs::JobId(job));
+    }
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the job never finished");
+    match app.raw_shelf.first() {
+        Some(held) => {
+            assert_eq!(session_state(&app).0, before.0, "the admitted document closed again");
+            assert_eq!(held.kept.as_ref().map(|(p, _)| p.contrast), Some(40.0));
+        }
+        None => assert_eq!(app.session.documents().len(), 2, "opened with its step"),
+    }
+}
