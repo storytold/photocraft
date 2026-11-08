@@ -302,7 +302,8 @@ impl PhotocraftApp {
                 self.ui.selected_path = Some("layer".into());
             }
         }
-        if result.is_ok() && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
+        // A copy that runs as a background job is mirrored when it lands (`jobs_ui`).
+        if result.as_ref().is_ok_and(|v| v.get("pending") != Some(&Value::Bool(true))) && matches!(id, "edit.copy" | "edit.cut" | "edit.copyMerged") {
             self.clip_external = false;
             self.export_os_clipboard();
         }

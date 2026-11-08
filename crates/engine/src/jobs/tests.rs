@@ -1655,3 +1655,23 @@ fn unix_fingerprint_detects_a_same_size_rewrite_with_a_restored_mtime() {
     assert_ne!(before, after, "a same-size rewrite with a restored mtime is a different source");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn copy_runs_as_a_job_with_the_inline_result_and_cut_stays_inline() {
+    // On the UI thread a large canvas froze the window long enough for Wayland to drop it.
+    let area = json!({"x": 10, "y": 20, "width": 100, "height": 50});
+    let mut inline = session(300, 200);
+    inline.execute("select.rect", area.clone()).unwrap();
+    inline.execute("edit.copy", json!({})).unwrap();
+
+    let mut s = session(300, 200);
+    s.execute("select.rect", area).unwrap();
+    let id = job(s.start("edit.copy", json!({})).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    let (a, b) = (s.clipboard.as_ref().unwrap(), inline.clipboard.as_ref().unwrap());
+    assert_eq!(a.bounds, b.bounds);
+    assert_eq!(a.surface, b.surface, "the inline clip's pixels");
+    // Cut clears the pixels right after copying them, so it copies on the calling thread.
+    assert!(matches!(s.start("edit.cut", json!({})).unwrap(), Started::Done(_)));
+}

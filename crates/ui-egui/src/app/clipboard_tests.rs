@@ -666,3 +666,11 @@ fn pixel_paste_reads_the_bitmap_when_the_svg_read_fails() {
     app.run("file.new", json!({"width":24,"height":20})).unwrap();
     assert!(app.run("edit.paste", json!({"as":"pixels"})).is_err());
 }
+
+#[test]
+fn only_copies_up_to_64_megapixels_go_to_the_os_clipboard() {
+    use photocraft_geom::Rect;
+    assert!(super::clipboard::mirrors_to_os(Rect::new(0, 0, 8192, 8192)));
+    assert!(!super::clipboard::mirrors_to_os(Rect::new(0, 0, 8192, 8193)), "a larger copy stays PhotoCraft's own");
+    assert!(!super::clipboard::mirrors_to_os(Rect::new(0, 0, 34_000, 34_000)));
+}

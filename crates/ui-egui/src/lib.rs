@@ -631,6 +631,9 @@ pub struct PhotocraftApp {
     /// The session copy, if any, need not track the OS clipboard. An older OS signature is kept
     /// to recognize unchanged system contents when exporting a newer copy failed or was disabled.
     clip_unmirrored: bool,
+    /// The session clipboard's RGBA8 pixels, being converted on a worker for the OS clipboard
+    /// (see `export_os_clipboard`); `None` when no conversion is running.
+    os_clip_export: Option<std::sync::mpsc::Receiver<(u32, u32, Vec<u8>)>>,
     /// The session clipboard currently holds an image imported from the OS clipboard: it has no
     /// original position, so Paste centres it (see `menus` "edit.paste").
     pub(crate) clip_external: bool,

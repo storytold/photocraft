@@ -1,5 +1,22 @@
 use super::PhotocraftApp;
 
+/// `surface`'s pixels in `b` as straight RGBA8 bytes, row by row (read in parallel bands).
+fn rgba8(surface: &photocraft_raster::Surface, b: photocraft_geom::Rect) -> Vec<u8> {
+    photocraft_algo::selection::rgba8_image(surface, b).into_flattened()
+}
+
+/// The largest copy mirrored to the OS clipboard, in pixels (64 MP: 256 MiB of RGBA, an
+/// 8192 × 8192 image). Larger clips stay PhotoCraft's own: Paste inside PhotoCraft is
+/// unaffected. Beyond this the mirror costs gigabytes of RGBA, and the clipboard library
+/// encodes it as PNG on the UI thread when the OS takes it, which froze the window for as long
+/// as that took; few other apps could open such an image anyway.
+pub(crate) const MAX_OS_CLIPBOARD_PIXELS: u64 = 64 << 20;
+
+/// Whether a copy of `b` is mirrored to the OS clipboard (see [`MAX_OS_CLIPBOARD_PIXELS`]).
+pub(super) fn mirrors_to_os(b: photocraft_geom::Rect) -> bool {
+    b.size().area() <= MAX_OS_CLIPBOARD_PIXELS
+}
+
 fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     let mut sig = (w as u64) << 32 | h as u64;
     for b in px.iter().step_by(997) {
@@ -30,6 +47,10 @@ fn svg_clip_signature(clip: &photocraft_engine::edit_cmds::Clip) -> u64 {
 impl PhotocraftApp {
     /// Capture SVG and its raster mirror together; failures leave the previous copy intact.
     pub(super) fn import_os_svg_clipboard(&mut self) -> Result<bool, String> {
+        // Our own copy is still on its way to the OS clipboard: it is the newest, keep it.
+        if self.os_clip_export.is_some() {
+            return Ok(false);
+        }
         let Some(get) = self.services.clipboard_get_svg.as_mut() else { return Ok(false) };
         let source = match get() {
             Ok(source) => source,
@@ -79,22 +100,61 @@ impl PhotocraftApp {
     }
 
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
-    pub(super) fn export_os_clipboard(&mut self) {
+    ///
+    /// Converting the clip to RGBA8 reads every pixel: hundreds of megabytes and seconds of work
+    /// for a large canvas, which on the UI thread froze the window until the Wayland compositor
+    /// dropped it. With background jobs on (the desktop app) the conversion runs on a worker and
+    /// [`Self::poll_os_clipboard_export`] hands the pixels to the OS clipboard when they are ready.
+    pub(crate) fn export_os_clipboard(&mut self) {
         self.clip_unmirrored = true;
-        if !self.session.prefs().general.export_clipboard {
+        // A newer copy supersedes one still being converted.
+        self.os_clip_export = None;
+        if !self.session.prefs().general.export_clipboard || self.services.clipboard_set_image.is_none() {
             return;
         }
-        let (Some(set), Some(clip)) = (self.services.clipboard_set_image.as_mut(), self.session.clipboard.as_ref()) else { return };
+        let Some(clip) = self.session.clipboard.as_ref() else { return };
         let b = clip.bounds;
         if b.is_empty() {
             return;
         }
-        let mut px = vec![[0u8; 4]; b.width() as usize * b.height() as usize];
-        clip.surface.read_rgba8_into(b, &mut px);
-        let bytes: Vec<u8> = px.into_iter().flatten().collect();
-        if set(b.width(), b.height(), &bytes).is_ok() {
+        if !mirrors_to_os(b) {
+            log::info!("copy of {}×{} px kept in PhotoCraft: too large for the system clipboard", b.width(), b.height());
+            return;
+        }
+        if self.background_jobs {
+            let surface = clip.surface.clone();
+            let (tx, rx) = std::sync::mpsc::channel();
+            let spawned = std::thread::Builder::new().name("photocraft-clipboard-export".into()).spawn(move || {
+                let _ = tx.send((b.width(), b.height(), rgba8(&surface, b)));
+            });
+            if spawned.is_ok() {
+                self.os_clip_export = Some(rx);
+                return;
+            }
+        }
+        let bytes = rgba8(&clip.surface, b);
+        self.set_os_clipboard_image(b.width(), b.height(), &bytes);
+    }
+
+    /// Hand a finished background conversion (see [`Self::export_os_clipboard`]) to the OS
+    /// clipboard. Called every frame; keeps frames coming while a conversion runs.
+    pub(crate) fn poll_os_clipboard_export(&mut self, ctx: &egui::Context) {
+        let Some(rx) = &self.os_clip_export else { return };
+        match rx.try_recv() {
+            Ok((w, h, bytes)) => {
+                self.os_clip_export = None;
+                self.set_os_clipboard_image(w, h, &bytes);
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(50)),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.os_clip_export = None,
+        }
+    }
+
+    fn set_os_clipboard_image(&mut self, w: u32, h: u32, bytes: &[u8]) {
+        let Some(set) = self.services.clipboard_set_image.as_mut() else { return };
+        if set(w, h, bytes).is_ok() {
             self.os_clip_svg = None;
-            self.os_clip_sig = Some(clip_signature(b.width(), b.height(), &bytes));
+            self.os_clip_sig = Some(clip_signature(w, h, bytes));
             self.clip_unmirrored = false;
         }
     }
@@ -106,6 +166,10 @@ impl PhotocraftApp {
     /// it is dropped rather than pasted. Unexported internal copies survive unavailable or empty
     /// system clipboards.
     pub(crate) fn import_os_clipboard(&mut self) -> Result<bool, String> {
+        // Our own copy is still on its way to the OS clipboard: it is the newest, keep it.
+        if self.os_clip_export.is_some() {
+            return Ok(false);
+        }
         let Some(get) = self.services.clipboard_get_image.as_mut() else { return Ok(false) };
         // A read failure says nothing about the clipboard contents. Keep our editable copy and
         // its signature rather than treating the failure as an empty image.
