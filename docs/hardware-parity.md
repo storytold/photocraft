@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-06 · **Change:** minor (Graphics Adapter choice on Linux, #1885; Camera Raw's preview develops its per-pixel stages on the GPU; GPU, Wayland and monitor-profile rows refreshed against main; Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; previously minor: optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-11-08 · **Change:** minor (Graphics Adapter choice on Linux, #1885; Camera Raw's preview develops its per-pixel stages on the GPU; GPU, Wayland (tilt and eraser end via Xwayland) and monitor-profile rows refreshed against main; Windows: flipping the pen to its eraser end selects the Eraser with Windows Ink on, #2285, not yet confirmed on a pen with an eraser end; previously minor: optional WinTab backend on Windows: pressure and the eraser end; tilt on devices with orientation axes; rotation only with a pen and driver that report twist, with Windows Ink off) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -33,9 +33,9 @@ HDR display to verify.
 | Feature | Photoshop | macOS | Windows | Linux X11 | Linux Wayland | Web |
 |---|---|---|---|---|---|---|
 | Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622); KDE fixed in 0.6.0 (#2297, #1070) | yes |
-| Tilt | yes | yes | **no** (WinTab: with orientation axes, opt-in) | yes | no | yes |
+| Tilt | yes | yes | **no** (WinTab: with orientation axes, opt-in) | yes | via Xwayland only (native Wayland: no) | yes |
 | Barrel rotation | yes | yes (not applied to tip angle, #1301) | no (WinTab: with a twist-reporting pen and driver, opt-in) | partial | no | yes (twist) |
-| Eraser end | yes | yes | yes with Windows Ink, not yet confirmed on hardware (#2285); WinTab: yes (opt-in) | partial | no | partial |
+| Eraser end | yes | yes | yes with Windows Ink, not yet confirmed on hardware (#2285); WinTab: yes (opt-in) | partial | partial, via Xwayland only (native Wayland: no) | partial |
 | WinTab driver mode | yes | – | yes (opt-in; Windows Ink off) | – | – | – |
 | Pressure curve | Windows Ink / driver | global curve in Preferences (#2195) | same | same | same | same |
 
@@ -78,3 +78,4 @@ rotation; its eraser end comes from the pointer hooks (#2285).
 | 2026-10-12 | minor | GPU rows (documents past the texture limit, Rgba32Float panic), Wayland KDE pen and monitor-profile detection refreshed against main |
 | 2026-10-17 | minor | GPU filters: Camera Raw's preview, per-pixel stages (#6916 step 1) |
 | 2026-10-19 | minor | Graphics Adapter choice on Linux (#1885) |
+| 2026-11-08 | minor | Linux Wayland: tilt and the eraser end work through Xwayland, like pressure; native Wayland still has no pen |
