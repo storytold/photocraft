@@ -186,8 +186,9 @@ pub fn ellipse_drag(grab: EllipseGrab, rel: egui::Vec2, angle: f32, roundness: f
     }
 }
 
-/// Photoshop's angle/roundness widget: drag the arrow to rotate, the dots to squash.
-fn ellipse_widget(ui: &mut egui::Ui, angle: &mut f32, roundness: &mut f32) -> bool {
+/// Photoshop's angle/roundness widget: drag the arrow to rotate, the dots to squash. Also at the
+/// Brush Preset picker's top left (#11821).
+pub(crate) fn ellipse_widget(ui: &mut egui::Ui, angle: &mut f32, roundness: &mut f32) -> bool {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(84.0, 84.0), Sense::click_and_drag());
     let c = rect.center();
