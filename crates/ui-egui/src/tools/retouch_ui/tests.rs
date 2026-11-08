@@ -587,7 +587,8 @@ fn patch_cursor_shows_the_selection_mode_badge() {
         app.ui.selection_mode = 1;
         assert_eq!(badge(&app, tool, none), Some(Badge::Add), "{tool:?}: the options-bar mode outside the selection");
         app.hover_doc = Some([20.0, 30.0]);
-        assert_eq!(badge(&app, tool, none), None, "{tool:?}: a press over the selection drags the patch");
+        let over = (tool == Tool::Patch).then_some(Badge::Arrow);
+        assert_eq!(badge(&app, tool, none), over, "{tool:?}: a press over the selection drags the patch (Patch shows an arrow, #12130)");
         assert_eq!(badge(&app, tool, shift), Some(Badge::Add), "{tool:?}: ⇧ over the selection adds");
     }
 }

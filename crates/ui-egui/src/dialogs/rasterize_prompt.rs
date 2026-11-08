@@ -57,7 +57,10 @@ impl Kind {
         match self {
             Kind::Type => "This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?",
             Kind::Shape => "This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?",
-            Kind::SmartObject => "This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?",
+            // As measured in the reference application (#11899): lower-case "smart object".
+            Kind::SmartObject => {
+                "This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?"
+            }
             Kind::Fill => "This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?",
         }
     }
@@ -249,3 +252,7 @@ pub fn run_pending(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../rasterize_prompt_text_tests.rs"]
+mod rasterize_prompt_text_tests;
