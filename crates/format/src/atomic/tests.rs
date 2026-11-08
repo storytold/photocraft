@@ -616,8 +616,8 @@ fn a_directory_flush_the_file_system_cannot_do_still_saves() {
     atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap();
     assert_eq!(std::fs::read(&p).unwrap(), b"new");
     // EINVAL (22) means "can't flush a directory" only on Unix; EIO (5) is a real failure.
-    assert_eq!(dir_synced(Err(io::Error::from_raw_os_error(22))).is_ok(), cfg!(unix));
-    assert!(dir_synced(Err(io::Error::from_raw_os_error(5))).is_err());
+    assert_eq!(dir_synced(Err(io::Error::from_raw_os_error(22)), &d.0, &RealFs).is_ok(), cfg!(unix));
+    assert!(dir_synced(Err(io::Error::from_raw_os_error(5)), &d.0, &RealFs).is_err());
     let fs = Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() };
     assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
 }
@@ -792,4 +792,45 @@ fn an_afp_share_that_cannot_flush_a_directory_still_saves() {
     assert_eq!(std::fs::read(&p).unwrap(), b"new");
     let fs = Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() };
     assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
+}
+
+/// The ENOENT refusal only counts as unsupported while the folder is still there (review on
+/// #11492): a folder genuinely deleted, renamed or symlink-swapped between the rename and the
+/// flush must keep the save unconfirmed instead of counting a save into a vanished folder as
+/// durable. The real file system answers `dir_exists`, so the mock has to.
+#[cfg(target_vendor = "apple")]
+struct VanishedFolder(Faulty);
+
+#[cfg(target_vendor = "apple")]
+impl AtomicFs for VanishedFolder {
+    fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()> {
+        self.0.write_new(tmp, bytes)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.0.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> io::Result<()> {
+        self.0.remove(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> io::Result<()> {
+        self.0.sync_dir(dir)
+    }
+    fn dir_exists(&self, _dir: &Path) -> bool {
+        false
+    }
+    fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()> {
+        self.0.copy_metadata(from, to)
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+#[test]
+fn a_vanished_folder_keeps_the_enoent_flush_a_failure() {
+    let d = TempDir::new("syncdir-afp-vanished");
+    let p = d.0.join("doc.pcraft");
+    let fs = VanishedFolder(Faulty { fail_sync_dir: Some(Ok(2)), ..Default::default() });
+    let e = atomic_write_with(&fs, NO_RETRY, &p, b"new").unwrap_err();
+    assert!(e.to_string().contains("could not be flushed"), "{e}");
+    let fs = VanishedFolder(Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() });
+    assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err(), "EIO still fails");
 }

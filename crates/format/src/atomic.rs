@@ -74,6 +74,12 @@ pub trait AtomicFs {
     fn remove(&self, path: &Path) -> io::Result<()>;
     /// Flush a directory entry change on Unix and Windows; a no-op elsewhere.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
+    /// Whether `dir` is still a directory at this path. The directory-flush path uses this to
+    /// tell a file system that refuses the flush with ENOENT ([#11315]) from a folder that is
+    /// genuinely gone; by default the real file system answers.
+    fn dir_exists(&self, dir: &Path) -> bool {
+        std::fs::metadata(dir).map(|m| m.is_dir()).unwrap_or(false)
+    }
     /// Copy the metadata a replacement should keep — mode, extended attributes, ACL — from the
     /// file about to be replaced onto the temporary file. Best effort; see [`meta`].
     fn copy_metadata(&self, from: &Path, to: &Path) -> io::Result<()>;
@@ -360,7 +366,7 @@ fn replace_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, write_tmp: &
     #[cfg(windows)]
     fs.sync_dir(&dir).map_err(|e| publication_error(e, path))?;
     #[cfg(not(windows))]
-    dir_synced(fs.sync_dir(&dir)).map_err(|e| unconfirmed_error(e, path))?;
+    dir_synced(fs.sync_dir(&dir), &dir, fs).map_err(|e| unconfirmed_error(e, path))?;
     Ok(())
 }
 
@@ -380,11 +386,30 @@ fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
 /// success: `EINVAL` (Linux file systems without directory fsync), `ENOTSUP`/`EOPNOTSUPP` and,
 /// on Apple platforms, `ENOTTY`, or [`io::ErrorKind::Unsupported`]. Waiting or retrying won't
 /// change those, and failing every save there would make saving impossible. Any other error is
-/// returned: the flush was attempted and failed.
+/// returned: the flush was attempted and failed. An Apple `ENOENT` (the AFP share's refusal,
+/// #11315) only counts as unsupported while `dir` is still a directory at its path — when it
+/// is gone (deleted, renamed or symlink-swapped between the rename and the flush), the save
+/// stays unconfirmed instead of counting a save into a vanished folder as durable.
 #[cfg(not(windows))]
-pub(crate) fn dir_synced(result: io::Result<()>) -> io::Result<()> {
+pub(crate) fn dir_synced(result: io::Result<()>, dir: &Path, fs: &dyn AtomicFs) -> io::Result<()> {
     match result {
-        Err(e) if dir_sync_unsupported(&e) => Ok(()),
+        Err(e) if dir_sync_unsupported(&e) => {
+            // An Apple ENOENT (the AFP share's refusal) is fail-open: durability is downgraded
+            // to "saved but not dir-synced", so make that distinguishable from a fully synced
+            // save. But only while the folder is still there — when it vanished between the
+            // rename and the flush, the save stays unconfirmed instead of counting a save
+            // into a vanished folder as durable.
+            if e.raw_os_error() == Some(2) && cfg!(target_vendor = "apple") {
+                if fs.dir_exists(dir) {
+                    log::warn!("directory flush refused with ENOENT on {dir:?} (AFP, #11315); the save stands but is not dir-synced");
+                    Ok(())
+                } else {
+                    Err(e)
+                }
+            } else {
+                Ok(())
+            }
+        }
         other => other,
     }
 }
