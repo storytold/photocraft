@@ -50,6 +50,11 @@ pub struct CanvasToolMenu {
     /// `None` off a sampler, where every row is greyed.
     #[serde(default)]
     pub sampler: Option<usize>,
+    /// Where that sampler was when the menu opened: the active document's index and the sampler's
+    /// position. Once a control command deletes, moves or renumbers samplers, or another document
+    /// becomes active, the index may name a different sampler, so the menu closes and Delete greys.
+    #[serde(default)]
+    pub sampler_at: Option<(usize, [f64; 2])>,
 }
 
 /// A misspelled word in the type layer being edited (`edit.checkSpelling`'s `list` entry).
@@ -308,6 +313,7 @@ pub fn open_crop(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         spelling: None,
         crop: Some(users),
         sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -477,6 +483,14 @@ pub const SAMPLER_MENU: &[Row] = &[
     None,
     Some(("Total Ink", "colorSampler.readout.totalInk")),
 ];
+
+/// Does the Color Sampler menu's index still name the sampler it opened on, in the same document?
+/// `true` off a sampler, where there is nothing to go stale.
+fn sampler_current(app: &PhotocraftApp, menu: &CanvasToolMenu) -> bool {
+    let Some(i) = menu.sampler else { return true };
+    let now = app.session.active_index().zip(app.session.active().and_then(|d| d.color_samplers.get(i).copied()));
+    now.is_some() && now == menu.sampler_at
+}
 
 /// Is `menu` the Color Sampler's own menu (not the pasteboard, guide or transform menu opened
 /// with it)?
@@ -693,6 +707,7 @@ pub fn open_transform(app: &mut PhotocraftApp, ctx: &Context, pos: [f32; 2]) -> 
         spelling: None,
         crop: None,
         sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -775,6 +790,7 @@ pub fn open_pasteboard(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: 
         spelling: None,
         crop: None,
         sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -807,6 +823,7 @@ pub fn open_guide(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, mods: egui
         spelling: None,
         crop: None,
         sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -861,8 +878,7 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     }
     // Off a sampler every row is greyed. The readout rows wait for per-sampler readout modes.
     if sampler_menu(menu) {
-        let count = app.session.active().map_or(0, |d| d.color_samplers.len());
-        return command == SAMPLER_DELETE && menu.sampler.is_some_and(|i| i < count);
+        return command == SAMPLER_DELETE && menu.sampler.is_some() && sampler_current(app, menu);
     }
     if menu.transform || !path_menu(menu.tool) {
         return crate::menus::is_enabled(app, command);
@@ -925,6 +941,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
     let path_name = crate::vector_ui::active_path_name(app);
     let spelling = if text { doc.and_then(|d| spelling_at(app, d)) } else { None };
     let sampler = if tool == Tool::ColorSampler { doc.and_then(|d| crate::analysis_ui::sampler_at(app, d)) } else { None };
+    let sampler_at = sampler.and_then(|i| Some((app.session.active_index()?, *app.session.active()?.color_samplers.get(i)?)));
     app.ui.canvas_tool_menu = Some(CanvasToolMenu {
         pos,
         tool,
@@ -940,6 +957,7 @@ pub fn open_at(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 2]
         spelling,
         crop: None,
         sampler,
+        sampler_at,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -968,6 +986,7 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
         spelling: None,
         crop: None,
         sampler: None,
+        sampler_at: None,
     });
     crate::canvas_popup::mark_open(ctx, menu_id());
     true
@@ -1213,6 +1232,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         || (menu.text && app.ui.text_edit.is_none())
         || (menu.type_layer && app.ui.text_edit.is_some())
         || (menu.crop.is_some() && !crate::crop_ui::pending(app))
+        || (sampler_menu(&menu) && !sampler_current(app, &menu))
     {
         app.ui.canvas_tool_menu = None;
         return;

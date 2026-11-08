@@ -113,6 +113,33 @@ fn delete_removes_the_sampler_under_the_pointer_and_renumbers_the_rest() {
 }
 
 #[test]
+fn delete_never_removes_another_sampler_after_the_list_changes_under_the_menu() {
+    let (mut app, ctx) = app();
+    app.run("view.colorSamplers.add", json!({"x": 180, "y": 90})).unwrap();
+    right_click(&mut app, &ctx, 120.0, 60.0);
+    assert_eq!(app.ui.canvas_tool_menu.as_ref().and_then(|m| m.sampler), Some(1));
+    // An agent deletes #1 while the menu is open: index 1 now names the old #3.
+    app.run("view.colorSamplers.delete", json!({"index": 0})).unwrap();
+    let r = control(&mut app, &ctx, "ui.context.choose", json!({"id": SAMPLER_DELETE}));
+    assert_eq!(r["ok"], json!(false), "Delete greys out: {r}");
+    assert_eq!(samplers(&app), [[120.0, 60.0], [180.0, 90.0]], "no other sampler is deleted");
+    // The menu itself closes on the next frame.
+    right_click(&mut app, &ctx, 120.0, 60.0);
+    app.run("view.colorSamplers.move", json!({"index": 0, "x": 30, "y": 30})).unwrap();
+    ctx.run_ui(Default::default(), |ui| crate::canvas_tool_menu::show(&mut app, ui.ctx())).textures_delta.clear();
+    assert!(app.ui.canvas_tool_menu.is_none(), "a moved sampler closes the menu");
+    // Another document with a sampler at the same index and spot: still not this menu's sampler.
+    right_click(&mut app, &ctx, 180.0, 90.0);
+    assert_eq!(app.ui.canvas_tool_menu.as_ref().and_then(|m| m.sampler), Some(1));
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    for (x, y) in [(20, 20), (180, 90)] {
+        app.run("view.colorSamplers.add", json!({"x": x, "y": y})).unwrap();
+    }
+    let menu = app.ui.canvas_tool_menu.clone().expect("the menu is still open");
+    assert!(!crate::canvas_tool_menu::entry_enabled(&app, &menu, SAMPLER_DELETE), "another document's sampler");
+}
+
+#[test]
 fn readout_rows_do_nothing_until_samplers_have_readout_modes() {
     let (mut app, ctx) = app();
     right_click(&mut app, &ctx, 20.0, 20.0);
