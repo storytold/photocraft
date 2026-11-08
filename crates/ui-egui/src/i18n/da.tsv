@@ -185,8 +185,8 @@
 	Trap…	Trap…
 
 # Layer
-	Layer via Copy	Lag via kopiering
-	Layer via Cut	Lag via udklipning
+	Layer Via Copy	Lag via kopiering
+	Layer Via Cut	Lag via udklipning
 	Duplicate Layer…	Duplikér lag…
 	Duplicate…	Duplikér…
 	Delete	Slet
@@ -4493,7 +4493,7 @@ curves	Smooth	Udjævn
 	The file could not be saved.	Filen kunne ikke gemmes.
 	Thickness	Tykkelse
 	This Layer:	Dette lag:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Dette smartobjekt skal rasteriseres, før du fortsætter. Dets indhold kan ikke længere redigeres. Vil du rasterisere smartobjektet?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Dette smartobjekt skal rasteriseres, før du fortsætter. Dets indhold kan ikke længere redigeres. Vil du rasterisere smartobjektet?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Denne justering ({key}) bevares som importeret og kan ikke redigeres endnu.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Dette udfyldningslag skal rasteriseres, før du fortsætter. Dets udfyldningsindhold kan ikke længere redigeres. Vil du rasterisere laget?
 	This layer must be rasterized before proceeding.	Dette lag skal rasteriseres, før du fortsætter.
@@ -4705,6 +4705,7 @@ shape	Appearance	Udseende
 	Grayscale Ramp	Gråtonerampe
 	Current Colors	Aktuelle farver
 	Make Ramp Web Safe	Gør rampe websikker
+	Scroll All Windows	Rul alle vinduer
 # Art History Brush (#213).
 	Art History Brush Tool	Kunstnerisk historikpenselværktøj
 	Tight Short	Stram kort
@@ -4813,6 +4814,7 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Pick a different document for each channel.	Vælg et andet dokument til hver kanal.
 	A picked document is no longer open.	Et af de valgte dokumenter er ikke længere åbent.
 	A picked document is no longer a grayscale document of the same size.	Et af de valgte dokumenter er ikke længere et dokument i gråtoner i samme størrelse.
+	Netscape Gray	Netscape-grå
 # Move tool options bar (#11381)
 	Align top edges	Juster øverste kanter
 	Align vertical centers	Juster lodrette midter

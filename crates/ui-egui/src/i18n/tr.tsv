@@ -339,8 +339,8 @@
 	Artboard…	Çalışma Yüzeyi…
 	Artboard from Group…	Gruptan Çalışma Yüzeyi…
 	Artboard from Layers…	Katmanlardan Çalışma Yüzeyi…
-	Layer via Copy	Kopyalama Yoluyla Katman
-	Layer via Cut	Kesim Yoluyla Katman
+	Layer Via Copy	Kopyalama Yoluyla Katman
+	Layer Via Cut	Kesim Yoluyla Katman
 	Layer From Background…	Arka Plandan Katman…
 	Layer from Background…	Arka Plandan Katman…
 	Background From Layer	Katmandan Arka Plan
@@ -4237,8 +4237,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Gri Tonlama Şeridi
 	Current Colors	Geçerli Renkler
 	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+	Scroll All Windows	Tüm Pencereleri Kaydır
 	The path was kept as the Work Path	Yol, Çalışma Yolu olarak korundu
 	The path was discarded	Yol atıldı
+# Art History Brush (#213).
 	Art History Brush Tool	Sanat Tarihi Fırçası Aracı
 	Tight Short	Sıkı Kısa
 	Tight Medium	Sıkı Orta
@@ -4337,6 +4339,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Her kanal için farklı bir belge seçin.
 	A picked document is no longer open.	Seçilen belgelerden biri artık açık değil.
 	A picked document is no longer a grayscale document of the same size.	Seçilen belgelerden biri artık aynı boyutta gri tonlamalı bir belge değil.
+	Netscape Gray	Netscape Grisi
 # Move tool options bar (#11381)
 	Align top edges	Üst kenarları hizala
 	Align vertical centers	Dikey merkezleri hizala
