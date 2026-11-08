@@ -487,6 +487,49 @@ fn batch_menu_keeps_the_selected_same_name_and_set_occurrence() {
     assert_eq!(app.session.active().unwrap().doc.size, size);
 }
 
+#[test]
+fn batch_chooser_selects_the_later_same_caption_and_rejects_a_stale_occurrence() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let (mut app, _) = app_with(0);
+    app.run("file.new", json!({"width": 2, "height": 1})).unwrap();
+    for _ in 0..2 {
+        app.session.execute("actions.reset", json!({"confirm": true, "mode": "append"})).unwrap();
+    }
+    app.session.actions.list[2].steps = vec![("image.imageRotation.90cw".into(), json!({}))];
+    app.ui.actions.selected = Some(0);
+    let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let ctx = h.ctx.clone();
+    for stale in [false, true] {
+        let id = menu(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+        fields.insert("source".into(), json!("open"));
+        fields.remove("output");
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Occurrence").click();
+        h.run_steps(2);
+        h.get_by_label("2 / 2").click();
+        h.run_steps(2);
+        assert_eq!(h.state_mut().ui.dialog_mut(id).unwrap().fields[crate::actions::BATCH_OCCURRENCE], 2);
+        if stale {
+            h.state_mut().run("actions.move", json!({"action": 2, "to": 1})).unwrap();
+            assert!(crate::dialogs::confirm(h.state_mut(), id).unwrap_err().contains("selected action changed"));
+        } else {
+            assert_eq!(crate::dialogs::confirm(h.state_mut(), id).unwrap()["errors"], json!([]));
+        }
+        let size = h.state().session.active().unwrap().doc.size;
+        assert_eq!((size.width, size.height), (1, 2));
+    }
+}
+
 /// Choosing a different action changes the output; cancelled or deleted choices write nothing.
 #[test]
 fn batch_menu_runs_the_action_chosen_in_the_form() {

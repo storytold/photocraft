@@ -83,7 +83,7 @@ pub struct ActionsUi {
     #[serde(skip)]
     renaming: Option<RenameAction>,
     #[serde(skip)]
-    batch_dialog_targets: std::collections::BTreeMap<u64, ActionOccurrence>,
+    batch_dialog_targets: std::collections::BTreeMap<u64, std::collections::BTreeMap<usize, ActionOccurrence>>,
 }
 
 impl ActionsUi {
@@ -125,12 +125,36 @@ pub(crate) fn selected_action_row(app: &PhotocraftApp) -> Option<usize> {
     app.ui.actions.selected.filter(|&row| row < len).or_else(|| selected_set_actions(app).first().copied()).or_else(|| (len > 0).then_some(0))
 }
 
+pub(crate) const BATCH_OCCURRENCE: &str = "__batchOccurrence";
+pub(crate) const BATCH_OCCURRENCES: &str = "__batchOccurrences";
+
 pub(crate) fn bind_batch_dialog(app: &mut PhotocraftApp, dialog: u64, row: usize) {
+    let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
+    for (index, action) in app.session.actions.list.iter().enumerate() {
+        groups.entry((action.name.as_str(), action.set.as_deref())).or_default().push(index);
+    }
+    let mut rows = vec![row];
+    let mut choices = Vec::new();
+    for ((name, set), group) in groups.iter().filter(|(_, group)| group.len() > 1) {
+        for (position, &index) in group.iter().enumerate() {
+            if index != row {
+                rows.push(index);
+            }
+            choices.push(json!({"action": name, "set": set, "row": index, "label": format!("{} / {}", position + 1, group.len())}));
+        }
+    }
+    let captured = ActionOccurrence::capture_pending(&app.session, &rows).into_iter().map(|target| (target.row, target)).collect();
     let dialogs = &app.ui.dialogs;
     let targets = &mut app.ui.actions.batch_dialog_targets;
     targets.retain(|id, _| dialogs.iter().any(|dialog| dialog.id == *id));
-    if let Some(target) = ActionOccurrence::capture(&app.session, row) {
-        targets.insert(dialog, target);
+    targets.insert(dialog, captured);
+
+    if let Some(d) = app.ui.dialog_mut(dialog) {
+        d.fields.insert(BATCH_OCCURRENCE.into(), json!(row));
+        d.fields.insert(BATCH_OCCURRENCES.into(), json!(choices));
+        if let Some(original) = d.fields.get_mut("__formOrig").and_then(Value::as_object_mut) {
+            original.insert(BATCH_OCCURRENCE.into(), json!(row));
+        }
     }
 }
 
@@ -138,13 +162,19 @@ pub(crate) fn cancel_batch_dialog(app: &mut PhotocraftApp, dialog: u64) {
     app.ui.actions.batch_dialog_targets.remove(&dialog);
 }
 
-pub(crate) fn batch_dialog_params(app: &mut PhotocraftApp, dialog: u64, params: &mut Value) -> Result<(), String> {
-    let Some(target) = app.ui.actions.batch_dialog_targets.remove(&dialog) else { return Ok(()) };
+pub(crate) fn batch_dialog_params(app: &mut PhotocraftApp, dialog: u64, choice: Option<&Value>, params: &mut Value) -> Result<(), String> {
+    let targets = app.ui.actions.batch_dialog_targets.remove(&dialog);
+    if params.get("actionId").is_some() {
+        return Ok(());
+    }
+    let Some(choice) = choice.filter(|choice| !choice.is_null()) else { return Ok(()) };
+    let target = choice
+        .as_u64()
+        .and_then(|row| usize::try_from(row).ok())
+        .and_then(|row| targets.as_ref()?.get(&row))
+        .ok_or("the selected action changed while Batch was open")?;
     let set = params.get("set").filter(|v| !v.is_null());
-    if params.get("actionId").is_some()
-        || params.get("action").and_then(Value::as_str) != Some(target.action.name.as_str())
-        || set != target.action.set.as_ref().map(|name| json!(name)).as_ref()
-    {
+    if params.get("action").and_then(Value::as_str) != Some(target.action.name.as_str()) || set != target.action.set.as_ref().map(|name| json!(name)).as_ref() {
         // An explicit edit still uses the existing named/set or actionId command API.
         return Ok(());
     }
@@ -1620,8 +1650,8 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     let remaining = !paused.then.is_empty()
         || !paused.callers.is_empty()
         || paused.played.first().is_some_and(|occurrence| {
-            let live = occurrence.identity_row(&app.session).and_then(|row| app.session.actions.list.get(row));
-            occurrence.action.enabled_steps().any(|(i, _)| i >= paused.from) || live.is_some_and(|action| action.enabled_steps().any(|(i, _)| i >= paused.from))
+            let action = occurrence.identity_row(&app.session).and_then(|row| app.session.actions.list.get(row)).unwrap_or(&occurrence.action);
+            action.enabled_steps().any(|(i, _)| i >= paused.from)
         });
     let gate =
         if remaining { continuation_gate(saved, service).and_then(|live| continuation_gate(paused.gate, live)) } else { Ok(saved.or(service).or(paused.gate)) };
@@ -1636,9 +1666,9 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
             return Err(error);
         }
     };
-    // Verify each live occurrence against the exact definition that paused.
+    // Every caller needs a captured occurrence before the two lists can be paired.
     let rows: Option<Vec<usize>> = paused.played.iter().rev().map(|occurrence| occurrence.resolve(&app.session)).collect();
-    if remaining && rows.is_none() {
+    if paused.played.len() != paused.callers.len() + 1 || (remaining && rows.is_none()) {
         let error = "the action changed while it was paused";
         actions_cmds::finish_pending_history(&mut app.session);
         restore_recording(app, owner.as_ref());
@@ -1650,9 +1680,6 @@ pub fn resume(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) 
     // The paused action goes on, then each action that called it, inside its callers' frames:
     // replay starts at the outermost, which replays the inner ones first.
     let positions = paused.callers.iter().rev().map(|(_, from)| *from).chain(std::iter::once(paused.from));
-    if paused.played.is_empty() {
-        return Err("this dialog doesn't belong to a paused action".into());
-    }
     let frames: Vec<_> = rows.into_iter().flatten().zip(positions).collect();
     // A dialog's own step runs on its confirm; a paced wait's step already ran and was counted.
     let own = u64::from(!paused.timed);

@@ -974,7 +974,11 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         return Err("dialog has no command".into());
     };
     let mut params = crate::filter_dialog::params_of(&d.fields);
-    let exact = if cmd == "file.automate.batch" { crate::actions::batch_dialog_params(app, d.id, &mut params) } else { Ok(()) };
+    let exact = if cmd == "file.automate.batch" {
+        crate::actions::batch_dialog_params(app, d.id, d.fields.get(crate::actions::BATCH_OCCURRENCE), &mut params)
+    } else {
+        Ok(())
+    };
     if let Err(error) = exact.and_then(|()| crate::actions::authorize_panel_preview(app, d.id, &d.fields, &cmd, &params)) {
         app.filter_preview = None;
         crate::actions::abandoned(app, &d.fields);
