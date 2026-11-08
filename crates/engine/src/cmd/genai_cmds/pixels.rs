@@ -477,7 +477,7 @@ pub enum Framing {
 }
 
 /// The largest rect of `w`:`h`'s shape centred in `full`.
-fn centred(full: Rect, w: u32, h: u32) -> Rect {
+pub(super) fn centred(full: Rect, w: u32, h: u32) -> Rect {
     let (fw, fh) = (u64::from(full.width()), u64::from(full.height()));
     let (w, h) = (u64::from(w.max(1)), u64::from(h.max(1)));
     if fw * h > fh * w {

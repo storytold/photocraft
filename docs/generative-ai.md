@@ -170,8 +170,10 @@ and writes a new folder there with
 - `composite-N.png`: each placed variation shown alone, over the area, from the document as it is
   now;
 - `summary.json`: model, connection, destination, area and request size, each returned picture's
-  size, how it was lined up (or why it was refused), and whether colour matching ran or why it was
-  skipped.
+  size, how it was lined up (or why it was refused), whether colour matching ran or why it was
+  skipped, and each placed picture's placement: the part of it used, the size it was matched at,
+  the document area it went into, and its scale across and down (`stretch` is not 1 when the
+  picture was stretched).
 
 PhotoCraft sends the prompt; the service's adapter in the shared AI layer may wrap it in an
 instruction of its own (Gemini's does), which PhotoCraft never sees. The summary says so rather

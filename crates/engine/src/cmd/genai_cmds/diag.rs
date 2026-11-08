@@ -9,8 +9,11 @@
 //! picture exactly as the service returned it (`returned-N.*`), each placed variation composited
 //! into the document as it is now (`composite-N.png`), and `summary.json`: the model and
 //! connection, sizes, how each picture was lined up, whether colour matching ran or why it was
-//! skipped, and what PhotoCraft can't see (the instruction a service's adapter wraps the prompt
-//! in).
+//! skipped, where each placed picture went (the part of it used, its scale and the document area:
+//! [`placement`]), and what PhotoCraft can't see (the instruction a service's adapter wraps the
+//! prompt in).
+
+mod placement;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -163,6 +166,10 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
         let returned_file = format!("{prefix}returned-{n}.{ext}");
         files.push((returned_file.clone(), ret.bytes.clone()));
         let size = pixels::decode(&ret.bytes).ok().map(|(_, full)| [full.width(), full.height()]);
+        let placement = match (&ret.outcome, size) {
+            (Ok(note), Some(size)) => Some(placement::placement(size, &note.framing, [r.w, r.h], c.area)),
+            _ => None,
+        };
         let composite = match (&ret.outcome, ret.layer, c.group) {
             (Ok(_), Some(layer), Some(group)) => match composite(doc, group, layer, c.area)? {
                 Some(png) => {
@@ -178,6 +185,7 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
             "returned": returned_file,
             "returnedSize": size,
             "placed": ret.outcome.as_ref().ok(),
+            "placement": placement,
             "colourMatching": ret.outcome.as_ref().ok().map(|n| if n.colour.skipped() { "skipped" } else { "ran" }),
             "refused": ret.outcome.as_ref().err(),
             "layer": ret.layer.map(|l| l.0),
@@ -198,6 +206,7 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
         "instructionNote": "PhotoCraft sends the prompt above (or, for an empty prompt, its fixed instruction to continue the picture) with the picture and the mask. The shared AI layer's adapter for the service may wrap it in an instruction of its own (Gemini's does); PhotoCraft doesn't see that text.",
         "crop": "the area as rendered from the visible layers in sRGB at the request size, before the selection was cleared (not sent)",
         "composite": "each placed variation shown alone in its generative layer, rendered from the document as it is now over the area sent",
+        "placement": "each placed variation's part of the returned picture used (x, y, width, height), the size it was colour matched at, the document area it was scaled into, and the scale across and down (document pixels per returned pixel)",
         "variations": variations,
         "failure": c.failure,
     });

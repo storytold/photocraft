@@ -135,6 +135,12 @@ fn save_fill_diagnostics_writes_what_was_sent_and_returned_only_when_asked() {
     assert_eq!(fill["variations"][0]["colourMatching"], "ran");
     assert_eq!(fill["variations"][0]["placed"]["framing"]["state"], "same");
     assert_eq!(fill["variations"][0]["returnedSize"], json!([160, 160]));
+    let placement = &fill["variations"][0]["placement"];
+    assert_eq!(placement["used"], json!([0, 0, 160, 160]), "{placement}");
+    assert_eq!(placement["request"], json!([160, 160]));
+    let area = &fill["area"];
+    assert_eq!(placement["area"], json!([area["x"], area["y"], area["width"], area["height"]]));
+    assert_eq!(placement["stretch"], 1.0);
     assert!(fill["instructionNote"].as_str().unwrap().contains("doesn't see"));
     // A second save never replaces the first.
     let again = s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy(), "layer": group.0})).unwrap();
@@ -160,6 +166,7 @@ fn a_failed_fill_keeps_its_capture_until_retried_or_discarded() {
     let v = &summary["fills"][0]["variations"][0];
     assert!(v["refused"].as_str().unwrap().contains("1536×1024"), "{v}");
     assert_eq!(v["composite"], Value::Null);
+    assert_eq!(v["placement"], Value::Null, "a refused picture went nowhere");
     assert!(out.join("returned-1.png").is_file(), "the picture as returned, to look at");
     assert!(summary["fills"][0]["failure"].is_string());
     s.execute(DISCARD, json!({"fill": fills[0].id})).unwrap();
