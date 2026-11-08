@@ -879,6 +879,46 @@ fn ui_set_gradient_blend_mode_validates_and_updates_options() {
     assert!(app.ui.tool_options.gradient_classic, "invalid mode must not change options");
 }
 
+/// The Layers panel's Artboard filter type is drivable; it has no criteria of its own.
+#[test]
+fn ui_set_drives_the_layers_panel_artboard_filter() {
+    use crate::layer_filter_ui::FilterBy;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "artboard"}}));
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard);
+    let bad = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "artboards"}}));
+    assert_eq!(bad["ok"], false, "{bad}");
+    assert!(bad.to_string().contains("kind, name, effect, mode, attribute, color, smartObject, artboard or group"), "{bad}");
+    assert_eq!(app.ui.layer_filter_by, FilterBy::Artboard, "a bad value changed nothing");
+}
+
+/// The Layers panel's Smart Object filter takes a list of its toggles.
+#[test]
+fn ui_set_drives_the_layers_panel_smart_object_filter() {
+    use crate::layer_filter_ui::FilterBy;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "smartObject", "smart": ["missing", "embedded", "missing"]}}));
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(app.ui.layer_filter_by, FilterBy::SmartObject);
+    assert_eq!(app.ui.layer_filter_smart, ["missing", "embedded"], "toggles are kept once each");
+    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"smart": []}}));
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert!(app.ui.layer_filter_smart.is_empty());
+    for bad in [
+        json!({"layerFilter": {"smart": ["library"]}}),
+        json!({"layerFilter": {"smart": "linked"}}),
+        json!({"layerFilter": {"by": "kind", "smart": [1]}}),
+        json!({"layerFilter": {"by": "smart"}}),
+    ] {
+        let r = call(&mut app, &ctx, "ui.set", bad.clone());
+        assert_eq!(r["ok"], false, "{bad} → {r}");
+        assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_smart.len()), (FilterBy::SmartObject, 0), "{bad} changed nothing");
+    }
+}
+
 /// #5048: the Layers panel filter is drivable; a bad field changes nothing.
 #[test]
 fn ui_set_drives_the_layers_panel_filter() {
@@ -888,9 +928,9 @@ fn ui_set_drives_the_layers_panel_filter() {
     let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "name", "name": "ink"}}));
     assert_eq!(ok["ok"], true, "{ok}");
     assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_name.as_str()), (FilterBy::Name, "ink"));
-    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "mode", "mode": "Pass Through", "kinds": ["type", "pixel", "type"]}}));
+    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "mode", "mode": "Multiply", "kinds": ["type", "pixel", "type"]}}));
     assert_eq!(ok["ok"], true, "{ok}");
-    assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_mode), (FilterBy::Mode, photocraft_color::BlendMode::PassThrough));
+    assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_mode), (FilterBy::Mode, photocraft_color::BlendMode::Multiply));
     assert_eq!(app.ui.layer_filter, ["type", "pixel"], "kinds are kept once each");
     assert_eq!(app.ui.layer_filter_name, "ink", "fields left out keep their value");
     for bad in [
@@ -900,13 +940,21 @@ fn ui_set_drives_the_layers_panel_filter() {
         json!({"layerFilter": {"kinds": "pixel"}}),
         json!({"layerFilter": {"name": 3}}),
         json!({"layerFilter": {"mode": "Nonsense"}}),
+        // The Mode list has no Pass Through (#10878).
+        json!({"layerFilter": {"mode": "Pass Through"}}),
+        json!({"layerFilter": {"color": "crimson"}}),
         json!({"layerFilter": {"by": "kind", "extra": true}}),
         json!({"layerFilter": {"by": "kind"}, "tileGrid": "yes"}),
     ] {
         let r = call(&mut app, &ctx, "ui.set", bad.clone());
         assert_eq!(r["ok"], false, "{bad} → {r}");
         assert_eq!(app.ui.layer_filter_by, FilterBy::Mode, "{bad} changed nothing");
+        assert_eq!(app.ui.layer_filter_mode, photocraft_color::BlendMode::Multiply, "{bad} left the mode alone");
     }
+    // #5898: the Color filter through the same path.
+    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "color", "color": "red"}}));
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_color), (FilterBy::Color, photocraft_doc::LabelColor::Red));
 }
 
 #[test]
@@ -1372,6 +1420,50 @@ fn automation_save_passes_targa_bits_without_asking() {
     let r = call(&mut app, &ctx, "app.save", json!({"path": "d.tga", "tgaBits": 16}));
     assert!(r["error"].as_str().unwrap().contains("tgaBits"), "{r}");
     assert_eq!(written.borrow().len(), 3, "a bad tgaBits writes nothing");
+}
+
+/// #8064: `app.save` takes `maximizeCompatibility` for a PSD/PSB's merged image over Preferences ›
+/// File Handling; unset, the preference decides. Anything but a boolean writes nothing.
+#[test]
+fn app_save_takes_maximize_compatibility() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let asked: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let written: Rc<RefCell<Vec<String>>> = Rc::default();
+    let (a, w) = (asked.clone(), written.clone());
+    let services = crate::Services {
+        export: Some(Box::new(move |_d: &photocraft_doc::Document, _p: &str, s: &crate::ExportSettings| {
+            a.borrow_mut().push(s.psd_maximize_compatibility);
+            Ok((b"out".to_vec(), Vec::new()))
+        })),
+        automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
+            w.borrow_mut().push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let saves = [
+        json!({"path": "a.psd"}),
+        json!({"path": "b.psd", "maximizeCompatibility": false}),
+        json!({"path": "c.psd", "maximizeCompatibility": true}),
+        json!({"path": "d.psd", "maximizeCompatibility": null}),
+    ];
+    for params in &saves {
+        let r = call(&mut app, &ctx, "app.save", params.clone());
+        assert_eq!(r["result"]["path"], params["path"], "{r}");
+    }
+    app.session.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = photocraft_engine::prefs::Ask::Never);
+    for params in [json!({"path": "e.psd"}), json!({"path": "f.psd", "maximizeCompatibility": true})] {
+        let r = call(&mut app, &ctx, "app.save", params.clone());
+        assert_eq!(r["result"]["path"], params["path"], "{r}");
+    }
+    assert_eq!(*asked.borrow(), [true, false, true, true, false, true]);
+    let r = call(&mut app, &ctx, "app.save", json!({"path": "g.psd", "maximizeCompatibility": "no"}));
+    assert!(r["error"].as_str().unwrap().contains("maximizeCompatibility"), "{r}");
+    assert_eq!(written.borrow().len(), 6, "a bad maximizeCompatibility writes nothing");
 }
 
 /// `app.save` takes JPEG Options (`quality` 0–12, `jpegFormat`) and never stops at the prompt;
@@ -1971,6 +2063,35 @@ fn huge_click_count_is_rejected() {
         assert!(matches!(handle(&mut app, &ctx, &req), Outcome::AfterInput));
         assert_eq!(app.synthetic.len(), events);
         app.synthetic.clear();
+    }
+}
+
+/// #9137: a coordinate past f32's range became `inf`, and on the next frame egui's pointer
+/// delta `inf - inf` panicked outside the dispatch guard, closing the app.
+#[test]
+fn huge_click_coordinate_is_rejected() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    for method in ["ui.click", "ui.move"] {
+        for (field, v) in [("x", 1e308), ("y", -1e308), ("x", 3.5e38), ("y", 1e7), ("x", -1.5e6)] {
+            let (req, _rx) = ControlRequest::new(method, json!({ field: v }));
+            let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!("{method} {field}={v}: accepted") };
+            assert_eq!(r["ok"], false, "{method} {field}={v}: {r}");
+            assert!(r["error"].as_str().unwrap().starts_with(&format!("{field} must be between")), "{r}");
+            assert!(app.synthetic.is_empty(), "a rejected {method} queues nothing");
+        }
+    }
+    // Points at the edges of the range, off-window included, reach egui and run a frame each.
+    let edge = MAX_SCREEN_POINT;
+    for (method, x, y) in [("ui.move", edge, -edge), ("ui.click", -edge, edge), ("ui.click", -5.0, 20.0)] {
+        let (req, _rx) = ControlRequest::new(method, json!({"x": x, "y": y}));
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::AfterInput));
+        while !app.synthetic.is_empty() {
+            let events = app.take_synthetic_step();
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |_| {}).textures_delta.clear();
+        }
+        let pos = ctx.input(|i| i.pointer.latest_pos());
+        assert_eq!(pos, Some(egui::pos2(x as f32, y as f32)), "{method} {x},{y}");
     }
 }
 
