@@ -37,7 +37,8 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 /// Whether a brush-tip circle draws its centre mark.
 /// Clone Stamp and Healing Brush stay an empty circle until Option is held, the source-point
 /// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
-/// Photoshop; the Background Eraser always shows its sampling hotspot.
+/// Photoshop; the Background Eraser and the Color Replacement tool (#11934) always show their
+/// sampling hotspot.
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
     if tool == Tool::QuickSelection {
         return false;
@@ -45,7 +46,7 @@ pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -
     if matches!(tool, Tool::CloneStamp | Tool::Healing) {
         return option || show_crosshair;
     }
-    show_crosshair || tool == Tool::BackgroundEraser
+    show_crosshair || matches!(tool, Tool::BackgroundEraser | Tool::ColorReplacement)
 }
 
 /// The display colour of an RGB triple (0..1 per channel) as an egui colour.
@@ -289,6 +290,10 @@ pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
 #[cfg(test)]
 #[path = "../eyedropper_mask_sample_tests.rs"]
 mod eyedropper_mask_sample_tests;
+
+#[cfg(test)]
+#[path = "../color_replacement_cursor_tests.rs"]
+mod color_replacement_cursor_tests;
 
 #[cfg(test)]
 #[path = "../background_eraser_alt_click_tests.rs"]
