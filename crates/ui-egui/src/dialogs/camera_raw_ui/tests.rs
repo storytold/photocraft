@@ -1428,3 +1428,50 @@ fn a_background_raw_open_never_adds_a_tab() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
     assert_eq!(session_state(&app), before);
 }
+
+/// Open makes the documents in filmstrip order, whichever raw is shown.
+#[test]
+fn open_follows_the_filmstrip_order_whichever_raw_is_shown() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    for name in ["one.dng", "two.dng", "three.dng"] {
+        app.open_bytes(name, &dng).unwrap();
+    }
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 2).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 10}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.clone()).collect();
+    assert_eq!(names, ["one.dng", "two.dng", "three.dng"]);
+}
+
+/// A raw whose background develop is cancelled was never opened: it comes back to the filmstrip,
+/// as one whose develop failed does, rather than vanish.
+#[test]
+fn a_raw_whose_background_develop_is_cancelled_is_not_lost() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("one.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    app.background_jobs = true;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    let job = photocraft_engine::jobs::JobId(r["job"].as_u64().expect("a background develop"));
+    app.session.cancel_job(job);
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the job never finished");
+    // Cancelled in time: back in the filmstrip with its settings; too late: opened.
+    match app.raw_shelf.first() {
+        Some(held) => {
+            assert!(app.session.documents().is_empty());
+            assert_eq!(held.kept.as_ref().map(|(p, _)| p.exposure), Some(1.0));
+        }
+        None => assert_eq!(app.session.documents().len(), 1, "the raw is neither open nor waiting"),
+    }
+}

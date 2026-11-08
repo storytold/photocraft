@@ -147,42 +147,45 @@ pub(super) fn default_proxy(doc: &photocraft_doc::Document) -> Option<Vec<[f32; 
     Some(super::convert::box_proxy(surf, area, w, h).0)
 }
 
-/// Open with raws in the filmstrip: the shown one as the dialog has it, then every other with
-/// its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
+/// Open with raws in the filmstrip, in its order: the shown one as the dialog has it, every other
+/// with its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
 /// filmstrip once it has opened or its background develop has started: one that fails stays or
-/// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
+/// comes back there with its settings, so the dialog returns for it (or Cancel lets it go).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
-    let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
-    let first = commit_open_raw(app, params, raw, Some(original));
-    if let Ok(v) = &first {
-        return_on_failure(app, v, original);
-        app.raw_shelf.retain(|h| h.raw.document != raw.document);
-    }
-    if others.is_empty() {
-        return first;
+    // In filmstrip order, the shown raw in its place, so the tabs follow the filmstrip.
+    let mut order: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    if !order.contains(&raw.document) {
+        order.insert(0, raw.document);
     }
     let mut opened = Vec::new();
     let mut failed = Vec::new();
-    match first {
-        Ok(v) => opened.push(v),
-        Err(e) => failed.push(format!("{}: {e}", raw.name)),
-    }
-    for id in others {
-        let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == id) else { continue };
-        let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
-        let (p, loaded) = match kept {
-            Some((p, original)) => (p, Some(original)),
-            None => first_settings(app, &held_raw),
+    let mut last = None;
+    for id in &order {
+        let (this, p, loaded) = if *id == raw.document {
+            (raw.clone(), params.clone(), Some(original.clone()))
+        } else {
+            let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == *id) else { continue };
+            let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
+            let (p, loaded) = match kept {
+                Some((p, original)) => (p, Some(original)),
+                None => first_settings(app, &held_raw),
+            };
+            (held_raw, p, loaded)
         };
-        match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
+        let r = commit_open_raw(app, &p, &this, loaded.as_ref());
+        match &r {
             Ok(v) => {
-                return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
-                opened.push(v);
-                app.raw_shelf.retain(|h| h.raw.document != id);
+                return_on_failure(app, v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
+                opened.push(v.clone());
+                app.raw_shelf.retain(|h| h.raw.document != *id);
             }
-            Err(e) => failed.push(format!("{}: {e}", held_raw.name)),
+            Err(e) => failed.push(format!("{}: {e}", this.name)),
         }
+        last = Some(r);
+    }
+    if order.len() == 1 {
+        return last.unwrap_or_else(|| Err("no raw file to open".into()));
     }
     if !failed.is_empty() {
         let e = failed.join("; ");
