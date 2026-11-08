@@ -285,13 +285,32 @@ fn delete_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
     if !app.session.prefs().workspaces.contains_key(&name) {
         return Err(format!("no saved workspace \"{name}\""));
     }
-    // Like Photoshop, the current workspace can't be deleted. A saved copy of a bundled
-    // sample is current under its "{name} (saved)" label.
-    if app.ui.workspace == name || stored_saved_name(app, &app.ui.workspace) == name {
+    // The current workspace can't be deleted. Match the menu label, so the bundled sample
+    // "CS4" does not count as the saved layout listed beside it as "CS4 (saved)".
+    let label = saved_menu_label(app, &name);
+    if app.ui.workspace == label {
         return Err(format!("\"{name}\" is the current workspace; switch to another first"));
     }
     app.session.prefs.edit(|pr| pr.workspaces.remove(&name));
+    sync_saved_label(app);
     Ok(json!({"deleted": name}))
+}
+
+/// The menu text of a saved layout can change when another saved name appears or goes away.
+/// Keep the checked workspace on that text.
+fn sync_saved_label(app: &mut PhotocraftApp) {
+    let current = app.ui.workspace.clone();
+    if PRESETS.contains(&current.as_str()) || super::workspace_files::is_bundled(&current) {
+        return;
+    }
+    let key = stored_saved_name(app, &current).to_string();
+    if !app.session.prefs().workspaces.contains_key(&key) {
+        return;
+    }
+    let label = saved_menu_label(app, &key);
+    if app.ui.workspace != label {
+        app.ui.workspace = label;
+    }
 }
 
 fn select_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
@@ -790,6 +809,48 @@ mod tests {
         let keys: Vec<String> = switcher_options(&app).into_iter().map(|(key, _)| key).collect();
         assert!(keys.iter().any(|key| key == "CS4"));
         assert!(keys.iter().any(|key| key == "CS4 (saved)"));
+    }
+
+    #[test]
+    fn deleting_a_saved_copy_leaves_the_bundled_sample_and_updates_its_label() {
+        let (mut app, ctx) = app();
+        app.ui.panels.history = true;
+        app.ui.panels.navigator = false;
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name": "Retouch"})).unwrap();
+        let legacy = app.session.prefs().workspaces["Retouch"].clone();
+        app.session.prefs.edit(|prefs| {
+            prefs.workspaces.insert("CS4".into(), legacy.clone());
+            prefs.workspaces.insert("CS4 (saved)".into(), legacy);
+            prefs.workspaces.get_mut("CS4").unwrap()["panels"]["navigator"] = json!(false);
+            prefs.workspaces.get_mut("CS4").unwrap()["panels"]["history"] = json!(true);
+            prefs.workspaces.get_mut("CS4 (saved)").unwrap()["panels"]["navigator"] = json!(true);
+            prefs.workspaces.get_mut("CS4 (saved)").unwrap()["panels"]["history"] = json!(false);
+        });
+        let items = |app: &PhotocraftApp| {
+            crate::menus::menu_items(app).into_iter().filter(|item| item.path == ["Window", "Workspace"] && item.id != "---").collect::<Vec<_>>()
+        };
+        let legacy_item = items(&app).into_iter().find(|item| item.label == "CS4 (saved layout)").unwrap();
+        let alias_item = items(&app).into_iter().find(|item| item.label == "CS4 (saved)").unwrap();
+        crate::menus::invoke(&mut app, &ctx, &legacy_item.id, json!({})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4 (saved layout)");
+        assert!(!app.ui.panels.navigator && app.ui.panels.history);
+        crate::menus::invoke(&mut app, &ctx, &alias_item.id, json!({})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4 (saved)");
+        assert!(app.ui.panels.navigator && !app.ui.panels.history);
+        crate::menus::invoke(&mut app, &ctx, &legacy_item.id, json!({})).unwrap();
+        assert!(crate::menus::invoke(&mut app, &ctx, "window.workspace.deleteWorkspace", json!({"name": "CS4"})).is_err());
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.deleteWorkspace", json!({"name": "CS4 (saved)"})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4 (saved)");
+        assert!(!app.ui.panels.navigator && app.ui.panels.history, "the legacy layout stays applied");
+        let renamed = items(&app).into_iter().find(|item| item.label == "CS4 (saved)").unwrap();
+        assert_eq!(checked(&app, &renamed.id), Some(true));
+        let bundled = items(&app).into_iter().find(|item| item.id == "window.workspace.bundled.0").unwrap();
+        crate::menus::invoke(&mut app, &ctx, &bundled.id, json!({})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4");
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.deleteWorkspace", json!({"name": "CS4"})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4");
+        assert!(!app.session.prefs().workspaces.contains_key("CS4"));
+        assert_eq!(app.ui.theme.id(), "cs4");
     }
 
     #[test]

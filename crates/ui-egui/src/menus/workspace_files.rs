@@ -108,7 +108,7 @@ pub(crate) fn import(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     if let Some(path) = params.get("path").and_then(Value::as_str).filter(|path| !path.is_empty()) {
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = path;
+            let _ = (path, app.control_request);
             return Err("open a workspace file from the file dialog on the web".into());
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -125,7 +125,7 @@ pub(crate) fn export(app: &mut PhotocraftApp, params: &Value) -> Result<Value, S
     if let Some(path) = params.get("path").and_then(Value::as_str).filter(|path| !path.is_empty()) {
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = (path, bytes);
+            let _ = (path, bytes, app.control_request);
             return Err("save a workspace file from the file dialog on the web".into());
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -215,12 +215,12 @@ fn import_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
     import_bytes(app, &bytes)
 }
 
-/// A path on a control request goes through the authorized roots. The file dialog keeps
-/// [`write_bytes`].
+/// A path that arrived through [`crate::control::handle`] goes through the authorized roots.
+/// A menu or dialog path keeps the filesystem, including when the desktop has those roots
+/// installed for the control channel.
 #[cfg(not(target_arch = "wasm32"))]
 fn read_workspace_bytes(app: &mut PhotocraftApp, path: &str) -> Result<Vec<u8>, String> {
-    let automated = app.automation_input || app.services.automation_read.is_some();
-    if automated {
+    if app.control_request {
         let read = app.services.automation_read.as_mut().ok_or_else(|| "automation read authority is not configured".to_string())?;
         let (_name, bytes) = read(path)?;
         if bytes.len() > MAX_BYTES {
@@ -237,8 +237,7 @@ fn read_workspace_bytes(app: &mut PhotocraftApp, path: &str) -> Result<Vec<u8>, 
 
 #[cfg(not(target_arch = "wasm32"))]
 fn write_export_path(app: &mut PhotocraftApp, path: &str, bytes: &[u8]) -> Result<(), String> {
-    let automated = app.automation_input || app.services.automation_write.is_some();
-    if automated {
+    if app.control_request {
         let write = app.services.automation_write.as_mut().ok_or_else(|| "automation write authority is not configured".to_string())?;
         return write(path, bytes);
     }
@@ -517,7 +516,8 @@ mod tests {
     #[test]
     fn a_control_path_uses_the_automation_roots() {
         let (mut app, ctx) = app();
-        app.automation_input = true;
+        assert!(!app.automation_input);
+        app.control_request = true;
         let missing = crate::menus::invoke(&mut app, &ctx, "window.workspace.importWorkspace", json!({"path": "mine.pcraft-workspace"})).unwrap_err();
         assert!(missing.contains("automation read authority"), "{missing}");
         let refused = crate::menus::invoke(&mut app, &ctx, "window.workspace.exportWorkspace", json!({"name": "Retouch Desk", "path": "out.pcraft-workspace"}))
@@ -547,5 +547,50 @@ mod tests {
         let parsed = parse(&saved).unwrap();
         assert_eq!(parsed.name, "Retouch Desk");
         assert_eq!(parsed.theme.as_deref(), Some("cs4"));
+
+        // A menu path keeps the filesystem when the desktop has the control roots installed.
+        app.control_request = false;
+        app.services.automation_read = Some(Box::new(|_| Err("a menu path must not use the control root".into())));
+        app.services.automation_write = Some(Box::new(|_, _| Err("a menu path must not use the control root".into())));
+        let dir = std::env::temp_dir().join(format!("photocraft-ws-menu-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("desk.pcraft-workspace");
+        let path_str = path.to_string_lossy().into_owned();
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.exportWorkspace", json!({"name": "Retouch Desk", "path": path_str})).unwrap();
+        let imported = crate::menus::invoke(&mut app, &ctx, "window.workspace.importWorkspace", json!({"path": path_str})).unwrap();
+        assert_eq!(imported["workspace"], "Retouch Desk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_control_request_refuses_a_workspace_path_without_automation_authority() {
+        let (mut app, ctx) = app();
+        let reply =
+            control_reply(&mut app, &ctx, "ui.menu.invoke", json!({"id": "window.workspace.importWorkspace", "params": {"path": "mine.pcraft-workspace"}}));
+        assert_eq!(reply["ok"], false, "{reply}");
+        let error = reply["error"].as_str().unwrap_or("");
+        assert!(error.contains("automation read authority"), "{error}");
+        assert!(!app.control_request);
+        assert!(!app.automation_input);
+        let reply = control_reply(
+            &mut app,
+            &ctx,
+            "ui.menu.invoke",
+            json!({"id": "window.workspace.exportWorkspace", "params": {"name": "Retouch Desk", "path": "out.pcraft-workspace"}}),
+        );
+        assert_eq!(reply["ok"], false, "{reply}");
+        let error = reply["error"].as_str().unwrap_or("");
+        assert!(error.contains("automation write authority"), "{error}");
+        assert!(!app.control_request);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn control_reply(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value) -> Value {
+        let (request, _reply) = crate::control::ControlRequest::new(method, params);
+        match crate::control::handle(app, ctx, &request) {
+            crate::control::Outcome::Done(value) => value,
+            _ => json!({"ok": false, "error": "the control request did not finish"}),
+        }
     }
 }

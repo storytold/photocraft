@@ -737,8 +737,10 @@ by ID or label, and `onto` is accepted for `anchor`.
   `window.workspace.new {name}`, `window.workspace.delete {name}` and `window.workspace.reset`
   run the Window › Workspace commands. `window.workspace.importWorkspace {path?}` and
   `window.workspace.exportWorkspace {path?, name?}` read and write a `.pcraft-workspace` file
-  (version 1). A `theme` id in the file is applied when the workspace is selected. Bundled
-  samples CS4 and CS5 ship in the app.
+  (version 1). A path on a control request uses the automation read or write root and is
+  refused when that root is not configured. With no path, the file dialog opens. A `theme`
+  id in the file is applied when the workspace is selected. Bundled samples CS4 and CS5 ship
+  in the app.
 
 Panel IDs are stable across themes. Invalid IDs, non-finite or invalid geometry, and
 invalid destinations return an error without changing the arrangement.

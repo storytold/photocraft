@@ -171,12 +171,15 @@ const SHELL_DIALOG: &str = "shell";
 
 pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     app.frame_tool_ctx = Some(ctx.clone());
-    let saved = app.session.authorize;
+    let saved_authorize = app.session.authorize;
+    let saved_control = app.control_request;
     if let Some(gate) = app.services.automation_authorize {
         app.session.authorize = Some(gate);
     }
+    app.control_request = true;
     let outcome = dispatch(app, ctx, req);
-    app.session.authorize = saved;
+    app.session.authorize = saved_authorize;
+    app.control_request = saved_control;
     outcome
 }
 
