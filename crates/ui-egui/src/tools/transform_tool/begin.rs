@@ -103,14 +103,20 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     // (with the jobs window's progress) and the box opens when it lands (`on_prepared`).
     let big = plan_pixels(&plan).saturating_add(b.size().area()) >= PREPARE_IN_BACKGROUND_PX;
     let source = doc.clone();
+    let doc_id = doc.id;
     let finish_ctx = ctx.clone();
+    let selected = selected_now(app);
     let finish = move |app: &mut PhotocraftApp, prepared: Prepared| -> Result<(), String> {
         let ctx = &finish_ctx;
         // The document is locked while preparing; still, never open a box on another state (or
         // in another tab). The revision is read again: the job itself may have moved it on.
-        let Some(revision) = app.session.active().filter(|st| Arc::ptr_eq(&st.doc, &doc)).map(|st| st.revision) else {
+        let Some(revision) = app.session.active().filter(|st| Arc::ptr_eq(&st.doc, &doc) && st.active_layer == Some(id)).map(|st| st.revision) else {
             return Err("Free Transform: the document changed while it was preparing".into());
         };
+        // Nor over a layer the Layers panel no longer has selected.
+        if selected_now(app) != selected {
+            return Err("Free Transform: the layer selection changed while it was preparing".into());
+        }
         let Prepared { plan, above, image: (image, uv) } = prepared;
         let above = Above::from_plan(ctx, format!("transform-{session}-above"), max_side, plan, above);
         app.transform_area = area.map(|area| super::OpenArea { doc: doc.id, key: super::preview_key(session), revision, area });
@@ -156,9 +162,17 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         start_steps(app);
         Ok(())
     };
-    let prepare = move || Prepared { above: plan.image(max_side), image: preview_image(&source, id, lifted.as_ref(), b, max_side, styled), plan };
+    // `canceled` is asked between the two images, so a canceled job doesn't make the second.
+    let prepare = move |canceled: &dyn Fn() -> bool| -> Option<Prepared> {
+        let above = plan.image(max_side);
+        if canceled() {
+            return None;
+        }
+        Some(Prepared { above, image: preview_image(&source, id, lifted.as_ref(), b, max_side, styled), plan })
+    };
     if !(big && app.background_jobs) {
-        return finish(app, prepare());
+        let prepared = prepare(&|| false).ok_or("Free Transform: nothing was prepared")?;
+        return finish(app, prepared);
     }
     // The worker leaves its result here; the job's own result is only the jobs window's.
     let out = std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -172,10 +186,10 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
             true,
             move |job| {
                 job.progress(0.0, "Reading the layer");
-                let prepared = prepare();
+                let prepared = prepare(&|| job.cancelled());
                 job.check()?;
                 if let Ok(mut s) = slot.lock() {
-                    *s = Some(prepared);
+                    *s = prepared;
                 }
                 Ok(())
             },
@@ -184,7 +198,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         .map_err(|e| e.to_string())?;
     match started {
         photocraft_engine::jobs::Started::Job(job) => {
-            app.transform_preparing = Some(super::Preparing { job, out, finish: Box::new(finish) });
+            app.transform_preparing = Some(super::Preparing { job, out, finish: Box::new(finish), layer: (doc_id, id), made: None });
             Ok(())
         }
         // Ran inline after all (a session without workers).
@@ -217,13 +231,34 @@ pub(crate) fn on_prepared(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::
         return false;
     }
     let Some(p) = app.transform_preparing.take() else { return true };
-    if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_))
-        && let Some(prepared) = p.out.lock().ok().and_then(|mut o| o.take())
-        && let Err(err) = (p.finish)(app, prepared)
-    {
-        crate::notices::error(app, err);
+    let (made, (document, layer)) = (p.made, p.layer);
+    let prepared = if matches!(e.outcome, photocraft_engine::jobs::JobOutcome::Done(_)) { p.out.lock().ok().and_then(|mut o| o.take()) } else { None };
+    let opened = match prepared.map(|prepared| (p.finish)(app, prepared)) {
+        Some(Ok(())) => true,
+        Some(Err(err)) => {
+            crate::notices::error(app, err);
+            false
+        }
+        None => false,
+    };
+    // As `mark_made` would have done at once, had the box opened inline.
+    if let Some(made) = made {
+        if opened && let Some(t) = app.ui.transform.as_mut() {
+            t.made = Some(made);
+        } else {
+            take_back_made(app, document, layer);
+        }
     }
     true
+}
+
+/// Mark the box `begin` opened, or the one it is still preparing, as made for `made`.
+fn mark_made(app: &mut PhotocraftApp, made: MadeLayer) {
+    if let Some(t) = app.ui.transform.as_mut() {
+        t.made = Some(made);
+    } else if let Some(p) = app.transform_preparing.as_mut() {
+        p.made = Some(made);
+    }
 }
 
 pub(super) fn interpolation_preference(interpolation: &str) -> Option<photocraft_engine::prefs::Interpolation> {
@@ -393,9 +428,7 @@ pub fn begin_copy(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
         }
         return Err(e);
     }
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.made = Some(MadeLayer::Copy);
-    }
+    mark_made(app, MadeLayer::Copy);
     Ok(())
 }
 
@@ -407,9 +440,7 @@ pub fn begin_placed(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), 
         return Ok(());
     }
     begin(app, ctx)?;
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.made = Some(MadeLayer::Place);
-    }
+    mark_made(app, MadeLayer::Place);
     Ok(())
 }
 

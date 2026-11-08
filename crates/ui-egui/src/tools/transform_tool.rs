@@ -113,6 +113,11 @@ pub(crate) struct Preparing {
     job: JobId,
     out: Arc<std::sync::Mutex<Option<begin::Prepared>>>,
     finish: FinishPrepared,
+    /// The document and layer the box is for.
+    layer: (DocId, LayerId),
+    /// The layer was made for this box (⌥⌘T's copy, a placed file): the opened session gets the
+    /// marker, and a box that never opens takes the layer back, as Esc would.
+    made: Option<MadeLayer>,
 }
 
 /// The canvas key of an open box's preview document (`display_doc`).
