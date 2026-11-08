@@ -51,10 +51,10 @@ fn drag(app: &mut PhotocraftApp, from: [f64; 2], by: [f64; 2], mods: egui::Modif
 }
 
 #[test]
-fn auto_select_is_on_by_default_with_the_group_target() {
+fn auto_select_is_on_by_default_with_the_layer_target() {
     let o = ToolOptions::default();
     assert!(o.move_auto_select, "Photoshop ships with Auto-Select checked");
-    assert_eq!(o.move_target, "group", "Photoshop defaults Auto-Select to Group (#4056)");
+    assert_eq!(o.move_target, "layer", "Reset Tool in Photoshop gives Auto-Select: Layer (#11380)");
     // A saved tool preset that predates the option gets the default too.
     let mut v = serde_json::to_value(&o).unwrap();
     v.as_object_mut().unwrap().remove("move_auto_select");
