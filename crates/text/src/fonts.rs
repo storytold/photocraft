@@ -1,7 +1,10 @@
 //! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
 //! fonts of every script ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional
-//! system fonts found by scanning platform directories (plus Fontconfig's file list on Linux),
-//! user-registered font data, and PostScript-name lookup for PSD import.
+//! system fonts found by scanning platform directories (plus Fontconfig's file list on Linux, and
+//! the files Core Text on macOS and DirectWrite on Windows offer, which include fonts a font
+//! manager activated in place), user-registered font data, and PostScript-name lookup for PSD
+//! import. [`new_system_font_files`] with [`FontDb::add_system_font_files`] picks up fonts
+//! installed or activated while the app runs.
 
 use std::collections::HashMap;
 #[cfg(not(target_arch = "wasm32"))]
@@ -10,7 +13,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock};
 
 use parley::FontContext;
-#[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
 use parley::fontique::SourceKind;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
 use skrifa::raw::{FileRef, TableProvider, types::Tag};
@@ -202,6 +205,21 @@ pub struct FontDb {
     face_aliases: HashMap<(String, usize), String>,
     /// This is the shared engine's database: registrations also move [`shared_generation`].
     shared: bool,
+    /// System font files already loaded (canonical paths), so a rescan only adds new ones.
+    #[cfg(not(target_arch = "wasm32"))]
+    system_files: HashSet<std::path::PathBuf>,
+}
+
+/// What [`new_system_font_files`] compares against: the system font files and the family names
+/// a [`FontDb`] already has ([`FontDb::system_fonts_seen`]). Taken under the engine's lock, so the
+/// slow part of a rescan runs without it.
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Debug, Default)]
+pub struct SystemFontsSeen {
+    files: HashSet<std::path::PathBuf>,
+    /// Families the OS font list needn't read files for (macOS and Windows only).
+    #[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
+    families: HashSet<String>,
 }
 
 impl Default for FontDb {
@@ -224,6 +242,8 @@ impl FontDb {
             traits_cache: HashMap::new(),
             face_aliases: HashMap::new(),
             shared: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            system_files: HashSet::new(),
         };
         for (_, bytes) in BUNDLED {
             db.register_static_font(bytes.as_slice());
@@ -252,7 +272,8 @@ impl FontDb {
         db
     }
 
-    /// Scans the platform font directories once, plus Fontconfig's file list on Linux. Font files
+    /// Scans the platform font directories once, plus Fontconfig's file list on Linux and the
+    /// files the OS font system offers on macOS (Core Text) and Windows (DirectWrite). Font files
     /// are memory-mapped lazily by fontique when a face is first used.
     pub fn load_system_fonts(&mut self) {
         if self.system_loaded {
@@ -261,33 +282,61 @@ impl FontDb {
         self.system_loaded = true;
         #[cfg(not(target_arch = "wasm32"))]
         {
-            // One call per file: fontique's directory scan is much slower on large folders.
-            let mut files = Vec::new();
-            for d in system_font_dirs() {
-                collect_font_files(&d, 0, &mut files);
-            }
-            #[cfg(target_os = "linux")]
-            files.extend(fontconfig_font_paths());
-            // Core Text knows every font macOS offers, also those activated from outside the
-            // font folders (#6683).
-            #[cfg(target_os = "macos")]
-            files.extend(coretext_font_paths());
-            // PingFang (the macOS Chinese UI font) lives outside the font folders.
-            if cfg!(target_os = "macos") {
-                files.extend(crate::cjk::mac_pingfang());
-            }
-            let mut seen = HashSet::new();
-            for path in files {
-                let key = path.canonicalize().unwrap_or_else(|_| path.clone());
-                if seen.insert(key) {
-                    self.fcx.collection.load_fonts_from_paths([path]);
-                }
-            }
+            let mut files = folder_font_files();
+            files.extend(os_font_files(&HashSet::new()));
+            self.register_system_files(files);
             self.ps_cache.clear();
             self.face_cache.clear();
             self.traits_cache.clear();
             self.refresh_generics();
         }
+    }
+
+    /// Loads each file not loaded yet (one call per file: fontique's directory scan is much slower
+    /// on large folders). Returns how many were new.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn register_system_files(&mut self, files: Vec<std::path::PathBuf>) -> usize {
+        let mut added = 0;
+        for path in files {
+            let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if self.system_files.insert(key) {
+                self.fcx.collection.load_fonts_from_paths([path]);
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// The system font files and families loaded so far, for [`new_system_font_files`]. `None`
+    /// until [`Self::load_system_fonts`] has run (a database without system fonts has nothing to
+    /// rescan).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn system_fonts_seen(&mut self) -> Option<SystemFontsSeen> {
+        if !self.system_loaded {
+            return None;
+        }
+        let families = self.fcx.collection.family_names().map(str::to_string).collect();
+        Some(SystemFontsSeen { files: self.system_files.clone(), families })
+    }
+
+    /// Adds the system font files [`new_system_font_files`] found (installed, or activated by a
+    /// font manager, after the first scan); files already loaded are skipped. When any is new, the
+    /// lookup caches are dropped and the generation moves, so font menus list the new families.
+    /// Returns how many files were added. Fonts deactivated meanwhile stay listed until restart.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn add_system_font_files(&mut self, files: Vec<std::path::PathBuf>) -> usize {
+        if !self.system_loaded {
+            return 0;
+        }
+        let added = self.register_system_files(files);
+        if added > 0 {
+            self.ps_cache.clear();
+            self.face_cache.clear();
+            self.traits_cache.clear();
+            self.refresh_generics();
+            self.bump_generation();
+        }
+        added
     }
 
     /// Registers font data (TTF/OTF, or every face of a TTC/OTC). Returns the family names added.
@@ -323,11 +372,16 @@ impl FontDb {
         self.face_cache.clear();
         self.traits_cache.clear();
         self.refresh_generics();
+        self.bump_generation();
+        names
+    }
+
+    /// Tells font menus and other caches that the database changed.
+    fn bump_generation(&self) {
         GENERATION.fetch_add(1, Ordering::Relaxed);
         if self.shared {
             SHARED_GENERATION.fetch_add(1, Ordering::Relaxed);
         }
-        names
     }
 
     /// Marks this as the shared engine's database ([`crate::shared`]) and moves
@@ -924,16 +978,85 @@ mod fontconfig_tests {
 /// (a font manager, Adobe Fonts, Office, Apple's on-demand downloads). A scratch collection with
 /// fontique's Core Text backend lists them; its fonts are not used, only their files, so our own
 /// collection registers them like any scanned file.
+/// Families in `skip` are not read (a rescan's known families, see [`font_files_except`]).
 #[cfg(target_os = "macos")]
-fn coretext_font_paths() -> Vec<std::path::PathBuf> {
+fn coretext_font_paths(skip: &HashSet<String>) -> Vec<std::path::PathBuf> {
     // Reading arbitrary fonts must not take the scan down: no files is the folder scan's result.
     std::panic::catch_unwind(|| {
         let mut system = Collection::new(CollectionOptions { shared: false, system_fonts: true });
-        let mut files = font_files_of(&mut system);
+        let mut files = font_files_except(&mut system, skip);
         files.retain(|f| !f.starts_with(MACOS_PRIVATE_FONTS));
         files
     })
     .unwrap_or_default()
+}
+
+/// The font files DirectWrite offers: the installed fonts and those a font manager (FontBase,
+/// Extensis Connect, FontExpert…) activated in place for the session with `AddFontResourceW`,
+/// which every GDI or DirectWrite app lists and no folder scan finds. DirectWrite picks up an
+/// activation within a couple of seconds. As on macOS, a scratch collection with fontique's
+/// DirectWrite backend lists them and only their files are used. Families in `skip` are not read.
+#[cfg(target_os = "windows")]
+fn directwrite_font_paths(skip: &HashSet<String>) -> Vec<std::path::PathBuf> {
+    // fontique unwraps DirectWrite's factory: a broken DirectWrite gives the folder scan's result.
+    std::panic::catch_unwind(|| {
+        let mut system = Collection::new(CollectionOptions { shared: false, system_fonts: true });
+        font_files_except(&mut system, skip)
+    })
+    .unwrap_or_default()
+}
+
+/// The files the OS font system offers beyond the font folders (Core Text, DirectWrite; nothing
+/// elsewhere), except for families in `skip`.
+#[cfg(not(target_arch = "wasm32"))]
+fn os_font_files(skip: &HashSet<String>) -> Vec<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    return coretext_font_paths(skip);
+    #[cfg(target_os = "windows")]
+    return directwrite_font_paths(skip);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = skip;
+        Vec::new()
+    }
+}
+
+/// The font folders' files, plus Fontconfig's list on Linux and PingFang on macOS. May hold the
+/// same file twice (registration dedupes by canonical path).
+#[cfg(not(target_arch = "wasm32"))]
+fn folder_font_files() -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for d in system_font_dirs() {
+        collect_font_files(&d, 0, &mut files);
+    }
+    #[cfg(target_os = "linux")]
+    files.extend(fontconfig_font_paths());
+    // PingFang (the macOS Chinese UI font) lives outside the font folders.
+    if cfg!(target_os = "macos") {
+        files.extend(crate::cjk::mac_pingfang());
+    }
+    files
+}
+
+/// The system font files `seen` doesn't have: installed in the font folders since, or (macOS,
+/// Windows) activated by a font manager since. Slow (reads folders and asks the OS), so it runs
+/// without the engine's lock; pass the result to [`FontDb::add_system_font_files`].
+///
+/// The OS list skips the families `seen` already has, because listing a family's files makes
+/// fontique read them: a whole family activated meanwhile is found, more faces of a family
+/// already listed only at the next launch.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn new_system_font_files(seen: &SystemFontsSeen) -> Vec<std::path::PathBuf> {
+    let mut files = folder_font_files();
+    files.extend(os_font_files(&seen.families));
+    let mut found = HashSet::new();
+    files
+        .into_iter()
+        .filter(|path| {
+            let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+            !seen.files.contains(&key) && found.insert(key)
+        })
+        .collect()
 }
 
 /// Fonts reserved for the system UI (PingFangUI.ttc among them). Core Text offers them, but
@@ -944,9 +1067,15 @@ const MACOS_PRIVATE_FONTS: &str = "/System/Library/PrivateFrameworks";
 
 /// The files `collection`'s fonts are read from, each once and in a fixed order. Fonts
 /// registered from memory have no file.
-#[cfg(any(target_os = "macos", all(test, not(target_arch = "wasm32"))))]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 fn font_files_of(collection: &mut Collection) -> Vec<std::path::PathBuf> {
-    let names: Vec<String> = collection.family_names().map(str::to_string).collect();
+    font_files_except(collection, &HashSet::new())
+}
+
+/// [`font_files_of`] without the families in `skip`, whose fonts are then not read.
+#[cfg(any(target_os = "macos", target_os = "windows", all(test, not(target_arch = "wasm32"))))]
+fn font_files_except(collection: &mut Collection, skip: &HashSet<String>) -> Vec<std::path::PathBuf> {
+    let names: Vec<String> = collection.family_names().filter(|name| !skip.contains(*name)).map(str::to_string).collect();
     let mut files = HashSet::new();
     for name in names {
         let Some(family) = collection.family_by_name(&name) else {
@@ -1128,11 +1257,106 @@ mod tests {
         assert_eq!(files, expected);
     }
 
+    /// Families in the skip list are left out (a rescan doesn't read what it already has).
+    #[test]
+    fn font_files_except_leaves_out_known_families() {
+        use super::{Collection, CollectionOptions};
+        let dir = std::env::temp_dir().join(format!("photocraft-font-files-except-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (inter, mono) = (dir.join("inter.ttf"), dir.join("mono.ttf"));
+        std::fs::write(&inter, super::INTER_REGULAR.as_slice()).unwrap();
+        std::fs::write(&mono, super::JETBRAINS_MONO_REGULAR.as_slice()).unwrap();
+        let mut collection = Collection::new(CollectionOptions { shared: false, system_fonts: false });
+        collection.load_fonts_from_paths([&dir]);
+        let skip = std::collections::HashSet::from([super::DEFAULT_FAMILY.to_string()]);
+        let files = super::font_files_except(&mut collection, &skip);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(files, vec![mono]);
+    }
+
+    /// A database without the system scan has nothing to rescan, and takes no system files.
+    #[test]
+    fn a_rescan_needs_the_system_scan() {
+        let mut db = super::FontDb::new();
+        assert!(db.system_fonts_seen().is_none());
+        let file = std::env::temp_dir().join(format!("photocraft-rescan-unscanned-{}.ttf", std::process::id()));
+        std::fs::write(&file, super::INTER_REGULAR.as_slice()).unwrap();
+        assert_eq!(db.add_system_font_files(vec![file.clone()]), 0);
+        let _ = std::fs::remove_file(file);
+    }
+
+    /// A font file a rescan finds (installed, or activated by a font manager, after the first
+    /// scan) is loaded once, and only a real addition moves the generation font menus watch.
+    #[test]
+    fn a_rescanned_file_is_added_once_and_moves_the_generation() {
+        let mut db = super::FontDb::new();
+        db.load_system_fonts();
+        let dir = std::env::temp_dir().join(format!("photocraft-rescan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Activated.ttf");
+        std::fs::write(&file, super::INTER_REGULAR.as_slice()).unwrap();
+        let before = db.system_fonts_seen().unwrap();
+        let g = super::generation();
+        assert_eq!(db.add_system_font_files(vec![file.clone()]), 1);
+        assert!(super::generation() > g, "an added file moves the generation");
+        // The same file again, also spelled another way. (Not checked through the generation: it is
+        // process-wide, and tests running beside this one move it.)
+        assert_eq!(db.add_system_font_files(vec![file.clone(), dir.join(".").join("Activated.ttf")]), 0);
+        let after = db.system_fonts_seen().unwrap();
+        assert_eq!(after.files.len(), before.files.len() + 1);
+        assert!(after.files.contains(&file.canonicalize().unwrap()));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A family the font menu asked about before it was activated (no traits then) gets its traits
+    /// once a rescan adds it, instead of staying unknown until restart.
+    #[test]
+    fn a_rescanned_family_gets_its_traits() {
+        let mut db = super::FontDb::new();
+        db.load_system_fonts();
+        let dir = std::env::temp_dir().join(format!("photocraft-rescan-traits-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("Activated.ttf");
+        std::fs::write(&file, super::font_names_tests::numeric_font(&super::INTER_REGULAR, "Rescan", "RescanPS")).unwrap();
+        assert!(db.family_traits("Numeric Test").is_none());
+        assert_eq!(db.add_system_font_files(vec![file]), 1);
+        let traits = db.family_traits("Numeric Test");
+        let _ = std::fs::remove_dir_all(dir);
+        assert!(traits.is_some(), "the added family's traits are read, not the cached miss");
+    }
+
+    /// Right after the scan a rescan finds nothing new: the scan loaded every file the folders
+    /// and the OS font list (Core Text, DirectWrite) offer.
+    #[test]
+    fn a_rescan_right_after_the_scan_finds_nothing() {
+        let mut db = super::FontDb::new();
+        db.load_system_fonts();
+        let seen = db.system_fonts_seen().unwrap();
+        assert_eq!(super::new_system_font_files(&seen), Vec::<std::path::PathBuf>::new());
+    }
+
+    /// DirectWrite lists the system's font files (here at least the fonts every Windows ships),
+    /// all readable, and the scan loads every one of them.
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn every_file_directwrite_offers_is_loaded() {
+        let files = super::directwrite_font_paths(&std::collections::HashSet::new());
+        let windir = std::env::var_os("WINDIR").map_or_else(|| std::path::PathBuf::from("C:\\Windows"), std::path::PathBuf::from);
+        let fonts = windir.join("Fonts").canonicalize().unwrap();
+        assert!(files.iter().any(|f| f.canonicalize().is_ok_and(|f| f.starts_with(&fonts))), "{} files", files.len());
+        assert!(files.iter().all(|f| f.is_file()));
+        let mut db = super::FontDb::new();
+        db.load_system_fonts();
+        let seen = db.system_fonts_seen().unwrap();
+        let missing: Vec<_> = files.iter().filter(|f| !seen.files.contains(&f.canonicalize().unwrap_or_else(|_| f.to_path_buf()))).collect();
+        assert!(missing.is_empty(), "DirectWrite offers these files, the scan didn't load them: {missing:?}");
+    }
+
     /// Core Text lists the system's font files, all readable, none of the reserved UI fonts.
     #[test]
     #[cfg(target_os = "macos")]
     fn coretext_lists_the_system_font_files() {
-        let files = super::coretext_font_paths();
+        let files = super::coretext_font_paths(&std::collections::HashSet::new());
         assert!(files.iter().any(|f| f.starts_with("/System/Library/Fonts")), "{} files", files.len());
         assert!(files.iter().all(|f| f.is_file() && !f.starts_with("/System/Library/PrivateFrameworks")));
     }
