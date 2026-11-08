@@ -7,7 +7,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use serde_json::json;
 
-use super::mixer_load_image;
+use super::{mixer_load_image, mixer_load_texture};
 use crate::PhotocraftApp;
 use crate::canvas::{ToolEvent, tool_event};
 use crate::state::Tool;
@@ -112,11 +112,22 @@ fn the_swatch_shows_the_load_the_tip_image_or_a_checkerboard() {
     h.run_steps(3);
     let load = h.state().session.tools.mixer.spatial.clone().expect("the ⌥-click loads the tip image");
     let (_, textures) = swatch(&h);
-    assert_eq!(textures.len(), 1, "the swatch draws the tip image");
+    let sampled = mixer_load_texture(&h.ctx, &load).id();
+    assert_eq!(textures, [sampled], "the swatch draws the texture of the sampled load");
     let image = mixer_load_image(&load);
     let (left, right) = (image[(16, 32)], image[(48, 32)]);
     assert!(left.g() > 200 && left.b() < 50, "left of the image {left:?}");
     assert!(right.b() > 200 && right.g() < 50, "right of the image {right:?}");
+    h.run_steps(3);
+    assert_eq!(swatch(&h).1, [sampled], "an unchanged load keeps its texture");
+
+    // ⌥-click in the green: a new load, uploaded again.
+    tool_event(h.state_mut(), ToolEvent::Down { x: 30.0, y: 50.0, pressure: 1.0 }, Modifiers::ALT);
+    tool_event(h.state_mut(), ToolEvent::Up { x: 30.0, y: 50.0 }, Modifiers::ALT);
+    h.run_steps(3);
+    let green = h.state().session.tools.mixer.spatial.clone().expect("the second ⌥-click loads the tip image");
+    let (_, textures) = swatch(&h);
+    assert!(textures != [sampled] && textures == [mixer_load_texture(&h.ctx, &green).id()], "the new load's texture {textures:?}");
 
     // Clean Brush: a checkerboard of two greys, no image.
     h.state_mut().run("brush.mixer.clean", json!({})).unwrap();
