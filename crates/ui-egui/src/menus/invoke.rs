@@ -39,6 +39,26 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
     })
 }
 
+/// Whether command `id` leaves a Type box-handle drag going: only the ones that change what is
+/// on screen and nothing in the document. `UI_COMMANDS` is every command the shell carries out
+/// itself, so it can't tell them apart: it holds `edit.freeTransform` and `file.save`, which
+/// must see the dragged box, and `view.clearSelectedGuides`, which edits the document. So the view
+/// ones are listed one by one; panel and help commands only open or arrange windows.
+fn keeps_box_drag(id: &str) -> bool {
+    const VIEW: &[&str] = &[
+        "view.zoomIn",
+        "view.zoomOut",
+        "view.fitOnScreen",
+        "view.actualPixels",
+        "view.rotateView",
+        "view.resetView",
+        "view.screenMode.cycle",
+        "view.darkenInterface",
+        "view.lightenInterface",
+    ];
+    VIEW.contains(&id) || ((id.starts_with("window.") || id.starts_with("help.")) && super::UI_COMMANDS.iter().any(|c| c.0 == id))
+}
+
 /// Run a command id from any source (menu, shortcut, palette, automation).
 pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
     if app.automation_input
@@ -46,11 +66,9 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     {
         authorize(id, &params)?;
     }
-    // A held Type box handle applies its box before any command that may read the document runs.
-    // `UI_COMMANDS` is every command the shell carries out itself, not only view ones: it holds
-    // `edit.freeTransform` and `file.save`, which must see the dragged box. So only commands that
-    // cannot read the layer (view, window and help ones) leave the drag going.
-    if !["view.", "window.", "help."].iter().any(|prefix| id.starts_with(prefix)) {
+    // A held Type box handle applies its box before any command that may read or edit the
+    // document runs; a command that edits it first would make the drag's box stale and lose it.
+    if !keeps_box_drag(id) {
         crate::type_box_preview::end_drag(app);
     }
     if crate::discard_ui::intercept(app, id, &params) {

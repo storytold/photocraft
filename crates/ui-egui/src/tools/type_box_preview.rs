@@ -708,6 +708,21 @@ mod tests {
         assert!(sync.ui.text_edit.as_ref().unwrap().resize.is_some(), "a sync drag is left going");
     }
 
+    /// `view.clearSelectedGuides` is a view command that edits the document. It must not leave
+    /// the drag going: its edit would make the preview stale and the dragged box would be lost.
+    #[test]
+    fn a_view_command_that_edits_the_document_ends_the_drag_first() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let ctx = egui::Context::default();
+        press(&mut app);
+        to(&mut app, 560.0);
+        assert_eq!(height(&session_layer(&app, id)), 180.0, "not applied yet");
+        let _ = crate::menus::invoke(&mut app, &ctx, "view.clearSelectedGuides", json!({}));
+        assert!(app.type_box_preview.is_none(), "the drag ended");
+        assert_eq!(height(&session_layer(&app, id)), 260.0, "the box was applied, not lost");
+    }
+
     /// `edit.freeTransform` is a shell command (in `UI_COMMANDS`), yet it captures the document,
     /// so it must see the dragged box like any other command does: its frame is the resized
     /// layer's, not the one from before the drag.
