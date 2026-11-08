@@ -666,6 +666,7 @@ mod reporting_tests {
         serde_json::from_str::<Value>(&text).expect("report json")["rows"].as_array().expect("report rows").clone()
     }
 
+    /// A cold CPU fallback must not relabel GPU warm samples or sort their raw timings.
     #[test]
     fn a_cold_cpu_fallback_keeps_the_warm_gpu_path() {
         let mut b = bench(3);
@@ -691,6 +692,7 @@ mod reporting_tests {
         assert_eq!(row["samples_ms"], json!([24.0, 22.0, 23.0]));
     }
 
+    /// Retain a warm fallback after recovery without relabeling the cold sample.
     #[test]
     fn any_warm_fallback_labels_the_warm_row_and_keeps_the_cold_path() {
         let mut b = bench(3);
@@ -714,6 +716,7 @@ mod reporting_tests {
         assert_eq!(row["samples_ms"], json!([20.0, 21.0, 22.0]));
     }
 
+    /// Preserve the legacy row schema and sample alignment when rendering paths are not requested.
     #[test]
     fn ordinary_rows_keep_their_names_and_have_no_path_metadata() {
         let mut b = bench(2);
