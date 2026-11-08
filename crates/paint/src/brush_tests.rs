@@ -879,26 +879,27 @@ fn smoothing_modes() {
     // Pulled string: jitter smaller than the string moves nothing; the brush trails by the string.
     let ps = Smoothing { amount: 0.2, pulled_string: true, catch_up_on_end: false, ..Default::default() };
     let jitter: Vec<StrokePoint> = (0..20).map(|i| StrokePoint::new(if i % 2 == 0 { 0.0 } else { 5.0 }, 0.0, 1.0)).collect();
-    assert_eq!(smooth_points(&ps, 1.0, &jitter).len(), 1, "within the 20 px string: no motion");
+    assert_eq!(smooth_points(&ps, 1.0, &jitter).len(), 1, "within the 60 px string: no motion");
     let far = smooth_points(&ps, 1.0, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(100.0, 0.0, 1.0)]);
-    assert!((far.last().unwrap().x - 80.0).abs() < 1e-4);
+    assert!((far.last().unwrap().x - 40.0).abs() < 1e-4);
     // Adjust for zoom: at 200 % zoom the string is half as long in image pixels.
     let far = smooth_points(&ps, 2.0, &[StrokePoint::new(0.0, 0.0, 1.0), StrokePoint::new(100.0, 0.0, 1.0)]);
-    assert!((far.last().unwrap().x - 90.0).abs() < 1e-4);
+    assert!((far.last().unwrap().x - 70.0).abs() < 1e-4);
     // Stroke catch-up: a pause (timestamps) lets the brush converge on the pointer.
     let mut a = StrokePoint::new(0.0, 0.0, 1.0);
     a.time = 0.0;
     let b = StrokePoint { x: 100.0, time: 16.0, ..a };
-    let c = StrokePoint { time: 500.0, ..b };
+    let c = StrokePoint { time: 1000.0, ..b };
+    let d = StrokePoint { time: 2000.0, ..b };
     let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: true, catch_up_on_end: false, ..Default::default() }, 1.0);
     let mut out = Vec::new();
-    for p in [a, b, c] {
+    for p in [a, b, c, d] {
         s.push(p, &mut out);
     }
     assert!(out.last().unwrap().x > 99.0, "{}", out.last().unwrap().x);
     let mut s = Smoother::new(&Smoothing { amount: 0.8, catch_up: false, catch_up_on_end: false, ..Default::default() }, 1.0);
     let mut out = Vec::new();
-    for p in [a, b, c] {
+    for p in [a, b, c, d] {
         s.push(p, &mut out);
     }
     assert!(out.last().unwrap().x < 70.0, "{}", out.last().unwrap().x);
@@ -930,7 +931,10 @@ fn disabled_smoothing_keeps_its_settings_and_paints_unsmoothed_at_every_depth() 
         let mut back: Smoothing = serde_json::from_value(serde_json::to_value(&smoothing).unwrap()).unwrap();
         assert_eq!(back, smoothing);
         back.enabled = true;
-        assert!(smooth_points(&back, 1.0, &pts).iter().zip(&pts).any(|(a, b)| a.x != b.x || a.y != b.y));
+        // Re-enabled, it smooths again: different points, or fewer (a pulled string that hasn't
+        // been pulled taut leaves the brush where it started, #11888).
+        let again = smooth_points(&back, 1.0, &pts);
+        assert!(again.len() != pts.len() || again.iter().zip(&pts).any(|(a, b)| a.x != b.x || a.y != b.y));
     }
     // Existing brush JSON has no switch and must retain its old smoothing behavior.
     let legacy: Smoothing = serde_json::from_str(r#"{"amount":0.8,"pulledString":true}"#).unwrap();
@@ -972,8 +976,9 @@ fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
         out.last().map_or(0.0, |p| p.x)
     };
     let (fast, slow) = (run(1.0), run(16.0));
-    // Two 16 ms steps of a 0.2 pull: 1 - 0.8² = 36 % of the way.
-    assert!((slow - 36.0).abs() < 1e-4, "{slow}");
+    // Two 16 ms steps of one step's pull `a`: 1 - (1 - a)² of the way.
+    let a = crate::dynamics::smoothing_pull(0.8);
+    assert!((slow - 100.0 * (1.0 - (1.0 - a).powi(2))).abs() < 1e-4, "{slow}");
     assert!((fast - slow).abs() < 1e-4, "1000 Hz {fast} vs 60 Hz {slow}");
     // Without timestamps each point is one step, as before.
     let mut s = Smoother::new(&cfg, 1.0);
@@ -981,7 +986,7 @@ fn smoothing_pulls_by_time_not_by_how_often_the_device_reports() {
     for x in [0.0, 100.0] {
         s.push(StrokePoint::new(x, 0.0, 1.0), &mut out);
     }
-    assert!((out.last().map_or(0.0, |p| p.x) - 20.0).abs() < 1e-4);
+    assert!((out.last().map_or(0.0, |p| p.x) - 100.0 * a).abs() < 1e-4);
 }
 
 #[test]
@@ -1021,13 +1026,13 @@ fn a_pulled_string_brush_takes_the_pose_along_the_string() {
     let a = StrokePoint { rotation: 350.0, ..StrokePoint::new(0.0, 0.0, 1.0) };
     let b = StrokePoint { rotation: 10.0, tilt_x: 40.0, ..StrokePoint::new(100.0, 0.0, 0.0) };
     let out = smooth_points(&ps, 1.0, &[a, b]);
-    // The 20 px string leaves the brush 80 % of the way to the pointer.
+    // The 60 px string leaves the brush 40 % of the way to the pointer.
     let p = out.last().unwrap();
-    assert!((p.x - 80.0).abs() < 1e-4, "{}", p.x);
-    assert!((p.pressure - 0.2).abs() < 1e-4, "{}", p.pressure);
-    assert!((p.tilt_x - 32.0).abs() < 1e-3, "{}", p.tilt_x);
-    // Rotation the short way round: 350° + 80 % of 20°.
-    assert!((p.rotation - 6.0).abs() < 1e-3, "{}", p.rotation);
+    assert!((p.x - 40.0).abs() < 1e-4, "{}", p.x);
+    assert!((p.pressure - 0.6).abs() < 1e-4, "{}", p.pressure);
+    assert!((p.tilt_x - 16.0).abs() < 1e-3, "{}", p.tilt_x);
+    // Rotation the short way round: 350° + 40 % of 20°.
+    assert!((p.rotation - 358.0).abs() < 1e-3, "{}", p.rotation);
 }
 
 #[test]

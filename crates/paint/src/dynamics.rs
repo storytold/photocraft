@@ -10,10 +10,24 @@ use crate::brush::{BrushSettings, Control, Dynamic, Smoothing};
 use crate::rng::{rand_signed, rand01, stream};
 use crate::{Dab, StrokePoint};
 
-/// Maximum pulled-string length at 100 % smoothing, in screen pixels.
-pub const MAX_STRING_PX: f64 = 100.0;
+/// Maximum pulled-string length at 100 % smoothing, in screen pixels: 150 px at 50 %, as measured
+/// in the reference application (#11888).
+pub const MAX_STRING_PX: f64 = 300.0;
 /// Stroke time over which exponential smoothing moves its fraction of the way to the pointer.
 pub const SMOOTHING_STEP_MS: f64 = 16.0;
+/// Exponential smoothing's time constant at 100 % smoothing, in ms, and the power of the amount
+/// it scales by: `tau = SMOOTHING_TAU_MS · amount^SMOOTHING_TAU_EXP`. Fitted to the reference
+/// application's lag (#11888): a 200 px drag in 40 moves 10 ms apart ends 19 px short at 10 %
+/// (tau 43 ms) and 78 px short at 50 % (tau 173 ms).
+pub const SMOOTHING_TAU_MS: f64 = 314.0;
+pub const SMOOTHING_TAU_EXP: f64 = 0.864;
+
+/// The fraction of the way to the pointer exponential smoothing moves in one
+/// [`SMOOTHING_STEP_MS`] at `amount` (0..1, above 0).
+pub fn smoothing_pull(amount: f64) -> f64 {
+    let tau = SMOOTHING_TAU_MS * amount.clamp(0.0, 1.0).powf(SMOOTHING_TAU_EXP);
+    if tau > 0.0 { 1.0 - (-SMOOTHING_STEP_MS / tau).exp() } else { 1.0 }
+}
 
 /// With Spacing unchecked, one dab per this many milliseconds of stroke time, so faster strokes
 /// space their dabs further apart (Photoshop: "the speed of the cursor determines the spacing").
@@ -147,7 +161,7 @@ impl Smoother {
         // Exponential: every SMOOTHING_STEP_MS of stroke time moves `a` of the way towards the
         // pointer, so the feel doesn't depend on how often the device reports. Input without
         // timestamps takes one step per point.
-        let a = 1.0 - amount.min(0.95);
+        let a = smoothing_pull(amount);
         let dt = prev_input.map_or(0.0, |q| p.time - q.time);
         let still = prev_input.is_some_and(|q| q.x == p.x && q.y == p.y);
         if still && !self.cfg.catch_up {
@@ -188,9 +202,10 @@ impl Smoother {
     }
 
     /// End of stroke: with Catch-Up On Stroke End the brush finishes at the last pointer position
-    /// and pose.
+    /// and pose. Not in Pulled String Mode: the brush stays the string's length behind the pointer
+    /// (measured, #11888).
     pub fn finish(&mut self, out: &mut Vec<StrokePoint>) {
-        if !self.active() || !self.cfg.catch_up_on_end {
+        if !self.active() || !self.cfg.catch_up_on_end || self.cfg.pulled_string {
             return;
         }
         if let (Some(pos), Some(last)) = (self.pos, self.last_input)
@@ -1046,3 +1061,7 @@ mod streaming_tests {
         assert_eq!(dabs.len(), 2_000_001);
     }
 }
+
+#[cfg(test)]
+#[path = "smoothing_lag_tests.rs"]
+mod smoothing_lag_tests;

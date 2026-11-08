@@ -1746,6 +1746,11 @@ live_coordinate_regression!(
 fn live_dodge_matches_the_commit_across_cells() {
     let mut s = session(200, 90, 32, "rgb");
     paint_layer(&mut s, texture);
+    // About the cells' summation order, not smoothing: the live stroke is compared before its
+    // release, and with the brush's default smoothing lag (#11888) the commit's end catch-up runs
+    // from the trailing brush along most of the last segment. Live against commit with smoothing
+    // is the hand-off tests' "smoothing" case.
+    s.tools.brush.smoothing.enabled = false;
     let all = [[10.0, 40.0], [100.0, 60.0], [180.0, 40.0], [60.0, 30.0], [150.0, 70.0]];
     let pts = |v: &[[f64; 2]]| v.iter().map(|q| StrokePoint::new(q[0], q[1], 1.0)).collect::<Vec<_>>();
     let opts = |p: &[[f64; 2]]| json!({"points": p, "size": 40, "hardness": 30, "exposure": 60, "range": "midtones"});
