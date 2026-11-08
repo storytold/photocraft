@@ -178,3 +178,26 @@ fn a_preset_picked_in_another_case_is_noted_by_its_own_name() {
     let h = harness(app);
     assert_eq!(h.get_by_label(&tile(&n[1])).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "and shown as the current brush");
 }
+
+#[test]
+fn double_clicking_a_recent_tile_chooses_that_brush() {
+    // The first click moves the tile to the front; the second lands on whatever moved under the
+    // pointer, and must still choose the brush the double-click began on.
+    let mut app = app();
+    let n = names(&app);
+    pick(&mut app, &n[3]);
+    pick(&mut app, &n[1]);
+    let mut h = harness(app);
+    assert_eq!(h.state().ui.brush_picker_list.recent, [n[1].clone(), n[3].clone()]);
+    let p = h.get_by_label(&tile(&n[3])).rect().center();
+    h.hover_at(p);
+    h.run_steps(1);
+    for _ in 0..2 {
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(n[3].as_str()), "the brush the double-click began on");
+    assert!(h.state().ui.brush_picker.is_none(), "a double-click closes the picker");
+}

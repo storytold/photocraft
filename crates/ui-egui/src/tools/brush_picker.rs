@@ -406,9 +406,14 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
                 egui::Color32::WHITE,
             );
             let resp = resp.on_hover_text(name);
+            // The first click moves its tile to the front, so the second can land on another
+            // tile: the double-click chooses the brush its first click picked.
+            let first_click = picker_id().with("recent-first-click");
             if resp.double_clicked() {
-                picks.push(Pick::List(Action::Choose(name.clone())));
+                let first = ui.ctx().data_mut(|d| d.remove_temp::<String>(first_click)).unwrap_or_else(|| name.clone());
+                picks.push(Pick::List(Action::Choose(first)));
             } else if resp.clicked() {
+                ui.ctx().data_mut(|d| d.insert_temp(first_click, name.clone()));
                 picks.push(Pick::List(Action::Select(name.clone())));
             }
         }
