@@ -192,6 +192,55 @@ fn byte_budget_counts_the_brush_source_first() {
     assert_eq!(h.brush_source(), Some(0));
 }
 
+/// A deep layer's samples and count tables count against the byte budget like tiles: a
+/// history of deep edits must trim, not grow unbounded below a budget that never sees them
+/// (#1122's review — `memory_bytes` reported the deep samples as 0).
+#[test]
+fn byte_budget_counts_deep_samples() {
+    use photocraft_doc::{DeepChannel, DeepData, LayerContent};
+    let mut h = History::new(50);
+    let mut cur = Arc::new(base());
+    let deep = || {
+        // ~64 KiB of samples per state: 4096 samples x 4 channels x 4 bytes.
+        LayerContent::Deep(DeepData {
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 16,
+            channels: (0..4).map(|i| DeepChannel { name: format!("c{i}"), samples: vec![0.25f32; 4096] }).collect(),
+            counts: vec![0; 64 * 16 + 1],
+        })
+    };
+    edit(&mut h, &mut cur, "deep", |d| {
+        d.layers.push(Layer::new("deep", deep()));
+    });
+    let one = h.pixel_bytes(&cur);
+    // The current document's deep samples count (the state shares nothing with them yet).
+    let mut counted = 0usize;
+    tiles::blocks(&cur, |_, len| counted += len);
+    assert!(counted >= 4 * 4096 * 4 + (64 * 16 + 1) * 8, "deep samples and counts are visited: {counted}");
+    for i in 0..4 {
+        edit(&mut h, &mut cur, &format!("deep {i}"), |d| {
+            let id = d.layers.last().unwrap().id;
+            if let LayerContent::Deep(dd) = &mut d.layer_mut(id).unwrap().content
+                && let Some(c) = dd.channels.first_mut()
+            {
+                c.samples[0] = i as f32;
+            }
+        });
+    }
+    // Each edit clones the deep samples into its own state, so the history must see them.
+    let grown = h.pixel_bytes(&cur);
+    assert!(grown > one + 4 * (4 * 4096 * 4), "deep samples count per state: {grown} <= {}", one);
+    // And the budget trims them: with the budget between one state's footprint and what the
+    // deep history grew to, the older states go.
+    h.max_bytes = one + one / 2;
+    let grown_now = h.pixel_bytes(&cur);
+    let dropped = h.trim(&cur);
+    assert!(dropped > 0, "a deep history trims to its budget: {grown_now} bytes, budget {}, entries {:?}", h.max_bytes, h.entries());
+    assert!(h.pixel_bytes(&cur) <= h.max_bytes, "{} > {}", h.pixel_bytes(&cur), h.max_bytes);
+}
+
 /// Edit › Purge › Histories clears every state: a source set on one of them goes back to the
 /// default (the oldest state held) instead of leaving no source (#3536 review).
 #[test]

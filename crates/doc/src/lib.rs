@@ -698,6 +698,20 @@ impl DeepData {
         if cells > 1 << 28 {
             return Err(format!("merging these deep layers needs a union grid of {cells} pixels ({w} x {h}), above the 2^28 limit"));
         }
+        // The dense grid's bytes, not only its cell count, cap the merge: two 1x1 layers parked
+        // far apart refuse instead of allocating half a gigabyte of counts and samples in
+        // milliseconds (#1122's review). Every channel holds the same per-cell capacity (f32
+        // samples over the whole grid), and the count table is one u64 per cell.
+        let union_bytes = cells.saturating_mul(names.len().saturating_mul(4)).saturating_add(cells.saturating_mul(8));
+        const MAX_MERGE_BYTES: usize = 1 << 30;
+        if union_bytes > MAX_MERGE_BYTES {
+            return Err(format!(
+                "merging these deep layers needs {} MiB for the union grid ({w} x {h}, {} channels), above the {} MiB limit",
+                union_bytes >> 20,
+                names.len(),
+                MAX_MERGE_BYTES >> 20
+            ));
+        }
         let mut counts = Vec::with_capacity(cells.saturating_add(1));
         counts.push(0u64);
         for py in 0..h as i32 {
@@ -718,8 +732,12 @@ impl DeepData {
                     n += range.end.saturating_sub(range.start);
                     let n_here = (range.end.saturating_sub(range.start)) as usize;
                     for (k, name) in names.iter().enumerate() {
-                        // A channel the side lacks (or that is short) contributes zeros, so
-                        // every channel stays aligned with the merged counts.
+                        // A channel the side lacks (or that is short) fills with the value the
+                        // renderer assumes for a missing channel — alpha opaque, no depth — so
+                        // the merged samples composite the same way the side alone did.
+                        // Alpha fills 1.0 (a missing alpha channel is fully opaque); depth
+                        // fills NaN (the Z sort places it last, behind every known depth);
+                        // colour fills 0.0. Every channel stays aligned with the merged counts.
                         let got = match cm.get(name.as_str()) {
                             None => 0,
                             Some(samples) => {
@@ -729,7 +747,12 @@ impl DeepData {
                                 to.saturating_sub(from)
                             }
                         };
-                        out[k].extend(std::iter::repeat_n(0.0, n_here - got));
+                        let fill = match name.as_str() {
+                            "A" => 1.0f32,
+                            "Z" => f32::NAN,
+                            _ => 0.0,
+                        };
+                        out[k].extend(std::iter::repeat_n(fill, n_here - got));
                     }
                 }
                 counts.push(counts.last().copied().unwrap_or(0).saturating_add(n));
@@ -1469,6 +1492,47 @@ impl Document {
 
 #[cfg(test)]
 mod tests {
+    /// A side without an alpha channel composites opaque (the renderer's rule), so the merge
+    /// fills its missing alpha with 1.0 instead of transparent zeros (#1122's review).
+    #[test]
+    fn merging_fills_a_missing_alpha_channel_opaque() {
+        use crate::{DeepChannel, DeepData};
+        let ch = |name: &str, v: &[f32]| DeepChannel { name: name.to_string(), samples: v.to_vec() };
+        let no_alpha = DeepData { x: 0, y: 0, width: 1, height: 1, channels: vec![ch("R", &[0.5])], counts: vec![0, 1] };
+        let with_alpha = DeepData { x: 0, y: 0, width: 1, height: 1, channels: vec![ch("A", &[0.5]), ch("R", &[0.0])], counts: vec![0, 1] };
+        let merged = no_alpha.merge(&with_alpha).unwrap();
+        let a = merged.channels.iter().find(|c| c.name == "A").unwrap();
+        assert_eq!(a.samples, vec![1.0, 0.5], "the alpha-less side composites opaque, not transparent");
+        let r = merged.channels.iter().find(|c| c.name == "R").unwrap();
+        assert_eq!(r.samples, vec![0.5, 0.0]);
+        assert_eq!(merged.counts, vec![0, 2]);
+    }
+
+    /// A side without a depth channel has no known depth: the merge fills NaN, which the
+    /// renderer's Z sort places last — behind every known depth — instead of depth 0, in
+    /// front of everything (#1122's review).
+    #[test]
+    fn merging_fills_a_missing_depth_channel_behind_everything() {
+        use crate::{DeepChannel, DeepData};
+        let ch = |name: &str, v: &[f32]| DeepChannel { name: name.to_string(), samples: v.to_vec() };
+        let no_depth = DeepData { x: 0, y: 0, width: 1, height: 1, channels: vec![ch("A", &[1.0]), ch("R", &[1.0])], counts: vec![0, 1] };
+        let with_depth = DeepData { x: 0, y: 0, width: 1, height: 1, channels: vec![ch("A", &[1.0]), ch("R", &[0.0]), ch("Z", &[5.0])], counts: vec![0, 1] };
+        let merged = with_depth.merge(&no_depth).unwrap();
+        let z = merged.channels.iter().find(|c| c.name == "Z").unwrap();
+        assert_eq!(z.samples.len(), 2);
+        assert!(z.samples[0] == 5.0, "the known depth first");
+        assert!(z.samples[1].is_nan(), "the unknown depth fills NaN");
+        // The Z sort then composites the known depth first, as the renderer orders it.
+        let sorted: Vec<f32> = {
+            let mut order: Vec<u32> = (0u32..2).collect();
+            order.sort_by(|&i, &j| z.samples[i as usize].total_cmp(&z.samples[j as usize]));
+            order.iter().map(|&i| z.samples[i as usize]).collect()
+        };
+        // NaN != NaN, so compare bit patterns: the known depth first, NaN last.
+        let bits = |v: &[f32]| v.iter().map(|f| f.to_bits()).collect::<Vec<_>>();
+        assert_eq!(bits(&sorted), bits(&[5.0, f32::NAN]), "NaN sorts last");
+    }
+
     use super::*;
 
     fn doc() -> Document {

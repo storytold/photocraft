@@ -47,6 +47,14 @@ pub(crate) trait Fetch {
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>>;
     /// Fetch an optional display payload without allocating beyond its stricter limit.
     fn blob_bounded(&mut self, hash: &str, limit: usize) -> Result<Arc<Vec<u8>>>;
+    /// Charge `n` bytes against the load's memory budget without fetching: a derived copy
+    /// (each deep channel's samples are decoded into their own `Vec`, not shared with the
+    /// blob they came from) must count, or a small hostile file expands far past the budget.
+    /// A fetcher that has no separate budget charges nothing.
+    fn charge(&mut self, n: usize) -> Result<()> {
+        let _ = n;
+        Ok(())
+    }
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -596,6 +604,10 @@ impl Loader<'_> {
                             total
                         )));
                     }
+                    // The decoded samples are a fresh allocation, not the blob: charge them
+                    // against the load's budget, or N channels on one blob expand N-fold
+                    // past it (#1122's review).
+                    self.fetch.charge(want)?;
                     channels_v.push(photocraft_doc::DeepChannel {
                         name: c.name.clone(),
                         samples: bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect(),

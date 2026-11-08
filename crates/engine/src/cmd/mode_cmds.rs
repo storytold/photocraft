@@ -69,6 +69,11 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
     if !angle.is_finite() || angle.abs() > 3600.0 {
         return Err(bad(CMD, "angle out of range"));
     }
+    if let Some(d) = s.active()
+        && photocraft_compose::deep::any_deep(&d.doc.layers)
+    {
+        return Err(bad(CMD, "deep layers cannot be rotated yet; their samples keep their depth"));
+    }
     let deg = match str_or(p, "direction", "cw") {
         "cw" => angle,
         "ccw" => -angle,

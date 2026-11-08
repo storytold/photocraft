@@ -32,6 +32,15 @@ pub(crate) fn blocks(doc: &Document, mut visit: impl FnMut(usize, usize)) {
         {
             visit(Arc::as_ptr(bytes) as usize, bytes.len());
         }
+        // Deep samples and count tables are shared allocations history retains like tiles:
+        // a clone holds its own copies (they are plain Vecs), and a state's copies must count
+        // against the memory budget, or a deep document's edits escape it (#1122's review).
+        if let LayerContent::Deep(d) = &layer.content {
+            for c in &d.channels {
+                visit(c.samples.as_ptr() as usize, c.samples.len().saturating_mul(4));
+            }
+            visit(d.counts.as_ptr() as usize, d.counts.len().saturating_mul(8));
+        }
     }
 }
 

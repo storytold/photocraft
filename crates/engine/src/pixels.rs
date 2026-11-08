@@ -553,11 +553,23 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
 /// effects — is refused instead of silently dropped. Bake it into the samples first
 /// (flatten or rasterize the upper layer) to merge.
 pub fn deep_merge_blocker(l: &Layer) -> Option<&'static str> {
+    if !l.visible {
+        return Some("a hidden layer");
+    }
     if l.opacity < 1.0 {
         return Some("an opacity below 100 %");
     }
+    if l.fill_opacity < 1.0 {
+        return Some("a fill opacity below 100 %");
+    }
     if !matches!(l.blend, photocraft_doc::BlendMode::Normal | photocraft_doc::BlendMode::PassThrough) {
         return Some("a blend mode");
+    }
+    if !l.blend_if.is_default() {
+        return Some("advanced blending");
+    }
+    if l.clipped {
+        return Some("a clipped layer");
     }
     if l.mask.is_some() || l.vector_mask.is_some() {
         return Some("a mask");
@@ -577,10 +589,11 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Result<Layer,
         if let Some(what) = deep_merge_blocker(upper) {
             return Err(format!("the upper deep layer has {what}; sample merging would drop it. Flatten or rasterize the layer to bake it in first"));
         }
-        let mut merged = Layer::new(lower.name.clone(), LayerContent::Deep(a.merge(b)?));
-        merged.id = lower.id;
-        merged.blend = lower.blend;
-        merged.opacity = 1.0;
+        // The lower layer carries the result: its compositing — opacity, fill opacity, blend,
+        // advanced blending, masks, effects, clipping, locks, label, link group — still applies
+        // to the merged samples, exactly as for a raster Merge Down (#1122's review).
+        let mut merged = lower.clone();
+        merged.content = LayerContent::Deep(a.merge(b)?);
         return Ok(merged);
     }
     let stack = vec![lower.clone(), upper.clone()];

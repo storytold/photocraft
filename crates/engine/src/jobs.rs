@@ -1267,14 +1267,38 @@ impl Session {
                 };
                 ctx.check()?;
                 ctx.progress(0.02, "Decoding");
-                photocraft_io::import_deep_exr(&name_w, &bytes, &photocraft_codecs::Limits::default()).map_err(|e| match e {
+                let r = photocraft_io::import_deep_exr(&name_w, &bytes, &photocraft_codecs::Limits::default()).map_err(|e| match e {
                     photocraft_io::IoError::Cancelled => EngineError::Cancelled,
                     e => EngineError::Other(e.to_string()),
-                })
+                })?;
+                // The same post-decode work a flat open does on the worker: bounds are warmed
+                // before the result is applied, so the first draw doesn't pay for it.
+                ctx.progress(0.95, "Preparing layers");
+                warm_layer_bounds(&r.document, || ctx.check())?;
+                if crate::type_extra_cmds::has_type_layers(&r.document) {
+                    ctx.progress(0.97, "Loading fonts");
+                    let _ = photocraft_text::shared();
+                    ctx.check()?;
+                }
+                Ok(r)
             },
-            move |s, r: photocraft_io::ImportResult| {
+            // The same apply a flat open does: the color question holds the document like
+            // `start_open_inner`, and the result carries the document identity the shell's
+            // `finish_open` requires (no docId made every Open as Deep report failure and
+            // skip the save path and Open Recent, #1122's review).
+            move |s, mut r: photocraft_io::ImportResult| {
+                crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
+                let question = s.color.open_question(&r.document);
+                if let Some(question) = question {
+                    let held = s.hold_open(r.document, r.source_read_only);
+                    return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": Some(question), "damaged": false}));
+                }
                 let (index, color) = s.open_document(r.document, None);
-                Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color}))
+                let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
+                if let Some(st) = s.active_mut() {
+                    st.source_read_only = r.source_read_only;
+                }
+                Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color}))
             },
         )
     }

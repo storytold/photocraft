@@ -803,6 +803,11 @@ fn unlock_background_for_crop(doc: &mut Document) {
 }
 
 fn crop_with(s: &mut Session, p: &Value, keep_background: bool) -> Result<Value> {
+    if let Some(d) = s.active()
+        && photocraft_compose::deep::any_deep(&d.doc.layers)
+    {
+        return Err(bad("image.crop", "deep layers cannot be cropped yet; their samples keep their extent"));
+    }
     let delete = p.get("deleteCroppedPixels").and_then(Value::as_bool).unwrap_or(true);
     // The Crop tool's Fill: Content-Aware Fill of what the crop uncovers (#3823).
     let content_aware = match p.get("contentAware") {
@@ -1013,6 +1018,11 @@ fn crop_angle(p: &Value) -> Result<Option<f64>> {
 /// overhang and leaving the uncovered corners transparent (#10867).
 fn rotated_crop(s: &mut Session, r: Rect, angle: f64, delete: bool, content_aware: bool, unlock: bool, crop_target: &CropTarget) -> Result<Value> {
     const CMD: &str = "image.crop";
+    if let Some(d) = s.active()
+        && photocraft_compose::deep::any_deep(&d.doc.layers)
+    {
+        return Err(bad(CMD, "deep layers cannot be cropped yet; their samples keep their extent"));
+    }
     let size = s.active().ok_or(EngineError::NoDocument)?.doc.size;
     let (w, h) = (f64::from(r.width()), f64::from(r.height()));
     let (cx, cy) = (f64::from(r.x0) + w / 2.0, f64::from(r.y0) + h / 2.0);
@@ -1179,6 +1189,11 @@ fn convert_depth(s: &mut Session, depth: SampleType) -> Result<Value> {
     if current == depth {
         // History::record clears redo even when an edit closure leaves the document unchanged.
         return Ok(Value::Null);
+    }
+    if let Some(d) = s.active()
+        && photocraft_compose::deep::any_deep(&d.doc.layers)
+    {
+        return Err(bad("image.bits", "deep samples keep their depth; deep layers cannot change the bit depth yet"));
     }
     s.edit("Bit Depth", |doc, _| {
         change_depth(doc, depth);

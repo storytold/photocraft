@@ -907,6 +907,13 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     if doc.mode == ColorMode::Multichannel && mode != ColorMode::Multichannel {
         return crate::multichannel_cmds::convert_from(s, mode, p);
     }
+    // A conversion resamples every raster surface through the CMS; deep samples keep their
+    // meaning (they are scene-linear RGBA) but a CMYK/Lab/Gray target cannot hold them, and
+    // the renderer refuses deep in those modes anyway. Refuse before anything changes
+    // (#1122's review: the conversion silently skipped the deep samples).
+    if mode != ColorMode::Rgb && photocraft_compose::deep::any_deep(&doc.layers) {
+        return Err(EngineError::Other("deep layers cannot convert to this colour mode yet; their samples keep their colour".into()));
+    }
     if doc.mode == mode && p.get("profile").is_none() {
         return Ok(Value::Null);
     }
