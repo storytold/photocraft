@@ -1289,3 +1289,26 @@ fn hover_badge_shows_lab_values_with_lab_readouts() {
     assert!(text.starts_with("L "), "{text}");
     assert_ne!(text, hover_badge_text(d, false).unwrap());
 }
+
+#[test]
+fn hover_badge_shows_dashes_for_a_component_that_is_not_a_number() {
+    use crate::camera_raw_scope_ui::badge_text_of;
+    let values = serde_json::json!([null, 12.0, "x"]);
+    assert_eq!(badge_text_of(&values, false), "R --   G 12   B --");
+    assert_eq!(badge_text_of(&values, true), "L --   a 12.0   b --");
+    assert_eq!(badge_text_of(&serde_json::json!([1.0, 2.0]), true), "L 1.0   a 2.0   b --");
+    assert_eq!(badge_text_of(&serde_json::json!(null), false), "R --   G --   B --");
+}
+
+#[test]
+fn hover_badge_font_shrinks_to_fit_but_not_below_eight() {
+    use crate::camera_raw_scope_ui::badge_font_size;
+    assert_eq!(badge_font_size(100.0, 150.0), 11.0);
+    assert_eq!(badge_font_size(150.0, 150.0), 11.0);
+    let scaled = badge_font_size(200.0, 150.0);
+    assert!(scaled < 11.0 && scaled > 8.0, "{scaled}");
+    assert!((scaled - 8.25).abs() < 1e-4, "{scaled}");
+    assert_eq!(badge_font_size(400.0, 100.0), 8.0);
+    assert_eq!(badge_font_size(100.0, 0.0), 8.0);
+    assert_eq!(badge_font_size(0.0, 0.0), 11.0);
+}

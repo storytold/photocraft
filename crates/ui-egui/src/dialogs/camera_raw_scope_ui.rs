@@ -346,9 +346,26 @@ fn readout_text(value: Option<Value>) -> String {
 pub(crate) fn hover_badge_text(d: &CameraRawDialog, lab: bool) -> Option<String> {
     let position = d.scope.pointer_sample?;
     let reading = d.readout(position, lab)?;
-    let values = reading.get("values")?.as_array()?;
-    let get = |i: usize| values.get(i).and_then(Value::as_f64).unwrap_or(0.0);
-    Some(if lab { format!("L {:.1}   a {:.1}   b {:.1}", get(0), get(1), get(2)) } else { format!("R {:.0}   G {:.0}   B {:.0}", get(0), get(1), get(2)) })
+    Some(badge_text_of(reading.get("values")?, lab))
+}
+
+/// Formats a readout's `values` array. A component that is not a number (the readout
+/// serialises an overflowed one as null) shows `--` rather than a made-up 0.
+pub(crate) fn badge_text_of(values: &Value, lab: bool) -> String {
+    let part = |i: usize, precision: usize| match values.as_array().and_then(|a| a.get(i)).and_then(Value::as_f64) {
+        Some(n) => format!("{n:.precision$}"),
+        None => "--".to_string(),
+    };
+    if lab { format!("L {}   a {}   b {}", part(0, 1), part(1, 1), part(2, 1)) } else { format!("R {}   G {}   B {}", part(0, 0), part(1, 0), part(2, 0)) }
+}
+
+/// The badge's font size: the usual 11, scaled down (never below 8) when the text laid out at 11
+/// is wider than the space inside the badge.
+pub(crate) fn badge_font_size(text_width_at_11: f32, available: f32) -> f32 {
+    if !text_width_at_11.is_finite() || !available.is_finite() || text_width_at_11 <= available || text_width_at_11 <= 0.0 {
+        return 11.0;
+    }
+    (11.0 * available / text_width_at_11).clamp(8.0, 11.0)
 }
 
 fn warning(ui: &mut egui::Ui, rect: Rect, mask: u8, on: &mut bool, label: &str) {
@@ -400,8 +417,13 @@ fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeSt
         crate::rgb_histogram::paint_sample(ui.painter(), plot, sample.rgb, &t);
         let text = hover_badge_text(d, view.lab).unwrap_or_default();
         let font = crate::theme::mono(11.0);
-        let galley = ui.painter().layout_no_wrap(text, font, t.text);
-        let width = (galley.size().x + 12.0).min((rect.width() - 2.0 * corner - 4.0).max(1.0));
+        let max_width = (rect.width() - 2.0 * corner - 4.0).max(1.0);
+        let mut galley = ui.painter().layout_no_wrap(text.clone(), font, t.text);
+        let size = badge_font_size(galley.size().x, max_width - 6.0);
+        if size < 11.0 {
+            galley = ui.painter().layout_no_wrap(text, crate::theme::mono(size), t.text);
+        }
+        let width = (galley.size().x + 12.0).min(max_width);
         let badge = Rect::from_center_size(pos2(rect.center().x, rect.top() + 13.0), vec2(width, 20.0));
         ui.painter().rect_filled(badge, t.radius_sm, t.card.gamma_multiply(0.65));
         ui.painter().rect_stroke(badge, t.radius_sm, Stroke::new(0.7, t.field_border.gamma_multiply(0.55)), egui::StrokeKind::Inside);
