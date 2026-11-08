@@ -348,8 +348,8 @@
 	Duotone…	Дуплекс…
 	Duotone	Дуплекс
 	Trap…	Трепінг…
-	Layer via Copy	Шар через копіювання
-	Layer via Cut	Шар через вирізання
+	Layer Via Copy	Шар через копіювання
+	Layer Via Cut	Шар через вирізання
 	Duplicate Layer…	Дублювати шар…
 	Duplicate…	Дублювати…
 	Delete	Видалити
@@ -4218,8 +4218,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Шкала градацій сірого
 	Current Colors	Поточні кольори
 	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+	Scroll All Windows	Прокручувати всі вікна
 	The path was kept as the Work Path	Контур збережено як робочий контур
 	The path was discarded	Контур видалено
+# Art History Brush (#213).
 	Art History Brush Tool	Інструмент «Художній пензель історії»
 	Tight Short	Щільний короткий
 	Tight Medium	Щільний середній

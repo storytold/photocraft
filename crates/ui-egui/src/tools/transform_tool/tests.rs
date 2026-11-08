@@ -2336,7 +2336,7 @@ fn plain_layers_from_the_top_cover_the_moving_one() {
     assert_eq!(covers(&layers, c), [tp, inner], "a clipped layer: covered by what is over its clipping group");
 
     // Under the box, the covering layers leave the document; over it, they alone show.
-    let above = Above { ctx: egui::Context::default(), name: String::new(), max_side: 64, ids: vec![tp, inner], applied: Vec::new(), shown: None };
+    let above = Above { ctx: egui::Context::default(), name: String::new(), max_side: 64, ids: vec![tp, inner], shown: None };
     let mut under = layers.clone();
     above.hide_in(&mut under);
     let vis = |ls: &[Layer]| [ls[0].visible, ls[1].visible, ls[2].visible];

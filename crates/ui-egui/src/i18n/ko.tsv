@@ -407,8 +407,8 @@
 	Artboard…	아트보드…
 	Artboard from Group…	그룹으로 아트보드 만들기…
 	Artboard from Layers…	레이어로 아트보드 만들기…
-	Layer via Copy	복사하여 레이어 만들기
-	Layer via Cut	잘라내어 레이어 만들기
+	Layer Via Copy	복사하여 레이어 만들기
+	Layer Via Cut	잘라내어 레이어 만들기
 	Layer From Background…	배경에서 레이어 만들기…
 	Layer from Background…	배경에서 레이어 만들기…
 	Background from Layer	레이어에서 배경 만들기
@@ -3726,8 +3726,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	회색 음영 램프
 	Current Colors	현재 색상
 	Make Ramp Web Safe	램프를 웹 안전 색상으로 만들기
+	Scroll All Windows	모든 창 스크롤
 	The path was kept as the Work Path	패스가 작업 패스로 유지되었습니다
 	The path was discarded	패스가 삭제되었습니다
+# Art History Brush (#213).
 	Art History Brush	아트 히스토리 브러시
 	Art History Brush Tool	아트 히스토리 브러시 도구
 	Tight Short	타이트 숏
