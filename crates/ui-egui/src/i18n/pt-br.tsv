@@ -4541,3 +4541,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Ajustar tamanho da tela automaticamente
 	Keep Relative Position During Layer Reordering	Manter a posição relativa ao reordenar camadas
 	Shrinkwrap Canvas on Save	Reduzir a tela ao conteúdo ao salvar
+	Move Toolbar to the Right	Mover a barra de ferramentas para a direita
+	Move Toolbar to the Left	Mover a barra de ferramentas para a esquerda

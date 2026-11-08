@@ -4572,3 +4572,5 @@ navigator	Zoom	زوم
 @plural	{n} action file loaded|{n} action files loaded	{n} ایکشن فائل لوڈ ہوئی|{n} ایکشن فائلیں لوڈ ہوئیں
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} فائل لوڈ نہیں ہو سکی: {errors}|{n} فائلیں لوڈ نہیں ہو سکیں: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} تصویری اثاثہ آؤٹ پٹ ناکام ہوا|{what}: {n} تصویری اثاثے آؤٹ پٹس ناکام ہوئے
+	Move Toolbar to the Right	ٹول بار کو دائیں منتقل کریں
+	Move Toolbar to the Left	ٹول بار کو بائیں منتقل کریں

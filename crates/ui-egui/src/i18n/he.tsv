@@ -4572,3 +4572,5 @@ navigator	Zoom	תקריב
 @plural	{n} action file loaded|{n} action files loaded	נטען {n} קובץ פעולות|נטענו {n} קובצי פעולות
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	לא ניתן היה לטעון {n} קובץ: {errors}|לא ניתן היה לטעון {n} קבצים: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} פלט נכסי תמונה נכשל|{what}: {n} פלטי נכסי תמונה נכשלו
+	Move Toolbar to the Right	העבר את סרגל הכלים ימינה
+	Move Toolbar to the Left	העבר את סרגל הכלים שמאלה

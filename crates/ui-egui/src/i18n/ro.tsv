@@ -4614,3 +4614,5 @@ navigator	Zoom	Zoom
 @plural	{n} action file loaded|{n} action files loaded	{n} fișier de acțiuni încărcat|{n} fișiere de acțiuni încărcate|{n} de fișiere de acțiuni încărcate
 @plural	{n} file could not be loaded: {errors}|{n} files could not be loaded: {errors}	{n} fișier nu a putut fi încărcat: {errors}|{n} fișiere nu au putut fi încărcate: {errors}|{n} de fișiere nu au putut fi încărcate: {errors}
 @plural	{what}: {n} Image Assets output failed|{what}: {n} Image Assets outputs failed	{what}: {n} ieșire Resurse imagine a eșuat|{what}: {n} ieșiri Resurse imagine au eșuat|{what}: {n} de ieșiri Resurse imagine au eșuat
+	Move Toolbar to the Right	Mută bara de instrumente la dreapta
+	Move Toolbar to the Left	Mută bara de instrumente la stânga

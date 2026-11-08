@@ -4368,3 +4368,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Auto-size Canvas	Automaticky měnit velikost plátna
 	Keep Relative Position During Layer Reordering	Zachovat relativní polohu při změně pořadí vrstev
 	Shrinkwrap Canvas on Save	Při uložení zmenšit plátno na obsah
+	Move Toolbar to the Right	Přesunout panel nástrojů doprava
+	Move Toolbar to the Left	Přesunout panel nástrojů doleva

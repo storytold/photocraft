@@ -354,8 +354,14 @@ pub(crate) fn keep_newer(app: &PhotocraftApp, layout: &mut Value) {
 
 /// Writes the current panels/layout snapshot now, for a discrete change such as the toolbar side,
 /// whether or not the dock was drawn this frame. Only while Remember Workspace Changes is on.
-pub(crate) fn persist_panels(app: &mut PhotocraftApp) {
+pub(crate) fn persist_panels(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.session.prefs().workspace.remember_workspace_changes {
+        return;
+    }
+    // An OS window drag/resize is still settling: let the dock pass save once it stops, so this
+    // discrete click cannot record intermediate geometry.
+    if native_moved(app, ctx) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
         return;
     }
     let now = snapshot(app);

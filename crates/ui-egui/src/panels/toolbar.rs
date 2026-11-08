@@ -174,16 +174,16 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let other = side.other();
             let (dock_tip, dock_icon) = match other {
-                ToolbarSide::Right => ("Move Toolbar to the Right", "panel-right"),
-                _ => ("Move Toolbar to the Left", "panel-left"),
+                ToolbarSide::Right => (tl!("Move Toolbar to the Right"), "panel-right"),
+                _ => (tl!("Move Toolbar to the Left"), "panel-left"),
             };
             let (dr, dock) = ui.allocate_exact_size(vec2((bx - 16.0).max(14.0), 14.0), Sense::click());
             icons::paint(ui, dr, dock_icon, 11.0, if dock.hovered() { t.text } else { t.text_faint });
-            dock.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(dock_tip)));
-            if dock.on_hover_text(tl!(dock_tip)).clicked() {
+            dock.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, dock_tip));
+            if dock.on_hover_text(dock_tip).clicked() {
                 app.ui.panels.toolbar_side = other;
                 // Persist the side as a discrete change; the dock may not be drawn this frame.
-                crate::dock::persist_panels(app);
+                crate::dock::persist_panels(app, ui.ctx());
             }
         });
         ui.add_space(4.0);
