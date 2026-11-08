@@ -1,6 +1,7 @@
 //! Caps Lock and the Magnetic Lasso's cursor (#11690): it swaps Preferences › Cursors › Other
 //! Cursors, so with Standard and Caps Lock on the pointer shows a circle as big as the detection
-//! Width (scaled with zoom), and with Precise and Caps Lock on it doesn't.
+//! Width (scaled with zoom), and with Precise and Caps Lock on it is the tool's icon, as with
+//! Standard alone.
 
 use serde_json::json;
 
@@ -19,13 +20,19 @@ fn app(other: &str, caps_lock: bool) -> PhotocraftApp {
 
 /// The radii of the circles `cursor` draws at `zoom`, and the OS cursor it asks for.
 fn drawn(app: &PhotocraftApp, zoom: f32) -> (Vec<f32>, egui::CursorIcon) {
+    let (radii, icon, _) = drawn_with_others(app, zoom);
+    (radii, icon)
+}
+
+/// As [`drawn`], plus how many shapes that are not circles it draws (the icon).
+fn drawn_with_others(app: &PhotocraftApp, zoom: f32) -> (Vec<f32>, egui::CursorIcon, usize) {
     let ctx = egui::Context::default();
     ctx.begin_pass(egui::RawInput::default());
     let painter = ctx.layer_painter(egui::LayerId::background());
     let icon = super::cursor(app, &painter, egui::pos2(100.0, 100.0), zoom);
     let mut out = ctx.end_pass();
     out.textures_delta.clear();
-    let radii = out
+    let radii: Vec<f32> = out
         .shapes
         .iter()
         .filter_map(|c| match &c.shape {
@@ -33,7 +40,8 @@ fn drawn(app: &PhotocraftApp, zoom: f32) -> (Vec<f32>, egui::CursorIcon) {
             _ => None,
         })
         .collect();
-    (radii, icon)
+    let others = out.shapes.len() - radii.len();
+    (radii, icon, others)
 }
 
 #[test]
@@ -47,13 +55,20 @@ fn caps_lock_on_standard_draws_the_width_circle_scaled_with_zoom() {
 }
 
 #[test]
-fn caps_lock_on_precise_swaps_back_to_no_circle() {
-    let (radii, _) = drawn(&app("precise", true), 1.0);
+fn caps_lock_on_precise_swaps_back_to_the_tool_icon() {
+    let (radii, icon, others) = drawn_with_others(&app("precise", true), 1.0);
     assert!(radii.is_empty(), "no width circle: {radii:?}");
+    assert_eq!(icon, egui::CursorIcon::None, "the OS cursor hides behind the icon");
+    assert!(others > 0, "the tool icon is drawn");
 }
 
 #[test]
 fn without_caps_lock_the_preference_decides() {
-    assert!(drawn(&app("standard", false), 1.0).0.is_empty(), "Standard: no circle");
-    assert!(!drawn(&app("precise", false), 1.0).0.is_empty(), "Precise: the width circle");
+    let (radii, icon, others) = drawn_with_others(&app("standard", false), 1.0);
+    assert!(radii.is_empty(), "Standard: no circle");
+    assert_eq!(icon, egui::CursorIcon::None, "Standard: the tool icon, not a crosshair");
+    assert!(others > 0, "Standard: the tool icon is drawn");
+    let (radii, icon) = drawn(&app("precise", false), 1.0);
+    assert!(!radii.is_empty(), "Precise: the width circle");
+    assert_eq!(icon, egui::CursorIcon::Crosshair, "Precise: with the crosshair");
 }
