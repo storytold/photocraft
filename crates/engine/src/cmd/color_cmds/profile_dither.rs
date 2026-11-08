@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 use super::{
     ColorMode, Document, EngineError, Intent, PixelFormat, Profile, Result, SampleType, Surface, Transform, cms_err, convert_color, convert_document,
-    convert_layer_colors, convert_surface, document_profile, space_mode,
+    convert_layer_colors, convert_style_colors, convert_surface, document_profile, space_mode,
 };
 
 const TILE_PIXELS: u128 = (TILE_SIZE * TILE_SIZE) as u128;
@@ -122,7 +122,7 @@ fn dither_tile(s: &Surface, out: &Surface, t: &Transform, bounds: Rect, c: TileC
     for (index, dp) in dest.bytes_mut().chunks_exact_mut(ds).enumerate() {
         let x = x0 + (index % TILE_SIZE as usize) as i32;
         let y = y0 + (index / TILE_SIZE as usize) as i32;
-        let sp = match source {
+        let sp = match &source {
             Some(bytes) => bytes.get(index * ss..index * ss + ss).ok_or_else(|| bad("a stored tile has invalid sample storage"))?,
             None => default,
         };
@@ -197,6 +197,7 @@ pub(super) fn convert(doc: &mut Document, dst: &Profile, intent: Intent, bpc: bo
     for layer in &mut doc.layers {
         convert_layer_colors(layer, &mut |c| convert_color(c, from, to_mode, &t));
     }
+    convert_style_colors(&mut doc.text_styles, &mut |c| convert_color(c, from, to_mode, &t));
     doc.mode = to_mode;
     doc.icc_profile = Some(dst.to_bytes());
     doc.color_table = None;

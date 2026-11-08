@@ -171,6 +171,7 @@
 	Right	Prawa
 	Open Recent	Otwórz ostatnie
 	Clear Recent Files	Wyczyść listę ostatnich plików
+	Clear Recent File List	Wyczyść listę ostatnich plików
 	Remove from Recent	Usuń z ostatnich plików
 	Remove {name} from Recent	Usuń {name} z ostatnich plików
 	Close	Zamknij
@@ -179,6 +180,10 @@
 	Restore	Przywróć
 	Close All	Zamknij wszystko
 	Close Others	Zamknij pozostałe
+	New Document…	Nowy dokument…
+	Open Document…	Otwórz…
+	Consolidate All to Here	Połącz wszystko tutaj
+	Move to New Window	Przenieś do nowego okna
 	Save	Zapisz
 	Save As…	Zapisz jako…
 	Save a Copy…	Zapisz kopię…
@@ -231,6 +236,7 @@
 	Create Smart Object after Loading Layers	Utwórz obiekt inteligentny po wczytaniu warstw
 	Reveal in Finder	Pokaż w Finderze
 	Show in Explorer	Pokaż w Eksploratorze
+	Reveal in Explorer	Pokaż w Eksploratorze
 	Show in Folder	Pokaż w folderze
 	File Info…	Informacje o pliku…
 	Print…	Drukuj…
@@ -318,6 +324,7 @@
 	Units & Rulers…	Jednostki i linijki…
 	Guides, Grid & Slices…	Prowadnice, siatka i plasterki…
 	Plug-ins…	Wtyczki…
+	Plugins…	Wtyczki…
 	Type…	Tekst…
 	Enhanced Controls…	Ulepszone elementy sterujące…
 	Camera Raw…	Camera Raw…
@@ -474,6 +481,8 @@
 	Smart Object	Obiekt inteligentny
 	Convert to Smart Object	Konwertuj na obiekt inteligentny
 	Convert to Embedded	Konwertuj na osadzony
+	Embed Linked	Osadź połączony
+	Embed All Linked	Osadź wszystkie połączone
 	Convert to Layers	Konwertuj na warstwy
 	Convert to Linked…	Konwertuj na połączony…
 	Edit Contents	Edytuj zawartość
@@ -547,7 +556,9 @@
 	Unite Shapes	Złącz kształty
 	Subtract Front Shape	Odejmij kształt z przodu
 	Intersect Shape Areas	Część wspólna obszarów kształtów
+	Unite Shapes at Overlap	Część wspólna obszarów kształtów
 	Exclude Overlapping Shapes	Wyklucz nakładające się kształty
+	Subtract Shapes at Overlap	Wyklucz nakładające się kształty
 	Merge Shape Components	Scal składniki kształtu
 	Path operations	Operacje na ścieżkach
 	Align	Wyrównaj
@@ -732,6 +743,7 @@
 	Minimum…	Minimum…
 	Offset…	Przesunięcie…
 	Plug-ins	Wtyczki
+	Plugins	Wtyczki
 	Proof Setup	Ustawienia próbnego wydruku
 	Proof Colors	Kolory próbne
 	Gamut Warning	Ostrzeżenie o gamucie
@@ -740,9 +752,9 @@
 	Working Magenta Plate	Robocza płyta magenty
 	Working Yellow Plate	Robocza płyta żółci
 	Working Black Plate	Robocza płyta czerni
-	Working CMY Plate	Robocza płyta CMY
-	Legacy Macintosh RGB	Starszy Macintosh RGB
-	Internet Standard RGB	Standardowy RGB dla Internetu
+	Working CMY Plates	Robocza płyta CMY
+	Legacy Macintosh RGB (Gamma 1.8)	Starszy Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	Standardowy RGB dla Internetu (sRGB)
 	Monitor RGB	RGB monitora
 	Color Blindness — Protanopia-type	Ślepota barw — typ protanopii
 	Color Blindness — Deuteranopia-type	Ślepota barw — typ deuteranopii
@@ -834,7 +846,7 @@
 	Consolidate All to Tabs	Połącz wszystko w karty
 	Float in Window	Odłącz do okna
 	Float All in Windows	Odłącz wszystko do okien
-	New Window for Document	Nowe okno dla dokumentu
+	New Window	Nowe okno dla dokumentu
 	Workspace	Obszar roboczy
 	Essentials	Podstawowe
 	Graphic and Web	Grafika i Internet
@@ -1935,6 +1947,7 @@
 	Soften	Zmiękcz
 	Source	Źródło
 	Source: set	Źródło: ustawione
+	Source: {name}	Źródło: {name}
 	Sponge Tool	Narzędzie Gąbka
 	Spot Healing Brush Tool	Narzędzie Punktowy pędzel korygujący
 	Spread	Rozszerzenie
@@ -2011,6 +2024,11 @@
 	Show canvas dots	Pokaż kropki płótna
 	Clip thumbnails to layer bounds	Przycinaj miniatury do granic warstwy
 	Clip Thumbnails to Layer Bounds	Przycinaj miniatury do granic warstwy
+	No Thumbnails	Bez miniaturek
+	Small Thumbnails	Małe miniaturki
+	Medium Thumbnails	Średnie miniaturki
+	Large Thumbnails	Duże miniaturki
+	Clip Thumbnails to Document Bounds	Przycinaj miniatury do granic dokumentu
 	Canvas color	Kolor płótna
 	Canvas custom color	Własny kolor płótna
 	Color picker	Próbnik kolorów
@@ -2127,7 +2145,6 @@
 	Show only crosshair while painting	Podczas malowania pokaż tylko celownik
 	Show slice numbers	Pokaż numery plasterków
 	Show tooltips	Pokaż podpowiedzi
-	Enable animations	Włącz animacje
 	Show highlight on rollover	Pokaż podświetlenie po najechaniu
 	Show bounding box when dragging layer	Pokaż ramkę ograniczającą podczas przeciągania warstwy
 	Show transformation values	Pokaż wartości przekształcenia
@@ -3898,6 +3915,8 @@ curves	Smooth	Wygładź
 	Step {step} is waiting for its dialog	Krok {step} czeka na swoje okno dialogowe
 @plural	{n} action|{n} actions	{n} operacja|{n} operacje|{n} operacji
 	Background (Default)	Tło (domyślne)
+	Background (default)	Tło (domyślne)
+	Transparent (default)	Przezroczyste (domyślne)
 	Include All Subfolders	Uwzględnij wszystkie podfoldery
 	Auto Add/Delete	Automatyczne dodawanie/usuwanie
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nie włączaj też odbicia lustrzanego w ustawieniach druku: oba odbicia wzajemnie się znoszą.
@@ -3906,6 +3925,7 @@ curves	Smooth	Wygładź
 	Sent to {printer}	Wysłano do {printer}
 	set in Print Settings…	ustawiane w ustawieniach druku…
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
+	Memory usage percent	Użycie pamięci (%)
 	Show Favorite Fonts	Pokaż ulubione czcionki
 	No favorite fonts yet: click the star beside a font to add it.	Brak ulubionych czcionek: kliknij gwiazdkę obok czcionki, aby ją dodać.
 	Favorite fonts	Ulubione czcionki
@@ -3949,6 +3969,7 @@ curves	Smooth	Wygładź
 	Automatically Check for Updates	Automatycznie sprawdzaj aktualizacje
 	Paints from the History panel's source state	Maluje ze stanu źródłowego panelu Historia
 	Sets the source for the history brush	Ustawia źródło dla pędzla historii
+	The History Brush source was deleted: set a new source in the History panel	Źródło pędzla historii zostało usunięte: ustaw nowe źródło w panelu Historia
 	Highlight Mode	Tryb świateł
 	Highlight Color	Kolor świateł
 	Highlight Opacity	Krycie świateł
@@ -3968,6 +3989,7 @@ curves	Smooth	Wygładź
 	Chisel Soft	Dłuto miękkie
 	Open color-less EXR as ACEScg	Otwieraj EXR bez profilu koloru jako ACEScg
 	Do not append "copy" to filename when saving a copy	Nie dodawaj „copy” do nazwy pliku przy zapisywaniu kopii
+	Save Full-Size Composite in .pcraft Files	Zapisuj obraz złożony w pełnym rozmiarze w plikach .pcraft
 	Edit Selected Guides	Edytuj zaznaczone prowadnice
 	Clear Selected Guides	Usuń zaznaczone prowadnice
 	Bicubic Automatic	Dwusześcienna automatyczna
@@ -4020,6 +4042,7 @@ curves	Smooth	Wygładź
 	This document's layers: {needed} of {budget} for layers	Warstwy tego dokumentu: {needed} z {budget} na warstwy
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Warstwy tego dokumentu potrzebują {needed}, ale mogą zająć {budget}: odświeżanie całego dokumentu używa CPU
 	GPU Memory (MB, 0 = Automatic)	Pamięć GPU (MB, 0 = Automatycznie)
+	Scratch Size Limit (MB, 0 = No Limit)	Limit rozmiaru dysku roboczego (MB, 0 = bez limitu)
 	{path}: the path is not valid Unicode; save under another name.	{path}: ścieżka nie jest prawidłowym Unicode; zapisz pod inną nazwą.
 	Replace	Zastąp
 	{name} was changed by another app after it was opened or saved here.	Plik {name} został zmieniony przez inną aplikację po otwarciu lub zapisaniu go tutaj.
@@ -4110,6 +4133,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Nieprawidłowa wartość liczbowa. Wymagana jest liczba całkowita od {min}% do {max}%. Wstawiono poprzednią wartość.
 	Clear Selection	Wyczyść zaznaczenie
 	Color Aware	Według kolorów
@@ -4136,3 +4161,58 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Kolor punktu
 	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków
 	Edit Brush…	Edytuj pędzel…
+
+# Action Stop message (#8386)
+	Message	Komunikat
+# Playback Options (#5212)
+	Playback Options…	Opcje odtwarzania…
+	Playback Options	Opcje odtwarzania
+	Accelerated	Przyspieszone
+	Step by Step	Krok po kroku
+	Pause For:	Wstrzymaj na:
+	Pause For	Wstrzymaj na
+	seconds	s
+	Create a single history state	Utwórz jeden stan historii
+	Generator enabled	Generator włączony
+	Move Up	Przesuń w górę
+	Move Down	Przesuń w dół
+	Grid view	Widok siatki
+	List view	Widok listy
+	On your computer	Na tym komputerze
+	New file	Nowy plik
+	Learn	Nauka
+	No recent files	Brak ostatnich plików
+	Website	Strona internetowa
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Ramka obsługuje przekształcenia afiniczne; do przekształceń perspektywicznych wybierz jej obraz
+	A frame supports affine transforms; select its image to warp it	Ramka obsługuje przekształcenia afiniczne; aby ją wypaczyć, wybierz obraz
+	Convert to Frame…	Konwertuj na ramkę…
+	Create a new custom frame	Utwórz nową ramkę niestandardową
+	Create a new polygonal frame	Utwórz nową ramkę wielokątną
+	Create a new triangular frame	Utwórz nową ramkę trójkątną
+	Fit Content to Frame	Dopasuj zawartość do ramki
+	Fit Frame to Content	Dopasuj ramkę do zawartości
+	Frame coordinates must be finite and within 600000 pixels	Współrzędne ramki muszą być skończone i mieścić się w granicach 600000 pikseli
+	Import Image…	Importuj obraz…
+	Invalid frame transform	Nieprawidłowe przekształcenie ramki
+	Invalid nested file drop	Nieprawidłowe zagnieżdżone upuszczenie pliku
+	New Frame	Nowa ramka
+	Replace Image…	Zastąp obraz…
+	The frame is locked	Ramka jest zablokowana
+	The frame is unavailable	Ramka jest niedostępna
+
+# Channels panel menu (#11451)
+	New Channel…	Nowy kanał…
+	Duplicate Channel	Duplikuj kanał
+	Delete Channel	Usuń kanał
+	New Spot Channel…	Nowy kanał kolorów dodatkowych…
+	Merge Spot Channel	Scal kanał kolorów dodatkowych
+	Channel Options…	Opcje kanału…
+	Split Channels	Podziel kanały
+	Merge Channels…	Scal kanały…
+	Specify Channels:	Określ kanały:
+	Not enough grayscale documents for this mode.	Za mało dokumentów w skali szarości dla tego trybu.
+	Pick a different document for each channel.	Wybierz inny dokument dla każdego kanału.
+	A picked document is no longer open.	Jeden z wybranych dokumentów nie jest już otwarty.
+	A picked document is no longer a grayscale document of the same size.	Jeden z wybranych dokumentów nie jest już dokumentem w skali szarości o tym samym rozmiarze.

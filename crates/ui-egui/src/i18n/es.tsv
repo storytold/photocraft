@@ -139,6 +139,7 @@
 	Right	Derecha
 	Open Recent	Abrir recientes
 	Clear Recent Files	Vaciar archivos recientes
+	Clear Recent File List	Vaciar archivos recientes
 	Remove from Recent	Quitar de recientes
 	Remove {name} from Recent	Quitar {name} de recientes
 	Close	Cerrar
@@ -147,6 +148,10 @@
 	Restore	Restaurar
 	Close All	Cerrar todo
 	Close Others	Cerrar otros
+	New Document…	Documento nuevo…
+	Open Document…	Abrir…
+	Consolidate All to Here	Consolidar todo aquí
+	Move to New Window	Mover a una nueva ventana
 	Save	Guardar
 	Save As…	Guardar como…
 	Save a Copy…	Guardar una copia…
@@ -199,6 +204,7 @@
 	Create Smart Object after Loading Layers	Crear objeto inteligente tras cargar las capas
 	Reveal in Finder	Mostrar en Finder
 	Show in Explorer	Mostrar en el Explorador
+	Reveal in Explorer	Mostrar en el Explorador
 	Show in Folder	Mostrar en la carpeta
 	File Info…	Información del archivo…
 	Print…	Imprimir…
@@ -287,6 +293,7 @@
 	Units & Rulers…	Unidades y reglas…
 	Guides, Grid & Slices…	Guías, cuadrícula y sectores…
 	Plug-ins…	Plugins…
+	Plugins…	Plugins…
 	Type…	Texto…
 	Enhanced Controls…	Controles mejorados…
 	Camera Raw…	Camera Raw…
@@ -444,6 +451,8 @@
 	Smart Object	Objeto inteligente
 	Convert to Smart Object	Convertir en objeto inteligente
 	Convert to Embedded	Convertir en incrustado
+	Embed Linked	Incrustar vinculado
+	Embed All Linked	Incrustar todos los vinculados
 	Convert to Layers	Convertir en capas
 	Convert to Linked…	Convertir en vinculado…
 	Edit Contents	Editar contenido
@@ -702,6 +711,7 @@
 	Minimum…	Mínimo…
 	Offset…	Desplazamiento…
 	Plug-ins	Plugins
+	Plugins	Plugins
 	Proof Setup	Ajuste de prueba
 	Proof Colors	Colores de prueba
 	Gamut Warning	Advertencia de gama
@@ -710,9 +720,9 @@
 	Working Magenta Plate	Placa magenta de trabajo
 	Working Yellow Plate	Placa amarilla de trabajo
 	Working Black Plate	Placa negra de trabajo
-	Working CMY Plate	Placa CMY de trabajo
-	Legacy Macintosh RGB	RGB heredado de Macintosh
-	Internet Standard RGB	RGB estándar de Internet
+	Working CMY Plates	Placa CMY de trabajo
+	Legacy Macintosh RGB (Gamma 1.8)	RGB heredado de Macintosh (Gamma 1.8)
+	Internet Standard RGB (sRGB)	RGB estándar de Internet (sRGB)
 	Monitor RGB	RGB del monitor
 	Color Blindness — Protanopia-type	Daltonismo — tipo protanopia
 	Color Blindness — Deuteranopia-type	Daltonismo — tipo deuteranopia
@@ -804,7 +814,6 @@
 	Consolidate All to Tabs	Consolidar todo en pestañas
 	Float in Window	Hacer flotante en ventana
 	Float All in Windows	Hacer flotantes todas en ventanas
-	New Window for Document	Nueva ventana para el documento
 	Workspace	Espacio de trabajo
 	Essentials	Esenciales
 	Graphic and Web	Gráficos y web
@@ -1896,6 +1905,7 @@
 	Soften	Suavizar
 	Source	Origen
 	Source: set	Origen: establecido
+	Source: {name}	Origen: {name}
 	Sponge Tool	Herramienta Esponja
 	Spot Healing Brush Tool	Herramienta Pincel corrector puntual
 	Spread	Extensión
@@ -1972,6 +1982,11 @@
 	Show canvas dots	Mostrar puntos del lienzo
 	Clip thumbnails to layer bounds	Recortar miniaturas a los límites de la capa
 	Clip Thumbnails to Layer Bounds	Recortar miniaturas a los límites de la capa
+	No Thumbnails	Sin miniaturas
+	Small Thumbnails	Miniaturas pequeñas
+	Medium Thumbnails	Miniaturas medianas
+	Large Thumbnails	Miniaturas grandes
+	Clip Thumbnails to Document Bounds	Recortar miniaturas a los límites del documento
 	Canvas color	Color del lienzo
 	Canvas custom color	Color personalizado del lienzo
 	Color picker	Selector de color
@@ -2089,7 +2104,6 @@
 	Show only crosshair while painting	Mostrar solo la retícula al pintar
 	Show slice numbers	Mostrar los números de sector
 	Show tooltips	Mostrar las descripciones emergentes
-	Enable animations	Activar las animaciones
 	Show highlight on rollover	Mostrar resaltado al pasar el cursor
 	Show bounding box when dragging layer	Mostrar el cuadro delimitador al arrastrar la capa
 	System title bar	Barra de título del sistema
@@ -4195,6 +4209,8 @@ navigator	Zoom	Zoom
 	Step {step} is waiting for its dialog	El paso {step} está esperando su cuadro de diálogo
 @plural	{n} action|{n} actions	{n} acción|{n} acciones
 	Background (Default)	Fondo (predeterminado)
+	Background (default)	Fondo (predeterminado)
+	Transparent (default)	Transparente (predeterminado)
 	Include All Subfolders	Incluir todas las subcarpetas
 	Auto Add/Delete	Añadir/eliminar automáticamente
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	No actives también Imagen especular en Ajustes de impresión: las dos inversiones se anulan.
@@ -4203,6 +4219,7 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Enviado a {printer}
 	set in Print Settings…	se establece en Ajustes de impresión…
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+	Memory usage percent	Uso de memoria (%)
 	Show Favorite Fonts	Mostrar fuentes favoritas
 	No favorite fonts yet: click the star beside a font to add it.	Aún no hay fuentes favoritas: haz clic en la estrella junto a una fuente para añadirla.
 	Favorite fonts	Fuentes favoritas
@@ -4246,6 +4263,7 @@ navigator	Zoom	Zoom
 	Automatically Check for Updates	Buscar actualizaciones automáticamente
 	Paints from the History panel's source state	Pinta a partir del estado de origen del panel Historia
 	Sets the source for the history brush	Establece el origen del pincel de historia
+	The History Brush source was deleted: set a new source in the History panel	Se eliminó el origen del pincel de historia: establece un nuevo origen en el panel Historia
 	Highlight Mode	Modo de luces
 	Highlight Color	Color de luces
 	Highlight Opacity	Opacidad de luces
@@ -4265,6 +4283,7 @@ navigator	Zoom	Zoom
 	Chisel Soft	Cincelar suave
 	Open color-less EXR as ACEScg	Abrir EXR sin espacio de color como ACEScg
 	Do not append "copy" to filename when saving a copy	No añadir «copy» al nombre de archivo al guardar una copia
+	Save Full-Size Composite in .pcraft Files	Guardar la imagen compuesta a tamaño completo en los archivos .pcraft
 	Edit Selected Guides	Editar guías seleccionadas
 	Clear Selected Guides	Borrar guías seleccionadas
 	Bicubic Automatic	Bicúbica automática
@@ -4317,6 +4336,7 @@ navigator	Zoom	Zoom
 	This document's layers: {needed} of {budget} for layers	Capas de este documento: {needed} de {budget} para capas
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Las capas de este documento necesitan {needed} pero pueden ocupar {budget}: los redibujados de todo el documento usan la CPU
 	GPU Memory (MB, 0 = Automatic)	Memoria de GPU (MB, 0 = Automático)
+	Scratch Size Limit (MB, 0 = No Limit)	Límite de tamaño del disco de memoria virtual (MB, 0 = sin límite)
 	{path}: the path is not valid Unicode; save under another name.	{path}: la ruta no es Unicode válido; guarde con otro nombre.
 	{name} was changed by another app after it was opened or saved here.	Otra aplicación cambió {name} después de abrirlo o guardarlo aquí.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Reemplázalo con este documento, o cancela y usa Archivo › Guardar como para conservar ambos.
@@ -4404,6 +4424,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entrada numérica no válida. Se requiere un número entero entre {min}% y {max}%. Se ha insertado el valor anterior.
 	Color Aware	Según color
 	Decontaminate Colors	Descontaminar colores
@@ -4429,3 +4451,50 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Color de la parada
 	Shapes can't use patterns yet	Las formas aún no pueden usar motivos
 	Edit Brush…	Editar pincel…
+
+# Action Stop message (#8386)
+	Message	Mensaje
+# Playback Options (#5212)
+	Playback Options…	Opciones de reproducción…
+	Playback Options	Opciones de reproducción
+	Accelerated	Acelerada
+	Step by Step	Paso a paso
+	Pause For:	Pausa de:
+	Pause For	Pausa de
+	seconds	segundos
+	Create a single history state	Crear un solo estado de historia
+	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el trazado de trabajo
+	Generator enabled	Generador activado
+	This Layer:	Esta capa:
+	Move Up	Mover arriba
+	Move Down	Mover abajo
+	On your computer	En su ordenador
+	New file	Nuevo archivo
+	Learn	Aprender
+	Website	Sitio web
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Un marco admite transformaciones afines; seleccione su imagen para transformaciones de perspectiva
+	A frame supports affine transforms; select its image to warp it	Un marco admite transformaciones afines; seleccione su imagen para deformarla
+	Convert to Frame…	Convertir en marco…
+	Create a new custom frame	Crear un nuevo marco personalizado
+	Create a new polygonal frame	Crear un nuevo marco poligonal
+	Create a new triangular frame	Crear un nuevo marco triangular
+	Fit Content to Frame	Ajustar contenido al marco
+	Fit Frame to Content	Ajustar marco al contenido
+	Frame coordinates must be finite and within 600000 pixels	Las coordenadas del marco deben ser finitas y estar dentro de 600000 píxeles
+	Import Image…	Importar imagen…
+	Invalid frame transform	Transformación de marco no válida
+	Invalid nested file drop	Soltado de archivo anidado no válido
+	New Frame	Nuevo marco
+	Replace Image…	Reemplazar imagen…
+	The frame is locked	El marco está bloqueado
+	The frame is unavailable	El marco no está disponible
+
+# Channels panel menu (#11451)
+	Channel Options…	Opciones de canal…
+	Specify Channels:	Especificar canales:
+	Not enough grayscale documents for this mode.	No hay suficientes documentos en escala de grises para este modo.
+	Pick a different document for each channel.	Elija un documento distinto para cada canal.
+	A picked document is no longer open.	Uno de los documentos elegidos ya no está abierto.
+	A picked document is no longer a grayscale document of the same size.	Uno de los documentos elegidos ya no es un documento en escala de grises del mismo tamaño.

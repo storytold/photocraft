@@ -144,6 +144,7 @@
 	Right	Δεξιά
 	Open Recent	Πρόσφατα αρχεία
 	Clear Recent Files	Εκκαθάριση πρόσφατων αρχείων
+	Clear Recent File List	Εκκαθάριση πρόσφατων αρχείων
 	Remove from Recent	Αφαίρεση από τα πρόσφατα
 	Remove {name} from Recent	Αφαίρεση του {name} από τα πρόσφατα
 	Close	Κλείσιμο
@@ -152,6 +153,10 @@
 	Restore	Επαναφορά
 	Close All	Κλείσιμο όλων
 	Close Others	Κλείσιμο των υπόλοιπων
+	New Document…	Νέο έγγραφο…
+	Open Document…	Άνοιγμα…
+	Consolidate All to Here	Συγκέντρωση όλων εδώ
+	Move to New Window	Μετακίνηση σε νέο παράθυρο
 	Save	Αποθήκευση
 	Save As…	Αποθήκευση ως…
 	Save a Copy…	Αποθήκευση αντιγράφου…
@@ -203,6 +208,7 @@
 	Create Smart Object after Loading Layers	Δημιουργία έξυπνου αντικειμένου μετά τη φόρτωση επιπέδων
 	Reveal in Finder	Εμφάνιση στο Finder
 	Show in Explorer	Εμφάνιση στην Εξερεύνηση αρχείων
+	Reveal in Explorer	Εμφάνιση στην Εξερεύνηση αρχείων
 	Show in Folder	Εμφάνιση στον φάκελο
 	File Info…	Πληροφορίες αρχείου…
 	Print…	Εκτύπωση…
@@ -936,6 +942,7 @@
 	Show Extras Options	Εμφάνιση επιπλέον επιλογών
 	Soften	Απαλότητα
 	Source: set	Πηγή: ορίστηκε
+	Source: {name}	Πηγή: {name}
 	Std Dev:	Τυπική απόκλιση:
 	Subtract	Αφαίρεση
 	Text Replacement	Αντικατάσταση κειμένου
@@ -1605,7 +1612,6 @@
 	Show only crosshair while painting	Εμφάνιση μόνο σταυρονήματος κατά τη ζωγραφική
 	Show slice numbers	Εμφάνιση αριθμών τομών
 	Show tooltips	Εμφάνιση επεξηγήσεων
-	Enable animations	Ενεργοποίηση κινούμενων εφέ
 	Show highlight on rollover	Εμφάνιση επισήμανσης κατά την κατάδειξη
 	Show bounding box when dragging layer	Εμφάνιση πλαισίου οριοθέτησης κατά τη μετακίνηση επιπέδου
 	Show transformation values	Εμφάνιση τιμών μετασχηματισμού
@@ -1765,6 +1771,11 @@
 	Show canvas dots	Εμφάνιση κουκκίδων καμβά
 	Clip thumbnails to layer bounds	Περικοπή μικρογραφιών στα όρια του επιπέδου
 	Clip Thumbnails to Layer Bounds	Περικοπή μικρογραφιών στα όρια του επιπέδου
+	No Thumbnails	Χωρίς μικρογραφίες
+	Small Thumbnails	Μικρές μικρογραφίες
+	Medium Thumbnails	Μεσαίες μικρογραφίες
+	Large Thumbnails	Μεγάλες μικρογραφίες
+	Clip Thumbnails to Document Bounds	Περικοπή μικρογραφιών στα όρια του εγγράφου
 	Canvas color	Χρώμα καμβά
 	Canvas custom color	Προσαρμοσμένο χρώμα καμβά
 	Color picker	Επιλογέας χρώματος
@@ -1846,6 +1857,7 @@
 	Units & Rulers…	Μονάδες και χάρακες…
 	Guides, Grid & Slices…	Οδηγοί, πλέγμα και τομές…
 	Plug-ins…	Πρόσθετα…
+	Plugins…	Πρόσθετα…
 	Type…	Κείμενο…
 	Enhanced Controls…	Προηγμένα χειριστήρια…
 	Raw Defaults…	Προεπιλογές RAW…
@@ -1950,6 +1962,8 @@
 	Hide Selection	Απόκρυψη επιλογής
 	From Transparency	Από διαφάνεια
 	Convert to Embedded	Μετατροπή σε ενσωματωμένο
+	Embed Linked	Ενσωμάτωση συνδεδεμένου
+	Embed All Linked	Ενσωμάτωση όλων των συνδεδεμένων
 	Convert to Linked…	Μετατροπή σε συνδεδεμένο…
 	Edit Contents	Επεξεργασία περιεχομένου
 	Replace Contents…	Αντικατάσταση περιεχομένου…
@@ -2008,7 +2022,9 @@
 	Unite Shapes	Ένωση σχημάτων
 	Subtract Front Shape	Αφαίρεση μπροστινού σχήματος
 	Intersect Shape Areas	Τομή περιοχών σχημάτων
+	Unite Shapes at Overlap	Τομή περιοχών σχημάτων
 	Exclude Overlapping Shapes	Εξαίρεση επικαλυπτόμενων σχημάτων
+	Subtract Shapes at Overlap	Εξαίρεση επικαλυπτόμενων σχημάτων
 	Merge Shape Components	Συγχώνευση συστατικών σχήματος
 	Path operations	Λειτουργίες διαδρομών
 	Top Edges	Επάνω ακμές
@@ -2664,7 +2680,7 @@
 	Install Plug-in	Εγκατάσταση προσθέτου
 	Integrations	Ενσωματώσεις
 	Interlaced	Πεπλεγμένο
-	Internet Standard RGB	Τυπικό RGB διαδικτύου
+	Internet Standard RGB (sRGB)	Τυπικό RGB διαδικτύου (sRGB)
 	Interpolation:	Παρεμβολή:
 	Interpret Footage	Ερμηνεία πλάνων
 	Intersect with selection  ({key})	Τομή με την επιλογή  ({key})
@@ -2717,7 +2733,7 @@
 	Leave as is (don't color manage)	Διατήρηση ως έχει (χωρίς διαχείριση χρώματος)
 	Left align text	Αριστερή στοίχιση κειμένου
 	Legacy	Παλαιού τύπου
-	Legacy Macintosh RGB	Παλαιό Macintosh RGB
+	Legacy Macintosh RGB (Gamma 1.8)	Παλαιό Macintosh RGB (Gamma 1.8)
 	Legacy compositing	Παλαιός τρόπος σύνθεσης
 	Legal	Μέγεθος Legal
 	Length:	Μήκος:
@@ -2854,7 +2870,6 @@
 	New Video Group	Νέα ομάδα βίντεο
 	New Video Layer	Νέο επίπεδο βίντεο
 	New Video Layer from File	Νέο επίπεδο βίντεο από αρχείο
-	New Window for Document	Νέο παράθυρο για το έγγραφο
 	New Workspace	Νέος χώρος εργασίας
 	New Workspace…	Νέος χώρος εργασίας…
 	New document…	Νέο έγγραφο…
@@ -2947,6 +2962,7 @@
 	Play	Αναπαραγωγή
 	Play selection	Αναπαραγωγή επιλογής
 	Plug-ins	Πρόσθετα
+	Plugins	Πρόσθετα
 	Point size	Μέγεθος σε σημεία
 	Pointillize	Πουαντιγισμός
 	Pointillize…	Πουαντιγισμός…
@@ -3370,7 +3386,7 @@
 	Word Spacing	Διάστημα λέξεων
 	Work Path	Διαδρομή εργασίας
 	Working Black Plate	Κανάλι μαύρου εργασίας
-	Working CMY Plate	Κανάλια CMY εργασίας
+	Working CMY Plates	Κανάλια CMY εργασίας
 	Working CMYK	Χώρος εργασίας CMYK
 	Working Cyan Plate	Κανάλι κυανού εργασίας
 	Working Gray Plate	Κανάλι γκρι εργασίας
@@ -3982,6 +3998,8 @@ curves	Smooth	Εξομάλυνση
 	Step {step} is waiting for its dialog	Το βήμα {step} περιμένει το παράθυρο διαλόγου του
 @plural	{n} action|{n} actions	{n} ενέργεια|{n} ενέργειες
 	Background (Default)	Φόντο (προεπιλογή)
+	Background (default)	Φόντο (προεπιλογή)
+	Transparent (default)	Διαφανές (προεπιλογή)
 	Include All Subfolders	Συμπερίληψη όλων των υποφακέλων
 	Auto Add/Delete	Αυτόματη προσθήκη/διαγραφή
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Μην ενεργοποιείτε επίσης τον κατοπτρισμό στις ρυθμίσεις εκτύπωσης: οι δύο αναστροφές αλληλοαναιρούνται.
@@ -3990,6 +4008,7 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+	Memory usage percent	Χρήση μνήμης (%)
 	Show Favorite Fonts	Εμφάνιση αγαπημένων γραμματοσειρών
 	No favorite fonts yet: click the star beside a font to add it.	Δεν υπάρχουν ακόμη αγαπημένες γραμματοσειρές: κάντε κλικ στο αστέρι δίπλα σε μια γραμματοσειρά για να την προσθέσετε.
 	Favorite fonts	Αγαπημένες γραμματοσειρές
@@ -4033,6 +4052,7 @@ curves	Smooth	Εξομάλυνση
 	Automatically Check for Updates	Αυτόματος έλεγχος ενημερώσεων
 	Paints from the History panel's source state	Βάφει από την κατάσταση πηγής του πίνακα Ιστορικό
 	Sets the source for the history brush	Ορίζει την πηγή για το πινέλο ιστορικού
+	The History Brush source was deleted: set a new source in the History panel	Η πηγή για το πινέλο ιστορικού διαγράφηκε: ορίστε νέα πηγή στον πίνακα Ιστορικό
 	Highlight Mode	Λειτουργία φωτεινών τόνων
 	Highlight Color	Χρώμα φωτεινών τόνων
 	Highlight Opacity	Αδιαφάνεια φωτεινών τόνων
@@ -4052,6 +4072,7 @@ curves	Smooth	Εξομάλυνση
 	Chisel Soft	Μαλακή σμίλευση
 	Open color-less EXR as ACEScg	Άνοιγμα EXR χωρίς χρωματική δήλωση ως ACEScg
 	Do not append "copy" to filename when saving a copy	Να μην προστίθεται «copy» στο όνομα αρχείου κατά την αποθήκευση αντιγράφου
+	Save Full-Size Composite in .pcraft Files	Αποθήκευση σύνθετης εικόνας πλήρους μεγέθους στα αρχεία .pcraft
 	EXIF	EXIF
 	Edit Selected Guides	Επεξεργασία επιλεγμένων οδηγών
 	Clear Selected Guides	Απαλοιφή επιλεγμένων οδηγών
@@ -4105,6 +4126,7 @@ curves	Smooth	Εξομάλυνση
 	This document's layers: {needed} of {budget} for layers	Επίπεδα αυτού του εγγράφου: {needed} από {budget} για επίπεδα
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Τα επίπεδα αυτού του εγγράφου χρειάζονται {needed} αλλά μπορούν να καταλάβουν {budget}: η επανασχεδίαση όλου του εγγράφου γίνεται στη CPU
 	GPU Memory (MB, 0 = Automatic)	Μνήμη GPU (MB, 0 = Αυτόματο)
+	Scratch Size Limit (MB, 0 = No Limit)	Όριο μεγέθους δίσκου προσωρινής αποθήκευσης (MB, 0 = χωρίς όριο)
 	{path}: the path is not valid Unicode; save under another name.	{path}: η διαδρομή δεν είναι έγκυρο Unicode· αποθηκεύστε με άλλο όνομα.
 	{name} was changed by another app after it was opened or saved here.	Το {name} άλλαξε από άλλη εφαρμογή αφού ανοίχτηκε ή αποθηκεύτηκε εδώ.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Αντικαταστήστε το με αυτό το έγγραφο ή ακυρώστε και χρησιμοποιήστε Αρχείο › Αποθήκευση ως για να κρατήσετε και τα δύο.
@@ -4193,6 +4215,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
 	Leading presets	Προεπιλογές διάστιχου
 	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Μη έγκυρη αριθμητική τιμή. Απαιτείται ακέραιος αριθμός μεταξύ {min}% και {max}%. Εισήχθη η προηγούμενη τιμή.
 	Color Aware	Με βάση το χρώμα
 	Decontaminate Colors	Απολύμανση χρωμάτων
@@ -4217,3 +4241,60 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# Action Stop message (#8386)
+	Message	Μήνυμα
+# Playback Options (#5212)
+	Playback Options…	Επιλογές αναπαραγωγής…
+	Playback Options	Επιλογές αναπαραγωγής
+	Accelerated	Επιταχυνόμενη
+	Step by Step	Βήμα προς βήμα
+	Pause For:	Παύση για:
+	Pause For	Παύση για
+	seconds	δευτερόλεπτα
+	Create a single history state	Δημιουργία μίας κατάστασης ιστορικού
+	Generator enabled	Ενεργοποίηση γεννήτριας
+	Drag to move the active shape's path or the Work Path	Σύρετε για μετακίνηση της διαδρομής του ενεργού σχήματος ή της διαδρομής εργασίας
+	Move Up	Μετακίνηση επάνω
+	Move Down	Μετακίνηση κάτω
+	Grid view	Προβολή πλέγματος
+	List view	Προβολή λίστας
+	On your computer	Στον υπολογιστή σας
+	New file	Νέο αρχείο
+	Learn	Εκμάθηση
+	Website	Ιστότοπος
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	Το πλαίσιο υποστηρίζει αφινικούς μετασχηματισμούς· επιλέξτε την εικόνα του για μετασχηματισμούς προοπτικής
+	A frame supports affine transforms; select its image to warp it	Το πλαίσιο υποστηρίζει αφινικούς μετασχηματισμούς· επιλέξτε την εικόνα του για στρέβλωση
+	Convert to Frame…	Μετατροπή σε πλαίσιο…
+	Create a new custom frame	Δημιουργία νέου προσαρμοσμένου πλαισίου
+	Create a new polygonal frame	Δημιουργία νέου πολυγωνικού πλαισίου
+	Create a new triangular frame	Δημιουργία νέου τριγωνικού πλαισίου
+	Fit Content to Frame	Προσαρμογή περιεχομένου στο πλαίσιο
+	Fit Frame to Content	Προσαρμογή πλαισίου στο περιεχόμενο
+	Frame coordinates must be finite and within 600000 pixels	Οι συντεταγμένες του πλαισίου πρέπει να είναι πεπερασμένες και εντός 600000 pixel
+	Import Image…	Εισαγωγή εικόνας…
+	Invalid frame transform	Μη έγκυρος μετασχηματισμός πλαισίου
+	Invalid nested file drop	Μη έγκυρη ένθετη απόθεση αρχείου
+	New Frame	Νέο πλαίσιο
+	Replace Image…	Αντικατάσταση εικόνας…
+	The frame is locked	Το πλαίσιο είναι κλειδωμένο
+	The frame is unavailable	Το πλαίσιο δεν είναι διαθέσιμο
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	Νέο κανάλι…
+	Duplicate Channel	Δημιουργία αντιγράφου καναλιού
+	Delete Channel	Διαγραφή καναλιού
+	New Spot Channel…	Νέο κανάλι πλακάτου χρώματος…
+	Merge Spot Channel	Συγχώνευση καναλιού πλακάτου χρώματος
+	Channel Options…	Επιλογές καναλιού…
+	Split Channels	Διαχωρισμός καναλιών
+	Merge Channels…	Συγχώνευση καναλιών…
+	Specify Channels:	Καθορισμός καναλιών:
+	Not enough grayscale documents for this mode.	Δεν υπάρχουν αρκετά έγγραφα σε κλίμακα του γκρι για αυτή τη λειτουργία.
+	Pick a different document for each channel.	Επιλέξτε διαφορετικό έγγραφο για κάθε κανάλι.
+	A picked document is no longer open.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον ανοιχτό.
+	A picked document is no longer a grayscale document of the same size.	Ένα από τα επιλεγμένα έγγραφα δεν είναι πλέον έγγραφο σε κλίμακα του γκρι ίδιου μεγέθους.

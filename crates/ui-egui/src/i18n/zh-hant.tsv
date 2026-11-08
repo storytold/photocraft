@@ -176,6 +176,7 @@
 	Right	右
 	Open Recent	最近開啟的檔案
 	Clear Recent Files	清除最近檔案
+	Clear Recent File List	清除最近檔案
 	Remove from Recent	從最近檔案中移除
 	Remove {name} from Recent	從最近檔案中移除 {name}
 	Close	關閉
@@ -184,6 +185,10 @@
 	Restore	向下還原
 	Close All	全部關閉
 	Close Others	關閉其他
+	New Document…	新增文件…
+	Open Document…	開啟…
+	Consolidate All to Here	將所有視窗合併至此處
+	Move to New Window	移至新視窗
 	Save	儲存
 	Save As…	另存新檔…
 	Save a Copy…	儲存拷貝…
@@ -236,6 +241,7 @@
 	Create Smart Object after Loading Layers	載入圖層後建立智慧型物件
 	Reveal in Finder	在 Finder 中顯示
 	Show in Explorer	在檔案總管中顯示
+	Reveal in Explorer	在檔案總管中顯示
 	Show in Folder	在資料夾中顯示
 	File Info…	檔案資訊…
 	Print…	列印…
@@ -324,6 +330,7 @@
 	Units & Rulers…	單位和尺標…
 	Guides, Grid & Slices…	參考線、格點和切片…
 	Plug-ins…	增效模組…
+	Plugins…	增效模組…
 	Type…	文字…
 	Enhanced Controls…	增強控制項…
 	Camera Raw…	Camera Raw…
@@ -481,6 +488,8 @@
 	Smart Object	智慧型物件
 	Convert to Smart Object	轉換為智慧型物件
 	Convert to Embedded	轉換為嵌入
+	Embed Linked	嵌入連結
+	Embed All Linked	嵌入所有連結
 	Convert to Layers	轉換為圖層
 	Convert to Linked…	轉換為連結…
 	Edit Contents	編輯內容
@@ -554,7 +563,9 @@
 	Unite Shapes	聯集形狀
 	Subtract Front Shape	減去前方形狀
 	Intersect Shape Areas	交集形狀區域
+	Unite Shapes at Overlap	交集形狀區域
 	Exclude Overlapping Shapes	排除重疊形狀
+	Subtract Shapes at Overlap	排除重疊形狀
 	Merge Shape Components	合併形狀元件
 	Path operations	路徑操作
 	Align	對齊
@@ -739,6 +750,7 @@
 	Minimum…	最小…
 	Offset…	畫面錯位…
 	Plug-ins	增效模組
+	Plugins	增效模組
 	Proof Setup	校樣設定
 	Proof Colors	校樣色彩
 	Gamut Warning	色域警告
@@ -747,9 +759,9 @@
 	Working Magenta Plate	使用中的洋紅版
 	Working Yellow Plate	使用中的黃色版
 	Working Black Plate	使用中的黑色版
-	Working CMY Plate	使用中的 CMY 版
-	Legacy Macintosh RGB	舊版 Macintosh RGB
-	Internet Standard RGB	網際網路標準 RGB
+	Working CMY Plates	使用中的 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	舊版 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	網際網路標準 RGB (sRGB)
 	Monitor RGB	顯示器 RGB
 	Color Blindness — Protanopia-type	色盲 — 紅色盲型
 	Color Blindness — Deuteranopia-type	色盲 — 綠色盲型
@@ -841,7 +853,7 @@
 	Consolidate All to Tabs	全部合併至標籤頁
 	Float in Window	在視窗中浮動
 	Float All in Windows	全部在視窗中浮動
-	New Window for Document	為文件新增視窗
+	New Window	為文件新增視窗
 	Workspace	工作區
 	Essentials	基本功能
 	Graphic and Web	繪圖和網頁
@@ -1943,6 +1955,7 @@
 	Soften	柔化
 	Source	來源
 	Source: set	來源：已設定
+	Source: {name}	來源：{name}
 	Sponge Tool	海綿工具
 	Spot Healing Brush Tool	污點修復筆刷工具
 	Spread	展開
@@ -2019,6 +2032,11 @@
 	Show canvas dots	顯示畫布圓點
 	Clip thumbnails to layer bounds	將縮圖裁切至圖層邊界
 	Clip Thumbnails to Layer Bounds	將縮圖裁切至圖層邊界
+	No Thumbnails	無縮圖
+	Small Thumbnails	小縮圖
+	Medium Thumbnails	中縮圖
+	Large Thumbnails	大縮圖
+	Clip Thumbnails to Document Bounds	將縮圖裁切至文件邊界
 	Canvas color	畫布顏色
 	Canvas custom color	畫布自訂顏色
 	Color picker	檢色器
@@ -2136,7 +2154,6 @@
 	Show only crosshair while painting	繪圖時僅顯示十字線
 	Show slice numbers	顯示切片編號
 	Show tooltips	顯示工具提示
-	Enable animations	啟用動畫
 	Show highlight on rollover	滑鼠懸停時顯示醒目提示
 	Show bounding box when dragging layer	拖曳圖層時顯示邊界框
 	System title bar	系統標題列
@@ -2899,6 +2916,8 @@ curves	Smooth	平滑
 	Step {step} is waiting for its dialog	步驟 {step} 正在等待其對話框
 @plural	{n} action|{n} actions	{n} 個動作
 	Background (Default)	背景（預設）
+	Background (default)	背景（預設）
+	Transparent (default)	透明（預設）
 	Content-Aware Fill	內容感知填滿
 	Include All Subfolders	包含所有子資料夾
 	Auto Add/Delete	自動增加/刪除
@@ -2908,6 +2927,10 @@ curves	Smooth	平滑
 	Sent to {printer}	已傳送至 {printer}
 	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
+	Automatically Create First Snapshot	自動建立第一個快照
+	Automatically Create New Snapshot When Saving	儲存時自動建立新快照
+	Show New Snapshot Dialog by Default	預設顯示新增快照對話框
+	Memory usage percent	記憶體使用比例 (%)
 	Show Favorite Fonts	顯示我的最愛字體
 	No favorite fonts yet: click the star beside a font to add it.	尚無我的最愛字體：按一下字體旁的星號即可加入。
 	Favorite fonts	我的最愛字體
@@ -2951,6 +2974,7 @@ curves	Smooth	平滑
 	Automatically Check for Updates	自動檢查更新
 	Paints from the History panel's source state	從步驟記錄面板的來源狀態繪畫
 	Sets the source for the history brush	設定步驟記錄筆刷的來源
+	The History Brush source was deleted: set a new source in the History panel	步驟記錄筆刷的來源已刪除：請在步驟記錄面板中設定新的來源
 	Highlight Mode	亮部模式
 	Highlight Color	亮部顏色
 	Highlight Opacity	亮部不透明度
@@ -2970,6 +2994,7 @@ curves	Smooth	平滑
 	Chisel Soft	雕刻柔和
 	Open color-less EXR as ACEScg	將無色彩空間資訊的 EXR 以 ACEScg 開啟
 	Do not append "copy" to filename when saving a copy	儲存副本時不在檔名後加上「copy」
+	Save Full-Size Composite in .pcraft Files	在 .pcraft 檔案中儲存全尺寸合成影像
 	Color Profile	色彩描述檔
 	EXIF	EXIF
 	Edit Selected Guides	編輯所選參考線
@@ -3018,6 +3043,7 @@ curves	Smooth	平滑
 	{shortcut} is reserved by the system and can't be assigned.	{shortcut} 由系統保留，無法指定。
 	Low-Latency Drawing (vsync off, applies at next launch)	低延遲繪圖（關閉垂直同步，下次啟動時生效）
 	Reference point location	參考點位置
+	Toggle reference point	切換參考點
 	Free Transform is still being applied; try again when it has finished.	任意變形仍在套用中；請在完成後再試一次。
 	The transform couldn't be applied.	無法套用變形。
 	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	其圖層需要 {needed} GPU 記憶體；預算只留給它們 {budget}。
@@ -3029,6 +3055,7 @@ curves	Smooth	平滑
 	This document's layers: {needed} of {budget} for layers	此文件的圖層：圖層可用 {budget} 中的 {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	此文件的圖層需要 {needed}，但只能佔用 {budget}：整份文件的重繪使用 CPU
 	GPU Memory (MB, 0 = Automatic)	GPU 記憶體（MB，0 = 自動）
+	Scratch Size Limit (MB, 0 = No Limit)	暫存磁碟大小上限（MB，0 = 無限制）
 	{path}: the path is not valid Unicode; save under another name.	{path}：路徑不是有效的 Unicode；請以其他名稱儲存。
 	Replace	取代
 	{name} was changed by another app after it was opened or saved here.	{name} 在此處開啟或儲存後已被其他 App 更改。
@@ -3130,6 +3157,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	數值輸入無效。需要介於 {min}% 和 {max}% 之間的整數。已插入先前的值。
 	Clear Selection	清除選取範圍
 	Color Aware	顏色感知
@@ -3158,3 +3187,62 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	純色
 	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
+
+# Action Stop message (#8386)
+	Message	訊息
+# Playback Options (#5212)
+	Playback Options…	回放選項…
+	Playback Options	回放選項
+	Accelerated	加速
+	Step by Step	逐步
+	Pause For:	暫停：
+	Pause For	暫停
+	seconds	秒
+	Create a single history state	建立單一步驟記錄狀態
+	Drag to move the active shape's path or the Work Path	拖曳以移動作用中形狀的路徑或工作路徑
+	Generator enabled	啟用 Generator
+	Move Up	上移
+	Move Down	下移
+	Grid view	格線檢視
+	List view	清單檢視
+	On your computer	在您的電腦上
+	New file	新增檔案
+	Learn	學習
+	No recent files	沒有最近使用的檔案
+	Website	網站
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	框架支援仿射變形；若要進行透視變形，請選取框架中的影像
+	A frame supports affine transforms; select its image to warp it	框架支援仿射變形；若要進行彎曲變形，請選取框架中的影像
+	Convert to Frame…	轉換為框架…
+	Create a new custom frame	建立新的自訂框架
+	Create a new polygonal frame	建立新的多邊形框架
+	Create a new triangular frame	建立新的三角形框架
+	Fit Content to Frame	使內容符合框架
+	Fit Frame to Content	使框架符合內容
+	Frame coordinates must be finite and within 600000 pixels	框架座標必須為有限值，且在 600000 像素範圍內
+	Import Image…	讀入影像…
+	Invalid frame transform	無效的框架變形
+	Invalid nested file drop	無效的巢狀檔案拖放
+	New Frame	新增框架
+	Replace Image…	取代影像…
+	The frame is locked	框架已鎖定
+	The frame is unavailable	框架無法使用
+	Frame	框架
+	X	X
+	Y	Y
+
+# Channels panel menu (#11451)
+	New Channel…	新增色版…
+	Duplicate Channel	複製色版
+	Delete Channel	刪除色版
+	New Spot Channel…	新增特別色色版…
+	Merge Spot Channel	合併特別色色版
+	Channel Options…	色版選項…
+	Split Channels	分離色版
+	Merge Channels…	合併色版…
+	Specify Channels:	指定色版:
+	Not enough grayscale documents for this mode.	灰階文件不足，無法使用此模式。
+	Pick a different document for each channel.	請為每個色版選擇不同的文件。
+	A picked document is no longer open.	所選的一個文件已不再開啟。
+	A picked document is no longer a grayscale document of the same size.	所選的一個文件已不再是相同大小的灰階文件。

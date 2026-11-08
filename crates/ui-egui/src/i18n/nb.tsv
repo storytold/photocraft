@@ -86,6 +86,7 @@
 	Right	Høyre
 	Open Recent	Åpne nylig brukte
 	Clear Recent Files	Tøm nylig brukte filer
+	Clear Recent File List	Tøm nylig brukte filer
 	Remove from Recent	Fjern fra nylig brukte
 	Remove {name} from Recent	Fjern {name} fra nylig brukte
 	Close	Lukk
@@ -94,6 +95,10 @@
 	Restore	Gjenopprett
 	Close All	Lukk alle
 	Close Others	Lukk andre
+	New Document…	Nytt dokument…
+	Open Document…	Åpne…
+	Consolidate All to Here	Samle alle her
+	Move to New Window	Flytt til nytt vindu
 	Save	Lagre
 	Save As…	Lagre som…
 	Save a Copy…	Lagre en kopi…
@@ -508,7 +513,6 @@
 	Match Location	Samkjør plassering
 	Match Rotation	Samkjør rotasjon
 	Match All	Samkjør alle
-	New Window for Document	Nytt vindu for dokument
 	Workspace	Arbeidsområde
 	Extensions	Utvidelser
 	Panels	Paneler
@@ -686,6 +690,7 @@
 	Units & Rulers…	Enheter og linjaler…
 	Guides, Grid & Slices…	Hjelpelinjer, rutenett og segmenter…
 	Plug-ins…	Programtillegg…
+	Plugins…	Programtillegg…
 	Technology Previews	Teknologiforhåndsvisninger
 	Scratch Disks…	Arbeidsdisker…
 	Export Preferences…	Eksportinnstillinger…
@@ -920,8 +925,8 @@
 	ACES	ACES
 	Industry Standard	Bransjestandard
 	Web	Web
-	Internet Standard RGB	Internettstandard RGB
-	Legacy Macintosh RGB	Eldre Macintosh RGB
+	Internet Standard RGB (sRGB)	Internettstandard RGB (sRGB)
+	Legacy Macintosh RGB (Gamma 1.8)	Eldre Macintosh RGB (Gamma 1.8)
 	Monitor RGB	Skjerm-RGB
 	Windows LCD	Windows LCD
 	Coated CMYK	Bestrøket CMYK
@@ -1742,6 +1747,7 @@
 	Saved	Lagret
 	Reveal in Finder	Vis i Finder
 	Show in Explorer	Vis i Utforsker
+	Reveal in Explorer	Vis i Utforsker
 	Show in Folder	Vis i mappe
 	Before (Y)	Før (Y)
 	Save Settings…	Lagre innstillinger…
@@ -1921,6 +1927,8 @@
 	Combine Shapes	Kombiner former
 	Contract…	Trekk sammen…
 	Convert to Embedded	Konverter til innebygd
+	Embed Linked	Bygg inn koblet
+	Embed All Linked	Bygg inn alle koblede
 	Convert to Layers	Konverter til lag
 	Convert to Linked…	Konverter til koblet…
 	Count	Telling
@@ -2008,6 +2016,7 @@
 	Pixelate	Pikseler
 	Place Scale Marker…	Plasser skalamarkør…
 	Plug-ins	Programtillegg
+	Plugins	Programtillegg
 	Print One Copy	Skriv ut ett eksemplar
 	Print…	Skriv ut…
 	Range	Område
@@ -2052,7 +2061,7 @@
 	Vertical Centers	Loddrette sentre
 	Video Frames to Layers…	Videorammer til lag…
 	WIA Support…	WIA-støtte…
-	Working CMY Plate	Arbeidsplate for CMY
+	Working CMY Plates	Arbeidsplate for CMY
 
 # tl! literals (third pass)
 	Absolute	Absolutt
@@ -2338,6 +2347,11 @@
 	Show canvas dots	Vis lerretprikker
 	Clip thumbnails to layer bounds	Klipp miniatyrer til laggrensene
 	Clip Thumbnails to Layer Bounds	Klipp miniatyrer til laggrensene
+	No Thumbnails	Ingen miniatyrer
+	Small Thumbnails	Små miniatyrer
+	Medium Thumbnails	Middels miniatyrer
+	Large Thumbnails	Store miniatyrer
+	Clip Thumbnails to Document Bounds	Klipp miniatyrer til dokumentgrensene
 	Canvas color	Lerretfarge
 	Canvas custom color	Egendefinert lerretfarge
 	Classic	Klassisk
@@ -2464,7 +2478,6 @@
 	Show only crosshair while painting	Vis bare trådkors under maling
 	Show slice numbers	Vis segmentnumre
 	Show tooltips	Vis verktøytips
-	Enable animations	Aktiver animasjoner
 	Show highlight on rollover	Vis utheving ved pekerberøring
 	Show bounding box when dragging layer	Vis avgrensningsboks når lag dras
 	System title bar	Systemets tittellinje
@@ -3199,6 +3212,8 @@ curves	Smooth	Jevn ut
 	Step {step} is waiting for its dialog	Trinn {step} venter på dialogen sin
 @plural	{n} action|{n} actions	{n} handling|{n} handlinger
 	Background (Default)	Bakgrunn (standard)
+	Background (default)	Bakgrunn (standard)
+	Transparent (default)	Gjennomsiktig (standard)
 	Content-Aware Fill	Innholdsbasert fyll
 # Batch / Image Processor
 	Include All Subfolders	Ta med alle undermapper
@@ -3361,6 +3376,7 @@ curves	Smooth	Jevn ut
 	This document's layers: {needed} of {budget} for layers	Dette dokumentets lag: {needed} av {budget} for lag
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	Dette dokumentets lag trenger {needed}, men kan holde {budget}: gjentegning av hele dokumentet bruker CPU-en
 	GPU Memory (MB, 0 = Automatic)	GPU-minne (MB, 0 = automatisk)
+	Scratch Size Limit (MB, 0 = No Limit)	Størrelsesgrense for arbeidsdisk (MB, 0 = ingen grense)
 	{path}: the path is not valid Unicode; save under another name.	{path}: banen er ikke gyldig Unicode. Lagre under et annet navn.
 	Replace	Erstatt
 	{name} was changed by another app after it was opened or saved here.	{name} ble endret av et annet program etter at den ble åpnet eller lagret her.
@@ -4772,3 +4788,23 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+
+# Action Stop message (#8386)
+	Message	Melding
+# Playback Options (#5212)
+	Playback Options…	Avspillingsalternativer…
+	Playback Options	Avspillingsalternativer
+	Accelerated	Akselerert
+	Step by Step	Trinn for trinn
+	Pause For:	Pause i:
+	Pause For	Pause i
+	seconds	sekunder
+	Create a single history state	Opprett én historikktilstand
+
+# Channels panel menu (#11451)
+	Channel Options…	Kanalalternativer…
+	Specify Channels:	Angi kanaler:
+	Not enough grayscale documents for this mode.	Ikke nok dokumenter i gråtoner for denne modusen.
+	Pick a different document for each channel.	Velg et annet dokument for hver kanal.
+	A picked document is no longer open.	Et av de valgte dokumentene er ikke lenger åpent.
+	A picked document is no longer a grayscale document of the same size.	Et av de valgte dokumentene er ikke lenger et dokument i gråtoner av samme størrelse.

@@ -195,6 +195,7 @@
 	Right	右
 	Open Recent	最近使ったファイルを開く
 	Clear Recent Files	最近使ったファイルを消去
+	Clear Recent File List	最近使ったファイルを消去
 	Remove from Recent	最近使ったファイルから削除
 	Remove {name} from Recent	{name} を最近使ったファイルから削除
 	Close	閉じる
@@ -203,6 +204,10 @@
 	Restore	元に戻す (縮小)
 	Close All	すべて閉じる
 	Close Others	ほかを閉じる
+	New Document…	新規ドキュメント…
+	Open Document…	開く…
+	Consolidate All to Here	すべてをここに統合
+	Move to New Window	新規ウィンドウに移動
 	Save	保存
 	Save As…	名前を付けて保存…
 	Save a Copy…	コピーを保存…
@@ -255,6 +260,7 @@
 	Create Smart Object after Loading Layers	レイヤーの読み込み後にスマートオブジェクトを作成
 	Reveal in Finder	Finder で表示
 	Show in Explorer	エクスプローラーで表示
+	Reveal in Explorer	エクスプローラーで表示
 	Show in Folder	フォルダーで表示
 	File Info…	ファイル情報…
 	Print…	プリント…
@@ -343,6 +349,7 @@
 	Units & Rulers…	単位・定規…
 	Guides, Grid & Slices…	ガイド・グリッド・スライス…
 	Plug-ins…	プラグイン…
+	Plugins…	プラグイン…
 	Type…	文字…
 	Enhanced Controls…	拡張コントロール…
 	Camera Raw…	Camera Raw…
@@ -499,6 +506,8 @@
 	Smart Object	スマートオブジェクト
 	Convert to Smart Object	スマートオブジェクトに変換
 	Convert to Embedded	埋め込みに変換
+	Embed Linked	リンクを埋め込む
+	Embed All Linked	すべてのリンクを埋め込む
 	Convert to Layers	レイヤーに変換
 	Convert to Linked…	リンクに変換…
 	Edit Contents	コンテンツを編集
@@ -572,7 +581,9 @@
 	Unite Shapes	シェイプを結合
 	Subtract Front Shape	前面シェイプで型抜き
 	Intersect Shape Areas	シェイプの重なりを抽出
+	Unite Shapes at Overlap	シェイプの重なりを抽出
 	Exclude Overlapping Shapes	シェイプの重なりを除外
+	Subtract Shapes at Overlap	シェイプの重なりを除外
 	Merge Shape Components	シェイプの構成要素を結合
 	Path operations	パスの操作
 	Align	整列
@@ -756,6 +767,7 @@
 	Minimum…	最小値…
 	Offset…	オフセット…
 	Plug-ins	プラグイン
+	Plugins	プラグイン
 	Proof Setup	校正設定
 	Proof Colors	色の校正
 	Gamut Warning	色域外警告
@@ -764,9 +776,9 @@
 	Working Magenta Plate	作業用マゼンタ版
 	Working Yellow Plate	作業用イエロー版
 	Working Black Plate	作業用ブラック版
-	Working CMY Plate	作業用 CMY 版
-	Legacy Macintosh RGB	旧 Macintosh RGB
-	Internet Standard RGB	インターネット標準 RGB
+	Working CMY Plates	作業用 CMY 版
+	Legacy Macintosh RGB (Gamma 1.8)	旧 Macintosh RGB (Gamma 1.8)
+	Internet Standard RGB (sRGB)	インターネット標準 RGB (sRGB)
 	Monitor RGB	モニター RGB
 	Color Blindness — Protanopia-type	色覚特性 — 1 型(P 型)
 	Color Blindness — Deuteranopia-type	色覚特性 — 2 型(D 型)
@@ -858,7 +870,7 @@
 	Consolidate All to Tabs	すべてをタブに統合
 	Float in Window	ウィンドウ内に浮動
 	Float All in Windows	すべてをウィンドウ内に浮動
-	New Window for Document	ドキュメントの新規ウィンドウ
+	New Window	ドキュメントの新規ウィンドウ
 	Workspace	ワークスペース
 	Essentials	基本
 	Graphic and Web	グラフィックと Web
@@ -1949,6 +1961,7 @@
 	Soften	ぼかし
 	Source	ソース
 	Source: set	ソース: 設定済み
+	Source: {name}	ソース: {name}
 	Sponge Tool	スポンジツール
 	Spot Healing Brush Tool	スポット修復ブラシツール
 	Spread	スプレッド
@@ -2025,6 +2038,11 @@
 	Show canvas dots	カンバスのドットを表示
 	Clip thumbnails to layer bounds	サムネールをレイヤーの境界でクリップ
 	Clip Thumbnails to Layer Bounds	サムネールをレイヤーの境界でクリップ
+	No Thumbnails	サムネールなし
+	Small Thumbnails	小さいサムネール
+	Medium Thumbnails	中サイズのサムネール
+	Large Thumbnails	大きいサムネール
+	Clip Thumbnails to Document Bounds	サムネールをドキュメントの境界でクリップ
 	Canvas color	カンバスの色
 	Canvas custom color	カンバスのカスタム色
 	Color picker	カラーピッカー
@@ -2142,7 +2160,6 @@
 	Show only crosshair while painting	描画中は十字線のみ表示
 	Show slice numbers	スライス番号を表示
 	Show tooltips	ツールチップを表示
-	Enable animations	アニメーションを有効にする
 	Show highlight on rollover	ロールオーバー時にハイライトを表示
 	Show bounding box when dragging layer	レイヤーのドラッグ中にバウンディングボックスを表示
 	System title bar	システムのタイトルバー
@@ -3900,6 +3917,8 @@ curves	Smooth	スムーズ
 	Step {step} is waiting for its dialog	ステップ {step} はダイアログを待っています
 @plural	{n} action|{n} actions	アクション {n} 個
 	Background (Default)	背景（既定）
+	Background (default)	背景（既定）
+	Transparent (default)	透明（既定）
 	Include All Subfolders	すべてのサブフォルダーを含める
 	Forward Warp	前方ワープ
 	Twirl Clockwise	時計回りに渦巻き
@@ -3965,6 +3984,7 @@ curves	Smooth	スムーズ
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+	Memory usage percent	メモリ使用率 (%)
 	Show Favorite Fonts	お気に入りのフォントを表示
 	No favorite fonts yet: click the star beside a font to add it.	お気に入りのフォントはまだありません。フォントの横の星をクリックして追加してください。
 	Favorite fonts	お気に入りのフォント
@@ -4008,6 +4028,7 @@ curves	Smooth	スムーズ
 	Automatically Check for Updates	アップデートを自動的に確認
 	Paints from the History panel's source state	ヒストリーパネルのソース状態からペイントします
 	Sets the source for the history brush	ヒストリーブラシのソースを設定します
+	The History Brush source was deleted: set a new source in the History panel	ヒストリーブラシのソースが削除されました: ヒストリーパネルで新しいソースを設定してください
 	Highlight Mode	ハイライトモード
 	Highlight Color	ハイライトカラー
 	Highlight Opacity	ハイライト不透明度
@@ -4027,6 +4048,7 @@ curves	Smooth	スムーズ
 	Chisel Soft	チゼルソフト
 	Open color-less EXR as ACEScg	色空間のないEXRをACEScgとして開く
 	Do not append "copy" to filename when saving a copy	コピーを保存するときにファイル名に「copy」を付けない
+	Save Full-Size Composite in .pcraft Files	.pcraftファイルにフルサイズの合成画像を保存
 	Edit Selected Guides	選択したガイドを編集
 	Clear Selected Guides	選択したガイドを消去
 	Bicubic Automatic	バイキュービック法 (自動)
@@ -4079,6 +4101,7 @@ curves	Smooth	スムーズ
 	This document's layers: {needed} of {budget} for layers	このドキュメントのレイヤー: レイヤー用 {budget} のうち {needed}
 	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	このドキュメントのレイヤーには {needed} が必要ですが、使えるのは {budget} です: ドキュメント全体の再描画は CPU で行われます
 	GPU Memory (MB, 0 = Automatic)	GPU メモリ（MB、0 = 自動）
+	Scratch Size Limit (MB, 0 = No Limit)	仮想記憶ディスクのサイズ上限（MB、0 = 上限なし）
 	{path}: the path is not valid Unicode; save under another name.	{path}: パスが有効な Unicode ではありません。別の名前で保存してください。
 	Replace	置き換え
 	{name} was changed by another app after it was opened or saved here.	{name} は、ここで開くか保存した後に別のアプリで変更されました。
@@ -4168,6 +4191,8 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+
+	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	無効な数値です。{min}% から {max}% までの整数が必要です。以前の値が挿入されました。
 	Clear Selection	選択範囲をクリア
 	Color Aware	カラー認識
@@ -4194,3 +4219,53 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	分岐点のカラー
 	Shapes can't use patterns yet	シェイプではまだパターンを使用できません
 	Edit Brush…	ブラシを編集…
+
+# Action Stop message (#8386)
+	Message	メッセージ
+# Playback Options (#5212)
+	Playback Options…	再生オプション…
+	Playback Options	再生オプション
+	Accelerated	高速
+	Step by Step	ステップ単位
+	Pause For:	一時停止：
+	Pause For	一時停止
+	seconds	秒
+	Create a single history state	単一のヒストリー状態を作成
+	Drag to move the active shape's path or the Work Path	ドラッグして、アクティブなシェイプのパスまたは作業用パスを移動
+	Generator enabled	自動生成を有効にする
+	This Layer:	現在のレイヤー:
+	Move Up	上へ移動
+	Move Down	下へ移動
+	Grid view	グリッド表示
+	List view	リスト表示
+	On your computer	このコンピューター上
+	New file	新規ファイル
+	Learn	学ぶ
+	No recent files	最近使ったファイルはありません
+	Website	Web サイト
+
+# Frame Tool and other branch translations.
+	A frame supports affine transforms; select its image for perspective transforms	フレームはアフィン変換に対応しています。遠近法変換を行うにはフレーム内の画像を選択してください
+	A frame supports affine transforms; select its image to warp it	フレームはアフィン変換に対応しています。ワープするにはフレーム内の画像を選択してください
+	Convert to Frame…	フレームに変換…
+	Create a new custom frame	新しいカスタムフレームを作成
+	Create a new polygonal frame	新しい多角形フレームを作成
+	Create a new triangular frame	新しい三角形フレームを作成
+	Fit Content to Frame	内容をフレームに合わせる
+	Fit Frame to Content	フレームを内容に合わせる
+	Frame coordinates must be finite and within 600000 pixels	フレームの座標は有限値で、600000 ピクセル以内である必要があります
+	Import Image…	画像を読み込み…
+	Invalid frame transform	フレームの変形が無効です
+	Invalid nested file drop	入れ子のファイルドロップは無効です
+	New Frame	新規フレーム
+	Replace Image…	画像を置き換え…
+	The frame is locked	フレームはロックされています
+	The frame is unavailable	フレームを利用できません
+
+# Channels panel menu (#11451)
+	Channel Options…	チャンネルオプション…
+	Specify Channels:	チャンネルを指定:
+	Not enough grayscale documents for this mode.	このモードに必要なグレースケールのドキュメントが足りません。
+	Pick a different document for each channel.	チャンネルごとに別のドキュメントを選択してください。
+	A picked document is no longer open.	選択したドキュメントの一つが開かれていません。
+	A picked document is no longer a grayscale document of the same size.	選択したドキュメントの一つが、同じサイズのグレースケールのドキュメントではなくなりました。
