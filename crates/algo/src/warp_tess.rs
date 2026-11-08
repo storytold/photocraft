@@ -16,7 +16,7 @@
 //! * a first-level cell that splits across also splits down, and a down split anywhere on the
 //!   first level splits every first-level cell down;
 //! * for a mesh that is cubic in one direction, a cell split down for its columns' curvature splits
-//!   every cell of its row (the cells of that level beside it) down.
+//!   every cell of its row down, within its first-level column (the cells of that level beside it).
 //!
 //! Each cell becomes two triangles, split from its top-left corner, cut across at the vertices its
 //! left and right neighbours put on its sides. A vertex inside a bigger cell's edge sits on that
@@ -323,8 +323,10 @@ fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<S
     let (mut leaves, mut log) = (Vec::new(), Vec::new());
     while !level_cells.is_empty() {
         let mut decisions = Vec::with_capacity(level_cells.len());
-        // Rows (by their top and bottom) with a cell split down for its curvature.
-        let mut curved_rows: Vec<(f64, f64)> = Vec::new();
+        // Rows (by their top and bottom, within one first-level column) with a cell split down for
+        // its curvature.
+        let mut curved_rows: Vec<(f64, f64, i64)> = Vec::new();
+        let column = |u: f64| (u / first + EPS).floor() as i64;
         for &c in &level_cells {
             let [u0, u1, v0, v1] = c;
             let fu = need(&segment(&net.row(v0), u0, u1)).max(need(&segment(&net.row(v1), u0, u1)));
@@ -332,7 +334,7 @@ fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<S
             let (mut across, mut down) = (fu >= 1.0 - EPS, fv >= 1.0 - EPS);
             let curved_across = across;
             if twisty && down {
-                curved_rows.push((v0, v1));
+                curved_rows.push((v0, v1, column(u0)));
             }
             if twisty {
                 let tw = net.sub(c).twist();
@@ -360,7 +362,7 @@ fn cells(net: &Net, twisty: bool, swap: bool, start: usize) -> (Vec<Cell>, Vec<S
             }
         }
         for (c, d) in level_cells.iter().zip(&mut decisions) {
-            if curved_rows.iter().any(|&(a, b)| (a - c[2]).abs() < EPS && (b - c[3]).abs() < EPS) {
+            if curved_rows.iter().any(|&(a, b, k)| (a - c[2]).abs() < EPS && (b - c[3]).abs() < EPS && k == column(c[0])) {
                 d.1 = true;
             }
         }
@@ -529,6 +531,34 @@ mod tests {
         assert_eq!((full.nu, full.nv), (4, 4));
         let env = net_of(&at, false);
         assert_eq!((env.nu, env.nv), (3, 2));
+    }
+
+    /// A 128 px square with its top-left corner pulled 48 px out diagonally: the reference keeps
+    /// the far end of the top row (a quarter by a quarter) whole, though cells of that row in the
+    /// other first-level column split down for their curvature: the row rule stays within a
+    /// first-level column.
+    #[test]
+    fn the_row_rule_stays_within_a_first_level_column() {
+        let mut p = [[0.0f64; 2]; 16];
+        for (k, q) in p.iter_mut().enumerate() {
+            *q = [128.0 * (k % 4) as f64 / 3.0, 128.0 * (k / 4) as f64 / 3.0];
+        }
+        p[0] = [-48.0, -48.0];
+        let b = |t: f64| [(1.0 - t).powi(3), 3.0 * t * (1.0 - t).powi(2), 3.0 * t * t * (1.0 - t), t.powi(3)];
+        let at = |u: f64, v: f64| {
+            let (bu, bv) = (b(u), b(v));
+            let mut o = [0.0; 2];
+            for (j, wv) in bv.iter().enumerate() {
+                for (i, wu) in bu.iter().enumerate() {
+                    o[0] += wu * wv * p[j * 4 + i][0];
+                    o[1] += wu * wv * p[j * 4 + i][1];
+                }
+            }
+            o
+        };
+        let (leaves, log) = cells(&net_of(&at, true), true, false, START_FULL);
+        assert!(log.iter().any(|s| s.cell == [0.0, 0.25, 0.0, 0.25]), "the corner cell splits");
+        assert!(leaves.contains(&[0.75, 1.0, 0.0, 0.25]), "{leaves:?}");
     }
 
     /// A full mesh starts as 2 × 2 cells: a flat one stays at four.
