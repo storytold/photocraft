@@ -112,10 +112,10 @@ pub(super) fn eyedropper_ring(app: &mut PhotocraftApp, painter: &egui::Painter, 
 const RING_GREY: Color32 = Color32::from_gray(127);
 
 /// Tools on which holding ⌥ (Alt) switches to the Eyedropper: a click or drag sets the
-/// foreground colour, as with the Eyedropper itself (#417).
+/// foreground colour, as with the Eyedropper itself (#417, the Background Eraser #11906).
 pub(crate) fn alt_samples(tool: Tool, mods: egui::Modifiers) -> bool {
     // Control+Alt is the brush-resize drag (`brush_resize`), not sampling.
-    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket)
+    mods.alt && !mods.ctrl && matches!(tool, Tool::Brush | Tool::Pencil | Tool::Gradient | Tool::PaintBucket | Tool::BackgroundEraser)
 }
 
 /// Preferences › Cursors › Other Cursors asks for the precise crosshair, or Caps Lock swaps the
@@ -203,14 +203,51 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
     true
 }
 
+/// Sample the image or targeted raster mask at (x, y) using the configured Sample Size.
+/// Write a valid sample to the foreground swatch, or to the background swatch with Alt.
 pub(super) fn sample_eyedropper(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) {
-    if let Some(mut rgb) = eyedropper_color(app, x, y) {
-        if super::paint_target(app) != json!("pixels") {
-            rgb = [photocraft_color::convert::rgb_to_gray(rgb); 3];
-        }
+    let rgb = if let Some((surface, canvas)) = eyedropper_mask_source(app) {
+        sample_layer_mask(surface, canvas, x, y, app.ui.tool_options.eyedropper_size)
+    } else {
+        eyedropper_color(app, x, y).map(|rgb| if super::paint_target(app) == json!("pixels") { rgb } else { [photocraft_color::convert::rgb_to_gray(rgb); 3] })
+    };
+    if let Some(rgb) = rgb {
         let key = if mods.alt { "background" } else { "foreground" };
         let _ = app.run("tools.setColors", json!({ key: [rgb[0],rgb[1],rgb[2],1.0] }));
     }
+}
+
+/// Only the Eyedropper's Current Layer and Current & Below modes pick the targeted raster mask.
+fn eyedropper_mask_source(app: &PhotocraftApp) -> Option<(&photocraft_raster::Surface, photocraft_geom::Rect)> {
+    use photocraft_engine::{channel_cmds::ChannelTarget, mask_view_cmds};
+
+    if app.active_tool() != Tool::Eyedropper
+        || app.ui.vector_mask_target
+        || !matches!(app.ui.tool_options.eyedropper_sample.as_str(), "current" | "currentAndBelow")
+    {
+        return None;
+    }
+    let st = app.session.active()?;
+    // Painting can implicitly edit an adjustment's mask even with its content thumbnail selected.
+    let targeted = app.ui.mask_target || st.channel_view.target == ChannelTarget::LayerMask || mask_view_cmds::current(st).is_some_and(|v| !v.filter);
+    if !targeted || st.doc.quick_mask.is_some() || !app.layer_mask_targeted() {
+        return None;
+    }
+    let mask = st.doc.layer(st.active_layer?)?.mask.as_ref()?;
+    Some((&mask.surface, st.doc.bounds()))
+}
+
+/// Read the stored mask channel, including its sparse default, rather than its composited coverage.
+fn sample_layer_mask(surface: &photocraft_raster::Surface, canvas: photocraft_geom::Rect, x: f64, y: f64, size: u32) -> Option<[f32; 3]> {
+    let rect = photocraft_engine::cmd::sample_cmds::sample_rect(x, y, size, canvas)?;
+    let mut sum = 0.0;
+    for y in rect.y0..rect.y1 {
+        for x in rect.x0..rect.x1 {
+            sum += f64::from(surface.sample_channel(x, y, 0));
+        }
+    }
+    let gray = (sum / (f64::from(rect.width()) * f64::from(rect.height()))) as f32;
+    gray.is_finite().then_some([gray; 3])
 }
 
 /// The colour at document point (x, y) with the Eyedropper's Sample Size (the composite pixel,
@@ -248,3 +285,11 @@ pub(crate) fn alt_loads_mixer(tool: Tool, mods: egui::Modifiers) -> bool {
 pub(crate) fn alt_picks(tool: Tool, mods: egui::Modifiers) -> bool {
     alt_samples(tool, mods) || alt_loads_mixer(tool, mods)
 }
+
+#[cfg(test)]
+#[path = "../eyedropper_mask_sample_tests.rs"]
+mod eyedropper_mask_sample_tests;
+
+#[cfg(test)]
+#[path = "../background_eraser_alt_click_tests.rs"]
+mod background_eraser_alt_click_tests;
