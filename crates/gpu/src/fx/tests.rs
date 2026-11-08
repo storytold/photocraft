@@ -345,6 +345,15 @@ fn softer_outer_glow_blurs_with_the_glow_tent() {
         };
         let outer = weights(&program(&Effect::OuterGlow(g.clone()), &light, false));
         assert_eq!(outer, vec![glow_tent_kernel(size).1; 2], "outer glow size {size}");
+        if size == 10.0 {
+            // With spread, the dilation runs first and the blur sees the remaining
+            // width (10 x (1 - 0.4) = 6, even): that kernel is the glow tent too,
+            // not the shared tent (#12305 review).
+            let mut spread_glow = g.clone();
+            spread_glow.spread = 0.4;
+            let outer = weights(&program(&Effect::OuterGlow(spread_glow), &light, false));
+            assert_eq!(outer, vec![glow_tent_kernel(6.0).1; 2], "outer glow with spread");
+        }
         let inner = weights(&program(&Effect::InnerGlow(g), &light, false));
         assert_eq!(inner, vec![tent_kernel(size).1; 2], "inner glow size {size}");
         let Effect::DropShadow(mut s) = Effect::default_drop_shadow() else { unreachable!() };
