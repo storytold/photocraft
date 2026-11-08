@@ -107,6 +107,7 @@ pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<Stri
         after_shortcuts,
         after_alternates,
     };
+    s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
     s.actions.touch();
     s.actions.library_undo = Some(Box::new(undo));
 }
@@ -167,6 +168,7 @@ pub(super) fn undo(s: &mut Session, _: &Value) -> Result<Value> {
     s.actions.list = undo.list;
     s.actions.sets = undo.sets;
     s.actions.set_rows = undo.rows;
+    s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
     replace_bindings(s, undo.shortcuts, undo.alternates);
     s.actions.touch();
     Ok(json!({"undone":true}))

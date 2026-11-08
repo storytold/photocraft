@@ -210,6 +210,7 @@ fn duplicate_set(s: &mut Session, source: &str, source_slot: Option<usize>) -> R
     if let Some(slot) = copy_slot {
         let old_len = s.actions.set_rows.len();
         s.actions.set_rows.insert(slot, name);
+        s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
         for action in &mut s.actions.list {
             if let Some(row) = &mut action.set_slot
                 && (slot..old_len).contains(row)

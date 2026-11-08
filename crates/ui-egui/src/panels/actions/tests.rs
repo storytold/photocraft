@@ -50,6 +50,7 @@ fn repeated_factory_rows_select_and_play_independently() {
     assert!(matches!(&displayed[3], PanelRow::Set(Folder { slot: Some(1), .. }, 2)));
     app.ui.actions.selected_set = Some("PhotoCraft Basics".into());
     app.ui.actions.selected_set_slot = Some(1);
+    app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
     assert_eq!(playback_targets(&app), [2, 3]);
     assert_eq!(new_action_set(&app).unwrap().slot, Some(1));
 }
@@ -100,6 +101,22 @@ fn duplicate_selected_physical_folder_keeps_occurrences_and_shortcuts() {
     assert_eq!(legacy, json!({"set": "Later copy", "index": 4, "actions": 1}));
     assert_eq!(app.session.actions.list[4].set_slot, None);
     assert_eq!(app.session.actions.set_rows.len(), 6);
+}
+
+/// A nested Load can compact same-caption rows before the panel repaints.
+#[test]
+fn stale_same_caption_selection_does_not_follow_a_compacted_slot() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.actions.set_rows = vec!["Remove".into(), "Same".into(), "Same".into()];
+    app.ui.actions.selected_set = Some("Same".into());
+    app.ui.actions.selected_set_slot = Some(1);
+    assert_eq!(selected_set(&app), Some("Same"));
+    let archive = action_set_bytes("Remove", "Loaded");
+    app.session.execute("actions.load", json!({"data":photocraft_engine::paint::tile::b64_encode(&archive)})).unwrap();
+    assert_eq!(app.session.actions.set_rows[1], "Same");
+    assert!(selected_set(&app).is_none());
+    assert!(playback_targets(&app).is_empty());
+    assert!(duplicate_selection(&mut app).is_err());
 }
 
 #[test]

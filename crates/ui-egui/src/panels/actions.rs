@@ -23,6 +23,7 @@ pub(crate) fn library_selection_changed(app: &mut PhotocraftApp) {
     ui.selected_step = None;
     ui.selected_set = None;
     ui.selected_set_slot = None;
+    ui.slot_revision = app.session.actions.set_rows_revision;
     ui.collapsed_set_slots.clear();
     ui.expanded.clear();
     ui.renaming = None;
@@ -33,12 +34,19 @@ pub(crate) fn library_slots_changed(app: &mut PhotocraftApp) {
     if app.ui.actions.selected_set_slot.take().is_some() {
         app.ui.actions.selected_set = None;
     }
+    app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
     app.ui.actions.collapsed_set_slots.clear();
 }
 
 /// Preserve selection and disclosure for the existing physical folders after inserting a row.
 pub(crate) fn library_slot_inserted(app: &mut PhotocraftApp, slot: usize) {
+    let revision = app.session.actions.set_rows_revision;
+    if app.ui.actions.slot_revision != revision.wrapping_sub(1) {
+        library_slots_changed(app);
+        return;
+    }
     let ui = &mut app.ui.actions;
+    ui.slot_revision = revision;
     for existing in ui.selected_set_slot.iter_mut().chain(&mut ui.collapsed_set_slots) {
         if *existing >= slot {
             *existing = existing.saturating_add(1);
@@ -65,6 +73,8 @@ pub struct ActionsUi {
     pub selected_set: Option<String>,
     #[serde(skip)]
     selected_set_slot: Option<usize>,
+    #[serde(skip)]
+    slot_revision: u64,
     #[serde(skip)]
     collapsed_set_slots: Vec<usize>,
     #[serde(skip)]
@@ -133,7 +143,9 @@ fn selected_set(app: &PhotocraftApp) -> Option<&str> {
     }
     let set = app.ui.actions.selected_set.as_deref()?;
     if let Some(slot) = app.ui.actions.selected_set_slot {
-        return (app.session.actions.set_rows.get(slot).map(String::as_str) == Some(set)).then_some(set);
+        return (app.ui.actions.slot_revision == app.session.actions.set_rows_revision
+            && app.session.actions.set_rows.get(slot).map(String::as_str) == Some(set))
+        .then_some(set);
     }
     photocraft_engine::actions_edit_cmds::set_names(&app.session).iter().any(|n| n == set).then_some(set)
 }
@@ -154,7 +166,8 @@ fn selected_set_actions(app: &PhotocraftApp) -> Vec<usize> {
 /// What Play plays: the selected action; with a set folder selected, every action of that set in
 /// order, as Photoshop plays a selected set (nothing for an empty set); else the first action.
 fn playback_targets(app: &PhotocraftApp) -> Vec<usize> {
-    if selected_set(app).is_some() {
+    // A stale physical selection must not play the first unrelated action before repaint.
+    if app.ui.actions.selected_set_slot.is_some() || selected_set(app).is_some() {
         return selected_set_actions(app);
     }
     playback_selection(app).into_iter().collect()
@@ -1760,7 +1773,7 @@ fn move_row(app: &mut PhotocraftApp, source: DragRow, to: usize) {
 /// Keep the selection and disclosure rows on the new copy after the engine edits the list.
 fn duplicate_selection(app: &mut PhotocraftApp) -> Result<Value, String> {
     if app.ui.actions.selected.is_none()
-        && let Some(set) = app.ui.actions.selected_set.clone()
+        && let Some(set) = selected_set(app).map(str::to_owned)
     {
         let count = app.session.actions.list.len();
         let result = app.run("actions.duplicate", json!({"set": set, "setSlot": app.ui.actions.selected_set_slot}))?;
@@ -2005,6 +2018,9 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
 }
 
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    if app.ui.actions.slot_revision != app.session.actions.set_rows_revision {
+        library_slots_changed(app);
+    }
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
     let rows: Vec<Row> = app
@@ -2191,6 +2207,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.actions.selected_step = None;
             app.ui.actions.selected_set = Some(set.name.clone());
             app.ui.actions.selected_set_slot = set.slot;
+            app.ui.actions.slot_revision = app.session.actions.set_rows_revision;
         }
         // The disclosure triangle collapses or expands the set and leaves the selection alone.
         if toggle {

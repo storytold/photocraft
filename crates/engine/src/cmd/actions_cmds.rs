@@ -128,6 +128,9 @@ pub struct ActionState {
     /// Ordered folder occurrences from whole-library commands, including empty and same-name rows.
     #[serde(skip)]
     pub set_rows: Vec<String>,
+    /// Changes when old physical folder positions may name different occurrences.
+    #[serde(skip)]
+    pub set_rows_revision: u64,
     /// The latest destructive panel edit, separate from document History.
     #[serde(skip)]
     pub library_undo: Option<Box<crate::actions_edit_cmds::LibraryUndo>>,

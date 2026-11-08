@@ -46,6 +46,9 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
             next += usize::from(keep);
             keep
         });
+        if next != slots.len() {
+            s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
+        }
         for action in &mut s.actions.list {
             action.set_slot = action.set_slot.and_then(|slot| slots.get(slot).copied().flatten());
         }
