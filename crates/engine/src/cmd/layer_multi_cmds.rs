@@ -101,7 +101,15 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(Value::Null)
         }),
-        spec!("select.findLayers", "Find Layers", &["Select"], Some("Cmd+Alt+Shift+F"), r##"{"name":str (case-insensitive substring)}"##, has_doc, find_layers),
+        spec!(
+            "select.findLayers",
+            "Find Layers",
+            &["Select"],
+            Some("Cmd+Alt+Shift+F"),
+            r##"{"name":str?} (filters the Layers panel by Name, a case-insensitive substring, selecting none of the matches; without `name` the panel's Name text is kept; replies with the matching layers)"##,
+            has_doc,
+            find_layers
+        ),
         spec!("layer.selectLinkedLayers", "Select Linked Layers", &["Layer"], None, "{}", has_linked, |s, _| select_linked(s)),
         spec!("layer.align.topEdges", "Top Edges", &["Layer", "Align"], None, ALIGN, can_align, |s, p| align(s, p, "topEdges")),
         spec!("layer.align.verticalCenters", "Vertical Centers", &["Layer", "Align"], None, ALIGN, can_align, |s, p| align(s, p, "verticalCenters")),
