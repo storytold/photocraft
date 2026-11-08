@@ -428,29 +428,51 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
 /// The Content-Aware Move tool's "Don't show again" for [`content_aware_move_no_pixels`].
 const CAM_NO_PIXELS_PREF: &str = "contentAwareMove.noPixelsSelected";
 
-/// Content-Aware Move Tool with no selection: a drag that encloses no area (a click, a straight
-/// line) selects nothing and adds no History state, and says so in the alert "No pixels are
-/// selected." with "Don't show again" (#12192). Returns whether this drag was such a one. With a
-/// selection, or a drag that encloses an area, it is the tool's lasso as before.
+/// Content-Aware Move Tool with no selection: a drag whose lasso would select no pixel (a click,
+/// a straight line) selects nothing and adds no History state, and says so in the alert "No pixels
+/// are selected." with "Don't show again" (#12192). Returns whether this drag was such a one. With
+/// a selection, or a lasso that selects pixels, it is the tool's lasso as before.
 pub fn content_aware_move_no_pixels(app: &mut PhotocraftApp, points: &[[f64; 2]]) -> bool {
-    if app.session.active().is_none_or(|s| s.doc.selection.is_some()) || encloses_area(points) {
+    let Some(canvas) = app.session.active().filter(|s| s.doc.selection.is_none()).map(|s| s.doc.bounds()) else { return false };
+    if lasso_selects_pixels(points, canvas, app.ui.tool_options.anti_alias) {
         return false;
     }
     crate::dialogs::dont_show_again::alert(app, tl!("No pixels are selected."), CAM_NO_PIXELS_PREF);
     true
 }
 
-/// Whether the lasso through `points` encloses any area: at least three points and a polygon of at
-/// least half a pixel (shoelace), so a straight line, however long, encloses none.
-fn encloses_area(points: &[[f64; 2]]) -> bool {
-    let Some(last) = points.last() else { return false };
-    let mut prev = last;
-    let mut twice = 0.0;
-    for p in points {
-        twice += prev[0] * p[1] - p[0] * prev[1];
-        prev = p;
+/// Whether `select.lasso` through `points` would select any pixel of `canvas`: the same
+/// rasterization (its coverage over the canvas's coordinates), kept where it rounds to at least
+/// 1/255 as the selection stores it. Only the lasso's bounds are rasterized, a strip of rows at a
+/// time, stopping at the first selected pixel.
+fn lasso_selects_pixels(points: &[[f64; 2]], canvas: photocraft_geom::Rect, anti_alias: bool) -> bool {
+    const STRIP: i32 = 64;
+    // As `select.lasso` reads the points.
+    let pts: Vec<(f32, f32)> = points.iter().map(|p| (p[0] as f32, p[1] as f32)).collect();
+    if pts.len() < 3 {
+        return false;
     }
-    points.len() >= 3 && twice.abs() >= 1.0
+    let (mut lo, mut hi) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
+    for &(x, y) in pts.iter().filter(|(x, y)| x.is_finite() && y.is_finite()) {
+        lo = (lo.0.min(x), lo.1.min(y));
+        hi = (hi.0.max(x), hi.1.max(y));
+    }
+    if lo.0 > hi.0 || lo.1 > hi.1 {
+        return false;
+    }
+    // Saturating float-to-int casts; the canvas clips them.
+    let bounds =
+        photocraft_geom::Rect::new(lo.0.floor() as i32, lo.1.floor() as i32, (hi.0.ceil() as i32).saturating_add(1), (hi.1.ceil() as i32).saturating_add(1));
+    let window = bounds.intersect(&canvas);
+    let mut y = window.y0;
+    while y < window.y1 {
+        let strip = photocraft_geom::Rect::new(window.x0, y, window.x1, y.saturating_add(STRIP).min(window.y1));
+        if photocraft_algo::selection::polygon_window(&pts, canvas, strip, anti_alias).iter().any(|v| *v * 255.0 >= 0.5) {
+            return true;
+        }
+        y = strip.y1;
+    }
+    false
 }
 
 /// `paint.contentAwareMove`'s params for a drag by `offset`, from the options bar.
