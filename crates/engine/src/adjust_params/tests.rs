@@ -477,6 +477,20 @@ fn exposure_eyedropper_accepts_dim_samples_within_range() {
     assert!(exposure_eyedropper(&json!({}), CurvesEyedropper::White, [0.0; 3], ColorMode::Rgb).is_err(), "black stays refused");
 }
 
+/// #9288 review: with only Red targeted, Exposure moves only red, so White Point reads the
+/// sample's red value, not its luma: in a 32-bit document (Exposure on the stored values) red
+/// goes to white and green and blue are left alone.
+#[test]
+fn exposure_white_point_on_one_targeted_channel_reads_that_channel() {
+    let mut s = crate::Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
+    s.execute("edit.fill", json!({"color": [0.2, 0.8, 0.8]})).unwrap();
+    s.execute("image.adjustments.exposure", json!({"eyedropper": {"point": "white", "at": [2, 2]}, "target": {"color": 0}})).unwrap();
+    let px: Vec<f32> = serde_json::from_value(s.execute("document.pixel", json!({"x": 2, "y": 2})).unwrap()).unwrap();
+    assert!(px[0] > 0.99, "the targeted red goes to white: {px:?}");
+    assert!((px[1] - 0.8).abs() < 0.01 && (px[2] - 0.8).abs() < 0.01, "green and blue are untouched: {px:?}");
+}
+
 /// #9288 review: an Offset already past the target leaves no exposure that reaches it, so the
 /// pick is refused rather than reported as a −20-stop success.
 #[test]

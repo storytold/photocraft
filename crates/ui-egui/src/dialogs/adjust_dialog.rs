@@ -65,6 +65,11 @@ pub fn sample_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
         return true;
     }
     let Some(sample) = crate::canvas::composite_color(app, x, y) else { return true };
+    let sample = if kind == "exposure" {
+        photocraft_engine::adjust_params::exposure_pick_sample(sample, photocraft_engine::color_channels::explicit(&base, 3).ok().flatten(), mode)
+    } else {
+        sample
+    };
     let params = match photocraft_engine::adjust_params::adjustment_eyedropper(&kind, &base, eyedropper, sample, mode) {
         Ok(adjustment) => photocraft_engine::adjust_params::to_params(&adjustment),
         Err(error) => {

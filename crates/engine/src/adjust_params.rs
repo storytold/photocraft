@@ -842,6 +842,16 @@ pub fn exposure_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32;
     Ok(adjustment)
 }
 
+/// The colour an Exposure pick reads (#9288 review): with one colour channel of an RGB document
+/// targeted, Exposure moves only that channel, so the pick reads that channel's value, not the
+/// sample's luma.
+pub fn exposure_pick_sample(sample: [f32; 3], colors: Option<crate::color_channels::ColorChannels>, mode: ColorMode) -> [f32; 3] {
+    match colors.filter(|c| c.len() == 1).and_then(|c| c.indices().next()) {
+        Some(i) if mode == ColorMode::Rgb => sample.get(i).map_or(sample, |&v| [v; 3]),
+        _ => sample,
+    }
+}
+
 /// Resolve a merged-composite colour sample into the black, luma-preserving neutral-gray or white target.
 /// RGB uses the three channel curves. Grayscale uses the composite curve and has no gray picker.
 /// Other colour models stay unsupported until their native channel semantics can be sampled.
@@ -899,6 +909,7 @@ pub fn eyedropper_from_params(s: &crate::Session, kind: &str, p: &Value) -> Resu
     let Some(e) = p.get("eyedropper") else { return Ok(None) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (picker, sample) = eyedropper_sample(&d.doc, None, e)?;
+    let sample = if kind == "exposure" { exposure_pick_sample(sample, crate::color_channels::target(s, p).ok().flatten(), d.doc.mode) } else { sample };
     let mut base = p.clone();
     if let Some(o) = base.as_object_mut() {
         o.remove("eyedropper");
