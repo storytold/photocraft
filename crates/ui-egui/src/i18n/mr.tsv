@@ -3911,7 +3911,7 @@ curves	Smooth	गुळगुळीत करा
 	Scroll menu down	मेनू खाली स्क्रोल करा
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	पुढे जाण्यापूर्वी हा मजकूर लेयर रास्टराइझ करणे आवश्यक आहे. त्याचा मजकूर यापुढे संपादित करता येणार नाही. मजकूर रास्टराइझ करायचा?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	पुढे जाण्यापूर्वी हा आकृती लेयर रास्टराइझ करणे आवश्यक आहे. तो यापुढे आकृती म्हणून संपादित करता येणार नाही. आकृती रास्टराइझ करायची?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	पुढे जाण्यापूर्वी हा स्मार्ट ऑब्जेक्ट रास्टराइझ करणे आवश्यक आहे. त्याची सामग्री यापुढे संपादित करता येणार नाही. स्मार्ट ऑब्जेक्ट रास्टराइझ करायचा?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	पुढे जाण्यापूर्वी हा स्मार्ट ऑब्जेक्ट रास्टराइझ करणे आवश्यक आहे. “सामग्री संपादित करा” यापुढे उपलब्ध राहणार नाही. स्मार्ट ऑब्जेक्ट रास्टराइझ करायचा?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	पुढे जाण्यापूर्वी हा फिल लेयर रास्टराइझ करणे आवश्यक आहे. त्याची भरण सामग्री यापुढे संपादित करता येणार नाही. लेयर रास्टराइझ करायचा?
 	This layer must be rasterized before proceeding.	पुढे जाण्यापूर्वी हा लेयर रास्टराइझ करणे आवश्यक आहे.
 	Color Picker (Background Color)	रंग निवडक (पार्श्वभूमी रंग)
@@ -4847,3 +4847,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Use relative positioning for reference point	संदर्भ बिंदूसाठी सापेक्ष स्थान वापरा
 	{label} is writing the file and can no longer be canceled	{label} फाइल लिहीत आहे आणि आता रद्द करता येणार नाही
 @plural	{what}: {n} file failed|{what}: {n} files failed	{what}: {n} फाइल अयशस्वी|{what}: {n} फाइल्स अयशस्वी
+	Click and move left or right to scale using the Zoom Tool (OpenGL only)	झूम साधनाने आकार बदलण्यासाठी क्लिक करून डावीकडे किंवा उजवीकडे हलवा (फक्त OpenGL)
+	Resize windows when zooming using the Zoom Tool	झूम साधनाने झूम करताना विंडोचा आकार बदला
+	Useful mixer brush combinations	उपयुक्त मिक्सर ब्रश संयोजने
+	Zoom current window to 1:1	सध्याची विंडो 1:1 वर झूम करा
+	Zoom current window to fill the screen	सध्याची विंडो स्क्रीन भरेपर्यंत झूम करा
+	Zoom current window to screen size	सध्याची विंडो स्क्रीनच्या आकारापर्यंत झूम करा
+	brush tool	ब्रश साधन
