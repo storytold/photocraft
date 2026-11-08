@@ -391,6 +391,33 @@ fn the_straighten_layer_button_greys_out_where_the_command_is_off() {
     }
 }
 
+/// A refused click says so. `PhotocraftApp::run` reports what the *command* answered in the status
+/// line, but a refusal raised before it runs - the automation gate a control/MCP-driven click goes
+/// through - returns early, so the button has to report it itself. As the toolbar flyout does
+/// (`a_failed_edit_toolbar_from_the_flyout_reports_its_error_in_the_status_bar`).
+#[test]
+fn a_denied_synthetic_click_reports_the_refusal_instead_of_saying_nothing() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let (mut app, _) = app();
+    on_a_layer(&mut app);
+    rule(&mut app);
+    app.automation_input = true;
+    app.services.automation_command =
+        Some(Box::new(|id, _| if id == "image.analysis.straightenLayer" { Err("straightening is denied".into()) } else { Ok(()) }));
+    let mut h = ruler_bar(app);
+    assert!(!h.get_by_label("Straighten Layer").accesskit_node().is_disabled(), "the layer is a valid target");
+    let steps = h.state().session.active().unwrap().history.past_len();
+    h.get_by_label("Straighten Layer").click();
+    h.run_steps(2);
+    let st = h.state();
+    assert_eq!(st.ui.status, "straightening is denied", "the refusal reaches the status line");
+    assert!(st.ui.status_error, "as an error");
+    assert!(alerts(st).is_empty(), "the alert stays the hidden layer's own");
+    let now = st.session.active().unwrap();
+    assert!(now.doc.measurement.ruler.is_some(), "nothing ran: the ruler line is still up");
+    assert_eq!(now.history.past_len(), steps, "and nothing was recorded");
+}
+
 /// #12033: a hidden target layer is the one state that keeps its button. The click answers with the
 /// reference's alert - its measured message and an OK button - instead of the status line, and the
 /// document, its History and the ruler line stay as they were.

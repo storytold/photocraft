@@ -535,13 +535,20 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             // layer locked in place (#12033).
             let straighten = app.session.is_enabled("image.analysis.straightenLayer");
             if ui.add_enabled_ui(straighten, |ui| crate::widgets::secondary_button(ui, tl!("Straighten Layer"), 0.0)).inner.clicked() {
-                // A hidden target layer keeps the button on and answers the click with the
-                // reference's alert (its message and an OK button), changing nothing (#12033).
-                if let Err(why) = app.run("image.analysis.straightenLayer", json!({}))
-                    && why == photocraft_engine::analysis_cmds::STRAIGHTEN_HIDDEN_ERROR
-                {
-                    let message = photocraft_engine::analysis_cmds::STRAIGHTEN_HIDDEN_ERROR;
-                    app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(message)}).as_object().cloned().unwrap_or_default());
+                let hidden = photocraft_engine::analysis_cmds::STRAIGHTEN_HIDDEN_ERROR;
+                if let Err(why) = app.run("image.analysis.straightenLayer", json!({})) {
+                    // A hidden target layer keeps the button on and answers the click with the
+                    // reference's alert (its message and an OK button), changing nothing (#12033).
+                    if why == hidden {
+                        app.ui.open_dialog(DialogKind::Error, json!({"message": tl!(hidden)}).as_object().cloned().unwrap_or_default());
+                    }
+                    // Every other refusal goes to the status line, as the eraser tools do. What the
+                    // command itself answered is reported there by `PhotocraftApp::run`, but a
+                    // refusal raised before it runs - the automation gate a control or MCP-driven
+                    // click passes - returns early, and a click that says nothing reads as a dead
+                    // button (#12148).
+                    app.ui.status = why;
+                    app.ui.status_error = true;
                 }
             }
             if ui.add_enabled_ui(has, |ui| crate::widgets::secondary_button(ui, tl!("Clear"), 0.0)).inner.clicked() {
