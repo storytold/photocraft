@@ -478,12 +478,19 @@ fn commit_here(app: &mut PhotocraftApp, mods: egui::Modifiers) {
     // commit makes what a Type Mask tool's commit makes: the glyphs become the selection and the
     // layer goes, in the typing session's one history step - which keeps the "New Type Layer" name
     // it was opened with, as Photoshop's state there is named.
-    // `photocraft_engine::type_cmds::commits_as_selection` says why the check belongs to the commit
-    // and not to the `type.create` command. Two cases are not measured in these modes and keep
-    // today's behaviour: an edit of a layer the session did not create (`ed.created`), and a commit
-    // with no text in it, which is the empty-layer clean-up below.
-    let leaves_a_selection = ed.created && app.session.active().is_some_and(|st| photocraft_engine::type_cmds::commits_as_selection(st.doc.mode));
-    if leaves_a_selection && !text.trim().is_empty() {
+    // `photocraft_engine::type_cmds::commits_as_selection` holds the ticket's scope - the two modes
+    // and the measured horizontal point text - and why the check belongs to the commit and not to
+    // the `type.create` command. Three cases are not measured in these modes and keep today's
+    // behaviour: an edit of a layer the session did not create (`ed.created`), paragraph (box) and
+    // vertical text, whose editability a coverage mask could not give back, and a commit with no
+    // text in it, which is the empty-layer clean-up below.
+    let session_layer = LayerId(ed.layer);
+    let converts = app
+        .session
+        .active()
+        .is_some_and(|st| text_layer(&st.doc, session_layer).is_some_and(|t| photocraft_engine::type_cmds::commits_as_selection(st.doc.mode, t)));
+    let leaves_a_selection = ed.created && !text.trim().is_empty() && converts;
+    if leaves_a_selection {
         if let Err(e) = app.run("type.createSelection", json!({"layer": ed.layer, "removeLayer": true, "operation": "new", "coalesce": ed.session})) {
             // The refused step left the document alone: keep today's type layer, so what was typed
             // is not lost with a selection that was never made.
@@ -558,7 +565,7 @@ mod indexed_commit_tests {
     use crate::PhotocraftApp;
     use crate::state::Tool;
     use crate::tools::type_tool::pointer_up;
-    use photocraft_doc::{ColorMode, LayerContent};
+    use photocraft_doc::{ColorMode, LayerContent, LayerId, TextLayer};
     use serde_json::json;
 
     /// A new transparent document in `mode`: `rgb` keeps today's behaviour, `indexed` and `bitmap`
@@ -585,6 +592,11 @@ mod indexed_commit_tests {
 
     fn doc_mode(app: &PhotocraftApp) -> ColorMode {
         app.session.active().unwrap().doc.mode
+    }
+
+    fn text_of(app: &PhotocraftApp, id: LayerId) -> Option<TextLayer> {
+        let doc = app.session.active().unwrap().doc.clone();
+        super::text_layer(&doc, id).cloned()
     }
 
     fn text_layers(app: &PhotocraftApp) -> usize {
@@ -660,6 +672,38 @@ mod indexed_commit_tests {
             assert_eq!(layers(&app), layers_before, "{mode}: no layer is added");
             assert!(selection(&app).is_none(), "{mode}: nothing is selected");
             assert_eq!(states(&app), states_before, "{mode}: and no history state");
+        }
+    }
+
+    /// #12041 measures the horizontal point text you click and type. Paragraph (box) text and
+    /// vertical type are on its *Not measured* list, whose rule is that they keep today's
+    /// behaviour - and today's behaviour is the right one here anyway: a coverage mask cannot bring
+    /// back a box that reflows or a column that runs down the page, so their editable layer stays.
+    #[test]
+    fn paragraph_and_vertical_text_keep_their_type_layer_in_indexed_and_bitmap() {
+        use photocraft_doc::text::{Orientation, TextShape};
+
+        for mode in ["indexed", "bitmap"] {
+            // A dragged paragraph box.
+            let mut boxed = app(mode);
+            pointer_up(&mut boxed, [40.0, 60.0], [320.0, 180.0]);
+            insert(&mut boxed, "Hi");
+            let box_layer = LayerId(boxed.ui.text_edit.as_ref().unwrap().layer);
+            assert!(matches!(text_of(&boxed, box_layer).map(|t| t.shape), Some(TextShape::Box { .. })), "{mode}: the setup made paragraph text");
+            commit(&mut boxed);
+            assert_eq!(text_layers(&boxed), 1, "{mode}: paragraph text keeps its editable layer");
+            assert!(selection(&boxed).is_none(), "{mode}: and is not turned into a selection");
+
+            // Vertical point text.
+            let mut column_app = app(mode);
+            column_app.ui.tool = Tool::VerticalType;
+            pointer_up(&mut column_app, [80.0, 120.0], [80.0, 120.0]);
+            insert(&mut column_app, "Hi");
+            let column = LayerId(column_app.ui.text_edit.as_ref().unwrap().layer);
+            assert!(text_of(&column_app, column).is_some_and(|t| t.orientation == Orientation::Vertical), "{mode}: the setup made vertical text");
+            commit(&mut column_app);
+            assert_eq!(text_layers(&column_app), 1, "{mode}: vertical text keeps its editable layer");
+            assert!(selection(&column_app).is_none(), "{mode}: and is not turned into a selection");
         }
     }
 }

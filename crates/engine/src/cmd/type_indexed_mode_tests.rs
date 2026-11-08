@@ -13,9 +13,16 @@
 //! layer they edit and show on canvas with that command, on the first click already with text in it
 //! when Preferences > Type > "Fill new type layers with placeholder text" is on (the default), so a
 //! mode branch there would take away the layer the session types into.
+//!
+//! The issue measures the horizontal point text you click and type, and lists paragraph text and
+//! vertical type under *Not measured*, where its rule is that today's behaviour stays:
+//! [`only_the_measured_horizontal_point_text_converts_in_these_modes`] pins that half of the check,
+//! and [`an_uncoalesced_edit_between_typing_and_the_commit_splits_the_states`] what happens to the
+//! states when an edit outside the session's coalesce group comes between the typing and the commit.
 
-use super::type_cmds::{commits_as_selection, name_selection_commit};
+use super::type_cmds::{commits_as_selection, name_selection_commit, new_text_layer};
 use super::*;
+use photocraft_doc::text::{Orientation, TextShape};
 
 /// The typing session's coalesce key, as `ui-egui`'s `session_key` gives one.
 const SESSION: &str = "type-session-12041";
@@ -166,7 +173,8 @@ fn rgb_grayscale_cmyk_and_lab_keep_making_type_layers_at_every_depth() {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 240, "height": 120, "mode": id, "depth": depth, "background": "transparent"})).unwrap();
             assert_eq!(mode(&s), want, "{id} at {depth} bit: the document really is that mode");
-            assert!(!commits_as_selection(want), "{id} keeps type layers");
+            let point = new_text_layer(&s, &typed(false), "type.create").unwrap();
+            assert!(!commits_as_selection(want, &point), "{id} keeps type layers");
 
             let layer = s.execute("type.create", typed(true)).unwrap()["layer"].as_u64().unwrap();
             // Today's commit: rename the session's layer in the same step, select nothing.
@@ -216,5 +224,64 @@ fn a_refused_conversion_leaves_the_typed_text_and_the_document_alone() {
         assert_eq!(pixels(&s), pixels_before, "{name}: the refused step painted nothing");
         assert_eq!(history(&s).len(), steps, "{name}: the refused step is no new state");
         assert_eq!(history(&s).last().cloned(), label, "{name}: the refused conversion renames nothing");
+    }
+}
+
+/// The measurement covers horizontal point text. Paragraph (box) text and vertical type are on the
+/// issue's *Not measured* list, where its rule is that today's behaviour stays - and a coverage mask
+/// could not give a reflowing box or a stacked column back anyway, so their editable layer stays.
+#[test]
+fn only_the_measured_horizontal_point_text_converts_in_these_modes() {
+    let s = indexed();
+    let point = new_text_layer(&s, &typed(false), "type.create").unwrap();
+    assert!(matches!(point.shape, TextShape::Point) && point.orientation == Orientation::Horizontal, "the fixture is horizontal point text");
+
+    let mut box_params = typed(false);
+    box_params["box"] = json!([20.0, 20.0, 180.0, 80.0]);
+    let paragraph = new_text_layer(&s, &box_params, "type.create").unwrap();
+    assert!(matches!(paragraph.shape, TextShape::Box { .. }), "the fixture is paragraph text");
+
+    let mut vertical_params = typed(false);
+    vertical_params["orientation"] = json!("vertical");
+    let vertical = new_text_layer(&s, &vertical_params, "type.create").unwrap();
+    assert_eq!(vertical.orientation, Orientation::Vertical, "the fixture is vertical text");
+
+    for mode in [ColorMode::Indexed, ColorMode::Bitmap] {
+        assert!(commits_as_selection(mode, &point), "{mode:?}: the measured text becomes the selection");
+        assert!(!commits_as_selection(mode, &paragraph), "{mode:?}: paragraph text keeps its type layer");
+        assert!(!commits_as_selection(mode, &vertical), "{mode:?}: vertical text keeps its type layer");
+    }
+}
+
+/// An edit that does not carry the session's `coalesce` key ends its coalesce group - in the tool
+/// that is the deliberately per-press Alt+arrow kerning step. The commit then makes a state of its
+/// own, which is what the Type Mask tools' commit and the plain layer's rename do in the same
+/// situation today; nothing is mis-named and nothing else moves.
+#[test]
+fn an_uncoalesced_edit_between_typing_and_the_commit_splits_the_states() {
+    for (name, make) in [("Indexed Color", indexed as fn() -> Session), ("Bitmap", bitmap as fn() -> Session)] {
+        let mut s = make();
+        let layer = s.execute("type.create", typed(true)).unwrap()["layer"].as_u64().unwrap();
+        // The stand-in for that kerning press: a real edit under no coalesce key.
+        s.execute("type.edit", json!({"layer": layer, "antialias": "sharp"})).unwrap();
+        let before = history(&s);
+        assert_eq!(before.last().map(String::as_str), Some("Edit Type"), "{name}: the unkeyed edit is a state of its own");
+
+        commit(&mut s, layer);
+
+        let h = history(&s);
+        assert_eq!(h.len(), before.len() + 1, "{name}: the commit is a further state once the group ended: {h:?}");
+        assert_eq!(h.last().map(String::as_str), Some("New Type Layer"), "{name}: named for the type layer either way");
+        assert_eq!(h[h.len() - 2].as_str(), "Edit Type", "{name}: the edit between them keeps its own name");
+        assert_eq!(text_layers(&s), 0, "{name}: still no type layer is left");
+        assert!(s.active().unwrap().doc.selection.is_some(), "{name}: still the glyphs are selected");
+
+        s.execute("edit.undo", json!({})).unwrap();
+        assert!(s.active().unwrap().doc.selection.is_none(), "{name}: one undo takes the conversion");
+        assert_eq!(text_layers(&s), 1, "{name}: which brings the working layer back, as the mask tools' undo does");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(text_layers(&s), 1, "{name}: the next undo takes the unkeyed edit, not the session");
+        s.execute("edit.undo", json!({})).unwrap();
+        assert_eq!(text_layers(&s), 0, "{name}: and the third one takes the typing session");
     }
 }
