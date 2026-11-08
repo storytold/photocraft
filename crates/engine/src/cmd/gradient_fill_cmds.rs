@@ -339,7 +339,9 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let new = apply_set(&layer, &fill, canvas, p, fg, bg)?;
     if new != fill {
-        replace_fill(s, id, "Edit Gradient Fill", new)?;
+        // A canvas drag on the layer redraws it ("redraw": true), as the reference names it (#12014).
+        let label = if p.get("redraw").and_then(Value::as_bool) == Some(true) { "Redraw gradient" } else { "Edit Gradient Fill" };
+        replace_fill(s, id, label, new)?;
     }
     describe(s, id)
 }
@@ -566,7 +568,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Edit Gradient Fill",
             menu: &[],
             shortcut: None,
-            params: r##"{"layer":id?,"from":[x,y]?,"to":[x,y]?,"style":"linear|radial|angle|reflected|diamond"?,"angle":deg?,"scale":%?,"offset":[x%,y%]?,"reverse":bool?,"dither":bool?,"align":bool?,"stops":[[t,"#rrggbb"|"#rrggbbaa"|[r,g,b,a]|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]?,"midpoints":[0.05..0.95 per segment]?} → the gradient (see gradient.fill.get)"##,
+            params: r##"{"layer":id?,"from":[x,y]?,"to":[x,y]?,"style":"linear|radial|angle|reflected|diamond"?,"angle":deg?,"scale":%?,"offset":[x%,y%]?,"reverse":bool?,"dither":bool?,"align":bool?,"stops":[[t,"#rrggbb"|"#rrggbbaa"|[r,g,b,a]|"foreground"|"background"],…]?,"transparency":[[t,0..100],…]?,"midpoints":[0.05..0.95 per segment]?,"redraw":bool?} → the gradient (see gradient.fill.get); "redraw":true names the History state Redraw gradient (a canvas drag)"##,
             enabled: has_gradient_fill,
             run: set,
             journal: true,

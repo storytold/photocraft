@@ -310,7 +310,7 @@ fn finish(app: &mut PhotocraftApp) {
                 return;
             }
             let _ = match redraw {
-                Some(id) => app.run(cmds::SET, json!({"layer": id.0, "from": from, "to": to})),
+                Some(id) => app.run(cmds::SET, json!({"layer": id.0, "from": from, "to": to, "redraw": true})),
                 None => {
                     let p = create_params(app, from, to);
                     app.run(cmds::CREATE, p)

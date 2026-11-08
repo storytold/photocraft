@@ -161,7 +161,13 @@ fn gradient(s: &mut Session, p: &Value) -> Result<Value> {
     let blend = p.get("mode").and_then(Value::as_str).and_then(blend_from_str).unwrap_or(photocraft_color::BlendMode::Normal);
     let dither = b(p, "dither", true); // Photoshop dithers gradients by default (reduces banding).
     let layer = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { s.active().and_then(|st| st.active_layer) };
-    s.edit("Gradient", |doc, _| {
+    // The reference's History names (#12014); other targets (a channel, Quick Mask) keep "Gradient".
+    let label = match crate::channel_cmds::target_of(p) {
+        crate::channel_cmds::Target::Pixels => "Draw classic gradient",
+        crate::channel_cmds::Target::Mask => "Draw classic gradient on mask",
+        _ => "Gradient",
+    };
+    s.edit(label, |doc, _| {
         let sel = doc.selection.clone();
         let area = sel.as_ref().map(|m| m.content_bounds()).filter(|r| !r.is_empty()).unwrap_or_else(|| doc.bounds()).intersect(&doc.bounds());
         let (surf, lock) = crate::channel_cmds::target_surface(doc, layer, p)?;
