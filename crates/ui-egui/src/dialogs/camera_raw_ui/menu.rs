@@ -75,6 +75,18 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
 }
 
 fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Option<Result<Value, String>> {
+    // Auto with settings: Auto first (each selected raw its own), then the settings on top of it,
+    // on the shown raw and on the other selected ones alike.
+    if ui.get("auto").and_then(Value::as_bool) == Some(true)
+        && ui.get("set").is_some()
+        && let Value::Object(mut rest) = ui.clone()
+    {
+        rest.remove("auto");
+        if let Some(Err(e)) = menu_update(app, ctx, &json!({"auto": true})) {
+            return Some(Err(e));
+        }
+        return menu_update(app, ctx, &Value::Object(rest));
+    }
     // Stage both filter and presentation updates. No texture, preference or dialog mutation
     // occurs until every part of the request has passed validation.
     let d = app.camera_raw.as_ref()?;

@@ -1718,3 +1718,18 @@ fn a_raw_whose_background_develop_is_cancelled_is_not_lost() {
         None => assert_eq!(app.session.documents().len(), 1, "the raw is neither open nor waiting"),
     }
 }
+
+/// Auto and a tone setting in one request: Auto first, the setting on top, for the shown raw and
+/// the other selected ones alike.
+#[test]
+fn auto_with_a_setting_keeps_the_setting_on_every_selected_raw() {
+    let (mut app, ctx, _) = filmstrip_app(2);
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true, "set": {"exposure": 0.7}}})).unwrap().unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().params.exposure, 0.7);
+    let (other, _) = app.raw_shelf[1].kept.clone().unwrap();
+    let mut auto = CameraRaw::default();
+    filmstrip::auto_tone(&app, &app.raw_shelf[1].raw, &mut auto);
+    assert_eq!(other.exposure, 0.7, "the explicit exposure wins over Auto's");
+    assert_eq!((other.whites, other.blacks), (auto.whites, auto.blacks), "the rest is the raw's own Auto");
+}

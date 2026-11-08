@@ -152,6 +152,8 @@ pub(super) fn keep_settings(app: &mut PhotocraftApp) {
     if !developed.is_empty() {
         let (px, w, h) = shrink(developed, d.pw, d.ph);
         held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
+        // An older redraw still on a worker must not land over it.
+        (held.redraw, held.stale) = (None, false);
         held.tex = None;
     }
 }
@@ -386,6 +388,8 @@ pub(super) fn request(app: &mut PhotocraftApp, ctx: &egui::Context, film: &Value
         }
     }
     let flag = |k: &str| film.get(k).and_then(Value::as_bool) == Some(true);
+    // An edit not yet synced goes to the raws selected when it was made, not to the new selection.
+    sync_selected(app);
     match (film.get("click"), flag("selectAll")) {
         (Some(_), true) => Err("Camera Raw filmstrip takes click or selectAll, not both".into()),
         (None, true) => {
@@ -574,6 +578,8 @@ pub(super) fn refresh_shown_thumbnail(app: &mut PhotocraftApp) -> bool {
     let Some(held) = app.raw_shelf.get_mut(i) else { return false };
     let (px, w, h) = shrink(&d.processed, d.pw, d.ph);
     held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
+    // An older redraw still on a worker (from before it was shown) must not land over it.
+    (held.redraw, held.stale) = (None, false);
     held.tex = None;
     true
 }
