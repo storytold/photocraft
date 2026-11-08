@@ -16,7 +16,9 @@ fn five_counts() -> Session {
 
 fn record(s: &mut Session, source: &str) -> Value {
     let r = s.execute("image.analysis.recordMeasurements", json!({"source": source})).unwrap();
-    r["rows"][0]["values"].clone()
+    let rows = r["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 1, "{source}: {r}");
+    rows[0]["values"].clone()
 }
 
 #[test]
@@ -35,7 +37,16 @@ fn other_rows_keep_their_labels_and_the_counter_is_shared() {
     let mut s = five_counts();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
     let selection = record(&mut s, "selection");
-    assert!(selection["label"].as_str().is_some_and(|l| !l.starts_with("Count")), "{selection}");
+    assert_eq!(selection["label"], json!("Measurement 1"), "{selection}");
     let count = record(&mut s, "count");
     assert_eq!(count["label"], json!("Count 2"), "{count}");
+    // `auto` picks the selection over the counts, and keeps its label.
+    let auto = record(&mut s, "auto");
+    assert_eq!(auto["source"], json!("Selection"), "{auto}");
+    assert_eq!(auto["label"], json!("Measurement 3"), "{auto}");
+    s.execute("image.analysis.rulerTool", json!({"start": [0, 0], "end": [3, 4]})).unwrap();
+    let ruler = record(&mut s, "ruler");
+    assert_eq!(ruler["label"], json!("Measurement 4"), "{ruler}");
+    let count = record(&mut s, "count");
+    assert_eq!(count["label"], json!("Count 5"), "{count}");
 }
