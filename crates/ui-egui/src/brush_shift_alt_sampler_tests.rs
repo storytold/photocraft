@@ -67,9 +67,10 @@ fn at_the_limit_the_click_adds_nothing_and_says_so() {
     for i in 0..10 {
         app.run("view.colorSamplers.add", json!({"x": 10 + i * 20, "y": 10})).unwrap();
     }
-    let fg = foreground(&app);
+    let (fg, before) = (foreground(&app), steps(&app));
     click(&mut app, 200.0, 150.0, SHIFT_ALT);
     assert_eq!(samplers(&mut app).len(), 10);
+    assert_eq!(steps(&app), before, "nothing painted");
     assert!(app.ui.status.contains("limit"), "the Color Sampler tool's limit message: {:?}", app.ui.status);
     assert!(!app.ui.status_error, "reported as the Color Sampler tool does");
     assert_eq!(foreground(&app), fg);
