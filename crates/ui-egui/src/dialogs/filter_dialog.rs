@@ -769,6 +769,29 @@ fn uses_angle_dial(command: &str, key: &str) -> bool {
 /// eyedropper like Photoshop's. While armed, the next click on the image writes the merged
 /// composite colour into the `color` field (the same sampler the Color Picker uses).
 const REPLACE_COLOR: &str = "image.adjustments.replaceColor";
+
+/// Selective Color's four sliders, in the order of the command's per-colour `[c, m, y, k]` arrays.
+const SELECTIVE_INKS: [&str; 4] = ["cyan", "magenta", "yellow", "black"];
+
+fn is_selective_color(command: &str) -> bool {
+    command.ends_with(".selectiveColor")
+}
+
+/// Selective Color's Colors menu moved to `to`: the sliders' values are kept for the colour that
+/// was shown, as its `[c, m, y, k]` array, and the sliders show `to`'s own values (0 until set).
+/// OK then sends every colour's array, so each of the nine keeps its own edit (#11463).
+fn switch_selective_color(f: &mut Map<String, Value>, to: &str) {
+    let from = f.get("colors").and_then(Value::as_str).unwrap_or("reds").to_string();
+    if from == to {
+        return;
+    }
+    let shown: Vec<Value> = SELECTIVE_INKS.iter().map(|k| f.get(*k).cloned().unwrap_or(json!(0.0))).collect();
+    f.insert(from, Value::Array(shown));
+    let saved = f.get(to).and_then(Value::as_array).filter(|a| a.len() == 4).cloned().unwrap_or_else(|| vec![json!(0.0); 4]);
+    for (k, v) in SELECTIVE_INKS.iter().zip(saved) {
+        f.insert((*k).to_string(), v);
+    }
+}
 /// What OK on an edited smart filter runs (`smart_ui::confirm_command`).
 const SMART_FILTER_SET_PARAMS: &str = "layer.smartFilter.setParams";
 const COLOR_EYEDROPPER: &str = "__colorEyedropper";
@@ -981,6 +1004,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         cur = "channel".into();
                     } else if depth {
                         f.remove("depthChannel");
+                    }
+                    if is_selective_color(&cmd) && p.key == "colors" {
+                        switch_selective_color(f, &cur);
                     }
                     f.insert(p.key.clone(), json!(cur));
                 });
