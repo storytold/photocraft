@@ -840,7 +840,8 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     app.ui.docking_reveal = None;
     app.ui.docking_generation = app.ui.docking_generation.wrapping_add(1);
     app.ui.docking = None;
-    app.ui.docking_essentials = false;
+    // Essentials adds a column of panel icons beside the dock (`panel_docking::essentials`).
+    app.ui.docking_essentials = app.ui.workspace == "Essentials";
     app.ui.docking_kept = None;
     app.ui.docking_returns.clear();
     app.ui.docking_collapsed.clear();
@@ -854,11 +855,7 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
         // Color includes Swatches; Navigator keeps the pixel canvas easy to inspect.
         "Pixel Art" => (true, true, true, false, false),
         "Motion" => (false, false, true, false, true),
-        _ => {
-            // Essentials adds a column of panel icons beside the dock (`panel_docking::essentials`).
-            app.ui.docking_essentials = true;
-            (false, true, true, false, true)
-        }
+        _ => (false, true, true, false, true),
     };
     p.navigator = nav;
     p.color = color;

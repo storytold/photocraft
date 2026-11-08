@@ -953,6 +953,12 @@ fn essentials_puts_navigator_history_info_and_type_panels_in_an_icon_column() {
     assert_eq!(groups, [vec!["navigator"], vec!["history"], vec!["info"], vec!["character", "paragraph"]]);
     let shown = &h.state().ui.panels;
     assert!(shown.navigator && shown.history && shown.character, "the Window menu checks the panels in the icon column");
+    // As drawn: the icon column is narrow and on screen, and the dock column keeps its width.
+    let icon = hit_rect(&h, craft_ui::docking::Hit::Icon("navigator".to_owned()));
+    let layers = tab_rect(&h, "layers");
+    assert!(icon.width() < 60.0 && icon.right() <= 1280.0, "{icon:?}");
+    assert!(icon.right() <= layers.left(), "the icons are between the canvas and the dock column: {icon:?} {layers:?}");
+    assert!(1280.0 - icon.right() >= dock.width - 1.0, "the dock column is {} wide", 1280.0 - icon.right());
     for (panel, _, _) in PANELS {
         assert!(layout.contains(&panel.to_string()) || hidden(h.state(), panel), "{panel} is shown or can be reopened");
     }
@@ -965,4 +971,53 @@ fn essentials_puts_navigator_history_info_and_type_panels_in_an_icon_column() {
     crate::menus::apply_workspace(h.state_mut());
     h.run_steps(2);
     assert_eq!(&lay(h.state()).root, &layout.root, "Essentials lays the icon column out again");
+}
+
+/// Every theme's native dock gets the icon column, Studio's floating Properties card too.
+#[test]
+fn essentials_adds_the_icon_column_in_every_theme() {
+    for theme in [crate::theme::ThemeKind::ProMedium, crate::theme::ThemeKind::Studio] {
+        let mut app = app();
+        app.ui.theme = theme;
+        let layout = essentials(&app).layout;
+        assert!(valid(&layout), "{theme:?}");
+        let Some(Node::Split { second, .. }) = &layout.root else { panic!("{theme:?}: {layout:?}") };
+        let Node::Dock { columns, .. } = second.as_ref() else { panic!("{theme:?}: {layout:?}") };
+        assert_eq!(columns.iter().map(|c| c.iconic).collect::<Vec<_>>(), [false, true], "{theme:?}");
+        assert_eq!(layout.floating, legacy(&app).floating, "{theme:?} keeps its floating windows");
+    }
+}
+
+/// Whether the dock column holding `panel` is iconic, or `None` when no dock column holds it.
+fn icon_column_holds(layout: &Layout<String>, panel: &str) -> Option<bool> {
+    let Some(Node::Split { second, .. }) = &layout.root else { return None };
+    let Node::Dock { columns, .. } = second.as_ref() else { return None };
+    columns.iter().find(|c| c.groups.iter().any(|g| g.panels.iter().any(|id| id == panel))).map(|c| c.iconic)
+}
+
+/// A first launch, from loading no saved preferences to the first frame, shows the Essentials
+/// icon column.
+#[test]
+fn a_first_launch_shows_the_essentials_icon_column() {
+    let services = crate::Services { load_prefs: Some(Box::new(|| None)), ..Default::default() };
+    let h = harness(PhotocraftApp::new(photocraft_engine::Session::new(), services), vec2(1280.0, 800.0));
+    assert!(!h.state().ui.docking_essentials, "taken");
+    assert_eq!(icon_column_holds(lay(h.state()), "navigator"), Some(true));
+    assert_eq!(icon_column_holds(lay(h.state()), "layers"), Some(false));
+}
+
+/// A customized workspace already on screen keeps its layout when Essentials was asked for
+/// before it, and the request does not linger for a later frame.
+#[test]
+fn a_customized_workspace_keeps_its_layout_over_a_pending_essentials() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"swatches", "anchor":"layers", "zone":"top"})).unwrap();
+    let custom = lay(&app).clone();
+    app.ui.docking_essentials = true;
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    assert!(!h.state().ui.docking_essentials);
+    assert_eq!(lay(h.state()).root, custom.root);
+    h.state_mut().ui.docking = None;
+    h.run_steps(2);
+    assert!(h.state().ui.docking.is_none(), "no late Essentials layout");
 }

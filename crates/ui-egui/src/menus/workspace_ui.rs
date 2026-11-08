@@ -267,6 +267,8 @@ fn select_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
 /// Apply the current workspace when it is a saved one. Returns false for the built-in presets.
 pub fn apply_custom(app: &mut PhotocraftApp) -> bool {
     let Some(ws) = app.session.prefs().workspaces.get(&app.ui.workspace).cloned() else { return false };
+    // Its own layout, not a pending Essentials one.
+    app.ui.docking_essentials = false;
     // Workspaces saved before the dock layout existed get the default heights.
     app.ui.dock = Default::default();
     crate::dock::apply(app, &ws);

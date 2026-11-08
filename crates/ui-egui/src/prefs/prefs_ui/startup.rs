@@ -28,7 +28,11 @@ pub fn load(app: &mut PhotocraftApp) {
     app.prefs_rt.loaded = true;
     let mut invalid = Vec::new();
     let mut stored = None;
-    if let Some(text) = app.services.load_prefs.as_mut().and_then(|f| f()) {
+    let loaded = app.services.load_prefs.as_mut().map(|f| f());
+    // A first launch (preferences can be saved, none were) opens the Essentials workspace. An
+    // unreadable file is not one: its reset keeps the native dock.
+    let first_launch = matches!(loaded, Some(None));
+    if let Some(text) = loaded.flatten() {
         match app.session.load_prefs_json(&text) {
             Ok(found) => {
                 invalid = found;
@@ -42,8 +46,7 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     // Applies Memory Usage and the scratch disks even when the stored preferences were reset.
     app.session.apply_prefs();
-    // A first launch (preferences can be saved, none were) opens the Essentials workspace.
-    if app.services.load_prefs.is_some() && stored.is_none() {
+    if first_launch {
         app.ui.docking_essentials = true;
     }
     crate::dock::restore(app);

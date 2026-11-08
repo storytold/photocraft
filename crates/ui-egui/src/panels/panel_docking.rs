@@ -99,7 +99,9 @@ const ESSENTIALS_ICONS: [&[&str]; 4] = [&["navigator"], &["history"], &["info"],
 
 /// Window › Workspace › Essentials, and a first launch: the native dock's column, a little
 /// wider, with a column of icons beside it for Navigator, History, Info, and Character with
-/// Paragraph. Each opens as a flyout from its icon, so the canvas keeps its room.
+/// Paragraph. Each opens as a flyout from its icon, so the canvas keeps its room. A dock beside
+/// the canvas is as wide as its columns as drawn, the icon column at its iconic width; the icon
+/// column's `width` is the one it expands to.
 fn essentials(app: &PhotocraftApp) -> Workspace {
     let mut layout = legacy(app);
     if let Some(Node::Split { size, second, .. }) = &mut layout.root
@@ -556,6 +558,8 @@ fn app_owned(app: &mut PhotocraftApp, command: DockCommand<String>) -> Result<Va
 /// else the native dock's arrangement.
 pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let area = area_id();
+    // The request is taken either way: a customized workspace already on screen keeps its layout.
+    // Choosing a preset clears the customized one first, and a saved workspace clears the request.
     if std::mem::take(&mut app.ui.docking_essentials) && app.ui.docking.is_none() {
         app.ui.docking = Some(essentials(app));
         app.ui.docking_returns.clear();
