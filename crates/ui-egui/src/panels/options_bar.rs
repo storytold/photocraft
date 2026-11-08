@@ -1,4 +1,6 @@
-use super::brush_controls::{brush_preset_chip, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown};
+use super::brush_controls::{
+    brush_preset_chip, mixer_combination_dropdown, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown,
+};
 use super::properties::{select_and_mask_button, selection_mode_buttons};
 use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, starts_blend_group, vec2, widgets};
 use photocraft_paint::BrushSettings;
@@ -179,7 +181,8 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 }
             }
             ui.add_enabled_ui(!block, |ui| {
-                tip(percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 62.0), tl!("Set opacity for stroke"));
+                // A whole number from 1 to 100, as in Photoshop: 0 paints nothing (#11812).
+                tip(whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 62.0), tl!("Set opacity for stroke"));
                 let pressure = pressure_button(ui, b.pressure_opacity, tl!("Always use pressure for opacity"), brush);
                 if tip(pressure, tl!("Always use Pressure for Opacity. When off, Brush Preset controls pressure")).clicked() {
                     b.pressure_opacity = !b.pressure_opacity;
@@ -215,7 +218,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             opt_label(ui, tl!("Mode"));
             let held = app.held_erase;
             paint_mode_dropdown(ui, "pencil-mode", b, &mut app.ui.tool_options.pencil_clear, held);
-            percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, if t.pro { 62.0 } else { 66.0 });
+            whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, if t.pro { 62.0 } else { 66.0 });
             opt_label(ui, tl!("Smoothing"));
             smoothing_field(ui, b, if t.pro { 58.0 } else { 66.0 });
             widgets::vline(ui, 22.0);
@@ -248,7 +251,7 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
             // A Pencil-mode Eraser is always hard and at full flow (Photoshop).
             let fixed = block || crate::eraser_ui::pencil_mode(app, app.ui.tool);
             ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Hardness"), &mut b.hardness, 0.0..=100.0, 66.0));
-            let opacity = ui.add_enabled_ui(!block, |ui| percent_field(ui, tl!("Opacity"), &mut b.opacity, 0.0..=100.0, 66.0)).inner;
+            let opacity = ui.add_enabled_ui(!block, |ui| whole_percent_field(ui, tl!("Opacity"), &mut b.opacity, 1.0..=100.0, 66.0)).inner;
             tip(opacity, tl!("Set opacity for stroke"));
             let flow = ui.add_enabled_ui(!fixed, |ui| percent_field(ui, tl!("Flow"), &mut b.flow, 1.0..=100.0, 66.0)).inner;
             tip(flow, tl!("Set flow rate for stroke"));
@@ -277,6 +280,9 @@ fn brush_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens,
                 if icons::button(ui, icon, 24.0, *on, tip).clicked() {
                     *on = !*on;
                 }
+            }
+            if let Some(r) = mixer_combination_dropdown(ui, &mut app.ui.tool_options.mixer_combination, &mut b.mixer) {
+                r.on_hover_text(tl!("Useful mixer brush combinations"));
             }
             widgets::vline(ui, 22.0);
             for (label, value) in
@@ -648,25 +654,13 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             // Resize Windows to Fit is Preferences › Zoom Resizes Windows itself, as in
             // Photoshop: one setting, shown in both places (zoom_window_fit.rs).
             let mut fit = app.session.prefs().general.zoom_resizes_windows;
-            if widgets::checkbox(ui, &mut fit, tl!("Resize Windows to Fit")).changed() {
+            if widgets::checkbox(ui, &mut fit, tl!("Resize Windows to Fit")).on_hover_text(tl!("Resize windows when zooming using the Zoom Tool")).changed() {
                 app.session.prefs.edit(|p| p.general.zoom_resizes_windows = fit);
             }
-            widgets::checkbox(ui, &mut app.ui.tool_options.zoom_scrubby, tl!("Scrubby Zoom"));
-            hint(
-                ui,
-                &crate::i18n::fmt(
-                    tl!("Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out"),
-                    &[("key", &crate::shortcuts::pretty("Alt"))],
-                ),
-            );
-            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).clicked()
-                && let Some(i) = app.session.active_index()
-            {
-                app.ui.views[i].fit_pending = true;
-                app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
-                app.ui.views[i].zoom_anchor = None;
-            }
-            if widgets::secondary_button(ui, "100%", 0.0).clicked()
+            widgets::checkbox(ui, &mut app.ui.tool_options.zoom_scrubby, tl!("Scrubby Zoom"))
+                .on_hover_text(tl!("Click and move left or right to scale using the Zoom Tool (OpenGL only)"));
+            // The same three buttons as the Hand bar, with the reference tooltips (#12068).
+            if widgets::secondary_button(ui, "100%", 0.0).on_hover_text(tl!("Zoom current window to 1:1")).clicked()
                 && let Some(i) = app.session.active_index()
             {
                 app.ui.views[i].zoom = 1.0;
@@ -674,6 +668,22 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
                 app.ui.views[i].zoom_anchor = None;
                 app.ui.views[i].fit_pending = false;
                 app.ui.views[i].fill_pending = false;
+            }
+            if widgets::secondary_button(ui, tl!("Fit Screen"), 0.0).on_hover_text(tl!("Zoom current window to screen size")).clicked()
+                && let Some(i) = app.session.active_index()
+            {
+                app.ui.views[i].fit_pending = true;
+                app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                app.ui.views[i].zoom_anchor = None;
+                app.ui.views[i].fill_pending = false;
+            }
+            if widgets::secondary_button(ui, tl!("Fill Screen"), 0.0).on_hover_text(tl!("Zoom current window to fill the screen")).clicked()
+                && let Some(i) = app.session.active_index()
+            {
+                app.ui.views[i].fill_pending = true;
+                app.ui.views[i].request_zoom_animation(app.session.prefs().general.animated_zoom);
+                app.ui.views[i].zoom_anchor = None;
+                app.ui.views[i].fit_pending = false;
             }
         }
         Tool::RotateView => {
@@ -725,6 +735,9 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod zoom_buttons_tests;
 
 /// Width of the Layers panel's Opacity and Fill fields, with room for their pop-up slider's ▾.
 pub(super) const LAYER_PCT_W: f32 = 66.0 + widgets::POPUP_ARROW_W;
@@ -833,6 +846,18 @@ fn percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::op
 /// `own_tip` leaves the tooltip to the caller (the Brush's own texts, #11813).
 fn pressure_button(ui: &mut egui::Ui, on: bool, name: &str, own_tip: bool) -> egui::Response {
     icons::button_with_icon_size_tip(ui, "circle-dot", 24.0, (24.0f32 * 0.52).round(), on, name, !own_tip)
+}
+
+/// [`percent_field`] that keeps whole percents (`33.7` becomes 34 %). A value set elsewhere (a
+/// `tools.setBrush` fraction, an older saved 0) shows as the whole percent in range.
+fn whole_percent_field(ui: &mut egui::Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, width: f32) -> egui::Response {
+    opt_label(ui, label);
+    let mut percent = (*value * 100.0).round().max(*range.start()).min(*range.end());
+    let r = widgets::value_field_named(ui, label, &mut percent, range.clone(), "%", width);
+    if r.changed() {
+        *value = percent.round().max(*range.start()).min(*range.end()) / 100.0;
+    }
+    r
 }
 
 fn hint(ui: &mut egui::Ui, s: &str) {

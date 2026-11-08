@@ -219,15 +219,24 @@ fn dist(a: [f64; 2], b: [f64; 2]) -> f64 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
-/// Shift constrains to 45° steps around `from`.
+/// Shift constrains to 45° steps around `from`, as the reference does (#11985): on a diagonal step
+/// both legs take the smaller of |dx| and |dy| (signs kept), on a 0° or 90° step the dominant
+/// component stays and the other becomes 0, so the ruler never gets longer than the pointer's legs.
 fn constrain(from: [f64; 2], to: [f64; 2], shift: bool) -> [f64; 2] {
     if !shift {
         return to;
     }
     let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
-    let a = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() * std::f64::consts::FRAC_PI_4;
-    let l = dx.hypot(dy);
-    [from[0] + l * a.cos(), from[1] + l * a.sin()]
+    let step = (dy.atan2(dx) / std::f64::consts::FRAC_PI_4).round() as i64;
+    let (cx, cy) = match step.rem_euclid(4) {
+        0 => (dx, 0.0),
+        2 => (0.0, dy),
+        _ => {
+            let leg = dx.abs().min(dy.abs());
+            (leg.copysign(dx), leg.copysign(dy))
+        }
+    };
+    [from[0] + cx, from[1] + cy]
 }
 
 fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
@@ -392,6 +401,18 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 fn nearest_sampler(points: &[[f64; 2]], at: [f64; 2], tol: f64) -> Option<usize> {
     points.iter().enumerate().filter(|(_, q)| dist(**q, at) <= tol).min_by(|a, b| dist(*a.1, at).total_cmp(&dist(*b.1, at))).map(|(i, _)| i)
 }
+
+/// The Color Sampler point under document point `at` on the active document, by the same hit test
+/// a click uses, so the right-click menu acts on the sampler a click would grab.
+pub(crate) fn sampler_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<usize> {
+    if !at.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    nearest_sampler(&app.session.active()?.color_samplers, at, tolerance(app))
+}
+
+#[cfg(test)]
+mod sampler_menu_tests;
 
 /// Show a command error in the status bar without treating the sample-limit message as a fault.
 fn status_on_err(app: &mut PhotocraftApp, r: Result<Value, String>) {
@@ -1113,3 +1134,7 @@ pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 #[cfg(test)]
 #[path = "note_delete_key_tests.rs"]
 mod note_delete_key_tests;
+
+#[cfg(test)]
+#[path = "analysis_ruler_shift_tests.rs"]
+mod analysis_ruler_shift_tests;
