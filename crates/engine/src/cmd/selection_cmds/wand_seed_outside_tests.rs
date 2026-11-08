@@ -19,12 +19,14 @@ fn ramp() -> Session {
     s
 }
 
+/// Anti-alias off: these tests check Contiguous and the modes with hard edges; the soft fringe
+/// near-matching neighbours get is tested in `photocraft_algo`'s wand anti-alias tests.
 fn wand(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
-    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode})).unwrap();
+    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "antiAlias": false})).unwrap();
 }
 
 fn wand_global(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
-    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "contiguous": false})).unwrap();
+    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "contiguous": false, "antiAlias": false})).unwrap();
 }
 
 /// The columns of row 400 that are at least half selected: (first, end), or `None`. Every
