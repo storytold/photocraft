@@ -55,8 +55,16 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         }
     };
     let lib = crate::paint_picker::library(&app.session, ui.ctx());
-    let mut gradients =
-        GradientChoices { presets: &app.session.presets.gradients, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    // A gradient preset's Foreground / Background stops still take the foreground and background
+    // colours, as in Photoshop; only solid paint uses the tool's own colours (#6695).
+    let (session_fg, session_bg) = (app.session.tools.foreground, app.session.tools.background);
+    let mut gradients = GradientChoices {
+        presets: &app.session.presets.gradients,
+        current: &app.session.presets.gradient,
+        recent: &mut app.ui.recent_gradients,
+        fg: session_fg,
+        bg: session_bg,
+    };
     let mut width = stroke.as_ref().map_or(0.0, |s| s.width);
     let stroke_enabled = stroke.as_ref().is_some_and(|s| s.width > 0.0);
     let style = stroke.as_ref().map_or_else(|| o.shape_stroke.clone(), crate::shape_stroke_ui::StrokeOptions::from);

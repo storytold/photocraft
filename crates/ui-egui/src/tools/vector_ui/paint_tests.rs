@@ -1140,3 +1140,23 @@ fn shape_tool_paint_is_independent_of_foreground_and_background() {
     assert_eq!(shape(&app).fill, Some(solid_paint(fill)), "a new foreground leaves the tool fill alone");
     assert_eq!(shape(&app).stroke.as_ref().unwrap().paint, solid_paint(stroke));
 }
+
+/// #6695: the tool's own Fill colour is for solid paint; the Gradient tab's "Foreground to
+/// Background" still runs from the foreground to the background colour, as in Photoshop.
+#[test]
+fn a_gradient_fill_runs_from_the_foreground_to_the_background_colour() {
+    let mut app = app("rgb", 8);
+    app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    assert_eq!(app.ui.tool_options.shape_fill_color, [0.0, 0.0, 0.0, 1.0], "the tool's own fill stays black");
+    let mut h = harness(app, false);
+    h.get_by_label("Fill color").click();
+    h.run_steps(3);
+    h.get_by_label("Gradient").click();
+    h.run_steps(2);
+    let Some(photocraft_doc::Fill::Gradient { stops, .. }) = h.state().ui.tool_options.shape_fill_gradient.clone() else {
+        panic!("the next shape's fill is a gradient")
+    };
+    let ends: Vec<[f32; 3]> = [stops.first(), stops.last()].iter().flatten().map(|(_, c)| [c.c[0], c.c[1], c.c[2]]).collect();
+    assert_eq!(ends, [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], "red to blue, not the tool's black to white");
+    assert_eq!(h.state().ui.tool_options.shape_fill_color, [0.0, 0.0, 0.0, 1.0], "the solid fill colour is unchanged");
+}
