@@ -910,6 +910,7 @@ pub(super) const EVENTS: &[Event] = &[
             "layer.new.layerFromBackground",
             "layer.layerStyle.blendingOptions",
             "layer.smartFilter.blendingOptions",
+            "path.set",
         ],
         from: set_from,
         to: set_to,
@@ -1198,6 +1199,15 @@ pub(super) const EVENTS: &[Event] = &[
         ids: &["file.automate.batch"],
         from: super::steps_batch::batch_from,
         to: super::steps_batch::batch_to,
+    },
+    // Create Droplet (#10710): Photoshop has no string ID for it.
+    Event {
+        code: "CrtD",
+        name: "CrtD",
+        label: "Create Droplet",
+        ids: &["file.automate.createDroplet"],
+        from: super::steps_droplet::droplet_from,
+        to: super::steps_droplet::droplet_to,
     },
     Event { code: "", name: "applyComp", label: "Apply Layer Comp", ids: &["layerComp.apply"], from: apply_comp_from, to: apply_comp_to },
     Event { code: "Stop", name: "stop", label: "Stop", ids: &[STOP_MESSAGE], from: stop_from, to: stop_to },

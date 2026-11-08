@@ -25,8 +25,12 @@ fn minimum_brush() -> BrushSettings {
 }
 
 fn section_harness(section: usize, b: BrushSettings) -> Harness<'static, BrushSettings> {
+    section_harness_width(section, 340.0, b)
+}
+
+fn section_harness_width(section: usize, width: f32, b: BrushSettings) -> Harness<'static, BrushSettings> {
     let mut ready = false;
-    let mut h = Harness::builder().with_size(vec2(340.0, 1100.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(width, 1100.0)).build_ui_state(
         move |ui, b: &mut BrushSettings| {
             if !ready {
                 crate::PhotocraftApp::setup_context(ui.ctx(), theme::ThemeKind::ProMedium);
@@ -334,4 +338,101 @@ fn ellipse_widget_drags_angle_and_roundness() {
     assert!((h.x.abs() - ELLIPSE_R).abs() < 1e-3 && h.y.abs() < 1e-3, "{h:?}");
     let (_, r) = ellipse_drag(EllipseGrab::Roundness, vec2(500.0, 0.0), 90.0, 0.2);
     assert_eq!(r, 1.0);
+}
+
+fn tip_geometry_center(h: &Harness<'static, BrushSettings>) -> egui::Pos2 {
+    fn centre(shape: &egui::Shape) -> Option<egui::Pos2> {
+        match shape {
+            egui::Shape::Circle(c) if c.radius == 40.0 => Some(c.center),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(centre),
+            _ => None,
+        }
+    }
+    h.output().shapes.iter().find_map(|shape| centre(&shape.shape)).unwrap()
+}
+
+#[test]
+fn tip_geometry_fields_precede_the_widget_and_labels_align_in_all_themes() {
+    for kind in theme::ThemeKind::ALL {
+        for width in [280.0, 340.0] {
+            let b = BrushSettings { angle: -23.0, roundness: 0.473, ..Default::default() };
+            let mut h = section_harness_width(0, width, b.clone());
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(3);
+            let centre = tip_geometry_center(&h);
+            let angle = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(-23.0)).unwrap().rect();
+            let roundness = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(47.0)).unwrap().rect();
+            let angle_label = caption_rect(&h, "Angle:");
+            let roundness_label = caption_rect(&h, "Roundness:");
+            assert!(angle.right() + 2.0 < centre.x - 40.0 && roundness.right() + 2.0 < centre.x - 40.0, "{kind:?}, {width}: fields belong left of the widget");
+            assert!((angle.left() - roundness.left()).abs() < 0.5, "{kind:?}, {width}: one numeric column");
+            assert!((angle_label.right() - roundness_label.right()).abs() < 0.5, "{kind:?}, {width}: labels align to the right");
+            assert!((angle_label.center().y - angle.center().y).abs() < 2.0 && (roundness_label.center().y - roundness.center().y).abs() < 2.0);
+            assert_eq!(h.state(), &b, "layout does not round imported values");
+        }
+    }
+}
+
+#[test]
+fn tip_geometry_numeric_edits_keep_units_limits_and_other_settings() {
+    let mut b = BrushSettings { angle: -23.0, roundness: 0.473, hardness: 0.65, spacing: 0.31, flip_x: true, ..Default::default() };
+    let mut h = section_harness(0, b.clone());
+    let angle = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(-23.0)).unwrap();
+    angle.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    b.angle = -22.0;
+    assert_eq!(h.state(), &b);
+    let roundness = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(47.0)).unwrap();
+    roundness.click();
+    h.key_press(egui::Key::ArrowUp);
+    h.run_steps(2);
+    b.roundness = 0.48;
+    assert_eq!(h.state(), &b, "percentage edits retain degrees and the rest of the brush");
+    for (angle, key) in [(-180.0, egui::Key::ArrowDown), (180.0, egui::Key::ArrowUp)] {
+        b.angle = angle;
+        *h.state_mut() = b.clone();
+        h.run_steps(2);
+        let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(f64::from(angle))).unwrap();
+        field.click();
+        h.key_press(key);
+        h.run_steps(2);
+        assert_eq!(h.state(), &b, "angle stays within -180..180 degrees");
+    }
+    for (value, key) in [(1.0, egui::Key::ArrowDown), (100.0, egui::Key::ArrowUp)] {
+        b.roundness = value / 100.0;
+        *h.state_mut() = b.clone();
+        h.run_steps(2);
+        let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().numeric_value() == Some(f64::from(value))).unwrap();
+        field.click();
+        h.key_press(key);
+        h.run_steps(2);
+        assert_eq!(h.state(), &b, "roundness stays within 1..100 percent");
+    }
+}
+
+#[test]
+fn tip_geometry_pointer_drags_keep_angle_and_roundness_independent() {
+    let mut b = BrushSettings { roundness: 0.5, flip_x: true, ..Default::default() };
+    let mut h = section_harness(0, b.clone());
+    let c = tip_geometry_center(&h);
+    drag(&mut h, c + vec2(35.0, 0.0), c + vec2(0.0, -35.0));
+    b.angle = 90.0;
+    assert_eq!(h.state(), &b, "the arrow changes only the angle");
+    let handle = c + roundness_handles(b.angle, b.roundness)[0];
+    // Acquire the dot before moving beyond its hit radius.
+    h.hover_at(handle);
+    h.run_steps(2);
+    h.drag_at(handle);
+    h.run_steps(1);
+    h.hover_at(handle + vec2(-6.5, 0.0));
+    h.run_steps(2);
+    h.hover_at(c + vec2(-ELLIPSE_R * 0.8, 0.0));
+    h.run_steps(2);
+    h.drop_at(c + vec2(-ELLIPSE_R * 0.8, 0.0));
+    h.run_steps(2);
+    b.roundness = 0.8;
+    assert!((h.state().roundness - b.roundness).abs() < 1e-5, "a real handle drag keeps percentage units");
+    b.roundness = h.state().roundness;
+    assert_eq!(h.state(), &b, "the dot changes only the roundness");
 }
