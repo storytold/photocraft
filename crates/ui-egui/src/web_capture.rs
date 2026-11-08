@@ -41,16 +41,13 @@ pub fn capture_screen(_x: i32, _y: i32, _w: u32, _h: u32) -> Result<Shot, String
     Err("screen capture is only supported on Windows".into())
 }
 
-/// A screenshot of the preview as a PNG in the temp directory (the file `edit.placeImage` reads).
-pub fn write_png(shot: &Shot) -> Result<String, String> {
+/// A screenshot of the preview as PNG bytes, handed to `edit.placeImage` in memory: nothing is
+/// written to disk, so placing a shot leaves no file behind.
+pub fn png_bytes(shot: &Shot) -> Result<Vec<u8>, String> {
     let img = photocraft_codecs::Image::from_u8(shot.width, shot.height, photocraft_codecs::ChannelLayout::Rgba, shot.rgba.clone())
         .map_err(|e| e.to_string())?;
-    let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default())
-        .map_err(|e| format!("could not encode the shot: {e}"))?;
-    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
-    let at = std::env::temp_dir().join(format!("photocraft-web-shot-{stamp}.png"));
-    std::fs::write(&at, png).map_err(|e| format!("could not write the shot: {e}"))?;
-    Ok(at.to_string_lossy().into_owned())
+    photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default())
+        .map_err(|e| format!("could not encode the shot: {e}"))
 }
 
 /// A pixel of one axis colour: the high channel saturated, the other two near black. `which` is

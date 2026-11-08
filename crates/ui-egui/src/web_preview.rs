@@ -346,9 +346,11 @@ fn sync(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Take the page from the screen, strip the 3D view's XYZ axes, and let the engine fit it into the
-/// rectangle drawn with the marquee tool.
+/// Take the page from the screen, strip the 3D view's XYZ axes, and let the engine place it as a
+/// smart object — fitted into the rectangle drawn with the marquee tool. The shot travels to the
+/// engine in memory (base64 PNG), so no file is written anywhere.
 fn place_shot(app: &mut PhotocraftApp, (x, y, w, h): (i32, i32, u32, u32)) {
+    use base64::Engine as _;
     use serde_json::json;
     // Anything covering the preview would be captured instead of the page — the main window most
     // of all. Raise the preview and give the compositor a moment to draw it before reading.
@@ -359,11 +361,14 @@ fn place_shot(app: &mut PhotocraftApp, (x, y, w, h): (i32, i32, u32, u32)) {
     match crate::web_capture::capture_screen(x, y, w, h) {
         Ok(mut shot) => {
             crate::web_capture::strip_axes(&mut shot);
-            match crate::web_capture::write_png(&shot) {
-                Ok(path) => match app.run("edit.placeImage", json!({ "path": path })) {
-                    Ok(_) => set_notice(app, tl!("Screenshot placed on the canvas").to_string()),
-                    Err(e) => set_notice(app, format!("!{e}")),
-                },
+            match crate::web_capture::png_bytes(&shot) {
+                Ok(png) => {
+                    let data = base64::engine::general_purpose::STANDARD.encode(&png);
+                    match app.run("edit.placeImage", json!({ "png": data })) {
+                        Ok(_) => set_notice(app, tl!("Screenshot placed as a smart object").to_string()),
+                        Err(e) => set_notice(app, format!("!{e}")),
+                    }
+                }
                 Err(e) => set_notice(app, format!("!{e}")),
             }
         }

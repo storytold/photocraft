@@ -3353,6 +3353,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Shot placed into the selection	截图已填充到选框
 	Screenshot placed on the canvas	截图已放到画布（框选后点截图会贴合选框）
 	Remove this marker	删除这个修订标记
+	Screenshot placed as a smart object	截图已作为智能对象置入（保留原始像素，放大不糊）
 	Draw the box with the Marquee tool first	请先用矩形选框工具在画布上画出要填充的框
 	QR	二维码
 	Could not open the preview window	预览窗口没能打开

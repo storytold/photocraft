@@ -1,11 +1,11 @@
 //! Place the web preview's screenshot into the drawn selection (`edit.placeImage`).
 //!
-//! The screenshot button saves the captured page to a temporary PNG and calls this command. The
-//! shot is placed as a **smart object** (Layer › Smart Objects, `file.placeEmbedded`), not as a
-//! resampled raster: the embedded source keeps the capture's own pixels and the layer stores only
-//! the placement transform, so enlarging it later re-renders from the original instead of
-//! magnifying an already-interpolated copy. It is fitted into the selection (aspect preserved,
-//! centred), and lands centred at 1:1 when nothing is drawn.
+//! The screenshot button encodes the captured page to PNG **in memory** and calls this command, so
+//! placing a shot leaves no file on disk. The shot is placed as a **smart object**
+//! (`file.placeEmbedded`), not as a resampled raster: the embedded source keeps the capture's own
+//! pixels and the layer stores only the placement transform, so enlarging it later re-renders from
+//! the original instead of magnifying an already-interpolated copy. It is fitted into the selection
+//! (aspect preserved, centred), and lands centred at 1:1 when nothing is drawn.
 
 use serde_json::{Value, json};
 
@@ -22,15 +22,26 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 fn place(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "edit.placeImage";
-    let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad(CMD, "`path` (an image file) is required"))?;
-    // Only the source size is needed here: the place itself decodes the file and keeps its bytes.
-    let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("could not read {path}: {e}")))?;
-    let img = photocraft_codecs::decode(&bytes).map_err(|e| EngineError::Other(format!("could not decode {path}: {e}")))?;
+    let (name, bytes) = if let Some(data) = p.get("png").and_then(Value::as_str) {
+        // The web preview's screenshot button hands the capture over in memory, so placing a shot
+        // writes no file at all.
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(data).map_err(|e| bad(CMD, format!("`png` is not base64: {e}")))?;
+        ("Screenshot.png".to_string(), bytes)
+    } else if let Some(path) = p.get("path").and_then(Value::as_str) {
+        let bytes = std::fs::read(path).map_err(|e| EngineError::Other(format!("could not read {path}: {e}")))?;
+        let name = path.rsplit(['/', '\\']).next().unwrap_or("Image.png").to_string();
+        (name, bytes)
+    } else {
+        return Err(bad(CMD, "`png` (base64 image bytes) or `path` is required"));
+    };
+    // Only the source size is needed here: the place itself decodes the image and keeps its bytes.
+    let img = photocraft_codecs::decode(&bytes).map_err(|e| EngineError::Other(format!("could not decode {name}: {e}")))?;
     let (sw, sh) = (img.width() as f64, img.height() as f64);
     if sw <= 0.0 || sh <= 0.0 {
         return Err(bad(CMD, "the image has no pixels"));
     }
-    let mut params = json!({"path": path, "smartObject": true, "frame": false});
+    let mut params = json!({"smartObject": true, "frame": false});
     if let Some(session) = s.active() {
         let canvas = session.doc.bounds();
         let selection = session.doc.selection.as_ref().map(|m| m.content_bounds().intersect(&canvas)).filter(|r| !r.is_empty());
@@ -44,8 +55,8 @@ fn place(s: &mut Session, p: &Value) -> Result<Value> {
             params["fit"] = json!(false);
         }
     }
-    // `file.placeEmbedded` inserts the smart object (one undo step) and reports the new layer.
-    crate::cmd::file_cmds::place(s, &params, false)
+    // `place_bytes` inserts the smart object (one undo step) and reports the new layer.
+    crate::cmd::file_cmds::place_bytes(s, &name, bytes, None, &params)
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -54,7 +65,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Place Image File…",
         menu: &[],
         shortcut: None,
-        params: r##"{"path":str} (place an image file as a smart object: fitted into the selection when there is one, otherwise at 1:1 in the middle) → {layer, scale, bounds, smartObject}"##,
+        params: r##"{"png":str (base64 image bytes)|"path":str} (placed as a smart object: fitted into the selection when there is one, otherwise at 1:1 in the middle) → {layer, scale, bounds, smartObject}"##,
         enabled: has_doc,
         run: place,
         journal: true,
@@ -68,8 +79,9 @@ mod tests {
 
     use super::*;
 
-    /// A 64×48 PNG with a red square in its top-left quarter, written to the temp directory.
-    fn shot_png() -> std::path::PathBuf {
+    /// A 64×48 PNG with a red square in its top-left quarter: bytes, plus a copy written to the
+    /// temp directory (the two ways `edit.placeImage` can take the image).
+    fn shot_png() -> (Vec<u8>, std::path::PathBuf) {
         let (w, h) = (64u32, 48u32);
         let mut rgba = vec![0u8; (w * h * 4) as usize];
         for y in 0..h {
@@ -85,19 +97,22 @@ mod tests {
         let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgba, rgba).unwrap();
         let png = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &photocraft_codecs::EncodeOptions::default()).unwrap();
         let path = std::env::temp_dir().join(format!("photocraft-place-test-{}.png", std::process::id()));
-        std::fs::write(&path, png).unwrap();
-        path
+        std::fs::write(&path, &png).unwrap();
+        (png, path)
     }
 
     #[test]
     fn places_the_shot_inside_the_selection_as_a_smart_object() {
-        let path = shot_png();
+        use base64::Engine as _;
+        // The preview hands the capture over in memory: no file is involved at all.
+        let (png, path) = shot_png();
+        let data = base64::engine::general_purpose::STANDARD.encode(&png);
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 200, "height": 160})).unwrap();
         // A 100×80 box at (20, 30) is the drawn frame.
         s.execute("select.rect", json!({"x": 20, "y": 30, "width": 100, "height": 80})).unwrap();
         let before = s.active().unwrap().doc.layers.len();
-        let v = s.execute("edit.placeImage", json!({"path": path.to_string_lossy()})).unwrap();
+        let v = s.execute("edit.placeImage", json!({"png": data})).unwrap();
         assert!(v["layer"].as_u64().is_some(), "the command reports the new layer: {v}");
         assert_eq!(v["smartObject"], json!(true), "the shot lands as a smart object: {v}");
         let after = s.active().unwrap().doc.layers.len();
@@ -116,7 +131,8 @@ mod tests {
 
     #[test]
     fn without_a_selection_the_shot_lands_in_the_middle() {
-        let path = shot_png();
+        // A path still works, for anything that places a file rather than live capture bytes.
+        let (_, path) = shot_png();
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 120, "height": 90})).unwrap();
         let before = s.active().unwrap().doc.layers.len();
