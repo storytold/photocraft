@@ -147,6 +147,27 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         if width > raster::MAX_SIDE || height > raster::MAX_SIDE || u64::from(width) * u64::from(height) > raster::MAX_PIXELS {
             return Err(IoError::Unsupported(format!("PDF page {page_number} is too large at {dpi:.0} dpi; lower the import DPI")));
         }
+        let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
+        #[cfg(feature = "pdf-editable")]
+        if opts.pdf_editable {
+            match crate::pdf_editable::page(page, rect, ctl) {
+                Ok(layers) => {
+                    let group = Group { children: layers, expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+                    doc.layers.push(Layer::new(format!("Page {page_number}"), LayerContent::Group(group)));
+                    x = x.saturating_add(width).saturating_add(GAP);
+                    ctl.progress((index + 1) as f32 / count as f32);
+                    continue;
+                }
+                Err(crate::pdf_editable::EditableError::Cancelled) => return Err(IoError::Cancelled),
+                Err(crate::pdf_editable::EditableError::Unsupported(reason)) => {
+                    warnings.push(format!("PDF page {page_number}: {reason}; the page was rasterised"));
+                }
+            }
+        }
+        #[cfg(not(feature = "pdf-editable"))]
+        if opts.pdf_editable {
+            warnings.push(format!("PDF page {page_number}: editable PDF import is not built into this binary; the page was rasterised"));
+        }
         // A cache per page, deliberately: a shared one would keep decoded images and fonts alive
         // across up to 16 pages outside the pixel budget, and would hide an image-decode warning
         // on a later page after the page that first hit it.
@@ -195,7 +216,6 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
             let band_height = (rows.len() / row_bytes) as u32;
             surface.write_region(Rect::from_xywh(x as i32, top, width, band_height), &data);
         }
-        let rect = Rect::new(x as i32, 0, (x + width) as i32, height as i32);
         let layer = Layer::new(format!("Page {page_number}"), LayerContent::Raster(surface));
         let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
         doc.layers.push(Layer::new(format!("Page {page_number}"), LayerContent::Group(group)));
