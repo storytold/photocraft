@@ -481,8 +481,15 @@ pub fn show_picker(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let before = app.session.tools.brush.clone();
         let mut b = before.clone();
         let list = &mut app.ui.brush_picker_list;
-        let frame = egui::Frame::popup(ui.style())
-            .show(ui, |ui| crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content));
+        let frame = egui::Frame::popup(ui.style()).show(ui, |ui| {
+            // The Background Eraser has its own compact popup, without presets (#11910).
+            if app.ui.tool == Tool::BackgroundEraser {
+                crate::bg_eraser_popup::body(ui, &mut b, &mut app.ui.tool_options.bg_tolerance_control);
+                Vec::new()
+            } else {
+                crate::brush_picker::body(ui, &mut b, &app.session.tools.presets, app.session.tools.current_preset.as_deref(), list, content)
+            }
+        });
         let picks = frame.inner;
         // The corner grip resizes the picker, and the size is remembered across opens.
         if let Some(new) = crate::brush_picker::resize_grip(ui, frame.response.rect, content) {
