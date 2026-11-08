@@ -14,7 +14,14 @@ fn hand_bar() -> Harness<'static, PhotocraftApp> {
     app.run("file.new", json!({"width": 3000, "height": 2000})).unwrap();
     // The bar's fonts are installed after the first frame, so it starts on a tool without "100%".
     app.ui.tool = Tool::Move;
-    let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).with_step_dt(1.0 / 60.0).build_ui_state(|ui, app| crate::panels::options_bar(app, ui), app);
+    let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        |ui, app| {
+            // The labels and tooltips are checked in English, whatever this thread drew in before.
+            let _language = crate::i18n::language_scope(crate::i18n::Lang::EN);
+            crate::panels::options_bar(app, ui)
+        },
+        app,
+    );
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
     h.state_mut().ui.tool = Tool::Hand;
     h.run_steps(4);
