@@ -45,7 +45,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     // Path mode edits only the next outline: an active shape layer is not the target.
     let target = if paint { selected_shape(&app.session) } else { None };
     // Fill and Stroke edit the selected shape layer too (#3347), and still set the next shape's.
-    let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let (fg, bg) = (o.shape_fill_color, o.shape_stroke_color);
     let (mut has_fill, fill, stroke) = match &target {
         Some(s) => (s.fill.is_some(), s.fill.clone(), s.stroke.clone()),
         None => {
@@ -55,8 +55,16 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
         }
     };
     let lib = crate::paint_picker::library(&app.session, ui.ctx());
-    let mut gradients =
-        GradientChoices { presets: &app.session.presets.gradients, current: &app.session.presets.gradient, recent: &mut app.ui.recent_gradients, fg, bg };
+    // A gradient preset's Foreground / Background stops still take the foreground and background
+    // colours, as in Photoshop; only solid paint uses the tool's own colours (#6695).
+    let (session_fg, session_bg) = (app.session.tools.foreground, app.session.tools.background);
+    let mut gradients = GradientChoices {
+        presets: &app.session.presets.gradients,
+        current: &app.session.presets.gradient,
+        recent: &mut app.ui.recent_gradients,
+        fg: session_fg,
+        bg: session_bg,
+    };
     let mut width = stroke.as_ref().map_or(0.0, |s| s.width);
     let stroke_enabled = stroke.as_ref().is_some_and(|s| s.width > 0.0);
     let style = stroke.as_ref().map_or_else(|| o.shape_stroke.clone(), crate::shape_stroke_ui::StrokeOptions::from);
@@ -199,6 +207,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
 }
 
 /// Tool-bar paint changes affect the next shape; Properties edits the selected shape instead.
+/// The tool keeps its own colours: the foreground and background colours are left alone (#6695).
 pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: PaintChange) -> Result<(), String> {
     // A colour takes the place of a gradient; No Color keeps it for when the paint comes back.
     let o = &mut app.ui.tool_options;
@@ -211,7 +220,12 @@ pub(crate) fn set_tool_paint(app: &mut PhotocraftApp, stroke: bool, change: Pain
         PaintChange::OpenPicker => return Ok(()),
     }
     if let PaintChange::Color(color) = change {
-        app.run("tools.setColors", if stroke { json!({"background": color}) } else { json!({"foreground": color}) })?;
+        let o = &mut app.ui.tool_options;
+        if stroke {
+            o.shape_stroke_color = color;
+        } else {
+            o.shape_fill_color = color;
+        }
     }
     if stroke {
         app.ui.tool_options.stroke_width = if change == PaintChange::None { 0.0 } else { enabled_stroke_width(app.ui.tool_options.stroke_width) };

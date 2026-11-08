@@ -151,7 +151,9 @@ fn tool_only_picker_sets_the_next_shapes_colour() {
     app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
     crate::dialogs::confirm(&mut app, dialog).unwrap();
     assert!(app.ui.tool_options.shape_fill);
-    assert_eq!(color_picker_ui::hex([app.session.tools.foreground[0], app.session.tools.foreground[1], app.session.tools.foreground[2]]), "#ff8800");
+    let fill = app.ui.tool_options.shape_fill_color;
+    assert_eq!(color_picker_ui::hex([fill[0], fill[1], fill[2]]), "#ff8800");
+    assert_eq!(app.session.tools.foreground, [0.0, 0.0, 0.0, 1.0], "the foreground is left alone (#6695)");
     assert_eq!(app.session.active().unwrap().history.past_len(), history);
 }
 
@@ -166,8 +168,9 @@ fn tool_only_picker_works_without_a_document() {
         crate::dialogs::confirm(&mut app, dialog).unwrap();
     }
     assert!(app.ui.tool_options.shape_fill);
-    assert_eq!(color_picker_ui::hex([app.session.tools.foreground[0], app.session.tools.foreground[1], app.session.tools.foreground[2]]), "#ff8800");
-    assert_eq!(color_picker_ui::hex([app.session.tools.background[0], app.session.tools.background[1], app.session.tools.background[2]]), "#ff8800");
+    let (fill, stroke) = (app.ui.tool_options.shape_fill_color, app.ui.tool_options.shape_stroke_color);
+    assert_eq!(color_picker_ui::hex([fill[0], fill[1], fill[2]]), "#ff8800");
+    assert_eq!(color_picker_ui::hex([stroke[0], stroke[1], stroke[2]]), "#ff8800");
     // A picker for a shape layer still needs its document.
     let mut f = Map::new();
     f.insert("__params".into(), json!({"layer": 3, "document": 1, "which": "fill"}));
@@ -184,13 +187,13 @@ fn locked_shape_refuses_the_options_bar_picker_without_changing_the_next_shapes_
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         let id = LayerId(app.run("shape.create", json!({"rect": [8, 8, 40, 30], "fill": "#336699"})).unwrap()["layer"].as_u64().unwrap());
         app.run("layer.lockLayers", json!({lock: true})).unwrap();
-        let (fg, options) = (app.session.tools.foreground, app.ui.tool_options.clone());
+        let (fg, options) = (app.ui.tool_options.shape_fill_color, app.ui.tool_options.clone());
         let history = app.session.active().unwrap().history.past_len();
         let dialog = open_paint(&mut app, Paint::Fill, Some(id), true, fg).unwrap();
         app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
         let f = app.ui.dialog_mut(dialog).unwrap().fields.clone();
         assert_eq!(confirm(&mut app, &f).unwrap_err(), "shape layer is locked", "{lock}");
-        assert_eq!(app.session.tools.foreground, fg, "{lock}: the next shape's colour is unchanged");
+        assert_eq!(app.ui.tool_options.shape_fill_color, fg, "{lock}: the next shape's colour is unchanged");
         assert_eq!(app.ui.tool_options, options);
         assert_eq!(app.session.active().unwrap().history.past_len(), history);
         assert_eq!(fill(&app, id), Some(Fill::Solid(Color::rgb(0.2, 0.4, 0.6))));
@@ -207,7 +210,7 @@ fn a_refused_shape_edit_leaves_the_next_shapes_colour_alone() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
         let id = LayerId(app.run("shape.create", json!({"rect": [8, 8, 40, 30], "fill": "#336699"})).unwrap()["layer"].as_u64().unwrap());
-        let (tools, options) = (app.session.tools.clone(), app.ui.tool_options.clone());
+        let options = app.ui.tool_options.clone();
         let dialog = open_paint(&mut app, which, Some(id), true, [0.0, 0.0, 0.0, 1.0]).unwrap();
         app.ui.dialog_mut(dialog).unwrap().fields.insert("color".into(), json!("#ff8800"));
         let f = app.ui.dialog_mut(dialog).unwrap().fields.clone();
@@ -232,8 +235,8 @@ fn a_refused_shape_edit_leaves_the_next_shapes_colour_alone() {
             .unwrap();
         let photocraft_engine::jobs::Started::Job(job) = started else { panic!("the job ran inline") };
         assert!(confirm(&mut app, &f).unwrap_err().contains("still running"), "{which:?}");
-        assert_eq!(app.session.tools.foreground, tools.foreground, "{which:?}: the next shape's colours are unchanged");
-        assert_eq!(app.session.tools.background, tools.background);
+        let colours = |o: &crate::state::ToolOptions| (o.shape_fill_color, o.shape_stroke_color);
+        assert_eq!(colours(&app.ui.tool_options), colours(&options), "{which:?}: the next shape's colours are unchanged");
         assert_eq!(app.ui.tool_options, options, "{which:?}: the stroke stays off");
         gate.store(true, Ordering::Relaxed);
         app.session.cancel_job(job);
