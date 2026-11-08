@@ -1,10 +1,11 @@
 //! PDF export: structure, pixel oracle, colour modes and refusal paths.
 
 use super::*;
+use lopdf::{Object, StringFormat};
 use photocraft_color::{PixelFormat, SampleType};
-use photocraft_doc::{Layer, LayerContent, Size};
+use photocraft_doc::{Artboard, Group, Layer, LayerContent, Size};
 use photocraft_geom::Rect;
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 
 fn solid(fmt: PixelFormat, x0: i32, y0: i32, x1: i32, y1: i32, px: &[f32]) -> Surface {
     let mut s = Surface::new(fmt);
@@ -68,7 +69,7 @@ fn check_structure(pdf: &[u8]) {
 #[test]
 fn a_flat_rgb_document_saves_as_one_page_pdf() {
     let d = doc(ColorMode::Rgb);
-    let out = export(&d).unwrap();
+    let out = export(&d, &Interrupt::NONE).unwrap();
     let pdf = &out.bytes;
     check_structure(pdf);
     assert!(has(pdf, "/MediaBox [0 0 4.00 2.00]"), "page = image size at 72 pt/in");
@@ -85,7 +86,7 @@ fn layers_composite_over_white_before_the_page() {
     let mut d = doc(ColorMode::Rgb);
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
     d.layers.push(Layer::new("Half red", LayerContent::Raster(solid(fmt, 1, 0, 3, 2, &[1.0, 0.0, 0.0, 0.5]))));
-    let out = export(&d).unwrap();
+    let out = export(&d, &Interrupt::NONE).unwrap();
     let img = stream_after(&out.bytes, "/Subtype /Image");
     // Pixels 1-2 of row 0: 0.5 red over white = (1.0, 0.5, 0.5); elsewhere plain white.
     assert_eq!(&img[3..6], &[255, 128, 128], "the blend lands: {:?}", &img[3..6]);
@@ -102,7 +103,7 @@ fn topmost_solid_shape_is_exported_as_a_vector_path() {
         ..Default::default()
     };
     d.layers.push(Layer::new("Shape", LayerContent::Shape(shape)));
-    let out = export(&d).unwrap();
+    let out = export(&d, &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
     let content = stream_after(&out.bytes, "/Contents 4 0 R");
     let content = String::from_utf8(content).unwrap();
@@ -128,7 +129,7 @@ fn topmost_text_layer_is_exported_with_selectable_text_and_vector_outlines() {
     let baseline = layout.lines.get(cluster.line).expect("a line").baseline;
     let origin = text.transform.apply(photocraft_geom::Point::new(f64::from(cluster.x), f64::from(baseline)));
     d.layers.push(Layer::new("Text", LayerContent::Text(text)));
-    let out = export(&d).unwrap();
+    let out = export(&d, &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
     let content = stream_after(&out.bytes, "/Contents 4 0 R");
     let content = String::from_utf8(content).unwrap();
@@ -159,7 +160,7 @@ fn topmost_shape_and_text_layers_are_both_exported_as_vectors() {
     d.layers.push(Layer::new("Shape", LayerContent::Shape(shape)));
     let text = TextLayer { text: "Hi".into(), size_pt: 12.0, color: photocraft_color::Color::rgb(0.0, 1.0, 0.0), ..Default::default() };
     d.layers.push(Layer::new("Text", LayerContent::Text(text)));
-    let out = export(&d).unwrap();
+    let out = export(&d, &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
     let content = stream_after(&out.bytes, "/Contents 4 0 R");
     let content = String::from_utf8(content).unwrap();
@@ -173,10 +174,10 @@ fn topmost_shape_and_text_layers_are_both_exported_as_vectors() {
 
 #[test]
 fn greyscale_and_cmyk_pages_keep_their_channels() {
-    let g = export(&doc(ColorMode::Grayscale)).unwrap();
+    let g = export(&doc(ColorMode::Grayscale), &Interrupt::NONE).unwrap();
     assert!(has(&g.bytes, "/ColorSpace /DeviceGray"), "gray is DeviceGray");
     assert_eq!(stream_after(&g.bytes, "/Subtype /Image"), vec![255; 4 * 2], "one sample per pixel");
-    let c = export(&doc(ColorMode::Cmyk)).unwrap();
+    let c = export(&doc(ColorMode::Cmyk), &Interrupt::NONE).unwrap();
     assert!(has(&c.bytes, "/ColorSpace /DeviceCMYK"), "cmyk is DeviceCMYK");
     assert_eq!(stream_after(&c.bytes, "/Subtype /Image"), vec![0; 4 * 2 * 4], "zero ink over the whole page");
 }
@@ -188,7 +189,7 @@ fn the_page_measures_at_the_document_resolution() {
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
     d.layers = vec![Layer::new("Paper", LayerContent::Raster(solid(fmt, 0, 0, 300, 150, &[1.0, 1.0, 1.0, 1.0])))];
     d.resolution_dpi = 300.0;
-    let out = export(&d).unwrap();
+    let out = export(&d, &Interrupt::NONE).unwrap();
     assert!(has(&out.bytes, "/MediaBox [0 0 72.00 36.00]"), "300 px at 300 dpi is one inch");
 }
 
@@ -196,7 +197,7 @@ fn the_page_measures_at_the_document_resolution() {
 fn an_embedded_profile_travels_as_iccbased() {
     let mut d = doc(ColorMode::Rgb);
     d.icc_profile = Some(std::sync::Arc::new(vec![1, 2, 3, 4, 5, 6, 7, 8]));
-    let out = export(&d).unwrap();
+    let out = export(&d, &Interrupt::NONE).unwrap();
     assert!(has(&out.bytes, "[/ICCBased 7 0 R]"), "the image refers to the profile");
     assert_eq!(stream_after(&out.bytes, "/N 3 /Alternate"), vec![1, 2, 3, 4, 5, 6, 7, 8], "the profile bytes survive");
 }
@@ -204,7 +205,7 @@ fn an_embedded_profile_travels_as_iccbased() {
 #[test]
 fn other_modes_are_refused_with_an_actionable_error() {
     let d = doc(ColorMode::Lab);
-    let e = export(&d).unwrap_err().to_string();
+    let e = export(&d, &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("RGB") && e.contains("Mode"), "{e}");
     assert!(crate::export(&d, "x.pdf", &crate::ExportOptions::default()).is_err());
 }
@@ -257,7 +258,7 @@ fn x1a_keeps_a_cmyk_documents_numbers() {
     let mut d = doc(ColorMode::Cmyk);
     let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::F32, true);
     d.layers = vec![Layer::new("Ink", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &[1.0, 0.5, 0.0, 0.2, 1.0])))];
-    let out = export_with_options(&d, &x1a(None, 0.0)).unwrap();
+    let out = export_with_options(&d, &x1a(None, 0.0), &Interrupt::NONE).unwrap();
     let img = stream_after(&out.bytes, "/Subtype /Image");
     assert_eq!(&img[..4], &[255, 128, 0, 51], "no conversion");
     assert!(!out.warnings.iter().any(|w| w.contains("converted")));
@@ -267,13 +268,13 @@ fn x1a_keeps_a_cmyk_documents_numbers() {
 fn x1a_converts_a_cmyk_document_from_another_condition() {
     let d = doc(ColorMode::Cmyk);
     let other = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
-    let out = export_with_options(&d, &x1a(Some(other), 0.0)).unwrap();
+    let out = export_with_options(&d, &x1a(Some(other), 0.0), &Interrupt::NONE).unwrap();
     assert!(out.warnings.iter().any(|w| w.contains("converted")), "{:?}", out.warnings);
 }
 
 #[test]
 fn x1a_keeps_gray_as_device_gray() {
-    let out = export_with_options(&doc(ColorMode::Grayscale), &x1a(None, 0.0)).unwrap();
+    let out = export_with_options(&doc(ColorMode::Grayscale), &x1a(None, 0.0), &Interrupt::NONE).unwrap();
     assert!(has(&out.bytes, "/ColorSpace /DeviceGray"));
     assert!(has(&out.bytes, "/GTS_PDFXConformance (PDF/X-1a:2001)"));
 }
@@ -282,13 +283,13 @@ fn x1a_keeps_gray_as_device_gray() {
 fn x1a_refuses_what_it_cant_write() {
     let d = doc(ColorMode::Rgb);
     let v4 = PdfOptions { x: Some(PdfX { profile: photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes(), ..x1a(None, 0.0).x.unwrap() }) };
-    let e = export_with_options(&d, &v4).unwrap_err().to_string();
+    let e = export_with_options(&d, &v4, &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("version 2"), "{e}");
     let rgb = PdfOptions { x: Some(PdfX { profile: photocraft_cms::Builtin::Srgb.profile().to_bytes(), ..x1a(None, 0.0).x.unwrap() }) };
-    assert!(export_with_options(&d, &rgb).unwrap_err().to_string().contains("CMYK"));
+    assert!(export_with_options(&d, &rgb, &Interrupt::NONE).unwrap_err().to_string().contains("CMYK"));
     // The 4 × 2 px page at 72 dpi is 4 × 2 pt: a 1 pt bleed leaves nothing to trim.
-    assert!(export_with_options(&d, &x1a(None, 1.0)).unwrap_err().to_string().contains("bleed"));
-    assert!(export_with_options(&doc(ColorMode::Lab), &x1a(None, 0.0)).is_err());
+    assert!(export_with_options(&d, &x1a(None, 1.0), &Interrupt::NONE).unwrap_err().to_string().contains("bleed"));
+    assert!(export_with_options(&doc(ColorMode::Lab), &x1a(None, 0.0), &Interrupt::NONE).is_err());
 }
 
 #[test]
@@ -319,7 +320,7 @@ fn x3_keeps_icc_tagged_rgb_for_the_printer_to_convert() {
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
     d.layers = vec![Layer::new("Red", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &[1.0, 0.0, 0.0, 1.0])))];
     let srgb = as_v2(photocraft_cms::Builtin::Srgb.profile());
-    let out = export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(srgb.clone()), false, 0.0)).unwrap();
+    let out = export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(srgb.clone()), false, 0.0), &Interrupt::NONE).unwrap();
     let pdf = &out.bytes;
     check_structure(pdf);
     assert!(
@@ -343,7 +344,7 @@ fn x3_keeps_icc_tagged_rgb_for_the_printer_to_convert() {
 #[test]
 fn x3_converts_to_the_output_condition_when_asked() {
     let srgb = as_v2(photocraft_cms::Builtin::Srgb.profile());
-    let out = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(srgb), true, 0.0)).unwrap();
+    let out = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(srgb), true, 0.0), &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
     assert!(has(&out.bytes, "/ColorSpace /DeviceCMYK") && !has(&out.bytes, "/ICCBased"));
     assert!(out.warnings.iter().any(|w| w.contains("PDF/X-3:2002: colour converted")), "{:?}", out.warnings);
@@ -354,15 +355,15 @@ fn x3_refuses_version_4_profiles_pdf_1_3_cant_hold() {
     let d = doc(ColorMode::Rgb);
     // The built-in sRGB is ICC v4: it can't be embedded, only converted from.
     let v4 = photocraft_cms::Builtin::Srgb.profile().to_bytes();
-    let e = export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4.clone()), false, 0.0)).unwrap_err().to_string();
+    let e = export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4.clone()), false, 0.0), &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.starts_with("unsupported") || e.contains("PDF/X-3:2002"), "{e}");
     assert!(e.contains("can't embed") && e.contains("save PDF/X-4"), "{e}");
-    assert!(export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4), true, 0.0)).is_ok(), "converting from it is fine");
+    assert!(export_with_options(&d, &pdfx(PdfXStandard::X3_2002, Some(v4), true, 0.0), &Interrupt::NONE).is_ok(), "converting from it is fine");
     let mut opts = pdfx(PdfXStandard::X3_2002, None, true, 0.0);
     if let Some(x) = &mut opts.x {
         x.profile = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
     }
-    let e = export_with_options(&d, &opts).unwrap_err().to_string();
+    let e = export_with_options(&d, &opts, &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("ICC version 2 and") && e.contains("save PDF/X-4"), "{e}");
 }
 
@@ -375,7 +376,7 @@ fn x4_writes_pdf_1_6_with_matching_xmp_and_takes_version_4_profiles() {
         x.profile = photocraft_cms::Builtin::CoatedCmyk.profile().to_bytes();
     }
     let x = opts.x.as_ref().unwrap();
-    let out = export_x(&d, x, 1_760_000_000).unwrap();
+    let out = export_x(&d, x, 1_760_000_000, &Interrupt::NONE).unwrap();
     let pdf = &out.bytes;
     check_structure(pdf);
     assert!(
@@ -410,7 +411,7 @@ fn every_standard_keeps_a_cmyk_documents_numbers_in_its_condition() {
     d.layers = vec![Layer::new("Ink", LayerContent::Raster(solid(fmt, 0, 0, 4, 2, &[0.2, 0.4, 0.6, 0.8, 1.0])))];
     for standard in PdfXStandard::ALL {
         for convert in [true, false] {
-            let out = export_with_options(&d, &pdfx(standard, None, convert, 0.0)).unwrap();
+            let out = export_with_options(&d, &pdfx(standard, None, convert, 0.0), &Interrupt::NONE).unwrap();
             check_structure(&out.bytes);
             assert!(has(&out.bytes, "/ColorSpace /DeviceCMYK"), "{standard:?}");
             assert_eq!(&stream_after(&out.bytes, "/Subtype /Image")[..4], &[51, 102, 153, 204], "{standard:?}");
@@ -445,7 +446,7 @@ fn the_output_profile_must_be_a_printer_profile_of_version_2_or_4() {
         if let Some(x) = &mut o.x {
             x.profile = profile;
         }
-        export_with_options(&d, &o)
+        export_with_options(&d, &o, &Interrupt::NONE)
     };
     // A CMYK colour-space profile, not an output (printer) one.
     let e = with(patched(&v2_cmyk(), 12, b"spac"), PdfXStandard::X4).unwrap_err().to_string();
@@ -460,7 +461,7 @@ fn the_output_profile_must_be_a_printer_profile_of_version_2_or_4() {
 #[test]
 fn no_conversion_keeps_a_gray_documents_own_profile() {
     let gray = as_v2(photocraft_cms::Builtin::SGray.profile());
-    let out = export_with_options(&doc(ColorMode::Grayscale), &pdfx(PdfXStandard::X3_2002, Some(gray.clone()), false, 0.0)).unwrap();
+    let out = export_with_options(&doc(ColorMode::Grayscale), &pdfx(PdfXStandard::X3_2002, Some(gray.clone()), false, 0.0), &Interrupt::NONE).unwrap();
     check_structure(&out.bytes);
     assert!(has(&out.bytes, "/ColorSpace [/ICCBased 8 0 R]") && has(&out.bytes, "/N 1 /Alternate /DeviceGray"));
     assert_eq!(stream_after(&out.bytes, "/N 1 /Alternate"), *gray);
@@ -473,7 +474,7 @@ fn control_characters_in_the_title_agree_in_info_and_xmp() {
 .psd"
         .into();
     let opts = pdfx(PdfXStandard::X4, None, true, 0.0);
-    let out = export_x(&d, opts.x.as_ref().unwrap(), 0).unwrap();
+    let out = export_x(&d, opts.x.as_ref().unwrap(), 0, &Interrupt::NONE).unwrap();
     assert!(has(&out.bytes, "/Title (Plakat Tour)"));
     assert!(between(&out.bytes, "/Subtype /XML", "endstream").contains(">Plakat Tour</rdf:li>"));
 }
@@ -481,7 +482,7 @@ fn control_characters_in_the_title_agree_in_info_and_xmp() {
 #[test]
 fn the_output_condition_is_custom_with_its_profile_embedded() {
     // A profile's name can't prove the press condition it was made for, so none is claimed.
-    let out = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.0)).unwrap();
+    let out = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.0), &Interrupt::NONE).unwrap();
     let condition = photocraft_cms::Profile::parse(&v2_cmyk()).unwrap().description;
     assert!(has(
         &out.bytes,
@@ -494,10 +495,10 @@ fn the_output_condition_is_custom_with_its_profile_embedded() {
 #[test]
 fn a_device_link_document_profile_is_never_embedded() {
     let link = patched(&as_v2(photocraft_cms::Builtin::Srgb.profile()), 12, b"link");
-    let e = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(link), false, 0.0)).unwrap_err().to_string();
+    let e = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(link), false, 0.0), &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("DeviceLink"), "{e}");
     let abstract_ = patched(&as_v2(photocraft_cms::Builtin::Srgb.profile()), 12, b"abst");
-    let e = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(abstract_), false, 0.0)).unwrap_err().to_string();
+    let e = export_with_options(&doc(ColorMode::Rgb), &pdfx(PdfXStandard::X3_2002, Some(abstract_), false, 0.0), &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("Abstract"), "{e}");
 }
 
@@ -511,7 +512,7 @@ fn a_non_ascii_output_condition_survives_as_text() {
 fn the_file_id_changes_with_the_bleed_and_the_profile() {
     let d = doc(ColorMode::Rgb);
     let id = |o: &PdfOptions| {
-        let out = export_x(&d, o.x.as_ref().unwrap(), 7).unwrap();
+        let out = export_x(&d, o.x.as_ref().unwrap(), 7, &Interrupt::NONE).unwrap();
         between(&out.bytes, "/ID [<", ">")
     };
     let mut other = x1a(None, 0.0);
@@ -542,7 +543,7 @@ fn absolute_colorimetric_keeps_the_simulated_paper_white() {
             x.profile = dst.to_bytes();
             x.intent = intent;
         }
-        let out = export_with_options(&doc(ColorMode::Rgb), &o).unwrap();
+        let out = export_with_options(&doc(ColorMode::Rgb), &o, &Interrupt::NONE).unwrap();
         stream_after(&out.bytes, "/Subtype /Image")[..4].to_vec()
     };
     assert_eq!(export(Intent::AbsoluteColorimetric), expected, "the simulated paper white");
@@ -554,13 +555,13 @@ fn absolute_colorimetric_keeps_the_simulated_paper_white() {
 #[test]
 fn the_trim_box_stays_positive_as_written() {
     // The 4 × 2 px page at 72 dpi is 4 × 2 pt: 0.999 pt leaves 0.002 pt of height, 0.00 written.
-    let e = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.999)).unwrap_err().to_string();
+    let e = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.999), &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("leaves no trim"), "{e}");
     let mut tall = doc(ColorMode::Rgb);
     tall.size = Size { width: 2, height: 4 };
-    let e = export_with_options(&tall, &x1a(None, 0.999)).unwrap_err().to_string();
+    let e = export_with_options(&tall, &x1a(None, 0.999), &Interrupt::NONE).unwrap_err().to_string();
     assert!(e.contains("leaves no trim"), "width: {e}");
-    let out = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.5)).unwrap();
+    let out = export_with_options(&doc(ColorMode::Rgb), &x1a(None, 0.5), &Interrupt::NONE).unwrap();
     assert!(has(&out.bytes, "/TrimBox [0.50 0.50 3.50 1.50]"));
 }
 
@@ -581,7 +582,7 @@ fn unicode_text_over_a_photo_extracts_through_a_pdf_reader() {
             ..Default::default()
         }),
     ));
-    let pdf = export(&d).unwrap().bytes;
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
     let parsed = lopdf::Document::load_mem(&pdf).unwrap();
     assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), text);
     assert!(has(&pdf, "/Subtype /Image"));
@@ -621,7 +622,7 @@ fn text_with_compositing_or_a_profile_stays_in_the_raster_backdrop() {
             _ => d.icc_profile = Some(std::sync::Arc::new(vec![1, 2, 3, 4])),
         }
         d.layers.push(layer);
-        let pdf = export(&d).unwrap().bytes;
+        let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
         let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
         assert!(!content.contains("/ActualText"), "case {case} must retain the raster composite");
         assert!(stream_after(&pdf, "/Subtype /Image").iter().any(|v| *v != 255), "case {case} must retain visible text");
@@ -659,7 +660,7 @@ fn text_outside_the_vector_prefix_does_not_consume_the_selection_font() {
             "Top text",
             LayerContent::Text(TextLayer { text: "Hi".into(), size_pt: 12.0, color: photocraft_color::Color::rgb(0.0, 1.0, 0.0), ..Default::default() }),
         ));
-        let pdf = export(&d).unwrap().bytes;
+        let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
         let parsed = lopdf::Document::load_mem(&pdf).unwrap();
         assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "Hi", "case {case}: only the top text is selectable");
         let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
@@ -710,7 +711,7 @@ fn a_text_layer_refused_at_emission_keeps_the_upper_vectors_and_stays_raster() {
             ..Default::default()
         }),
     ));
-    let pdf = export(&d).unwrap().bytes;
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
     check_structure(&pdf);
     let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF0048"), "the upper text stays vector:\n{content}");
@@ -732,7 +733,7 @@ fn multiline_text_keeps_its_paragraph_breaks_in_the_selection() {
     use photocraft_doc::TextLayer;
     let mut d = doc(ColorMode::Rgb);
     d.layers.push(Layer::new("Text", LayerContent::Text(TextLayer { text: "A\nB".into(), size_pt: 12.0, ..Default::default() })));
-    let pdf = export(&d).unwrap().bytes;
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
     let parsed = lopdf::Document::load_mem(&pdf).unwrap();
     assert_eq!(parsed.extract_text(&[1]).unwrap().trim(), "A\nB", "the paragraph break survives selection");
     let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
@@ -744,7 +745,7 @@ fn leading_newline_stays_in_the_first_selection_span() {
     use photocraft_doc::TextLayer;
     let mut d = doc(ColorMode::Rgb);
     d.layers.push(Layer::new("Text", LayerContent::Text(TextLayer { text: "\nA".into(), size_pt: 12.0, ..Default::default() })));
-    let pdf = export(&d).unwrap().bytes;
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
     let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
     assert!(content.contains("/ActualText <FEFF000A0041>"), "the first span retains the leading newline:\n{content}");
 }
@@ -756,9 +757,173 @@ fn pdf_x_keeps_text_in_the_image_without_a_font() {
     // an unembedded font or RGB vectors, so there it stays in the converted image.
     let mut d = doc(ColorMode::Rgb);
     d.layers.push(Layer::new("Text", LayerContent::Text(TextLayer { text: "Print".into(), size_pt: 12.0, ..Default::default() })));
-    assert!(has(&export(&d).unwrap().bytes, "/FSelect"));
-    let pdf = export_with_options(&d, &x1a(None, 0.5)).unwrap().bytes;
+    assert!(has(&export(&d, &Interrupt::NONE).unwrap().bytes, "/FSelect"));
+    let pdf = export_with_options(&d, &x1a(None, 0.5), &Interrupt::NONE).unwrap().bytes;
     assert!(!has(&pdf, "/Font") && !has(&pdf, "/FSelect") && !has(&pdf, "/Type3"));
     let content = String::from_utf8(stream_after(&pdf, "/Contents 4 0 R")).unwrap();
     assert!(!content.contains("BT") && !content.contains("ActualText"), "{content}");
+}
+
+#[test]
+/// Each artboard becomes one labelled page, in document order.
+fn artboards_export_as_one_page_each() {
+    use photocraft_doc::{Artboard, Group};
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let mut d = Document::new("pages.pdf", Size { width: 40, height: 30 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for (rect, px) in [(Rect::new(0, 0, 20, 30), [1.0, 0.0, 0.0, 1.0]), (Rect::new(20, 0, 40, 30), [0.0, 0.0, 1.0, 1.0])] {
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, rect.x0, rect.y0, rect.x1, rect.y1, &px)));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new("Page", LayerContent::Group(group)));
+    }
+    let out = export(&d, &Interrupt::NONE).unwrap();
+    check_structure(&out.bytes);
+    let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
+    let pages = parsed.get_pages();
+    assert_eq!(pages.len(), 2);
+    for id in pages.values() {
+        let page = parsed.get_dictionary(*id).unwrap();
+        let media = page.get(b"MediaBox").unwrap().as_array().unwrap();
+        let w = media[2].as_float().or_else(|_| media[2].as_i64().map(|v| v as f32)).unwrap();
+        let h = media[3].as_float().or_else(|_| media[3].as_i64().map(|v| v as f32)).unwrap();
+        assert!((w - 20.0).abs() < 0.01 && (h - 30.0).abs() < 0.01, "page {w}x{h}");
+    }
+    assert_eq!(out.bytes.windows(15).filter(|w| *w == b"/Subtype /Image").count(), 2);
+}
+
+/// Side-by-side 2x2 artboards at 72 dpi, named by `names` (empty names are kept).
+fn artboard_doc(names: &[&str]) -> Document {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let width = (names.len() as u32).saturating_mul(2).max(2);
+    let mut d = Document::new("labels.pdf", Size { width, height: 2 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for (index, name) in names.iter().enumerate() {
+        let x0 = (index as i32) * 2;
+        let rect = Rect::new(x0, 0, x0 + 2, 2);
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, rect.x0, rect.y0, rect.x1, rect.y1, &[0.5, 0.5, 0.5, 1.0])));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new(*name, LayerContent::Group(group)));
+    }
+    d
+}
+
+/// The decompressed samples of page `id`'s first image XObject (`/Im0`).
+fn page_image(pdf: &lopdf::Document, id: lopdf::ObjectId) -> Vec<u8> {
+    let page = pdf.get_dictionary(id).expect("page dictionary");
+    let resources = page.get(b"Resources").expect("page resources").as_dict().expect("resources dictionary");
+    let xobjects = resources.get(b"XObject").expect("xobjects").as_dict().expect("xobject dictionary");
+    let image = xobjects.get(b"Im0").expect("Im0").as_reference().expect("image reference");
+    pdf.get_object(image).expect("image object").as_stream().expect("image stream").decompressed_content().expect("image samples")
+}
+
+/// A named artboard gives every page a `/PageLabels` entry, and an empty name gets an empty
+/// label dictionary rather than inheriting the previous name.
+#[test]
+fn page_labels_name_every_page_and_an_empty_name_does_not_inherit() {
+    let d = artboard_doc(&["A", "", "C"]);
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
+    check_structure(&pdf);
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    let labels = parsed
+        .catalog()
+        .unwrap()
+        .get(b"PageLabels")
+        .expect("a named artboard gives the PDF page labels")
+        .as_reference()
+        .expect("the label tree is an indirect object");
+    let nums = parsed.get_dictionary(labels).unwrap().get(b"Nums").unwrap().as_array().unwrap();
+    assert_eq!(nums.len(), 6, "one key and one label dictionary per page");
+    for page in 0..3 {
+        assert_eq!(nums[page * 2].as_i64().unwrap(), page as i64, "the tree starts at page index 0 and covers every page");
+    }
+    let label = |page: usize| nums[page * 2 + 1].as_dict().unwrap();
+    assert_eq!(label(0).get(b"P").unwrap(), &Object::String(vec![0xFE, 0xFF, 0x00, 0x41], StringFormat::Hexadecimal), "page 1 is A");
+    assert!(label(1).get(b"P").is_err(), "the empty name gets an empty dictionary, not A");
+    assert_eq!(label(2).get(b"P").unwrap(), &Object::String(vec![0xFE, 0xFF, 0x00, 0x43], StringFormat::Hexadecimal), "page 3 is C");
+    assert_eq!(parsed.get_pages().len(), 3);
+}
+
+/// With no non-empty name there is no label tree at all: an empty `/Nums` would be invalid.
+#[test]
+fn an_all_empty_artboard_names_document_has_no_page_labels_tree() {
+    let d = artboard_doc(&["", "", ""]);
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
+    check_structure(&pdf);
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    assert!(parsed.catalog().unwrap().get(b"PageLabels").is_err(), "no names means no /PageLabels");
+    assert!(!has(&pdf, "/PageLabels"));
+    assert_eq!(parsed.get_pages().len(), 3, "the pages themselves are still written");
+}
+
+/// Two artboards at the same rectangle: each page must hold only its own board's pixels, not
+/// the other board composited over it.
+#[test]
+fn overlapping_artboards_export_only_their_own_pixels() {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let mut d = Document::new("overlap.pdf", Size { width: 2, height: 2 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for (name, color) in [("Red", [1.0, 0.0, 0.0, 1.0]), ("Blue", [0.0, 0.0, 1.0, 1.0])] {
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, 0, 0, 2, 2, &color)));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(Rect::new(0, 0, 2, 2))), frame_stroke: None };
+        d.layers.push(Layer::new(name, LayerContent::Group(group)));
+    }
+    let pdf = export(&d, &Interrupt::NONE).unwrap().bytes;
+    let parsed = lopdf::Document::load_mem(&pdf).unwrap();
+    let pages = parsed.get_pages();
+    let images = pages.values().map(|id| page_image(&parsed, *id)).collect::<Vec<_>>();
+    assert_eq!(images.len(), 2);
+    assert_eq!(images[0], [255u8, 0, 0].repeat(4), "the bottom board's page is red, not blue over red");
+    assert_eq!(images[1], [0u8, 0, 255].repeat(4), "the top board's page is blue");
+}
+
+/// A large, mostly empty canvas must not be charged as if its whole area were rendered.
+#[test]
+fn sparse_canvas_artboards_export_without_a_false_memory_limit() {
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::F32, true);
+    let mut d = Document::new("sparse.pdf", Size { width: 9000, height: 9000 }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 72.0;
+    for index in 0..2 {
+        let x0 = index * 10;
+        let rect = Rect::new(x0, 0, x0 + 2, 2);
+        let layer = Layer::new("Pixels", LayerContent::Raster(solid(fmt, rect.x0, 0, rect.x1, 2, &[1.0, 0.0, 0.0, 1.0])));
+        let group = Group { children: vec![layer], expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new("Page", LayerContent::Group(group)));
+    }
+    let out = export(&d, &Interrupt::NONE).expect("two 2x2 boards on a 9000x9000 canvas must fit the export budget");
+    let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
+    assert_eq!(parsed.get_pages().len(), 2);
+}
+
+/// Seven US Letter boards at 300 dpi with the importer's gaps: the pages are retained as encoded
+/// data, but no whole-canvas buffer exists, so the old whole-canvas charge rejected this.
+#[test]
+fn seven_us_letter_artboards_export_without_a_false_memory_limit() {
+    const PAGE_W: u32 = 2550;
+    const PAGE_H: u32 = 3300;
+    const GAP: u32 = 80;
+    const PAGES: u32 = 7;
+    let mut d = Document::new("letters.pdf", Size { width: PAGES * PAGE_W + (PAGES - 1) * GAP, height: PAGE_H }, ColorMode::Rgb, SampleType::F32);
+    d.resolution_dpi = 300.0;
+    for index in 0..PAGES {
+        let x0 = (index * (PAGE_W + GAP)) as i32;
+        let rect = Rect::new(x0, 0, x0 + PAGE_W as i32, PAGE_H as i32);
+        let group = Group { children: Vec::new(), expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+        d.layers.push(Layer::new(format!("Letter {}", index + 1), LayerContent::Group(group)));
+    }
+    let out = export(&d, &Interrupt::NONE).expect("seven US Letter pages at 300 dpi fit the export budget");
+    let parsed = lopdf::Document::load_mem(&out.bytes).unwrap();
+    assert_eq!(parsed.get_pages().len(), 7);
+}
+
+/// PDF/X writes one page, and says so when the document has artboards.
+#[test]
+fn pdf_x_says_artboards_share_one_page() {
+    use photocraft_doc::{Artboard, Group};
+    let mut d = doc(ColorMode::Rgb);
+    let rect = Rect::new(0, 0, d.size.width as i32, d.size.height as i32);
+    let group = Group { children: Vec::new(), expanded: true, artboard: Some(Artboard::new(rect)), frame_stroke: None };
+    d.layers.push(Layer::new("Board", LayerContent::Group(group)));
+    let out = export_with_options(&d, &x1a(None, 0.0), &Interrupt::NONE).unwrap();
+    assert_eq!(lopdf::Document::load_mem(&out.bytes).unwrap().get_pages().len(), 1);
+    assert!(out.warnings.iter().any(|w| w.contains("artboards")), "{:?}", out.warnings);
 }
