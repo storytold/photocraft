@@ -185,9 +185,9 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
                 // With Anti-alias off the tip has a hard edge (#11917): a pixel it reaches at all
-                // is replaced fully, not blended by its partial coverage.
+                // takes the dab's full strength (its flow and pressure), not its partial coverage.
                 let cover = fp.at(x, y);
-                let cover = if rs.anti_alias || cover <= 0.0 { cover } else { 1.0 };
+                let cover = if rs.anti_alias || cover <= 0.0 { cover } else { fp.dab.alpha };
                 let k = cover * weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
                 if k <= 0.0 {
                     continue;

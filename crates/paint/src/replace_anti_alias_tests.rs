@@ -18,9 +18,13 @@ fn target() -> Surface {
 }
 
 fn click(anti_alias: bool) -> Surface {
+    click_at_flow(anti_alias, 1.0)
+}
+
+fn click_at_flow(anti_alias: bool, flow: f32) -> Surface {
     let mut s = target();
     let stroke = Stroke {
-        brush: BrushSettings { size: 80.0, hardness: 1.0, spacing: 0.25, pressure_size: false, ..Default::default() },
+        brush: BrushSettings { size: 80.0, hardness: 1.0, spacing: 0.25, flow, pressure_size: false, ..Default::default() },
         points: vec![StrokePoint::new(100.0, 120.0, 1.0)],
     };
     let rs = ReplaceSettings {
@@ -88,4 +92,15 @@ fn a_colour_boundary_stays_hard_either_way() {
         assert_ne!(px(&s, 100, 139), RED, "y 139 replaced (anti-alias {anti_alias})");
         assert_eq!(px(&s, 100, 140), [255, 255, 255], "y 140 white (anti-alias {anti_alias})");
     }
+}
+
+#[test]
+fn anti_alias_off_keeps_the_brush_flow() {
+    // A 50 % flow dab replaces half way inside the tip whichever the setting, and with Anti-alias
+    // off its rim pixel takes that same strength rather than the full replacement.
+    let (on, off) = (click_at_flow(true, 0.5), click_at_flow(false, 0.5));
+    let centre = px(&on, 100, 120);
+    assert!(centre != RED && centre != full(), "a half-strength dab: {centre:?}");
+    assert_eq!(px(&off, 100, 120), centre, "the centre keeps the flow");
+    assert_eq!(px(&off, 58, 120), centre, "the hard rim takes the dab's strength");
 }
