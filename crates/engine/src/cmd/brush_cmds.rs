@@ -855,9 +855,14 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
     Ok((Stroke { brush, points: pts }, rs, id))
 }
 
+/// The History state (and recorded step) name of a Color Replacement edit.
+pub const COLOR_REPLACEMENT_STEP: &str = "Color Replacement Tool";
+
 fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
-    let dmg = s.edit("Color Replacement", |doc, _| {
+    // The reference application names every click, stroke and Shift+click segment "Color
+    // Replacement Tool" (#11933); the command's label is the same, so recorded actions match.
+    let dmg = s.edit(COLOR_REPLACEMENT_STEP, |doc, _| {
         let sel = doc.selection.clone();
         let lock = doc.effective_locks(id).transparency;
         let surf = paint_surface(doc, id, &json!({}))?;
@@ -1340,7 +1345,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         spec!(
             "paint.colorReplacement",
-            "Color Replacement",
+            "Color Replacement Tool",
             r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
             crate::commands::has_paintable,
             color_replacement,
@@ -1383,3 +1388,7 @@ mod tests;
 
 #[cfg(test)]
 mod mixer_live_tests;
+
+#[cfg(test)]
+#[path = "color_replacement_history_name_tests.rs"]
+mod color_replacement_history_name_tests;
