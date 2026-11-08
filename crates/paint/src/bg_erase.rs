@@ -40,9 +40,31 @@ impl Default for BgEraseSettings {
     }
 }
 
-/// Largest per-channel difference over the colour channels.
+/// Colour distance of `a` from `b` over the colour channels: the largest increase plus the largest
+/// decrease (#11901). Changes in the same direction count like the largest of them; changes in
+/// opposite directions add up, as the reference application measures them (a red-to-green edge is
+/// about twice as far as one channel alone). One channel (Gray) gives the absolute difference.
 fn dist(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b).fold(0.0f32, |m, (x, y)| m.max((x - y).abs()))
+    let (up, down) = a.iter().zip(b).fold((0.0f32, 0.0f32), |(up, down), (x, y)| {
+        let diff = x - y;
+        (up.max(diff), down.max(-diff))
+    });
+    up + down
+}
+
+/// The match weight of one dab for a colour `d` away from the sampled colour (#11901): an exact
+/// match is erased fully, then the weight falls off linearly over the whole Tolerance `tol` after
+/// a short plateau `d0 = min(tol / 20, 8 levels)`, and colours at or beyond the Tolerance are kept.
+/// Measured in the reference application with single clicks (one dab) at Tolerance 10 to 100.
+fn graded_weight(d: f32, tol: f32) -> f32 {
+    if !d.is_finite() || d >= tol {
+        return if d <= 0.0 { 1.0 } else { 0.0 };
+    }
+    let d0 = (tol / 20.0).min(8.0 / 255.0);
+    if d <= d0 {
+        return 1.0;
+    }
+    (1.0 - (d - d0) / (tol - d0)).clamp(0.0, 1.0)
 }
 
 /// Erase along `stroke`. The brush opacity is ignored (Photoshop's Background Eraser has none);
@@ -77,11 +99,10 @@ pub fn background_eraser_effect(pre: &Surface, bs: &BgEraseSettings) -> Option<i
     let (sampling, limits, protect_foreground) = (bs.sampling, bs.limits, bs.protect_foreground);
     let mut once: Option<Option<Vec<f32>>> = None;
     let match_w = move |d: f32| -> f32 {
-        if d > tol {
+        if soft {
+            graded_weight(d, tol)
+        } else if d > tol {
             0.0
-        } else if soft && tol > 0.0 {
-            // Soft falloff over the last quarter of the tolerance.
-            ((tol - d) / (tol * 0.25)).clamp(0.0, 1.0)
         } else {
             1.0
         }
@@ -190,6 +211,10 @@ fn keep_connected(weight: &mut [f32], w: usize, h: usize, sx: usize, sy: usize) 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "bg_erase_graded_alpha_tests.rs"]
+mod graded_alpha_tests;
 
 #[cfg(test)]
 mod tests {
