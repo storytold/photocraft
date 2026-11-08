@@ -621,7 +621,9 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
     if pts.len() < 3 {
         return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "needs at least 3 points".into() });
     }
-    polygon_selection(s, "select.lasso", "Lasso", &pts, p)
+    // The History step is named after the tool: the Polygonal Lasso sends `polygonal` (Photoshop).
+    let step = if b(p, "polygonal", false) { "Polygonal Lasso" } else { "Lasso" };
+    polygon_selection(s, "select.lasso", step, &pts, p)
 }
 
 /// Selects the polygon `pts` with the lasso tools' `mode`, `antiAlias` and `feather` params, as
@@ -754,7 +756,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.lasso",
             "Lasso",
             [],
-            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0}"##,
+            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false}"##,
             has_doc,
             lasso
         ),

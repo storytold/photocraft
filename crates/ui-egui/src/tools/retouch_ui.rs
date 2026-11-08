@@ -313,6 +313,30 @@ pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modi
     sel.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) > 0.0
 }
 
+/// A Patch or Content-Aware Move lasso that makes a new selection is being drawn: the selection it
+/// replaces is hidden from the press on, as in Photoshop, rather than shown beside the new outline
+/// until the release (#11024). Adding, subtracting and intersecting keep it visible. A drag pressed
+/// on another document hides nothing, even before `cancel_stale` drops it (the active document can
+/// change between `sync_views` and the canvas paint).
+pub fn patch_replaces_selection(app: &PhotocraftApp) -> bool {
+    app.drag.as_ref().is_some_and(|d| {
+        matches!(d.tool, Tool::Patch | Tool::ContentAwareMove)
+            && d.document.as_ref().is_none_or(|doc| doc.is_active(app))
+            && !patch_drags_selection(app, d.start, d.modifiers)
+            && crate::canvas::selection_mode(app, d.modifiers) == "replace"
+    })
+}
+
+/// A Patch or Content-Aware Move drag belongs to the document it was pressed on: once another one
+/// is active it is dropped, so it neither hides that document's selection nor lassos or patches it
+/// on release, and its own document shows its selection again (#11024). A document reopened with
+/// the same ID is another one too.
+pub fn cancel_stale(app: &mut PhotocraftApp) {
+    if app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Patch | Tool::ContentAwareMove) && d.document.as_ref().is_some_and(|doc| !doc.is_active(app))) {
+        app.drag = None;
+    }
+}
+
 /// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
 /// canvas (the engine rejects a patch or move that leaves it).
 pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
@@ -542,8 +566,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::Patch => {
-            // Photoshop's options bar: Patch: Normal (Source / Destination) or Content-Aware
-            // (Structure, Color, Sample All Layers).
+            // Photoshop's options bar: the lasso's selection mode, then Patch: Normal (Source /
+            // Destination) or Content-Aware (Structure, Color, Sample All Layers).
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Patch:"));
             let kinds = [("normal".to_string(), tl!("Normal")), ("contentAware".to_string(), tl!("Content-Aware"))];
             let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
@@ -567,6 +593,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Lasso around an area, then drag the selection"));
         }
         Tool::ContentAwareMove => {
+            // The lasso's selection mode leads, as on the Patch tool's bar (#11024).
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Mode:"));
             let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
             crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut o.cam_mode, &modes, 90.0);
