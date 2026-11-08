@@ -1774,11 +1774,11 @@ fn delete_row(app: &mut PhotocraftApp, action: usize, step: Option<usize>) -> bo
     true
 }
 
-/// Outline a footer button a dragged row would be dropped on.
+/// Outline a footer button a dragged row would be dropped on (an outline only, so the icon
+/// stays visible).
 fn drop_target_highlight(ui: &egui::Ui, response: &egui::Response, active: bool, t: &Tokens) {
     if active && response.contains_pointer() {
-        ui.painter().rect_filled(response.rect, t.radius_sm, t.hover);
-        ui.painter().rect_stroke(response.rect, t.radius_sm, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(response.rect, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
     }
 }
 
