@@ -121,3 +121,21 @@ fn notes_from_a_pdf_are_refused_on_save() {
     }
     assert!(export_item("file.import.notes", &json!({"path": "/work/review.psd"}), "S").is_some());
 }
+
+/// An `apply` naming a data set that isn't valid UTF-16 (an unpaired surrogate) has no
+/// `image.applyDataSet` name that saves back the same reference, so it keeps the Photoshop step
+/// and round-trips unchanged (CodeRabbit review on events.rs:1235).
+#[test]
+fn a_data_set_name_with_an_unpaired_surrogate_keeps_the_photoshop_step() {
+    let mut reference = name_ref("dataSetClass", "");
+    if let D::Reference(items) = &mut reference
+        && let [ReferenceItem::Name { name, .. }] = items.as_mut_slice()
+    {
+        *name = UnicodeString(vec![u16::from(b'A'), 0xD800, 0]);
+    }
+    let unpaired = desc("null").with("null", reference);
+    let (mut s, _) = load(vec![named("apply", "Apply Data Set", unpaired.clone())]);
+    assert_ne!(s.actions.list[0].steps[0].0, "image.applyDataSet", "{:?}", s.actions.list[0].steps);
+    let back = saved(&mut s);
+    assert_eq!((back[0].event.id(), back[0].descriptor.as_ref()), ("apply".to_string(), Some(&unpaired)));
+}
