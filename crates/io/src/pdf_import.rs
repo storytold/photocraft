@@ -147,6 +147,9 @@ pub fn import(name: &str, bytes: &[u8], opts: &ImportOptions, ctl: &Interrupt) -
         if width > raster::MAX_SIDE || height > raster::MAX_SIDE || u64::from(width) * u64::from(height) > raster::MAX_PIXELS {
             return Err(IoError::Unsupported(format!("PDF page {page_number} is too large at {dpi:.0} dpi; lower the import DPI")));
         }
+        // A cache per page, deliberately: a shared one would keep decoded images and fonts alive
+        // across up to 16 pages outside the pixel budget, and would hide an image-decode warning
+        // on a later page after the page that first hit it.
         let cache = RenderCache::new();
         let options = raster::Options {
             scale: [(dpi / 72.0) as f32; 2],
@@ -347,10 +350,11 @@ mod tests {
     }
 
     /// Hundreds of thousands of path operators take far longer than the watcher's polling
-    /// interval, so the interrupt lands mid-render and the page reports Cancelled.
+    /// interval, so the interrupt lands mid-render and the page reports Cancelled. A million
+    /// strokes leaves a wide margin even on a fast, optimised test build.
     #[test]
     fn a_dense_page_stops_when_the_interrupt_fires_mid_render() {
-        let pdf = dense_operator_pdf(300_000).expect("writing the dense PDF");
+        let pdf = dense_operator_pdf(1_000_000).expect("writing the dense PDF");
         let document = craft_pdf::open_slice_with_options(&pdf, None, &craft_pdf::OpenOptions::default()).expect("the dense PDF opens");
         let cache = RenderCache::new();
         let options =
