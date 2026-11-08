@@ -600,6 +600,84 @@ fn recorded_layer_selection_replays_by_name_on_another_document() {
 /// #7845: dragging a layer in the Layers panel while recording keeps the drop target by name,
 /// so the action plays on another document (whose layer ids differ) instead of failing with
 /// "no such layer". The reporter's steps, replayed on a new document.
+/// #10485: a mask thumbnail dropped on another layer while recording keeps its destination by
+/// name, so the action moves the mask to the same layer in another document (whose ids differ)
+/// rather than to whichever layer has the recorded id there.
+#[test]
+fn recorded_mask_drop_replays_on_another_document() {
+    let masked = |s: &mut Session, name: &str| {
+        let id = s.execute("layer.new.layer", json!({"name": name})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 1, "y": 1, "width": 4, "height": 4})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        id
+    };
+    let has_mask = |s: &Session, name: &str| s.active().unwrap().doc.walk().iter().any(|(_, _, l)| l.name == name && l.mask.is_some());
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let photo = masked(&mut s, "Photo");
+    let shadow = s.execute("layer.new.layer", json!({"name": "Shadow"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name": "Mask to shadow"})).unwrap();
+    s.execute("layer.layerMask.moveTo", json!({"layer": photo, "to": shadow, "copy": false})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].steps[0].1, json!({"layer": "Photo", "to": "Shadow", "copy": false}));
+    // Another document: an extra layer between them, so the recorded id is a different layer.
+    let saved = serde_json::to_string(&s.actions.list).unwrap();
+    let mut replay = Session::new();
+    replay.actions.list = serde_json::from_str(&saved).unwrap();
+    replay.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    masked(&mut replay, "Photo");
+    replay.execute("layer.new.layer", json!({"name": "Extra"})).unwrap();
+    replay.execute("layer.new.layer", json!({"name": "Shadow"})).unwrap();
+    let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert!(has_mask(&replay, "Shadow"), "the mask went to Shadow");
+    assert!(!has_mask(&replay, "Photo") && !has_mask(&replay, "Extra"), "and nowhere else");
+}
+
+/// A mask dropped on one of several same-named layers records which of them it is, so replay
+/// picks the same one (not the topmost of that name), and an explicit name needs the occurrence.
+#[test]
+fn recorded_mask_drop_onto_a_duplicate_name_replays_on_the_same_layer() {
+    let build = |s: &mut Session, extra: bool| {
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        if extra {
+            s.execute("layer.new.layer", json!({"name": "Extra"})).unwrap();
+        }
+        let photo = s.execute("layer.new.layer", json!({"name": "Photo"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 1, "y": 1, "width": 4, "height": 4})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        let lower = s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap()["layer"].as_u64().unwrap();
+        let upper = s.execute("layer.new.layer", json!({"name": "Twin"})).unwrap()["layer"].as_u64().unwrap();
+        (photo, lower, upper)
+    };
+    let mask_on = |s: &Session, id: u64| s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().mask.is_some();
+    let mut s = Session::new();
+    let (photo, lower, upper) = build(&mut s, false);
+    s.execute("actions.record", json!({"name": "Copy mask"})).unwrap();
+    s.execute("layer.layerMask.moveTo", json!({"layer": photo, "to": lower, "copy": true})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(s.actions.list[0].steps[0].1, json!({"layer": "Photo", "to": "Twin", "toOccurrence": 0, "copy": true}));
+    assert!(mask_on(&s, lower) && !mask_on(&s, upper));
+    let saved = serde_json::to_string(&s.actions.list).unwrap();
+    let mut replay = Session::new();
+    replay.actions.list = serde_json::from_str(&saved).unwrap();
+    let (photo2, lower2, upper2) = build(&mut replay, true);
+    assert_ne!((photo, lower, upper), (photo2, lower2, upper2), "the ids differ");
+    let result = replay.execute("actions.play", json!({"action": 0})).unwrap();
+    assert!(result.get("failed").is_none(), "{result}");
+    assert!(mask_on(&replay, photo2), "a copy: the original stays");
+    assert!(mask_on(&replay, lower2), "the copy went to the lower Twin");
+    assert!(!mask_on(&replay, upper2), "not to the upper one");
+    // Explicit calls: a name shared by several layers needs `toOccurrence`; ids still work.
+    let err = replay.execute("layer.layerMask.moveTo", json!({"layer": photo2, "to": "Twin", "copy": true})).unwrap_err().to_string();
+    assert!(err.contains("toOccurrence"), "{err}");
+    replay.execute("layer.layerMask.moveTo", json!({"layer": photo2, "to": "Twin", "toOccurrence": 1, "copy": true})).unwrap();
+    assert!(mask_on(&replay, upper2), "occurrence 1 is the upper Twin");
+    replay.execute("layer.layerMask.delete", json!({"layer": upper2})).unwrap();
+    replay.execute("layer.layerMask.moveTo", json!({"layer": photo2, "to": upper2})).unwrap();
+    assert!(mask_on(&replay, upper2) && !mask_on(&replay, photo2), "a numeric id still names the layer");
+}
+
 #[test]
 fn recorded_layer_drag_replays_on_another_document() {
     for depth in [8, 16, 32] {
