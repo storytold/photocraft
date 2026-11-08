@@ -53,6 +53,8 @@ fn a_hostile_history_name_is_refused_without_a_step() {
     let steps = s.active().unwrap().history.past_len();
     for name in [json!(""), json!("   "), json!("x".repeat(65)), json!("a\nb"), json!(7), json!(["Patch Tool"])] {
         assert!(s.execute("select.lasso", json!({"points": TRIANGLE, "historyName": name})).is_err(), "{name}");
+        let polygonal = json!({"points": TRIANGLE, "polygonal": true, "historyName": name});
+        assert!(s.execute("select.lasso", polygonal).is_err(), "polygonal {name}");
     }
     assert_eq!(s.active().unwrap().history.past_len(), steps);
 }

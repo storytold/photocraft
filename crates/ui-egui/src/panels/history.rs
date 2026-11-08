@@ -62,16 +62,7 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
             }
-            let icon = match e.as_str() {
-                s if s.contains("Brush") || s.contains("Eraser") => "brush",
-                // The Layers panel's controls (layer.setProps).
-                "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
-                s if s.contains("Layer") => "layers",
-                s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
-                s if s.contains("Fill") => "paint-bucket",
-                "Open" => "image",
-                _ => "sliders-horizontal",
-            };
+            let icon = step_icon(&e);
             let color = if is_redo { t.text_faint } else { t.text };
             icons::paint(
                 ui,
@@ -197,6 +188,22 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// The History panel's source column at the left of a state or snapshot row: the History Brush
 /// icon on the source; a click makes the row the source (`history.setSource`). It sits above the
 /// row, so the click doesn't also step to the state or snapshot.
+/// The icon of a History step, from its name.
+pub(crate) fn step_icon(step: &str) -> &'static str {
+    match step {
+        s if s.contains("Brush") || s.contains("Eraser") => "brush",
+        // The Layers panel's controls (layer.setProps).
+        "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
+        s if s.contains("Layer") => "layers",
+        s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
+        // The selections the Patch tool draws (select.lasso's historyName).
+        "Patch Tool" => "square-dashed",
+        s if s.contains("Fill") => "paint-bucket",
+        "Open" => "image",
+        _ => "sliders-horizontal",
+    }
+}
+
 fn history_source_column(ui: &mut egui::Ui, row: Rect, salt: egui::Id, is_source: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let cell = Rect::from_min_size(row.min, vec2(24.0, row.height()));

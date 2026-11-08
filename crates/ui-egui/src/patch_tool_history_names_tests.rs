@@ -31,3 +31,10 @@ fn the_patch_tool_lasso_is_named_for_the_tool() {
     assert_eq!(drag_lasso(&mut app_with(Tool::Patch)).as_deref(), Some("Patch Tool"));
     assert_eq!(drag_lasso(&mut app_with(Tool::Lasso)).as_deref(), Some("Lasso"));
 }
+
+/// A Patch tool lasso keeps the selection icon in the History panel.
+#[test]
+fn the_patch_tool_step_has_the_selection_icon() {
+    assert_eq!(crate::panels::history_step_icon("Patch Tool"), crate::panels::history_step_icon("Lasso"));
+    assert_eq!(crate::panels::history_step_icon("Patch Tool"), "square-dashed");
+}

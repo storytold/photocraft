@@ -624,15 +624,13 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
     // The History step is named after the tool: the Polygonal Lasso sends `polygonal` (Photoshop).
     // The Patch and Content-Aware Move tools draw with this command and send their own name as
     // `historyName`, so the plain Lasso tool keeps "Lasso".
-    let step = if b(p, "polygonal", false) {
-        "Polygonal Lasso"
-    } else {
-        match p.get("historyName") {
-            None | Some(Value::Null) => "Lasso",
-            Some(Value::String(n)) if !n.trim().is_empty() && n.chars().count() <= 64 && !n.chars().any(char::is_control) => n.trim(),
-            Some(_) => return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "historyName must be a short text".into() }),
-        }
+    // A bad name is refused even when `polygonal` picks the step's name.
+    let named = match p.get("historyName") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) if !n.trim().is_empty() && n.chars().count() <= 64 && !n.chars().any(char::is_control) => Some(n.trim()),
+        Some(_) => return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "historyName must be a short text".into() }),
     };
+    let step = if b(p, "polygonal", false) { "Polygonal Lasso" } else { named.unwrap_or("Lasso") };
     polygon_selection(s, "select.lasso", step, &pts, p)
 }
 
