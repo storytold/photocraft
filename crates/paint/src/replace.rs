@@ -184,7 +184,11 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
         let mut enc = [0.0f32; 8];
         for y in r.y0..r.y1 {
             for x in r.x0..r.x1 {
-                let k = fp.at(x, y) * weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
+                // With Anti-alias off the tip has a hard edge (#11917): a pixel it reaches at all
+                // is replaced fully, not blended by its partial coverage.
+                let cover = fp.at(x, y);
+                let cover = if rs.anti_alias || cover <= 0.0 { cover } else { 1.0 };
+                let k = cover * weight[(y - r.y0) as usize * w + (x - r.x0) as usize];
                 if k <= 0.0 {
                     continue;
                 }
@@ -198,6 +202,10 @@ pub fn color_replacement_effect(pre: Surface, rs: ReplaceSettings) -> impl FnMut
         }
     }
 }
+
+#[cfg(test)]
+#[path = "replace_anti_alias_tests.rs"]
+mod replace_anti_alias_tests;
 
 #[cfg(test)]
 mod tests {
