@@ -142,3 +142,17 @@ fn the_canvas_right_click_opens_no_menu_for_a_quad_left_from_another_document() 
     assert!(app.ui.canvas_tool_menu.is_none());
     assert!(app.ui.perspective_crop.is_none(), "the stale quad is dropped");
 }
+
+#[test]
+fn after_a_tool_switch_the_menu_does_nothing() {
+    // `ui.set` switches tools before the menu is dismissed (no frame between): neither row acts.
+    let (mut app, ctx) = app();
+    app.ui.perspective_crop = Some(QUAD);
+    right_click(&mut app, &ctx, 100.0, 70.0);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool": "Pencil"}))["ok"], true);
+    for id in [PCROP_COMMIT, PCROP_CANCEL] {
+        assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": id}))["ok"], false, "{id}");
+    }
+    assert_eq!(size(&app), (200, 150), "nothing cropped");
+    assert_eq!(app.ui.perspective_crop, Some(QUAD), "the quad is kept");
+}

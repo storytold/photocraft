@@ -902,7 +902,9 @@ fn choose_pasteboard(app: &mut PhotocraftApp, menu: &CanvasToolMenu, command: &s
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
     if is_perspective_crop(menu) {
-        return matches!(command, PCROP_COMMIT | PCROP_CANCEL);
+        // Not after a switch to another tool that the menu hasn't seen yet (`show` closes it on
+        // the next frame): a queued `ui.context.choose` neither crops nor clears the quad.
+        return app.ui.tool == Tool::PerspectiveCrop && matches!(command, PCROP_COMMIT | PCROP_CANCEL);
     }
     if menu.crop.is_some() {
         return crop_enabled(app, menu, command);
