@@ -198,8 +198,9 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
     match ev {
         // ⇧⌥-click adds a colour sampler at the clicked pixel instead, as the Color Sampler tool
         // places one: no foreground change, nothing painted (#11890). A refused point (the
-        // document's limit) reports in the status bar as that tool's does.
-        ToolEvent::Down { x, y, .. } if mods.shift => {
+        // document's limit) reports in the status bar as that tool's does. A press on an existing
+        // point wasn't measured, so it samples the foreground as before.
+        ToolEvent::Down { x, y, .. } if mods.shift && !on_sampler(app, x, y) => {
             if let Err(e) = app.run("view.colorSamplers.add", json!({"x": x, "y": y})) {
                 app.ui.status = e;
                 app.ui.status_error = false;
@@ -212,6 +213,13 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
         ToolEvent::Up { .. } => app.alt_sampling = false,
     }
     true
+}
+
+/// Is document point (x, y) on a colour sampler, within the Color Sampler tool's reach of one (7
+/// screen pixels)?
+fn on_sampler(app: &PhotocraftApp, x: f64, y: f64) -> bool {
+    let tol = 7.0 / f64::from(app.point_zoom().max(0.01));
+    app.session.active().is_some_and(|d| d.color_samplers.iter().any(|q| (q[0] - x).hypot(q[1] - y) <= tol))
 }
 
 #[cfg(test)]

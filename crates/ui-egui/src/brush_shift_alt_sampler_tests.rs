@@ -97,3 +97,14 @@ fn a_shift_alt_click_off_the_canvas_adds_nothing_and_never_panics() {
     assert!(samplers(&mut app).is_empty());
     assert_eq!(foreground(&app), fg);
 }
+
+#[test]
+fn shift_alt_click_on_a_sampler_samples_the_foreground_as_before() {
+    // A press on an existing point wasn't measured, so it keeps the Alt eyedropper's sample.
+    let mut app = app(Tool::Brush);
+    app.run("view.colorSamplers.add", json!({"x": 120, "y": 80})).unwrap();
+    let before = samplers(&mut app);
+    click(&mut app, 121.0, 80.5, SHIFT_ALT);
+    assert_eq!(samplers(&mut app), before, "no second point on the first");
+    assert_eq!(foreground(&app)[..3], [1.0, 0.0, 0.0], "the red under the pointer, as an Alt+click");
+}
