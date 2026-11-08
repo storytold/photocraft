@@ -33,14 +33,41 @@ fn px(s: &Session, x: i32, y: i32) -> [f32; 4] {
     d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().rgba(x, y)
 }
 
+fn history_len(s: &Session) -> usize {
+    s.active().unwrap().history.past_len()
+}
+
+fn select_rect(s: &mut Session) {
+    s.execute("select.rect", json!({"x": 120, "y": 120, "width": 40, "height": 40})).unwrap();
+}
+
+const DESTINATION: fn() -> Value = || json!({"mode": "destination", "offset": [460, 280]});
+
 #[test]
 fn destination_moves_the_selection_with_the_patch_and_undo_restores_both() {
     let mut s = session();
-    s.execute("select.rect", json!({"x": 120, "y": 120, "width": 40, "height": 40})).unwrap();
+    select_rect(&mut s);
     let before = px(&s, 600, 420);
-    s.execute("paint.patch", json!({"mode": "destination", "offset": [460, 280]})).unwrap();
+    let source_before: Vec<[f32; 4]> = [(130, 130), (140, 140), (148, 140)].iter().map(|&(x, y)| px(&s, x, y)).collect();
+    let r = s.execute("paint.patch", DESTINATION()).unwrap();
+    assert_eq!(r["offset"], json!([460, 280]));
+    // The damage covers the patched area (the 40 px square at the destination, plus the solve's ring).
+    assert_eq!(r["damage"], json!([578, 398, 44, 44]));
     assert_eq!(bounds(&mut s), json!([580, 400, 40, 40]));
     assert_ne!(px(&s, 600, 420), before, "pixels changed too");
+    // Source pixels untouched.
+    let source_after: Vec<[f32; 4]> = [(130, 130), (140, 140), (148, 140)].iter().map(|&(x, y)| px(&s, x, y)).collect();
+    assert_eq!(source_after, source_before);
+    // The destination carries the source texture: the step between two neighbouring checker cells is kept
+    // in the same direction and at a similar strength (the seamless clone adds a smooth colour correction, and the
+    // red channel clamps at 0 on the dark green, so the step shrinks).
+    let step_src = px(&s, 140, 140)[0] - px(&s, 148, 140)[0];
+    let step_dst = px(&s, 600, 420)[0] - px(&s, 608, 420)[0];
+    assert!(step_src * step_dst > 0.0 && step_dst.abs() > 0.2, "texture kept: source step {step_src}, destination step {step_dst}");
+    // The moved selection is still a hard-edged rectangle exactly filling its bounds.
+    let d = s.active().unwrap();
+    let sel = d.doc.selection.as_ref().unwrap();
+    assert!(is_hard_rect(sel, sel.content_bounds(), Rect::new(580, 400, 620, 440)));
     // One history state: a single undo brings back the pixels and the old selection.
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(bounds(&mut s), json!([120, 120, 40, 40]));
@@ -48,11 +75,91 @@ fn destination_moves_the_selection_with_the_patch_and_undo_restores_both() {
 }
 
 #[test]
-fn source_and_content_aware_keep_the_selection() {
+fn destination_selection_stays_when_it_is_not_a_plain_rectangle() {
+    let cases: [(&str, Value, Value); 4] = [
+        ("feathered", json!({"x": 120, "y": 120, "width": 40, "height": 40, "feather": 6.0}), json!(null)),
+        ("ellipse", json!({"x": 120, "y": 120, "width": 40, "height": 40, "ellipse": true}), json!(null)),
+        ("lasso", json!({"points": [[120, 120], [160, 130], [140, 165]]}), json!("lasso")),
+        ("rectangle with a hole", json!({"x": 120, "y": 120, "width": 40, "height": 40}), json!("hole")),
+    ];
+    for (name, params, kind) in cases {
+        let mut s = session();
+        let cmd = if kind == json!("lasso") { "select.lasso" } else { "select.rect" };
+        s.execute(cmd, params).unwrap();
+        if kind == json!("hole") {
+            // Same bounds as the rectangle, but not every pixel inside is fully selected.
+            s.execute("select.rect", json!({"x": 135, "y": 135, "width": 10, "height": 10, "mode": "subtract"})).unwrap();
+        }
+        let sel_before = bounds(&mut s);
+        let area = |s: &Session| -> Vec<[f32; 4]> { (400..440).flat_map(|y| (580..620).map(move |x| (x, y))).map(|(x, y)| px(s, x, y)).collect() };
+        let before = area(&s);
+        s.execute("paint.patch", DESTINATION()).unwrap();
+        assert_eq!(bounds(&mut s), sel_before, "{name}: the selection stays in place");
+        assert_ne!(area(&s), before, "{name}: the patch still lands");
+    }
+}
+
+#[test]
+fn partial_coverage_and_oversized_rectangles_are_not_constructible_apart_from_the_hole_case() {
+    // `plan.area` is the selection's own content bounds, so a rectangle larger than the area cannot
+    // exist, and the area is never wider than the selection. The only way the bounds equal the area
+    // yet coverage falls short is a hole (covered above). An inverted selection makes the area the
+    // whole canvas, which no non-zero drag can keep on the canvas, so Patch refuses it.
     let mut s = session();
-    s.execute("select.rect", json!({"x": 120, "y": 120, "width": 40, "height": 40})).unwrap();
+    select_rect(&mut s);
+    s.execute("select.inverse", json!({})).unwrap();
+    assert!(s.execute("paint.patch", DESTINATION()).is_err());
+}
+
+#[test]
+fn destination_without_a_selection_fails_and_leaves_history_alone() {
+    let mut s = session();
+    // A marker step after the setup, so a stray undo would be visible.
+    s.edit("marker", |doc, active| {
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 10, 20, 20), &[1.0, 0.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let h = history_len(&s);
+    assert!(s.execute("paint.patch", DESTINATION()).is_err());
+    assert_eq!(history_len(&s), h, "no history entry");
+    // Undo reverts the marker (the last real step), not the setup.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_ne!(px(&s, 15, 15), [1.0, 0.0, 0.0, 1.0], "the marker step was undone");
+    assert!((px(&s, 450, 300)[0] - 0.1).abs() < 0.01 && (px(&s, 450, 300)[1] - 0.6).abs() < 0.01, "the setup step is still there");
+}
+
+#[test]
+fn redo_restores_the_patched_pixels_and_the_moved_selection() {
+    let mut s = session();
+    select_rect(&mut s);
+    let before = px(&s, 600, 420);
+    s.execute("paint.patch", DESTINATION()).unwrap();
+    let patched = px(&s, 600, 420);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(bounds(&mut s), json!([120, 120, 40, 40]));
+    assert_eq!(px(&s, 600, 420), before);
+    s.execute("edit.redo", json!({})).unwrap();
+    assert_eq!(bounds(&mut s), json!([580, 400, 40, 40]));
+    assert_eq!(px(&s, 600, 420), patched);
+}
+
+#[test]
+fn source_mode_keeps_the_selection() {
+    let mut s = session();
+    select_rect(&mut s);
     s.execute("paint.patch", json!({"offset": [260, 0]})).unwrap();
     assert_eq!(bounds(&mut s), json!([120, 120, 40, 40]));
-    s.execute("paint.patch", json!({"offset": [260, 0], "contentAware": true})).unwrap();
+}
+
+#[test]
+fn content_aware_keeps_the_selection_and_changes_the_pixels() {
+    let mut s = session();
+    select_rect(&mut s);
+    // Content-Aware ignores the mode and fills the selection itself from the dragged-to place (the
+    // green half), so the pixels under the selection change.
+    let before = px(&s, 140, 140);
+    s.execute("paint.patch", json!({"offset": [400, 0], "contentAware": true})).unwrap();
     assert_eq!(bounds(&mut s), json!([120, 120, 40, 40]));
+    assert_ne!(px(&s, 140, 140), before, "the selected area was filled");
 }

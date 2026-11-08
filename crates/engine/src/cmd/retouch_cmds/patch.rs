@@ -213,8 +213,8 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
 
 /// Whether `sel` is a hard-edged rectangle exactly filling `area` (the only Destination selection
 /// measured to move with the patch).
-fn is_hard_rect(sel: &Surface, area: Rect) -> bool {
-    sel.default_pixel().first().copied().unwrap_or(0.0) <= 0.0 && sel.content_bounds() == area && coverage(sel, area).iter().all(|c| *c >= 1.0)
+fn is_hard_rect(sel: &Surface, bounds: Rect, area: Rect) -> bool {
+    sel.default_pixel().first().copied().unwrap_or(0.0) <= 0.0 && bounds == area && coverage(sel, area).iter().all(|c| *c >= 1.0)
 }
 
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -226,13 +226,13 @@ pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
     let dmg = if plan.destination {
         // Destination: a plain rectangular selection moves with the patch, in the same history state.
         let dmg = s.edit(label, |doc, _| {
-            let pre = doc.clone();
+            let sel = doc.selection.clone().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
             let (surf, lock) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
-            let sel = pre.selection.as_ref().ok_or_else(|| bad(CMD, "select the area to patch first"))?;
-            let dmg = patch_surface(surf, sel, &plan, lock, 1);
-            if is_hard_rect(sel, plan.area) {
+            let dmg = patch_surface(surf, &sel, &plan, lock, 1);
+            let bounds = sel.content_bounds();
+            if is_hard_rect(&sel, bounds, plan.area) {
                 let (dx, dy) = plan.offset;
-                doc.selection = Some(sel.translated(dx, dy, sel.content_bounds()));
+                doc.selection = Some(sel.translated(dx, dy, bounds));
             }
             Ok(dmg)
         })?;
