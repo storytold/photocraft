@@ -31,6 +31,7 @@ mod levels;
 mod selective_color;
 mod session;
 
+pub(crate) use basic::PHOTO_FILTER_MODE;
 #[cfg(test)]
 pub(crate) use basic::row_value;
 #[cfg(test)]
@@ -48,6 +49,7 @@ use hue_saturation::hue_saturation;
 #[cfg(test)]
 use hue_saturation::{lightness_track, move_hue_range_handle, saturation_track};
 use levels::levels;
+pub(crate) use levels::levels_drag;
 pub use levels::{auto_levels, gamma_from_pos, gamma_pos};
 use selective_color::selective_color;
 pub use session::{layer_editor, layer_mem, properties_coalesce, properties_reset, session_start};
@@ -72,6 +74,12 @@ pub const KINDS: [&str; 14] = [
 
 pub fn has_editor(kind: &str) -> bool {
     KINDS.contains(&kind)
+}
+
+/// Forget Photo Filter's Filter / Color choice in the editor memory `mem`, so the editor derives it
+/// from the colour again: a choice changed and then cancelled must not outlive the dialog (#9879).
+pub(crate) fn forget_photo_filter_mode(ctx: &egui::Context, mem: egui::Id) {
+    ctx.data_mut(|d| d.remove::<bool>(mem.with(PHOTO_FILTER_MODE)));
 }
 
 /// Kinds that draw a histogram behind their controls.
