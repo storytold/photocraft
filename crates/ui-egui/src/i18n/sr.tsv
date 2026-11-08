@@ -394,6 +394,8 @@
 	Match Color…	Uskladi boje…
 	Replace Color…	Zameni boju…
 	Equalize	Izjednači
+	Equalize Selected Area Only	Izjednači samo selekciju
+	Equalize Entire Image Based On Selected Area	Izjednači celu sliku prema selekciji
 	Auto Tone	Automatski ton
 	Auto Contrast	Automatski kontrast
 	Auto Color	Automatske boje
@@ -4679,3 +4681,15 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Prikaži granice sloja pri prelasku miša
 	Expand layer group on click	Proširi grupu slojeva klikom
 	Show hover bounds from Layers	Prikaži granice pri prelasku iz panela Slojevi
+	Saved Camera Raw settings to {file}	Подешавања Camera Raw сачувана у {file}
+	Save the settings to each raw's sidecar without opening it	Sačuvaj podešavanja u prateću datoteku svakog raw snimka bez otvaranja
+	No settings saved: these raws can't keep a sidecar here	Ništa nije sačuvano: ovi raw snimci ovde ne mogu imati prateću datoteku
+	Some settings could not be saved; the raws stay open	Neka podešavanja nije moguće sačuvati; raw snimci ostaju otvoreni
+	Nothing to save: these raws are at their default settings	Nema šta da se sačuva: ovi raw snimci imaju podrazumevana podešavanja
+# Artboard tool options bar (#11385)
+	Distribute Widths	Raspodeli širine
+	Distribute Heights	Raspodeli visine
+	Auto-nest Layers	Automatski ugnezdi slojeve
+	Auto-size Canvas	Automatski promeni veličinu platna
+	Keep Relative Position During Layer Reordering	Zadrži relativni položaj pri promeni redosleda slojeva
+	Shrinkwrap Canvas on Save	Smanji platno na sadržaj pri čuvanju

@@ -271,8 +271,15 @@ fn edit_contents_is_available_only_for_smart_objects() {
     let ids: Vec<_> = entries(&layer(&s), false, false).into_iter().flatten().map(|e| e.1).collect();
     let edit = ids.iter().position(|id| *id == "layer.smartObjects.editContents").expect("Edit Contents entry");
     assert_eq!(
-        ids[edit + 1..edit + 5],
-        ["layer.smartObjects.replaceContents", "layer.smartObjects.relinkToFile", "layer.smartObjects.convertToLayers", "layer.rasterize.smartObject"]
+        ids[edit + 1..edit + 6],
+        [
+            "layer.smartObjects.resetTransform",
+            "layer.smartObjects.replaceContents",
+            "layer.smartObjects.relinkToFile",
+            "layer.smartObjects.convertToLayers",
+            "layer.rasterize.smartObject"
+        ],
+        "Reset Transform follows Edit Contents, as in the reference flyout"
     );
 }
 
@@ -308,12 +315,14 @@ fn multi_selection_menu_rasterizes_the_selection() {
     let smart = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
     let ids = |multi| entries(&smart, multi, false).into_iter().flatten().map(|e| e.1).collect::<Vec<_>>();
     assert!(ids(false).contains(&"layer.smartObjects.editContents"), "a single smart object keeps its items");
+    assert!(ids(false).contains(&"layer.smartObjects.resetTransform"), "and its Reset Transform");
     let multi = ids(true);
     assert!(multi.contains(&"layer.rasterize.layer"));
     for single in [
         "layer.rasterize.smartObject",
         "layer.rasterize.shape",
         "layer.smartObjects.editContents",
+        "layer.smartObjects.resetTransform",
         "layer.smartObjects.replaceContents",
         "layer.smartObjects.relinkToFile",
         "layer.smartObjects.convertToLayers",
