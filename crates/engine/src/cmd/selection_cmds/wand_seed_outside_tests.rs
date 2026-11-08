@@ -19,14 +19,12 @@ fn ramp() -> Session {
     s
 }
 
-/// Anti-alias off: these tests check Contiguous and the modes with hard edges; the soft fringe
-/// near-matching neighbours get is tested in `photocraft_algo`'s wand anti-alias tests.
 fn wand(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
-    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "antiAlias": false})).unwrap();
+    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode})).unwrap();
 }
 
 fn wand_global(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
-    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "contiguous": false, "antiAlias": false})).unwrap();
+    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "contiguous": false})).unwrap();
 }
 
 /// The columns of row 400 that are at least half selected: (first, end), or `None`. Every
@@ -41,11 +39,12 @@ fn selected(s: &Session) -> Option<(i32, i32)> {
     Some((first as i32, last as i32 + 1))
 }
 
-/// Greys 100 to 130 (x 100–380) selected, as tolerance 32 on the first block selects them.
+/// Greys 100 to 130 (x 100–380) selected, as tolerance 32 on the first block selects them, plus
+/// the Anti-alias fringe: column 380 of grey 135 at about 251/255, as measured in #11776.
 fn ramp_selected() -> Session {
     let mut s = ramp();
     wand(&mut s, 110, 32.0, "replace");
-    assert_eq!(selected(&s), Some((100, 380)));
+    assert_eq!(selected(&s), Some((100, 381)));
     s
 }
 
@@ -54,7 +53,7 @@ fn a_seed_outside_the_selection_subtracts_nothing() {
     let mut s = ramp_selected();
     // Grey 145 (x 460–500) is outside the selection, though its own region reaches into it.
     wand(&mut s, 480, 32.0, "subtract");
-    assert_eq!(selected(&s), Some((100, 380)), "unchanged");
+    assert_eq!(selected(&s), Some((100, 381)), "unchanged");
 }
 
 #[test]
@@ -67,12 +66,14 @@ fn a_seed_outside_the_selection_intersects_to_nothing() {
 #[test]
 fn a_seed_inside_the_selection_works_as_before() {
     // Grey 125 with tolerance 10 reaches greys 115–135; inside the selection that is x 220–380.
+    // With the default Anti-alias fringe, as measured in #11779: Subtract leaves 100–219 (x 219
+    // keeps about 6/255, under the 0.5 cut) and Intersect 219–381.
     let mut s = ramp_selected();
     wand(&mut s, 320, 10.0, "subtract");
-    assert_eq!(selected(&s), Some((100, 220)));
+    assert_eq!(selected(&s), Some((100, 219)));
     let mut s = ramp_selected();
     wand(&mut s, 320, 10.0, "intersect");
-    assert_eq!(selected(&s), Some((220, 380)));
+    assert_eq!(selected(&s), Some((219, 381)));
 }
 
 #[test]
@@ -81,10 +82,10 @@ fn contiguous_off_keeps_the_global_match() {
     // x 220–500, wherever the seed lies.
     let mut s = ramp_selected();
     wand_global(&mut s, 480, 32.0, "subtract");
-    assert_eq!(selected(&s), Some((100, 220)));
+    assert_eq!(selected(&s), Some((100, 219)));
     let mut s = ramp_selected();
     wand_global(&mut s, 480, 32.0, "intersect");
-    assert_eq!(selected(&s), Some((220, 380)));
+    assert_eq!(selected(&s), Some((219, 381)));
 }
 
 #[test]
