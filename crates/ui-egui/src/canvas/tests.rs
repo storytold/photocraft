@@ -1925,7 +1925,10 @@ fn mixer_drag_shows_actual_mixed_paint_before_release_and_alt_never_paints() {
     tool_event(&mut app, ToolEvent::Up { x: 35.0, y: 30.0 }, egui::Modifiers::NONE);
     assert!(app.drag.is_none());
     assert!(app.session.tools.mixer.spatial.is_some());
-    assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    // The ⌥-click keeps the pixels and adds one "Mixer Brush" state (#11954).
+    assert!(*before == *app.session.active().unwrap().doc);
+    assert_eq!(app.session.active().unwrap().history.past_len(), count + 1);
+    let (before, count) = (app.session.active().unwrap().doc.clone(), count + 1);
     app.run("brush.mixer.load", json!({})).unwrap();
     tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
     tool_event(&mut app, ToolEvent::Move { x: 70.0, y: 30.0, pressure: 0.6 }, egui::Modifiers::NONE);

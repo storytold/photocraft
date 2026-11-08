@@ -134,8 +134,10 @@ fn mixer_alt_click_samples_the_tip_through_zoomed_rotated_canvas_input() {
         let load = state.spatial.as_ref().expect("Alt loads a spatial brush tip");
         assert!(load.iter().any(|c| c[0] > 0.9 && c[1] < 0.1 && c[3] > 0.9));
         assert!(load.iter().any(|c| c[1] > 0.9 && c[0] < 0.1 && c[3] > 0.9));
-        assert!(std::sync::Arc::ptr_eq(&before, &h.state().session.active().unwrap().doc));
-        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps);
+        // The ⌥-click keeps the pixels and adds one "Mixer Brush" state (#11954).
+        assert!(*before == *h.state().session.active().unwrap().doc);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
+        let steps = steps + 1;
         click(&mut h, 40.0, 50.0, Modifiers::NONE);
         let st = h.state().session.active().unwrap();
         let surface = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap();
@@ -332,12 +334,13 @@ fn alt_click_with_the_mixer_brush_loads_the_reservoir_not_the_foreground() {
     let mut h = harness(two_colours());
     h.state_mut().ui.tool = Tool::MixerBrush;
     h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
-    let rev = h.state().session.active().unwrap().revision;
+    let before = h.state().session.active().unwrap().doc.clone();
     assert!(h.state().session.tools.mixer.reservoir.is_none());
     click(&mut h, 50.0, 50.0, Modifiers::ALT);
     assert_eq!(h.state().session.tools.mixer.reservoir, Some([1.0, 0.0, 0.0, 1.0]), "⌥-click loaded red into the reservoir");
     assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0], "the foreground colour is unchanged");
-    assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted");
+    // The ⌥-click adds a "Mixer Brush" state (#11954) but paints nothing.
+    assert!(*before == *h.state().session.active().unwrap().doc, "nothing was painted");
     click(&mut h, 150.0, 50.0, Modifiers::ALT);
     assert_eq!(h.state().session.tools.mixer.reservoir, Some([0.0, 1.0, 0.0, 1.0]), "⌥-click loaded green");
     assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0]);

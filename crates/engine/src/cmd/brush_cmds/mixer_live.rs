@@ -362,7 +362,9 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(damage_json(s, damage))
 }
 
-/// Sampling changes only session tool state, never document pixels or document Undo.
+/// Sampling loads the session's tool state and never changes document pixels. A load adds one
+/// "Mixer Brush" history state with the pixels as they are, as the reference's ⌥-click does
+/// (#11954); a failed sample adds none.
 pub(super) fn sample(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("points").and_then(Value::as_array).is_some_and(|v| v.len() != 1) {
         return Err(bad("brush.mixer.sample", "exactly one sample point is required"));
@@ -445,6 +447,13 @@ pub(super) fn sample(s: &mut Session, p: &Value) -> Result<Value> {
         average[k] /= average[3];
     }
     average[3] = 1.0;
+    // The state keeps a floating selection, as the load did before it added one.
+    let floating = s.active().and_then(crate::float_cmds::floating).cloned();
+    s.edit("Mixer Brush", |_, _| Ok(()))?;
+    if let (Some(mut f), Some(st)) = (floating, s.active_mut()) {
+        f.revision = st.revision;
+        st.floating = Some(f);
+    }
     s.tools.mixer.load(average);
     s.tools.mixer.spatial = Some(load);
     s.tools.mixer.pickup = None;
