@@ -92,6 +92,7 @@ pub mod vanishing;
 pub mod vectorscope;
 mod video;
 pub mod warp;
+mod warp_tess;
 pub mod wideangle;
 
 pub use artistic::{GALLERY_CATEGORIES, GalleryEffect, GalleryFilter, GalleryParam, GalleryParamKind};

@@ -267,8 +267,19 @@ pub fn warp_patches_surface(
         let (x, y) = f(x0 + sw * u, y0 + sh * v);
         [x, y]
     };
-    let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh, facets);
-    let (verts, tris) = cell_triangles(&at, &leaves, [x0, y0, sw, sh]);
+    // An envelope is cut as the reference application cuts one (see `warp_tess`).
+    let envelope = (facets == Facets::Envelope).then(|| crate::warp_tess::envelope_mesh(&at)).flatten();
+    let (verts, tris) = match envelope {
+        Some(m) => {
+            let verts = m.uv.iter().zip(&m.pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();
+            let tris = m.quads.iter().flat_map(|&[c00, c10, c01, c11]| [[c00, c10, c11], [c00, c11, c01]]).collect();
+            (verts, tris)
+        }
+        None => {
+            let leaves = tessellate(&at, cuts_u, cuts_v, sw, sh, facets);
+            cell_triangles(&at, &leaves, [x0, y0, sw, sh])
+        }
+    };
     triangles(src, src_rect, &verts, &tris, interp, &Interrupt::NONE)
 }
 
