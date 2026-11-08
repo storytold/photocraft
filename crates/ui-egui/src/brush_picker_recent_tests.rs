@@ -276,3 +276,29 @@ fn every_brush_picked_on_the_row_counts_once_the_pointer_leaves() {
     h.run_steps(2);
     assert_eq!(recent(h.state()), [n[3].clone(), n[5].clone(), n[1].clone()], "both picks count, the last one first");
 }
+
+#[test]
+fn quick_clicks_on_two_neighbouring_tiles_pick_the_second() {
+    // Two clicks a few pixels apart across the gap between two tiles count as a double-click for
+    // egui, but they are on different brushes: the second click picks its own brush and the
+    // picker stays open.
+    let mut app = app();
+    let n = names(&app);
+    pick(&mut app, &n[3]);
+    pick(&mut app, &n[1]);
+    let mut h = harness(app);
+    assert_eq!(recent(h.state()), [n[1].clone(), n[3].clone()]);
+    let (a, b) = (h.get_by_label(&tile(&n[1])).rect(), h.get_by_label(&tile(&n[3])).rect());
+    let (p, q) = (egui::pos2(a.max.x - 1.0, a.center().y), egui::pos2(b.min.x + 1.0, b.center().y));
+    assert!(p.distance(q) < 6.0, "the clicks are close enough for a double-click");
+    for at in [p, q] {
+        h.hover_at(at);
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.run_steps(2);
+    }
+    assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(n[3].as_str()), "the second click picks its own brush");
+    assert!(h.state().ui.brush_picker.is_some(), "clicks on two brushes keep the picker open");
+}

@@ -444,13 +444,15 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
             );
             let resp = resp.on_hover_text(name);
             // The double-click chooses the brush its first click picked, even if the row has
-            // moved between the clicks (the pointer left it and came back).
+            // moved between the clicks (the pointer left it and came back). Two quick clicks on
+            // neighbouring tiles are two clicks, not a double-click.
             let first_click = picker_id().with("recent-first-click");
-            if resp.double_clicked() {
-                let first = ui.ctx().data_mut(|d| d.remove_temp::<String>(first_click)).unwrap_or_else(|| name.clone());
-                picks.push(Pick::List(Action::Choose(first)));
-            } else if resp.clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(first_click, name.clone()));
+            let first = if resp.double_clicked() { ui.ctx().data_mut(|d| d.remove_temp::<(String, egui::Pos2)>(first_click)) } else { None };
+            if resp.double_clicked() && first.as_ref().is_none_or(|(_, at)| r.contains(*at)) {
+                picks.push(Pick::List(Action::Choose(first.map_or_else(|| name.clone(), |(first, _)| first))));
+            } else if resp.clicked() || resp.double_clicked() {
+                let at = resp.interact_pointer_pos().unwrap_or_else(|| r.center());
+                ui.ctx().data_mut(|d| d.insert_temp(first_click, (name.clone(), at)));
                 picks.push(Pick::List(Action::Select(name.clone())));
             }
         }
