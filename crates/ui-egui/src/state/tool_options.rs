@@ -226,6 +226,9 @@ pub struct ToolOptions {
     pub bg_limits: String,
     pub bg_tolerance: f32,
     pub bg_protect_fg: bool,
+    /// The Background Eraser popup's "Tolerance:" pen control (#11910): `off`, `penPressure` (the
+    /// reference's default) or `stylusWheel`.
+    pub bg_tolerance_control: String,
     /// Color Replacement: mode (hue | saturation | color | luminosity), sampling (continuous |
     /// once | backgroundSwatch), limits (discontiguous | contiguous | findEdges), tolerance % and
     /// anti-alias, as `paint.colorReplacement` takes them.
@@ -251,6 +254,9 @@ pub struct ToolOptions {
     /// `paint.pencil`), as in Photoshop's options bar (#2662).
     #[serde(default = "default_eraser_mode")]
     pub eraser_mode: String,
+    /// Mixer Brush › Useful mixer brush combinations: the entry last picked, an index into
+    /// `brush_controls::MIXER_COMBINATIONS` (0 = Custom, #11946).
+    pub mixer_combination: usize,
     /// Magnetic Lasso: detection width (px, 1..256), edge contrast (%, 1..100), how often it
     /// fastens points by itself (0..100), and whether pen pressure narrows the width.
     pub magnetic_width: f32,
@@ -522,6 +528,7 @@ impl Default for ToolOptions {
             bg_limits: "contiguous".into(),
             bg_tolerance: 50.0,
             bg_protect_fg: false,
+            bg_tolerance_control: "penPressure".into(),
             cr_mode: "color".into(),
             cr_sampling: "continuous".into(),
             cr_limits: "contiguous".into(),
@@ -532,6 +539,7 @@ impl Default for ToolOptions {
             brush_clear: false,
             pencil_clear: false,
             eraser_mode: default_eraser_mode(),
+            mixer_combination: 0,
             magnetic_width: 10.0,
             magnetic_contrast: 10.0,
             magnetic_frequency: 57.0,

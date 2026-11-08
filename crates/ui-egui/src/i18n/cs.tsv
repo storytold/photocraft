@@ -448,8 +448,8 @@
 	Artboard…	Kreslicí plocha…
 	Artboard from Group…	Kreslicí plocha ze skupiny…
 	Artboard from Layers…	Kreslicí plocha z vrstev…
-	Layer via Copy	Vrstva kopírováním
-	Layer via Cut	Vrstva vyjmutím
+	Layer Via Copy	Vrstva kopírováním
+	Layer Via Cut	Vrstva vyjmutím
 	Layer From Background…	Vrstva z pozadí…
 	Layer from Background…	Vrstva z pozadí…
 	Background from Layer	Pozadí z vrstvy
@@ -3807,7 +3807,7 @@ curves	Smooth	Vyhladit
 	Scroll menu down	Posunout nabídku dolů
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Před pokračováním je nutné tuto textovou vrstvu rastrovat. Její text už nebude možné upravovat. Rastrovat text?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Před pokračováním je nutné tuto vrstvu tvaru rastrovat. Už ji nebude možné upravovat jako tvar. Rastrovat tvar?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Před pokračováním je nutné tento chytrý objekt rastrovat. Jeho obsah už nebude možné upravovat. Rastrovat chytrý objekt?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Před pokračováním je nutné tento chytrý objekt rastrovat. Jeho obsah už nebude možné upravovat. Rastrovat chytrý objekt?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Před pokračováním je nutné tuto vrstvu výplně rastrovat. Její výplň už nebude možné upravovat. Rastrovat vrstvu?
 	This layer must be rasterized before proceeding.	Před pokračováním je nutné tuto vrstvu rastrovat.
 	Color Picker (Background Color)	Výběr barvy (barva pozadí)
