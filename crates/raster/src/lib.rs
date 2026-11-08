@@ -770,14 +770,21 @@ impl Surface {
     /// clear pixel is empty whatever its stored colour, so this can be tighter than
     /// `content_bounds`. Otherwise it equals `content_bounds`.
     pub fn covered_bounds(&self) -> Rect {
-        let sample_bytes = self.format.sample.bytes();
-        let default_clear =
-            self.default_pixel.len().checked_sub(sample_bytes).and_then(|i| self.default_pixel.get(i..)).is_some_and(|a| a.iter().all(|&b| b == 0));
-        if !self.format.alpha || !default_clear {
+        if !self.default_is_clear() {
             return self.content_bounds();
         }
+        let sample_bytes = self.format.sample.bytes();
         let bpp = self.format.bytes_per_pixel();
         self.scan_bounds(|t| t.alpha_bounds(bpp, sample_bytes))
+    }
+
+    /// Whether the default pixel is clear: the surface has alpha and the default's alpha bytes are all zero.
+    /// Then [`Surface::covered_bounds`] holds every pixel that is not clear; otherwise the default is content
+    /// everywhere and it falls back to [`Surface::content_bounds`].
+    pub fn default_is_clear(&self) -> bool {
+        let sample_bytes = self.format.sample.bytes();
+        self.format.alpha
+            && self.default_pixel.len().checked_sub(sample_bytes).and_then(|i| self.default_pixel.get(i..)).is_some_and(|a| a.iter().all(|&b| b == 0))
     }
 
     /// Union of the per-tile bounds `f` finds, in surface coordinates.

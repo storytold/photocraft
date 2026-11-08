@@ -86,7 +86,8 @@ pub fn warp_mesh_surface_with(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f6
 
 fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp, ctl: &Interrupt) -> Surface {
     // Clear pixels carry no colour once premultiplied, so they are not content whatever colour they are stored in
-    // (white and black copies of one shape must warp alike, #10639): only the covered part of the rect is warped.
+    // (white and black copies of one shape must warp alike, #10639): with a clear default only the covered
+    // part of the rect is warped. An opaque default keeps the whole rect (see `warp_source_rect`).
     let src_rect = crate::transform::warp_source_rect(src, src_rect);
     if src_rect.is_empty() {
         let fmt = src.format();
@@ -828,5 +829,27 @@ mod tests {
             assert!((out.sample_channel(2, 2, 3) - 1.0).abs() < 1e-4, "{interp:?}: background alpha {}", out.sample_channel(2, 2, 3));
             assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "{interp:?}: patch");
         }
+    }
+
+    /// A translucent default is content too: it keeps the whole rect, so the background keeps its half alpha.
+    #[test]
+    fn a_translucent_default_survives_a_mesh_warp() {
+        let mut src = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.5]);
+        src.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0, 1.0]);
+        let identity = |x: f64, y: f64| (x, y);
+        let out = warp_mesh_surface(&src, Rect::new(0, 0, 32, 32), &identity, Interp::Bilinear);
+        assert!((out.sample_channel(2, 2, 3) - 0.5).abs() < 0.01, "background alpha {}", out.sample_channel(2, 2, 3));
+    }
+
+    /// A source without alpha (a Background layer) keeps its default-coloured areas through a mesh warp.
+    #[test]
+    fn a_source_without_alpha_keeps_its_background_through_a_mesh_warp() {
+        let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
+        let mut src = Surface::with_default(fmt, &[0.0, 0.0, 0.0]);
+        src.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0]);
+        let identity = |x: f64, y: f64| (x, y);
+        let out = warp_mesh_surface(&src, Rect::new(0, 0, 32, 32), &identity, Interp::Bilinear);
+        assert!((out.sample_channel(2, 2, 3) - 1.0).abs() < 1e-4, "background alpha {}", out.sample_channel(2, 2, 3));
+        assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "patch");
     }
 }
