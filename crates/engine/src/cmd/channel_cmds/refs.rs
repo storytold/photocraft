@@ -238,6 +238,24 @@ pub(super) fn gray_plane(doc: &Document, layer: Option<LayerId>, active: Option<
 /// A source spec `{document?, layer?, channel, invert?}`, reduced to planes over the canvas of
 /// the active document (sizes must match, as in Photoshop).
 pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Vec<Vec<f32>>> {
+    resolve_source(s, p, cmd, gray)?.planes(cmd)
+}
+
+/// A source spec checked and resolved against the session, ready to read on any thread: the
+/// cheap part of [`source`]. Reading its pixels ([`ResolvedSource::planes`]) renders composites
+/// and walks whole channels, which on a large document takes seconds, so a background job calls
+/// [`resolve_source`] on the UI thread and [`ResolvedSource::planes`] on its worker.
+pub(super) struct ResolvedSource {
+    doc: std::sync::Arc<Document>,
+    r: ChanRef,
+    layer: Option<LayerId>,
+    active: Option<LayerId>,
+    merged_transparency: bool,
+    gray: bool,
+    invert: bool,
+}
+
+pub(super) fn resolve_source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<ResolvedSource> {
     let di = doc_index(s, p, "document")?;
     let st = &s.documents()[di];
     let target = s.active().ok_or(EngineError::NoDocument)?;
@@ -257,27 +275,85 @@ pub(super) fn source(s: &Session, p: &Value, cmd: &str, gray: bool) -> Result<Ve
         p.get("channel").map_or(Some(ChanRef::Composite), |v| parse_ref(v, &st.doc)).ok_or_else(|| bad(cmd, "unknown `channel`"))?
     };
     let layer = source_layer(&st.doc, p, cmd)?;
-    let mut planes = if r == ChanRef::Transparency && p.get("layer").is_some_and(|v| v == "merged") {
+    Ok(ResolvedSource {
+        doc: st.doc.clone(),
+        r,
+        layer,
+        active: st.active_layer,
         // An explicit merged transparency source reads all visible layers. An omitted layer
         // retains the existing active-layer transparency behavior.
-        vec![photocraft_compose::render(&st.doc, st.doc.bounds()).px.iter().map(|p| p[3]).collect()]
-    } else if gray {
-        vec![gray_plane(&st.doc, layer, st.active_layer, r)?]
-    } else {
-        ref_planes(&st.doc, layer, st.active_layer, r)?
-    };
-    // Guard every caller (`.remove(0)` / `src[0]`) against an empty source.
-    if planes.is_empty() {
-        return Err(bad(cmd, "the source has no channels"));
+        merged_transparency: r == ChanRef::Transparency && p.get("layer").is_some_and(|v| v == "merged"),
+        gray,
+        invert: p.get("invert").and_then(Value::as_bool).unwrap_or(false),
+    })
+}
+
+impl ResolvedSource {
+    /// A layer's transparency over only the part of the canvas it can cover, as `(band, plane)`:
+    /// the plane is the layer's alpha inside `band` and the layer is transparent outside it.
+    /// `None` when the source is not one layer's own transparency with a transparent default
+    /// pixel (merged, inverted, a Background without alpha, a shape with no pixel cache): use
+    /// [`Self::planes`] then.
+    ///
+    /// [`Self::planes`] reads the whole canvas as RGBA `f32` to keep one channel of it: on a
+    /// gigapixel canvas that is tens of gigabytes of working memory and seconds of conversion,
+    /// even for a layer that covers a corner. This reads the alpha samples alone, only inside
+    /// the layer's tiles, in parallel rows.
+    pub(super) fn transparency_band(&self) -> Option<(photocraft_geom::Rect, Vec<f32>)> {
+        if self.r != ChanRef::Transparency || self.merged_transparency || self.invert {
+            return None;
+        }
+        let doc = &*self.doc;
+        let s = doc.layer(self.layer.or(self.active)?)?.surface()?;
+        let fmt = s.format();
+        if !fmt.alpha {
+            return None;
+        }
+        let a = fmt.mode.color_channels();
+        // Untiled pixels read as the default pixel: it must be transparent for them to be skipped.
+        if s.default_pixel().get(a).is_none_or(|v| *v != 0.0) {
+            return None;
+        }
+        let band = s.tile_bounds().intersect(&doc.bounds());
+        if band.is_empty() {
+            return Some((photocraft_geom::Rect::EMPTY, Vec::new()));
+        }
+        let w = band.width() as usize;
+        let mut plane = vec![0.0f32; w * band.height() as usize];
+        let row = |(i, out): (usize, &mut [f32])| s.sample_row_strided(band.y0 + i as i32, band.x0, 1, a, out);
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            use rayon::prelude::*;
+            plane.par_chunks_mut(w).enumerate().for_each(row);
+        }
+        #[cfg(target_arch = "wasm32")]
+        plane.chunks_mut(w).enumerate().for_each(row);
+        Some((band, plane))
     }
-    if p.get("invert").and_then(Value::as_bool).unwrap_or(false) {
-        for pl in &mut planes {
-            for v in pl.iter_mut() {
-                *v = 1.0 - *v;
+
+    /// The source's planes over its document's canvas (the heavy part of [`source`]).
+    pub(super) fn planes(&self, cmd: &str) -> Result<Vec<Vec<f32>>> {
+        let doc = &*self.doc;
+        let mut planes = if self.merged_transparency {
+            vec![photocraft_compose::render(doc, doc.bounds()).px.iter().map(|p| p[3]).collect()]
+        } else if self.gray {
+            vec![gray_plane(doc, self.layer, self.active, self.r)?]
+        } else {
+            ref_planes(doc, self.layer, self.active, self.r)?
+        };
+        // Guard every caller (`.remove(0)` / `src[0]`) against an empty source.
+        if planes.is_empty() {
+            return Err(bad(cmd, "the source has no channels"));
+        }
+        if self.invert {
+            for pl in &mut planes {
+                for v in pl.iter_mut() {
+                    *v = 1.0 - *v;
+                }
             }
         }
+        Ok(planes)
     }
-    Ok(planes)
 }
 
 // ---------------------------------------------------------------------------------------------

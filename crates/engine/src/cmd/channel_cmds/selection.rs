@@ -1,5 +1,5 @@
 use super::planes::{channel_format, next_alpha_name, plane_surface, read_plane};
-use super::refs::{ChanRef, bad, doc_index, parse_ref, source};
+use super::refs::{ChanRef, bad, doc_index, parse_ref, resolve_source};
 use super::view::{ChannelTarget, QuickMaskOptions};
 use super::{AlphaChannel, ColorIndicates, Document, EngineError, PixelFormat, Rect, Result, SelectionMode, Session, Surface, Value, json, operation, sel};
 
@@ -87,18 +87,47 @@ pub(super) fn load_selection(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let p = &targeted;
     // Composite and colour channels load their luminosity / values, as ⌘-clicking them does.
-    let plane = source(s, p, cmd, true)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
-    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
-    let label = match p.get("channel").and_then(|v| parse_ref(v, doc)) {
+    // Resolve (and report bad params) now; read the pixels in the job below.
+    let src = resolve_source(s, p, cmd, true)?;
+    let target = s.active().ok_or(EngineError::NoDocument)?;
+    let label = match p.get("channel").and_then(|v| parse_ref(v, &target.doc)) {
         Some(ChanRef::Transparency) => "Load Transparency",
         Some(ChanRef::LayerMask) => "Load Layer Mask",
         _ => "Load Selection",
     };
-    let selected = s.edit(label, |doc, _| {
-        doc.selection = sel::combine(doc.selection.as_ref(), &plane, doc.bounds(), mode);
-        Ok(doc.selection.is_some())
-    })?;
-    Ok(json!({ "selected": selected }))
+    // Reading the channel renders composites and walks whole planes: seconds on a large
+    // document. Run on the UI thread, that froze the window long enough for the Wayland
+    // compositor to drop the connection ("Broken pipe"), which closed PhotoCraft with all its
+    // documents. As a job it runs on a worker while the window keeps drawing. The target is
+    // locked meanwhile, so the selection captured here is still current when the result lands.
+    let (old, area) = (target.doc.selection.clone(), target.doc.bounds());
+    let label_owned = label.to_string();
+    crate::jobs::run(
+        s,
+        label,
+        true,
+        move |ctx| {
+            ctx.progress(0.0, "Reading channel");
+            // A layer's transparency (⌘-click its thumbnail): only the part the layer covers,
+            // combined as a band, never a canvas-sized plane (see `transparency_band`).
+            if let Some((band, plane)) = src.transparency_band() {
+                ctx.check()?;
+                ctx.progress(0.5, "Making selection");
+                return Ok(sel::combine_band(old.as_ref(), &plane, band, mode));
+            }
+            let plane = src.planes(cmd)?.into_iter().next().ok_or_else(|| bad(cmd, "the channel has no pixels"))?;
+            ctx.check()?;
+            ctx.progress(0.5, "Making selection");
+            Ok(sel::combine(old.as_ref(), &plane, area, mode))
+        },
+        move |s, selection| {
+            let selected = s.edit(&label_owned, |doc, _| {
+                doc.selection = selection;
+                Ok(doc.selection.is_some())
+            })?;
+            Ok(json!({ "selected": selected }))
+        },
+    )
 }
 
 // ---------------------------------------------------------------------------------------------

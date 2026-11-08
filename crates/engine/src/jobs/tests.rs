@@ -96,6 +96,22 @@ fn free_transform_runs_as_a_job_with_the_inline_result() {
 }
 
 #[test]
+fn load_selection_runs_as_a_job_with_the_inline_result() {
+    // On the UI thread a large canvas froze the window long enough for Wayland to drop it.
+    let load = json!({"channel": "transparency"});
+    let mut inline = session(300, 200);
+    inline.execute("select.loadSelection", load.clone()).unwrap();
+
+    let mut s = session(300, 200);
+    let steps = s.active().unwrap().history.past_len();
+    let id = job(s.start("select.loadSelection", load).unwrap());
+    let e = wait_event(&mut s, id);
+    assert!(matches!(e.outcome, JobOutcome::Done(_)), "{e:?}");
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "one undo step");
+    assert_eq!(s.active().unwrap().doc.selection, inline.active().unwrap().doc.selection, "the inline selection");
+}
+
+#[test]
 fn warp_runs_as_a_job_with_the_inline_result() {
     let arc = json!({"style": "arc", "bend": 30});
     let mut inline = session(300, 200);

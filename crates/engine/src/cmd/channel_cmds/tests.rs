@@ -1256,3 +1256,41 @@ fn merge_channels_waits_for_three_grayscale_documents() {
     s.execute("channel.merge", json!({"mode": "lab"})).unwrap();
     assert_eq!(s.documents().len(), 2, "the three of one size merged; the other is left");
 }
+
+#[test]
+fn loading_a_layers_transparency_reads_only_its_tiles_with_the_same_result() {
+    // A layer's own transparency is read from its tiles alone (`transparency_band`); the
+    // selection must match the full-canvas path (`planes` + `combine`) for the same source.
+    let cmd = "select.loadSelection";
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 300, "background": "transparent"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let id = s.active().unwrap().active_layer.unwrap();
+    s.edit("paint", |doc, _| {
+        let surf = doc.layer_mut(id).unwrap().surface_mut().unwrap();
+        surf.fill_rect(photocraft_geom::Rect::new(10, 10, 50, 30), &[1.0, 0.0, 0.0, 0.5]);
+        surf.fill_rect(photocraft_geom::Rect::new(300, 100, 420, 250), &[0.0, 1.0, 0.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let modes = [("new", SelectionMode::Replace), ("add", SelectionMode::Add), ("subtract", SelectionMode::Subtract), ("intersect", SelectionMode::Intersect)];
+    for (op, mode) in modes {
+        if op != "new" {
+            rect(&mut s, 20, 15, 400, 200, "new");
+        }
+        let p = json!({"channel": "transparency", "layer": id.0, "operation": op});
+        let (old, area) = (doc(&s).selection.clone(), doc(&s).bounds());
+        let src = super::refs::resolve_source(&s, &p, cmd, true).unwrap();
+        assert!(src.transparency_band().is_some(), "{op}: a layer's own transparency takes the band path");
+        let plane = src.planes(cmd).unwrap().into_iter().next().unwrap();
+        let expected = sel::combine(old.as_ref(), &plane, area, mode);
+        s.execute(cmd, p).unwrap();
+        for y in (0..300).step_by(7) {
+            for x in (0..600).step_by(7) {
+                let want = expected.as_ref().map_or(0.0, |m| m.sample_channel(x, y, 0));
+                let got = sel_at(&s, x, y);
+                assert!((want - got).abs() < 1e-4, "{op}: ({x}, {y}): {got} vs {want}");
+            }
+        }
+    }
+}
