@@ -1171,5 +1171,7 @@ that suggestion does not ask to replace the unsuffixed source. The engine's `pre
 option publishes the selected name exclusively without appending another timestamp. User edits
 to the suggestion are honoured; explicitly selecting an existing file can still trigger the
 native picker's confirmation, but publication never replaces it.
+The picker also passes its captured `naming` mode to the command. That per-export override applies
+only to a cloned preference value, so changing Preferences while the picker is open affects later exports.
 The browser retains its PNG Quick Export service and lets the browser manage filesystem collisions.
 Its final download name may differ from the name PhotoCraft requested.

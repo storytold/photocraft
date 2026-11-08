@@ -798,7 +798,9 @@ actual output. An explicit `path` is a naming base in Timestamp mode. A native s
 the timestamped name before checking replacement. It passes `preparedPath: true` with its selected
 `path` to avoid adding a second timestamp; edits to that suggested name are honoured. This flag
 requires Timestamp naming and an explicit nonempty path, and still uses exclusive publication.
-Default retains existing
-replacement and source-file confirmation behaviour. Browser Quick Export passes the timestamped
+The optional `naming` parameter (`"default"` or `"timestamp"`) overrides naming for one export
+without modifying preferences. A native picker captures and passes this value so later preference
+changes cannot alter its pending export. Without it, the current naming preference is used.
+Default retains existing replacement and source-file confirmation behaviour. Browser Quick Export passes the timestamped
 PNG name to the existing download service; the browser chooses the final filename on disk.
 Layer Quick Export and other save/export commands do not use this setting.

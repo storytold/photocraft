@@ -1413,6 +1413,27 @@ fn prepared_timestamp_quick_export_keeps_picker_name_and_publishes_exclusively()
     }
 }
 
+/// A naming override belongs to this export and never changes the stored preference.
+#[test]
+fn quick_export_naming_override_is_local_and_validated() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut s = session(8);
+    let prepared = dir.path().join("photo_20261108-120000-007.png");
+    let result = s.execute("file.export.quickExport", json!({"path": prepared, "naming": "timestamp", "preparedPath": true})).unwrap();
+    assert_eq!(result["path"], prepared.to_str().unwrap());
+    assert_eq!(s.prefs().export.quick_export_naming, crate::prefs::QuickExportNaming::Default);
+    s.execute("prefs.set", json!({"path": "export.quickExportNaming", "value": "timestamp"})).unwrap();
+    let plain = dir.path().join("plain.png");
+    let result = s.execute("file.export.quickExport", json!({"path": plain, "naming": "default"})).unwrap();
+    assert_eq!(result["path"], plain.to_str().unwrap());
+    assert_eq!(s.prefs().export.quick_export_naming, crate::prefs::QuickExportNaming::Timestamp);
+    let invalid = dir.path().join("invalid.png");
+    for naming in [json!("other"), json!(true), json!(2), Value::Null] {
+        assert!(s.execute("file.export.quickExport", json!({"path": invalid, "naming": naming})).is_err());
+    }
+    assert!(!invalid.exists());
+}
+
 /// Reject malformed or inapplicable prepared paths before any output is written.
 #[test]
 fn prepared_quick_export_requires_timestamp_naming_and_an_explicit_path() {

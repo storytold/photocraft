@@ -54,7 +54,13 @@ pub fn quick_export_target_is_own_file(s: &Session) -> bool {
 /// location from Export Preferences. `path` overrides the location ("ask" needs one).
 pub(super) fn quick_export(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.export.quickExport";
-    let prefs = s.prefs().export.clone();
+    let mut prefs = s.prefs().export.clone();
+    // A pending picker owns its naming policy even if Preferences changes before it answers.
+    // Override only this command's copy; the user's newer preference must remain stored.
+    if let Some(naming) = p.get("naming") {
+        prefs.quick_export_naming =
+            naming.as_str().and_then(crate::prefs::QuickExportNaming::parse).ok_or_else(|| bad(cmd, "`naming` must be `default` or `timestamp`"))?;
+    }
     let prepared_path = match p.get("preparedPath") {
         None => false,
         Some(Value::Bool(value)) => *value,

@@ -1169,7 +1169,8 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         let st = app.session.active().ok_or("no document")?;
         let stem = st.doc.name.rsplit_once('.').map_or(st.doc.name.as_str(), |(a, _)| a);
         let (mut suggested, doc) = (format!("{stem}.{fmt}"), st.doc.id);
-        let prepared_path = prefs.quick_export_naming == photocraft_engine::prefs::QuickExportNaming::Timestamp;
+        let naming = prefs.quick_export_naming;
+        let prepared_path = naming == photocraft_engine::prefs::QuickExportNaming::Timestamp;
         if prepared_path {
             // Native pickers confirm replacement before their callback runs. Offer the final
             // timestamped name now; the engine must publish it exclusively without stamping twice.
@@ -1181,7 +1182,7 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
         }
         return app.pick_export(&suggested, move |app, path| {
             app.refocus(doc)?;
-            quick_export(app, json!({"path": path, "preparedPath": prepared_path}))
+            quick_export(app, json!({"path": path, "preparedPath": prepared_path, "naming": naming}))
         });
     }
     let mut f = Map::new();
