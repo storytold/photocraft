@@ -429,6 +429,101 @@ fn crop_to_explicit_rect_can_extend_canvas() {
     assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 5), vec![1.0, 0.0, 0.0, 1.0]);
 }
 
+/// A rectangle that is passed but invalid is refused, not replaced by the selection (#9279).
+#[test]
+fn crop_refuses_a_bad_explicit_rect_instead_of_cropping_to_the_selection() {
+    let bad = [
+        json!({"x": 10, "y": 10, "width": 0, "height": 50}),
+        json!({"x": 10, "y": 10, "width": 20, "height": 0}),
+        json!({"x": 10, "y": 10, "width": -50, "height": 50}),
+        json!({"x": 10, "y": 10, "width": "100", "height": 50}),
+        json!({"x": 10, "y": 10, "width": true, "height": 50}),
+        json!({"width": 20, "height": 10}),
+        json!({"x": 1, "y": 1}),
+        json!({"x": 1, "y": null, "width": 20, "height": 10}),
+        json!({"height": 10}),
+    ];
+    for p in bad {
+        for selection in [true, false] {
+            let mut s = session();
+            if selection {
+                s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+            }
+            let (size, past) = (doc(&s).size, s.active().unwrap().history.past_len());
+            let err = s.execute("image.crop", p.clone()).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{p} (selection: {selection}): {err:?}");
+            assert_eq!(doc(&s).size, size, "{p} (selection: {selection})");
+            assert_eq!(doc(&s).selection.is_some(), selection, "{p}: the selection stays");
+            assert_eq!(s.active().unwrap().history.past_len(), past, "{p} (selection: {selection})");
+        }
+    }
+    // No rectangle at all (or every side null) still crops to the selection.
+    for p in [json!({}), json!({"x": null, "y": null, "width": null, "height": null})] {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+        s.execute("image.crop", p.clone()).unwrap();
+        assert_eq!(doc(&s).size, Size::new(20, 10), "{p}");
+    }
+    // Whole-number floats, as the Crop tool sends them, are a valid rectangle.
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+    s.execute("image.crop", json!({"x": 1.0, "y": 1.0, "width": 30.0, "height": 15.0})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(30, 15));
+    // Fractional pixels round, like the rectangle's `x`/`y` and every other pixel param
+    // (`commands::int`); a side that rounds to 0 is refused.
+    let mut s = session();
+    s.execute("image.crop", json!({"x": 0.4, "y": 0.6, "width": 20.6, "height": 9.5})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(21, 10));
+    let err = s.execute("image.crop", json!({"x": 0, "y": 0, "width": 0.4, "height": 5})).unwrap_err();
+    assert!(matches!(err, EngineError::BadParams { .. }), "{err:?}");
+    assert_eq!(doc(&s).size, Size::new(21, 10));
+}
+
+/// The explicit rectangle of #9279's edge cases, each with a selection elsewhere that a fallback
+/// would crop to: `0` is a given origin, numeric strings are not numbers (refused, as `x`/`y`
+/// already were), and a rectangle partly past the canvas is used as passed, never clamped.
+#[test]
+fn crop_rect_edge_cases_never_fall_back_to_the_selection() {
+    let with_selection = || {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+        s
+    };
+    // `x`/`y` of 0 count as given: the red square (10, 5)..(20, 15) stays where it was, where a
+    // crop to the selection would have moved it to (5, 3).
+    let mut s = with_selection();
+    s.execute("image.crop", json!({"x": 0, "y": 0, "width": 15, "height": 10})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(15, 10));
+    assert_eq!(doc(&s).layers[1].surface().unwrap().content_bounds(), Rect::new(10, 5, 15, 10));
+    // Numeric strings are refused on every side, with or without a selection.
+    for p in [
+        json!({"x": "0", "y": "0", "width": "15", "height": "10"}),
+        json!({"x": "0", "y": 0, "width": 15, "height": 10}),
+        json!({"x": 0, "y": 0, "width": 15, "height": "10"}),
+    ] {
+        for mut s in [with_selection(), session()] {
+            let err = s.execute("image.crop", p.clone()).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{p}: {err:?}");
+            assert_eq!(doc(&s).size, Size::new(40, 20), "{p}");
+        }
+    }
+    // Partly outside the canvas: the canvas grows to the rectangle, not to its overlap with the
+    // canvas or the selection.
+    let mut s = with_selection();
+    s.execute("image.crop", json!({"x": -10, "y": -5, "width": 30, "height": 40})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(30, 40));
+    assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 10), vec![1.0, 0.0, 0.0, 1.0]);
+    // Reveal All passes all four sides through the same check (here x = y = 0: the hidden pixels
+    // are past the right and bottom edges), so a selection doesn't change what it reveals.
+    let mut s = with_selection();
+    s.execute("image.canvasSize", json!({"width": 12, "height": 8, "anchor": "topLeft"})).unwrap();
+    s.execute("select.rect", json!({"x": 2, "y": 2, "width": 4, "height": 4})).unwrap();
+    assert_eq!(s.execute("image.revealAll", json!({})).unwrap()["changed"], true);
+    let size = doc(&s).size;
+    assert!(size.width >= 20 && size.height >= 15, "{size:?}: the red square is revealed");
+    assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(19, 14), vec![1.0, 0.0, 0.0, 1.0]);
+}
+
 #[test]
 fn crop_extension_fills_the_background_with_the_background_colour() {
     let mut shrink = Session::new();
@@ -986,6 +1081,28 @@ fn trim_based_on_top_left_colour() {
     .unwrap();
     s.execute("image.trim", json!({"basedOn": "topLeft"})).unwrap();
     assert_eq!(doc(&s).size, Size::new(10, 10));
+}
+
+#[test]
+fn trim_transparent_drops_alpha_that_rounds_to_zero_at_the_depth() {
+    // A faint pixel at (0, 0) on a 40 % layer: alpha 1 step × 0.4 rounds to 0 at 8 and 16 bits
+    // (the stored image is transparent there), so Trim keeps only the opaque square. A 1/255
+    // pixel is 0.4 × 257 ≈ 103 steps at 16 bits and any alpha is content at 32 bits: kept.
+    for (depth, faint, keeps) in [(8, 1.0 / 255.0, false), (16, 1.0 / 65535.0, false), (16, 1.0 / 255.0, true), (32, 1.0 / 65535.0, true)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth, "background": "transparent"})).unwrap();
+        s.edit("paint", |doc, _| {
+            let surf = doc.layers[0].surface_mut().unwrap();
+            surf.fill_rect(Rect::new(40, 40, 50, 50), &[1.0, 0.0, 0.0, 1.0]);
+            surf.fill_rect(Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, faint]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.setProps", json!({"layer": doc(&s).layers[0].id.0, "opacity": 0.4})).unwrap();
+        let r = s.execute("image.trim", json!({"basedOn": "transparent"})).unwrap();
+        let want = if keeps { json!({"x": 0, "y": 0, "width": 50, "height": 50}) } else { json!({"x": 40, "y": 40, "width": 10, "height": 10}) };
+        assert_eq!(r, want, "{depth}-bit, faint alpha {faint}");
+    }
 }
 
 #[test]

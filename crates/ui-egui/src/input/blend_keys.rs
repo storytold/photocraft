@@ -32,8 +32,7 @@ pub enum Pick {
     Mode(BlendMode),
     /// Painting tools only: paint transparency.
     Clear,
-    /// Painting tools only: paint behind the layer's pixels. Not implemented yet, so ⇧⌥Q is taken
-    /// (it must not reach another binding) and does nothing.
+    /// Brush and Pencil: paint behind the layer's pixels.
     Behind,
 }
 
@@ -265,7 +264,23 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
     let want = match pick {
         Pick::Mode(m) => Some(m),
         Pick::Clear => None,
-        Pick::Behind => return,
+        Pick::Behind => {
+            let item = crate::brush_mode_menu::Item::Behind;
+            let tool = app.ui.tool;
+            if app.session.active().is_none() || !crate::brush_mode_menu::enabled(app, item) {
+                return;
+            }
+            let Some((id, params)) = crate::brush_mode_menu::engine_call(app, tool, item) else { return };
+            crate::paint_mouse::sync_tool_brush(app);
+            if app.run(id, params).is_ok() {
+                match tool {
+                    Tool::Brush => app.ui.tool_options.brush_clear = false,
+                    Tool::Pencil => app.ui.tool_options.pencil_clear = false,
+                    _ => {}
+                }
+            }
+            return;
+        }
     };
     match target(app.ui.tool) {
         Target::Tool(modes) if modes.contains(&want) => set_tool_mode(app, want),
@@ -280,3 +295,7 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+#[path = "../brush_behind_key_tests.rs"]
+mod brush_behind_key_tests;
