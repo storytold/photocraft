@@ -4262,7 +4262,7 @@ curves	Smooth	Hamarlama
 	The file could not be saved.	Faylı saxlamaq mümkün olmadı.
 	Thickness	Qalınlıq
 	This Layer:	Bu qat:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Bu Ağıllı Obyekt davam etməzdən əvvəl rasterləşdirilməlidir. Onun məzmunu artıq redaktə edilə bilməyəcək. Ağıllı Obyekt rasterləşdirilsin?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Bu Ağıllı Obyekt davam etməzdən əvvəl rasterləşdirilməlidir. Onun məzmunu artıq redaktə edilə bilməyəcək. Ağıllı Obyekt rasterləşdirilsin?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Bu tənzimləmə ({key}) idxal edilmiş kimi saxlanılır və hələ redaktə edilə bilməz.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Davam etməzdən əvvəl bu doldurma qatsi rasterləşdirilməlidir. Onun doldurma məzmunu artıq redaktə edilə bilməyəcək. Qat rasterləşdirilsin?
 	This layer must be rasterized before proceeding.	Davam etməzdən əvvəl bu qat rasterləşdirilməlidir.
