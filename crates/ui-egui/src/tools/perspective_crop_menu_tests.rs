@@ -179,9 +179,11 @@ fn an_unknown_id_is_rejected_and_keeps_the_session() {
 #[test]
 fn crop_is_authorized_as_the_perspective_crop_command() {
     // The automation policy sees Crop as the `image.perspectiveCrop` call Enter makes, with its
-    // corners: a policy that denies it keeps the document as it was.
+    // corners and the W, H and resolution fields: a policy that denies it keeps the document as it was.
     let (mut app, ctx) = app();
     app.ui.perspective_crop = Some(QUAD);
+    let o = &mut app.ui.tool_options;
+    (o.crop_width, o.crop_height, o.crop_resolution) = ("120 px".into(), "90 px".into(), "150".into());
     let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let log = std::sync::Arc::clone(&seen);
     app.services.automation_command = Some(Box::new(move |id, params| {
@@ -197,5 +199,7 @@ fn crop_is_authorized_as_the_perspective_crop_command() {
     assert_eq!(app.ui.perspective_crop, Some(QUAD), "the quad is kept");
     let seen = seen.lock().unwrap().clone();
     let crop = seen.iter().find(|(id, _)| id == "image.perspectiveCrop").map(|(_, p)| p.clone());
-    assert_eq!(crop.map(|p| p["corners"].clone()), Some(json!(QUAD)), "the policy sees the quad's corners: {seen:?}");
+    let crop = crop.unwrap_or_default();
+    assert_eq!(crop["corners"], json!(QUAD), "the policy sees the quad's corners: {seen:?}");
+    assert_eq!((&crop["width"], &crop["height"], &crop["resolution"]), (&json!(120.0), &json!(90.0), &json!(150.0)), "and the crop size: {crop}");
 }
