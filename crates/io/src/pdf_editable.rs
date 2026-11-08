@@ -247,26 +247,27 @@ fn text_layer(text: String, run: &GlyphRun, number: usize) -> Layer {
 /// itself reports, and renders the caches so the page is complete before the engine refreshes it.
 fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, fonts: &[(u128, String, String, FontData)]) {
     let shared = photocraft_text::shared();
-    let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
-    let mut counts = std::collections::HashMap::new();
-    for (_, postscript, _, _) in fonts {
-        *counts.entry(postscript.as_str()).or_insert(0usize) += 1;
-    }
     let mut families = std::collections::HashMap::new();
-    for (key, postscript, derived, data) in fonts {
-        // Prefer an installed full family; a subset only holds the glyphs the page uses. The
-        // Device has the font program's PostScript name, not the PDF `/BaseFont`, so register
-        // the embedded face under that name (with a key suffix when two faces share it) rather
-        // than shadowing the real family.
-        let family = if engine.has_family(derived) {
-            derived.clone()
-        } else {
-            let alias =
-                if counts.get(postscript.as_str()).copied().unwrap_or(0) > 1 { format!("{postscript} {:08x}", *key as u32) } else { postscript.clone() };
-            let names = engine.register_font_data_as(data.as_ref().as_ref().to_vec(), &alias);
-            names.first().cloned().unwrap_or(alias)
-        };
-        families.insert(postscript.clone(), family);
+    {
+        let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
+        for (key, postscript, derived, data) in fonts {
+            // Prefer an installed full family; a subset only holds the glyphs the page uses. The
+            // Device has the font program's PostScript name, not the PDF `/BaseFont`; a
+            // content-keyed alias keeps two documents' subsets of one name apart for the life of
+            // the shared engine, and the same face imported twice reuses its registration.
+            let family = if engine.has_family(derived) {
+                derived.clone()
+            } else {
+                let alias = font_alias(postscript, *key);
+                if engine.has_family(&alias) {
+                    alias
+                } else {
+                    let names = engine.register_font_data_as(data.as_ref().as_ref().to_vec(), &alias);
+                    names.first().cloned().unwrap_or(alias)
+                }
+            };
+            families.insert(postscript.clone(), family);
+        }
     }
     for layer in layers {
         if let LayerContent::Text(text) = &mut layer.content {
@@ -277,10 +278,27 @@ fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, fonts: &
                 }
             }
             if !text.text.trim().is_empty() {
+                // Re-lock per layer so a text-heavy import does not hold the UI's engine for the
+                // whole cache-render loop.
+                let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
                 let _ = engine.render_layer(text, dpi as f32, fmt);
             }
         }
     }
+}
+
+/// A content key for an embedded face, used to group its glyphs and to keep aliases unique.
+fn font_content_key(data: &OutlineFontData) -> u128 {
+    let hash = blake3::hash(data.data.as_ref().as_ref());
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&hash.as_bytes()[..16]);
+    u128::from_le_bytes(key)
+}
+
+/// The family alias an embedded face is registered under: its PostScript name plus a content
+/// key, so subsets with the same name from different documents cannot replace each other.
+fn font_alias(postscript: &str, key: u128) -> String {
+    format!("{postscript} {key:016x}")
 }
 
 /// Collects filled and stroked paths and glyph runs; anything else marks the page unsupported.
@@ -531,7 +549,7 @@ impl<'a> Device<'a> for PathDevice<'_> {
         let advance = f64::from(outline.advance_width().unwrap_or(500.0)) / 1000.0 * size_px;
         let weight = font_weight(&data, &postscript);
         let italic = data.is_italic || name_has(&postscript, &["italic", "oblique"]);
-        let key = outline.font_cache_key();
+        let key = font_content_key(&data);
         let family = family_from_postscript(&postscript);
         if !self.fonts.iter().any(|(existing, _, _, _)| *existing == key) {
             self.fonts.push((key, postscript.clone(), family.clone(), data.data.clone()));
@@ -854,6 +872,9 @@ mod tests {
     use super::*;
     use crate::{ImportOptions, IoError, import_with_options_and_interrupt};
 
+    /// The embedded test font.
+    const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
     /// A one-page 200 x 100 pt PDF whose content stream is `content`.
     fn pdf(content: &str) -> Vec<u8> {
         pdf_with_resources(content, dictionary! {})
@@ -895,10 +916,14 @@ mod tests {
     /// [`text_pdf`] with the font named `name` (the same Inter bytes, so tests can exercise the
     /// name-based style rules).
     fn text_pdf_named(content: &str, name: &str) -> Vec<u8> {
-        const INTER: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+        text_pdf_bytes(content, name, INTER)
+    }
+
+    /// [`text_pdf`] with the font named `name` and the given font bytes.
+    fn text_pdf_bytes(content: &str, name: &str, font_bytes: &[u8]) -> Vec<u8> {
         let mut pdf = PdfDocument::with_version("1.5");
         let pages_id = pdf.new_object_id();
-        let font_file = pdf.add_object(Stream::new(dictionary! { "Length1" => INTER.len() as i64 }, INTER.to_vec()));
+        let font_file = pdf.add_object(Stream::new(dictionary! { "Length1" => font_bytes.len() as i64 }, font_bytes.to_vec()));
         let descriptor = pdf.add_object(dictionary! {
             "Type" => "FontDescriptor",
             "FontName" => Object::Name(name.as_bytes().to_vec()),
@@ -1091,6 +1116,38 @@ mod tests {
         let imported = import_with_options_and_interrupt("rotated.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
         assert!(!imported.warnings.iter().any(|warning| warning.contains("skewed or mirrored")), "{:?}", imported.warnings);
         assert_eq!(text_layer(&imported.document).text, "Hi");
+    }
+
+    #[test]
+    fn font_aliases_include_the_content_key() {
+        assert_ne!(font_alias("Inter-Regular", 1), font_alias("Inter-Regular", 2));
+        assert!(font_alias("Inter-Regular", 0x12ab).contains("Inter-Regular"));
+    }
+
+    #[test]
+    fn two_documents_with_one_font_name_keep_distinct_aliases() {
+        // Rename the bundled Inter family to one that is not installed, so the embedded face
+        // takes the alias path; same PostScript name and family, different bytes (a trailing byte
+        // changes the content key), as two different subsets of one font would.
+        let mut base = INTER.to_vec();
+        for at in 0..base.len().saturating_sub(5) {
+            if &base[at..at + 5] == b"Inter" {
+                base[at..at + 5].copy_from_slice(b"Xntr");
+            }
+        }
+        let mut other = base.clone();
+        other.push(0);
+        let a = text_pdf_bytes("BT /F1 24 Tf 20 50 Td (Hi) Tj ET", "Xntr-Regular", &base);
+        let b = text_pdf_bytes("BT /F1 24 Tf 20 50 Td (Hi) Tj ET", "Xntr-Regular", &other);
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let first = import_with_options_and_interrupt("a.pdf", &a, &options, &Interrupt::NONE).expect("first import");
+        let second = import_with_options_and_interrupt("b.pdf", &b, &options, &Interrupt::NONE).expect("second import");
+        let fa = text_layer(&first.document).font_family.clone();
+        let fb = text_layer(&second.document).font_family.clone();
+        assert_ne!(fa, fb, "the two embedded faces must not share an alias");
+        let shared = photocraft_text::shared();
+        let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
+        assert!(engine.has_family(&fa) && engine.has_family(&fb));
     }
 
     #[test]
