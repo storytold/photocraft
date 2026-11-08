@@ -322,6 +322,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status_error = true;
     }
     let Some(d) = app.camera_raw.as_ref() else { return };
+    // Camera Raw's window is drawn from the main window's frame: while a filmstrip thumbnail waits
+    // to be redrawn, the main window keeps frames coming, whatever reaches the dialog's own window.
+    if super::filmstrip::thumbnails_pending(app) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    }
     // Where the platform has no extra windows (the web build), draw over the main window.
     if ctx.embed_viewports() {
         draw(app, ctx, false);
@@ -722,9 +727,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         app.ui.status = e;
         app.ui.status_error = true;
     }
-    // Thumbnails of raws an edit synced to, one a frame once the drag ends.
-    if !ctx.input(|i| i.pointer.primary_down()) && super::filmstrip::refresh_thumbnails(app, 1) {
-        ctx.request_repaint();
+    // Thumbnails of raws an edit synced to, redrawn on workers once the drag ends. The dialog
+    // polls them: a worker can't wake an immediate viewport's window by itself.
+    if !ctx.input(|i| i.pointer.primary_down()) && super::filmstrip::refresh_thumbnails(app, false) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()

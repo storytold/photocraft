@@ -182,6 +182,6 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("done").and_then(Value::as_bool) == Some(true) {
         return Some(Ok(super::filmstrip::done(app)));
     }
-    super::filmstrip::refresh_thumbnails(app, usize::MAX);
+    super::filmstrip::refresh_thumbnails(app, true);
     Some(Ok(super::describe(app).unwrap_or(Value::Null)))
 }

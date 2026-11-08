@@ -36,8 +36,13 @@ pub struct HeldRaw {
     /// edit ends.
     pub(super) stale: bool,
     /// What the thumbnail is developed from, built the first time it has to be redrawn.
-    source: Option<ThumbSource>,
+    source: Option<std::sync::Arc<ThumbSource>>,
+    /// The thumbnail being redrawn on a worker: its source and image, `None` when it failed.
+    redraw: Option<ThumbRedraw>,
 }
+
+/// A thumbnail redraw on a worker: its source and image, `None` when it failed.
+type ThumbRedraw = std::sync::mpsc::Receiver<Option<(std::sync::Arc<ThumbSource>, egui::ColorImage)>>;
 
 /// A filmstrip raw's pixels at thumbnail size and its camera tone curve, to develop its
 /// thumbnail with settings it was given without being shown.
@@ -53,7 +58,7 @@ struct ThumbSource {
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
         let thumb = super::open::document_index(app, raw.document).and_then(|i| thumbnail(app, i));
-        HeldRaw { raw, kept: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None }
+        HeldRaw { raw, kept: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None, redraw: None }
     }
 }
 
@@ -471,48 +476,110 @@ pub(super) fn sync_selected(app: &mut PhotocraftApp) {
     }
 }
 
-/// Redraws up to `limit` thumbnails that an edit synced from the shown raw left out of date.
-/// `true` when one was redrawn or more are left. Each develops a thumbnail-sized copy of its raw,
-/// as the preview does, on this thread.
-pub(super) fn refresh_thumbnails(app: &mut PhotocraftApp, limit: usize) -> bool {
-    let mut redrawn = 0;
-    for i in 0..app.raw_shelf.len() {
-        let Some(held) = app.raw_shelf.get(i).filter(|h| h.stale) else { continue };
-        if redrawn >= limit {
-            return true;
+/// Redraws the thumbnails an edit synced from the shown raw left out of date, each on a worker:
+/// it develops a thumbnail-sized copy of the raw as the preview does, which first reads the raw's
+/// camera tone curve from its file (a second or so for a large raw, the first time). Takes in the
+/// ones that are done and starts the next. `wait`: finish them here (the control channel, so its
+/// reply shows them). `true` while one is still being drawn or one was just taken in, so the
+/// dialog draws again until they are all shown.
+pub(super) fn refresh_thumbnails(app: &mut PhotocraftApp, wait: bool) -> bool {
+    let mut busy = false;
+    // Twice: a raw edited again while its redraw ran starts the next one once that is in.
+    for i in (0..app.raw_shelf.len()).flat_map(|i| [i, i]) {
+        let Some(held) = app.raw_shelf.get(i) else { continue };
+        if held.stale && held.redraw.is_none() {
+            let job = thumb_job(app, held);
+            let Some(held) = app.raw_shelf.get_mut(i) else { continue };
+            held.stale = false;
+            match job {
+                Some(job) => held.redraw = Some(spawn_thumb(job)),
+                None => log::warn!("{}: no thumbnail for its synced settings", held.raw.name),
+            }
         }
-        redrawn += 1;
-        let source = if held.source.is_none() { thumb_source(app, &held.raw) } else { None };
-        let display = super::open::document_index(app, held.raw.document)
-            .and_then(|k| app.session.documents().get(k))
-            .and_then(|st| app.session.color.canvas_display(&st.doc).ok());
         let Some(held) = app.raw_shelf.get_mut(i) else { continue };
-        held.stale = false;
-        if source.is_some() {
-            held.source = source;
+        let Some(rx) = &held.redraw else { continue };
+        let got = if wait { rx.recv().map_err(|_| std::sync::mpsc::TryRecvError::Disconnected) } else { rx.try_recv() };
+        match got {
+            Ok(done) => {
+                held.redraw = None;
+                busy = true;
+                if let Some((source, image)) = done {
+                    held.source = Some(source);
+                    held.thumb = Some(image);
+                    held.tex = None;
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => busy = true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => held.redraw = None,
         }
-        let (Some(src), Some(display), Some((params, _))) = (&held.source, display, &held.kept) else { continue };
-        let mut params = params.clone();
-        if params.encoding_gamma == 0.0 {
-            params.encoding_gamma = src.encoding_gamma;
-        }
-        let job = super::ProxyJob {
-            proxy: src.px.clone(),
-            selection: None,
-            raw_curve: src.curve.clone(),
-            params,
-            float: src.float,
-            size: src.size,
-            full_w: src.full_w,
-            display,
-            gpu: None,
-            source_key: 0,
-        };
-        held.thumb = Some(job.run().image);
-        held.tex = None;
     }
-    // A redrawn thumbnail's texture loads on the next frame.
-    redrawn > 0
+    busy
+}
+
+/// Whether a filmstrip thumbnail still waits to be redrawn.
+pub(super) fn thumbnails_pending(app: &PhotocraftApp) -> bool {
+    app.raw_shelf.iter().any(|h| h.stale || h.redraw.is_some())
+}
+
+/// Everything one thumbnail redraw reads, owned, so it can run off the UI thread.
+struct ThumbJob {
+    params: CameraRaw,
+    source: Result<std::sync::Arc<ThumbSource>, (photocraft_raster::Surface, photocraft_geom::Rect, RawOpen, f32)>,
+    display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+}
+
+fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
+    let (params, _) = held.kept.clone()?;
+    let st = app.session.documents().get(super::open::document_index(app, held.raw.document)?)?;
+    let display = app.session.color.canvas_display(&st.doc).ok()?;
+    let source = match &held.source {
+        Some(source) => Ok(source.clone()),
+        None => {
+            let surf = st.doc.layers.iter().find_map(|l| l.surface())?.clone();
+            Err((surf, st.doc.bounds(), held.raw.clone(), photocraft_engine::lens_cmds::encoding_gamma(&st.doc)))
+        }
+    };
+    Some(ThumbJob { params, source, display })
+}
+
+fn spawn_thumb(job: ThumbJob) -> ThumbRedraw {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let work = move || {
+        let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw_thumb(job))).ok().flatten();
+        let _ = tx.send(drawn);
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Err(e) = std::thread::Builder::new().name("camera-raw-thumbnail".into()).spawn(work) {
+        log::warn!("no thread for a Camera Raw thumbnail: {e}");
+    }
+    #[cfg(target_arch = "wasm32")]
+    work();
+    rx
+}
+
+fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::ColorImage)> {
+    let source = match job.source {
+        Ok(source) => source,
+        Err((surf, bounds, raw, encoding_gamma)) => std::sync::Arc::new(thumb_source(&surf, bounds, &raw, encoding_gamma)?),
+    };
+    let mut params = job.params;
+    if params.encoding_gamma == 0.0 {
+        params.encoding_gamma = source.encoding_gamma;
+    }
+    let frame = super::ProxyJob {
+        proxy: source.px.clone(),
+        selection: None,
+        raw_curve: source.curve.clone(),
+        params,
+        float: source.float,
+        size: source.size,
+        full_w: source.full_w,
+        display: job.display,
+        gpu: None,
+        source_key: 0,
+    }
+    .run();
+    Some((source, frame.image))
 }
 
 /// The filmstrip as the control channel describes it: each raw's name, whether it is selected,
@@ -531,7 +598,7 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
                 "selected": selected,
                 "shown": Some(i) == shown,
                 "edited": if Some(i) == shown { live.is_some_and(|p| !p.is_identity()) } else { h.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) },
-                "thumbnailPending": h.stale,
+                "thumbnailPending": h.stale || h.redraw.is_some(),
             }))
             .collect::<Vec<_>>()
     )
@@ -539,10 +606,8 @@ pub(crate) fn describe(app: &PhotocraftApp) -> Value {
 
 /// [`ThumbSource`] of a filmstrip raw: its developed pixels at thumbnail size, and the camera tone
 /// curve the dialog would read from its file.
-fn thumb_source(app: &PhotocraftApp, raw: &RawOpen) -> Option<ThumbSource> {
-    let st = app.session.documents().get(super::open::document_index(app, raw.document)?)?;
-    let surf = st.doc.layers.iter().find_map(|l| l.surface())?;
-    let (area, w, h) = super::convert::preview_area(st.doc.bounds(), surf).ok()?;
+fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect, raw: &RawOpen, encoding_gamma: f32) -> Option<ThumbSource> {
+    let (area, w, h) = super::convert::preview_area(bounds, surf).ok()?;
     let (proxy, pw, ph, _) = super::convert::box_proxy(surf, area, w, h);
     let (px, tw, th) = shrink(&proxy, pw, ph);
     Some(ThumbSource {
@@ -551,7 +616,7 @@ fn thumb_source(app: &PhotocraftApp, raw: &RawOpen) -> Option<ThumbSource> {
         full_w: w,
         float: surf.format().sample == photocraft_color::SampleType::F32,
         curve: super::open::raw_tone_curve(raw).map(std::sync::Arc::new),
-        encoding_gamma: photocraft_engine::lens_cmds::encoding_gamma(&st.doc),
+        encoding_gamma,
     })
 }
 

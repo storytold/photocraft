@@ -1497,3 +1497,27 @@ fn done_writes_the_synced_settings_to_each_sidecar() {
     assert_eq!((read(&second).clarity, read(&second).exposure), (15.0, 0.25));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A thumbnail redrawn for synced settings looks as the dialog shows that raw with them: the
+/// raw-stage sliders (here Highlights) go through the camera tone curve as in the preview.
+#[test]
+fn a_synced_thumbnail_matches_the_dialogs_own() {
+    let (mut app, ctx, _) = filmstrip_app(2);
+    let before = app.raw_shelf[1].thumb.clone().unwrap();
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
+    let set = json!({"exposure": -0.23, "contrast": 58, "highlights": -100, "whites": -57});
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": set}})).unwrap().unwrap();
+    let synced = app.raw_shelf[1].thumb.clone().unwrap();
+    // Shown and left, the dialog thumbnails its own preview of the same settings.
+    filmstrip::show_raw(&mut app, &ctx, 1).unwrap();
+    app.camera_raw.as_mut().unwrap().render(&ctx);
+    filmstrip::keep_settings(&mut app);
+    let dialog = app.raw_shelf[1].thumb.clone().unwrap();
+    let diff = |a: &egui::ColorImage, b: &egui::ColorImage| {
+        assert_eq!(a.size, b.size);
+        a.pixels.iter().zip(&b.pixels).map(|(p, q)| (0..3).map(|c| (p[c] as f32 - q[c] as f32).abs()).sum::<f32>() / 3.0).sum::<f32>() / a.pixels.len() as f32
+    };
+    assert!(diff(&synced, &dialog) < 2.0, "synced thumbnail differs from the dialog's by {}", diff(&synced, &dialog));
+    let mean = |img: &egui::ColorImage| img.pixels.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).sum::<f32>() / img.pixels.len() as f32;
+    assert!((mean(&before) - mean(&synced)).abs() > 3.0, "and it changed: {} → {}", mean(&before), mean(&synced));
+}

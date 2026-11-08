@@ -68,3 +68,71 @@ fn filmstrip_clicks_and_command_a_select_raws_not_the_document() {
     h.run_steps(2);
     assert!(!no_document_selection(&h));
 }
+
+/// Mean brightness of the thumbnail in raw `name`'s tile, as the window shows it.
+fn tile_brightness(h: &mut Harness<'_, PhotocraftApp>, name: &str) -> f32 {
+    let tile = h.get_by_label(name).rect();
+    let ppp = h.ctx.pixels_per_point();
+    let image = h.render().unwrap();
+    // The thumbnail's middle, clear of the name, the outline and the edited dot.
+    let inner = egui::Rect::from_center_size(tile.center() - vec2(0.0, 12.0), vec2(tile.width() * 0.5, tile.height() * 0.4));
+    let (x0, y0, x1, y1) = ((inner.left() * ppp) as u32, (inner.top() * ppp) as u32, (inner.right() * ppp) as u32, (inner.bottom() * ppp) as u32);
+    let mut sum = 0.0;
+    let mut n = 0.0;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let p = image.get_pixel(x, y);
+            sum += (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0;
+            n += 1.0;
+        }
+    }
+    sum / n
+}
+
+/// A slider dragged in the dialog with several raws selected redraws the other selected raws'
+/// thumbnails once the drag ends, without further input, and as the preview would show them.
+#[test]
+fn a_dragged_slider_redraws_the_other_selected_thumbnails() {
+    let mut h = fixture();
+    h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    h.run_steps(3);
+    let (before_other, before_unselected) = (tile_brightness(&mut h, NAMES[1]), tile_brightness(&mut h, NAMES[2]));
+    h.get_by_label(NAMES[2]).click_modifiers(Modifiers::COMMAND);
+    h.run_steps(3);
+    // Exposure dragged well down with real pointer events.
+    let label = photocraft_ui_egui::i18n::tr_ctx(photocraft_ui_egui::i18n::current(), "cameraRaw", "Exposure");
+    let track = h.get_by_role_and_label(egui::accesskit::Role::Slider, label).rect();
+    let at = egui::pos2(track.center().x, track.center().y);
+    h.event(egui::Event::PointerMoved(at));
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    for n in 1..=6 {
+        h.event(egui::Event::PointerMoved(at - vec2(15.0 * n as f32, 0.0)));
+        h.run_steps(1);
+    }
+    let end = at - vec2(90.0, 0.0);
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    // Only the frames egui asks for: nothing else wakes the window after the release. The redraw
+    // runs on a worker, and until it is shown the dialog asks for the next frame.
+    h.run_steps(1);
+    for _ in 0..1000 {
+        let pending = photocraft_ui_egui::control::inspect(h.state(), &h.ctx)["cameraRaw"]["filmstrip"][1]["thumbnailPending"] == true;
+        if !pending {
+            break;
+        }
+        let delay = h.output().viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay);
+        assert!(delay.is_some_and(|d| d <= std::time::Duration::from_millis(50)), "a pending thumbnail keeps frames coming: {delay:?}");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        h.run_steps(1);
+    }
+    // One more frame loads the redrawn thumbnail's texture.
+    h.run_steps(1);
+    let exposure = photocraft_ui_egui::control::inspect(h.state(), &h.ctx)["cameraRaw"]["params"]["exposure"].as_f64().unwrap();
+    assert!(exposure < -0.5, "the drag lowered Exposure: {exposure}");
+    let film = photocraft_ui_egui::control::inspect(h.state(), &h.ctx)["cameraRaw"]["filmstrip"].clone();
+    assert_eq!(film[1]["edited"], true, "{film}");
+    assert_eq!(film[1]["thumbnailPending"], false, "{film}");
+    let (after_other, after_unselected) = (tile_brightness(&mut h, NAMES[1]), tile_brightness(&mut h, NAMES[2]));
+    assert!(after_other < before_other - 10.0, "the selected raw's thumbnail darkened: {before_other} → {after_other}");
+    assert!((after_unselected - before_unselected).abs() < 1.0, "the unselected one didn't: {before_unselected} → {after_unselected}");
+}
