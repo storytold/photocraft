@@ -86,6 +86,12 @@ impl Drag {
         }
     }
 
+    /// The document and target a vector drag was pressed on are still the current ones
+    /// ([`VectorGestureOwner`]); false for a drag that captured none.
+    pub(crate) fn vector_owner_valid(&self, app: &PhotocraftApp) -> bool {
+        self.vector_owner.as_ref().is_some_and(|owner| owner.valid(app))
+    }
+
     /// Reposition: move the start and every point so the last one lands on `to` (same size).
     pub fn shift_to(&mut self, to: [f64; 2]) {
         let last = self.points.last().map_or(self.start, |p| [p[0], p[1]]);
