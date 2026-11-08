@@ -127,7 +127,7 @@ fn mixer_live_current_layer_matches_reference_and_cancels() {
 /// Sampling retains a spatial two-color load while leaving document pixels alone (it adds one
 /// "Mixer Brush" history state, #11954).
 #[test]
-fn mixer_sample_is_spatial_and_never_edits_document() {
+fn mixer_sample_is_spatial_and_keeps_document_pixels() {
     let mut s = fixture(PixelFormat::RGBA8);
     let before = s.active().unwrap().doc.clone();
     s.execute("brush.mixer.sample", json!({"points":[[96,48]],"size":40,"brush":{"hardness":1.0,"pressureSize":false}})).unwrap();
@@ -229,8 +229,7 @@ fn mixer_prepared_commit_uses_displayed_pixels_and_rejects_stale_documents() {
 }
 
 /// Load and clean affect tool state without dropping a floating selection or creating document
-/// history; a sample drops the floating selection as its own state and adds one "Mixer Brush"
-/// history state after it (#11954).
+/// history (a sample drops it: `mixer_alt_click_history_tests`, #11954).
 #[test]
 fn mixer_load_commands_preserve_floating_selection_and_history() {
     let mut s = fixture(PixelFormat::RGBA8);
@@ -244,10 +243,6 @@ fn mixer_load_commands_preserve_floating_selection_and_history() {
         assert_eq!(s.active().unwrap().history.past_len(), steps);
         assert!(crate::float_cmds::floating(s.active().unwrap()).is_some());
     }
-    s.execute("brush.mixer.sample", json!({"points":[[96,48]],"size":24})).unwrap();
-    assert_eq!(s.active().unwrap().history.past_len(), steps + 2, "the move, then the load");
-    assert_eq!(s.active().unwrap().history.undo_label(), Some("Mixer Brush"));
-    assert!(crate::float_cmds::floating(s.active().unwrap()).is_none());
 }
 
 /// Malformed reservoir input is rejected and automatic reload follows the selected setting.

@@ -80,6 +80,7 @@ fn a_load_over_a_floating_selection_is_undone_before_the_move() {
     s.execute("select.float", json!({"dx": 8, "dy": 0})).unwrap();
     sample(&mut s, 16.0, 24.0).unwrap();
     let st = s.active().unwrap();
+    assert!(crate::float_cmds::floating(st).is_none(), "the move is dropped");
     assert_eq!(st.history.past_len(), before + 3, "the selection, the move and the load");
     assert_eq!(st.history.undo_label(), Some("Mixer Brush"));
     let moved = pixels(&mut s);
