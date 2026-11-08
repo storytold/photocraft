@@ -709,6 +709,8 @@ fn an_oversized_copy_is_not_mirrored_and_says_so() {
     assert!(os.lock().unwrap().is_none(), "the OS clipboard is left alone");
     assert!(app.os_clip_export.is_none(), "no conversion was started");
     assert_eq!(app.ui.notices.len(), notices + 1, "the user is told the copy stays in PhotoCraft");
+    app.export_os_clipboard();
+    assert_eq!(app.ui.notices.len(), notices + 1, "a second oversized copy replaces the notice instead of stacking");
 }
 
 #[test]

@@ -226,7 +226,9 @@ fn lift_checked(src: &Surface, sel: Option<&Surface>, canvas: Rect, check: &dyn 
     // alpha) cost about a second per Layer via Copy (#668).
     let mut shared = Vec::new();
     let mut convert = Vec::new();
-    let blank_default = fmt.alpha && src.default_pixel().iter().all(|v| *v == 0.0);
+    // Compared as stored bytes, not values: a float default of -0.0 equals 0.0 but is stored
+    // differently from the clip's own default, so its missing tiles must still be converted.
+    let blank_default = fmt.alpha && src.default_bytes().iter().all(|b| *b == 0);
     for tc in area.tiles() {
         let tr = tc.rect().intersect(&area);
         if fmt.alpha

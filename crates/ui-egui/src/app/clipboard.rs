@@ -109,11 +109,16 @@ impl PhotocraftApp {
         self.clip_unmirrored = true;
         // One conversion at a time: a newer copy waits for the running one, which is then
         // dropped (see `poll_os_clipboard_export`), so superseded copies can't pile up workers.
+        let exporting = self.session.prefs().general.export_clipboard && self.services.clipboard_set_image.is_some();
         if self.os_clip_export.is_some() {
             self.os_clip_export_again = true;
+            // Say at once that this copy won't reach other apps, not when the running one lands.
+            if exporting && self.session.clipboard.as_ref().is_some_and(|c| !c.bounds.is_empty() && !mirrors_to_os(c.bounds)) {
+                self.note_kept_in_photocraft();
+            }
             return;
         }
-        if !self.session.prefs().general.export_clipboard || self.services.clipboard_set_image.is_none() {
+        if !exporting {
             return;
         }
         let Some(clip) = self.session.clipboard.as_ref() else { return };
@@ -123,13 +128,7 @@ impl PhotocraftApp {
         }
         if !mirrors_to_os(b) {
             log::info!("copy of {}×{} px kept in PhotoCraft: too large for the system clipboard", b.width(), b.height());
-            crate::notices::post(
-                self,
-                "Copy kept in PhotoCraft",
-                vec!["It is too large for the system clipboard: other apps keep what they had, and Paste in PhotoCraft uses this copy.".into()],
-                false,
-                None,
-            );
+            self.note_kept_in_photocraft();
             return;
         }
         if self.background_jobs {
@@ -145,6 +144,20 @@ impl PhotocraftApp {
         }
         let bytes = rgba8(&clip.surface, b);
         self.set_os_clipboard_image(b.width(), b.height(), &bytes);
+    }
+
+    /// Tell the user a copy is too large for the system clipboard. One notice however many such
+    /// copies follow: a newer one replaces it rather than stacking up and pushing others out.
+    fn note_kept_in_photocraft(&mut self) {
+        const TITLE: &str = "Copy kept in PhotoCraft";
+        self.ui.notices.retain(|n| n.title != TITLE);
+        crate::notices::post(
+            self,
+            TITLE,
+            vec!["It is too large for the system clipboard: other apps keep what they had, and Paste in PhotoCraft uses this copy.".into()],
+            false,
+            None,
+        );
     }
 
     /// Hand a finished background conversion (see [`Self::export_os_clipboard`]) to the OS
