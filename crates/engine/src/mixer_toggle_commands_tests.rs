@@ -67,3 +67,15 @@ fn keyboard_shortcuts_list_the_five_without_keys_and_can_assign_one() {
         assert_eq!(row(id)["label"], label);
     }
 }
+
+/// A switch flipped by its key is saved like any other brush change: it moves the brush revision
+/// the last-brush persistence watches (CodeRabbit review on brush_cmds.rs:825).
+#[test]
+fn each_switch_marks_the_brush_changed_so_it_is_saved() {
+    let mut s = Session::new();
+    for (id, _) in SWITCHES {
+        let rev = s.tools.brush_rev;
+        s.execute(id, json!({})).unwrap();
+        assert_ne!(s.tools.brush_rev, rev, "{id} moves the brush revision");
+    }
+}

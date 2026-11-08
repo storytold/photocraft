@@ -822,7 +822,10 @@ fn mixer_toggle(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     };
     let value = field(&mut s.tools.brush.mixer);
     *value = on.unwrap_or(!*value);
-    Ok(json!({ "on": *value }))
+    let on = *value;
+    // Saved like any other brush change (the last-brush persistence watches the revision).
+    s.tools.brush_changed();
+    Ok(json!({ "on": on }))
 }
 
 /// `paint.mixerLoad`: ⌥-click with the Mixer Brush loads the reservoir from the canvas colour at
