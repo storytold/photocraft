@@ -354,6 +354,9 @@ fn spacing_row_has_one_label_and_a_shared_header_in_every_theme() {
             let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(43.0)).unwrap();
             assert!((checkbox.center().y - field.rect().center().y).abs() < 2.0, "{kind:?}: checkbox and percentage share a row");
             assert_eq!(field.accesskit_node().is_disabled(), !enabled);
+            let slider = h.get_by_role_and_label(Role::Slider, "Spacing");
+            assert_eq!(slider.accesskit_node().numeric_value(), Some(43.0), "{kind:?}: the track is a named slider");
+            assert_eq!(slider.accesskit_node().is_disabled(), !enabled);
             assert_eq!(h.state(), &b, "rendering does not round the saved spacing");
         }
     }

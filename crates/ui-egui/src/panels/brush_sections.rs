@@ -67,7 +67,14 @@ fn spacing_row(ui: &mut egui::Ui, b: &mut BrushSettings) {
                 .changed();
         });
     });
-    changed |= ui.add_enabled_ui(b.spacing_enabled, |ui| widgets::slider(ui, &mut percent, 1.0..=1000.0, None)).inner.changed();
+    changed |= ui
+        .add_enabled_ui(b.spacing_enabled, |ui| {
+            let s = widgets::slider(ui, &mut percent, 1.0..=1000.0, None);
+            s.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(percent), tl!("Spacing")));
+            s
+        })
+        .inner
+        .changed();
     if changed {
         b.spacing = (percent.round() / 100.0).clamp(0.01, 10.0);
     }
