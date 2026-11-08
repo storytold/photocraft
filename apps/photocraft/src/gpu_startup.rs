@@ -535,7 +535,9 @@ impl Sentinel {
 /// a termination signal): release its marker. The marker a crashed previous start left (`previous`)
 /// is put back, so the next start still steps past that backend; otherwise the marker is cleared.
 pub fn release_without_crash(sentinel: &SharedSentinel, previous: Option<&Marker>) {
-    let Some(mut s) = sentinel.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+    // Held until the marker is written, so a termination signal meanwhile waits for it.
+    let mut held = sentinel.lock().unwrap_or_else(PoisonError::into_inner);
+    let Some(mut s) = held.take() else {
         return;
     };
     match previous {
@@ -564,12 +566,16 @@ const TERMINATION: [async_signal::Signal; 3] = [async_signal::Signal::Term, asyn
 /// The signals are taken over on a thread of their own, for the whole run: once they are, they no
 /// longer end the process by themselves, so that thread has to. Returns whether they were taken
 /// over; when not (the thread or the handler couldn't be set up) they keep their default action.
+/// A signal the process inherited ignored (`nohup`) is left ignored.
 #[cfg(target_os = "linux")]
 pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>) -> bool {
     use futures_lite::StreamExt;
     let (ready, registered) = std::sync::mpsc::channel();
     let spawned = std::thread::Builder::new().name("photocraft-termination".into()).spawn(move || {
-        let mut signals = match async_signal::Signals::new(TERMINATION) {
+        // One inherited ignored (`nohup` ignores SIGHUP, a shell's background job SIGINT) stays
+        // ignored: taking it over would let it end the process.
+        let wanted = TERMINATION.into_iter().filter(|&signal| !inherited_ignored(signal));
+        let mut signals = match async_signal::Signals::new(wanted) {
             Ok(signals) => signals,
             Err(error) => {
                 log::warn!("termination signals keep their default action: {error}");
@@ -597,6 +603,21 @@ pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>
             false
         }
     }
+}
+
+/// Whether `signal` is ignored in this process, as a parent such as `nohup` can leave it: the
+/// `SigIgn` mask in `/proc/self/status` (bit `n - 1` for signal `n`). Unknown counts as not ignored.
+#[cfg(target_os = "linux")]
+fn inherited_ignored(signal: async_signal::Signal) -> bool {
+    let status = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    ignored_in_status(&status, signal as u32)
+}
+
+/// Whether `/proc/<pid>/status` text `status` lists signal number `signal` as ignored.
+#[cfg(any(target_os = "linux", test))]
+fn ignored_in_status(status: &str, signal: u32) -> bool {
+    let mask = status.lines().find_map(|line| line.strip_prefix("SigIgn:")).and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok());
+    signal.checked_sub(1).is_some_and(|bit| bit < 64 && mask.is_some_and(|m| (m >> bit) & 1 == 1))
 }
 
 /// The Linux display-server preference (`performance.linuxDisplayServer`) from the preferences
