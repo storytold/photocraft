@@ -64,8 +64,36 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
     });
 }
 
-/// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with (an
-/// empty swatch when the brush is clean). Its menu holds Load Brush and Clean Brush.
+/// The sampled tip image of a Mixer Brush load (64 × 64 straight RGBA cells, row by row) as the
+/// Current Brush Load swatch draws it.
+pub(crate) fn mixer_load_image(load: &[[f32; 4]]) -> egui::ColorImage {
+    let bytes: Vec<u8> = load.iter().flat_map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
+    egui::ColorImage::from_rgba_unmultiplied([64, 64], &bytes)
+}
+
+/// The swatch's texture of `load`, uploaded again only when the load changes.
+fn mixer_load_texture(ctx: &egui::Context, load: &[[f32; 4]]) -> egui::TextureHandle {
+    use std::hash::{Hash, Hasher};
+    let image = mixer_load_image(load);
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    image.as_raw().hash(&mut hasher);
+    let hash = hasher.finish();
+    let key = egui::Id::unique("mixer-load-swatch-image");
+    if let Some((_, tex)) = ctx.data(|d| d.get_temp::<(u64, egui::TextureHandle)>(key)).filter(|(h, _)| *h == hash) {
+        return tex;
+    }
+    let tex = ctx.load_texture("mixer-load-swatch", image, egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(key, (hash, tex.clone())));
+    tex
+}
+
+#[cfg(test)]
+#[path = "../mixer_load_swatch_tests.rs"]
+mod mixer_load_swatch_tests;
+
+/// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with: the
+/// loaded colour, the sampled tip image after an ⌥-click, or a transparency checkerboard when the
+/// brush is clean. Its menu holds Load Brush and Clean Brush.
 pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(40.0, 26.0), Sense::hover());
@@ -75,14 +103,22 @@ pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let chip = Rect::from_min_size(pos2(r.left() + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
     let p = ui.painter();
-    match app.session.tools.mixer.next_load(app.session.tools.foreground) {
-        Some(c) => {
-            p.rect_filled(chip, 2.0, c32(c));
-        }
-        None => {
-            p.rect_filled(chip, 2.0, t.field);
-            p.line_segment([chip.left_bottom(), chip.right_top()], Stroke::new(1.0, t.text_faint));
-        }
+    // What the reservoir holds (#11953): the loaded colour, the sampled tip image of an ⌥-click
+    // (kept while the foreground stays), or a transparency checkerboard when the brush is clean.
+    let mixer = &app.session.tools.mixer;
+    let foreground = app.session.tools.foreground;
+    match mixer.next_load(foreground) {
+        Some(c) => match mixer.spatial.as_deref().filter(|load| load.len() == 64 * 64 && mixer.color == Some(foreground)) {
+            Some(load) => {
+                widgets::checker(p, chip, 4.0);
+                let tex = mixer_load_texture(ui.ctx(), load);
+                p.image(tex.id(), chip, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            }
+            None => {
+                p.rect_filled(chip, 2.0, c32(c));
+            }
+        },
+        None => widgets::checker(p, chip, 4.0),
     }
     p.rect_stroke(chip, 2.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, r.center().y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
