@@ -43,9 +43,10 @@ pub fn text(error: &str, renderer: &str, note: Option<&str>, version: &str, log:
 
 /// [`text`] for a window that had been open: the app started fine and then lost its window (a
 /// display-server disconnect, for example), so "could not start" would send a bug report down
-/// the wrong path. Crash-recovery autosaves are offered at the next start.
+/// the wrong path. Crash recovery can only offer what autosave had written before the window
+/// was lost, so the wording stays conditional.
 pub fn closed_text(error: &str, renderer: &str, note: Option<&str>, version: &str, log: Option<&Path>) -> String {
-    body("PhotoCraft closed unexpectedly. Documents with unsaved changes are offered for recovery at the next start.", error, renderer, note, version, log)
+    body("PhotoCraft closed unexpectedly. Documents with unsaved changes may be offered for recovery at the next start.", error, renderer, note, version, log)
 }
 
 fn body(headline: &str, error: &str, renderer: &str, note: Option<&str>, version: &str, log: Option<&Path>) -> String {
@@ -115,6 +116,7 @@ mod tests {
         assert!(body.contains("closed unexpectedly"), "{body:?}");
         assert!(!body.contains("could not start"), "{body:?}");
         assert!(body.contains("Renderer: vulkan"), "{body:?}");
+        assert!(body.contains("may be offered for recovery at the next start"), "{body:?}");
     }
 
     /// A crash fallback is the confusing case: the app picks a renderer the user never chose, so
