@@ -79,14 +79,15 @@ fn a_click_near_rotation_handles_accepts_but_drags_and_option_pivot_do_not() {
 }
 
 #[test]
-fn rotate_feedback_only_appears_just_outside_corners() {
+fn rotate_feedback_covers_the_outside_zone() {
     let mut t = session();
-    assert!(near_rotate_corner(&t, [-18.0, -18.0], 12.0));
-    assert!(!near_rotate_corner(&t, [50.0, 25.0], 12.0), "inside moves the box");
-    assert!(!near_rotate_corner(&t, [500.0, 500.0], 12.0), "far outside stays generic");
-    assert!(!near_rotate_corner(&t, [2.0, 2.0], 12.0), "corner handle resizes");
+    let rotates = |t: &TransformSession, p| near_rotate_corner(t, hit(t, p, 12.0));
+    assert!(rotates(&t, [-18.0, -18.0]));
+    assert!(!rotates(&t, [30.0, 25.0]), "inside moves the box");
+    assert!(rotates(&t, [500.0, 500.0]), "far outside also rotates");
+    assert!(!rotates(&t, [2.0, 2.0]), "corner handle resizes");
     t.mode = TransformMode::Distort;
-    assert!(!near_rotate_corner(&t, [-18.0, -18.0], 12.0));
+    assert!(!rotates(&t, [-18.0, -18.0]));
 }
 
 #[test]
@@ -329,7 +330,7 @@ fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.transform = Some(session());
     setup(&mut app);
-    let mut h = Harness::builder().with_size(vec2(900.0, 360.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(1000.0, 360.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -552,6 +553,23 @@ fn editing_the_contents_of_a_dropped_file_keeps_the_layer() {
     assert!(parent.is_some_and(|st| st.doc.layer(placed_layer).is_some()), "the placed Smart Object must remain in the parent document");
     assert!(app.ui.transform.is_none(), "the transform session should end");
     assert!(app.transform_preview.is_none(), "the transform preview should end");
+}
+
+/// #8492: Preferences ▸ General ▸ Skip Transform when Placing (off by default) places a file
+/// without opening Free Transform on it, as in the reference app.
+#[test]
+fn skip_transform_when_placing_leaves_the_place_without_a_box() {
+    for skip in [false, true] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        app.session.execute("prefs.set", json!({"path": "general.skipTransformWhenPlacing", "value": skip})).unwrap();
+        app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        app.session.execute("layer.duplicate", json!({"inPlace": true})).unwrap();
+        app.sync_views();
+        let placed = app.session.active().unwrap().active_layer.unwrap();
+        begin_placed(&mut app, &egui::Context::default()).unwrap();
+        assert_eq!(app.ui.transform.is_some(), !skip, "skip {skip}: Free Transform opens only with the preference off");
+        assert!(app.session.active().unwrap().doc.layer(placed).is_some(), "skip {skip}: the placed layer stays");
+    }
 }
 
 /// Polls the app's background jobs until they have all landed.
@@ -1754,7 +1772,7 @@ fn hovering_just_outside_a_corner_asks_for_the_rotate_cursor() {
     assert_eq!(cursor(&app, &xf, tl, egui::Modifiers::NONE), Some(CursorIcon::None), "the arrow is drawn instead");
     assert!(near2(rotate_cursor_dir(&app, tl), [h, h]), "{:?}", rotate_cursor_dir(&app, tl));
     assert!(near2(rotate_cursor_dir(&app, br), [-h, -h]), "bends round the bottom-right corner");
-    assert_eq!(cursor(&app, &xf, [60.0, 60.0], egui::Modifiers::NONE), Some(CursorIcon::Move));
+    assert_eq!(cursor(&app, &xf, [60.0, 60.0], egui::Modifiers::NONE), Some(CursorIcon::Default));
     assert_eq!(rotate_cursor_dir(&app, [60.0, 60.0]), None, "inside moves");
     assert_eq!(rotate_cursor_dir(&app, [32.0, 32.0]), None, "the corner handle scales");
     assert_eq!(rotate_cursor_dir(&app, [f64::NAN, 32.0]), None);
@@ -3551,9 +3569,10 @@ fn cursor_during_drag_stays_stable() {
     // Release drag
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 60.0 }, command);
 
-    // Once released, dragging has ended: far outside returns the commit-on-click cursor,
+    // Once released, dragging has ended: far outside returns the custom rotate cursor,
     // and hovering the corner without Command restores normal resize cursor.
-    assert_eq!(cursor(&app, &xf, [200.0, 200.0], command), Some(CursorIcon::Alias));
+    assert_eq!(cursor(&app, &xf, [200.0, 200.0], command), Some(CursorIcon::None));
+    assert!(rotate_cursor_dir(&app, [200.0, 200.0]).is_some());
     assert_ne!(cursor(&app, &xf, [50.0, 60.0], egui::Modifiers::NONE), Some(CursorIcon::None));
 }
 

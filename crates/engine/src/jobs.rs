@@ -507,9 +507,9 @@ struct Running {
     label: String,
     params: Value,
     journal: bool,
-    /// The recording (`ActionState::take`) running when the job started, if any (set by
-    /// `dispatch`, once recording resumes). Only that recording gets the job's step: one started
-    /// later must not pick up an edit made before it.
+    /// The take active at dispatch, including strokes started with tool recording off.
+    started_in_take: Option<u64>,
+    /// The take eligible to receive this job's step under the mode at dispatch.
     recorded_by: Option<u64>,
     pre_selected: Option<Vec<LayerId>>,
     before: crate::actions_record::Before,
@@ -863,6 +863,7 @@ fn new_job<T: Send + 'static>(
         label: label.to_string(),
         params: Value::Null,
         journal: true,
+        started_in_take: None,
         recorded_by: None,
         pre_selected: None,
         before: crate::actions_record::Before::capture(s),
@@ -956,6 +957,14 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        pdf_dpi: prefs.file_handling.pdf_dpi,
+        pdf_pages: match (prefs.file_handling.pdf_first_page, prefs.file_handling.pdf_last_page) {
+            (0, 0) => None,
+            (first, last) => {
+                let first = first.max(1);
+                Some((first, if last == 0 { u32::MAX } else { last.max(first) }))
+            }
+        },
         ..Default::default()
     }
 }
@@ -1031,6 +1040,11 @@ pub struct PendingPsdPreflight {
 }
 
 impl Session {
+    /// A recording mode change must not reclassify an in-flight stroke from this take.
+    pub(crate) fn tool_stroke_job_running(&self) -> bool {
+        self.jobs.running.iter().any(|job| job.started_in_take == Some(self.actions.take) && crate::actions_cmds::tool_stroke(&job.command))
+    }
+
     /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
     /// can cancel them: a live preview whose parameters changed stops its stale computation
     /// (`Err(Cancelled)`, the document unchanged) instead of finishing it. `None` restores the
@@ -1042,7 +1056,10 @@ impl Session {
     /// Run a command, in the background when it supports it (see [`jobs`](crate::jobs)). Errors
     /// like [`Session::execute`] for unknown, disabled or failing commands.
     pub fn start(&mut self, id: &str, params: Value) -> Result<Started> {
-        self.dispatch(id, params, true)
+        let before = self.active_layer_stamp();
+        let started = self.dispatch(id, params, true);
+        self.note_layer_change(before);
+        started
     }
 
     pub const MAX_PENDING_PREFLIGHTS: usize = 32;
@@ -1811,7 +1828,8 @@ impl Session {
                 job.command = id.to_string();
                 job.params = params;
                 job.journal = spec.journal;
-                job.recorded_by = self.actions.recording.map(|_| self.actions.take);
+                job.started_in_take = self.actions.recording.map(|_| self.actions.take);
+                job.recorded_by = job.started_in_take.filter(|_| self.actions.record_tools || !crate::actions_cmds::tool_stroke(id));
                 job.pre_selected = pre_selected.clone();
                 job.before = std::mem::take(&mut record_before);
                 let jid = job.id;
@@ -1924,7 +1942,13 @@ impl Session {
     }
 
     /// Apply (or report the failure of) a job whose worker has delivered `r`.
-    fn finish_job(&mut self, mut job: Running, r: Result<Payload>) {
+    fn finish_job(&mut self, job: Running, r: Result<Payload>) {
+        let before = self.active_layer_stamp();
+        self.finish_job_step(job, r);
+        self.note_layer_change(before);
+    }
+
+    fn finish_job_step(&mut self, mut job: Running, r: Result<Payload>) {
         let apply = job.apply.take();
         // Keep the typed error beside its display text, so `wait_job` and `JobEvent` can still
         // report a hard budget's required/limit or an approval request's limits.

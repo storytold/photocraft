@@ -221,7 +221,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 34] = [
+pub static LANGUAGES: [LangInfo; 35] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -292,6 +292,8 @@ pub static LANGUAGES: [LangInfo; 34] = [
     // Persian; `fa-IR` and the other `fa-*` locales resolve here. The chrome mirrors right to
     // left (`dir_for_code`), and egui lays each label out right to left.
     LangInfo { code: "fa", name: "فارسی", source: catalog!("fa"), plural: plural_fa, complete_menus: true, catalog: OnceLock::new() },
+    // Georgian: nouns stay singular after a numeral (`შრე: 5`, `5 შრე`), so one form serves every count.
+    LangInfo { code: "ka", name: "ქართული", source: catalog!("ka"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
