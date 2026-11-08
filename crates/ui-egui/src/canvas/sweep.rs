@@ -75,7 +75,7 @@ pub(crate) fn running(app: &PhotocraftApp, doc: DocId) -> bool {
 /// (Re)start a sweep of all of `doc`'s canvas, the blocks nearest `visible` first.
 pub(crate) fn start(app: &mut PhotocraftApp, doc: &Document, visible: Rect) {
     let state = app.canvas_states.entry(doc.id).or_default();
-    state.pending = blocks(doc.bounds(), visible);
+    state.pending = blocks(doc.bounds(), doc.bounds(), visible);
 }
 
 /// Add `region` of `doc`'s canvas to its sweep, drawn before what was already pending.
@@ -85,9 +85,13 @@ pub(crate) fn add(app: &mut PhotocraftApp, doc: &Document, region: Rect, visible
         return;
     }
     let state = app.canvas_states.entry(doc.id).or_default();
-    // Popped from the end: the new blocks first. A block pending twice is drawn twice, which
-    // is only wasted time, never a wrong pixel.
-    state.pending.extend(blocks(region, visible));
+    // Blocks sit on one grid over the canvas, so a block already pending is the same rectangle:
+    // it moves to the front instead of being queued twice (a Move drag adds the same blocks
+    // every frame). Popped from the end: the new blocks first.
+    let new = blocks(region, doc.bounds(), visible);
+    let queued: std::collections::HashSet<(i32, i32)> = new.iter().map(|b| (b.x0, b.y0)).collect();
+    state.pending.retain(|b| !queued.contains(&(b.x0, b.y0)));
+    state.pending.extend(new);
 }
 
 /// Forget a sweep that failed, after a full refresh landed.
@@ -119,6 +123,13 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
     loop {
         let Some(block) = app.canvas_states.get_mut(&doc.id).and_then(|s| s.pending.pop()) else { return Step::Done };
         let r = gpu.refresh_with(doc.id.0, doc, Some(block), display, false);
+        // Counted like any refresh, so `ui.inspect` and slow-frame reports include the blocks.
+        if r.fallback.is_none() && matches!(r.kind, "gpu-rect" | "gpu-full" | "rect") {
+            app.perf.record_refresh(&r);
+            if r.kind.starts_with("gpu") {
+                app.perf.gpu_uploads = r.uploads;
+            }
+        }
         match (r.kind, &r.fallback) {
             ("gpu-rect" | "rect", None) => {}
             // The texture had to be made again: that refresh drew everything.
@@ -147,15 +158,21 @@ pub(crate) fn step(app: &mut PhotocraftApp, ctx: &egui::Context, gpu: &GpuCanvas
     }
 }
 
-/// Blocks covering `bounds`, in drawing order from the end (they are popped): the blocks the view
-/// shows, nearest its center first, then the rest by distance.
-fn blocks(bounds: Rect, visible: Rect) -> Vec<Rect> {
+/// The blocks of a grid over `canvas` that cover `region`, in drawing order from the end (they
+/// are popped): the blocks the view shows, nearest its center first, then the rest by distance.
+/// On one grid, the same block of two regions is the same rectangle.
+fn blocks(region: Rect, canvas: Rect, visible: Rect) -> Vec<Rect> {
+    let region = region.intersect(&canvas);
     let mut out = Vec::new();
-    let mut y = bounds.y0;
-    while y < bounds.y1 {
-        let mut x = bounds.x0;
-        while x < bounds.x1 {
-            out.push(Rect::new(x, y, (x + BLOCK_W).min(bounds.x1), (y + BLOCK_H).min(bounds.y1)));
+    if region.is_empty() {
+        return out;
+    }
+    let snap = |v: i32, origin: i32, step: i32| origin + (v - origin).div_euclid(step) * step;
+    let mut y = snap(region.y0, canvas.y0, BLOCK_H);
+    while y < region.y1 {
+        let mut x = snap(region.x0, canvas.x0, BLOCK_W);
+        while x < region.x1 {
+            out.push(Rect::new(x, y, (x + BLOCK_W).min(canvas.x1), (y + BLOCK_H).min(canvas.y1)));
             x += BLOCK_W;
         }
         y += BLOCK_H;
@@ -178,12 +195,26 @@ mod tests {
     fn blocks_cover_the_canvas_once_and_draw_the_view_first() {
         let bounds = Rect::new(0, 0, 10_000, 5_000);
         let visible = Rect::new(6_000, 1_000, 8_000, 3_000);
-        let b = blocks(bounds, visible);
+        let b = blocks(bounds, bounds, visible);
         let area: u64 = b.iter().map(|r| r.size().area()).sum();
         assert_eq!(area, bounds.size().area(), "every pixel once");
         let first = *b.last().unwrap();
         assert!(!first.intersect(&visible).is_empty(), "the view's blocks come first: {first:?}");
         let last = b[0];
         assert!(last.intersect(&visible).is_empty(), "far blocks come last: {last:?}");
+    }
+
+    #[test]
+    fn blocks_of_overlapping_regions_are_the_same_rectangles() {
+        let canvas = Rect::new(0, 0, 10_000, 5_000);
+        let a = blocks(Rect::new(100, 100, 3_000, 1_500), canvas, canvas);
+        let b = blocks(Rect::new(200, 50, 3_100, 1_400), canvas, canvas);
+        let set = |v: &[Rect]| v.iter().map(|r| (r.x0, r.y0, r.x1, r.y1)).collect::<std::collections::HashSet<_>>();
+        assert_eq!(set(&a), set(&b), "both regions fall on the same grid blocks");
+        for r in &a {
+            assert!(r.x0 % BLOCK_W == 0 && r.y0 % BLOCK_H == 0, "on the grid: {r:?}");
+        }
+        let covered = a.iter().fold(Rect::EMPTY, |u, r| if u.is_empty() { *r } else { u.union(r) });
+        assert!(covered.contains(100, 100) && covered.contains(2_999, 1_499), "the region is covered: {covered:?}");
     }
 }

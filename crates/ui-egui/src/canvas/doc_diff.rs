@@ -31,7 +31,9 @@ pub(crate) fn changed_area(old: &Document, new: &Document) -> Option<Rect> {
     let mut area = Changed::Nothing;
     diff_list(&old.layers, &new.layers, canvas, &mut area);
     match area {
-        Changed::Area(r) => Some(r.intersect(&canvas)),
+        // Not clipped to the canvas yet: the caller widens it by the effects' reach first, then
+        // the refresh clips it, so effects of pixels just past the edge are redrawn too.
+        Changed::Area(r) => Some(r),
         // No visible difference here is still a change the caller saw: something this doesn't
         // look at (a display setting, a view state) may have changed, so redraw everything.
         Changed::Nothing | Changed::Unknown => None,
@@ -80,7 +82,7 @@ fn diff_layer(a: &Layer, b: &Layer, canvas: Rect, area: &mut Changed) {
         match (&a.content, &b.content) {
             // Only pixels changed: where their tiles differ. Blending, clipping and effects act
             // pixel by pixel (effects spread further, which the caller's effect reach covers).
-            (LayerContent::Raster(sa), LayerContent::Raster(sb)) => area.add(tile_diff(sa, sb, canvas)),
+            (LayerContent::Raster(sa), LayerContent::Raster(sb)) => area.add(tile_diff(sa, sb)),
             // Only children changed: where they did.
             (LayerContent::Group(ga), LayerContent::Group(gb)) => diff_list(&ga.children, &gb.children, canvas, area),
             // `same_props` compares every other kind of content in full: nothing differs.
@@ -111,13 +113,15 @@ fn same_props(a: &Layer, b: &Layer) -> bool {
 
 /// Where two pixel surfaces differ, by tile identity: a tile both share unchanged is the same
 /// allocation. `None` when they can't be compared that way (another format or default pixel).
-fn tile_diff(a: &Surface, b: &Surface, canvas: Rect) -> Option<Rect> {
+fn tile_diff(a: &Surface, b: &Surface) -> Option<Rect> {
     if a.format() != b.format() || a.default_pixel() != b.default_pixel() {
         return None;
     }
     let mut r = Rect::EMPTY;
+    // Tiles past the canvas edge count too: an effect (a shadow, a stroke) of pixels there can
+    // reach onto the canvas once the caller widens the area by the effects' reach; the refresh
+    // clips the result to the canvas.
     let mut add = |t: Rect| {
-        let t = t.intersect(&canvas);
         if !t.is_empty() {
             r = if r.is_empty() { t } else { r.union(&t) };
         }
@@ -191,13 +195,17 @@ mod tests {
         assert_eq!(changed_area(&before, &s.active().unwrap().doc.clone()), None);
         // Nothing differs at all: the caller saw a change this can't see.
         assert_eq!(changed_area(&before, &before.as_ref().clone()), None);
-        // An adjustment layer reaches everything beneath it.
+        // An adjustment layer reaches everything beneath it: changing one isn't bounded, even
+        // alongside a pixel change that is.
+        s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+        let adjustment = s.active().unwrap().active_layer.unwrap();
         let before = s.active().unwrap().doc.clone();
-        s.execute("layer.new.adjustment", json!({"kind": "invert"})).ok();
-        let after = s.active().unwrap().doc.clone();
-        if after.layers.len() == before.layers.len() + 1 {
-            assert_eq!(changed_area(&before, &after), None);
-        }
-        let _ = a;
+        s.edit("hide", |doc, _| {
+            doc.layer_mut(adjustment).unwrap().visible = false;
+            Ok(())
+        })
+        .unwrap();
+        paint(&mut s, a, Rect::new(10, 10, 50, 50));
+        assert_eq!(changed_area(&before, &s.active().unwrap().doc.clone()), None);
     }
 }

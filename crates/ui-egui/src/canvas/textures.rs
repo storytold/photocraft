@@ -496,9 +496,10 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     // (`doc_diff`), so a change no tool or preview bounds still redraws only where it can
     // differ. A sweep then redraws the rest as a safety net (below).
     let mut from_diff = false;
-    // Desktop only, as the sweep that backs it up (`sweep::eligible`).
+    // Only where the sweep that backs it up can run (`sweep::eligible`); elsewhere a change
+    // nothing bounded redraws everything, as before.
     if damage.is_none()
-        && app.background_jobs
+        && crate::canvas::sweep::eligible(app, &doc)
         && seen.is_some_and(|s| s != (revision, preview_key))
         && let Some(r) = crate::canvas::sweep::changed_since_shown(app, &doc, display_key)
     {
@@ -544,19 +545,12 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         crate::render_path::layer_fit(app, fit);
     }
     if present && current && crate::canvas::sweep::running(app, id) {
+        refresh_preview_uncovered(app, &gpu, (id, raw_key), visible, &doc, display.as_deref());
         continue_sweep(app, ctx, &gpu, (idx, id), &doc, display.as_deref(), visible);
         return true;
     }
     if present && current {
-        // An adjustment preview composited where the view was: catch up where it moved to.
-        if let Some(r) = crate::adjust_preview::uncovered(app, id, raw_key, visible) {
-            let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
-            app.perf.record_refresh(&r);
-        }
-        if let Some(r) = crate::adjust_preview::live_uncovered(app, id, raw_key, visible) {
-            let r = gpu.refresh(id.0, &doc, Some(r), display.as_deref());
-            app.perf.record_refresh(&r);
-        }
+        refresh_preview_uncovered(app, &gpu, (id, raw_key), visible, &doc, display.as_deref());
         // Blend previews keep offscreen pixels untouched until the view reaches them.
         // Use the normal refresh path so CPU fallback and pending redraws stay synchronized.
         damage = crate::blend_preview::uncovered(app, id, revision, raw_key, blend_visible);
@@ -576,7 +570,7 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         crate::render_path::note(app, id.0, crate::render_path::Path::Cpu(crate::render_path::CpuReason::CanvasTooLarge { bytes, budget }));
         return false;
     }
-    let partial = present && damage.is_some();
+    let mut partial = present && damage.is_some();
     if let Some((region, everything)) = sweep_region(app, &gpu, id, &doc, damage, present) {
         crate::background_redraw::cancel(app, id);
         gpu_budget(app, &gpu, idx, partial, visible);
@@ -597,10 +591,12 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
             }
             return true;
         }
-        // A block didn't redraw on the GPU: redraw in one go, as before.
+        // A block didn't redraw on the GPU: redraw in one go, as before, and everything: the
+        // failed sweep dropped blocks still pending from earlier changes, not only this one's.
         if let Some(s) = app.canvas_states.get_mut(&id) {
             s.shown = None;
         }
+        partial = false;
     }
     let budget_start = crate::gpu_canvas::now_ms();
     gpu_budget(app, &gpu, idx, partial, visible);
@@ -665,10 +661,28 @@ fn continue_sweep(
 ) {
     gpu_budget(app, gpu, idx, true, visible);
     if crate::canvas::sweep::step(app, ctx, gpu, doc, display) == crate::canvas::sweep::Step::Failed {
-        if let Some(c) = app.canvases.get_mut(&(id, GPU_OUTPUT)) {
-            c.revision = 0;
-        }
+        // No cache: the next frame redraws everything, whatever the document's revision.
+        app.canvases.remove(&(id, GPU_OUTPUT));
         ctx.request_repaint();
+    }
+}
+
+/// An adjustment preview composited where the view was: catch up where the view moved to.
+fn refresh_preview_uncovered(
+    app: &mut PhotocraftApp,
+    gpu: &crate::gpu_canvas::GpuCanvas,
+    (id, raw_key): (photocraft_doc::DocId, u64),
+    visible: DRect,
+    doc: &Document,
+    display: Option<&photocraft_engine::display_color::CanvasDisplay>,
+) {
+    if let Some(r) = crate::adjust_preview::uncovered(app, id, raw_key, visible) {
+        let r = gpu.refresh(id.0, doc, Some(r), display);
+        app.perf.record_refresh(&r);
+    }
+    if let Some(r) = crate::adjust_preview::live_uncovered(app, id, raw_key, visible) {
+        let r = gpu.refresh(id.0, doc, Some(r), display);
+        app.perf.record_refresh(&r);
     }
 }
 
