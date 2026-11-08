@@ -41,6 +41,10 @@ pub fn gamma_from_pos(black: f32, white: f32, x: f32) -> f32 {
 /// Black and white input levels clipping 0.1 % at each end of `h` (Photoshop's Auto).
 pub fn auto_levels(h: &[u32; 256]) -> (f32, f32) {
     let total: u64 = h.iter().map(|x| u64::from(*x)).sum();
+    if total == 0 {
+        // Nothing counted (a mask that reveals nothing): leave the full range.
+        return (0.0, 255.0);
+    }
     let clip = total / 1000;
     let (mut acc, mut lo) = (0u64, 0usize);
     while lo < 253 && acc + u64::from(h[lo]) <= clip {

@@ -232,7 +232,23 @@ fn composite_bins(doc: &Document, source: HistSource, space: ToneSpace, max_leve
     }
     let level = cache_level(&d, max_level);
     let d = if level > 1 { photocraft_compose::proxy::proxy_document(&d, proxy_factor(&d, level)) } else { d };
-    let _ = photocraft_compose::render_bands(&d, d.bounds(), 0, |band| -> Result<(), ()> {
+    // An adjustment layer's mask limits what the adjustment touches, so only the pixels it reveals
+    // (effective value above one half, density included) are counted. On the proxy path the layer's
+    // mask was reduced with the rest, so band coordinates and mask coordinates agree.
+    let mask = match source {
+        HistSource::BelowLayer(id) => d.layer(id).and_then(|l| l.mask.as_ref()).filter(|m| m.enabled),
+        _ => None,
+    };
+    let mut revealed = Vec::new();
+    let _ = photocraft_compose::render_bands(&d, d.bounds(), 0, |mut band| -> Result<(), ()> {
+        if let Some(m) = mask {
+            m.values_into(band.rect, &mut revealed);
+            for (p, v) in band.px.iter_mut().zip(&revealed) {
+                if v.is_nan() || *v <= 0.5 {
+                    p[3] = 0.0;
+                }
+            }
+        }
         #[cfg(not(target_arch = "wasm32"))]
         let part = {
             use rayon::prelude::*;
@@ -655,5 +671,72 @@ mod tests {
             assert!(stray.is_empty(), "channel {c}: invented values {stray:?}");
         }
         assert!((mean(&hist[0]) - 255.0 * 3999.0 / 6000.0).abs() < 1.0, "mean {}", mean(&hist[0]));
+    }
+
+    /// `split_doc` (black columns `0..split`, white after) plus an Invert adjustment layer whose mask
+    /// reveals only columns `split..w`. Returns the session and the adjustment layer.
+    fn masked_adjustment(w: u32, h: u32, split: u32, mask_enabled: bool) -> (photocraft_engine::Session, LayerId) {
+        let mut s = split_doc(w, h, split, None);
+        s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+        s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.edit("hide-left", |doc, active| {
+            let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+            m.surface.fill_rect(photocraft_geom::Rect::new(0, 0, split as i32, h as i32), &[0.0]);
+            m.enabled = mask_enabled;
+            Ok(())
+        })
+        .unwrap();
+        (s, id)
+    }
+
+    /// #12247: the histogram of the image below an adjustment layer counts only what its mask reveals.
+    #[test]
+    fn masked_adjustment_histogram_counts_only_the_revealed_area() {
+        let (s, id) = masked_adjustment(64, 64, 32, true);
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert_eq!(hist.level, 1);
+        assert_eq!(hist[0][255], 32 * 64, "the white half");
+        assert_eq!(hist[0][0], 0, "the hidden black half is not counted");
+    }
+
+    #[test]
+    fn disabled_mask_counts_everything() {
+        let (s, id) = masked_adjustment(64, 64, 32, false);
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert_eq!((hist[0][0], hist[0][255]), (32 * 64, 32 * 64));
+    }
+
+    #[test]
+    fn masked_adjustment_histogram_counts_only_the_revealed_area_on_the_proxy_path() {
+        let (s, id) = masked_adjustment(6000, 3000, 3000, true);
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert!(hist.level > 1, "a proxy stood in, level {}", hist.level);
+        assert!(hist[0][255] > 0, "the revealed white half is counted");
+        assert_eq!(hist[0][0], 0, "the hidden black half is not counted");
+    }
+
+    #[test]
+    fn fully_hidden_mask_gives_empty_bins_and_a_finite_auto() {
+        let (mut s, id) = masked_adjustment(64, 64, 32, true);
+        s.edit("hide-all", |doc, active| {
+            let m = doc.layer_mut(active.unwrap()).unwrap().mask.as_mut().unwrap();
+            m.surface.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[0.0]);
+            Ok(())
+        })
+        .unwrap();
+        let hist = compute_histograms(&s.active().unwrap().doc, HistSource::BelowLayer(id), ToneSpace::Rgb);
+        assert_eq!(hist[0], [0; 256]);
+        let (lo, hi) = crate::dialogs::adjust_editors::auto_levels(&hist[0]);
+        assert!(lo.is_finite() && hi.is_finite() && lo < hi, "{lo} {hi}");
+    }
+
+    #[test]
+    fn image_source_counts_every_pixel() {
+        let (s, _) = masked_adjustment(64, 64, 32, true);
+        let hist = panel_histograms(&s);
+        // The whole composite (no such layer to take a mask from): every pixel counted, here all black.
+        assert_eq!(hist[0].iter().sum::<u32>(), 64 * 64);
+        assert_eq!(hist[0][0], 64 * 64);
     }
 }

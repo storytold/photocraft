@@ -308,7 +308,7 @@ mod tests {
         h[10] = 1000;
         h[200] = 1000;
         assert_eq!(auto_levels(&h), (10.0, 200.0));
-        assert_eq!(auto_levels(&[0; 256]), (253.0, 255.0), "an empty histogram is no panic");
+        assert_eq!(auto_levels(&[0; 256]), (0.0, 255.0), "an empty histogram is no panic and leaves the full range");
     }
 }
 
