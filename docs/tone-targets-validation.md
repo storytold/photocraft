@@ -222,11 +222,22 @@ Evidence is retained in `plan/merge-main-20261104/` (gitignored).
 
 ## Main integration (2026-11-07)
 
-Current upstream main integrated is `e6ba4aca4293093dc803d6db8ad899ba3beea681`. The Levels conflict retains upstream input-handle tracking for the clipping display together with this PR's channel-specific record, histogram and Auto routing. The Action playback conflict retains Equalize's selection-choice dialog alongside target-aware Levels/Curves initialization and captured receiver checks.
+Upstream main integrated was `e6ba4aca4293093dc803d6db8ad899ba3beea681`. The Levels conflict retains upstream input-handle tracking for the clipping display together with this PR's channel-specific record, histogram and Auto routing. The Action playback conflict retains Equalize's selection-choice dialog alongside target-aware Levels/Curves initialization and captured receiver checks.
 
 - Full Linux engine/UI `cargo test` with pinned CI fonts and the full serial sweep passed **9,772 tests, with 0 failures and 47 normally ignored**, including doctest builds.
 - Strict all-target Clippy, formatting, layering, wasm, and the ignored full-registry adversarial command test passed. Changed-corpus checking skipped because the PR diff contains no corpus-critical paths.
 - Six fresh offscreen captures were inspected. Addressed Levels/Curves Actions show `Receiver Mask`, unavailable targets show their error, Equalize opens with its recorded entire-image choice, and the normal RGB Levels clipping display shows the expected black/white result. Both the Equalize Action regression and the real Alt-drag clipping regression passed in the full suite.
+
+## Main integration (2026-11-08)
+
+Current upstream main integrated is `7acc57a25ff4c58097f421962f16e6b37e1a1bb2`. The dialog conflicts retain Photo Filter's last-confirmed Preserve Luminosity and fresh Filter/Color choice, recorded Smart Filter settings, and the distinction between interactive and programmatic Action playback.
+
+Record Again now shares recorded-editor initialization with Action playback. Its newly added upstream path previously seeded defaults from the current channel before inserting a different recorded target. The regression first failed with that initializer because recorded colour records overrode the neutral scalar records. It passes with shared target-aware initialization across six U16 RGB/CMYK/Lab Levels/Curves cases, checking the named alpha controls, preview/commit agreement, expected samples, retained Action target and exact preservation of layer data.
+
+- Full Linux engine/UI suite at `6ab991571`, with the full serial sweep and pinned CI fonts, passed **10,026 tests, 0 failures, 47 normally ignored**, including doctest builds. The ignored full-registry adversarial command test passed separately.
+- The final snapshot at `7acc57a25` passed **363 focused tests, 0 failures, 0 ignored**, covering the incoming blend-mode keys and rasterize wording plus tone dialogs, Smart Filters, Actions, Record Again and localization.
+- Strict all-target Clippy, formatting, layering, panel-command validation and wasm passed on the final snapshot. Changed-corpus checking skipped because the PR diff contains no corpus-critical paths.
+- Seven offscreen captures were inspected for addressed and unavailable tone targets, Equalize, Photo Filter reopening and Levels clipping. All seven were byte-identical when rendered from the final snapshot.
 
 ## 24 MP release comparison
 
