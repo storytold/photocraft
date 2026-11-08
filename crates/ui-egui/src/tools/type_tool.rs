@@ -131,6 +131,9 @@ fn byte_range(text: &str, a: usize, b: usize) -> (usize, usize) {
 }
 
 #[cfg(test)]
+mod vertical_align_buttons_tests;
+
+#[cfg(test)]
 mod canvas_tests;
 
 #[cfg(test)]
