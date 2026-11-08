@@ -67,6 +67,8 @@ pub mod color_cmds;
 pub mod color_to_alpha_cmds;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
+#[cfg(test)]
+mod count_delete_group_tests;
 pub mod cutout_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
@@ -169,7 +171,7 @@ use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_layer, has_pixel
 pub use layer_params::blend_from_str;
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
 pub(crate) use layer_references::{recorded_drop, recorded_layer};
-use ops::{arrange, merge_group, set_mask, set_mask_and_deselect};
+use ops::{arrange, merge_group, move_mask, set_mask, set_mask_and_deselect};
 pub(crate) use ops::{layer_copy, translate_layer};
 use params::{bad, set_clipped};
 pub(crate) use params::{check_f32_values, cmyk_param, color_param, int, int_i32, parse_hex, u32_id, u32_id_param};
@@ -807,6 +809,15 @@ fn build() -> Vec<CommandSpec> {
             "Delete Layer Mask",
             None
         )),
+        cmd!(
+            "layer.layerMask.moveTo",
+            "Move Layer Mask",
+            [],
+            None,
+            r##"{"layer":id? (the mask's layer, default active),"to":id|name (the layer or group it goes to; a recorded step names it),"toOccurrence":n? (which of several layers named `to`, in document order),"copy":bool=false (⌥-drag: a copy goes and the original stays),"replace":bool=false (replace a mask already there; otherwise refused)} → {layer,to,copy}"##,
+            has_layer,
+            move_mask
+        ),
         cmd!("layer.mergeDown", "Merge Down", ["Layer"], None, r##"{"layer":id?}"##, has_layer, |s, p| {
             let id = layer_param(s, p)?;
             s.edit("Merge Down", |doc, active| {
@@ -882,7 +893,7 @@ fn build() -> Vec<CommandSpec> {
             "Gradient…",
             ["Layer", "New Fill Layer"],
             None,
-            r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask)}"##,
+            r##"{"from":"#rrggbb","to":"#rrggbb","angle":deg=90,"style":"linear|radial|angle|reflected|diamond","reverse":bool,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask; else the selection is the layer mask),"stops"?,"transparency"?,"midpoints"?,"scale"?,"offset"?,"dither"?,"align"? (as gradient.fill.set; stops replace from/to)}"##,
             has_doc,
             |s, p| {
                 let a = color_param("layer.newFillLayer.gradient", p, "from", s.tools.foreground)?;
@@ -891,15 +902,26 @@ fn build() -> Vec<CommandSpec> {
                 let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
                 let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
+                // The rest of a recorded Gradient Fill (a loaded action's Make): applied as
+                // `gradient.fill.set` would, in the same step.
+                let rest: serde_json::Map<String, Value> = ["stops", "transparency", "midpoints", "scale", "offset", "dither", "align"]
+                    .iter()
+                    .filter_map(|k| p.get(*k).map(|v| ((*k).to_string(), v.clone())))
+                    .collect();
+                let (fg, bg) = (s.tools.foreground, s.tools.background);
                 let id = s.edit("New Gradient Fill Layer", |doc, active| {
-                    let fill = Fill::gradient(
+                    let mut fill = Fill::gradient(
                         vec![(0.0, Color::rgba(a[0], a[1], a[2], a[3])), (1.0, Color::rgba(b[0], b[1], b[2], b[3]))],
                         angle,
                         1.0,
                         style,
                         reverse,
-                    )
-                    .in_mode(doc.mode);
+                    );
+                    if !rest.is_empty() {
+                        let l = Layer::new(String::new(), LayerContent::Fill(fill.clone()));
+                        fill = crate::gradient_fill_cmds::apply_set(&l, &fill, doc.bounds(), &Value::Object(rest.clone()), fg, bg)?;
+                    }
+                    let fill = fill.in_mode(doc.mode);
                     let mut l = Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.gradient", default_mask)?;
                     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
@@ -1217,7 +1239,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "colorLookup",
             "Color Lookup…",
-            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":json} (file: .cube/.3dl/.look path; data: file text + "fileName")"##,
+            r##"{"lut":"none|warm|cool|tealOrange|bleachBypass|fadedFilm|dayForNight|monoContrast|crossProcess"="none","file":text,"interpolation":"trilinear|tetrahedral"="trilinear","dither":bool=false,"data":text,"dataEncoding":"text|base64"="text","fileName":text?,"lutFormat":"cube|3dl|look"?} (file: LUT path; data: file text or encoded bytes; lutFormat overrides format detection)"##,
         ),
     ];
     for &(kind, label, params) in ADJ {
@@ -1228,7 +1250,7 @@ fn build() -> Vec<CommandSpec> {
             label,
             menu: &["Layer", "New Adjustment Layer"],
             shortcut: None,
-            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1}}"#).into_boxed_str()),
+            params: Box::leak(format!(r#"{params} + {{{NEW_LAYER_PATH},"opacity":0..1=1,"name":str?=the adjustment's name + number,"mode":blend mode name="normal" (not Pass Through),"clipToPrevious":bool=false}}"#).into_boxed_str()),
             enabled: has_doc,
             run: |s, p| {
                 let kind = p.get("__kind").and_then(Value::as_str).unwrap_or("invert").to_string();
