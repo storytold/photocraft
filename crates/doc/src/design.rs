@@ -19,15 +19,12 @@ pub struct DesignTimeline {
     pub steps: Vec<DesignStep>,
     /// The rollback marker: how many steps are in effect (None = all). New steps go in here.
     pub marker: Option<usize>,
-    /// The library patterns the steps used, as they were when first used: a replay paints with
-    /// them, whatever the library holds by then.
-    pub patterns: Vec<crate::pattern::Pattern>,
 }
 
 impl DesignTimeline {
     /// An empty timeline starting from `base`.
     pub fn new(base: Arc<Document>) -> Self {
-        DesignTimeline { base, steps: Vec::new(), marker: None, patterns: Vec::new() }
+        DesignTimeline { base, steps: Vec::new(), marker: None }
     }
 
     /// Steps before the marker.
@@ -43,7 +40,7 @@ impl DesignTimeline {
     /// Every pixel surface a save writes for the timeline: the base and the baked results.
     pub fn for_each_surface(&self, mut visit: impl FnMut(&crate::Surface)) {
         self.base.for_each_surface(&mut visit);
-        for p in &self.patterns {
+        for p in self.steps.iter().flat_map(|st| &st.patterns) {
             visit(&p.surface);
         }
         for b in self.steps.iter().filter_map(|st| st.baked.as_deref()) {
@@ -102,6 +99,10 @@ pub struct DesignStep {
     /// The document right after this step, to resume replay from. Not saved.
     #[serde(default, skip)]
     pub checkpoint: Checkpoint,
+    /// The library patterns the step used in a version no step before it holds, as they were: a
+    /// replay installs them first, whatever the library holds by then.
+    #[serde(default, skip)]
+    pub patterns: Vec<crate::pattern::Pattern>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

@@ -169,9 +169,11 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     let r = change(s, "design.delete", "Delete Step", |tl| {
         let i = step_index("design.delete", tl, p)?;
         let removed = tl.steps.remove(i);
-        // Its tool settings still feed the steps after it.
+        // Its tool settings and pattern versions still feed the steps after it.
         if let Some(next) = tl.steps.get_mut(i) {
             next.prelude.splice(0..0, removed.prelude);
+            let own: Vec<String> = next.patterns.iter().map(|p| p.id.clone()).collect();
+            next.patterns.splice(0..0, removed.patterns.into_iter().filter(|p| !own.contains(&p.id)));
         }
         if let Some(m) = tl.marker.as_mut()
             && i < *m

@@ -1840,6 +1840,7 @@ mod id_tests {
             rerecord: false,
             state: Default::default(),
             checkpoint: Default::default(),
+            patterns: Vec::new(),
         };
         let mut doc = new_doc();
         let mut tl = DesignTimeline::new(std::sync::Arc::new(base));

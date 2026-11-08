@@ -47,7 +47,7 @@ fn a_timeline_the_load_drops_is_reported_with_the_open() {
     // An unscoped id far ahead of the counter makes the loader remap, dropping the timeline.
     doc.layers[0].id = photocraft_doc::LayerId((1 << 52) + 50_000_000);
     let base = std::sync::Arc::new(doc.clone());
-    doc.design_timeline = Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base, steps: Vec::new(), marker: None, patterns: Vec::new() }));
+    doc.design_timeline = Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base, steps: Vec::new(), marker: None }));
     let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let opened = files::open_bytes("Lossy.pcraft", &bytes).unwrap();
     assert!(opened.document.design_timeline.is_none());

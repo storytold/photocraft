@@ -329,9 +329,10 @@ fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn 
                 // Without a timeline of its own (a constructed one could nest without end).
                 state: b.state.as_ref().map(|(doc, fields)| (Box::new(doc_m(&Document { design_timeline: None, ..(**doc).clone() }, sink)), fields.clone())),
             }),
+            patterns: st.patterns.iter().map(|p| pattern_m(p, sink)).collect(),
         })
         .collect();
-    DesignTimelineM { base: doc_m(&t.base, sink), steps, marker: t.marker, patterns: t.patterns.iter().map(|p| pattern_m(p, sink)).collect() }
+    DesignTimelineM { base: doc_m(&t.base, sink), steps, marker: t.marker }
 }
 
 fn pattern_m(p: &Pattern, sink: &mut dyn Sink) -> PatternM {
@@ -697,6 +698,7 @@ impl Loader<'_> {
         let mut steps = Vec::with_capacity(t.steps.len());
         for m in &t.steps {
             let mut st = m.step.clone();
+            st.patterns = m.patterns.iter().map(|p| self.pattern(p)).collect::<Result<Vec<_>>>()?;
             st.baked = match &m.baked {
                 Some(b) => Some(Arc::new(Baked {
                     layers: b.layers.iter().map(|l| self.layer(l, 0)).collect::<Result<Vec<_>>>()?,
@@ -717,8 +719,7 @@ impl Loader<'_> {
         }
         // A damaged file's marker past the last step would leave Edit Parameters no marker to restore.
         let marker = t.marker.map(|m| m.min(steps.len()));
-        let patterns = t.patterns.iter().map(|p| self.pattern(p)).collect::<Result<Vec<_>>>()?;
-        let mut tl = DesignTimeline { base: Arc::new(base), steps, marker, patterns };
+        let mut tl = DesignTimeline { base: Arc::new(base), steps, marker };
         // The saved document is what the steps in effect produce: replay can resume from it.
         let n = tl.in_effect();
         if let Some(last) = n.checked_sub(1).and_then(|i| tl.steps.get_mut(i)) {

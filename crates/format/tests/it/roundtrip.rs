@@ -229,12 +229,8 @@ fn deeply_nested_groups_in_a_design_timeline_roundtrip() {
             color: None,
             state: None,
         }));
-        doc.design_timeline = Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline {
-            base: std::sync::Arc::new(base),
-            steps: vec![step],
-            marker: None,
-            patterns: Vec::new(),
-        }));
+        doc.design_timeline =
+            Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base: std::sync::Arc::new(base), steps: vec![step], marker: None }));
         let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
         assert_eq!(back, doc);
     };
@@ -259,12 +255,8 @@ fn nesting_beyond_the_load_limit_is_refused_at_save() {
         step.baked = (!in_base).then(|| {
             std::sync::Arc::new(photocraft_doc::design::Baked { layers: deep.layers.clone(), placed: Vec::new(), selection: None, color: None, state: None })
         });
-        doc.design_timeline = Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline {
-            base: std::sync::Arc::new(base),
-            steps: vec![step.clone()],
-            marker: None,
-            patterns: Vec::new(),
-        }));
+        doc.design_timeline =
+            Some(std::sync::Arc::new(photocraft_doc::design::DesignTimeline { base: std::sync::Arc::new(base), steps: vec![step.clone()], marker: None }));
         let e = save_to_bytes(&doc, &SaveOptions::default()).unwrap_err();
         assert!(matches!(e, FormatError::LimitExceeded(_)), "in base {in_base}: {e}");
     }

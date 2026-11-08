@@ -198,12 +198,12 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
             state: StepState::Ok,
             // Without its timeline: that would hold every earlier checkpoint out of the budget's reach.
             checkpoint: Checkpoint(Some(Arc::new(Document { design_timeline: None, ..(*st.doc).clone() }))),
+            patterns: used,
         };
         let current = st.doc.clone();
         let doc = Arc::make_mut(&mut st.doc);
         let Some(tl) = doc.design_timeline.as_mut() else { continue };
         let tl = Arc::make_mut(tl);
-        tl.patterns.extend(used);
         let at = tl.in_effect();
         keep_successor_pins(tl, at, &entry);
         tl.steps.insert(at, entry);
@@ -262,9 +262,9 @@ fn with_pins(b: &Before, tl: Option<&photocraft_doc::design::DesignTimeline>) ->
     prelude
 }
 
-/// Before `entry` goes in at `at` (a rolled-back marker): give the step after it the colour and
-/// symmetry pins in effect there, where `entry` pins one and it doesn't, so it keeps running
-/// with what it was recorded with rather than `entry`'s.
+/// Before `entry` goes in at `at` (a rolled-back marker): give the step after it the colour,
+/// symmetry and pattern pins in effect there, where `entry` pins one and it doesn't, so it keeps
+/// running with what it was recorded with rather than `entry`'s.
 fn keep_successor_pins(tl: &mut photocraft_doc::design::DesignTimeline, at: usize, entry: &DesignStep) {
     let Some(next) = tl.steps.get(at) else { return };
     let off = Prelude { command: "paint.symmetryDisable".into(), params: serde_json::json!({}) };
@@ -276,8 +276,12 @@ fn keep_successor_pins(tl: &mut photocraft_doc::design::DesignTimeline, at: usiz
             keep.extend(before.cloned().or(default));
         }
     }
+    // A pattern version it brings in: the step after it keeps the one it painted with.
+    let before = |id: &str| tl.steps.iter().take(at).rev().flat_map(|st| &st.patterns).find(|p| p.id == id).cloned();
+    let patterns: Vec<_> = entry.patterns.iter().filter(|p| !next.patterns.iter().any(|q| q.id == p.id)).filter_map(|p| before(&p.id)).collect();
     if let Some(next) = tl.steps.get_mut(at) {
         next.prelude.splice(0..0, keep);
+        next.patterns.extend(patterns);
     }
 }
 
@@ -291,12 +295,16 @@ pub(crate) fn pin_patterns(s: &Session, id: &str, mut params: Value) -> Value {
     fn walk(s: &Session, v: &mut Value, depth: usize) {
         match v {
             Value::Object(m) if depth < 32 => {
-                for (k, v) in m.iter_mut() {
-                    match v.as_str().filter(|key| k == PATTERN && !key.is_empty()).and_then(|key| crate::pattern_cmds::resolve_id(s, key)) {
-                        Some(found) => *v = found.into(),
-                        None => walk(s, v, depth + 1),
-                    }
+                // As the command looks it up: by id or name, else (an imported action's) by `patternName`.
+                let key = m.get(PATTERN).and_then(Value::as_str).filter(|k| !k.is_empty());
+                let found = key.and_then(|key| match m.get("patternName") {
+                    Some(_) => crate::pattern_cmds::resolve_or_named(s, key, &Value::Object(m.clone())).ok().map(|p| p.id),
+                    None => crate::pattern_cmds::resolve_id(s, key),
+                });
+                if let Some(found) = found {
+                    m.insert(PATTERN.into(), found.into());
                 }
+                m.iter_mut().filter(|(k, _)| k.as_str() != PATTERN).for_each(|(_, v)| walk(s, v, depth + 1));
             }
             Value::Array(a) if depth < 32 => a.iter_mut().for_each(|v| walk(s, v, depth + 1)),
             _ => {}
@@ -318,18 +326,17 @@ pub(crate) fn pin_patterns(s: &Session, id: &str, mut params: Value) -> Value {
     params
 }
 
-/// The patterns `params` and `prelude` name that document `doc`'s timeline doesn't hold yet, as
-/// they are now.
+/// The patterns `params` and `prelude` name, as they are now, where that isn't the version in
+/// effect at the marker of document `doc`'s timeline.
 fn used_patterns(s: &Session, doc: DocId, params: &Value, prelude: &[Prelude]) -> Vec<photocraft_doc::pattern::Pattern> {
-    fn named<'a>(v: &'a Value, out: &mut Vec<&'a str>, depth: usize) {
+    /// Each pattern key with the object naming it (which may add a `patternName`).
+    fn named<'a>(v: &'a Value, out: &mut Vec<(&'a str, &'a Value)>, depth: usize) {
         match v {
             Value::Object(m) if depth < 32 => {
-                for (k, v) in m {
-                    match v.as_str().filter(|_| k == PATTERN) {
-                        Some(key) => out.push(key),
-                        None => named(v, out, depth + 1),
-                    }
+                if let Some(key) = m.get(PATTERN).and_then(Value::as_str).filter(|k| !k.is_empty()) {
+                    out.push((key, v));
                 }
+                m.iter().filter(|(k, _)| k.as_str() != PATTERN).for_each(|(_, v)| named(v, out, depth + 1));
             }
             Value::Array(a) if depth < 32 => a.iter().for_each(|v| named(v, out, depth + 1)),
             _ => {}
@@ -340,18 +347,28 @@ fn used_patterns(s: &Session, doc: DocId, params: &Value, prelude: &[Prelude]) -
     for p in prelude {
         named(&p.params, &mut keys, 0);
     }
-    let held = s.docs.iter().find(|st| st.doc.id == doc).and_then(|st| st.doc.design_timeline.clone());
+    let tl = s.docs.iter().find(|st| st.doc.id == doc).and_then(|st| st.doc.design_timeline.clone());
+    let in_effect = |id: &str| tl.as_ref().and_then(|tl| tl.steps.iter().take(tl.in_effect()).rev().flat_map(|st| &st.patterns).find(|p| p.id == id).cloned());
     let mut out: Vec<photocraft_doc::pattern::Pattern> = Vec::new();
-    for key in keys.into_iter().filter(|k| !k.is_empty()) {
-        let known = |id: &str| held.as_ref().is_some_and(|tl| tl.patterns.iter().any(|p| p.id == id)) || out.iter().any(|p| p.id == id);
-        if !known(key)
-            && let Some(p) = crate::pattern_cmds::resolve(s, key)
-            && !known(&p.id)
-        {
+    for (key, obj) in keys {
+        let Ok(p) = crate::pattern_cmds::resolve_or_named(s, key, obj) else { continue };
+        if !out.iter().any(|q| q.id == p.id) && in_effect(&p.id).as_ref() != Some(&p) {
             out.push(p);
         }
     }
     out
+}
+
+/// Put `patterns` in `r`'s library in place of any with their ids.
+fn install(r: &mut Session, patterns: &[photocraft_doc::pattern::Pattern]) {
+    for p in patterns {
+        // A saved pattern's pixels would be read from a store this session doesn't have.
+        r.patterns.stored.remove(&p.id);
+        match r.patterns.items.iter_mut().find(|q| q.id == p.id) {
+            Some(q) => *q = p.clone(),
+            None => r.patterns.items.push(p.clone()),
+        }
+    }
 }
 
 /// Whether a capture holds a document with a timeline: the command may be a step.
@@ -515,18 +532,12 @@ pub(crate) fn replay(
             .ok_or_else(|| crate::EngineError::Other("internal error: no checkpoint to replay from".into()))?,
     };
     let mut r = scratch(seed, &resume);
-    // The patterns the steps used, as they were: in place of the library's, which may have changed
-    // (and whose saved ones this session has no store to read).
-    for p in &tl.patterns {
-        r.patterns.stored.remove(&p.id);
-        match r.patterns.items.iter_mut().find(|q| q.id == p.id) {
-            Some(q) => *q = p.clone(),
-            None => r.patterns.items.push(p.clone()),
-        }
-    }
     // The tool settings the steps before `start` set, as a replay from the base has them.
-    for p in tl.steps.iter().take(start).flat_map(|st| &st.prelude) {
-        let _ = r.execute(&p.command, p.params.clone());
+    for st in tl.steps.iter().take(start) {
+        install(&mut r, &st.patterns);
+        for p in &st.prelude {
+            let _ = r.execute(&p.command, p.params.clone());
+        }
     }
     for (i, step) in tl.steps.iter_mut().enumerate().take(end).skip(start) {
         ctx.check()?;
@@ -552,7 +563,8 @@ fn run_step(r: &mut Session, step: &mut DesignStep) {
         step.state = state;
         step.checkpoint = Checkpoint(r.active().map(|st| st.doc.clone()));
     };
-    // Tool settings feed the later steps too, so they run even when the step doesn't.
+    // Tool settings and patterns feed the later steps too, so they go in even when the step doesn't.
+    install(r, &step.patterns);
     for p in &step.prelude {
         // A tool setting that no longer applies leaves the tool as it is.
         let _ = r.execute(&p.command, p.params.clone());

@@ -31,6 +31,7 @@ fn step(step: u64, command: &str) -> DesignStep {
         rerecord: false,
         state: StepState::Ok,
         checkpoint: Default::default(),
+        patterns: Vec::new(),
     }
 }
 
@@ -53,7 +54,7 @@ fn with_timeline() -> Document {
     let mut second = step(3, "select.reselect");
     second.suppressed = true;
     second.baked = Some(Arc::new(Baked::capture(&base, &doc, &[aid], &[])));
-    doc.design_timeline = Some(Arc::new(DesignTimeline { base: Arc::new(base), steps: vec![first, second], marker: Some(1), patterns: Vec::new() }));
+    doc.design_timeline = Some(Arc::new(DesignTimeline { base: Arc::new(base), steps: vec![first, second], marker: Some(1) }));
     doc
 }
 

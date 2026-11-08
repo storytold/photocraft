@@ -1084,41 +1084,110 @@ fn the_timeline_does_not_start_while_a_job_runs() {
     s.execute("design.start", json!({})).unwrap();
 }
 
-/// A timeline keeps the patterns its steps painted with: a replay paints with them after the
-/// library deleted or renamed them, and after a save and load into a session without them. A
-/// fill with the panel's current pattern records which one that was.
+/// A timeline keeps the pattern versions its steps painted with: a replay paints with them after
+/// the library deleted, renamed or replaced them, and after a save and load into a session
+/// without them. A fill with the panel's current pattern records which one that was.
 #[test]
-fn a_timeline_keeps_the_patterns_its_steps_used() {
+fn a_timeline_keeps_the_pattern_versions_its_steps_used() {
     let mut s = started();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
-    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
-    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    let id = s.execute("edit.definePattern", json!({"name": "Mine"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    let define = |s: &mut Session, color: &str, name: &str| {
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        s.execute("edit.fill", json!({"color": color})).unwrap();
+        s.execute("edit.definePattern", json!({"name": name})).unwrap()["pattern"].as_str().unwrap().to_string()
+    };
+    let id = define(&mut s, "#ff0000", "Mine");
+    let blue = define(&mut s, "#0000ff", "Blue");
     let dir = std::env::temp_dir().join(format!("pc-design-pat-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("lib.pat").to_string_lossy().into_owned();
-    s.execute("pattern.export", json!({"path": path})).unwrap();
+    s.execute("pattern.export", json!({"path": dir.join("lib.pat").to_string_lossy()})).unwrap();
     s.set_active(0);
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
-    // By name, then (another step between) as the panel's current pattern.
     s.execute("edit.fill", json!({"contents": "pattern", "pattern": "Mine"})).unwrap();
     s.execute("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+    // Re-imported with other pixels under the same id: the next fill paints those.
+    let pixels = crate::pattern_cmds::resolve(&s, &blue).unwrap().surface;
+    s.patterns.items.iter_mut().find(|p| p.id == id).unwrap().surface = pixels;
+    s.execute("select.rect", json!({"x": 0, "y": 8, "width": 8, "height": 8})).unwrap();
     s.execute("pattern.presets.select", json!({"pattern": id})).unwrap();
     s.execute("edit.fill", json!({"contents": "pattern"})).unwrap();
     let st = steps(&mut s);
-    assert_eq!((&st[2]["params"]["pattern"], &st[4]["params"]["pattern"]), (&json!(id), &json!(id)), "kept by id");
+    assert_eq!([&st[2], &st[4], &st[6]].map(|st| st["params"]["pattern"].clone()), [json!(id), json!(id), json!(id)], "kept by id");
     assert!(st.iter().all(|st| st["baked"] == false), "nothing baked for it");
     let tl = s.active().unwrap().doc.design_timeline.clone().unwrap();
-    assert_eq!(tl.patterns.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), [id.as_str()]);
+    assert_eq!(tl.steps.iter().map(|st| st.patterns.len()).collect::<Vec<_>>(), [0, 0, 1, 0, 0, 0, 1], "a version where it changed");
     let want = doc(&s);
     s.execute("pattern.delete", json!({"pattern": id})).unwrap();
     s.execute("design.replay", json!({})).unwrap();
-    assert_eq!((state(&mut s, 2), state(&mut s, 4)), ("ok".to_string(), "ok".to_string()));
-    assert_eq!(doc(&s), want, "the deleted pattern still paints in a replay");
+    assert!([2, 4, 6].iter().all(|i| state(&mut s, *i) == "ok"));
+    assert_eq!(doc(&s), want, "each fill with its own version, the pattern deleted");
     let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
     let mut r = Session::new();
     r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
     r.execute("design.replay", json!({})).unwrap();
     assert_eq!(doc(&r), want, "after a save and load too");
+}
+
+/// A pattern an imported action's step names by an id this session lacks, and by `patternName`,
+/// is kept by the id it resolved to.
+#[test]
+fn a_pattern_found_by_its_recorded_name_is_kept() {
+    let mut s = started();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Mine"})).unwrap()["pattern"].as_str().unwrap().to_string();
+    s.execute(crate::pattern_fill_cmds::CREATE, json!({"pattern": "not-installed", "patternName": "Mine"})).unwrap();
+    let step = steps(&mut s).last().unwrap().clone();
+    assert_eq!(step["params"]["pattern"], json!(id));
+    let tl = s.active().unwrap().doc.design_timeline.clone().unwrap();
+    assert_eq!(tl.steps.last().unwrap().patterns.iter().map(|p| p.id.clone()).collect::<Vec<_>>(), [id]);
+}
+
+/// A pattern version brought in by one step reaches the steps after it however the timeline is
+/// edited: a replay resuming after it, a step put in before them with another version, or the
+/// step deleted.
+#[test]
+fn a_pattern_version_reaches_later_steps_through_timeline_edits() {
+    let red_at = |s: &Session, x: i32, y: i32| s.active().unwrap().doc.layers[1].surface().unwrap().pixel(x, y) == vec![1.0, 0.0, 0.0, 1.0];
+    let setup = || {
+        let mut s = started();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        let id = s.execute("edit.definePattern", json!({"name": "Mine"})).unwrap()["pattern"].as_str().unwrap().to_string();
+        s.execute("edit.fill", json!({"color": "#0000ff"})).unwrap();
+        let blue = s.execute("edit.definePattern", json!({"name": "Blue"})).unwrap()["pattern"].as_str().unwrap().to_string();
+        s.set_active(0);
+        // 1: fill the top left red (the version comes in here), 3: the bottom right.
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+        s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+        s.execute("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 8})).unwrap();
+        s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+        (s, id, blue)
+    };
+    // Resuming at step 3 (after the version came in), with the pattern gone from the library.
+    let (mut s, id, _) = setup();
+    s.execute("pattern.delete", json!({"pattern": id})).unwrap();
+    s.execute("design.rollTo", json!({"at": 3})).unwrap();
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(state(&mut s, 4), "ok", "resumed");
+    // Deleting the step that brought it in: the later fill still has it.
+    let first = step_id(&mut s, 2);
+    s.execute("design.delete", json!({"step": first})).unwrap();
+    assert_eq!(state(&mut s, 3), "ok", "after a delete");
+    assert!(red_at(&s, 12, 12));
+    // A step put in before the second fill with other pixels under the same id leaves it red.
+    let (mut s, id, blue) = setup();
+    let pixels = crate::pattern_cmds::resolve(&s, &blue).unwrap().surface;
+    s.execute("design.rollTo", json!({"at": 4})).unwrap();
+    s.patterns.items.iter_mut().find(|p| p.id == id).unwrap().surface = pixels;
+    s.execute("select.rect", json!({"x": 0, "y": 8, "width": 8, "height": 8})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": id})).unwrap();
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(commands(&mut s)[4..], ["select.rect", "edit.fill", "edit.fill"]);
+    // The inserted selection is the later fill's now: it paints over the inserted blue fill.
+    assert!(red_at(&s, 4, 12), "the later fill keeps the version it painted with");
 }

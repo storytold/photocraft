@@ -111,9 +111,6 @@ pub struct DesignTimelineM {
     pub steps: Vec<DesignStepM>,
     #[serde(default)]
     pub marker: Option<usize>,
-    /// The library patterns the steps used.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub patterns: Vec<PatternM>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,6 +119,9 @@ pub struct DesignStepM {
     pub step: photocraft_doc::design::DesignStep,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub baked: Option<BakedM>,
+    /// The library patterns the step used in a version no earlier step holds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<PatternM>,
 }
 
 /// A baked step's stored result (see `photocraft_doc::design::Baked`).
