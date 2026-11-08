@@ -773,7 +773,10 @@ fn temp_owner_takes_only_a_file_part_temp_name_writes() {
 #[cfg(not(windows))]
 #[test]
 fn an_afp_enoent_directory_flush_is_unsupported_where_afp_lives() {
-    let code = |c| dir_synced(Err(io::Error::from_raw_os_error(c)));
+    // A folder that still exists: the real file system answers `dir_exists`, so the code table
+    // alone decides (the vanished-folder case has its own test below).
+    let d = TempDir::new("syncdir-afp-codes");
+    let code = |c| dir_synced(Err(io::Error::from_raw_os_error(c)), &d.0, &RealFs);
     assert_eq!(code(2).is_ok(), cfg!(target_vendor = "apple"), "code 2 counts as flushed only where AFP lives");
     assert!(code(5).is_err(), "EIO stays a failure");
 }
