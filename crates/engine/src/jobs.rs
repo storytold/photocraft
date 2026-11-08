@@ -969,6 +969,14 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
         keep_raw: false,
+        pdf_dpi: prefs.file_handling.pdf_dpi,
+        pdf_pages: match (prefs.file_handling.pdf_first_page, prefs.file_handling.pdf_last_page) {
+            (0, 0) => None,
+            (first, last) => {
+                let first = first.max(1);
+                Some((first, if last == 0 { u32::MAX } else { last.max(first) }))
+            }
+        },
         ..Default::default()
     }
 }
