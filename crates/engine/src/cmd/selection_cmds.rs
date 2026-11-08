@@ -622,8 +622,31 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "needs at least 3 points".into() });
     }
     // The History step is named after the tool: the Polygonal Lasso sends `polygonal` (Photoshop).
-    let step = if b(p, "polygonal", false) { "Polygonal Lasso" } else { "Lasso" };
+    // The Patch and Content-Aware Move tools draw with this command and send their own name as
+    // `historyName`, so the plain Lasso tool keeps "Lasso".
+    // A bad name is refused even when `polygonal` picks the step's name.
+    let named = match p.get("historyName") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(n)) if history_name(n).is_some() => history_name(n),
+        Some(_) => {
+            let msg = "historyName must be 1-64 characters with a visible one, and no control, line-break or hidden format characters";
+            return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: msg.into() });
+        }
+    };
+    let step = if b(p, "polygonal", false) { "Polygonal Lasso" } else { named.unwrap_or("Lasso") };
     polygon_selection(s, "select.lasso", step, &pts, p)
+}
+
+/// The History step name for `historyName` `n`: refused when it has a control or line-break
+/// character anywhere; otherwise without its invisible end padding (see
+/// [`photocraft_plugins::manifest::trim_name`]), so a name that looks like "Patch Tool" is "Patch Tool",
+/// and then held to the plug-in menu-label rule.
+fn history_name(n: &str) -> Option<&str> {
+    if n.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')) {
+        return None;
+    }
+    let t = photocraft_plugins::manifest::trim_name(n);
+    photocraft_plugins::manifest::printable_name(t).then_some(t)
 }
 
 /// Selects the polygon `pts` with the lasso tools' `mode`, `antiAlias` and `feather` params, as
@@ -756,7 +779,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.lasso",
             "Lasso",
             [],
-            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false}"##,
+            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false,"historyName"?:text (1..64 characters with a visible one, no control, line-break or hidden format characters, invisible padding at the ends (spaces, joiners, fillers, blank Braille and other default-ignorable blanks, and selectors cut off by them) trimmed; the History step name when a tool other than the Lasso draws it, e.g. "Patch Tool"; default "Lasso")}"##,
             has_doc,
             lasso
         ),

@@ -4157,7 +4157,7 @@ curves	Smooth	Згладити
 	Color Picker (Custom Canvas Color)	Вибір кольору (власний колір полотна)
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Щоб продовжити, потрібно растеризувати цей текстовий шар. Після цього його текст більше не можна буде редагувати. Растеризувати текст?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Щоб продовжити, потрібно растеризувати цей шар фігури. Після цього його більше не можна буде редагувати як фігуру. Растеризувати фігуру?
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Щоб продовжити, потрібно растеризувати цей смартоб’єкт. Після цього його вміст більше не можна буде редагувати. Растеризувати смартоб’єкт?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Щоб продовжити, потрібно растеризувати цей смартоб’єкт. Після цього його вміст більше не можна буде редагувати. Растеризувати смартоб’єкт?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Щоб продовжити, потрібно растеризувати цей шар заливки. Після цього його заливку більше не можна буде редагувати. Растеризувати шар?
 	Demosaic	Демозаїк
 	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Як відновлюється мозаїка кольорового фільтра камери. Застосовується під час відкриття файлу; попередній перегляд показує метод, з яким файл було відкрито.
@@ -4317,6 +4317,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Виберіть окремий документ для кожного каналу.
 	A picked document is no longer open.	Один із вибраних документів більше не відкрито.
 	A picked document is no longer a grayscale document of the same size.	Один із вибраних документів більше не є документом у градаціях сірого того самого розміру.
+	Netscape Gray	Сірий Netscape
 # Move tool options bar (#11381)
 	Align top edges	Вирівняти верхні краї
 	Align vertical centers	Вирівняти центри по вертикалі
