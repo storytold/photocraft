@@ -23,6 +23,10 @@ fn pending_id() -> Id {
     Id::unique("pc-field-tab-pending")
 }
 
+fn reached_id() -> Id {
+    Id::unique("pc-field-tab-reached")
+}
+
 /// Give `id` the focus from the next frame on. Focusing a widget after it was laid out would
 /// never read as "gained focus" to it (egui compares with the focus at the start of the frame),
 /// and that is what selects a field's text; so the move waits for [`take_step`] next frame.
@@ -33,9 +37,11 @@ pub fn focus(ctx: &Context, id: Id) {
 /// Tab (+1) or ⇧Tab (−1) pressed this frame, taken from the input so nothing else acts on it;
 /// 0 when neither was. Also applies a pending [`focus`]. Call before the dialog is laid out.
 pub fn take_step(ctx: &Context) -> i32 {
-    if let Some(id) = ctx.data_mut(|d| d.remove_temp::<Option<Id>>(pending_id())).flatten() {
+    let pending = ctx.data_mut(|d| d.remove_temp::<Option<Id>>(pending_id())).flatten();
+    if let Some(id) = pending {
         ctx.memory_mut(|m| m.request_focus(id));
     }
+    ctx.data_mut(|d| d.insert_temp(reached_id(), pending));
     let step = ctx.input_mut(|i| {
         if i.consume_key(Modifiers::SHIFT, Key::Tab) {
             -1
@@ -50,6 +56,12 @@ pub fn take_step(ctx: &Context) -> i32 {
         ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
     }
     step
+}
+
+/// True in the frame a field gets the focus [`take_step`] handed it (Tab, ⇧Tab or [`focus`]),
+/// whatever the mouse is doing meanwhile.
+pub fn reached(ctx: &Context, id: Id) -> bool {
+    ctx.data(|d| d.get_temp::<Option<Id>>(reached_id())).flatten() == Some(id)
 }
 
 /// Start collecting the fields of a dialog body.

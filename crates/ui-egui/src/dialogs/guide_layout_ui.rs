@@ -335,13 +335,27 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     // Colour is the existing global guide display preference, not document data.
     let color = rgb(color).ok_or("invalid guide color")?;
     let hex = format!("#{:02x}{:02x}{:02x}", color.r(), color.g(), color.b());
-    let result = app.run(COMMAND, params_with(Some(app), f))?;
+    let params = params_with(Some(app), f);
+    // Lengths are remembered as the pixels they applied, so a bare "5" typed in px still means
+    // 5 px after the ruler unit changes; reopening shows them in the new unit.
+    let mut remembered = f.clone();
+    for (key, along_x, optional) in [("width", true, true), ("height", false, true), ("gutter", true, false), ("rowGutter", false, false)] {
+        if let Some(v) = f.get(key) {
+            remembered.insert(key.into(), parse_length_value(Some(v), Some(app), along_x, optional));
+        }
+    }
+    if let Some(Value::Array(m)) = f.get("margin")
+        && m.len() == 4
+    {
+        let px = m.iter().zip([false, true, false, true]).map(|(v, along_x)| parse_length_value(Some(v), Some(app), along_x, false)).collect();
+        remembered.insert("margin".into(), Value::Array(px));
+    }
+    let result = app.run(COMMAND, params)?;
     // The preview is visible even when guides were hidden. Keep a committed layout visible too.
     app.ui.view.extras = true;
     app.ui.view.show.canvas_guides = true;
     app.ui.extras.guides = true;
     app.session.prefs.edit(|prefs| prefs.guides_grid_and_slices.guide_color = hex);
-    let mut remembered = f.clone();
     for key in [MARK, "__command", "__label", "__document", "__previewGuides", "__previewParams", "__previewSource"] {
         remembered.remove(key);
     }
@@ -382,8 +396,11 @@ fn count_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, name: &
     }
 }
 
+/// Tab selects the text even while a mouse button is held; a click places the caret.
 fn should_select_all(response: &egui::Response, ui: &egui::Ui) -> bool {
-    response.gained_focus() && !response.clicked() && !response.dragged() && !ui.input(|i| i.pointer.any_click() || i.pointer.any_down())
+    response.gained_focus()
+        && (crate::field_tab::reached(ui.ctx(), response.id)
+            || (!response.clicked() && !response.dragged() && !ui.input(|i| i.pointer.any_click() || i.pointer.any_down())))
 }
 
 fn length_field(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: egui::Id, optional: bool, along_x: bool) {

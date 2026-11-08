@@ -433,3 +433,75 @@ fn tabbing_through_untouched_fields_keeps_the_preset() {
     assert_eq!(f["__preset"], "eight");
     assert_eq!(f["width"], Value::Null);
 }
+
+fn gutter_dialog(gutter: &str) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("columns".into(), json!(2));
+    f.insert("__rowsEnabled".into(), json!(false));
+    f.insert("__marginEnabled".into(), json!(false));
+    f.insert("gutter".into(), json!(gutter));
+    let mut h = harness(app);
+    h.run_steps(3);
+    h
+}
+
+/// Tab from the dialog's start to Spacing (gutter): Number, Width, then Spacing.
+fn tab_to_gutter(h: &mut egui_kittest::Harness<'static, PhotocraftApp>) {
+    for _ in 0..3 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+}
+
+/// Enter straight after typing a bare number applies it in the unit the field showed: "5" typed
+/// over "2 mm" is 5 mm, not 5 px.
+#[test]
+fn enter_after_a_bare_number_applies_the_unit_the_field_showed() {
+    let mut h = gutter_dialog("2 mm");
+    tab_to_gutter(&mut h);
+    h.event(egui::Event::Text("5".into()));
+    h.run_steps(2);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(3);
+    let app = h.state();
+    assert!(app.ui.dialogs.is_empty(), "Enter applies the layout");
+    // Two automatic columns: the gutter is the gap between the second and third guide.
+    let v = &app.session.active().unwrap().doc.guides.vertical;
+    let gutter = v[2] - v[1];
+    assert!((gutter - 5.0 / 25.4 * 72.0).abs() < 1e-2, "gutter {gutter} px in {v:?}");
+}
+
+/// A unitless length set over automation is remembered as the length it applied, so a later
+/// ruler unit change does not reinterpret it.
+#[test]
+fn remembered_lengths_keep_their_size_when_the_ruler_unit_changes() {
+    use photocraft_engine::prefs::Unit;
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("gutter".into(), json!("5"));
+    f.insert("margin".into(), json!(["5", "5", "5", "5"]));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    app.session.prefs.edit(|p| p.units_and_rulers.rulers = Unit::Millimeters);
+    let reopened = open(&mut app);
+    let rf = &app.ui.dialog_mut(reopened).unwrap().fields;
+    assert_eq!(rf["gutter"], "1.764 mm");
+    assert_eq!(rf["margin"][0], "1.764 mm");
+}
+
+/// Tab selects the field it reaches even while a mouse button is held, so typing replaces the
+/// value instead of appending to it.
+#[test]
+fn tab_selects_the_field_while_a_mouse_button_is_held() {
+    let mut h = gutter_dialog("2 mm");
+    let at = egui_kittest::kittest::Queryable::get_all_by_label(&h, "Number").next().unwrap().rect().center();
+    let at = egui::pos2(at.x as f32, at.y as f32);
+    h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(2);
+    tab_to_gutter(&mut h);
+    h.event(egui::Event::Text("5".into()));
+    h.run_steps(2);
+    assert_eq!(h.state().ui.dialogs.first().unwrap().fields["gutter"], "5");
+}
