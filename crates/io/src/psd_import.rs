@@ -1240,6 +1240,7 @@ fn read_initial_metadata(
     if let Some(scale) = crate::annotations_map::raw_scale(doc) {
         doc.measurement.scale = scale;
     }
+    crate::annotations_map::import_count_resource(doc);
     let _ = layered;
     (damaged, alloc_error)
 }
