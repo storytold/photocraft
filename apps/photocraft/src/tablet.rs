@@ -19,8 +19,10 @@
 //! the UI's cursor, the brush outline included. A pen press can't start a native window move or
 //! resize (winit asks the compositor with the mouse's serial), so the custom title bar is dragged
 //! with the mouse. Only when the compositor has no tablet protocol does the app open its window
-//! through Xwayland with a pen attached ([`display_session`]), where the X11 reader applies. Xwayland is a poor fallback on
-//! some multi-GPU systems: there only a GPU that drives no display may present to it.
+//! through Xwayland with a pen attached ([`display_session`]), where the X11 reader applies.
+//! On some multi-GPU systems Xwayland can only present through a GPU that drives no display,
+//! which shows up as a blurred, very slow window; keep native Wayland with
+//! `PHOTOCRAFT_NATIVE_WAYLAND=1` on a compositor with tablet-v2 (or use an X11 session).
 
 #[cfg(any(target_os = "linux", test))]
 use crate::linux_libs::DisplaySession;
@@ -120,9 +122,9 @@ pub fn install_macos(feed: &StylusFeed) -> Option<photocraft_tablet::macos::Moni
 /// The display server to open the window on: the session's own, except Xwayland on Wayland when
 /// a pen is attached, the compositor has no tablet protocol (see the module docs) and Xwayland
 /// can run the window: `$DISPLAY` is set and the X11 libraries are installed.
-/// `PHOTOCRAFT_NATIVE_WAYLAND=1` keeps native Wayland; `PHOTOCRAFT_XWAYLAND_PEN=1` takes
-/// Xwayland for a pen even when the compositor has the tablet protocol (the behaviour before
-/// native Wayland pens).
+/// `PHOTOCRAFT_NATIVE_WAYLAND=1` keeps native Wayland and wins when both variables are set;
+/// `PHOTOCRAFT_XWAYLAND_PEN=1` takes Xwayland for a pen even when the compositor has the tablet
+/// protocol (the behaviour before native Wayland pens).
 #[cfg(target_os = "linux")]
 pub fn display_session() -> DisplaySession {
     let var = |k: &str| std::env::var(k).ok();
@@ -138,6 +140,7 @@ pub fn display_session() -> DisplaySession {
 }
 
 /// [`display_session`]'s decision; the system probes run only when the session asks for them.
+/// `PHOTOCRAFT_NATIVE_WAYLAND` takes precedence over `PHOTOCRAFT_XWAYLAND_PEN`.
 #[cfg(any(target_os = "linux", test))]
 pub fn pen_needs_xwayland(
     session: DisplaySession,
