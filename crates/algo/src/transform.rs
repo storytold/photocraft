@@ -293,6 +293,14 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
     Some(Rect::new(bx0, by0, bx1, by1))
 }
 
+/// The part of `src_rect` worth warping. Clear pixels carry no colour once premultiplied, so when the
+/// default pixel is clear only the covered part of the rect matters. An opaque or translucent default
+/// is content everywhere in the rect (it is not stored in any tile), so the rect is kept whole.
+pub(crate) fn warp_source_rect(src: &Surface, src_rect: Rect) -> Rect {
+    let clear_default = src.format().alpha && src.default_pixel().last().is_some_and(|&a| a <= 0.0);
+    if clear_default { src_rect.intersect(&src.covered_bounds()) } else { src_rect }
+}
+
 /// A cancelled `ctl` skips the remaining tiles; the caller discards the result.
 fn warp(
     src: &Surface,
@@ -314,7 +322,7 @@ fn warp(
     let out = Surface::new(fmt);
     // Clear pixels carry no colour once premultiplied, so they are not content whatever colour they are stored in
     // (white and black copies of one shape must warp alike, #10639): only the covered part of the rect is warped.
-    let src_rect = src_rect.intersect(&src.covered_bounds());
+    let src_rect = warp_source_rect(src, src_rect);
     if src_rect.is_empty() || clip.is_some_and(|c| c.is_empty()) {
         return Ok(out);
     }

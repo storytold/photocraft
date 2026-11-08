@@ -87,7 +87,7 @@ pub fn warp_mesh_surface_with(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f6
 fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync), interp: Interp, ctl: &Interrupt) -> Surface {
     // Clear pixels carry no colour once premultiplied, so they are not content whatever colour they are stored in
     // (white and black copies of one shape must warp alike, #10639): only the covered part of the rect is warped.
-    let src_rect = src_rect.intersect(&src.covered_bounds());
+    let src_rect = crate::transform::warp_source_rect(src, src_rect);
     if src_rect.is_empty() {
         let fmt = src.format();
         return Surface::new(PixelFormat::new(fmt.mode, fmt.sample, true));
@@ -799,5 +799,34 @@ mod tests {
         assert_eq!(o.pixel(0, 0), vec![1.0]);
         assert_eq!(o.pixel(12, 6), vec![0.0]);
         assert_eq!(o.pixel(5, 6), vec![1.0]);
+    }
+
+    /// A surface whose untouched pixels are opaque black, with a red patch on it.
+    fn opaque_default_surface() -> Surface {
+        let mut src = Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 1.0]);
+        src.fill_rect(Rect::new(8, 8, 16, 16), &[1.0, 0.0, 0.0, 1.0]);
+        src
+    }
+
+    #[test]
+    fn an_opaque_default_survives_a_mesh_warp() {
+        let src = opaque_default_surface();
+        let identity = |x: f64, y: f64| (x, y);
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let out = warp_mesh_surface(&src, Rect::new(0, 0, 32, 32), &identity, interp);
+            assert!((out.sample_channel(2, 2, 3) - 1.0).abs() < 1e-4, "{interp:?}: background alpha {}", out.sample_channel(2, 2, 3));
+            assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "{interp:?}: patch");
+        }
+    }
+
+    #[test]
+    fn an_opaque_default_survives_a_homography_warp() {
+        use crate::transform::{Homography, warp_surface};
+        let src = opaque_default_surface();
+        for interp in [Interp::Nearest, Interp::Bilinear, Interp::Bicubic] {
+            let Ok(out) = warp_surface(&src, Rect::new(0, 0, 32, 32), &Homography::IDENTITY, interp) else { panic!("allocation") };
+            assert!((out.sample_channel(2, 2, 3) - 1.0).abs() < 1e-4, "{interp:?}: background alpha {}", out.sample_channel(2, 2, 3));
+            assert!((out.sample_channel(12, 12, 0) - 1.0).abs() < 1e-4, "{interp:?}: patch");
+        }
     }
 }
