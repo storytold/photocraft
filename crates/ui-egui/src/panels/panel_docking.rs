@@ -43,6 +43,32 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("brushes", "Brushes", Group::Brushes),
 ];
 
+/// The icon a panel shows in an iconic (collapsed to icons) dock column, from `icon_data.rs`.
+/// Without one, craft-ui draws the label's initial in a box.
+fn panel_icon(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "color" => "palette",
+        "swatches" => "swatch-book",
+        "gradients" => "gradient",
+        "patterns" => "grid-3x3",
+        "properties" => "sliders-horizontal",
+        "adjustments" => "adjustment-layer",
+        "character" => "type",
+        "paragraph" => "pilcrow",
+        "navigator" => "navigation",
+        "histogram" => "chart-column",
+        "info" => "info",
+        "history" => "history",
+        "actions" => "play",
+        "layerComps" => "copy",
+        "layers" => "layers",
+        "channels" => "blend",
+        "paths" => "spline",
+        "brushes" => "brush",
+        _ => return None,
+    })
+}
+
 /// PhotoCraft's wording of craft-ui's docking labels, translated through `tl!`. The others keep
 /// craft-ui's English.
 const DOCK_LABELS: &[(&str, &str)] = &[
@@ -1245,6 +1271,9 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
     }
     fn allow_native(&self, id: &String) -> bool {
         !self.card.contains(id)
+    }
+    fn icon(&self, id: &String) -> Option<egui::ImageSource<'static>> {
+        panel_icon(id).and_then(crate::icons::source)
     }
     fn group_header_width(&self, _panels: &[String], _active: &String, _floating: bool, _strip_width: f32) -> f32 {
         28.0
