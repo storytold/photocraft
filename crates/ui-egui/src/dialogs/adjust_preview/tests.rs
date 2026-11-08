@@ -244,7 +244,12 @@ fn a_clipped_target_previews_like_the_destructive_command() {
 /// and the adjustment inside its group, and leaves the committed document untouched.
 #[test]
 fn a_clipped_target_preview_keeps_its_place_and_properties() {
-    let (doc, target) = clipped_document(ColorMode::Rgb, SampleType::U8, true);
+    let (mut doc, target) = clipped_document(ColorMode::Rgb, SampleType::U8, true);
+    // Nondefaults the transformed group must keep, not just Photoshop's defaults.
+    let l = doc.layer_mut(target).unwrap();
+    l.fill_opacity = 0.4;
+    l.excluded_channels = 0b101;
+    l.advanced.blend_clipped = false;
     let before = doc.layer(target).unwrap().clone();
     let path = doc.path_of(target).unwrap();
     let layer_count = doc.layer_count();

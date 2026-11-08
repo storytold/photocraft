@@ -12,10 +12,11 @@
 //! real latency. Without a GPU adapter the CPU compositor stands in. Zoom and pan don't
 //! recomposite (the canvas samples the composited texture's mip levels); "viewport (CPU)" times
 //! what the CPU fallback pays for one 1920×1080 view. Each row is the median of `--reps` runs
-//! (min / max shown); the first run of an operation is reported separately as "cold". Adjustment
-//! preview rows cover a plain pixel target and a clipped one. A styled clipped target keeps the
-//! CPU proxy (its preview group would rebuild effect shape maps on the UI thread), so only its
-//! CPU reference rows run and the reason is printed.
+//! (min / max shown); the first run of an operation is reported separately as "cold", and
+//! path-reported rows keep its compositing path (`cold_path` in `--json`) beside the warm row's
+//! `warm_path`. Adjustment preview rows cover a plain pixel target and a clipped one. A styled
+//! clipped target keeps the CPU proxy (its preview group would rebuild effect shape maps on the
+//! UI thread), so only its CPU reference rows run and the reason is printed.
 
 use std::time::Instant;
 
@@ -82,6 +83,16 @@ fn photo(w: u32, h: u32) -> photocraft_codecs::Image {
     photocraft_codecs::Image::from_raw(w, h, photocraft_codecs::ChannelLayout::Rgb, photocraft_codecs::SampleType::U8, px).expect("image")
 }
 
+/// JSON metadata for one benchmark row, in the same order as `Bench::rows`.
+struct RowExtra {
+    samples: Vec<f64>,
+    peak_rss: Option<u64>,
+    faults: Option<u64>,
+    /// Any fallback among the warm samples takes precedence.
+    warm_path: Option<&'static str>,
+    cold_path: Option<&'static str>,
+}
+
 struct Bench {
     gpu: Option<Gpu>,
     reps: usize,
@@ -89,9 +100,8 @@ struct Bench {
     /// state later rows need).
     only: Option<String>,
     rows: Vec<(String, f64, f64, f64, f64)>,
-    /// Per row (same order as `rows`): the timed samples, the peak RSS while they ran and the
-    /// minor page faults per warm run (all of it, untimed setup included), for `--json` (`cargo xtask perf`).
-    extra: Vec<(Vec<f64>, Option<u64>, Option<u64>)>,
+    /// Per row (same order as `rows`): the metadata for `--json` (`cargo xtask perf`).
+    extra: Vec<RowExtra>,
     rss: photocraft_testkit::perf::RssSampler,
 }
 
@@ -116,14 +126,15 @@ impl Bench {
     }
 
     /// [`Self::time`] for a row that also reports the compositing path that drew it (`GPU`,
-    /// `CPU fallback` or `CPU canvas`), so a fallback is never presented as a GPU result.
+    /// `CPU fallback` or `CPU canvas`), so a fallback is never presented as a GPU result. The cold
+    /// sample's path is kept beside the warm row's (see [`RowExtra`]).
     fn time_path(&mut self, name: &str, report_path: bool, mut f: impl FnMut(&mut Self) -> (f64, &'static str)) {
         if self.only.as_ref().is_some_and(|o| !name.contains(o.as_str())) {
             f(self);
             return;
         }
         self.rss.reset();
-        let (cold, _) = f(self);
+        let (cold, cold_path) = f(self);
         let faults0 = photocraft_testkit::perf::minor_faults();
         let mut v = Vec::with_capacity(self.reps);
         let mut path = "";
@@ -141,12 +152,16 @@ impl Bench {
         // Counted over the whole of `f`, so it includes untimed setup and cleanup (an undo, an
         // extra refresh), not only the work the milliseconds measure.
         let faults = faults0.zip(photocraft_testkit::perf::minor_faults()).map(|(a, b)| b.saturating_sub(a) / self.reps as u64);
-        self.extra.push((v.clone(), self.rss.peak(), faults));
+        let report_paths = report_path && !path.is_empty();
+        let warm_path = report_paths.then_some(path);
+        let cold_path = (report_path && !cold_path.is_empty()).then_some(cold_path);
+        self.extra.push(RowExtra { samples: v.clone(), peak_rss: self.rss.peak(), faults, warm_path, cold_path });
         v.sort_by(f64::total_cmp);
         let med = v[v.len() / 2];
         let fl = faults.map_or(String::new(), |f| format!(", {f} faults/run incl. setup"));
-        let shown = if report_path && !path.is_empty() { format!("{name} ({path})") } else { name.to_string() };
-        println!("{shown:<44} {med:>9.1} ms   (min {:>8.1}, max {:>8.1}, cold {:>8.1}{fl})", v[0], v[v.len() - 1], cold);
+        let cold_tag = cold_path.map_or(String::new(), |p| format!(" ({p})"));
+        let shown = if report_paths { format!("{name} ({path})") } else { name.to_string() };
+        println!("{shown:<44} {med:>9.1} ms   (min {:>8.1}, max {:>8.1}, cold {:>8.1}{cold_tag}{fl})", v[0], v[v.len() - 1], cold);
         self.rows.push((shown, med, v[0], v[v.len() - 1], cold));
     }
 
@@ -381,12 +396,18 @@ fn write_report(b: &Bench, args: &[String], w: u32, h: u32) {
         .rows
         .iter()
         .zip(&b.extra)
-        .map(|((n, med, min, max, cold), (samples, rss, faults))| {
+        .map(|((n, med, min, max, cold), extra)| {
             let mut r = json!({"name": n, "median_ms": med, "min_ms": min, "max_ms": max, "cold_ms": cold});
             // For `cargo xtask perf`: raw samples (it computes p50 / p95) and peak RSS.
-            r["samples_ms"] = json!(samples);
-            r["peak_rss_bytes"] = json!(rss);
-            r["minor_faults_per_run"] = json!(faults);
+            r["samples_ms"] = json!(&extra.samples);
+            r["peak_rss_bytes"] = json!(extra.peak_rss);
+            r["minor_faults_per_run"] = json!(extra.faults);
+            if let Some(p) = extra.warm_path {
+                r["warm_path"] = json!(p);
+            }
+            if let Some(p) = extra.cold_path {
+                r["cold_path"] = json!(p);
+            }
             r
         })
         .collect();
@@ -616,4 +637,103 @@ fn main() {
     });
 
     write_report(&b, &args, w, h);
+}
+
+/// The `--json` reporting path, exercised with fake timings: CI runs integration tests, not
+/// examples, so these live here and are included by `tests/it/main.rs`.
+#[cfg(test)]
+mod reporting_tests {
+    use super::*;
+
+    fn bench(reps: usize) -> Bench {
+        Bench {
+            gpu: None,
+            reps,
+            only: None,
+            rows: Vec::new(),
+            extra: Vec::new(),
+            rss: photocraft_testkit::perf::RssSampler::start(std::time::Duration::from_millis(2)),
+        }
+    }
+
+    /// Write `b`'s report to a temporary file and return its rows.
+    fn report_rows(b: &Bench) -> Vec<Value> {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("report.json");
+        let args = ["--json".to_string(), path.to_string_lossy().into_owned()];
+        write_report(b, &args, 40, 32);
+        let text = std::fs::read_to_string(&path).expect("read report");
+        serde_json::from_str::<Value>(&text).expect("report json")["rows"].as_array().expect("report rows").clone()
+    }
+
+    #[test]
+    fn a_cold_cpu_fallback_keeps_the_warm_gpu_path() {
+        let mut b = bench(3);
+        let mut call = 0;
+        b.time_path("row", true, |_| {
+            call += 1;
+            match call {
+                1 => (10.0, "CPU fallback"),
+                2 => (24.0, "GPU"),
+                3 => (22.0, "GPU"),
+                _ => (23.0, "GPU"),
+            }
+        });
+        let rows = report_rows(&b);
+        let row = &rows[0];
+        assert_eq!(row["name"], "row (GPU)");
+        assert_eq!(row["median_ms"], 23.0);
+        assert_eq!(row["min_ms"], 22.0);
+        assert_eq!(row["max_ms"], 24.0);
+        assert_eq!(row["cold_ms"], 10.0);
+        assert_eq!(row["cold_path"], "CPU fallback");
+        assert_eq!(row["warm_path"], "GPU");
+        assert_eq!(row["samples_ms"], json!([24.0, 22.0, 23.0]));
+    }
+
+    #[test]
+    fn any_warm_fallback_labels_the_warm_row_and_keeps_the_cold_path() {
+        let mut b = bench(3);
+        let mut call = 0;
+        b.time_path("row", true, |_| {
+            call += 1;
+            match call {
+                1 => (5.0, "GPU"),
+                2 => (20.0, "GPU"),
+                3 => (21.0, "CPU fallback"),
+                _ => (22.0, "GPU"),
+            }
+        });
+        let rows = report_rows(&b);
+        let row = &rows[0];
+        assert_eq!(row["name"], "row (CPU fallback)");
+        assert_eq!(row["median_ms"], 21.0);
+        assert_eq!(row["cold_ms"], 5.0);
+        assert_eq!(row["cold_path"], "GPU");
+        assert_eq!(row["warm_path"], "CPU fallback");
+        assert_eq!(row["samples_ms"], json!([20.0, 21.0, 22.0]));
+    }
+
+    #[test]
+    fn ordinary_rows_keep_their_names_and_have_no_path_metadata() {
+        let mut b = bench(2);
+        b.time("plain row", |_| 4.0);
+        b.time("other row", |_| 6.0);
+        let rows = report_rows(&b);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["name"], "plain row");
+        assert_eq!(rows[0]["median_ms"], 4.0);
+        assert_eq!(rows[0]["cold_ms"], 4.0);
+        assert_eq!(rows[0]["samples_ms"], json!([4.0, 4.0]));
+        for key in ["median_ms", "min_ms", "max_ms", "cold_ms", "samples_ms", "peak_rss_bytes", "minor_faults_per_run"] {
+            assert!(rows[0].get(key).is_some(), "{key} missing: {}", rows[0]);
+        }
+        assert!(rows[0].get("warm_path").is_none(), "{}", rows[0]);
+        assert!(rows[0].get("cold_path").is_none(), "{}", rows[0]);
+        assert_eq!(rows[1]["name"], "other row");
+        assert_eq!(rows[1]["min_ms"], 6.0);
+        assert_eq!(rows[1]["cold_ms"], 6.0);
+        assert!(rows[1].get("warm_path").is_none(), "{}", rows[1]);
+        assert!(rows[1].get("cold_path").is_none(), "{}", rows[1]);
+    }
 }

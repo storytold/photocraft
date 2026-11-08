@@ -33,6 +33,11 @@ mod export_as_scaling;
 mod eyedropper_ring;
 mod full_res_preview;
 mod gpu_device_loss;
+// The interactive bench's `#[cfg(test)]` reporting tests: CI runs `--tests`, never examples.
+// Embedding the example leaves its other entrypoints unused in this binary.
+#[path = "../../examples/interactive_bench.rs"]
+#[allow(dead_code)]
+mod interactive_bench_reporting;
 mod layout_perf;
 mod live_stroke_canvas;
 mod magnetic_lasso_right_click;

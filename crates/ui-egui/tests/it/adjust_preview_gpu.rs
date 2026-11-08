@@ -148,9 +148,15 @@ fn sample(kind: &str) -> Value {
         "posterize" => json!({"levels": 3}),
         "threshold" => json!({"level": 90}),
         "gradientMap" => json!({"stops": [[0, "#200040"], [1, "#ffd080"]]}),
+        "selectiveColor" => json!({"method": "absolute", "reds": [10, -20, 30, 5], "blues": [-15, 0, 25, 0]}),
         _ => json!({}),
     }
 }
+
+/// Grayscale kinds that make colour from gray: only these preview on the CPU proxy, so a
+/// Grayscale preview error is expected only for them. The Hue/Saturation sample leaves
+/// `colorize` off, so it stays gray.
+const GRAY_COLOUR: [&str; 7] = ["vibrance", "colorBalance", "blackWhite", "photoFilter", "channelMixer", "gradientMap", "selectiveColor"];
 
 fn pm(p: &[f32; 4]) -> [f32; 4] {
     [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]
@@ -181,10 +187,14 @@ fn preview_layer_composites_on_the_gpu_like_the_command() {
                 let (doc, target) = document(mode, depth, selection);
                 for kind in photocraft_ui_egui::adjust_editors::KINDS {
                     let params = sample(kind);
-                    let Ok(preview) = preview_document(&doc, target, kind, &params) else {
-                        // Grayscale kinds that make colour preview on the CPU proxy.
-                        assert_eq!(mode, ColorMode::Grayscale, "{kind}");
-                        continue;
+                    let preview = match preview_document(&doc, target, kind, &params) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            // Only grayscale kinds that make colour keep the CPU proxy preview.
+                            assert_eq!(mode, ColorMode::Grayscale, "{kind}: {e}");
+                            assert!(GRAY_COLOUR.contains(&kind), "{kind} {mode:?}: unexpected preview error: {e}");
+                            continue;
+                        }
                     };
                     assert!(preview.layer(PREVIEW_LAYER).is_some());
                     let what = format!("{kind} {mode:?} {depth:?} selection {selection}");
@@ -225,10 +235,14 @@ fn clipped_target_preview_composites_on_the_gpu_like_the_command() {
                 let (doc, target) = clipped_document(mode, depth, selection);
                 for kind in photocraft_ui_egui::adjust_editors::KINDS {
                     let params = sample(kind);
-                    let Ok(preview) = preview_document(&doc, target, kind, &params) else {
-                        // Grayscale kinds that make colour preview on the CPU proxy.
-                        assert_eq!(mode, ColorMode::Grayscale, "{kind}");
-                        continue;
+                    let preview = match preview_document(&doc, target, kind, &params) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            // Only grayscale kinds that make colour keep the CPU proxy preview.
+                            assert_eq!(mode, ColorMode::Grayscale, "{kind}: {e}");
+                            assert!(GRAY_COLOUR.contains(&kind), "{kind} {mode:?}: unexpected preview error: {e}");
+                            continue;
+                        }
                     };
                     assert!(preview.layer(PREVIEW_LAYER).is_some());
                     assert!(preview.layer(target).unwrap().is_group(), "the clipped target is isolated");
