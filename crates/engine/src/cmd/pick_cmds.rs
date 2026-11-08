@@ -84,12 +84,15 @@ fn top_group(doc: &Document, id: LayerId) -> LayerId {
     path.get(..depth).and_then(|p| doc.layer_at(p)).map_or(id, |l| l.id)
 }
 
-/// The layer an Auto-Select click at (x, y) picks (with `group`, its outermost group): the topmost
-/// movable hit, a type layer by its text bounds. It clicks through Position or All locks
-/// (including locks inherited from a group) to the layer under it; the right-click list
-/// still shows it. The Move tool's rollover highlight and `layer.pickAt` with `moveAutoSelect`
-/// use the same eligibility, so the outline names the layer the click takes.
+/// The topmost selectable layer at (x, y), or its outermost group if `group` is set.
+/// Type layers hit across their text bounds. Effective Lock All is skipped. Position-locked layers remain selectable.
 pub fn auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
+    pick_target(doc, x, y, group, false)
+}
+
+/// The Move tool's Auto-Select target, matching `layer.pickAt` with `moveAutoSelect` enabled.
+/// Both effective Position and All locks are skipped before resolving the group.
+pub fn move_auto_select_target(doc: &Document, x: i32, y: i32, group: bool) -> Option<LayerId> {
     pick_target(doc, x, y, group, true)
 }
 
@@ -351,13 +354,16 @@ mod tests {
         let top = s.active().unwrap().active_layer.unwrap();
         let lock = |s: &mut Session, id: u64, locks: Value| s.execute("layer.setProps", json!({"layer": id, "locks": locks})).unwrap();
         let pick = |s: &mut Session| s.execute("layer.pickAt", json!({"x": 5, "y": 5, "moveAutoSelect": true})).unwrap()["layer"].clone();
+        let direct = |s: &Session| auto_select_target(&s.active().unwrap().doc, 5, 5, false);
         assert_eq!(pick(&mut s), top.0);
         // Position and All locks are both skipped; Image Pixels still permits picking.
         lock(&mut s, top.0, json!({"position": true}));
+        assert_eq!(direct(&s), Some(top), "ordinary Rust callers can select a position-locked layer");
         assert_eq!(pick(&mut s), a.0);
         lock(&mut s, top.0, json!({"position": false, "pixels": true}));
         assert_eq!(pick(&mut s), top.0);
         lock(&mut s, top.0, json!({"all": true}));
+        assert_eq!(direct(&s), Some(a));
         assert_eq!(pick(&mut s), a.0);
         assert_eq!(s.active().unwrap().active_layer, Some(a));
         // The right-click layer list still names it.
@@ -369,8 +375,10 @@ mod tests {
         let g = s.execute("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
         assert_eq!(pick(&mut s), top.0);
         lock(&mut s, g, json!({"position": true}));
+        assert_eq!(direct(&s), Some(top), "inherited Position has the same ordinary default");
         assert_eq!(pick(&mut s), a.0);
         lock(&mut s, g, json!({"all": true}));
+        assert_eq!(direct(&s), Some(a));
         assert_eq!(pick(&mut s), a.0);
         // Nothing unlocked under the point: no pick.
         lock(&mut s, a.0, json!({"all": true}));

@@ -22,8 +22,10 @@ pub(crate) struct LayerBox {
     clear_on_empty: bool,
 }
 
-/// A Move-tool press that Auto-Select found nothing under: start the marquee at `p`. The press
-/// started a Move gesture's snapping and ⇧/⌥ handling, which a marquee has none of.
+/// Start the marquee at `p` after an empty or locked-only hit. With `move_auto_select`, the
+/// real Move tool skips effective Position as well as All locks. Set `clear_on_empty` for its
+/// locked-only press so an empty replacement marquee clears the selection.
+/// Temporary Move keeps ordinary lock filtering. Marquees clear the press's snapping and ⇧/⌥ state.
 pub(crate) fn begin(app: &mut PhotocraftApp, p: [f64; 2], add: bool, move_auto_select: bool, clear_on_empty: bool) {
     app.layer_box = Some(LayerBox { start: p, end: p, add, move_auto_select, clear_on_empty });
     app.prefs_rt.snap = None;
