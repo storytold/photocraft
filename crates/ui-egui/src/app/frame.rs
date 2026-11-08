@@ -303,6 +303,9 @@ impl PhotocraftApp {
         if ((chrome && self.ui.panels.toolbar) || tabbed_in) && !home {
             panels::toolbar(self, ui);
         }
+        if (chrome || tabbed_in) && !home {
+            crate::design_timeline_ui::strip(self, ui);
+        }
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
         let docking = ((chrome && self.ui.panels.dock) || tabbed_in) && !home;
         if docking {

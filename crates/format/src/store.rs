@@ -301,17 +301,31 @@ pub(crate) fn read_full_composite_entry(src: &dyn ByteSource, opts: &LoadOptions
     }
 }
 
+/// Read, bound and migrate the manifest of `src`.
 pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
     let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
     // serde_json stops at 128 levels (about 40 nested groups); `read_manifest_with` checks the
     // nesting and the items in one pass, then parses without that limit.
     let limits = manifest_limits(opts.max_manifest_bytes);
-    let mut layers = Vec::new();
+    let (mut layers, mut base_layers, mut baked_layers) = (Vec::new(), Vec::new(), Vec::new());
     let mut m: Manifest = craft_pcraft_format::read_manifest_with(&raw, &limits, crate::migrate::STEPS, FORMAT_VERSION, |mut document| {
         layers = take_array(&mut document, "/layers");
+        // A design timeline's base and baked layers are layer trees too: decode them the same way.
+        base_layers = take_array(&mut document, "/design_timeline/base/layers");
+        if let Some(serde_json::Value::Array(steps)) = document.pointer_mut("/design_timeline/steps") {
+            baked_layers = steps.iter_mut().map(|st| take_array(st, "/baked/layers")).collect::<Vec<_>>();
+        }
         Ok::<_, FormatError>(serde_json::from_value(document)?)
     })?;
     m.document.layers = layers_from_json(layers)?;
+    if let Some(t) = m.document.design_timeline.as_deref_mut() {
+        t.base.layers = layers_from_json(base_layers)?;
+        for (st, layers) in t.steps.iter_mut().zip(baked_layers) {
+            if let Some(b) = st.baked.as_mut() {
+                b.layers = layers_from_json(layers)?;
+            }
+        }
+    }
     // A number past f32's range decodes as infinity, which no save could write back (#6862).
     if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
         return Err(FormatError::corrupt(format!("`{path}` is out of range")));
@@ -366,6 +380,10 @@ impl LoadFetch<'_> {
 }
 
 impl Fetch for LoadFetch<'_> {
+    fn admit(&self, size: photocraft_geom::Size) -> Result<()> {
+        admit_canvas(size, &self.opts)
+    }
+
     fn tile(&mut self, hash: &str, len: usize) -> Result<Vec<u8>> {
         let Some(path) = tile_path(hash) else {
             return Err(FormatError::corrupt(format!("invalid tile hash `{hash}`")));
@@ -430,7 +448,17 @@ fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
     Ok(())
 }
 
+/// Fails where [`load_reporting`] would warn: a caller with no way to show the warning could
+/// save the document back and lose what it dropped.
 pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    match load_reporting(src, opts)? {
+        (doc, warnings) if warnings.is_empty() => Ok(doc),
+        (_, warnings) => Err(FormatError::Unsupported(warnings.join("; "))),
+    }
+}
+
+/// [`load`], with what loaded without part of its stored data.
+pub(crate) fn load_reporting(src: &dyn ByteSource, opts: &LoadOptions) -> Result<(Document, Vec<String>)> {
     let m = read_manifest(src, opts)?;
     admit_canvas(m.document.size, opts)?;
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
@@ -441,8 +469,10 @@ pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document>
         contents_id_map: HashMap::new(),
         legacy_linked_contents: HashMap::new(),
         tiles: HashMap::new(),
+        warnings: Vec::new(),
     };
-    loader.document(&m.document)
+    let doc = loader.document(&m.document)?;
+    Ok((doc, loader.warnings))
 }
 
 // ---------------------------------------------------------------------------
@@ -1066,6 +1096,7 @@ impl PcraftWriter {
         self.lock_wait = wait;
     }
 
+    /// Check `doc` against the format's limits and build its manifest and the entries to write.
     fn prepare(&mut self, doc: &Document, opts: &SaveOptions) -> Result<Prepared> {
         doc.scratch_health().map_err(FormatError::corrupt)?;
         let generation = photocraft_raster::spill::read_error_generation();
@@ -1083,9 +1114,17 @@ impl PcraftWriter {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
+        // The timeline's base and baked layer trees are saved too, and loaded under the same limit.
+        if let Some(t) = &doc.design_timeline {
+            convert::check_nesting(&t.base.layers)?;
+            for b in t.steps.iter().filter_map(|st| st.baked.as_deref()) {
+                convert::check_nesting(&b.layers)?;
+            }
+        }
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
         let mut model = Manifest::new(format!("photocraft-format {}", env!("CARGO_PKG_VERSION")), document);
+        model.format_version = if model.document.design_timeline.is_some() { FORMAT_VERSION } else { crate::manifest::BASE_FORMAT_VERSION };
         model.thumbnail = opts.thumbnail.as_ref().map(|_| THUMB.to_owned());
         model.composite = opts.composite.as_ref().map(|_| COMPOSITE.to_owned());
         let full_composite = opts.full_composite.is_some();

@@ -118,6 +118,8 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;
     let fresh = import_opened(s, &file_name(&path), &bytes)?;
+    // The file may have been saved by another session since: no later step reuses its ids.
+    s.next_step = s.next_step.max(photocraft_doc::next_step_after(&fresh));
     s.edit("Revert", |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;
@@ -315,8 +317,12 @@ pub const PLACE_EMBEDDED: &str = "Place Embedded";
 /// [`Session::start`] (see [`crate::jobs`]); inline otherwise. The layer is inserted by the apply
 /// step on the calling thread, as one undo step.
 pub fn place_bytes(s: &mut Session, name: &str, bytes: Vec<u8>, linked: Option<String>, p: &Value) -> Result<Value> {
-    let input = PlaceInput::new(s, name, bytes, linked, p)?;
-    place_input(s, input)
+    // Outside any command (a script's bytes), record it as one step that keeps its result.
+    let id = if linked.is_some() { "file.placeLinked" } else { "file.placeEmbedded" };
+    s.record_outside(id, json!({ "path": name }), |s| {
+        let input = PlaceInput::new(s, name, bytes, linked, p)?;
+        place_input(s, input)
+    })
 }
 
 /// Run a place: in the background when the command was started with [`Session::start`].

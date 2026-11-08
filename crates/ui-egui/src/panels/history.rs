@@ -1,6 +1,7 @@
 use super::layer_drag::dropped_on;
 use super::{Align2, Color32, HistorySource, PhotocraftApp, Rect, Sense, Stroke, StrokeKind, Tokens, Tool, Value, empty, icons, json, pos2, vec2, widgets};
 
+/// The History panel: snapshots and undo states.
 pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else {
@@ -62,16 +63,7 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
             }
-            let icon = match e.as_str() {
-                s if s.contains("Brush") || s.contains("Eraser") => "brush",
-                // The Layers panel's controls (layer.setProps).
-                "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
-                s if s.contains("Layer") => "layers",
-                s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
-                s if s.contains("Fill") => "paint-bucket",
-                "Open" => "image",
-                _ => "sliders-horizontal",
-            };
+            let icon = icons::step_icon(e.as_str());
             let color = if is_redo { t.text_faint } else { t.text };
             icons::paint(
                 ui,

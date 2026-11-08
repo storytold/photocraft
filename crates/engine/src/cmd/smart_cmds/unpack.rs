@@ -21,7 +21,14 @@ use crate::{EngineError, Result, Session};
 fn contents(s: &Session, doc: &Document, sm: &SmartObject, intent: Intent, bpc: bool) -> Result<Vec<Layer>> {
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.convertToLayers", &doc.metadata, &sm.source)?
         .ok_or_else(|| other("the smart object's contents are unavailable (missing linked file?)"))?;
-    let mut src = decode_source(&name, &bytes)?;
+    // A bundle's stored ids can be the parent's own (step-keyed ids repeat across sessions):
+    // its layers land in the parent, so they take fresh ids, minted under this step.
+    let mut src = if photocraft_format::is_pcraft(&bytes) {
+        let opts = photocraft_format::LoadOptions { preserve_ids: false, ..Default::default() };
+        photocraft_format::load_from_bytes_with(&bytes, &opts).map_err(|e| other(format!("can't read smart object contents \"{name}\": {e}")))?
+    } else {
+        decode_source(&name, &bytes)?
+    };
     let mode = doc.pixel_format().mode;
     if src.pixel_format().mode != mode || src.icc_profile != doc.icc_profile {
         crate::color_cmds::convert_document(&mut src, &crate::color_cmds::document_profile(doc), intent, bpc)?;

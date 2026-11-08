@@ -1,7 +1,7 @@
 use super::rendering::{refresh_or_fail, unapplied_filters};
 use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
 use super::{
-    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
+    Affine, Arc, BlendMode, DocId, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
     SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, source_box, translate_surface,
 };
 use photocraft_algo::transform::Interp;
@@ -224,6 +224,9 @@ pub fn layer_to_smart(doc: &Document, l: &Layer) -> Result<Layer> {
 pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result<Layer> {
     let canvas = doc.bounds();
     let mut sub = Document::new(format!("{name}.pcraft"), doc.size, doc.mode, doc.depth);
+    // Edit Contents gives each opened copy a fresh id; a fixed one keeps the embedded bytes the
+    // same whenever the conversion is replayed.
+    sub.id = DocId(0);
     sub.resolution_dpi = doc.resolution_dpi;
     sub.icc_profile = doc.icc_profile.clone();
     sub.global_light = doc.global_light;

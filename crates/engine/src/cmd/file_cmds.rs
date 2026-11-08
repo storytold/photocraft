@@ -340,7 +340,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Conditional Mode Change…",
             &["File", "Automate"],
             None,
-            r##"{"from":["rgb","grayscale","cmyk","lab","indexed","bitmap",…]|"any"="any","to":"rgb|grayscale|cmyk|lab"}"##,
+            r##"{"from":["rgb","grayscale","cmyk","lab","indexed","bitmap",…]|"any"="any","to":"rgb|grayscale|cmyk|lab","profile":spec?,"intent":"perceptual|relative|saturation|absolute"?,"bpc":bool? (passed to the image.mode.* conversion)}"##,
             has_doc,
             conditional_mode_change
         ),

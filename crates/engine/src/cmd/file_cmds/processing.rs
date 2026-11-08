@@ -61,7 +61,9 @@ pub(super) fn conditional_mode_change(s: &mut Session, p: &Value) -> Result<Valu
     if cur == to || !(from.iter().any(|f| f == "any" || f == cur)) {
         return Ok(json!({"changed": false, "mode": cur}));
     }
-    s.execute(&format!("image.mode.{to}"), json!({}))?;
+    // The conversion options it was given (a design-timeline step pins them) go to the conversion.
+    let opts: serde_json::Map<String, Value> = ["profile", "intent", "bpc"].iter().filter_map(|k| Some((k.to_string(), p.get(*k)?.clone()))).collect();
+    s.execute(&format!("image.mode.{to}"), Value::Object(opts))?;
     Ok(json!({"changed": true, "mode": to}))
 }
 

@@ -186,7 +186,8 @@ struct GpuProxy {
 /// The open adjustment dialog: (kind, params, Preview on).
 fn dialog(app: &PhotocraftApp) -> Option<(String, Value, bool)> {
     let d = app.ui.dialogs.iter().find(|d| crate::adjust_dialog::owns(&d.fields))?;
-    if d.fields.contains_key("__smartFilter") {
+    // Edit Parameters previews only on the document it edits, not one a background open activated.
+    if d.fields.contains_key("__smartFilter") || crate::design_timeline_ui::edits_other(&d.fields, app.session.active().map(|st| st.doc.id.0)) {
         return None;
     }
     let kind = d.fields.get("__adjust")?.as_str()?.to_string();

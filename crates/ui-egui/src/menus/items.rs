@@ -33,6 +33,7 @@ pub fn is_live(id: &str) -> bool {
         || crate::preset_panels::handles(id)
         || crate::type_panels_ui::handles(id)
         || crate::timeline_ui::handles(id)
+        || crate::design_timeline_ui::handles(id)
 }
 
 /// Commands outside the catalogue that belong right after a catalogue item: `(id, after)`.
@@ -43,6 +44,7 @@ const PLACE_AFTER: &[(&str, &str)] = &[
     ("filter.render.relight", "filter.render.lightingEffects"),
     ("view.resetView", "view.flipHorizontal"),
     ("filter.other.colorToAlpha", "filter.other.offset"),
+    ("window.panel.designTimeline", "window.panel.timeline"),
 ];
 
 pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {

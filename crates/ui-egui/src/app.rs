@@ -119,6 +119,7 @@ impl PhotocraftApp {
             outline_cache: None,
             guide_edit: None,
             filter_preview: None,
+            filter_preview_hold: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             filter_preview_worker: Default::default(),

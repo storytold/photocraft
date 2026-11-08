@@ -47,6 +47,23 @@ pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::new(white_icons().source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
 }
 
+/// The icon of a History state or design timeline step, from its label.
+pub fn step_icon(label: &str) -> &'static str {
+    match label {
+        // Content brought in from another document or a file (engine timeline::step_label), whose
+        // name may contain any of the words below.
+        s if s.starts_with("Copy from ") || s.starts_with("Place ") => "image",
+        s if s.contains("Brush") || s.contains("Eraser") => "brush",
+        // The Layers panel's controls (layer.setProps).
+        "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
+        s if s.contains("Layer") => "layers",
+        s if s.contains("Select") || s.contains("Marquee") || s.contains("Deselect") || s.contains("Lasso") => "square-dashed",
+        s if s.contains("Fill") => "paint-bucket",
+        "Open" => "image",
+        _ => "sliders-horizontal",
+    }
+}
+
 /// Rasterize the same styled SVG used by the toolbar for a composed native cursor.
 pub(crate) fn rasterize(name: &str, side: u32) -> Result<egui::ColorImage, String> {
     if !white_icons().contains(name) {

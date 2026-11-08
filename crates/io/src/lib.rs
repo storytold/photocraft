@@ -278,28 +278,41 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 /// sources that carry no import warnings of their own (a crafted `.pcraft`): a Color Lookup
 /// whose table can't be applied silently renders as the identity instead (#1763).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
-    let mut out = Vec::new();
-    // Iterative, so no document's nesting can make this recurse.
-    let mut stack: Vec<&Layer> = doc.layers.iter().rev().collect();
+    let mut out: Vec<(photocraft_doc::LayerId, String)> = Vec::new();
+    // Iterative, so no document's nesting can make this recurse. The timeline's base and baked
+    // trees render when its marker moves there, so they are checked too.
+    let mut stack: Vec<&Layer> = Vec::new();
+    if let Some(t) = doc.design_timeline.as_deref() {
+        stack.extend(t.steps.iter().rev().filter_map(|st| st.baked.as_deref()).flat_map(|b| b.layers.iter().rev()));
+        stack.extend(t.base.layers.iter().rev());
+    }
+    stack.extend(doc.layers.iter().rev());
     while let Some(l) = stack.pop() {
         if let LayerContent::Adjustment(Adjustment::ColorLookup { name: _, size, lut, .. }) = &l.content {
             match lut.as_deref().zip(photocraft_doc::adjust::lut3d_len(*size)) {
                 Some((table, len)) if table.len() >= len => {}
-                Some((table, len)) => out.push(format!(
-                    "layer \"{}\": its Color Lookup table has {} values, but a {size}³ lookup needs {len}; the layer renders without the lookup",
-                    l.name,
-                    table.len()
+                Some((table, len)) => out.push((
+                    l.id,
+                    format!(
+                        "layer \"{}\": its Color Lookup table has {} values, but a {size}³ lookup needs {len}; the layer renders without the lookup",
+                        l.name,
+                        table.len()
+                    ),
                 )),
-                None => {
-                    out.push(format!("layer \"{}\": its Color Lookup has no usable table for a {size}³ lookup; the layer renders without the lookup", l.name))
-                }
+                None => out.push((
+                    l.id,
+                    format!("layer \"{}\": its Color Lookup has no usable table for a {size}³ lookup; the layer renders without the lookup", l.name),
+                )),
             }
         }
         if let Some(children) = l.children() {
             stack.extend(children.iter().rev());
         }
     }
-    out
+    // A layer the timeline left unchanged is in several trees: name it once. Another layer with
+    // the same name and damage keeps its own warning.
+    let mut seen = std::collections::HashSet::new();
+    out.into_iter().filter(|w| seen.insert(w.clone())).map(|(_, w)| w).collect()
 }
 
 /// Result of [`export`].
@@ -1000,8 +1013,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     }
     match route(name, bytes) {
         Route::Pcraft => {
-            let document = photocraft_format::load_from_bytes(bytes)?;
-            Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
+            let (document, mut warnings) = photocraft_format::load_from_bytes_reporting(bytes, &Default::default())?;
+            warnings.extend(open_warnings(&document));
+            Ok(ImportResult { warnings, document, source_read_only: false, preview_only: false })
         }
         Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts, |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
         Route::Affinity => affinity::import(name, bytes),
@@ -1408,6 +1422,50 @@ pub fn merged_composite(file: &PsdFile) -> Result<Vec<[f32; 4]>, IoError> {
 mod tests {
     use super::{ImportOptions, ImportPreflight, import, import_for_open, import_preflight, is_psd_input, is_svg_input};
     use photocraft_psd::{Compression, Version, testgen};
+
+    /// A damaged lookup that only the current tree, the timeline's base (inside a group) or a
+    /// baked step holds is reported, one in both trees once, and two layers with the same name
+    /// and damage each.
+    #[test]
+    fn open_warnings_cover_the_design_timeline_trees() {
+        use photocraft_doc::adjust::Adjustment;
+        use photocraft_doc::{Document, Layer, LayerContent, Size, design::DesignTimeline};
+        let lookup = |name: &str| {
+            let mut l = Layer::raster(name, photocraft_color::PixelFormat::RGBA8);
+            l.content = LayerContent::Adjustment(Adjustment::ColorLookup {
+                name: "x".into(),
+                lut: Some(std::sync::Arc::new(vec![0.0; 3])),
+                size: 2,
+                tetrahedral: false,
+                dither: false,
+                source: None,
+            });
+            l
+        };
+        let mut base = Document::new("d", Size::new(1, 1), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+        base.layers = vec![lookup("both"), lookup("old"), lookup("old"), Layer::group("g", vec![lookup("nested")])];
+        let mut doc = base.clone();
+        doc.layers.truncate(1);
+        doc.layers.push(lookup("current"));
+        let mut tl = DesignTimeline::new(std::sync::Arc::new(base));
+        let mut step: photocraft_doc::design::DesignStep = serde_json::from_value(serde_json::json!({
+            "step": 2, "command": "edit.paste", "params": {}, "label": "Paste",
+            "active": null, "selected": [], "created": [], "changed": []
+        }))
+        .unwrap();
+        let baked = lookup("baked");
+        step.created = vec![baked.id];
+        step.baked =
+            Some(std::sync::Arc::new(photocraft_doc::design::Baked { layers: vec![baked], placed: Vec::new(), selection: None, color: None, state: None }));
+        tl.steps.push(step);
+        doc.design_timeline = Some(std::sync::Arc::new(tl));
+        let w = super::open_warnings(&doc);
+        assert_eq!(w.len(), 6, "\"both\" once, each \"old\" layer on its own, and the rest: {w:?}");
+        for only in ["\"baked\"", "\"nested\"", "\"current\""] {
+            assert!(w.iter().any(|w| w.contains(only)), "{only}: {w:?}");
+        }
+        assert_eq!(w.iter().filter(|w| w.contains("\"old\"")).count(), 2, "{w:?}");
+    }
 
     /// The callers that fit several imports into one budget choose their option from this
     /// classification, so it has to follow the same dispatch as [`super::import`].

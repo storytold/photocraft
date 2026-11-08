@@ -1136,6 +1136,9 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
+    if let Some(r) = crate::design_timeline_ui::confirm_edit(app, &d.fields) {
+        return r;
+    }
     match d.kind {
         DialogKind::NewDocument => {
             let r = app.run("file.new", crate::new_doc_ui::command_params(&d.fields));
@@ -1180,6 +1183,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     crate::actions::record_again::cancel(app, id);
     crate::actions::menu_item::cancel(app, id);
     crate::actions::stopped(app, &closed.fields);
+    crate::design_timeline_ui::cancel_edit(app, &closed.fields);
     if crate::guide_layout_ui::owns(&closed.fields) {
         app.ui.dialogs.retain(|child| child.fields.get("__dialog").and_then(Value::as_u64) != Some(id));
     }
