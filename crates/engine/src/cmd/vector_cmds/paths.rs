@@ -214,9 +214,9 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
     if vector_mask && layer_id.is_none() {
         return Err(bad(CMD, "`vectorMask` needs `\"name\":\"layer\"`"));
     }
-    if vector_mask && let Some(id) = layer_id {
-        // A vector mask, like a pixel mask, must respect Lock All on the layer or its groups.
-        // Pixel-only locks still allow mask edits.
+    if let Some(id) = layer_id {
+        // Both explicit and implicit layer-mask paths must respect Lock All on the layer or
+        // its groups. Pixel-only locks still allow mask edits; shape content checks them below.
         crate::commands::check_all_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
     }
     // The box Distort, Perspective and Warp frame: `rect`, else the path's control bounds.

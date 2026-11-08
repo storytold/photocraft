@@ -574,10 +574,12 @@ fn targeted_vector_mask_transforms_respect_layer_and_group_lock_all() {
             assert_eq!(s.active().unwrap().doc, before);
             assert_eq!(s.active().unwrap().history.past_len(), past);
         }
-        let err = s.execute("path.transform", json!({"name": "layer", "layer": id.0, "vectorMask": true, "translateX": 1})).unwrap_err();
-        assert!(err.to_string().contains("locked"), "{err}");
-        assert_eq!(s.active().unwrap().doc, before);
-        assert_eq!(s.active().unwrap().history.past_len(), past);
+        for vector_mask in [true, false] {
+            let err = s.execute("path.transform", json!({"name": "layer", "layer": id.0, "vectorMask": vector_mask, "translateX": 1})).unwrap_err();
+            assert!(err.to_string().contains("locked"), "{err}");
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().history.past_len(), past);
+        }
 
         s.edit("Lock Pixels Only", |doc, _| {
             let locks = &mut doc.layer_mut(lock_id).unwrap().locks;
