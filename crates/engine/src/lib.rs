@@ -32,6 +32,7 @@ pub mod layer_style;
 pub mod link_watch;
 pub mod malloc_tuning;
 pub mod memory;
+pub mod memory_gate;
 pub mod new_layer;
 mod param_check;
 mod pixels;
@@ -174,6 +175,16 @@ pub use session::move_item;
 use session::restore_target;
 pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
 
+/// A type layer for [`Session::refresh_type_layers`]: in the open document, or in its first
+/// History snapshot (the document as opened) when `first_snapshot`. The caller picks each against
+/// that version of the layer, which may differ from the open one or be gone from it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TypeLayerRef {
+    pub doc: photocraft_doc::DocId,
+    pub layer: LayerId,
+    pub first_snapshot: bool,
+}
+
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.
 pub(crate) fn pixels_mut(l: &mut photocraft_doc::Layer) -> Result<&mut photocraft_raster::Surface> {
@@ -205,6 +216,13 @@ pub struct Session {
     active_generation: u64,
     /// The document id [`Self::active_generation`] was last bumped for.
     active_doc_for_generation: Option<photocraft_doc::DocId>,
+    /// Change marker: advances at least once whenever the active document or layer changes through
+    /// the `Session` API (commands via `execute`, `start` and finished jobs, `select_layer`,
+    /// `restore_layer_selection`, `layer_multi_cmds::set_selection`, `set_active_layer`, undo / redo /
+    /// rollback, document switches). Compare two readings for equality to know whether anything
+    /// changed in between; it is not an exact count of operations (one operation may advance it
+    /// more than once). Writing `DocState::active_layer` directly bypasses it.
+    active_layer_changes: u64,
     pub tools: ToolState,
     /// Log of executed commands (for action recording and debugging).
     pub journal: Vec<(String, Value)>,
@@ -322,9 +340,17 @@ pub struct Session {
 }
 
 #[cfg(test)]
+mod brush_pressure_size_default_tests;
+#[cfg(test)]
+mod embed_all_linked_tests;
+#[cfg(test)]
 mod fill_layer_mode_tests;
 #[cfg(test)]
+mod mixer_indexed_bitmap_tests;
+#[cfg(test)]
 mod pattern_mode_tests;
+#[cfg(test)]
+mod second_keys_zoom_actions_tests;
 #[cfg(test)]
 mod tests;
 
