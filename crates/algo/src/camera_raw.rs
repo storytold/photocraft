@@ -58,7 +58,9 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
+mod black_white;
 mod color_mixer;
+mod optics;
 mod colour_lut;
 mod contrast;
 mod exposure;
@@ -78,6 +80,7 @@ pub use per_pixel::{
     per_pixel, white_black_points,
 };
 pub use whites_blacks::{RowOn, TonePoints, Tones};
+pub use white_balance::{auto_white_balance, white_balance_from_sample};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,
 /// Adobe RGB's 2.2), and in which primaries. The tone controls work on light, so the document's
@@ -255,6 +258,17 @@ pub struct CameraRaw {
     pub hsl_hue: [f32; 8],
     pub hsl_sat: [f32; 8],
     pub hsl_lum: [f32; 8],
+    /// Treatment: `"color"` or `"bw"` (Black & White, measured in `black_white`).
+    pub treatment: String,
+    /// The B&W mixer, −100 … 100 per band (red, orange, yellow, green, aqua, blue, purple,
+    /// magenta); used when [`treatment`](Self::treatment) is `"bw"`.
+    pub bw_mix: [f32; 8],
+    /// Optics › Distortion, −100 … 100 (measured, see `optics`).
+    pub lens_distortion: f32,
+    /// Optics › Vignetting amount, −100 … 100 (measured, see `optics`).
+    pub lens_vignette: f32,
+    /// Optics › Vignetting midpoint, 0 … 100.
+    pub lens_vignette_midpoint: f32,
     // Color grading
     pub grade_shadows: Wheel,
     pub grade_midtones: Wheel,
@@ -402,6 +416,11 @@ impl Default for CameraRaw {
             perspective_y: 0.0,
             constrain_crop: false,
             masks: Vec::new(),
+            treatment: "color".into(),
+            bw_mix: [0.0; 8],
+            lens_distortion: 0.0,
+            lens_vignette: 0.0,
+            lens_vignette_midpoint: 50.0,
         }
     }
 }
@@ -651,9 +670,11 @@ fn lut_eval(lut: &[f32], v: f32) -> f32 {
     lut[i] + (lut[i + 1] - lut[i]) * t
 }
 
-/// Parametric tone curve as a LUT (regions split at `splits`, each slider ±100 moves its region
-/// by up to a quarter of the range, smoothly).
-fn parametric_lut(p: &CameraRaw, n: usize) -> Vec<f32> {
+/// The Tone Curve panel's parametric curve as `n` samples over 0 … 1 (at least 2): regions split
+/// at `curve_splits`, each slider ±100 moves its region by up to a quarter of the range,
+/// smoothly; monotone. The output level of input `i / (n − 1)`, as `develop` applies it.
+pub fn parametric_lut(p: &CameraRaw, n: usize) -> Vec<f32> {
+    let n = n.max(2);
     let s = p.curve_splits.map(|v| v.clamp(5.0, 95.0) / 100.0);
     let centres = [s[0] / 2.0, (s[0] + s[1]) / 2.0, (s[1] + s[2]) / 2.0, (s[2] + 1.0) / 2.0];
     let amounts = [p.curve_shadows, p.curve_darks, p.curve_lights, p.curve_highlights];
@@ -719,8 +740,24 @@ impl CameraRaw {
         ] {
             validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
         }
+        self.validate_treatment()?;
+        optics::validate(self)?;
         geometry::validate(self)?;
         masks::validate(&self.masks)
+    }
+    /// The treatment is `"color"` or `"bw"` and the B&W mixer is finite.
+    fn validate_treatment(&self) -> Result<(), String> {
+        if !matches!(self.treatment.as_str(), "color" | "bw") {
+            return Err(format!("treatment: expected \"color\" or \"bw\", got {:?}", self.treatment));
+        }
+        if self.bw_mix.iter().any(|v| !v.is_finite()) {
+            return Err("bwMix: values must be finite".into());
+        }
+        Ok(())
+    }
+    /// Black & White treatment.
+    pub fn is_bw(&self) -> bool {
+        self.treatment == "bw"
     }
     /// [`validate`](Self::validate) for an edit of `stored` settings: a curve left as stored is
     /// accepted, so editing another control of an older Smart Filter still works.
@@ -735,9 +772,15 @@ impl CameraRaw {
                 validate_curve(curve).map_err(|e| format!("{name}: {e}"))?;
             }
         }
-        // Geometry and Masks are new: always checked (they have no lenient older form).
+        // Geometry, Masks and the treatment are new: always checked (no lenient older form).
+        self.validate_treatment()?;
+        optics::validate(self)?;
         geometry::validate(self)?;
         masks::validate(&self.masks)
+    }
+    /// The Optics panel at rest.
+    pub fn optics_neutral(&self) -> bool {
+        optics::neutral(self)
     }
     fn wb_neutral(&self) -> bool {
         self.temperature == 0.0 && self.tint == 0.0 && self.exposure == 0.0
@@ -789,6 +832,8 @@ impl CameraRaw {
             && self.vignette_amount == 0.0
             && self.geometry_neutral()
             && !self.masks.iter().any(masks::Mask::is_active)
+            && !self.is_bw()
+            && self.optics_neutral()
     }
 }
 
@@ -854,7 +899,10 @@ fn develop_impl(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: b
     let ps = p.pixel_scale.clamp(0.01, 1.0);
     // 1. White balance (per-channel curves, see `white_balance`), then Exposure.
     white_balance::apply(px, w, p.temperature, p.tint, p.encoding());
-    if p.exposure != 0.0 {
+    if !optics::vignette_neutral(p) {
+        // Lens Vignetting is a local Exposure: the slider's stops plus each pixel's own.
+        optics::exposure_with_vignette(px, w, h, p, p.encoding());
+    } else if p.exposure != 0.0 {
         exposure::apply(px, w, &exposure::row(p.exposure), p.encoding());
     }
     if p.contrast != 0.0 {
@@ -912,17 +960,19 @@ fn develop_impl(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: b
         whites_blacks::apply(px, w, wr.as_ref(), br.as_ref(), fix.as_ref(), enc);
     }
     // 4–7: per-pixel colour stages.
-    let need_color = p.vibrance != 0.0 || p.saturation != 0.0 || !p.curves_neutral() || !p.hsl_neutral() || !p.grade_neutral();
+    let need_color = p.vibrance != 0.0 || p.saturation != 0.0 || !p.curves_neutral() || !p.hsl_neutral() || !p.grade_neutral() || p.is_bw();
     if need_color {
         let par = (!(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0)).then(|| parametric_lut(p, 1024));
         let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, 1024));
         let (master, cr, cg, cb) = (pts(&p.point_curve), pts(&p.point_curve_red), pts(&p.point_curve_green), pts(&p.point_curve_blue));
-        let mixer = color_mixer::mixer(&p.hsl_hue, &p.hsl_sat, &p.hsl_lum);
+        // Black & White replaces the colour stages: no Vibrance, Saturation or Color Mixer.
+        let mono = p.is_bw().then(|| black_white::mono(&p.bw_mix)).flatten();
+        let mixer = if p.is_bw() { None } else { color_mixer::mixer(&p.hsl_hue, &p.hsl_sat, &p.hsl_lum) };
         let grade = !p.grade_neutral();
         let Grade { tints, lums, blend, balance: bal } = Grade::new(p);
         let enc = p.encoding();
         // Vibrance and Saturation: measured tables (see `presence`).
-        let presence = presence::presence(p.vibrance, p.saturation);
+        let presence = if p.is_bw() { None } else { presence::presence(p.vibrance, p.saturation) };
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
                 let mut c = [q[0], q[1], q[2]];
@@ -941,6 +991,9 @@ fn develop_impl(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: b
                     }
                 }
                 if let Some(m) = &mixer {
+                    c = m.apply_encoded(c, enc);
+                }
+                if let Some(m) = &mono {
                     c = m.apply_encoded(c, enc);
                 }
                 if grade {
@@ -968,6 +1021,10 @@ fn develop_impl(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: b
     // 8. Detail.
     if p.noise_luminance > 0.0 || p.noise_color > 0.0 || p.sharpen_amount > 0.0 {
         detail(px, w, h, p, ps);
+    }
+    // 8a. Optics: Distortion (pixels it uncovers become transparent; Vignetting ran with Exposure).
+    if !p.optics_neutral() {
+        optics::apply(px, w, h, p, float);
     }
     // 8b. Geometry: Upright and Transform (pixels the warp uncovers become transparent).
     if !p.geometry_neutral() {
@@ -1479,6 +1536,27 @@ mod tests {
 
     fn mean(px: &[[f32; 4]], c: usize) -> f32 {
         px.iter().map(|q| q[c]).sum::<f32>() / px.len() as f32
+    }
+
+    #[test]
+    fn black_and_white_greys_the_image_and_bad_treatments_are_rejected() {
+        let p = CameraRaw { treatment: "bw".into(), ..Default::default() };
+        assert!(p.is_bw() && !p.is_identity() && p.validate().is_ok());
+        let mut a = img(24, 16);
+        develop(&mut a, 24, 16, &p, false);
+        assert!(a.iter().all(|q| q[0] == q[1] && q[1] == q[2] && (0.0..=1.0).contains(&q[0])));
+        // B&W ignores Vibrance, Saturation and the Color Mixer, as Camera Raw does.
+        let mut b = img(24, 16);
+        develop(&mut b, 24, 16, &CameraRaw { saturation: 80.0, vibrance: -40.0, hsl_lum: [60.0; 8], ..p.clone() }, false);
+        assert_eq!(a, b);
+        // The GPU stages leave B&W to the CPU develop.
+        assert!(per_pixel(&p, 24, 16, false, None).is_none());
+        for bad in [CameraRaw { treatment: "sepia".into(), ..Default::default() }, CameraRaw { treatment: "BW".into(), ..Default::default() }, CameraRaw { bw_mix: [f32::NAN; 8], ..Default::default() }] {
+            assert!(bad.validate().is_err() && bad.validate_changes(&CameraRaw::default()).is_err(), "{:?}", bad.treatment);
+        }
+        // Older settings without the fields load as colour.
+        let old: CameraRaw = serde_json::from_str(r#"{"exposure": 0.5}"#).expect("json");
+        assert!(!old.is_bw() && old.bw_mix == [0.0; 8]);
     }
 
     #[test]

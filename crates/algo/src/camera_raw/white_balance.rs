@@ -78,6 +78,79 @@ pub(crate) fn apply(px: &mut [[f32; 4]], width: usize, temperature: f32, tint: f
     });
 }
 
+/// How far `c` (straight, encoded with `enc`) is from grey: squared log ratios of red and blue to
+/// green in linear light. `None` for a colour too dark or not finite to judge.
+fn cast(c: [f32; 3], enc: Encoding) -> Option<f32> {
+    let lin = c.map(|v| enc.decode(v).max(1e-6));
+    if lin.iter().any(|v| !v.is_finite()) || lin.iter().all(|v| *v < 1e-4) {
+        return None;
+    }
+    let (r, b) = ((lin[0] / lin[1]).ln(), (lin[2] / lin[1]).ln());
+    Some(r * r + b * b)
+}
+
+/// The White Balance eyedropper: the Temperature and Tint (−100 … 100, whole numbers as the
+/// panel shows them) that turn `rgb` (a pixel of the image before Camera Raw, encoded as
+/// `encoding_gamma` says, see [`CameraRaw::encoding_gamma`](super::CameraRaw)) grey, through the
+/// same measured curves and corrections [`develop`](super::develop) applies. A grid search,
+/// refined twice. `None` for a pixel too dark, clipped white or not finite, which has no colour
+/// to read.
+pub fn white_balance_from_sample(rgb: [f32; 3], encoding_gamma: f32) -> Option<(f32, f32)> {
+    let enc = Encoding::of(encoding_gamma);
+    if rgb.iter().any(|v| !v.is_finite()) || rgb.iter().all(|v| *v >= 0.999) {
+        return None;
+    }
+    let q = [rgb[0], rgb[1], rgb[2], 1.0];
+    let score = |t: f32, n: f32| -> Option<f32> {
+        let o = curves(t, n).map_or(q, |b| pixel(q, &b, enc));
+        cast([o[0], o[1], o[2]], enc)
+    };
+    score(0.0, 0.0)?;
+    let (mut best, mut at) = (f32::INFINITY, (0.0f32, 0.0f32));
+    for (step, span) in [(10.0f32, 10i32), (2.0, 5), (0.5, 4)] {
+        let centre = at;
+        for i in -span..=span {
+            for j in -span..=span {
+                let (t, n) = ((centre.0 + i as f32 * step).clamp(-100.0, 100.0), (centre.1 + j as f32 * step).clamp(-100.0, 100.0));
+                if let Some(s) = score(t, n).filter(|s| *s < best) {
+                    (best, at) = (s, (t, n));
+                }
+            }
+        }
+    }
+    Some((at.0.round(), at.1.round()))
+}
+
+/// Auto White Balance on rendered pixels (`px` straight, encoded as `encoding_gamma` says): the
+/// eyedropper ([`white_balance_from_sample`]) on the image's mean neutral-ish colour, the mean of
+/// its mid-tone pixels whose darkest channel is at least half the brightest (a grey-world estimate
+/// that ignores strongly coloured areas and the clipped ends). Not measured against Camera
+/// Raw's own Auto, which is not documented. `(0, 0)` when nothing qualifies.
+pub fn auto_white_balance(px: &[[f32; 4]], encoding_gamma: f32) -> (f32, f32) {
+    let enc = Encoding::of(encoding_gamma);
+    let (mut sum, mut n) = ([0.0f64; 3], 0usize);
+    let step = (px.len() / 200_000).max(1);
+    for q in px.iter().step_by(step) {
+        let lin = [q[0], q[1], q[2]].map(|v| enc.decode(v));
+        if lin.iter().any(|v| !v.is_finite()) {
+            continue;
+        }
+        let (mx, mn) = (lin[0].max(lin[1]).max(lin[2]), lin[0].min(lin[1]).min(lin[2]));
+        if mx < 0.02 || mx > 0.9 || mn < mx * 0.5 {
+            continue;
+        }
+        for c in 0..3 {
+            sum[c] += f64::from(lin[c]);
+        }
+        n += 1;
+    }
+    if n == 0 {
+        return (0.0, 0.0);
+    }
+    let mean = sum.map(|v| enc.encode((v / n as f64) as f32));
+    white_balance_from_sample(mean, encoding_gamma).unwrap_or((0.0, 0.0))
+}
+
 // Measured levels; some happen to lie near π/4, 1/π or log10 2.
 #[allow(clippy::approx_constant)]
 #[rustfmt::skip]
@@ -216,5 +289,32 @@ mod tests {
         assert_eq!(curves(500.0, 0.0), curves(100.0, 0.0));
         let q = pixel([2.0, -1.0, f32::INFINITY, 1.0], &curves(100.0, -100.0).unwrap(), Encoding::of(0.0));
         assert!(q[0].is_finite() && q[1].is_finite());
+    }
+
+    #[test]
+    fn the_eyedropper_neutralises_the_sample() {
+        // A grey that Temperature −40 and Tint 20 tinted comes back to about those values' undo:
+        // sampling it gives settings that turn it grey again.
+        let v = 0.5;
+        let tinted = pixel([v, v, v, 1.0], &curves(-40.0, 20.0).unwrap(), Encoding::of(0.0));
+        let (t, n) = white_balance_from_sample([tinted[0], tinted[1], tinted[2]], 0.0).expect("a colour");
+        let o = curves(t, n).map_or(tinted, |b| pixel(tinted, &b, Encoding::of(0.0)));
+        let before = cast([tinted[0], tinted[1], tinted[2]], Encoding::of(0.0)).unwrap();
+        let after = cast([o[0], o[1], o[2]], Encoding::of(0.0)).unwrap();
+        assert!(t > 10.0 && after < before * 0.1, "{t} {n}: {before} → {after}");
+        assert_eq!(white_balance_from_sample([0.4; 3], 0.0), Some((0.0, 0.0)), "a grey needs nothing");
+        for bad in [[f32::NAN, 0.2, 0.2], [1.0; 3], [0.0; 3], [f32::INFINITY, 0.0, 0.0]] {
+            assert!(white_balance_from_sample(bad, 0.0).is_none(), "{bad:?}");
+        }
+        assert!(white_balance_from_sample([0.6, 0.5, 0.4], 1.8).is_some());
+    }
+
+    #[test]
+    fn auto_warms_a_blue_cast_and_leaves_an_empty_image() {
+        let blue: Vec<[f32; 4]> = (0..400).map(|i| [0.46, 0.48, 0.54 + (i % 7) as f32 * 0.005, 1.0]).collect();
+        let (t, _) = auto_white_balance(&blue, 0.0);
+        assert!(t > 5.0, "a blue cast is warmed: {t}");
+        assert_eq!(auto_white_balance(&[], 0.0), (0.0, 0.0));
+        assert_eq!(auto_white_balance(&[[f32::NAN, 0.0, 1.0, 1.0], [0.0, 0.0, 0.0, 1.0]], 0.0), (0.0, 0.0));
     }
 }

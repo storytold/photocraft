@@ -166,23 +166,24 @@ pub(super) struct FieldOpts {
 }
 
 /// Camera Raw's value box: the number in proportional digits at the box's left, always with
-/// `decimals` places ("0.00" for Exposure, "0" for Contrast), "+" before a positive value
-/// ("+0.35", "+20") and the system's decimal separator, as Camera Raw shows it. Typed text may use
+/// `decimals` places ("0.00" for Exposure, "0" for Contrast), "+" before a positive value of a
+/// slider that also goes negative ("+0.35", "+20"; Midpoint's "50" has none) and the system's decimal separator, as Camera Raw shows it. Typed text may use
 /// either separator and a leading "+". Arrow keys step by the last shown place.
 pub(crate) fn camera_raw_value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, decimals: u32, size: Vec2) -> Response {
     let opts = FieldOpts { decimals: Some(decimals), step_from_decimals: true, camera_raw: true, ..Default::default() };
     value_field_box(ui, value, range, "", size, 0.0, opts, None).0
 }
 
-/// [`camera_raw_value_field`]'s text for `v`: fixed places, a "+" on positive values, never "-0".
-pub(crate) fn camera_raw_number(v: f64, decimals: u32) -> String {
+/// [`camera_raw_value_field`]'s text for `v`: fixed places, a "+" on positive values when
+/// `signed` (the slider's range goes below 0), never "-0".
+pub(crate) fn camera_raw_number(v: f64, decimals: u32, signed: bool) -> String {
     let d = decimals.min(6) as usize;
     let text = if v.is_finite() { format!("{v:.d$}") } else { String::from("0") };
     // "-0.00" (a tiny negative rounded away) reads as zero.
     let zero = text.trim_start_matches('-').chars().all(|c| c == '0' || c == '.');
     let text = if zero {
         text.trim_start_matches('-').to_owned()
-    } else if v > 0.0 {
+    } else if signed && v > 0.0 {
         format!("+{text}")
     } else {
         text
@@ -395,7 +396,7 @@ fn value_field_box(
                 ui.ctx(),
                 resp.id,
                 &if camera_raw {
-                    camera_raw_number(f64::from(*value), decimals.unwrap_or(0))
+                    camera_raw_number(f64::from(*value), decimals.unwrap_or(0), lo < 0.0)
                 } else if fine {
                     fmt_num2(f64::from(*value))
                 } else {
@@ -582,9 +583,10 @@ fn number_edit(
     // the focus: Tab would otherwise already have handed the focus on to the next widget.
     // A zoom field shows its number with the system's decimal separator (`12,5` on a German
     // Windows), as Photoshop does, so the text it shows is one that can be typed.
+    let signed = *range.start() < 0.0;
     let format = move |v: f64| {
         if camera_raw {
-            return camera_raw_number(v, decimals.unwrap_or(0));
+            return camera_raw_number(v, decimals.unwrap_or(0), signed);
         }
         if blank_when_zero && v == 0.0 {
             return String::new();
@@ -760,13 +762,14 @@ mod camera_raw_number_tests {
 
     #[test]
     fn camera_raw_numbers_keep_their_places_and_sign() {
-        assert_eq!(camera_raw_number(0.0, 2), localize("0.00".into()));
-        assert_eq!(camera_raw_number(0.35, 2), localize("+0.35".into()));
-        assert_eq!(camera_raw_number(-1.5, 2), localize("-1.50".into()));
-        assert_eq!(camera_raw_number(20.0, 0), "+20");
-        assert_eq!(camera_raw_number(-20.4, 0), "-20");
-        assert_eq!(camera_raw_number(-0.001, 2), localize("0.00".into()));
-        assert_eq!(camera_raw_number(1.0, 1), localize("+1.0".into()));
-        assert_eq!(camera_raw_number(f64::NAN, 2), "0");
+        assert_eq!(camera_raw_number(0.0, 2, true), localize("0.00".into()));
+        assert_eq!(camera_raw_number(0.35, 2, true), localize("+0.35".into()));
+        assert_eq!(camera_raw_number(-1.5, 2, true), localize("-1.50".into()));
+        assert_eq!(camera_raw_number(20.0, 0, true), "+20");
+        assert_eq!(camera_raw_number(-20.4, 0, true), "-20");
+        assert_eq!(camera_raw_number(-0.001, 2, true), localize("0.00".into()));
+        assert_eq!(camera_raw_number(1.0, 1, true), localize("+1.0".into()));
+        assert_eq!(camera_raw_number(f64::NAN, 2, true), "0");
+        assert_eq!(camera_raw_number(50.0, 0, false), "50", "no \"+\" on a 0 … 100 slider");
     }
 }

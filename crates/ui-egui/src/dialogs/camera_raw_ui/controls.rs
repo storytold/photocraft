@@ -305,7 +305,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // does, so the zoom tool must not claim it.
         // Guides follow the geometry the preview shows (none with Geometry hidden or Before shown).
         let drawing = super::masks_panel::captures_pointer(ctx, &d.effective_params(), d.show_before);
-        let mut sampling = scope.sampler_tool || drawing;
+        // The White Balance tool and the Color Sampler are one at a time, as in Camera Raw.
+        let wb_tool = d.panels.wb_tool && !drawing;
+        if wb_tool {
+            scope.sampler_tool = false;
+        }
+        let mut sampling = scope.sampler_tool || drawing || wb_tool;
         // Before / After side by side: Before at the left, the After the tools act on at the right,
         // both zoomed and panned together; Split shows Before over the left half of one image.
         use super::panels::Compare;
@@ -318,7 +323,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         // The rectangle the image is fitted to (the After half side by side): `zoom` reads it.
         d.viewport = Some(after_view);
         let (r, response, panning, zoom_box) = crate::camera_raw_preview_ui::interact(&mut preview, navigation, after_view, size, &mut sampling, animated_zoom);
-        if !drawing {
+        if !drawing && !wb_tool {
             scope.sampler_tool = sampling;
         }
         let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
@@ -334,29 +339,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // full-resolution detail), under Split's Before half; their drags edit the masks.
             // Edits start only on the After image: Split's Before half covers the left of it.
             super::masks_panel::preview(&mut preview, d, r, &response, panning, compare.after_area(view, after_view));
-            if compare != Compare::Single
-                && let Some(before) = d.before_tex.as_ref()
-            {
-                let (left, at) = match compare {
-                    Compare::SideBySide => {
-                        (ERect::from_min_size(view.min, vec2(half_w, view.height())), r.translate(vec2(-(after_view.left() - view.left()), 0.0)))
-                    }
-                    _ => (ERect::from_min_max(view.min, pos2(view.center().x, view.bottom())), r),
-                };
-                let painter = ui.painter().with_clip_rect(left.intersect(ui.clip_rect()));
-                painter.rect_filled(left, 0.0, t.canvas);
-                widgets::checker(&painter, at.intersect(left), 8.0);
-                painter.image(before.id(), at, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-                let edge = if compare == Compare::Split { left.right() } else { after_view.left() - 2.0 };
-                ui.painter()
-                    .with_clip_rect(view.intersect(ui.clip_rect()))
-                    .line_segment([pos2(edge, view.top()), pos2(edge, view.bottom())], Stroke::new(1.0, t.text_faint));
-                for (text, x, align) in [(tl!("Before"), left.left() + 8.0, Align2::LEFT_TOP), (tl!("After"), view.right() - 8.0, Align2::RIGHT_TOP)] {
-                    let label = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.0), t.text);
-                    let at = align.anchor_size(pos2(x, view.top() + 8.0), label.size());
-                    ui.painter().rect_filled(at.expand2(vec2(6.0, 3.0)), t.radius_sm, Color32::from_black_alpha(150));
-                    ui.painter().galley(at.min, label, t.text);
-                }
+            if wb_tool && !panning {
+                super::wb_picker::preview(&preview, d, r, &response);
+            }
+            if let Some(before) = d.before_tex.as_ref() {
+                paint_before(ui, &t, before, compare, view, after_view, r);
             }
             if d.detail.pending() {
                 ctx.request_repaint_after(std::time::Duration::from_millis(50));
@@ -501,6 +488,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     {
         d.show_before = !d.show_before;
     }
+    // I: the White Balance tool, as in Camera Raw (not while typing in a field).
+    if !ctx.egui_wants_keyboard_input()
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::I))
+        && let Some(d) = app.camera_raw.as_mut()
+    {
+        d.panels.wb_tool = !d.panels.wb_tool;
+        if d.panels.wb_tool {
+            app.ui.camera_raw_scope.sampler_tool = false;
+        }
+    }
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         action = Some("cancel");
     }
@@ -523,6 +520,33 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             report_file_error(app, r);
         }
         _ => {}
+    }
+}
+
+/// The Before image beside (side by side) or over the left half of (split) the After image `r`,
+/// with the Before / After labels and the dividing line. Nothing for the single view.
+fn paint_before(ui: &egui::Ui, t: &Tokens, before: &egui::TextureHandle, compare: super::panels::Compare, view: ERect, after_view: ERect, r: ERect) {
+    use super::panels::Compare;
+    let (left, at) = match compare {
+        Compare::Single => return,
+        Compare::SideBySide => {
+            (ERect::from_min_max(view.min, pos2(after_view.left() - 4.0, view.bottom())), r.translate(vec2(-(after_view.left() - view.left()), 0.0)))
+        }
+        Compare::Split => (ERect::from_min_max(view.min, pos2(view.center().x, view.bottom())), r),
+    };
+    let painter = ui.painter().with_clip_rect(left.intersect(ui.clip_rect()));
+    painter.rect_filled(left, 0.0, t.canvas);
+    widgets::checker(&painter, at.intersect(left), 8.0);
+    painter.image(before.id(), at, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    let edge = if compare == Compare::Split { left.right() } else { after_view.left() - 2.0 };
+    ui.painter()
+        .with_clip_rect(view.intersect(ui.clip_rect()))
+        .line_segment([pos2(edge, view.top()), pos2(edge, view.bottom())], Stroke::new(1.0, t.text_faint));
+    for (text, x, align) in [(tl!("Before"), left.left() + 8.0, Align2::LEFT_TOP), (tl!("After"), view.right() - 8.0, Align2::RIGHT_TOP)] {
+        let label = ui.painter().layout_no_wrap(text.to_owned(), FontId::proportional(12.0), t.text);
+        let at = align.anchor_size(pos2(x, view.top() + 8.0), label.size());
+        ui.painter().rect_filled(at.expand2(vec2(6.0, 3.0)), t.radius_sm, Color32::from_black_alpha(150));
+        ui.painter().galley(at.min, label, t.text);
     }
 }
 

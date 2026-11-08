@@ -199,6 +199,7 @@ impl CameraRaw {
             || self.noise_luminance > 0.0
             || self.noise_color > 0.0
             || !self.geometry_neutral()
+            || !self.optics_neutral()
             || self.masks.iter().any(super::masks::Mask::is_active)
     }
 }
@@ -233,11 +234,12 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) ->
 }
 
 /// Develop's stages for settings without spatial stages, on a `w × h` image; `points` are the
-/// image's [`white_black_points`]. `None` when `p` needs a spatial stage or Calibration (these
+/// image's [`white_black_points`]. `None` when `p` needs a spatial stage, Calibration or Black & White (these
 /// stages don't run it), Temperature or Tint, or Contrast or a raised Whites has no `points`. The points themselves
 /// leave Calibration out, so a caller may cache them across Calibration changes.
 pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<TonePoints>) -> Option<PerPixel> {
-    if p.spatial() || !p.calibration_neutral() {
+    // Black & White runs on the CPU develop only (see `black_white`).
+    if p.spatial() || !p.calibration_neutral() || p.is_bw() {
         return None;
     }
     let identity = p.is_identity();

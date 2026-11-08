@@ -104,7 +104,7 @@ fn settings_sections_group_existing_controls_without_rendering_or_document_edits
         // The dialog translates through the `cameraRaw` context; match it in any system language.
         let tr = |s| photocraft_ui_egui::i18n::tr_ctx(lang, "cameraRaw", s);
         let mut y = 0.0;
-        for label in [light, tr("Color"), tr("Effects"), tr("Curve"), tr("Detail"), tr("Color Mixer"), tr("Color Grading"), tr("Calibration")] {
+        for label in [light, tr("Color"), tr("Effects"), tr("Curve"), tr("Detail"), tr("Color Mixer"), tr("Color Grading"), tr("Optics"), tr("Calibration")] {
             // Camera Raw's panel order; each header is a DisclosureTriangle.
             let next = h.get_by_role_and_label(Role::DisclosureTriangle, label).rect().top();
             assert!(next > y, "section order: {label}");

@@ -8,7 +8,7 @@ use std::collections::BTreeSet;
 use super::{CameraRaw, Value, json};
 
 /// The Edit panels in Camera Raw's order, with their control-channel ids and English titles.
-pub(super) const PANELS: [(&str, &str); 9] = [
+pub(super) const PANELS: [(&str, &str); 10] = [
     ("light", "Light"),
     ("color", "Color"),
     ("effects", "Effects"),
@@ -16,6 +16,7 @@ pub(super) const PANELS: [(&str, &str); 9] = [
     ("detail", "Detail"),
     ("colorMixer", "Color Mixer"),
     ("colorGrading", "Color Grading"),
+    ("optics", "Optics"),
     ("geometry", "Geometry"),
     ("calibration", "Calibration"),
 ];
@@ -104,6 +105,11 @@ pub(crate) struct PanelState {
     pub(super) grading_view: usize,
     /// The preview's Before/After view.
     pub(super) compare: Compare,
+    /// The White Balance tool (I) is on: a click on the preview neutralises that spot.
+    pub(super) wb_tool: bool,
+    /// Temperature and Tint the last Auto gave, so the White Balance menu reads "Auto" while
+    /// they stand.
+    pub(super) wb_auto: Option<(f32, f32)>,
 }
 
 impl Default for PanelState {
@@ -117,6 +123,8 @@ impl Default for PanelState {
             curve_channel: 0,
             grading_view: 0,
             compare: Compare::Single,
+            wb_tool: false,
+            wb_auto: None,
         }
     }
 }
@@ -170,11 +178,14 @@ impl PanelState {
                     (out.noise_luminance, out.noise_luminance_detail, out.noise_color, out.noise_color_detail) =
                         (d.noise_luminance, d.noise_luminance_detail, d.noise_color, d.noise_color_detail);
                 }
-                "colorMixer" => (out.hsl_hue, out.hsl_sat, out.hsl_lum) = (d.hsl_hue, d.hsl_sat, d.hsl_lum),
+                "colorMixer" => (out.hsl_hue, out.hsl_sat, out.hsl_lum, out.bw_mix) = (d.hsl_hue, d.hsl_sat, d.hsl_lum, d.bw_mix),
                 "colorGrading" => {
                     (out.grade_shadows, out.grade_midtones, out.grade_highlights, out.grade_global) =
                         (d.grade_shadows, d.grade_midtones, d.grade_highlights, d.grade_global);
                     (out.grade_blending, out.grade_balance) = (d.grade_blending, d.grade_balance);
+                }
+                "optics" => {
+                    (out.lens_distortion, out.lens_vignette, out.lens_vignette_midpoint) = (d.lens_distortion, d.lens_vignette, d.lens_vignette_midpoint)
                 }
                 "geometry" => super::geometry_panel::reset(&mut out, &d),
                 "calibration" => (out.shadow_tint, out.calibration_hue, out.calibration_sat) = (d.shadow_tint, d.calibration_hue, d.calibration_sat),
@@ -196,6 +207,7 @@ impl PanelState {
             "curve": CURVE_CHANNELS.get(self.curve_channel),
             "grading": GRADING_VIEWS.get(self.grading_view).map(|v| v.0),
             "compare": self.compare.id(),
+            "whiteBalanceTool": self.wb_tool,
         })
     }
 
@@ -249,6 +261,9 @@ impl PanelState {
                 .and_then(|v| GRADING_VIEWS.iter().position(|x| x.0 == v))
                 .ok_or("grading must be threeWay, shadows, midtones, highlights or global")?;
         }
+        if let Some(on) = ui.get("whiteBalanceTool") {
+            next.wb_tool = on.as_bool().ok_or("whiteBalanceTool must be a boolean")?;
+        }
         if let Some(view) = ui.get("compare") {
             next.compare = view.as_str().and_then(|v| Compare::ALL.into_iter().find(|c| c.id() == v)).ok_or("compare must be single, sideBySide or split")?;
         }
@@ -281,7 +296,7 @@ mod tests {
 
     #[test]
     fn hidden_panels_apply_their_defaults_and_keep_the_rest() {
-        let mut p = CameraRaw { exposure: 1.0, contrast: 20.0, vibrance: 30.0, grade_blending: 70.0, ..CameraRaw::default() };
+        let mut p = CameraRaw { exposure: 1.0, contrast: 20.0, vibrance: 30.0, grade_blending: 70.0, bw_mix: [10.0; 8], ..CameraRaw::default() };
         p.point_curve_red = vec![[0.0, 10.0], [255.0, 255.0]];
         let mut s = PanelState::default();
         assert_eq!(s.effective(&p), p, "nothing hidden: unchanged");
@@ -289,6 +304,12 @@ mod tests {
         let e = s.effective(&p);
         assert_eq!((e.exposure, e.contrast, e.vibrance, e.grade_blending), (0.0, 0.0, 30.0, 50.0));
         assert!(e.point_curve_red.is_empty());
+        s.hidden = BTreeSet::from(["colorMixer"]);
+        assert_eq!(s.effective(&p).bw_mix, [0.0; 8], "a hidden mixer drops the B&W mix too");
+        let lens = CameraRaw { lens_distortion: 20.0, lens_vignette: -30.0, lens_vignette_midpoint: 70.0, ..CameraRaw::default() };
+        s.hidden = BTreeSet::from(["optics"]);
+        let e = s.effective(&lens);
+        assert_eq!((e.lens_distortion, e.lens_vignette, e.lens_vignette_midpoint), (0.0, 0.0, 50.0), "hidden Optics");
     }
 
     #[test]

@@ -478,30 +478,10 @@ fn grade_wheel(ui: &mut egui::Ui, dirty: &mut bool, title: &str, w: &mut Wheel, 
     resp.widget_info(|| egui::WidgetInfo::slider(true, f64::from(w.sat), &name));
 }
 
-/// The parametric curve's shape, 256 outputs for inputs 0…1: the Camera Raw pipeline run on a
-/// grey ramp with only the curve's settings, minus the same ramp without them, so nothing else
-/// the pipeline does shows in the graph. Cached per setting.
-fn parametric_shape(ui: &egui::Ui, p: &CameraRaw) -> std::sync::Arc<Vec<f32>> {
-    let key = [p.curve_highlights, p.curve_lights, p.curve_darks, p.curve_shadows, p.curve_splits[0], p.curve_splits[1], p.curve_splits[2]];
-    let id = egui::Id::unique("camera-raw-parametric-shape");
-    if let Some((k, shape)) = ui.data(|d| d.get_temp::<([f32; 7], std::sync::Arc<Vec<f32>>)>(id))
-        && k == key
-    {
-        return shape;
-    }
-    let mut base = CameraRaw::default();
-    (base.sharpen_amount, base.noise_luminance, base.noise_color) = (0.0, 0.0, 0.0);
-    let mut curved = base.clone();
-    (curved.curve_highlights, curved.curve_lights, curved.curve_darks, curved.curve_shadows, curved.curve_splits) =
-        (p.curve_highlights, p.curve_lights, p.curve_darks, p.curve_shadows, p.curve_splits);
-    let ramp: Vec<[f32; 4]> = (0..256).map(|i| i as f32 / 255.0).map(|v| [v, v, v, 1.0]).collect();
-    let (mut a, mut b) = (ramp.clone(), ramp.clone());
-    photocraft_algo::camera_raw::develop(&mut a, 256, 1, &curved, false);
-    photocraft_algo::camera_raw::develop(&mut b, 256, 1, &base, false);
-    let shape: Vec<f32> = ramp.iter().zip(a.iter().zip(&b)).map(|(r, (a, b))| (r[1] + a[1] - b[1]).clamp(0.0, 1.0)).collect();
-    let shape = std::sync::Arc::new(shape);
-    ui.data_mut(|d| d.insert_temp(id, (key, shape.clone())));
-    shape
+/// The parametric curve's shape: 256 output levels for inputs 0 … 1, exactly what the develop
+/// applies.
+fn parametric_shape(p: &CameraRaw) -> Vec<f32> {
+    photocraft_algo::camera_raw::parametric_lut(p, 256)
 }
 
 /// The image's tones (the mean of the R, G and B histograms), scaled to their tallest bin, for
@@ -587,7 +567,7 @@ fn parametric_curve(ui: &mut egui::Ui, p: &mut CameraRaw, backdrop: &[f32], dirt
         let band = ERect::from_min_max(pos2(rect.left() + a / 100.0 * side, rect.top()), pos2(rect.left() + b / 100.0 * side, rect.bottom()));
         painter.rect_filled(band, 0.0, Color32::from_white_alpha(14));
     }
-    let shape = parametric_shape(ui, p);
+    let shape = parametric_shape(p);
     let pts: Vec<Pos2> = shape.iter().enumerate().map(|(i, y)| pos2(rect.left() + i as f32 / 255.0 * side, rect.bottom() - y * side)).collect();
     painter.add(egui::Shape::line(pts, Stroke::new(1.5, t.text)));
     let name = trc("Parametric Curve").to_owned();
@@ -719,6 +699,38 @@ fn chips(ui: &mut egui::Ui, items: &[(Option<Color32>, &str)], selected: &mut us
     changed
 }
 
+/// The White Balance menu's entries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum WbMode {
+    AsShot,
+    Auto,
+    Custom,
+}
+
+/// What the White Balance menu shows for these settings: As Shot when neither is moved, Auto
+/// while they are what Auto set, Custom otherwise.
+pub(super) fn wb_mode(temperature: f32, tint: f32, auto: Option<(f32, f32)>) -> WbMode {
+    if auto == Some((temperature, tint)) && auto != Some((0.0, 0.0)) {
+        WbMode::Auto
+    } else if temperature == 0.0 && tint == 0.0 {
+        WbMode::AsShot
+    } else {
+        WbMode::Custom
+    }
+}
+
+/// Camera Raw's B&W Mixer: how light each colour band turns in the Black & White image, one
+/// slider per band (−100 … 100), its track running dark to light through the band's colour.
+fn bw_mixer(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool) {
+    ui.push_id("bw-mixer", |ui| {
+        for (k, band) in BANDS.iter().enumerate() {
+            if let Some(v) = p.bw_mix.get_mut(k) {
+                row(ui, dirty, band, v, -100.0..=100.0, Some(&mixer_gradient(2, k)), 0.0);
+            }
+        }
+    });
+}
+
 /// What the header's menu asks the dialog to do with files.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum FileAction {
@@ -755,6 +767,14 @@ pub(super) fn header(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
                     *dirty = true;
                 }
             });
+            // B&W: Camera Raw's Black & White treatment; the Color Mixer becomes the B&W Mixer.
+            let bw = d.params.is_bw();
+            let toggle = widgets::pill_tab(ui, tl!("B&W"), bw);
+            toggle.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, bw, tl!("B&W")));
+            if toggle.on_hover_text(tl!("Convert to black and white")).clicked() {
+                d.params.treatment = if bw { "color".into() } else { "bw".into() };
+                *dirty = true;
+            }
             // Auto: Camera Raw's one-click tone from the histogram; the sliders show what it
             // chose, so each can be adjusted afterwards.
             if widgets::compact_button(ui, tl!("Auto"), 19.0).on_hover_text(tl!("Set the tone sliders from the image")).clicked() {
@@ -782,6 +802,7 @@ pub(super) fn panels(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
     let def = CameraRaw::default();
     let (ts, tn, vivid) = (temp_stops(), tint_stops(), vivid_stops());
     let backdrop = if d.panels.open.contains("curve") { tone_backdrop(d.histogram()) } else { Vec::new() };
+    let proxy = d.proxy.clone();
     let d_ref = &mut *d;
     let p = &mut d_ref.params;
     let panels = &mut d_ref.panels;
@@ -799,13 +820,26 @@ pub(super) fn panels(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
         let t = Tokens::get(ui.ctx());
         ui.horizontal(|ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // As Shot is the image's own balance (no Temperature / Tint shift); moving either
-                // slider makes it Custom, as in Camera Raw.
-                let mut custom = p.temperature != 0.0 || p.tint != 0.0;
-                if widgets::dropdown(ui, "cr-white-balance", trc("White Balance"), &mut custom, &[(false, tl!("As Shot")), (true, tl!("Custom"))], 112.0)
-                    && !custom
-                {
-                    (p.temperature, p.tint) = (0.0, 0.0);
+                // Camera Raw's White Balance tool (I): a click on the preview neutralises that spot.
+                let tool = crate::icons::button(ui, "pipette", 22.0, panels.wb_tool, tl!("White Balance Tool (I)"));
+                tool.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, panels.wb_tool, tl!("White Balance Tool (I)")));
+                if tool.clicked() {
+                    panels.wb_tool = !panels.wb_tool;
+                }
+                // As Shot is the image's own balance (no Temperature / Tint shift); Auto sets it
+                // from the image; moving either slider makes it Custom, as in Camera Raw.
+                let mut mode = wb_mode(p.temperature, p.tint, panels.wb_auto);
+                let options = [(WbMode::AsShot, tl!("As Shot")), (WbMode::Auto, tl!("Auto")), (WbMode::Custom, tl!("Custom"))];
+                if widgets::dropdown(ui, "cr-white-balance", trc("White Balance"), &mut mode, &options, 112.0) {
+                    match mode {
+                        WbMode::AsShot => (p.temperature, p.tint) = (0.0, 0.0),
+                        WbMode::Auto => {
+                            let auto = photocraft_algo::camera_raw::auto_white_balance(&proxy, p.encoding_gamma);
+                            panels.wb_auto = Some(auto);
+                            (p.temperature, p.tint) = auto;
+                        }
+                        WbMode::Custom => {}
+                    }
                     *dirty = true;
                 }
                 // The label takes what is left, cut short (full text on hover) when too long.
@@ -817,8 +851,11 @@ pub(super) fn panels(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
         ui.add_space(10.0);
         row(ui, dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts), def.temperature);
         row(ui, dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn), def.tint);
-        row(ui, dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, Some(&vivid), def.vibrance);
-        row(ui, dirty, "Saturation", &mut p.saturation, -100.0..=100.0, Some(&vivid), def.saturation);
+        // A Black & White image has no colour for Vibrance and Saturation to act on.
+        if !p.is_bw() {
+            row(ui, dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, Some(&vivid), def.vibrance);
+            row(ui, dirty, "Saturation", &mut p.saturation, -100.0..=100.0, Some(&vivid), def.saturation);
+        }
         ui.add_space(PANEL_END);
     }
     if section(ui, panels, "effects", "Effects", dirty) {
@@ -921,8 +958,13 @@ pub(super) fn panels(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
         row(ui, dirty, "Color Detail", &mut p.noise_color_detail, 0.0..=100.0, None, def.noise_color_detail);
         ui.add_space(PANEL_END);
     }
-    if section(ui, panels, "colorMixer", "Color Mixer", dirty) {
-        color_mixer(ui, p, panels, dirty);
+    let mixer_title = if p.is_bw() { "B&W Mixer" } else { "Color Mixer" };
+    if section(ui, panels, "colorMixer", mixer_title, dirty) {
+        if p.is_bw() {
+            bw_mixer(ui, p, dirty);
+        } else {
+            color_mixer(ui, p, panels, dirty);
+        }
         ui.add_space(PANEL_END);
     }
     if section(ui, panels, "colorGrading", "Color Grading", dirty) {
@@ -930,6 +972,19 @@ pub(super) fn panels(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut boo
         ui.add_space(4.0);
         row(ui, dirty, "Blending", &mut p.grade_blending, 0.0..=100.0, None, def.grade_blending);
         row(ui, dirty, "Balance", &mut p.grade_balance, -100.0..=100.0, Some(&tone_stops()), def.grade_balance);
+        ui.add_space(PANEL_END);
+    }
+    // Camera Raw's Optics, its manual corrections: Distortion, then the lens Vignette's Amount
+    // and Midpoint (Midpoint does nothing, and is dimmed, while Amount is 0, as in Camera Raw).
+    if section(ui, panels, "optics", "Optics", dirty) {
+        row(ui, dirty, "Distortion", &mut p.lens_distortion, -100.0..=100.0, None, def.lens_distortion);
+        sub(ui, "Vignette");
+        ui.push_id("lens-vignette", |ui| {
+            row(ui, dirty, "Amount", &mut p.lens_vignette, -100.0..=100.0, Some(&tone_stops()), def.lens_vignette);
+            ui.add_enabled_ui(p.lens_vignette != 0.0, |ui| {
+                row(ui, dirty, "Midpoint", &mut p.lens_vignette_midpoint, 0.0..=100.0, None, def.lens_vignette_midpoint);
+            });
+        });
         ui.add_space(PANEL_END);
     }
     if section(ui, panels, "geometry", "Geometry", dirty) {
@@ -980,14 +1035,14 @@ fn color_mixer(ui: &mut egui::Ui, p: &mut CameraRaw, panels: &mut PanelState, di
             // Text tabs as Camera Raw's: the chosen one bright and underlined, the rest dimmed.
             let t = Tokens::get(ui.ctx());
             ui.add_space(4.0);
+            // A long translation (Tamil) shrinks the four tabs' text and margins to fit the panel.
+            let natural: f32 = MIXER_TABS
+                .iter()
+                .map(|(_, source)| ui.painter().layout_no_wrap(trc(source).to_string(), egui::FontId::proportional(12.0), t.text).size().x + 14.0)
+                .sum();
+            let fit = (ui.available_width() / natural.max(1.0)).clamp(0.6, 1.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
-                // Long translations shrink the tabs (text and padding) so all four fit the column.
-                let natural: f32 = MIXER_TABS
-                    .iter()
-                    .map(|(_, source)| ui.painter().layout_no_wrap(trc(source).to_string(), egui::FontId::proportional(12.0), t.text).size().x + 14.0)
-                    .sum();
-                let fit = (ui.available_width() / natural.max(1.0)).clamp(0.6, 1.0);
                 for (i, (_, source)) in MIXER_TABS.iter().enumerate() {
                     let name = trc(source);
                     let on = panels.mixer_tab == i;
@@ -997,7 +1052,7 @@ fn color_mixer(ui: &mut egui::Ui, p: &mut CameraRaw, panels: &mut PanelState, di
                     ui.painter().galley_with_override_text_color(rect.center() - galley.size() / 2.0, galley, color);
                     if on {
                         ui.painter().line_segment(
-                            [pos2(rect.left() + 5.0, rect.bottom() - 1.0), pos2(rect.right() - 5.0, rect.bottom() - 1.0)],
+                            [pos2(rect.left() + 5.0 * fit, rect.bottom() - 1.0), pos2(rect.right() - 5.0 * fit, rect.bottom() - 1.0)],
                             Stroke::new(2.0, t.text),
                         );
                     }

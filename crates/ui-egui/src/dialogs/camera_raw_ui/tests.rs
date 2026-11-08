@@ -1856,3 +1856,13 @@ fn split_view_readouts_read_the_side_they_sample() {
     d.scope.split = None;
     assert!(red(d, 0.25) > 140.0, "no Split: After everywhere");
 }
+
+/// The White Balance menu reads As Shot at zero, Auto while Auto's values stand, Custom otherwise.
+#[test]
+fn white_balance_menu_follows_the_settings() {
+    use super::edit_panel::{WbMode, wb_mode};
+    assert_eq!(wb_mode(0.0, 0.0, None), WbMode::AsShot);
+    assert_eq!(wb_mode(-12.0, 3.0, Some((-12.0, 3.0))), WbMode::Auto);
+    assert_eq!(wb_mode(-11.0, 3.0, Some((-12.0, 3.0))), WbMode::Custom);
+    assert_eq!(wb_mode(0.0, 0.0, Some((0.0, 0.0))), WbMode::AsShot, "an Auto that changed nothing is As Shot");
+}

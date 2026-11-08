@@ -539,7 +539,7 @@ pub fn apply(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bool
             extra::defringe(&mut dev, bw, bh, a.defringe);
         }
         let k = (m.amount / 100.0).clamp(0.0, 2.0);
-        let enc = super::Encoding::of(p.encoding_gamma);
+        let enc = p.encoding();
         for y in y0..y1 {
             for x in x0..x1 {
                 let (i, j) = (y * w + x, (y - y0) * bw + (x - x0));

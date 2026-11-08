@@ -648,7 +648,7 @@ stored settings over the pixels below that filter, previewed through the filter 
 then runs `layer.smartFilter.setParams` with every setting. `params.ui` accepts `set` (filter settings), `before`, `scope`, `view`, `auto` (true: the Light
 sliders from the image's histogram, the Edit header's Auto button), `reset` (`"default"` or
 `"open"`: the Edit menu's Reset to Default / Reset to Open), `panels` (`{open?, hidden?}`: lists of
-panel ids `light`, `color`, `effects`, `curve`, `detail`, `colorMixer`, `colorGrading`, `geometry`,
+panel ids `light`, `color`, `effects`, `curve`, `detail`, `colorMixer`, `colorGrading`, `optics`, `geometry`,
 `calibration`; a hidden panel, its eye button off, keeps its settings in the dialog but neither the
 preview nor commit applies them), `mixer` (`{adjust?: "hsl"|"color", tab?: "hue"|"saturation"|
 "luminance"|"all", color?: band name}`), `curve` (`"parametric"`, `"point"`, `"red"`, `"green"`,

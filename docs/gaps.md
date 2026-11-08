@@ -292,6 +292,28 @@ what an agent can't finish alone.
   0.55 → 0.10. Contrast's colour mechanism (hue-preserving tone in linear ProPhoto) is already
   the best of those tested on the cube; its remaining error on saturated colours comes from the
   adaptive curve. When an analytic model changes, the tables must be measured again.
+- **Progress (2026-11-07, Optics: Distortion and Vignetting):** `lens_distortion`,
+  `lens_vignette`, `lens_vignette_midpoint` (`camera_raw/optics.rs`). Distortion, measured with a
+  dot grid through Camera Raw, is exactly a radial map back to the source, `c + (p − c)(a + (1 −
+  a) r²)` (corners fixed, a = 1 + amount/250 above 0, 1 + amount/200 below; fit 0.44 px), and
+  PhotoCraft's result sits 0.10–0.15 px (max 0.46) from Photoshop's dots at ±25…±100; uncovered
+  areas transparent as in Camera Raw. Vignetting (filter keys `VigA`, `VigM`) is a local Exposure:
+  per pixel the Exposure slider's response at stops that depend only on the radius in
+  half-diagonals, the amount and the midpoint (measured table 3 amounts × 5 midpoints × 21 radii;
+  greys within 0.03 stops on a photograph, flats mean ΔE76 0.03–0.2, 0.5 on the brightest grey at
+  +100). Open: on coloured pixels Photoshop's vignetting darkens and saturates less than its own
+  Exposure slider (a photograph 0.7–0.9 mean ΔE76); Remove Chromatic Aberration and Defringe not
+  measured or implemented.
+- **Progress (2026-11-07, Black & White):** new `treatment` ("color" | "bw") and `bw_mix` settings,
+  measured on every 8-bit colour (filter keys found by probing: `CtoG` converts, `GM_R`…`GM_M` the
+  mixer). Photoshop's grey is not a desaturation (8.7 off): it is modelled as the ProPhoto
+  luminance times a measured factor over hue × saturation × value (36 × 13 × 13), each mixer band
+  adding its own measured change (`camera_raw/black_white.rs`, `data/camera_raw_bw.bin`); B&W skips
+  Vibrance, Saturation and the Color Mixer as Camera Raw does; CPU only for now. Mean ΔE76 on 17
+  images 0.096 over the default and every band at ±50/±100 (default 0.03, worst Yellow −100 0.69,
+  Orange −100 0.55; Photoshop's effect 13–18). Also: `white_balance_from_sample` (eyedropper),
+  `auto_white_balance` (grey-world, not measured against Camera Raw's Auto) and a public
+  `parametric_lut`, for the dialog. Glow: the filter key is not found yet.
 - **Investigated (2026-11-07, Clarity up):** still 1.52 at +50 and 2.95 at +100 (17 images). A
   per-picture global curve removes only ~0.4 of it; the rest is local. Photoshop's Clarity also
   changes chroma (with its own luminance and the colours' proportions kept it still misses by
@@ -302,9 +324,13 @@ what an agent can't finish alone.
   (±0.03) is barely boosted (gain 1.1) while ±0.1–0.25 detail at 8–32 px periods is boosted
   1.2–3.0, and the gain jumps with image size (2.8 / 1.1 / 3.1 / 3.2 for a 16 px period at 512 /
   1024 / 2048 / 4096 px), as a pyramid would. Likely an edge-aware pyramid filter such as the
-  local Laplacian filter (Paris, Hasinoff, Kautz 2011); next step: implement one from the paper
-  and fit its parameters to the probes and photographs. Measurement kit: `tools\clarity\probe.py`,
-  `probe_size.py`.
+  local Laplacian filter (Paris, Hasinoff, Kautz 2011). Tried: a local Laplacian filter written
+  from the papers (with the fast sampled version of Aubry et al. 2014), its remap learned by
+  least squares per pyramid level on full-resolution crops of 15 photographs, held out by photo:
+  Clarity +100 3.73 alone, 3.26 with L* knots, 3.05 stacked on the current model (current 3.08,
+  no change 6.30), so not implemented. The photographs' error is mostly large-scale shifts that
+  depend on the picture (fitting each picture alone reaches 1.9). Measurement kit:
+  `tools\clarity\` (`probe.py`, `probe_size.py`, `lapfilt.py`, `llf_feat.py`).
 - **Investigated (2026-11-07, Whites up):** Whites +100 stays at mean ΔE76 1.82 on 17 images
   (+50 0.44). Within a picture Photoshop's result is a fixed function of the colour; across
   pictures it is not (the adaptation). The hue-preserving tone curve in linear ProPhoto that
@@ -637,6 +663,8 @@ what an agent can't finish alone.
 |---|---|---|
 | 2026-11-07 | minor | G14: Camera Raw Upright zoom and recentring as Photoshop's (facade medians 1.3–3.3 px), Upright robust on photographs; Masks: measured brush, calibrated local sliders, Color/Moiré/Defringe, People by faces, Auto Mask, mask editing, `.xmp` masks, control channel, 26 languages |
 | 2026-11-07 | minor | G14: Camera Raw Geometry: Upright (Off, Auto, Level, Vertical, Full, Guided), Transform (Vertical, Horizontal, Rotate, Aspect, Scale, Offset X/Y) and Constrain Crop; manual Transform measured, PhotoCraft vs Photoshop dots 0.14 px mean, 0.63 px max (122 settings); Upright Level 0.2 px, Vertical/Full/Auto ≤ 5 px on a facade where Photoshop fills, larger at strong tilts and on photographs. Camera Raw Masks (brush, gradients, ranges, classical AI kinds, combine modes, local adjustments, measured gradient profiles and weighting) in `filter.cameraRaw` and the dialog's Masking tool |
+| 2026-11-07 | minor | G14: Camera Raw Optics: Distortion as the measured radial map (PhotoCraft 0.10–0.15 px from Photoshop's dot positions) and Vignetting as a measured local Exposure (`camera_raw/optics.rs`); Remove CA and Defringe still open |
+| 2026-11-07 | minor | G14: Camera Raw Black & White: `treatment` and `bw_mix` settings, grey as ProPhoto luminance × a measured factor over hue × saturation × value with per-band measured changes (`camera_raw/black_white.rs`, `data/camera_raw_bw.bin`), mean ΔE76 0.096 on 17 images (default 0.03); `white_balance_from_sample`, `auto_white_balance`, public `parametric_lut` for the dialog |
 | 2026-11-07 | minor | G14: Camera Raw Vibrance and Saturation: every 8-bit colour (4096² image) through Photoshop at ±25…±100 showed both are one fixed function of the colour (spread 0.000 across pictures), so they are now measured tables over hue × saturation × value in HSV of linear ProPhoto (48 × 21 × 21, `camera_raw/presence.rs`, `data/camera_raw_presence.bin`, shared table code `camera_raw/hsv_table.rs`), Saturation then Vibrance; the fitted Vibrance formula and the 17³ corrections are gone. Mean ΔE76 on 17 images: Vibrance −100/−50/+50/+100 0.38/0.28/0.52/1.56 → 0.14/0.10/0.09/0.22, Saturation 0.12/0.11/0.43/0.88 → 0.07/0.10/0.12/0.18 |
 | 2026-11-07 | minor | G14: Camera Raw Color Mixer (HSL): measured model (`camera_raw/color_mixer.rs`, `data/camera_raw_hsl.bin`): per hue, each kind's band sliders combine into one effective value through measured band weights, and the effect is a table of hue shift, saturation and log-value change on 72 × 9 × 9 HSV nodes of linear ProPhoto; CPU and GPU. Mean ΔE76 on 17 images, 24 sliders at ±100: 1.49 → 0.17 (Hue 1.57/1.40 → 0.11/0.12, Saturation 1.37/1.64 → 0.24/0.26, Luminance 1.73/1.25 → 0.20/0.11); 33³ cube at ±50/±100 3.73 → 0.31; the kinds apply one after the other, Luminance → Saturation → Hue, looked up at the input's hue (96 measured pairs of kinds in one band 1.13 → 0.67, three kinds in one band 1.28 → 1.1) |
 | 2026-11-06 | minor | G14: Camera Raw Texture (per-channel luminance and colour detail at 5 scales) and Clarity (luminance detail at 6 scales) as least-squares fitted multi-scale models, Dehaze below 0 as a fitted haze blend; mean ΔE76 on 17 images Texture 1.06–1.93 → 0.45–0.78, Clarity −100/−50/+50/+100 1.51/0.92/2.35/4.55 → 0.73/0.45/1.52/2.95, Dehaze −100/−50 11.2/5.4 → 6.9/4.6 |
