@@ -156,10 +156,11 @@ pub const RECENT_MAX: usize = 8;
 
 /// Keep the recent row up to date with the current preset (#11884): it goes to the front, moving
 /// there if it was already in the row, the row keeps at most [`RECENT_MAX`], and a preset that
-/// no longer exists leaves it.
+/// no longer exists leaves it. The current preset is found as `tools.setBrush` finds it, whatever
+/// the case, and noted under the preset's own name.
 pub fn note_recent(st: &mut BrushesPanelState, current: Option<&str>, presets: &[BrushPreset]) {
     st.recent.retain(|name| presets.iter().any(|p| &p.name == name));
-    if let Some(cur) = current.filter(|c| presets.iter().any(|p| p.name == *c))
+    if let Some(cur) = current.and_then(|c| presets.iter().find(|p| p.name.eq_ignore_ascii_case(c))).map(|p| p.name.as_str())
         && st.recent.first().map(String::as_str) != Some(cur)
     {
         st.recent.retain(|name| name != cur);
@@ -384,7 +385,7 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
         ui.spacing_mut().item_spacing.x = 3.0;
         for name in recent {
             let Some(p) = presets.iter().find(|p| &p.name == name) else { continue };
-            let is_current = current == Some(name.as_str());
+            let is_current = current.is_some_and(|c| c.eq_ignore_ascii_case(name));
             let (r, resp) = ui.allocate_exact_size(vec2(TILE, TILE), egui::Sense::click());
             let label = crate::i18n::fmt(tl!("Recent brush: {name}"), &[("name", name)]);
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, is_current, &label));

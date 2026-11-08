@@ -4,7 +4,7 @@
 //! Brushes shows and hides it, remembered with the picker's other view settings.
 
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::json;
 
 use super::*;
@@ -164,4 +164,17 @@ fn the_saved_toggle_is_restored_and_a_bad_value_keeps_the_default() {
         restore(&mut app);
         assert!(app.ui.brush_picker_list.show_recent, "{bad}");
     }
+}
+
+#[test]
+fn a_preset_picked_in_another_case_is_noted_by_its_own_name() {
+    // `tools.setBrush` finds a preset whatever the case of its name and keeps the name as given.
+    let mut app = app();
+    let n = names(&app);
+    let shouted = n[1].to_ascii_uppercase();
+    assert_ne!(shouted, n[1], "the preset's name has lower-case letters");
+    pick(&mut app, &shouted);
+    assert_eq!(recent(&app), [n[1].clone()], "noted under the preset's own name");
+    let h = harness(app);
+    assert_eq!(h.get_by_label(&tile(&n[1])).accesskit_node().toggled(), Some(egui::accesskit::Toggled::True), "and shown as the current brush");
 }
