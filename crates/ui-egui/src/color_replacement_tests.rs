@@ -147,7 +147,7 @@ fn live_stroke_at(depth: u32) {
     }
     let st = app.session.active().unwrap();
     assert_eq!(st.history.past_len(), steps + 1, "one History step");
-    assert_eq!(st.history.entries().last().map(|e| e.to_string()).as_deref(), Some("Color Replacement"));
+    assert_eq!(st.history.entries().last().map(|e| e.to_string()).as_deref(), Some("Color Replacement Tool"));
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(rgba(&app, 20, 20), before, "one undo restores the pixels");
     app.run("edit.redo", json!({})).unwrap();
