@@ -1022,7 +1022,7 @@ fn patch_content_aware_copies_the_dragged_to_content_into_the_selection() {
             let (got, want) = (rgba(&s, x, y), texture(x, y));
             assert!((got[0] - want[0]).abs() <= tol(depth), "depth {depth}: untouched {x},{y}: {got:?}");
         }
-        assert_eq!(s.active().unwrap().history.undo_label(), Some("Patch (Content-Aware)"));
+        assert_eq!(s.active().unwrap().history.undo_label(), Some("Patch Selection"));
         s.execute("edit.undo", json!({})).unwrap();
         assert_eq!(rgba(&s, 44, 24)[1], 0.0, "depth {depth}: undo brings the blemish back");
     }
