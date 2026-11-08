@@ -80,12 +80,18 @@ fn has_fonts(h: &Harness<'static, PhotocraftApp>) -> bool {
 }
 
 #[test]
-fn the_sampled_image_keeps_its_left_and_right() {
+fn the_sampled_image_keeps_its_left_right_top_and_bottom() {
     let load: Vec<[f32; 4]> = (0..64 * 64).map(|i| if i % 64 < 32 { GREEN } else { BLUE }).collect();
     let image = mixer_load_image(&load);
     assert_eq!(image.size, [64, 64]);
     assert_eq!(image[(10, 32)], egui::Color32::from_rgb(0, 255, 0));
     assert_eq!(image[(54, 32)], egui::Color32::from_rgb(0, 0, 255));
+    // Row 0 is the tip's top, as `load_at` reads it; alpha is kept and values past 0..1 clamp.
+    let load: Vec<[f32; 4]> = (0..64 * 64).map(|i| if i < 32 * 64 { [1.0, 0.0, 0.0, 0.5] } else { [1.5, -0.2, 0.0, 1.0] }).collect();
+    let image = mixer_load_image(&load);
+    let (top, bottom) = (image[(32, 10)], image[(32, 54)]);
+    assert_eq!((top.r() > 0, top.g(), top.b(), top.a()), (true, 0, 0, 128), "top of the image {top:?}");
+    assert_eq!(bottom, egui::Color32::from_rgb(255, 0, 0), "bottom of the image");
 }
 
 #[test]
