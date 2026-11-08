@@ -137,10 +137,12 @@ fn transposed(h: &[f64; 9]) -> [f64; 9] {
 }
 
 /// Bicubic Automatic's choice for a pass whose output spans `out` pixels where its input spans
-/// `inp`: Smoother when the pass enlarges, else Sharper. The comparison is strict: a Distort that
-/// keeps the width exactly draws Sharper, as the reference does.
+/// `inp`: Smoother when the pass enlarges, else Sharper. The comparison is strict and has no
+/// tolerance: the reference decides from the same floating-point extent, so a Distort that keeps
+/// the width to within 1e-13 draws Smoother or Sharper by the sign of that residue (a saved one
+/// redrawn from its stored corners comes out the same way).
 fn automatic(out: f64, inp: f64) -> (f64, f64) {
-    if out > inp * (1.0 + 1e-9) { SMOOTHER } else { SHARPER }
+    if out > inp { SMOOTHER } else { SHARPER }
 }
 
 /// Keys kernels (a, stretch) of Bicubic Sharper and Smoother at 1:1.
@@ -428,6 +430,24 @@ fn cascade(src: &Surface, bounds: Rect, h: &[f64; 9]) -> Option<Surface> {
     cascade_normal(src, bounds, h, &p)
 }
 
+/// `s` without the rows at or below `end` (document rows; `end` is exclusive).
+fn clip_rows_below(s: Surface, end: f64) -> Option<Surface> {
+    let r = alpha_bounds(&s)?;
+    if !end.is_finite() {
+        return Some(s);
+    }
+    let end = end.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+    if end >= r.y1 {
+        return Some(s);
+    }
+    let keep = Rect::new(r.x0, r.y0, r.x1, end.max(r.y0));
+    let mut out = Surface::new(s.format());
+    if !keep.is_empty() {
+        out.write_region_par(keep, &s.read_region(keep));
+    }
+    Some(out)
+}
+
 fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan) -> Option<Surface> {
     let flat = |v: f64| v.abs() <= FLAT;
     let w = f64::from(bounds.width());
@@ -449,6 +469,14 @@ fn cascade_normal(src: &Surface, bounds: Rect, h: &[f64; 9], p: &Plan) -> Option
     } else {
         render_with(src, bounds, m1s, Some(k1), true)?
     };
+    // The intermediate lives in a buffer of ceil(height) rows from the whole pixel above the
+    // stretched quad's top (floor), while its rows are drawn from the nearest pixel edge (round):
+    // when the top's fraction passes a half and the bottom's does not exceed it, the bottom row of
+    // the drawn range falls outside the buffer and is lost. The reference loses it too (its
+    // distort-everything references have no bottom row; a one-way draw keeps its last row).
+    let (top, bottom) = (p.b[1], p.b[3]);
+    let buffer_end = top.floor() + (bottom - top).ceil();
+    let inter = clip_rows_below(inter, buffer_end)?;
     let ib = alpha_bounds(&inter)?;
     let m2 = mul(&mul(h, &inverse(&m1s)?), &translation(f64::from(ib.x0), f64::from(ib.y0)));
     if m2[8].abs() <= FLAT {
@@ -530,6 +558,32 @@ mod tests {
     /// The reference's render of the dots moved by (30, 10) under Perspective 0.35 % / 0.2 %:
     /// the vertical stage goes first here (its intermediate is the smaller), although the
     /// horizontal coefficient is larger.
+    #[test]
+    fn automatic_has_no_tolerance_at_the_tie() {
+        // The reference decides from the same floating-point extent: a Distort whose stored corners
+        // keep the width to within 1e-12 draws Smoother, one that keeps it exactly draws Sharper.
+        assert_eq!(automatic(128.0 * (1.0 + 9e-13), 128.0), SMOOTHER);
+        assert_eq!(automatic(128.0, 128.0), SHARPER);
+        assert_eq!(automatic(128.0 * (1.0 - 9e-13), 128.0), SHARPER);
+    }
+
+    /// distort-everything's map: the stretched quad spans y 102.556..249.555, so its intermediate's
+    /// buffer (floor(top) + ceil(height) = 249) ends a row before the drawn range (round: 250) and the
+    /// final quad's bottom row 249 stays empty, as in the reference, although the quad's lowest corner
+    /// (249.555) lies below that row's centre.
+    #[test]
+    fn a_cascade_loses_the_bottom_row_its_intermediate_buffer_cannot_hold() {
+        use photocraft_color::{ColorMode, PixelFormat, SampleType};
+        let h = [0.5001371796382342, 0.024111162934328828, 101.48460242572091, -0.2210246357031403, 1.0279091153627808, 102.55647359375378, -0.003193430656934307, 0.0018248175182481743, 1.0];
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+        s.write_region(Rect::new(0, 0, 128, 128), &vec![1.0; 128 * 128 * 4]);
+        let out = render(&s, Rect::new(0, 0, 128, 128), h).expect("a general quad");
+        let row = |y: i32| out.read_region(Rect::new(180, y, 230, y + 1)).as_chunks::<4>().0.iter().map(|p| p[3]).fold(0.0f32, f32::max);
+        assert_eq!(row(249), 0.0, "row 249 must be empty");
+        assert!(row(248) > 0.9, "row 248 holds the quad's tip");
+        assert_eq!(alpha_bounds(&out), Some(Rect::new(85, 103, 280, 249)));
+    }
+
     #[test]
     fn a_moved_two_way_perspective_matches_the_reference_byte_for_byte() {
         let h = [2.4074074074099214, 0.49382716049342734, 107.53086419753102, 0.864197530867415, 2.037037037036821, 76.6666666666538, 0.005401234567917046, 0.0030864197530817293, 1.0];
