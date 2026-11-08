@@ -408,3 +408,28 @@ fn a_bare_number_takes_the_unit_the_field_showed() {
     h.run_steps(2);
     assert_eq!(h.state().ui.dialogs.first().unwrap().fields["gutter"], "5 mm");
 }
+
+/// Tabbing past fields without typing keeps a named preset: an empty Width stays automatic.
+#[test]
+fn tabbing_through_untouched_fields_keeps_the_preset() {
+    let mut app = app();
+    let id = open(&mut app);
+    let f = &mut app.ui.dialog_mut(id).unwrap().fields;
+    f.insert("__preset".into(), json!("eight"));
+    f.insert("columns".into(), json!(8));
+    f.insert("rows".into(), json!(0));
+    f.insert("__rowsEnabled".into(), json!(false));
+    f.insert("__marginEnabled".into(), json!(false));
+    f.insert("width".into(), Value::Null);
+    f.insert("gutter".into(), json!(20));
+    let mut h = harness(app);
+    h.run_steps(3);
+    // Number, Width, Spacing, then back to Number.
+    for _ in 0..4 {
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    let f = &h.state().ui.dialogs.first().unwrap().fields;
+    assert_eq!(f["__preset"], "eight");
+    assert_eq!(f["width"], Value::Null);
+}

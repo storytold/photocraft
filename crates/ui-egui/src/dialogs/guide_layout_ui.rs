@@ -426,7 +426,11 @@ fn unit_edit(app: &PhotocraftApp, ui: &mut egui::Ui, id_salt: &str, value: &mut 
     }
     if response.lost_focus() {
         let unit = ui.ctx().data_mut(|d| d.remove_temp::<Unit>(response.id)).unwrap_or(ruler);
-        if let Some(normalized) = normalize_field_text(&text, app, along_x, optional, unit) {
+        // Leaving a field untouched keeps its stored value (an automatic size stays empty), so
+        // tabbing past it does not turn a named preset into Custom.
+        if let Some(normalized) = normalize_field_text(&text, app, along_x, optional, unit)
+            && normalized != text
+        {
             *value = json!(normalized);
         }
     }
