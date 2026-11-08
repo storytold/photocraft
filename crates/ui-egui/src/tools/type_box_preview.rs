@@ -709,20 +709,30 @@ mod tests {
     }
 
     /// `edit.freeTransform` is a shell command (in `UI_COMMANDS`), yet it captures the document,
-    /// so it must see the dragged box like any other command does.
+    /// so it must see the dragged box like any other command does: its frame is the resized
+    /// layer's, not the one from before the drag.
     #[test]
     fn free_transform_mid_drag_sees_the_dragged_box() {
         let (mut app, id) = app_with_box();
         background(&mut app);
         let ctx = egui::Context::default();
-        press(&mut app);
-        to(&mut app, 560.0);
-        assert_eq!(height(&session_layer(&app, id)), 180.0, "not applied yet");
-        // Whether Free Transform opens here does not matter: the box is applied before it runs.
-        let _ = crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({}));
-        assert_eq!(height(&session_layer(&app, id)), 260.0, "applied before Free Transform captured the document");
+        let frame = |app: &PhotocraftApp| {
+            let st = app.session.active().unwrap();
+            let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, st.doc.layer(id).unwrap());
+            [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64]
+        };
+        let before = frame(&app);
+        // A narrower box wraps the text differently, so the layer's frame changes with it.
+        press_right(&mut app);
+        to_x(&mut app, 420.0);
+        assert_eq!(width(&session_layer(&app, id)), 240.0, "not applied yet");
+        crate::menus::invoke(&mut app, &ctx, "edit.freeTransform", json!({})).expect("Free Transform opens");
+        assert_eq!(width(&session_layer(&app, id)), 120.0, "applied before Free Transform captured the document");
         assert!(app.type_box_preview.is_none());
-        assert!(app.ui.text_edit.as_ref().is_none_or(|e| e.resize.is_none() && !e.dragging));
+        let after = frame(&app);
+        assert_ne!(after, before, "the resized text has another frame");
+        let t = app.ui.transform.as_ref().expect("a Free Transform session");
+        assert_eq!(t.rect, after, "its frame is the resized layer's");
     }
 
     #[test]
