@@ -29,9 +29,9 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let o = &app.ui.tool_options;
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label()});
+    // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
     if app.ui.tool == Tool::CloneStamp {
-        p["wrap"] = json!(app.ui.view.pattern_preview);
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
@@ -335,6 +335,17 @@ pub fn cancel_stale(app: &mut PhotocraftApp) {
     if app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Patch | Tool::ContentAwareMove) && d.document.as_ref().is_some_and(|doc| !doc.is_active(app))) {
         app.drag = None;
     }
+}
+
+/// Where a Patch drag ends: with ⇧ pressed after the press (⇧ at the press adds to the selection
+/// instead, so this never sees it) the end is held to the dominant axis from the start, 0 or 90
+/// degrees only (#12129). Other tools, and a drag without ⇧, end at `end`.
+pub fn patch_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
+    if d.tool != Tool::Patch || !d.live.shift {
+        return end;
+    }
+    let (dx, dy) = (end[0] - d.start[0], end[1] - d.start[1]);
+    if dx.abs() >= dy.abs() { [end[0], d.start[1]] } else { [d.start[0], end[1]] }
 }
 
 /// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
