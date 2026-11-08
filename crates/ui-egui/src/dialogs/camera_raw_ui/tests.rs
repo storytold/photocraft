@@ -757,7 +757,7 @@ fn auto_tone_of_a_never_shown_raw_matches_the_dialogs() {
         }
     }
     let method = photocraft_io::raw::Demosaic::Ahd;
-    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, developed_with: method, demosaic: method };
+    let raw = RawOpen { document, name: "pattern.dng".into(), path: None, bytes: None, decoded: None, developed_with: method, demosaic: method };
     let (unshown, _) = filmstrip::first_settings(&app, &raw);
     open_raw(&mut app, &ctx, raw).unwrap();
     let shown = &app.camera_raw.as_ref().unwrap().params;
