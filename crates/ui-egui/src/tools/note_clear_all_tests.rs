@@ -121,3 +121,17 @@ fn a_second_click_while_the_alert_is_open_opens_no_second_alert() {
     ask_clear_notes(h.state_mut());
     assert_eq!(h.state().ui.dialogs.iter().filter(|d| owns_clear_notes(&d.fields)).count(), 1);
 }
+
+#[test]
+fn ok_after_the_document_changed_deletes_nothing() {
+    let mut h = harness(app());
+    let id = clear_all(&mut h);
+    let app = h.state_mut();
+    app.run("file.new", json!({"width": 50, "height": 50})).unwrap();
+    app.run("notes.add", json!({"x": 5, "y": 5})).unwrap();
+    let past: Vec<usize> = app.session.documents().iter().map(|d| d.history.past_len()).collect();
+    assert!(crate::dialogs::confirm(app, id).is_err(), "the alert was for the first document");
+    let docs = app.session.documents();
+    assert_eq!(docs.iter().map(|d| d.doc.notes.len()).collect::<Vec<_>>(), [3, 1], "no note deleted in either document");
+    assert_eq!(docs.iter().map(|d| d.history.past_len()).collect::<Vec<_>>(), past, "no history step in either");
+}
