@@ -158,3 +158,26 @@ fn command_period_outside_a_type_session_changes_nothing() {
         assert_eq!(snapshot(&app), before, "{tool:?}");
     }
 }
+
+/// Not measured, kept as before: once the composition text has gone but its committed text has
+/// not arrived yet, ⌘. still leaves the session, as it does while composing.
+#[test]
+fn command_period_before_a_composition_commits_keeps_the_session() {
+    let mut app = new_app(Tool::Type);
+    type_new(&mut app, "AB");
+    let preedit = |text: &str| egui::Event::Ime(egui::ImeEvent::Preedit { text: text.into(), active_range_chars: None });
+    let app = send(app, vec![preedit("にほ"), preedit(""), key(egui::Key::Period, egui::Modifiers::COMMAND)]);
+    assert!(app.ui.text_edit.is_some(), "still editing");
+}
+
+#[test]
+fn command_period_after_a_composition_commits_cancels() {
+    let mut app = new_app(Tool::Type);
+    let before = snapshot(&app);
+    type_new(&mut app, "AB");
+    let preedit = egui::Event::Ime(egui::ImeEvent::Preedit { text: "にほ".into(), active_range_chars: None });
+    let commit = egui::Event::Ime(egui::ImeEvent::Commit("日本".into()));
+    let app = send(app, vec![preedit, commit, key(egui::Key::Period, egui::Modifiers::COMMAND)]);
+    assert!(app.ui.text_edit.is_none(), "the session ends");
+    assert_eq!(snapshot(&app), before, "as before the session");
+}
