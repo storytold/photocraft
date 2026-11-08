@@ -16,19 +16,18 @@
 //! document (with the preview layer) and the region are built once per dialog session; a change
 //! only swaps the layer's adjustment in a shallow copy.
 //!
-//! An already-clipped target is previewed by wrapping it, in the preview document only, in a
-//! group: its raw raster and the temporary adjustment layer are the group's children, and the
-//! group keeps the target's place, clipping relationship, blend mode, opacity, fill, masks,
-//! effects and advanced blending. The adjustment therefore runs on the target's own raster before
-//! the target blends (and before the layers clipped to it), exactly as the destructive command
-//! does, instead of acting on the whole clipping group. Nothing about this transformation reaches
-//! the committed document.
+//! An already-clipped, unstyled target becomes a group in the preview document only: its raw
+//! raster and the temporary adjustment are children, while its external compositing properties
+//! stay on the group. This applies the adjustment before the target blends into its clipping
+//! group, as the destructive command does.
 //!
 //! Cases where an adjustment-layer composite differs from the destructive result, or where it
 //! would not be cheap, keep the CPU proxy preview (`canvas::ensure_filter_preview`), see
 //! [`unsupported`]:
 //! - the target is not a plain pixel layer (smart object, type, shape, group: the command edits
 //!   a smart object's filters or refuses);
+//! - a clipped target has enabled effects on itself or an enclosing group (their effect shape
+//!   maps would rebuild on the UI thread for every settings change);
 //! - the target uses Blend If (its "Current Layer" ranges test the layer's adjusted colour);
 //! - the target's untouched area is visible (a surface without alpha whose content doesn't cover
 //!   the canvas: the command only edits content);
@@ -71,6 +70,13 @@ pub fn unsupported(doc: &Document, target: LayerId) -> Option<&'static str> {
     }
     let Some(l) = doc.layer(target) else { return Some("no target layer") };
     let LayerContent::Raster(s) = &l.content else { return Some("not a pixel layer") };
+    // A clipped target is previewed inside a new group. If the target or a group around it is
+    // styled, every slider change invalidates that group's effect shape maps, and rebuilding
+    // them is CPU work on the UI thread. The CPU proxy has its own worker, so styled clips keep
+    // it; an unrelated styled sibling doesn't affect this target's clip.
+    if l.clipped && (photocraft_compose::effects::has_effects(l) || styled_ancestor(doc, target)) {
+        return Some("clipped target or enclosing group has layer effects");
+    }
     if photocraft_compose::blend_if_active(l, doc.mode) {
         return Some(tl!("Blend If"));
     }
@@ -79,6 +85,12 @@ pub fn unsupported(doc: &Document, target: LayerId) -> Option<&'static str> {
         return Some("untouched area is visible");
     }
     None
+}
+
+/// Whether a group enclosing `target` has enabled layer effects.
+fn styled_ancestor(doc: &Document, target: LayerId) -> bool {
+    let Some(path) = doc.path_of(target) else { return false };
+    (1..path.len()).any(|n| path.get(..n).and_then(|p| doc.layer_at(p)).is_some_and(photocraft_compose::effects::has_effects))
 }
 
 /// Whether `adj` maps gray to gray. Others make colour in a grayscale document, which the command
@@ -101,11 +113,8 @@ fn keeps_gray(adj: &Adjustment) -> bool {
 /// mask): built once per dialog session, then [`with_settings`] per change. Errors when the target
 /// isn't eligible ([`unsupported`]).
 ///
-/// A clipped target is wrapped in a group instead of receiving a new clipped sibling: its raw
-/// raster is the group's bottom child, the temporary adjustment is clipped to that raster, and
-/// the group takes the target's id and every compositing property. The target therefore keeps its
-/// external clipping relationship, and the adjustment runs before the target's own blend (and
-/// before the layers clipped to it) as the destructive command does.
+/// An already-clipped target becomes a group containing its raw raster and the adjustment, so
+/// only its own pixels are adjusted. Its id and external compositing properties stay on the group.
 pub fn base_document(doc: &Document, target: LayerId) -> Result<Document, String> {
     if let Some(why) = unsupported(doc, target) {
         return Err(why.into());

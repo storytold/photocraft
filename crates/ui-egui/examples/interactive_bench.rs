@@ -13,7 +13,9 @@
 //! recomposite (the canvas samples the composited texture's mip levels); "viewport (CPU)" times
 //! what the CPU fallback pays for one 1920×1080 view. Each row is the median of `--reps` runs
 //! (min / max shown); the first run of an operation is reported separately as "cold". Adjustment
-//! preview rows cover a plain pixel target and a clipped one, unstyled and with a Color Overlay.
+//! preview rows cover a plain pixel target and a clipped one. A styled clipped target keeps the
+//! CPU proxy (its preview group would rebuild effect shape maps on the UI thread), so only its
+//! CPU reference rows run and the reason is printed.
 
 use std::time::Instant;
 
@@ -40,6 +42,7 @@ fn block_on<F: std::future::Future>(f: F) -> F::Output {
 }
 
 struct Gpu {
+    adapter_name: String,
     device: wgpu::Device,
     queue: wgpu::Queue,
     comp: photocraft_gpu::Compositor,
@@ -50,12 +53,13 @@ fn gpu() -> Option<Gpu> {
     let adapter =
         block_on(instance.request_adapter(&wgpu::RequestAdapterOptions { power_preference: wgpu::PowerPreference::HighPerformance, ..Default::default() }))
             .ok()?;
-    eprintln!("adapter: {}", adapter.get_info().name);
+    let adapter_name = adapter.get_info().name;
+    eprintln!("adapter: {adapter_name}");
     // The limits the app requests (see `gpu_canvas::use_adapter_limits`).
     let limits = photocraft_ui_egui::gpu_canvas::device_limits(&adapter);
     let (device, queue) = block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() })).ok()?;
     let comp = photocraft_gpu::Compositor::new(&device);
-    Some(Gpu { device, queue, comp })
+    Some(Gpu { adapter_name, device, queue, comp })
 }
 
 /// A photo-like RGB image: smooth gradients, soft blobs, fine noise (so JPEG has real work).
@@ -203,8 +207,9 @@ fn exec(s: &mut Session, id: &str, p: Value) {
 
 /// A 36 MP RGB/8 document with a clipped raster target in a real clipping stack: a base, a
 /// clipped sibling below, the clipped target and a clipped sibling above. `styled` gives the
-/// target a Color Overlay: the preview wraps the target in a group, and that group's effect maps
-/// include the adjustment settings, so a slider change may rebuild them (#7487).
+/// target a Color Overlay: that makes it ineligible for the layer preview (the preview's styled
+/// group would rebuild its effect shape maps on the UI thread), so the benchmark reports only
+/// its CPU reference rows (#7487).
 fn clipped_document(w: u32, h: u32, styled: bool) -> (Document, LayerId) {
     let mut doc = Document::new("clipped preview", Size::new(w, h), ColorMode::Rgb, SampleType::U8);
     let fmt = doc.pixel_format();
@@ -264,16 +269,12 @@ fn cpu_adjust_preview_case(b: &mut Bench, doc: &Document, target: LayerId, name:
     });
 }
 
-/// Compare CPU and layer previews, keeping session setup outside the settings-change samples.
-fn adjust_preview_case(b: &mut Bench, s: &Session, target: LayerId, name: &str, sel: &str, report_path: bool) {
-    let doc = &s.active().expect("doc").doc;
-    let (w, h) = (doc.size.width, doc.size.height);
-    let zoom = 1600.0 / w as f32 * 2.0;
-    let k = photocraft_ui_egui::adjust_preview::proxy_factor(zoom);
+/// The CPU reference rows: the old proxy at the desktop factor, and (for path-reported rows) at
+/// the 100 % and zoomed-out resolutions the canvas would use, so the layer path compares fairly.
+fn cpu_preview_rows(b: &mut Bench, doc: &Document, target: LayerId, name: &str, sel: &str, report_path: bool) {
     cpu_adjust_preview_case(b, doc, target, &format!("{name}, CPU proxy preview{sel}"), photocraft_ui_egui::proxy::factor(doc));
     if report_path {
-        // Match the desktop fallback's resolution at each view. It still computes the whole
-        // document; the layer path below only redraws the visible part of the affected region.
+        let zoom = 1600.0 / doc.size.width as f32 * 2.0;
         cpu_adjust_preview_case(b, doc, target, &format!("{name}, CPU proxy preview 100 % view{sel}"), 1);
         cpu_adjust_preview_case(
             b,
@@ -283,6 +284,20 @@ fn adjust_preview_case(b: &mut Bench, s: &Session, target: LayerId, name: &str, 
             photocraft_ui_egui::proxy::view_factor(photocraft_ui_egui::proxy::factor(doc), zoom),
         );
     }
+}
+
+/// Compare CPU and layer previews, keeping session setup outside the settings-change samples.
+fn adjust_preview_case(b: &mut Bench, s: &Session, target: LayerId, name: &str, sel: &str, report_path: bool) {
+    let doc = &s.active().expect("doc").doc;
+    let (w, h) = (doc.size.width, doc.size.height);
+    let zoom = 1600.0 / w as f32 * 2.0;
+    let k = photocraft_ui_egui::adjust_preview::proxy_factor(zoom);
+    if let Some(why) = photocraft_ui_egui::adjust_preview::unsupported(doc, target) {
+        println!("  ({name}{sel}: no layer preview: {why}; CPU reference rows only)");
+        cpu_preview_rows(b, doc, target, name, sel, report_path);
+        return;
+    }
+    cpu_preview_rows(b, doc, target, name, sel, report_path);
     // Once per dialog session (the app caches both per document revision).
     let (base, region) = {
         let st = s.active().expect("doc");
@@ -334,6 +349,52 @@ fn adjust_preview_case(b: &mut Bench, s: &Session, target: LayerId, name: &str, 
     });
 }
 
+/// The independent clipped-preview fixtures: unstyled (layer/GPU path) and styled (CPU fallback).
+/// Both use their own session, so `--only clipped` never touches the big photo, PSD or gradient
+/// setup and the full run keeps its existing row order.
+fn clipped_preview_group(b: &mut Bench, w: u32, h: u32) {
+    for (styled, label) in [(false, "clipped target"), (true, "clipped styled target")] {
+        let t = Instant::now();
+        let (doc, target) = clipped_document(w, h, styled);
+        let mut cs = Session::new();
+        cs.open_document(doc, None);
+        exec(&mut cs, "layer.select", json!({"layer": target.0}));
+        println!("  ({label} fixture setup: {:.1} ms)", ms(t));
+        for selection in [false, true] {
+            if selection {
+                exec(&mut cs, "select.rect", json!({"x": w / 4, "y": h / 4, "width": w / 2, "height": h / 2, "ellipse": true}));
+            }
+            let sel = if selection { ", selection" } else { "" };
+            adjust_preview_case(b, &cs, target, &format!("Curves dialog change, {label}"), sel, true);
+            if selection {
+                exec(&mut cs, "select.deselect", json!({}));
+            }
+        }
+    }
+}
+
+/// Write the `--json` report of the rows measured so far (shared by the full run and the early
+/// `--only clipped` path).
+fn write_report(b: &Bench, args: &[String], w: u32, h: u32) {
+    let Some(out) = arg(args, "--json") else { return };
+    let rows: Vec<Value> = b
+        .rows
+        .iter()
+        .zip(&b.extra)
+        .map(|((n, med, min, max, cold), (samples, rss, faults))| {
+            let mut r = json!({"name": n, "median_ms": med, "min_ms": min, "max_ms": max, "cold_ms": cold});
+            // For `cargo xtask perf`: raw samples (it computes p50 / p95) and peak RSS.
+            r["samples_ms"] = json!(samples);
+            r["peak_rss_bytes"] = json!(rss);
+            r["minor_faults_per_run"] = json!(faults);
+            r
+        })
+        .collect();
+    let context = json!({"gpu_adapter": b.gpu.as_ref().map(|g| g.adapter_name.as_str())});
+    let report = json!({"width": w, "height": h, "gpu": b.gpu.is_some(), "context": context, "rows": rows});
+    std::fs::write(&out, serde_json::to_string_pretty(&report).unwrap()).expect("write json");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let (w, h) =
@@ -348,6 +409,15 @@ fn main() {
         rss: photocraft_testkit::perf::RssSampler::start(std::time::Duration::from_millis(2)),
     };
     println!("document {w}×{h} ({:.1} MP), 8-bit RGB, {} reps, {}", (w * h) as f64 / 1e6, reps, if b.gpu.is_some() { "GPU canvas" } else { "CPU canvas" });
+
+    // `--only clipped` measures just the independent clipped fixtures, without building the
+    // 36 MP photo, encoding JPEG, or opening/exporting PSD. That keeps the run's retained
+    // memory lower and avoids unrelated rows that `--only` would otherwise execute once.
+    if arg(&args, "--only").as_deref() == Some("clipped") {
+        clipped_preview_group(&mut b, w, h);
+        write_report(&b, &args, w, h);
+        return;
+    }
 
     // ---- open / save / export ----------------------------------------------------------------
     let img = photo(w, h);
@@ -440,26 +510,9 @@ fn main() {
             exec(&mut s, "select.deselect", json!({}));
         }
     }
-    // The same case on a clipped target (#7487): the preview isolates it in a group. The styled
-    // target's group effects are keyed by the adjustment settings, so a change may rebuild them.
-    for (styled, label) in [(false, "clipped target"), (true, "clipped styled target")] {
-        let t = Instant::now();
-        let (doc, target) = clipped_document(w, h, styled);
-        let mut cs = Session::new();
-        cs.open_document(doc, None);
-        exec(&mut cs, "layer.select", json!({"layer": target.0}));
-        println!("  ({label} fixture setup: {:.1} ms)", ms(t));
-        for selection in [false, true] {
-            if selection {
-                exec(&mut cs, "select.rect", json!({"x": w / 4, "y": h / 4, "width": w / 2, "height": h / 2, "ellipse": true}));
-            }
-            let sel = if selection { ", selection" } else { "" };
-            adjust_preview_case(&mut b, &cs, target, &format!("Curves dialog change, {label}"), sel, true);
-            if selection {
-                exec(&mut cs, "select.deselect", json!({}));
-            }
-        }
-    }
+    // The same case on a clipped target (#7487): the preview isolates it in a group. A styled
+    // target keeps the CPU proxy (see `adjust_preview_case`), so only its CPU rows are measured.
+    clipped_preview_group(&mut b, w, h);
     exec(&mut s, "layer.newAdjustmentLayer.levels", json!({"inBlack": 10, "inWhite": 240, "gamma": 1.1}));
     let mut g = 1.0;
     b.time("Levels layer tweak (gamma) + full refresh", |b| {
@@ -562,21 +615,5 @@ fn main() {
         ms(t) + b.refresh(&s, false)
     });
 
-    if let Some(out) = arg(&args, "--json") {
-        let rows: Vec<Value> = b
-            .rows
-            .iter()
-            .zip(&b.extra)
-            .map(|((n, med, min, max, cold), (samples, rss, faults))| {
-                let mut r = json!({"name": n, "median_ms": med, "min_ms": min, "max_ms": max, "cold_ms": cold});
-                // For `cargo xtask perf`: raw samples (it computes p50 / p95) and peak RSS.
-                r["samples_ms"] = json!(samples);
-                r["peak_rss_bytes"] = json!(rss);
-                r["minor_faults_per_run"] = json!(faults);
-                r
-            })
-            .collect();
-        std::fs::write(&out, serde_json::to_string_pretty(&json!({"width": w, "height": h, "gpu": b.gpu.is_some(), "rows": rows})).unwrap())
-            .expect("write json");
-    }
+    write_report(&b, &args, w, h);
 }

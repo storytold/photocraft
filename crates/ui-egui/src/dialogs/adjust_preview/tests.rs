@@ -90,8 +90,9 @@ pub(crate) fn document(mode: ColorMode, depth: SampleType, selection: bool) -> (
 }
 
 /// A target in the middle of a clipping group, nested two groups deep: a base, a clipped layer
-/// below the target, the target (semi-transparent noise, 80 % Multiply, a mask, an effect) and a
-/// clipped layer above it. The target is clipped, so its preview must isolate it from the group.
+/// below the target, the target (semi-transparent noise, 80 % Multiply, a mask) and a clipped
+/// layer above it. The target is clipped, so its preview must isolate it from the group. It is
+/// unstyled, which is the path the preview accelerates.
 pub(crate) fn clipped_document(mode: ColorMode, depth: SampleType, selection: bool) -> (Document, LayerId) {
     let (w, h) = (40u32, 32u32);
     let mut doc = Document::with_background("t", Size::new(w, h), mode, depth, Color::rgba(0.7, 0.6, 0.5, 1.0));
@@ -120,7 +121,6 @@ pub(crate) fn clipped_document(mode: ColorMode, depth: SampleType, selection: bo
     let mut m = LayerMask::reveal_all();
     m.surface.fill_rect(Rect::from_xywh(0, 0, 10, 10), &[0.3]);
     target.mask = Some(m);
-    target.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.5), color: Color::rgba(0.2, 0.8, 0.4, 1.0) });
     let id = target.id;
     let mut above = Layer::raster("above", fmt);
     if let Some(s) = above.surface_mut() {
@@ -282,11 +282,17 @@ fn a_clipped_target_preview_keeps_its_place_and_properties() {
 }
 
 /// The canvas damage region still bounds every change when the target is clipped: outside it the
-/// preview composites exactly like the committed document.
+/// preview composites like the committed document, within a tight premultiplied tolerance.
 #[test]
 fn a_clipped_target_preview_changes_nothing_outside_its_region() {
+    // The extra group's straight-alpha normalization introduces floating-point rounding.
+    // Allow 1e-6 outside the damage region, well below the 1/255 command-parity tolerance;
+    // the committed document itself must remain identical.
+    const OUTSIDE: f32 = 1e-6;
+    let pm = |p: &[f32; 4]| [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]];
     for selection in [false, true] {
         let (doc, target) = clipped_document(ColorMode::Rgb, SampleType::U8, selection);
+        let committed = doc.clone();
         let r = region(&doc, target);
         assert!(!r.is_empty(), "the target can change something");
         let before = photocraft_compose::render(&doc, doc.bounds());
@@ -296,10 +302,12 @@ fn a_clipped_target_preview_changes_nothing_outside_its_region() {
             for (i, (a, b)) in before.px.iter().zip(&after.px).enumerate() {
                 let (x, y) = ((i % 40) as i32, (i / 40) as i32);
                 if !r.contains(x, y) {
-                    assert_eq!(a, b, "{kind} selection {selection}: ({x}, {y}) outside {r:?}");
+                    let (pa, pb) = (pm(a), pm(b));
+                    assert!((0..4).all(|c| (pa[c] - pb[c]).abs() <= OUTSIDE), "{kind} selection {selection}: ({x}, {y}) outside {r:?}: {pa:?} vs {pb:?}");
                 }
             }
         }
+        assert_eq!(doc, committed, "the committed document is unchanged");
     }
 }
 
@@ -347,6 +355,47 @@ fn ineligible_targets_use_the_proxy_preview() {
     let (gray, t) = document(ColorMode::Grayscale, SampleType::U16, false);
     assert!(preview_document(&gray, t, "hueSaturation", &json!({"colorize": true, "hue": 30, "saturation": 40})).is_err());
     assert!(preview_document(&gray, t, "hueSaturation", &json!({"lightness": 20})).is_ok());
+}
+
+/// A clipped target with enabled effects on itself or an enclosing group keeps the CPU proxy:
+/// the preview's temporary group would rebuild the styled group's effect shape maps on the UI
+/// thread for every settings change. Disabled effects and styled siblings elsewhere don't count.
+#[test]
+fn a_styled_clipped_target_keeps_the_proxy_preview() {
+    let overlay = || Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.5), color: Color::rgba(0.2, 0.8, 0.4, 1.0) };
+    let (mut doc, target) = clipped_document(ColorMode::Rgb, SampleType::U8, false);
+    assert_eq!(unsupported(&doc, target), None, "the fixture target is unstyled");
+    // An enabled effect on the target itself.
+    doc.layer_mut(target).unwrap().effects.items.push(overlay());
+    let why = unsupported(&doc, target).expect("a styled clipped target keeps the proxy");
+    assert!(why.contains("layer effects"), "{why}");
+    assert!(base_document(&doc, target).is_err(), "no preview group for a styled clip");
+    doc.layer_mut(target).unwrap().clipped = false;
+    assert_eq!(unsupported(&doc, target), None, "unclipped styled targets keep their existing path");
+    doc.layer_mut(target).unwrap().clipped = true;
+    doc.layer_mut(target).unwrap().effects.enabled = false;
+    assert_eq!(unsupported(&doc, target), None, "the disabled master switch doesn't count");
+    doc.layer_mut(target).unwrap().effects.enabled = true;
+    // Disabled effects cost nothing: still eligible.
+    if let Effect::ColorOverlay { common, .. } = &mut doc.layer_mut(target).unwrap().effects.items[0] {
+        common.enabled = false;
+    }
+    assert_eq!(unsupported(&doc, target), None, "disabled effects don't count");
+    doc.layer_mut(target).unwrap().effects.items.clear();
+    // An enabled effect on an enclosing group.
+    let inner = doc.layers[1].children().unwrap()[0].id;
+    doc.layer_mut(inner).unwrap().effects.items.push(overlay());
+    assert!(unsupported(&doc, target).is_some(), "a styled enclosing group keeps the proxy");
+    if let Effect::ColorOverlay { common, .. } = &mut doc.layer_mut(inner).unwrap().effects.items[0] {
+        common.enabled = false;
+    }
+    assert_eq!(unsupported(&doc, target), None, "a disabled group effect doesn't count");
+    doc.layer_mut(inner).unwrap().effects.items.clear();
+    // A styled sibling inside the same clipping group is unrelated.
+    let above = doc.layer(inner).unwrap().children().unwrap()[3].id;
+    doc.layer_mut(above).unwrap().effects.items.push(overlay());
+    assert_eq!(unsupported(&doc, target), None, "an unrelated styled sibling doesn't reject the target");
+    assert!(base_document(&doc, target).is_ok());
 }
 
 /// The canvas recomposites only `region` between previews: nothing outside it may change.
