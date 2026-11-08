@@ -101,8 +101,10 @@ fn arm_move_transfer(app: &mut PhotocraftApp, ctx: &egui::Context, index: usize)
             app.drag = Some(drag);
             return false;
         }
+        // The rollback raised the revision; the restored document is the one the float was
+        // over, so it floats over the new revision (else `floating()` drops it as stale).
         if let Some(st) = app.session.active_mut() {
-            st.floating = previous;
+            st.floating = previous.map(|f| photocraft_engine::float_cmds::Floating { revision: st.revision, ..f });
         }
         let active = app.session.active().and_then(|st| st.active_layer).unwrap_or(active);
         if !begin(app, ctx, active, Some(grab)) {

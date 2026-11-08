@@ -38,10 +38,16 @@ fn tab(h: &Harness<'_, PhotocraftApp>, name: &str) -> Pos2 {
 /// Press at `path[0]`, move through the rest (a few frames at each) and release at the last
 /// point with `release` held.
 fn drag_along(h: &mut Harness<'_, PhotocraftApp>, path: &[Pos2], release: Modifiers) {
+    drag_along_pressed(h, path, Modifiers::NONE, release);
+}
+
+/// [`drag_along`], with `press` held from the press on (⌥ for a Move-tool copy).
+fn drag_along_pressed(h: &mut Harness<'_, PhotocraftApp>, path: &[Pos2], press: Modifiers, release: Modifiers) {
     let first = path[0];
+    h.event(egui::Event::ModifiersChanged(press));
     h.event(egui::Event::PointerMoved(first));
     h.run_steps(1);
-    h.event(egui::Event::PointerButton { pos: first, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.event(egui::Event::PointerButton { pos: first, button: PointerButton::Primary, pressed: true, modifiers: press });
     h.run_steps(1);
     for w in path.windows(2) {
         for k in 1..=4 {
@@ -192,6 +198,30 @@ fn a_tiled_selection_drag_that_returns_to_its_source_still_moves_there() {
     assert_ne!(floating.offset, (0, 0));
     assert_eq!(state.session.documents()[0].history.past_len(), history);
     assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1);
+}
+
+#[test]
+fn an_option_drag_of_a_moved_float_onto_a_tab_keeps_the_source_float() {
+    let (mut h, _) = harness();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().run("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+    h.state_mut().run("select.float", json!({"dx": 5, "dy": 0})).unwrap();
+    h.run_steps(2);
+    let source = &h.state().session.documents()[0];
+    let (before, history) = (source.doc.clone(), source.history.past_len());
+    assert!(photocraft_engine::float_cmds::floating(source).is_some_and(|f| f.offset == (5, 0)));
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(13.0, 10.0);
+    let over_tab = tab(&h, "dest-doc");
+    let drop = h.state().last_canvas_rect.center();
+    drag_along_pressed(&mut h, &[grab, over_tab, drop], Modifiers::ALT, Modifiers::NONE);
+    assert_eq!(copy(&h).1.size(), vec2(3.0, 4.0));
+    let source = &h.state().session.documents()[0];
+    assert_eq!(*source.doc, *before);
+    assert_eq!(source.history.past_len(), history);
+    // The rollback of the ⌥-drag's drop-and-copy raised the revision: the restored float must
+    // still count as floating over it, or the earlier move is lost.
+    let float = photocraft_engine::float_cmds::floating(source).expect("the moved float survives the transfer");
+    assert_eq!(float.offset, (5, 0));
 }
 
 #[test]
