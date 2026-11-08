@@ -52,6 +52,16 @@ fn a_vertical_mask_keeps_the_part_below_the_canvas() {
     let b = mask(&mut s, text.clone());
     assert!(b.y0 < 600 && b.y1 > 600, "{b:?}");
     assert_eq!(b, layer_bounds(800, 600, text));
+
+    // Moved up, the rows that were below the canvas are there: it equals the text masked there.
+    s.execute("select.transformSelection", json!({"dy": -300, "stepName": "Move Selection"})).unwrap();
+    let moved = selection(&s).unwrap();
+    let mut s = session(800, 600);
+    mask(&mut s, json!({"text": "MASKMASKMASK", "x": 500, "y": 150, "size": 48, "orientation": "vertical"}));
+    let there = selection(&s).unwrap();
+    let b = there.content_bounds();
+    assert_eq!(moved.content_bounds(), b);
+    assert_eq!(moved.read_region(b), there.read_region(b), "pixel for pixel");
 }
 
 /// Moving the selection onto the canvas shows the whole outline: it equals a mask of the same text
@@ -145,4 +155,73 @@ fn masks_on_the_canvas_select_as_before() {
             assert!((v - want).abs() <= 1.5 / 255.0, "{operation}: pixel {i} is {v}, expected {want}");
         }
     }
+}
+
+/// Text with no glyphs selects nothing: Add and Subtract leave an earlier selection as it is,
+/// Replace and Intersect clear it, as before the combine step changed.
+#[test]
+fn a_mask_with_no_glyphs_keeps_or_clears_as_before() {
+    for operation in ["new", "add", "subtract", "intersect"] {
+        for earlier in [false, true] {
+            let mut s = session(600, 400);
+            if earlier {
+                s.execute("select.rect", json!({"x": 400, "y": 50, "width": 100, "height": 70})).unwrap();
+            }
+            let before = selection(&s);
+            let r = s.execute(super::CMD, json!({"text": "   ", "x": 100, "y": 200, "size": 48, "operation": operation})).unwrap();
+            let kept = earlier && matches!(operation, "add" | "subtract");
+            assert_eq!(selection(&s), if kept { before } else { None }, "{operation}, earlier selection {earlier}");
+            assert_eq!(r["selected"], json!(kept), "{operation}, earlier selection {earlier}");
+        }
+    }
+}
+
+/// Replace and Intersect keep nothing of an earlier selection outside the text, its part past the
+/// canvas included.
+#[test]
+fn replace_and_intersect_drop_an_off_canvas_previous_selection() {
+    // A new mask keeps nothing of the earlier rectangle (it ends at x 50, the text starts at 400);
+    // an intersection keeps only its on-canvas part under the text.
+    for (operation, x, left, right) in [("new", 400, 50, i32::MAX), ("intersect", 10, 0, 50)] {
+        let mut s = session(600, 400);
+        s.execute("select.rect", json!({"x": 10, "y": 50, "width": 100, "height": 70})).unwrap();
+        s.execute("select.transformSelection", json!({"dx": -60, "stepName": "Move Selection"})).unwrap();
+        assert_eq!(bounds(&s), Rect::new(-50, 50, 50, 120), "precondition");
+        let b = mask(&mut s, json!({"text": "I", "x": x, "y": 110, "size": 48, "operation": operation}));
+        assert!(!b.is_empty() && b.x0 >= left && b.x1 <= right, "{operation}: only the text's part is left: {b:?}");
+    }
+}
+
+/// Adding to an unusual earlier selection (not 8-bit grey) keeps its format; when its buffers over
+/// the text can't be had, that's an error that changes nothing, not an abort.
+#[test]
+fn an_unusual_earlier_selection_keeps_its_format_or_fails_cleanly() {
+    use photocraft_color::{PixelFormat, SampleType};
+    let format = PixelFormat::GRAY8.with_sample(SampleType::F32);
+    let earlier = Rect::new(-50, 50, 50, 120);
+    let mut old = Surface::new(format);
+    old.write_region(earlier, &vec![1.0; (earlier.width() * earlier.height()) as usize]);
+    let mut s = session(600, 400);
+    std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).selection = Some(old.clone());
+    let text = json!({"text": "I", "x": 400, "y": 300, "size": 48, "operation": "add"});
+
+    // The two glyph buffers are had; the third allocation is the room for combining.
+    crate::allocation::fail_after_for_test(2);
+    let steps = s.active().unwrap().history.entries().len();
+    let err = s.execute(super::CMD, text.clone()).unwrap_err().to_string();
+    assert!(err.contains("not enough memory for the Type Mask selection"), "{err}");
+    assert_eq!(selection(&s), Some(old.clone()), "unchanged");
+    assert_eq!(s.active().unwrap().history.entries().len(), steps, "no history step");
+
+    s.execute(super::CMD, text.clone()).unwrap();
+    let now = selection(&s).unwrap();
+    assert_eq!(now.format(), format);
+    assert_eq!(now.read_region(earlier), old.read_region(earlier), "the earlier part stays, past the canvas too");
+
+    // The third attempt is that check: an 8-bit grey earlier selection needs none, so the same
+    // failure point is never reached and the mask goes through.
+    let mut s = session(600, 400);
+    s.execute("select.rect", json!({"x": 10, "y": 50, "width": 100, "height": 70})).unwrap();
+    crate::allocation::fail_after_for_test(2);
+    s.execute(super::CMD, text).unwrap();
 }

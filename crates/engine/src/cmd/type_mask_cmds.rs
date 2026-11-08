@@ -16,6 +16,8 @@ use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
 const CMD: &str = "type.createSelection";
+/// What an allocation failure names: the buffers are no longer bounded by the canvas.
+const PURPOSE: &str = "the Type Mask selection";
 
 fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: CMD.into(), msg: msg.into() }
@@ -54,7 +56,6 @@ fn coverage(doc: &Document, t: &TextLayer) -> Result<(Vec<f32>, Rect)> {
         return Ok((Vec::new(), Rect::EMPTY));
     }
     // No longer bounded by the canvas: a very large text must fail as an error, not abort.
-    const PURPOSE: &str = "the Type Mask selection";
     let len = (area.width() as usize).checked_mul(area.height() as usize).ok_or_else(|| crate::allocation::error(PURPOSE, "requested size overflowed"))?;
     let mut px = crate::allocation::filled(len, [0.0f32; 4], PURPOSE)?;
     surface.read_rgba_into(area, &mut px);
@@ -92,6 +93,20 @@ fn create_selection(s: &mut Session, p: &Value) -> Result<Value> {
         t.antialias = aa;
     }
     let (mask, text_area) = coverage(&doc, &t)?;
+    // With an unusual earlier selection (not 8-bit grey), `combine_band` keeps its format through
+    // buffers spanning the text, made where running out of memory aborts: check first that they
+    // fit, so a text too big for them is an error that changes nothing. Per pixel that is up to:
+    // the combined grey tiles and their float copy (1 + 4), the copy widened to every channel and
+    // its growth while collected (8 per channel), and the earlier selection's own new tiles. An
+    // Intersect reads the earlier selection over the band the same way.
+    if mode != SelectionMode::Replace
+        && let Some(old) = doc.selection.as_ref().filter(|o| o.format() != photocraft_color::PixelFormat::GRAY8)
+    {
+        let per_pixel = 5 + 8 * old.channels() + old.format().bytes_per_pixel();
+        let bytes = (text_area.width() as usize).checked_mul(text_area.height() as usize).and_then(|n| n.checked_mul(per_pixel));
+        let bytes = bytes.ok_or_else(|| crate::allocation::error(PURPOSE, "requested size overflowed"))?;
+        drop(crate::allocation::capacity::<u8>(bytes, PURPOSE)?);
+    }
     let selected = s.edit("Type Mask", |doc, active| {
         // Replace and Intersect leave nothing outside the text; Add and Subtract keep the rest of
         // the selection as it is, its part past the canvas too, without a buffer spanning both.
