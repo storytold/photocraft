@@ -638,13 +638,14 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// The History step name for `historyName` `n`: refused when it has a control or line-break
-/// character anywhere; otherwise without white space or zero-width (non-)joiners at its ends, so a
-/// name that looks like "Patch Tool" is "Patch Tool", and then held to the plug-in menu-label rule.
+/// character anywhere; otherwise without its invisible end padding (see
+/// [`photocraft_plugins::manifest::trim_name`]), so a name that looks like "Patch Tool" is "Patch Tool",
+/// and then held to the plug-in menu-label rule.
 fn history_name(n: &str) -> Option<&str> {
     if n.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}')) {
         return None;
     }
-    let t = n.trim_matches(|c: char| c.is_whitespace() || matches!(c, '\u{200C}' | '\u{200D}'));
+    let t = photocraft_plugins::manifest::trim_name(n);
     photocraft_plugins::manifest::printable_name(t).then_some(t)
 }
 
@@ -778,7 +779,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.lasso",
             "Lasso",
             [],
-            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false,"historyName"?:text (1..64 characters with a visible one, no control, line-break or hidden format characters, spaces and joiners at the ends trimmed; the History step name when a tool other than the Lasso draws it, e.g. "Patch Tool"; default "Lasso")}"##,
+            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false,"historyName"?:text (1..64 characters with a visible one, no control, line-break or hidden format characters, invisible padding at the ends (spaces, joiners, fillers, blank Braille and other default-ignorable blanks, and selectors cut off by them) trimmed; the History step name when a tool other than the Lasso draws it, e.g. "Patch Tool"; default "Lasso")}"##,
             has_doc,
             lasso
         ),

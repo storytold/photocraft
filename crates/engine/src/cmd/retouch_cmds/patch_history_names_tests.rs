@@ -83,6 +83,15 @@ fn spaces_and_joiners_at_the_ends_are_trimmed_and_only_what_is_left_counts() {
         (" \u{200C}Patch Tool ", "Patch Tool"),
         ("Love \u{2764}\u{FE0F}", "Love \u{2764}\u{FE0F}"),
         (joined.as_str(), "Patch Tool"),
+        ("Patch Tool\u{2800}", "Patch Tool"),
+        ("\u{3164}\u{2800}Patch Tool\u{FFA0} \u{115F}", "Patch Tool"),
+        ("Patch Tool\u{2065}\u{FFF0}", "Patch Tool"),
+        ("\u{17B4}Patch Tool", "Patch Tool"),
+        ("Patch Tool \u{FE0F}", "Patch Tool"),
+        ("\u{FE0F}Patch Tool", "Patch Tool"),
+        ("Patch \u{2764}\u{FE0F}\u{2800}", "Patch \u{2764}\u{FE0F}"),
+        ("Patch \u{1100}\u{1160}", "Patch \u{1100}\u{1160}"),
+        ("\u{115F}\u{1161} Patch", "\u{115F}\u{1161} Patch"),
     ];
     for (name, stored) in cases.iter().copied().chain([(padded.as_str(), &padded[10..])]) {
         s.execute("select.lasso", json!({"points": TRIANGLE, "historyName": name})).unwrap();
