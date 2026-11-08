@@ -129,6 +129,12 @@ fn the_swatch_shows_the_load_the_tip_image_or_a_checkerboard() {
     let (_, textures) = swatch(&h);
     assert!(textures != [sampled] && textures == [mixer_load_texture(&h.ctx, &green).id()], "the new load's texture {textures:?}");
 
+    // A new foreground: the next stroke loads it, so the swatch shows that colour, not the image.
+    h.state_mut().run("tools.setColors", json!({"foreground": "#ffff00"})).unwrap();
+    h.run_steps(3);
+    let (fills, textures) = swatch(&h);
+    assert!(fills.contains(&egui::Color32::from_rgb(255, 255, 0)) && textures.is_empty(), "the new foreground {fills:?} {textures:?}");
+
     // Clean Brush: a checkerboard of two greys, no image.
     h.state_mut().run("brush.mixer.clean", json!({})).unwrap();
     h.run_steps(3);
