@@ -259,10 +259,15 @@ pub fn draw_shape_preview(app: &PhotocraftApp, painter: &egui::Painter, xf: &Vie
     let x = xf.to_screen(1.0, 0.0) - origin;
     let y = xf.to_screen(0.0, 1.0) - origin;
     let transform = Affine { m: [x.x as f64, x.y as f64, y.x as f64, y.y as f64, origin.x as f64, origin.y as f64] };
-    let shape = preview_for_view(shape, &transform, f64::from(xf.zoom));
     // This lightweight screen overlay retains the existing display-colour behaviour; document
     // rendering still goes through its format/profile path when the shape is committed.
-    crate::shape_stroke_ui::paint_shape_preview(painter, &shape);
+    if shape.pixel_align_stroke {
+        let canvas = app.session.active().map_or(photocraft_geom::Rect::EMPTY, |st| st.doc.bounds());
+        crate::shape_stroke_ui::paint_document_shape_preview(painter, &shape, &transform, canvas);
+    } else {
+        let shape = preview_for_view(shape, &transform, f64::from(xf.zoom));
+        crate::shape_stroke_ui::paint_shape_preview(painter, &shape);
+    }
     let accent = Tokens::get(painter.ctx()).accent;
     for (pts, _) in path_lines(&path, &|q| xf.to_screen(q[0] as f32, q[1] as f32)) {
         // The accent path over a dark halo: visible on any pixels (#172).

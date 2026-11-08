@@ -777,6 +777,7 @@ mod tests {
             Tool::EllipseShape,
             Tool::Triangle,
             Tool::Polygon,
+            Tool::Star,
             Tool::CustomShape,
             Tool::Line,
             Tool::Pen,

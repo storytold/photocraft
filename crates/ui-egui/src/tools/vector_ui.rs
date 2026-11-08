@@ -272,10 +272,10 @@ pub(crate) fn capture_pen_owner(app: &PhotocraftApp) -> Option<PenOwner> {
         PenTarget::Path { name: "work".into(), append: false }
     };
     let mut options = app.ui.tool_options.clone();
-    // Combining starts with the layer's displayed setting without replacing the user's
+    // Combining or resuming starts with the layer's displayed setting without replacing the user's
     // New Layer default merely because a different target was selected.
     if options.vector_mode == "shape"
-        && pen::pen_path_op(&options).is_some()
+        && (pen::pen_path_op(&options).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.resumes.as_ref().is_some_and(|r| r.layer.is_some())))
         && let Some(LayerContent::Shape(shape)) = st.active_layer.and_then(|id| st.doc.layer(id)).map(|layer| &layer.content)
     {
         options.pixel_align_stroke = shape.pixel_align_stroke;

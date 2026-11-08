@@ -40,6 +40,8 @@ fn pixel_align_pen_append_and_resume_apply_the_captured_setting() {
             if resume {
                 draw(&mut app, &[(80.0, 20.0), (80.0, 80.0)]);
                 assert!(app.ui.pen.as_ref().unwrap().resumes.is_some());
+                // An explicit draft edit overrides the inherited layer value.
+                app.ui.pen.as_mut().unwrap().owner.as_mut().unwrap().options.pixel_align_stroke = enabled;
                 assert!(super::pen_commit(&mut app, false));
             } else {
                 draw(&mut app, &[(110.0, 110.0), (140.0, 110.0), (140.0, 140.0), (110.0, 140.0)]);
@@ -58,6 +60,35 @@ fn pixel_align_pen_append_and_resume_apply_the_captured_setting() {
             app.session.redo();
             assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
         }
+    }
+}
+
+/// Resuming inherits the layer setting once and leaves the New Layer default untouched.
+#[test]
+fn pixel_align_resumed_pen_inherits_layer_before_any_checkbox_edit() {
+    for enabled in [false, true] {
+        let mut app = app();
+        let before = app
+            .run(
+                "shape.create",
+                json!({"kind":"path", "pixelAlignStroke":enabled,
+                "fill":null,"stroke":{"width":1},"path":{"subpaths":[{"closed":false,"knots":[
+                    {"anchor":[20,20]},{"anchor":[80,20]}
+                ]}]}}),
+            )
+            .unwrap();
+        app.ui.tool_options.vector_mode = "shape".into();
+        app.ui.tool_options.pen_path_op = "newLayer".into();
+        app.ui.tool_options.pixel_align_stroke = !enabled;
+        draw(&mut app, &[(80.0, 20.0), (80.0, 80.0)]);
+        assert_eq!(app.ui.pen.as_ref().unwrap().owner.as_ref().unwrap().options.pixel_align_stroke, enabled);
+        assert!(super::pen_commit(&mut app, false));
+        assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
+        assert_eq!(app.ui.tool_options.pixel_align_stroke, !enabled);
+        app.session.undo();
+        assert_eq!(app.run("shape.info", json!({})).unwrap()["path"], before["path"]);
+        app.session.redo();
+        assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
     }
 }
 

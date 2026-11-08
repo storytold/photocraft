@@ -77,6 +77,14 @@ Widths other than 1 px and inside/outside stroke alignment keep legacy rendering
 Fractional-coordinate strokes are not rounded. Curves, including ellipses, are
 not snapped or thresholded. They remain antialiased.
 
+Aligned shape-tool previews rasterize in document pixels before the view transform,
+so zoom cannot make a fractional-width stroke eligible. Integer grid zooms use
+nearest filtering; rotated or fractional views filter the document coverage.
+The visible preview raster is capped at 2048 pixels per dimension (4,194,304
+pixels total). Larger visible bounds
+fall back to the bounded vector proxy with stroke alignment disabled, avoiding
+zoom-dependent eligibility without allocating an unbounded document raster.
+
 Filled Line/ArrowLine alignment requires live parameters matching the current
 path, and is disabled for density/feather masks. A point edit or transform that
 drops live line metadata leaves the filled path on the legacy renderer. A Line

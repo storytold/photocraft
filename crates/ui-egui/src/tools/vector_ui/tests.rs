@@ -1643,6 +1643,31 @@ fn pixel_align_preview_preserves_shape_and_path_modes() {
     }
 }
 
+/// The actual drag painter must not promote a fractional document stroke at 200% zoom.
+#[test]
+fn pixel_align_shape_drag_keeps_fractional_width_coverage_at_double_zoom() {
+    let mut app = app();
+    app.ui.tool_options.pixel_align_stroke = true;
+    app.ui.tool_options.shape_fill = false;
+    app.ui.tool_options.stroke_width = 0.5;
+    let ctx = egui::Context::default();
+    let mut output = ctx.run_ui(Default::default(), |ui| {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+        let painter = ui.ctx().layer_painter(egui::LayerId::background()).with_clip_rect(rect);
+        let xf = ViewXform { rect, zoom: 2.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+        super::shapes::draw_shape_preview(&app, &painter, &xf, Tool::Rectangle, [20.0, 20.0], [60.0, 50.0], Default::default());
+    });
+    let texture = output.shapes.iter().find_map(|s| match &s.shape {
+        egui::Shape::Mesh(mesh) => Some(mesh.texture_id),
+        _ => None,
+    });
+    let image = texture.and_then(|id| output.textures_delta.set.get(&id)).map(|delta| delta[0].image.clone());
+    output.textures_delta.clear();
+    let egui::ImageData::Color(image) = image.expect("document coverage quad texture");
+    assert!(image.pixels.iter().any(|p| p.a() == 64), "a 0.5px centered edge retains quarter coverage at 200% zoom");
+    assert!(image.pixels.iter().all(|p| p.a() < 255), "zoom must not make a half-pixel stroke eligible for opaque alignment");
+}
+
 /// A filled Line Tool preview must render the same crisp pixels as its committed shape.
 #[test]
 fn pixel_align_live_line_preview_matches_commit() {
@@ -1685,7 +1710,7 @@ fn pixel_align_live_line_preview_matches_commit() {
 #[test]
 fn pixel_align_reset_restores_shape_mode_without_resetting_pen_mode() {
     let mut app = app();
-    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::CustomShape, Tool::Line] {
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Star, Tool::CustomShape, Tool::Line] {
         app.ui.tool_options.shape_mode = "path".into();
         app.ui.tool_options.vector_mode = "shape".into();
         app.ui.tool_options.pixel_align_stroke = true;

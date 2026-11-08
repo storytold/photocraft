@@ -1,4 +1,93 @@
 use super::*;
+
+/// Zoom and rotation project committed document coverage, including ineligible half-pixel strokes.
+#[test]
+fn pixel_align_preview_texture_matches_document_coverage_before_zoom() {
+    use photocraft_doc::{Fill, ShapeLayer};
+    use photocraft_geom::{Affine, Point, Rect as PixelRect};
+    for (curved, path) in [(false, photocraft_vector::shapes::rect(20.0, 20.0, 40.0, 30.0)), (true, photocraft_vector::shapes::ellipse(20.0, 20.0, 40.0, 30.0))]
+    {
+        for width in [0.5, 1.0, 2.0] {
+            for dashed in [false, true] {
+                for zoom in [0.5, 1.0, 2.0, 3.0] {
+                    for angle in [0.0, 0.3] {
+                        let shape = ShapeLayer {
+                            path: path.clone(),
+                            fill: None,
+                            stroke: Some(ShapeStroke {
+                                width,
+                                paint: Fill::Solid(photocraft_doc::Color::BLACK),
+                                dashes: if dashed { vec![3.0, 2.0] } else { vec![] },
+                                dash_offset: 0.5,
+                                ..Default::default()
+                            }),
+                            pixel_align_stroke: true,
+                            ..Default::default()
+                        };
+                        let ctx = egui::Context::default();
+                        let transform = Affine::scale(zoom).then(&Affine::rotate(angle)).then(&Affine::translate(40.0, 40.0));
+                        let mut output = ctx.run_ui(Default::default(), |ui| {
+                            let ctx = ui.ctx();
+                            let painter =
+                                ctx.layer_painter(egui::LayerId::background()).with_clip_rect(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(300.0, 300.0)));
+                            paint_document_shape_preview(&painter, &shape, &transform, PixelRect::new(0, 0, 200, 200));
+                        });
+                        let cache =
+                            ctx.data(|d| d.get_temp::<DocumentDragCache>(egui::Id::unique("shape-document-drag-render"))).expect("document preview cache");
+                        let image = output.textures_delta.set.get(&cache.texture.id()).expect("uploaded preview");
+                        let egui::ImageData::Color(image) = &image[0].image;
+                        let compiled = photocraft_vector::CompiledShape::new(&shape, photocraft_vector::DEFAULT_TOLERANCE, cache.visible);
+                        let rgba = compiled.render_rgba(cache.bounds);
+                        let expected: Vec<_> = rgba
+                            .iter()
+                            .map(|p| {
+                                egui::Color32::from_rgba_unmultiplied(
+                                    (p[0] * 255.0).round() as u8,
+                                    (p[1] * 255.0).round() as u8,
+                                    (p[2] * 255.0).round() as u8,
+                                    (p[3] * 255.0).round() as u8,
+                                )
+                            })
+                            .collect();
+                        assert_eq!(image.pixels, expected, "width={width}, angle={angle}");
+                        if curved {
+                            assert!(rgba.iter().any(|p| p[3] > 0.0 && p[3] < 1.0), "curve antialiasing");
+                        } else if !dashed {
+                            let edge = compiled.render_rgba(PixelRect::new(35, 20, 36, 21))[0][3];
+                            assert_eq!(edge, if width == 0.5 { 0.25 } else { 1.0 });
+                        }
+                        let mesh = output
+                            .shapes
+                            .iter()
+                            .find_map(|s| match &s.shape {
+                                egui::Shape::Mesh(mesh) if mesh.texture_id == cache.texture.id() => Some(mesh),
+                                _ => None,
+                            })
+                            .expect("projected quad");
+                        let corner = transform.apply(Point::new(f64::from(cache.bounds.x0), f64::from(cache.bounds.y0)));
+                        assert_eq!(mesh.vertices[0].pos, egui::pos2(corner.x as f32, corner.y as f32));
+                        output.textures_delta.clear();
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Huge previews retain a bounded allocation instead of rasterizing an unbounded document.
+#[test]
+fn pixel_align_document_preview_rejects_oversized_raster_allocations() {
+    let shape = photocraft_doc::ShapeLayer {
+        path: photocraft_vector::shapes::rect(0.0, 0.0, 100_000.0, 100_000.0),
+        fill: Some(photocraft_doc::Fill::Solid(photocraft_doc::Color::BLACK)),
+        pixel_align_stroke: true,
+        ..Default::default()
+    };
+    let visible = photocraft_geom::Rect::new(0, 0, 100_000, 100_000);
+    let compiled = photocraft_vector::CompiledShape::new(&shape, photocraft_vector::DEFAULT_TOLERANCE, visible);
+    assert!(document_preview_bounds(&compiled, visible).is_none());
+    assert!(document_preview_bounds(&compiled, photocraft_geom::Rect::new(0, 0, 10_000, 1)).is_none(), "thin textures still need a dimension limit");
+}
 use egui::accesskit::Role;
 use egui::{Key, Modifiers, PointerButton, Pos2, Rect, Vec2, pos2};
 use egui_kittest::{
