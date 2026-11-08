@@ -275,6 +275,36 @@ pub(super) fn band_width(structure: u8, min_side: u32) -> usize {
     (w.round() as usize).min(128)
 }
 
+/// The Structure the move lands with. Structure 1 and 2 re-synthesise the content beyond the edge
+/// band only where it is busy (a fine texture, a painting, #2202); content of flat areas keeps
+/// them, as with 3 to 7: the reference keeps a 40 px checker of 10 px cells at Structure 1
+/// (#12198).
+fn structure_for(structure: u8, w: usize, selected: &[bool], content: &Region) -> u8 {
+    if structure >= 3 || busy(w, selected, content) { structure } else { 3 }
+}
+
+/// More than a quarter of the selected neighbouring pixel pairs of `content` (a `w`-wide window)
+/// differ by more than 0.02 in some channel.
+fn busy(w: usize, selected: &[bool], content: &Region) -> bool {
+    let n = content.ch;
+    let px = |i: usize| content.data.get(i * n..(i + 1) * n);
+    let (mut pairs, mut edges) = (0usize, 0usize);
+    for (i, _) in selected.iter().enumerate().filter(|(_, s)| **s) {
+        let right = (w > 0 && (i + 1) % w != 0).then_some(i + 1);
+        for j in [right, Some(i + w)].into_iter().flatten() {
+            if selected.get(j) != Some(&true) {
+                continue;
+            }
+            let (Some(a), Some(b)) = (px(i), px(j)) else { continue };
+            pairs += 1;
+            if a.iter().zip(b).any(|(a, b)| (a - b).abs() > 0.02) {
+                edges += 1;
+            }
+        }
+    }
+    pairs == 0 || edges * 4 > pairs
+}
+
 /// The cells of a `w × h` mask whose whole `(2r+1)²` neighbourhood, as far as it lies on the grid,
 /// is set (a square erosion in O(w·h) through a summed-area table). The grid's border doesn't erode:
 /// a selection reaching the canvas edge keeps its content there.
@@ -470,7 +500,8 @@ fn run_move(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, ctx: &cra
         }
     };
     let old_place = mask(sel, win);
-    let mut damage = land(doc, plan.target, p, win, &moved, &content, &old_place, plan.structure, plan.color, (0.0, split), ctx, label)?;
+    let structure = structure_for(plan.structure, win.width() as usize, &moved, &content);
+    let mut damage = land(doc, plan.target, p, win, &moved, &content, &old_place, structure, plan.color, (0.0, split), ctx, label)?;
 
     // 2. Move: fill the place the content left (where the content didn't land on it).
     if plan.mode == Mode::Move {
@@ -718,6 +749,10 @@ fn run_scaled(doc: &mut Document, sel: &Surface, plan: &Plan, p: &Value, scale: 
     }
     Ok(damage)
 }
+
+#[cfg(test)]
+#[path = "content_aware_move_structure_tests.rs"]
+mod content_aware_move_structure_tests;
 
 #[cfg(test)]
 mod tests {
