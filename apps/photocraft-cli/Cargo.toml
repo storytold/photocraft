@@ -33,7 +33,7 @@ required-features = ["gpu"]
 photocraft-automation = { path = "../../crates/automation" }
 photocraft-doc = { workspace = true }
 photocraft-engine = { workspace = true }
-photocraft-io = { workspace = true }
+photocraft-io = { workspace = true, features = ["pdf-editable"] }
 photocraft-raster = { workspace = true }
 photocraft-format = { path = "../../crates/format" }
 photocraft-codecs = { workspace = true }
