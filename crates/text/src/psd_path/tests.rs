@@ -70,6 +70,122 @@ fn flip_and_start_are_baked_into_the_frame() {
     }
 }
 
+/// ag-psd's `test/read/text-path/src.psd` (CS6, MIT): "some text" with its end a third into the
+/// first segment, so only "so" is drawn.
+const AG_SHORT: &str = "<< /1 << /0 [ 0.0 10.17448 30.0 -13.99219 63.5 5.17448 83.0 13.17448 83.0 13.17448 102.5 21.17448 138.0 18.67448 150.0 3.17448 ] >> /2 << /0 2 /6 [ 0.0 0.32983 ] /11 << /3 0 /5 0.0 /7 false >> >> >>";
+/// ag-psd's `test/read/text-path-26/src.psd` (2024, MIT): the start moved, the end at the path's
+/// end.
+const AG_MOVED: &str = "<< /1 << /0 [ 438.0 529.0 438.0 529.0 632.0 -39.0 790.0 545.0 790.0 545.0 948.0 1129.0 1564.0 987.0 1684.0 605.0 ] >> /2 << /0 2 /2 [ 1.0 0.0 0.0 1.0 -438.0 -281.23035 ] /6 [ 0.07689 2.0 ] /11 << /3 0 /5 0.0 >> >> >>";
+
+/// The point `arc` px along `shape`'s path, measured as its type is laid out.
+fn point_at(shape: &TextShape, arc: f32) -> Point {
+    let TextShape::Path { path, flip, .. } = shape else { panic!("{shape:?}") };
+    let ((x, y), _) = crate::warp::PathGeometry::new(path, *flip).unwrap().sample(f64::from(arc)).unwrap();
+    Point::new(x, y)
+}
+
+fn dist(a: Point, b: Point) -> f64 {
+    (a.x - b.x).hypot(a.y - b.y)
+}
+
+/// The text-space point of segment `i` at parameter `t` of `src`'s frame.
+fn frame_point(src: &str, i: usize, t: f64) -> Point {
+    let (segs, _) = segments(&frame(src)).unwrap();
+    cubic(&segs[i], t)
+}
+
+/// The `/6` range is read in segment units: start and end land where the reference files put them.
+#[test]
+fn reference_ranges_read_in_segment_units() {
+    let short = read_shape(&frame(AG_SHORT)).unwrap();
+    let TextShape::Path { start, end: Some(end), flip: false, ref path } = short else { panic!("{short:?}") };
+    assert!(!path.closed && path.knots.len() == 3, "the whole path: {path:?}");
+    assert_eq!(start, 0.0);
+    let want = frame_point(AG_SHORT, 0, 0.32983);
+    assert!(dist(point_at(&short, end), want) < 0.5, "{:?} vs {want:?}", point_at(&short, end));
+    // About 30 px: "so" fits at 30 pt, "som" does not.
+    assert!((28.0..34.0).contains(&end), "{end}");
+
+    let moved = read_shape(&frame(AG_MOVED)).unwrap();
+    let TextShape::Path { start, end: None, flip: false, .. } = moved else { panic!("{moved:?}") };
+    let want = frame_point(AG_MOVED, 0, 0.07689);
+    assert!(dist(point_at(&moved, start), want) < 0.5, "{:?} vs {want:?}", point_at(&moved, start));
+
+    // The default range reads as before.
+    for src in [CIRCLE, WAVE] {
+        let shape = read_shape(&frame(src)).unwrap();
+        assert_eq!(shape, TextShape::Path { path: read(&frame(src)).unwrap(), start: 0.0, end: None, flip: false }, "{src:.12}");
+    }
+}
+
+/// A file's flipped flag reads as flipped type over the same stretch of path.
+#[test]
+fn a_reversed_frame_reads_as_flipped_type() {
+    let src = AG_MOVED.replace("/11 << /3 0", "/11 << /0 true /3 0");
+    let shape = read_shape(&frame(&src)).unwrap();
+    let TextShape::Path { start, end: Some(end), flip: true, .. } = shape else { panic!("{shape:?}") };
+    assert!(start.abs() < 0.01, "{start}");
+    let want = frame_point(&src, 0, 0.07689);
+    assert!(dist(point_at(&shape, end), want) < 0.5, "{:?} vs {want:?}", point_at(&shape, end));
+}
+
+/// Ranges written to a frame read back placing the type the same; an open path keeps all of itself.
+#[test]
+fn ranges_round_trip_through_frames() {
+    use crate::warp::{Warp, path_range_length};
+    let wave = read(&frame(WAVE)).unwrap();
+    let circle = read(&frame(CIRCLE)).unwrap();
+    let cases = [
+        (&wave, 30.0, Some(150.0), false),
+        (&wave, 30.0, None, false),
+        (&wave, 0.0, Some(100.0), false),
+        (&wave, 25.0, Some(120.0), true),
+        (&circle, 40.0, Some(200.0), false),
+        (&circle, 0.0, Some(300.0), false),
+        (&circle, 250.0, Some(500.0), true),
+        (&circle, 60.0, None, false),
+    ];
+    for (path, start, end, flip) in cases {
+        let shape = TextShape::Path { path: path.clone(), start, end, flip };
+        let mut entry = E::Dict(vec![("0".into(), frame(WAVE))]);
+        update_frame(&mut entry, &shape);
+        let back = read_shape(entry.get("0").unwrap()).unwrap();
+        let label = format!("{} start {start} end {end:?} flip {flip}", if path.closed { "circle" } else { "wave" });
+        let TextShape::Path { path: back_path, .. } = &back else { panic!("{label}: {back:?}") };
+        if !path.closed {
+            let whole = if flip { reversed(path) } else { path.clone() };
+            assert!(same_path(back_path, &whole), "{label}: the open path is not cut: {back_path:?}");
+        }
+        let (a, b) = (path_range_length(&shape), path_range_length(&back));
+        match (a, b) {
+            (None, None) => {}
+            (Some(a), Some(b)) => assert!((a - b).abs() < 0.05, "{label}: range {a} vs {b}"),
+            _ => panic!("{label}: range {a:?} vs {b:?}"),
+        }
+        let (wa, wb) = (Warp::on_path(&shape).unwrap(), Warp::on_path(&back).unwrap());
+        for x in [0.0, 10.0, 50.0, 90.0] {
+            let (p, q) = (wa.apply(x, -4.0), wb.apply(x, -4.0));
+            assert!((p.0 - q.0).hypot(p.1 - q.1) < 0.5, "{label} at {x}: {p:?} vs {q:?}");
+        }
+        // Saving the opened layer again leaves the frame as it is.
+        let before = entry.clone();
+        update_frame(&mut entry, &back);
+        assert_eq!(entry, before, "{label}: a re-save changes the frame");
+    }
+}
+
+/// Out-of-range, non-numeric and inverted ranges fall back to the default without failing.
+#[test]
+fn hostile_ranges_read_as_the_default() {
+    for range in ["[ 1e999 -5 ]", "[ (x) 1 ]", "[ 9 99 ]", "[ -3 ]", "( )", "[ 1.5 0.5 ]"] {
+        let src = WAVE.replace("/6 [ -1.0 -1.0 ]", &format!("/6 {range}"));
+        let shape = read_shape(&frame(&src)).unwrap();
+        let TextShape::Path { start, end, .. } = shape else { panic!("{range}: {shape:?}") };
+        assert!(start.is_finite() && start >= 0.0, "{range}: {start}");
+        assert!(end.is_none_or(|e| e.is_finite() && e >= start), "{range}: {end:?}");
+    }
+}
+
 #[test]
 fn hostile_frames_are_errors() {
     for src in [
@@ -177,11 +293,12 @@ fn path_text_round_trips_through_tysh_and_txt2() {
     let b = layer("Along a wave", TextShape::Path { path: wave.clone(), start: 30.0, end: None, flip: true });
     let prev = photoshop_txt2("On a circle\r");
     let (txt2, back) = save_and_open(&[&a, &b], &prev);
+    // The open wave keeps all of its (flipped) path, with the moved start in the range.
     for ((l, applied), (want, start, flip)) in back.iter().zip([(&circle, 0.0, false), (&wave, 30.0, true)]) {
         assert_eq!(applied, &Ok(true), "{}", l.text);
         let TextShape::Path { path, start: s, flip: f, .. } = &l.shape else { panic!("{}: {:?}", l.text, l.shape) };
-        assert_eq!((*s, *f), (0.0, false));
-        assert!(same_path(path, &frame_path(want, start, flip)), "{}: {path:?}", l.text);
+        assert!((s - start).abs() < 0.01 && !*f, "{}: start {s} flip {f}", l.text);
+        assert!(same_path(path, &frame_path(want, 0.0, flip)), "{}: {path:?}", l.text);
         assert_eq!(l.transform, Affine::translate(32.0, 20.0), "the frame's matrix is not applied twice");
     }
     let (again, _) = save_and_open(&[&back[0].0, &back[1].0], &txt2);

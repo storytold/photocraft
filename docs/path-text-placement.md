@@ -16,7 +16,7 @@ Offsets are measured in the text layer's local space, along its current directio
 
 The markers, cursors and gestures follow the reference editor's documented behaviour: an `x` and a circle mark the beginning and end, a plus in the circle signals overflow, the I-beam's triangle points right at the beginning and left at the end, and dragging across the path flips the text, unlike baseline shift. Direct side-by-side comparison is still required before claiming exact parity.
 
-Editable PSD end-limit mapping is unresolved: neither PSD oracle has a moved or limited range, so the key that stores it is unverified. PSD export warns that the end limit is lost; alignment, placement, and overflow can therefore change when reopened. The existing path/start/flip export mapping is retained. Native persistence tests do not establish PSD interchange fidelity.
+PSD stores the range in the type layer's `Txt2` frame as `/2 /6 [start end]`, in curve-segment units (segment index plus Bézier parameter; `-1` is the default). Three reference-editor files in ag-psd's test set (MIT) fix the mapping: `text-path` (CS6) limits the end a third into the first segment and draws only "so" of "some text", and `text-path-26`/`-27` (2024) move the start on an open path. PhotoCraft reads both ends and writes them back. An open path is saved whole, with its start and end in the range, as those files do. A closed path keeps its start in the path and saves a limited end as a range from there, within one lap; no reference file shows a closed path with a moved range. Flipped type is still saved as the path run backwards; a file's flipped flag (`/2 /11 /0`) is read as the same stretch of path from the other end, which no reference file shows yet.
 
 ## Manual comparison protocol
 
@@ -29,6 +29,6 @@ Use the same font, size, content, baseline shift, and alignment in PhotoCraft an
 5. Cross a closed-path seam in both directions. Check for jumps and duplicate text. Repeat after zoom, view rotation/mirroring, and a skewed layer transform.
 6. Repeat the first drag on an older native file with centered/right-aligned text and no explicit end. Check for an unexpected placement jump.
 7. Cancel with Escape, undo/redo completed drags, switch documents during a gesture, and try a position-locked layer.
-8. Save/reopen the native file. Export to PSD and verify the warning; end-limit parity remains unsupported.
+8. Save/reopen the native file. Export to PSD, open it in the reference editor and back, and check the start, end, overflow and flip.
 
 Automated regression tests cover the model, bounded layout, caret projection, marker/body gestures, flipping, history, locks, transformed marker targets, preview caching, repaint damage, and native persistence. Remote CI results and this manual comparison must be assessed separately.
