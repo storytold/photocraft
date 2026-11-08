@@ -29,6 +29,44 @@ fn stripes(app: &mut PhotocraftApp, step: usize, target: &str) {
 }
 
 #[test]
+fn only_clone_stamp_and_healing_brush_wrap_in_pattern_preview() {
+    // View › Pattern Preview (#8883): a Clone Stamp or Healing Brush stroke across the right edge
+    // asks its command to go on at the opposite one, and only then. The reference application's
+    // other retouching tools stop at the edge.
+    let tools = [
+        (Tool::CloneStamp, "paint.cloneStamp", true),
+        (Tool::Healing, "paint.healingBrush", true),
+        (Tool::Blur, "paint.blur", false),
+        (Tool::Sharpen, "paint.sharpen", false),
+        (Tool::Smudge, "paint.smudge", false),
+        (Tool::Dodge, "paint.dodge", false),
+        (Tool::Burn, "paint.burn", false),
+        (Tool::Sponge, "paint.sponge", false),
+        (Tool::ColorReplacement, "paint.colorReplacement", false),
+        (Tool::PatternStamp, "paint.patternStamp", false),
+        (Tool::HistoryBrush, "paint.historyBrush", false),
+        (Tool::SpotHealing, "paint.spotHealing", false),
+        (Tool::BackgroundEraser, "paint.backgroundEraser", false),
+    ];
+    for (tool, cmd, wraps) in tools {
+        for pattern_preview in [false, true] {
+            let mut app = app();
+            stripes(&mut app, 8, "pixels");
+            app.ui.view.pattern_preview = pattern_preview;
+            app.ui.clone_source = Some([20.0, 30.0]);
+            app.ui.tool = tool;
+            let m = egui::Modifiers::NONE;
+            tool_event(&mut app, ToolEvent::Down { x: 86.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Move { x: 112.0, y: 30.0, pressure: 1.0 }, m);
+            tool_event(&mut app, ToolEvent::Up { x: 112.0, y: 30.0 }, m);
+            assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
+            let (_, p) = app.session.journal.iter().rev().find(|(id, _)| id == cmd).cloned().unwrap_or_else(|| panic!("{tool:?}: no {cmd}"));
+            assert_eq!(p.get("wrap").and_then(Value::as_bool).unwrap_or(false), wraps && pattern_preview, "{tool:?}: {p}");
+        }
+    }
+}
+
+#[test]
 fn clone_stamp_in_pattern_preview_wraps_a_dab_across_the_right_edge() {
     for pattern_preview in [false, true] {
         let mut app = app();
