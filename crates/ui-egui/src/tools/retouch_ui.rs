@@ -29,9 +29,9 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
     let o = &app.ui.tool_options;
     // The options bar's Mode is the tool's own brush's.
     let mode = crate::blend_keys::brush_tool_mode(app.ui.tool, app.session.tools.brush.mode);
-    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label()});
+    // View › Pattern Preview: both tools carry a stroke on across the canvas edges (#8883).
+    let mut p = json!({"aligned": o.clone_aligned, "sampleLayer": o.clone_sample, "mode": mode.label(), "wrap": app.ui.view.pattern_preview});
     if app.ui.tool == Tool::CloneStamp {
-        p["wrap"] = json!(app.ui.view.pattern_preview);
         p["opacity"] = json!(app.session.tools.brush.opacity * 100.0);
         p["flow"] = json!(app.session.tools.brush.flow * 100.0);
     }
@@ -50,7 +50,11 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
 /// options bar's Mode, which is the tool's own brush's.
 pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
-    json!({"mode": app.session.tools.brush.mode.label()})
+    json!({
+        "mode": app.session.tools.brush.mode.label(),
+        "opacity": app.session.tools.brush.opacity * 100.0,
+        "flow": app.session.tools.brush.flow * 100.0,
+    })
 }
 
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:
@@ -158,6 +162,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
                 "style": o.art_history_style,
                 "area": o.art_history_area,
                 "tolerance": o.art_history_tolerance,
+                "opacity": app.session.tools.brush.opacity * 100.0,
             }),
         ),
         Tool::Blur | Tool::Sharpen | Tool::Smudge | Tool::Dodge | Tool::Burn | Tool::Sponge => match dab_params(app, tool) {
@@ -308,6 +313,41 @@ pub fn patch_drags_selection(app: &PhotocraftApp, at: [f64; 2], mods: egui::Modi
     sel.sample_channel(at[0].floor() as i32, at[1].floor() as i32, 0) > 0.0
 }
 
+/// A Patch or Content-Aware Move lasso that makes a new selection is being drawn: the selection it
+/// replaces is hidden from the press on, as in Photoshop, rather than shown beside the new outline
+/// until the release (#11024). Adding, subtracting and intersecting keep it visible. A drag pressed
+/// on another document hides nothing, even before `cancel_stale` drops it (the active document can
+/// change between `sync_views` and the canvas paint).
+pub fn patch_replaces_selection(app: &PhotocraftApp) -> bool {
+    app.drag.as_ref().is_some_and(|d| {
+        matches!(d.tool, Tool::Patch | Tool::ContentAwareMove)
+            && d.document.as_ref().is_none_or(|doc| doc.is_active(app))
+            && !patch_drags_selection(app, d.start, d.modifiers)
+            && crate::canvas::selection_mode(app, d.modifiers) == "replace"
+    })
+}
+
+/// A Patch or Content-Aware Move drag belongs to the document it was pressed on: once another one
+/// is active it is dropped, so it neither hides that document's selection nor lassos or patches it
+/// on release, and its own document shows its selection again (#11024). A document reopened with
+/// the same ID is another one too.
+pub fn cancel_stale(app: &mut PhotocraftApp) {
+    if app.drag.as_ref().is_some_and(|d| matches!(d.tool, Tool::Patch | Tool::ContentAwareMove) && d.document.as_ref().is_some_and(|doc| !doc.is_active(app))) {
+        app.drag = None;
+    }
+}
+
+/// Where a Patch drag ends: with ⇧ pressed after the press (⇧ at the press adds to the selection
+/// instead, so this never sees it) the end is held to the dominant axis from the start, 0 or 90
+/// degrees only (#12129). Other tools, and a drag without ⇧, end at `end`.
+pub fn patch_end(d: &crate::canvas::Drag, end: [f64; 2]) -> [f64; 2] {
+    if d.tool != Tool::Patch || !d.live.shift {
+        return end;
+    }
+    let (dx, dy) = (end[0] - d.start[0], end[1] - d.start[1]);
+    if dx.abs() >= dy.abs() { [end[0], d.start[1]] } else { [d.start[0], end[1]] }
+}
+
 /// Whole-pixel offset for a drag from `start` to `end`, limited so the dragged outline stays on the
 /// canvas (the engine rejects a patch or move that leaves it).
 pub fn patch_offset(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) -> [i32; 2] {
@@ -383,6 +423,85 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
         app.ui.status = e;
         app.ui.status_error = true;
     }
+}
+
+/// The Content-Aware Move tool's "Don't show again" for [`content_aware_move_no_pixels`].
+const CAM_NO_PIXELS_PREF: &str = "contentAwareMove.noPixelsSelected";
+
+/// Content-Aware Move Tool with no selection: a drag whose lasso would select no pixel (a click,
+/// a straight line) selects nothing and adds no History state, and says so in the alert "No pixels
+/// are selected." with "Don't show again" (#12192). Returns whether this drag was such a one. With
+/// a selection, or a lasso that selects pixels, it is the tool's lasso as before.
+pub fn content_aware_move_no_pixels(app: &mut PhotocraftApp, points: &[[f64; 2]]) -> bool {
+    let Some(canvas) = app.session.active().filter(|s| s.doc.selection.is_none()).map(|s| s.doc.bounds()) else { return false };
+    if lasso_selects_pixels(points, canvas, app.ui.tool_options.anti_alias) {
+        return false;
+    }
+    crate::dialogs::dont_show_again::alert(app, tl!("No pixels are selected."), CAM_NO_PIXELS_PREF);
+    true
+}
+
+/// Whether `select.lasso` through `points` would select any pixel of `canvas`: the same
+/// rasterization (its coverage over the canvas's coordinates), kept where it rounds to a nonzero
+/// 8-bit value as the selection stores it. Only the lasso's bounds are rasterized, a strip of rows
+/// at a time, stopping at the first selected pixel. The strips start at 64 rows, so a lasso that
+/// selects is answered after the first, and double up to about 4 MP (16 MB), so a lasso that
+/// selects nothing (a long line) is rasterized and scanned in parallel: a corner-to-corner line
+/// on 7360 x 4912 takes 25-32 ms, about what the `select.lasso` it replaces took (23-27 ms).
+fn lasso_selects_pixels(points: &[[f64; 2]], canvas: photocraft_geom::Rect, anti_alias: bool) -> bool {
+    const FIRST_STRIP: u32 = 64;
+    const MAX_STRIP_PIXELS: u32 = 1 << 22;
+    // `coverage8` of the selection combine: the 8-bit value a pixel's coverage is stored as. It
+    // only grows with the coverage, so a pixel is kept from the least coverage it keeps (found
+    // once over the f32 bits in [0, 1]), and the scan is a single compare per pixel.
+    let stored = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let (mut below, mut kept) = (0u32, 1.0f32.to_bits());
+    while kept - below > 1 {
+        let mid = below + (kept - below) / 2;
+        if stored(f32::from_bits(mid)) > 0 { kept = mid } else { below = mid }
+    }
+    let least = f32::from_bits(kept);
+    // As `select.lasso` reads the points.
+    let pts: Vec<(f32, f32)> = points.iter().map(|p| (p[0] as f32, p[1] as f32)).collect();
+    if pts.len() < 3 {
+        return false;
+    }
+    let (mut lo, mut hi) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
+    for &(x, y) in pts.iter().filter(|(x, y)| x.is_finite() && y.is_finite()) {
+        lo = (lo.0.min(x), lo.1.min(y));
+        hi = (hi.0.max(x), hi.1.max(y));
+    }
+    if lo.0 > hi.0 || lo.1 > hi.1 {
+        return false;
+    }
+    // Saturating float-to-int casts; the canvas clips them.
+    let bounds =
+        photocraft_geom::Rect::new(lo.0.floor() as i32, lo.1.floor() as i32, (hi.0.ceil() as i32).saturating_add(1), (hi.1.ceil() as i32).saturating_add(1));
+    let window = bounds.intersect(&canvas);
+    let max_rows = (MAX_STRIP_PIXELS / window.width().max(1)).max(FIRST_STRIP);
+    let (mut y, mut rows) = (window.y0, FIRST_STRIP);
+    while y < window.y1 {
+        let strip = photocraft_geom::Rect::new(window.x0, y, window.x1, y.saturating_add_unsigned(rows).min(window.y1));
+        if any_at_least(&photocraft_algo::selection::polygon_window(&pts, canvas, strip, anti_alias), least) {
+            return true;
+        }
+        y = strip.y1;
+        rows = rows.saturating_mul(2).min(max_rows);
+    }
+    false
+}
+
+/// Whether any of `mask` is at least `least`: in parallel blocks, each one a branch-free pass the
+/// compiler vectorizes.
+fn any_at_least(mask: &[f32], least: f32) -> bool {
+    let block = |b: &[f32]| b.iter().fold(false, |found, v| found | (*v >= least));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        mask.par_chunks(1 << 16).any(block)
+    }
+    #[cfg(target_arch = "wasm32")]
+    mask.chunks(1 << 16).any(block)
 }
 
 /// `paint.contentAwareMove`'s params for a drag by `offset`, from the options bar.
@@ -537,8 +656,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             }
         }
         Tool::Patch => {
-            // Photoshop's options bar: Patch: Normal (Source / Destination) or Content-Aware
-            // (Structure, Color, Sample All Layers).
+            // Photoshop's options bar: the lasso's selection mode, then Patch: Normal (Source /
+            // Destination) or Content-Aware (Structure, Color, Sample All Layers).
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Patch:"));
             let kinds = [("normal".to_string(), tl!("Normal")), ("contentAware".to_string(), tl!("Content-Aware"))];
             let mut kind = if o.patch_content_aware { "contentAware" } else { "normal" }.to_string();
@@ -562,6 +683,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Lasso around an area, then drag the selection"));
         }
         Tool::ContentAwareMove => {
+            // The lasso's selection mode leads, as on the Patch tool's bar (#11024).
+            crate::panels::selection_mode_buttons(&mut app.ui.selection_mode, ui);
+            crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Mode:"));
             let modes = [("move".to_string(), tl!("Move")), ("extend".to_string(), tl!("Extend"))];
             crate::widgets::dropdown(ui, "cam-mode", tl!("Mode"), &mut o.cam_mode, &modes, 90.0);
@@ -665,7 +789,28 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::value_field(ui, &mut o.cr_tolerance, 0.0..=100.0, "%", 62.0);
             crate::widgets::checkbox(ui, &mut o.cr_anti_alias, tl!("Anti-alias"));
         }
-        Tool::HistoryBrush => opt(ui, tl!("Paints from the History panel's source state")),
+        Tool::HistoryBrush => {
+            let label = app.session.active().and_then(|st| match photocraft_engine::history_source_cmds::source(st)? {
+                photocraft_engine::history_source_cmds::HistorySource::Snapshot(id) => {
+                    let s = st.snapshots.iter().find(|s| s.id == id)?;
+                    Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &s.name)]))
+                }
+                photocraft_engine::history_source_cmds::HistorySource::State(idx) => {
+                    let entries = st.history.entries();
+                    let name =
+                        if idx < entries.len() { entries.get(idx).cloned() } else { st.history.redo_labels().nth(idx - entries.len()).map(str::to_string) }?;
+                    if idx == 0 && name == "Open" {
+                        Some(tl!("Paints from the document's opening state").to_string())
+                    } else {
+                        Some(crate::i18n::fmt(tl!("Source: {name}"), &[("name", &name)]))
+                    }
+                }
+            });
+            match label {
+                Some(text) => opt(ui, &text),
+                None => opt(ui, tl!("The History Brush source was deleted: set a new source in the History panel")),
+            }
+        }
         Tool::ArtHistoryBrush => {
             opt(ui, tl!("Style"));
             let styles = [
