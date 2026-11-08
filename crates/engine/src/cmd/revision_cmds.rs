@@ -332,7 +332,12 @@ fn detect(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad(CMD, format!("no revision marker {i}")));
     }
-    s.edit("Check Revision Markers", |d, _| {
+    // Checking reads the pixels, it does not edit them: the markers' done flags are refreshed
+    // **without** recording a history state. Recording one put "Check Revision Markers" between the
+    // user's own steps, so the first undo landed on the check instead of on the edit just made — and
+    // the automatic re-check after that undo stepped forward again, making undo all but unusable.
+    // An unrecorded change still marks the document modified and leaves the redo states alone.
+    s.edit_with("Check Revision Markers", false, |d, _| {
         // A marker whose bound layer was deleted (and replaced) re-binds to the layer now under
         // its frame before pixels are compared, so the box keeps following the content.
         repair_bindings(d);
@@ -563,5 +568,25 @@ mod tests {
         s.execute("history.undo", json!({})).unwrap();
         let v = s.execute("revision.list", json!({})).unwrap();
         assert_eq!(v["markers"][0]["done"], json!(true), "undo restores green");
+    }
+
+    #[test]
+    fn checking_records_no_history_step() {
+        // Checking reads the pixels, it does not edit them: no "Check Revision Markers" row lands in
+        // the history, so the first undo goes back to what the user actually did (the automatic
+        // re-check after an edit used to take that undo away).
+        let mut s = session();
+        s.execute("revision.add", json!({"x": 10.0, "y": 10.0, "width": 60.0, "height": 40.0})).unwrap();
+        let before: Vec<String> = s.active().unwrap().history.entries();
+        s.execute("revision.detect", json!({})).unwrap();
+        let after: Vec<String> = s.active().unwrap().history.entries();
+        assert_eq!(after, before, "checking records no history step");
+        assert!(!after.iter().any(|e| e.contains("Check Revision Markers")), "and none is listed: {after:?}");
+        // A real edit still records a step, and undo takes back that one edit alone.
+        s.execute("revision.snapshot", json!({})).unwrap();
+        let edited: Vec<String> = s.active().unwrap().history.entries();
+        assert!(edited.len() > after.len(), "editing still records: {edited:?}");
+        s.execute("history.undo", json!({})).unwrap();
+        assert_eq!(s.active().unwrap().history.entries(), after, "undo steps back over the edit, not over a check");
     }
 }
