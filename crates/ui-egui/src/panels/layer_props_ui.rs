@@ -745,7 +745,9 @@ mod tests {
         for _ in 0..4 {
             notch(&mut h);
         }
-        h.run_steps(20);
+        // Past the field wheel's scroll latch (1.5 s): W's gesture, handed to the panel when the
+        // wheel left W, stays the panel's across a shorter pause with the pointer at rest (#11353).
+        h.run_steps(40);
         assert_eq!(history(&h), before + 1, "W applied once, H not stepped by W's gesture");
         assert_eq!(size(&mut h), w_only, "W's four notches, linked, and nothing from H");
         // A new gesture over H is H's own.
