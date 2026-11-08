@@ -69,7 +69,8 @@ pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::Br
 mod mixer_load_solid_colors_tests;
 
 /// Mixer Brush: the Current Brush Load swatch shows the paint the next stroke starts with (an
-/// empty swatch when the brush is clean). Its menu holds Load Brush and Clean Brush.
+/// empty swatch when the brush is clean). Its menu holds Load Brush, Clean Brush, a separator and
+/// the checkable Load Solid Colors Only.
 pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(40.0, 26.0), Sense::hover());
