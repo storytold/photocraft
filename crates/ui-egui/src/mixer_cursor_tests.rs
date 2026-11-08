@@ -81,6 +81,18 @@ fn asymmetry(size: [u16; 2], alpha: &[u8], mirror: impl Fn(usize, usize) -> (usi
     off as f32 / (w * h) as f32
 }
 
+/// Whether the Eyedropper's comparison ring is painted: its circles have the ring's 17 pt band.
+fn ring_drawn(h: &Harness<'static, PhotocraftApp>) -> bool {
+    fn ring(shape: &egui::Shape) -> bool {
+        match shape {
+            egui::Shape::Circle(c) => (c.stroke.width - 17.0).abs() < 0.5 && c.radius > 50.0,
+            egui::Shape::Vec(shapes) => shapes.iter().any(ring),
+            _ => false,
+        }
+    }
+    h.output().shapes.iter().any(|c| ring(&c.shape))
+}
+
 fn assert_centred(size: [u16; 2], hotspot: [u16; 2], what: &str) {
     for k in 0..2 {
         assert!((f32::from(hotspot[k]) - f32::from(size[k]) / 2.0).abs() <= 1.0, "{what}: hotspot {hotspot:?} in a {size:?} bitmap");
@@ -107,8 +119,10 @@ fn alt_shows_the_sample_target_and_no_ring_while_held() {
     let p = centre(&h);
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
     h.run_steps(2);
+    assert!(h.state().mixer_sampling, "the ⌥-click is held and loads");
     assert_eq!(bitmap(&h), target, "the target stays while the ⌥-click is held");
     assert!(!pipette_shown(&h));
+    assert!(!ring_drawn(&h), "no comparison ring");
     h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
     h.run_steps(2);
 }
@@ -143,4 +157,41 @@ fn the_brush_keeps_its_alt_pipette() {
     }
     hover(&mut h, Modifiers::ALT);
     assert!(pipette_shown(&h), "the Brush's ⌥ is the Eyedropper's pipette");
+}
+
+/// The Brush's held ⌥-click still shows the Eyedropper's comparison ring around its pipette, so
+/// the ring test above can see one.
+#[test]
+fn the_brush_shows_its_ring_while_an_alt_click_is_held() {
+    let mut h = harness(Tool::Brush);
+    if !has_fonts(&h) {
+        return;
+    }
+    hover(&mut h, Modifiers::ALT);
+    assert!(!ring_drawn(&h), "no ring on hover");
+    let p = centre(&h);
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(2);
+    assert!(h.state().alt_sampling, "the Brush's ⌥-click samples");
+    assert!(ring_drawn(&h), "the comparison ring");
+    assert!(pipette_shown(&h));
+    h.event(egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
+    h.run_steps(2);
+}
+
+/// Other Cursors = Precise wasn't measured with the Mixer Brush's ⌥, so it keeps today's precise
+/// crosshair rather than the sample target.
+#[test]
+fn precise_other_cursors_keep_the_crosshair_with_alt() {
+    let mut h = harness(Tool::MixerBrush);
+    if !has_fonts(&h) {
+        return;
+    }
+    hover(&mut h, Modifiers::ALT);
+    let target = bitmap(&h).expect("the sample target");
+    h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
+    hover(&mut h, Modifiers::ALT);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Crosshair);
+    assert_ne!(bitmap(&h), Some(target), "the precise crosshair, not the sample target");
+    assert!(!pipette_shown(&h));
 }
