@@ -164,7 +164,7 @@ fn has_straightenable_layer(s: &Session) -> std::result::Result<(), String> {
 /// [`straighten`] with [`STRAIGHTEN_HIDDEN_ERROR`], and the states the ticket marks *not measured*
 /// (a layer with a mask, a shape, vector or adjustment layer, artboards, and the lock kinds other
 /// than Lock All and Lock Position) keep today's behaviour. A document with no active layer keeps
-/// turning the whole canvas as it does now.
+/// turning the whole canvas as it does now; an active id the document no longer holds is refused.
 fn straighten_disabled(s: &Session) -> Option<&'static str> {
     let st = s.active()?;
     if st.selected_layers().len() > 1 {
@@ -173,10 +173,17 @@ fn straighten_disabled(s: &Session) -> Option<&'static str> {
     // The active layer is the one the Layers panel targets; with none, the command turns the
     // canvas, which the reference was not measured for.
     let id = st.active_layer?;
+    // An id the document no longer holds: `Session::edit` keeps the *selected* layers valid but
+    // not the active one, so an edit that drops the active layer can leave a stale id behind.
+    // Turning and cropping the whole canvas for a layer that is not there is the worse answer, and
+    // `select_layer` and `restore_layer_selection` both refuse such an id.
+    let Some(layer) = st.doc.layer(id) else {
+        return Some("no active layer");
+    };
     if st.doc.is_background(id) {
         return Some("the Background");
     }
-    if st.doc.layer(id).is_some_and(|l| l.is_group()) {
+    if layer.is_group() {
         return Some("a group");
     }
     // Locks inherited from a group count, as they do for the Move tool.

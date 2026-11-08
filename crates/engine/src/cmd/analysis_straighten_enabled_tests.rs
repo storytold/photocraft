@@ -210,6 +210,30 @@ fn without_a_ruler_line_the_button_stays_greyed_for_every_layer() {
 }
 
 #[test]
+fn an_active_layer_the_document_no_longer_holds_is_refused() {
+    // `Session::edit` prunes the selected layers but not the active id, so an edit that drops the
+    // active layer can leave one behind (`select_layer` and `restore_layer_selection` both refuse
+    // such an id). The command must then say it is off, not rotate and crop the whole canvas for a
+    // layer that is not there.
+    let mut s = session(100, 80);
+    let l = pixel_layer(&mut s, "Gone");
+    s.edit("drop", |doc, _| {
+        doc.layers.retain(|layer| layer.id != l);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(l), "the target still points at the dropped layer");
+    assert!(doc_of(&s).layer(l).is_none(), "and the document does not hold it");
+    rule(&mut s);
+    assert_greyed(&mut s, "an active layer that is gone");
+    // The destructive case this closes: `crop` asks for the canvas, which would turn and shrink for
+    // a target that no longer exists.
+    let size = (doc_of(&s).size.width, doc_of(&s).size.height);
+    assert!(s.execute(CMD, json!({"crop": true})).is_err());
+    assert_eq!((doc_of(&s).size.width, doc_of(&s).size.height), size, "the canvas kept its size");
+}
+
+#[test]
 fn a_single_visible_layer_still_rotates_without_cropping() {
     // The pin for the state that stays: the layer turns about the canvas centre, the canvas does not.
     let mut s = session(100, 80);
