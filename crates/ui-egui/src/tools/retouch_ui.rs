@@ -425,6 +425,85 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
     }
 }
 
+/// The Content-Aware Move tool's "Don't show again" for [`content_aware_move_no_pixels`].
+const CAM_NO_PIXELS_PREF: &str = "contentAwareMove.noPixelsSelected";
+
+/// Content-Aware Move Tool with no selection: a drag whose lasso would select no pixel (a click,
+/// a straight line) selects nothing and adds no History state, and says so in the alert "No pixels
+/// are selected." with "Don't show again" (#12192). Returns whether this drag was such a one. With
+/// a selection, or a lasso that selects pixels, it is the tool's lasso as before.
+pub fn content_aware_move_no_pixels(app: &mut PhotocraftApp, points: &[[f64; 2]]) -> bool {
+    let Some(canvas) = app.session.active().filter(|s| s.doc.selection.is_none()).map(|s| s.doc.bounds()) else { return false };
+    if lasso_selects_pixels(points, canvas, app.ui.tool_options.anti_alias) {
+        return false;
+    }
+    crate::dialogs::dont_show_again::alert(app, tl!("No pixels are selected."), CAM_NO_PIXELS_PREF);
+    true
+}
+
+/// Whether `select.lasso` through `points` would select any pixel of `canvas`: the same
+/// rasterization (its coverage over the canvas's coordinates), kept where it rounds to a nonzero
+/// 8-bit value as the selection stores it. Only the lasso's bounds are rasterized, a strip of rows
+/// at a time, stopping at the first selected pixel. The strips start at 64 rows, so a lasso that
+/// selects is answered after the first, and double up to about 4 MP (16 MB), so a lasso that
+/// selects nothing (a long line) is rasterized and scanned in parallel: a corner-to-corner line
+/// on 7360 x 4912 takes 25-32 ms, about what the `select.lasso` it replaces took (23-27 ms).
+fn lasso_selects_pixels(points: &[[f64; 2]], canvas: photocraft_geom::Rect, anti_alias: bool) -> bool {
+    const FIRST_STRIP: u32 = 64;
+    const MAX_STRIP_PIXELS: u32 = 1 << 22;
+    // `coverage8` of the selection combine: the 8-bit value a pixel's coverage is stored as. It
+    // only grows with the coverage, so a pixel is kept from the least coverage it keeps (found
+    // once over the f32 bits in [0, 1]), and the scan is a single compare per pixel.
+    let stored = |v: f32| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+    let (mut below, mut kept) = (0u32, 1.0f32.to_bits());
+    while kept - below > 1 {
+        let mid = below + (kept - below) / 2;
+        if stored(f32::from_bits(mid)) > 0 { kept = mid } else { below = mid }
+    }
+    let least = f32::from_bits(kept);
+    // As `select.lasso` reads the points.
+    let pts: Vec<(f32, f32)> = points.iter().map(|p| (p[0] as f32, p[1] as f32)).collect();
+    if pts.len() < 3 {
+        return false;
+    }
+    let (mut lo, mut hi) = ((f32::INFINITY, f32::INFINITY), (f32::NEG_INFINITY, f32::NEG_INFINITY));
+    for &(x, y) in pts.iter().filter(|(x, y)| x.is_finite() && y.is_finite()) {
+        lo = (lo.0.min(x), lo.1.min(y));
+        hi = (hi.0.max(x), hi.1.max(y));
+    }
+    if lo.0 > hi.0 || lo.1 > hi.1 {
+        return false;
+    }
+    // Saturating float-to-int casts; the canvas clips them.
+    let bounds =
+        photocraft_geom::Rect::new(lo.0.floor() as i32, lo.1.floor() as i32, (hi.0.ceil() as i32).saturating_add(1), (hi.1.ceil() as i32).saturating_add(1));
+    let window = bounds.intersect(&canvas);
+    let max_rows = (MAX_STRIP_PIXELS / window.width().max(1)).max(FIRST_STRIP);
+    let (mut y, mut rows) = (window.y0, FIRST_STRIP);
+    while y < window.y1 {
+        let strip = photocraft_geom::Rect::new(window.x0, y, window.x1, y.saturating_add_unsigned(rows).min(window.y1));
+        if any_at_least(&photocraft_algo::selection::polygon_window(&pts, canvas, strip, anti_alias), least) {
+            return true;
+        }
+        y = strip.y1;
+        rows = rows.saturating_mul(2).min(max_rows);
+    }
+    false
+}
+
+/// Whether any of `mask` is at least `least`: in parallel blocks, each one a branch-free pass the
+/// compiler vectorizes.
+fn any_at_least(mask: &[f32], least: f32) -> bool {
+    let block = |b: &[f32]| b.iter().fold(false, |found, v| found | (*v >= least));
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        use rayon::prelude::*;
+        mask.par_chunks(1 << 16).any(block)
+    }
+    #[cfg(target_arch = "wasm32")]
+    mask.chunks(1 << 16).any(block)
+}
+
 /// `paint.contentAwareMove`'s params for a drag by `offset`, from the options bar.
 pub fn content_aware_move_params(app: &PhotocraftApp, offset: [i64; 2]) -> Value {
     let o = &app.ui.tool_options;
