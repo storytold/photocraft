@@ -200,8 +200,6 @@
 	Edit	Szerkesztés
 	Enhanced Controls…	Bővített vezérlők…
 	Equalize	Kiegyenlítés
-	Equalize Entire Image Based On Selected Area	A teljes kép kiegyenlítése a kijelölt terület alapján
-	Equalize Selected Area Only	Csak a kijelölt terület kiegyenlítése
 	Exit	Kilépés
 	Export As…	Exportálás másként…
 	Export Preferences…	Beállítások exportálása…
@@ -408,6 +406,7 @@
 	Insert Blank Frame	Üres képkocka beszúrása
 	Interpret Footage…	Videoanyag értelmezése…
 	Intersect Shape Areas	Alakzatterületek metszete
+	Inverse Selection	Kijelölés megfordítása
 	Invert…	Invertálás…
 	Isolate Layers	Rétegek elkülönítése
 	Kurtosis	Csúcsosság
@@ -818,6 +817,7 @@
 	Proof Colors	Színpróba
 	Proof Setup	Színpróba beállítása
 	Properties	Tulajdonságok
+	Quick Export As PNG	Gyors exportálás PNG-be
 	Quit	Kilépés
 	Quit {app}	Kilépés: {app}
 	Radial Blur…	Sugárirányú elmosás…
@@ -2536,6 +2536,7 @@ navigator	Zoom	Nagyítás mértéke
 	Use Measurement Scale	Mérési méretarány használata
 	Use Selection In Source	Kijelölés használata a forrásban
 	Use Selection In Target	Kijelölés használata a célban
+	Uses the foreground and background colours.	Elő- és a háttérszín használata.
 	Vertical Only	Csak függőleges
 	Vibrance	Élénkség
 	View Options	Nézetbeállítások
@@ -4100,7 +4101,7 @@ cameraRaw	Yellow	Sárga
 	Unsupported format	Nem támogatott formátum
 	Urgency	Sürgősség
 	Use File › Open to open an image.	Kép megnyitásához használja a Fájl › Megnyitás parancsot.
-	Uses the foreground and background colors.	Az előtér- és a háttérszínt használja.
+	Uses the foreground and background colors.	Elő- és háttérszín használata.
 	Violet, Orange	Ibolya, narancs
 	Watercolour look: lighter interior, darker rims.	Akvarellhatás: világosabb belső rész, sötétebb szélek.
 	Web Photo Gallery…	Webes fotógaléria…
