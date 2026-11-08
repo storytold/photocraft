@@ -1,6 +1,6 @@
 use super::{
-    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, curve_edit, json, label, pos2,
-    space_of, tone, vec2, widgets,
+    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, auto_levels, curve_edit, json,
+    label, pos2, space_of, tone, vec2, widgets,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -354,7 +354,17 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     if cx.dialog {
         select_channel_by_key(ui, cx.mem.with("curves-ch"), channels.len());
     }
-    let ch = editor_channel_picker(ui, cx.mem.with("curves-ch"), &channels);
+    // Channel menu, with Auto at the right of its row as in Photoshop's Curves (#9229).
+    let mut auto = false;
+    let ch = ui
+        .horizontal(|ui| {
+            let ch = editor_channel_picker(ui, cx.mem.with("curves-ch"), &channels);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).on_hover_text(tl!("Automatically correct curves")).clicked();
+            });
+            ch
+        })
+        .inner;
     if ch != st.channel {
         st = CurveUi { channel: ch, ..Default::default() };
     }
@@ -363,6 +373,12 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let tinted = isolated.is_some_and(|c| c.tint) || (isolated.is_none_or(|c| c.components.is_some()) && ch != 0);
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx);
+    // Auto: the shown channel's curve runs from its histogram's black point to its white point,
+    // the same automatic points as Levels' Auto. With the pencil it draws that ramp into the
+    // shown channel's map and stays in pencil mode, so the other channels' drawn maps keep every
+    // level (leaving the pencil would refit them all to points). An empty histogram (a fully
+    // transparent layer) has no such points: Auto changes nothing.
+    let auto_points = auto.then(|| cx.hist.as_ref().filter(|h| h[hist_i].iter().any(|&n| n != 0)).map(|h| auto_levels(&h[hist_i]))).flatten();
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
@@ -399,6 +415,19 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let interaction = crate::point_curve::interact(ui, &resp, graph, &mut pts, &mut st.gesture);
         changed = interaction.changed;
         e.commit |= interaction.commit;
+    }
+    if let Some((lo, hi)) = auto_points {
+        if pencil {
+            let span = (hi - lo).max(f32::EPSILON);
+            for (x, o) in map.iter_mut().enumerate() {
+                *o = ((x as f32 - lo) / span * 255.0).clamp(0.0, 255.0);
+            }
+            drawn = true;
+        } else {
+            pts = vec![[lo, 0.0], [hi, 255.0]];
+            changed = true;
+        }
+        e.commit = true;
     }
 
     // Draw: histogram, quarter grid, baseline, gradient bars, other channels, the curve, points.
