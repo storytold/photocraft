@@ -141,6 +141,17 @@ fn a_tiny_lasso_that_covers_part_of_a_pixel_still_selects() {
 }
 
 #[test]
+fn without_anti_alias_a_lasso_over_pixel_centres_selects() {
+    let mut app = app();
+    app.ui.tool_options.anti_alias = false;
+    let before = steps(&app);
+    drag(&mut app, &[[10.0, 20.0], [13.0, 20.0], [13.0, 23.0], [10.0, 23.0]]);
+    assert!(alerts(&app).is_empty());
+    assert!(selected(&app));
+    assert_eq!(steps(&app), before + 1);
+}
+
+#[test]
 fn a_thin_lasso_between_pixel_centres_warns_without_anti_alias() {
     // 21 px² of area, but between the centres of row 20 (20.5) and the row above: no pixel.
     let mut app = app();
