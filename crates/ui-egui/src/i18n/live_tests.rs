@@ -638,9 +638,6 @@ fn arabic_labels_are_laid_out_right_to_left() {
 /// right-to-left document name.
 #[test]
 fn arabic_names_are_laid_out_right_to_left() {
-    if !needs_catalogs() {
-        return;
-    }
     with_language(Lang::EN, || {
         let h = harness();
         let font = egui::FontId::proportional(13.0);

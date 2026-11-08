@@ -369,11 +369,11 @@ fn macos_hides_mnemonics_but_other_platforms_keep_them() {
 /// "Ja (Y)" with "(N)ein" (#5564).
 #[test]
 fn one_dialog_shows_every_key_in_the_same_style() {
+    let buttons = [("Yes", Some(Key::Y)), ("No", Some(Key::N)), ("Cancel", Some(Key::C))];
+    assert_eq!(button_labels(false, &buttons), ["(Y)es", "(N)o", "(C)ancel"]);
     if !crate::i18n::needs_catalogs() {
         return;
     }
-    let buttons = [("Yes", Some(Key::Y)), ("No", Some(Key::N)), ("Cancel", Some(Key::C))];
-    assert_eq!(button_labels(false, &buttons), ["(Y)es", "(N)o", "(C)ancel"]);
     let german = crate::i18n::Lang::from_code("de").unwrap();
     crate::i18n::with_language(german, || {
         let shown: Vec<&str> = buttons.iter().map(|(label, _)| crate::i18n::tr(german, label)).collect();

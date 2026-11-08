@@ -2,9 +2,10 @@ use super::*;
 
 #[test]
 fn mask_toggle_label_follows_history_and_selected_layer() {
-    if !crate::i18n::needs_catalogs() {
-        return;
-    }
+    // English in every build; French too when the craft-i18n catalogs are embedded.
+    let langs: Vec<_> = std::iter::once(crate::i18n::Lang::EN)
+        .chain(crate::i18n::needs_catalogs().then(|| crate::i18n::Lang::from_code("fr").expect("fr registered")))
+        .collect();
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
     s.execute("layer.new.layer", json!({})).unwrap();
@@ -20,7 +21,7 @@ fn mask_toggle_label_follows_history_and_selected_layer() {
         let item = crate::menus::menu_items(app).into_iter().find(|i| i.id == toggle).unwrap();
         assert_eq!(item.enabled, label.is_some());
         assert_eq!(item.label, label.unwrap_or("Enable Layer Mask"));
-        for lang in [crate::i18n::Lang::EN, crate::i18n::Lang::from_pref("fr")] {
+        for &lang in &langs {
             let layout = crate::native_menu::photocraft_layout(&crate::menus::menu_items(app), lang, lang.code());
             let native = layout.bar.find(toggle).unwrap();
             assert_eq!(native.label, crate::i18n::tr(lang, &item.label));
