@@ -49,6 +49,7 @@ mod remote;
 pub use areas::MAX_AREAS;
 pub use diag::SAVE_DIAGNOSTICS;
 pub use queue::MAX_PARALLEL;
+pub(crate) use references::journaled;
 pub use references::{MAX_REFERENCE_BYTES, MAX_REFERENCES};
 
 pub use pixels::{ColourMatch, Framing};

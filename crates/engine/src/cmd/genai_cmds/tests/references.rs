@@ -170,6 +170,21 @@ fn generate_more_sends_the_same_references_again() {
 }
 
 #[test]
+fn the_journal_keeps_how_many_references_not_the_pictures() {
+    let (mut s, _f) = selected(fake([0, 0, 255]));
+    let a = picture(8, 8, [255, 0, 0], Format::Png);
+    s.execute(FILL, json!({"prompt": "a boat", "variations": 1, "references": [entry(&a), entry(&a)]})).unwrap();
+    let (id, params) = s.journal.iter().rev().find(|(id, _)| id == FILL).expect("the fill is journaled");
+    assert_eq!(id, FILL);
+    assert!(params.get("references").is_none(), "{params}");
+    assert_eq!(params["referenceCount"], 2);
+    assert_eq!(params["prompt"], "a boat", "the rest is kept");
+    // Other commands, and a fill with none, are left as they are.
+    assert_eq!(super::super::references::journaled("edit.fill", json!({"references": [1]})), json!({"references": [1]}));
+    assert_eq!(super::super::references::journaled(FILL, json!({"prompt": "x"})), json!({"prompt": "x"}));
+}
+
+#[test]
 fn a_reference_that_cannot_be_read_fails_the_fill_and_sends_nothing() {
     let (mut s, f) = selected(fake([0, 0, 255]));
     let e = s.execute(FILL, json!({"variations": 1, "references": [{"data": b64_encode(b"not a picture")}]})).unwrap_err();

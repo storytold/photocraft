@@ -15,7 +15,7 @@
 use photocraft_geom::Rect;
 use serde_json::Value;
 
-use super::pixels;
+use super::{FILL, pixels};
 use crate::{EngineError, Result};
 
 /// Most reference pictures one fill takes: our own bound, so one call cannot queue an unbounded
@@ -54,6 +54,20 @@ pub(super) fn param(p: &Value, cmd: &str) -> Result<Vec<Vec<u8>>> {
             Ok(bytes)
         })
         .collect()
+}
+
+/// `params` of command `id` as the session's journal keeps them. A fill's reference pictures are
+/// left out: the journal is what an action records, and the pictures as given still carry their
+/// metadata. Only how many there were is kept. Nothing is lost for playback, since automation
+/// may not run a fill.
+pub(crate) fn journaled(id: &str, mut params: Value) -> Value {
+    if id == FILL
+        && let Some(map) = params.as_object_mut()
+        && let Some(Value::Array(list)) = map.remove("references")
+    {
+        map.insert("referenceCount".into(), Value::from(list.len()));
+    }
+    params
 }
 
 /// Why picture `n` is refused for its size.

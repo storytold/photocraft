@@ -111,9 +111,12 @@ variation (three requests by default; a metered service bills each one):
 - **The prompt**, or for an empty prompt a fixed instruction to continue the surrounding picture
   through the masked area.
 - **Reference pictures**, only when the fill was given some (`references` on
-  `edit.generativeFill`, up to 4 PNG, JPEG or WebP pictures of at most 10 MB and 8192 px a side):
-  each is decoded, scaled to at most 2048 px on the long side and sent as a new sRGB PNG of its
-  pixels alone, so no location, camera or other metadata leaves the computer. They follow the
+  `edit.generativeFill`, up to 4 PNG, JPEG or WebP pictures of at most 10 MB, 8192 px a side and
+  40 million pixels): each is decoded, scaled to at most 2048 px on the long side and sent as a
+  new sRGB PNG of its pixels alone, so no location, camera or other metadata leaves the computer.
+  An embedded colour profile is not applied yet: the pixels are read as sRGB, so a wide-gamut
+  picture can reach the model a little duller than it looks in a colour-managed viewer. The
+  session's journal, and so a recorded action, keeps only how many pictures a fill had. They follow the
   source, mask and prompt, in the order given, and the consent prompt lists each one with its
   size. A model that takes none, or fewer, refuses the fill before anything is sent.
 
