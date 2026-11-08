@@ -148,3 +148,5 @@ mod commit_tests;
 
 #[cfg(test)]
 mod ime_tests;
+#[cfg(test)]
+mod mask_escape_tests;
