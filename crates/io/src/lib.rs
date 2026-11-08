@@ -614,9 +614,12 @@ pub struct ImportOptions {
     pub pdf_dpi: f32,
     /// The 1-based, inclusive page range to import; `None` imports every page (up to the cap).
     pub pdf_pages: Option<(u32, u32)>,
-    /// Import PDF painted paths as editable [`photocraft_doc::ShapeLayer`]s instead of a page
-    /// raster (experimental). Text, images, clipping paths and the other unsupported constructs
-    /// make that page fall back to the raster importer with a warning. Off by default.
+    /// Import PDF painted paths and embedded-font text as editable [`photocraft_doc::ShapeLayer`]s
+    /// and text layers instead of a page raster (experimental). Images, complex clips/masks,
+    /// patterns, non-normal blends and unembedded/Type 3 text make that page fall back to the
+    /// raster importer with a warning. Text that uses fonts embedded in the PDF may change font
+    /// when edited or reopened, because the document format does not carry the font bytes. Off by
+    /// default.
     pub pdf_editable: bool,
     /// Explicit one-shot authorization for imports that exceed the soft budget but fit within the hard budget.
     pub psd_high_memory_approved: bool,

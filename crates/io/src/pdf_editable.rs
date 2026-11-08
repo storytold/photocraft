@@ -10,16 +10,17 @@
 //! is what makes moving or deleting a layer behave, and what avoids the black-path and
 //! doubled-text failures of the old PDFium import.
 
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::time::Duration;
 
 use craft_pdf::interpret::color::Color as HayroColor;
 use craft_pdf::interpret::font::{FontData, Glyph, OutlineFontData};
 use craft_pdf::interpret::{
-    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask, TransformExt,
-    interpret_page,
+    BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, InterpreterWarning, Paint, PathDrawMode, SoftMask,
+    TransformExt, interpret_page,
 };
 use craft_pdf::syntax::page::Page;
 use kurbo::{Affine as KurboAffine, BezPath, Cap, Join, PathEl};
@@ -70,7 +71,20 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
     let cancelled = Arc::new(AtomicBool::new(false));
     let finished = Arc::new(AtomicBool::new(false));
-    let settings = InterpreterSettings { cancelled: Some(Arc::clone(&cancelled)), ..InterpreterSettings::default() };
+    let warned = Arc::new(AtomicU8::new(0));
+    let sink = Arc::clone(&warned);
+    let settings = InterpreterSettings {
+        cancelled: Some(Arc::clone(&cancelled)),
+        warning_sink: Arc::new(move |warning| {
+            let bit = match warning {
+                InterpreterWarning::ImageDecodeFailure => 1,
+                InterpreterWarning::UnsupportedFont => 2,
+                InterpreterWarning::ContentTruncated => 4,
+            };
+            sink.fetch_or(bit, Ordering::Relaxed);
+        }),
+        ..InterpreterSettings::default()
+    };
     let cache = InterpreterCache::new();
     let mut device = PathDevice {
         doc,
@@ -82,6 +96,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
         glyphs: Vec::new(),
         strokes: Vec::new(),
         fonts: Vec::new(),
+        font_keys: HashMap::new(),
         clips: Vec::new(),
         knots: 0,
         cached: 0,
@@ -115,15 +130,25 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
     if device.cancelled || ctl.cancelled() {
         return Err(EditableError::Cancelled);
     }
+    let warned = warned.load(Ordering::Relaxed);
+    if warned & 4 != 0 {
+        return Err(EditableError::Unsupported("the page content was truncated"));
+    }
+    if warned & 2 != 0 {
+        return Err(EditableError::Unsupported("a font could not be used"));
+    }
+    if warned & 1 != 0 {
+        return Err(EditableError::Unsupported("an image could not be decoded"));
+    }
     if let Some(reason) = device.unsupported {
         return Err(EditableError::Unsupported(reason));
     }
     if let Err(reason) = pair_fake_bold(&mut device.glyphs, device.strokes) {
         return Err(EditableError::Unsupported(reason));
     }
-    let mut layers = device.layers;
-    layers.extend(text_layers(&device.glyphs));
-    render_text_caches(&mut layers, device.dpi, device.fmt, &device.fonts);
+    let families = register_fonts(&device.fonts)?;
+    let mut layers = merge_text_layers(device.layers, text_layers(&device.glyphs, &families));
+    render_text_caches(&mut layers, device.dpi, device.fmt, ctl)?;
     Ok(layers)
 }
 
@@ -150,12 +175,14 @@ fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>) -> Result<(),
     Ok(())
 }
 
-/// Builds one point-text layer per line and style run.
-fn text_layers(glyphs: &[GlyphRun]) -> Vec<Layer> {
+/// Builds one point-text layer per line and style run, with the layer index it must be inserted
+/// at to preserve paint order relative to paths.
+fn text_layers(glyphs: &[GlyphRun], families: &std::collections::HashMap<u128, String>) -> Vec<(usize, Layer)> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < glyphs.len() {
         let first = &glyphs[i];
+        let family = families.get(&first.font.key).cloned().unwrap_or_else(|| first.font.family.clone());
         let (dx, dy) = (first.angle.cos(), first.angle.sin());
         let (nx, ny) = (-dy, dx);
         let baseline = first.origin.x * nx + first.origin.y * ny;
@@ -164,7 +191,7 @@ fn text_layers(glyphs: &[GlyphRun]) -> Vec<Layer> {
         let mut last = first;
         while i < glyphs.len() {
             let glyph = &glyphs[i];
-            if !same_style(glyph, first) {
+            if glyph.order != first.order || !same_style(glyph, first) {
                 break;
             }
             let line = glyph.origin.x * nx + glyph.origin.y * ny;
@@ -188,7 +215,7 @@ fn text_layers(glyphs: &[GlyphRun]) -> Vec<Layer> {
         }
         let text = text.trim().to_string();
         if !text.is_empty() {
-            out.push(text_layer(text, first, out.len()));
+            out.push((first.order, text_layer(text, first, out.len(), &family)));
         }
         if i == start {
             i += 1;
@@ -212,8 +239,8 @@ fn same_style(a: &GlyphRun, b: &GlyphRun) -> bool {
         && (a.color.alpha - b.color.alpha).abs() < 0.004
 }
 
-/// One line's point-text layer.
-fn text_layer(text: String, run: &GlyphRun, number: usize) -> Layer {
+/// One line's point-text layer, with the family the shared engine registered.
+fn text_layer(text: String, run: &GlyphRun, number: usize, family: &str) -> Layer {
     let weight = if run.fake_bold { 700 } else { run.font.weight };
     let font_style = match (weight >= 600, run.font.italic) {
         (true, true) => "Bold Italic",
@@ -222,18 +249,19 @@ fn text_layer(text: String, run: &GlyphRun, number: usize) -> Layer {
         (false, false) => "Regular",
     };
     let style = CharStyle {
-        font_family: run.font.family.clone(),
+        font_family: family.to_string(),
         font_style: font_style.to_string(),
         postscript_name: Some(run.font.postscript.clone()),
         weight: u16::try_from(weight).unwrap_or(400),
         italic: run.font.italic,
+        faux_bold: run.fake_bold,
         size_pt: run.size_pt as f32,
         color: run.color,
         ..CharStyle::default()
     };
     let layer = TextLayer {
         text: text.clone(),
-        font_family: run.font.family.clone(),
+        font_family: family.to_string(),
         size_pt: run.size_pt as f32,
         color: run.color,
         transform: Affine::translate(run.origin.x, run.origin.y).mul(&Affine::rotate(run.angle)),
@@ -243,48 +271,70 @@ fn text_layer(text: String, run: &GlyphRun, number: usize) -> Layer {
     Layer::new(format!("Text {}", number + 1), LayerContent::Text(layer))
 }
 
-/// Registers each embedded font with the text engine, renames the runs to the family the font
-/// itself reports, and renders the caches so the page is complete before the engine refreshes it.
-fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, fonts: &[(u128, String, String, FontData)]) {
+/// Registers each embedded face with the shared engine under its content-keyed family and returns
+/// the family each font key must use.
+fn register_fonts(fonts: &[(u128, String, String, FontData)]) -> Result<std::collections::HashMap<u128, String>, EditableError> {
     let shared = photocraft_text::shared();
+    let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
     let mut families = std::collections::HashMap::new();
-    {
-        let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
-        for (key, postscript, derived, data) in fonts {
-            // Prefer an installed full family; a subset only holds the glyphs the page uses. The
-            // Device has the font program's PostScript name, not the PDF `/BaseFont`; a
-            // content-keyed alias keeps two documents' subsets of one name apart for the life of
-            // the shared engine, and the same face imported twice reuses its registration.
-            let family = if engine.has_family(derived) {
-                derived.clone()
+    for (key, postscript, derived, data) in fonts {
+        // Prefer an installed full family; a subset only holds the glyphs the page uses. The
+        // Device has the font program's PostScript name, not the PDF `/BaseFont`; a content-keyed
+        // alias keeps two documents' subsets of one name apart for the life of the shared engine,
+        // and the same face imported twice reuses its registration.
+        let family = if engine.has_family(derived) {
+            derived.clone()
+        } else {
+            let alias = font_alias(postscript, *key);
+            if engine.has_family(&alias) {
+                alias
             } else {
-                let alias = font_alias(postscript, *key);
-                if engine.has_family(&alias) {
-                    alias
-                } else {
-                    let names = engine.register_font_data_as(data.as_ref().as_ref().to_vec(), &alias);
-                    names.first().cloned().unwrap_or(alias)
+                let names = engine.register_font_data_as(data.as_ref().as_ref().to_vec(), &alias);
+                if names.is_empty() && !engine.has_family(&alias) {
+                    return Err(EditableError::Unsupported("a font could not be registered"));
                 }
-            };
-            families.insert(postscript.clone(), family);
-        }
+                names.first().cloned().unwrap_or(alias)
+            }
+        };
+        families.insert(*key, family);
     }
+    Ok(families)
+}
+
+/// Renders the text caches so the page is complete before the engine refreshes it.
+fn render_text_caches(layers: &mut [Layer], dpi: f64, fmt: PixelFormat, ctl: &Interrupt) -> Result<(), EditableError> {
+    let shared = photocraft_text::shared();
     for layer in layers {
-        if let LayerContent::Text(text) = &mut layer.content {
-            if let Some(family) = text.runs.first().and_then(|run| run.style.postscript_name.as_ref()).and_then(|postscript| families.get(postscript)) {
-                text.font_family.clone_from(family);
-                if let Some(run) = text.runs.first_mut() {
-                    run.style.font_family.clone_from(family);
-                }
-            }
-            if !text.text.trim().is_empty() {
-                // Re-lock per layer so a text-heavy import does not hold the UI's engine for the
-                // whole cache-render loop.
-                let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
-                let _ = engine.render_layer(text, dpi as f32, fmt);
-            }
+        if ctl.check().is_err() {
+            return Err(EditableError::Cancelled);
+        }
+        if let LayerContent::Text(text) = &mut layer.content
+            && !text.text.trim().is_empty()
+        {
+            // Re-lock per layer so a text-heavy import does not hold the UI's engine for the
+            // whole cache-render loop.
+            let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
+            let _ = engine.render_layer(text, dpi as f32, fmt);
         }
     }
+    Ok(())
+}
+
+/// Puts text layers back at the path index where their glyphs were painted.
+fn merge_text_layers(layers: Vec<Layer>, mut texts: Vec<(usize, Layer)>) -> Vec<Layer> {
+    texts.sort_by_key(|(order, _)| *order);
+    let mut out = Vec::with_capacity(layers.len() + texts.len());
+    let mut texts = texts.into_iter().peekable();
+    for (index, layer) in layers.into_iter().enumerate() {
+        while texts.peek().is_some_and(|(order, _)| *order <= index) {
+            if let Some((_, text)) = texts.next() {
+                out.push(text);
+            }
+        }
+        out.push(layer);
+    }
+    out.extend(texts.map(|(_, layer)| layer));
+    out
 }
 
 /// A content key for an embedded face, used to group its glyphs and to keep aliases unique.
@@ -319,6 +369,8 @@ struct PathDevice<'a> {
     strokes: Vec<GlyphRun>,
     /// Embedded fonts met on the page: cache key, PostScript name, derived family and bytes.
     fonts: Vec<(u128, String, String, FontData)>,
+    /// Hayro's cheap font identity → our content hash, so bytes are hashed once per face.
+    font_keys: HashMap<u128, u128>,
     /// One entry per clip pushed by the interpreter: `true` for an accepted no-op clip.
     clips: Vec<bool>,
     knots: usize,
@@ -341,6 +393,9 @@ struct GlyphRun {
     /// Advance in document pixels.
     advance: f64,
     font: FontInfo,
+    /// How many layers had been drawn when this glyph was painted; text runs split at a path
+    /// between glyphs so paint order is preserved.
+    order: usize,
     color: Color,
     /// Drawn both filled and stroked: word-processor fake bold.
     fake_bold: bool,
@@ -397,7 +452,11 @@ impl PathDevice<'_> {
             .intersect(&self.clip);
         let bytes = u64::from(area.width()).saturating_mul(u64::from(area.height())).saturating_mul(self.fmt.bytes_per_pixel() as u64);
         let mut shape = ShapeLayer { path, fill, stroke, ..ShapeLayer::default() };
-        if area.width() > 0 && area.height() > 0 && self.cached.saturating_add(bytes) <= MAX_CACHE_BYTES {
+        if area.width() > 0 && area.height() > 0 {
+            if self.cached.saturating_add(bytes) > MAX_CACHE_BYTES {
+                self.unsupported("shape cache budget");
+                return;
+            }
             shape.cache = Some(photocraft_vector::render_shape(&shape, self.fmt, self.clip));
             self.cached = self.cached.saturating_add(bytes);
         }
@@ -495,7 +554,11 @@ impl<'a> Device<'a> for PathDevice<'_> {
         let text = match glyph.as_unicode() {
             Some(craft_pdf::interpret::hayro_cmap::BfString::Char(c)) => c.to_string(),
             Some(craft_pdf::interpret::hayro_cmap::BfString::String(s)) => s,
-            None => return,
+            None => {
+                // No Unicode means the text layer could not be edited faithfully.
+                self.unsupported("text without a Unicode mapping");
+                return;
+            }
         };
         if text.is_empty() || text.chars().all(|c| c.is_control()) {
             return;
@@ -549,13 +612,14 @@ impl<'a> Device<'a> for PathDevice<'_> {
         let advance = f64::from(outline.advance_width().unwrap_or(500.0)) / 1000.0 * size_px;
         let weight = font_weight(&data, &postscript);
         let italic = data.is_italic || name_has(&postscript, &["italic", "oblique"]);
-        let key = font_content_key(&data);
+        let identity = outline.font_cache_key();
+        let key = *self.font_keys.entry(identity).or_insert_with(|| font_content_key(&data));
         let family = family_from_postscript(&postscript);
         if !self.fonts.iter().any(|(existing, _, _, _)| *existing == key) {
             self.fonts.push((key, postscript.clone(), family.clone(), data.data.clone()));
         }
         let font = FontInfo { key, family, postscript, weight, italic };
-        let glyph = GlyphRun { text, origin, size_pt, size_px, angle, advance, font, color, fake_bold: false };
+        let glyph = GlyphRun { text, origin, size_pt, size_px, angle, advance, font, color, fake_bold: false, order: self.layers.len() };
         if matches!(draw_mode, GlyphDrawMode::Stroke(_)) {
             self.strokes.push(glyph);
         } else {
@@ -700,6 +764,18 @@ fn axis_aligned_rect(path: &BezPath) -> Option<(f64, f64, f64, f64)> {
     if points.iter().any(|(x, y)| !on_edge(*x, x0, x1) || !on_edge(*y, y0, y1)) {
         return None;
     }
+    // A bow-tie traversal also visits the four corners, so require its shoelace area to match
+    // the bounding box (a real rectangle covers it exactly).
+    let mut twice_area = 0.0;
+    for i in 0..4 {
+        let (ax, ay) = points[i];
+        let (bx, by) = points[(i + 1) % 4];
+        twice_area += ax * by - bx * ay;
+    }
+    let box_area = (x1 - x0) * (y1 - y0);
+    if (twice_area.abs() * 0.5 - box_area).abs() > box_area * 1.0e-3 {
+        return None;
+    }
     Some((x0, y0, x1, y1))
 }
 
@@ -719,13 +795,10 @@ fn uniform_transform(transform: &KurboAffine) -> bool {
 /// A PDF colour as a straight-alpha PhotoCraft colour.
 fn to_color(color: &HayroColor) -> Color {
     let rgba = color.to_rgba();
+    // `AlphaColor` components are straight (not premultiplied), despite the raster path being
+    // premultiplied: `Color::to_rgba8` reads them as straight too.
     let [r, g, b, a] = rgba.components();
-    let a = a.clamp(0.0, 1.0);
-    if a <= 0.0 {
-        return Color::rgba(0.0, 0.0, 0.0, 0.0);
-    }
-    // `AlphaColor` components are premultiplied; PhotoCraft colours are straight.
-    Color::rgba((r / a).clamp(0.0, 1.0), (g / a).clamp(0.0, 1.0), (b / a).clamp(0.0, 1.0), a)
+    Color::rgba(r.clamp(0.0, 1.0), g.clamp(0.0, 1.0), b.clamp(0.0, 1.0), a.clamp(0.0, 1.0))
 }
 
 /// A kurbo affine as PhotoCraft's affine (same `[a, b, c, d, e, f]` layout).
@@ -738,10 +811,12 @@ fn knots_affine(transform: &KurboAffine) -> Affine {
 fn path_bounds(path: &Path) -> (f64, f64, f64, f64) {
     let mut b = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for knot in path.subpaths.iter().flat_map(|subpath| &subpath.knots) {
-        b.0 = b.0.min(knot.anchor.x);
-        b.1 = b.1.min(knot.anchor.y);
-        b.2 = b.2.max(knot.anchor.x);
-        b.3 = b.3.max(knot.anchor.y);
+        for point in [knot.anchor, knot.in_ctrl, knot.out_ctrl] {
+            b.0 = b.0.min(point.x);
+            b.1 = b.1.min(point.y);
+            b.2 = b.2.max(point.x);
+            b.3 = b.3.max(point.y);
+        }
     }
     b
 }
@@ -792,7 +867,9 @@ fn to_path(bez: &BezPath, transform: &Affine, knots: &mut usize) -> Option<Path>
     for element in bez.elements() {
         match *element {
             PathEl::MoveTo(p) => {
-                if let Some(subpath) = current.take() {
+                if let Some(subpath) = current.take()
+                    && subpath.knots.len() > 1
+                {
                     subpaths.push(subpath);
                 }
                 current = Some(Subpath { closed: false, knots: vec![Knot::corner(p.x, p.y)], op: PathOp::Combine });
@@ -833,6 +910,7 @@ fn to_path(bez: &BezPath, transform: &Affine, knots: &mut usize) -> Option<Path>
             }
             PathEl::ClosePath => {
                 if let Some(mut subpath) = current.take() {
+                    let restart = subpath.knots.first().map(|knot| knot.anchor);
                     subpath.closed = true;
                     if subpath.knots.len() > 1 {
                         let first = subpath.knots[0].anchor;
@@ -844,13 +922,21 @@ fn to_path(bez: &BezPath, transform: &Affine, knots: &mut usize) -> Option<Path>
                         } else {
                             subpath.knots[0].in_ctrl = first;
                         }
+                        subpaths.push(subpath);
                     }
-                    subpaths.push(subpath);
+                    // A close starts a new subpath at the closed subpath's start point; a
+                    // following line/curve continues from there (PDF 32000-1 §8.5.2.1).
+                    if let Some(start) = restart {
+                        current = Some(Subpath { closed: false, knots: vec![Knot::corner(start.x, start.y)], op: PathOp::Combine });
+                        last = start;
+                    }
                 }
             }
         }
     }
-    if let Some(subpath) = current {
+    if let Some(subpath) = current
+        && subpath.knots.len() > 1
+    {
         subpaths.push(subpath);
     }
     *knots = knots.saturating_add(subpaths.iter().map(|subpath| subpath.knots.len()).sum::<usize>());
@@ -1224,12 +1310,14 @@ mod tests {
                 "GS0" => dictionary! { "ca" => 0.5, "CA" => 0.5 },
             },
         };
-        let bytes = pdf_with_resources("/GS0 gs 1 0 0 rg 20 20 60 40 re f 0 0 1 RG 4 w 20 80 m 180 80 l S", resources);
+        let bytes = pdf_with_resources("/GS0 gs 0.2 0.4 0.6 rg 20 20 60 40 re f 0 0 1 RG 4 w 20 80 m 180 80 l S", resources);
         let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
         let imported = import_with_options_and_interrupt("opacity.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
         let layers = children(&imported.document);
         let LayerContent::Shape(fill) = &layers[0].content else { panic!("not a shape") };
-        assert!((solid(fill.fill.as_ref().expect("a fill")).alpha - 0.5).abs() < 0.01);
+        let fill = solid(fill.fill.as_ref().expect("a fill"));
+        assert!((fill.alpha - 0.5).abs() < 0.01);
+        assert!((fill.c[0] - 0.2).abs() < 0.01 && (fill.c[1] - 0.4).abs() < 0.01 && (fill.c[2] - 0.6).abs() < 0.01, "{fill:?}");
         let LayerContent::Shape(stroke) = &layers[1].content else { panic!("not a shape") };
         assert!((solid(&stroke.stroke.as_ref().expect("a stroke").paint).alpha - 0.5).abs() < 0.01);
     }
@@ -1310,6 +1398,69 @@ mod tests {
         }
         let mean = sum / av.len() as f64;
         assert!(mean < 0.02, "mean pixel difference {mean:.4} (max {max:.3})");
+        // The cache must actually contain text: a blank layer can still pass a mean comparison.
+        let channels = fmt.channels();
+        let width = rect.width() as usize;
+        let mut red = 0;
+        for y in 30..60usize {
+            for x in 20..45usize {
+                let at = (y * width + x) * channels;
+                if av[at] > 0.4 && av[at + 1] < 0.4 && av[at + 2] < 0.4 {
+                    red += 1;
+                }
+            }
+        }
+        assert!(red > 0, "the editable text cache is blank");
+    }
+
+    #[test]
+    fn text_keeps_paint_order_relative_to_paths() {
+        let bytes = text_pdf("BT /F1 24 Tf 20 50 Td (Hi) Tj ET 0 0 1 rg 0 0 200 100 re f");
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        let imported = import_with_options_and_interrupt("order.pdf", &bytes, &options, &Interrupt::NONE).expect("import");
+        let layers = children(&imported.document);
+        assert!(matches!(layers[0].content, LayerContent::Text(_)), "text was painted first");
+        assert!(matches!(layers[1].content, LayerContent::Shape(_)), "the covering path comes after");
+    }
+
+    #[test]
+    fn a_bow_tie_path_is_not_a_no_op_clip() {
+        let mut path = BezPath::new();
+        path.move_to((0.0, 0.0));
+        path.line_to((10.0, 10.0));
+        path.line_to((10.0, 0.0));
+        path.line_to((0.0, 10.0));
+        path.close_path();
+        assert!(axis_aligned_rect(&path).is_none());
+    }
+
+    #[test]
+    fn a_line_after_close_starts_a_new_subpath() {
+        let mut bez = BezPath::new();
+        bez.move_to((0.0, 0.0));
+        bez.line_to((10.0, 0.0));
+        bez.line_to((10.0, 10.0));
+        bez.close_path();
+        bez.line_to((20.0, 0.0));
+        let mut knots = 0;
+        let path = to_path(&bez, &Affine::IDENTITY, &mut knots).expect("a path");
+        assert_eq!(path.subpaths.len(), 2);
+        assert_eq!(path.subpaths[1].knots[0].anchor, Point::new(0.0, 0.0));
+        assert_eq!(path.subpaths[1].knots.last().expect("a knot").anchor, Point::new(20.0, 0.0));
+    }
+
+    #[test]
+    fn cancelling_between_objects_stops_the_editable_page() {
+        let mut content = String::from("1 0 0 rg\n");
+        for i in 0..20 {
+            content.push_str(&format!("{} 20 20 20 re f\n", i * 8));
+        }
+        let bytes = pdf(&content);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let cancel = || calls.fetch_add(1, Ordering::SeqCst) >= 3;
+        let ctl = Interrupt::cancel_only(&cancel);
+        let options = ImportOptions { pdf_dpi: 72.0, pdf_editable: true, ..ImportOptions::default() };
+        assert!(matches!(import_with_options_and_interrupt("objects.pdf", &bytes, &options, &ctl), Err(IoError::Cancelled)));
     }
 
     #[test]
