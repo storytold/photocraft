@@ -531,6 +531,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         ".historyLog.filePath",
         "plugIns.additionalPluginsFolder",
         "fileHandling.lutFolder",
+        "fileHandling.lastSaveFolder",
         "fileHandling",
         "scratchDisks.disks",
         ".",

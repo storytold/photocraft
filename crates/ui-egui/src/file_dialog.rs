@@ -170,13 +170,16 @@ impl PhotocraftApp {
         let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
         self.save_dirs.retain(|id, _| open.contains(id));
         if suggested.parent().is_some_and(|p| p.as_os_str().is_empty()) {
+            // Save As to Original Folder off: the folder last saved to from any document first (#8493).
+            let handling = &self.session.prefs().file_handling;
+            let last = Some(std::path::PathBuf::from(&handling.last_save_folder)).filter(|d| !handling.save_as_to_original_folder && !d.as_os_str().is_empty());
             let document_dir = doc
                 .and_then(|d| self.save_dirs.get(&d).cloned())
                 // An export doesn't start in a folder that is gone.
                 .filter(|dir| !export || folder_exists(dir))
                 .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf));
             let remembered = export.then(|| self.session.prefs().export.last_folder.clone());
-            if let Some(dir) = export_start_dir(remembered.as_deref(), document_dir, folder_exists) {
+            if let Some(dir) = last.or_else(|| export_start_dir(remembered.as_deref(), document_dir, folder_exists)) {
                 suggested = dir.join(suggested);
             }
         }
@@ -189,7 +192,8 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
-                let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
+                let folder = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf);
+                let dir = doc.zip(folder.clone());
                 // An export's folder only once it has exported: a failed one doesn't move where
                 // the next export starts.
                 if !export && let Some((doc, dir)) = dir.clone() {
@@ -201,6 +205,12 @@ impl PhotocraftApp {
                         app.save_dirs.insert(doc, dir);
                     }
                     app.remember_export_folder(&path);
+                }
+                // The folder Save As to Original Folder off starts in (#8493).
+                if let Some(folder) = folder.map(|f| f.to_string_lossy().into_owned())
+                    && app.session.prefs().file_handling.last_save_folder != folder
+                {
+                    app.session.prefs.edit(|p| p.file_handling.last_save_folder = folder);
                 }
                 Ok(exported)
             }
