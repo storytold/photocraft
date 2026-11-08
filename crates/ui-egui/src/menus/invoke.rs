@@ -10,6 +10,7 @@ pub(crate) fn panel_alias(id: &str) -> Option<&'static str> {
         "navigator" | "info" | "histogram" => "window.toggle.navigator",
         "tools" => "window.toggle.toolbar",
         "options" => "window.toggle.options",
+        "contextualTaskBar" => "window.toggle.contextualTaskBar",
         "brushSettings" => "window.toggle.brushSettings",
         "brushes" => "window.toggle.brushes",
         _ => return None,
@@ -56,11 +57,31 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     Ok(r)
 }
 
+/// Layer › New › Convert to Frame without params: asks for the frame's name and size first.
+fn frame_convert_dialog(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
+    let st = app.session.active().ok_or("no document")?;
+    let layer = st.active_layer.and_then(|id| st.doc.layer(id)).ok_or("select a shape or type layer")?;
+    let b = photocraft_engine::transform_cmds::transform_frame(&st.doc, layer);
+    let mut fixed = serde_json::Map::new();
+    fixed.insert("layer".into(), json!(layer.id.0));
+    let dialog = crate::filter_dialog::open_with_spec(app, id, tl!("New Frame"), r#"{"name":text,"width":1..300000=100,"height":1..300000=100}"#, fixed);
+    if let Some(d) = app.ui.dialog_mut(dialog) {
+        d.fields.insert("__preview".into(), json!(false));
+        d.fields.insert("name".into(), json!("Frame"));
+        d.fields.insert("width".into(), json!(b.width().max(1)));
+        d.fields.insert("height".into(), json!(b.height().max(1)));
+    }
+    Ok(json!({"dialog":dialog}))
+}
+
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if let Some(tool) = crate::tool_shortcuts::tool(id) {
         crate::tool_memory::select(app, tool);
         return Some(Ok(json!({"tool": tool})));
+    }
+    if id == "layer.frame.convert" && params.as_object().is_none_or(|o| o.is_empty()) {
+        return Some(frame_convert_dialog(app, id));
     }
     if id == "help.checkForUpdates" {
         return Some(crate::updates_ui::check(app, ctx, params.clone()));
@@ -187,6 +208,18 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
         // drawn) as a selection.
         "path.toSelection" if params.get("name").is_none() => crate::vector_ui::path_to_selection(app, params.clone()),
+        // ⌘⇧↩ / ⌘⌥↩ / ⇧⌥⌘↩ load the same path, adding it to, subtracting it from or intersecting
+        // it with the selection.
+        "path.addToSelection" | "path.subtractFromSelection" | "path.intersectWithSelection" if params.get("name").is_none() => {
+            let mut p = params.as_object().cloned().unwrap_or_default();
+            let mode = match id {
+                "path.addToSelection" => "add",
+                "path.subtractFromSelection" => "subtract",
+                _ => "intersect",
+            };
+            p.insert("mode".into(), json!(mode));
+            crate::vector_ui::path_to_selection(app, Value::Object(p))
+        }
         // Layer › Rename Layer from a menu starts in-place renaming in the Layers panel.
         "layer.renameLayer" if params.get("name").is_none() => {
             let st = app.session.active().ok_or("no document")?;
@@ -213,6 +246,18 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
         }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
+        }
+        // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
+        "file.import.variableDataSets" if params.get("path").and_then(Value::as_str).is_none() => {
+            let doc = app.active_doc_id()?;
+            let params = params.clone();
+            app.pick_file_bytes_filtered(&["csv", "txt"], move |app, _name, bytes| {
+                app.refocus(doc)?;
+                let text = data_sets_text(bytes)?;
+                let r = photocraft_engine::import_data_sets_text(&mut app.session, &text, &params).map_err(|e| e.to_string());
+                app.sync_views();
+                r
+            })
         }
         "file.save" => {
             // Writes back only to a layered file that holds the whole document; anything else
@@ -284,6 +329,12 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 }
 
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
+        return result;
+    }
+    if id == "layer.selectUnderCursor" {
+        return select_layer_under_cursor(app, ctx);
+    }
     if let Some(result) = invoke_early_commands(app, ctx, id, &params) {
         return result;
     }
@@ -371,18 +422,34 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(json!({"dialog": crate::new_group_ui::open(app, id)}))
         }
         // Channels › Channel Options… without params: the dialog on the targeted alpha/spot
-        // channel, Layer Mask Display Options on a targeted layer mask, or Quick Mask Options while
-        // in Quick Mask (with params: the engine directly).
+        // channel (also in Quick Mask mode, where its row is the selected one), Quick Mask Options
+        // in Quick Mask otherwise, or Layer Mask Display Options on a targeted layer mask (with
+        // params: the engine directly).
         crate::channel_options_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
             let mask = app.layer_mask_targeted();
             let st = app.session.active().ok_or("no document is open")?;
             let channel = match st.channel_view.target {
-                _ if st.doc.quick_mask.is_some() => json!("quickMask"),
                 photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) => json!(i),
+                _ if st.doc.quick_mask.is_some() => json!("quickMask"),
                 _ if mask => json!("mask"),
                 _ => return Err("target an alpha or spot channel, or a layer mask, first".into()),
             };
             let dialog = crate::channel_options_ui::open(app, &channel).ok_or("no such channel")?;
+            Ok(json!({"dialog": dialog}))
+        }
+        // Channels › New Channel… without params: its dialog (with params: the engine). The
+        // panel's New button makes one at once, as Photoshop's does.
+        crate::channel_options_ui::NEW_CHANNEL if params.as_object().is_none_or(|o| o.is_empty()) => {
+            let dialog = crate::channel_options_ui::open_new_channel(app).ok_or("no document is open")?;
+            Ok(json!({"dialog": dialog}))
+        }
+        // Channels › Merge Channels… without params: its dialog, which picks the mode and the
+        // documents (with params: the engine).
+        crate::dialogs::merge_channels_ui::COMMAND if params.as_object().is_none_or(|o| o.is_empty()) => {
+            if let Some(Err(why)) = photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)) {
+                return Err(why);
+            }
+            let dialog = crate::dialogs::merge_channels_ui::open(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))
         }
         // Channels › New Spot Channel… without params: its dialog (with params: the engine).
@@ -390,6 +457,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let dialog = crate::channel_options_ui::open_new_spot(app).ok_or("no document is open")?;
             Ok(json!({"dialog": dialog}))
         }
+        // Select › Find Layers: the Layers panel's Name filter (#10884).
+        "select.findLayers" => crate::layer_filter_ui::find::invoke(app, ctx, params),
         // Photoshop's "Select and Mask…" is the engine's select.refineEdge.
         // Select › Color Range… from the menu: the dialog (with params: the engine directly).
         "select.colorRange" if params.as_object().is_none_or(|o| o.is_empty()) => Ok(json!({"dialog": crate::color_range_ui::open(app)})),
@@ -405,7 +474,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(json!({"dialog": crate::fill_ui::open(app)}))
         }
-        "select.selectAndMask" => Ok(json!({"dialog": crate::filter_dialog::open(app, "select.refineEdge")})),
+        // Photoshop's workspace (select_mask_ui); `distort_ui::menu` routes it first.
+        "select.selectAndMask" => crate::select_mask_ui::open(app).map(|_| json!({"selectAndMask": app.distort.describe()["selectAndMask"]})),
         // Select › Transform Selection from the menu: the interactive box (with params: the engine).
         "select.transformSelection" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::transform_tool::begin_selection(app, ctx).map(|_| json!({"transform": app.ui.transform}))
@@ -442,6 +512,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         _ => app.run(id, params),
     }
+}
+
+/// The text of a picked Variable Data Sets file. Invalid UTF-8 is refused, as the engine's
+/// path-based import refuses it, so a failed read never replaces the document's data sets with
+/// U+FFFD-substituted values.
+pub(super) fn data_sets_text(bytes: Vec<u8>) -> Result<String, String> {
+    String::from_utf8(bytes).map_err(|e| format!("the data set file is not valid UTF-8: {e}"))
 }
 
 fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {
@@ -558,6 +635,10 @@ fn type_command_target(app: &PhotocraftApp) -> Option<Value> {
 fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
     match id {
         "view.zoomIn" | "view.zoomOut" | "view.fitOnScreen" | "view.actualPixels" => Some(app.run(id, params.clone())),
+        "view.editSelectedGuides" => Some(crate::new_guide_ui::open_edit(app).map(|_| Value::Null)),
+        "view.clearSelectedGuides" => {
+            Some(crate::guide_select::delete_selected(app).and_then(|done| if done { Ok(Value::Null) } else { Err("No guide is selected".to_string()) }))
+        }
         "view.rulers" | "view.show.grid" | "view.show.guides" | "view.snap" | "view.lockGuides" => {
             let extras = &mut app.ui.extras;
             let slot = match id {
@@ -614,6 +695,10 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
             Some(crate::sizing::open(app, sz).map(|dialog| json!({"dialog": dialog})).ok_or_else(|| "no document".to_string()))
         }
         "view.newGuide" if params.as_object().is_none_or(|object| object.is_empty()) => Some(Ok(json!({"dialog": crate::new_guide_ui::open(app)}))),
+        // Image › Adjustments › Equalize with a selection asks what to equalize, as in Photoshop.
+        crate::equalize_ui::COMMAND if params.as_object().is_none_or(|object| object.is_empty()) && crate::equalize_ui::asks(app) => {
+            Some(Ok(json!({"dialog": crate::equalize_ui::open(app)})))
+        }
         fl if crate::filter_dialog::has_dialog(fl) && params.as_object().is_none_or(|object| object.is_empty()) => {
             Some(Ok(json!({"dialog": crate::filter_dialog::open(app, fl)})))
         }
@@ -630,7 +715,7 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
             let doc = app.session.active_index().ok_or("no document")?;
             let wid = app.ui.alloc_id();
             let view = app.ui.views[doc].clone();
-            app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, position: None });
+            app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating: false, focused: false, position: None });
             Ok(json!({"window": wid}))
         })()),
         "window.theme.toggle" => {
@@ -675,7 +760,9 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
             let count = app.session.documents().len();
             let active = app.session.active_index().ok_or("no document open")?;
             let next = if id == "window.nextDocument" { (active + 1) % count } else { (active + count - 1) % count };
-            app.session.set_active(next);
+            if next != active {
+                app.run("document.activate", json!({"document": next}))?;
+            }
             app.jobs.focus = None;
             Ok(json!({"document": next}))
         })()),
@@ -729,6 +816,7 @@ fn toggle_panel(app: &mut PhotocraftApp, id: &str) -> Result<Value, String> {
         "navigator" => &mut panels.navigator,
         "toolbar" => &mut panels.toolbar,
         "options" => &mut panels.options_bar,
+        "contextualTaskBar" => &mut panels.context_task_bar,
         "brushSettings" => &mut panels.brush_settings,
         "brushes" => &mut panels.brushes,
         "dock" => &mut panels.dock,
@@ -779,4 +867,26 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     if !app.ui.timeline.open {
         app.ui.timeline.playing = false;
     }
+}
+
+/// Pointer-dependent shell command; pixel picking and selection remain engine commands.
+fn select_layer_under_cursor(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
+    if app.drag.is_some() || app.brush_resize.is_some() {
+        return Ok(json!({"layer": null}));
+    }
+    let Some(xf) = crate::canvas::ViewXform::active(app) else { return Ok(json!({"layer": null})) };
+    let Some(pointer) = ctx.pointer_hover_pos().filter(|p| xf.rect.contains(*p)) else { return Ok(json!({"layer": null})) };
+    let [x, y] = xf.to_doc(pointer);
+    let inside = app
+        .session
+        .active()
+        .is_some_and(|st| x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 && x < f64::from(st.doc.size.width) && y < f64::from(st.doc.size.height));
+    if !inside {
+        return Ok(json!({"layer": null}));
+    }
+    let picked = app.run("layer.pickAt", json!({"x": x, "y": y, "target": "layer", "select": false}))?;
+    if let Some(layer) = picked.get("layer").and_then(Value::as_u64) {
+        app.run("layer.select", json!({"layer": layer, "mode": "replace"}))?;
+    }
+    Ok(picked)
 }

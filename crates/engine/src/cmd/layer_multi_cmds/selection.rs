@@ -49,6 +49,7 @@ pub(crate) fn top_level(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 
 /// Replace the layer selection without a history step (like [`Session::select_layer`]).
 pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>, anchor: Option<LayerId>) -> Result<()> {
+    let before = s.active_layer_stamp();
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
     if let Some(bad) = ids.iter().chain(active.iter()).find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*bad));
@@ -70,6 +71,7 @@ pub fn set_selection(s: &mut Session, ids: Vec<LayerId>, active: Option<LayerId>
         st.saved_revision = st.revision;
     }
     st.last_damage = Some(Rect::EMPTY);
+    s.note_layer_change(before);
     Ok(())
 }
 
@@ -133,11 +135,28 @@ pub(super) fn same_named_targets(doc: &photocraft_doc::Document, name: &str, mov
 /// (omitting `layer`) so that the recorded step applies to whatever layer is targeted when
 /// replayed or exported to `.atn` (#7248).
 pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Option<&[LayerId]>) -> Value {
+    if id == "select.loadSelection"
+        && let Some(layer_id) = p.get("layer").and_then(Value::as_u64).map(LayerId)
+    {
+        return recorded_source_layer(s, p, layer_id);
+    }
+    if crate::actions_record::needs_source_layer(id) {
+        // An explicit layer supplies content, even when it is the sole selection.
+        return p;
+    }
     if id == "layer.select" {
         return recorded_selection(s, p);
     }
     if id == "layer.moveTo" {
         return recorded_move(s, p, pre_selected);
+    }
+    if id == "edit.transform" {
+        // Multi-layer transforms carry the set of ids separately. A single-layer transform
+        // uses the ordinary `layer` target, which should follow the sole selected layer when
+        // the action is replayed in a document with different ids.
+        if p.get("layers").is_some_and(Value::is_array) {
+            return recorded_transform(s, p, pre_selected);
+        }
     }
     let Some(layer_id) = p.get("layer").and_then(Value::as_u64).map(LayerId) else { return p };
     let is_sole_selected = match pre_selected {
@@ -150,6 +169,47 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
             fields.remove("layer");
         }
         return p;
+    }
+    p
+}
+
+/// ⌘-clicking another layer's thumbnail loads that layer's transparency. The step refers to the
+/// layer the way the reference application records it, by name (or as the Background), so it
+/// replays in another document and saves to `.atn`. A layer that the name would not find (a
+/// same-named layer above it) keeps its id.
+fn recorded_source_layer(s: &Session, mut p: Value, id: LayerId) -> Value {
+    let Some(doc) = s.active().map(|st| &st.doc) else { return p };
+    let Some(layer) = doc.layer(id) else { return p };
+    let reference = if doc.background().is_some_and(|b| b.id == id) {
+        json!({"background": true})
+    } else if doc.walk().into_iter().rev().find(|(_, _, l)| l.name == layer.name).is_some_and(|(_, _, l)| l.id == id) {
+        json!({"name": layer.name})
+    } else {
+        return p;
+    };
+    if let Some(fields) = p.as_object_mut() {
+        fields.insert("layer".into(), reference);
+    }
+    p
+}
+
+/// A Free Transform of several layers lists their ids (the box's session keeps them while it is
+/// open). When they are the layers the selection gave it, the step drops `layers`, so it replays on
+/// the layers selected then, in any document, rather than on these ids (#6501).
+fn recorded_transform(s: &Session, mut p: Value, pre_selected: Option<&[LayerId]>) -> Value {
+    let Some(st) = s.active() else { return p };
+    let Some(listed) = p.get("layers").and_then(Value::as_array) else { return p };
+    let Some(listed) = listed.iter().map(|v| v.as_u64().map(LayerId)).collect::<Option<Vec<_>>>() else { return p };
+    let selected = pre_selected.map_or_else(|| st.selected_layers(), <[LayerId]>::to_vec);
+    let mut moved = top_level(&st.doc, &listed);
+    let mut targets = crate::transform_cmds::targets_of(&st.doc, &selected, st.active_layer);
+    moved.sort_unstable();
+    moved.dedup();
+    targets.sort_unstable();
+    if moved == targets
+        && let Some(fields) = p.as_object_mut()
+    {
+        fields.remove("layers");
     }
     p
 }
@@ -193,6 +253,20 @@ fn range_order(layers: &[Layer], include_collapsed: bool, out: &mut Vec<LayerId>
 
 /// `layer.select`: `{"layer": id, "mode": "replace|toggle|range|add|remove"}`.
 pub fn select(s: &mut Session, p: &Value) -> Result<Value> {
+    if let Some(selector @ Value::Object(fields)) = p.get("layer")
+        && (fields.contains_key("index") || fields.contains_key("ordinal"))
+        && crate::commands::recorded_layer(s, selector)?.is_none()
+    {
+        if p.get("name").is_some() || p.get("occurrence").is_some() {
+            return Err(bad("layer.select", "a layer reference cannot be combined with name or occurrence"));
+        }
+        let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
+        if !matches!(mode, "replace" | "toggle" | "range" | "add" | "remove") {
+            return Err(bad("layer.select", format!("unknown mode `{mode}`")));
+        }
+        // A group-end index leaves the active layer, anchor and full selection unchanged.
+        return Ok(json!({"selected": selected(s).iter().map(|id| id.0).collect::<Vec<_>>()}));
+    }
     let id = selection_target(s, p)?;
     let mode = p.get("mode").and_then(Value::as_str).unwrap_or("replace");
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -262,16 +336,27 @@ pub(super) fn select_all_layers(s: &mut Session) -> Result<Value> {
     Ok(json!({"selected": n}))
 }
 
+/// Select › Find Layers (#10884): as in Photoshop it filters the Layers panel by Name and leaves the
+/// layer selection alone. The reply's `layerFilter` is the Name filter the app applies (`name` only
+/// when one is given) and `selected` lists the layers it matches: part of the name, trimmed and
+/// ignoring case, as the panel matches: every layer for a blank name, which the panel doesn't filter
+/// by (none without a name).
 pub(super) fn find_layers(s: &mut Session, p: &Value) -> Result<Value> {
-    let needle = p.get("name").and_then(Value::as_str).ok_or_else(|| bad("select.findLayers", "missing `name`"))?.to_lowercase();
+    let name = match p.get("name") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(v.as_str().ok_or_else(|| bad("select.findLayers", "`name` must be a string"))?),
+    };
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let ids: Vec<LayerId> = d.doc.walk().into_iter().filter(|(_, _, l)| l.name.to_lowercase().contains(&needle)).map(|(_, _, l)| l.id).collect();
-    if ids.is_empty() {
-        return Err(EngineError::Other(format!("no layer name contains \"{needle}\"")));
+    let needle = name.map(|n| n.trim().to_lowercase());
+    let ids: Vec<u64> = match &needle {
+        Some(n) => d.doc.walk().into_iter().filter(|(_, _, l)| l.name.to_lowercase().contains(n.as_str())).map(|(_, _, l)| l.id.0).collect(),
+        None => Vec::new(),
+    };
+    let mut filter = json!({"by": "name"});
+    if let Some(n) = name {
+        filter["name"] = json!(n);
     }
-    let out = ids.iter().map(|l| l.0).collect::<Vec<_>>();
-    set_selection(s, ids, None, None)?;
-    Ok(json!({"selected": out}))
+    Ok(json!({"selected": ids, "layerFilter": filter}))
 }
 
 pub(super) fn select_linked(s: &mut Session) -> Result<Value> {
