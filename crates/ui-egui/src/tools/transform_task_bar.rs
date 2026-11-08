@@ -20,6 +20,17 @@ enum Action {
     Done,
 }
 
+#[derive(Clone, Copy)]
+struct ShownRect {
+    session: u64,
+    pass: u64,
+    rect: [f32; 4],
+}
+
+fn shown_id() -> egui::Id {
+    egui::Id::unique("free-transform-task-bar-rect")
+}
+
 /// Crop keeps its own bar. Warp, Transform Selection and Content-Aware Scale use their own controls.
 fn open_box(app: &PhotocraftApp) -> Option<&TransformSession> {
     let active = app.session.active()?;
@@ -27,6 +38,7 @@ fn open_box(app: &PhotocraftApp) -> Option<&TransformSession> {
     if !app.ui.panels.context_task_bar
         || app.ui.tool == Tool::Crop
         || !app.ui.dialogs.is_empty()
+        || app.ui.shell.dialog.is_some()
         || preview.doc.id != active.doc.id
         || crate::transform_tool::committing(app).is_some()
     {
@@ -35,10 +47,20 @@ fn open_box(app: &PhotocraftApp) -> Option<&TransformSession> {
     app.ui.transform.as_ref().filter(|t| t.warp.is_none() && !t.selection && t.content_aware.is_none())
 }
 
-/// Whether the inspector may report the shared task-bar rectangle for Free Transform.
+/// Whether Free Transform can show its bar.
 /// This checks current eligibility without changing placement or the transform.
 pub fn eligible(app: &PhotocraftApp) -> bool {
     open_box(app).is_some()
+}
+
+/// The current or last painted rectangle of this transform session. Crop keeps its own rectangle.
+pub(crate) fn shown_rect(app: &PhotocraftApp, ctx: &egui::Context) -> Option<[f32; 4]> {
+    let session = open_box(app)?.session;
+    let shown = ctx.data(|data| data.get_temp::<ShownRect>(shown_id()))?;
+    // Extra document windows draw within the root pass. Inspection also runs between passes,
+    // when egui has already incremented the counter for the last drawn rectangle.
+    let pass = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
+    (shown.session == session && pass.checked_sub(shown.pass).is_some_and(|age| age <= 1)).then_some(shown.rect)
 }
 
 /// Draw the shared bar, persist its placement and apply the selected action before Hide.
@@ -46,6 +68,7 @@ pub fn eligible(app: &PhotocraftApp) -> bool {
 /// for inspection while Free Transform remains eligible, or clear it if the action closed or hid it.
 pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
     let Some(transform) = open_box(app) else { return };
+    let session = transform.session;
     let corners = transform.quad.map(|[x, y]| xf.to_screen(x as f32, y as f32));
     let anchor = egui::Rect::from_points(&corners);
     let ctx = ui.ctx().clone();
@@ -68,10 +91,13 @@ pub fn draw(app: &mut PhotocraftApp, ui: &mut egui::Ui, xf: &ViewXform) {
         app.ui.panels.context_task_bar = false;
     }
     // An action in an extra window can invalidate the rect written by the main canvas.
-    app.ui.task_bar_shown = eligible(app).then(|| {
+    let pass = ctx.cumulative_pass_nr_for(egui::ViewportId::ROOT);
+    if open_box(app).is_some_and(|transform| transform.session == session) {
         let r = shown.rect;
-        [r.min.x, r.min.y, r.max.x, r.max.y]
-    });
+        ctx.data_mut(|data| data.insert_temp(shown_id(), ShownRect { session, pass, rect: [r.min.x, r.min.y, r.max.x, r.max.y] }));
+    } else {
+        ctx.data_mut(|data| data.remove::<ShownRect>(shown_id()));
+    }
 }
 
 /// Draw presets in the measured order, with the shared menu before Cancel and Done.

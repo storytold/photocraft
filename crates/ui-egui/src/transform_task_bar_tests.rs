@@ -72,9 +72,14 @@ fn transform_task_bar_presets_match_the_context_menu() {
 /// Done commits once like Enter, while Cancel discards the box like Escape.
 #[test]
 fn transform_task_bar_done_and_cancel_match_the_keys() {
+    let pixels = |h: &AppHarness| {
+        let st = h.state().session.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(st.doc.bounds())
+    };
     for (label, key, edits) in [("Done", Key::Enter, 1), ("Cancel", Key::Escape, 0)] {
         let mut toolbar = open_box();
         let mut keys = open_box();
+        let original = pixels(&toolbar);
         for h in [&mut toolbar, &mut keys] {
             click(h, "Rotate 90° Clockwise");
         }
@@ -85,6 +90,9 @@ fn transform_task_bar_done_and_cancel_match_the_keys() {
         assert!(toolbar.state().ui.transform.is_none() && keys.state().ui.transform.is_none(), "{label}");
         assert_eq!(history(&toolbar), toolbar_history + edits);
         assert_eq!(history(&keys), key_history + edits);
+        let actual = pixels(&toolbar);
+        assert!(actual == pixels(&keys), "{label} should produce the same pixels as the key");
+        assert_eq!(actual != original, edits != 0, "{label}");
         assert_eq!(bar(&mut toolbar)["visible"], false);
     }
 }
@@ -109,7 +117,7 @@ fn transform_task_bar_tracks_the_rotated_quad() {
         };
         let quad = app.ui.transform.as_ref().unwrap().quad.map(|[x, y]| xf.to_screen(x as f32, y as f32));
         let anchor = Rect::from_points(&quad);
-        let [x0, y0, x1, y1] = app.ui.task_bar_shown.unwrap();
+        let [x0, y0, x1, y1] = crate::transform_task_bar::shown_rect(app, &h.ctx).unwrap();
         let shown = Rect::from_min_max(pos2(x0, y0), pos2(x1, y1));
         assert!((shown.center().x - anchor.center().x).abs() <= 1.0, "{shown:?} below {anchor:?}");
         assert!((shown.top() - anchor.bottom() - crate::widgets::task_bar::GAP).abs() <= 1.0, "{shown:?} below {anchor:?}");
@@ -185,6 +193,50 @@ fn transform_task_bar_ignores_a_foreign_preview_after_a_document_switch() {
     assert_eq!(h.state().ui.transform.as_ref().unwrap().quad, quad);
 }
 
+#[test]
+fn transform_task_bar_hides_while_a_shell_dialog_is_open() {
+    let mut h = open_box();
+    let session = h.state().ui.transform.as_ref().unwrap().session;
+    assert_eq!(bar(&mut h)["visible"], true);
+    control(&mut h, "ui.menu.invoke", json!({"id": "window.workspace.newWorkspace"}));
+    assert!(h.state().ui.shell.dialog.is_some() && h.state().ui.dialogs.is_empty());
+    assert_eq!(bar(&mut h)["visible"], false);
+    h.run_steps(2);
+    assert!(h.query_by_label("Rotate 90° Clockwise").is_none());
+    control(&mut h, "ui.dialog.cancel", json!({"dialog": "shell"}));
+    assert!(bar(&mut h)["rect"].is_null(), "the last pass did not draw the bar");
+    h.run_steps(4);
+    assert_eq!(h.state().ui.transform.as_ref().unwrap().session, session);
+    assert_eq!(bar(&mut h)["visible"], true);
+}
+
+#[test]
+fn transform_task_bar_inspection_keeps_crop_and_free_transform_rects_separate_before_redraw() {
+    let mut h = open_box();
+    assert_eq!(bar(&mut h)["visible"], true);
+    control(
+        &mut h,
+        "ui.pointer",
+        json!({"tool": "crop", "events": [{"kind": "down", "x": 40, "y": 40}, {"kind": "move", "x": 230, "y": 170}, {"kind": "up", "x": 230, "y": 170}]}),
+    );
+    assert!(crate::crop_task_bar::eligible(h.state()));
+    assert!(bar(&mut h)["rect"].is_null(), "Crop must wait for its own draw");
+    h.run_steps(4);
+    assert_eq!(bar(&mut h)["visible"], true);
+
+    // An untouched Crop frame can leave the tool without committing a document edit.
+    let mut h = harness();
+    control(&mut h, "ui.set", json!({"tool": "crop"}));
+    h.run_steps(4);
+    assert_eq!(bar(&mut h)["visible"], true);
+    control(&mut h, "ui.set", json!({"tool": "move"}));
+    control(&mut h, "ui.menu.invoke", json!({"id": "edit.freeTransform"}));
+    assert!(crate::transform_task_bar::eligible(h.state()));
+    assert!(bar(&mut h)["rect"].is_null(), "Free Transform must wait for its own draw");
+    h.run_steps(4);
+    assert_eq!(bar(&mut h)["visible"], true);
+}
+
 /// Accessibility can deliver Hide and Done during the same pass.
 #[test]
 fn transform_task_bar_commits_when_done_and_hide_arrive_together() {
@@ -210,7 +262,7 @@ fn transform_task_bar_commits_when_done_and_hide_arrive_together() {
 #[test]
 fn transform_task_bar_does_not_report_its_rect_as_crop_after_cancel() {
     let mut h = open_box();
-    let prior_rect = h.state().ui.task_bar_shown.unwrap();
+    let prior_rect = crate::transform_task_bar::shown_rect(h.state(), &h.ctx).unwrap();
     let cancel = h.get_by_label("Cancel").rect().center();
     let ctx = h.ctx.clone();
     let mut input = h.input().clone();
@@ -231,8 +283,7 @@ fn transform_task_bar_does_not_report_its_rect_as_crop_after_cancel() {
     };
     ctx.run_ui(input, |ui| {
         if app.ui.transform.is_some() {
-            // Model the main canvas recording its rect before the extra window handles Cancel.
-            app.ui.task_bar_shown = Some(prior_rect);
+            assert_eq!(crate::transform_task_bar::shown_rect(app, ui.ctx()), Some(prior_rect));
             crate::transform_task_bar::draw(app, ui, &xf);
         }
     })
