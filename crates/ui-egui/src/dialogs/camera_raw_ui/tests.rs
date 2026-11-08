@@ -1266,3 +1266,26 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The histogram's hover badge follows Show Lab Color Readouts (#12337): L a b in Lab mode,
+/// the same numbers as the pointer readout; R G B otherwise; nothing without a hover sample.
+#[test]
+fn hover_badge_shows_lab_values_with_lab_readouts() {
+    use crate::camera_raw_scope_ui::hover_badge_text;
+    let (mut app, _ctx) = worker_app();
+    let d = app.camera_raw.as_mut().unwrap();
+    assert_eq!(hover_badge_text(d, false), None);
+    assert_eq!(hover_badge_text(d, true), None);
+    d.scope.pointer_sample = Some([0.25, 0.25]);
+    let value = |lab: bool| -> Vec<f64> {
+        let r = d.readout([0.25, 0.25], lab).unwrap();
+        r["values"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect()
+    };
+    let rgb = value(false);
+    assert_eq!(hover_badge_text(d, false).unwrap(), format!("R {:.0}   G {:.0}   B {:.0}", rgb[0], rgb[1], rgb[2]));
+    let lab = value(true);
+    let text = hover_badge_text(d, true).unwrap();
+    assert_eq!(text, format!("L {:.1}   a {:.1}   b {:.1}", lab[0], lab[1], lab[2]));
+    assert!(text.starts_with("L "), "{text}");
+    assert_ne!(text, hover_badge_text(d, false).unwrap());
+}

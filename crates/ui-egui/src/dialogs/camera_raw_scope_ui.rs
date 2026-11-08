@@ -342,6 +342,15 @@ fn readout_text(value: Option<Value>) -> String {
     }
 }
 
+/// The hover badge's text for the pointer's sample: R G B, or L a b with Show Lab Color Readouts.
+pub(crate) fn hover_badge_text(d: &CameraRawDialog, lab: bool) -> Option<String> {
+    let position = d.scope.pointer_sample?;
+    let reading = d.readout(position, lab)?;
+    let values = reading.get("values")?.as_array()?;
+    let get = |i: usize| values.get(i).and_then(Value::as_f64).unwrap_or(0.0);
+    Some(if lab { format!("L {:.1}   a {:.1}   b {:.1}", get(0), get(1), get(2)) } else { format!("R {:.0}   G {:.0}   B {:.0}", get(0), get(1), get(2)) })
+}
+
 fn warning(ui: &mut egui::Ui, rect: Rect, mask: u8, on: &mut bool, label: &str) {
     let t = Tokens::get(ui.ctx());
     let response = ui.interact(rect, ui.scope_id().with(label), Sense::click()).on_hover_text(label);
@@ -389,8 +398,7 @@ fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeSt
     let corner = 18.0;
     if let Some(sample) = d.hover_sample(false) {
         crate::rgb_histogram::paint_sample(ui.painter(), plot, sample.rgb, &t);
-        let [r, g, b] = sample.rgb.map(|x| x * 255.0);
-        let text = format!("R {r:.0}   G {g:.0}   B {b:.0}");
+        let text = hover_badge_text(d, view.lab).unwrap_or_default();
         let font = crate::theme::mono(11.0);
         let galley = ui.painter().layout_no_wrap(text, font, t.text);
         let width = (galley.size().x + 12.0).min((rect.width() - 2.0 * corner - 4.0).max(1.0));
