@@ -334,7 +334,7 @@ fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
             "flipHorizontal" => [-1.0, 0.0, 0.0, 1.0, sx, 0.0],
             _ => [1.0, 0.0, 0.0, -1.0, 0.0, sy],
         };
-        return s.execute("path.transform", json!({"name": "layer", "layer": id.0, "matrix": m}));
+        return s.execute("path.transform", json!({"name": "layer", "layer": id.0, "vectorMask": true, "matrix": m}));
     }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // A targeted alpha channel, the Quick Mask or an unlinked layer mask turns by itself (#2835).

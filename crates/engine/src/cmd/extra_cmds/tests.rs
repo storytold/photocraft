@@ -519,6 +519,42 @@ fn transform_presets_flip_a_targeted_vector_mask_about_its_control_bounds() {
     }
 }
 
+/// #12283: a shape layer's path is its content, but it can also carry a separate vector mask. A
+/// targeted flip moves only the mask; the shape's path and rendered cache stay as they were.
+#[test]
+fn a_targeted_vector_mask_on_a_shape_layer_leaves_the_shape_path_and_cache_alone() {
+    let mut s = session(8);
+    let id = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [2, 2, 20, 20], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap());
+    s.edit("vector mask", |doc, _| {
+        doc.layer_mut(id).unwrap().vector_mask = Some(photocraft_doc::VectorMask::new(asymmetric_vector_path()));
+        Ok(())
+    })
+    .unwrap();
+    let (shape_path, shape_cache) = match &doc(&s).layer(id).unwrap().content {
+        LayerContent::Shape(sh) => (sh.path.clone(), sh.cache.clone()),
+        _ => panic!("a shape layer"),
+    };
+    let mask_before = mask_path(&s, id);
+    assert!(shape_cache.is_some(), "the shape is rendered");
+    let past = s.active().unwrap().history.past_len();
+
+    s.execute("edit.transform.flipHorizontal", json!({"target": "vectorMask"})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one Transform Path step");
+    let LayerContent::Shape(sh) = &doc(&s).layer(id).unwrap().content else { panic!("still a shape layer") };
+    assert_eq!(sh.path, shape_path, "the shape's path is untouched");
+    assert_eq!(sh.cache, shape_cache, "the shape's cache is untouched");
+    let mask_after = mask_path(&s, id);
+    assert_ne!(mask_after, mask_before, "the vector mask moved");
+    assert_eq!((mask_after.subpaths[0].knots[0].anchor.x, mask_after.subpaths[0].knots[0].anchor.y), (32.0, 20.0), "about the mask's bounds");
+
+    s.undo();
+    assert_eq!(mask_path(&s, id), mask_before, "undo restores the mask");
+    let LayerContent::Shape(sh) = &doc(&s).layer(id).unwrap().content else { panic!("still a shape layer") };
+    assert_eq!((sh.path.clone(), sh.cache.clone()), (shape_path, shape_cache), "and leaves the shape alone");
+    s.redo();
+    assert_eq!(mask_path(&s, id), mask_after, "redo flips the mask again");
+}
+
 /// The Channels panel's vector-mask target reaches the presets through the engine's target
 /// injection, without an explicit `target` param.
 #[test]
