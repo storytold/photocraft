@@ -203,3 +203,21 @@ fn automation_delete_and_clear_work_as_today() {
     app.run("count.deleteGroup", json!({})).unwrap();
     assert!(app.session.active().unwrap().doc.measurement.count_groups.is_empty());
 }
+
+/// The visible caption node (a `Role::Label`) reading `text`, if any.
+fn caption_node(h: &Harness<'static, PhotocraftApp>, text: &str) -> bool {
+    h.query_all(egui_kittest::kittest::by().label(text).include_labels()).any(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+}
+
+#[test]
+fn the_size_captions_are_translated() {
+    // The catalogs translate "Marker Size" and "Label Size" (main's captions); the colon follows.
+    let _de = crate::i18n::language_scope(crate::i18n::Lang::from_code("de").expect("German"));
+    let h = harness(app(1));
+    for (english, key) in [("Marker Size:", "Marker Size"), ("Label Size:", "Label Size")] {
+        let want = format!("{}:", crate::i18n::t(key));
+        assert_ne!(want, english, "German has a translation of {key}");
+        assert!(caption_node(&h, &want), "the caption reads {want}");
+        assert!(!caption_node(&h, english), "not the English {english}");
+    }
+}
