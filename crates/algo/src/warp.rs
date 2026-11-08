@@ -514,8 +514,10 @@ fn mip_level(jx: [f64; 2]) -> u32 {
 
 /// Box-filtered premultiplied levels `1..` of a window whose origin lies on the level grid of the
 /// whole source (texels outside the source are transparent): level `k`'s texel `(i, j)` averages
-/// the `2^k`-square block from the window's origin, as one pyramid of the whole source would.
-fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32) -> Vec<(Vec<f32>, usize, usize)> {
+/// the `2^k`-square texels of level `k - 1` below it, as one pyramid of the whole source would.
+/// With `steps`, every level is rounded to that many steps per unit, as the reference application
+/// keeps an 8-bit source's levels in 8 bits (its renders match only so).
+fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32, steps: Option<f32>) -> Vec<(Vec<f32>, usize, usize)> {
     let mut out: Vec<(Vec<f32>, usize, usize)> = Vec::new();
     for _ in 0..levels {
         let (prev, pw, ph) = match out.last() {
@@ -537,6 +539,11 @@ fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32) -> Vec<(V
                         }
                     }
                 }
+            }
+        }
+        if let Some(k) = steps {
+            for v in &mut next {
+                *v = (*v * k).round() / k;
             }
         }
         out.push((next, nw, nh));
@@ -723,7 +730,9 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
             }
         }
         let fw = foot.width() as usize;
-        let mips = if top_level > 0 { mip_levels(&px, fw, foot.height() as usize, n, top_level) } else { Vec::new() };
+        // An 8-bit source's levels are 8-bit too; deeper ones keep their precision (unmeasured).
+        let steps = (fmt.sample == photocraft_color::SampleType::U8).then_some(255.0);
+        let mips = if top_level > 0 { mip_levels(&px, fw, foot.height() as usize, n, top_level, steps) } else { Vec::new() };
         // One premultiplied bilinear tap of mip level `l` (>= 1) at source position `q`, with the
         // reference's 1/256-step weights; texels past the source are transparent.
         let mip_tap = |l: u32, q: [f64; 2], acc: &mut [f64; 8]| {
@@ -1106,12 +1115,15 @@ mod tests {
     fn mip_levels_average_blocks_with_transparency_past_the_edge() {
         // A 3 x 3 window of one channel: level 1 is 2 x 2, its far blocks part outside.
         let px: Vec<f32> = (1..=9).map(|v| v as f32).collect();
-        let m = mip_levels(&px, 3, 3, 1, 2);
+        let m = mip_levels(&px, 3, 3, 1, 2, None);
         assert_eq!((m[0].1, m[0].2), (2, 2));
         assert_eq!(m[0].0, vec![(1.0 + 2.0 + 4.0 + 5.0) / 4.0, (3.0 + 6.0) / 4.0, (7.0 + 8.0) / 4.0, 9.0 / 4.0]);
         assert_eq!((m[1].1, m[1].2), (1, 1));
         assert!((m[1].0[0] - 45.0 / 16.0).abs() < 1e-6);
-        assert!(mip_levels(&[], 0, 0, 4, 3).iter().all(|(p, _, _)| p.is_empty()));
+        assert!(mip_levels(&[], 0, 0, 4, 3, None).iter().all(|(p, _, _)| p.is_empty()));
+        // In 8 bits: 7 / 255 and three transparent texels average to 1.75 / 255, kept as 2 / 255.
+        let m = mip_levels(&[7.0 / 255.0, 0.0], 2, 1, 1, 1, Some(255.0));
+        assert!((m[0].0[0] - 2.0 / 255.0).abs() < 1e-7);
     }
 
     /// The reference application's warp reads a box mip level where it squeezes the source along a
