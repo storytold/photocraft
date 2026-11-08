@@ -38,7 +38,18 @@ fn has_display() -> bool {
 /// The dialog's text: the error, the renderer that was tried and why it wasn't the preference,
 /// the version and, when one was opened, the log file.
 pub fn text(error: &str, renderer: &str, note: Option<&str>, version: &str, log: Option<&Path>) -> String {
-    let mut text = format!("PhotoCraft could not start.\n\n{error}\n\nRenderer: {renderer}");
+    body("PhotoCraft could not start.", error, renderer, note, version, log)
+}
+
+/// [`text`] for a window that had been open: the app started fine and then lost its window (a
+/// display-server disconnect, for example), so "could not start" would send a bug report down
+/// the wrong path. Crash-recovery autosaves are offered at the next start.
+pub fn closed_text(error: &str, renderer: &str, note: Option<&str>, version: &str, log: Option<&Path>) -> String {
+    body("PhotoCraft closed unexpectedly. Documents with unsaved changes are offered for recovery at the next start.", error, renderer, note, version, log)
+}
+
+fn body(headline: &str, error: &str, renderer: &str, note: Option<&str>, version: &str, log: Option<&Path>) -> String {
+    let mut text = format!("{headline}\n\n{error}\n\nRenderer: {renderer}");
     if let Some(note) = note {
         text.push_str(&format!("\nStartup: {note}"));
     }
@@ -51,13 +62,18 @@ pub fn text(error: &str, renderer: &str, note: Option<&str>, version: &str, log:
 
 /// Show [`text`] in a native error dialog. Called after the event loop returned, so nothing is
 /// repainting and the launch was about to fail anyway.
-pub fn show(error: &str, renderer: &str, note: Option<&str>, log: Option<&Path>) {
+/// `started`: the app's window had been created (see [`closed_text`]).
+pub fn show(error: &str, renderer: &str, note: Option<&str>, log: Option<&Path>, started: bool) {
     let version = photocraft_engine::build_info::long_version();
-    let body = text(error, renderer, note, &version, log);
-    log::info!("showing the startup-failure dialog");
+    let (body, title) = if started {
+        (closed_text(error, renderer, note, &version, log), "PhotoCraft closed unexpectedly")
+    } else {
+        (text(error, renderer, note, &version, log), "PhotoCraft could not start")
+    };
+    log::info!("showing the {} dialog", if started { "unexpected-exit" } else { "startup-failure" });
     let _ = rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title(photocraft_ui_egui::i18n::t("PhotoCraft could not start"))
+        .set_title(photocraft_ui_egui::i18n::t(title))
         .set_description(body)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -91,6 +107,14 @@ mod tests {
         assert!(!body.contains("Startup:"), "no fallback to explain: {body:?}");
         // A start whose log file could not be created says so by leaving the line out.
         assert!(!text("boom", "cpu", None, "0.15.1", None).contains("Log file:"));
+    }
+
+    #[test]
+    fn a_window_lost_after_starting_does_not_say_it_could_not_start() {
+        let body = closed_text("winit EventLoopError: Exit Failure: 1", "vulkan", None, "0.18.0", None);
+        assert!(body.contains("closed unexpectedly"), "{body:?}");
+        assert!(!body.contains("could not start"), "{body:?}");
+        assert!(body.contains("Renderer: vulkan"), "{body:?}");
     }
 
     /// A crash fallback is the confusing case: the app picks a renderer the user never chose, so

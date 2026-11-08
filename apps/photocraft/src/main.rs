@@ -750,9 +750,16 @@ fn main() -> eframe::Result {
     // file to attach (#7643). A terminal or automation launch can read standard error or the
     // exit status instead, so it keeps the silent exit.
     if let Err(error) = &result {
-        log::error!("PhotoCraft could not start: {error}");
+        // An error after the app was created is a lost window (on Wayland, the compositor
+        // dropping a client that stopped answering), not a failed start.
+        let started = app_created.load(std::sync::atomic::Ordering::Relaxed);
+        if started {
+            log::error!("PhotoCraft closed unexpectedly: {error}");
+        } else {
+            log::error!("PhotoCraft could not start: {error}");
+        }
         if startup_report::needs_dialog(control_port.is_some()) {
-            startup_report::show(&error.to_string(), &started_renderer, started_note.as_deref(), logger.and_then(logging::AppLogger::path).as_deref());
+            startup_report::show(&error.to_string(), &started_renderer, started_note.as_deref(), logger.and_then(logging::AppLogger::path).as_deref(), started);
         }
     }
     result
