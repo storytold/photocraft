@@ -197,3 +197,57 @@ fn an_entry_that_is_not_a_number_keeps_the_angle_without_the_alert() {
     }
     assert!(alerts(&h).is_empty(), "{:?}", alerts(&h));
 }
+
+fn wheel_event(lines: f32) -> egui::Event {
+    egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Line,
+        delta: vec2(0.0, lines),
+        phase: egui::TouchPhase::Move,
+        modifiers: egui::Modifiers::NONE,
+    }
+}
+
+#[test]
+fn wheel_steps_with_the_focus_stop_at_the_ends_without_the_alert() {
+    // As in the app: the focused field takes the wheel before the bar is laid out.
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+    app.ui.tool = Tool::BackgroundEraser;
+    let mut h = Harness::builder().with_size(vec2(1600.0, 300.0)).build_ui_state(
+        |ui, app| {
+            crate::field_wheel::begin_frame(ui.ctx());
+            crate::panels::options_bar(app, ui)
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, ThemeKind::ProMedium);
+    h.run_steps(4);
+    type_angle(&mut h, "178");
+    angle_field(&h).expect("the Angle field").click();
+    h.run_steps(1);
+    for _ in 0..5 {
+        h.event(wheel_event(1.0));
+        h.run_steps(1);
+    }
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.angle, 180.0);
+    assert!(alerts(&h).is_empty(), "a wheel step is not typing: {:?}", alerts(&h));
+}
+
+#[test]
+fn a_view_scroll_while_typing_keeps_the_alert() {
+    let mut h = bar(Tool::BackgroundEraser);
+    angle_field(&h).expect("the Angle field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    // A scroll the field does not take (no wheel hand-off here) arrives with the typed text.
+    h.event(wheel_event(-3.0));
+    h.event(egui::Event::Text("400".into()));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.angle, 180.0);
+    assert_eq!(alerts(&h), vec![crate::eraser_ui::ANGLE_RANGE_MESSAGE.to_string()], "typed, so it alerts");
+}
