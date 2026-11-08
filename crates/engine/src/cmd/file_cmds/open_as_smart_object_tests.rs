@@ -334,3 +334,18 @@ fn a_document_held_for_its_prompt_does_not_share_its_name_with_the_next() {
     admit_as_smart_object(&mut t, d);
     assert_eq!(names(&t), ["a_test-1", "a_test-2"], "the second takes the next free number when admitted");
 }
+
+#[test]
+fn a_cancelled_hold_frees_its_number_for_the_one_admitted_after_it() {
+    let dir = tmp("cancelled-hold");
+    let path = write_psd16(&dir, "photo.psd", 20, 20);
+    let mut s = Session::new();
+    let first = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    let second = s.execute("file.openAsSmartObject", json!({"path": path})).unwrap();
+    assert_eq!((first["name"].as_str(), second["name"].as_str()), (Some("photo-1"), Some("photo-2")));
+    // photo-1 is cancelled while photo-2 waits; photo-2 is admitted with nothing open.
+    s.take_held_open(first["held"].as_u64().unwrap()).unwrap();
+    let (b, _) = s.take_held_open(second["held"].as_u64().unwrap()).unwrap();
+    admit_as_smart_object(&mut s, b);
+    assert_eq!(names(&s), ["photo-1"], "the first free number is taken at admission, with no collision");
+}

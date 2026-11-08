@@ -976,3 +976,34 @@ fn inline_drop_slot_survives_the_memory_prompt() {
         });
     });
 }
+
+/// A damaged PSD opened as a smart object, once confirmed, is admitted as one: the history says
+/// "Open As Smart Object" and two same-stem files get distinct names (#12212 review).
+#[test]
+fn confirmed_damaged_smart_object_opens_are_admitted_as_smart_objects_with_distinct_names() {
+    let mut app = app();
+    let bytes = recovery_psd::make_psd(true);
+    let dir = std::env::temp_dir().join(format!("photocraft-damaged-so-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let mut paths = Vec::new();
+    for sub in ["a", "b"] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+        let path = dir.join(sub).join("dmg.psd");
+        std::fs::write(&path, &bytes).unwrap();
+        paths.push(path.to_string_lossy().into_owned());
+    }
+    for path in &paths {
+        crate::jobs_ui::start_open_as_smart_object(&mut app, path, None).unwrap();
+    }
+    assert!(app.session.documents().is_empty());
+    for _ in 0..2 {
+        let id = damage_dialog(&mut app);
+        assert_eq!(call(&mut app, "ui.dialog.confirm", json!({"dialog": id}))["ok"], true);
+    }
+    let names: Vec<_> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
+    assert_eq!(names, ["dmg-1", "dmg-2"]);
+    for st in app.session.documents() {
+        assert_eq!(st.history.entries(), ["Open As Smart Object"]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

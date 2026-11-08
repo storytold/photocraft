@@ -95,11 +95,10 @@ fn apply(
 /// history is the single state "Open As Smart Object", as File › Open's is one state.
 pub fn admit_as_smart_object(s: &mut Session, mut doc: Document) -> usize {
     let layer_name = doc.layers.first().map(|l| l.name.clone());
-    // The number was free when the file was read, but a document held for its prompt did not count
-    // then: take the next free one now, as each document is admitted.
-    if let Some(base) = &layer_name
-        && s.documents().iter().any(|d| d.doc.name == doc.name)
-    {
+    // The number was free when the file was read, but documents held for their prompts did not count
+    // then, and one of them may have been cancelled since: take the first free one now, as each
+    // document is admitted.
+    if let Some(base) = &layer_name {
         doc.name = untitled_name(base, |n| s.documents().iter().any(|d| d.doc.name == n));
     }
     // Untitled: no path, so Save asks where to save.
