@@ -70,7 +70,16 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if iconic { width.clamp(1.0, max_dock) } else { width.clamp(min_dock, max_dock) }
     };
     let drag_id = egui::Id::unique("dock-edge-drag");
-    let mut drag = if empty || locked || modal { None } else { ui.ctx().data(|d| d.get_temp::<(f32, f32)>(drag_id)) };
+    // Resizing is unavailable while locked, modal, or when the parent UI is disabled (screen
+    // picking disables it). A disabled handle never receives drag_stopped, so drop any stored
+    // start here; otherwise it blocks persistence and can apply to a later pointer.
+    let resizable = !empty && !locked && !modal && ui.is_enabled();
+    let mut drag = if resizable {
+        ui.ctx().data(|d| d.get_temp::<(f32, f32)>(drag_id))
+    } else {
+        crate::panels::clear_dock_edge_drag(ui.ctx());
+        None
+    };
     // The release frame still carries the final pointer position; apply it before dropping the
     // drag, so the dock keeps the width the user released at instead of the previous frame's.
     if let Some((start_x, start_w)) = drag
@@ -97,7 +106,7 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     #[cfg(test)]
     ui.ctx().data_mut(|data| data.insert_temp(egui::Id::unique("photo-dock-panel-width"), panel_w));
-    if drag.is_some() && !modal {
+    if drag.is_some() && resizable {
         crate::panel_docking::set_end_dock_total(app, (panel_w - rw).clamp(min_visible, max_dock));
     }
     crate::direction::end_panel("dock-column").resizable(false).show_separator_line(false).exact_size(panel_w).frame(egui::Frame::NONE.fill(t.card)).show(
@@ -141,13 +150,13 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let panel_rect = ui.max_rect();
             let panel_edge = if crate::direction::is_rtl() { panel_rect.right() } else { panel_rect.left() };
             let handle = egui::Rect::from_min_max(egui::pos2(panel_edge - 4.0, panel_rect.top()), egui::pos2(panel_edge + 4.0, panel_rect.bottom()));
-            // A locked workspace, an empty dock (nothing to resize), or a modal dialog leaves the
-            // handle inert.
-            let sense = if locked || empty || modal { egui::Sense::hover() } else { egui::Sense::drag() };
+            // A locked workspace, an empty dock (nothing to resize), a modal dialog or a disabled
+            // UI leaves the handle inert.
+            let sense = if resizable { egui::Sense::drag() } else { egui::Sense::hover() };
             let response = ui.interact(handle, egui::Id::unique("dock-edge-handle"), sense);
             // The bar is always visible, on the foreground layer so no panel, rail or dock
             // content can hide it; it brightens under the pointer.
-            let active = !locked && !empty && !modal && (response.hovered() || response.dragged());
+            let active = resizable && (response.hovered() || response.dragged());
             if active {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }

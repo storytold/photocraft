@@ -1187,6 +1187,59 @@ fn setting_the_current_dock_width_keeps_the_legacy_layout() {
     assert!(app.ui.docking.is_none(), "tab selection still did not customize the workspace");
 }
 
+/// Screen picking disables the parent UI mid-drag, so the handle never sees the release. The
+/// stored drag must be dropped, saves must resume, and a later pointer must not apply the old
+/// start.
+#[test]
+fn disabling_the_ui_cancels_a_dock_edge_drag() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
+    app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+    let disabled = Arc::new(AtomicBool::new(false));
+    let flag = disabled.clone();
+    let mut ready = false;
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            if flag.load(Ordering::Relaxed) {
+                ui.disable();
+            }
+            crate::panels::dock_panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(4);
+    let stored = dock_width(h.state());
+    let rail = if h.state().ui.panels.rail { if h.state().ui.theme.is_pro() { 36.0 } else { 44.0 } } else { 0.0 };
+    let edge = 1280.0 - (stored + rail);
+    h.event(Event::PointerMoved(pos2(edge, 400.0)));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: pos2(edge, 400.0), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(Event::PointerMoved(pos2(edge + 40.0, 400.0)));
+    h.run_steps(2);
+    assert!(crate::panels::dock_edge_drag_active(&h.ctx), "the resize drag started");
+
+    disabled.store(true, Ordering::Relaxed);
+    h.event(Event::PointerButton { pos: pos2(edge + 40.0, 400.0), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert!(!crate::panels::dock_edge_drag_active(&h.ctx), "a disabled UI clears the stored drag");
+    let settled = dock_width(h.state());
+
+    disabled.store(false, Ordering::Relaxed);
+    h.run_steps(3);
+    h.event(Event::PointerMoved(pos2(edge - 120.0, 400.0)));
+    h.run_steps(2);
+    assert!((dock_width(h.state()) - settled).abs() < 0.5, "a stale drag start must not resize the dock after re-enable");
+}
+
 /// `ui.set {dockWidth}` sets the whole end dock, scaling every column rather than only the outer
 /// one; the split holding the dock follows the new total.
 #[test]
