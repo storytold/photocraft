@@ -143,9 +143,7 @@ impl Manifest {
         if !valid_id(&self.id) {
             return Err(Error::Manifest(format!("invalid id {:?}: use 1-64 characters from A-Z a-z 0-9 . _ -", self.id)));
         }
-        let name = self.name.trim();
-        let printable = name.chars().all(|c| !c.is_control() && !hidden_format(c)) && name.chars().any(visible);
-        if !printable || name.chars().count() > 64 {
+        if !printable_name(self.name.trim()) {
             return Err(Error::Manifest("`name` must be 1-64 printable characters".into()));
         }
         if self.version.len() > 32 || self.description.len() > 1024 || self.author.len() > 128 {
@@ -399,6 +397,12 @@ fn hidden_format(c: char) -> bool {
     !matches!(c, '\u{200C}' | '\u{200D}') && in_ranges(c, FORMAT)
 }
 
+/// Whether `name` (already trimmed) can be shown as a label: 1-64 characters, at least one of them
+/// visible, and no control characters, line or paragraph separators, or hidden format characters.
+pub fn printable_name(name: &str) -> bool {
+    name.chars().count() <= 64 && name.chars().any(visible) && !name.chars().any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}') || hidden_format(c))
+}
+
 /// A character that draws something on its own.
 fn visible(c: char) -> bool {
     !c.is_whitespace() && !c.is_control() && !in_ranges(c, FORMAT) && !in_ranges(c, BLANK)
@@ -631,6 +635,8 @@ mod tests {
             "\u{3164}\u{FE0F}",
             " \u{3000} ",
             "Tone\u{7}",
+            "Tone\u{2028}Pro",
+            "Tone\u{2029}Pro",
         ] {
             assert!(with_name(bad).is_err(), "{bad:?}");
         }

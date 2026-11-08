@@ -51,10 +51,41 @@ fn the_lasso_is_named_for_the_tool_that_drew_it() {
 fn a_hostile_history_name_is_refused_without_a_step() {
     let mut s = session();
     let steps = s.active().unwrap().history.past_len();
-    for name in [json!(""), json!("   "), json!("x".repeat(65)), json!("a\nb"), json!(7), json!(["Patch Tool"])] {
+    let invisible = ["\u{200B}", " \u{200B}\u{FEFF} ", "\u{3164}", "\u{FE0F}", "\u{E0020}", "\u{00AD}"];
+    let hidden = ["Patch\u{202E}looT", "\u{FEFF}Patch Tool", "Patch Tool\u{200B}", "\u{2066}Patch", "Patch\u{2028}Tool", "a\u{2029}b"];
+    let ends = ["Patch Tool\n", "\r\nPatch Tool", "\tPatch", "\u{0085}Patch", "Patch\u{2028}"];
+    let others = [json!(""), json!("   "), json!("x".repeat(65)), json!("a\nb"), json!(7), json!(["Patch Tool"])];
+    let others = ends.iter().map(|n| json!(n)).chain(others);
+    for name in invisible.iter().chain(&hidden).map(|n| json!(n)).chain(others) {
         assert!(s.execute("select.lasso", json!({"points": TRIANGLE, "historyName": name})).is_err(), "{name}");
         let polygonal = json!({"points": TRIANGLE, "polygonal": true, "historyName": name});
         assert!(s.execute("select.lasso", polygonal).is_err(), "polygonal {name}");
     }
     assert_eq!(s.active().unwrap().history.past_len(), steps);
+}
+
+#[test]
+fn a_name_joining_its_letters_with_a_zero_width_joiner_is_kept() {
+    let mut s = session();
+    for name in ["\u{0645}\u{200C}\u{06CC}", "\u{1F469}\u{200D}\u{1F4BB}", "Patch Tool \u{2713}"] {
+        s.execute("select.lasso", json!({"points": TRIANGLE, "historyName": name})).unwrap();
+        assert_eq!(last_step(&s).as_deref(), Some(name));
+    }
+}
+
+#[test]
+fn spaces_and_joiners_at_the_ends_are_trimmed_and_only_what_is_left_counts() {
+    let mut s = session();
+    let padded = format!("{}{}", " ".repeat(10), "x".repeat(60));
+    let joined = format!("Patch Tool{}", "\u{200D}".repeat(60));
+    let cases = [
+        ("Patch Tool\u{200D}", "Patch Tool"),
+        (" \u{200C}Patch Tool ", "Patch Tool"),
+        ("Love \u{2764}\u{FE0F}", "Love \u{2764}\u{FE0F}"),
+        (joined.as_str(), "Patch Tool"),
+    ];
+    for (name, stored) in cases.iter().copied().chain([(padded.as_str(), &padded[10..])]) {
+        s.execute("select.lasso", json!({"points": TRIANGLE, "historyName": name})).unwrap();
+        assert_eq!(last_step(&s).as_deref(), Some(stored), "{name:?}");
+    }
 }
