@@ -477,12 +477,38 @@ fn an_unconfirmed_background_save_leaves_the_document_unsaved() {
     let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
     h.state_mut().services.save_file = Some(gates.save(None));
     h.state_mut().services.write_unconfirmed = true;
+    let before = h.state().session.active().unwrap().saved_revision;
     h.state_mut().save_as(Some("/tmp/photocraft-test/unconfirmed.psd".into())).unwrap();
     step_until(&mut h, |a| !a.saving());
     assert_eq!(gates.written(), ["/tmp/photocraft-test/unconfirmed.psd"]);
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty(), "not saved until the writer confirms");
+    assert_eq!(st.saved_revision, before, "still saved at the revision it was before");
     assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/unconfirmed.psd"), "but it is the document's file now");
+    // A writer that confirms (the host's policy changes, as when a later save writes in place)
+    // saves it.
+    h.state_mut().services.write_unconfirmed = false;
+    h.state_mut().save_as(Some("/tmp/photocraft-test/unconfirmed.psd".into())).unwrap();
+    step_until(&mut h, |a| !a.saving());
+    assert!(!h.state().session.active().unwrap().is_dirty(), "a confirmed save saves it");
+}
+
+/// An automation save writes through the control session's own write root, which stores the
+/// bytes: in the background as inline, it saves the document whatever the host's own writer can
+/// confirm.
+#[test]
+fn a_background_automation_save_saves_the_document_with_an_unconfirmed_host_writer() {
+    let mut h = app_harness();
+    let gates = Gates { encode: Arc::new(AtomicBool::new(true)), write: Arc::new(AtomicBool::new(true)), ..Gates::default() };
+    h.state_mut().services.automation_save = Some(gates.save(None));
+    h.state_mut().services.write_unconfirmed = true;
+    let r = h.state_mut().save_automation(Some("/tmp/photocraft-test/automation.psd".into())).unwrap();
+    assert_eq!(r["pending"], true, "saved in the background");
+    step_until(&mut h, |a| !a.saving());
+    assert_eq!(gates.written(), ["/tmp/photocraft-test/automation.psd"]);
+    let st = h.state().session.active().unwrap();
+    assert!(!st.is_dirty(), "saved");
+    assert_eq!(st.path.as_deref(), Some("/tmp/photocraft-test/automation.psd"));
 }
 
 /// Save in Background off (#6207): the same worker writes the file, but the app waits for it
