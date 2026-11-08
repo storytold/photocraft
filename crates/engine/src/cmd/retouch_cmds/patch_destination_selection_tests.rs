@@ -67,7 +67,7 @@ fn destination_moves_the_selection_with_the_patch_and_undo_restores_both() {
     // The moved selection is still a hard-edged rectangle exactly filling its bounds.
     let d = s.active().unwrap();
     let sel = d.doc.selection.as_ref().unwrap();
-    assert!(is_hard_rect(sel, sel.content_bounds(), Rect::new(580, 400, 620, 440)));
+    assert!(is_hard_rect(sel, sel.content_bounds()));
     // One history state: a single undo brings back the pixels and the old selection.
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(bounds(&mut s), json!([120, 120, 40, 40]));
@@ -162,4 +162,23 @@ fn content_aware_keeps_the_selection_and_changes_the_pixels() {
     s.execute("paint.patch", json!({"offset": [400, 0], "contentAware": true})).unwrap();
     assert_eq!(bounds(&mut s), json!([120, 120, 40, 40]));
     assert_ne!(px(&s, 140, 140), before, "the selected area was filled");
+}
+
+#[test]
+fn destination_moves_a_hard_rectangle_that_extends_past_the_canvas() {
+    let mut s = session();
+    // 60x40 rectangle with 20 columns off the left edge; the part on the canvas is x 0..40.
+    s.execute("select.rect", json!({"x": 0, "y": 100, "width": 60, "height": 40})).unwrap();
+    s.execute("select.transformSelection", json!({"dx": -20, "dy": 0})).unwrap();
+    let sel_before = bounds(&mut s);
+    let before = px(&s, 480, 400);
+    s.execute("paint.patch", DESTINATION()).unwrap();
+    assert_ne!(px(&s, 480, 400), before, "the patch lands on the canvas part");
+    let d = s.active().unwrap();
+    let sel = d.doc.selection.as_ref().unwrap();
+    assert_eq!(sel.content_bounds(), Rect::new(440, 380, 500, 420), "the whole rectangle moved, off-canvas part included");
+    assert!(sel.read_region(Rect::new(440, 380, 500, 420)).chunks_exact(sel.channels().max(1)).all(|p| p[0] >= 1.0));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(bounds(&mut s), sel_before);
+    assert_eq!(px(&s, 480, 400), before);
 }

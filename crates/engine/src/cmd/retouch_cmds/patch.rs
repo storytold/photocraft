@@ -211,10 +211,11 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
     apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal)
 }
 
-/// Whether `sel` is a hard-edged rectangle exactly filling `area` (the only Destination selection
-/// measured to move with the patch).
-fn is_hard_rect(sel: &Surface, bounds: Rect, area: Rect) -> bool {
-    sel.default_pixel().first().copied().unwrap_or(0.0) <= 0.0 && bounds == area && coverage(sel, area).iter().all(|c| *c >= 1.0)
+/// Whether `sel` is a hard-edged rectangle: nothing selected outside its own `bounds` and every pixel
+/// inside fully selected (the only Destination selection measured to move with the patch). The
+/// bounds may reach past the canvas; the patched area is then only the part on the canvas.
+fn is_hard_rect(sel: &Surface, bounds: Rect) -> bool {
+    sel.default_pixel().first().copied().unwrap_or(0.0) <= 0.0 && coverage(sel, bounds).iter().all(|c| *c >= 1.0)
 }
 
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -230,7 +231,7 @@ pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {
             let (surf, lock) = crate::channel_cmds::target_surface(doc, plan.id, p)?;
             let dmg = patch_surface(surf, &sel, &plan, lock, 1);
             let bounds = sel.content_bounds();
-            if is_hard_rect(&sel, bounds, plan.area) {
+            if is_hard_rect(&sel, bounds) {
                 let (dx, dy) = plan.offset;
                 doc.selection = Some(sel.translated(dx, dy, bounds));
             }
