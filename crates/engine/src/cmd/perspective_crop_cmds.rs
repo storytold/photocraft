@@ -9,10 +9,12 @@
 //! the quad are deleted (Photoshop's Perspective Crop has no Delete Cropped Pixels option).
 //!
 //! Type and smart object layers are rasterized first: a projective map has no editable equivalent
-//! for them. Shape and fill layers stay shape and fill layers when the quad is a rectangle, whose
-//! map is affine (#11800), and are rasterized for any other quad. Vector masks, paths, shapes,
-//! notes, slices and guides follow the affine map closest to the homography (exact when the quad
-//! is a parallelogram).
+//! for them. Shape and fill layers stay shape and fill layers when the quad is a rectangle at any
+//! angle, whose map is affine (#11800); a kept shape's stroke width scales with the mean of the
+//! two axis scales, as in Image Size. Any other quad rasterizes every layer's vector data first,
+//! vector masks included, as Rasterize All Layers does. Vector masks that are left, paths, notes,
+//! slices and guides follow the affine map closest to the homography (exact when the quad is a
+//! parallelogram).
 
 use photocraft_algo::transform::{Homography, Interp, convex_quad, quad_size, quad_to_rect, warp_surface_clipped};
 use photocraft_color::PixelFormat;
@@ -110,13 +112,40 @@ fn interpolation(p: &Value) -> Result<Interp> {
 }
 
 /// Whether the quad (TL, TR, BR, BL) is a rectangle, at any angle: its map is then affine, so
-/// shape and fill layers can follow it as they are.
+/// shape and fill layers can follow it as they are. The right-angle test allows for the rounding
+/// of the corners to f64, which far from the origin is larger than the angle of a short side.
 fn is_rectangle(q: &[[f64; 2]; 4]) -> bool {
     let [tl, tr, br, bl] = *q;
     let (u, v) = ([tr[0] - tl[0], tr[1] - tl[1]], [bl[0] - tl[0], bl[1] - tl[1]]);
-    let scale = (u[0].hypot(u[1]) * v[0].hypot(v[1])).max(1e-9);
+    let (lu, lv) = (u[0].hypot(u[1]).max(1e-9), v[0].hypot(v[1]).max(1e-9));
     let parallelogram = (tl[0] + br[0] - tr[0] - bl[0]).abs() < 1e-6 && (tl[1] + br[1] - tr[1] - bl[1]).abs() < 1e-6;
-    parallelogram && ((u[0] * v[0] + u[1] * v[1]) / scale).abs() < 1e-9
+    // Each corner is off by up to half an ulp of the largest coordinate.
+    let ulp = q.iter().flatten().fold(1.0_f64, |m, c| m.max(c.abs())) * f64::EPSILON;
+    let tolerance = 1e-9 + 4.0 * ulp * (1.0 / lu + 1.0 / lv);
+    parallelogram && ((u[0] * v[0] + u[1] * v[1]) / (lu * lv)).abs() < tolerance
+}
+
+/// The mean of a rectangle crop's two axis scales: what a kept shape's stroke width is multiplied
+/// by, as Image Size does with its mean scale (#8341).
+fn stroke_scale(q: &[[f64; 2]; 4], w: f64, h: f64) -> f64 {
+    let [tl, tr, _, bl] = *q;
+    let (lu, lv) = ((tr[0] - tl[0]).hypot(tr[1] - tl[1]), (bl[0] - tl[0]).hypot(bl[1] - tl[1]));
+    if lu > 0.0 && lv > 0.0 { (w / lu + h / lv) / 2.0 } else { 1.0 }
+}
+
+/// Multiplies the stroke width of every shape layer (in groups too) by `k`.
+fn scale_strokes(layers: &mut [Layer], k: f64) {
+    for l in layers {
+        match &mut l.content {
+            LayerContent::Group(g) => scale_strokes(&mut g.children, k),
+            LayerContent::Shape(sh) => {
+                if let Some(st) = &mut sh.stroke {
+                    st.width = (f64::from(st.width) * k).clamp(0.0, f64::from(f32::MAX)) as f32;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// The affine map closest to the crop for geometry that can't take a homography (vector masks,
@@ -209,6 +238,8 @@ fn apply(doc: &mut Document, q: &[[f64; 2]; 4], h: &Homography, size: (u32, u32)
     }
     doc.selection = None;
     crate::canvas_geom::transform_geometry(doc, &nearest_affine(q, f64::from(w), f64::from(ht)));
+    // Only a rectangle crop keeps shape layers (#11800); every other quad rasterized them.
+    scale_strokes(&mut doc.layers, stroke_scale(q, f64::from(w), f64::from(ht)));
     doc.size = Size::new(w, ht);
     crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     Ok(())
@@ -233,7 +264,9 @@ fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
     let interp = interpolation(p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
     crate::image_cmds::check_resample_budget(CMD, &d.doc, w, h, "")?;
-    // Shape and fill layers follow a rectangle's affine map as they are (#11800).
+    // Shape and fill layers follow a rectangle's affine map as they are (#11800): only type and
+    // smart object layers are rasterized then. Any other quad keeps today's Rasterize All Layers,
+    // which also turns the vector masks into pixel masks, so they follow the homography too.
     let keeps_vectors = is_rectangle(&q);
     let rasterize: Vec<LayerId> = d
         .doc
@@ -253,7 +286,9 @@ fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
     let samplers = s.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
     let removed = s.samplers_removed;
     crate::analysis_cmds::compound(s, "Perspective Crop", |s| {
-        if !rasterize.is_empty() {
+        if !rasterize.is_empty() && !keeps_vectors {
+            crate::extra_cmds::rasterize_all(s)?;
+        } else if !rasterize.is_empty() {
             // One history entry for every layer, as Rasterize All Layers makes.
             let key = crate::extra_cmds::step_key(s, "rasterizeAll");
             for id in rasterize {
@@ -283,7 +318,7 @@ pub fn specs() -> Vec<CommandSpec> {
         label: "Perspective Crop",
         menu: &[],
         shortcut: None,
-        params: r##"{"corners":[[x,y],[x,y],[x,y],[x,y]] (top-left, top-right, bottom-right, bottom-left; a convex quad, document px),"width":px,"height":px,"resolution":ppi,"interpolation":"bicubic|bilinear|nearest"="bicubic"} → {width,height,resolution,corners} (the quad is mapped onto an upright width x height canvas, all layers, one undo step; no width/height: the quad's mean side lengths, one alone keeps its proportions; type and smart object layers are rasterized, and shape and fill layers too unless the quad is a rectangle)"##,
+        params: r##"{"corners":[[x,y],[x,y],[x,y],[x,y]] (top-left, top-right, bottom-right, bottom-left; a convex quad, document px),"width":px,"height":px,"resolution":ppi,"interpolation":"bicubic|bilinear|nearest"="bicubic"} → {width,height,resolution,corners} (the quad is mapped onto an upright width x height canvas, all layers, one undo step; no width/height: the quad's mean side lengths, one alone keeps its proportions; type and smart object layers are rasterized; shape and fill layers are kept when the quad is a rectangle at any angle, their stroke widths scaled by the mean axis scale, and otherwise every layer's vector data is rasterized, vector masks included)"##,
         enabled: has_doc,
         run: perspective_crop,
         journal: true,
