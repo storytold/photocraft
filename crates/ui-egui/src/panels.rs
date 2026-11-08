@@ -1634,14 +1634,23 @@ mod embedding_tests {
     use egui_kittest::kittest::Queryable;
 
     fn whole_app(rail: bool, menu_bar: bool) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        with_rail_pref(rail, menu_bar, true, |_| {})
+    }
+
+    /// The whole app with the rail preference set, after `setup` picks its theme or layout.
+    fn with_rail_pref(rail: bool, menu_bar: bool, show_rail: bool, setup: fn(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut session = photocraft_engine::Session::new();
             // An empty workspace with its docks, not the Home screen.
-            session.edit_prefs(|p| p.general.auto_show_home_screen = false);
+            session.edit_prefs(|p| {
+                p.general.auto_show_home_screen = false;
+                p.workspace.show_panel_icon_rail = show_rail;
+            });
             let mut app = PhotocraftApp::new(session, crate::Services::default());
             app.ui.panels.rail = rail;
             app.ui.panels.menu_bar = menu_bar;
+            setup(&mut app);
             app
         });
         h.run_steps(4);
@@ -1673,6 +1682,34 @@ mod embedding_tests {
         assert!(!drawn(&h, "title_bar"), "the title bar is drawn");
         assert!(h.query_by_label("File").is_none(), "the menus are drawn");
         assert!(crate::panel_docking::last_bodies(&h.ctx).iter().any(|(id, _)| id == "layers"), "the dock itself stays");
+    }
+
+    /// Preferences › Workspace › Show Panel Icon Rail hides the rail, off by default (#11180);
+    /// the embedding flag still hides it with the preference on. The Pro and Studio themes draw
+    /// the rail in different panels, and the toolbox-beside-the-dock layout draws it inside the
+    /// dock's own panel: the preference holds in each.
+    #[test]
+    fn the_icon_rail_follows_its_preference_and_is_hidden_by_default() {
+        assert!(!photocraft_engine::prefs::Preferences::default().workspace.show_panel_icon_rail);
+        type Setup = fn(&mut PhotocraftApp);
+        let setups: [(&str, Setup); 3] = [
+            ("pro", |_| {}),
+            ("studio", |app| app.ui.theme = crate::theme::ThemeKind::Studio),
+            ("toolbox beside the dock", |app| app.ui.panels.toolbar_side = crate::state::ToolbarSide::Right),
+        ];
+        for (name, setup) in setups {
+            let mut h = with_rail_pref(true, true, false, setup);
+            assert!(!rail_drawn(&h), "{name}: hidden by default");
+            assert!(crate::panel_docking::last_bodies(&h.ctx).iter().any(|(id, _)| id == "layers"), "{name}: the dock stays");
+            h.state_mut().session.execute("prefs.set", serde_json::json!({"values": {"workspace.showPanelIconRail": true}})).unwrap();
+            h.run_steps(2);
+            assert!(rail_drawn(&h), "{name}: the preference shows it without a restart");
+            h.state_mut().session.execute("prefs.set", serde_json::json!({"values": {"workspace.showPanelIconRail": false}})).unwrap();
+            h.run_steps(2);
+            assert!(!rail_drawn(&h), "{name}: and hides it again");
+            let h = with_rail_pref(false, true, true, setup);
+            assert!(!rail_drawn(&h), "{name}: an embedding app's flag wins");
+        }
     }
 
     /// Settings saved before the flags existed load with both on.
