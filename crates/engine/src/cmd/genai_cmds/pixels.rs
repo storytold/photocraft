@@ -440,18 +440,23 @@ pub(super) fn match_surroundings(px: &mut [f32], r: &Reference) -> ColourMatch {
 
 /// Decode a returned PNG, JPEG or WebP into 8-bit sRGB, with its size.
 pub(super) fn decode(bytes: &[u8]) -> Result<(Surface, Rect)> {
+    let unreadable = "the AI service returned a picture PhotoCraft can't read";
+    read_picture(bytes, unreadable, "the AI service returned an empty picture")
+}
+
+/// Decode a PNG, JPEG or WebP (at most 8192 pixels a side) into 8-bit sRGB, with its size. The
+/// errors say `unreadable` (with the codec's reason) or `empty`.
+pub(super) fn read_picture(bytes: &[u8], unreadable: &str, empty: &str) -> Result<(Surface, Rect)> {
     let opts = codecs::DecodeOptions {
         limits: codecs::Limits { max_width: RESULT_SIDE, max_height: RESULT_SIDE, max_pixels: 40_000_000, max_alloc: 512 * 1024 * 1024 },
         keep_orientation: false,
     };
-    let format = codecs::detect(bytes)
-        .filter(|f| matches!(f, Format::Png | Format::Jpeg | Format::WebP))
-        .ok_or_else(|| other("the AI service returned a picture PhotoCraft can't read"))?;
-    let img = codecs::decode_as_with(format, bytes, &opts).map_err(|e| other(format!("the AI service returned a picture PhotoCraft can't read ({e})")))?;
+    let format = codecs::detect(bytes).filter(|f| matches!(f, Format::Png | Format::Jpeg | Format::WebP)).ok_or_else(|| other(unreadable))?;
+    let img = codecs::decode_as_with(format, bytes, &opts).map_err(|e| other(format!("{unreadable} ({e})")))?;
     let img = img.convert(ChannelLayout::Rgba, CodecSample::U8);
     let r = Rect::from_xywh(0, 0, img.width(), img.height());
     if r.is_empty() {
-        return Err(other("the AI service returned an empty picture"));
+        return Err(other(empty));
     }
     let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
     s.write_interleaved(r, img.data());

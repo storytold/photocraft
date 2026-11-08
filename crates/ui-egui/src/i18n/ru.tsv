@@ -4804,6 +4804,7 @@ shape	Appearance	Оформление
 	The picture around the selection	Изображение вокруг выделения
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	В выделении {n} отдельных областей — слишком много, чтобы заливать их по одной (не больше {max}): оно заливается целиком.
 	The selection's shape	Форма выделения
+	A reference picture	Референсное изображение
 	Until I turn it off	Пока я не отключу
 	Variations	Варианты
 	Waiting ({n})	В очереди ({n})

@@ -3636,6 +3636,7 @@ curves	Smooth	تنعيم
 	The picture around the selection	الصورة حول التحديد
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	يحتوي التحديد على {n} من المناطق المنفصلة، وهو عدد أكبر من أن تُعبَّأ واحدة تلو الأخرى (بحد أقصى {max}): لذا يُعبَّأ كوحدة واحدة.
 	The selection's shape	شكل التحديد
+	A reference picture	صورة مرجعية
 	Until I turn it off	حتى أوقفه
 	Variations	التنويعات
 	Waiting ({n})	قيد الانتظار ({n})

@@ -108,7 +108,8 @@ impl std::fmt::Display for AiFailure {
 }
 
 /// What a Generative Fill sends: the area around the selection, the selection as a mask (both PNG,
-/// the same size) and the prompt. The `generative-fill` tool's inputs are exactly these three.
+/// the same size), the prompt and any reference pictures. These are the `generative-fill` tool's
+/// inputs: source, mask, prompt and optional references.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FillRequest {
     /// The area around the selection, sRGB PNG.
@@ -119,6 +120,9 @@ pub struct FillRequest {
     pub mask_png: Vec<u8>,
     /// What to put there; may be empty (continue the picture through the selection).
     pub prompt: String,
+    /// Pictures the person added to show what the fill should look like, sRGB PNG, in the order
+    /// added. A guide only, never part of the document; usually none.
+    pub references: Vec<Vec<u8>>,
 }
 
 /// Which input of the request a [`SentItem`] is.
@@ -131,6 +135,8 @@ pub enum SentInput {
     Mask,
     /// The prompt.
     Prompt,
+    /// A reference picture the person added (one item each).
+    Reference,
     /// Anything else the layer reports.
     Other,
 }

@@ -3837,6 +3837,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	선택 영역 주변 이미지
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	선택 영역에 떨어진 영역이 {n}개 있어 하나씩 채우기에는 너무 많습니다(최대 {max}개). 하나로 채웁니다.
 	The selection's shape	선택 영역의 모양
+	A reference picture	참조 이미지
 	Until I turn it off	끌 때까지
 	Variations	변형
 	Waiting ({n})	대기 중 ({n})

@@ -5,7 +5,8 @@
 //! and leaves the computer's memory only through this command, which automation may not run.
 //!
 //! The folder holds the area as rendered before the selection was cleared (`crop.png`), the
-//! picture, mask and prompt exactly as sent (`source.png`, `mask.png`, `prompt.txt`), each
+//! picture, mask and prompt exactly as sent (`source.png`, `mask.png`, `prompt.txt`), any
+//! reference pictures as sent (`reference-N.png`), each
 //! picture exactly as the service returned it (`returned-N.*`), each placed variation composited
 //! into the document as it is now (`composite-N.png`), and `summary.json`: the model and
 //! connection, sizes, how each picture was lined up, whether colour matching ran or why it was
@@ -151,6 +152,7 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
         (format!("{prefix}mask.png"), request.mask_png.clone()),
         (format!("{prefix}prompt.txt"), request.prompt.as_bytes().to_vec()),
     ];
+    files.extend(request.references.iter().enumerate().map(|(k, png)| (format!("{prefix}reference-{}.png", k + 1), png.clone())));
     let mut variations = Vec::new();
     for (k, ret) in c.returned.iter().enumerate() {
         let n = k + 1;

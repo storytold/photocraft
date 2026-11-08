@@ -4323,6 +4323,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	Зображення навколо виділення
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	У виділенні {n} окремих областей — забагато, щоб заливати їх по одній (не більше {max}): воно заливається цілком.
 	The selection's shape	Форма виділення
+	A reference picture	Референсне зображення
 	Until I turn it off	Доки я не вимкну
 	Variations	Варіанти
 	Waiting ({n})	У черзі ({n})

@@ -43,11 +43,13 @@ mod areas;
 mod diag;
 mod pixels;
 mod queue;
+mod references;
 mod remote;
 
 pub use areas::MAX_AREAS;
 pub use diag::SAVE_DIAGNOSTICS;
 pub use queue::MAX_PARALLEL;
+pub use references::{MAX_REFERENCE_BYTES, MAX_REFERENCES};
 
 pub use pixels::{ColourMatch, Framing};
 use pixels::{Placed, Reference, other};
@@ -250,6 +252,8 @@ struct FillInput {
     area: Rect,
     size: (u32, u32),
     prompt: String,
+    /// The reference pictures as the person gave them (encoded); made ready to send with the rest.
+    references: Vec<Vec<u8>>,
     name: String,
     count: usize,
     /// Generate More: the generative layer the variations join.
@@ -274,7 +278,11 @@ impl FillInput {
         // Image models need words: an empty prompt asks for the picture to carry on through the
         // selection, which removes what was there.
         let prompt = if self.prompt.is_empty() { CONTINUE_PROMPT.to_owned() } else { self.prompt.clone() };
-        let p = Arc::new(Prepared { request: FillRequest { source_png, mask_png, prompt }, reference });
+        if !self.references.is_empty() {
+            ctx.progress(0.08, "Preparing the reference pictures");
+        }
+        let references = self.references.iter().enumerate().map(|(i, bytes)| references::prepare(bytes, i + 1, UPLOAD_SIDE)).collect::<Result<Vec<_>>>()?;
+        let p = Arc::new(Prepared { request: FillRequest { source_png, mask_png, prompt, references }, reference });
         *self.prepared.lock().unwrap_or_else(PoisonError::into_inner) = Some(Arc::clone(&p));
         Ok(p)
     }
@@ -450,6 +458,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let count = variations_param(p, "variations", FILL)?;
     let area_index = area_param(p)?;
+    let references = references::param(p, FILL)?;
     fill_enabled(s).map_err(bad)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
@@ -474,6 +483,7 @@ fn fill(s: &mut Session, p: &Value) -> Result<Value> {
         area,
         size: (w, h),
         prompt,
+        references,
         count,
         into: None,
         prepared: Mutex::new(None),
@@ -928,6 +938,8 @@ fn more(s: &mut Session, p: &Value) -> Result<Value> {
         area: source.area,
         size: (0, 0),
         prompt: source.prompt.clone(),
+        // Sent as they were the first time: they are part of the prepared request.
+        references: Vec::new(),
         count,
         into: Some(group),
         prepared: Mutex::new(Some(Arc::clone(&source.prepared))),
@@ -945,7 +957,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Generative Fill…",
             menu: &["Edit"],
             shortcut: None,
-            params: r#"{"prompt":str?,"variations":1..4=3,"area":uint?} fills the selection with the model chosen for Generative Fill in the Craft AI setup: a new group masked by the selection holds one layer per variation, the first showing. The selected area is blurred out first, so the model fills a hole (an empty prompt continues the surrounding picture through it, removing what was there). `area` fills only that one of the selection's separate areas (0 = the first, see layer.generative.areas). Started in the background it doesn't lock the document: it returns {job, fill} at once, at most 5 fills talk to the service at a time (the rest wait their turn), and the group lands above the layer that was active when it started, without becoming active (layer.generative.fills lists those still running, waiting for consent or failed). Sends the selected area, the picture around it, the selection's shape and the prompt to the chosen model, once per variation; a model off this computer needs the person's agreement first (layer.generative.agree). Not available to automation."#,
+            params: r#"{"prompt":str?,"variations":1..4=3,"area":uint?,"references":[{"data":base64}]?} fills the selection with the model chosen for Generative Fill in the Craft AI setup: a new group masked by the selection holds one layer per variation, the first showing. The selected area is blurred out first, so the model fills a hole (an empty prompt continues the surrounding picture through it, removing what was there). `area` fills only that one of the selection's separate areas (0 = the first, see layer.generative.areas). Started in the background it doesn't lock the document: it returns {job, fill} at once, at most 5 fills talk to the service at a time (the rest wait their turn), and the group lands above the layer that was active when it started, without becoming active (layer.generative.fills lists those still running, waiting for consent or failed). Sends the selected area, the picture around it, the selection's shape, the prompt and any reference pictures to the chosen model, once per variation. `references` are up to 4 PNG, JPEG or WebP pictures (10 MB each) that show what the fill should look like: each is sent as a PNG of its pixels only, at most 2048 pixels a side, and a model that can't take them refuses before anything is sent; a model off this computer needs the person's agreement first (layer.generative.agree). Not available to automation."#,
             enabled: fill_enabled,
             run: fill,
             journal: true,
@@ -1015,7 +1027,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Save Fill Diagnostics…",
             menu: &[],
             shortcut: None,
-            params: r#"{"folder":text,"layer":id?,"fill":id?} writes what a Generative Fill sent and got back into a new folder inside `folder`: the area as rendered before the selection was cleared, the picture, mask and prompt exactly as sent, each picture as the service returned it, each placed variation composited, and summary.json (model, connection, sizes, how each picture was lined up, whether colour matching ran or why not). For the active generative layer (or `layer`), or a failed fill (`fill`). Kept in memory only for the last 8 fills of the session; nothing is written unless this runs. Desktop only; not available to automation."#,
+            params: r#"{"folder":text,"layer":id?,"fill":id?} writes what a Generative Fill sent and got back into a new folder inside `folder`: the area as rendered before the selection was cleared, the picture, mask, prompt and any reference pictures exactly as sent, each picture as the service returned it, each placed variation composited, and summary.json (model, connection, sizes, how each picture was lined up, whether colour matching ran or why not). For the active generative layer (or `layer`), or a failed fill (`fill`). Kept in memory only for the last 8 fills of the session; nothing is written unless this runs. Desktop only; not available to automation."#,
             enabled: diag::save_enabled,
             run: diag::save,
             journal: false,

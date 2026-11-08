@@ -3635,6 +3635,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	Gambar di sekitar seleksi
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Seleksi memiliki {n} area terpisah, terlalu banyak untuk diisi satu per satu (paling banyak {max}): diisi sebagai satu kesatuan.
 	The selection's shape	Bentuk seleksi
+	A reference picture	Gambar referensi
 	Until I turn it off	Sampai saya matikan
 	Variations	Variasi
 	Waiting ({n})	Menunggu ({n})

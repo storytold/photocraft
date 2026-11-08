@@ -236,10 +236,15 @@ impl GenerativeAi for CraftAi {
 
     /// Check the request against the chosen model and say what it would send, and where.
     fn plan(&self, request: FillRequest) -> Result<Arc<dyn FillPlan>, AiFailure> {
-        let req = Request::new(self.role.capability.clone())
+        let mut req = Request::new(self.role.capability.clone())
             .with_input(InputRole::Source, Payload::inline("image/png", request.source_png).map_err(failure)?)
             .with_input(InputRole::Mask, Payload::inline("image/png", request.mask_png).map_err(failure)?)
             .with_input(InputRole::Prompt, Payload::text(request.prompt));
+        // After the source, mask and prompt, in the order added: the shared layer numbers them
+        // from there, and a route that takes none refuses the plan here, before consent.
+        for png in request.references {
+            req = req.with_input(InputRole::Reference, Payload::inline("image/png", png).map_err(failure)?);
+        }
         let mut plan = self.client.plan(&self.role, req.clone()).map_err(failure)?;
         // OpenAI picks its own quality unless told, and fills came back soft; other adapters
         // refuse params they don't know, so this is asked only of OpenAI.
@@ -260,6 +265,7 @@ impl GenerativeAi for CraftAi {
                         InputRole::Source => SentInput::Source,
                         InputRole::Mask => SentInput::Mask,
                         InputRole::Prompt => SentInput::Prompt,
+                        InputRole::Reference => SentInput::Reference,
                         _ => SentInput::Other,
                     },
                     kind: match i.kind {

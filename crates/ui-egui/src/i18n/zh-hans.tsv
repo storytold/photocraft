@@ -3301,6 +3301,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	选区周围的图像
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	选区有 {n} 个分离的区域，太多，无法逐个填充（最多 {max} 个）：将作为整体填充。
 	The selection's shape	选区的形状
+	A reference picture	参考图片
 	Until I turn it off	直到我关闭
 	Variations	变体
 	Waiting ({n})	等待中（{n}）

@@ -4359,6 +4359,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	Obraz kolem výběru
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Výběr má {n} samostatných oblastí, příliš mnoho na vyplnění po jedné (nejvýše {max}): vyplní se jako celek.
 	The selection's shape	Tvar výběru
+	A reference picture	Referenční obrázek
 	Until I turn it off	Dokud to nevypnu
 	Variations	Varianty
 	Waiting ({n})	Čeká ({n})

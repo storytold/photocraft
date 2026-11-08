@@ -4343,6 +4343,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	Seçimin çevresindeki görüntü
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Seçimde {n} ayrı alan var; tek tek doldurmak için çok fazla (en fazla {max}): tek parça olarak doldurulur.
 	The selection's shape	Seçimin şekli
+	A reference picture	Referans resmi
 	Until I turn it off	Ben kapatana kadar
 	Variations	Varyasyonlar
 	Waiting ({n})	Bekliyor ({n})

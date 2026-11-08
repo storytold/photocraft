@@ -4289,6 +4289,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	選択範囲の周りの画像
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	選択範囲に {n} 個の離れた領域があり、1 つずつ塗りつぶすには多すぎます（最大 {max}）。まとめて塗りつぶします。
 	The selection's shape	選択範囲の形
+	A reference picture	参考画像
 	Until I turn it off	オフにするまで
 	Variations	バリエーション
 	Waiting ({n})	待機中（{n}）

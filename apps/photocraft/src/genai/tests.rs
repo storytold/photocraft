@@ -40,6 +40,13 @@ fn inpaint_model() -> ModelInfo {
     )
 }
 
+/// [`inpaint_model`] that also takes up to `n` reference pictures.
+fn inpaint_model_with_references(n: u32) -> ModelInfo {
+    let mut m = inpaint_model();
+    m.capabilities[0] = m.capabilities[0].clone().accepting(InputRole::Reference, n);
+    m
+}
+
 /// What the scripted service does with each job.
 #[derive(Clone)]
 enum Answer {
@@ -72,6 +79,11 @@ struct Scene {
 
 impl Scene {
     fn new(online: bool, chosen: bool) -> Scene {
+        Scene::with_model(online, chosen, inpaint_model())
+    }
+
+    /// [`Scene::new`] with `model` as the service's one model.
+    fn with_model(online: bool, chosen: bool, model: ModelInfo) -> Scene {
         let dir = tempfile::tempdir().unwrap();
         let shared = SharedStore::new(dir.path().join("connections.json"));
         let keys = Arc::new(MemoryStore::new());
@@ -81,12 +93,12 @@ impl Scene {
                 "id": "fake", "label": "Fake (online)", "provider": "fake",
                 "endpoint": "https://fake.example.com/v1", "locality": "remote",
                 "auth": {"kind": "api_key", "secret": "fake-key"},
-                "billing": "metered", "models": [inpaint_model()],
+                "billing": "metered", "models": [model],
             })
         } else {
             json!({
                 "id": "fake", "label": "Fake (on this computer)", "provider": "fake",
-                "locality": "local", "auth": {"kind": "none"}, "billing": "free", "models": [inpaint_model()],
+                "locality": "local", "auth": {"kind": "none"}, "billing": "free", "models": [model],
             })
         };
         let connection: Connection = serde_json::from_value(connection).unwrap();
@@ -128,7 +140,12 @@ impl Scene {
 }
 
 fn request() -> FillRequest {
-    FillRequest { source_png: png(8, 8, [10, 20, 30]), mask_png: png(8, 8, [255, 255, 255]), prompt: "a red balloon".into() }
+    FillRequest { source_png: png(8, 8, [10, 20, 30]), mask_png: png(8, 8, [255, 255, 255]), prompt: "a red balloon".into(), references: Vec::new() }
+}
+
+/// [`request`] with `n` reference pictures of different sizes.
+fn request_with_references(n: u32) -> FillRequest {
+    FillRequest { references: (1..=n).map(|k| png(4 + k, 4, [200, 0, 0])).collect(), ..request() }
 }
 
 fn wait(job: &mut Box<dyn photocraft_engine::genai::FillJob>) -> JobPoll {
@@ -367,4 +384,33 @@ fn an_old_status_is_read_again_on_a_worker_not_on_the_caller() {
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
     assert!(matches!(ai.status(), AiStatus::Unavailable { .. }));
+}
+
+#[test]
+fn reference_pictures_are_sent_after_the_rest_and_disclosed_one_by_one() {
+    let scene = Scene::with_model(true, true, inpaint_model_with_references(4));
+    let ai = scene.ai(Some(Answer::Picture(png(4, 4, [255, 0, 0]))));
+    let request = request_with_references(2);
+    let plan = ai.plan(request.clone()).unwrap();
+    let d = plan.disclosure();
+    let inputs: Vec<_> = d.items.iter().map(|i| i.input).collect();
+    assert_eq!(inputs, [SentInput::Source, SentInput::Mask, SentInput::Prompt, SentInput::Reference, SentInput::Reference]);
+    assert_eq!(d.items[3].bytes, Some(request.references[0].len() as u64));
+    assert_eq!(d.items[4].bytes, Some(request.references[1].len() as u64));
+    plan.agree(ConsentTerm::ThisTime).unwrap();
+    let mut job = plan.start().unwrap();
+    assert!(matches!(wait(&mut job), JobPoll::Done(_)));
+}
+
+#[test]
+fn a_model_that_takes_no_references_refuses_them_before_consent() {
+    let scene = Scene::new(true, true);
+    let ai = scene.ai(Some(Answer::Picture(png(4, 4, [255, 0, 0]))));
+    assert!(ai.plan(request_with_references(1)).is_err(), "planned with a reference the model can't take");
+    assert!(!scene.consent_path().exists());
+    // Too many for the model is refused too, not cut short.
+    let scene = Scene::with_model(true, true, inpaint_model_with_references(1));
+    let ai = scene.ai(Some(Answer::Picture(png(4, 4, [255, 0, 0]))));
+    assert!(ai.plan(request_with_references(1)).is_ok());
+    assert!(ai.plan(request_with_references(2)).is_err(), "planned with more references than the model takes");
 }

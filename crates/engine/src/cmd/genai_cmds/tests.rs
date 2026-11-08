@@ -257,7 +257,10 @@ impl GenerativeAi for FakeAi {
             SentItem { input: SentInput::Source, kind: SentKind::Image, bytes: Some(request.source_png.len() as u64) },
             SentItem { input: SentInput::Mask, kind: SentKind::Image, bytes: Some(request.mask_png.len() as u64) },
             SentItem { input: SentInput::Prompt, kind: SentKind::Text, bytes: Some(request.prompt.len() as u64) },
-        ];
+        ]
+        .into_iter()
+        .chain(request.references.iter().map(|r| SentItem { input: SentInput::Reference, kind: SentKind::Image, bytes: Some(r.len() as u64) }))
+        .collect();
         let disclosure = Disclosure {
             destination: if self.0.remote { "https://fake.example".into() } else { "fake".into() },
             connection: "Fake".into(),
@@ -993,4 +996,5 @@ fn consent_terms_use_the_shared_layers_ids() {
 }
 
 /// Review follow-ups (#10903): feathered edges, colour matching, framing, diagnostics.
+mod references;
 mod review;

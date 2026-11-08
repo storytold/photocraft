@@ -4231,6 +4231,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	Obraz wokół zaznaczenia
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Zaznaczenie ma {n} oddzielnych obszarów, za dużo, by wypełniać je po kolei (najwyżej {max}): zostanie wypełnione jako całość.
 	The selection's shape	Kształt zaznaczenia
+	A reference picture	Obraz referencyjny
 	Until I turn it off	Dopóki tego nie wyłączę
 	Variations	Warianty
 	Waiting ({n})	Oczekuje ({n})

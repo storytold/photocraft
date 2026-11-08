@@ -4686,6 +4686,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	Slika oko izbora
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Izbor ima {n} zasebnih oblasti, previše da bi se popunjavale jedna po jedna (najviše {max}): popunjava se kao celina.
 	The selection's shape	Oblik izbora
+	A reference picture	Referentna slika
 	Until I turn it off	Dok to ne isključim
 	Variations	Varijacije
 	Waiting ({n})	Čeka ({n})

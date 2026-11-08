@@ -4366,6 +4366,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	Het beeld rond de selectie
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	De selectie heeft {n} losse gebieden, te veel om één voor één te vullen (maximaal {max}): ze wordt als geheel gevuld.
 	The selection's shape	De vorm van de selectie
+	A reference picture	Een referentieafbeelding
 	Until I turn it off	Tot ik het uitzet
 	Variations	Variaties
 	Waiting ({n})	Wachtend ({n})

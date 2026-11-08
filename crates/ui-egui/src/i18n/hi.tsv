@@ -706,6 +706,7 @@ cameraRaw	Yellow	पीला
 	The picture around the selection	चयन के आसपास की तस्वीर
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	चयन में {n} अलग क्षेत्र हैं, एक-एक करके भरने के लिए बहुत ज़्यादा (अधिकतम {max}): इसे एक साथ भरा जाता है।
 	The selection's shape	चयन का आकार
+	A reference picture	एक संदर्भ चित्र
 	Until I turn it off	जब तक मैं बंद न करूँ
 	Variations	विविधताएँ
 	Waiting ({n})	प्रतीक्षा में ({n})

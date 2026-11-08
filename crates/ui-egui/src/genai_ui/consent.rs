@@ -85,6 +85,7 @@ pub(super) fn item_text(input: &str, sizes: &[u64]) -> String {
     let what = match input {
         "source" => tl!("The picture around the selection"),
         "mask" => tl!("The selection's shape"),
+        "reference" => tl!("A reference picture"),
         "prompt" => return tl!("Your prompt").to_owned(),
         _ => tl!("Other data"),
     };

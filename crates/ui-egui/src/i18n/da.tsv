@@ -4853,6 +4853,7 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	The picture around the selection	Billedet omkring markeringen
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	Markeringen har {n} adskilte områder, for mange til at udfylde ét ad gangen (højst {max}): den udfyldes som én.
 	The selection's shape	Markeringens form
+	A reference picture	Et referencebillede
 	Until I turn it off	Indtil jeg slår det fra
 	Variations	Variationer
 	Waiting ({n})	Venter ({n})

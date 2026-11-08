@@ -4534,6 +4534,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The picture around the selection	A imagem em volta da seleção
 	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	A seleção tem {n} áreas separadas, demais para preencher uma a uma (no máximo {max}): ela é preenchida como um todo.
 	The selection's shape	A forma da seleção
+	A reference picture	Uma imagem de referência
 	Until I turn it off	Até eu desativar
 	Variations	Variações
 	Waiting ({n})	Aguardando ({n})
