@@ -189,8 +189,8 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 pub(crate) fn step_icon(step: &str) -> &'static str {
     match step {
         s if s.contains("Brush") || s.contains("Eraser") => "brush",
-        // Applying a patch edits pixels; only the Patch tool's lasso is a selection step.
-        "Patch Selection" => "sliders-horizontal",
+        // Applying a patch or a content-aware move edits pixels; only these tools' lassos are selection steps.
+        "Patch Selection" | "Content-Aware Move Selection" => "sliders-horizontal",
         // The Layers panel's controls (layer.setProps).
         "Opacity Change" | "Fill Opacity Change" | "Blending Change" => "layers",
         s if s.contains("Layer") => "layers",

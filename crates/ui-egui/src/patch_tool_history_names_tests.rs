@@ -51,4 +51,7 @@ fn the_content_aware_move_tool_lasso_is_named_for_the_tool() {
 #[test]
 fn the_content_aware_move_tool_step_has_the_selection_icon() {
     assert_eq!(crate::panels::history_step_icon("Content-Aware Move Tool"), "square-dashed");
+    // The move or extend itself edits pixels, so it takes the same icon as applying a patch.
+    assert_ne!(crate::panels::history_step_icon("Content-Aware Move Selection"), "square-dashed");
+    assert_eq!(crate::panels::history_step_icon("Content-Aware Move Selection"), crate::panels::history_step_icon("Patch Selection"));
 }
