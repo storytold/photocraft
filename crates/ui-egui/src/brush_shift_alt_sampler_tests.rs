@@ -109,3 +109,14 @@ fn shift_alt_click_on_a_sampler_samples_the_foreground_as_before() {
     assert_eq!(samplers(&mut app), before, "no second point on the first");
     assert_eq!(foreground(&app)[..3], [1.0, 0.0, 0.0], "the red under the pointer, as an Alt+click");
 }
+
+#[test]
+fn a_shift_alt_click_off_the_canvas_reports_nothing() {
+    // The Color Sampler tool places no point off the canvas and says nothing; so does this press.
+    let mut app = app(Tool::Brush);
+    app.ui.status = "Ready".into();
+    for (x, y) in [(-20.0, 50.0), (450.0, 50.0), (f64::NAN, 10.0)] {
+        click(&mut app, x, y, SHIFT_ALT);
+        assert_eq!(app.ui.status, "Ready", "({x}, {y}): the status bar is left as it was");
+    }
+}
