@@ -709,7 +709,8 @@ pub fn ruler_info(r: &Ruler, sc: &MeasurementScale) -> Value {
             if a > 180.0 {
                 a = 360.0 - a;
             }
-            json!({"x": r.start[0], "y": r.start[1], "w": dx, "h": dy, "angle": round4(a), "l1": round4(l1), "l2": round4(l2), "length": round4(l1 * f), "units": sc.units, "protractor": true})
+            // X/Y name the second arm's end and W/H stay blank, as the reference shows (#11990).
+            json!({"x": q[0], "y": q[1], "w": Value::Null, "h": Value::Null, "angle": round4(a), "l1": round4(l1), "l2": round4(l2), "length": round4(l1 * f), "units": sc.units, "protractor": true})
         }
     }
 }
@@ -1351,7 +1352,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.analysis.rulerTool",
             "Ruler Tool",
             ["Image", "Analysis"],
-            r##"{"start":[x,y],"end":[x,y],"protractor":[x,y]|null?,"clear":bool=false} (no params: read) → X/Y/W/H/angle/L1/L2"##,
+            r##"{"start":[x,y],"end":[x,y],"protractor":[x,y]|null?,"clear":bool=false} (no params: read) → X/Y/W/H/angle/L1/L2 (protractor: X/Y the second arm's end, W/H null)"##,
             has_doc,
             ruler_tool,
             true
@@ -1413,6 +1414,9 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+#[cfg(test)]
+#[path = "analysis_protractor_readout_tests.rs"]
+mod analysis_protractor_readout_tests;
 #[cfg(test)]
 #[path = "analysis_straighten_enabled_tests.rs"]
 mod analysis_straighten_enabled_tests;
