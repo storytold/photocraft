@@ -216,3 +216,23 @@ fn the_spread_keeps_the_transparent_and_alpha_handling() {
     let region = run(half, 30.0);
     assert_eq!((region.at(1, 0), region.at(2, 0)), (0.0, 1.0), "alpha differences stay limited by the Tolerance");
 }
+
+/// The spread was measured on opaque colours only: a partly transparent seed or pixel keeps the
+/// per-channel limit, in the match and in the anti-alias fringe.
+#[test]
+fn partly_transparent_colours_keep_the_per_channel_limit() {
+    let area = Rect::new(0, 0, 3, 1);
+    let run = |img: &[[u8; 4]; 3], distance, anti_alias| sel::wand_region_by(img, area, (0, 0), 30.0, false, anti_alias, None, distance).unwrap();
+
+    let opaque = [[100, 100, 100, 255], [130, 100, 70, 255], [9, 9, 9, 255]];
+    assert_eq!(run(&opaque, sel::ColorDistance::Spread, false).at(1, 0), 0.0, "opaque colours use the spread");
+
+    for img in [
+        [[100, 100, 100, 128], [130, 100, 70, 128], [160, 100, 40, 128]],
+        [[100, 100, 100, 255], [130, 100, 70, 250], [160, 100, 40, 250]],
+        [[100, 100, 100, 250], [130, 100, 70, 255], [160, 100, 40, 255]],
+    ] {
+        assert_eq!(run(&img, sel::ColorDistance::Spread, false).at(1, 0), 1.0, "{img:?}: every channel is within 30");
+        assert_eq!(run(&img, sel::ColorDistance::Spread, true), run(&img, sel::ColorDistance::LargestChannel, true), "{img:?}: same fringe");
+    }
+}

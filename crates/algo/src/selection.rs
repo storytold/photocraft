@@ -305,7 +305,8 @@ pub enum ColorDistance {
     /// The largest difference in any one of R, G and B.
     LargestChannel,
     /// The spread of `{0, dR, dG, dB}`: changes in the same direction count once, opposite
-    /// changes add up.
+    /// changes add up. Only opaque colours were measured, so a partly transparent seed or pixel
+    /// uses [`Self::LargestChannel`].
     Spread,
 }
 
@@ -313,8 +314,8 @@ impl ColorDistance {
     fn rgb(self, p: [u8; 4], seed: [u8; 4]) -> i32 {
         let d = [0, 1, 2].map(|c| p[c] as i32 - seed[c] as i32);
         match self {
-            Self::LargestChannel => d.iter().fold(0, |m, v| m.max(v.abs())),
-            Self::Spread => d.iter().fold(0, |m, v| m.max(*v)) - d.iter().fold(0, |m, v| m.min(*v)),
+            Self::Spread if p[3] == 255 && seed[3] == 255 => d.iter().fold(0, |m, v| m.max(*v)) - d.iter().fold(0, |m, v| m.min(*v)),
+            Self::LargestChannel | Self::Spread => d.iter().fold(0, |m, v| m.max(v.abs())),
         }
     }
 }
