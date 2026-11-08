@@ -27,6 +27,7 @@ fn can_start(s: &Session) -> std::result::Result<(), String> {
 /// `design.start`: record from the current document on, as one undoable edit.
 fn start(s: &mut Session, _: &Value) -> Result<Value> {
     can_start(s).map_err(EngineError::Other)?;
+    forget_prelude(s);
     s.edit("Start Design Timeline", |doc, _| {
         doc.design_timeline = Some(Arc::new(DesignTimeline::new(Arc::new(doc.clone()))));
         Ok(())
@@ -42,6 +43,15 @@ fn stop(s: &mut Session, _: &Value) -> Result<Value> {
         Ok(())
     })?;
     Ok(json!({"stopped": true}))
+}
+
+/// Drop the active document's pending tool settings as a timeline starts: an earlier timeline's
+/// (stopped, or its start undone), which the new one must not take. Its colours and symmetry are
+/// pinned.
+fn forget_prelude(s: &mut Session) {
+    if let Some(id) = s.active().map(|st| st.doc.id) {
+        s.timeline_prelude.remove(&id);
+    }
 }
 
 /// `design.list`: every step with its outcome, the marker and how many steps are in effect.
@@ -148,7 +158,13 @@ fn suppress(s: &mut Session, p: &Value, on: bool) -> Result<Value> {
 
 /// `design.delete`: remove a step, then replay from where it was.
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
-    change(s, "design.delete", "Delete Step", |tl| {
+    // The last step's tool settings go with the next step recorded instead.
+    let tail = timeline_of(s).ok().and_then(|tl| {
+        let i = step_index("design.delete", tl, p).ok()?;
+        (i + 1 == tl.steps.len()).then(|| tl.steps.get(i).map(|st| st.prelude.clone())).flatten()
+    });
+    let doc = s.active().map(|st| st.doc.id);
+    let r = change(s, "design.delete", "Delete Step", |tl| {
         let i = step_index("design.delete", tl, p)?;
         let removed = tl.steps.remove(i);
         // Its tool settings still feed the steps after it.
@@ -161,7 +177,11 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
             *m -= 1;
         }
         Ok((i, true))
-    })
+    })?;
+    if let (Some(prelude), Some(doc)) = (tail, doc) {
+        s.timeline_prelude.entry(doc).or_default().splice(0..0, prelude);
+    }
+    Ok(r)
 }
 
 /// `design.rollTo`: move the marker (`at` steps in effect, null = all) and rebuild the document there.

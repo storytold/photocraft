@@ -688,4 +688,21 @@ mod tests {
         thumbs.lock().unwrap().insert((st.step, Arc::as_ptr(&doc) as usize), (std::sync::Weak::new(), Some(stale)));
         assert!(thumb(&ctx, &tl, st).is_none(), "a new render starts");
     }
+
+    /// An adjustment's Edit Parameters previews only on the document it edits too.
+    #[test]
+    fn an_adjustment_edit_previews_only_on_its_document() {
+        let mut a = app();
+        a.run("design.start", json!({})).unwrap();
+        a.run("layer.new.layer", json!({"name": "A"})).unwrap();
+        a.run("edit.fillForeground", json!({})).unwrap();
+        a.run("image.adjustments.brightnessContrast", json!({"brightness": 40, "contrast": -10})).unwrap();
+        assert!(has_dialog("image.adjustments.brightnessContrast"));
+        edit(&mut a, 2).unwrap();
+        assert!(crate::adjust_preview::display_doc(&mut a, 0).is_some(), "previews on the edited document");
+        a.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        a.run("layer.new.layer", json!({})).unwrap();
+        let other = a.session.active_index().unwrap();
+        assert!(crate::adjust_preview::display_doc(&mut a, other).is_none());
+    }
 }

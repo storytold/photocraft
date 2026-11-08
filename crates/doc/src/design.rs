@@ -353,4 +353,18 @@ mod tests {
         assert_eq!(doc.ruler_origin, [5.0, 5.0], "a field the step didn't change keeps its value");
         assert!(Baked::capture(&before, &before, &[], &[]).state.is_none());
     }
+
+    /// A tree nested far past what recursion could walk is still enumerated.
+    #[test]
+    fn a_deep_layer_tree_is_walked_without_recursion() {
+        let mut layer = Layer::raster("leaf", PixelFormat::RGBA8);
+        for _ in 0..50_000 {
+            layer = Layer::group("g", vec![layer]);
+        }
+        let mut n = 0;
+        crate::layer_surfaces(&layer, &mut |_| n += 1);
+        assert_eq!(n, 1);
+        // Dropping it recurses; leak it rather than test the destructor here.
+        std::mem::forget(layer);
+    }
 }

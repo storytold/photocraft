@@ -1462,28 +1462,31 @@ impl Document {
 }
 
 /// Every pixel surface `layer` and the layers inside it hold (see [`Document::for_each_surface`]).
+/// A stack, not recursion: a tree built in memory has no depth limit.
 pub(crate) fn layer_surfaces(layer: &Layer, visit: &mut impl FnMut(&Surface)) {
-    if let Some(surface) = layer.surface() {
-        visit(surface);
-    }
-    if let Some(mask) = &layer.mask {
-        visit(&mask.surface);
-    }
-    if let Some(cache) = &layer.fill_cache {
-        visit(&cache.surface);
-    }
-    if let LayerContent::Smart(smart) = &layer.content
-        && let Some(mask) = &smart.filter_mask
-    {
-        visit(&mask.surface);
-    }
-    if let Some(video) = &layer.video {
-        for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
-            visit(frame);
+    let mut stack = vec![layer];
+    while let Some(layer) = stack.pop() {
+        if let Some(surface) = layer.surface() {
+            visit(surface);
         }
-    }
-    for child in layer.children().unwrap_or_default() {
-        layer_surfaces(child, visit);
+        if let Some(mask) = &layer.mask {
+            visit(&mask.surface);
+        }
+        if let Some(cache) = &layer.fill_cache {
+            visit(&cache.surface);
+        }
+        if let LayerContent::Smart(smart) = &layer.content
+            && let Some(mask) = &smart.filter_mask
+        {
+            visit(&mask.surface);
+        }
+        if let Some(video) = &layer.video {
+            for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
+                visit(frame);
+            }
+        }
+        // Reversed, so children are visited bottom to top, as `walk` lists them.
+        stack.extend(layer.children().unwrap_or_default().iter().rev());
     }
 }
 

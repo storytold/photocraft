@@ -151,3 +151,40 @@ fn a_marker_past_the_steps_is_clamped() {
     let back = load_from_bytes(&save_to_bytes(&doc, &SaveOptions::default()).unwrap()).unwrap();
     assert_eq!(back.design_timeline.unwrap().marker, Some(2));
 }
+
+/// `doc`'s timeline with a baked step whose stored document state holds a `size` canvas.
+fn with_baked_canvas(size: Size) -> Document {
+    let mut doc = with_timeline();
+    let tl = Arc::make_mut(doc.design_timeline.as_mut().unwrap());
+    let mut state = Document::new("s", size, ColorMode::Rgb, SampleType::U8);
+    // A constructed state with a timeline of its own saves without it.
+    state.design_timeline = Some(Arc::new(DesignTimeline::new(Arc::new(Document::new("n", size, ColorMode::Rgb, SampleType::U8)))));
+    tl.steps[0].baked =
+        Some(Arc::new(Baked { layers: Vec::new(), placed: Vec::new(), selection: None, color: None, state: Some((Arc::new(state), vec!["size".into()])) }));
+    doc
+}
+
+/// Replaying a baked step that changed the canvas size makes that the document's size, so it is
+/// held to the limits too, but only for a timeline the load keeps.
+#[test]
+fn a_baked_canvas_past_the_limits_is_refused_unless_its_timeline_is_dropped() {
+    let opts = LoadOptions { max_canvas_side: 16, ..Default::default() };
+    let doc = with_baked_canvas(Size::new(64, 64));
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let raw = zip::ZipReader::new(&bytes).unwrap().read_by_name("manifest.json", usize::MAX).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+    let saved = &manifest["document"]["design_timeline"]["steps"][0]["baked"]["state"][0];
+    assert!(saved.is_object() && saved["design_timeline"].is_null(), "saved without its own timeline");
+    assert!(matches!(load_from_bytes_with(&bytes, &opts), Err(FormatError::LimitExceeded(_))));
+    let back = load_from_bytes(&bytes).unwrap();
+    let (state, fields) = back.design_timeline.unwrap().steps[0].baked.clone().unwrap().state.clone().unwrap();
+    assert_eq!((state.size, fields), (Size::new(64, 64), vec!["size".to_string()]));
+    assert!(state.design_timeline.is_none());
+    // A timeline repeating a step number is dropped: its baked canvas doesn't stop the image opening.
+    let mut doc = with_baked_canvas(Size::new(64, 64));
+    let tl = Arc::make_mut(doc.design_timeline.as_mut().unwrap());
+    tl.steps[1].step = tl.steps[0].step;
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let (back, _) = load_from_bytes_reporting(&bytes, &opts).unwrap();
+    assert!(back.design_timeline.is_none());
+}

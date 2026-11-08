@@ -26,10 +26,16 @@ pub(crate) struct Before {
     prelude: Vec<Prelude>,
     /// The foreground and background colours when the command started, as `tools.setColors` takes them.
     colors: Value,
+    /// The document's painting symmetry when the command started, as the command that sets it
+    /// (None for a symmetry path, which only its own command can set).
+    symmetry: Option<Prelude>,
 }
 
-/// The prelude command a step's colours are pinned with ([`with_colors`]).
+/// The prelude command a step's colours are pinned with ([`with_pins`]).
 const COLORS: &str = "tools.setColors";
+
+/// The commands that set a document's painting symmetry; the first two pin it ([`with_pins`]).
+const SYMMETRY: &[&str] = &["paint.setSymmetry", "paint.symmetryDisable", "paint.symmetryFromPath"];
 
 /// Commands that change no document but feed the steps after them (tool colours and options).
 /// Only these are kept as a step's prelude: anything else that changes no document (saving,
@@ -99,6 +105,11 @@ pub(crate) fn capture(s: &Session) -> Vec<Before> {
             untouched: false,
             prelude: s.timeline_prelude.get(&st.doc.id).cloned().unwrap_or_default(),
             colors: serde_json::json!({"foreground": s.tools.foreground, "background": s.tools.background}),
+            symmetry: match &st.symmetry {
+                None => Some(Prelude { command: "paint.symmetryDisable".into(), params: serde_json::json!({}) }),
+                Some(p @ crate::symmetry_cmds::PaintingSymmetry::Preset(_)) => Some(Prelude { command: "paint.setSymmetry".into(), params: p.inspect() }),
+                Some(crate::symmetry_cmds::PaintingSymmetry::Path(_)) => None,
+            },
         })
         .collect()
 }
@@ -156,7 +167,7 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
             command: id.to_string(),
             params: resolve_names(&b.state, params),
             label: step_label(st.history.undo_label().unwrap_or(id), id, params, (!b.was_active).then_some(source.as_str())),
-            prelude: with_colors(&b, st.doc.design_timeline.as_deref()),
+            prelude: with_pins(&b, st.doc.design_timeline.as_deref()),
             active: b.active,
             selected: b.selected,
             created,
@@ -188,7 +199,8 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
         }
     }
     // Each document's prelude runs from its own last step: one recorded elsewhere leaves it be.
-    let tool = PRELUDE.iter().any(|p| id.starts_with(p));
+    // A tool command that changed a document (a stroke) is that document's step, no setting.
+    let tool = PRELUDE.iter().any(|p| id.starts_with(p)) && took.iter().all(|t| t.1.is_none());
     for (doc, n) in took {
         let pending = s.timeline_prelude.entry(doc).or_default();
         match n {
@@ -201,15 +213,27 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
     s.timeline_prelude.retain(|d, p| !p.is_empty() && docs.iter().any(|st| st.doc.id == *d));
 }
 
-/// `b`'s prelude with the colours it started with pinned when they aren't those in effect at the
-/// marker of `tl`: colours also change outside the prelude (targeting a mask resets them), and the
-/// first step must not take today's. Every pin is a whole `tools.setColors`, so the last one in
-/// effect says which colours are, and an explicit one in the prelude is left out for it.
-fn with_colors(b: &Before, tl: Option<&photocraft_doc::design::DesignTimeline>) -> Vec<Prelude> {
-    let mut prelude: Vec<Prelude> = b.prelude.iter().filter(|p| p.command != COLORS).cloned().collect();
-    let in_effect = tl.and_then(|tl| tl.steps.iter().take(tl.in_effect()).rev().flat_map(|st| st.prelude.iter().rev()).find(|p| p.command == COLORS));
-    if in_effect.is_none_or(|p| p.params != b.colors) {
-        prelude.push(Prelude { command: COLORS.to_string(), params: b.colors.clone() });
+/// `b`'s prelude with the colours and painting symmetry it started with pinned when they aren't
+/// those in effect at the marker of `tl`: both also change outside the prelude (targeting a mask
+/// resets the colours, a crop moves the symmetry), and the first step must not take today's.
+/// Every pin sets the whole value, so the last one in effect says what is, and an explicit setting
+/// in the prelude is left out for it. A replay starts without symmetry.
+fn with_pins(b: &Before, tl: Option<&photocraft_doc::design::DesignTimeline>) -> Vec<Prelude> {
+    let last = |cmds: &[&str]| {
+        tl.and_then(|tl| tl.steps.iter().take(tl.in_effect()).rev().flat_map(|st| st.prelude.iter().rev()).find(|p| cmds.contains(&p.command.as_str())))
+    };
+    // A symmetry path has no pin: its own command stays in the prelude.
+    let pinned = |p: &&Prelude| p.command != COLORS && (b.symmetry.is_none() || !SYMMETRY.contains(&p.command.as_str()));
+    let mut prelude: Vec<Prelude> = b.prelude.iter().filter(pinned).cloned().collect();
+    let colors = Prelude { command: COLORS.to_string(), params: b.colors.clone() };
+    if last(&[COLORS]) != Some(&colors) {
+        prelude.push(colors);
+    }
+    if let Some(symmetry) = &b.symmetry {
+        let off = Prelude { command: "paint.symmetryDisable".into(), params: serde_json::json!({}) };
+        if last(SYMMETRY).unwrap_or(&off) != symmetry {
+            prelude.push(symmetry.clone());
+        }
     }
     prelude
 }
@@ -235,8 +259,16 @@ fn pin_color_settings(s: &Session, id: &str, params: &Value) -> Option<Value> {
         _ => return None,
     };
     let mut p = params.as_object().cloned().unwrap_or_default();
-    if !p.contains_key("profile")
-        && let Some((spec, _)) = s.color.working_setting(mode)
+    // No profile, or one naming a working space: what the Color Settings resolve it to here.
+    let working = match p.get("profile").map(|v| v.as_str()) {
+        None | Some(Some("working" | "default")) => Some(mode),
+        Some(Some("working-rgb" | "workingRgb")) => Some(ColorMode::Rgb),
+        Some(Some("working-cmyk" | "workingCmyk")) => Some(ColorMode::Cmyk),
+        Some(Some("working-gray" | "workingGray")) => Some(ColorMode::Grayscale),
+        Some(_) => None,
+    };
+    if let Some(working) = working
+        && let Some((spec, _)) = s.color.working_setting(working)
     {
         // A built-in named another way ("Adobe RGB (1998)") is kept by its id, as every version reads it.
         let spec = photocraft_cms::Builtin::from_id(spec).map_or(spec, |b| b.id());

@@ -73,6 +73,10 @@ pub(crate) trait Fetch {
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>>;
     /// Fetch an optional display payload without allocating beyond its stricter limit.
     fn blob_bounded(&mut self, hash: &str, limit: usize) -> Result<Arc<Vec<u8>>>;
+    /// Refuse a declared canvas past the load's budget before anything is decoded for it.
+    fn admit(&self, _size: photocraft_geom::Size) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub(crate) fn hex(bytes: &[u8]) -> String {
@@ -326,7 +330,8 @@ fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn 
                 selection_changed: b.selection.is_some(),
                 selection: b.selection.as_ref().and_then(|s| s.as_ref().map(|s| surface_m(s, sink))),
                 color: b.color.as_ref().map(|(mode, depth, profile)| (*mode, *depth, opt_blob(profile, sink))),
-                state: b.state.as_ref().map(|(doc, fields)| (Box::new(doc_m(doc, sink)), fields.clone())),
+                // Without a timeline of its own (a constructed one could nest without end).
+                state: b.state.as_ref().map(|(doc, fields)| (Box::new(doc_m(&Document { design_timeline: None, ..(**doc).clone() }, sink)), fields.clone())),
             }),
         })
         .collect();
@@ -681,6 +686,12 @@ impl Loader<'_> {
     /// The timeline of the loaded `doc`; its last step in effect resumes from `doc`.
     fn design_timeline(&mut self, t: &DesignTimelineM, doc: &Document) -> Result<photocraft_doc::design::DesignTimeline> {
         use photocraft_doc::design::{Baked, Checkpoint, DesignTimeline};
+        // Rolling back to the start makes the base the document, and a baked step can change the
+        // canvas size: admitted before either loads, and only for a timeline that is kept.
+        self.fetch.admit(t.base.size)?;
+        for (d, _) in t.steps.iter().filter_map(|st| st.baked.as_ref()?.state.as_ref()) {
+            self.fetch.admit(d.size)?;
+        }
         let mut base = self.document_only(&t.base)?;
         base.id = doc.id;
         let mut steps = Vec::with_capacity(t.steps.len());

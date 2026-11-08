@@ -301,11 +301,19 @@ fn bad_params_are_errors() {
     for id in ["design.suppress", "design.unsuppress", "design.delete", "design.rollTo", "design.editStep"] {
         for p in &bad {
             let r = s.execute(id, p.clone());
-            // rollTo takes no `step` (and a missing `at` means the end), the rest no `at`.
-            let invalid = if id == "design.rollTo" { p == &json!({"at": -3}) || p == &json!({"at": 999}) } else { p == &json!({"step": -1}) };
+            // rollTo takes no `step` (and a missing `at` means the end); the rest need a valid step.
+            let invalid = match id {
+                "design.rollTo" => p == &json!({"at": -3}) || p == &json!({"at": 999}),
+                // Step 1 is one of this timeline's: only Edit Step looks at `params`.
+                "design.editStep" => true,
+                _ => p.get("params").is_none(),
+            };
             assert!(!invalid || r.is_err(), "{id} accepted {p}");
         }
     }
+    let step = step_id(&mut s, 0);
+    let e = s.execute("design.editStep", json!({"step": step, "params": 5})).unwrap_err().to_string();
+    assert!(e.contains("`params` must be an object"), "{e}");
     assert!(s.execute("design.start", json!({})).is_err(), "already on");
     s.execute("design.replay", json!({})).unwrap();
 }
@@ -817,12 +825,12 @@ fn a_jobs_step_takes_the_tool_settings_from_when_it_started() {
     let bytes = photocraft_io::export(&src, "p.png", &Default::default()).unwrap().bytes;
     let crate::jobs::Started::Job(id) = s.start_place_bytes("p.png", bytes, None, json!({})).unwrap() else { panic!("expected a job") };
     s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
-    s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+    s.execute("tools.swapColors", json!({})).unwrap();
     s.wait_job(id).unwrap();
     s.set_active(0);
-    assert!(!last_prelude(&s).contains(&"paint.setSymmetry".to_string()), "set after the job started");
+    assert!(!last_prelude(&s).contains(&"tools.swapColors".to_string()), "set after the job started");
     s.execute("layer.new.layer", json!({})).unwrap();
-    assert!(last_prelude(&s).contains(&"paint.setSymmetry".to_string()), "it goes with the next step");
+    assert!(last_prelude(&s).contains(&"tools.swapColors".to_string()), "it goes with the next step");
 }
 
 /// Clearing a targeted layer mask records the target, so replay clears the mask again.
@@ -918,4 +926,64 @@ fn an_edited_step_may_replace_a_missing_target() {
     // An edit naming no layer acts on none: the layer it ran on is still gone.
     s.execute("design.editStep", json!({"step": props, "params": {"opacity": 0.75}})).unwrap();
     assert_ne!(state(&mut s, 2), "ok");
+}
+
+/// A stroke in one document is that document's step, never a tool setting for another one.
+#[test]
+fn a_stroke_in_one_document_is_not_replayed_in_another() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.set_active(0);
+    s.execute("paint.pencil", json!({"points": [[4, 4]], "size": 4, "color": "#ff0000"})).unwrap();
+    s.set_active(1);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(!last_prelude(&s).contains(&"paint.pencil".to_string()), "{:?}", last_prelude(&s));
+    let want = doc(&s);
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&s), want);
+}
+
+/// The painting symmetry a stroke ran with replays with it, whatever was queued before the
+/// timeline started and whatever is set now.
+#[test]
+fn a_stroke_replays_with_the_symmetry_it_ran_with() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+    s.execute("tools.swapColors", json!({})).unwrap();
+    s.execute("design.stop", json!({})).unwrap();
+    s.execute("paint.setSymmetry", json!({"mode": "horizontal"})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("paint.pencil", json!({"points": [[2, 3]], "size": 2, "color": "#ff0000"})).unwrap();
+    assert!(!last_prelude(&s).contains(&"tools.swapColors".to_string()), "nothing queued for the old timeline");
+    let want = doc(&s);
+    s.execute("paint.symmetryDisable", json!({})).unwrap();
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&s), want, "mirrored horizontally, as painted");
+}
+
+/// Deleting the last step leaves its tool settings for the next step recorded.
+#[test]
+fn deleting_the_last_step_keeps_its_tool_settings_for_the_next() {
+    let mut s = started();
+    s.execute("tools.swapColors", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let last = step_id(&mut s, 0);
+    s.execute("design.delete", json!({"step": last})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(last_prelude(&s).contains(&"tools.swapColors".to_string()), "{:?}", last_prelude(&s));
+}
+
+/// An explicit working-space alias is recorded as the working space it resolved to.
+#[test]
+fn a_working_profile_alias_is_recorded_as_the_working_space() {
+    let mut s = Session::new();
+    s.execute("edit.colorSettings", json!({"workingRgb": "rec2020"})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8, "mode": "gray", "depth": 8, "background": "white"})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("file.automate.conditionalModeChange", json!({"to": "rgb", "profile": "working"})).unwrap();
+    let step = s.active().unwrap().doc.design_timeline.as_ref().unwrap().steps.last().unwrap().clone();
+    assert_eq!(step.params["profile"], "rec2020", "{}", step.params);
 }
