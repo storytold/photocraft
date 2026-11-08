@@ -160,7 +160,7 @@ impl PhotocraftApp {
             self,
             KEPT_IN_PHOTOCRAFT,
             vec![
-                "It is too large for the system clipboard, so other apps can't paste it.".into(),
+                "PhotoCraft doesn't send copies over 64 megapixels to the system clipboard, so other apps can't paste this one.".into(),
                 "Paste in PhotoCraft may use an image from the system clipboard instead.".into(),
             ],
             false,
@@ -278,6 +278,8 @@ impl PhotocraftApp {
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;
+        // The copy the notice described has been replaced by the system clipboard's image.
+        self.ui.notices.retain(|n| n.title != KEPT_IN_PHOTOCRAFT);
         Ok(true)
     }
 }

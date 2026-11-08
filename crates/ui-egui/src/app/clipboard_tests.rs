@@ -709,8 +709,16 @@ fn an_oversized_copy_is_not_mirrored_and_says_so() {
     assert!(os.lock().unwrap().is_none(), "the OS clipboard is left alone");
     assert!(app.os_clip_export.is_none(), "no conversion was started");
     assert_eq!(app.ui.notices.len(), notices + 1, "the user is told the copy stays in PhotoCraft");
+    let text = app.ui.notices.last().map(|n| n.lines.join(" ")).unwrap_or_default();
+    assert!(text.contains("may use an image from the system clipboard"), "it doesn't promise what Paste uses: {text:?}");
     app.export_os_clipboard();
     assert_eq!(app.ui.notices.len(), notices + 1, "a second oversized copy replaces the notice instead of stacking");
+
+    // A smaller copy next, with export turned off: the notice described the older copy and goes.
+    app.session.edit_prefs(|prefs| prefs.general.export_clipboard = false);
+    app.session.clipboard.as_mut().unwrap().bounds = photocraft_geom::Rect::new(0, 0, 10, 10);
+    app.export_os_clipboard();
+    assert_eq!(app.ui.notices.len(), notices, "a newer copy clears the notice even when it isn't exported");
 }
 
 #[test]
