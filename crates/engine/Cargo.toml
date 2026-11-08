@@ -37,6 +37,7 @@ base64 = "0.22"
 blake3 = { version = "1.8", default-features = false, features = ["pure"] }
 photocraft-codecs = { workspace = true }
 flate2 = { workspace = true }
+getrandom = { workspace = true, features = ["wasm_js"] }
 craft-print = { workspace = true }
 
 # Photoshop `.kys` shortcut sets (`edit.keyboardShortcuts` `importKys`); already in the tree

@@ -122,21 +122,25 @@ pub(super) struct ReplacementSet {
     pub keys: Vec<(usize, String)>,
 }
 
+pub(super) fn import_first_with_keys(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<ReplacementSet, String> {
+    let file = atn::parse_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
+    Ok(convert_with_keys(&file))
+}
+
 pub(super) fn import_sets(bytes: &[u8], encoding: Option<&str>) -> std::result::Result<Vec<ReplacementSet>, String> {
     let files = atn::parse_sets_with_encoding(bytes, encoding).map_err(|error| error.to_string())?;
-    Ok(files
+    Ok(files.iter().map(convert_with_keys).collect())
+}
+
+fn convert_with_keys(file: &AtnFile) -> ReplacementSet {
+    let keys = file
+        .actions
         .iter()
-        .map(|file| {
-            let keys = file
-                .actions
-                .iter()
-                .enumerate()
-                .filter(|(_, action)| action.function_key > 0)
-                .map(|(index, action)| (index, function_key_name(action.function_key, action.shift, action.command)))
-                .collect();
-            ReplacementSet { imported: convert_set(file), keys }
-        })
-        .collect())
+        .enumerate()
+        .filter(|(_, action)| action.function_key > 0)
+        .map(|(index, action)| (index, function_key_name(action.function_key, action.shift, action.command)))
+        .collect();
+    ReplacementSet { imported: convert_set(file), keys }
 }
 
 fn convert_set(file: &AtnFile) -> Imported {
@@ -250,6 +254,33 @@ pub fn parse_function_key(key: &str) -> Option<(u16, bool, bool)> {
     Some((n, shift, command))
 }
 
+/// ATN uses names for these calls. Only translate an ID when that name identifies
+/// the same exported row; an absent or ambiguous target is an unsupported step.
+fn export_targeted_items(id: &str, params: &Value, set: &str, actions: &[&Action]) -> Option<Vec<AtnItem>> {
+    let targets: &[(&str, &str)] = match id {
+        "actions.play" => &[("actionId", "action")],
+        "actions.conditional" => &[("thenActionId", "then"), ("elseActionId", "else")],
+        _ => &[],
+    };
+    if !targets.iter().any(|(key, _)| params.get(*key).is_some()) {
+        return export_items(id, params, set);
+    }
+    let mut params = params.clone();
+    for (key, name) in targets {
+        if let Some(id) = params.get(*key) {
+            let id = id.as_str().filter(|id| crate::actions_cmds::valid_action_id(id))?;
+            let mut matches = actions.iter().filter(|action| action.action_id.as_deref() == Some(id));
+            let action = matches.next()?;
+            if matches.next().is_some() || actions.iter().filter(|other| other.name == action.name).take(2).count() != 1 {
+                return None;
+            }
+            params[*name] = json!(action.name);
+        }
+    }
+    params["set"] = json!(set);
+    export_items(id, &params, set)
+}
+
 /// The `.atn` bytes of `actions` as the set `set`. `function_keys` gives each action's key
 /// (`F1`…`F15`, with `Shift+` and `Cmd+` as [`function_key_name`] writes them). Steps with no Photoshop equivalent are an error unless `skip_unsupported`.
 pub fn export(
@@ -258,15 +289,24 @@ pub fn export(
     function_keys: &[(String, String)],
     skip_unsupported: bool,
 ) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
+    export_with_keys(set, actions, |_, action| function_keys.iter().find(|(name, _)| name == &action.name).map(|(_, key)| key.as_str()), skip_unsupported)
+}
+
+pub(super) fn export_with_keys<'a>(
+    set: &str,
+    actions: &[&Action],
+    key: impl Fn(usize, &Action) -> Option<&'a str>,
+    skip_unsupported: bool,
+) -> std::result::Result<(Vec<u8>, Vec<Skipped>), String> {
     let mut skipped = Vec::new();
     let mut file = AtnFile { name: UnicodeString::new_nul(set), expanded: true, actions: Vec::new(), warnings: Vec::new(), ..Default::default() };
-    for a in actions {
+    for (index, a) in actions.iter().enumerate() {
         let mut out = AtnAction { name: UnicodeString::new_nul(&a.name), expanded: false, ..Default::default() };
-        if let Some((n, shift, command)) = function_keys.iter().find(|(n, _)| n == &a.name).and_then(|(_, key)| parse_function_key(key)) {
+        if let Some((n, shift, command)) = key(index, a).and_then(parse_function_key) {
             (out.function_key, out.shift, out.command) = (n, shift, command);
         }
         for (i, (id, params)) in a.steps.iter().enumerate() {
-            let Some(items) = export_items(id, params, set) else {
+            let Some(items) = export_targeted_items(id, params, set, actions) else {
                 if skip_unsupported {
                     skipped.push(Skipped { action: a.name.clone(), step: i, id: id.clone() });
                     continue;

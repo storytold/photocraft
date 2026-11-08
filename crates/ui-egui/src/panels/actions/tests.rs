@@ -70,8 +70,13 @@ fn duplicate_selected_physical_folder_keeps_occurrences_and_shortcuts() {
         .into_iter()
         .map(|(name, set, slot)| Action { set: Some(set.into()), set_slot: Some(slot), ..Action::new(name, Vec::new()) })
         .collect();
+    let id = "0123456789abcdef0123456789abcdef";
+    app.session.actions.list[1].action_id = Some(id.into());
+    app.session.actions.list[1].legacy_shortcut_owner = true;
+    let occurrence = actions_cmds::occurrence_key(id);
     app.session.edit_prefs(|prefs| {
         prefs.shortcuts.insert("actions.play:Chosen".into(), "F2".into());
+        prefs.shortcuts.insert(occurrence.clone(), "F3".into());
     });
     app.ui.actions.selected_set = Some("Same".into());
     app.ui.actions.selected_set_slot = Some(1);
@@ -92,6 +97,9 @@ fn duplicate_selected_physical_folder_keeps_occurrences_and_shortcuts() {
     );
     assert_eq!(app.session.prefs().shortcuts["actions.play:Chosen"], "F2");
     assert!(!app.session.prefs().shortcuts.contains_key("actions.play:Chosen copy"));
+    assert_eq!(actions_cmds::shortcut_row(&app.session.actions.list, &occurrence), Some(1));
+    assert!(app.session.actions.list[2].action_id.is_none());
+    assert!(!app.session.actions.list[2].legacy_shortcut_owner);
 
     app.ui.actions.selected_set = Some("Same".into());
     app.ui.actions.selected_set_slot = Some(3);
@@ -108,6 +116,12 @@ fn duplicate_selected_physical_folder_keeps_occurrences_and_shortcuts() {
     assert_eq!(legacy, json!({"set": "Later copy", "index": 4, "actions": 1}));
     assert_eq!(app.session.actions.list[4].set_slot, None);
     assert_eq!(app.session.actions.set_rows.len(), 6);
+
+    let action_copy = app.run("actions.duplicate", json!({"action": 1})).unwrap();
+    assert_eq!(action_copy["index"], 2);
+    assert!(app.session.actions.list[2].action_id.is_none());
+    assert!(!app.session.actions.list[2].legacy_shortcut_owner);
+    assert_eq!(actions_cmds::shortcut_row(&app.session.actions.list, &occurrence), Some(1));
 }
 
 /// A nested Load can compact same-caption rows before the panel repaints.
@@ -609,7 +623,7 @@ fn a_function_key_with_shift_and_command_plays_its_action() {
     });
     let key = photocraft_engine::atn_cmds::function_key_name(2, true, true);
     assert_eq!(key, "Cmd+Shift+F2");
-    assign_shortcut(&mut app, "Action 1", &key).unwrap();
+    assign_shortcut(&mut app, 0, &key).unwrap();
     let ctx = egui::Context::default();
     let press = |app: &mut PhotocraftApp, modifiers| {
         ctx.begin_pass(egui::RawInput {
@@ -2283,6 +2297,25 @@ fn child_call() -> Vec<(String, Value)> {
 fn pause_child(app: &mut PhotocraftApp) -> u64 {
     let v = play(app, &json!({"action": "Child"})).unwrap();
     v["paused"]["dialog"].as_u64().unwrap()
+}
+
+#[test]
+fn a_bound_same_name_call_resumes_the_selected_occurrence() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 6, "background": "#203040"})).unwrap();
+    let id = "a".repeat(32);
+    let mut second =
+        Action::new("Same", vec![("filter.blur.gaussianBlur".into(), json!({"radius": 1.5})), ("layer.new.layer".into(), json!({"name":"Suffix"}))]);
+    second.action_id = Some(id.clone());
+    second.dialogs.insert(0);
+    let first =
+        Action::new("Same", vec![("actions.play".into(), json!({"action":"Same","actionId":id})), ("layer.new.layer".into(), json!({"name":"caller tail"}))]);
+    app.session.actions.list.extend([first, second]);
+
+    let playback = play(&mut app, &json!({"action":"Same"})).unwrap();
+    let dialog = playback["paused"]["dialog"].as_u64().expect("the selected occurrence's blur dialog");
+    crate::dialogs::confirm(&mut app, dialog).unwrap();
+    assert_eq!(layer_names(&app), ["Suffix", "caller tail"]);
 }
 
 #[test]

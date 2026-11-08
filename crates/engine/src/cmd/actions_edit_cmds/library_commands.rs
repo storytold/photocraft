@@ -5,7 +5,7 @@ use std::io::{self, Write};
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX, not_playing};
+use crate::actions_cmds::{Action, PLAY_SHORTCUT_PREFIX, has_legacy_shortcut, is_action_key, not_playing, shortcut_row};
 use crate::{Result, Session};
 
 use super::bad;
@@ -51,13 +51,13 @@ pub(crate) fn confirmed_idle(s: &Session, p: &Value, cmd: &str) -> Result<()> {
 }
 
 fn action_bindings<V: Clone>(bindings: &BTreeMap<String, V>) -> BTreeMap<String, V> {
-    bindings.iter().filter(|(id, _)| id.starts_with(PLAY_SHORTCUT_PREFIX)).map(|(id, value)| (id.clone(), value.clone())).collect()
+    bindings.iter().filter(|(id, _)| is_action_key(id)).map(|(id, value)| (id.clone(), value.clone())).collect()
 }
 
 fn replace_bindings(s: &mut Session, shortcuts: Shortcuts, alternates: Alternates) {
     s.edit_prefs(|prefs| {
-        prefs.shortcuts.retain(|id, _| !id.starts_with(PLAY_SHORTCUT_PREFIX));
-        prefs.alternate_shortcuts.retain(|id, _| !id.starts_with(PLAY_SHORTCUT_PREFIX));
+        prefs.shortcuts.retain(|id, _| !is_action_key(id));
+        prefs.alternate_shortcuts.retain(|id, _| !is_action_key(id));
         prefs.shortcuts.extend(shortcuts);
         prefs.alternate_shortcuts.extend(alternates);
     });
@@ -88,17 +88,38 @@ pub(crate) fn check_library_size(list: &[Action], sets: &[String], rows: &[Strin
         .map_err(|error| bad(cmd, error.to_string()))
 }
 
-/// Replace only library data. Append uses None to leave both binding maps in place.
-pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<String>, rows: Vec<String>, new_shortcuts: Option<Shortcuts>, label: &'static str) {
+/// Replace library definitions and remember both shortcut maps for the one-step undo.
+/// Append pins an existing legacy binding before adding a namesake.
+pub(crate) fn publish_library(
+    s: &mut Session,
+    mut list: Vec<Action>,
+    sets: Vec<String>,
+    rows: Vec<String>,
+    new_shortcuts: Option<Shortcuts>,
+    label: &'static str,
+    cmd: &str,
+) -> Result<()> {
     let shortcuts = action_bindings(&s.prefs().shortcuts);
     let alternates = action_bindings(&s.prefs().alternate_shortcuts);
     let (after_shortcuts, after_alternates) = match new_shortcuts {
-        Some(keys) => {
-            replace_bindings(s, keys.clone(), Alternates::new());
-            (keys, Alternates::new())
+        Some(keys) => (keys, Alternates::new()),
+        None => {
+            let count = s.actions.list.len();
+            let owners: Vec<_> = list[count..]
+                .iter()
+                .filter(|action| has_legacy_shortcut(s, &action.name))
+                .filter_map(|action| shortcut_row(&list[..count], &format!("{PLAY_SHORTCUT_PREFIX}{}", action.name)))
+                .collect();
+            for owner in owners {
+                list[owner].legacy_shortcut_owner = true;
+            }
+            (shortcuts.clone(), alternates.clone())
         }
-        None => (shortcuts.clone(), alternates.clone()),
     };
+    check_library_size(&list, &sets, &rows, cmd)?;
+    if after_shortcuts != shortcuts || after_alternates != alternates {
+        replace_bindings(s, after_shortcuts.clone(), after_alternates.clone());
+    }
     let document_history = s.documents().iter().map(|st| (st.doc.id, st.history.row_ids().max().unwrap_or(0), st.history.is_cleared())).collect();
     // A document edit after a library command must start a new undo step.
     for st in &mut s.docs {
@@ -118,13 +139,14 @@ pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<Stri
     s.actions.set_rows_revision = s.actions.set_rows_revision.wrapping_add(1);
     s.actions.touch();
     s.actions.library_undo = Some(Box::new(undo));
+    Ok(())
 }
 
 pub(super) fn clear(s: &mut Session, p: &Value) -> Result<Value> {
     confirmed_idle(s, p, "actions.clearAll")?;
     let count = s.actions.list.len();
     if count != 0 || !s.actions.sets.is_empty() || !s.actions.set_rows.is_empty() {
-        publish_library(s, Vec::new(), Vec::new(), Vec::new(), Some(Shortcuts::new()), "Undo Clear All Actions");
+        publish_library(s, Vec::new(), Vec::new(), Vec::new(), Some(Shortcuts::new()), "Undo Clear All Actions", "actions.clearAll")?;
     }
     Ok(json!({"cleared":count}))
 }
@@ -146,8 +168,7 @@ pub(super) fn reset(s: &mut Session, p: &Value) -> Result<Value> {
     for (name, command) in [("Invert Colors", "image.adjustments.invert"), ("Desaturate", "image.adjustments.desaturate")] {
         list.push(Action { set: Some(NAME.into()), set_slot: Some(slot), ..Action::new(name, vec![(command.into(), json!({}))]) });
     }
-    check_library_size(&list, &sets, &rows, CMD)?;
-    publish_library(s, list, sets, rows, (!append).then(Shortcuts::new), "Undo Reset Actions");
+    publish_library(s, list, sets, rows, (!append).then(Shortcuts::new), "Undo Reset Actions", CMD)?;
     Ok(json!({"set":NAME,"slot":slot,"appended":append,"actions":2}))
 }
 

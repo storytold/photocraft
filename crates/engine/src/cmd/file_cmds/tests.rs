@@ -20,7 +20,7 @@ fn batch_resolves_action_by_name_and_detects_recursion() {
         p["output"] = json!(out);
         assert!(s.execute("file.automate.batch", p).is_err());
     }
-    s.actions.playback_stack.push("Scale".into());
+    s.actions.playback_stack.push(crate::actions_cmds::PlaybackTarget { name: "Scale".into(), id: None });
     let err = s.execute("file.automate.batch", json!({"action":"Scale","input":[input],"output":out})).unwrap_err();
     assert!(err.to_string().contains("recursive action call"), "{err}");
 }
@@ -532,7 +532,7 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
             crate::actions_cmds::Action::new("Leaf", vec![("actions.play".into(), json!({"action":0}))]),
         ];
         let definitions = s.actions.list[1..].to_vec();
-        s.actions.playback_stack = vec!["Enclosing".into()];
+        s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None }];
         s.actions.recording = Some((s.journal.len(), 0));
         let take = s.actions.take;
         s.authorize = Some(gate);
@@ -540,7 +540,7 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         let result = batch(&mut s, &json!({"source":"open","action":"Loop A"})).unwrap();
         assert!(result["errors"][0]["error"].as_str().unwrap().contains("recursive action"), "{result}");
         assert!(CALLS.load(Ordering::SeqCst) <= 2, "the cycle check must beat the finite sentinel");
-        assert_eq!(s.actions.playback_stack, ["Enclosing"]);
+        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None }]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
         assert_eq!(&s.actions.list[1..], definitions.as_slice());
@@ -549,7 +549,7 @@ fn named_open_document_batch_keeps_cycle_context_and_live_recorder() {
         let result = batch(&mut s, &json!({"source":"open","action":"Leaf","calledActions":embedded})).unwrap();
         assert_eq!(result["errors"], json!([]), "{result}");
         assert_eq!(doc(&s).walk().len(), before + 1);
-        assert_eq!(s.actions.playback_stack, ["Enclosing"]);
+        assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Enclosing".into(), id: None }]);
         assert_eq!(s.actions.recording.map(|(_, owner)| owner), Some(0));
         assert_eq!(s.actions.take, take);
         assert_eq!(&s.actions.list[1..], definitions.as_slice());
@@ -2778,7 +2778,7 @@ fn named_batch_limits_nesting_and_keeps_the_callers_state() {
         }
         s.actions.list.push(Action::new("Invert", vec![("image.adjustments.invert".into(), json!({}))]));
         s.actions.playing = 16;
-        s.actions.playback_stack = (0..16).map(|i| format!("Parent{i}")).collect();
+        s.actions.playback_stack = (0..16).map(|i| crate::actions_cmds::PlaybackTarget { name: format!("Parent{i}"), id: None }).collect();
         let before = s.actions.clone();
         let error = s.execute("file.automate.batch", params.clone()).unwrap_err();
         assert!(error.to_string().contains("nesting exceeds 16"), "{error}");
@@ -2834,14 +2834,14 @@ fn named_batch_charges_the_existing_budget_across_inputs_and_children() {
         Action::new("Leaf", vec![("select.deselect".into(), json!({})); 2]),
     ];
     s.actions.playing = 1;
-    s.actions.playback_stack = vec!["Parent".into()];
+    s.actions.playback_stack = vec![crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None }];
     s.actions.playback_steps = MAX_PLAYBACK_STEPS - 4;
     let result = s.execute("file.automate.batch", json!({"action": "Outer", "input": [input, input], "output": output, "naming": "{serial}"})).unwrap();
     assert_eq!(result["files"].as_array().unwrap().len(), 1, "{result}");
     assert!(result["errors"][0]["error"].as_str().unwrap().contains("step limit"), "{result}");
     assert_eq!(s.actions.playback_steps, MAX_PLAYBACK_STEPS);
     assert_eq!(s.actions.playing, 1);
-    assert_eq!(s.actions.playback_stack, ["Parent"]);
+    assert_eq!(s.actions.playback_stack, [crate::actions_cmds::PlaybackTarget { name: "Parent".into(), id: None }]);
 }
 
 /// Nested named batches honor the caller's authorization and preserve its action state.

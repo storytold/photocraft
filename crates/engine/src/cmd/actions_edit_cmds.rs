@@ -165,6 +165,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(cmd, "stop recording before duplicating an action"));
     }
     let mut copied = s.actions.list[idx].clone();
+    copied.action_id = None;
+    copied.legacy_shortcut_owner = false;
     let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
     copied.name = names.claim(&format!("{} copy", copied.name));
     let at = idx + 1;
@@ -202,6 +204,8 @@ fn duplicate_set(s: &mut Session, source: &str, source_slot: Option<usize>) -> R
             action.name = names.claim(&format!("{} copy", action.name));
             action.set = Some(name.clone());
             action.set_slot = copy_slot;
+            action.action_id = None;
+            action.legacy_shortcut_owner = false;
             action
         })
         .collect();
@@ -442,25 +446,18 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(c)) => c.clone(),
         _ => return Err(bad(cmd, format!("needs `if`, one of {}", CONDITIONS.join("|")))),
     };
-    let branch = |key: &str| -> Result<Option<String>> {
-        match p.get(key) {
-            None | Some(Value::Null) => Ok(None),
-            Some(Value::String(n)) if !n.trim().is_empty() => Ok(Some(n.clone())),
-            Some(Value::String(_)) => Ok(None),
-            Some(_) => Err(bad(cmd, format!("`{key}` must be an action name or null"))),
-        }
-    };
-    let (then, otherwise) = (branch("then")?, branch("else")?);
+    let (then, otherwise) = (crate::actions_cmds::conditional_branch(p, "then")?, crate::actions_cmds::conditional_branch(p, "else")?);
     let holds = evaluate(s, &condition)?;
     let played = if holds { then } else { otherwise };
-    let mut out = json!({"if": condition, "holds": holds, "played": played});
-    if let Some(name) = played {
-        let r = s.execute("actions.play", json!({"action": name}))?;
+    let mut out = json!({"if": condition, "holds": holds, "played": played.as_ref().and_then(|p| p.get("action"))});
+    if let Some(params) = played {
+        let r = s.execute("actions.play", params)?;
         if let Some(f) = r.get("failed") {
             out["failed"] = f.clone();
         }
         out["ran"] = r.get("ran").cloned().unwrap_or(json!(0));
-        out["action"] = json!(name);
+        out["action"] = r["action"].clone();
+        out["played"] = r["action"].clone();
     }
     Ok(out)
 }
