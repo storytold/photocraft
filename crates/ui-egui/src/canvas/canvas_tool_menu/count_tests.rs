@@ -97,6 +97,7 @@ fn rows_are_enabled_as_the_layers_panel_menu_enables_them() {
     // A pixel layer: Convert to Layers (a smart object's) and Reselect (no earlier selection) are
     // greyed; Delete Layer and Free Transform are not.
     assert!(!entry_enabled(&app, &menu, "layer.smartObjects.convertToLayers"));
+    assert!(!entry_enabled(&app, &menu, "select.reselect"));
     assert!(entry_enabled(&app, &menu, "layer.delete") && entry_enabled(&app, &menu, "edit.freeTransform"));
 }
 
