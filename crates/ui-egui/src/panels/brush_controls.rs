@@ -36,21 +36,27 @@ pub(super) fn paint_mode_dropdown(ui: &mut egui::Ui, id: &str, b: &mut photocraf
 }
 
 /// Options-bar Smoothing % (the brush's stroke smoothing; the live stroke and the commit use it).
-pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) {
+pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, width: f32) -> egui::Response {
     let mut sm = (b.smoothing.amount * 100.0).round();
-    if widgets::value_field_named(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, "%", width).changed() {
+    let r = widgets::value_field_named(ui, tl!("Smoothing"), &mut sm, 0.0..=100.0, "%", width);
+    if r.changed() {
         b.smoothing.enabled = true;
         b.smoothing.amount = (sm / 100.0).clamp(0.0, 1.0);
     }
+    r
 }
 
 /// Options-bar gear beside Smoothing: Photoshop's smoothing options popup, edited on the brush
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
-pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) {
+/// `brush` adds the Brush's "Smoothing Options" title (#11813); the Eraser keeps its popup as it was.
+pub(super) fn smoothing_options(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings, brush: bool) {
     let resp = icons::button(ui, "settings", 24.0, false, tl!("Set additional smoothing options"));
     let resp = crate::brush_picker::named(resp, "Set additional smoothing options");
     egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         let s = &mut b.smoothing;
+        if brush {
+            ui.label(egui::RichText::new(tl!("Smoothing Options")).strong());
+        }
         widgets::checkbox(ui, &mut s.pulled_string, tl!("Pulled String Mode"));
         widgets::checkbox(ui, &mut s.catch_up, tl!("Stroke Catch-up"));
         widgets::checkbox(ui, &mut s.catch_up_on_end, tl!("Catch-up on Stroke End"));
@@ -119,7 +125,13 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
     ui.painter().text(pos2(c.x, r.bottom() - 5.0), Align2::CENTER_CENTER, format!("{}", b.size.round() as i64), egui::FontId::proportional(9.5), t.text_dim);
     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Brush Preset picker")));
-    if resp.on_hover_text(tl!("Brush Preset picker")).clicked() {
+    // The Brush's and the Background Eraser's own text (#11813, #11909); the other tools keep theirs.
+    let tip = if matches!(state.tool, crate::state::Tool::Brush | crate::state::Tool::BackgroundEraser) {
+        tl!("Click to open the Brush Preset picker")
+    } else {
+        tl!("Brush Preset picker")
+    };
+    if resp.on_hover_text(tip).clicked() {
         if state.brush_picker.is_some() {
             crate::brush_picker::close(state);
         } else {
