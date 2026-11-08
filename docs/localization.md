@@ -56,9 +56,8 @@ Languages registered with `complete_menus` cover the current menu labels, `tl!` 
 mode names, and generated preference labels. A string a catalog lacks shows in English:
 `cargo xtask i18n-report` lists the missing strings per language (with `CRAFT_I18N_DIR` set), and
 `cargo xtask ci` prints that list as its last step without failing. Vietnamese (`vi`) is
-selectable, resolves regional tags such as `vi-VN`, and covers all current stable localization
-keys. `complete_menus` remains false while generated/dynamic long-tail labels are still under
-review. This does not include every engine error or status message: those remain English, as do
+selectable, resolves regional tags such as `vi-VN`, and is registered with `complete_menus`, its
+coverage level with the other complete catalogs. This does not include every engine error or status message: those remain English, as do
 automation command IDs and user-provided document, layer and preset names.
 
 UI search and access-key comparisons use locale-aware dotted/dotless I rules for Azerbaijani
@@ -170,7 +169,10 @@ detection remain separate outstanding work. Switching catalogs does not supply m
 Translations live in craft-i18n, not here (its `docs/integration.md`). A PhotoCraft PR that adds
 or changes interface text adds the English only; translators add the other languages to
 `locales/<code>/photocraft.tsv` in craft-i18n PRs, and they show here once `craft-i18n.rev` moves
-to a commit that has them. A missing translation never fails a build, a test or a release.
+to a commit that has them. A missing translation never fails a build or a release: the string shows
+in English. A few tests check named rows of the pinned catalogs (Hindi's Camera Raw row, for
+one), so moving `craft-i18n.rev` to a commit that drops such a row fails that test until it is
+updated.
 
 1. Translate the meaning of the English source keys. Preserve `{name}` placeholders, escaped
    characters and the trailing `…` on dialog commands (an `@id` row without them is skipped and
