@@ -4617,6 +4617,7 @@ smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	SVG redakt
 # Strings main added after this catalog was written (integration batch 20).
 	Background (default)	Fon (defolt)
 	Transparent (default)	Şəffaf (defolt)
+	Generative Fill…	Generativ doldurma…
 # Move tool options bar (#11381)
 	Align top edges	Üst kənarları hizalayın
 	Align vertical centers	Şaquli mərkəzləri hizalayın

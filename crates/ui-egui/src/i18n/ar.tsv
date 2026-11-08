@@ -3575,6 +3575,94 @@ curves	Smooth	تنعيم
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
 
+# Generative Fill through the Craft suite's shared AI layer (#41): prompt, consent, setup, fills in progress
+	Allow sending to it:	السماح بالإرسال إليه:
+	API key	مفتاح API
+	Cancel this Generative Fill	إلغاء هذه التعبئة التوليدية
+	Checking…	جارٍ التحقق…
+	Connect a service	ربط خدمة
+	Connect	ربط
+	Connected.	تم الربط.
+	Connecting asks the service for its models with your key. Nothing from your documents is sent.	عند الربط تُسأل الخدمة عن نماذجها باستخدام مفتاحك. لا يُرسَل أي شيء من مستنداتك.
+	Connections and the model you choose are shared with the other Craft apps. Keys are kept in this computer's keychain, never in PhotoCraft's settings.	تُشارَك الاتصالات والنموذج الذي تختاره مع تطبيقات Craft الأخرى. تُحفَظ المفاتيح في سلسلة مفاتيح هذا الكمبيوتر، وليس في إعدادات PhotoCraft أبدًا.
+	Connections	الاتصالات
+	Describe what to generate in the selection, or leave it empty to continue the image through it.	صف ما يجب توليده في التحديد، أو اتركه فارغًا لمتابعة الصورة عبره.
+	Discard	تجاهل
+	Don't Send	عدم الإرسال
+	Each area becomes its own Generative Fill and layer, generated side by side; each sends its own requests.	تصبح كل منطقة تعبئة توليدية وطبقة خاصة بها، وتُولَّد جنبًا إلى جنب؛ وترسل كل منها طلباتها الخاصة.
+	Empty: removes what is selected and continues the image through it.	فارغ: يزيل ما هو محدد ويتابع الصورة عبره.
+	Failed: {name}	فشل: {name}
+	Failed	فشل
+	Fill the selection from a prompt	تعبئة التحديد من وصف
+	For a day	لمدة يوم
+	For an hour	لمدة ساعة
+	Generate More	توليد المزيد
+	Generated {name}	تم توليد {name}
+	Generating: {name}	جارٍ التوليد: {name}
+	Generating	جارٍ التوليد
+	Generative AI	الذكاء الاصطناعي التوليدي
+	Generative Fill failed: {error}	فشلت التعبئة التوليدية: {error}
+	Generative Fill uses {model} ({connection}).	تستخدم التعبئة التوليدية {model} ({connection}).
+	Generative Fill will send this to {destination}:	سترسل التعبئة التوليدية ما يلي إلى {destination}:
+	Generative Fill	التعبئة التوليدية
+	Generative Fill…	التعبئة التوليدية…
+	Always show the Generative Fill… button in the options bar	إظهار زر «التعبئة التوليدية…» دائمًا في شريط الخيارات
+	Generative Fills in progress	التعبئات التوليدية الجارية
+	Go to area	الانتقال إلى المنطقة
+	It runs on this computer: nothing leaves it.	يعمل على هذا الكمبيوتر: لا يغادره شيء.
+	It runs online: PhotoCraft asks before anything is sent.	يعمل عبر الإنترنت: يسأل PhotoCraft قبل إرسال أي شيء.
+	Locked until its layer lands	مقفل حتى تصل طبقته
+	Model for Generative Fill	نموذج التعبئة التوليدية
+	Needs your OK: {name}	بانتظار موافقتك: {name}
+	Needs your OK	بانتظار موافقتك
+	No connected model can do Generative Fill yet. Connect a service below.	لا يوجد نموذج متصل يمكنه إجراء التعبئة التوليدية بعد. اربط خدمة أدناه.
+	No key saved	لم يُحفَظ أي مفتاح
+	No prompt: continues the image	بلا وصف: يتابع الصورة
+	No prompt: removes what is selected	بلا وصف: يزيل ما هو محدد
+	On this computer	على هذا الكمبيوتر
+	Online	عبر الإنترنت
+	Only this time	هذه المرة فقط
+	Other data	بيانات أخرى
+	Prompt (optional)	الوصف (اختياري)
+	Retry	إعادة المحاولة
+	Review…	مراجعة…
+	Send	إرسال
+	Sends the same area and prompt again for three more.	يرسل المنطقة والوصف نفسيهما مرة أخرى للحصول على ثلاثة أخرى.
+	Set Up Generative AI…	إعداد الذكاء الاصطناعي التوليدي…
+	Something went wrong in the shared AI layer: {error}	حدث خطأ في وحدة الذكاء الاصطناعي المشتركة: {error}
+	Switched off	متوقف
+	The AI service is busy. Try again shortly.	خدمة الذكاء الاصطناعي مشغولة. حاول مرة أخرى بعد قليل.
+	The key can't be read	تتعذر قراءة المفتاح
+	The picture around the selection	الصورة حول التحديد
+	The selection has {n} separate areas, too many to fill one by one (at most {max}): it is filled as one.	يحتوي التحديد على {n} من المناطق المنفصلة، وهو عدد أكبر من أن تُعبَّأ واحدة تلو الأخرى (بحد أقصى {max}): لذا يُعبَّأ كوحدة واحدة.
+	The selection's shape	شكل التحديد
+	Until I turn it off	حتى أوقفه
+	Variations	التنويعات
+	Waiting ({n})	قيد الانتظار ({n})
+	Waiting: {name}	قيد الانتظار: {name}
+	Your prompt	وصفك
+@plural	{n} Generative Fill waits for this answer.|{n} Generative Fills wait for this answer.	{n} تعبئة توليدية تنتظر هذه الإجابة.|{n} تعبئة توليدية تنتظر هذه الإجابة.|{n} تعبئتان توليديتان تنتظران هذه الإجابة.|{n} تعبئات توليدية تنتظر هذه الإجابة.|{n} تعبئةً توليديةً تنتظر هذه الإجابة.|{n} تعبئة توليدية تنتظر هذه الإجابة.
+@plural	Fill each of the {n} separate areas on its own|Fill each of the {n} separate areas on its own	تعبئة كل منطقة من المناطق المنفصلة الـ{n} على حدة|تعبئة كل منطقة من المناطق المنفصلة الـ{n} على حدة|تعبئة كل منطقة من المناطق المنفصلة الـ{n} على حدة|تعبئة كل منطقة من المناطق المنفصلة الـ{n} على حدة|تعبئة كل منطقة من المناطق المنفصلة الـ{n} على حدة|تعبئة كل منطقة من المناطق المنفصلة الـ{n} على حدة
+@plural	{n} needs your OK|{n} need your OK	بانتظار موافقتك: {n}|بانتظار موافقتك: {n}|بانتظار موافقتك: {n}|بانتظار موافقتك: {n}|بانتظار موافقتك: {n}|بانتظار موافقتك: {n}
+@plural	{n} failed|{n} failed	فشل: {n}|فشل: {n}|فشل: {n}|فشل: {n}|فشل: {n}|فشل: {n}
+@plural	{n} waiting|{n} waiting	قيد الانتظار: {n}|قيد الانتظار: {n}|قيد الانتظار: {n}|قيد الانتظار: {n}|قيد الانتظار: {n}|قيد الانتظار: {n}
+@plural	{n} generating|{n} generating	قيد التوليد: {n}|قيد التوليد: {n}|قيد التوليد: {n}|قيد التوليد: {n}|قيد التوليد: {n}|قيد التوليد: {n}
+	Check the service's own terms for what each request costs.	راجع شروط الخدمة لمعرفة تكلفة كل طلب.
+	Colour matching was skipped for this variation: the picture around the selection came back too different to match it safely.	تم تخطي مطابقة الألوان لهذا التنويع: عادت الصورة حول التحديد مختلفة جدًا بحيث لا يمكن مطابقتها بأمان.
+	Colour matching was skipped for this variation: too little of the picture lies outside the selection to measure.	تم تخطي مطابقة الألوان لهذا التنويع: الجزء من الصورة خارج التحديد أقل من أن يُقاس.
+	Each request is billed by the service.	تحتسب الخدمة رسوم كل طلب.
+	Each request uses your subscription allowance.	يستهلك كل طلب من حصة اشتراكك.
+	Generate {n}	توليد {n}
+	Save Fill Diagnostics…	حفظ تشخيص التعبئة…
+	Saved Generative Fill diagnostics to {folder}	تم حفظ تشخيص التعبئة التوليدية في {folder}
+	Select a generative layer first.	حدد طبقة توليدية أولًا.
+	The connection is set up as free of charge.	الاتصال مُعد على أنه مجاني.
+	The service returned a {returned} picture for a {sent} area; it lined up with the picture around the selection once scaled.	أعادت الخدمة صورة بحجم {returned} لمنطقة بحجم {sent}؛ وبعد تغيير حجمها تطابقت مع الصورة حول التحديد.
+	The service returned a {returned} picture for a {sent} area; its centre was used.	أعادت الخدمة صورة بحجم {returned} لمنطقة بحجم {sent}؛ واستُخدم وسطها.
+	Writes what this fill sent and got back (the pictures, the mask, the prompt and a summary) to a folder you choose. Nothing is saved unless you ask.	يكتب ما أرسلته هذه التعبئة وما تلقته (الصور والقناع والموجّه وملخصًا) في مجلد تختاره. لا يُحفظ شيء إلا إذا طلبت ذلك.
+@plural	Colour matching was skipped for {n} variation.|Colour matching was skipped for {n} variations.	تم تخطي مطابقة الألوان لـ{n} تنويع.|تم تخطي مطابقة الألوان لـ{n} تنويع.|تم تخطي مطابقة الألوان لـ{n} تنويع.|تم تخطي مطابقة الألوان لـ{n} تنويعات.|تم تخطي مطابقة الألوان لـ{n} تنويعًا.|تم تخطي مطابقة الألوان لـ{n} تنويع.
+@plural	Makes {n} variation on this computer, with {connection}.|Makes {n} variations on this computer, with {connection}.	ينشئ {n} تنويع على هذا الكمبيوتر باستخدام {connection}.|ينشئ {n} تنويع على هذا الكمبيوتر باستخدام {connection}.|ينشئ {n} تنويع على هذا الكمبيوتر باستخدام {connection}.|ينشئ {n} تنويعات على هذا الكمبيوتر باستخدام {connection}.|ينشئ {n} تنويعًا على هذا الكمبيوتر باستخدام {connection}.|ينشئ {n} تنويع على هذا الكمبيوتر باستخدام {connection}.
+@plural	Makes {n} variation: {n} request to {connection}.|Makes {n} variations: {n} separate requests to {connection}.	ينشئ {n} تنويع: {n} طلب إلى {connection}.|ينشئ {n} تنويع: {n} طلب إلى {connection}.|ينشئ {n} تنويع: {n} طلب منفصل إلى {connection}.|ينشئ {n} تنويعات: {n} طلبات منفصلة إلى {connection}.|ينشئ {n} تنويعًا: {n} طلبًا منفصلًا إلى {connection}.|ينشئ {n} تنويع: {n} طلب منفصل إلى {connection}.
 # Action Stop message (#8386)
 	Message	رسالة
 # Playback Options (#5212)

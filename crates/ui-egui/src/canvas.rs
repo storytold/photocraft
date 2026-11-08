@@ -599,6 +599,9 @@ fn paint_canvas(
     // in (`layer_edges_rect`), so a press that Auto-Selects a layer outlines that layer.
     let layer_edges = painter.add(egui::Shape::Noop);
 
+    // Generative Fills still generating shimmer over their areas, under the ants.
+    crate::genai_ui::paint_pending(app, ctx, painter, &xf, doc.id);
+
     let ants = paint_selection_outline(app, SelectionPaintInput { ctx, painter, ui, view, xf, rect, doc, idx });
 
     (beyond, layer_edges, edge_rect, ants)

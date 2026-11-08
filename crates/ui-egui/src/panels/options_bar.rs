@@ -357,6 +357,7 @@ fn marquee_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     widgets::vline(ui, 22.0);
     select_and_mask_button(app, ui);
+    crate::genai_ui::options_bar_button(app, ui);
 }
 
 /// Lasso family: selection mode, feather, anti-alias, magnetic settings and the drawing hints.
@@ -383,6 +384,7 @@ fn lasso_options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         widgets::vline(ui, 22.0);
     }
     select_and_mask_button(app, ui);
+    crate::genai_ui::options_bar_button(app, ui);
     if crate::lasso_ui::active(app) || (app.ui.tool == Tool::PolygonLasso && !app.ui.polygon.is_empty()) {
         hint(ui, &crate::i18n::fmt(tl!("Click the first point or press {key} to close · Esc cancels"), &[("key", &crate::shortcuts::pretty("Enter"))]));
     } else if app.ui.tool == Tool::Lasso {
@@ -422,6 +424,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
                 crate::retouch_ui::report_smart_result(app, r, tl!("No subject found — try Object Selection or the Lasso"));
             }
             select_and_mask_button(app, ui);
+            crate::genai_ui::options_bar_button(app, ui);
         }
         Tool::PaintBucket => {
             opt_label(ui, tl!("Fill"));

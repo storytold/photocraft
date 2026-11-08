@@ -660,6 +660,14 @@ impl History {
         undo.iter().chain(redo.iter())
     }
 
+    /// Every document history holds and can make current again: the undo and redo states (the
+    /// cleared ones while Clear History can still be undone) and those the last step dropped,
+    /// which a rollback puts back. The current document is not among them.
+    pub fn held_docs(&self) -> impl Iterator<Item = &Arc<Document>> {
+        let evicted = self.last_record.iter().flat_map(|r| r.evicted.iter().map(|(_, s)| &s.doc));
+        self.held_states().map(|s| &s.doc).chain(evicted)
+    }
+
     /// Approximate unique pixel bytes held by history (tiles not shared with `current`).
     pub fn unique_bytes(&self, current: &Document) -> usize {
         let mut seen = HashSet::new();
