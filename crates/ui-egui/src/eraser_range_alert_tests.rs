@@ -119,9 +119,11 @@ fn the_brush_bar_keeps_todays_silent_clamp() {
     assert!(alerts(&h).is_empty(), "not measured for the Brush: no alert");
 }
 
-/// A value typed past the range and left by switching tools (simulated: the tool is set and the
-/// field loses the keyboard while the bar is not drawn, as a click on the toolbar does) shows the
-/// stored value when the Eraser comes back, not the typed one, and opens no alert on the way.
+/// A value typed past the range and left while the bar is not drawn (the tool is set from outside
+/// the bar, as the control channel does, and the field loses the keyboard meanwhile) shows the
+/// stored value when the Eraser comes back, not the typed one, and opens no alert on the way. A
+/// click on the toolbar leaves the field while the bar is drawn: see
+/// `a_toolbar_click_after_a_typed_value_past_the_range_alerts_once`.
 #[test]
 fn a_typed_value_left_by_a_tool_switch_shows_the_stored_value() {
     let mut h = bar(Tool::Eraser);
@@ -197,4 +199,60 @@ fn a_caption_scrub_past_100_does_not_alert() {
     h.run_steps(3);
     assert_eq!(brush(&h).0, 100.0, "the scrub reached the end");
     assert!(alerts(&h).is_empty(), "a scrub stops at 100 without an alert");
+}
+
+/// 150 typed into the Eraser's Opacity, then a click on the toolbar's Brush Tool: the click leaves
+/// the field while the Eraser's bar is still drawn, so the value is clamped and its alert shows
+/// once, as when the field is left any other way. The tool switches, and the Eraser shows the
+/// stored value when it comes back.
+#[test]
+fn a_toolbar_click_after_a_typed_value_past_the_range_alerts_once() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 80, "height": 80})).unwrap();
+    app.ui.tool = Tool::Eraser;
+    let mut h = Harness::builder().with_size(vec2(1800.0, 900.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            crate::panels::options_bar(app, ui);
+            crate::panels::toolbar(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(4);
+    let field = |h: &Harness<'static, PhotocraftApp>| {
+        h.query_all_by_role(Role::SpinButton)
+            .find(|n| n.accesskit_node().label().as_deref() == Some("Opacity:"))
+            .map(|n| (n.rect(), n.accesskit_node().numeric_value()))
+    };
+    let click = |h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.run_steps(1);
+        }
+    };
+    let (rect, _) = field(&h).expect("the Opacity field");
+    click(&mut h, rect.center());
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("150".into()));
+    h.run_steps(1);
+    let tool = |h: &Harness<'static, PhotocraftApp>, name: &str| {
+        h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().is_some_and(|l| l.starts_with(name))).map(|n| n.rect().center())
+    };
+    let at = tool(&h, "Brush Tool").expect("the toolbar's Brush Tool");
+    click(&mut h, at);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.tool, Tool::Brush, "the click switches tools");
+    assert_eq!(alerts(&h), [ONE_TO_100], "the typed value's alert, once");
+    assert_eq!(brush(&h).0, 100.0, "the closest value is stored");
+    ok(&mut h);
+    assert!(alerts(&h).is_empty(), "OK closes it");
+    let at = tool(&h, "Eraser Tool").expect("the toolbar's Eraser Tool");
+    click(&mut h, at);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.tool, Tool::Eraser);
+    assert!(alerts(&h).is_empty(), "back on the Eraser: no alert");
+    assert_eq!(field(&h).and_then(|(_, v)| v), Some(100.0), "the field shows the stored value");
 }
