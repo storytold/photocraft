@@ -46,6 +46,19 @@ pub(super) fn smoothing_field(ui: &mut egui::Ui, b: &mut photocraft_engine::Brus
     r
 }
 
+/// The Brush's options-bar Angle (#11811): an angle icon and a whole-degree field, −180…180, on
+/// the same tip angle as the Brush Settings panel. A typed fraction is cut off (45.5 → 45).
+pub(super) fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> egui::Response {
+    let t = Tokens::get(ui.ctx());
+    ui.add(icons::image("rotate-cw", 15.0, t.text_dim)).on_hover_text(tl!("Set the brush angle"));
+    let mut a = b.angle;
+    let r = widgets::value_field_named(ui, tl!("Angle"), &mut a, -180.0..=180.0, "°", 52.0);
+    if r.changed() && a.is_finite() {
+        b.angle = a.trunc().clamp(-180.0, 180.0);
+    }
+    r.on_hover_text(tl!("Set the brush angle"))
+}
+
 /// Options-bar gear beside Smoothing: Photoshop's smoothing options popup, edited on the brush
 /// like the Smoothing % (so they stay per tool and reach the live stroke and the commit).
 /// `brush` adds the Brush's "Smoothing Options" title (#11813); the Eraser keeps its popup as it was.
