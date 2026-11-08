@@ -1,84 +1,17 @@
-//! Properties-panel editors for the Selective Color and Color Lookup adjustment layers.
+//! Properties-panel editor for the Color Lookup adjustment layer.
 //!
-//! Both commit through `layer.setAdjustment` (which merges these kinds' params into the current
-//! values). Selective Color previews live while a slider drags, via `app.live_adjust` carrying
-//! the full parameter set; Color Lookup commits on every change (its table isn't in the params).
+//! It commits through `layer.setAdjustment` (which merges the params into the current values) on
+//! every change, since its table isn't in the params. The other kinds, Selective Color included,
+//! are edited by `adjust_editors`.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
 use photocraft_doc::{Adjustment, LayerId};
-use photocraft_engine::adjust_cmds::RANGES;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
 use crate::widgets;
-
-const RANGE_LABELS: [&str; 9] = ["Reds", "Yellows", "Greens", "Cyans", "Blues", "Magentas", "Whites", "Neutrals", "Blacks"];
-
-/// The full parameter set of a Selective Color adjustment (every range as `[c, m, y, k]`).
-pub fn selective_values(adj: &Adjustment) -> Value {
-    let Adjustment::SelectiveColor { relative, adjustments } = adj else {
-        return json!({});
-    };
-    let mut v = json!({"method": if *relative { "relative" } else { "absolute" }});
-    for (i, key) in RANGES.iter().enumerate() {
-        v[*key] = json!(adjustments[i]);
-    }
-    v
-}
-
-pub fn selective_color_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
-    let t = Tokens::get(ui.ctx());
-    let committed = selective_values(adj);
-    let mut values = match &app.live_adjust {
-        Some((l, v)) if *l == id && v.get("reds").is_some() => v.clone(),
-        _ => committed,
-    };
-    let key = egui::Id::unique(("selc-range", id.0));
-    let mut range: usize = ui.data(|d| d.get_temp(key)).unwrap_or(0);
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Colors")).color(t.text_dim));
-        let opts: Vec<(usize, &str)> = RANGE_LABELS.iter().copied().enumerate().collect();
-        if widgets::dropdown(ui, &format!("selc-colors-{}", id.0), tl!("Color"), &mut range, &opts, 150.0) {
-            ui.data_mut(|d| d.insert_temp(key, range));
-        }
-    });
-    ui.add_space(4.0);
-    let mut live = false;
-    let mut commit = false;
-    for (k, label) in [tl!("Cyan"), tl!("Magenta"), tl!("Yellow"), tl!("Black")].iter().enumerate() {
-        let mut v = values[RANGES[range]][k].as_f64().unwrap_or(0.0) as f32;
-        let r = widgets::slider_row(ui, label, &mut v, -100.0..=100.0, "%", None);
-        if r.changed() {
-            values[RANGES[range]][k] = json!(v.round());
-            live = true;
-        }
-        if r.drag_stopped() || (r.changed() && !r.dragged()) {
-            commit = true;
-        }
-    }
-    ui.add_space(4.0);
-    let mut method = values["method"].as_str().unwrap_or("relative").to_string();
-    ui.horizontal(|ui| {
-        for (m, label) in [("relative", tl!("Relative")), ("absolute", tl!("Absolute"))] {
-            if ui.radio(method == m, label).clicked() && method != m {
-                method = m.to_string();
-                values["method"] = json!(m);
-                commit = true;
-            }
-        }
-    });
-    if live {
-        app.live_adjust = Some((id, values.clone()));
-    }
-    if commit {
-        let mut p = values;
-        p["layer"] = json!(id.0);
-        let _ = app.run("layer.setAdjustment", p);
-        app.live_adjust = None;
-    }
-}
 
 /// Ask the platform for one LUT. Send embedded text through the same engine command on
 /// desktop and web, so the result doesn't depend on ambient filesystem permissions.

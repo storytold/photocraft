@@ -36,9 +36,19 @@ pub(crate) fn moves_selected_pixels_with(app: &PhotocraftApp, tool: Tool) -> boo
 /// time, or with `copy` (⌥) floats a duplicate and leaves them; `copy` on a piece already floating
 /// drops it where it is and floats a copy of it. False when it failed (reported in the status bar).
 pub(crate) fn float_selected(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64) -> bool {
+    float_selected_as(app, copy, dx, dy, None)
+}
+
+/// The start of a Move-tool drag of the selected pixels. An ⌥-drag copy is one "Duplicate" step,
+/// as in Photoshop (#11383); a plain drag is "Move".
+pub(crate) fn float_selected_for_drag(app: &mut PhotocraftApp, copy: bool) -> bool {
+    float_selected_as(app, copy, 0.0, 0.0, copy.then(|| tl!("Duplicate")))
+}
+
+fn float_selected_as(app: &mut PhotocraftApp, copy: bool, dx: f64, dy: f64, step_name: Option<&str>) -> bool {
     let floating = app.session.active().is_some_and(|st| photocraft_engine::float_cmds::floating(st).is_some());
     let dropped = if copy && floating { app.run("select.drop", json!({})) } else { Ok(json!(null)) };
-    match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy}))) {
+    match dropped.and_then(|_| app.run("select.float", json!({"dx": dx, "dy": dy, "copy": copy, "stepName": step_name}))) {
         Ok(_) => {
             crate::snap_ui::follow_cut(app);
             true
@@ -372,10 +382,14 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     if dx == 0.0 && dy == 0.0 {
         return;
     }
-    if app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app)})).is_err() {
+    // `nest`: a layer dropped on another artboard joins it (Photoshop's auto-nesting).
+    let Ok(result) = app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app), "nest": app.ui.artboard_tool.auto_nest}))
+    else {
         return;
-    }
-    let Some(p) = shown else { return };
+    };
+    // A layer that changed board is clipped by its new board, not the old one the preview showed,
+    // so the canvas recomposites instead of keeping the preview.
+    let Some(p) = shown.filter(|_| result.get("nested").is_none()) else { return };
     crate::canvas::shown_as_document(app, p.doc, is_preview_key);
 }
 

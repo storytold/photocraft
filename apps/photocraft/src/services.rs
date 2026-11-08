@@ -341,6 +341,41 @@ pub fn prefs_file() -> Option<PathBuf> {
     config_dir().map(|d| d.join("preferences.json"))
 }
 
+fn gpu_memo_file() -> Option<PathBuf> {
+    config_dir().map(|d| d.join("gpu-compositor.json"))
+}
+
+fn load_gpu_memo_text() -> Option<String> {
+    use std::io::Read;
+    let file = std::fs::File::open(gpu_memo_file()?).ok()?;
+    let cap = photocraft_ui_egui::gpu_memo::MAX_GPU_MEMO_BYTES;
+    let mut bytes = Vec::new();
+    file.take((cap + 1) as u64).read_to_end(&mut bytes).ok()?;
+    if bytes.len() > cap {
+        log::info!("ignoring oversized GPU compositor memo");
+        return None;
+    }
+    String::from_utf8(bytes).ok()
+}
+
+fn shader_compiler_identity() -> String {
+    #[cfg(target_os = "windows")]
+    {
+        let exe = std::env::current_exe().ok();
+        let exe_dir = exe.as_deref().and_then(Path::parent);
+        match crate::gpu_startup::dx12_compiler(std::env::var("WGPU_DX12_COMPILER").ok().as_deref(), exe_dir) {
+            eframe::wgpu::Dx12Compiler::Fxc => "fxc".into(),
+            eframe::wgpu::Dx12Compiler::DynamicDxc { dxc_path } => format!("dxc:{dxc_path}"),
+            eframe::wgpu::Dx12Compiler::StaticDxc => "static-dxc".into(),
+            eframe::wgpu::Dx12Compiler::Auto => "auto".into(),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        String::new()
+    }
+}
+
 /// The brush preset store (one file per preset group plus tip bitmaps; see
 /// `photocraft_engine::preset_store`).
 pub fn presets_dir() -> Option<PathBuf> {
@@ -361,9 +396,20 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
-/// [`write_atomic`] reporting the fraction written (a background save's progress, #3389).
-fn write_atomic_progress(path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> Result<(), String> {
-    photocraft_format::atomic_write_progress(path, bytes, progress).map_err(|e| e.to_string())
+/// [`write_atomic`] for an encoded save, reporting the fraction written (a background save's
+/// progress, #3389). A PSD/PSB is serialized straight into the temporary file, so the whole file
+/// is never held in memory next to its model (#6607).
+fn write_encoded_atomic(path: &Path, encoded: &photocraft_io::Encoded, progress: &dyn Fn(f32)) -> Result<(), String> {
+    match encoded {
+        photocraft_io::Encoded::Bytes(bytes) => photocraft_format::atomic_write_progress(path, bytes, progress),
+        photocraft_io::Encoded::Psd(_) => {
+            // Only the progress bar's scale: a model whose length can't be worked out fails the
+            // write the same way, through the atomic write's "not changed" error.
+            let len = encoded.encoded_len().unwrap_or(0);
+            photocraft_format::atomic_write_stream_progress(path, len, progress, &mut |w| encoded.write_to(w))
+        }
+    }
+    .map_err(|e| e.to_string())
 }
 
 /// Whether `a` and `b` reach the same file: the same device and inode on Unix, the same final path
@@ -413,26 +459,26 @@ fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_i
 const ENCODE_SHARE: f32 = 0.85;
 
 /// A save on a worker thread (`Services::save_file` and `Services::automation_save`, #2017):
-/// encode, then write through `write`. Cancelling while encoding leaves the target untouched;
-/// once writing starts the save can't be cancelled. The encoder's progress fills the first
+/// encode, then write through `write` (a PSD/PSB is serialized as it is written). Cancelling
+/// while encoding leaves the target untouched; once writing starts the save can't be cancelled. The encoder's progress fills the first
 /// [`ENCODE_SHARE`] of the job's progress, so the status bar and tab read "Saving NN%" (#3389).
 fn save_through(
     doc: &Document,
     path: &str,
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
-    write: impl Fn(&str, &[u8], &dyn Fn(f32)) -> Result<(), String>,
+    write: impl Fn(&str, &photocraft_io::Encoded, &dyn Fn(f32)) -> Result<(), String>,
 ) -> Result<Vec<String>, String> {
     ctl.progress(0.0, "Encoding");
     let opts = export_options(settings);
     let cancelled = || ctl.check().is_err();
     let progress = |f: f32| ctl.progress(f * ENCODE_SHARE, "");
     let interrupt = photocraft_raster::Interrupt::new(&cancelled, &progress);
-    let r = crate::crash_guard::guard("Save", || photocraft_io::export_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
+    let r = crate::crash_guard::guard("Save", || photocraft_io::encode_with(doc, path, &opts, &interrupt).map_err(|e| e.to_string()))?;
     ctl.commit()?;
     ctl.progress(ENCODE_SHARE, "Writing");
     // The last bit is the flush and rename after the last chunk: 100% only once they're done.
-    write(path, &r.bytes, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
+    write(path, &r.encoded, &|f| ctl.progress(ENCODE_SHARE + (0.99 - ENCODE_SHARE) * f, ""))?;
     ctl.progress(1.0, "");
     Ok(r.warnings)
 }
@@ -443,7 +489,7 @@ fn save_file(
     settings: &photocraft_ui_egui::ExportSettings,
     ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
 ) -> Result<Vec<String>, String> {
-    save_through(doc, path, settings, ctl, |p, b, progress| write_atomic_progress(Path::new(p), b, progress))
+    save_through(doc, path, settings, ctl, |p, encoded, progress| write_encoded_atomic(Path::new(p), encoded, progress))
 }
 
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
@@ -674,7 +720,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     });
     let automation_save = automation.clone().map(|workspace| {
         std::sync::Arc::new(move |doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings, ctl: &photocraft_ui_egui::jobs_ui::SaveCtl| {
-            save_through(doc, path, settings, ctl, |p, b, _| workspace.write(p, b).map_err(|e| e.to_string()))
+            save_through(doc, path, settings, ctl, |p, encoded, _| workspace.write_stream(p, &mut |w| encoded.write_to(w)).map_err(|e| e.to_string()))
         }) as photocraft_ui_egui::SaveFileFn
     });
     let step: fn(&str, &serde_json::Value) -> photocraft_engine::Result<()> = photocraft_automation::workspace::authorize_desktop_engine_step;
@@ -780,6 +826,14 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
         photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
         save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
+        load_gpu_memo: Some(Box::new(load_gpu_memo_text)),
+        save_gpu_memo: Some(Box::new(|text: &str| {
+            if text.len() > photocraft_ui_egui::gpu_memo::MAX_GPU_MEMO_BYTES {
+                return Err("GPU compositor memo exceeds 64 KiB".into());
+            }
+            write_atomic(&gpu_memo_file().ok_or("no config directory")?, text.as_bytes())
+        })),
+        shader_compiler: Some(shader_compiler_identity()),
         system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {
             use std::io::Write;
