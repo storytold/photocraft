@@ -1401,6 +1401,52 @@ fn selection_pruned_after_delete_and_undo() {
     assert!(sel(&s).iter().all(|id| doc(&s).layer(*id).is_some()));
 }
 
+/// #11915: duplicating several layers stacks the copies above the topmost selected original, in
+/// the originals' order, as Photoshop does, instead of putting each copy directly above its own
+/// original (which interleaved copies and originals).
+#[test]
+fn duplicating_several_layers_stacks_the_copies_above_the_originals() {
+    let mut s = session(8);
+    let background = doc(&s).layers[0].id;
+    let lower = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    let upper = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    // Bottom to top: Background, lower, upper.
+    select_all(&mut s, &[background, lower]);
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    let copies: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
+    assert_eq!(copies.len(), 2);
+    // The copies keep the originals' order and sit as one block above the topmost selected
+    // original; upper, which is not selected, stays on top.
+    let stack: Vec<LayerId> = doc(&s).layers.iter().map(|l| l.id).collect();
+    assert_eq!(stack, vec![background, lower, copies[0], copies[1], upper], "the copies are a block above the originals");
+    assert_eq!(sel(&s).len(), 2);
+    assert!(sel(&s).iter().all(|id| copies.contains(id)));
+    // One undo puts the stack back.
+    assert!(s.undo());
+    assert_eq!(doc(&s).layers.iter().map(|l| l.id).collect::<Vec<_>>(), vec![background, lower, upper]);
+}
+
+/// #11915: only sibling layers get one block of copies. A selected layer inside a group keeps its
+/// copy in that group, directly above the original, even when a top-level layer is selected too,
+/// so no copy ever leaves its group.
+#[test]
+fn duplicating_layers_from_different_parents_keeps_each_copy_in_its_group() {
+    let mut s = session(8);
+    let background = doc(&s).layers[0].id;
+    let inner = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    let gid = LayerId(s.execute("layer.groupLayers", json!({"layer": inner.0})).unwrap()["layer"].as_u64().unwrap());
+    let outer = rect_layer(&mut s, Rect::new(0, 0, 5, 5));
+    select_all(&mut s, &[inner, outer]);
+    let r = s.execute("layer.duplicate", json!({})).unwrap();
+    let copies: Vec<LayerId> = r["layers"].as_array().unwrap().iter().map(|v| LayerId(v.as_u64().unwrap())).collect();
+    assert_eq!(copies.len(), 2);
+    let children: Vec<LayerId> = doc(&s).layer(gid).unwrap().children().unwrap().iter().map(|l| l.id).collect();
+    assert_eq!(children, vec![inner, copies[0]], "the grouped layer's copy stays in the group");
+    let stack: Vec<LayerId> = doc(&s).layers.iter().map(|l| l.id).collect();
+    assert_eq!(stack, vec![background, gid, outer, copies[1]], "the top-level layer's copy stays at the root");
+    assert!(sel(&s).iter().all(|id| copies.contains(id)));
+}
+
 #[test]
 fn duplicate_hide_lock_and_reverse_selected() {
     let mut s = session(8);
