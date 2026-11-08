@@ -3650,6 +3650,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	It will be saved in {folder}.	Es wird in {folder} gespeichert.
 	Download Subject Model	Motivmodell herunterladen
 	The document or layer changed. Please run the command again.	Das Dokument oder die Ebene hat sich geändert. Bitte den Befehl erneut ausführen.
+	Netscape Gray	Netscape-Grau
 # Move tool options bar (#11381)
 	Align top edges	Obere Kanten ausrichten
 	Align vertical centers	Vertikale Mitten ausrichten
