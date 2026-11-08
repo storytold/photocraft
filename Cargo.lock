@@ -5775,6 +5775,7 @@ version = "0.20.1"
 dependencies = [
  "base64 0.23.1",
  "chrono",
+ "craft-i18n",
  "craft-print",
  "craft-ui",
  "craft-update",
