@@ -393,6 +393,18 @@ fn nearest_sampler(points: &[[f64; 2]], at: [f64; 2], tol: f64) -> Option<usize>
     points.iter().enumerate().filter(|(_, q)| dist(**q, at) <= tol).min_by(|a, b| dist(*a.1, at).total_cmp(&dist(*b.1, at))).map(|(i, _)| i)
 }
 
+/// The Color Sampler point under document point `at` on the active document, by the same hit test
+/// a click uses, so the right-click menu acts on the sampler a click would grab.
+pub(crate) fn sampler_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<usize> {
+    if !at.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    nearest_sampler(&app.session.active()?.color_samplers, at, tolerance(app))
+}
+
+#[cfg(test)]
+mod sampler_menu_tests;
+
 /// Show a command error in the status bar without treating the sample-limit message as a fault.
 fn status_on_err(app: &mut PhotocraftApp, r: Result<Value, String>) {
     if let Err(e) = r {
