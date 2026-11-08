@@ -124,7 +124,10 @@ pub fn badge(app: &PhotocraftApp, tool: Tool, m: egui::Modifiers) -> Option<Badg
     // Patch and Content-Aware Move lasso their area in the Lasso's mode (⇧ adds, ⌥ subtracts,
     // #11024). Over the selection without them a press drags the patch, which combines nothing.
     if matches!(tool, Tool::Patch | Tool::ContentAwareMove) {
-        let at = app.drag.as_ref().filter(|d| d.tool == tool).map(|d| d.start).or(app.hover_doc);
+        // A drag in progress keeps what its press decided (the release reads `drag.modifiers`).
+        let drag = app.drag.as_ref().filter(|d| d.tool == tool);
+        let at = drag.map(|d| d.start).or(app.hover_doc);
+        let m = drag.map_or(m, |d| d.modifiers);
         if at.is_some_and(|p| crate::retouch_ui::patch_drags_selection(app, p, m)) {
             return (tool == Tool::Patch).then_some(Badge::Arrow);
         }
