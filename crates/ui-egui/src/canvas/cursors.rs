@@ -144,8 +144,6 @@ pub fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon 
     egui::CursorIcon::None
 }
 
-/// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
-/// OS cursor to set (hidden).
 /// The Color Sampler's cursor over an existing sampler point: the arrow with the sampler target,
 /// or with Alt the arrow with scissors (#11744).
 pub(crate) fn sampler_hover_cursor(ctx: &egui::Context, p: Pos2, alt: bool) -> egui::CursorIcon {
@@ -177,6 +175,8 @@ pub(crate) fn color_sampler_cursor(ctx: &egui::Context, p: Pos2) -> egui::Cursor
     egui::CursorIcon::None
 }
 
+/// The sampling cursor: a pipette whose tip is the sampled pixel. Draws it at `p` and returns the
+/// OS cursor to set (hidden).
 pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     // The tip of the icon's pipette is at (2, 22) of its 24-unit box.
     crate::icons::cursor(ctx, "pipette", p, vec2(2.0, 22.0) / 24.0, 20.0);

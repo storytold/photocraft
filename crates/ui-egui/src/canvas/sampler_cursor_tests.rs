@@ -52,6 +52,11 @@ fn cursor_area_visible(h: &Harness<'static, PhotocraftApp>, id: &str) -> bool {
     h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer))
 }
 
+fn cursor_badge_visible(h: &Harness<'static, PhotocraftApp>, name: &str) -> bool {
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique(("pc-cursor-badge", name)));
+    h.ctx.memory(|memory| memory.areas().visible_layer_ids().contains(&layer))
+}
+
 fn hover_at(h: &mut Harness<'static, PhotocraftApp>, doc_x: f32, doc_y: f32, m: Modifiers) -> egui::CursorIcon {
     h.event(egui::Event::ModifiersChanged(m));
     let p = screen(h, doc_x, doc_y);
@@ -69,7 +74,7 @@ fn off_sampler_no_key_or_shift_or_alt_shows_eyedropper_with_sampler_target() {
     assert_eq!(icon, egui::CursorIcon::None, "pipette cursor replaces OS pointer");
     assert!(cursor_area_visible(&h, "pc-icon-cursor"), "pipette icon is drawn");
     assert!(cursor_area_visible(&h, "pc-sampler-badge"), "sampler target at top-left is drawn");
-    assert!(!cursor_area_visible(&h, "pc-cursor-badge"), "arrow badge is not drawn off sampler");
+    assert!(!cursor_badge_visible(&h, "sampler") && !cursor_badge_visible(&h, "scissors"), "arrow badge is not drawn off sampler");
 
     // 2. Off a sampler, Shift held: still eyedropper with sampler target.
     let icon_shift = hover_at(&mut h, 80.0, 80.0, Modifiers::SHIFT);
@@ -104,26 +109,42 @@ fn over_sampler_shows_arrow_with_sampler_target_and_alt_shows_scissors() {
     // 1. Over sampler, no key: arrow with sampler target.
     let icon = hover_at(&mut h, 150.0, 150.0, Modifiers::NONE);
     assert_eq!(icon, egui::CursorIcon::Default, "over sampler uses standard arrow pointer");
-    assert!(cursor_area_visible(&h, "pc-cursor-badge"), "sampler target badge is drawn");
+    assert!(cursor_badge_visible(&h, "sampler"), "sampler target badge is drawn");
+    assert!(!cursor_badge_visible(&h, "scissors"), "scissors badge is not drawn without Alt");
     assert!(!cursor_area_visible(&h, "pc-icon-cursor"), "no pipette icon over sampler");
 
     // Even with Precise Other Cursors, over a sampler is the arrow cursor.
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "precise"}})).unwrap();
     let icon_precise = hover_at(&mut h, 150.0, 150.0, Modifiers::NONE);
     assert_eq!(icon_precise, egui::CursorIcon::Default, "Precise cursor does not suppress sampler grab pointer");
-    assert!(cursor_area_visible(&h, "pc-cursor-badge"));
+    assert!(cursor_badge_visible(&h, "sampler"));
+    assert!(!cursor_badge_visible(&h, "scissors"));
     h.state_mut().run("prefs.set", json!({"values": {"cursors.other": "standard"}})).unwrap();
 
     // 2. Alt held over sampler: arrow with scissors.
     let icon_alt = hover_at(&mut h, 150.0, 150.0, Modifiers::ALT);
     assert_eq!(icon_alt, egui::CursorIcon::Default, "Alt over sampler keeps arrow pointer");
-    assert!(cursor_area_visible(&h, "pc-cursor-badge"), "scissors badge is drawn");
+    assert!(cursor_badge_visible(&h, "scissors"), "scissors badge is drawn with Alt");
+    assert!(!cursor_badge_visible(&h, "sampler"), "sampler badge is not drawn when Alt shows scissors");
 
     // 3. Releasing Alt without moving pointer reverts to arrow with sampler target.
     h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
     h.run_steps(2);
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
-    assert!(cursor_area_visible(&h, "pc-cursor-badge"));
+    assert!(cursor_badge_visible(&h, "sampler"), "sampler target badge restored when Alt is released");
+    assert!(!cursor_badge_visible(&h, "scissors"), "scissors badge removed when Alt is released");
+
+    // 4. Sticky Alt (e.g. tablet button) also shows scissors.
+    h.state_mut().ui.shell.sticky_alt = true;
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    assert!(cursor_badge_visible(&h, "scissors"), "sticky Alt shows scissors");
+    assert!(!cursor_badge_visible(&h, "sampler"));
+
+    h.state_mut().ui.shell.sticky_alt = false;
+    h.run_steps(2);
+    assert!(cursor_badge_visible(&h, "sampler"));
+    assert!(!cursor_badge_visible(&h, "scissors"));
 }
 
 #[test]
@@ -135,7 +156,8 @@ fn cursor_follows_sampler_hit_test_tolerance() {
     // Inside hit square (dx = 6.0 <= 7.0): over sampler -> CursorIcon::Default.
     let icon_in = hover_at(&mut h, 156.0, 150.0, Modifiers::NONE);
     assert_eq!(icon_in, egui::CursorIcon::Default, "dx = 6 px is within tolerance");
-    assert!(cursor_area_visible(&h, "pc-cursor-badge"));
+    assert!(cursor_badge_visible(&h, "sampler"));
+    assert!(!cursor_badge_visible(&h, "scissors"));
 
     // Outside hit square (dx = 8.0 > 7.0): off sampler -> CursorIcon::None (eyedropper).
     let icon_out = hover_at(&mut h, 158.0, 150.0, Modifiers::NONE);
