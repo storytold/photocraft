@@ -50,11 +50,11 @@ dynamic labels, contextual translations and two integer plural forms. Machine-as
 drafts have edited core terminology; native-speaker review is pending. See
 [`localization-az.md`](localization-az.md) for terminology, provenance and validation limits.
 
-Languages registered with `complete_menus` (every catalog but Hindi) cover 88.8–97.2% of the
-measured keys (`cargo xtask i18n-coverage` at e6ba4aca4). A string a catalog lacks shows in English:
+Languages registered with `complete_menus` (every catalog but Hindi) cover 87.8–96.0% of the
+measured keys (`cargo xtask i18n-coverage` at 3aa1d9f43). A string a catalog lacks shows in English:
 `cargo xtask i18n-coverage` lists the missing strings per language, and `cargo xtask ci` prints
 that list as its last step without failing. Vietnamese (`vi`) is
-selectable, resolves regional tags such as `vi-VN`, covers 2,283 of the 2,400 measured keys and is
+selectable, resolves regional tags such as `vi-VN`, covers 2,288 of the 2,428 measured keys and is
 registered with `complete_menus`. This does not include every engine error or status message: those remain English, as do
 automation command IDs and user-provided document, layer and preset names.
 

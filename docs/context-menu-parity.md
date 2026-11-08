@@ -1,6 +1,6 @@
 # Context-menu parity contract
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-07 · **Change:** minor (accuracy pass against the code at e6ba4aca4; Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-11-07 · **Change:** minor (accuracy pass against the code at 3aa1d9f43; Crop tool menu on a pending crop, #6561; Zoom tool menu order, #6005; Type tool menu over committed type, #7324; earlier: Path Selection canvas menu, #1056; pasteboard row: the menu exists, #2462) · **Target:** Adobe Photoshop 2026
 
 Status: implementation contract, updated 2026-10-09. Scope: canvas, document tabs, and panels. “Right-click” means a secondary pointer click; macOS Control-click should also open the same menu where the platform sends a context-menu gesture. Photoshop changes a context menu with the active tool, selection, and panel item. Adobe documents that principle but does not publish a complete current menu catalog. **Documented** means an Adobe source explicitly names the gesture or action. **Inferred** means a PhotoCraft design target or an item known from a main menu whose presence in a Photoshop context menu still needs a current-product capture. Do not present inferred rows as exact Photoshop menus. [Adobe: panels and menus](https://helpx.adobe.com/photoshop/using/panels-menus.html), [Adobe: shortcuts and context menus](https://helpx.adobe.com/sa_en/photoshop/using/customizing-keyboard-shortcuts.html).
 
@@ -100,7 +100,7 @@ Each slice needs pure model tests (including every item dispatching a known comm
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-11-07 | minor | Accuracy pass against the code at e6ba4aca4: Free Transform menu exists (`TRANSFORM_MENU`, TOOL-214-5); Quick Selection and Magnetic Lasso open the selection menu; Delete and Fill Selection row; layer-mask Mask Options… |
+| 2026-11-07 | minor | Accuracy pass against the code at 3aa1d9f43: Free Transform menu exists (`TRANSFORM_MENU`, TOOL-214-5); Quick Selection and Magnetic Lasso open the selection menu; Delete and Fill Selection row; layer-mask Mask Options… |
 | 2026-10-21 | minor | Crop tool menu on a pending crop (#6561) |
 | 2026-10-20 | trivial | Zoom tool menu order (#6005) |
 | 2026-10-18 | minor | Type tool menu over committed type (#7324) |

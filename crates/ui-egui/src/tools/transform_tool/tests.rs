@@ -329,7 +329,7 @@ fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.transform = Some(session());
     setup(&mut app);
-    let mut h = Harness::builder().with_size(vec2(900.0, 360.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(1000.0, 360.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
