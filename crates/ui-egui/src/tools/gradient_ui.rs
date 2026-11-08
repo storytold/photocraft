@@ -84,9 +84,10 @@ pub(crate) fn editing(app: &PhotocraftApp) -> bool {
 
 /// Whether the Gradient tool is in its live (Gradient Fill layer) mode.
 /// Painting into a layer mask, an alpha channel or the Quick Mask stays classic (pixels), except
-/// that a selected gradient fill layer is always edited live (selecting it targets its mask).
+/// that a selected gradient fill layer is always edited live (selecting it targets its mask), even
+/// with Classic gradient chosen ([`fill_layer_active`]).
 pub fn live_mode(app: &PhotocraftApp) -> bool {
-    if app.active_tool() != Tool::Gradient || app.ui.tool_options.gradient_classic {
+    if app.active_tool() != Tool::Gradient || (app.ui.tool_options.gradient_classic && !fill_layer_active(app)) {
         return false;
     }
     match crate::canvas::paint_target(app).as_str() {
@@ -94,6 +95,15 @@ pub fn live_mode(app: &PhotocraftApp) -> bool {
         Some("mask") => active_gradient(app).is_some(),
         _ => false,
     }
+}
+
+/// Whether the active layer is a visible, unlocked gradient fill layer the tool paints into (its
+/// pixels or its mask). The Gradient tool then edits it live whatever the stored Gradient / Classic
+/// gradient choice, and the options bar greys that choice out (#12008). Hidden and locked fill
+/// layers, and the Quick Mask or an alpha channel as the target, were not measured and keep the choice.
+pub(crate) fn fill_layer_active(app: &PhotocraftApp) -> bool {
+    let Some((l, ..)) = active_gradient(app) else { return false };
+    matches!(crate::canvas::paint_target(app).as_str(), Some("pixels" | "mask")) && app.session.active().is_some_and(|st| !st.doc.effective_locks(l.id).any())
 }
 
 /// The active layer when it is a gradient fill layer: (layer, its frame, the canvas).
@@ -668,7 +678,8 @@ pub fn editor_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// panel's: the live bar has no Mode or Opacity (#12007).
 pub fn options_changed(app: &mut PhotocraftApp, before: &crate::state::ToolOptions) {
     let o = app.ui.tool_options.clone();
-    if app.ui.tool != Tool::Gradient || o.gradient_classic {
+    // A gradient fill layer is edited live whatever the stored choice (#12008).
+    if app.ui.tool != Tool::Gradient || (o.gradient_classic && !fill_layer_active(app)) {
         return;
     }
     let Some((l, ..)) = active_gradient(app) else { return };
