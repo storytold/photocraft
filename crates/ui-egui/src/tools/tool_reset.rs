@@ -218,7 +218,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Pencil => reset!(pencil_auto_erase, pencil_clear),
         Tool::Eraser => reset!(eraser_mode),
         Tool::Remove => reset!(remove_new_layer, remove_after_each_stroke),
-        Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg),
+        Tool::BackgroundEraser => reset!(bg_sampling, bg_limits, bg_tolerance, bg_protect_fg, bg_tolerance_control),
         Tool::ColorReplacement => reset!(cr_mode, cr_sampling, cr_limits, cr_tolerance, cr_anti_alias),
         Tool::MagicEraser => reset!(tolerance, anti_alias, contiguous, magic_eraser_opacity),
         Tool::Gradient => reset!(gradient_style, gradient_reverse, gradient_dither, gradient_classic, gradient_blend_mode, fill_opacity),
@@ -262,11 +262,11 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Star | Tool::CustomShape => {
             reset!(shape_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
         }
+        Tool::MixerBrush => reset!(mixer_combination),
         Tool::ColorSampler
         | Tool::Ruler
         | Tool::Note
         | Tool::Count
-        | Tool::MixerBrush
         | Tool::Hand
         | Tool::RotateView
         | Tool::HistoryBrush
