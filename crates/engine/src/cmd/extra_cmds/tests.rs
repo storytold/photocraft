@@ -675,6 +675,33 @@ fn paste_into_each_uses_the_thumbnails_that_built_the_selection() {
     assert_eq!(s.active().unwrap().selection_sources(), None, "only ⌘-click and ⌘⇧-click build the list");
 }
 
+/// Rule 9: no clipboard, wrong-type params or only an empty layer to paste into fail with an
+/// error, never a panic.
+#[test]
+fn paste_into_each_fails_gracefully() {
+    let mut s = session(8);
+    assert!(s.execute("edit.pasteSpecial.pasteIntoEach", json!({})).is_err(), "nothing copied yet");
+    paint_square(&mut s, Rect::new(0, 0, 10, 10), [1.0, 0.0, 0.0, 1.0]);
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    // The command takes no params: anything passed is ignored or refused, never a crash.
+    for p in [json!(null), json!([1, 2]), json!({"layers": "x", "center": -1})] {
+        let _ = s.execute("edit.pasteSpecial.pasteIntoEach", p);
+    }
+    // Only an empty layer to paste into: nothing to mask a copy to.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let empty = active(&s).id;
+    {
+        let st = s.active_mut().unwrap();
+        st.selected_layers = vec![empty];
+        st.active_layer = Some(empty);
+    }
+    let layers_before = doc(&s).layers.len();
+    assert!(s.execute("edit.pasteSpecial.pasteIntoEach", json!({})).is_err(), "an empty layer has no pixels to paste into");
+    assert_eq!(doc(&s).layers.len(), layers_before, "nothing pasted");
+}
+
 #[test]
 fn option_click_eye_shows_one_layer_then_restores() {
     let mut s = session(8);
