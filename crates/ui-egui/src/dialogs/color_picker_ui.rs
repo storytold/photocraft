@@ -1007,7 +1007,8 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
             if f.get("__orig").and_then(Value::as_str).and_then(parse_hex) == Some(rgb) {
                 return Ok(json!({ "color": color }));
             }
-            app.run("notes.set", json!({"index": i, "color": color}))?;
+            // The colour as the picker read it: the engine takes no padded spelling.
+            app.run("notes.set", json!({"index": i, "color": hex(rgb)}))?;
         } else {
             app.ui.analysis.note_default_color = rgb;
         }

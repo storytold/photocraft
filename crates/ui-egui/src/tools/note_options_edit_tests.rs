@@ -194,3 +194,14 @@ fn ok_on_the_unchanged_colour_spelled_in_capitals_leaves_the_note_alone() {
     assert_eq!(steps(&app), before, "no \"Note Color\" step");
     assert_eq!(journaled_notes_set(&app), 0, "no notes.set for an action to record");
 }
+
+#[test]
+fn ok_on_a_padded_colour_recolours_the_note_with_it() {
+    let mut app = app();
+    select(&mut app, 0);
+    let shown = app.ui.analysis.note_color;
+    let id = crate::color_picker_ui::open_for_target(&mut app, "noteColor", "Color", shown);
+    app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!(" #80c0ff "));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(close(note(&app, 0).color.to_rgb(), [128.0 / 255.0, 192.0 / 255.0, 1.0]), "{:?}", note(&app, 0).color.to_rgb());
+}
