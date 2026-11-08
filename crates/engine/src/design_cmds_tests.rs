@@ -1084,28 +1084,41 @@ fn the_timeline_does_not_start_while_a_job_runs() {
     s.execute("design.start", json!({})).unwrap();
 }
 
-/// A step after a pattern imported from a file keeps its result: the replay reads no file, and
-/// the pattern may be gone from the library by then.
+/// A timeline keeps the patterns its steps painted with: a replay paints with them after the
+/// library deleted or renamed them, and after a save and load into a session without them. A
+/// fill with the panel's current pattern records which one that was.
 #[test]
-fn a_step_after_an_imported_pattern_replays_its_result() {
+fn a_timeline_keeps_the_patterns_its_steps_used() {
     let mut s = started();
     s.execute("layer.new.layer", json!({})).unwrap();
     s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
     s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
-    s.execute("edit.definePattern", json!({"name": "Imported"})).unwrap();
+    let id = s.execute("edit.definePattern", json!({"name": "Mine"})).unwrap()["pattern"].as_str().unwrap().to_string();
     let dir = std::env::temp_dir().join(format!("pc-design-pat-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("lib.pat").to_string_lossy().into_owned();
     s.execute("pattern.export", json!({"path": path})).unwrap();
-    s.execute("pattern.delete", json!({"pattern": "Imported"})).unwrap();
     s.set_active(0);
-    s.execute("pattern.import", json!({"path": path})).unwrap();
-    s.execute("edit.fill", json!({"contents": "pattern", "pattern": "Imported"})).unwrap();
-    assert_eq!(steps(&mut s).last().unwrap()["baked"], true);
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 8, "height": 8})).unwrap();
+    // By name, then (another step between) as the panel's current pattern.
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": "Mine"})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 8, "height": 8})).unwrap();
+    s.execute("pattern.presets.select", json!({"pattern": id})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern"})).unwrap();
+    let st = steps(&mut s);
+    assert_eq!((&st[2]["params"]["pattern"], &st[4]["params"]["pattern"]), (&json!(id), &json!(id)), "kept by id");
+    assert!(st.iter().all(|st| st["baked"] == false), "nothing baked for it");
+    let tl = s.active().unwrap().doc.design_timeline.clone().unwrap();
+    assert_eq!(tl.patterns.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), [id.as_str()]);
     let want = doc(&s);
-    s.execute("pattern.delete", json!({"pattern": "Imported"})).unwrap();
+    s.execute("pattern.delete", json!({"pattern": id})).unwrap();
     s.execute("design.replay", json!({})).unwrap();
-    assert_eq!(state(&mut s, 1), "ok");
-    assert_eq!(doc(&s), want);
+    assert_eq!((state(&mut s, 2), state(&mut s, 4)), ("ok".to_string(), "ok".to_string()));
+    assert_eq!(doc(&s), want, "the deleted pattern still paints in a replay");
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let mut r = Session::new();
+    r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
+    r.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&r), want, "after a save and load too");
 }

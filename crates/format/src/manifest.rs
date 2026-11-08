@@ -111,6 +111,9 @@ pub struct DesignTimelineM {
     pub steps: Vec<DesignStepM>,
     #[serde(default)]
     pub marker: Option<usize>,
+    /// The library patterns the steps used.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub patterns: Vec<PatternM>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

@@ -1763,7 +1763,9 @@ impl Session {
         let before = crate::timeline::capture(self);
         // With the Channels panel's target filled in, as the command runs: a replay session has
         // no panel, so a cleared mask would clear the layer's pixels instead.
-        let recorded = crate::timeline::tracks(&before).then(|| crate::channel_cmds::inject_target(self, id, params.clone()));
+        // Patterns named by name are kept by id: a rename doesn't change the step.
+        let recorded =
+            crate::timeline::tracks(&before).then(|| crate::timeline::pin_patterns(self, id, crate::channel_cmds::inject_target(self, id, params.clone())));
         let timed = recorded.is_some();
         let r = {
             let _g = scope.enter();

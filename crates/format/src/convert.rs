@@ -296,11 +296,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         clipping_path: d.clipping_path.clone(),
         quick_mask: d.quick_mask.as_ref().map(|c| channel_m(c, sink)),
         quick_mask_unselected: d.quick_mask_unselected,
-        patterns: d
-            .patterns
-            .iter()
-            .map(|p| PatternM { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: surface_m(&p.surface, sink) })
-            .collect(),
+        patterns: d.patterns.iter().map(|p| pattern_m(p, sink)).collect(),
         color_table: d.color_table.clone(),
         duotone: d.duotone.clone(),
         variables: d.variables.clone(),
@@ -335,7 +331,11 @@ fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn 
             }),
         })
         .collect();
-    DesignTimelineM { base: doc_m(&t.base, sink), steps, marker: t.marker }
+    DesignTimelineM { base: doc_m(&t.base, sink), steps, marker: t.marker, patterns: t.patterns.iter().map(|p| pattern_m(p, sink)).collect() }
+}
+
+fn pattern_m(p: &Pattern, sink: &mut dyn Sink) -> PatternM {
+    PatternM { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: surface_m(&p.surface, sink) }
 }
 
 fn effects_m(e: &Effects, sink: &mut dyn Sink) -> EffectsM {
@@ -717,13 +717,27 @@ impl Loader<'_> {
         }
         // A damaged file's marker past the last step would leave Edit Parameters no marker to restore.
         let marker = t.marker.map(|m| m.min(steps.len()));
-        let mut tl = DesignTimeline { base: Arc::new(base), steps, marker };
+        let patterns = t.patterns.iter().map(|p| self.pattern(p)).collect::<Result<Vec<_>>>()?;
+        let mut tl = DesignTimeline { base: Arc::new(base), steps, marker, patterns };
         // The saved document is what the steps in effect produce: replay can resume from it.
         let n = tl.in_effect();
         if let Some(last) = n.checked_sub(1).and_then(|i| tl.steps.get_mut(i)) {
             last.checkpoint = Checkpoint(Some(Arc::new(doc.clone())));
         }
         Ok(tl)
+    }
+
+    fn pattern(&mut self, p: &PatternM) -> Result<Pattern> {
+        // Sizes come from the file: a pattern with no tiles can claim any size, and renderers
+        // allocate per pixel.
+        let max = photocraft_doc::pattern::MAX_EDGE;
+        if p.width == 0 || p.height == 0 {
+            return Err(FormatError::corrupt(format!("pattern `{}` is {}×{} px", p.name, p.width, p.height)));
+        }
+        if p.width > max || p.height > max {
+            return Err(FormatError::LimitExceeded(format!("pattern `{}` is {}×{} px (max {max} per side)", p.name, p.width, p.height)));
+        }
+        Ok(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: self.surface(&p.surface)? })
     }
 
     /// The document of `m` without its timeline, under the id decision already made.
@@ -751,19 +765,7 @@ impl Loader<'_> {
         for p in &m.paths {
             paths.push(NamedPath { name: p.name.clone(), path: p.path.clone(), psd_raw: self.opt_blob(&p.psd_raw)? });
         }
-        let mut patterns = Vec::with_capacity(m.patterns.len());
-        for p in &m.patterns {
-            // Sizes come from the file: a pattern with no tiles can claim any size, and renderers
-            // allocate per pixel.
-            let max = photocraft_doc::pattern::MAX_EDGE;
-            if p.width == 0 || p.height == 0 {
-                return Err(FormatError::corrupt(format!("pattern `{}` is {}×{} px", p.name, p.width, p.height)));
-            }
-            if p.width > max || p.height > max {
-                return Err(FormatError::LimitExceeded(format!("pattern `{}` is {}×{} px (max {max} per side)", p.name, p.width, p.height)));
-            }
-            patterns.push(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface: self.surface(&p.surface)? });
-        }
+        let patterns = m.patterns.iter().map(|p| self.pattern(p)).collect::<Result<Vec<_>>>()?;
         let layer_comps = m.layer_comps.iter().map(|c| self.comp(c)).collect::<Result<Vec<_>>>()?;
         let last_document_state = m.last_document_state.as_ref().map(|c| self.comp(c)).transpose()?;
         // Layer-based slices follow their layer through id remapping; a dangling one becomes a
