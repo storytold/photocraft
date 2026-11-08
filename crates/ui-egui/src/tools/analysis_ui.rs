@@ -72,7 +72,7 @@ impl Default for AnalysisUi {
             log_selected: Vec::new(),
             note_selected: None,
             note_author: String::new(),
-            note_color: [1.0, 1.0, 0.51],
+            note_color: photocraft_engine::notes_cmds::DEFAULT_NOTE_COLOR,
             use_measurement_scale: false,
             dialog: None,
             drag: None,
