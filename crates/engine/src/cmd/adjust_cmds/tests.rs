@@ -1113,4 +1113,14 @@ fn black_white_auto_spreads_the_greys() {
     let r = s.execute("image.adjustments.blackWhite.auto", json!({})).unwrap();
     let got: Vec<f32> = HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect();
     assert_eq!(got, w.to_vec());
+
+    // Columns alternating with a period that divides the sampling stride (4 here): both colours
+    // are still sampled, not only the even columns.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 512, "height": 512})).unwrap();
+    paint(&mut s, |x, _| if x % 2 == 0 { [0.776, 0.2, 0.2, 1.0] } else { [0.29, 0.29, 1.0, 1.0] });
+    let r = s.execute("image.adjustments.blackWhite.auto", json!({})).unwrap();
+    let got: Vec<f32> = HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect();
+    assert_ne!(got, BW_DEFAULTS.to_vec(), "only one colour was sampled");
+    assert!(gap(&got.clone().try_into().unwrap()) > 1.0 / 32.0, "{got:?}");
 }

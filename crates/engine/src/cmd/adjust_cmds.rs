@@ -708,6 +708,17 @@ pub fn auto_black_white(px: &[[f32; 3]]) -> [f32; 6] {
     w
 }
 
+/// At most [`AUTO_BW_SAMPLES`] of the pixels with alpha: one from each run of `stride` of them, at
+/// a position that varies from run to run (Fibonacci hashing of the run's index), so a pattern
+/// whose period divides `stride` (alternating columns on an even-width canvas) isn't only ever
+/// sampled in one phase.
+fn auto_bw_sample(rgba: &[[f32; 4]]) -> Vec<[f32; 3]> {
+    let covered = || rgba.iter().filter(|c| c[3] > 0.0);
+    let stride = covered().count().div_ceil(AUTO_BW_SAMPLES).max(1);
+    let pick = |run: usize| ((run as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize % stride;
+    covered().enumerate().filter(|(i, _)| i % stride == pick(i / stride)).map(|(_, c)| [c[0], c[1], c[2]]).collect()
+}
+
 /// Hides `id` and everything composited above it. Returns whether `id` is in `layers`.
 fn hide_from(layers: &mut [Layer], id: photocraft_doc::LayerId) -> bool {
     let mut found = false;
@@ -746,10 +757,7 @@ fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
             surf.read_region(area).chunks_exact(fmt.channels()).map(|c| to_rgba(&fmt, c)).collect()
         }
     };
-    let covered = || rgba.iter().filter(|c| c[3] > 0.0);
-    let stride = covered().count().div_ceil(AUTO_BW_SAMPLES).max(1);
-    let px: Vec<[f32; 3]> = covered().step_by(stride).map(|c| [c[0], c[1], c[2]]).collect();
-    let w = auto_black_white(&px);
+    let w = auto_black_white(&auto_bw_sample(&rgba));
     Ok(Value::Object(crate::adjust_params::HUE_RANGES.iter().zip(w).map(|(k, v)| ((*k).to_string(), json!(v))).collect()))
 }
 
