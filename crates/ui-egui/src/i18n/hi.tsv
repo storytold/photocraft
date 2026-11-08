@@ -580,6 +580,9 @@ cameraRaw	Yellow	पीला
 	Target	लक्ष्य
 	Units	इकाइयाँ
 	Demosaic	डिमोज़ेक
+cameraRaw	Auto	स्वचालित
+cameraRaw	Rotate	घुमाएँ
+cameraRaw	Scale	आकार बदलें
 
 	The GPU compositor is still being prepared	The GPU compositor is still being prepared
 	Clear Selection	चयन साफ़ करें
