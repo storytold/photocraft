@@ -233,13 +233,15 @@ jobs:
           tool: sccache@0.18.0
 
       # The GitHub Actions cache backend needs the runtime URL and token, which steps only see
-      # through an action; export them for the sccache calls below.
+      # through an action; export the same set sccache-action does (cache service v2, no legacy
+      # ACTIONS_CACHE_URL) for the sccache calls below.
       - name: Expose cache runtime to sccache
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            for (const name of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_TOKEN']) {
-              if (process.env[name]) core.exportVariable(name, process.env[name]);
+            core.exportVariable('ACTIONS_CACHE_SERVICE_V2', 'on');
+            for (const name of ['ACTIONS_RESULTS_URL', 'ACTIONS_RUNTIME_TOKEN']) {
+              core.exportVariable(name, process.env[name] || '');
             }
 
       - name: Use sccache
