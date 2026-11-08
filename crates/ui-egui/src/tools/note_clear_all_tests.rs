@@ -118,7 +118,9 @@ fn clear_all_stays_grey_without_notes() {
 fn a_second_click_while_the_alert_is_open_opens_no_second_alert() {
     let mut h = harness(app());
     clear_all(&mut h);
-    ask_clear_notes(h.state_mut());
+    // The options bar alone, so nothing covers Clear All: the second click reaches the button.
+    h.get_by_label("Clear All").click();
+    h.run_steps(3);
     assert_eq!(h.state().ui.dialogs.iter().filter(|d| owns_clear_notes(&d.fields)).count(), 1);
 }
 
