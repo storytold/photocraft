@@ -4120,6 +4120,11 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Show layer bounds on hover	Hiện ranh giới lớp khi di chuột
 	Expand layer group on click	Mở rộng nhóm lớp khi nhấp
 	Show hover bounds from Layers	Hiện ranh giới khi di chuột từ bảng Lớp
+	Saved Camera Raw settings to {file}	Đã lưu cài đặt Camera Raw vào {file}
+	Save the settings to each raw's sidecar without opening it	Lưu thiết lập vào tệp sidecar của từng ảnh raw mà không mở
+	No settings saved: these raws can't keep a sidecar here	Không lưu được gì: các ảnh raw này không thể có tệp sidecar ở đây
+	Some settings could not be saved; the raws stay open	Không thể lưu một số cài đặt; các ảnh raw vẫn mở
+	Nothing to save: these raws are at their default settings	Không có gì để lưu: các ảnh raw này đang ở cài đặt mặc định
 # Artboard tool options bar (#11385)
 	Distribute Widths	Phân bố chiều rộng
 	Distribute Heights	Phân bố chiều cao
