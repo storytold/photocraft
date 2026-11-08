@@ -274,6 +274,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-08 | minor | Actions panel: an action or step row dragged onto the trash is deleted, and one dragged onto Create new action is duplicated right after itself (#12373) |
 | 2026-11-08 | minor | Image › Adjustments › Photo Filter… keeps Preserve Luminosity from its last OK; filter, colour and density reopen at Warming Filter (85) and 25 %, measured in the reference application (#9879); no percentage changed |
 | 2026-11-07 | minor | Gradient stops dragged off the bar are removed, with a live preview and drag-back cancel, in every stop editor: Gradient Map and Layer Style gained it, the Gradient Editor, Properties and shape popover share the same threshold (#10742); row added (done); no percentage changed |
 | 2026-11-07 | minor | Foreground/background colours restored before the first frame (`Preferences.toolColors`, #8485), with separate pixel/mask pairs, HDR/alpha, exact CMYK ink picks and a final normal-exit flush; malformed values are ignored one by one, and first saves from older preferences merge against the default swatches so separate edits in two instances survive. No percentage changed |
