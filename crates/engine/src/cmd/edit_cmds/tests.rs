@@ -732,6 +732,9 @@ fn layer_via_copy_duplicates_every_selected_layer() {
     assert_eq!(ids.len(), 5, "background, a, b, a copy, b copy");
     assert_eq!((ids[1], ids[2]), (a, b), "the originals keep their order");
     assert_eq!(st.selected_layers(), vec![ids[3], ids[4]], "the copies become the selection, in document order");
+    let surface = |id: LayerId| st.doc.layer(id).unwrap().surface().unwrap();
+    assert_eq!(surface(ids[3]), surface(a), "the first copy came from a");
+    assert_eq!(surface(ids[4]), surface(b), "the second copy came from b");
     assert_eq!(st.history.past_len(), steps + 1, "one undo step");
     assert!(s.undo());
     s.execute("layer.select", json!({"layer": b.0})).unwrap();

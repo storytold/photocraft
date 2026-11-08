@@ -266,8 +266,9 @@ pub fn delete_selected(s: &mut Session) -> Result<Value> {
 
 /// Duplicate Layer with several layers selected: the copies of sibling layers form one block above
 /// the topmost selected original, in the originals' order, as Photoshop does (#11915); a selection
-/// spanning groups keeps each copy directly above its original, so no copy leaves its group. The
-/// copies become the selection. Artboard copies go beside their boards unless `in_place`
+/// spanning groups keeps each copy directly above its original, so no copy leaves its group, and a
+/// clipped layer copied without its base keeps its copy above the original so the copy keeps that
+/// base. The copies become the selection. Artboard copies go beside their boards unless `in_place`
 /// ([`crate::artboard_cmds::place_copy`]). `label` names the history step (Layer via Copy reuses
 /// this path, #2777).
 pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Result<Value> {
@@ -279,8 +280,11 @@ pub fn duplicate_selected(s: &mut Session, in_place: bool, label: &str) -> Resul
         // Copies of sibling layers go above the topmost selected original as one block, keeping
         // their originals' order, as Photoshop does (#11915). Layers from different groups keep a
         // copy directly above each original, so no copy leaves its group; artboard copies are
-        // placed beside their boards one by one (below).
-        let block = same_siblings(doc, &ids) && !ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some()));
+        // placed beside their boards one by one (below). So does a clipped copy whose own base is
+        // not copied with it: the block would give it a different base and change its pixels.
+        let block = same_siblings(doc, &ids)
+            && !ids.iter().any(|id| doc.layer(*id).is_some_and(|l| l.artboard().is_some()))
+            && ids.iter().all(|id| doc.layer(*id).is_none_or(|l| !l.clipped || crate::clip_group::base_of(doc, *id).is_some_and(|base| ids.contains(&base))));
         let mut above = ids.last().copied();
         let mut copies = Vec::new();
         let mut new_active = None;
