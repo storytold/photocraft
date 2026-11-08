@@ -5,7 +5,8 @@
 //! The hit test is `layer.pickAt` with `"list": true` (non-transparent pixels, text bounds,
 //! layer masks, hidden layers and hidden groups), and choosing runs `layer.select`, so the menu is the same
 //! two commands an agent would run. Painting tools keep their plain right-click (the Brush
-//! Preset picker, #268); the ⌘/Ctrl variant reaches the layer list from them too.
+//! Preset picker, #268); the ⌘/Ctrl variant reaches the layer list from them too. With the Move
+//! tool, ⌥ + right-click selects the topmost layer under the pointer at once (#8484).
 
 use egui::{Color32, Context, Modifiers};
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,14 @@ pub fn open(app: &mut PhotocraftApp, ctx: &Context, at: [f32; 2], x: f64, y: f64
     app.ui.brush_picker = None;
     app.ui.layer_menu = Some(LayerMenu { pos: at, layers });
     crate::canvas_popup::mark_open(ctx, menu_id());
+    true
+}
+
+/// ⌥ + right-click with the Move tool (#8484): select the topmost layer with pixels at document
+/// point (x, y) without opening the menu. False when no layer has pixels there.
+pub fn select_topmost(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
+    let Some(&(layer, _)) = layers_at(app, x, y).first() else { return false };
+    choose(app, layer);
     true
 }
 
