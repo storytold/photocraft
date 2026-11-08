@@ -132,16 +132,27 @@ fn is_selection_tool(tool: Tool) -> bool {
     )
 }
 
-/// Put `tool`'s fields of `o` back to their defaults.
+/// The fields of [`option_keys`] that Reset Tool leaves as they are, as the reference app does
+/// (the Patch tool's Structure and Color, #12127). They stay in [`option_keys`], so a tool preset
+/// still stores them, and Reset All Tools still resets them (it starts from the defaults).
+fn kept_by_reset_tool(tool: Tool) -> &'static [&'static str] {
+    match tool {
+        Tool::Patch => &["patch_structure", "patch_color"],
+        _ => &[],
+    }
+}
+
+/// Put `tool`'s fields of `o` back to their defaults, except those Reset Tool keeps.
 pub fn reset_options(o: &mut ToolOptions, tool: Tool) {
-    let keys = option_keys(tool);
+    let kept = kept_by_reset_tool(tool);
+    let keys: Vec<&str> = option_keys(tool).iter().copied().filter(|k| !kept.contains(k)).collect();
     if keys.is_empty() {
         return;
     }
     let (Ok(Value::Object(mut cur)), Ok(Value::Object(d))) = (serde_json::to_value(&*o), serde_json::to_value(ToolOptions::default())) else {
         return;
     };
-    for k in keys {
+    for k in &keys {
         if let Some(v) = d.get(*k) {
             cur.insert((*k).to_string(), v.clone());
         }
