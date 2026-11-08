@@ -46,6 +46,7 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     import_opts.psd_high_memory_approved = a.approve_high_memory;
     import_opts.pdf_dpi = a.pdf_dpi.unwrap_or(300.0);
     import_opts.pdf_pages = a.pdf_pages.as_deref().map(parse_pdf_pages).transpose()?;
+    import_opts.pdf_editable = a.pdf_editable;
     let mut o = files::open_with_options(input, &import_opts)?;
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);

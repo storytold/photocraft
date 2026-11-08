@@ -185,8 +185,8 @@
 	Trap…	Overlapping…
 
 # Layer
-	Layer via Copy	Lag via kopiering
-	Layer via Cut	Lag via utklipp
+	Layer Via Copy	Lag via kopiering
+	Layer Via Cut	Lag via utklipp
 	Duplicate Layer…	Dupliser lag…
 	Duplicate…	Dupliser…
 	Delete	Slett
@@ -4493,7 +4493,7 @@ curves	Smooth	Jevn ut
 	The file could not be saved.	Filen kunne ikke lagres.
 	Thickness	Tykkelse
 	This Layer:	Dette laget:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Dette smartobjektet må rasteriseres før du fortsetter. Innholdet kan da ikke lenger redigeres. Rasterisere smartobjektet?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Dette smartobjektet må rasteriseres før du fortsetter. Innholdet kan da ikke lenger redigeres. Rasterisere smartobjektet?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Denne justeringen ({key}) beholdes som importert og kan ikke redigeres ennå.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Dette fyllaget må rasteriseres før du fortsetter. Fyllinnholdet kan da ikke lenger redigeres. Rasterisere laget?
 	This layer must be rasterized before proceeding.	Dette laget må rasteriseres før du fortsetter.
