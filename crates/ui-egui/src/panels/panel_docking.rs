@@ -129,12 +129,27 @@ fn display_width(column: &Column<String>) -> f32 {
     if column.iconic { column.iconic_width.unwrap_or(column.width) } else { column.width }
 }
 
-/// Sets a column's displayed width, keeping `iconic_width` in step for an iconic column.
+/// Sets a column's displayed width. An iconic column keeps its expanded width for when the user
+/// expands it again; only `iconic_width` changes.
 fn set_display_width(column: &mut Column<String>, width: f32) {
     let width = width.max(1.0);
-    column.width = width;
     if column.iconic {
         column.iconic_width = Some(width);
+    } else {
+        column.width = width;
+    }
+}
+
+/// True when every end-dock column is collapsed to icons: such a dock takes its iconic width even
+/// below the expanded minimum.
+pub(crate) fn dock_iconic_only(app: &PhotocraftApp) -> bool {
+    let layout = match &app.ui.docking {
+        Some(workspace) => workspace.layout.clone(),
+        None => legacy(app),
+    };
+    match layout.root.as_ref().and_then(end_dock_node) {
+        Some(Node::Dock { columns, .. }) => !columns.is_empty() && columns.iter().all(|column| column.iconic),
+        _ => false,
     }
 }
 

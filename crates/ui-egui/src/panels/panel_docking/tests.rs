@@ -1073,6 +1073,32 @@ fn the_toolbar_side_toggle_works_in_every_interface_theme() {
     }
 }
 
+/// Moving the toolbar persists at click time, even when the dock is not drawn.
+#[test]
+fn moving_the_toolbar_persists_without_the_dock() {
+    use crate::state::ToolbarSide;
+    let mut app = app();
+    app.session.prefs.edit(|p| p.workspace.remember_workspace_changes = true);
+    let mut ready = false;
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+        move |ui, app: &mut PhotocraftApp| {
+            if !ready {
+                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                ready = true;
+                return;
+            }
+            crate::panels::toolbar(app, ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.get_by_label("Move Toolbar to the Right").click();
+    h.run_steps(1);
+    assert_eq!(h.state().ui.panels.toolbar_side, ToolbarSide::Right);
+    let saved = &h.state().session.prefs().panel_layout;
+    assert_eq!(saved["panels"]["toolbar_side"], "right", "the toolbar side is persisted without the dock: {saved}");
+}
+
 /// A dock-edge harness: draw only the dock column, as the dock-edge frame layout does.
 fn dock_panel_harness(app: PhotocraftApp, size: egui::Vec2, theme: crate::theme::ThemeKind) -> Harness<'static, PhotocraftApp> {
     let mut ready = false;
@@ -1099,7 +1125,7 @@ fn dock_edge_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, P
 /// workspace makes the same drag a no-op.
 #[test]
 fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
-    let drag_once = |locked: bool| -> (f32, f32) {
+    let drag_once = |locked: bool| -> (f32, f32, f32) {
         let mut app = app();
         app.run("window.panel.move", json!({"panel":"swatches","anchor":"layers"})).unwrap();
         if locked {
@@ -1113,16 +1139,16 @@ fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
         let resized = dock_width(h.state());
         h.run_steps(4);
         let settled = dock_width(h.state());
-        (resized, settled)
+        (stored, resized, settled)
     };
 
-    let (resized, settled) = drag_once(false);
+    let (_, resized, settled) = drag_once(false);
     assert!(resized < 290.0, "dragging right should shrink the dock, got {resized}");
     assert!((settled - resized).abs() < 1.0, "the resized width must not snap back: {resized} then {settled}");
 
-    let (locked_resized, locked_settled) = drag_once(true);
+    let (locked_stored, locked_resized, locked_settled) = drag_once(true);
     assert!((locked_resized - locked_settled).abs() < 1.0);
-    assert!(locked_resized >= 250.0, "a locked workspace keeps the default dock width, got {locked_resized}");
+    assert!((locked_resized - locked_stored).abs() < 1.0, "a locked workspace keeps its pre-drag width: {locked_stored} then {locked_resized}");
 }
 
 /// `ui.set {dockWidth}` sets the whole end dock, scaling every column rather than only the outer
@@ -1233,6 +1259,15 @@ fn an_iconic_dock_column_takes_its_iconic_width() {
         columns[0].iconic = true;
         columns[0].iconic_width = Some(36.0);
     }
+    let expanded = {
+        let root = layout.root.as_ref().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_ref(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns[0].width
+    };
     app.ui.docking = Some(Workspace::new(layout));
     assert!((dock_width(&app) - 36.0).abs() < 0.5, "the iconic column displays 36 points, got {}", dock_width(&app));
     assert!(set_end_dock_total(&mut app, 220.0), "the dock-edge resize accepts an iconic dock");
@@ -1244,6 +1279,40 @@ fn an_iconic_dock_column_takes_its_iconic_width() {
     };
     let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
     assert!(columns[0].iconic_width.unwrap_or(0.0) > 200.0, "iconic_width follows the resize: {:?}", columns[0].iconic_width);
+    assert!((columns[0].width - expanded).abs() < 0.5, "resizing while iconic keeps the expanded width: {} vs {expanded}", columns[0].width);
+
+    let root = app.ui.docking.as_mut().unwrap().layout.root.as_mut().unwrap();
+    let dock = match root {
+        Node::Split { second, .. } => second.as_mut(),
+        _ => root,
+    };
+    let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+    columns[0].iconic = false;
+    assert!((dock_width(&app) - expanded).abs() < 0.5, "expanding restores the expanded width, got {} (was {expanded})", dock_width(&app));
+}
+
+/// An iconic-only dock keeps its narrow panel instead of reserving the expanded minimum; the rest
+/// of the window stays with the canvas.
+#[test]
+fn an_iconic_only_dock_keeps_its_narrow_panel() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns[0].iconic = true;
+        columns[0].iconic_width = Some(36.0);
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    let h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::ProMedium);
+    let rail = if h.state().ui.panels.rail { 36.0 } else { 0.0 };
+    let panel = crate::panels::dock_panel_width(&h.ctx);
+    assert!((panel - (36.0 + rail)).abs() < 2.0, "the iconic panel is its 36 points plus the rail ({rail}), got {panel}");
+    assert!(panel < 120.0, "the iconic panel must not take the expanded minimum, got {panel}");
 }
 /// Closing every panel leaves the dock with nothing in it, which the dock-edge layout uses to
 /// take no width for the column.

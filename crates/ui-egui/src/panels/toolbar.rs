@@ -182,6 +182,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             dock.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!(dock_tip)));
             if dock.on_hover_text(tl!(dock_tip)).clicked() {
                 app.ui.panels.toolbar_side = other;
+                // Persist the side as a discrete change; the dock may not be drawn this frame.
+                crate::dock::persist_panels(app);
             }
         });
         ui.add_space(4.0);

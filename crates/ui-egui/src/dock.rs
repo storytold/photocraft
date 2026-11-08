@@ -352,6 +352,18 @@ pub(crate) fn keep_newer(app: &PhotocraftApp, layout: &mut Value) {
     }
 }
 
+/// Writes the current panels/layout snapshot now, for a discrete change such as the toolbar side,
+/// whether or not the dock was drawn this frame. Only while Remember Workspace Changes is on.
+pub(crate) fn persist_panels(app: &mut PhotocraftApp) {
+    if !app.session.prefs().workspace.remember_workspace_changes {
+        return;
+    }
+    let now = snapshot(app);
+    if app.session.prefs().panel_layout != now {
+        app.session.prefs.edit(|p| p.panel_layout = now);
+    }
+}
+
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
 /// Remember Workspace Changes), and once panel windows the OS moves or resizes keep still. Cheap:
 /// a small JSON compare per frame.
