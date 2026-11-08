@@ -462,6 +462,9 @@ fn main() -> eframe::Result {
         log::warn!("the previous start didn't finish (GPU backend {}, adapter {:?}); {}", m.backend, m.adapter, plan.reason.as_deref().unwrap_or(""));
     }
     let sentinel: gpu_startup::SharedSentinel = std::sync::Arc::new(std::sync::Mutex::new(sentinel));
+    // Logout, `kill` or Ctrl+C before the first frames is not a driver crash (#12401).
+    #[cfg(target_os = "linux")]
+    gpu_startup::release_on_termination(sentinel.clone(), previous.crashed().cloned());
     write_start_marker(&sentinel, &plan);
     let gpu_note: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
     // The adapter's real texture limits (egui asks for 8192 px), so big documents stay on the GPU.
@@ -708,21 +711,14 @@ fn main() -> eframe::Result {
     // keeps the marker, so the next start tries a safer backend, unless there is no safer one:
     // a failed CPU start would otherwise pin every later start to CPU.
     let renderer_error = gpu_startup::keep_marker_after_run(&result);
-    if !(renderer_error && keep_marker)
-        && let Some(mut s) = sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+    if result.is_err() && !renderer_error {
+        // This failure supplies no new graphics-crash evidence: clear the marker, or put back a
+        // crashed previous start's, rather than recording this attempt's fallback backend.
+        gpu_startup::release_without_crash(&sentinel, previous.crashed());
+    } else if !(renderer_error && keep_marker)
+        && let Some(s) = sentinel.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
     {
-        if result.is_err()
-            && !renderer_error
-            && let Some(marker) = previous.crashed()
-        {
-            // This failure supplies no new graphics-crash evidence: retain the previous
-            // marker, rather than recording this attempt's fallback backend.
-            if let Err(error) = s.write(marker.clone()) {
-                log::warn!("couldn't restore previous GPU startup marker: {error}");
-            }
-        } else {
-            s.finish();
-        }
+        s.finish();
     }
     // Retry in a fresh process: winit event loops cannot be recreated reliably in-process.
     // Only renderer initialization failures qualify; never restart after editing has begun.

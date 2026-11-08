@@ -531,6 +531,74 @@ impl Sentinel {
     }
 }
 
+/// This start ended without new evidence of a driver crash (a returned error outside graphics, or
+/// a termination signal): release its marker. The marker a crashed previous start left (`previous`)
+/// is put back, so the next start still steps past that backend; otherwise the marker is cleared.
+pub fn release_without_crash(sentinel: &SharedSentinel, previous: Option<&Marker>) {
+    let Some(mut s) = sentinel.lock().unwrap_or_else(PoisonError::into_inner).take() else {
+        return;
+    };
+    match previous {
+        // Dropping the sentinel releases the lock and leaves the marker.
+        Some(marker) => {
+            if let Err(error) = s.write(marker.clone()) {
+                log::warn!("couldn't restore previous GPU startup marker: {error}");
+            }
+        }
+        None => s.finish(),
+    }
+}
+
+/// Signals that end the process on purpose: `kill`, `systemctl stop`, logout and shutdown send
+/// SIGTERM, Ctrl+C SIGINT, a closed terminal SIGHUP.
+#[cfg(target_os = "linux")]
+const TERMINATION: [async_signal::Signal; 3] = [async_signal::Signal::Term, async_signal::Signal::Int, async_signal::Signal::Hup];
+
+/// A termination signal is not a driver crash (#12401): logout or `kill` in the seconds before
+/// the first frames rendered left the marker behind like a segfault in the driver, and the next
+/// start fell back to a safer backend (from GL straight to the CPU). From now on such a signal
+/// releases the marker ([`release_without_crash`]) and then ends the process with status
+/// 128 + the signal's number, as a shell reports a process the signal ended. SIGKILL can't be
+/// caught and still counts as a crash.
+///
+/// The signals are taken over on a thread of their own, for the whole run: once they are, they no
+/// longer end the process by themselves, so that thread has to. Returns whether they were taken
+/// over; when not (the thread or the handler couldn't be set up) they keep their default action.
+#[cfg(target_os = "linux")]
+pub fn release_on_termination(sentinel: SharedSentinel, previous: Option<Marker>) -> bool {
+    use futures_lite::StreamExt;
+    let (ready, registered) = std::sync::mpsc::channel();
+    let spawned = std::thread::Builder::new().name("photocraft-termination".into()).spawn(move || {
+        let mut signals = match async_signal::Signals::new(TERMINATION) {
+            Ok(signals) => signals,
+            Err(error) => {
+                log::warn!("termination signals keep their default action: {error}");
+                let _ = ready.send(false);
+                return;
+            }
+        };
+        let _ = ready.send(true);
+        let signal = loop {
+            match async_io::block_on(signals.next()) {
+                Some(Ok(signal)) => break signal,
+                Some(Err(error)) => log::warn!("termination signal: {error}"),
+                // The stream never ends while `signals` lives; park rather than drop it.
+                None => std::thread::park(),
+            }
+        };
+        log::info!("{signal:?} received: ending without counting it as a graphics crash");
+        release_without_crash(&sentinel, previous.as_ref());
+        std::process::exit(128 + signal as i32);
+    });
+    match spawned {
+        Ok(_) => registered.recv().unwrap_or(false),
+        Err(error) => {
+            log::warn!("termination signals keep their default action: {error}");
+            false
+        }
+    }
+}
+
 /// The Linux display-server preference (`performance.linuxDisplayServer`) from the preferences
 /// file, read before the window opens; `Auto` when the file or value is missing or unknown.
 #[cfg(any(target_os = "linux", test))]

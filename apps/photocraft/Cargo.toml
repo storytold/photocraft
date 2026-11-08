@@ -98,6 +98,9 @@ resvg = { version = "=0.45.1", default-features = false }
 # Already used by the portal stack; bounded waits let cancelling close the OS request.
 futures-lite = "=2.6.1"
 async-io = "=2.6.0"
+# SIGTERM, SIGINT and SIGHUP while the GPU startup marker is held (gpu_startup.rs, #12401): a
+# safe signal stream. Already in Cargo.lock (async-process, under zbus); pinned exactly.
+async-signal = "=0.2.14"
 # Open the window through Xwayland for a pen on Wayland (`tablet.rs`, #639): eframe doesn't
 # re-export winit's `EventLoopBuilderExtX11`. Already in Cargo.lock (eframe); pinned exactly.
 winit = { version = "=0.30.13", default-features = false, features = ["wayland-csd-adwaita-notitle", "x11"] }
