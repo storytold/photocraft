@@ -1083,3 +1083,29 @@ fn the_timeline_does_not_start_while_a_job_runs() {
     s.wait_job(id).unwrap();
     s.execute("design.start", json!({})).unwrap();
 }
+
+/// A step after a pattern imported from a file keeps its result: the replay reads no file, and
+/// the pattern may be gone from the library by then.
+#[test]
+fn a_step_after_an_imported_pattern_replays_its_result() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("edit.definePattern", json!({"name": "Imported"})).unwrap();
+    let dir = std::env::temp_dir().join(format!("pc-design-pat-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("lib.pat").to_string_lossy().into_owned();
+    s.execute("pattern.export", json!({"path": path})).unwrap();
+    s.execute("pattern.delete", json!({"pattern": "Imported"})).unwrap();
+    s.set_active(0);
+    s.execute("pattern.import", json!({"path": path})).unwrap();
+    s.execute("edit.fill", json!({"contents": "pattern", "pattern": "Imported"})).unwrap();
+    assert_eq!(steps(&mut s).last().unwrap()["baked"], true);
+    let want = doc(&s);
+    s.execute("pattern.delete", json!({"pattern": "Imported"})).unwrap();
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(state(&mut s, 1), "ok");
+    assert_eq!(doc(&s), want);
+}

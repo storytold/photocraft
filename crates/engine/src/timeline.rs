@@ -176,7 +176,9 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
         // (`replay_gate`).
         // A stroke mirrored across a symmetry path keeps its result: no pin restores the path.
         let path_mirrored = b.symmetry.is_none() && matches!(id, "paint.stroke" | "paint.pencil");
-        let baked = (force_bake || bakes(id, params) || crate::untrusted::reaches_outside(id, params) || !b.was_active || path_mirrored)
+        // So does a step after a setting the replay gate refuses (a pattern imported from a file).
+        let outside_setting = b.prelude.iter().any(|p| crate::untrusted::reaches_outside(&p.command, &p.params));
+        let baked = (force_bake || bakes(id, params) || crate::untrusted::reaches_outside(id, params) || !b.was_active || path_mirrored || outside_setting)
             .then(|| Arc::new(photocraft_doc::design::Baked::capture(&b.state, &st.doc, &created, &changed)));
         let entry = DesignStep {
             step,
