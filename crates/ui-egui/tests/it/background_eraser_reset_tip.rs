@@ -67,6 +67,7 @@ fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     scramble(&mut app);
     control(&mut app, "ui.menu.invoke", json!({"id": "tool.resetAll", "params": {"confirmed": true}}));
     assert_eq!(tip(&mut app), ERASER_TIP, "active");
+    assert!(!pressure_size(&mut app), "Size control Off, active");
     let mut app = self::app();
     pick(&mut app, Tool::BackgroundEraser);
     scramble(&mut app);
@@ -74,6 +75,7 @@ fn reset_all_tools_gives_it_the_tip_active_or_picked_later() {
     control(&mut app, "ui.menu.invoke", json!({"id": "tool.resetAll", "params": {"confirmed": true}}));
     pick(&mut app, Tool::BackgroundEraser);
     assert_eq!(tip(&mut app), ERASER_TIP, "picked after the reset");
+    assert!(!pressure_size(&mut app), "Size control Off, picked after the reset");
 }
 
 #[test]
