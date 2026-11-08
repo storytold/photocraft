@@ -1026,6 +1026,8 @@ mod doc_tab_menu_tests;
 #[cfg(test)]
 mod layers_empty_area_menu_tests;
 #[cfg(test)]
+mod pencil_auto_erase_tooltip_tests;
+#[cfg(test)]
 mod preferences_submenu_tests;
 #[cfg(test)]
 mod selection_move_step_tests;
