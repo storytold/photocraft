@@ -214,11 +214,34 @@ fn patch_surface(surf: &mut Surface, sel: &Surface, plan: &Plan, lock: bool, ste
     apply_coverage(surf, g, &cov, 1.0, None, lock, &healed, BlendMode::Normal)
 }
 
+/// Rows scanned per band by [`is_hard_rect_within`], so the coverage buffer stays small.
+const RECT_BAND_ROWS: i32 = 64;
+
 /// Whether `sel` is a hard-edged rectangle: nothing selected outside its own `bounds` and every pixel
 /// inside fully selected (the only Destination selection measured to move with the patch). The
-/// bounds may reach past the canvas; the patched area is then only the part on the canvas.
+/// bounds may reach past the canvas; the patched area is then only the part on the canvas. Bounds
+/// of more than [`MAX_PIXELS`] pixels (the patch's own cap) are never classified as a hard
+/// rectangle, so a huge selection moved mostly off the canvas is not scanned and stays in place.
 fn is_hard_rect(sel: &Surface, bounds: Rect) -> bool {
-    sel.default_pixel().first().copied().unwrap_or(0.0) <= 0.0 && coverage(sel, bounds).iter().all(|c| *c >= 1.0)
+    is_hard_rect_within(sel, bounds, MAX_PIXELS)
+}
+
+/// [`is_hard_rect`] with the pixel `limit` given. Scans `bounds` in bands of [`RECT_BAND_ROWS`] rows
+/// and stops at the first pixel that is not fully selected.
+fn is_hard_rect_within(sel: &Surface, bounds: Rect, limit: u64) -> bool {
+    let (w, h) = ((i64::from(bounds.x1) - i64::from(bounds.x0)).max(0) as u64, (i64::from(bounds.y1) - i64::from(bounds.y0)).max(0) as u64);
+    if w.saturating_mul(h) > limit || sel.default_pixel().first().copied().unwrap_or(0.0) > 0.0 {
+        return false;
+    }
+    let mut y = bounds.y0;
+    while y < bounds.y1 {
+        let y1 = y.saturating_add(RECT_BAND_ROWS).min(bounds.y1);
+        if !coverage(sel, Rect::new(bounds.x0, y, bounds.x1, y1)).iter().all(|c| *c >= 1.0) {
+            return false;
+        }
+        y = y1;
+    }
+    true
 }
 
 pub(super) fn patch(s: &mut Session, p: &Value) -> Result<Value> {

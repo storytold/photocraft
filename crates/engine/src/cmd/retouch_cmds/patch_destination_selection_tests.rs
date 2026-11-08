@@ -182,3 +182,22 @@ fn destination_moves_a_hard_rectangle_that_extends_past_the_canvas() {
     assert_eq!(bounds(&mut s), sel_before);
     assert_eq!(px(&s, 480, 400), before);
 }
+
+#[test]
+fn hard_rect_check_is_capped_and_scans_every_band() {
+    let mut s = session();
+    // 40x150 rectangle: three bands of 64 rows (64 + 64 + 22).
+    s.execute("select.rect", json!({"x": 100, "y": 100, "width": 40, "height": 150})).unwrap();
+    let d = s.active().unwrap();
+    let sel = d.doc.selection.as_ref().unwrap();
+    let b = sel.content_bounds();
+    assert_eq!(b, Rect::new(100, 100, 140, 250));
+    assert!(!is_hard_rect_within(sel, b, 5999), "over the limit is never a hard rectangle");
+    assert!(is_hard_rect_within(sel, b, 6000), "at the limit it is checked as usual");
+    assert!(is_hard_rect_within(sel, b, u64::MAX));
+    // A hole in the third band must still be found.
+    let mut holed = sel.clone();
+    let fmt = holed.format();
+    holed.write_region(Rect::new(120, 240, 121, 241), &photocraft_raster::from_rgba(&fmt, [0.0, 0.0, 0.0, 0.0]));
+    assert!(!is_hard_rect_within(&holed, b, u64::MAX), "a hole past the first band fails the check");
+}
