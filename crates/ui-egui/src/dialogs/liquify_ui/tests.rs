@@ -1653,18 +1653,20 @@ fn reduced_proxy_paths_keep_working_float_precision_until_display_encoding() {
             assert_eq!(native.pixel(0, 0).as_slice(), &average);
         }
         let texture = d.tex.as_ref().unwrap().id();
-        let delta = ctx.tex_manager().write().take_delta();
+        let mut delta = ctx.tex_manager().write().take_delta();
         let egui::ImageData::Color(image) = &delta.set.get(&texture).unwrap()[0].image;
         assert_eq!(image.size, [width / 2, 1]);
         assert_eq!(image.pixels[0].to_array(), proxy_pixel);
+        delta.clear();
         cancel(&mut app);
     }
 
     let backdrop = load_backdrop(&app, &ctx, None, bounds).unwrap();
-    let delta = ctx.tex_manager().write().take_delta();
+    let mut delta = ctx.tex_manager().write().take_delta();
     let egui::ImageData::Color(image) = &delta.set.get(&backdrop.id()).unwrap()[0].image;
     assert_eq!(image.size, [width / 2, 1]);
     assert_eq!(image.pixels[0].to_array(), backdrop_pixel);
+    delta.clear();
 }
 
 /// Preview off shows the image unwarped while strokes still change the field, and P turns it back
