@@ -112,7 +112,13 @@ pub fn canvas_color(app: &PhotocraftApp, ctx: &egui::Context) -> Color32 {
 
 /// The shield over the pending crop box now ([`fill`]).
 pub fn current(app: &PhotocraftApp, ctx: &egui::Context) -> Option<Color32> {
-    fill(&app.ui.tool_options.crop_shield, canvas_color(app, ctx), app.crop.drag.is_some())
+    let s = &app.ui.tool_options.crop_shield;
+    // No shield before the crop has started: an untouched frame shows only itself (#10930).
+    // Show Cropped Area off still hides everything outside the frame, as it does once started.
+    if s.shows_cropped_area() && !crate::crop_overlay::crop_started(app) {
+        return None;
+    }
+    fill(s, canvas_color(app, ctx), app.crop.drag.is_some())
 }
 
 /// Show Cropped Area is off with the Crop tool showing a box: nothing outside it shows.
@@ -120,11 +126,13 @@ pub fn hides_outside(app: &PhotocraftApp) -> bool {
     app.ui.tool == Tool::Crop && app.ui.crop_rect.is_some() && !app.ui.tool_options.crop_shield.shows_cropped_area()
 }
 
-/// H with the Crop tool showing a box and no drag in progress toggles Show Cropped Area (in
+/// H with a crop in progress (a frame drawn or changed) and no drag toggles Show Cropped Area (in
 /// Classic Mode, where the option is greyed out, H is taken and does nothing), and P Use Classic
-/// Mode. Returns true when a key was used; otherwise H stays the Hand tool key and P the Pen's.
+/// Mode. Returns true when a key was used; otherwise H stays the Hand tool key and P the Pen's,
+/// also over the untouched default frame the tool shows when picked or after a commit (#6536,
+/// #9731).
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
-    if app.ui.tool != Tool::Crop || app.ui.crop_rect.is_none() || app.crop.drag.is_some() {
+    if app.ui.tool != Tool::Crop || app.ui.crop_rect.is_none() || app.crop.default_frame || app.crop.drag.is_some() {
         return false;
     }
     if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::H)) {
@@ -311,6 +319,8 @@ mod tests {
     #[test]
     fn match_canvas_is_the_black_full_screen_pasteboard() {
         let mut app = crop_app();
+        // A shield shows only once the crop has started (#10930); this test is about its colour.
+        app.crop.default_frame = false;
         let ctx = egui::Context::default();
         let theme_canvas = crate::theme::Tokens::get(&ctx).canvas;
         assert_ne!(theme_canvas, Color32::BLACK);
@@ -335,8 +345,10 @@ mod tests {
     }
 
     #[test]
-    fn h_toggles_show_cropped_area_while_the_crop_tool_shows_a_box() {
+    fn h_toggles_show_cropped_area_while_a_crop_is_in_progress() {
         let mut app = crop_app();
+        app.ui.crop_rect = Some([20.0, 10.0, 120.0, 90.0]);
+        app.crop.default_frame = false;
         assert!(!hides_outside(&app));
         press_h(&mut app);
         assert_eq!(app.ui.tool, Tool::Crop, "H doesn't switch to the Hand tool");
@@ -351,6 +363,12 @@ mod tests {
         // No document: no box, so H picks the Hand tool.
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.ui.tool = Tool::Crop;
+        press_h(&mut app);
+        assert_eq!(app.ui.tool, Tool::Hand);
+        assert!(app.ui.tool_options.crop_shield.show_cropped_area);
+        // The untouched default frame (#9731).
+        let mut app = crop_app();
+        assert!(app.crop.default_frame);
         press_h(&mut app);
         assert_eq!(app.ui.tool, Tool::Hand);
         assert!(app.ui.tool_options.crop_shield.show_cropped_area);
