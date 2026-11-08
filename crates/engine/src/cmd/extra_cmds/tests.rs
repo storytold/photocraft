@@ -519,6 +519,78 @@ fn transform_presets_flip_a_targeted_vector_mask_about_its_control_bounds() {
     }
 }
 
+/// Fractional path centers must not be rounded to the pixel grid, and clockwise and
+/// counterclockwise presets must move every anchor and handle in the expected direction.
+#[test]
+fn transform_presets_rotate_vector_masks_about_fractional_control_bounds() {
+    let path = asymmetric_vector_path().transform(&photocraft_geom::Affine::translate(0.25, 0.5));
+    assert_eq!(path.control_bounds(), Some((8.25, 18.5, 34.25, 34.5)));
+    let cases = [
+        ("rotate180", [[(32.25, 32.5), (34.25, 34.5), (30.25, 30.5)], [(12.25, 22.5), (14.25, 24.5), (8.25, 18.5)]]),
+        ("rotate90Cw", [[(27.25, 15.5), (29.25, 13.5), (25.25, 17.5)], [(17.25, 35.5), (19.25, 33.5), (13.25, 39.5)]]),
+        ("rotate90Ccw", [[(15.25, 37.5), (13.25, 39.5), (17.25, 35.5)], [(25.25, 17.5), (23.25, 19.5), (29.25, 13.5)]]),
+    ];
+    for linked in [true, false] {
+        for (kind, expected) in cases {
+            let (mut s, id) = vector_mask_session(linked, path.clone());
+            let past = s.active().unwrap().history.past_len();
+            s.execute(&format!("edit.transform.{kind}"), json!({"target": "vectorMask"})).unwrap();
+            let after = mask_path(&s, id);
+            let actual: Vec<_> =
+                after.subpaths[0].knots.iter().map(|k| [(k.anchor.x, k.anchor.y), (k.in_ctrl.x, k.in_ctrl.y), (k.out_ctrl.x, k.out_ctrl.y)]).collect();
+            assert_eq!(actual, expected, "{kind}, linked {linked}");
+            assert_eq!(s.active().unwrap().history.past_len(), past + 1, "one history step");
+            s.undo();
+            assert_eq!(mask_path(&s, id), path, "undo {kind}");
+            s.redo();
+            assert_eq!(mask_path(&s, id), after, "redo {kind}");
+        }
+    }
+}
+
+/// The explicit path route must not let presets or direct path commands edit a vector mask
+/// through Lock All, including when that lock comes from a containing group.
+#[test]
+fn targeted_vector_mask_transforms_respect_layer_and_group_lock_all() {
+    for inherited in [false, true] {
+        let (mut s, id) = vector_mask_session(true, asymmetric_vector_path());
+        let lock_id = if inherited {
+            let group = LayerId(s.execute("layer.groupLayers", json!({"layer": id.0})).unwrap()["layer"].as_u64().unwrap());
+            s.execute("layer.select", json!({"layer": id.0})).unwrap();
+            group
+        } else {
+            id
+        };
+        s.edit("Lock All", |doc, _| {
+            doc.layer_mut(lock_id).unwrap().locks.all = true;
+            Ok(())
+        })
+        .unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let past = s.active().unwrap().history.past_len();
+        for kind in ["flipHorizontal", "flipVertical", "rotate180", "rotate90Cw", "rotate90Ccw"] {
+            let err = s.execute(&format!("edit.transform.{kind}"), json!({"target": "vectorMask"})).unwrap_err();
+            assert!(err.to_string().contains("locked"), "{kind}: {err}");
+            assert_eq!(s.active().unwrap().doc, before);
+            assert_eq!(s.active().unwrap().history.past_len(), past);
+        }
+        let err = s.execute("path.transform", json!({"name": "layer", "layer": id.0, "vectorMask": true, "translateX": 1})).unwrap_err();
+        assert!(err.to_string().contains("locked"), "{err}");
+        assert_eq!(s.active().unwrap().doc, before);
+        assert_eq!(s.active().unwrap().history.past_len(), past);
+
+        s.edit("Lock Pixels Only", |doc, _| {
+            let locks = &mut doc.layer_mut(lock_id).unwrap().locks;
+            locks.all = false;
+            locks.pixels = true;
+            Ok(())
+        })
+        .unwrap();
+        s.execute("edit.transform.flipHorizontal", json!({"target": "vectorMask"})).unwrap();
+        assert_ne!(mask_path(&s, id), asymmetric_vector_path(), "pixel-only locks permit mask edits");
+    }
+}
+
 /// #12283: a shape layer's path is its content, but it can also carry a separate vector mask. A
 /// targeted flip moves only the mask; the shape's path and rendered cache stay as they were.
 #[test]

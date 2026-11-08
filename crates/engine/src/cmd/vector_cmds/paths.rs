@@ -214,6 +214,11 @@ pub(super) fn path_transform(s: &mut Session, p: &Value) -> Result<Value> {
     if vector_mask && layer_id.is_none() {
         return Err(bad(CMD, "`vectorMask` needs `\"name\":\"layer\"`"));
     }
+    if vector_mask && let Some(id) = layer_id {
+        // A vector mask, like a pixel mask, must respect Lock All on the layer or its groups.
+        // Pixel-only locks still allow mask edits.
+        crate::commands::check_all_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
+    }
     // The box Distort, Perspective and Warp frame: `rect`, else the path's control bounds.
     let frame = |s: &Session| -> Result<[f64; 4]> {
         let r = match coords(p, "rect", 4)? {
