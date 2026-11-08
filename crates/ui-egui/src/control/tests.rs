@@ -675,15 +675,17 @@ fn agent_space_right_click_opens_the_hand_view_menu() {
         app.ui.canvas_tool_menu = None;
         app.ui.layer_menu = None;
         app.ui.brush_picker = None;
-        call(&mut app, &ctx, "ui.pointer", click(true, true));
-        assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.anchor.is_none()), "{tool:?}: ⌘Space holds the Zoom, which has no menu");
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", click(true, true))["ok"], true, "{tool:?}");
+        assert!(app.ui.canvas_tool_menu.is_none(), "{tool:?}: ⌘Space holds the Zoom, which has no menu");
+        // ⌘ still makes it a ⌘/Ctrl+right-click, which lists the layers under the pointer (#307).
+        assert!(app.ui.layer_menu.is_some(), "{tool:?}: ⌘+right-click lists the layers");
         app.ui.canvas_tool_menu = None;
         app.ui.layer_menu = None;
         app.ui.brush_picker = None;
         // ⌥Space holds the Zoom too: no view menu, and not the Move tool's layer list.
         let alt = json!({"space": true, "alt": true, "button": "secondary", "events": [{"kind":"down","x":8,"y":8},{"kind":"up","x":8,"y":8}]});
-        call(&mut app, &ctx, "ui.pointer", alt);
-        assert!(app.ui.canvas_tool_menu.as_ref().is_none_or(|m| m.anchor.is_none()), "{tool:?}: ⌥Space opens no view menu");
+        assert_eq!(call(&mut app, &ctx, "ui.pointer", alt)["ok"], true, "{tool:?}");
+        assert!(app.ui.canvas_tool_menu.is_none(), "{tool:?}: ⌥Space opens no menu");
         assert!(app.ui.layer_menu.is_none(), "{tool:?}: ⌥Space doesn't open the layer list");
     }
 }

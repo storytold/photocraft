@@ -1104,3 +1104,29 @@ fn space_right_click_opens_the_hand_view_menu() {
         assert!(h.state().ui.canvas_tool_menu.is_none(), "{tool:?}: choosing closes the menu");
     }
 }
+
+/// ⌘Space and ⌥Space hold the Zoom, not the Hand: a right-click opens no view menu (#11271).
+/// With ⌥ it opens nothing, not even the held-over Move tool's layer list; with ⌘ it is still a
+/// ⌘/Ctrl+right-click, which lists the layers under the pointer for any tool (#307).
+#[test]
+fn command_or_alt_space_right_click_opens_no_view_menu() {
+    for mods in [Modifiers::COMMAND, Modifiers::ALT] {
+        for tool in [Tool::Move, Tool::Brush] {
+            let mut h = harness(tool);
+            let p = screen(&h, 200.0, 150.0);
+            h.event(Event::PointerMoved(p));
+            h.run_steps(1);
+            key(&mut h, Key::Space, true, mods);
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: true, modifiers: mods });
+            h.run_steps(1);
+            h.event(Event::PointerButton { pos: p, button: PointerButton::Secondary, pressed: false, modifiers: mods });
+            h.run_steps(1);
+            key(&mut h, Key::Space, false, mods);
+            h.run_steps(2);
+            let view = h.state().ui.canvas_tool_menu.as_ref().is_some_and(|m| crate::canvas_tool_menu::rows(m) == crate::canvas_tool_menu::VIEW_MENU);
+            assert!(!view, "{mods:?} {tool:?}: no view menu");
+            assert_eq!(h.state().ui.layer_menu.is_some(), mods.command, "{mods:?} {tool:?}: the layer list only for ⌘+right-click");
+            assert_eq!(h.state().ui.tool, tool, "{mods:?} {tool:?}: the tool is kept");
+        }
+    }
+}
