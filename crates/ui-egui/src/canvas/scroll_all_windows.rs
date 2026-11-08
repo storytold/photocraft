@@ -3,9 +3,10 @@
 //! With the option on, or with Shift held while dragging with the Hand, a drag in one document
 //! view scrolls every other view that is shown: the main window's document, or the documents in its
 //! Window › Arrange tiles, and the document windows of Float in Window and New Window for Document.
-//! After each step of the drag, each of those views puts its center at the same relative location
-//! as the dragged view's center: the same fraction of its own document's width and height. Each
-//! view keeps its own zoom and rotation. Documents in hidden tabs keep their views.
+//! After each step of the drag, each of those views moves by the same distance in document pixels
+//! as the dragged view, as the reference application does: a view at 100 % moves twice the screen
+//! distance of one at 50 %. Each view keeps its own zoom and rotation. Documents in hidden tabs
+//! keep their views.
 
 use crate::PhotocraftApp;
 use crate::state::View;
@@ -44,17 +45,20 @@ pub struct ClampGeometry {
     pub aspect: f32,
 }
 
-/// Update the other shown views after a Hand drag. With Overscroll off, use the center that the
-/// next frame clamps the dragged view to.
-pub fn follow_drag(app: &mut PhotocraftApp, enabled: bool, source: Source, doc: usize, view: &View, geometry: ClampGeometry) {
+/// Move the other shown views after one step of a Hand drag or glide, which moved the dragged view's
+/// center from `before` to `view.center`. With Overscroll off, both centers are taken where the
+/// dragged view is clamped to, so a view held at its pan limit moves the others no further.
+pub fn follow_step(app: &mut PhotocraftApp, enabled: bool, source: Source, before: [f32; 2], view: &View, geometry: ClampGeometry) {
     if !enabled {
         return;
     }
-    let mut target = view.clone();
+    let mut from = View { center: before, ..view.clone() };
+    let mut to = view.clone();
     if !app.session.prefs().tools.overscroll {
-        crate::scrollbars::clamp_view_with_aspect(&mut target, geometry.size, geometry.ppp, geometry.aspect);
+        crate::scrollbars::clamp_view_with_aspect(&mut from, geometry.size, geometry.ppp, geometry.aspect);
+        crate::scrollbars::clamp_view_with_aspect(&mut to, geometry.size, geometry.ppp, geometry.aspect);
     }
-    follow(app, source, doc, target.center);
+    follow(app, source, [to.center[0] - from.center[0], to.center[1] - from.center[1]]);
 }
 
 /// Whether the main window shows the Home screen or an open-file card instead of a document
@@ -65,23 +69,15 @@ fn main_canvas_hidden(app: &mut PhotocraftApp) -> bool {
     (!opening && app.ui.chrome.shows_home(n, app.session.prefs().general.auto_show_home_screen)) || app.jobs.focus.is_some()
 }
 
-/// Put every shown view except `source` at the relative location of `center`, a point in document
-/// `doc`: each view's center becomes the same fraction of its own document's width and height.
-pub fn follow(app: &mut PhotocraftApp, source: Source, doc: usize, center: [f32; 2]) {
-    let sizes: Vec<[f32; 2]> = app.session.documents().iter().map(|d| [d.doc.size.width as f32, d.doc.size.height as f32]).collect();
-    let Some(&[w, h]) = sizes.get(doc) else {
-        return;
-    };
-    let rel = [center[0] / w, center[1] / h];
-    if !(w > 0.0 && h > 0.0 && rel[0].is_finite() && rel[1].is_finite()) {
+/// Move every shown view except `source` by `delta`, a distance in document pixels: each view's
+/// center moves by the same number of its own document's pixels.
+pub fn follow(app: &mut PhotocraftApp, source: Source, delta: [f32; 2]) {
+    if !(delta[0].is_finite() && delta[1].is_finite()) || delta == [0.0, 0.0] {
         return;
     }
-    let place = |v: &mut View, d: usize| {
-        let Some(&[w, h]) = sizes.get(d) else {
-            return;
-        };
-        let c = [rel[0] * w, rel[1] * h];
-        if v.center != c {
+    let place = |v: &mut View| {
+        let c = [v.center[0] + delta[0], v.center[1] + delta[1]];
+        if c[0].is_finite() && c[1].is_finite() {
             v.zoom_animating = false;
             v.zoom_anchor = None;
             v.fit_pending = false;
@@ -99,12 +95,12 @@ pub fn follow(app: &mut PhotocraftApp, source: Source, doc: usize, center: [f32;
             if source != Source::Main(d)
                 && let Some(v) = app.ui.views.get_mut(d)
             {
-                place(v, d);
+                place(v);
             }
         }
     }
     for w in app.ui.windows.iter_mut().filter(|w| w.open && source != Source::Window(w.id)) {
-        place(&mut w.view, w.document);
+        place(&mut w.view);
     }
 }
 
@@ -142,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn a_drag_puts_the_other_shown_views_at_the_same_relative_location() {
+    fn a_drag_moves_the_other_shown_views_by_the_same_document_pixel_distance() {
         let mut app = app_with_tiles();
         app.ui.windows.push(DocWindow {
             id: 7,
@@ -153,15 +149,15 @@ mod tests {
             focused: false,
             position: None,
         });
-        // The dragged 400 × 300 view's center moved to a quarter of the width and a fifth of the height.
-        follow(&mut app, Source::Main(0), 0, [100.0, 60.0]);
+        // The dragged 400 × 300 view's center moved 50 document pixels left and 20 down.
+        follow(&mut app, Source::Main(0), [-50.0, 20.0]);
         assert_eq!(app.ui.views[0].center, [200.0, 150.0], "the dragged view's canvas stores its own view");
-        // The 800 × 600 tile at 200 % centers on the same fractions of its own document.
-        assert!(near(app.ui.views[1].center, [200.0, 120.0]), "{:?}", app.ui.views[1].center);
+        // The 800 × 600 tile at 200 % moves by the same document pixels, not to the same fraction.
+        assert!(near(app.ui.views[1].center, [350.0, 320.0]), "{:?}", app.ui.views[1].center);
         assert_eq!(app.ui.views[1].zoom, 2.0, "each view keeps its zoom");
         // The document window shows the 200 × 100 document at 50 %, turned 90°.
         let w = &app.ui.windows[0].view;
-        assert!(near(w.center, [50.0, 20.0]), "{:?}", w.center);
+        assert!(near(w.center, [50.0, 70.0]), "{:?}", w.center);
         assert_eq!((w.zoom, w.rotation), (0.5, 90.0), "and its rotation");
         // The third document's main view is in a tab hidden behind the tiles: it stays.
         assert_eq!(app.ui.views[2].center, [100.0, 50.0]);
@@ -189,8 +185,8 @@ mod tests {
             focused: false,
             position: None,
         });
-        // The window's 800 × 600 view moved its center to three quarters of the width and a quarter of the height.
-        follow(&mut app, Source::Window(3), 1, [600.0, 150.0]);
+        // The window's 800 × 600 view moved its center 100 document pixels right and 75 up.
+        follow(&mut app, Source::Window(3), [100.0, -75.0]);
         assert_eq!(app.ui.windows[0].view.center, [400.0, 300.0], "the dragged window's canvas stores its own view");
         // Tabs: the main window shows the active 400 × 300 document only.
         assert!(near(app.ui.views[0].center, [300.0, 75.0]), "{:?}", app.ui.views[0].center);
@@ -213,9 +209,9 @@ mod tests {
         assert_eq!(super::super::main_canvas_document(&app), Some(1));
         let window_id = app.ui.windows[0].id;
 
-        // The floated 400 × 300 view moved to a quarter of its width and a fifth of its height.
-        follow(&mut app, Source::Window(window_id), 0, [100.0, 60.0]);
-        assert!(near(app.ui.views[1].center, [200.0, 120.0]), "{:?}", app.ui.views[1].center);
+        // The floated 400 × 300 view moved 100 document pixels left and 90 up.
+        follow(&mut app, Source::Window(window_id), [-100.0, -90.0]);
+        assert!(near(app.ui.views[1].center, [300.0, 210.0]), "{:?}", app.ui.views[1].center);
         assert_eq!(app.ui.views[0].center, [200.0, 150.0], "the floated document's hidden main view stays");
     }
 
@@ -250,9 +246,9 @@ mod tests {
                 app.jobs.focus = Some(job);
             }
 
-            follow(&mut app, Source::Window(3), 1, [200.0, 120.0]);
+            follow(&mut app, Source::Window(3), [-30.0, -10.0]);
             assert_eq!(app.ui.views[0].center, [200.0, 150.0], "the main canvas is hidden when home={home}");
-            assert!(near(app.ui.windows[1].view.center, [50.0, 20.0]), "another document window follows when home={home}");
+            assert!(near(app.ui.windows[1].view.center, [70.0, 40.0]), "another document window follows when home={home}");
         }
     }
 
@@ -266,7 +262,8 @@ mod tests {
 
     /// A Hand drag with `option` and the Shift key as given, on the main canvas of the 2000 × 1500
     /// document 0 or (`in_window`) on the canvas of a window showing the 1000 × 750 document 1, as
-    /// `canvas::extra_windows` draws it. Both views start at their document's center at 100 %.
+    /// `canvas::extra_windows` draws it. Both views start at their document's center, the main view
+    /// at 100 % and the window at 50 %.
     /// Returns the dragged view's center and the stored centers of document 0's main view and of
     /// the window's view.
     fn drag_on_canvas(option: bool, shift: bool, in_window: bool) -> ([f32; 2], [f32; 2], [f32; 2]) {
@@ -293,13 +290,13 @@ mod tests {
         app.ui.windows.push(DocWindow {
             id: 5,
             document: 1,
-            view: view(1.0, [500.0, 375.0], 0.0),
+            view: view(0.5, [500.0, 375.0], 0.0),
             open: true,
             floating: false,
             focused: false,
             position: None,
         });
-        let mut v = if in_window { view(1.0, [500.0, 375.0], 0.0) } else { view(1.0, [1000.0, 750.0], 0.0) };
+        let mut v = if in_window { view(0.5, [500.0, 375.0], 0.0) } else { view(1.0, [1000.0, 750.0], 0.0) };
         let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
         let modifiers = if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE };
         let mut frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
@@ -336,10 +333,10 @@ mod tests {
         let (dragged, _, window) = drag_on_canvas(false, false, false);
         assert!(near(dragged, [1060.0, 720.0]), "the dragged view follows the pointer: {dragged:?}");
         assert_eq!(window, [500.0, 375.0], "off: the window stays");
-        // 1060 / 2000 and 720 / 1500 of the 1000 × 750 document.
-        let moved = [530.0, 360.0];
+        // The same 60 and -30 document pixels in the window at 50 %: half the screen distance.
+        let moved = [560.0, 345.0];
         let (_, _, window) = drag_on_canvas(true, false, false);
-        assert!(near(window, moved), "on: it scrolls to the same relative location: {window:?}");
+        assert!(near(window, moved), "on: it moves by the same document pixels: {window:?}");
         let (_, _, window) = drag_on_canvas(false, true, false);
         assert!(near(window, moved), "Shift turns it on for the drag: {window:?}");
     }
@@ -348,7 +345,7 @@ mod tests {
     fn shift_held_in_the_modifier_keys_panel_makes_a_hand_drag_scroll_the_document_windows_too() {
         let (dragged, _, window) = drag_on_canvas_with(false, false, true, false, false);
         assert!(near(dragged, [1060.0, 720.0]), "the dragged view follows the pointer: {dragged:?}");
-        assert!(near(window, [530.0, 360.0]), "sticky Shift turns it on for the drag: {window:?}");
+        assert!(near(window, [560.0, 345.0]), "sticky Shift turns it on for the drag: {window:?}");
     }
 
     #[test]
@@ -357,22 +354,23 @@ mod tests {
         assert!(near(dragged, [1060.0, 720.0]), "the dragged view pans under the dialog: {dragged:?}");
         assert_eq!(window, [500.0, 375.0], "off: the window stays");
         let (_, _, window) = drag_on_canvas_with(true, false, false, false, true);
-        assert!(near(window, [530.0, 360.0]), "on: it scrolls to the same relative location: {window:?}");
+        assert!(near(window, [560.0, 345.0]), "on: it moves by the same document pixels: {window:?}");
         let (_, _, window) = drag_on_canvas_with(false, true, false, false, true);
-        assert!(near(window, [530.0, 360.0]), "Shift turns it on for the drag: {window:?}");
+        assert!(near(window, [560.0, 345.0]), "Shift turns it on for the drag: {window:?}");
     }
 
     #[test]
     fn a_hand_drag_in_a_document_window_scrolls_the_main_window_once() {
         let (dragged, main, window) = drag_on_canvas(false, false, true);
-        assert!(near(dragged, [560.0, 345.0]), "the dragged window follows the pointer: {dragged:?}");
+        // At 50 % the window's center moves twice the screen distance in document pixels.
+        assert!(near(dragged, [620.0, 315.0]), "the dragged window follows the pointer: {dragged:?}");
         assert_eq!((main, window), ([1000.0, 750.0], [500.0, 375.0]), "off: nothing else moves");
         // The window's own canvas moved its view (`dragged`), and `follow` leaves its stored view
         // alone: `extra_windows` stores the canvas's view, so the window moves once.
         let (dragged, main, window) = drag_on_canvas(true, false, true);
-        assert!(near(dragged, [560.0, 345.0]), "{dragged:?}");
-        // 560 / 1000 and 345 / 750 of the 2000 × 1500 document.
-        assert!(near(main, [1120.0, 690.0]), "on: the main window scrolls to the same relative location: {main:?}");
+        assert!(near(dragged, [620.0, 315.0]), "{dragged:?}");
+        // The main view at 100 % moves the same 120 and -60 document pixels: twice the screen distance.
+        assert!(near(main, [1120.0, 690.0]), "on: the main window moves by the same document pixels: {main:?}");
         assert_eq!(window, [500.0, 375.0]);
     }
 
@@ -418,9 +416,10 @@ mod tests {
         frame(&mut app, vec![press(end, false)]);
         frame(&mut app, vec![]);
         assert!(near(v.center, [200.0, 750.0]), "the dragged view stops at its limit: {:?}", v.center);
-        // 200 / 2000 of the 1000 × 750 document. The window at 400 % has room to go further left.
+        // The dragged view moved 20 document pixels before its limit held it; the window moves the
+        // same 20, not the 60 of the pointer, though at 400 % it has room to go further left.
         let window = app.ui.windows[0].view.center;
-        assert!(near(window, [100.0, 375.0]), "{window:?}");
+        assert!(near(window, [480.0, 375.0]), "{window:?}");
     }
 
     #[test]
@@ -464,13 +463,13 @@ mod tests {
             frame(&mut app, vec![egui::Event::PointerMoved(end)]);
         }
         let released = frame(&mut app, vec![press(end, false), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
-        // The window's document is half the size, so on each frame of the glide its center is at
-        // half the dragged view's center.
+        // On each frame of the glide the window has moved by the same document pixels as the
+        // dragged view, though its document is half the size.
         let mut glided = released;
         for _ in 0..5 {
             glided = frame(&mut app, vec![]);
-            let half = [glided[0] / 2.0, glided[1] / 2.0];
-            assert!(near(app.ui.windows[0].view.center, half), "{:?} {half:?}", app.ui.windows[0].view.center);
+            let same = [glided[0] - 500.0, glided[1] - 375.0];
+            assert!(near(app.ui.windows[0].view.center, same), "{:?} {same:?}", app.ui.windows[0].view.center);
         }
         assert!(glided[0] > released[0], "the dragged view glides on: {released:?} {glided:?}");
     }
@@ -501,5 +500,70 @@ mod tests {
         h.get_by_label("Scroll All Windows").click();
         h.run_steps(2);
         assert!(!h.state().ui.tool_options.hand_scroll_all, "and off again");
+    }
+
+    /// The Hand tool's options bar with Scroll All Windows on, two tiled documents and a document
+    /// window, as `the_hand_tool_options_bar_shows_scroll_all_windows` draws it.
+    fn options_bar_with_scroll_all() -> egui_kittest::Harness<'static, PhotocraftApp> {
+        use egui_kittest::Harness;
+        let mut app = app_with_tiles();
+        app.ui.tool = Tool::Hand;
+        app.ui.tool_options.hand_scroll_all = true;
+        app.ui.views[0].zoom = 0.25;
+        app.ui.windows.push(DocWindow {
+            id: 7,
+            document: 1,
+            view: view(0.5, [400.0, 300.0], 0.0),
+            open: true,
+            floating: false,
+            focused: false,
+            position: None,
+        });
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::default());
+        h.run_steps(4);
+        h
+    }
+
+    #[test]
+    fn with_scroll_all_windows_on_the_zoom_buttons_change_only_the_active_view() {
+        use egui_kittest::kittest::Queryable;
+        for button in ["100%", "Fit Screen", "Fill Screen"] {
+            let mut h = options_bar_with_scroll_all();
+            let others = (h.state().ui.views[1].clone(), h.state().ui.windows[0].view.clone());
+            h.get_by_label(button).click();
+            h.run_steps(2);
+            let active = &h.state().ui.views[0];
+            assert!(active.zoom == 1.0 || active.fit_pending || active.fill_pending, "{button} changes the active view");
+            let (tile, window) = (&h.state().ui.views[1], &h.state().ui.windows[0].view);
+            assert_eq!(
+                (tile.zoom, tile.center, tile.fit_pending, tile.fill_pending),
+                (others.0.zoom, others.0.center, false, false),
+                "{button}: the other tile stays"
+            );
+            assert_eq!(
+                (window.zoom, window.center, window.fit_pending, window.fill_pending),
+                (others.1.zoom, others.1.center, false, false),
+                "{button}: the window stays"
+            );
+        }
+    }
+
+    #[test]
+    fn the_scroll_all_windows_checkbox_has_the_reference_tooltip() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = options_bar_with_scroll_all();
+        h.ctx.global_style_mut(|s| s.interaction.tooltip_delay = 0.0);
+        h.get_by_label("Scroll All Windows").hover();
+        h.run_steps(4);
+        assert!(h.query_by_label("Scroll all open document windows when using the hand tool").is_some());
     }
 }

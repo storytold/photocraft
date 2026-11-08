@@ -780,17 +780,14 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         }
     } else if let Some(d) = crate::dialogs::pan_delta(input.ctx, input.rect, dialog_hand) {
         let d = input.xf.unmap_vec(d) / (input.view.zoom / input.ppp);
+        let before = input.view.center;
         input.view.center[0] -= d.x;
         input.view.center[1] -= d.y;
         // Hand › Scroll All Windows, or Shift held: the other shown views follow, as on the free canvas.
-        if crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, input.ctx.input(|i| i.modifiers)).shift) {
-            let mut target = input.view.clone();
-            if !app.session.prefs().tools.overscroll {
-                crate::scrollbars::clamp_view_with_aspect(&mut target, input.rect.size(), input.ppp, input.aspect);
-            }
-            let source = crate::scroll_all_windows::source(app, input.idx);
-            crate::scroll_all_windows::follow(app, source, input.idx, target.center);
-        }
+        let scroll_all = crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, input.ctx.input(|i| i.modifiers)).shift);
+        let source = crate::scroll_all_windows::source(app, input.idx);
+        let geometry = crate::scroll_all_windows::ClampGeometry { size: input.rect.size(), ppp: input.ppp, aspect: input.aspect };
+        crate::scroll_all_windows::follow_step(app, scroll_all, source, before, input.view, geometry);
         input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, true));
     } else if input.free_hover && (input.space_pan || dialog_hand) {
         input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, false));
@@ -2148,6 +2145,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let glide_scroll_all = crate::scroll_all_windows::glide_choice(&ctx, flick_id.with("scroll-all"), hand_drag && !stroke_dismissal, scroll_all);
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_drag && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
+        let before = view.center;
         if d.is_finite() {
             view.zoom_animating = false;
             view.zoom_anchor = None;
@@ -2158,24 +2156,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view_with_aspect(&mut view, rect.size(), ppp, aspect) {
             ctx.data_mut(|m| m.get_temp_mut_or_default::<crate::flick_pan::Flick>(flick_id).stop());
         }
-        if glide_scroll_all {
-            crate::scroll_all_windows::follow(app, scroll_source, idx, view.center);
-        }
+        let geometry = crate::scroll_all_windows::ClampGeometry { size: rect.size(), ppp, aspect };
+        crate::scroll_all_windows::follow_step(app, glide_scroll_all, scroll_source, before, &view, geometry);
     }
     // A scroll or zoom while the right button is held moves the image under its press: no click.
     crate::paint_mouse::track_right_press_view(&response, &view, flip);
     if hand_drag && !stroke_dismissal {
         let d = xf.unmap_vec(response.drag_delta()) / (view.zoom / ppp);
+        let before = view.center;
         view.center[0] -= d.x;
         view.center[1] -= d.y;
-        crate::scroll_all_windows::follow_drag(
-            app,
-            scroll_all,
-            scroll_source,
-            idx,
-            &view,
-            crate::scroll_all_windows::ClampGeometry { size: rect.size(), ppp, aspect },
-        );
+        let geometry = crate::scroll_all_windows::ClampGeometry { size: rect.size(), ppp, aspect };
+        crate::scroll_all_windows::follow_step(app, scroll_all, scroll_source, before, &view, geometry);
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
