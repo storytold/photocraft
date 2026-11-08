@@ -169,8 +169,27 @@ pub fn purge_cache() -> usize {
 /// Fingerprint of everything [`combined_mask`] reads from `layer` over `canvas` (its pixel mask's
 /// tiles, default, density and feather, and its vector mask): equal fingerprints give equal masks,
 /// so callers that count what a mask reveals can tell when to count again.
+///
+/// The fingerprint hashes tile addresses, not pixels: a caller that compares fingerprints later
+/// must hold a reference to each tile it fingerprinted (a `Weak` is enough) until then. Otherwise
+/// a dropped tile's allocation can be reused by an edited one and the fingerprints match anyway.
 pub fn mask_key(layer: &Layer, canvas: Rect) -> u64 {
     key(layer, canvas)
+}
+
+/// Fingerprint of a surface's format, default pixel and tile addresses (not its pixels). A caller
+/// that compares it later must hold the same references as for [`mask_key`].
+pub fn surface_key(surface: &Surface) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    surface.format().hash(&mut h);
+    // Missing tiles read the default pixel, so tile identity alone is not pixel identity.
+    for sample in surface.default_pixel() {
+        sample.to_bits().hash(&mut h);
+    }
+    for (c, t) in surface.tiles() {
+        (c.tx, c.ty, Arc::as_ptr(t) as usize).hash(&mut h);
+    }
+    h.finish()
 }
 
 fn key(layer: &Layer, canvas: Rect) -> u64 {
@@ -180,10 +199,7 @@ fn key(layer: &Layer, canvas: Rect) -> u64 {
     format!("{:?}", layer.vector_mask).hash(&mut h);
     if let Some(m) = &layer.mask {
         (m.enabled, m.density.to_bits(), m.feather.to_bits()).hash(&mut h);
-        format!("{:?}", m.surface.default_pixel()).hash(&mut h);
-        for (c, t) in m.surface.tiles() {
-            (c.tx, c.ty, Arc::as_ptr(t) as usize).hash(&mut h);
-        }
+        surface_key(&m.surface).hash(&mut h);
     }
     h.finish()
 }

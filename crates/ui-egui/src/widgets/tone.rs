@@ -154,15 +154,7 @@ pub fn compute_histograms_at(doc: &Document, source: HistSource, space: ToneSpac
         // The gray plane itself: its levels are what the curve edits, whatever the document's
         // colour mode (#5335).
         HistSource::Channel { layer, surface } => {
-            let surf = match surface {
-                photocraft_engine::channel_cmds::GraySurface::LayerMask => doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| &m.surface),
-                photocraft_engine::channel_cmds::GraySurface::Alpha(i) => doc.channels.get(i).map(|c| &c.surface),
-                photocraft_engine::channel_cmds::GraySurface::QuickMask => doc.quick_mask.as_ref().map(|c| &c.surface),
-                photocraft_engine::channel_cmds::GraySurface::FilterMask => {
-                    doc.layer(layer).and_then(|l| photocraft_engine::mask_view_cmds::viewed_mask(l, true)).map(|m| &m.surface)
-                }
-            };
-            if let Some(s) = surf
+            if let Some(s) = channel_surface(doc, layer, surface)
                 && let Some(bin) = h.first_mut()
             {
                 *bin = gray_bins(s, doc.bounds());
@@ -453,25 +445,69 @@ pub(crate) struct ToneHist {
     rev: u64,
     hist: Arc<Histograms>,
     masks: u64,
-    // The fingerprint holds the mask's tile addresses. A weak reference to each keeps its
-    // allocation (a few bytes, not the pixels) from being reused for another tile, so equal
-    // fingerprints mean equal masks, without keeping the pixels alive. (A write to a tile nothing
-    // else holds, such as history, then copies it while the counts are cached.)
+    // The fingerprint holds the tile addresses of the layer mask or gray plane counted. A weak
+    // reference to each keeps its allocation (a few bytes, not the pixels) from being reused for
+    // another tile, so equal fingerprints mean equal planes, without keeping the pixels alive. (A
+    // write to a tile nothing else holds, such as history, then copies it while the counts are
+    // cached.)
     _tiles: Vec<std::sync::Weak<photocraft_raster::Tile>>,
 }
 
-/// The layer whose masks counting `source` reads: the adjustment counted below, or the layer whose
-/// mask is the counted channel. Editing a mask can change no pixels (the layer is hidden, say), so
-/// their fingerprint tells when such counts are stale.
-fn mask_source(doc: &Document, source: HistSource) -> Option<&Layer> {
-    match source {
-        HistSource::BelowLayer(id) | HistSource::Channel { layer: id, surface: photocraft_engine::channel_cmds::GraySurface::LayerMask } => doc.layer(id),
-        _ => None,
+/// The gray plane a channel source counts (#5335).
+fn channel_surface(doc: &Document, layer: LayerId, surface: photocraft_engine::channel_cmds::GraySurface) -> Option<&photocraft_raster::Surface> {
+    use photocraft_engine::channel_cmds::GraySurface;
+    match surface {
+        GraySurface::LayerMask => doc.layer(layer).and_then(|l| l.mask.as_ref()).map(|m| &m.surface),
+        GraySurface::Alpha(i) => doc.channels.get(i).map(|c| &c.surface),
+        GraySurface::QuickMask => doc.quick_mask.as_ref().map(|c| &c.surface),
+        GraySurface::FilterMask => doc.layer(layer).and_then(|l| photocraft_engine::mask_view_cmds::viewed_mask(l, true)).map(|m| &m.surface),
     }
 }
 
+/// What a source reads besides the composite: the layer whose masks limit the counts, or the gray
+/// plane counted. Composite damage is the only other guard of the cached counts, and it describes
+/// the composite, not these masks and planes (it is clipped to the canvas, for one), so every one
+/// of them is fingerprinted alike rather than trusting that an edit to it always damages
+/// something. Counts of the composite or a layer's own pixels rely on the damage alone.
+enum MaskInput<'a> {
+    Masks(&'a Layer),
+    Plane(&'a photocraft_raster::Surface),
+    None,
+}
+
+fn mask_input(doc: &Document, source: HistSource) -> MaskInput<'_> {
+    let input = match source {
+        HistSource::BelowLayer(id) => doc.layer(id).map(MaskInput::Masks),
+        HistSource::Channel { layer, surface } => channel_surface(doc, layer, surface).map(MaskInput::Plane),
+        HistSource::Layer(_) | HistSource::UpTo(_) | HistSource::Colors { .. } => None,
+    };
+    input.unwrap_or(MaskInput::None)
+}
+
+/// Fingerprint of [`mask_input`] (tile addresses: see [`ToneHist::_tiles`]).
 fn mask_fingerprint(doc: &Document, source: HistSource) -> u64 {
-    mask_source(doc, source).map_or(0, |l| photocraft_compose::masks::mask_key(l, doc.bounds()))
+    match mask_input(doc, source) {
+        MaskInput::Masks(l) => photocraft_compose::masks::mask_key(l, doc.bounds()),
+        // The plane is counted over the canvas, so the canvas is part of what was counted.
+        MaskInput::Plane(s) => {
+            use std::hash::{Hash, Hasher};
+            let b = doc.bounds();
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (photocraft_compose::masks::surface_key(s), b.x0, b.y0, b.x1, b.y1).hash(&mut h);
+            h.finish()
+        }
+        MaskInput::None => 0,
+    }
+}
+
+/// Weak references to the tiles [`mask_fingerprint`] hashed, so their addresses stay unique.
+fn fingerprint_tiles(doc: &Document, source: HistSource) -> Vec<std::sync::Weak<photocraft_raster::Tile>> {
+    let surface = match mask_input(doc, source) {
+        MaskInput::Masks(l) => l.mask.as_ref().map(|m| &m.surface),
+        MaskInput::Plane(s) => Some(s),
+        MaskInput::None => None,
+    };
+    surface.map_or_else(Vec::new, |s| s.tiles().map(|(_, t)| Arc::downgrade(t)).collect())
 }
 
 /// Cached histograms for a tone editor; recomputed only when something other than the editor's
@@ -499,8 +535,7 @@ pub fn histograms(app: &mut PhotocraftApp, source: HistSource, space: ToneSpace)
     let hist = Arc::new(compute_histograms(&st.doc, source, space));
     app.perf.span("histogram", crate::gpu_canvas::now_ms() - t0);
     let masks = mask_fingerprint(&st.doc, source);
-    let tiles =
-        mask_source(&st.doc, source).and_then(|l| l.mask.as_ref()).map_or_else(Vec::new, |m| m.surface.tiles().map(|(_, t)| Arc::downgrade(t)).collect());
+    let tiles = fingerprint_tiles(&st.doc, source);
     app.tone_hist = Some(ToneHist { doc: doc_id, layer, rev, hist: hist.clone(), masks, _tiles: tiles });
     hist
 }
@@ -960,6 +995,57 @@ mod tests {
         assert_eq!((after[0][0], after[0][255]), (0, 64 * 64));
         // An unchanged revision keeps the counts without fingerprinting the mask again.
         assert!(Arc::ptr_eq(&after, &histograms(&mut app, source, ToneSpace::Rgb)));
+    }
+
+    /// Every counted plane kind is fingerprinted, even an alpha channel or the quick mask, whose
+    /// edits today always damage the composite: forced empty damage shows the fingerprint alone
+    /// keeps or drops the counts.
+    #[test]
+    fn an_alpha_channel_edited_with_no_damage_is_recounted() {
+        use photocraft_engine::channel_cmds::GraySurface;
+        plane_edited_with_no_damage_is_recounted(GraySurface::Alpha(0), |doc| &mut doc.channels[0].surface);
+        plane_edited_with_no_damage_is_recounted(GraySurface::QuickMask, |doc| &mut doc.quick_mask.as_mut().unwrap().surface);
+    }
+
+    fn plane_edited_with_no_damage_is_recounted(
+        surface: photocraft_engine::channel_cmds::GraySurface,
+        plane: fn(&mut Document) -> &mut photocraft_raster::Surface,
+    ) {
+        let (s, id) = masked_adjustment(64, 64, 32, true);
+        let mut app = PhotocraftApp::new(s, crate::Services::default());
+        app.session
+            .edit("planes", |doc, _| {
+                let mut sf = photocraft_raster::Surface::new(photocraft_color::PixelFormat::new(
+                    photocraft_color::ColorMode::Grayscale,
+                    photocraft_color::SampleType::U8,
+                    false,
+                ));
+                sf.fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[0.0]);
+                doc.channels.push(photocraft_doc::AlphaChannel::new("Alpha 1", sf.clone()));
+                doc.quick_mask = Some(photocraft_doc::AlphaChannel::new("Quick Mask", sf));
+                Ok(())
+            })
+            .unwrap();
+        let source = HistSource::Channel { layer: id, surface };
+        let first = histograms(&mut app, source, ToneSpace::Rgb);
+        assert_eq!(first[0][0], 64 * 64);
+        app.session
+            .edit("rename", |doc, _| {
+                doc.layer_mut(id).unwrap().name = "renamed".into();
+                Ok(())
+            })
+            .unwrap();
+        app.session.active_mut().unwrap().last_damage = Some(photocraft_geom::Rect::EMPTY);
+        assert!(Arc::ptr_eq(&first, &histograms(&mut app, source, ToneSpace::Rgb)), "an unchanged plane keeps the counts");
+        app.session
+            .edit("fill plane", |doc, _| {
+                plane(doc).fill_rect(photocraft_geom::Rect::new(0, 0, 64, 64), &[1.0]);
+                Ok(())
+            })
+            .unwrap();
+        app.session.active_mut().unwrap().last_damage = Some(photocraft_geom::Rect::EMPTY);
+        let after = histograms(&mut app, source, ToneSpace::Rgb);
+        assert_eq!((after[0][0], after[0][255]), (0, 64 * 64));
     }
 
     /// A feathered mask is counted as the compositor blurs it: a two-pixel revealed stripe is
