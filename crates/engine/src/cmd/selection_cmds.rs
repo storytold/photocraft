@@ -143,10 +143,12 @@ fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let m = mode(p);
     // Subtract and Intersect grow the region from the seed through the selection only (#11779).
-    let within = matches!(m, SelectionMode::Subtract | SelectionMode::Intersect)
+    // A global match (Contiguous off) ignores the limit, so it skips the full-area mask.
+    let contiguous = b(p, "contiguous", true);
+    let within = (contiguous && matches!(m, SelectionMode::Subtract | SelectionMode::Intersect))
         .then(|| s.active().and_then(|st| st.doc.selection.as_ref()).map(|sel| sel::mask_from_surface(Some(sel), area)))
         .flatten();
-    let region = sel::wand_region_within(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true), within.as_deref());
+    let region = sel::wand_region_within(&img, area, (x, y), f(p, "tolerance", 32.0), contiguous, b(p, "antiAlias", true), within.as_deref());
     drop(img);
     let selected = s.edit("Magic Wand", |doc, _| {
         doc.selection = sel::combine_region(doc.selection.as_ref(), region.as_ref(), m);

@@ -23,13 +23,19 @@ fn wand(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
     s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode})).unwrap();
 }
 
-/// The columns of row 400 that are at least half selected: (first, end), or `None`.
+fn wand_global(s: &mut Session, x: i32, tolerance: f64, mode: &str) {
+    s.execute("select.magicWand", json!({"x": x, "y": 400, "tolerance": tolerance, "mode": mode, "contiguous": false})).unwrap();
+}
+
+/// The columns of row 400 that are at least half selected: (first, end), or `None`. Every
+/// column in between must be selected too, so a hole in the run fails the test.
 fn selected(s: &Session) -> Option<(i32, i32)> {
     let doc = &s.active().unwrap().doc;
     let row = photocraft_geom::Rect::new(0, 400, 800, 401);
     let m = photocraft_algo::selection::mask_from_surface(doc.selection.as_ref(), row);
     let first = m.iter().position(|v| *v >= 0.5)?;
     let last = m.iter().rposition(|v| *v >= 0.5)?;
+    assert!(m[first..=last].iter().all(|v| *v >= 0.5), "a hole in the selected run {first}..={last}");
     Some((first as i32, last as i32 + 1))
 }
 
@@ -65,4 +71,40 @@ fn a_seed_inside_the_selection_works_as_before() {
     let mut s = ramp_selected();
     wand(&mut s, 320, 10.0, "intersect");
     assert_eq!(selected(&s), Some((220, 380)));
+}
+
+#[test]
+fn contiguous_off_keeps_the_global_match() {
+    // Without Contiguous the seed's colour matches everywhere, as before: greys 115–145 are
+    // x 220–500, wherever the seed lies.
+    let mut s = ramp_selected();
+    wand_global(&mut s, 480, 32.0, "subtract");
+    assert_eq!(selected(&s), Some((100, 220)));
+    let mut s = ramp_selected();
+    wand_global(&mut s, 480, 32.0, "intersect");
+    assert_eq!(selected(&s), Some((220, 380)));
+}
+
+#[test]
+fn without_a_selection_subtract_and_intersect_select_nothing() {
+    for mode in ["subtract", "intersect"] {
+        let mut s = ramp();
+        wand(&mut s, 320, 10.0, mode);
+        assert_eq!(selected(&s), None, "{mode}");
+    }
+}
+
+#[test]
+fn the_fill_passes_only_pixels_at_least_half_selected() {
+    use photocraft_algo::selection::wand_region_within;
+    use photocraft_geom::Rect;
+    // One flat grey row of four pixels; only the coverage limit decides the region.
+    let img = [[128u8, 128, 128, 255]; 4];
+    let area = Rect::new(0, 0, 4, 1);
+    let fill = |within: [f32; 4], seed: i32| wand_region_within(&img, area, (seed, 0), 0.0, true, false, Some(&within));
+    assert!(fill([0.49, 1.0, 1.0, 1.0], 0).is_none(), "a seed just under half selected finds nothing");
+    let r = fill([0.5, 1.0, 1.0, 1.0], 0).unwrap();
+    assert_eq!((0..4).map(|x| r.at(x, 0) >= 0.5).collect::<Vec<_>>(), [true; 4], "half selected counts");
+    let r = fill([1.0, 1.0, 0.49, 1.0], 0).unwrap();
+    assert_eq!((0..4).map(|x| r.at(x, 0) >= 0.5).collect::<Vec<_>>(), [true, true, false, false], "the fill stops at 0.49");
 }
