@@ -1151,6 +1151,17 @@ fn the_dock_edge_handle_resizes_and_a_locked_workspace_refuses_it() {
     assert!((locked_resized - locked_stored).abs() < 1.0, "a locked workspace keeps its pre-drag width: {locked_stored} then {locked_resized}");
 }
 
+/// Asking for the width the dock already has is a no-op and must not create a customized
+/// workspace: a later `ui.set {dockTabs}` then keeps its legacy collapse handling.
+#[test]
+fn setting_the_current_dock_width_keeps_the_legacy_layout() {
+    let mut app = app();
+    let current = dock_width(&app);
+    assert!(app.ui.docking.is_none(), "the app starts on the native dock");
+    set_dock_width(&mut app, current);
+    assert!(app.ui.docking.is_none(), "a same-width request must not create a workspace");
+}
+
 /// `ui.set {dockWidth}` sets the whole end dock, scaling every column rather than only the outer
 /// one; the split holding the dock follows the new total.
 #[test]

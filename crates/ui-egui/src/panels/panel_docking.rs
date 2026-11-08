@@ -933,6 +933,12 @@ pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
     if columns.is_empty() {
         return;
     }
+    // A request for the width the dock already has must stay a no-op: committing the legacy
+    // layout here would turn a later `ui.set {dockTabs}` into a customized-workspace update.
+    let current: f32 = columns.iter().map(display_width).sum();
+    if (current - width).abs() < 0.5 {
+        return;
+    }
     let actual = scale_columns(columns, width);
     if actual <= 0.0 {
         return;
