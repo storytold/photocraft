@@ -661,6 +661,7 @@ fn several_raws_share_the_dialog_and_keep_their_own_settings() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30}}})).unwrap().unwrap();
     filmstrip::show_raw(&mut app, &ctx, 0).unwrap();
     assert_eq!(app.camera_raw.as_ref().unwrap().params.exposure, 1.0, "back to the first, as it was left");
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["opened"].as_array().map(Vec::len), Some(3), "{r}");
     assert!(app.raw_shelf.is_empty() && app.camera_raw.is_none());
@@ -692,6 +693,7 @@ fn a_raw_that_fails_to_open_stays_in_the_filmstrip_with_its_settings() {
     app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["opened"].as_array().map(Vec::len), Some(2), "one and three open: {r}");
     let left: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
@@ -705,6 +707,7 @@ fn a_raw_that_fails_to_open_stays_in_the_filmstrip_with_its_settings() {
     app.open_bytes("four.dng", &dng).unwrap();
     app.raw_shelf[1].raw.bytes = Some(std::sync::Arc::new(b"not a raw file either".to_vec()));
     app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().is_err());
     assert_eq!(app.raw_shelf.len(), 2, "both raws stay in the filmstrip");
     assert!(app.camera_raw.is_some(), "and the dialog stays open");
@@ -770,6 +773,7 @@ fn a_raw_whose_background_develop_fails_comes_back_to_the_filmstrip() {
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
     app.background_jobs = true;
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["opened"].as_array().map(Vec::len), Some(2), "both started: {r}");
     assert!(app.raw_shelf.is_empty());
@@ -1422,6 +1426,7 @@ fn open_with_several_raws_creates_exactly_those_documents() {
         app.open_bytes(name, &dng).unwrap();
     }
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 0.5}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
     assert_eq!(r["opened"].as_array().map(Vec::len), Some(3), "{r}");
@@ -1456,6 +1461,27 @@ fn a_background_raw_open_never_adds_a_tab() {
     filmstrip::open_held(&mut app, &ctx, 0).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
     assert_eq!(session_state(&app), before);
+}
+
+/// Open opens the selected raws only, as Camera Raw's Open does; the rest are let go like Cancel
+/// lets them go, so the dialog doesn't come back for them.
+#[test]
+fn open_opens_only_the_selected_raws() {
+    let (mut app, ctx, _) = filmstrip_app(4);
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert!(r.get("opened").is_none(), "one raw, one reply: {r}");
+    let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.clone()).collect();
+    assert_eq!(names, ["IMG_0.dng"], "only the shown raw opens");
+    assert!(app.raw_shelf.is_empty() && app.camera_raw.is_none(), "the dialog doesn't return for the others");
+
+    let (mut app, ctx, _) = filmstrip_app(4);
+    film(&mut app, &ctx, json!({"click": 2, "command": true})).unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(2), "{r}");
+    let mut names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.clone()).collect();
+    names.sort();
+    assert_eq!(names, ["IMG_0.dng", "IMG_2.dng"]);
+    assert!(app.raw_shelf.is_empty() && app.camera_raw.is_none());
 }
 
 /// `count` raws opened together, the dialog showing the first.
@@ -1607,17 +1633,17 @@ fn open_develops_each_raw_with_its_synced_settings() {
     film(&mut app, &ctx, json!({"click": 1, "shift": true})).unwrap();
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 30}}})).unwrap().unwrap();
     let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
-    // The shown raw (one, which Shift-click showed) first, then zero and two.
+    // The shown raw (one, which Shift-click showed) first, then zero; two wasn't selected.
     let opened = r["opened"].as_array().unwrap().clone();
-    assert_eq!(opened.len(), 3, "{r}");
-    assert!(opened[0].get("filter").is_some() && opened[1].get("filter").is_some(), "both selected raws take the Camera Raw step: {r}");
-    assert_eq!(opened[2].get("filter"), None, "the unselected raw opens at its defaults: {r}");
+    assert_eq!(opened.len(), 2, "{r}");
+    assert!(opened.iter().all(|o| o.get("filter").is_some()), "both selected raws take the Camera Raw step, zero from the synced Contrast: {r}");
+    let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.clone()).collect();
+    assert!(!names.contains(&"IMG_2.dng".to_string()), "{names:?}");
     let mut developed = opened.iter().map(|o| {
         app.session.set_active(o["document"].as_u64().unwrap() as usize);
         pixels(&app)
     });
-    let (one, zero, two) = (developed.next().unwrap(), developed.next().unwrap(), developed.next().unwrap());
-    assert_ne!(zero, two, "zero develops with the synced Contrast");
+    let (one, zero) = (developed.next().unwrap(), developed.next().unwrap());
     assert_ne!(one, zero, "one keeps its own Vibrance as well");
 }
 

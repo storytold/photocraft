@@ -57,6 +57,9 @@ fn raws_in_the_dialog_have_no_tab_until_open() {
     assert_eq!(h.query_all_by_label("first.dng").count(), 1);
     assert_eq!(h.query_all_by_label("second.dng").count(), 1);
     assert_eq!((tabs(&h, "Untitled"), tabs(&h, "first.dng"), tabs(&h, "second.dng")), (1, 0, 0), "one tab, the document's");
+    // Open opens the selected raws: ⌘A selects both.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run_steps(2);
     h.get_by_label("Open").click();
     h.run_steps(4);
     assert!(!dialog_up(&h));

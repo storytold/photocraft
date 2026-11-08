@@ -185,13 +185,30 @@ pub(super) fn default_proxy(doc: &photocraft_doc::Document) -> Option<Vec<[f32; 
     Some(super::convert::box_proxy(surf, area, w, h).0)
 }
 
-/// Open with raws in the filmstrip: the shown one as the dialog has it, then every other with
-/// its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
-/// filmstrip once it has opened or its background develop has started: one that fails stays or
-/// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
+/// Open with raws in the filmstrip: the shown one as the dialog has it, then every other selected
+/// one with its own settings, as Camera Raw's Open opens the selected images. The raws not
+/// selected are let go, as Cancel lets them go. One reply for one raw, `{"opened": [...]}` for
+/// several. A raw leaves the filmstrip once it has opened or its background develop has started:
+/// one that fails stays or comes back there with its settings, so the dialog returns for it (or
+/// Cancel still closes it).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
-    let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
+    let selected = selection(app);
+    let mut others = Vec::new();
+    let mut dropped = Vec::new();
+    for (held, selected) in app.raw_shelf.iter().zip(selected) {
+        if held.raw.document == raw.document {
+            continue;
+        }
+        if selected { others.push(held.raw.document) } else { dropped.push(held.raw.clone()) }
+    }
+    app.raw_shelf.retain(|h| !dropped.iter().any(|r| r.document == h.raw.document));
+    // Held raws were never documents; one shown from the session closes, as Cancel closes it.
+    for r in dropped.iter().filter(|r| r.held.is_none()) {
+        if let Some(index) = super::open::document_index(app, r.document) {
+            app.session.close(index);
+        }
+    }
     let first = commit_open_raw(app, params, raw, Some(original));
     if let Ok(v) = &first {
         return_on_failure(app, v, original);
