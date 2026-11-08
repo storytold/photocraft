@@ -318,3 +318,7 @@ sync_github_name = true
 
 [people.ashokram-si]
 real_name = "Ashok Ram"
+
+[people.rmsff]
+real_name = "Serikov Roman"
+sync_github_name = false
