@@ -816,6 +816,7 @@ fn match_color_source_layer_preview_and_ok_edit_only_the_target() {
                 photocraft_engine::channel_cmds::ChannelTarget::Composite,
                 &documents,
                 &ColorSettings::default(),
+                None,
             )
             .unwrap();
             let shown = preview.layers[0].surface().unwrap().pixel(12, 8);
