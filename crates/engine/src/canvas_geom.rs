@@ -245,6 +245,11 @@ pub(crate) fn transform_doc_marks(doc: &mut Document, a: &Affine) {
     // A note's icon point maps with the pixels; its popup moves with it and keeps its size and its
     // offset from the icon, as Photoshop's does under Image Size, Canvas Size and turns (#11795).
     for n in &mut doc.notes {
+        // An all-zero popup means none is stored (PSD export writes its default one): keep it.
+        if n.popup == [0.0; 4] {
+            n.position = map_pt(a, n.position);
+            continue;
+        }
         let [px, py] = n.position;
         let (dx, dy, w, h) = (n.popup[0] - px, n.popup[1] - py, n.popup[2] - n.popup[0], n.popup[3] - n.popup[1]);
         n.position = map_pt(a, n.position);
