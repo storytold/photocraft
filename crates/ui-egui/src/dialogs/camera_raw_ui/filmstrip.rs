@@ -55,7 +55,7 @@ struct ThumbSource {
     curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
     /// The raw file binned to the thumbnail's size: synced raw-stage settings develop from the
     /// sensor data, as Open does ([`super::ProxyJob`]). `None`: the file can't be read again.
-    raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    raw: Option<crate::camera_raw_detail_ui::RawDetail>,
     encoding_gamma: f32,
 }
 
@@ -185,22 +185,27 @@ pub(super) fn default_proxy(doc: &photocraft_doc::Document) -> Option<Vec<[f32; 
     Some(super::convert::box_proxy(surf, area, w, h).0)
 }
 
-/// Open with raws in the filmstrip: the shown one as the dialog has it, then every other selected
-/// one with its own settings, as Camera Raw's Open opens the selected images. The raws not
-/// selected are let go, as Cancel lets them go. One reply for one raw, `{"opened": [...]}` for
-/// several. A raw leaves the filmstrip once it has opened or its background develop has started:
-/// one that fails stays or comes back there with its settings, so the dialog returns for it (or
-/// Cancel lets it go).
+/// Open with raws in the filmstrip: every selected one in filmstrip order, the shown one as the
+/// dialog has it and the others with their own settings, as Camera Raw's Open opens the selected
+/// images. The raws not selected are let go, as Cancel lets them go. One reply for one raw,
+/// `{"opened": [...]}` for several. A raw leaves the filmstrip once it has opened or its
+/// background develop has started: one that fails stays or comes back there with its settings,
+/// so the dialog returns for it (or Cancel lets it go).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
     let selected = selection(app);
-    let mut others = Vec::new();
+    // In filmstrip order, the shown raw in its place, so the tabs follow the filmstrip.
+    let mut order = Vec::new();
     let mut dropped = Vec::new();
     for (held, selected) in app.raw_shelf.iter().zip(selected) {
-        if held.raw.document == raw.document {
-            continue;
+        if selected || held.raw.document == raw.document {
+            order.push(held.raw.document);
+        } else {
+            dropped.push(held.raw.clone());
         }
-        if selected { others.push(held.raw.document) } else { dropped.push(held.raw.clone()) }
+    }
+    if !order.contains(&raw.document) {
+        order.insert(0, raw.document);
     }
     app.raw_shelf.retain(|h| !dropped.iter().any(|r| r.document == h.raw.document));
     // Held raws were never documents; one shown from the session closes, as Cancel closes it.
@@ -209,35 +214,34 @@ pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpe
             app.session.close(index);
         }
     }
-    let first = commit_open_raw(app, params, raw, Some(original));
-    if let Ok(v) = &first {
-        return_on_failure(app, v, original);
-        app.raw_shelf.retain(|h| h.raw.document != raw.document);
-    }
-    if others.is_empty() {
-        return first;
-    }
     let mut opened = Vec::new();
     let mut failed = Vec::new();
-    match first {
-        Ok(v) => opened.push(v),
-        Err(e) => failed.push(format!("{}: {e}", raw.name)),
-    }
-    for id in others {
-        let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == id) else { continue };
-        let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
-        let (p, loaded) = match kept {
-            Some((p, original)) => (p, Some(original)),
-            None => first_settings(app, &held_raw),
+    let mut last = None;
+    for id in &order {
+        let (this, p, loaded) = if *id == raw.document {
+            (raw.clone(), params.clone(), Some(original.clone()))
+        } else {
+            let Some(held) = app.raw_shelf.iter().find(|h| h.raw.document == *id) else { continue };
+            let (held_raw, kept) = (held.raw.clone(), held.kept.clone());
+            let (p, loaded) = match kept {
+                Some((p, original)) => (p, Some(original)),
+                None => first_settings(app, &held_raw),
+            };
+            (held_raw, p, loaded)
         };
-        match commit_open_raw(app, &p, &held_raw, loaded.as_ref()) {
+        let r = commit_open_raw(app, &p, &this, loaded.as_ref());
+        match &r {
             Ok(v) => {
-                return_on_failure(app, &v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
-                opened.push(v);
-                app.raw_shelf.retain(|h| h.raw.document != id);
+                return_on_failure(app, v, loaded.as_ref().unwrap_or(&CameraRaw::default()));
+                opened.push(v.clone());
+                app.raw_shelf.retain(|h| h.raw.document != *id);
             }
-            Err(e) => failed.push(format!("{}: {e}", held_raw.name)),
+            Err(e) => failed.push(format!("{}: {e}", this.name)),
         }
+        last = Some(r);
+    }
+    if order.len() == 1 {
+        return last.unwrap_or_else(|| Err("no raw file to open".into()));
     }
     if !failed.is_empty() {
         let e = failed.join("; ");
@@ -674,11 +678,12 @@ fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect
         _ => None,
     };
     let source = bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok());
-    let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &Default::default(), tw, th));
+    let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.developed_with, ..Default::default() };
+    let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &as_opened, tw, th));
     let (px, size, raw_source, curve) = match (developed, source) {
         (Some((px, _)), Some(s)) => {
             let curve = std::sync::Arc::new(s.tone_curve().to_vec());
-            (px, (tw, th), Some(std::sync::Arc::new(s)), Some(curve))
+            (px, (tw, th), Some((std::sync::Arc::new(s), raw.developed_with)), Some(curve))
         }
         _ => {
             let (proxy, pw, ph, _) = super::convert::box_proxy(surf, area, w, h);

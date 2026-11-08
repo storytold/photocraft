@@ -194,10 +194,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         && !app.raw_shelf.is_empty()
         && let Err(e) = super::filmstrip::open_held(app, ctx, 0)
     {
-        // It opens as developed with the defaults rather than vanish.
+        // It opens as developed with the defaults (no settings applied, no sidecar written)
+        // rather than vanish or come back every frame.
         let held = app.raw_shelf.remove(0);
-        let _ = super::open::commit_open_raw(app, &Default::default(), &held.raw, None);
-        app.ui.status = e;
+        let opened = super::open::open_as_developed(app, &held.raw);
+        app.ui.status = match opened {
+            Ok(()) => e,
+            Err(open) => format!("{e}; {open}"),
+        };
         app.ui.status_error = true;
     }
     let Some(d) = app.camera_raw.as_ref() else { return };

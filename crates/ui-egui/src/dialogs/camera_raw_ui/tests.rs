@@ -491,6 +491,26 @@ fn the_preview_of_a_raw_stage_setting_matches_what_open_develops() {
     }
 }
 
+/// The proxy of a raw too small to bin develops with the demosaic method the raw was opened
+/// with, so the Before view and the settings it was opened with show the document's own pixels.
+#[test]
+fn an_unbinned_proxy_uses_the_demosaic_method_the_raw_was_opened_with() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"path": "rawDefaults.demosaic", "value": "bilinear"})).unwrap();
+    app.open_bytes("IMG_0007.dng", &dng).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let d = app.camera_raw.as_ref().unwrap();
+    assert!(d.raw_proxy, "the proxy is the raw's own develop");
+    let doc = shown_doc(&app);
+    let surf = doc.layers.iter().find_map(|l| l.surface()).unwrap();
+    let (area, w, h) = super::convert::preview_area(doc.bounds(), surf).unwrap();
+    let (doc_proxy, ..) = super::convert::box_proxy(surf, area, w, h);
+    let (mean, max) = proxy_difference(&d.proxy, &doc_proxy);
+    assert!(max < 1e-4, "the proxy is the document as developed: {mean} {max}");
+}
+
 #[test]
 fn shadows_of_a_raw_open_act_on_the_raw_data_and_the_preview_shows_it() {
     let (mut app, dng) = raw_app();
@@ -1649,4 +1669,52 @@ fn a_synced_thumbnail_matches_the_dialogs_own() {
     assert!(diff(&synced, &dialog) < 2.0, "synced thumbnail differs from the dialog's by {}", diff(&synced, &dialog));
     let mean = |img: &egui::ColorImage| img.pixels.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).sum::<f32>() / img.pixels.len() as f32;
     assert!((mean(&before) - mean(&synced)).abs() > 3.0, "and it changed: {} → {}", mean(&before), mean(&synced));
+}
+
+/// Open makes the documents in filmstrip order, whichever raw is shown.
+#[test]
+fn open_follows_the_filmstrip_order_whichever_raw_is_shown() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    for name in ["one.dng", "two.dng", "three.dng"] {
+        app.open_bytes(name, &dng).unwrap();
+    }
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    filmstrip::show_raw(&mut app, &ctx, 2).unwrap();
+    film(&mut app, &ctx, json!({"selectAll": true})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 10}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    let names: Vec<_> = app.session.documents().iter().map(|st| st.doc.name.clone()).collect();
+    assert_eq!(names, ["one.dng", "two.dng", "three.dng"]);
+}
+
+/// A raw whose background develop is cancelled was never opened: it comes back to the filmstrip,
+/// as one whose develop failed does, rather than vanish.
+#[test]
+fn a_raw_whose_background_develop_is_cancelled_is_not_lost() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("one.dng", &dng).unwrap();
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    app.background_jobs = true;
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    let job = photocraft_engine::jobs::JobId(r["job"].as_u64().expect("a background develop"));
+    app.session.cancel_job(job);
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the job never finished");
+    // Cancelled in time: back in the filmstrip with its settings; too late: opened.
+    match app.raw_shelf.first() {
+        Some(held) => {
+            assert!(app.session.documents().is_empty());
+            assert_eq!(held.kept.as_ref().map(|(p, _)| p.exposure), Some(1.0));
+        }
+        None => assert_eq!(app.session.documents().len(), 1, "the raw is neither open nor waiting"),
+    }
 }
