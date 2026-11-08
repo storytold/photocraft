@@ -380,13 +380,17 @@ fn dismiss_popup(resp: &egui::Response) {
 /// click picks it and a double-click picks it and closes the picker, as in the preset groups.
 fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>, recent: &[String], picks: &mut Vec<Pick>) {
     const TILE: f32 = 30.0;
+    const GAP: f32 = 3.0;
     let t = Tokens::get(ui.ctx());
+    // A full row is wider than the narrowest picker: the tiles shrink to fit its width.
+    let n = recent.iter().filter(|name| presets.iter().any(|p| &p.name == *name)).count().max(1) as f32;
+    let tile = ((ui.available_width() - GAP * (n - 1.0)) / n).clamp(12.0, TILE);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.spacing_mut().item_spacing.x = GAP;
         for name in recent {
             let Some(p) = presets.iter().find(|p| &p.name == name) else { continue };
             let is_current = current.is_some_and(|c| c.eq_ignore_ascii_case(name));
-            let (r, resp) = ui.allocate_exact_size(vec2(TILE, TILE), egui::Sense::click());
+            let (r, resp) = ui.allocate_exact_size(vec2(tile, tile), egui::Sense::click());
             let label = crate::i18n::fmt(tl!("Recent brush: {name}"), &[("name", name)]);
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, is_current, &label));
             if is_current {
@@ -398,7 +402,7 @@ fn recent_row(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&str>,
             let pb = &p.brush;
             let tip =
                 crate::brush_preview::tip_texture(ui.ctx(), &format!("brush-recent-tip:{name}"), &pb.tip, (pb.hardness, pb.angle, pb.roundness), 24, t.text);
-            let side = (TILE - 6.0) * crate::brush_sections::thumb_scale(pb.size);
+            let side = (tile - 6.0) * crate::brush_sections::thumb_scale(pb.size);
             ui.painter().image(
                 tip.id(),
                 egui::Rect::from_center_size(r.center(), vec2(side, side)),

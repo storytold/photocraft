@@ -201,3 +201,20 @@ fn double_clicking_a_recent_tile_chooses_that_brush() {
     assert_eq!(h.state().session.tools.current_preset.as_deref(), Some(n[3].as_str()), "the brush the double-click began on");
     assert!(h.state().ui.brush_picker.is_none(), "a double-click closes the picker");
 }
+
+#[test]
+fn a_full_recent_row_fits_the_narrowest_picker() {
+    let mut app = app();
+    let n = names(&app);
+    for name in n.iter().take(RECENT_MAX) {
+        pick(&mut app, name);
+    }
+    app.ui.brush_picker_size = Some(MIN_SIZE);
+    let mut h = harness(app);
+    h.run_steps(3);
+    let right = h.get_by_label("Brush Preset Options").rect().max.x;
+    for name in n.iter().take(RECENT_MAX) {
+        let r = h.get_by_label(&tile(name)).rect();
+        assert!(r.max.x <= right + 0.5, "`{name}`'s tile ends at {} past the picker's right edge {right}", r.max.x);
+    }
+}
