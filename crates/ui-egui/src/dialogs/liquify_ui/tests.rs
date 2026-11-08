@@ -1501,7 +1501,7 @@ fn direct_profile_conversion_preserves_the_open_liquify_document_and_stroke() {
         app.run("edit.assignProfile", json!({"profile":"display-p3"})).unwrap();
         refresh_display(&mut app);
         let st = app.session.active().unwrap();
-        assert_eq!(st.doc.icc_profile.as_deref(), Some(Builtin::DisplayP3.profile().to_bytes().as_slice()));
+        assert_eq!(st.doc.icc_profile.as_deref().map(Vec::as_slice), Some(Builtin::DisplayP3.profile().to_bytes().as_slice()));
         let d = app.distort.liquify.as_ref().unwrap();
         assert_eq!(d.field, field);
         assert!(d.source == source);
@@ -1597,7 +1597,7 @@ fn direct_profile_conversion_runs_after_liquify_closes() {
 
     app.run("edit.convertToProfile", json!({"profile":"working"})).unwrap();
     let st = app.session.active().unwrap();
-    assert_eq!(st.doc.icc_profile.as_deref(), Some(Builtin::LinearSrgb.profile().to_bytes().as_slice()));
+    assert_eq!(st.doc.icc_profile.as_deref().map(Vec::as_slice), Some(Builtin::LinearSrgb.profile().to_bytes().as_slice()));
     assert_ne!(st.doc.layer(layer).unwrap().surface().unwrap().pixel(20, 20), before);
 }
 
