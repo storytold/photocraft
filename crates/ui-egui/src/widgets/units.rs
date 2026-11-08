@@ -132,8 +132,14 @@ pub(super) fn plain(text: &str) -> Option<f64> {
 /// point (`0,3`, as typed where the comma is the decimal separator, #10729) when the text has no
 /// point; beside a point (`1.234,5`) a comma is left as it is, so the text stays invalid rather
 /// than guessed.
+///
+/// The comma is read that way only where the system's separator is not the point
+/// ([`crate::i18n::decimal_separator`]): where it is, a typed `1,234` is a thousands group, and
+/// reading it as `1.234` would be out by a factor of a thousand rather than invalid (review on
+/// #10729). Where the separator can't be read (macOS, Linux, the web) the field takes both, as
+/// `zoom_field` does.
 fn clean(text: &str) -> String {
-    let comma_is_decimal = !text.contains('.');
+    let comma_is_decimal = !text.contains('.') && crate::i18n::decimal_separator() != Some('.');
     text.chars()
         .filter(|c| !c.is_whitespace())
         .map(|c| match c {

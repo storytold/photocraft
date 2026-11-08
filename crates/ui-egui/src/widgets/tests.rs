@@ -1308,6 +1308,27 @@ fn value_field_takes_a_decimal_comma() {
     assert!((type_and_press(1.0, "2,5", Tab, false) - 2.5).abs() < 1e-6);
 }
 
+/// Review on #10729: only where the system's separator is not the point. Where it is, a typed
+/// `1,234` is a thousands group, and reading the comma as a decimal point would be out by a
+/// factor of a thousand instead of invalid. Where the separator can't be read the field takes
+/// both, as it did before.
+#[test]
+fn a_decimal_comma_is_read_only_where_the_system_uses_one() {
+    let parse = |text: &str| super::units::plain(text);
+    crate::i18n::with_decimal_separator(Some(','), || {
+        assert_eq!(parse("0,3"), Some(0.3), "a comma system reads the comma");
+    });
+    crate::i18n::with_decimal_separator(Some('.'), || {
+        assert_eq!(parse("0,3"), None, "a point system does not: 0,3 stays invalid, not 0.3");
+        assert_eq!(parse("1,234"), None, "and a thousands group is not read as 1.234");
+        assert_eq!(parse("0.3"), Some(0.3), "its own separator still works");
+    });
+    crate::i18n::with_decimal_separator(None, || {
+        assert_eq!(parse("0,3"), Some(0.3), "unknown: both are taken, as zoom_field does");
+        assert_eq!(parse("0.3"), Some(0.3));
+    });
+}
+
 #[test]
 fn numbers_drop_trailing_zero() {
     // #2434: the unit keys map to Photoshop's places, and the shared formatter trims zeros.
