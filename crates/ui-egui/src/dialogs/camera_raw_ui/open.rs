@@ -112,7 +112,7 @@ pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpe
 pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpen, kept: Option<(CameraRaw, CameraRaw)>) -> Result<(), String> {
     let doc = raw_document(app, &raw).ok_or("the raw document was closed")?;
     let (layer, surf) = doc.layers.iter().find_map(|l| Some((l.id, l.surface()?.clone()))).ok_or("the raw document has no pixels")?;
-    let source = Source { raw: raw_source(&raw, doc.bounds(), &surf), surf, doc: Some(doc.clone()) };
+    let source = Source { raw: raw_source(&raw, doc.bounds(), &surf).map(|s| (s, raw.developed_with)), surf, doc: Some(doc.clone()) };
     if let Some((params, original)) = kept {
         open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
         if let Some(d) = app.camera_raw.as_mut() {
@@ -175,9 +175,9 @@ fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
         // Without the sensor data, the preview retones the developed pixels with it.
-        let curve = d.raw_source.as_ref().map(|s| std::sync::Arc::new(s.tone_curve().to_vec()));
+        let curve = d.raw_source.as_ref().map(|(s, _)| std::sync::Arc::new(s.tone_curve().to_vec()));
         d.detail.raw_curve = curve.clone();
-        d.detail.raw = d.raw_source.clone().map(|s| (s, raw.developed_with));
+        d.detail.raw = d.raw_source.clone();
         d.raw_curve = curve;
         d.raw_open = Some(raw);
     }

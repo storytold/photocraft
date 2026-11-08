@@ -5,18 +5,21 @@
 //! Dehaze, black point, tone curve) on a frame `factor²` times smaller, with no demosaic: what
 //! the open-time Camera Raw dialog needs to show a raw-stage setting as Open will develop it.
 
-use crate::develop::{Scale, gain_row};
+use crate::develop::{Scale, gain_row, grey_world};
 use crate::error::{RawError, Result};
 use crate::par;
-use crate::sensor::{BlackLevels, Rect, Sensor};
+use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
 
 /// `s` binned by `factor` (see the module docs): `ceil(width / factor) × ceil(height / factor)`
 /// pixels of the crop, with the same colour, white balance, orientation, baseline exposure, tone
 /// curve and black point. The blocks of the last row and column are moved back inside the crop
-/// rather than cut short, so every block holds whole CFA repeats and every colour.
+/// rather than cut short.
 ///
-/// A factor smaller than the CFA repeat (or 1) gives an unchanged copy of `s`: such a frame is
-/// already preview-sized.
+/// A file without an as-shot white balance keeps the grey-world estimate of the whole frame (as
+/// the neutral of the binned one), so the two develop with the same white balance.
+///
+/// A factor of 1, a frame smaller than one block, or a factor whose blocks would miss a colour of
+/// the CFA pattern gives an unchanged copy of `s`.
 pub fn binned(s: &Sensor, factor: usize) -> Result<Sensor> {
     let c = s.crop;
     let samples = s.width.checked_mul(s.height).and_then(|n| n.checked_mul(s.samples));
@@ -30,12 +33,20 @@ pub fn binned(s: &Sensor, factor: usize) -> Result<Sensor> {
     if s.samples != 1 && s.samples != 3 {
         return Err(RawError::unsupported(format!("{} samples per pixel", s.samples)));
     }
-    let repeat = s.cfa.as_ref().map_or(1, |cfa| cfa.width.max(cfa.height));
-    if s.cfa.as_ref().is_some_and(|cfa| cfa.width == 0 || cfa.height == 0 || cfa.width > 16 || cfa.height > 16 || s.samples != 1) {
+    // The checks `develop_sensor` makes.
+    if s.cfa.as_ref().is_some_and(|cfa| {
+        s.samples != 1
+            || cfa.width == 0
+            || cfa.height == 0
+            || cfa.width > 16
+            || cfa.height > 16
+            || cfa.colors.len() != cfa.width * cfa.height
+            || cfa.colors.iter().any(|c| *c > 2)
+    }) {
         return Err(RawError::malformed("invalid sensor CFA pattern"));
     }
     let k = factor;
-    if k < 2 || k < repeat || c.width < k || c.height < k {
+    if k < 2 || c.width < k || c.height < k || s.cfa.as_ref().is_some_and(|cfa| !blocks_hold_every_colour(cfa, k)) {
         return Ok(s.clone());
     }
     let (bw, bh) = (c.width.div_ceil(k), c.height.div_ceil(k));
@@ -82,6 +93,12 @@ pub fn binned(s: &Sensor, factor: usize) -> Result<Sensor> {
             .collect::<Vec<u16>>()
     });
     let whole = Rect::new(0, 0, bw, bh);
+    // Grey world on the binned frame would see other samples than on the whole one.
+    let mut color = s.color.clone();
+    let as_shot = color.as_shot_neutral.is_some() || color.as_shot_white_xy.is_some() || s.camera_wb.is_some();
+    if !as_shot && !mono {
+        color.as_shot_neutral = Some(grey_world(s, &sc));
+    }
     Ok(Sensor {
         format: s.format,
         make: s.make.clone(),
@@ -96,7 +113,7 @@ pub fn binned(s: &Sensor, factor: usize) -> Result<Sensor> {
         white: [65535.0; 3],
         active: whole,
         crop: whole,
-        color: s.color.clone(),
+        color,
         camera_wb: s.camera_wb,
         orientation: s.orientation,
         baseline_exposure: s.baseline_exposure,
@@ -104,6 +121,29 @@ pub fn binned(s: &Sensor, factor: usize) -> Result<Sensor> {
         tone_curve: s.tone_curve.clone(),
         black_point: s.black_point,
         warnings: Vec::new(),
+    })
+}
+
+/// Whether every `k`×`k` block of the pattern, wherever it starts, holds every colour the pattern
+/// has (any block of a Bayer pattern from 2×2 on, of X-Trans from 3×3 on).
+fn blocks_hold_every_colour(cfa: &Cfa, k: usize) -> bool {
+    let has = |c: u8| cfa.colors.contains(&c);
+    let wanted: Vec<u8> = (0..3).filter(|c| has(*c)).collect();
+    if k >= cfa.width.max(cfa.height) {
+        return true;
+    }
+    (0..cfa.height).all(|y0| {
+        (0..cfa.width).all(|x0| {
+            let mut seen = [false; 3];
+            for y in y0..y0 + k {
+                for x in x0..x0 + k {
+                    if let Some(f) = seen.get_mut(usize::from(cfa.color(x, y))) {
+                        *f = true;
+                    }
+                }
+            }
+            wanted.iter().all(|c| seen.get(usize::from(*c)).copied().unwrap_or(false))
+        })
     })
 }
 
@@ -190,8 +230,54 @@ mod tests {
         let mut bad = s.clone();
         bad.data.truncate(10);
         assert!(binned(&bad, 4).is_err());
-        let mut bad = s;
+        let mut bad = s.clone();
         bad.crop = Rect::new(10, 0, 100, 12);
         assert!(binned(&bad, 4).is_err());
+        // A pattern develop_sensor refuses is refused here too, not read as a default colour.
+        let mut bad = s.clone();
+        bad.cfa.as_mut().unwrap().colors = vec![0, 1, 1];
+        assert!(binned(&bad, 4).is_err());
+        let mut bad = s.clone();
+        bad.cfa.as_mut().unwrap().colors = vec![0, 1, 1, 3];
+        assert!(binned(&bad, 4).is_err());
+        // Smaller than one block: unchanged.
+        assert_eq!(binned(&s, 13).unwrap().data, s.data);
+    }
+
+    /// X-Trans's 6×6 repeat bins by 3, 4 or 5 too: every such block holds all three colours.
+    #[test]
+    fn x_trans_bins_by_factors_below_its_repeat() {
+        let colors = "GGRGGBGGBGGRBRGRBGGGBGGRGGRGGBRBGBRG"
+            .chars()
+            .map(|c| match c {
+                'R' => 0,
+                'G' => 1,
+                _ => 2,
+            })
+            .collect();
+        let xtrans = Cfa { width: 6, height: 6, colors, origin_x: 0, origin_y: 0 };
+        assert!(!blocks_hold_every_colour(&xtrans, 2));
+        assert!((3..=6).all(|k| blocks_hold_every_colour(&xtrans, k)));
+        let mut s = sensor(60, 40);
+        s.cfa = Some(xtrans);
+        let b = binned(&s, 5).unwrap();
+        assert_eq!((b.width, b.height, b.samples), (12, 8, 3));
+        assert!(b.data.iter().all(|v| *v > 0), "every block has every colour");
+        assert_eq!(binned(&s, 2).unwrap().width, 60, "2×2 blocks would miss a colour: unchanged");
+    }
+
+    /// Without an as-shot white balance the binned frame keeps the whole frame's grey world.
+    #[test]
+    fn a_file_without_as_shot_white_balance_keeps_the_whole_frames_estimate() {
+        let mut s = sensor(96, 64);
+        s.camera_wb = None;
+        let b = binned(&s, 4).unwrap();
+        let expected = grey_world(&s, &Scale::new(&s));
+        assert_eq!(b.color.as_shot_neutral, Some(expected));
+        let full = develop_sensor(&s, &DevelopOptions::default()).unwrap();
+        let small = develop_sensor(&b, &DevelopOptions::default()).unwrap();
+        let nmax = |m: [f64; 3]| m.map(|v| v / m.iter().cloned().fold(f64::MAX, f64::min));
+        let (a, c) = (nmax(full.info.wb_multipliers), nmax(small.info.wb_multipliers));
+        assert!(a.iter().zip(&c).all(|(a, c)| (a - c).abs() < 1e-3), "{a:?} vs {c:?}");
     }
 }

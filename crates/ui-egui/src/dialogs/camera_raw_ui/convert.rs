@@ -97,7 +97,8 @@ pub(super) fn box_proxy(surf: &photocraft_raster::Surface, area: Rect, w: usize,
 pub(super) struct Source {
     pub(super) surf: photocraft_raster::Surface,
     /// The raw file the open-time dialog develops its raw-stage settings from ([`ProxyJob`](super::ProxyJob)).
-    pub(super) raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    /// With the demosaic method the raw was developed with.
+    pub(super) raw: Option<crate::camera_raw_detail_ui::RawDetail>,
     /// The document the pixels belong to: a held raw's, which is not in the session. `None`: the
     /// active document.
     pub(super) doc: Option<std::sync::Arc<photocraft_doc::Document>>,
@@ -142,8 +143,13 @@ pub(super) fn open_pixels(
     // A raw being opened: the proxy is its binned sensor data developed as the document was, so
     // the preview of a raw-stage setting starts from the same pixels Open develops from.
     let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
-    let developed = raw.as_ref().and_then(|r| raw_proxy(r, &Default::default(), w.div_ceil(k), h.div_ceil(k)).map(|(px, _)| px));
-    let raw = raw.filter(|_| developed.is_some());
+    let developed = raw.as_ref().and_then(|(r, method)| {
+        let as_opened = photocraft_io::raw::RawTuning { demosaic: *method, ..Default::default() };
+        raw_proxy(r, &as_opened, w.div_ceil(k), h.div_ceil(k)).map(|(px, _)| px)
+    });
+    // A binned frame of another size can't stand in for the proxy; the raw still serves the
+    // full-size preview and the tone curve.
+    let raw_proxy_ok = developed.is_some();
     let (proxy, pw, ph, k) = match developed {
         Some(px) => (px, w.div_ceil(k), h.div_ceil(k), k),
         None => box_proxy(&surf, area, w, h),
@@ -227,6 +233,7 @@ pub(super) fn open_pixels(
         raw_open: None,
         raw_curve: None,
         raw_source: raw,
+        raw_proxy: raw_proxy_ok,
         pending: None,
         preview_error: None,
         gpu,
