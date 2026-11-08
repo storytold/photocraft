@@ -487,6 +487,11 @@ fn a_raw_source_develops_as_open_does() {
     }
     assert!(source.develop_proxy(&RawTuning { exposure: f32::NAN, ..Default::default() }).is_err());
     assert!(RawSource::new(b"not a raw", 4).is_err());
+    // A frame that can't be binned by the factor (smaller than a block here) is developed whole
+    // and box-averaged to the size the preview asks for.
+    let whole = RawSource::new(&bytes, 500).unwrap();
+    let small = whole.develop_proxy(&RawTuning { exposure: -1.0, ..Default::default() }).unwrap();
+    assert_eq!((small.width, small.height, small.rgb.len()), (1, 1, 3));
 }
 
 #[test]

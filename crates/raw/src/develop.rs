@@ -222,7 +222,7 @@ pub(crate) fn grey_world(s: &Sensor, sc: &Scale) -> [f64; 3] {
     mean.map(|v| v / m)
 }
 
-fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
+pub(crate) fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
     let m = n.iter().cloned().fold(f64::MIN, f64::max);
     (m > 0.0 && n.iter().all(|v| v.is_finite() && *v > 1e-4)).then(|| n.map(|v| v / m))
 }

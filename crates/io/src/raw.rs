@@ -145,9 +145,34 @@ fn tuned_options(sensor: &Sensor, camera_look: Option<CameraLook>, tuning: &RawT
 /// rendering.
 pub struct RawSource {
     full: Sensor,
-    proxy: Sensor,
+    /// The binned frame; `None` when the frame can't be binned by the factor (too small, or a CFA
+    /// pattern whose blocks would miss a colour): the preview then develops the whole frame and
+    /// box-averages it by `shrink`.
+    proxy: Option<Sensor>,
+    shrink: usize,
     look: Option<CameraLook>,
     curve: Vec<[f32; 2]>,
+}
+
+/// `p` box-averaged by `k` (blocks of `k`×`k`, the last row and column of blocks cut short), as
+/// the dialog's proxy averages the developed document.
+fn shrink_rgb(p: RawPixels, k: usize) -> RawPixels {
+    if k <= 1 || p.width == 0 || p.height == 0 || p.rgb.len() < p.width * p.height * 3 {
+        return p;
+    }
+    let (w, h) = (p.width.div_ceil(k), p.height.div_ceil(k));
+    let mut acc = vec![[0u64; 4]; w * h];
+    for (i, px) in p.rgb.as_chunks::<3>().0.iter().take(p.width * p.height).enumerate() {
+        let (x, y) = (i % p.width, i / p.width);
+        if let Some(a) = acc.get_mut((y / k) * w + x / k) {
+            for c in 0..3 {
+                a[c] += u64::from(px[c]);
+            }
+            a[3] += 1;
+        }
+    }
+    let rgb = acc.iter().flat_map(|a| (0..3).map(move |c| (a[c] + a[3] / 2).checked_div(a[3]).unwrap_or(0) as u16)).collect();
+    RawPixels { width: w, height: h, rgb, white_balance: p.white_balance }
 }
 
 /// A develop of a [`RawSource`]: interleaved 16-bit RGB in the default open's colour space (the
@@ -169,8 +194,10 @@ impl RawSource {
             Some(look) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
             None => full.tone_curve.clone(),
         };
-        let proxy = photocraft_raw::binned(&full, factor).map_err(IoError::Raw)?;
-        Ok(RawSource { full, proxy, look, curve })
+        let binned = photocraft_raw::binned(&full, factor).map_err(IoError::Raw)?;
+        let proxy = (binned.width != full.width || binned.height != full.height).then_some(binned);
+        let shrink = if proxy.is_some() { 1 } else { factor.max(1) };
+        Ok(RawSource { full, proxy, shrink, look, curve })
     }
 
     /// The tone curve the file develops with by default, as [`tone_curve`] gives it.
@@ -179,9 +206,13 @@ impl RawSource {
     }
 
     /// The binned frame developed with `tuning` (its demosaic method does not apply: the binned
-    /// frame needs none).
+    /// frame needs none). A frame that can't be binned is developed whole and box-averaged to the
+    /// same size, so the preview still develops from the sensor data.
     pub fn develop_proxy(&self, tuning: &RawTuning) -> Result<RawPixels, IoError> {
-        self.develop(&self.proxy, tuning)
+        match &self.proxy {
+            Some(proxy) => self.develop(proxy, tuning),
+            None => self.develop(&self.full, tuning).map(|p| shrink_rgb(p, self.shrink)),
+        }
     }
 
     /// The whole frame developed with `tuning`, as [`import_raw_tuned`] develops it.

@@ -225,7 +225,9 @@ pub(super) fn open_pixels(
         curve_rect: None,
         render_ms: 0.0,
         raw_open: None,
-        raw_curve: None,
+        // The raw's tone curve: the full-size preview and, without the binned proxy, the fitted
+        // one retone with it from the first render on.
+        raw_curve: raw.as_ref().map(|(s, _)| std::sync::Arc::new(s.tone_curve().to_vec())),
         raw_source: raw,
         raw_proxy: raw_proxy_ok,
         pending: None,
@@ -238,6 +240,8 @@ pub(super) fn open_pixels(
         redo: Vec::new(),
         edit_origin: None,
     };
+    d.detail.raw_curve = d.raw_curve.clone();
+    d.detail.raw = d.raw_source.clone();
     d.render(ctx);
     app.camera_raw = Some(d);
     Ok(())

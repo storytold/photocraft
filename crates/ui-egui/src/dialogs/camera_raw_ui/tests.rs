@@ -1335,3 +1335,24 @@ fn done_keeps_the_raws_open_when_a_sidecar_write_fails() {
     assert!(app.camera_raw.is_none() && !app.ui.status_error, "{}", app.ui.status);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Auto reads the default develop at the preview's size, not the binned sensor proxy, so the
+/// dialog's Auto and Camera Raw Defaults' Auto for a raw Open develops unseen agree.
+#[test]
+fn auto_reads_the_default_develop_when_the_proxy_is_binned() {
+    let (mut app, _) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("bright.dng", &bright_raw()).unwrap();
+    let raw = take_queued(&mut app).unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    assert!(app.camera_raw.as_ref().unwrap().raw_proxy);
+    let mut expected = CameraRaw::default();
+    {
+        let (surf, area) = app.camera_raw.as_ref().unwrap().detail.source();
+        let (w, h) = (area.width() as usize, area.height() as usize);
+        photocraft_algo::camera_raw::auto_tone(&super::convert::box_proxy(surf, area, w, h).0, &mut expected);
+    }
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"auto": true}})).unwrap().unwrap();
+    assert_eq!(r["params"]["exposure"].as_f64().map(|v| v as f32), Some(expected.exposure));
+    assert_eq!(r["params"]["whites"].as_f64().map(|v| v as f32), Some(expected.whites));
+}
