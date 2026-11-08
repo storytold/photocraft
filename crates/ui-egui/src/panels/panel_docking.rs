@@ -118,10 +118,58 @@ pub(crate) fn dock_is_empty(app: &PhotocraftApp) -> bool {
 /// built from the native dock.
 pub(crate) fn dock_width(app: &PhotocraftApp) -> f32 {
     let width = app.ui.docking.as_ref().and_then(|workspace| match workspace.layout.root.as_ref().and_then(end_dock_node) {
-        Some(Node::Dock { columns, .. }) if !columns.is_empty() => Some(columns.iter().map(|column| column.width).sum::<f32>()),
+        Some(Node::Dock { columns, .. }) if !columns.is_empty() => Some(columns.iter().map(display_width).sum::<f32>()),
         _ => None,
     });
     width.unwrap_or_else(|| default_width(app.ui.theme.is_pro()))
+}
+
+/// A column's width as craft-ui displays it: `iconic_width` while collapsed to icons.
+fn display_width(column: &Column<String>) -> f32 {
+    if column.iconic { column.iconic_width.unwrap_or(column.width) } else { column.width }
+}
+
+/// Sets a column's displayed width, keeping `iconic_width` in step for an iconic column.
+fn set_display_width(column: &mut Column<String>, width: f32) {
+    let width = width.max(1.0);
+    column.width = width;
+    if column.iconic {
+        column.iconic_width = Some(width);
+    }
+}
+
+/// Scales every column so their displayed widths add up to `total`, each at least one point.
+/// Returns the resulting displayed total (rounding can differ by a point per column).
+fn scale_columns(columns: &mut [Column<String>], total: f32) -> f32 {
+    if columns.is_empty() {
+        return 0.0;
+    }
+    let current: f32 = columns.iter().map(display_width).sum();
+    let target = total.max(columns.len() as f32).max(1.0);
+    if current > 0.0 && (current - target).abs() < 0.5 {
+        return current;
+    }
+    if current <= 0.0 {
+        let even = target / columns.len() as f32;
+        for column in columns.iter_mut() {
+            set_display_width(column, even);
+        }
+    } else {
+        let scale = target / current;
+        for column in columns.iter_mut() {
+            set_display_width(column, display_width(column) * scale);
+        }
+    }
+    columns.iter().map(display_width).sum()
+}
+
+/// The end dock's columns, following the same horizontal second-child path as [`end_dock_node`].
+fn dock_columns_mut(node: &mut Node<String>) -> Option<&mut Vec<Column<String>>> {
+    match node {
+        Node::Dock { columns, .. } => Some(columns),
+        Node::Split { axis: SplitAxis::Horizontal, second, .. } => dock_columns_mut(second),
+        _ => None,
+    }
 }
 
 /// The window id of the Studio themes' floating Properties group in a layout built each frame:
@@ -566,6 +614,11 @@ thread_local! {
 /// Draw only the dock column, for the right-hand toolbox layout: the canvas is drawn separately
 /// to the toolbox's left.
 pub(crate) fn show_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    #[cfg(test)]
+    ui.ctx().data_mut(|data| {
+        let id = egui::Id::unique("photo-dock-show-calls");
+        data.insert_temp(id, data.get_temp::<u32>(id).unwrap_or(0) + 1);
+    });
     let previous = DOCK_ONLY.with(|flag| {
         let previous = flag.get();
         flag.set(true);
@@ -573,6 +626,13 @@ pub(crate) fn show_dock(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     let _guard = DockOnlyGuard(previous);
     show(app, ui);
+}
+
+/// How many times `show_dock` ran in this context (tests: the empty-dock path must still
+/// render floating windows through it).
+#[cfg(test)]
+pub(crate) fn show_dock_calls(ctx: &egui::Context) -> u32 {
+    ctx.data(|data| data.get_temp::<u32>(egui::Id::unique("photo-dock-show-calls")).unwrap_or(0))
 }
 
 /// Restores the previous dock-only flag when [`show_dock`] returns or unwinds.
@@ -849,30 +909,26 @@ fn pin_group_heights(ctx: &egui::Context, layout: &Layout<String>, actions: &mut
 /// An empty end dock has no column to store the width in; the request is a no-op until the
 /// dock gets a column.
 pub(crate) fn set_dock_width(app: &mut PhotocraftApp, width: f32) {
-    let Ok(mut workspace) = workspace_of(app) else { return };
-    let outer = match workspace.layout.root.as_ref().and_then(end_dock_node) {
-        Some(Node::Dock { columns, .. }) => {
-            let total: f32 = columns.iter().map(|column| column.width).sum();
-            columns.first().map(|column| (column.width, total, column.groups.iter().flat_map(|g| g.panels.first()).next().cloned()))
-        }
-        _ => None,
-    };
-    let Some((current, total, Some(panel))) = outer else { return };
-    let min = (total - current).max(0.0) + 1.0;
-    let next = (current + (width.max(min) - total)).max(1.0);
-    if next == current {
+    if !width.is_finite() || width <= 0.0 {
         return;
     }
-    workspace.locked = false;
-    if workspace.apply(Action::ResizeColumn { panel, width: next }, permissions).is_ok() {
-        workspace.locked = app.session.prefs().workspace_locked;
-        let mut actual = next;
-        if let Some(root) = workspace.layout.root.as_mut() {
-            resize_end_dock(root, width.max(min), &mut actual);
-        }
-        let returns = app.ui.docking_returns.clone();
-        commit(app, workspace, returns);
+    let Ok(mut workspace) = workspace_of(app) else { return };
+    let Some(root) = workspace.layout.root.as_mut() else { return };
+    let Some(columns) = dock_columns_mut(root) else { return };
+    if columns.is_empty() {
+        return;
     }
+    let actual = scale_columns(columns, width);
+    if actual <= 0.0 {
+        return;
+    }
+    // The columns already carry the requested total; this only brings the split holding the dock
+    // in step with it.
+    let mut split_width = actual;
+    resize_end_dock(root, actual, &mut split_width);
+    workspace.locked = app.session.prefs().workspace_locked;
+    let returns = app.ui.docking_returns.clone();
+    commit(app, workspace, returns);
 }
 
 /// Set the end dock's total width in place, keeping its columns' proportions and the horizontal
@@ -898,18 +954,7 @@ fn resize_end_dock(node: &mut Node<String>, total: f32, actual: &mut f32) -> boo
             if columns.is_empty() {
                 return false;
             }
-            let current: f32 = columns.iter().map(|column| column.width).sum();
-            if (current - total).abs() >= 0.5 {
-                if columns.len() == 1 {
-                    columns[0].width = total.max(1.0);
-                } else {
-                    let scale = total.max(1.0) / current.max(1.0);
-                    for column in columns.iter_mut() {
-                        column.width = (column.width * scale).max(1.0);
-                    }
-                }
-            }
-            *actual = columns.iter().map(|column| column.width).sum();
+            *actual = scale_columns(columns, total);
             true
         }
         Node::Split { axis: SplitAxis::Horizontal, second, size, .. } => {

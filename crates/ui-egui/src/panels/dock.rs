@@ -32,6 +32,26 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (min_dock, max_dock) = (*range.start(), *range.end());
     let locked = app.session.prefs().workspace_locked;
     let empty = crate::panel_docking::dock_is_empty(app);
+    if empty {
+        // Nothing to resize or draw in the dock column, but Studio draws its floating Properties
+        // group from the docking pass: keep that pass, on the full remaining area, with no column.
+        if rail_shown {
+            crate::direction::end_panel("dock-column").resizable(false).show_separator_line(false).exact_size(rw).frame(egui::Frame::NONE.fill(t.chrome)).show(
+                ui,
+                |ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let rect = ui.max_rect();
+                    let inner = rect.shrink2(egui::vec2(4.0, 8.0));
+                    let mut rail_ui = ui.new_child(egui::UiBuilder::new().max_rect(inner));
+                    rail_body(app, &mut rail_ui, &t);
+                },
+            );
+        }
+        crate::panel_docking::show_dock(app, ui);
+        crate::dock::persist(app, ui.ctx());
+        crate::color_panel_ui::persist(app);
+        return;
+    }
     // An empty dock takes no width: the standard layout gives it 0 rather than a blank column.
     let stored = if empty { 0.0 } else { crate::panel_docking::dock_width(app).clamp(min_dock, max_dock) };
     let drag_id = egui::Id::unique("dock-edge-drag");
@@ -49,11 +69,6 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     } else {
         stored + rw
     };
-    if panel_w <= 0.0 {
-        crate::dock::persist(app, ui.ctx());
-        crate::color_panel_ui::persist(app);
-        return;
-    }
     if drag.is_some() {
         crate::panel_docking::set_end_dock_total(app, (panel_w - rw).clamp(min_dock, max_dock));
     }
@@ -82,9 +97,11 @@ pub fn dock_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     dock_rect.min.x = rail_rect.right();
                 }
             }
+            let mut dock_ui = ui.new_child(egui::UiBuilder::new().max_rect(dock_rect));
+            // The docking pass also renders floating windows (Studio floats Properties over the
+            // canvas), so it runs even when the dock column itself is empty.
+            crate::panel_docking::show_dock(app, &mut dock_ui);
             if !empty {
-                let mut dock_ui = ui.new_child(egui::UiBuilder::new().max_rect(dock_rect));
-                crate::panel_docking::show_dock(app, &mut dock_ui);
                 // Block the docking layout's column-edge handle at the dock's content edge. It is
                 // registered before the resize handle so the handle wins where they overlap when
                 // the rail is hidden and both edges coincide.

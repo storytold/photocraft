@@ -1074,12 +1074,12 @@ fn the_toolbar_side_toggle_works_in_every_interface_theme() {
 }
 
 /// A dock-edge harness: draw only the dock column, as the dock-edge frame layout does.
-fn dock_edge_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
+fn dock_panel_harness(app: PhotocraftApp, size: egui::Vec2, theme: crate::theme::ThemeKind) -> Harness<'static, PhotocraftApp> {
     let mut ready = false;
     let mut harness = Harness::builder().with_size(size).with_step_dt(1.0 / 60.0).build_ui_state(
         move |ui, app: &mut PhotocraftApp| {
             if !ready {
-                PhotocraftApp::setup_context(ui.ctx(), crate::theme::ThemeKind::ProMedium);
+                PhotocraftApp::setup_context(ui.ctx(), theme);
                 ready = true;
                 return;
             }
@@ -1089,6 +1089,10 @@ fn dock_edge_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, P
     );
     harness.run_steps(4);
     harness
+}
+
+fn dock_edge_harness(app: PhotocraftApp, size: egui::Vec2) -> Harness<'static, PhotocraftApp> {
+    dock_panel_harness(app, size, crate::theme::ThemeKind::ProMedium)
 }
 
 /// The dock-edge handle resizes the dock and keeps the new width after release; a locked
@@ -1167,6 +1171,79 @@ fn ui_set_dock_width_scales_every_column() {
     };
     assert_eq!(widths.len(), 2, "both columns are kept");
     assert!(widths.iter().all(|width| *width > 0.0), "every column keeps a positive width: {widths:?}");
+
+    // A target smaller than the other column's expanded width must scale every column, not starve
+    // the first one while leaving the second untouched.
+    set_dock_width(&mut app, 250.0);
+    let after = total(&app);
+    assert!((after - 250.0).abs() < 1.0, "the whole dock should be 250 points, got {after}");
+    let widths: Vec<f32> = {
+        let root = app.ui.docking.as_ref().unwrap().layout.root.as_ref().unwrap();
+        let dock = match root {
+            Node::Split { second, .. } => second.as_ref(),
+            _ => root,
+        };
+        match dock {
+            Node::Dock { columns, .. } => columns.iter().map(|column| column.width).collect(),
+            _ => Vec::new(),
+        }
+    };
+    assert!(widths.iter().all(|width| *width < 250.0), "every column is scaled below the total: {widths:?}");
+    assert!(widths[1] < 180.0, "the second column must scale too: {widths:?}");
+}
+
+/// An empty dock must still run the docking pass, because Studio draws its floating Properties
+/// group from it, and the zero-width dock must not lose it with or without the rail.
+#[test]
+fn an_empty_dock_still_draws_studio_floating_properties() {
+    for rail in [true, false] {
+        let mut app = app();
+        let layout = Layout {
+            root: Some(Node::Split {
+                axis: SplitAxis::Horizontal,
+                size: SplitSize::FixedSecond(0.0),
+                first: Box::new(Node::Tabs { panels: vec![CANVAS.to_owned()], active: 0 }),
+                second: Box::new(Node::Dock { side: Side::End, columns: Vec::new() }),
+            }),
+            floating: vec![Floating::single(vec!["properties".to_owned()], 0, [120.0, 160.0, 320.0, 440.0])],
+        };
+        app.ui.docking = Some(Workspace::new(layout));
+        app.ui.panels.rail = rail;
+        let h = dock_panel_harness(app, vec2(1280.0, 800.0), crate::theme::ThemeKind::Studio);
+        assert!(dock_is_empty(h.state()), "rail={rail}: the dock is empty");
+        assert!(show_dock_calls(&h.ctx) > 0, "rail={rail}: the docking pass must still run for floating windows");
+        let rect = floating_rect(&h, "properties");
+        assert!(rect.is_positive(), "rail={rail}: floating Properties must be drawn, got {rect:?}");
+    }
+}
+
+/// A column collapsed to icons reserves its `iconic_width`, not the expanded width; resizing the
+/// edge keeps that iconic width in step.
+#[test]
+fn an_iconic_dock_column_takes_its_iconic_width() {
+    let mut app = app();
+    let mut layout = legacy(&app);
+    {
+        let root = layout.root.as_mut().expect("the legacy layout has a root");
+        let dock = match root {
+            Node::Split { second, .. } => second.as_mut(),
+            _ => root,
+        };
+        let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+        columns[0].iconic = true;
+        columns[0].iconic_width = Some(36.0);
+    }
+    app.ui.docking = Some(Workspace::new(layout));
+    assert!((dock_width(&app) - 36.0).abs() < 0.5, "the iconic column displays 36 points, got {}", dock_width(&app));
+    assert!(set_end_dock_total(&mut app, 220.0), "the dock-edge resize accepts an iconic dock");
+    assert!((dock_width(&app) - 220.0).abs() < 1.0, "after the resize the dock displays 220 points, got {}", dock_width(&app));
+    let root = app.ui.docking.as_ref().unwrap().layout.root.as_ref().unwrap();
+    let dock = match root {
+        Node::Split { second, .. } => second.as_ref(),
+        _ => root,
+    };
+    let Node::Dock { columns, .. } = dock else { panic!("the end dock is missing") };
+    assert!(columns[0].iconic_width.unwrap_or(0.0) > 200.0, "iconic_width follows the resize: {:?}", columns[0].iconic_width);
 }
 /// Closing every panel leaves the dock with nothing in it, which the dock-edge layout uses to
 /// take no width for the column.
