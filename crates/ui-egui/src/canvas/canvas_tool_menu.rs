@@ -465,7 +465,11 @@ pub const NOTES_MENU: &[Row] = &[
 /// Which notes-menu rows are live, as measured: off a note only New Note, Import Notes… and Delete
 /// All Notes; on a note Open, Delete and Delete All. With another tool on the note open in the
 /// Notes panel, Open Note greys and Close Note comes alive (with the Note tool it stays grey).
+/// Once another document is in front every row greys: none acts on a document it wasn't opened on.
 fn notes_enabled(app: &PhotocraftApp, n: &NotesMenu, command: &str) -> bool {
+    if !app.session.active().is_some_and(|d| d.doc.id.0 == n.document) {
+        return false;
+    }
     let any = app.session.active().is_some_and(|d| !d.doc.notes.is_empty());
     let note = menu_note(app, n);
     let open = note.is_some_and(|i| crate::analysis_ui::note_open(app, i));

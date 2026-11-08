@@ -200,3 +200,19 @@ fn a_rejected_delete_all_keeps_the_selected_note() {
     assert_eq!(notes(&app), 2, "nothing deleted");
     assert_eq!(app.ui.analysis.note_selected, Some(1), "the Notes panel keeps its note");
 }
+
+#[test]
+fn a_menu_for_another_document_acts_on_none_of_this_ones_notes() {
+    let (mut app, ctx) = app();
+    let menu = right_click(&mut app, &ctx, Tool::Note, [80.0, 80.0]);
+    // Another document comes to the front while the menu is open (over the control channel, say).
+    app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
+    app.run("notes.add", json!({"x": 20, "y": 20, "text": "three"})).unwrap();
+    app.sync_views();
+    assert_eq!(state(&app, &menu), want([false; 6]), "every row greys");
+    choose(&mut app, &ctx, NOTE_DELETE_ALL);
+    assert_eq!(notes(&app), 1, "Delete All Notes deletes nothing here");
+    app.ui.canvas_tool_menu = Some(menu);
+    choose(&mut app, &ctx, NOTE_NEW);
+    assert_eq!(notes(&app), 1, "New Note adds nothing here");
+}
