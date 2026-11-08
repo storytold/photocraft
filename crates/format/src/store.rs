@@ -460,6 +460,10 @@ pub(crate) fn load_reporting(src: &dyn ByteSource, opts: &LoadOptions) -> Result
     // Rolling the timeline back to its start makes its base the document.
     if let Some(t) = m.document.design_timeline.as_deref() {
         admit_canvas(t.base.size, opts)?;
+        // So does replaying a baked step that changed the canvas size.
+        for (d, _) in t.steps.iter().filter_map(|st| st.baked.as_ref()?.state.as_ref()) {
+            admit_canvas(d.size, opts)?;
+        }
     }
     let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
     let mut loader = Loader {

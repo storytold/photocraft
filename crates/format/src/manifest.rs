@@ -135,6 +135,9 @@ pub struct BakedM {
     /// The document's mode, depth and profile when the step changed them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<(ColorMode, SampleType, Option<Hash>)>,
+    /// Other document state the step changed: the document after it (no layers) and the fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<(Box<DocM>, Vec<String>)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

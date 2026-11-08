@@ -300,7 +300,10 @@ fn bad_params_are_errors() {
     ];
     for id in ["design.suppress", "design.unsuppress", "design.delete", "design.rollTo", "design.editStep"] {
         for p in &bad {
-            let _ = s.execute(id, p.clone());
+            let r = s.execute(id, p.clone());
+            // rollTo takes no `step` (and a missing `at` means the end), the rest no `at`.
+            let invalid = if id == "design.rollTo" { p == &json!({"at": -3}) || p == &json!({"at": 999}) } else { p == &json!({"step": -1}) };
+            assert!(!invalid || r.is_err(), "{id} accepted {p}");
         }
     }
     assert!(s.execute("design.start", json!({})).is_err(), "already on");
@@ -743,4 +746,176 @@ fn no_history_byte_limit_keeps_every_checkpoint() {
     let history = photocraft_ops::History::new(50);
     crate::timeline::budget_checkpoints(&history, &st.doc, &mut tl);
     assert!(tl.steps.iter().all(|st| st.checkpoint.0.is_some()), "{:?}", tl.steps.iter().map(|st| st.checkpoint.0.is_some()).collect::<Vec<_>>());
+}
+
+const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+/// The prelude commands of the timeline's last step in the active document.
+fn last_prelude(s: &Session) -> Vec<String> {
+    let tl = s.active().unwrap().doc.design_timeline.clone().unwrap();
+    tl.steps.last().unwrap().prelude.iter().map(|p| p.command.clone()).collect()
+}
+
+/// Rolling the marker back and forward replays a fill with the colour set before an earlier step.
+#[test]
+fn a_resumed_replay_keeps_the_tool_settings_of_the_steps_before_it() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("tools.setColors", json!({"foreground": RED})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 8, "y": 8, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    let want = doc(&s);
+    s.execute("tools.setColors", json!({"foreground": BLUE})).unwrap();
+    s.execute("design.rollTo", json!({"at": 4})).unwrap();
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(state(&mut s, 4), "ok");
+    assert_eq!(doc(&s), want, "the last fill replayed red");
+}
+
+/// A step in one document doesn't take the tool settings another document's next step needs.
+#[test]
+fn a_step_in_another_document_leaves_this_ones_tool_settings() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+    s.set_active(0);
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.set_active(1);
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    assert_eq!(last_prelude(&s), ["paint.setSymmetry"]);
+}
+
+/// A suppressed or deleted step's tool settings still reach the steps after it.
+#[test]
+fn a_suppressed_or_deleted_step_keeps_its_tool_settings() {
+    for cmd in ["design.suppress", "design.delete"] {
+        let mut s = started();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("tools.setColors", json!({"foreground": RED})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+        s.execute("select.all", json!({})).unwrap();
+        s.execute("edit.fillForeground", json!({})).unwrap();
+        let want = doc(&s);
+        s.execute("tools.setColors", json!({"foreground": BLUE})).unwrap();
+        let rect = step_id(&mut s, 1);
+        s.execute(cmd, json!({"step": rect})).unwrap();
+        assert_eq!(doc(&s), want, "{cmd}: the fill is still red");
+    }
+}
+
+/// Tool settings changed while a job runs go with the next step, not the job's.
+#[test]
+fn a_jobs_step_takes_the_tool_settings_from_when_it_started() {
+    let mut s = started();
+    let src = photocraft_doc::Document::new("p", photocraft_doc::Size::new(8, 8), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    let bytes = photocraft_io::export(&src, "p.png", &Default::default()).unwrap().bytes;
+    let crate::jobs::Started::Job(id) = s.start_place_bytes("p.png", bytes, None, json!({})).unwrap() else { panic!("expected a job") };
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.execute("paint.setSymmetry", json!({"mode": "vertical"})).unwrap();
+    s.wait_job(id).unwrap();
+    s.set_active(0);
+    assert!(!last_prelude(&s).contains(&"paint.setSymmetry".to_string()), "set after the job started");
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(last_prelude(&s).contains(&"paint.setSymmetry".to_string()), "it goes with the next step");
+}
+
+/// Clearing a targeted layer mask records the target, so replay clears the mask again.
+#[test]
+fn a_step_on_the_channels_panel_target_records_it() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.clear", json!({})).unwrap();
+    assert_eq!(steps(&mut s).last().unwrap()["params"]["target"], "mask");
+    let want = doc(&s);
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&s), want, "the mask was cleared, not the pixels");
+}
+
+/// Painting from a History state is baked: a replay session has no History panel.
+#[test]
+fn a_fill_from_history_replays_its_result() {
+    let mut s = started();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.execute("edit.fill", json!({"contents": "history"})).unwrap();
+    assert_eq!(steps(&mut s).last().unwrap()["baked"], true);
+    let want = doc(&s);
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(state(&mut s, 2), "ok");
+    assert_eq!(doc(&s), want);
+}
+
+/// A baked step keeps the document state it changed besides layers: imported data sets.
+#[test]
+fn a_baked_step_keeps_the_document_state_it_changed() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap().0;
+    s.execute("image.variables.define", json!({"defs": [{"name": "show", "layer": layer, "type": "visibility"}]})).unwrap();
+    let dir = std::env::temp_dir().join(format!("pc-design-sets-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let csv = dir.join("sets.csv");
+    std::fs::write(&csv, "DataSet,show\nrow,true\n").unwrap();
+    s.execute("file.import.variableDataSets", json!({"path": csv.to_string_lossy()})).unwrap();
+    assert_eq!(steps(&mut s).last().unwrap()["baked"], true, "it read a file");
+    let want = doc(&s);
+    assert_eq!(want.variables.data_sets.len(), 1);
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&s), want);
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let mut r = Session::new();
+    r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
+    r.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&r), want, "after a save and load too");
+}
+
+/// Conditional Mode Change records the colour settings its conversion ran with, as a mode
+/// change does, and a built-in working space by its id.
+#[test]
+fn a_conditional_mode_change_replays_with_the_colour_settings_it_ran_with() {
+    let mut s = Session::new();
+    s.execute("edit.colorSettings", json!({"workingRgb": "Adobe RGB (1998)", "intent": "perceptual", "bpc": false})).unwrap();
+    s.execute("file.new", json!({"width": 8, "height": 8, "mode": "gray", "depth": 8, "background": "white"})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("file.automate.conditionalModeChange", json!({"to": "rgb"})).unwrap();
+    let step = s.active().unwrap().doc.design_timeline.as_ref().unwrap().steps.last().unwrap().clone();
+    assert_eq!(step.params["profile"], "adobe-rgb-compat", "{}", step.params);
+    assert_eq!((&step.params["intent"], &step.params["bpc"]), (&json!("perceptual"), &json!(false)));
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let mut r = Session::new();
+    r.add_document(photocraft_format::load_from_bytes(&bytes).unwrap(), None);
+    let before = doc(&r);
+    r.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&r), before, "replayed with default settings, still the Adobe RGB conversion");
+}
+
+/// A step edited to name another layer acts on it even though the layer it acted on is gone.
+#[test]
+fn an_edited_step_may_replace_a_missing_target() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({"name": "A"})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "B"})).unwrap();
+    let b = s.active().unwrap().active_layer.unwrap().0;
+    s.execute("layer.select", json!({"layer": "A"})).unwrap();
+    s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+    let (new_a, props) = (step_id(&mut s, 0), step_id(&mut s, 2));
+    s.execute("design.suppress", json!({"step": new_a})).unwrap();
+    assert_eq!(state(&mut s, 2), "missingReference");
+    s.execute("design.editStep", json!({"step": props, "params": {"layer": b, "opacity": 0.25}})).unwrap();
+    assert_eq!(state(&mut s, 2), "ok");
+    assert_eq!(steps(&mut s)[2]["changed"], json!([b]));
+    // An edit naming no layer acts on none: the layer it ran on is still gone.
+    s.execute("design.editStep", json!({"step": props, "params": {"opacity": 0.75}})).unwrap();
+    assert_ne!(state(&mut s, 2), "ok");
 }

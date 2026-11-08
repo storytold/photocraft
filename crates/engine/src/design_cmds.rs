@@ -150,7 +150,11 @@ fn suppress(s: &mut Session, p: &Value, on: bool) -> Result<Value> {
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     change(s, "design.delete", "Delete Step", |tl| {
         let i = step_index("design.delete", tl, p)?;
-        tl.steps.remove(i);
+        let removed = tl.steps.remove(i);
+        // Its tool settings still feed the steps after it.
+        if let Some(next) = tl.steps.get_mut(i) {
+            next.prelude.splice(0..0, removed.prelude);
+        }
         if let Some(m) = tl.marker.as_mut()
             && i < *m
         {

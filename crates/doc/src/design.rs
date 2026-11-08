@@ -36,6 +36,22 @@ impl DesignTimeline {
     pub fn index_of(&self, step: u64) -> Option<usize> {
         self.steps.iter().position(|s| s.step == step)
     }
+
+    /// Every pixel surface a save writes for the timeline: the base and the baked results.
+    pub fn for_each_surface(&self, mut visit: impl FnMut(&crate::Surface)) {
+        self.base.for_each_surface(&mut visit);
+        for b in self.steps.iter().filter_map(|st| st.baked.as_deref()) {
+            for l in &b.layers {
+                crate::layer_surfaces(l, &mut visit);
+            }
+            if let Some(Some(sel)) = &b.selection {
+                visit(sel);
+            }
+            if let Some((doc, _)) = &b.state {
+                doc.for_each_surface(&mut visit);
+            }
+        }
+    }
 }
 
 /// A command run before a step that changed no document but feeds later ones (a foreground
@@ -120,7 +136,62 @@ pub struct Baked {
     /// The document's mode, depth and profile when the step changed them (Assign Profile, a mode
     /// change): document state no layer holds.
     pub color: Option<BakedColor>,
+    /// Any other document state the step changed (imported data sets, converted text styles, a
+    /// palette): the document after it, without layers, and the names of the fields it changed.
+    pub state: Option<(Arc<Document>, Vec<String>)>,
 }
+
+/// The document fields a baked step's `state` restores: all but those it keeps apart (`layers`,
+/// `selection`, the colour state) and identity. Destructured, so a new field fails to compile
+/// here until it is listed.
+macro_rules! doc_state {
+    ($($f:ident),* $(,)?) => {
+        /// The names of the [`doc_state`] fields `after` changed from `before`.
+        fn changed_state(before: &Document, after: &Document) -> Vec<String> {
+            let Document { id: _, name: _, layers: _, selection: _, mode: _, depth: _, icc_profile: _, design_timeline: _, $($f: _),* } = after;
+            let mut names = Vec::new();
+            $(if before.$f != after.$f { names.push(stringify!($f).to_string()); })*
+            names
+        }
+
+        /// Copy the [`doc_state`] field `name` from `src` into `dst` (an unknown name, from a
+        /// damaged file, copies nothing).
+        fn copy_state(dst: &mut Document, src: &Document, name: &str) {
+            match name {
+                $(stringify!($f) => dst.$f = src.$f.clone(),)*
+                _ => {}
+            }
+        }
+    };
+}
+
+doc_state!(
+    size,
+    resolution_dpi,
+    channels,
+    guides,
+    ruler_origin,
+    metadata,
+    global_light,
+    paths,
+    work_path,
+    clipping_path,
+    quick_mask,
+    quick_mask_unselected,
+    patterns,
+    color_table,
+    duotone,
+    layer_comps,
+    last_applied_comp,
+    last_document_state,
+    measurement,
+    notes,
+    text_styles,
+    slices,
+    variables,
+    timeline,
+    file_encoding,
+);
 
 impl Baked {
     /// What `after` holds of the `created` and `changed` layers, and its selection if it differs
@@ -141,7 +212,9 @@ impl Baked {
         let selection = (before.selection != after.selection).then(|| after.selection.clone());
         let color = ((before.mode, before.depth, &before.icc_profile) != (after.mode, after.depth, &after.icc_profile))
             .then(|| (after.mode, after.depth, after.icc_profile.clone()));
-        Baked { layers, placed, selection, color }
+        let fields = changed_state(before, after);
+        let state = (!fields.is_empty()).then(|| (Arc::new(Document { layers: Vec::new(), design_timeline: None, ..after.clone() }), fields));
+        Baked { layers, placed, selection, color, state }
     }
 
     /// Put the stored layers (and selection and colour state) into `doc` in place of the step's.
@@ -151,6 +224,11 @@ impl Baked {
         }
         if let Some((mode, depth, profile)) = &self.color {
             (doc.mode, doc.depth, doc.icc_profile) = (*mode, *depth, profile.clone());
+        }
+        if let Some((src, fields)) = &self.state {
+            for f in fields {
+                copy_state(doc, src, f);
+            }
         }
         for id in changed {
             match self.layers.iter().find(|l| l.id == *id) {
@@ -260,5 +338,19 @@ mod tests {
         baked.apply(&mut doc, &[mid_id], &[hid]);
         assert_eq!(doc, after);
         assert_eq!(baked.selection, None, "the selection didn't change");
+    }
+
+    #[test]
+    fn baked_state_restores_only_the_fields_the_step_changed() {
+        let before = Document::new("d", Size::new(4, 4), ColorMode::Rgb, SampleType::U8);
+        let mut after = before.clone();
+        after.resolution_dpi = 300.0;
+        let baked = Baked::capture(&before, &after, &[], &[]);
+        let mut doc = before.clone();
+        doc.ruler_origin = [5.0, 5.0];
+        baked.apply(&mut doc, &[], &[]);
+        assert_eq!(doc.resolution_dpi, 300.0);
+        assert_eq!(doc.ruler_origin, [5.0, 5.0], "a field the step didn't change keeps its value");
+        assert!(Baked::capture(&before, &before, &[], &[]).state.is_none());
     }
 }

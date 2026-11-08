@@ -1761,7 +1761,9 @@ impl Session {
         }
         let scope = photocraft_doc::IdScope::new(self.next_step).owned_by(self.scope_owner.0);
         let before = crate::timeline::capture(self);
-        let recorded = (!before.is_empty()).then(|| params.clone());
+        // With the Channels panel's target filled in, as the command runs: a replay session has
+        // no panel, so a cleared mask would clear the layer's pixels instead.
+        let recorded = (!before.is_empty()).then(|| crate::channel_cmds::inject_target(self, id, params.clone()));
         let timed = recorded.is_some();
         let r = {
             let _g = scope.enter();

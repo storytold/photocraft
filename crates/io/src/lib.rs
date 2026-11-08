@@ -1414,7 +1414,8 @@ mod tests {
         .unwrap();
         let baked = lookup("baked");
         step.created = vec![baked.id];
-        step.baked = Some(std::sync::Arc::new(photocraft_doc::design::Baked { layers: vec![baked], placed: Vec::new(), selection: None, color: None }));
+        step.baked =
+            Some(std::sync::Arc::new(photocraft_doc::design::Baked { layers: vec![baked], placed: Vec::new(), selection: None, color: None, state: None }));
         tl.steps.push(step);
         doc.design_timeline = Some(std::sync::Arc::new(tl));
         let w = super::open_warnings(&doc);

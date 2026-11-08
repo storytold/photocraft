@@ -326,6 +326,7 @@ fn design_timeline_m(t: &photocraft_doc::design::DesignTimeline, sink: &mut dyn 
                 selection_changed: b.selection.is_some(),
                 selection: b.selection.as_ref().and_then(|s| s.as_ref().map(|s| surface_m(s, sink))),
                 color: b.color.as_ref().map(|(mode, depth, profile)| (*mode, *depth, opt_blob(profile, sink))),
+                state: b.state.as_ref().map(|(doc, fields)| (Box::new(doc_m(doc, sink)), fields.clone())),
             }),
         })
         .collect();
@@ -692,6 +693,10 @@ impl Loader<'_> {
                     selection: if b.selection_changed { Some(self.opt_surface(&b.selection)?) } else { None },
                     color: match &b.color {
                         Some((mode, depth, profile)) => Some((*mode, *depth, self.opt_blob(profile)?)),
+                        None => None,
+                    },
+                    state: match &b.state {
+                        Some((d, fields)) => Some((Arc::new(self.document_only(d)?), fields.clone())),
                         None => None,
                     },
                 })),

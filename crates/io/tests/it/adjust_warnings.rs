@@ -195,7 +195,7 @@ fn a_short_lookup_only_a_baked_timeline_step_holds_warns_on_open() {
     }))
     .unwrap();
     step.created = vec![baked.id];
-    step.baked = Some(std::sync::Arc::new(Baked { layers: vec![baked], placed: Vec::new(), selection: None, color: None }));
+    step.baked = Some(std::sync::Arc::new(Baked { layers: vec![baked], placed: Vec::new(), selection: None, color: None, state: None }));
     let mut tl = DesignTimeline::new(std::sync::Arc::new(d.clone()));
     tl.steps.push(step);
     d.design_timeline = Some(std::sync::Arc::new(tl));

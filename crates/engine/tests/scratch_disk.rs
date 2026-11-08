@@ -100,6 +100,10 @@ fn scratch_pixels_history_and_failed_save_are_transactional() {
     assert_eq!(photocraft_format::load_from_bytes(&saved).unwrap().layers, healthy.layers);
     assert!(photocraft_io::export(&healthy, "png", &Default::default()).is_ok());
     assert!(retained.scratch_health().is_err());
+    // A tile only the design timeline's base holds counts too: a save writes it.
+    let mut timeline_only = (*healthy).clone();
+    timeline_only.design_timeline = Some(Arc::new(photocraft_doc::design::DesignTimeline::new(retained.clone())));
+    assert!(timeline_only.scratch_health().is_err());
 
     file.seek(SeekFrom::Start(0)).unwrap();
     file.write_all(&good).unwrap();

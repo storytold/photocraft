@@ -356,8 +356,8 @@ pub struct Session {
     /// This session as the owner of the id scopes it opens: one inside another session's command
     /// (a batch input, a package) runs its commands as its own steps, not nested in that command.
     pub(crate) scope_owner: ScopeOwner,
-    /// Tool-state commands since the last design-timeline step, replayed ahead of the next one.
-    pub(crate) timeline_prelude: Vec<photocraft_doc::design::Prelude>,
+    /// Tool-state commands since each timeline document's last step, replayed ahead of its next.
+    pub(crate) timeline_prelude: std::collections::HashMap<photocraft_doc::DocId, Vec<photocraft_doc::design::Prelude>>,
 }
 
 #[cfg(test)]

@@ -73,7 +73,7 @@ fn params_contain_ambient_path(id: &str, params: &Value) -> bool {
         | "layer.smartObjects.convertToLayers"
         | "layer.smartObjects.exportSvg"
         | "layer.smartObjects.updateSvg" => &["path"],
-        "image.mode.rgb" | "image.mode.grayscale" | "image.mode.cmyk" | "image.mode.lab" => &["profile"],
+        "image.mode.rgb" | "image.mode.grayscale" | "image.mode.cmyk" | "image.mode.lab" | "file.automate.conditionalModeChange" => &["profile"],
         "edit.assignProfile" | "edit.convertToProfile" | "edit.profileInfo" | "view.proofSetup" | "view.gamutWarning" => &["profile"],
         // New Document's Color Profile (#321) can name an .icc file.
         "file.new" => &["profile"],

@@ -112,7 +112,7 @@ impl IdScope {
 
     /// Install this scope on the current thread until the guard drops.
     pub fn enter(&self) -> IdScopeGuard {
-        IdScopeGuard(ID_SCOPE.with(|s| s.replace(Some(self.clone()))))
+        IdScopeGuard(ID_SCOPE.with(|s| s.replace(Some(self.clone()))), std::marker::PhantomData)
     }
 
     /// The next id of this step, or `None` once the step or its counter is out of range.
@@ -124,8 +124,14 @@ impl IdScope {
     }
 }
 
-/// Restores the previously installed [`IdScope`] on drop.
-pub struct IdScopeGuard(Option<IdScope>);
+/// Restores the previously installed [`IdScope`] on drop. Not `Send`: dropped on another thread,
+/// it would leave this thread scoped and install the old scope there.
+///
+/// ```compile_fail
+/// fn send<T: Send>() {}
+/// send::<photocraft_doc::IdScopeGuard>();
+/// ```
+pub struct IdScopeGuard(Option<IdScope>, std::marker::PhantomData<std::rc::Rc<()>>);
 
 impl Drop for IdScopeGuard {
     /// Reinstall the scope this guard replaced.
@@ -1209,26 +1215,8 @@ impl Document {
     /// masks, video frames (including the originals), channels, the quick mask, patterns and
     /// the selection. History snapshots and saves cover exactly these tiles.
     pub fn for_each_surface(&self, mut visit: impl FnMut(&Surface)) {
-        for (_, _, layer) in self.walk() {
-            if let Some(surface) = layer.surface() {
-                visit(surface);
-            }
-            if let Some(mask) = &layer.mask {
-                visit(&mask.surface);
-            }
-            if let Some(cache) = &layer.fill_cache {
-                visit(&cache.surface);
-            }
-            if let LayerContent::Smart(smart) = &layer.content
-                && let Some(mask) = &smart.filter_mask
-            {
-                visit(&mask.surface);
-            }
-            if let Some(video) = &layer.video {
-                for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
-                    visit(frame);
-                }
-            }
+        for layer in &self.layers {
+            layer_surfaces(layer, &mut visit);
         }
         for channel in self.channels.iter().chain(&self.quick_mask) {
             visit(&channel.surface);
@@ -1249,11 +1237,16 @@ impl Document {
             return Ok(());
         }
         let mut health = Ok(());
-        self.for_each_surface(|surface| {
+        let mut visit = |surface: &Surface| {
             if health.is_ok() {
                 health = surface.scratch_health();
             }
-        });
+        };
+        self.for_each_surface(&mut visit);
+        // A save writes the design timeline's base and baked results too.
+        if let Some(t) = &self.design_timeline {
+            t.for_each_surface(&mut visit);
+        }
         health
     }
 
@@ -1465,6 +1458,32 @@ impl Document {
     /// Top-most layer id, useful as the default active layer.
     pub fn top_layer(&self) -> Option<LayerId> {
         self.layers.last().map(|l| l.id)
+    }
+}
+
+/// Every pixel surface `layer` and the layers inside it hold (see [`Document::for_each_surface`]).
+pub(crate) fn layer_surfaces(layer: &Layer, visit: &mut impl FnMut(&Surface)) {
+    if let Some(surface) = layer.surface() {
+        visit(surface);
+    }
+    if let Some(mask) = &layer.mask {
+        visit(&mask.surface);
+    }
+    if let Some(cache) = &layer.fill_cache {
+        visit(&cache.surface);
+    }
+    if let LayerContent::Smart(smart) = &layer.content
+        && let Some(mask) = &smart.filter_mask
+    {
+        visit(&mask.surface);
+    }
+    if let Some(video) = &layer.video {
+        for frame in video.frames.iter().chain(video.original_frames.iter().flatten()) {
+            visit(frame);
+        }
+    }
+    for child in layer.children().unwrap_or_default() {
+        layer_surfaces(child, visit);
     }
 }
 
@@ -1801,7 +1820,7 @@ mod id_tests {
         };
         let mut base = new_doc();
         base.layers.push(layer_in(7));
-        let baked = Baked { layers: vec![layer_in(12)], placed: vec![], selection: None, color: None };
+        let baked = Baked { layers: vec![layer_in(12)], placed: vec![], selection: None, color: None, state: None };
         let step = DesignStep {
             step: 3,
             command: "x".into(),

@@ -21,7 +21,15 @@ pub(crate) struct Before {
     was_active: bool,
     /// A job's command left this document as it was when it started the job (`job_started`).
     untouched: bool,
+    /// The tool settings run since this document's last step: the step's prelude. Taken when the
+    /// command starts, so one changed while a job runs goes with the next step instead.
+    prelude: Vec<Prelude>,
+    /// The foreground and background colours when the command started, as `tools.setColors` takes them.
+    colors: Value,
 }
+
+/// The prelude command a step's colours are pinned with ([`with_colors`]).
+const COLORS: &str = "tools.setColors";
 
 /// Commands that change no document but feed the steps after them (tool colours and options).
 /// Only these are kept as a step's prelude: anything else that changes no document (saving,
@@ -51,7 +59,10 @@ pub const BAKED: &[&str] = &[
 fn bakes(id: &str, params: &Value) -> bool {
     // A Vanishing Point paste without a `layer` pastes the clipboard.
     let vp_clip = || params.get("paste").and_then(Value::as_array).is_some_and(|ps| ps.iter().any(|p| p.get("layer").is_none()));
-    BAKED.contains(&id) || (id == crate::vp_cmds::VP && vp_clip())
+    // These paint from a History panel state or snapshot, which a replay session doesn't hold.
+    let from_history = matches!(id, "paint.historyBrush" | "paint.artHistoryBrush")
+        || (id == "edit.fill" && params.get("contents").and_then(Value::as_str) == Some("history"));
+    BAKED.contains(&id) || (id == crate::vp_cmds::VP && vp_clip()) || from_history
 }
 
 /// The scratch session's gate: a timeline may come from a crafted file, so a replay stays inside
@@ -86,6 +97,8 @@ pub(crate) fn capture(s: &Session) -> Vec<Before> {
             selected: st.selected_layers.clone(),
             history_row: st.history.row_id(st.history.past_len()),
             untouched: false,
+            prelude: s.timeline_prelude.get(&st.doc.id).cloned().unwrap_or_default(),
+            colors: serde_json::json!({"foreground": s.tools.foreground, "background": s.tools.background}),
         })
         .collect()
 }
@@ -117,10 +130,12 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
     }
     let pinned = pin_color_settings(s, id, params);
     let params = pinned.as_ref().unwrap_or(params);
-    let mut recorded = false;
+    // Per document: (it took its prelude this many entries long, or it took none).
+    let mut took: Vec<(DocId, Option<usize>)> = Vec::new();
     // The document the command ran in: a step it made in another one names it as the source.
     let source = s.active().map(|st| st.doc.name.clone()).unwrap_or_default();
     for b in before {
+        took.push((b.doc, None));
         let Some(st) = s.docs.iter_mut().find(|st| st.doc.id == b.doc) else { continue };
         if Arc::ptr_eq(&st.doc, &b.state) {
             continue;
@@ -141,7 +156,7 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
             command: id.to_string(),
             params: resolve_names(&b.state, params),
             label: step_label(st.history.undo_label().unwrap_or(id), id, params, (!b.was_active).then_some(source.as_str())),
-            prelude: s.timeline_prelude.clone(),
+            prelude: with_colors(&b, st.doc.design_timeline.as_deref()),
             active: b.active,
             selected: b.selected,
             created,
@@ -168,13 +183,35 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
             }
         }
         budget_checkpoints(&st.history, &current, tl);
-        recorded = true;
+        if let Some(t) = took.last_mut() {
+            t.1 = Some(b.prelude.len());
+        }
     }
-    if recorded {
-        s.timeline_prelude.clear();
-    } else if PRELUDE.iter().any(|p| id.starts_with(p)) {
-        s.timeline_prelude.push(Prelude { command: id.to_string(), params: params.clone() });
+    // Each document's prelude runs from its own last step: one recorded elsewhere leaves it be.
+    let tool = PRELUDE.iter().any(|p| id.starts_with(p));
+    for (doc, n) in took {
+        let pending = s.timeline_prelude.entry(doc).or_default();
+        match n {
+            Some(n) => drop(pending.drain(..n.min(pending.len()))),
+            None if tool => pending.push(Prelude { command: id.to_string(), params: params.clone() }),
+            None => {}
+        }
     }
+    let docs = &s.docs;
+    s.timeline_prelude.retain(|d, p| !p.is_empty() && docs.iter().any(|st| st.doc.id == *d));
+}
+
+/// `b`'s prelude with the colours it started with pinned when they aren't those in effect at the
+/// marker of `tl`: colours also change outside the prelude (targeting a mask resets them), and the
+/// first step must not take today's. Every pin is a whole `tools.setColors`, so the last one in
+/// effect says which colours are, and an explicit one in the prelude is left out for it.
+fn with_colors(b: &Before, tl: Option<&photocraft_doc::design::DesignTimeline>) -> Vec<Prelude> {
+    let mut prelude: Vec<Prelude> = b.prelude.iter().filter(|p| p.command != COLORS).cloned().collect();
+    let in_effect = tl.and_then(|tl| tl.steps.iter().take(tl.in_effect()).rev().flat_map(|st| st.prelude.iter().rev()).find(|p| p.command == COLORS));
+    if in_effect.is_none_or(|p| p.params != b.colors) {
+        prelude.push(Prelude { command: COLORS.to_string(), params: b.colors.clone() });
+    }
+    prelude
 }
 
 /// A mode change's `params` with the Color Settings it ran with filled in: a replay (in a scratch
@@ -187,12 +224,22 @@ fn pin_color_settings(s: &Session, id: &str, params: &Value) -> Option<Value> {
         "image.mode.grayscale" => ColorMode::Grayscale,
         "image.mode.cmyk" => ColorMode::Cmyk,
         "image.mode.lab" => ColorMode::Lab,
+        // Conditional Mode Change passes these on to the mode change it runs.
+        "file.automate.conditionalModeChange" => match params.get("to").and_then(Value::as_str).map(str::to_ascii_lowercase).as_deref() {
+            Some("rgb") => ColorMode::Rgb,
+            Some("gray" | "grayscale") => ColorMode::Grayscale,
+            Some("cmyk") => ColorMode::Cmyk,
+            Some("lab") => ColorMode::Lab,
+            _ => return None,
+        },
         _ => return None,
     };
     let mut p = params.as_object().cloned().unwrap_or_default();
     if !p.contains_key("profile")
         && let Some((spec, _)) = s.color.working_setting(mode)
     {
+        // A built-in named another way ("Adobe RGB (1998)") is kept by its id, as every version reads it.
+        let spec = photocraft_cms::Builtin::from_id(spec).map_or(spec, |b| b.id());
         p.insert("profile".into(), spec.into());
     }
     p.entry("intent").or_insert_with(|| s.color.settings.intent().id().into());
@@ -315,6 +362,10 @@ pub(crate) fn replay(
             .ok_or_else(|| crate::EngineError::Other("internal error: no checkpoint to replay from".into()))?,
     };
     let mut r = scratch(seed, &resume);
+    // The tool settings the steps before `start` set, as a replay from the base has them.
+    for p in tl.steps.iter().take(start).flat_map(|st| &st.prelude) {
+        let _ = r.execute(&p.command, p.params.clone());
+    }
     for (i, step) in tl.steps.iter_mut().enumerate().take(end).skip(start) {
         ctx.check()?;
         ctx.progress((i - start) as f32 / (end - start) as f32, &format!("Step {} of {end}", i + 1));
@@ -339,18 +390,22 @@ fn run_step(r: &mut Session, step: &mut DesignStep) {
         step.state = state;
         step.checkpoint = Checkpoint(r.active().map(|st| st.doc.clone()));
     };
-    if step.suppressed {
-        return finish(r, step, StepState::Ok);
-    }
-    let missing: Vec<LayerId> = step.changed.iter().copied().filter(|id| pre.layer(*id).is_none()).collect();
-    if !missing.is_empty() {
-        return finish(r, step, StepState::MissingReference { layers: missing });
-    }
-    let placed_elsewhere = step.active.is_some_and(|a| pre.layer(a).is_none()) && !step.created.is_empty();
+    // Tool settings feed the later steps too, so they run even when the step doesn't.
     for p in &step.prelude {
         // A tool setting that no longer applies leaves the tool as it is.
         let _ = r.execute(&p.command, p.params.clone());
     }
+    if step.suppressed {
+        return finish(r, step, StepState::Ok);
+    }
+    let missing: Vec<LayerId> = step.changed.iter().copied().filter(|id| pre.layer(*id).is_none()).collect();
+    // A step whose params were edited to name another layer acts on that one, if it exists.
+    let named = step.params.get("layer").and_then(|v| v.as_u64().map(LayerId).or_else(|| v.as_str().and_then(|n| crate::commands::layer_named(&pre, n))));
+    let replaced = step.rerecord && named.is_some_and(|l| pre.layer(l).is_some());
+    if !missing.is_empty() && !replaced {
+        return finish(r, step, StepState::MissingReference { layers: missing });
+    }
+    let placed_elsewhere = step.active.is_some_and(|a| pre.layer(a).is_none()) && !step.created.is_empty();
     if let Some(st) = r.active_mut() {
         st.active_layer = step.active.filter(|a| pre.layer(*a).is_some());
         st.selected_layers = step.selected.iter().copied().filter(|id| pre.layer(*id).is_some()).collect();
