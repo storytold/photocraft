@@ -187,6 +187,9 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if app.camera_raw.is_none() && !app.raw_shelf.is_empty() {
+        super::filmstrip::clear_selection(&mut app.raw_shelf);
+    }
     if app.camera_raw.is_none()
         && !app.raw_shelf.is_empty()
         && let Err(e) = super::filmstrip::open_held(app, ctx, 0)
@@ -198,6 +201,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status_error = true;
     }
     let Some(d) = app.camera_raw.as_ref() else { return };
+    // Camera Raw's window is drawn from the main window's frame: while a filmstrip thumbnail waits
+    // to be redrawn, the main window keeps frames coming, whatever reaches the dialog's own window.
+    if super::filmstrip::thumbnails_pending(app) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(30));
+    }
     // Where the platform has no extra windows (the web build), draw over the main window.
     if ctx.embed_viewports() {
         draw(app, ctx, false);
@@ -248,7 +256,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         None => app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok()),
     };
     let mut action: Option<&str> = None;
-    let mut show_held: Option<usize> = None;
+    let mut film_click: Option<super::filmstrip::FilmClick> = None;
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
@@ -292,7 +300,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             let film = ERect::from_min_max(body.min, pos2(body.left() + film_w - 1.0, body.bottom()));
             painter.rect_filled(film, 0.0, t.dock);
             painter.line_segment([film.right_top(), film.right_bottom()], Stroke::new(1.0, t.separator));
-            show_held = super::filmstrip::filmstrip(ui, film, &mut app.raw_shelf, d.raw_open.as_ref().map(|r| r.document), &t);
+            film_click = super::filmstrip::filmstrip(ui, film, &mut app.raw_shelf, d.raw_open.as_ref().map(|r| r.document), &t);
+            // ⌘A selects every raw in the filmstrip. Application shortcuts don't run under the
+            // dialog (`shortcuts::preflight_keys`), so it never selects the document behind it.
+            if !ctx.text_edit_focused() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::A)) {
+                film_click = Some(super::filmstrip::FilmClick::SelectAll);
+            }
         }
         let preview_body =
             ERect::from_min_max(pos2(body.left() + film_w, body.top()), pos2((body.right() - PANEL_W).max(body.left() + film_w + 1.0), body.bottom()));
@@ -351,6 +364,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             ui.spacing_mut().item_spacing.y = 4.0;
             let p = &mut d.params;
             let proxy = &d.proxy;
+            let auto_all = &mut d.auto_all;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
             section(ui, "Light", true, |ui| {
@@ -358,6 +372,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 // chose, so each can be adjusted afterwards.
                 if ui.button(tl!("Auto")).on_hover_text(tl!("Set the tone sliders from the image")).clicked() {
                     photocraft_algo::camera_raw::auto_tone(proxy, p);
+                    *auto_all = true;
                     dirty = true;
                 }
                 tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
@@ -523,11 +538,30 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
     });
     crate::camera_raw_scope_ui::persist(app, ctx);
-    if let Some(i) = show_held
-        && let Err(e) = super::filmstrip::show_raw(app, ctx, i)
-    {
+    // This frame's edit reaches the other selected raws before another raw is shown or Open runs.
+    super::filmstrip::sync_selected(app);
+    let clicked = match film_click {
+        Some(super::filmstrip::FilmClick::Tile(i, shift, command)) => super::filmstrip::click(app, ctx, i, shift, command),
+        Some(super::filmstrip::FilmClick::SelectAll) => {
+            super::filmstrip::select_all(app);
+            Ok(())
+        }
+        None => Ok(()),
+    };
+    if let Err(e) = clicked {
         app.ui.status = e;
         app.ui.status_error = true;
+    }
+    // Thumbnails of raws an edit synced to, redrawn on workers once the drag ends. The dialog
+    // polls them: a worker can't wake an immediate viewport's window by itself.
+    if !ctx.input(|i| i.pointer.primary_down()) {
+        if super::filmstrip::refresh_thumbnails(app, false) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(30));
+        }
+        // The shown raw's own tile, from the preview once it has landed.
+        if super::filmstrip::refresh_shown_thumbnail(app) {
+            ctx.request_repaint();
+        }
     }
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()

@@ -144,7 +144,8 @@ fn tuned_options(sensor: &Sensor, camera_look: Option<CameraLook>, tuning: &RawT
 /// down for the fitted preview ([`photocraft_raw::binned`]) and the default open's colour
 /// rendering.
 pub struct RawSource {
-    full: Sensor,
+    /// `None` for [`RawSource::proxy_only`].
+    full: Option<Sensor>,
     proxy: Sensor,
     look: Option<CameraLook>,
     curve: Vec<[f32; 2]>,
@@ -170,7 +171,15 @@ impl RawSource {
             None => full.tone_curve.clone(),
         };
         let proxy = photocraft_raw::binned(&full, factor).map_err(IoError::Raw)?;
-        Ok(RawSource { full, proxy, look, curve })
+        Ok(RawSource { full: Some(full), proxy, look, curve })
+    }
+
+    /// [`RawSource::new`] without the whole frame (only [`Self::develop_proxy`]): a small source
+    /// to keep for a thumbnail, without holding on to the sensor data.
+    pub fn proxy_only(bytes: &[u8], factor: usize) -> Result<RawSource, IoError> {
+        let mut source = RawSource::new(bytes, factor)?;
+        source.full = None;
+        Ok(source)
     }
 
     /// The tone curve the file develops with by default, as [`tone_curve`] gives it.
@@ -184,9 +193,11 @@ impl RawSource {
         self.develop(&self.proxy, tuning)
     }
 
-    /// The whole frame developed with `tuning`, as [`import_raw_tuned`] develops it.
+    /// The whole frame developed with `tuning`, as [`import_raw_tuned`] develops it. An error
+    /// for a [`Self::proxy_only`] source.
     pub fn develop_full(&self, tuning: &RawTuning) -> Result<RawPixels, IoError> {
-        self.develop(&self.full, tuning)
+        let full = self.full.as_ref().ok_or_else(|| IoError::Raw(RawError::Malformed("this raw source keeps only its binned frame".into())))?;
+        self.develop(full, tuning)
     }
 
     fn develop(&self, sensor: &Sensor, tuning: &RawTuning) -> Result<RawPixels, IoError> {

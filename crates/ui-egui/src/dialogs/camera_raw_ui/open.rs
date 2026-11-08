@@ -148,6 +148,8 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
         && let Some(d) = app.camera_raw.as_mut()
     {
         photocraft_algo::camera_raw::auto_tone(&proxy, &mut d.params);
+        // Where the raw starts, not an edit for the other selected raws.
+        d.synced = d.params.clone();
         d.dirty = true;
     }
     attach_raw(app, raw);

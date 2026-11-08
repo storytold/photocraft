@@ -12,9 +12,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
         return Some(Err("Camera Raw params must be an object".into()));
     };
     if fields.is_empty() {
-        return Some(
-            open(app, ctx).map(|_| app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)),
-        );
+        return Some(open(app, ctx).map(|_| super::describe(app).unwrap_or(Value::Null)));
     }
     if let Some(sf) = params.get("smartFilter") {
         let opened = (|| {
@@ -24,7 +22,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
             let layer = sf.get("layer").and_then(Value::as_u64).ok_or("smartFilter.layer must be a layer id")?;
             let index = sf.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or("smartFilter.index must be a filter index")?;
             open_smart_filter(app, ctx, LayerId(layer), index)?;
-            Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null))
+            Ok(super::describe(app).unwrap_or(Value::Null))
         })();
         return Some(opened);
     }
@@ -34,7 +32,7 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     };
     for (key, value) in fields {
         match key.as_str() {
-            "set" | "scope" | "view" | "demosaic" => {}
+            "set" | "scope" | "view" | "demosaic" | "filmstrip" => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" if value.is_boolean() => {}
             "before" | "commit" | "cancel" | "done" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
@@ -53,6 +51,13 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
             }
             return Some(run(app));
         }
+    }
+    // A filmstrip click may show another raw (a new dialog), so it comes on its own.
+    if let Some(film) = ui.get("filmstrip") {
+        if fields.len() > 1 {
+            return Some(Err("Camera Raw filmstrip must be sent on its own".into()));
+        }
+        return Some(super::filmstrip::request(app, ctx, film).map(|()| super::describe(app).unwrap_or(Value::Null)));
     }
     let was_closed = app.camera_raw.is_none();
     let previous_view = app.ui.camera_raw_scope.clone();
@@ -139,6 +144,9 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         d.dirty = true;
         d.params = next_params;
     }
+    if ui.get("auto").and_then(Value::as_bool) == Some(true) {
+        d.auto_all = true;
+    }
     if let Some(b) = ui.get("before").and_then(Value::as_bool) {
         d.show_before = b;
     }
@@ -162,6 +170,8 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         d.ensure_scope(app.ui.camera_raw_scope.selected_region);
     }
     crate::camera_raw_scope_ui::persist(app, ctx);
+    // The edit reaches the other raws selected in the filmstrip before Open or Done reads them.
+    super::filmstrip::sync_selected(app);
     if ui.get("cancel").and_then(Value::as_bool) == Some(true) {
         cancel(app);
         return Some(Ok(json!({"cancelled": true})));
@@ -172,5 +182,7 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if ui.get("done").and_then(Value::as_bool) == Some(true) {
         return Some(Ok(super::filmstrip::done(app)));
     }
-    Some(Ok(app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)).unwrap_or(Value::Null)))
+    super::filmstrip::refresh_thumbnails(app, true);
+    super::filmstrip::refresh_shown_thumbnail(app);
+    Some(Ok(super::describe(app).unwrap_or(Value::Null)))
 }

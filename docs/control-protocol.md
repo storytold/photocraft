@@ -591,6 +591,20 @@ opens never show the dialog. The preference `rawDefaults.openInCameraRaw` (defau
 it off; `rawDefaults.demosaic` (`ahd` by default, `mhc`, `bilinear`; Preferences › Camera Raw)
 is the method the app's raw opens develop with (interactive opens, `app.open` and Place).
 
+**Several raws.** Raws opened together share the dialog, in a filmstrip on its left, each with
+its own settings; Open develops every one and Cancel closes every one. Several can be selected as
+in Camera Raw's filmstrip: a click selects one raw and shows it, Shift-click selects the range
+from the raw last clicked without Shift, ⌘-click (Ctrl on Windows and Linux) adds a raw and shows
+it or takes it out (another selected raw is shown when the shown one is taken out; the last one
+stays), and ⌘A or the filmstrip's Select All selects every raw (never the document behind the
+dialog). An edit to the shown raw changes the same settings, and only those, on every other
+selected raw: one Color Mixer band or grading-wheel slider at a time, a point curve whole. Each
+keeps its other settings and demosaic method; the grain seed stays per photograph, and Auto tones
+each raw from its own pixels. `params.ui.filmstrip` drives it and must be sent on its own:
+`{"click": index, "shift"?: bool, "command"?: bool}` or `{"selectAll": true}`. The reply and
+`ui.inspect.cameraRaw.filmstrip` list the raws as `{name, selected, shown, edited,
+thumbnailPending}`.
+
 Imported PSD Camera Raw filters whose processing settings are all mapped or neutral use this
 same editor. `params.__cameraRawPsd` is reserved import/export metadata: preserve it when editing
 stored parameters. Other processing fields or versions remain opaque Photoshop filters. See

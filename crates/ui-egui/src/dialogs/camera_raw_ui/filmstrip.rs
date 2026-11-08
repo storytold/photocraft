@@ -2,6 +2,11 @@
 //! dialog, as in Photoshop's. None is a document yet. Each keeps its own settings and demosaic
 //! choice when another is shown, Open develops every one into a document and Cancel drops every
 //! one.
+//!
+//! Several can be selected, as in Camera Raw's filmstrip: Shift-click selects a range, ⌘-click
+//! (Ctrl elsewhere) adds or removes one, ⌘A selects every raw. The shown raw is always one of
+//! them, and an edit to it changes the same settings on every other selected raw
+//! ([`sync_selected`]).
 
 use super::open::{Target, commit_open_raw, open_raw_with, return_on_failure};
 use super::sidecar::read_sidecar;
@@ -24,12 +29,40 @@ pub struct HeldRaw {
     /// The filmstrip thumbnail until it is first drawn, then its texture.
     pub(super) thumb: Option<egui::ColorImage>,
     tex: Option<egui::TextureHandle>,
+    /// In the filmstrip's selection. The shown raw always is, whether this is set or not.
+    pub(super) selected: bool,
+    /// Where the next Shift-click's range starts: the raw last clicked without Shift.
+    anchor: bool,
+    /// The thumbnail is older than `kept` (an edit synced from the shown raw): redrawn once the
+    /// edit ends.
+    pub(super) stale: bool,
+    /// What the thumbnail is developed from, built the first time it has to be redrawn.
+    source: Option<std::sync::Arc<ThumbSource>>,
+    /// The thumbnail being redrawn on a worker: its source and image, `None` when it failed.
+    redraw: Option<ThumbRedraw>,
+}
+
+/// A thumbnail redraw on a worker: its source and image, `None` when it failed.
+type ThumbRedraw = std::sync::mpsc::Receiver<Option<(std::sync::Arc<ThumbSource>, egui::ColorImage)>>;
+
+/// A filmstrip raw's pixels at thumbnail size and its camera tone curve, to develop its
+/// thumbnail with settings it was given without being shown.
+struct ThumbSource {
+    px: std::sync::Arc<Vec<[f32; 4]>>,
+    size: (usize, usize),
+    full_w: usize,
+    float: bool,
+    curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    /// The raw file binned to the thumbnail's size: synced raw-stage settings develop from the
+    /// sensor data, as Open does ([`super::ProxyJob`]). `None`: the file can't be read again.
+    raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+    encoding_gamma: f32,
 }
 
 impl HeldRaw {
     pub(super) fn new(app: &PhotocraftApp, raw: RawOpen) -> Self {
         let thumb = super::open::raw_document(app, &raw).and_then(|doc| thumbnail(app, &doc));
-        HeldRaw { raw, kept: None, thumb, tex: None }
+        HeldRaw { raw, kept: None, thumb, tex: None, selected: false, anchor: false, stale: false, source: None, redraw: None }
     }
 }
 
@@ -130,13 +163,18 @@ pub(super) fn first_settings(app: &PhotocraftApp, raw: &RawOpen) -> (CameraRaw, 
         return (loaded.clone(), Some(loaded));
     }
     let mut p = CameraRaw::default();
-    // From the pixels the dialog's Auto reads, so showing a raw doesn't change what Auto gives it.
-    if app.session.prefs().raw_defaults.apply_auto_tone
-        && let Some(proxy) = super::open::raw_document(app, raw).and_then(|doc| default_proxy(&doc))
-    {
-        photocraft_algo::camera_raw::auto_tone(&proxy, &mut p);
+    if app.session.prefs().raw_defaults.apply_auto_tone {
+        auto_tone(app, raw, &mut p);
     }
     (p, None)
+}
+
+/// Camera Raw's Auto for a filmstrip raw, from the pixels the dialog's Auto reads
+/// ([`default_proxy`]), so showing a raw doesn't change what Auto gives it.
+pub(super) fn auto_tone(app: &PhotocraftApp, raw: &RawOpen, p: &mut CameraRaw) {
+    if let Some(proxy) = super::open::raw_document(app, raw).and_then(|doc| default_proxy(&doc)) {
+        photocraft_algo::camera_raw::auto_tone(&proxy, p);
+    }
 }
 
 /// The default develop of a raw box-averaged to the preview's size: what Camera Raw Defaults ›
@@ -147,13 +185,30 @@ pub(super) fn default_proxy(doc: &photocraft_doc::Document) -> Option<Vec<[f32; 
     Some(super::convert::box_proxy(surf, area, w, h).0)
 }
 
-/// Open with raws in the filmstrip: the shown one as the dialog has it, then every other with
-/// its own settings. One reply for one raw, `{"opened": [...]}` for several. A raw leaves the
-/// filmstrip once it has opened or its background develop has started: one that fails stays or
-/// comes back there with its settings, so the dialog returns for it (or Cancel still closes it).
+/// Open with raws in the filmstrip: the shown one as the dialog has it, then every other selected
+/// one with its own settings, as Camera Raw's Open opens the selected images. The raws not
+/// selected are let go, as Cancel lets them go. One reply for one raw, `{"opened": [...]}` for
+/// several. A raw leaves the filmstrip once it has opened or its background develop has started:
+/// one that fails stays or comes back there with its settings, so the dialog returns for it (or
+/// Cancel lets it go).
 pub(super) fn open_all(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, original: &CameraRaw) -> Result<Value, String> {
     keep_settings(app);
-    let others: Vec<photocraft_doc::DocId> = app.raw_shelf.iter().map(|h| h.raw.document).filter(|id| *id != raw.document).collect();
+    let selected = selection(app);
+    let mut others = Vec::new();
+    let mut dropped = Vec::new();
+    for (held, selected) in app.raw_shelf.iter().zip(selected) {
+        if held.raw.document == raw.document {
+            continue;
+        }
+        if selected { others.push(held.raw.document) } else { dropped.push(held.raw.clone()) }
+    }
+    app.raw_shelf.retain(|h| !dropped.iter().any(|r| r.document == h.raw.document));
+    // Held raws were never documents; one shown from the session closes, as Cancel closes it.
+    for r in dropped.iter().filter(|r| r.held.is_none()) {
+        if let Some(index) = super::open::document_index(app, r.document) {
+            app.session.close(index);
+        }
+    }
     let first = commit_open_raw(app, params, raw, Some(original));
     if let Ok(v) = &first {
         return_on_failure(app, v, original);
@@ -238,9 +293,421 @@ pub(super) fn done(app: &mut PhotocraftApp) -> Value {
     json!({"done": true, "saved": saved})
 }
 
-/// The filmstrip of raws being opened: a thumbnail and name each, the shown one outlined, a dot
-/// on edited ones. Returns the one clicked.
-pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], current: Option<photocraft_doc::DocId>, t: &Tokens) -> Option<usize> {
+/// The index of the raw the dialog shows in the filmstrip, when it shows one of them.
+fn shown_index(app: &PhotocraftApp) -> Option<usize> {
+    let d = app.camera_raw.as_ref().filter(|d| d.target == Target::OpenRaw)?;
+    let shown = d.raw_open.as_ref()?.document;
+    app.raw_shelf.iter().position(|h| h.raw.document == shown)
+}
+
+/// Which filmstrip raws are selected: the ones marked, and the shown one.
+pub(super) fn selection(app: &PhotocraftApp) -> Vec<bool> {
+    let shown = shown_index(app);
+    app.raw_shelf.iter().enumerate().map(|(i, h)| h.selected || Some(i) == shown).collect()
+}
+
+/// Forgets the selection: a dialog that opens afresh shows one raw, selected alone.
+pub(super) fn clear_selection(shelf: &mut [HeldRaw]) {
+    for h in shelf {
+        (h.selected, h.anchor) = (false, false);
+    }
+}
+
+fn set_anchor(shelf: &mut [HeldRaw], at: usize) {
+    for (i, h) in shelf.iter_mut().enumerate() {
+        h.anchor = i == at;
+    }
+}
+
+/// A click on raw `i` of the filmstrip, as in Camera Raw's: alone it selects only that raw and
+/// shows it; with Shift it selects the range from the last raw clicked without Shift (with ⌘ as
+/// well, adds the range); with ⌘ (Ctrl on Windows and Linux) it adds the raw and shows it, or
+/// takes it out of the selection. The selection is never empty: the last selected raw stays,
+/// and when the shown raw is taken out another selected one is shown.
+pub(super) fn click(app: &mut PhotocraftApp, ctx: &egui::Context, i: usize, shift: bool, command: bool) -> Result<(), String> {
+    if i >= app.raw_shelf.len() {
+        return Err("no raw file at that place in the filmstrip".into());
+    }
+    let Some(shown) = shown_index(app) else { return Ok(()) };
+    let selected = selection(app);
+    // The shown raw is selected without a mark; marked now, it stays selected when another is shown.
+    for (h, s) in app.raw_shelf.iter_mut().zip(&selected) {
+        h.selected = *s;
+    }
+    if shift {
+        let anchor = app.raw_shelf.iter().position(|h| h.anchor).unwrap_or(shown);
+        let range = anchor.min(i)..=anchor.max(i);
+        for (k, h) in app.raw_shelf.iter_mut().enumerate() {
+            h.selected = range.contains(&k) || (command && h.selected);
+        }
+        set_anchor(&mut app.raw_shelf, anchor);
+        return show_raw(app, ctx, i);
+    }
+    set_anchor(&mut app.raw_shelf, i);
+    if command && selected.get(i) == Some(&true) {
+        if selected.iter().filter(|s| **s).count() < 2 {
+            return Ok(());
+        }
+        if i == shown {
+            // The next selected raw after it, else the nearest before it.
+            let next = (i + 1..selected.len()).chain((0..i).rev()).find(|k| selected.get(*k) == Some(&true));
+            if let Some(next) = next {
+                show_raw(app, ctx, next)?;
+            }
+        }
+        if let Some(h) = app.raw_shelf.get_mut(i) {
+            h.selected = false;
+        }
+        return Ok(());
+    }
+    for (k, h) in app.raw_shelf.iter_mut().enumerate() {
+        h.selected = k == i || (command && h.selected);
+    }
+    show_raw(app, ctx, i)
+}
+
+/// The control channel's filmstrip request: `{"click": index, "shift": bool, "command": bool}`
+/// clicks a raw as the pointer would, `{"selectAll": true}` is ⌘A.
+pub(super) fn request(app: &mut PhotocraftApp, ctx: &egui::Context, film: &Value) -> Result<(), String> {
+    let fields = film.as_object().ok_or("Camera Raw filmstrip must be an object")?;
+    if shown_index(app).is_none() {
+        return Err("the filmstrip is for raws being opened".into());
+    }
+    for (key, value) in fields {
+        match key.as_str() {
+            "click" => {}
+            "shift" | "command" | "selectAll" if value.is_boolean() => {}
+            "shift" | "command" | "selectAll" => return Err(format!("Camera Raw filmstrip {key} must be a boolean")),
+            _ => return Err(format!("unknown Camera Raw filmstrip property {key}")),
+        }
+    }
+    let flag = |k: &str| film.get(k).and_then(Value::as_bool) == Some(true);
+    match (film.get("click"), flag("selectAll")) {
+        (Some(_), true) => Err("Camera Raw filmstrip takes click or selectAll, not both".into()),
+        (None, true) => {
+            select_all(app);
+            Ok(())
+        }
+        (Some(i), false) => {
+            let i = i
+                .as_u64()
+                .and_then(|i| usize::try_from(i).ok())
+                .filter(|i| *i < app.raw_shelf.len())
+                .ok_or("filmstrip click must be the index of a raw in it")?;
+            click(app, ctx, i, flag("shift"), flag("command"))
+        }
+        (None, false) => Err("Camera Raw filmstrip needs click or selectAll".into()),
+    }
+}
+
+/// ⌘A in the filmstrip: every raw selected; the shown one stays shown.
+pub(super) fn select_all(app: &mut PhotocraftApp) {
+    for h in &mut app.raw_shelf {
+        h.selected = true;
+    }
+}
+
+/// Settings that belong to one photograph and never sync to the other selected raws: the grain
+/// pattern's seed, the preview scale and transfer curve PhotoCraft sets from each document, and
+/// Guided Upright's guides (`uprightGuides`, once Geometry lands), which are lines drawn on one
+/// picture. The Upright mode itself syncs, so each raw finds its own lines. Crop, masks and spot
+/// removal would join them here.
+const PER_IMAGE: [&str; 4] = ["seed", "pixelScale", "encodingGamma", "uprightGuides"];
+
+/// The settings Auto sets. With several raws selected Auto sets them on each from its own
+/// pixels, as Camera Raw's does, rather than copying the shown raw's.
+const AUTO_TONE: [&str; 6] = ["exposure", "contrast", "highlights", "shadows", "whites", "blacks"];
+
+/// `target` with what changed from `old` to `new`: a slider (one band of the Color Mixer, one
+/// part of a grading wheel) at a time; a point curve whole.
+fn merge_changes(old: &Value, new: &Value, target: &mut Value) {
+    if old == new {
+        return;
+    }
+    match (old, new, &mut *target) {
+        (Value::Object(o), Value::Object(n), Value::Object(t)) => {
+            for (k, v) in n {
+                if let (Some(was), Some(slot)) = (o.get(k), t.get_mut(k)) {
+                    merge_changes(was, v, slot);
+                }
+            }
+        }
+        (Value::Array(o), Value::Array(n), Value::Array(t))
+            if o.len() == n.len() && t.len() == n.len() && n.iter().all(Value::is_number) && o.iter().all(Value::is_number) =>
+        {
+            for ((was, v), slot) in o.iter().zip(n).zip(t.iter_mut()) {
+                if was != v {
+                    *slot = v.clone();
+                }
+            }
+        }
+        _ => *target = new.clone(),
+    }
+}
+
+/// Applies the shown raw's latest edit to every other selected raw: only the settings that changed
+/// since the last call, on top of each raw's own (the ones it was left with, else the ones Open
+/// would give it), so its other settings, what it started from and its demosaic choice stay. A
+/// raw changed so gets the edited dot, and its thumbnail is redrawn once the edit ends
+/// ([`refresh_thumbnails`]). Cheap when nothing changed: one comparison.
+pub(super) fn sync_selected(app: &mut PhotocraftApp) {
+    let Some(d) = app.camera_raw.as_mut() else { return };
+    if d.params == d.synced && !d.auto_all {
+        return;
+    }
+    let old = std::mem::replace(&mut d.synced, d.params.clone());
+    let auto = std::mem::take(&mut d.auto_all);
+    let new = d.params.clone();
+    let Some(shown) = shown_index(app) else { return };
+    let others: Vec<usize> = selection(app).iter().enumerate().filter(|(i, s)| **s && *i != shown).map(|(i, _)| i).collect();
+    if others.is_empty() {
+        return;
+    }
+    let (Ok(Value::Object(mut old)), Ok(Value::Object(mut new))) = (serde_json::to_value(&old), serde_json::to_value(&new)) else { return };
+    for k in PER_IMAGE.iter().chain(if auto { AUTO_TONE.as_slice() } else { &[] }) {
+        old.remove(*k);
+        new.remove(*k);
+    }
+    let (old, new) = (Value::Object(old), Value::Object(new));
+    if old == new && !auto {
+        return;
+    }
+    for i in others {
+        let Some(held) = app.raw_shelf.get(i) else { continue };
+        let raw = held.raw.clone();
+        let (base, original) = match held.kept.clone() {
+            Some(kept) => kept,
+            None => {
+                let (p, loaded) = first_settings(app, &raw);
+                (p, loaded.unwrap_or_default())
+            }
+        };
+        let Ok(mut merged) = serde_json::to_value(&base) else { continue };
+        merge_changes(&old, &new, &mut merged);
+        let Ok(mut next) = serde_json::from_value::<CameraRaw>(merged) else { continue };
+        if auto {
+            auto_tone(app, &raw, &mut next);
+        }
+        // A curve the shown raw takes is valid for every raw; this only guards the merge.
+        if next.validate_changes(&original).is_err() {
+            continue;
+        }
+        if next != base
+            && let Some(held) = app.raw_shelf.get_mut(i)
+        {
+            held.stale = true;
+            held.kept = Some((next, original));
+        }
+    }
+}
+
+/// Thumbnail redraws that build their source at once: the first redraw of a raw decodes and bins
+/// the whole raw (tens of megabytes for a while), so a Select All over many raws doesn't hold them
+/// all in memory together. The others wait their turn, still marked stale.
+const MAX_SOURCE_BUILDS: usize = 2;
+
+/// Redraws the thumbnails an edit synced from the shown raw left out of date, each on a worker:
+/// it develops the raw binned to thumbnail size as Open develops it, which the first time decodes
+/// the raw from its file (a few hundred milliseconds for a large raw). Takes in the ones that are
+/// done and starts the next. `wait`: finish them here (the control channel, so its reply shows
+/// them). `true` while one is still being drawn or waits, or one was just taken in, so the dialog
+/// draws again until they are all shown.
+pub(super) fn refresh_thumbnails(app: &mut PhotocraftApp, wait: bool) -> bool {
+    let mut busy = false;
+    // Twice: a raw edited again while its redraw ran starts the next one once that is in.
+    for i in (0..app.raw_shelf.len()).flat_map(|i| [i, i]) {
+        let Some(held) = app.raw_shelf.get(i) else { continue };
+        let building = app.raw_shelf.iter().filter(|h| h.redraw.is_some() && h.source.is_none()).count();
+        if held.stale && held.redraw.is_none() && held.source.is_none() && building >= MAX_SOURCE_BUILDS {
+            busy = true;
+        } else if held.stale && held.redraw.is_none() {
+            let job = thumb_job(app, held);
+            let Some(held) = app.raw_shelf.get_mut(i) else { continue };
+            held.stale = false;
+            match job {
+                Some(job) => held.redraw = Some(spawn_thumb(job)),
+                None => log::warn!("{}: no thumbnail for its synced settings", held.raw.name),
+            }
+        }
+        let Some(held) = app.raw_shelf.get_mut(i) else { continue };
+        let Some(rx) = &held.redraw else { continue };
+        let got = if wait { rx.recv().map_err(|_| std::sync::mpsc::TryRecvError::Disconnected) } else { rx.try_recv() };
+        match got {
+            Ok(done) => {
+                held.redraw = None;
+                busy = true;
+                if let Some((source, image)) = done {
+                    held.source = Some(source);
+                    held.thumb = Some(image);
+                    held.tex = None;
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => busy = true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => held.redraw = None,
+        }
+    }
+    busy
+}
+
+/// Whether a filmstrip thumbnail still waits to be redrawn: another raw's, or the shown raw's
+/// while its preview hasn't caught up with an edit.
+pub(super) fn thumbnails_pending(app: &PhotocraftApp) -> bool {
+    let shown_behind =
+        shown_index(app).is_some() && app.camera_raw.as_ref().is_some_and(|d| d.thumb_revision != d.preview_revision || d.dirty || d.render_pending());
+    shown_behind || app.raw_shelf.iter().any(|h| h.stale || h.redraw.is_some())
+}
+
+/// The shown raw's thumbnail follows its edits, as Camera Raw's does: from the dialog's own
+/// preview once it has caught up with the edit (no develop of its own), and only when the
+/// preview has changed since. `true` when it was redrawn (its texture loads on the next frame).
+pub(super) fn refresh_shown_thumbnail(app: &mut PhotocraftApp) -> bool {
+    let Some(i) = shown_index(app) else { return false };
+    let Some(d) = app.camera_raw.as_mut() else { return false };
+    if d.dirty || d.render_pending() || d.thumb_revision == d.preview_revision || d.processed.is_empty() {
+        return false;
+    }
+    d.thumb_revision = d.preview_revision;
+    let Some(held) = app.raw_shelf.get_mut(i) else { return false };
+    let (px, w, h) = shrink(&d.processed, d.pw, d.ph);
+    held.thumb = Some(CameraRawDialog::image(&px, w, h, &d.display));
+    held.tex = None;
+    true
+}
+
+/// Everything one thumbnail redraw reads, owned, so it can run off the UI thread.
+struct ThumbJob {
+    params: CameraRaw,
+    source: Result<std::sync::Arc<ThumbSource>, (photocraft_raster::Surface, photocraft_geom::Rect, RawOpen, f32)>,
+    display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
+}
+
+fn thumb_job(app: &PhotocraftApp, held: &HeldRaw) -> Option<ThumbJob> {
+    let (params, _) = held.kept.clone()?;
+    // A held raw: not a document, so not in the session.
+    let doc = super::open::raw_document(app, &held.raw)?;
+    let display = app.session.color.canvas_display(&doc).ok()?;
+    let source = match &held.source {
+        Some(source) => Ok(source.clone()),
+        None => {
+            let surf = doc.layers.iter().find_map(|l| l.surface())?.clone();
+            Err((surf, doc.bounds(), held.raw.clone(), photocraft_engine::lens_cmds::encoding_gamma(&doc)))
+        }
+    };
+    Some(ThumbJob { params, source, display })
+}
+
+fn spawn_thumb(job: ThumbJob) -> ThumbRedraw {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let work = move || {
+        let drawn = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| draw_thumb(job))).ok().flatten();
+        let _ = tx.send(drawn);
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Err(e) = std::thread::Builder::new().name("camera-raw-thumbnail".into()).spawn(work) {
+        log::warn!("no thread for a Camera Raw thumbnail: {e}");
+    }
+    #[cfg(target_arch = "wasm32")]
+    work();
+    rx
+}
+
+fn draw_thumb(job: ThumbJob) -> Option<(std::sync::Arc<ThumbSource>, egui::ColorImage)> {
+    let source = match job.source {
+        Ok(source) => source,
+        Err((surf, bounds, raw, encoding_gamma)) => std::sync::Arc::new(thumb_source(&surf, bounds, &raw, encoding_gamma)?),
+    };
+    let mut params = job.params;
+    if params.encoding_gamma == 0.0 {
+        params.encoding_gamma = source.encoding_gamma;
+    }
+    let frame = super::ProxyJob {
+        proxy: source.px.clone(),
+        selection: None,
+        raw_curve: source.curve.clone(),
+        raw_source: source.raw.clone(),
+        params,
+        float: source.float,
+        size: source.size,
+        full_w: source.full_w,
+        display: job.display,
+        gpu: None,
+        source_key: 0,
+    }
+    .run();
+    Some((source, frame.image))
+}
+
+/// The filmstrip as the control channel describes it: each raw's name, whether it is selected,
+/// shown, edited, and whether its thumbnail still waits for an edit synced to it.
+pub(crate) fn describe(app: &PhotocraftApp) -> Value {
+    let shown = shown_index(app);
+    // The shown raw's settings are the dialog's until it is left.
+    let live = app.camera_raw.as_ref().map(|d| &d.params);
+    let shown_behind = app.camera_raw.as_ref().is_some_and(|d| d.thumb_revision != d.preview_revision || d.dirty || d.render_pending());
+    json!(
+        app.raw_shelf
+            .iter()
+            .zip(selection(app))
+            .enumerate()
+            .map(|(i, (h, selected))| json!({
+                "name": h.raw.name,
+                "selected": selected,
+                "shown": Some(i) == shown,
+                "edited": if Some(i) == shown { live.is_some_and(|p| !p.is_identity()) } else { h.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) },
+                "thumbnailPending": h.stale || h.redraw.is_some() || (Some(i) == shown && shown_behind),
+            }))
+            .collect::<Vec<_>>()
+    )
+}
+
+/// [`ThumbSource`] of a filmstrip raw: its developed pixels at thumbnail size, and the camera tone
+/// curve the dialog would read from its file.
+fn thumb_source(surf: &photocraft_raster::Surface, bounds: photocraft_geom::Rect, raw: &RawOpen, encoding_gamma: f32) -> Option<ThumbSource> {
+    let (area, w, h) = super::convert::preview_area(bounds, surf).ok()?;
+    // The raw binned straight to the thumbnail's size, as the dialog's proxy is to its own.
+    let k = w.max(h).div_ceil(THUMB_SIDE).max(1);
+    let (tw, th) = (w.div_ceil(k), h.div_ceil(k));
+    let bytes = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => Some(b.as_ref().clone()),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => std::fs::read(p).ok(),
+        _ => None,
+    };
+    let source = bytes.and_then(|b| photocraft_io::raw::RawSource::proxy_only(&b, k).ok());
+    let developed = source.as_ref().and_then(|s| super::convert::raw_proxy(s, &Default::default(), tw, th));
+    let (px, size, raw_source, curve) = match (developed, source) {
+        (Some((px, _)), Some(s)) => {
+            let curve = std::sync::Arc::new(s.tone_curve().to_vec());
+            (px, (tw, th), Some(std::sync::Arc::new(s)), Some(curve))
+        }
+        _ => {
+            let (proxy, pw, ph, _) = super::convert::box_proxy(surf, area, w, h);
+            let (px, tw, th) = shrink(&proxy, pw, ph);
+            (px, (tw, th), None, None)
+        }
+    };
+    Some(ThumbSource {
+        px: std::sync::Arc::new(px),
+        size,
+        full_w: w,
+        float: surf.format().sample == photocraft_color::SampleType::F32,
+        curve,
+        raw: raw_source,
+        encoding_gamma,
+    })
+}
+
+/// What a click in the filmstrip asks for.
+pub(super) enum FilmClick {
+    /// Raw `.0`, with Shift (`.1`) or ⌘ (`.2`) held.
+    Tile(usize, bool, bool),
+    /// Select All (the filmstrip's context menu).
+    SelectAll,
+}
+
+/// The filmstrip of raws being opened: a thumbnail and name each, the shown one outlined, the
+/// other selected ones highlighted, a dot on edited ones. Returns what was clicked.
+pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], current: Option<photocraft_doc::DocId>, t: &Tokens) -> Option<FilmClick> {
     let mut clicked = None;
     let mut film = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(6.0, 6.0))));
     film.set_clip_rect(rect.intersect(ui.clip_rect()));
@@ -255,7 +722,11 @@ pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], c
             }
             let (tile, response) = ui.allocate_exact_size(vec2(w, w * 0.75 + 18.0), Sense::click());
             let frame = ERect::from_min_size(tile.min, vec2(w, w * 0.75));
+            let shown = Some(held.raw.document) == current;
+            let selected = held.selected || shown;
             let p = ui.painter();
+            // Selected: a highlighted tile (thumbnail and name); the shown raw is outlined as well.
+            p.rect_filled(tile, 2.0, if selected { t.row_selected } else { Color32::TRANSPARENT });
             p.rect_filled(frame, 2.0, if response.hovered() { t.hover } else { t.canvas });
             if let Some(tex) = &held.tex {
                 let size = tex.size_vec2();
@@ -264,7 +735,7 @@ pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], c
                 widgets::checker(p, r, 6.0);
                 p.image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            if Some(held.raw.document) == current {
+            if shown {
                 p.rect_stroke(frame, 2.0, Stroke::new(2.0, t.accent), egui::StrokeKind::Inside);
             }
             if held.kept.as_ref().is_some_and(|(p, _)| !p.is_identity()) {
@@ -275,10 +746,17 @@ pub(super) fn filmstrip(ui: &mut egui::Ui, rect: ERect, shelf: &mut [HeldRaw], c
             let label = tail_fitting(p, &held.raw.name, font.clone(), name.width());
             p.with_clip_rect(name).text(name.center(), Align2::CENTER_CENTER, label, font, t.text_dim);
             let response = response.on_hover_text(&held.raw.name);
-            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, Some(held.raw.document) == current, &held.raw.name));
+            response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &held.raw.name));
             if response.clicked() {
-                clicked = Some(i);
+                let m = ui.input(|i| i.modifiers);
+                clicked = Some(FilmClick::Tile(i, m.shift, m.command));
             }
+            response.context_menu(|ui| {
+                if ui.button(tl!("Select All")).clicked() {
+                    clicked = Some(FilmClick::SelectAll);
+                    ui.close();
+                }
+            });
         }
     });
     clicked

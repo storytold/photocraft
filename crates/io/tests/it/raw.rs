@@ -487,6 +487,9 @@ fn a_raw_source_develops_as_open_does() {
     }
     assert!(source.develop_proxy(&RawTuning { exposure: f32::NAN, ..Default::default() }).is_err());
     assert!(RawSource::new(b"not a raw", 4).is_err());
+    let small = RawSource::proxy_only(&bytes, 4).unwrap();
+    assert!(small.develop_full(&RawTuning::default()).is_err(), "no whole frame kept");
+    assert_eq!(small.develop_proxy(&RawTuning::default()).unwrap().rgb, source.develop_proxy(&RawTuning::default()).unwrap().rgb);
 }
 
 #[test]
