@@ -108,6 +108,10 @@ fn magic_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     let region = sel::wand_region(&img, area, (x, y), tolerance, contiguous, anti_alias);
     drop(img);
     let Some(region) = region else { return Ok(damage(s, Rect::EMPTY, false)) };
+    // A region wholly outside the selection erases nothing and records no history step (#11997).
+    if s.active().and_then(|d| d.doc.selection.as_ref()).is_some_and(|m| !photocraft_algo::erase::region_selected(&region, m)) {
+        return Ok(damage(s, Rect::EMPTY, false));
+    }
     let bg = s.tools.background;
     let channels = crate::color_channels::target(s, p)?.is_some();
     let dmg = s.edit("Magic Eraser", |doc, _| {
