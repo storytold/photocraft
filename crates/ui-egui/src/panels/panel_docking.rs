@@ -621,6 +621,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut actions = output.actions;
     pin_group_heights(ui.ctx(), &layout, &mut actions);
     for action in actions {
+        let new_column = new_column_panel(&action);
         let result = match action {
             // A dock group minimizes as PhotoCraft's collapsed group, which the native dock's
             // collapse also sets.
@@ -628,6 +629,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 group_command(app, &json!({"panel": panel, "operation": if minimized {"collapse"} else {"expand"}}))
             }
             action => app.run("window.panel.layout", json!({"action": action})),
+        };
+        // A panel dropped beside a dock column starts collapsed to icons, so the new column does
+        // not take its full width from the canvas.
+        let result = match (result, new_column) {
+            (Ok(_), Some(panel)) => app.run("window.panel.layout", json!({"action": Action::SetIconic { panel, iconic: true }})),
+            (result, _) => result,
         };
         if let Err(error) = result {
             app.ui.status = error;
@@ -637,6 +644,17 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if let Err(error) = app.run(id, params) {
             app.ui.status = error;
         }
+    }
+}
+
+/// The panel a drag drops into a new dock column beside an existing one, if `action` does that.
+fn new_column_panel(action: &Action<String>) -> Option<String> {
+    match action {
+        Action::Move { panel, placement: Placement::Column { .. }, .. }
+        | Action::MovePanel { panel, to: Target::At { placement: Placement::Column { .. }, .. } }
+        | Action::MoveGroup { panel, to: Target::At { placement: Placement::Column { .. }, .. } }
+        | Action::MoveWindow { panel, to: Target::At { placement: Placement::Column { .. }, .. } } => Some(panel.clone()),
+        _ => None,
     }
 }
 

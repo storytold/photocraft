@@ -931,3 +931,47 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert_eq!(columns[0].width, 380.0);
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
+
+/// Whether the dock column holding `panel` is iconic, or `None` when no dock column holds it.
+fn column_iconic(layout: &Layout<String>, panel: &str) -> Option<bool> {
+    fn walk(node: &Node<String>, panel: &str) -> Option<bool> {
+        match node {
+            Node::Dock { columns, .. } => columns.iter().find(|c| c.groups.iter().any(|g| g.panels.iter().any(|id| id == panel))).map(|c| c.iconic),
+            Node::Split { first, second, .. } => walk(first, panel).or_else(|| walk(second, panel)),
+            _ => None,
+        }
+    }
+    layout.root.as_ref().and_then(|root| walk(root, panel))
+}
+
+/// A tab dropped on the dock column's inner edge makes a new column that starts as icons;
+/// the column it came from stays expanded.
+#[test]
+fn a_panel_dropped_beside_the_dock_column_starts_iconic() {
+    let mut h = harness(app(), vec2(1280.0, 800.0));
+    let canvas = canvas_rect(&h);
+    let source = tab_rect(&h, "layers").center();
+    let target = egui::pos2(canvas.right() + 6.0, canvas.center().y);
+    drag(&mut h, source, target);
+    let layout = lay(h.state());
+    assert!(valid(layout));
+    assert_eq!(column_iconic(layout, "layers"), Some(true), "{layout:?}");
+    assert_eq!(column_iconic(layout, "color"), Some(false), "{layout:?}");
+}
+
+/// A drop into an existing group does not make anything iconic.
+#[test]
+fn only_a_new_column_starts_iconic() {
+    assert_eq!(
+        new_column_panel(&Action::Move { panel: "layers".into(), anchor: "color".into(), placement: Placement::Column { after: false } }),
+        Some("layers".into())
+    );
+    assert_eq!(
+        new_column_panel(&Action::MoveGroup {
+            panel: "layers".into(),
+            to: Target::At { anchor: "color".into(), placement: Placement::Group { below: true, height: None } }
+        }),
+        None
+    );
+    assert_eq!(new_column_panel(&Action::MovePanel { panel: "layers".into(), to: Target::NewDock { side: Side::Start } }), None);
+}
