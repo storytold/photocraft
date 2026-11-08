@@ -196,12 +196,27 @@ pub(super) fn alt_eyedropper(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui:
         return false;
     }
     match ev {
+        // ⇧⌥-click adds a colour sampler at the clicked pixel instead, as the Color Sampler tool
+        // places one: no foreground change, nothing painted (#11890). A refused point (the
+        // document's limit) reports in the status bar as that tool's does.
+        ToolEvent::Down { x, y, .. } if mods.shift => {
+            if let Err(e) = app.run("view.colorSamplers.add", json!({"x": x, "y": y})) {
+                app.ui.status = e;
+                app.ui.status_error = false;
+            }
+        }
+        // While ⇧⌥ stay held after that press, moves sample nothing.
+        ToolEvent::Move { .. } if mods.shift => {}
         // Without ⌥: the sample sets the foreground colour, whatever the Eyedropper would do.
         ToolEvent::Down { x, y, .. } | ToolEvent::Move { x, y, .. } => sample_eyedropper(app, x, y, egui::Modifiers::NONE),
         ToolEvent::Up { .. } => app.alt_sampling = false,
     }
     true
 }
+
+#[cfg(test)]
+#[path = "../brush_shift_alt_sampler_tests.rs"]
+mod brush_shift_alt_sampler_tests;
 
 /// Sample the image or targeted raster mask at (x, y) using the configured Sample Size.
 /// Write a valid sample to the foreground swatch, or to the background swatch with Alt.
