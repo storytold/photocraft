@@ -119,8 +119,9 @@ fn the_brush_bar_keeps_todays_silent_clamp() {
     assert!(alerts(&h).is_empty(), "not measured for the Brush: no alert");
 }
 
-/// A value typed past the range and left by switching tools (the click on the toolbar takes the
-/// keyboard) shows the stored value when the Eraser comes back, not the typed one.
+/// A value typed past the range and left by switching tools (simulated: the tool is set and the
+/// field loses the keyboard while the bar is not drawn, as a click on the toolbar does) shows the
+/// stored value when the Eraser comes back, not the typed one, and opens no alert on the way.
 #[test]
 fn a_typed_value_left_by_a_tool_switch_shows_the_stored_value() {
     let mut h = bar(Tool::Eraser);
@@ -140,12 +141,60 @@ fn a_typed_value_left_by_a_tool_switch_shows_the_stored_value() {
         }
     });
     h.run_steps(3);
+    assert!(alerts(&h).is_empty(), "leaving by a tool switch: no alert");
     switch(&mut h, Tool::Eraser);
     h.run_steps(1);
+    assert!(alerts(&h).is_empty(), "back on the Eraser: no alert");
     let shown = h
         .query_all_by_role(Role::SpinButton)
         .find(|n| n.accesskit_node().label().as_deref() == Some("Opacity:"))
         .and_then(|n| n.accesskit_node().numeric_value());
     assert_eq!(brush(&h).0, 100.0, "the stored value");
     assert_eq!(shown, Some(100.0), "the field shows the stored value");
+}
+
+#[test]
+fn a_leading_zero_typed_key_by_key_keeps_the_text() {
+    // While the field has the keyboard it keeps what was typed: 0 (past 1..100) on the way to 05
+    // stays 0 rather than turning into 1, so 0 then 5 is 5, not 15, and in range.
+    let mut h = bar(Tool::Eraser);
+    h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity:")).expect("the Opacity field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    for c in ["0", "5"] {
+        h.event(egui::Event::Text(c.into()));
+        h.run_steps(2);
+    }
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(brush(&h).0, 5.0, "0 then 5 is 05");
+    assert!(alerts(&h).is_empty(), "05 is in range");
+}
+
+#[test]
+fn a_caption_scrub_past_100_does_not_alert() {
+    let mut h = bar(Tool::Eraser);
+    type_into(&mut h, "Opacity", "90");
+    // The field keeps the keyboard while its caption is scrubbed from 90 past the end.
+    let field = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Opacity:")).expect("the Opacity field");
+    let rect = field.rect();
+    field.click();
+    h.run_steps(1);
+    // The caption sits just left of the field.
+    let from = egui::pos2(rect.left() - 25.0, rect.center().y);
+    h.event(egui::Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.run_steps(1);
+    for k in 1..=6 {
+        h.event(egui::Event::PointerMoved(from + vec2(50.0 * k as f32, 0.0)));
+        h.run_steps(1);
+    }
+    let to = from + vec2(300.0, 0.0);
+    h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.run_steps(3);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert_eq!(brush(&h).0, 100.0, "the scrub reached the end");
+    assert!(alerts(&h).is_empty(), "a scrub stops at 100 without an alert");
 }
