@@ -74,6 +74,21 @@ fn a_result_with_added_sides_is_cut_to_its_centre_not_squeezed() {
     assert_eq!(r["matching"][0]["framing"], json!({"state": "centre", "returned": [240, 160], "sent": [160, 160]}), "{r}");
     // Lined up as sent, the picture around the selection matches, so its colours were matched.
     assert_eq!(r["matching"][0]["colour"]["state"], "matched", "{r}");
+    // The diagnostics say which part was used and how it was scaled.
+    let p = saved_placement(&mut s);
+    assert_eq!(p["returned"], json!([240, 160]), "{p}");
+    assert_eq!(p["used"], json!([40, 0, 160, 160]), "the middle of the padded picture");
+    assert_eq!(p["scale"], json!([1.0, 1.0]));
+    assert_eq!(p["stretch"], 1.0);
+}
+
+/// The first variation's `placement` in the diagnostics of the active generative layer.
+fn saved_placement(s: &mut Session) -> Value {
+    let dir = tempfile::tempdir().unwrap();
+    let saved = s.execute(SAVE_DIAGNOSTICS, json!({"folder": dir.path().to_string_lossy()})).unwrap();
+    let out = std::path::PathBuf::from(saved["folder"].as_str().unwrap());
+    let summary: Value = serde_json::from_slice(&std::fs::read(out.join("summary.json")).unwrap()).unwrap();
+    summary["fills"][0]["variations"][0]["placement"].clone()
 }
 
 #[test]
@@ -82,6 +97,10 @@ fn a_stretched_result_is_scaled_back_when_the_whole_of_it_lines_up() {
     install(&mut s, Fake { echo: Some(0), reframe: Some(Reframe::Stretch(240, 160)), ..fake([0, 0, 0]) });
     let r = s.execute(FILL, json!({"variations": 1})).unwrap();
     assert_eq!(r["matching"][0]["framing"]["state"], "scaled", "{r}");
+    let p = saved_placement(&mut s);
+    assert_eq!(p["used"], json!([0, 0, 240, 160]), "the whole picture, squeezed: {p}");
+    assert_eq!(p["scale"], json!([160.0 / 240.0, 1.0]));
+    assert!((p["stretch"].as_f64().unwrap() - 2.0 / 3.0).abs() < 1e-9, "{p}");
 }
 
 #[test]

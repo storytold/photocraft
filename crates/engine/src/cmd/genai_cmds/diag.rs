@@ -196,8 +196,8 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
     let summary = json!({
         "generateMore": c.more,
         "model": d.map(|d| d.model.clone()),
-        "connection": d.map(|d| d.connection.clone()),
-        "destination": d.map(|d| d.destination.clone()),
+        "connection": d.map(|d| without_credentials(&d.connection)),
+        "destination": d.map(|d| without_credentials(&d.destination)),
         "onThisComputer": d.map(|d| d.local),
         "area": {"x": c.area.x0, "y": c.area.y0, "width": c.area.width(), "height": c.area.height()},
         "requestSize": [r.w, r.h],
@@ -211,6 +211,24 @@ fn capture_files(doc: &Document, c: &Capture, prefix: &str) -> Result<(Files, Va
         "failure": c.failure,
     });
     Ok((files, summary))
+}
+
+/// `text` with any address in it cut to scheme, host and path: a person may name a connection
+/// after an address that carries a user name and password (`https://user:key@host`) or a key in
+/// its query (`?key=...`), and the summary is meant to be shared.
+fn without_credentials(text: &str) -> String {
+    let words: Vec<String> = text
+        .split(' ')
+        .map(|word| {
+            let Some(at) = word.find("://") else { return word.to_owned() };
+            let (scheme, rest) = word.split_at(at + 3);
+            let rest = rest.split(['?', '#']).next().unwrap_or("");
+            let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            let host = authority.rsplit('@').next().unwrap_or(authority);
+            format!("{scheme}{host}{path}")
+        })
+        .collect();
+    words.join(" ")
 }
 
 /// The area `area` of `doc` with variation `layer` alone showing in generative layer `group`, as
@@ -262,6 +280,21 @@ fn write_folder(folder: &str, files: &[(String, Vec<u8>)]) -> Result<String> {
 #[cfg(target_arch = "wasm32")]
 fn write_folder(folder: &str, _: &[(String, Vec<u8>)]) -> Result<String> {
     Err(EngineError::Other(format!("cannot write to {folder}: Save Fill Diagnostics needs the desktop app")))
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::without_credentials;
+
+    #[test]
+    fn addresses_lose_their_user_names_passwords_and_queries() {
+        assert_eq!(without_credentials("OpenAI"), "OpenAI");
+        assert_eq!(without_credentials("https://api.example.com"), "https://api.example.com");
+        assert_eq!(without_credentials("Mine https://me:sk-secret@host.example:8443/v1?x=1"), "Mine https://host.example:8443/v1");
+        assert_eq!(without_credentials("http://host/path?key=abc#frag"), "http://host/path");
+        assert_eq!(without_credentials("ws://a@b@host"), "ws://host");
+        assert_eq!(without_credentials("://"), "://");
+    }
 }
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
