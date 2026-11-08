@@ -110,6 +110,12 @@ variation (three requests by default; a metered service bills each one):
   ComfyUI's image loader).
 - **The prompt**, or for an empty prompt a fixed instruction to continue the surrounding picture
   through the masked area.
+- **Reference pictures**, only when the fill was given some (`references` on
+  `edit.generativeFill`, up to 4 PNG, JPEG or WebP pictures of at most 10 MB and 8192 px a side):
+  each is decoded, scaled to at most 2048 px on the long side and sent as a new sRGB PNG of its
+  pixels alone, so no location, camera or other metadata leaves the computer. They follow the
+  source, mask and prompt, in the order given, and the consent prompt lists each one with its
+  size. A model that takes none, or fewer, refuses the fill before anything is sent.
 
 Where it goes is the connection's address (`https://api.openai.com`, say), or nowhere off the
 computer for a model that runs on it. The shared layer reads the key only when a job starts, from
@@ -166,6 +172,7 @@ and writes a new folder there with
   the selection was cleared (this is not sent);
 - `source.png`, `mask.png`, `prompt.txt`: exactly what was sent (for an empty prompt, the fixed
   instruction to continue the picture);
+- `reference-N.png`: each reference picture exactly as sent, when the fill had any;
 - `returned-N.png` (or `.jpg`, `.webp`): each picture exactly as the service returned it;
 - `composite-N.png`: each placed variation shown alone, over the area, from the document as it is
   now;
@@ -239,5 +246,7 @@ cancelled fill shows nothing.
 
 What the earlier provider-based branch had that this one doesn't: its own Gemini backend, HTTPS
 transport and keychain code (the shared layer does that now), and the Edit selection mode with
-reference images. The `generative-fill` tool's inputs are a source, a mask and a prompt, with no
-reference images, so those wait for a tool in the catalogue that takes them.
+reference images. Reference pictures have since come back through the shared layer: the
+`generative-fill` tool takes optional `reference` inputs (storytold/craft-ai-integrations#165),
+and `references` on `edit.generativeFill` sends them (#10940). The Edit selection mode is still
+to come.

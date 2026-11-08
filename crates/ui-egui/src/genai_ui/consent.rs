@@ -31,10 +31,12 @@ fn waiting(app: &PhotocraftApp) -> Option<(Vec<u64>, Vec<Disclosure>)> {
 }
 
 /// What the prompt lists: each kind of data sent, with every waiting fill's size of it (one
-/// answer covers them all, so each one's sizes are shown, not just the first's).
-fn items(disclosures: &[Disclosure]) -> Value {
-    let Some(first) = disclosures.first() else { return json!([]) };
-    let items: Vec<Value> = first
+/// answer covers them all, so each one's sizes are shown, not just the first's). Fills can send
+/// different numbers of reference pictures, so the list follows the fill that sends the most:
+/// nothing any of them sends is left off.
+pub(super) fn items(disclosures: &[Disclosure]) -> Value {
+    let Some(most) = disclosures.iter().max_by_key(|d| d.items.len()) else { return json!([]) };
+    let items: Vec<Value> = most
         .items
         .iter()
         .enumerate()

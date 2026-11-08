@@ -61,8 +61,8 @@ fn too_big(n: usize) -> String {
     format!("reference picture {n} is larger than {} MB", MAX_REFERENCE_BYTES / (1024 * 1024))
 }
 
-/// Picture `n` (encoded PNG, JPEG or WebP) as it is sent: 8-bit sRGB PNG, its longest side at
-/// most `side`, nothing kept but the pixels.
+/// Picture `n` (encoded PNG, JPEG or WebP, at most 8192 pixels a side and 40 million pixels) as it
+/// is sent: 8-bit sRGB PNG, its longest side at most `side`, nothing kept but the pixels.
 // shortcut: an embedded colour profile is ignored and the pixels are read as sRGB; convert
 // through the profile when people report colour shifts on references from wide-gamut cameras.
 pub(super) fn prepare(bytes: &[u8], n: usize, side: u32) -> Result<Vec<u8>> {

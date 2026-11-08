@@ -123,3 +123,22 @@ fn a_successful_choice_clears_the_setup_message() {
     super::super::setup::changed(&mut app, Ok(()));
     assert!(app.genai.setup.message.is_none(), "the earlier failure isn't left showing");
 }
+
+/// A disclosure of the source, mask and prompt plus `references` reference pictures.
+fn disclosure_with(references: usize) -> Disclosure {
+    let item = |input, kind, bytes| SentItem { input, kind, bytes: Some(bytes) };
+    let mut items = vec![item(SentInput::Source, SentKind::Image, 100), item(SentInput::Mask, SentKind::Image, 50), item(SentInput::Prompt, SentKind::Text, 5)];
+    items.extend((0..references).map(|k| item(SentInput::Reference, SentKind::Image, 1000 + k as u64)));
+    Disclosure { destination: "https://fake.example".into(), connection: "Fake".into(), model: "Fake 1".into(), local: false, items }
+}
+
+#[test]
+fn one_consent_prompt_lists_every_reference_any_waiting_fill_sends() {
+    // The first fill sends none, the second two: the prompt still lists both of the second's.
+    let items = super::super::consent::items(&[disclosure_with(0), disclosure_with(2)]);
+    let inputs: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["input"].as_str().unwrap()).collect();
+    assert_eq!(inputs, ["source", "mask", "prompt", "reference", "reference"]);
+    assert_eq!(items[3]["sizes"], json!([null, 1000]), "only the fill that sends it has a size");
+    assert_eq!(items[0]["sizes"], json!([100, 100]));
+    assert_eq!(super::super::consent::item_text("reference", &[1000]), "A reference picture · 1 KB");
+}
