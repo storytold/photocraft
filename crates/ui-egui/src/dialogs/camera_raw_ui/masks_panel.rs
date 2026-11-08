@@ -66,6 +66,8 @@ pub(crate) struct MaskUi {
     /// The mask whose name is being edited.
     renaming: Option<usize>,
     drag: Option<Drag>,
+    /// Add / Subtract / Intersect chosen for a drawn kind, used by the component its drag makes.
+    pending_op: Option<Op>,
     /// The overlay texture and the key of the mask it shows.
     overlay_tex: Option<(u64, TextureHandle)>,
 }
@@ -83,6 +85,7 @@ impl Default for MaskUi {
             overlay_mode: Overlay::Color,
             renaming: None,
             drag: None,
+            pending_op: None,
             overlay_tex: None,
         }
     }
@@ -136,26 +139,37 @@ pub(crate) fn describe(ctx: &egui::Context) -> Value {
 pub(crate) fn control(ctx: &egui::Context, p: &CameraRaw, v: &Value) -> Result<(), String> {
     let obj = v.as_object().ok_or("masks: expected an object")?;
     let mut s = load(ctx);
+    let index = |k: &str, val: &Value| -> Result<Option<usize>, String> {
+        if val.is_null() {
+            return Ok(None);
+        }
+        let i = val.as_u64().ok_or_else(|| format!("masks.{k}: expected an index or null"))?;
+        usize::try_from(i).map(Some).map_err(|_| format!("masks.{k}: out of range"))
+    };
+    // "selected" before "component" (the object's keys come sorted), so a component is checked
+    // against the mask this request selects.
+    if let Some(val) = obj.get("selected") {
+        let i = index("selected", val)?;
+        if i.is_some_and(|i| i >= p.masks.len()) {
+            return Err(format!("masks.selected: there are {} masks", p.masks.len()));
+        }
+        s.selected = i;
+        s.component = None;
+        s.pending_op = None;
+    }
+    if let Some(val) = obj.get("component") {
+        let i = index("component", val)?;
+        let n = s.selected.and_then(|m| p.masks.get(m)).map_or(0, |m| m.components.len());
+        if i.is_some_and(|i| i >= n) {
+            return Err(format!("masks.component: the selected mask has {n} components"));
+        }
+        s.component = i;
+    }
     for (k, val) in obj {
         match k.as_str() {
             "open" => s.open = val.as_bool().ok_or("masks.open: expected true or false")?,
             "overlay" => s.overlay = val.as_bool().ok_or("masks.overlay: expected true or false")?,
-            "selected" | "component" => {
-                let i = if val.is_null() { None } else { Some(val.as_u64().ok_or_else(|| format!("masks.{k}: expected an index or null"))? as usize) };
-                if k == "selected" {
-                    if i.is_some_and(|i| i >= p.masks.len()) {
-                        return Err(format!("masks.selected: there are {} masks", p.masks.len()));
-                    }
-                    s.selected = i;
-                    s.component = None;
-                } else {
-                    let n = s.selected.and_then(|m| p.masks.get(m)).map_or(0, |m| m.components.len());
-                    if i.is_some_and(|i| i >= n) {
-                        return Err(format!("masks.component: the selected mask has {n} components"));
-                    }
-                    s.component = i;
-                }
-            }
+            "selected" | "component" => {}
             "tool" => {
                 let name = val.as_str().ok_or("masks.tool: expected a name")?;
                 s.tool = TOOLS.iter().find(|(_, n)| *n == name).map(|(t, _)| *t).ok_or_else(|| format!("masks.tool: one of {}", TOOLS.map(|(_, n)| n).join(", ")))?;
@@ -193,10 +207,11 @@ pub(crate) fn is_open(ctx: &egui::Context) -> bool {
 }
 
 /// Whether a drag on the preview draws (so the preview's Zoom tool must not take the click).
-pub(crate) fn captures_pointer(ctx: &egui::Context, p: &CameraRaw) -> bool {
+/// `p`: the settings the preview shows; `before`: Before (Y) shows, which has no guides.
+pub(crate) fn captures_pointer(ctx: &egui::Context, p: &CameraRaw, before: bool) -> bool {
     let s = load(ctx);
     (s.open && s.tool != DrawTool::None && s.selected.is_some_and(|i| i < p.masks.len()))
-        || (s.tool == DrawTool::Guide && Upright::parse(&p.perspective_upright) == Some(Upright::Guided))
+        || (!before && s.tool == DrawTool::Guide && Upright::parse(&p.perspective_upright) == Some(Upright::Guided))
 }
 
 /// The tool strip's Masking button (Shift+W toggles it, as in Camera Raw).
@@ -273,6 +288,7 @@ pub(crate) fn create(p: &mut CameraRaw, s: &mut MaskUi, kind: &str, op: Option<O
     };
     s.selected = Some(target);
     s.tool = tool;
+    s.pending_op = None;
     let Some(m) = p.masks.get_mut(target) else { return };
     if let Some(shape) = ready_shape(kind) {
         if m.components.len() < masks::MAX_COMPONENTS {
@@ -280,11 +296,18 @@ pub(crate) fn create(p: &mut CameraRaw, s: &mut MaskUi, kind: &str, op: Option<O
             s.component = Some(m.components.len() - 1);
         }
     } else {
+        // Drawn kinds: the drag makes the component, with the operation chosen here.
         s.component = None;
+        s.pending_op = op;
     }
     // A new mask starts with Exposure up a little, as Camera Raw's do not: here it starts
     // neutral and shows its overlay, so drawing is visible before any slider moves.
     s.overlay = true;
+}
+
+/// The operation for a component a drag makes: the one Add / Subtract / Intersect chose, once.
+fn take_op(s: &mut MaskUi) -> Op {
+    s.pending_op.take().unwrap_or(Op::Add)
 }
 
 fn op_label(op: Op) -> &'static str {
@@ -342,6 +365,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool
                     } else if r.clicked() {
                         s.selected = Some(i);
                         s.component = None;
+                        s.pending_op = None;
                     }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -371,6 +395,7 @@ pub(crate) fn panel(ui: &mut egui::Ui, d: &mut CameraRawDialog, dirty: &mut bool
         p.masks.remove(i);
         s.selected = None;
         s.component = None;
+        s.pending_op = None;
         s.tool = DrawTool::None;
     }
     if let Some(i) = s.selected.filter(|i| *i < p.masks.len()) {
@@ -426,6 +451,7 @@ fn components(ui: &mut egui::Ui, m: &mut Mask, s: &mut MaskUi) {
                 let label = format!("{} · {}", trc(op_label(c.op)), trc(kind_name(&c.shape)));
                 if ui.selectable_label(s.component == Some(j), label).clicked() {
                     s.component = Some(j);
+                    s.pending_op = None;
                     s.tool = match c.shape {
                         Shape::Brush { .. } => DrawTool::Brush,
                         Shape::Linear { .. } => DrawTool::Linear,
@@ -545,11 +571,13 @@ fn screen(r: ERect, u: [f32; 2]) -> Pos2 {
     pos2(r.min.x + u[0] * r.width(), r.min.y + u[1] * r.height())
 }
 
-fn mask_key(m: &Mask, w: usize, h: usize) -> u64 {
+/// The overlay's cache key: the mask, the size and the preview revision (Color and Luminance
+/// Range coverage follows the developed pixels, which every global edit changes).
+fn mask_key(m: &Mask, w: usize, h: usize, revision: u64) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hs = std::collections::hash_map::DefaultHasher::new();
     serde_json::to_string(m).unwrap_or_default().hash(&mut hs);
-    (w, h).hash(&mut hs);
+    (w, h, revision).hash(&mut hs);
     hs.finish()
 }
 
@@ -584,25 +612,31 @@ fn ellipse(painter: &egui::Painter, r: ERect, center: [f32; 2], radius: [f32; 2]
 }
 
 /// Draws the selected mask's overlay, pins and guides over the preview image `r`, and turns drags
-/// on `response` into mask edits. Call after painting the image.
-pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &Response) {
+/// on `response` into mask edits. Call after painting the image. While `panning` (Space or a
+/// middle drag) they are drawn but the drag edits nothing.
+pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, response: &Response, panning: bool) {
     let ctx = ui.ctx().clone();
     let mut s = load(&ctx);
     let painter = ui.painter().clone();
     let t = Tokens::get(&ctx);
     let (pw, ph) = (d.pw, d.ph);
     let before = d.params.clone();
-    // Guided Upright: guides drawn in result coordinates, stored in source coordinates.
-    if Upright::parse(&d.params.perspective_upright) == Some(Upright::Guided) {
-        let maps = guide_maps(&d.params, pw.max(1), ph.max(1));
+    if panning {
+        s.drag = None;
+    }
+    // Guided Upright: guides drawn in result coordinates, stored in source coordinates. Through
+    // the geometry the preview shows: none while Before shows or the Geometry panel is hidden.
+    let shown = d.effective_params();
+    if !d.show_before && Upright::parse(&shown.perspective_upright) == Some(Upright::Guided) {
+        let maps = guide_maps(&shown, pw.max(1), ph.max(1));
         if let Some((fwd, _)) = maps {
-            for g in &d.params.upright_guides {
+            for g in &shown.upright_guides {
                 if let (Some(a), Some(b)) = (map(&fwd, g[0], pw as f64, ph as f64), map(&fwd, g[1], pw as f64, ph as f64)) {
                     painter.line_segment([screen(r, a), screen(r, b)], Stroke::new(2.0, Color32::from_rgb(255, 200, 0)));
                 }
             }
         }
-        if s.tool == DrawTool::Guide {
+        if s.tool == DrawTool::Guide && !panning {
             guide_drag(&mut s, d, r, response, &painter, maps.map(|m| m.1));
         }
     }
@@ -611,7 +645,10 @@ pub(crate) fn preview(ui: &mut egui::Ui, d: &mut CameraRawDialog, r: ERect, resp
     {
         overlay(&ctx, &mut s, d, i, r, &painter);
         pins(&painter, &d.params.masks[i], s.component, r, t.accent);
-        mask_drag(&mut s, d, i, r, response, &painter);
+        // The guide tool's drag belongs to `guide_drag` above.
+        if s.tool != DrawTool::Guide && !panning {
+            mask_drag(&mut s, d, i, r, response, &painter);
+        }
     }
     if d.params != before {
         d.dirty = true;
@@ -626,7 +663,7 @@ fn overlay(ctx: &egui::Context, s: &mut MaskUi, d: &CameraRawDialog, i: usize, r
     }
     let Some(m) = d.params.masks.get(i) else { return };
     let (w, h) = (d.pw, d.ph);
-    let key = mask_key(m, w, h);
+    let key = mask_key(m, w, h, d.preview_revision);
     if s.overlay_tex.as_ref().is_none_or(|(k, _)| *k != key) {
         let src: &[[f32; 4]] = if d.processed.len() >= w * h { &d.processed } else { &d.proxy };
         let cov = masks::coverage(m, src, w, h);
@@ -707,6 +744,7 @@ pub(crate) fn apply_list_action(p: &mut CameraRaw, s: &mut MaskUi, i: usize, op:
         _ => {}
     }
     s.component = None;
+    s.pending_op = None;
 }
 
 fn close(r: ERect, a: [f32; 2], p: Pos2) -> bool {
@@ -728,17 +766,10 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
     let alt = ctx.input(|x| x.modifiers.alt);
     if response.drag_started_by(egui::PointerButton::Primary) {
         s.drag = match s.tool {
-            DrawTool::Brush => {
-                // Paint into the selected brush component, or a new one.
-                let brush = s.component.filter(|j| matches!(m.components.get(*j).map(|c| &c.shape), Some(Shape::Brush { .. })));
-                let j = brush.unwrap_or_else(|| {
-                    m.components.push(Component { op: Op::Add, invert: false, shape: Shape::Brush { dabs: Vec::new() } });
-                    m.components.len() - 1
-                });
-                s.component = Some(j);
+            DrawTool::Brush => brush_target(m, s).map(|j| {
                 dab(m, j, u, &s.brush, s.erase || alt);
-                Some(Drag::Brush(u))
-            }
+                Drag::Brush(u)
+            }),
             DrawTool::Linear => {
                 let hit = s.component.and_then(|j| match m.components.get(j).map(|c| &c.shape) {
                     Some(Shape::Linear { full, .. }) if close(r, *full, p) => Some(Drag::LinearPin(j, 0)),
@@ -747,7 +778,7 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
                 });
                 hit.or_else(|| {
                     (m.components.len() < masks::MAX_COMPONENTS).then(|| {
-                        m.components.push(Component { op: Op::Add, invert: false, shape: Shape::Linear { zero: u, full: u } });
+                        m.components.push(Component { op: take_op(s), invert: false, shape: Shape::Linear { zero: u, full: u } });
                         s.component = Some(m.components.len() - 1);
                         Drag::NewLinear(m.components.len() - 1, u)
                     })
@@ -762,7 +793,11 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
                 });
                 hit.or_else(|| {
                     (m.components.len() < masks::MAX_COMPONENTS).then(|| {
-                        m.components.push(Component { op: Op::Add, invert: false, shape: Shape::Radial { center: u, radius: [0.01, 0.01], angle: 0.0, feather: 50.0 } });
+                        m.components.push(Component {
+                            op: take_op(s),
+                            invert: false,
+                            shape: Shape::Radial { center: u, radius: [0.01, 0.01], angle: 0.0, feather: 50.0 },
+                        });
                         s.component = Some(m.components.len() - 1);
                         Drag::NewRadial(m.components.len() - 1, u)
                     })
@@ -842,10 +877,19 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
             && (u[1] - start[1]).abs() > 0.01
             && m.components.len() < masks::MAX_COMPONENTS
         {
-            m.components.push(Component { op: Op::Add, invert: false, shape: Shape::Objects { rect: [start[0], start[1], u[0], u[1]].map(|v| v.clamp(0.0, 1.0)) } });
+            m.components.push(Component {
+                op: take_op(s),
+                invert: false,
+                shape: Shape::Objects { rect: [start[0], start[1], u[0], u[1]].map(|v| v.clamp(0.0, 1.0)) },
+            });
             s.component = Some(m.components.len() - 1);
         }
         s.drag = None;
+    } else if response.clicked() && s.tool == DrawTool::Brush {
+        // A click without a drag paints one dab, as in Camera Raw.
+        if let Some(j) = brush_target(m, s) {
+            dab(m, j, u, &s.brush, s.erase || alt);
+        }
     } else if response.clicked() && s.tool == DrawTool::ColorPick {
         let (w, h) = (d.pw, d.ph);
         let src: &[[f32; 4]] = if d.processed.len() >= w * h { &d.processed } else { &d.proxy };
@@ -862,11 +906,29 @@ fn mask_drag(s: &mut MaskUi, d: &mut CameraRawDialog, i: usize, r: ERect, respon
                     samples.push(sample);
                 }
             } else if m.components.len() < masks::MAX_COMPONENTS {
-                m.components.push(Component { op: Op::Add, invert: false, shape: Shape::Color { samples: vec![sample], amount: 50.0 } });
+                m.components.push(Component { op: take_op(s), invert: false, shape: Shape::Color { samples: vec![sample], amount: 50.0 } });
                 s.component = Some(m.components.len() - 1);
             }
         }
     }
+}
+
+/// The brush component a stroke paints into: the selected one, or a new one (with the pending
+/// operation). `None` when the mask already has as many components as it may.
+fn brush_target(m: &mut Mask, s: &mut MaskUi) -> Option<usize> {
+    let selected = s.component.filter(|j| matches!(m.components.get(*j).map(|c| &c.shape), Some(Shape::Brush { .. })));
+    let j = match selected {
+        Some(j) => j,
+        None => {
+            if m.components.len() >= masks::MAX_COMPONENTS {
+                return None;
+            }
+            m.components.push(Component { op: take_op(s), invert: false, shape: Shape::Brush { dabs: Vec::new() } });
+            m.components.len() - 1
+        }
+    };
+    s.component = Some(j);
+    Some(j)
 }
 
 fn dab(m: &mut Mask, j: usize, u: [f32; 2], brush: &Dab, erase: bool) {
@@ -981,6 +1043,73 @@ mod tests {
             assert!(control(&ctx, &p, &bad).is_err(), "{bad}");
         }
         assert_eq!(describe(&ctx)["tool"], "radial", "a refused request changes nothing");
+    }
+
+    /// The keys arrive sorted ("component" before "selected"); the component is still checked
+    /// against, and kept for, the mask the same request selects.
+    #[test]
+    fn control_selects_the_mask_before_its_component() {
+        let ctx = egui::Context::default();
+        let mut p = CameraRaw::default();
+        let mut s = MaskUi::default();
+        create(&mut p, &mut s, "Sky", None);
+        create(&mut p, &mut s, "Subject", None);
+        control(&ctx, &p, &json!({"selected": 1, "component": 0})).unwrap();
+        let d = describe(&ctx);
+        assert_eq!((d["selected"].clone(), d["component"].clone()), (json!(1), json!(0)));
+        // An index past usize (a 32-bit target) is refused, never truncated.
+        assert!(control(&ctx, &p, &json!({"selected": u64::MAX})).is_err());
+        assert!(control(&ctx, &p, &json!({"selected": 0, "component": u64::MAX})).is_err());
+    }
+
+    /// Subtract › Linear Gradient: the component the drag makes subtracts; the one after adds.
+    #[test]
+    fn a_drawn_kind_keeps_the_chosen_operation() {
+        let mut p = CameraRaw::default();
+        let mut s = MaskUi::default();
+        create(&mut p, &mut s, "Sky", None);
+        create(&mut p, &mut s, "Linear Gradient", Some(Op::Subtract));
+        assert_eq!(take_op(&mut s), Op::Subtract);
+        assert_eq!(take_op(&mut s), Op::Add);
+        create(&mut p, &mut s, "Brush", Some(Op::Intersect));
+        assert_eq!(s.pending_op, None, "a ready kind uses the operation itself");
+        assert_eq!(p.masks[0].components.last().map(|c| c.op), Some(Op::Intersect));
+        create(&mut p, &mut s, "Radial Gradient", Some(Op::Subtract));
+        apply_list_action(&mut p, &mut s, 0, 0);
+        assert_eq!(take_op(&mut s), Op::Add, "a new selection drops it");
+    }
+
+    /// A brush stroke makes a component only while the mask has room for one.
+    #[test]
+    fn brush_target_respects_the_component_limit() {
+        let mut m = Mask { components: vec![Component { op: Op::Add, invert: false, shape: Shape::Sky }; masks::MAX_COMPONENTS], ..Mask::default() };
+        let mut s = MaskUi::default();
+        assert_eq!(brush_target(&mut m, &mut s), None);
+        assert_eq!(m.components.len(), masks::MAX_COMPONENTS);
+        m.components.pop();
+        s.pending_op = Some(Op::Subtract);
+        assert_eq!(brush_target(&mut m, &mut s), Some(masks::MAX_COMPONENTS - 1));
+        assert_eq!(m.components.last().map(|c| c.op), Some(Op::Subtract));
+        assert_eq!(brush_target(&mut m, &mut s), Some(masks::MAX_COMPONENTS - 1), "the selected brush is reused");
+    }
+
+    /// With the Geometry panel hidden (or Before shown) the preview is unwarped and shows no
+    /// guides, so the guide tool does not take the drag.
+    #[test]
+    fn hidden_geometry_has_no_guides_to_draw() {
+        let ctx = egui::Context::default();
+        set_guide_tool(&ctx, true);
+        let p = CameraRaw { perspective_upright: "guided".into(), upright_guides: vec![[[0.3, 0.1], [0.32, 0.9]]], ..CameraRaw::default() };
+        assert!(captures_pointer(&ctx, &p, false));
+        assert!(!captures_pointer(&ctx, &p, true), "Before shows no guides");
+        let panels = super::super::panels::PanelState { hidden: ["geometry"].into(), ..Default::default() };
+        assert!(!captures_pointer(&ctx, &panels.effective(&p), false));
+    }
+
+    #[test]
+    fn the_overlay_key_follows_the_preview_revision() {
+        let m = Mask::default();
+        assert_ne!(mask_key(&m, 10, 10, 1), mask_key(&m, 10, 10, 2));
     }
 
     #[test]

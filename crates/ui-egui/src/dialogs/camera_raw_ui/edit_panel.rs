@@ -146,7 +146,7 @@ fn slider_more(
     let label = trc(label);
     let (lo, hi) = (*range.start(), *range.end());
     let id = ui.next_auto_id().with("camera-raw-track");
-    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width().max(FIELD_W * 3.0), ROW_H), Sense::hover());
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width().max(FIELD_W * 2.0), ROW_H), Sense::hover());
     let gap = if more.is_some() { MORE_W } else { 0.0 };
     let field_rect = ERect::from_min_size(pos2(row.right() - gap - FIELD_W, row.top()), vec2(FIELD_W, FIELD_H));
     if let Some(open) = more {
@@ -590,16 +590,15 @@ fn parametric_curve(ui: &mut egui::Ui, p: &mut CameraRaw, backdrop: &[f32], dirt
         if r.dragged()
             && let Some(pos) = r.interact_pointer_pos()
         {
-            let lo = if k == 0 { 5.0 } else { p.curve_splits[k - 1] + 5.0 };
-            let hi = if k == 2 { 95.0 } else { p.curve_splits[k + 1] - 5.0 };
-            let v = ((pos.x - strip.left()) / side.max(1.0) * 100.0).clamp(lo.min(hi), hi.max(lo)).round();
+            let (lo, hi) = split_bounds(&p.curve_splits, k);
+            let v = ((pos.x - strip.left()) / side.max(1.0) * 100.0).clamp(lo, hi).round();
             if v.is_finite() && v != p.curve_splits[k] {
                 p.curve_splits[k] = v;
                 *dirty = true;
             }
         }
         if widgets::second_click(ui, &r) {
-            p.curve_splits[k] = CameraRaw::default().curve_splits[k];
+            p.curve_splits[k] = reset_split(&p.curve_splits, k);
             *dirty = true;
         }
         let ink = if r.hovered() || r.dragged() { t.accent } else { t.text };
@@ -610,6 +609,19 @@ fn parametric_curve(ui: &mut egui::Ui, p: &mut CameraRaw, backdrop: &[f32], dirt
     }
     ui.add_space(6.0);
     rect
+}
+
+/// Where split `k` may go: 5 % from its neighbours (and from the ends), low end first.
+pub(super) fn split_bounds(s: &[f32; 3], k: usize) -> (f32, f32) {
+    let lo = if k == 0 { 5.0 } else { s.get(k - 1).map_or(5.0, |v| v + 5.0) };
+    let hi = s.get(k + 1).map_or(95.0, |v| v - 5.0);
+    (lo.min(hi), hi.max(lo))
+}
+
+/// Split `k`'s default (double-click), kept between its neighbours so the handles stay ordered.
+pub(super) fn reset_split(s: &[f32; 3], k: usize) -> f32 {
+    let (lo, hi) = split_bounds(s, k);
+    CameraRaw::default().curve_splits.get(k).copied().unwrap_or(50.0).clamp(lo, hi)
 }
 
 /// Small point-curve editor: click to add, drag to move, right-click to delete. `color` draws the
@@ -653,8 +665,13 @@ fn chips(ui: &mut egui::Ui, items: &[(Option<Color32>, &str)], selected: &mut us
     let t = Tokens::get(ui.ctx());
     let mut changed = false;
     ui.horizontal(|ui| {
+        // Every chip on one row, as Camera Raw's eight Color Mixer colours: narrower when the
+        // column can't fit 24 pt each.
+        let n = items.len().max(1) as f32;
+        let gap = ui.spacing().item_spacing.x;
+        let side = ((ui.available_width() - gap * (n - 1.0)) / n).clamp(1.0, 24.0);
         for (i, (fill, name)) in items.iter().enumerate() {
-            let (rect, resp) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::click());
+            let (rect, resp) = ui.allocate_exact_size(vec2(side, 24.0), Sense::click());
             let on = *selected == i;
             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, *name));
             let c = rect.center();
@@ -667,10 +684,11 @@ fn chips(ui: &mut egui::Ui, items: &[(Option<Color32>, &str)], selected: &mut us
                     ui.painter().line_segment([c + vec2(-4.0, 3.0), c + vec2(4.0, -3.0)], Stroke::new(1.5, t.text_dim));
                 }
             }
+            let ring = (side / 2.0 - 1.5).min(10.5);
             if on {
-                ui.painter().circle_stroke(c, 10.5, Stroke::new(1.5, t.text));
+                ui.painter().circle_stroke(c, ring, Stroke::new(1.5, t.text));
             } else if resp.hovered() {
-                ui.painter().circle_stroke(c, 10.5, Stroke::new(1.0, t.text_faint));
+                ui.painter().circle_stroke(c, ring, Stroke::new(1.0, t.text_faint));
             }
             if resp.on_hover_text(*name).clicked() && !on {
                 *selected = i;

@@ -428,6 +428,54 @@ fn dialog_drives_the_engine() {
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": "x"}}})).unwrap().is_err());
 }
 
+fn grey_dialog() -> (PhotocraftApp, egui::Context) {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({})).unwrap().unwrap();
+    (app, ctx)
+}
+
+/// `reset` and `set` in one request: `set` applies on top of the reset, not on the old settings.
+#[test]
+fn set_applies_on_top_of_a_reset_in_the_same_request() {
+    let (mut app, ctx) = grey_dialog();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"contrast": 40}}})).unwrap().unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"reset": "default", "set": {"exposure": 0.5}}})).unwrap().unwrap();
+    let p = &app.camera_raw.as_ref().unwrap().params;
+    assert_eq!((p.contrast, p.exposure), (0.0, 0.5));
+}
+
+/// Replacing a colour channel's point curve (here by undo) drops the curve editor's selected
+/// point, as replacing the master curve does.
+#[test]
+fn undo_of_a_channel_curve_resets_the_curve_gesture() {
+    let (mut app, _ctx) = grey_dialog();
+    let d = app.camera_raw.as_mut().unwrap();
+    super::controls::remember_edit(d);
+    d.params.point_curve_red = vec![[0.0, 0.0], [128.0, 150.0], [255.0, 255.0]];
+    d.curve_state.selected = Some(1);
+    assert!(super::controls::undo_edit(d));
+    assert_eq!(d.curve_state, Default::default());
+}
+
+/// With the panels hidden that hold every edit, the preview paints the source at full
+/// resolution, and the readout samples it there rather than falling back to the proxy.
+#[test]
+fn the_readout_samples_what_the_preview_shows_with_hidden_panels() {
+    let (mut app, _ctx) = grey_dialog();
+    let d = app.camera_raw.as_mut().unwrap();
+    d.params.exposure = 1.0;
+    d.panels.hidden = ["light"].into();
+    d.detail.ready = true;
+    // A proxy that disagrees with the full-resolution pixels.
+    d.processed = vec![[0.0, 0.0, 0.0, 1.0]; d.pw * d.ph];
+    let readout = d.readout([0.5, 0.5], false).expect("a readout");
+    assert!((readout["values"][0].as_f64().unwrap() - 128.0).abs() < 1.0, "{readout}");
+}
+
 std::thread_local! {
     /// Held by a test's thread from its first `raw_app` to the test's end.
     static RAW_OPEN_TURN: std::cell::RefCell<Option<std::sync::MutexGuard<'static, ()>>> = const { std::cell::RefCell::new(None) };
@@ -1456,6 +1504,17 @@ fn parametric_regions_follow_the_splits() {
     let s = [25.0, 50.0, 75.0];
     assert_eq!([0.0, 0.24, 0.25, 0.6, 0.75, 1.0].map(|x| parametric_region(x, s)), [0, 0, 1, 2, 3, 3]);
     assert_eq!(parametric_region(0.5, [10.0, 20.0, 30.0]), 3);
+}
+
+/// Double-clicking a split resets it to its default only as far as its neighbours allow, so the
+/// handles stay ordered.
+#[test]
+fn a_split_reset_stays_between_its_neighbours() {
+    use super::edit_panel::{reset_split, split_bounds};
+    assert!(reset_split(&[10.0, 15.0, 90.0], 0) <= 10.0);
+    assert_eq!(reset_split(&[20.0, 50.0, 80.0], 1), 50.0);
+    assert_eq!(reset_split(&[20.0, 30.0, 40.0], 2), 75.0);
+    assert_eq!(split_bounds(&[20.0, 30.0, 40.0], 1), (25.0, 35.0));
 }
 
 /// Camera Raw's decimal places: Exposure two, Radius and Rotate one, the -100 to 100 sliders none.

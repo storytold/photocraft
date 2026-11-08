@@ -55,7 +55,7 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color Mixer")).click();
         h.run_steps(2);
         for tab in ["Hue", "Saturation", "Luminance", "All"] {
-            assert!(h.get_by_role_and_label(Role::Button, tr(tab)).rect().right() <= 1426.0, "{}: mixer tabs overflow the panel", lang.code());
+            assert!(h.get_by_role_and_label(Role::Button, tr(tab)).rect().right() <= TOOL_STRIP_LEFT, "{}: mixer tabs overflow the panel", lang.code());
         }
         for band in ["Red", "Orange", "Yellow", "Green", "Aqua", "Blue", "Purple", "Magenta"] {
             assert!(h.query_by_role_and_label(Role::Slider, tr(band)).is_some(), "{}: {band}", lang.code());
@@ -118,6 +118,9 @@ fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_
         assert_eq!(after["histogram"], before["histogram"]);
     }
 }
+
+/// Where the tool strip starts at 1440 pt (it is 44 pt wide): the Edit column ends there.
+const TOOL_STRIP_LEFT: f32 = 1440.0 - 44.0;
 
 /// UI languages whose script has no face in the pinned central font manifest yet (code, ISO 15924).
 /// Tamil arrives with storytold/craft-fonts#63; drop the row once the pin ships it.

@@ -654,8 +654,14 @@ preview nor commit applies them), `mixer` (`{adjust?: "hsl"|"color", tab?: "hue"
 "luminance"|"all", color?: band name}`), `curve` (`"parametric"`, `"point"`, `"red"`, `"green"`,
 `"blue"`: the Curve panel's channel), `grading` (`"threeWay"`, `"shadows"`, `"midtones"`,
 `"highlights"`, `"global"`: the Color Grading view), `compare` (`"single"`, `"sideBySide"`, `"split"`:
-the preview's Before/After view, Before at the left), `masks` (the Masking panel: `open`,
-`selected`, `component`, `tool`, `overlay`, `overlayMode`, `brush`; the reply's `masking` describes it), `commit` and
+the preview's Before/After view, Before at the left), `masks` (the Masking panel: `open` and
+`overlay` booleans; `selected`, a mask index or null, and `component`, an index into the selected
+mask's components or null, checked after `selected` in the same request; `tool`: `"none"`,
+`"brush"`, `"linear"`, `"radial"`, `"colorPick"`, `"objects"` or `"guides"`; `overlayMode`:
+`"color"`, `"imageOnBlack"` or `"imageOnWhite"`; `brush`: `{size?, feather?, flow?, density?, erase?,
+autoMask?}`, with `size` clamped to 0.001–0.25 of the long side, `feather` and `density` to 0–100,
+`flow` to 1–100, and `erase` / `autoMask` booleans; unknown fields are errors; the masks
+themselves are the `masks` setting; the reply's `masking` describes the panel), `commit` and
 `cancel`, and while a raw file opens also `demosaic` (below). The reply's `panels` describes the
 panel state. All parts of one request are validated before any is applied; a rejected request
 leaves the settings, view state, preferences and document unchanged (and closes a dialog it

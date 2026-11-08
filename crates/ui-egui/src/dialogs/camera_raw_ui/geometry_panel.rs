@@ -86,15 +86,20 @@ pub(super) fn reset(out: &mut CameraRaw, d: &CameraRaw) {
 /// Adds a guide (0 … 1 image coordinates) for Guided Upright; the oldest goes past four, as in
 /// Camera Raw. Returns `false` for a guide too short to mean anything.
 pub(super) fn add_guide(p: &mut CameraRaw, a: [f32; 2], b: [f32; 2]) -> bool {
-    let ok = a.iter().chain(&b).all(|v| v.is_finite()) && (a[0] - b[0]).hypot(a[1] - b[1]) > 0.01;
-    if !ok {
+    if !a.iter().chain(&b).all(|v| v.is_finite()) {
         return false;
     }
+    // Length of the guide as stored (clamped to the image), so one that collapses at the edge
+    // neither goes in nor pushes a good one out.
     let clamp = |v: [f32; 2]| v.map(|c| c.clamp(0.0, 1.0));
+    let (a, b) = (clamp(a), clamp(b));
+    if (a[0] - b[0]).hypot(a[1] - b[1]) <= 0.01 {
+        return false;
+    }
     if p.upright_guides.len() >= MAX_GUIDES {
         p.upright_guides.remove(0);
     }
-    p.upright_guides.push([clamp(a), clamp(b)]);
+    p.upright_guides.push([a, b]);
     p.perspective_upright = Upright::Guided.id().into();
     true
 }
@@ -114,6 +119,9 @@ mod tests {
         assert_eq!(p.perspective_upright, "guided");
         assert!(!add_guide(&mut p, [0.5, 0.5], [0.5, 0.5]));
         assert!(!add_guide(&mut p, [f32::NAN, 0.5], [0.5, 0.9]));
+        let kept = p.upright_guides.clone();
+        assert!(!add_guide(&mut p, [-3.0, 0.5], [-2.0, 0.5]), "zero length once clamped");
+        assert_eq!(p.upright_guides, kept, "a refused guide evicts nothing");
         assert!(add_guide(&mut p, [-3.0, 0.0], [9.0, 1.0]));
         assert_eq!(p.upright_guides.last().map(|g| g[0][0]), Some(0.0));
     }

@@ -160,7 +160,7 @@ pub(super) fn load_settings(app: &mut PhotocraftApp) -> Result<Value, String> {
             report.ignored.extend(photocraft_io::camera_raw_xmp::CROP_KEYS.iter().take(4).map(|k| k.to_string()));
         }
         next.validate_changes(&d.original).map_err(|e| format!("{file}: {e}"))?;
-        if d.params.point_curve != next.point_curve {
+        if super::controls::curves_changed(&d.params, &next) {
             d.curve_state = Default::default();
         }
         if d.params != next {

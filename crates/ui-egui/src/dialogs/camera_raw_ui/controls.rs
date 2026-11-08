@@ -15,10 +15,19 @@ pub(super) fn remember_edit(d: &mut CameraRawDialog) {
     d.redo.clear();
 }
 
+/// Whether any of the four point curves (master, red, green, blue) differs: replacing the one
+/// the curve editor shows invalidates its selected or dragged point.
+pub(super) fn curves_changed(a: &super::CameraRaw, b: &super::CameraRaw) -> bool {
+    a.point_curve != b.point_curve
+        || a.point_curve_red != b.point_curve_red
+        || a.point_curve_green != b.point_curve_green
+        || a.point_curve_blue != b.point_curve_blue
+}
+
 pub(super) fn undo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(prev) = d.undo.pop() else { return false };
     d.redo.push(d.params.clone());
-    if d.params.point_curve != prev.point_curve {
+    if curves_changed(&d.params, &prev) {
         d.curve_state = Default::default();
     }
     d.params = prev;
@@ -30,7 +39,7 @@ pub(super) fn undo_edit(d: &mut CameraRawDialog) -> bool {
 pub(super) fn redo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(next) = d.redo.pop() else { return false };
     d.undo.push(d.params.clone());
-    if d.params.point_curve != next.point_curve {
+    if curves_changed(&d.params, &next) {
         d.curve_state = Default::default();
     }
     d.params = next;
@@ -264,7 +273,6 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             preview_body.min + vec2(12.0, 12.0),
             pos2((preview_body.right() - 12.0).max(preview_body.left() + 13.0), (preview_body.bottom() - 40.0).max(preview_body.top() + 13.0)),
         );
-        d.viewport = Some(view);
         d.preview_ppp = ctx.pixels_per_point();
         let size = vec2(d.full_w as f32, d.full_h as f32) / ctx.pixels_per_point();
         let navigation = &mut app.ui.camera_raw_preview;
@@ -273,7 +281,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         preview.painter().rect_filled(view, 0.0, t.canvas);
         // A mask brush, gradient or Upright guide takes the primary drag, as the Color Sampler
         // does, so the zoom tool must not claim it.
-        let drawing = super::masks_panel::captures_pointer(ctx, &d.params);
+        // Guides follow the geometry the preview shows (none with Geometry hidden or Before shown).
+        let drawing = super::masks_panel::captures_pointer(ctx, &d.effective_params(), d.show_before);
         let mut sampling = scope.sampler_tool || drawing;
         // Before / After side by side: Before at the left, the After the tools act on at the right,
         // both zoomed and panned together; Split shows Before over the left half of one image.
@@ -284,6 +293,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if compare == Compare::SideBySide {
             preview.set_clip_rect(after_view.intersect(ui.clip_rect()));
         }
+        // The rectangle the image is fitted to (the After half side by side): `zoom` reads it.
+        d.viewport = Some(after_view);
         let (r, response, panning, zoom_box) = crate::camera_raw_preview_ui::interact(&mut preview, navigation, after_view, size, &mut sampling, animated_zoom);
         if !drawing {
             scope.sampler_tool = sampling;
@@ -293,12 +304,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
             widgets::checker(preview.painter(), r.intersect(view), 8.0);
             preview.painter().image(tex.id(), r, ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
-            // Masks: the overlay, pins and Guided Upright's guides; their drags edit the masks.
-            super::masks_panel::preview(&mut preview, d, r, &response);
             let effective = d.effective_params();
             let raw_tone = d.raw_curve.is_some() && !raw_stage(&effective).is_neutral();
             let detail_needed = !raw_tone && (r.width() * ctx.pixels_per_point() > d.pw as f32 || r.height() * ctx.pixels_per_point() > d.ph as f32);
             d.detail.paint(&preview, r, d.preview_revision, d.show_before, &effective, detail_needed, &d.display);
+            // Masks: the overlay, pins and Guided Upright's guides over the image (and over the
+            // full-resolution detail), under Split's Before half; their drags edit the masks.
+            super::masks_panel::preview(&mut preview, d, r, &response, panning);
             if compare != Compare::Single
                 && let Some(before) = d.before_tex.as_ref()
             {

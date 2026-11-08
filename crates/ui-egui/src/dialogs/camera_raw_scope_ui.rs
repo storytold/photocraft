@@ -144,7 +144,7 @@ impl CameraRawDialog {
         let y = ((p[1] * self.ph as f32) as usize).min(self.ph - 1);
         let q = self
             .detail
-            .sample(p, self.preview_revision, self.show_before, &self.params)
+            .sample(p, self.preview_revision, self.show_before, &self.effective_params())
             .or_else(|| self.pixels().get(y.checked_mul(self.pw)?.checked_add(x)?).copied())?;
         (q[3] > 0.0 && q.iter().all(|v| v.is_finite())).then_some(q)
     }

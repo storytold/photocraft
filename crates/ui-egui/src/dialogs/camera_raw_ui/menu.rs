@@ -95,7 +95,8 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         if !set.is_object() {
             return Some(Err("bad RAW Develop settings: expected an object".into()));
         }
-        let mut cur = serde_json::to_value(&d.params).unwrap_or(json!({}));
+        // On top of what this request already changed (reset, auto).
+        let mut cur = serde_json::to_value(&next_params).unwrap_or(json!({}));
         if let (Value::Object(c), Value::Object(s)) = (&mut cur, set) {
             for (k, v) in s {
                 if !c.contains_key(k) {
@@ -148,7 +149,7 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     if let Some(view) = navigation {
         app.ui.camera_raw_preview = view;
     }
-    if d.params.point_curve != next_params.point_curve || d.panels.curve_channel != next_panels.curve_channel {
+    if super::controls::curves_changed(&d.params, &next_params) || d.panels.curve_channel != next_panels.curve_channel {
         d.curve_state = Default::default();
     }
     if d.panels.hidden != next_panels.hidden {
