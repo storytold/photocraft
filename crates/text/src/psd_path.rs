@@ -246,8 +246,17 @@ pub(crate) fn read_shape(frame: &E) -> Result<TextShape, String> {
     } else {
         let s = measure.arc(a.unwrap_or(if closed { count - 1.0 } else { 0.0 }));
         let e = match b.map(|b| measure.arc(b)) {
-            // A closed range runs on from its start, past the seam if it must.
-            Some(e) if closed => s + if e - s > SAME_ARC { e - s } else { e - s + length },
+            // A closed range runs on from its start, past the seam if it must. Equal ends are an
+            // empty range, not a lap: a full lap is written with its end a lap on (`frame_parts`).
+            Some(e) if closed => {
+                s + if e - s >= -SAME_ARC && e - s <= SAME_ARC {
+                    0.0
+                } else if e - s > 0.0 {
+                    e - s
+                } else {
+                    e - s + length
+                }
+            }
             Some(e) => e.max(s),
             None if closed => s + length,
             None => length,
@@ -262,8 +271,10 @@ pub(crate) fn read_shape(frame: &E) -> Result<TextShape, String> {
     } else {
         (s, e)
     };
-    let full = if closed { e - s >= length - SAME_ARC } else { e >= length - SAME_ARC };
-    Ok(TextShape::Path { path, start: s as f32, end: (!full).then_some(e as f32), flip })
+    // An explicit end stays explicit even when it reaches the path's end: it aligns center and
+    // right type within the span, where no end aligns it around the start.
+    let explicit = b.is_some();
+    Ok(TextShape::Path { path, start: s as f32, end: explicit.then_some(e as f32), flip })
 }
 
 /// `path` with its knots in the opposite order (the segments run backwards).
@@ -383,19 +394,18 @@ fn frame_parts(path: &Subpath, start: f32, end: Option<f32>, flip: bool) -> (Sub
         let start = f64::from(start);
         let measure = Measure::new(&path.segments());
         let length = measure.length();
-        return match end.map(|e| e - start) {
-            Some(span) if span < length - SAME_ARC => {
-                let span = span.max(0.0);
-                (path, false, [0.0, measure.position(span)])
-            }
-            _ => (path, true, DEFAULT),
+        return match end.map(|e| (e - start).max(0.0)) {
+            // A lap or more is an explicit end at the seam, apart from the default (no end).
+            Some(span) if span >= length - SAME_ARC => (path, false, [0.0, measure.count()]),
+            Some(span) => (path, false, [0.0, measure.position(span)]),
+            None => (path, true, DEFAULT),
         };
     }
     let base = if flip { reversed(path) } else { path.clone() };
     let measure = Measure::new(&base.segments());
     let length = measure.length();
     let start = f64::from(start).clamp(0.0, length);
-    let end = end.map(|e| e.clamp(start, length)).filter(|e| *e < length - SAME_ARC);
+    let end = end.map(|e| e.clamp(start, length));
     let range = match end {
         None if start <= SAME_ARC => DEFAULT,
         None => [measure.position(start), measure.count()],

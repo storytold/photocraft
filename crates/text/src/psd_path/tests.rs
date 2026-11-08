@@ -107,7 +107,11 @@ fn reference_ranges_read_in_segment_units() {
     assert!((28.0..34.0).contains(&end), "{end}");
 
     let moved = read_shape(&frame(AG_MOVED)).unwrap();
-    let TextShape::Path { start, end: None, flip: false, .. } = moved else { panic!("{moved:?}") };
+    // The file's end (`2.0`) is the path's end, kept as an explicit end.
+    let TextShape::Path { start, end: Some(end), flip: false, ref path } = moved else { panic!("{moved:?}") };
+    let (segs, _) = segments(&frame(AG_MOVED)).unwrap();
+    assert!((f64::from(end) - Measure::new(&segs).length()).abs() < 0.01, "{end}");
+    assert!(!path.closed);
     let want = frame_point(AG_MOVED, 0, 0.07689);
     assert!(dist(point_at(&moved, start), want) < 0.5, "{:?} vs {want:?}", point_at(&moved, start));
 
@@ -159,6 +163,8 @@ fn ranges_round_trip_through_frames() {
         let (a, b) = (path_range_length(&shape), path_range_length(&back));
         match (a, b) {
             (None, None) => {}
+            // No end after a moved start is written as an end at the path's end: the same type.
+            (None, Some(_)) if end.is_none() && start > 0.0 => {}
             (Some(a), Some(b)) => assert!((a - b).abs() < 0.05, "{label}: range {a} vs {b}"),
             _ => panic!("{label}: range {a:?} vs {b:?}"),
         }
@@ -449,4 +455,42 @@ fn an_area_layer_gets_a_box_frame() {
     let mut entry = E::Dict(vec![("0".into(), frame(CIRCLE))]);
     update_frame(&mut entry, &TextShape::Area { path: square });
     assert_eq!(entry, box_frame(10.0, 20.0, 40.0, 60.0));
+}
+
+/// An explicit end that reaches the path's end stays explicit: it aligns centered and right type
+/// within the span, where no end aligns it around the start.
+#[test]
+fn an_explicit_end_at_the_path_end_survives_a_round_trip() {
+    use crate::warp::path_range_length;
+    let wave = read(&frame(WAVE)).unwrap();
+    let circle = read(&frame(CIRCLE)).unwrap();
+    let wave_len = Measure::new(&wave.segments()).length();
+    let circle_len = Measure::new(&circle.segments()).length();
+    for (path, start, end, flip) in [(&wave, 20.0, wave_len, false), (&wave, 20.0, wave_len, true), (&circle, 40.0, 40.0 + circle_len, false)] {
+        let shape = TextShape::Path { path: path.clone(), start: start as f32, end: Some(end as f32), flip };
+        let mut entry = E::Dict(vec![("0".into(), frame(WAVE))]);
+        update_frame(&mut entry, &shape);
+        let back = read_shape(entry.get("0").unwrap()).unwrap();
+        let TextShape::Path { end: Some(_), .. } = back else { panic!("the explicit end was dropped: {back:?}") };
+        let (a, b) = (path_range_length(&shape), path_range_length(&back));
+        let (Some(a), Some(b)) = (a, b) else { panic!("range {a:?} vs {b:?}") };
+        assert!((a - b).abs() < 0.05, "range {a} vs {b}");
+    }
+}
+
+/// A closed range whose ends meet is empty, not a lap: it hides all the type and keeps doing so.
+#[test]
+fn a_collapsed_closed_range_stays_empty() {
+    use crate::warp::{Placement, Warp, path_range_length};
+    let circle = read(&frame(CIRCLE)).unwrap();
+    for start in [0.0_f32, 75.0] {
+        let shape = TextShape::Path { path: circle.clone(), start, end: Some(start), flip: false };
+        let mut entry = E::Dict(vec![("0".into(), frame(WAVE))]);
+        update_frame(&mut entry, &shape);
+        let back = read_shape(entry.get("0").unwrap()).unwrap();
+        let TextShape::Path { end: Some(_), .. } = back else { panic!("start {start}: {back:?}") };
+        assert_eq!(path_range_length(&back).map(|n| n.round()), Some(0.0), "start {start}: {back:?}");
+        let warp = Warp::on_path(&back).unwrap();
+        assert!(matches!(warp.place_glyph(10.0), Placement::Hidden), "start {start}: the text is revealed");
+    }
 }
