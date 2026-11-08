@@ -1044,3 +1044,38 @@ fn chosen_clear_paints_normally_on_the_background_and_the_mode_reads_normal() {
     let px = st.doc.layer(bg).unwrap().surface().unwrap().rgba((d.x + v.center[0]) as i32, (d.y + v.center[1]) as i32);
     assert!(px[2] > 0.9 && px[0] < 0.1, "the foreground blue, not the background colour: {px:?}");
 }
+
+/// #11897: a Background with Lock All refuses the stroke, so a chosen Clear stays chosen.
+#[test]
+fn chosen_clear_stays_on_a_locked_background() {
+    let mut h = harness(None);
+    h.state_mut().ui.tool_options.brush_clear = true;
+    let bg = h.state().session.active().unwrap().doc.background().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.state_mut().run("layer.lockLayers", json!({"all": true})).unwrap();
+    h.run_steps(2);
+    drag(&mut h, PointerButton::Primary);
+    assert!(h.state().ui.tool_options.brush_clear, "the Mode still reads Clear");
+}
+
+/// #11897: a held `~` on the Background keeps erasing to the background colour.
+#[test]
+fn held_tilde_on_the_background_paints_the_background_colour() {
+    let mut h = harness(None);
+    h.state_mut().run("tools.setColors", json!({"background": "#00ff00"})).unwrap();
+    let bg = h.state().session.active().unwrap().doc.background().unwrap().id;
+    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+    h.run_steps(2);
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    let (a, b) = drag(&mut h, PointerButton::Primary);
+    h.event(egui::Event::Key { key: egui::Key::Backtick, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    assert_eq!(strokes(&h).last().unwrap()["mode"], json!("clear"));
+    let app = h.state();
+    let v = app.ui.views[0].clone();
+    let d = ((a + (b - a) * 0.5) - app.last_canvas_rect.center()) / v.zoom;
+    let st = app.session.active().unwrap();
+    let px = st.doc.layer(bg).unwrap().surface().unwrap().rgba((d.x + v.center[0]) as i32, (d.y + v.center[1]) as i32);
+    assert!(px[1] > 0.9 && px[0] < 0.1 && px[2] < 0.1, "the background green, not the foreground blue: {px:?}");
+}

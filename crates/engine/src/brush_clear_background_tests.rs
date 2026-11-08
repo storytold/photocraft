@@ -1,5 +1,7 @@
-//! #11897: the Brush's Clear mode on the Background paints as Normal with the foreground colour,
-//! not the background colour; on a pixel layer Clear still erases, and the Eraser on the
+//! #11897: the Brush's chosen Clear on the Background paints as Normal. The options bar turns
+//! Clear off at the press there (`clear_off_on_background` in ui-egui), so the engine never sees
+//! it; a `"mode": "clear"` stroke that does reach the Background is a held `~`, which keeps
+//! erasing to the background colour. On a pixel layer Clear still erases, and the Eraser on the
 //! Background still paints the background colour.
 
 use crate::Session;
@@ -27,17 +29,27 @@ fn close(a: [f32; 4], b: [f32; 4]) -> bool {
     a.iter().zip(&b).all(|(x, y)| (x - y).abs() <= 0.02)
 }
 
-/// A hard stroke across (10..30, 10), as the canvas sends it with Clear chosen.
+/// A hard stroke across (10..30, 10), as the canvas sends it in Clear mode.
 fn clear_stroke() -> Value {
     json!({"points": [[10, 10], [30, 10]], "size": 8, "hardness": 1.0, "erase": true, "mode": "clear"})
 }
 
+/// A held `~` on the Background erases to the background colour, as before #11897.
 #[test]
-fn clear_on_the_background_paints_the_foreground() {
+fn a_clear_stroke_on_the_background_still_paints_the_background_colour() {
     let mut s = session();
     s.execute("paint.stroke", clear_stroke()).unwrap();
     let p = pixel(&mut s, 20, 10);
-    assert!(close(p, BLACK), "painted {p:?}, not the background colour");
+    assert!(close(p, GREEN), "painted {p:?}, not the foreground");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Brush Tool"));
+}
+
+#[test]
+fn a_normal_stroke_on_the_background_paints_the_foreground() {
+    let mut s = session();
+    s.execute("paint.stroke", json!({"points": [[10, 10], [30, 10]], "size": 8, "hardness": 1.0})).unwrap();
+    let p = pixel(&mut s, 20, 10);
+    assert!(close(p, BLACK), "{p:?}");
 }
 
 #[test]

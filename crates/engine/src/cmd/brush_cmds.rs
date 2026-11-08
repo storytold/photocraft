@@ -424,24 +424,10 @@ fn with_blend_mode(mut b: BrushSettings, p: &Value) -> BrushSettings {
     b
 }
 
-/// The Brush's Clear on the Background paints as Normal with its own colour, as in Photoshop
-/// (#11897): the Background has no transparency to clear. Masks, channels, other layers (even
-/// with locked transparency) and the Pencil keep Clear.
-fn clear_on_background(s: &Session, p: &Value, mut brush: BrushSettings) -> Result<BrushSettings> {
-    if !clear_mode(p) || is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some() {
-        return Ok(brush);
-    }
-    let id = layer_id(s, p)?;
-    if s.active().is_some_and(|st| st.doc.is_background(id)) {
-        brush.erase = false;
-    }
-    Ok(brush)
-}
-
 /// `paint.stroke`: the Brush (and Eraser) tool.
 pub fn paint_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = parse_points(p, "paint.stroke")?;
-    let brush = clear_on_background(s, p, with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p))?;
+    let brush = with_blend_mode(resolve_brush(s, p, "paint.stroke")?, p);
     let label = if brush.erase && !clear_mode(p) { "Eraser" } else { "Brush Tool" };
     if flag(p, "fill", false) {
         return fill_region(s, p, label, brush, pts);
@@ -619,7 +605,7 @@ impl LiveStroke {
             "paint.pencil" => true,
             other => return Err(bad(other, "live strokes are `paint.stroke` or `paint.pencil`")),
         };
-        let brush = if pencil { pencil_brush(s, p)? } else { clear_on_background(s, p, with_blend_mode(resolve_brush(s, p, cmd)?, p))? };
+        let brush = if pencil { pencil_brush(s, p)? } else { with_blend_mode(resolve_brush(s, p, cmd)?, p) };
         let (seed, fg) = (brush.seed, brush.color);
         let (layer, mut brush, zoom) = stroke_target(s, p, brush)?;
         let st = s.active().ok_or(EngineError::NoDocument)?;

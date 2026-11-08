@@ -377,16 +377,25 @@ fn mixer_press_failed(app: &mut PhotocraftApp, message: String) {
     }
 }
 
-/// Tool state machine. Shared by mouse input and automation.
 /// The Brush's chosen Clear paints as Normal on the Background, and its Mode then reads Normal
-/// (#11897). A held `~` keeps today's behaviour.
+/// (#11897): at the press of a Brush stroke on the Background's own pixels, Clear (chosen in the
+/// options bar, not a held `~`) is turned off, so the stroke is sent as Normal. A Background whose
+/// pixels are locked refuses the stroke, so Clear stays chosen there.
 fn clear_off_on_background(app: &mut PhotocraftApp, tool: Tool) {
-    let on_background = app.session.active().is_some_and(|st| st.active_layer.is_some_and(|id| st.doc.is_background(id)));
+    let on_background = app.session.active().is_some_and(|st| {
+        st.active_layer.is_some_and(|id| {
+            st.doc.is_background(id) && {
+                let locks = st.doc.effective_locks(id);
+                !locks.pixels && !locks.all
+            }
+        })
+    });
     if tool == Tool::Brush && app.ui.tool_options.brush_clear && !app.held_erase && on_background && paint_target(app) == serde_json::json!("pixels") {
         app.ui.tool_options.brush_clear = false;
     }
 }
 
+/// Tool state machine. Shared by mouse input and automation.
 pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     if consumes_cancelled_vector_event(app, ev) {
         return;
