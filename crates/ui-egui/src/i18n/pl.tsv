@@ -2513,8 +2513,6 @@
 	Roman Hanging Punctuation	Wiszące znaki interpunkcyjne (łacińskie)
 	Avoid Widows/Orphans	Unikaj wdów i sierot
 	Compose	Skład
-	Adobe Single-line Composer	Skład jednowierszowy Adobe
-	Adobe Every-line Composer	Skład wielowierszowy Adobe
 	Justification	Justowanie
 	Word Spacing	Odstępy między wyrazami
 	Letter Spacing	Odstępy między literami
@@ -2770,7 +2768,6 @@
 	Intersect with	Część wspólna z
 	Capture Comp	Przechwyć kompozycję
 	No Layer Comps	Brak kompozycji warstw
-	Adobe PDF Presets…	Ustawienia wstępne Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Podglądy technologii…
 	Background from Layer	Tło z warstwy
@@ -3539,7 +3536,6 @@ cameraRaw	Roughness	Chropowatość
 	Pick a screen pixel or press Esc to cancel	Wybierz piksel ekranu lub naciśnij Esc, aby anulować
 	Scroll to zoom	Przewijaj, aby zmieniać powiększenie
 	Drag to pan · Scroll to zoom · Double-click to fit	Przeciągnij, aby przesunąć · Przewijaj, aby powiększyć · Kliknij dwukrotnie, aby dopasować
-	Open in camera raw	Otwórz w Camera Raw
 	System title bar	Systemowy pasek tytułu
 	More documents	Więcej dokumentów
 	Developing {name}	Wywoływanie {name}

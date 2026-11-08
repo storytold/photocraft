@@ -62,7 +62,7 @@
 
 # Mixer Brush (required for every registered non-English language)
 
-# Camera Raw labels (required for every registered non-English language)
+# RAW Develop labels (required for every registered non-English language)
 
 # Phase 4.1 — Preferences dialog
 
@@ -75,13 +75,13 @@
 
 # Phase 4.5 — Preset Manager + Export/Import Presets
 
-# Phase 4.6 — Camera Raw chrome + Light/Color basics (tone, WB, presence)
+# Phase 4.6 — RAW Develop chrome + Light/Color basics (tone, WB, presence)
 
-# Phase 4.7 — Camera Raw Curve + Color Mixer
+# Phase 4.7 — RAW Develop Curve + Color Mixer
 
-# Phase 4.8 — Camera Raw Color Grading + Detail
+# Phase 4.8 — RAW Develop Color Grading + Detail
 
-# Phase 4.10 — Camera Raw Effects (Texture/Clarity/Dehaze + Vignetting + Grain)
+# Phase 4.10 — RAW Develop Effects (Texture/Clarity/Dehaze + Vignetting + Grain)
 
 # Phase 4.13 — New Document + Home + Image Size
 
@@ -289,7 +289,7 @@
 	Puppet Warp	Biến dạng con rối
 	Purge	Dọn
 	Quick Export as PNG	Xuất nhanh dạng PNG
-	Raw Defaults…	Mặc định Camera Raw…
+	Raw Defaults…	Mặc định RAW…
 	Redo	Làm lại
 	Remove Warp Split	Gỡ tách biến dạng
 	Render Video…	Xuất video…
@@ -1747,7 +1747,6 @@ cameraRaw	Shadows	Vùng tối
 	Default restored.	Đã khôi phục mặc định.
 	Delete Shortcut	Xóa phím tắt
 	Reset All to Defaults	Đặt lại tất cả về mặc định
-	All shortcuts reset to Photoshop defaults.	Tất cả phím tắt đã được đặt lại về mặc định Photoshop.
 	Show All Menu Items	Hiện tất cả mục menu
 	Restore Defaults	Khôi phục mặc định
 	Visible	Hiện
@@ -1872,7 +1871,6 @@ cameraRaw	Size	Kích thước
 	White	Trắng
 	Transparent	Trong suốt
 	Portrait	Dọc
-	Default Photoshop Size	Kích thước Photoshop mặc định
 document	Orientation	Hướng trang
 	Image Size	Kích thước ảnh
 	Image Size:	Kích thước ảnh:
@@ -2811,7 +2809,6 @@ shape	Appearance	Diện mạo
 	Missing glyph protection	Bảo vệ khi thiếu glyph
 	Modern	Hiện đại
 	Open as smart object	Mở dưới dạng đối tượng thông minh
-	Open in camera raw	Mở trong camera raw
 	Open documents as tabs	Mở tài liệu dưới dạng thẻ
 	Print resolution	Độ phân giải in
 	Pro light	Pro sáng

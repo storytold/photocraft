@@ -1978,7 +1978,6 @@
 	Never	ஒருபோதும் இல்லை
 	Normal tip	இயல்பான முனை
 	Open as smart object	திறன்மிகு பொருளாகத் திற
-	Open in camera raw	கேமரா Raw இல் திற
 	Open documents as tabs	ஆவணங்களைத் தாவல்களாகத் திற
 	Overscroll	மிகைஉருட்டல்
 	Performance	செயல்திறன்
@@ -2929,8 +2928,6 @@ curves	Smooth	மென்மையாக்கு
 	Roman Hanging Punctuation	ரோமன் தொங்கும் நிறுத்தற்குறிகள்
 	Avoid Widows/Orphans	தனித்த வரிகளைத் தவிர்
 	Compose	அமை
-	Adobe Single-line Composer	Adobe ஒற்றை வரி அமைப்பி
-	Adobe Every-line Composer	Adobe ஒவ்வொரு வரி அமைப்பி
 	Word Spacing	சொல் இடைவெளி
 	Letter Spacing	எழுத்து இடைவெளி
 	Glyph Scaling	குறியுரு அளவீடு
@@ -3126,7 +3123,6 @@ curves	Smooth	மென்மையாக்கு
 	Intersect with	இதனுடன் வெட்டிக்கொள்
 	Capture Comp	அமைப்பைப் பதிவுசெய்
 	No Layer Comps	அடுக்கு அமைப்புகள் இல்லை
-	Adobe PDF Presets…	Adobe PDF முன்னமைவுகள்…
 	3D…	3D…
 	Technology Previews…	தொழில்நுட்ப முன்னோட்டங்கள்…
 	Add a mask  (from the selection; ⌥ inverts)	மறைப்பை சேர் (தேர்விலிருந்து; ⌥ தலைகீழாக்கும்)

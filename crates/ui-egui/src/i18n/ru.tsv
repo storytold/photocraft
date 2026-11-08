@@ -66,7 +66,7 @@
 
 # Filters and adjustments dialogs
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 
 # Adjustments panel
 
@@ -125,7 +125,7 @@
 
 # Preference dialog: generated setting labels and dropdown choices
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 
 
@@ -199,7 +199,7 @@
 # Preferences › Performance › GPU Memory; the status bar and slow-redraw notice
 
 
-# Dynamic UI labels (fourth pass): filter and adjustment parameters, Camera Raw panels,
+# Dynamic UI labels (fourth pass): filter and adjustment parameters, RAW Develop panels,
 # lighting, History/Layers/paths/channels menus, metadata, System Info, status templates and
 # dialog text that other catalogs already carry. Written from the meaning of the English labels
 # in the ordinary Russian graphics-editor vocabulary; no proprietary resource consulted.
@@ -1315,8 +1315,6 @@
 	Roman Hanging Punctuation	Висячая пунктуация (римская)
 	Avoid Widows/Orphans	Избегать висячих строк
 	Compose	Компоновка
-	Adobe Single-line Composer	Построчная компоновка Adobe
-	Adobe Every-line Composer	Абзацная компоновка Adobe
 	Justification	Выключка
 	Word Spacing	Межсловные интервалы
 	Letter Spacing	Межбуквенные интервалы
@@ -2535,7 +2533,6 @@
 	Never	Никогда
 	Normal tip	Контур кисти (50%)
 	Open as smart object	Открывать как смарт-объект
-	Open in camera raw	Открывать в Camera Raw
 	Open documents as tabs	Открывать документы во вкладках
 	OpenGL	OpenGL
 	Orange	Оранжевая
@@ -3441,13 +3438,11 @@ curves	Smooth	Сгладить
 	Adjustment Layers	Корректирующие слои
 	Adjustment Properties	Свойства коррекции
 	Adjustment layers have nothing to transform	В корректирующих слоях нечего трансформировать
-	Adobe PDF Presets…	Наборы Adobe PDF…
 	Adobe-rgb-compat	Adobe RGB (совместимо)
 	Adwaita (Dark)	Adwaita (тёмная)
 	Adwaita (Light)	Adwaita (светлая)
 	After	После
 	Airbrush: keeps painting while the pointer rests.	Аэрограф: продолжает рисовать, пока указатель неподвижен.
-	All shortcuts reset to Photoshop defaults.	Все сочетания клавиш сброшены к значениям Photoshop по умолчанию.
 	Altitude	Высота
 	Ambience	Атмосфера
 	Ambient	Окружающий свет
@@ -3680,7 +3675,6 @@ curves	Smooth	Сгладить
 	Deep Yellow	Глубокий жёлтый
 	Default Foreground and Background Colors	Цвета переднего плана и фона по умолчанию
 	Default Leaves	Листья по умолчанию
-	Default Photoshop Size	Размер Photoshop по умолчанию
 	Defaults	По умолчанию
 	Define Brush Preset	Определить кисть
 	Define Custom Shape	Определить свою фигуру

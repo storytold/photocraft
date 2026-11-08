@@ -2071,7 +2071,6 @@
 	Never	Nunca
 	Normal tip	Ponta normal
 	Open as smart object	Abrir como objeto inteligente
-	Open in camera raw	Abrir no Camera Raw
 	Open documents as tabs	Abrir documentos como guias
 	Overscroll	Rolagem além dos limites
 	Performance	Desempenho
@@ -2475,8 +2474,6 @@
 	Roman Hanging Punctuation	Pontuação romana deslocada
 	Avoid Widows/Orphans	Evitar viúvas/órfãs
 	Compose	Compor
-	Adobe Single-line Composer	Compositor de linha única Adobe
-	Adobe Every-line Composer	Compositor de todas as linhas Adobe
 	Justification	Justificação
 	Word Spacing	Espaçamento entre palavras
 	Letter Spacing	Espaçamento entre letras
@@ -2732,7 +2729,6 @@
 	Intersect with	Fazer interseção com
 	Capture Comp	Capturar composição
 	No Layer Comps	Nenhuma composição de camadas
-	Adobe PDF Presets…	Predefinições do Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Prévias de tecnologia…
 	Background from Layer	Plano de fundo a partir da camada

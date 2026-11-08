@@ -876,7 +876,7 @@
 	Working Black Plate	Työ-mustalevy
 	Working Gray Plate	Harmaa työlevy
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 	Basic	Perusasetukset
 	Detail	Yksityiskohdat
 	HSL/Grayscale	HSL/harmaasävy
@@ -1178,8 +1178,6 @@
 	Roman Hanging Punctuation	Latinalainen riippuva välimerkitys
 	Avoid Widows/Orphans	Vältä leski- ja orporivejä
 	Compose	Sommittele
-	Adobe Single-line Composer	Adobe yksirivinen asettelija
-	Adobe Every-line Composer	Adobe kaikkien rivien asettelija
 	Justification	Tasaus
 	Word Spacing	Sanaväli
 	Letter Spacing	Merkkiväli
@@ -2441,7 +2439,6 @@
 	Never	Ei koskaan
 	Normal tip	Normaali kärki
 	Open as smart object	Avaa älykkäänä objektina
-	Open in camera raw	Avaa Camera Raw'ssa
 	Open documents as tabs	Avaa asiakirjat välilehtinä
 	OpenGL	OpenGL
 	Orange	Oranssi
@@ -2582,7 +2579,7 @@
 	Tone Histogram	Sävyhistogrammi
 	Show Selected Region	Näytä valittu alue
 cameraRaw	Light	Valo
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 	RAW Develop Filter ({layer})	RAW-kehitys -suodatin ({layer})
 	RAW Develop ({name})	RAW-kehitys ({name})
 	Aqua	Turkoosi
@@ -3389,7 +3386,7 @@ curves	Smooth	Tasoita
 	{name} was changed by another app after it was opened or saved here.	Toinen ohjelma on muuttanut tiedostoa {name} sen jälkeen, kun se avattiin tai tallennettiin täällä.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Korvaa se tällä asiakirjalla, tai peruuta ja käytä komentoa Tiedosto › Tallenna nimellä, jos haluat säilyttää molemmat.
 
-# Dynamic UI labels (fourth pass): filter and adjustment parameters, Camera Raw panels,
+# Dynamic UI labels (fourth pass): filter and adjustment parameters, RAW Develop panels,
 # lighting, History/Layers/paths/channels menus, metadata, System Info, status templates and
 # dialog text that other catalogs already carry. Written from the meaning of the English labels
 # in the ordinary Russian graphics-editor vocabulary; no proprietary resource consulted.
@@ -3415,13 +3412,11 @@ curves	Smooth	Tasoita
 	Adjustment Layers	Säätötasot
 	Adjustment Properties	Säädön ominaisuudet
 	Adjustment layers have nothing to transform	Säätötasoilla ei ole mitään muunnettavaa
-	Adobe PDF Presets…	Adobe PDF -esiasetukset…
 	Adobe-rgb-compat	Adobe RGB -yhteensopiva
 	Adwaita (Dark)	Adwaita (tumma)
 	Adwaita (Light)	Adwaita (vaalea)
 	After	Jälkeen
 	Airbrush: keeps painting while the pointer rests.	Ilmasivellin: maalaa edelleen, kun osoitin on paikallaan.
-	All shortcuts reset to Photoshop defaults.	Kaikki pikanäppäimet palautettu Photoshopin oletuksiin.
 	Altitude	Korkeus
 	Ambience	Ympäristövalo
 	Ambient	Ympäristö
@@ -3654,7 +3649,6 @@ curves	Smooth	Tasoita
 	Deep Yellow	Syvä keltainen
 	Default Foreground and Background Colors	Oletusarvoiset edusta- ja taustavärit
 	Default Leaves	Oletuslehdet
-	Default Photoshop Size	Photoshopin oletuskoko
 	Defaults	Oletukset
 	Define Brush Preset	Määritä siveltimen esiasetus
 	Define Custom Shape	Määritä mukautettu muoto

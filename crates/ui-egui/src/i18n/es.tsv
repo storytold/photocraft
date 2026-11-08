@@ -29,7 +29,7 @@
 # Spanish follows the tool wording used above (Herramienta X).
 # Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 # About ▸ Contributors / Models (credits)
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -54,7 +54,7 @@
 # Print dialog (#2697)
 # Counted status messages and labels (#3454; adapted from PR #3821)
 # View › Guides › New Guide… › Color
-# Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) that the
+# Dynamic labels (filter and adjustment parameters, RAW Develop, panels, dialogs) that the
 # other catalogs already translate
 # Path, channel, layer style, status and System Info labels the Czech catalog added
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
@@ -2071,7 +2071,6 @@
 	Never	Nunca
 	Normal tip	Punta normal
 	Open as smart object	Abrir como objeto inteligente
-	Open in camera raw	Abrir en Camera Raw
 	Open documents as tabs	Abrir los documentos como pestañas
 	Overscroll	Sobredesplazamiento
 	Performance	Rendimiento
@@ -3030,8 +3029,6 @@ curves	Smooth	Suavizar
 	Roman Hanging Punctuation	Puntuación latina colgante
 	Avoid Widows/Orphans	Evitar líneas viudas y huérfanas
 	Compose	Componer
-	Adobe Single-line Composer	Compositor de línea única de Adobe
-	Adobe Every-line Composer	Compositor multilínea de Adobe
 	Word Spacing	Espacio entre palabras
 	Letter Spacing	Espacio entre caracteres
 	Glyph Scaling	Escala de glifos
@@ -3227,7 +3224,6 @@ curves	Smooth	Suavizar
 	Intersect with	Intersecar con
 	Capture Comp	Capturar composición
 	No Layer Comps	No hay composiciones de capas
-	Adobe PDF Presets…	Ajustes preestablecidos de Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Previsualizaciones de tecnología…
 	Add a mask  (from the selection; ⌥ inverts)	Añadir una máscara (a partir de la selección; ⌥ invierte)

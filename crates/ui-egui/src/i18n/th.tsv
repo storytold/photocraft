@@ -861,7 +861,7 @@
 	Working Black Plate	จานดำทำงาน
 	Working Gray Plate	แผ่นสีเทาทำงาน
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 	Basic	ขั้นพื้นฐาน
 	Detail	รายละเอียด
 	HSL/Grayscale	HSL/ระดับสีเทา
@@ -1163,8 +1163,6 @@
 	Roman Hanging Punctuation	เครื่องหมายวรรคตอนแขวนโรมัน
 	Avoid Widows/Orphans	หลีกเลี่ยงแม่ม่าย/เด็กกำพร้า
 	Compose	เขียน
-	Adobe Single-line Composer	Adobe นักแต่งเพลงบรรทัดเดียว
-	Adobe Every-line Composer	Adobe นักแต่งเพลงทุกบรรทัด
 	Justification	การให้เหตุผล
 	Word Spacing	การเว้นวรรคคำ
 	Letter Spacing	การเว้นวรรคจดหมาย
@@ -2415,7 +2413,6 @@
 	Never	ไม่เคย
 	Normal tip	ทิปปกติ
 	Open as smart object	เปิดเป็นวัตถุอัจฉริยะ
-	Open in camera raw	เปิดในกล้องดิบ
 	Open documents as tabs	เปิดเอกสารเป็นแท็บ
 	OpenGL	OpenGL
 	Orange	ส้ม
@@ -2557,7 +2554,7 @@
 	Tone Histogram	โทนฮิสโตแกรม
 	Show Selected Region	แสดงภูมิภาคที่เลือก
 cameraRaw	Light	เบา
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 	RAW Develop Filter ({layer})	ฟิลเตอร์ การปรับแต่ง RAW ({layer})
 	RAW Develop ({name})	การปรับแต่ง RAW ({name})
 	Aqua	อควา
@@ -3367,7 +3364,7 @@ curves	Smooth	เรียบเนียน
 	{name} was changed by another app after it was opened or saved here.	{name} ถูกเปลี่ยนโดยแอปอื่นหลังจากเปิดหรือบันทึกที่นี่
 	Replace it with this document, or cancel and use File › Save As to keep both.	แทนที่ด้วยเอกสารนี้ หรือยกเลิกและใช้ไฟล์ › บันทึกเป็นเพื่อเก็บทั้งสองอย่าง
 
-# Dynamic UI labels (fourth pass): filter and adjustment parameters, Camera Raw panels,
+# Dynamic UI labels (fourth pass): filter and adjustment parameters, RAW Develop panels,
 # lighting, History/Layers/paths/channels menus, metadata, System Info, status templates and
 # dialog text that other catalogs already carry. Written from the meaning of the English labels
 # in the ordinary Russian graphics-editor vocabulary; no proprietary resource consulted.
@@ -3393,13 +3390,11 @@ curves	Smooth	เรียบเนียน
 	Adjustment Layers	เลเยอร์ปรับแต่ง
 	Adjustment Properties	คุณสมบัติการปรับ
 	Adjustment layers have nothing to transform	เลเยอร์การปรับแต่งไม่มีอะไรจะเปลี่ยนแปลง
-	Adobe PDF Presets…	ค่าที่ตั้งล่วงหน้า Adobe PDF…
 	Adobe-rgb-compat	Adobe-rgb-compat
 	Adwaita (Dark)	แอดเวตา (ความมืด)
 	Adwaita (Light)	อัดเวตา (ธาตุเบา)
 	After	หลังจากนั้น
 	Airbrush: keeps painting while the pointer rests.	พู่กัน: คงการวาดภาพในขณะที่ตัวชี้วางอยู่
-	All shortcuts reset to Photoshop defaults.	ทางลัดทั้งหมดรีเซ็ตเป็นค่าเริ่มต้นของ Photoshop
 	Altitude	ระดับความสูง
 	Ambience	บรรยากาศ
 	Ambient	สิ่งแวดล้อม
@@ -3632,7 +3627,6 @@ curves	Smooth	เรียบเนียน
 	Deep Yellow	สีเหลืองเข้ม
 	Default Foreground and Background Colors	สีพื้นหน้าและพื้นหลังเริ่มต้น
 	Default Leaves	ใบเริ่มต้น
-	Default Photoshop Size	ขนาด Photoshop เริ่มต้น
 	Defaults	ค่าเริ่มต้น
 	Define Brush Preset	กำหนดพรีเซ็ตแปรง
 	Define Custom Shape	กำหนดรูปร่างที่กำหนดเอง

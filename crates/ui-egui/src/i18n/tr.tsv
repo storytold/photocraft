@@ -2001,7 +2001,6 @@
 	Never	Asla
 	Normal tip	Normal uç
 	Open as smart object	Akıllı nesne olarak aç
-	Open in camera raw	Camera raw'da aç
 	Open documents as tabs	Belgeleri sekmeler halinde aç
 	Overscroll	Aşırı kaydırma
 	Performance	Performans
@@ -3354,7 +3353,6 @@ cameraRaw	Color	Renk
 	Add Pins	Pim Ekle
 	Add a mask  (from the selection; ⌥ inverts)	Bir maske ekleyin (seçimden; ⌥ tersine çevirir)
 	Adds grain to the soft edges of the brush tip.	Fırça ucunun yumuşak kenarlarına gren ekler.
-	Adobe PDF Presets…	Adobe PDF Ön Ayarları…
 	Advanced Blending	Gelişmiş Karıştırma
 	After (X)	Sonra (X)
 	Airbrush: keeps painting while the pointer rests.	Airbrush: İşaretçi dururken boyamaya devam eder.
@@ -3665,8 +3663,6 @@ cameraRaw	Whites	Beyazlar
 	Mac Crisp	Mac Net
 	Mac Strong	Mac Güçlü
 	Mac Smooth	Mac Yumuşak
-	Adobe Single-line Composer	Adobe Tek Satırlı Dizgi Motoru
-	Adobe Every-line Composer	Adobe Tüm Satırlı Dizgi Motoru
 	X	X
 	Y	Y
 	30 fps	30 fps

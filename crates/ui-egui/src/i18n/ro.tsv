@@ -30,7 +30,7 @@
 # Tool, filter, warp-style, path, layer-comp and metadata names that fell outside the `tl!` test.
 # Command-id override: under Edit > Purge a bare "Undo" reads as an action, not the history.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 # About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -55,7 +55,7 @@
 # Print dialog (#2697)
 # Counted status messages and labels (#3454)
 # View › Guides › New Guide… › Color
-# Dynamic labels (filter and adjustment parameters, Camera Raw, panels, dialogs) translated from
+# Dynamic labels (filter and adjustment parameters, RAW Develop, panels, dialogs) translated from
 # the English source, following the pattern of the other complete catalogs.
 # Path, channel, layer style, status and System Info labels
 # Actions panel: Load/Save Actions (.atn) and kept Photoshop steps
@@ -2026,7 +2026,6 @@
 	Never	Niciodată
 	Normal tip	Vârf normal
 	Open as smart object	Deschidere ca obiect inteligent
-	Open in camera raw	Deschidere în Camera Raw
 	Open documents as tabs	Deschidere documente ca file
 	Overscroll	Suprascrolare
 	Performance	Performanță
@@ -2985,8 +2984,6 @@ curves	Smooth	Netezire
 	Roman Hanging Punctuation	Punctuație latină suspendată
 	Avoid Widows/Orphans	Evitare linii văduve/orfane
 	Compose	Compunere
-	Adobe Single-line Composer	Compozitor Adobe cu o linie
-	Adobe Every-line Composer	Compozitor Adobe multilinie
 	Word Spacing	Spațiu între cuvinte
 	Letter Spacing	Spațiu între caractere
 	Glyph Scaling	Scalare glife
@@ -3182,7 +3179,6 @@ curves	Smooth	Netezire
 	Intersect with	Intersectare cu
 	Capture Comp	Capturare compoziție
 	No Layer Comps	Nicio compoziție de strat
-	Adobe PDF Presets…	Presetări Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Previzualizări de tehnologie…
 	Add a mask  (from the selection; ⌥ inverts)	Adăugare mască (din selecție; ⌥ inversează)

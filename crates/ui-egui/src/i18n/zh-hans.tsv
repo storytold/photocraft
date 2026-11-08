@@ -26,7 +26,7 @@
 
 # Layers-panel trash confirmation
 
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 # Current shell labels and shortcut templates. Keep {key} platform-dependent.
 # Gradient Editor window, opened from the options bar's gradient swatch.
 # Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
@@ -303,7 +303,6 @@
 	Histories	历史记录
 	Video Cache	视频缓存
 	All	全部
-	Adobe PDF Presets…	Adobe PDF 预设…
 	Presets	预设
 	Preset Manager…	预设管理器…
 	Migrate Presets	迁移预设
@@ -2153,7 +2152,6 @@
 	Never	从不
 	Normal tip	正常笔尖
 	Open as smart object	作为智能对象打开
-	Open in camera raw	在 Camera Raw 中打开
 	Open documents as tabs	以标签页打开文档
 	Overscroll	过度滚动
 	Performance	性能

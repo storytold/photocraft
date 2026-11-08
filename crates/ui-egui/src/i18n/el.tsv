@@ -1602,7 +1602,6 @@
 	Company	Εταιρεία
 	% of all commits	% του συνόλου των commits
 	Lines +/−	Γραμμές +/−
-	Open in camera raw	Άνοιγμα στο Camera Raw
 	System title bar	Γραμμή τίτλου συστήματος
 	More documents	Περισσότερα έγγραφα
 	Developing {name}	Επεξεργασία του {name}
@@ -2162,7 +2161,6 @@
 	Adds grain to the soft edges of the brush tip.	Προσθέτει κόκκο στις απαλές άκρες του πινέλου.
 	Adjust for Zoom	Προσαρμογή στη μεγέθυνση
 	Adjustment visible	Η προσαρμογή είναι ορατή
-	Adobe PDF Presets…	Προεπιλογές Adobe PDF…
 	Adobe RGB (1998) compatible	Συμβατό με Adobe RGB (1998)
 	Advanced Blending	Σύνθετες επιλογές ανάμειξης
 	After (X)	Μετά (X)

@@ -873,7 +873,7 @@
 	Working Black Plate	Svart arbetsplåt
 	Working Gray Plate	Grå arbetsplåt
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 	Basic	Grundläggande
 	Detail	Detalj
 	HSL/Grayscale	HSL/gråskala
@@ -1175,8 +1175,6 @@
 	Roman Hanging Punctuation	Hängande interpunktion (roman)
 	Avoid Widows/Orphans	Undvik änkor/horungar
 	Compose	Komponera
-	Adobe Single-line Composer	Adobe Single-line Composer
-	Adobe Every-line Composer	Adobe Every-line Composer
 	Justification	Marginaljustering
 	Word Spacing	Ordavstånd
 	Letter Spacing	Teckenavstånd
@@ -2438,7 +2436,6 @@
 	Never	Aldrig
 	Normal tip	Normal spets
 	Open as smart object	Öppna som smart objekt
-	Open in camera raw	Öppna i Camera Raw
 	Open documents as tabs	Öppna dokument som flikar
 	OpenGL	OpenGL
 	Orange	Orange
@@ -2579,7 +2576,7 @@
 	Tone Histogram	Tonhistogram
 	Show Selected Region	Visa markerat område
 cameraRaw	Light	Ljus
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 	RAW Develop Filter ({layer})	RAW-framkallning-filter ({layer})
 	RAW Develop ({name})	RAW-framkallning ({name})
 	Aqua	Akvamarin
@@ -3386,7 +3383,7 @@ curves	Smooth	Jämna ut
 	{name} was changed by another app after it was opened or saved here.	{name} har ändrats av en annan app efter att den öppnades eller sparades här.
 	Replace it with this document, or cancel and use File › Save As to keep both.	Ersätt den med det här dokumentet, eller avbryt och använd Arkiv › Spara som för att behålla båda.
 
-# Dynamic UI labels (fourth pass): filter and adjustment parameters, Camera Raw panels,
+# Dynamic UI labels (fourth pass): filter and adjustment parameters, RAW Develop panels,
 # lighting, History/Layers/paths/channels menus, metadata, System Info, status templates and
 # dialog text that other catalogs already carry. Written from the meaning of the English labels
 # in the ordinary Russian graphics-editor vocabulary; no proprietary resource consulted.
@@ -3412,13 +3409,11 @@ curves	Smooth	Jämna ut
 	Adjustment Layers	Justeringslager
 	Adjustment Properties	Justeringsegenskaper
 	Adjustment layers have nothing to transform	Justeringslager har inget att ombilda
-	Adobe PDF Presets…	Adobe PDF-förinställningar…
 	Adobe-rgb-compat	Adobe RGB (kompatibel)
 	Adwaita (Dark)	Adwaita (mörkt)
 	Adwaita (Light)	Adwaita (ljust)
 	After	Efter
 	Airbrush: keeps painting while the pointer rests.	Airbrush: fortsätter att måla medan pekaren står still.
-	All shortcuts reset to Photoshop defaults.	Alla kortkommandon har återställts till Photoshops standardvärden.
 	Altitude	Höjd
 	Ambience	Atmosfär
 	Ambient	Omgivande
@@ -3651,7 +3646,6 @@ curves	Smooth	Jämna ut
 	Deep Yellow	Djupgul
 	Default Foreground and Background Colors	Standardfärger för förgrund och bakgrund
 	Default Leaves	Standardlöv
-	Default Photoshop Size	Standardstorlek för Photoshop
 	Defaults	Standardvärden
 	Define Brush Preset	Definiera penselförinställning
 	Define Custom Shape	Definiera anpassad form

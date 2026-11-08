@@ -12,4 +12,4 @@ Adobe Camera Raw PSD/action descriptor class names, XMP namespaces and the setti
 
 Review menu and dialog layout in the supported interfaces, run the engine/UI tests and the existing PSD/action/XMP round-trip tests, and complete the normal platform gates. This is a feature naming change, not a legal determination.
 
-The dormant composer/PDF/Photoshop preference translations identified in the inventory are outside this active-feature change. They need a separate call-site and localization catalog cleanup, without altering compatibility labels.
+The catalog cleanup removes 136 dormant rows for branded composer labels, PDF presets, old Photoshop defaults and the unused raw-opening label. No active non-localization call sites use those keys. Current PhotoCraft defaults and required compatibility descriptions remain intact. Regression guards cover production Rust display literals and catalog keys; explicit exceptions document interchange descriptions and identifiers.

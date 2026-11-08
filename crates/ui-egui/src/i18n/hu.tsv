@@ -34,7 +34,7 @@
 
 # Adjustments and filters
 
-# Camera Raw and camera data
+# RAW Develop and camera data
 
 # Dialogs, preferences and file formats
 
@@ -2630,7 +2630,6 @@ navigator	Zoom	Nagyítás mértéke
 	Noise Luminance	Zajcsökkentés: luminancia
 	Noise Luminance Detail	Zajcsökkentés: luminancia-részletesség
 	Noise Reduction	Zajcsökkentés
-	Open in camera raw	Megnyitás a Camera Raw-ban
 	Paint Overlay	Ráfestés
 	Previous	Előző
 	Purple	Lila
@@ -3779,9 +3778,6 @@ cameraRaw	Yellow	Sárga
 	Add to selection  (⇧)	Hozzáadás a kijelöléshez  (⇧)
 	Adds grain to the soft edges of the brush tip.	Szemcsézettséget ad az ecsethegy lágy széleihez.
 	Adjustment Layers	Korrekciós rétegek
-	Adobe Every-line Composer	Adobe többsoros szedőmotor
-	Adobe PDF Presets…	Adobe PDF-előbeállítások…
-	Adobe Single-line Composer	Adobe egysoros szedőmotor
 	Advanced Controls	Speciális vezérlők
 	After (X)	Utána (X)
 	Airbrush: keeps painting while the pointer rests.	Festékszóró: a festés akkor is folytatódik, amikor a mutató áll.

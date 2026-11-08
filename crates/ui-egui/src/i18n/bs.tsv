@@ -18,7 +18,7 @@
 # Conventions: Bosnian Latin script, Ijekavian, standard Bosnian vocabulary where the neighbouring
 # languages differ (historija, sačuvaj, tačka, datoteka, postavke), sentence case. Commands are
 # imperatives (Otvori…, Sačuvaj kao…), tools read "Alat …" (Alat četkica). Quotation marks „…”
-# around names. Product and technology names (PhotoCraft, Camera Raw, OpenType, Lab ...) and
+# around names. Product and technology names (PhotoCraft, RAW Develop, OpenType, Lab ...) and
 # RGB/CMYK stay as they are; the trailing "…" of dialog commands is kept.
 
 	Rows	Redovi
@@ -1947,7 +1947,6 @@
 	Never	Nikad
 	Normal tip	Normalni vrh
 	Open as smart object	Otvori kao pametni objekat
-	Open in camera raw	Otvori u Camera Raw
 	Open documents as tabs	Otvaraj dokumente kao kartice
 	Overscroll	Prekoračenje pomjeranja
 	Performance	Performanse
@@ -2358,8 +2357,6 @@
 	Roman Hanging Punctuation	Latinična viseća interpunkcija
 	Avoid Widows/Orphans	Izbjegavaj udovice/siročad
 	Compose	Sastavi
-	Adobe Single-line Composer	Adobe slagač jednog reda
-	Adobe Every-line Composer	Adobe slagač svih redova
 	Justification	Obostrano poravnanje
 	Word Spacing	Razmak riječi
 	Letter Spacing	Razmak slova
@@ -2614,7 +2611,6 @@
 	Intersect with	Presijeci sa
 	Capture Comp	Zabilježi kompoziciju
 	No Layer Comps	Nema kompozicija slojeva
-	Adobe PDF Presets…	Adobe PDF predlošci…
 	3D…	3D…
 	Technology Previews…	Pregledi tehnologije…
 	Background from Layer	Pozadina iz sloja
@@ -4079,7 +4075,6 @@ layerLabel	Magenta	Magenta
 	Save Path	Sačuvaj putanju
 cameraRaw	Highlights	Svijetli tonovi
 cameraRaw	Shadows	Sjene
-	All shortcuts reset to Photoshop defaults.	Sve prečice su vraćene na zadane vrijednosti Photoshopa.
 	Temporary	Privremeno
 	none	nijedno
 	red	crvena
@@ -4129,7 +4124,6 @@ cameraRaw	Feather	Omekšavanje ivica
 cameraRaw	Midpoint	Srednja tačka
 cameraRaw	Roundness	Zaobljenost
 cameraRaw	Size	Veličina
-	Default Photoshop Size	Zadana veličina Photoshopa
 document	Orientation	Orijentacija
 	Arc Lower	Donji luk
 	Arc Upper	Gornji luk

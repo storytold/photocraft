@@ -38,7 +38,7 @@
 
 # Labels added on main after this catalog (depth labels, Wayland drop, profiles, rendering mode)
 
-# Camera Raw scopes and the Patch tool
+# RAW Develop scopes and the Patch tool
 
 # Warp grid presets (#388)
 
@@ -2077,7 +2077,6 @@
 	Never	Jamais
 	Normal tip	Pointe normale
 	Open as smart object	Ouvrir en tant qu'objet intelligent
-	Open in camera raw	Ouvrir dans Camera Raw
 	Open documents as tabs	Ouvrir les documents dans des onglets
 	Overscroll	Défilement au-delà des bords
 	Performance	Performances
@@ -2481,8 +2480,6 @@
 	Roman Hanging Punctuation	Ponctuation latine hors justification
 	Avoid Widows/Orphans	Éviter les veuves et orphelines
 	Compose	Composition
-	Adobe Single-line Composer	Composeur ligne par ligne Adobe
-	Adobe Every-line Composer	Composeur multiligne Adobe
 	Justification	Justification
 	Word Spacing	Espacement des mots
 	Letter Spacing	Espacement des lettres
@@ -2737,7 +2734,6 @@
 	Intersect with	Intersection avec
 	Capture Comp	Capturer la composition
 	No Layer Comps	Aucune composition de calques
-	Adobe PDF Presets…	Préréglages Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Aperçus technologiques…
 	Background from Layer	Arrière-plan d'après le calque
@@ -3512,7 +3508,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Adwaita (Dark)	Adwaita (sombre)
 	Adwaita (Light)	Adwaita (clair)
 	After	Après
-	All shortcuts reset to Photoshop defaults.	Tous les raccourcis ont été réinitialisés aux valeurs par défaut de Photoshop.
 	Ambience	Ambiance
 	Ambient	Ambiante
 	Amplitude Max	Amplitude max.
@@ -3698,7 +3693,6 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Deep Yellow	Jaune profond
 	Default Foreground and Background Colors	Couleurs par défaut du premier plan et de l'arrière-plan
 	Default Leaves	Feuilles par défaut
-	Default Photoshop Size	Taille Photoshop par défaut
 	Defaults	Valeurs par défaut
 	Define Brush Preset	Définir un préréglage de pinceau
 	Define Custom Shape	Définir une forme personnalisée

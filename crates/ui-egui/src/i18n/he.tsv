@@ -1984,7 +1984,6 @@
 	Never	לעולם לא
 	Normal tip	קצה רגיל
 	Open as smart object	פתח כאובייקט חכם
-	Open in camera raw	פתח ב-Camera Raw
 	Open documents as tabs	פתח מסמכים כלשוניות
 	Overscroll	גלילת יתר
 	Performance	ביצועים
@@ -2943,8 +2942,6 @@ curves	Smooth	החלק
 	Roman Hanging Punctuation	פיסוק תלוי רומי
 	Avoid Widows/Orphans	הימנע משורות יתומות/אלמנות
 	Compose	הרכב
-	Adobe Single-line Composer	מרכיב שורה בודדת של Adobe
-	Adobe Every-line Composer	מרכיב כל השורות של Adobe
 	Word Spacing	ריווח מילים
 	Letter Spacing	ריווח אותיות
 	Glyph Scaling	שינוי קנה מידה של גליפים
@@ -3140,7 +3137,6 @@ curves	Smooth	החלק
 	Intersect with	חתוך עם
 	Capture Comp	לכוד קומפ
 	No Layer Comps	אין קומפים של שכבות
-	Adobe PDF Presets…	ערכות PDF של Adobe…
 	3D…	3D…
 	Technology Previews…	תצוגות מקדימות של טכנולוגיה…
 	Add a mask  (from the selection; ⌥ inverts)	הוסף מסכה  (מהבחירה; ⌥ הופך)

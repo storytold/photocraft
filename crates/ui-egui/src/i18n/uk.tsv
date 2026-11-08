@@ -57,7 +57,7 @@
 
 # Filters and adjustments dialogs
 
-# Camera Raw and lens dialogs
+# RAW Develop and lens dialogs
 
 # Adjustments panel
 
@@ -116,7 +116,7 @@
 
 # Preference dialog: generated setting labels and dropdown choices
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 
 
@@ -1283,8 +1283,6 @@
 	Roman Hanging Punctuation	Висяча латинська пунктуація
 	Avoid Widows/Orphans	Уникати висячих рядків
 	Compose	Компонування
-	Adobe Single-line Composer	Однорядковий компонувальник Adobe
-	Adobe Every-line Composer	Багаторядковий компонувальник Adobe
 	Justification	Вирівнювання по ширині
 	Word Spacing	Інтервал між словами
 	Letter Spacing	Інтервал між літерами
@@ -2501,7 +2499,6 @@
 	Never	Ніколи
 	Normal tip	Звичайний кінчик
 	Open as smart object	Відкривати як смартоб'єкт
-	Open in camera raw	Відкривати в Camera Raw
 	Open documents as tabs	Відкривати документи у вкладках
 	OpenGL	OpenGL
 	Orange	Оранжевий
@@ -3652,7 +3649,6 @@ cameraRaw	Masking	Маскування
 @id	filter.sharpen.sharpen	Підвищити різкість
 	Good	Добра
 	Best	Найкраща
-	Adobe PDF Presets…	Набори Adobe PDF…
 	3D…	3D…
 	Technology Previews…	Попередній перегляд технологій…
 	Background from Layer	Фон із шару

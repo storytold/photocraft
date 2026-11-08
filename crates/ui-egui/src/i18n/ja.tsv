@@ -42,7 +42,7 @@
 # Strings added to the UI after this catalog was first written (rebase onto main, 2026-10).
 # Gradient Editor window, opened from the options bar's gradient swatch.
 # Rendering mode and recovery
-# Camera Raw: contextual controls and window title
+# RAW Develop: contextual controls and window title
 
 
 
@@ -2127,7 +2127,6 @@
 	Never	しない
 	Normal tip	通常の先端
 	Open as smart object	スマートオブジェクトとして開く
-	Open in camera raw	Camera Raw で開く
 	Open documents as tabs	ドキュメントをタブで開く
 	Overscroll	オーバースクロール
 	Performance	パフォーマンス
@@ -3345,10 +3344,7 @@ fontWeight	Italic	斜体
 	Add to selection  (⇧)	選択範囲に追加  (⇧)
 	Adds grain to the soft edges of the brush tip.	ブラシ先端の柔らかい縁に粒子を加えます。
 	Adjustment Layer	色調補正レイヤー
-	Adobe Every-line Composer	Adobe 全行コンポーザー
-	Adobe PDF Presets…	Adobe PDF プリセット…
 	Adobe RGB (1998)	Adobe RGB (1998)
-	Adobe Single-line Composer	Adobe 1 行コンポーザー
 	Advanced Controls	詳細コントロール
 	After (X)	後 (X)
 	Airbrush: keeps painting while the pointer rests.	エアブラシ: ポインターを止めている間も描き続けます。
