@@ -81,7 +81,8 @@ fn shift_u_steps_from_polygon_to_star_to_line() {
 fn a_drag_makes_a_live_star_shape_layer_with_one_undo_step() {
     let mut app = app();
     app.ui.tool = Tool::Star;
-    app.run("tools.setColors", json!({"foreground": "#ff0000", "background": "#0000ff"})).unwrap();
+    app.ui.tool_options.shape_fill_color = [1.0, 0.0, 0.0, 1.0];
+    app.ui.tool_options.shape_stroke_color = [0.0, 0.0, 1.0, 1.0];
     app.ui.tool_options.shape_fill = true;
     app.ui.tool_options.stroke_width = 5.0;
     let before = app.session.active().unwrap().history.past_len();
@@ -95,9 +96,9 @@ fn a_drag_makes_a_live_star_shape_layer_with_one_undo_step() {
     }
     let shape = shape_layer(&app).expect("a star shape layer");
     let solid = |r, g, b| Fill::Solid(Color::rgba(r, g, b, 1.0));
-    assert_eq!(shape.fill, Some(solid(1.0, 0.0, 0.0)), "filled with the foreground colour");
+    assert_eq!(shape.fill, Some(solid(1.0, 0.0, 0.0)), "filled with the tool's fill colour");
     let stroke = shape.stroke.expect("the star keeps the tool's stroke");
-    assert_eq!((stroke.paint, stroke.width), (solid(0.0, 0.0, 1.0), 5.0), "stroked with the background colour at the tool's width");
+    assert_eq!((stroke.paint, stroke.width), (solid(0.0, 0.0, 1.0), 5.0), "stroked with the tool's stroke colour at its width");
     assert_eq!(app.session.active().unwrap().history.past_len(), before + 1, "one history step");
     app.run("edit.undo", json!({})).unwrap();
     assert!(live_shape(&app).is_none(), "undo takes the star away");
