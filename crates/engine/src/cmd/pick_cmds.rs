@@ -130,11 +130,15 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": target.0 }))
 }
 
-/// Visible layers whose content touches document rect `r`, top to bottom. The Move marquee skips
-/// the locked Background and layers with effective Position or All locks (#11102). A layer on an
-/// artboard counts only where the board shows it, and without artboards only where the canvas
-/// does (#10665). With `group`, each counts as its outermost group (deduplicated).
+/// Visible layers whose content touches document rect `r`, top to bottom, excluding the locked
+/// Background and layers with effective All locks. A layer on an artboard counts only where the
+/// board shows it, and without artboards only where the canvas does (#10665). With `group`,
+/// each counts as its outermost group (deduplicated).
 pub fn layers_in_rect(doc: &Document, r: Rect, group: bool) -> Vec<LayerId> {
+    layers_in_rect_with_locks(doc, r, group, false)
+}
+
+fn layers_in_rect_with_locks(doc: &Document, r: Rect, group: bool, skip_position_locked: bool) -> Vec<LayerId> {
     let mut out = Vec::new();
     let canvas = doc.bounds();
     let r = if doc.has_artboards() { r } else { r.intersect(&canvas) };
@@ -146,7 +150,7 @@ pub fn layers_in_rect(doc: &Document, r: Rect, group: bool) -> Vec<LayerId> {
             || doc.is_background(l.id)
             || {
                 let locks = doc.effective_locks(l.id);
-                locks.position || locks.all
+                locks.all || (skip_position_locked && locks.position)
             }
             || !(1..=path.len()).all(|n| doc.layer_at(&path[..n]).is_some_and(|a| a.visible))
         {
@@ -181,14 +185,15 @@ fn select_in_rect(s: &mut Session, p: &Value) -> Result<Value> {
     let r = Rect::new(px(x.min(x + w).floor()), px(y.min(y + h).floor()), px(x.max(x + w).ceil()), px(y.max(y + h).ceil()));
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let group = p.get("target").and_then(Value::as_str) == Some("group");
-    let hits = layers_in_rect(&doc, r, group);
+    let move_auto_select = p.get("moveAutoSelect").and_then(Value::as_bool).unwrap_or(false);
+    let clear_on_empty = p.get("clearOnEmpty").and_then(Value::as_bool).unwrap_or(false);
+    let hits = layers_in_rect_with_locks(&doc, r, group, move_auto_select);
     let add = match p.get("mode").and_then(Value::as_str).unwrap_or("replace") {
         "replace" => false,
         "add" => true,
         other => return Err(EngineError::BadParams { cmd: "layer.selectInRect".into(), msg: format!("unknown mode `{other}`") }),
     };
-    // A plain marquee replaces even with no hits; Shift only adds to its base selection.
-    if !hits.is_empty() || !add {
+    if !hits.is_empty() || (clear_on_empty && !add) {
         let mut ids = if add { s.active().map(|st| st.selected_layers()).unwrap_or_default() } else { Vec::new() };
         ids.extend(hits.iter().filter(|id| !ids.contains(id)).copied().collect::<Vec<_>>());
         crate::layer_multi_cmds::set_selection(s, ids, hits.first().copied(), hits.first().copied())?;
@@ -203,7 +208,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Select Layers in Marquee",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":px,"y":px,"width":px,"height":px,"target":"layer|group"="layer","mode":"replace|add"="replace"} → {layers} (layers whose content touches the rect, topmost first, skipping Position and All locks; no hits clears in replace mode, preserves in add mode)"##,
+            params: r##"{"x":px,"y":px,"width":px,"height":px,"target":"layer|group"="layer","mode":"replace|add"="replace","moveAutoSelect":bool=false (also skip effective Position locks),"clearOnEmpty":bool=false (clear on no hits in replace mode only)} → {layers} (layers whose content touches the rect, topmost first, skipping effective All locks and Background)"##,
             enabled: has_doc,
             journal: true,
             run: select_in_rect,
@@ -432,7 +437,7 @@ mod tests {
     }
 
     /// A marquee normalizes reversed bounds and extends the existing selection in add mode.
-    /// An empty marquee preserves the selection in add mode and clears it in replace mode.
+    /// An empty direct rectangle pick preserves the selection in both modes by default.
     #[test]
     fn a_marquee_selects_the_layers_it_touches() {
         let (mut s, a, b) = two_squares();
@@ -447,10 +452,16 @@ mod tests {
         // Touching A's corner only (dragged up and left); never the empty layer or the Background.
         assert_eq!(sel(&mut s, [-5.0, -5.0, 6.0, 6.0], "layer", "replace"), (vec![a.0], vec![a.0]));
         assert_eq!(sel(&mut s, [50.0, 50.0, -27.0, -27.0], "layer", "replace"), (vec![b.0], vec![b.0]));
-        // ⇧ adds and an empty additive box preserves; an empty plain box clears.
+        // Adding extends the selection; a direct empty box preserves it in either mode.
         assert_eq!(sel(&mut s, [0.0, 0.0, 5.0, 5.0], "layer", "add"), (vec![a.0], vec![a.0, b.0]));
         assert_eq!(sel(&mut s, [11.0, 11.0, 8.0, 8.0], "layer", "add"), (vec![], vec![a.0, b.0]));
-        assert_eq!(sel(&mut s, [11.0, 11.0, 8.0, 8.0], "layer", "replace"), (vec![], vec![]));
+        assert_eq!(sel(&mut s, [11.0, 11.0, 8.0, 8.0], "layer", "replace"), (vec![], vec![a.0, b.0]));
+        let empty = s.execute("layer.selectInRect", json!({"x": 11, "y": 11, "width": 8, "height": 8, "clearOnEmpty": true})).unwrap();
+        assert_eq!(empty["layers"], json!([]));
+        assert!(s.active().unwrap().selected_layers().is_empty());
+        s.execute("layer.setProps", json!({"layer": a.0, "locks": {"position": true}})).unwrap();
+        assert_eq!(sel(&mut s, [0.0, 0.0, 5.0, 5.0], "layer", "replace"), (vec![a.0], vec![a.0]));
+        s.execute("layer.setProps", json!({"layer": a.0, "locks": {"position": false}})).unwrap();
         assert_eq!(sel(&mut s, [-10.0, -10.0, 60.0, 60.0], "layer", "replace"), (vec![b.0, a.0], vec![a.0, b.0]));
         // Group mode selects the outermost group; a hidden or fully locked layer is skipped.
         s.execute("layer.select", json!({"layer": a.0})).unwrap();

@@ -201,6 +201,24 @@ fn locked_top_layer_is_clicked_through_while_the_context_menu_still_lists_it() {
     }
 }
 
+/// A Shift marquee adds either the touched child or its enclosing group.
+#[test]
+fn grouped_marquee_respects_explicit_layer_and_group_targets() {
+    for target in ["layer", "group"] {
+        let mut f = Fixture::new();
+        let [a, _, c] = f.layers;
+        f.select(&[a]);
+        let group = LayerId(f.app.run("layer.new.groupFromLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap());
+        f.app.ui.tool_options.move_target = target.into();
+        f.select(&[c]);
+        let before = f.bounds();
+        f.gesture([4.0, 4.0], [22.0, 24.0], Modifiers::SHIFT);
+        let hit = if target == "layer" { a } else { group };
+        f.assert_selected(&[c, hit]);
+        assert_eq!(f.bounds(), before);
+    }
+}
+
 /// A marquee starting on Background adds hits with Shift and replaces the set without it.
 /// Empty boxes preserve the additive base and clear a replacement, with no pixel movement.
 #[test]
@@ -243,4 +261,32 @@ fn background_marquee_skips_position_and_all_locked_layers() {
         f.assert_selected(&expected.iter().map(|&index| f.layers[index]).collect::<Vec<_>>());
         assert_eq!(f.bounds(), before, "marquees select without moving pixels");
     }
+}
+
+/// A nonzero marquee wholly on the pasteboard keeps the layer targets when it hits nothing.
+#[test]
+fn pasteboard_only_empty_marquee_preserves_selection() {
+    let mut f = Fixture::new();
+    let [a, b, _] = f.layers;
+    f.select(&[a, b]);
+    let before = f.bounds();
+    let active = f.app.session.active().unwrap().active_layer;
+    f.gesture([-24.0, 8.0], [-8.0, 26.0], Modifiers::NONE);
+    f.assert_selected(&[a, b]);
+    assert_eq!(f.app.session.active().unwrap().active_layer, active);
+    assert_eq!(f.bounds(), before, "an empty pasteboard marquee moves no pixels");
+}
+
+/// An empty transparent start retains the prior no-hit behavior.
+#[test]
+fn transparent_canvas_empty_marquee_preserves_selection() {
+    let mut f = Fixture::new();
+    f.convert_background();
+    f.app.run("layer.setProps", json!({"layer": f.background.0, "visible": false})).unwrap();
+    let a = f.layers[0];
+    f.select(&[a]);
+    let before = f.bounds();
+    f.gesture([28.0, 32.0], [68.0, 48.0], Modifiers::NONE);
+    f.assert_selected(&[a]);
+    assert_eq!(f.bounds(), before);
 }

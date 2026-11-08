@@ -229,6 +229,16 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     Some((raw, ev, mods))
 }
 
+/// Remember a Move-way pick that changed the active layer (with the engine's change count after it, so
+/// any later change invalidates the marker), so the Layers panel's
+/// reveal can honour Expand layer group on click (layer_reveal.rs).
+fn note_move_pick(app: &mut PhotocraftApp, active_before: Option<photocraft_doc::LayerId>) {
+    let active_after = app.session.active().and_then(|st| st.active_layer);
+    if active_after != active_before {
+        app.move_pick = active_after.map(|id| (id, app.session.active_layer_changes()));
+    }
+}
+
 /// Handle Move-specific pointer events and report whether the event was consumed. Auto-Select
 /// picks on press so snapping and dragging use the resulting layer selection. When a locked-only
 /// hit starts a marquee, Shift preserves the selection that the marquee adds to.
@@ -247,7 +257,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                 return true;
             }
             if multiple_color_target(app) {
-                app.ui.status = "Move and transforms on several colour channels are not implemented yet".into();
+                app.ui.status = "Move and transforms on several color channels are not implemented yet".into();
                 return true;
             }
             // Auto-Select (or ⌘-click while it is off) picks the layer under the pointer first
@@ -279,7 +289,7 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                                 let _ = app.run("select.deselectLayers", json!({}));
                             }
                         }
-                        crate::move_box::begin(app, [x, y], mods.shift);
+                        crate::move_box::begin(app, [x, y], mods.shift, move_auto_select, move_auto_select && !empty);
                         return true;
                     }
                 } else {
@@ -292,9 +302,11 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
                             })
                         });
                     let before = app.session.active().map(|st| st.selected_layers());
+                    let active_before = app.session.active().and_then(|st| st.active_layer);
                     let _ = app.run("layer.pickAt", json!({"x": x, "y": y, "target": target, "mode": mode, "moveAutoSelect": move_auto_select}));
+                    note_move_pick(app, active_before);
                     if locked_hit {
-                        crate::move_box::begin(app, [x, y], mods.shift);
+                        crate::move_box::begin(app, [x, y], mods.shift, false, false);
                         return true;
                     }
                     // Snapping (and the drag's box) started before the pick: point it at what moves.
@@ -551,6 +563,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             let mut drag = Drag { clear, ..Drag::new(tool, from.map_or([x, y], |p| [p[0], p[1]]), points, mods, erase) };
             drag.capture_vector_owners(app);
             drag.capture_selection_at_press(app);
+            drag.document = super::drag::DragDocument::capture(app);
             app.drag = Some(drag);
             app.trail = None;
             app.stylus.begin_stroke();

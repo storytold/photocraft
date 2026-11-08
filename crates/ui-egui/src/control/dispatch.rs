@@ -116,7 +116,12 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
     // params and never open a dialog (an agent would otherwise get a modal instead of a
     // result). `ui.menu.invoke` behaves like a menu click, so it may open the dialog.
     if req.method == "engine.execute" && photocraft_engine::commands::find(id).is_some() {
-        return run_waiting(app, wait, |app| app.run(id, params));
+        return run_waiting(app, wait, |app| {
+            let previous = std::mem::replace(&mut app.programmatic_playback, true);
+            let result = app.run(id, params);
+            app.programmatic_playback = previous;
+            result
+        });
     }
     run_waiting(app, wait, |app| crate::menus::invoke(app, ctx, id, params))
 }
@@ -1452,6 +1457,10 @@ fn secondary_transform_or_crop_took(app: &mut PhotocraftApp, ctx: &egui::Context
 fn secondary_canvas_menu_took(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
     let (x, y) = (s.x, s.y);
     let down = matches!(s.ev, ToolEvent::Down { .. });
+    // A Magnetic Lasso border being drawn: no menu over it, as on the canvas (#11689).
+    if crate::canvas_tool_menu::magnetic_drawing(app) {
+        return true;
+    }
     if crate::canvas_tool_menu::pasteboard_at(app, app.ui.tool, [x, y]) {
         if down {
             crate::canvas_tool_menu::open_pasteboard(app, ctx, app.ui.tool, screen_point(app, x, y));
