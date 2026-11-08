@@ -169,7 +169,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Smart guides (magenta alignment lines) | done | |
 | Smart guide distance and spacing labels | missing | |
 | Ruler units px/in/cm/mm/pt/pica/% | done | |
-| ⇧-drag a guide out of a ruler: it lands on the nearest ruler tick | done | `rulers.rs` `snap_to_tick` (#3770) |
+| ⇧-drag a guide out of a ruler, or move one already placed: it lands on the nearest ruler tick, in a pixel ruler on whole pixels at least | done | `rulers.rs` `snap_to_tick`, `snap_tick`, `GuideDrag::follow_pointer` (#3770) |
 | A dragged guide shows its position beside the pointer (X for vertical, Y for horizontal, in the ruler unit) | done | `rulers.rs` `guide_drag_readout` (#7680) |
 | ⌥ while dragging a guide (out of a ruler, or with the Move tool) turns it; a guide dropped on either ruler is deleted | done | `rulers.rs` `GuideDrag::track`, `view.moveGuide` `toOrientation` (#5034) |
 | Status bar follows the ruler unit | partial | #2602 |
@@ -277,6 +277,7 @@ Paragraph; the rest open as in-app floating windows.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-11-08 | minor | Actions panel: an action or step row dragged onto the trash is deleted, and one dragged onto Create new action is duplicated right after itself (#12373) |
+| 2026-11-08 | minor | ⇧ while moving a guide already placed lands it on the nearest ruler tick too, as a guide dragged out of a ruler does (#3770); a ⇧-click still only selects it, and a guide ⌥ turns snaps along its new axis. In a pixel ruler ⇧ snaps guides and the zero point to whole pixels at least, also deep in, where the minor ticks are fractions of a pixel |
 | 2026-10-27 | minor | Warp mode edits Photoshop's Cylinder warp (#4112): the Warp menu lists it, its five handles set its seven values as in the reference, and a smart object's stored cylinder opens as one. Scores unchanged. |
 | 2026-11-08 | minor | Image › Adjustments › Photo Filter… keeps Preserve Luminosity from its last OK; filter, colour and density reopen at Warming Filter (85) and 25 %, measured in the reference application (#9879); no percentage changed |
 | 2026-11-07 | minor | Gradient stops dragged off the bar are removed, with a live preview and drag-back cancel, in every stop editor: Gradient Map and Layer Style gained it, the Gradient Editor, Properties and shape popover share the same threshold (#10742); row added (done); no percentage changed |
