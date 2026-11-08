@@ -930,9 +930,11 @@ fn web_preview_keeps_its_size_and_zoom_while_the_pointer_moves() {
     assert!(drifted.is_empty(), "the dialog or its zoom changed while the pointer moved: {drifted:#?}");
 }
 
-/// Wide settings text must not widen the dialog during pointer or keyboard repaints.
+/// Wide settings values stay readable and do not widen the dialog during real control interaction.
 #[test]
 fn web_settings_keep_dialog_width_stable_with_large_ui_font() {
+    use egui_kittest::kittest::Queryable;
+
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 1380.0)).with_pixels_per_point(1.0).with_max_steps(64).build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -945,23 +947,48 @@ fn web_settings_keep_dialog_width_stable_with_large_ui_font() {
         app
     });
     h.run_steps(4);
-    let width = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+    let dialog = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
         let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique("pc-dialog-rects"))).unwrap();
-        rects[0].width()
+        rects[0]
     };
-    let before = width(&h);
+    let before = dialog(&h).width();
     assert!(before < 2500.0, "dialog filled the window before the input baseline");
+    let check_width = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+        let now = dialog(h).width();
+        assert!((now - before).abs() < 0.5, "input repaints widened Save for Web: {before} -> {now}");
+    };
+    let combo = h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Resample");
+    assert_eq!(combo.value().as_deref(), Some("Bicubic (smooth gradients)"));
+    let r = combo.rect();
+    assert!((r.width() - 170.0).abs() < 0.5, "the selected value stays inside its assigned width: {r:?}");
+    assert!(r.height() > 28.0, "the full selected value wraps instead of truncating: {r:?}");
+    assert!(dialog(&h).contains_rect(r), "the wrapped dropdown and its arrow remain inside the dialog");
+
+    for i in 0..8 {
+        h.event(egui::Event::PointerMoved(r.center() + egui::vec2(i as f32, 0.0)));
+        h.step();
+        check_width(&h);
+    }
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Resample").click();
+    h.run_steps(2);
+    check_width(&h);
+    let option = h.get_by_label("Bicubic Smoother (enlargement)");
+    assert!(option.rect().width() > r.width(), "popup options remain fully readable instead of inheriting the button width");
+    h.key_press(egui::Key::ArrowDown);
+    h.step();
+    check_width(&h);
+    assert_eq!(h.state().ui.dialogs[0].fields["resample"], "bicubicSmoother");
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    check_width(&h);
+
     let pane = h.state().ui.dialogs[0].fields["__previewRects"][0].clone();
     let at = egui::pos2(pane[0].as_f64().unwrap() as f32 + 20.0, pane[1].as_f64().unwrap() as f32 + 20.0);
     for i in 0..30 {
         h.event(egui::Event::PointerMoved(at + egui::vec2(i as f32 * 3.0, i as f32)));
         h.step();
+        check_width(&h);
     }
-    for pressed in [true, false] {
-        h.event(egui::Event::Key { key: egui::Key::A, physical_key: None, pressed, repeat: false, modifiers: egui::Modifiers::NONE });
-        h.step();
-    }
-    assert_eq!(width(&h), before, "input repaints widened Save for Web");
 }
 
 #[test]
