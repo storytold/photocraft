@@ -5,6 +5,7 @@ mod actions_panel_menu;
 mod actions_record_again;
 mod adjust_preview_gpu;
 mod arbitrary_rotation_preview;
+mod background_eraser_reset_tip;
 mod batch_export_options;
 mod brush_reset_defaults;
 mod camera_raw_histogram;
