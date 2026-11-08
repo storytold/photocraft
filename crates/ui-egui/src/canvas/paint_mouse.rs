@@ -348,7 +348,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
     // Decided by the modifiers held when the button went down, not by those of the release frame that reports the click.
-    let mode_menu = crate::brush_mode_menu::is_gesture(tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
+    let mode_menu =
+        crate::brush_mode_menu::opens_on(app, tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
     if mode_menu && !resizing && app.drag.is_none() {
         app.secondary_erase = false;
         if let Some(p) = right_click_at(response) {
@@ -425,7 +426,7 @@ pub fn pointer_secondary(app: &mut PhotocraftApp, ctx: &egui::Context, down: boo
         app.brush_resize_armed = down && app.drag.is_none();
         return true;
     }
-    if crate::brush_mode_menu::is_gesture(tool, mods) && app.drag.is_none() && app.brush_resize.is_none() {
+    if crate::brush_mode_menu::opens_on(app, tool, mods) && app.drag.is_none() && app.brush_resize.is_none() {
         app.secondary_erase = false;
         if down {
             crate::brush_mode_menu::open(app, ctx, at);
