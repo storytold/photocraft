@@ -133,7 +133,9 @@ fn finish(app: &mut PhotocraftApp, mut d: Drag, click: Option<bool>) {
                 json!({"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0, "mode": mode, "line": line, "antiAlias": false, "feather": feather}),
             );
         }
-        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => crate::retouch_ui::finish_patch(app, d.start, [end[0], end[1]]),
+        Tool::Patch if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
+            crate::retouch_ui::finish_patch(app, d.start, crate::retouch_ui::patch_end(&d, [end[0], end[1]]))
+        }
         Tool::ContentAwareMove if crate::retouch_ui::patch_drags_selection(app, d.start, d.modifiers) => {
             crate::retouch_ui::finish_content_aware_move(app, d.start, [end[0], end[1]])
         }
