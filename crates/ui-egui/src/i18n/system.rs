@@ -173,6 +173,7 @@ mod tests {
             (vec!["nn_NO.UTF-8", "en-US"], "nb"),
             (vec!["is-IS", "no-NO"], "nb"),
             (vec!["ka-GE", "ru-RU"], "ka"),
+            (vec!["mr-IN", "en-IN"], "mr"),
             (vec![], "en"),
         ] {
             with_system_tags(&tags, || assert_eq!(system_lang().code(), expected));
