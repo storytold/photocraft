@@ -957,21 +957,48 @@ fn a_panel_dropped_beside_the_dock_column_starts_iconic() {
     assert!(valid(layout));
     assert_eq!(column_iconic(layout, "layers"), Some(true), "{layout:?}");
     assert_eq!(column_iconic(layout, "color"), Some(false), "{layout:?}");
+    assert_eq!(h.state().ui.status, "Layers is docked as an icon; select the icon to open it");
+    assert!(!h.state().ui.status_error);
+}
+
+/// A menu, keyboard or control move into a new column keeps it expanded: only the dock area's
+/// own drops collapse it.
+#[test]
+fn a_command_move_into_a_new_column_stays_expanded() {
+    let mut app = app();
+    app.run("window.panel.dock", json!({"panel":"layers", "anchor":"color", "zone":"left"})).unwrap();
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    h.run_steps(2);
+    let layout = lay(h.state());
+    assert!(valid(layout));
+    let Some(Node::Split { second, .. }) = &layout.root else { panic!("expected the canvas split") };
+    let Node::Dock { columns, .. } = second.as_ref() else { panic!("expected the dock") };
+    let column = |panel: &str| columns.iter().position(|c| c.groups.iter().any(|g| g.panels.iter().any(|id| id == panel)));
+    assert_ne!(column("layers"), column("color"), "a new column: {layout:?}");
+    assert_eq!(column_iconic(layout, "layers"), Some(false), "{layout:?}");
 }
 
 /// A drop into an existing group does not make anything iconic.
 #[test]
 fn only_a_new_column_starts_iconic() {
-    assert_eq!(
-        new_column_panel(&Action::Move { panel: "layers".into(), anchor: "color".into(), placement: Placement::Column { after: false } }),
-        Some("layers".into())
-    );
-    assert_eq!(
-        new_column_panel(&Action::MoveGroup {
-            panel: "layers".into(),
-            to: Target::At { anchor: "color".into(), placement: Placement::Group { below: true, height: None } }
-        }),
-        None
-    );
-    assert_eq!(new_column_panel(&Action::MovePanel { panel: "layers".into(), to: Target::NewDock { side: Side::Start } }), None);
+    let column = || Target::At { anchor: "color".to_owned(), placement: Placement::Column { after: false } };
+    let group = || Target::At { anchor: "color".to_owned(), placement: Placement::Group { below: true, height: None } };
+    let new_dock = || Target::NewDock { side: Side::Start };
+    let layers = || "layers".to_owned();
+    let cases = [
+        (Action::Move { panel: layers(), anchor: "color".into(), placement: Placement::Column { after: false } }, true),
+        (Action::MovePanel { panel: layers(), to: column() }, true),
+        (Action::MoveGroup { panel: layers(), to: column() }, true),
+        (Action::MoveWindow { panel: layers(), to: column() }, true),
+        (Action::Move { panel: layers(), anchor: "color".into(), placement: Placement::Group { below: true, height: None } }, false),
+        (Action::MovePanel { panel: layers(), to: group() }, false),
+        (Action::MoveGroup { panel: layers(), to: group() }, false),
+        (Action::MoveWindow { panel: layers(), to: group() }, false),
+        (Action::MovePanel { panel: layers(), to: new_dock() }, false),
+        (Action::MoveGroup { panel: layers(), to: new_dock() }, false),
+        (Action::MoveWindow { panel: layers(), to: new_dock() }, false),
+    ];
+    for (action, iconic) in cases {
+        assert_eq!(new_column_panel(&action), iconic.then(layers), "{action:?}");
+    }
 }

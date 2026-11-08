@@ -3617,3 +3617,4 @@ curves	Smooth	تنعيم
 	Auto-size Canvas	تحديد حجم مساحة الرسم تلقائيًا
 	Keep Relative Position During Layer Reordering	الإبقاء على الموضع النسبي عند إعادة ترتيب الطبقات
 	Shrinkwrap Canvas on Save	تقليص مساحة الرسم إلى المحتوى عند الحفظ
+	{panel} is docked as an icon; select the icon to open it	تم تثبيت {panel} كأيقونة؛ اختر الأيقونة لفتحها

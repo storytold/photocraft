@@ -631,9 +631,19 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             action => app.run("window.panel.layout", json!({"action": action})),
         };
         // A panel dropped beside a dock column starts collapsed to icons, so the new column does
-        // not take its full width from the canvas.
+        // not take its full width from the canvas. The status bar says where it went, so the drop
+        // doesn't look like it failed.
         let result = match (result, new_column) {
-            (Ok(_), Some(panel)) => app.run("window.panel.layout", json!({"action": Action::SetIconic { panel, iconic: true }})),
+            (Ok(_), Some(panel)) => {
+                let result = app.run("window.panel.layout", json!({"action": Action::SetIconic { panel: panel.clone(), iconic: true }}));
+                if result.is_ok() {
+                    let label = PANELS.iter().find(|p| p.0 == panel).map_or(panel.as_str(), |p| tl!(p.1));
+                    let template = "{panel} is docked as an icon; select the icon to open it";
+                    app.ui.status = crate::i18n::fmt(tl!(template), &[("panel", label)]);
+                    app.ui.status_error = false;
+                }
+                result
+            }
             (result, _) => result,
         };
         if let Err(error) = result {
@@ -648,6 +658,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 }
 
 /// The panel a drag drops into a new dock column beside an existing one, if `action` does that.
+/// Only the dock area's own drops come here: menu, keyboard and control moves
+/// (`window.panel.dock`, `window.panel.move`) keep the new column expanded.
 fn new_column_panel(action: &Action<String>) -> Option<String> {
     match action {
         Action::Move { panel, placement: Placement::Column { .. }, .. }
