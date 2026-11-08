@@ -72,8 +72,10 @@ fn embedded(dir: &Path) -> Result<&'static craft_i18n::Embedded, String> {
     for entry in list.flatten() {
         let path = entry.path();
         let Some(code) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
-        let Ok(app) = fs::read_to_string(path.join("photocraft.tsv")) else { continue };
-        let shared = fs::read_to_string(path.join("common.tsv")).unwrap_or_default();
+        // A locale without the file is skipped (or reads without a shared catalog); a file that is
+        // there but can't be read is an error, not a gap in the coverage.
+        let Some(app) = read_optional(&path.join("photocraft.tsv"))? else { continue };
+        let shared = read_optional(&path.join("common.tsv"))?.unwrap_or_default();
         out.push((Box::leak(code.into_boxed_str()), Box::leak(shared.into_boxed_str()), Box::leak(app.into_boxed_str())));
     }
     if out.is_empty() {
@@ -81,6 +83,15 @@ fn embedded(dir: &Path) -> Result<&'static craft_i18n::Embedded, String> {
     }
     out.sort();
     Ok(Box::leak(out.into_boxed_slice()))
+}
+
+/// The file's text; `None` when there is no such file, an error naming it when it can't be read.
+fn read_optional(path: &Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", path.display())),
+    }
 }
 
 fn source_keys(root: &Path) -> Result<BTreeSet<Key>, String> {
@@ -107,15 +118,22 @@ fn format_report(
 ) -> String {
     let mut report = String::from("UI translation coverage (translated source keys / source keys; kept: translated as the English itself)\n");
     report.push_str(&format!("{:<12} {:>12} {:>9} {:>6}\n", "language", "translated", "coverage", "kept"));
-    for language in languages {
+    // A registered language without a catalog in the checkout isn't a catalog with nothing in it:
+    // it is listed apart and left out of the coverage.
+    let resolved = |language: &&Language| language.code == "en" || translations.contains_key(&language.code);
+    for language in languages.iter().filter(resolved) {
         let translated =
             if language.code == "en" { english_keys.len() } else { translations.get(&language.code).map_or(0, |keys| keys.intersection(english_keys).count()) };
         let coverage = 100.0 * translated as f64 / english_keys.len() as f64;
         let kept = kept.get(&language.code).copied().unwrap_or(0);
         report.push_str(&format!("{:<12} {:>5}/{:<6} {:>8.2}% {:>6}\n", language.code, translated, english_keys.len(), coverage, kept));
     }
+    let unresolved: Vec<&str> = languages.iter().filter(|language| !resolved(language)).map(|language| language.code.as_str()).collect();
+    if !unresolved.is_empty() {
+        report.push_str(&format!("\nRegistered without a photocraft.tsv in the checkout (shown in English, not counted): {}\n", unresolved.join(", ")));
+    }
     report.push_str("\nMissing translations (shown in English until translated)\n");
-    for language in languages.iter().filter(|language| language.code != "en") {
+    for language in languages.iter().filter(resolved).filter(|language| language.code != "en") {
         let empty = BTreeSet::new();
         let translated = translations.get(&language.code).unwrap_or(&empty);
         let missing: Vec<&Key> = english_keys.difference(translated).collect();
@@ -511,8 +529,9 @@ mod tests {
     #[test]
     fn registered_languages_and_report_are_stable() {
         let registry = r#"
-            pub static LANGUAGES: [LangInfo; 3] = [
+            pub static LANGUAGES: [LangInfo; 4] = [
                 LangInfo { code: "zh", complete_menus: true },
+                LangInfo { code: "de", complete_menus: true },
                 LangInfo { code: "en", complete_menus: false },
                 // A comment with a } brace.
                 LangInfo { code: "fr", complete_menus: true },
@@ -539,6 +558,8 @@ mod tests {
              en               3/3        100.00%      0\n\
              fr               1/3         33.33%      0\n\
              zh               3/3        100.00%      1\n\
+             \n\
+             Registered without a photocraft.tsv in the checkout (shown in English, not counted): de\n\
              \n\
              Missing translations (shown in English until translated)\n\
              fr: 2 missing\n\
