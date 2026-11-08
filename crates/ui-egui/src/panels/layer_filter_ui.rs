@@ -389,10 +389,7 @@ fn controls(filter: &mut Filter, ui: &mut egui::Ui) {
                     }
                 }
             }
-            FilterBy::Name => {
-                let width = ui.available_width().max(48.0);
-                widgets::text_field(ui, ui.scope_id().with("layer-filter-name"), &mut filter.name, tl!("Search"), width, false);
-            }
+            FilterBy::Name => find::name_field(&mut filter.name, ui),
             FilterBy::Effect => effect::controls(&mut filter.effect, ui),
             FilterBy::Mode => {
                 let modes: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.into_iter().map(|m| (m, m.label())).collect();
@@ -432,12 +429,15 @@ fn controls(filter: &mut Filter, ui: &mut egui::Ui) {
 }
 
 pub mod effect;
+pub mod find;
 mod group;
 #[cfg(test)]
 mod group_tests;
 
 #[cfg(test)]
 mod effect_tests;
+#[cfg(test)]
+mod find_tests;
 #[cfg(test)]
 mod tests;
 
