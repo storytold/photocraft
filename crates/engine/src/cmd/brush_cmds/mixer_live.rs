@@ -364,7 +364,8 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// Sampling loads the session's tool state and never changes document pixels. A load adds one
 /// "Mixer Brush" history state with the pixels as they are, as the reference's ⌥-click does
-/// (#11954); a failed sample adds none.
+/// (#11954); a failed sample adds none. Over a floating selection the move is dropped first as its
+/// own state, so a load then adds two: the move, then "Mixer Brush".
 pub(super) fn sample(s: &mut Session, p: &Value) -> Result<Value> {
     if p.get("points").and_then(Value::as_array).is_some_and(|v| v.len() != 1) {
         return Err(bad("brush.mixer.sample", "exactly one sample point is required"));

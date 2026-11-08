@@ -1,6 +1,7 @@
 //! A Mixer Brush ⌥-click load (`brush.mixer.sample`) adds one "Mixer Brush" history state and
 //! leaves the pixels as they are, as the reference's does (#11954); Load Brush and Clean Brush add
-//! none, and a failed sample adds none and returns an error.
+//! none, and a failed sample adds none and returns an error. Over a floating selection the move is
+//! dropped as its own state first, so Undo removes the load before the move.
 
 use crate::Session;
 use serde_json::{Value, json};
