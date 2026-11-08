@@ -42,8 +42,9 @@ pub(super) fn copy_shape_fill(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 pub(super) fn copy_shape_stroke(s: &mut Session, _p: &Value) -> Result<Value> {
-    let stroke = active_shape(s).map_err(EngineError::Other)?.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
-    s.path_stroke_clipboard = Some(stroke);
+    let shape = active_shape(s).map_err(EngineError::Other)?;
+    let stroke = shape.stroke.clone().ok_or_else(|| EngineError::Other("shape has no stroke".into()))?;
+    s.path_stroke_clipboard = Some((stroke, shape.pixel_align_stroke));
     Ok(Value::Null)
 }
 
@@ -58,10 +59,11 @@ pub(super) fn paste_shape_fill(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub(super) fn paste_shape_stroke(s: &mut Session, p: &Value) -> Result<Value> {
-    let stroke = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
+    let (stroke, pixel_align_stroke) = s.path_stroke_clipboard.clone().ok_or_else(|| EngineError::Other("no shape stroke copied".into()))?;
     let id = layer_id(s, p)?;
     with_shape(s, id, "Paste Complete Stroke", |shape, _| {
         shape.stroke = Some(stroke);
+        shape.pixel_align_stroke = pixel_align_stroke;
         Ok(())
     })?;
     shape_info(s, id)
@@ -495,6 +497,11 @@ fn new_fill_stroke(s: &Session, cmd: &str, p: &Value) -> Result<(Option<Fill>, O
 /// that would duplicate the selected shape or vector mask.
 pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.toShape";
+    let pixel_align_stroke = match p.get("pixelAlignStroke") {
+        None => false,
+        Some(Value::Bool(enabled)) => *enabled,
+        Some(_) => return Err(bad(CMD, "`pixelAlignStroke` must be a boolean")),
+    };
     let name = match p.get("name") {
         None | Some(Value::Null) => None,
         Some(Value::String(n)) => Some(n.as_str()),
@@ -524,7 +531,7 @@ pub(super) fn path_to_shape(s: &mut Session, p: &Value) -> Result<Value> {
         Some(Value::String(n)) if !n.trim().is_empty() => Some(n.clone()),
         Some(_) => return Err(bad(CMD, "`layerName` must be a name that isn't empty")),
     };
-    let mut sh = ShapeLayer { path, fill, stroke, ..Default::default() };
+    let mut sh = ShapeLayer { path, fill, stroke, pixel_align_stroke, ..Default::default() };
     let id = s.edit("New Shape Layer", |doc, active| {
         refresh_shape(doc, &mut sh);
         let name = layer_name.unwrap_or_else(|| doc.next_layer_name(default_name("path")));

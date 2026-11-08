@@ -246,7 +246,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Make Shape from Path",
             [],
             leak(format!(
-                r##"{{"name":str|"work"|"layer"="work" (the Work Path becomes the shape's path; a saved path stays) | "path":{{subpaths}} (inline; not with name),"consumeWorkPath":bool=false (with path: it was drawn into the Work Path, which goes),{fill}=foreground,{stroke}=none,"layerName":str?}} → shape.info"##
+                r##"{{"name":str|"work"|"layer"="work" (the Work Path becomes the shape's path; a saved path stays) | "path":{{subpaths}} (inline; not with name),"consumeWorkPath":bool=false (with path: it was drawn into the Work Path, which goes),{fill}=foreground,{stroke}=none,"pixelAlignStroke":bool=false,"layerName":str?}} → shape.info"##
             )),
             has_doc,
             path_to_shape

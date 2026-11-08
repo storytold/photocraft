@@ -1395,6 +1395,43 @@ fn fx_doc(effects: Vec<Effect>) -> Document {
     d
 }
 
+/// Interior effects must not shift the fill away from a live line's visible outline.
+#[test]
+fn pixel_align_live_line_with_effect_keeps_fill_and_outline_registered() {
+    use photocraft_doc::{LiveShape, ShapeLayer, ShapeStroke};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for arrow in [false, true] {
+            let live = if arrow {
+                LiveShape::ArrowLine { from: [10.0, 20.0], to: [70.0, 20.0], weight: 1.0, start: false, end: true, width: 5.0, length: 8.0, concavity: 0.0 }
+            } else {
+                LiveShape::Line { from: [10.0, 20.0], to: [70.0, 20.0], weight: 1.0 }
+            };
+            let mut doc = Document::new("line", Size::new(100, 50), ColorMode::Rgb, depth);
+            let shape = ShapeLayer {
+                path: photocraft_vector::shapes::live_path(&live),
+                live: Some(live),
+                fill: Some(Fill::Solid(Color::BLACK)),
+                stroke: Some(ShapeStroke { width: 0.5, opacity: 0.5, paint: Fill::Solid(Color::rgb(1.0, 0.0, 0.0)), ..Default::default() }),
+                ..Default::default()
+            };
+            let path = shape.path.clone();
+            let mut layer = Layer::new("line", LayerContent::Shape(shape));
+            layer.effects.items.push(Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 1.0), color: Color::rgb(0.0, 1.0, 0.0) });
+            doc.layers.push(layer);
+            let expected = flatten(&doc);
+            assert!(expected.get(35, 19)[3] > 0.0, "fixture must paint the upper half of the live bar");
+            let LayerContent::Shape(shape) = &mut doc.layers[0].content else { panic!("shape") };
+            shape.pixel_align_stroke = true;
+            assert_eq!(shape.path, path);
+            assert!(shape.cache.is_none());
+            let actual = flatten(&doc);
+            for (i, (actual, expected)) in actual.px.iter().zip(&expected.px).enumerate() {
+                assert!(close4(*actual, *expected), "depth={depth:?}, arrow={arrow}, pixel={i}: {actual:?} != {expected:?}");
+            }
+        }
+    }
+}
+
 fn stroke(size: f32, position: StrokePosition) -> Effect {
     Effect::Stroke(StrokeFx {
         common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),

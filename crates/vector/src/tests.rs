@@ -938,6 +938,39 @@ fn pixel_aligned_one_pixel_live_line_is_crisp() {
     assert_eq!(shape.path, path);
 }
 
+/// A transparent solid outline must not suppress alignment of the painted live bar.
+#[test]
+fn pixel_aligned_live_line_ignores_transparent_solid_outline() {
+    let clip = Rect::new(0, 0, 100, 100);
+    for vertical in [false, true] {
+        for arrow in [false, true] {
+            let to = if vertical { [10.0, 70.0] } else { [70.0, 10.0] };
+            let live = if arrow {
+                photocraft_doc::LiveShape::ArrowLine { from: [10.0, 10.0], to, weight: 1.0, start: false, end: true, width: 5.0, length: 8.0, concavity: 0.0 }
+            } else {
+                photocraft_doc::LiveShape::Line { from: [10.0, 10.0], to, weight: 1.0 }
+            };
+            let mut shape = ShapeLayer {
+                path: shapes::live_path(&live),
+                live: Some(live),
+                fill: Some(Fill::Solid(Color::BLACK)),
+                pixel_align_stroke: true,
+                ..Default::default()
+            };
+            let expected = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+            let path = shape.path.clone();
+            shape.stroke = Some(ShapeStroke { width: 2.0, paint: Fill::Solid(Color::TRANSPARENT), ..Default::default() });
+            let actual = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
+            for (i, (actual, expected)) in actual.iter().zip(&expected).enumerate() {
+                assert_eq!(actual, expected, "vertical={vertical}, arrow={arrow}, pixel={i}");
+            }
+            assert_eq!(shape.path, path);
+            shape.stroke.as_mut().unwrap().paint = Fill::Solid(Color::BLACK);
+            assert!(crate::pixel_aligned_line_fill_path(&shape).is_none(), "visible outlines retain legacy placement");
+        }
+    }
+}
+
 /// A straight Pen run keeps its dash phase and yields the same pixels in independent tiles.
 #[test]
 fn pixel_alignment_straight_pen_runs_preserve_fractional_dash_phase_and_tiles() {
@@ -1171,6 +1204,18 @@ fn pixel_aligned_rectangle_corners_survive_reversed_traversal_and_quarter_turns(
             ShapeLayer { path: path.clone(), pixel_align_stroke: true, stroke: Some(ShapeStroke { width: 1.0, ..Default::default() }), ..Default::default() };
         let pixels = CompiledShape::new(&shape, DEFAULT_TOLERANCE, clip).render_rgba(clip);
         assert!(pixels.iter().all(|p| p[3] < 0.001 || p[3] > 0.999));
+        let (x0, y0, x1, y1) = path.control_bounds().unwrap();
+        let (x0, y0, x1, y1) = (x0.round() as i32, y0.round() as i32, x1.round() as i32, y1.round() as i32);
+        let alpha = |x: i32, y: i32| pixels[((y - clip.y0) * clip.width() as i32 + x - clip.x0) as usize][3];
+        for x in x0..x1 {
+            assert_eq!(alpha(x, y0), 1.0, "top side and corners");
+            assert_eq!(alpha(x, y1 - 1), 1.0, "bottom side and corners");
+        }
+        for y in y0..y1 {
+            assert_eq!(alpha(x0, y), 1.0, "left side and corners");
+            assert_eq!(alpha(x1 - 1, y), 1.0, "right side and corners");
+        }
+        assert_eq!(alpha((x0 + x1) / 2, (y0 + y1) / 2), 0.0, "unfilled interior");
         assert_eq!(shape.path, path);
     }
 }

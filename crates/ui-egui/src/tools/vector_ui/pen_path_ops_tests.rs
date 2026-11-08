@@ -19,6 +19,58 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// Both Make Shape routes forward alignment; an owned draft uses its captured preference.
+#[test]
+fn pixel_align_make_shape_forwards_preference_and_keeps_geometry() {
+    for source in ["work", "saved", "draft"] {
+        let mut paths = Vec::new();
+        for enabled in [false, true] {
+            let mut app = app();
+            app.ui.tool_options.vector_mode = "path".into();
+            app.ui.tool_options.stroke_width = 1.0;
+            app.ui.tool_options.pixel_align_stroke = enabled;
+            let expected = if source == "draft" {
+                draw(&mut app, &[(20.0, 20.0), (80.0, 20.0), (80.0, 80.0)]);
+                app.ui.tool_options.pixel_align_stroke = !enabled;
+                None
+            } else {
+                square(&mut app, 20.0, 20.0, 60.0);
+                let path = work(&app);
+                if source == "saved" {
+                    app.run("path.rename", json!({"name":"work","to":"Saved"})).unwrap();
+                    app.ui.selected_path = Some("Saved".into());
+                }
+                Some(path)
+            };
+            let before = app.session.active().unwrap().doc.clone();
+            let history = app.session.active().unwrap().history.past_len();
+            super::make_shape(&mut app).unwrap();
+            let info = app.run("shape.info", json!({})).unwrap();
+            assert_eq!(info["pixelAlignStroke"], enabled, "source={source}");
+            let path = shape_path(&app).1;
+            if let Some(expected) = expected {
+                assert_eq!(path, expected);
+            } else {
+                let anchors: Vec<_> = path.subpaths[0].knots.iter().map(|k| [k.anchor.x, k.anchor.y]).collect();
+                assert_eq!(anchors, vec![[20.0, 20.0], [80.0, 20.0], [80.0, 80.0]]);
+                assert!(!path.subpaths[0].closed);
+            }
+            paths.push(path);
+            let st = app.session.active().unwrap();
+            assert_eq!(st.history.past_len(), history + 1);
+            assert_eq!(st.doc.paths, before.paths);
+            assert_eq!(app.ui.tool_options.pixel_align_stroke, if source == "draft" { !enabled } else { enabled });
+            app.run("edit.undo", json!({})).unwrap();
+            assert_eq!(app.session.active().unwrap().doc.work_path, before.work_path);
+            assert_eq!(app.session.active().unwrap().doc.layers.len(), before.layers.len());
+            app.run("edit.redo", json!({})).unwrap();
+            assert_eq!(app.run("shape.info", json!({})).unwrap()["pixelAlignStroke"], enabled);
+            assert_eq!(shape_path(&app).1, *paths.last().unwrap());
+        }
+        assert_eq!(paths[0], paths[1], "alignment must not change stored {source} geometry");
+    }
+}
+
 /// Combining or resuming a Pen path applies the captured flag in the same undo step.
 #[test]
 fn pixel_align_pen_append_and_resume_apply_the_captured_setting() {

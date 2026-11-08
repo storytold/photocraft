@@ -96,7 +96,11 @@ pub fn make_shape(app: &mut PhotocraftApp) -> Result<Value, String> {
     }
     let name =
         shape_source_path(app).ok_or_else(|| tl!("No path to make a shape from: draw one with the Pen tool or select one in the Paths panel.").to_string())?;
-    let r = app.run("path.toShape", json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app)}))?;
+    let r = app.run(
+        "path.toShape",
+        json!({"name": name, "fill": super::shapes::fill_param(app), "stroke": super::shapes::stroke_param(app),
+        "pixelAlignStroke": app.ui.tool_options.pixel_align_stroke}),
+    )?;
     if name == "work" && app.ui.selected_path.as_deref() == Some("work") {
         app.ui.selected_path = None;
     }

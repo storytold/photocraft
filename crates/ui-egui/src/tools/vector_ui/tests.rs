@@ -1593,6 +1593,63 @@ fn path_rows_dragged_onto_the_trash_are_deleted() {
     assert_eq!((doc.layers.len(), doc.paths.len()), (layers, 1), "nothing is deleted");
 }
 
+/// A complete checkbox click commits the pending width expression without losing either edit.
+#[test]
+fn pixel_align_checkbox_keeps_pending_stroke_width_expression() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::PathSelection, Tool::DirectSelection] {
+        let mut app = app();
+        app.ui.tool = tool;
+        app.run("shape.create", json!({"kind":"rect","rect":[20,20,100,80],"stroke":{"width":3},"pixelAlignStroke":false})).unwrap();
+        let before = app.run("shape.info", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1600.0, 48.0)).build_ui_state(
+            move |ui, app: &mut PhotocraftApp| {
+                let _language = crate::i18n::language_scope(crate::i18n::Lang::EN);
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    ui.horizontal_centered(|ui| options_bar(app, ui, tool));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        let history = h.state().session.active().unwrap().history.past_len();
+        h.get_all_by_role(Role::SpinButton).next().expect("stroke width").click();
+        h.run();
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.event(egui::Event::Text("1+1".into()));
+        h.run();
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "arithmetic waits for commit");
+        let at = h.get_by_label("Pixel Align Stroke").rect().center();
+        h.hover_at(at);
+        h.step();
+        // Deliver a complete click in one frame: losing focus commits the expression while
+        // the checkbox changes, so neither pending patch may replace the other.
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+        }
+        h.step();
+        h.run_steps(2);
+        let after = h.state_mut().run("shape.info", json!({})).unwrap();
+        assert_eq!(after["stroke"]["width"], 2.0, "{tool:?}: expression and checkbox must both apply");
+        assert_eq!(after["pixelAlignStroke"], true);
+        assert_eq!(after["path"], before["path"]);
+        assert_eq!(after["fill"], before["fill"]);
+        assert_eq!(h.state().ui.tool_options.stroke_width, 2.0);
+        assert!(h.state().ui.tool_options.pixel_align_stroke);
+        assert_eq!(h.state().session.active().unwrap().history.past_len(), history + 1, "one atomic edit");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        let undone = h.state_mut().run("shape.info", json!({})).unwrap();
+        assert_eq!(undone["stroke"], before["stroke"]);
+        assert_eq!(undone["pixelAlignStroke"], false);
+        h.state_mut().run("edit.redo", json!({})).unwrap();
+        let redone = h.state_mut().run("shape.info", json!({})).unwrap();
+        assert_eq!(redone["stroke"], after["stroke"]);
+        assert_eq!(redone["pixelAlignStroke"], true);
+    }
+}
+
 /// The Shape toolbar edits its selected layer even when the next-shape preference differs.
 #[test]
 fn pixel_align_checkbox_edits_selected_shape_and_undo_restores_its_value() {

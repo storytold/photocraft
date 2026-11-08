@@ -922,7 +922,8 @@ pub(super) fn make_shape_from_draft(app: &mut PhotocraftApp, pen: &PenPath) -> R
     let selected = app.ui.selected_path.clone();
     let params = |app: &mut PhotocraftApp| {
         let (path, consume) = draft_shape_path(app, pen).ok_or_else(|| tl!("No document").to_string())?;
-        let params = json!({"path": path, "consumeWorkPath": consume, "fill": fill_param(app), "stroke": stroke_param(app)});
+        let params = json!({"path": path, "consumeWorkPath": consume, "fill": fill_param(app), "stroke": stroke_param(app),
+            "pixelAlignStroke": app.ui.tool_options.pixel_align_stroke});
         Ok::<_, String>((params, consume))
     };
     let made = match &owner {

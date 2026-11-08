@@ -109,7 +109,7 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             o.stroke_width = enabled_stroke_width(o.stroke_width);
         }
     }
-    edit = pixel_align_option(ui, &mut o.pixel_align_stroke, target.as_ref().map(|s| s.pixel_align_stroke), paint).or(edit);
+    let alignment_edit = pixel_align_option(ui, &mut o.pixel_align_stroke, target.as_ref().map(|s| s.pixel_align_stroke), paint);
     match tool {
         Tool::Rectangle => {
             crate::widgets::vline(ui, 22.0);
@@ -188,6 +188,9 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
             (_, PaintChange::OpenPicker) => continue,
         });
     }
+    // A click can commit a numeric expression and toggle alignment in the same frame.
+    // Merge after the other controls so both changes reach the same history step.
+    edit = merge_pixel_alignment_edit(edit, alignment_edit);
     if let (Some(mut p), Some(s)) = (edit, &target) {
         p["layer"] = json!(s.layer.0);
         if let Err(e) = app.run("shape.edit", p) {
@@ -205,6 +208,14 @@ pub(crate) fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool
     if let Some(rgb) = recent {
         crate::paint_picker::remember(app, rgb);
     }
+}
+
+/// Append the checkbox change without replacing another control's pending edit or coalesce key.
+fn merge_pixel_alignment_edit(mut edit: Option<Value>, alignment: Option<Value>) -> Option<Value> {
+    if let Some(alignment) = alignment {
+        edit.get_or_insert_with(|| json!({}))["pixelAlignStroke"] = alignment["pixelAlignStroke"].clone();
+    }
+    edit
 }
 
 fn pixel_align_option(ui: &mut egui::Ui, preference: &mut bool, selected: Option<bool>, paint: bool) -> Option<Value> {

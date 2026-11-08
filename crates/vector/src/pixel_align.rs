@@ -204,7 +204,13 @@ impl PixelRuns {
 /// A Line Tool bar is a fill, so translate its render-only copy by half a pixel.
 /// Moving the whole arrow also retains antialiasing and the proportions of its heads.
 pub(crate) fn line_fill_path(shape: &ShapeLayer) -> Option<Path> {
-    if !shape.pixel_align_stroke || shape.has_soft_mask() || shape.stroke.as_ref().is_some_and(|s| s.width > 0.0 && s.opacity > 0.0) {
+    // A completely transparent solid outline paints nothing and must not prevent
+    // alignment of the live bar. Other paints retain conservative legacy placement.
+    let visible_outline = shape
+        .stroke
+        .as_ref()
+        .is_some_and(|s| s.width > 0.0 && s.opacity > 0.0 && !matches!(&s.paint, photocraft_doc::Fill::Solid(color) if color.alpha <= 0.0));
+    if !shape.pixel_align_stroke || shape.has_soft_mask() || visible_outline {
         return None;
     }
     let live = shape.live.as_ref()?;

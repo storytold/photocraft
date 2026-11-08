@@ -79,7 +79,10 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
         }
     }
     let fmt = PixelFormat::RGBA8.with_sample(depth);
-    let fill_only = ShapeLayer { stroke: None, cache: None, ..sh.clone() };
+    // Removing the outline must not newly qualify a live Line/ArrowLine fill for
+    // a half-pixel shift: interior effects and clipped layers need the original placement.
+    let align_fill = photocraft_vector::pixel_aligned_line_fill_path(sh).is_some();
+    let fill_only = ShapeLayer { stroke: None, cache: None, pixel_align_stroke: align_fill, ..sh.clone() };
     let stroke_only = ShapeLayer { fill: None, cache: None, ..sh.clone() };
     let mut parts = (photocraft_vector::render_shape(&fill_only, fmt, canvas), photocraft_vector::render_shape(&stroke_only, fmt, canvas));
     if let Some(cache) = &sh.cache {
@@ -230,6 +233,35 @@ mod tests {
 
     fn held() -> usize {
         cache().lock().unwrap_or_else(|e| e.into_inner()).0.values().map(|e| entry_bytes(&e.0)).sum()
+    }
+
+    /// Splitting must not make a live fill eligible by removing its visible outline.
+    #[test]
+    fn pixel_align_split_live_fill_keeps_original_outline_eligibility() {
+        let canvas = Rect::new(0, 0, 100, 100);
+        for (vertical, transparent) in [(false, false), (true, false), (false, true), (true, true)] {
+            let to = if vertical { [10.0, 70.0] } else { [70.0, 10.0] };
+            let live = photocraft_doc::LiveShape::Line { from: [10.0, 10.0], to, weight: 1.0 };
+            let sh = ShapeLayer {
+                path: photocraft_vector::shapes::live_path(&live),
+                live: Some(live),
+                fill: Some(Fill::Solid(Color::BLACK)),
+                stroke: Some(ShapeStroke { width: 2.0, paint: Fill::Solid(if transparent { Color::TRANSPARENT } else { Color::BLACK }), ..Default::default() }),
+                pixel_align_stroke: true,
+                ..Default::default()
+            };
+            let path = sh.path.clone();
+            let (fill, _) = split(&sh, canvas, SampleType::U8).unwrap();
+            let expected = ShapeLayer { stroke: None, pixel_align_stroke: transparent, ..sh.clone() };
+            let expected = photocraft_vector::render_shape(&expected, PixelFormat::RGBA8, canvas);
+            for y in 0..100 {
+                for x in 0..100 {
+                    assert_eq!(fill.pixel(x, y), expected.pixel(x, y), "vertical={vertical}, transparent={transparent}, ({x},{y})");
+                }
+            }
+            assert_eq!(sh.path, path);
+            assert!(sh.cache.is_none());
+        }
     }
 
     /// Toggling only alignment must invalidate both directions of a cached split.
