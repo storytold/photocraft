@@ -860,7 +860,7 @@ enforce = false  # new; no baseline yet
 # ---- #9329: redraw area of property and order changes (track only) ----------------------------
 
 [[scenario]]
-id = "P83"
+id = "P87"
 title = "Toggle a masked adjustment mid-stack in the layered document + refresh"
 issue = 9329
 bench = "perf_scenarios"
@@ -868,7 +868,7 @@ row = "toggle a masked adjustment mid-stack in the layered document + refresh"
 enforce = false  # new; no baseline yet
 
 [[scenario]]
-id = "P84"
+id = "P88"
 title = "Bring forward / send backward a small layer in the many-layer document + refresh"
 issue = 9329
 bench = "perf_scenarios"
