@@ -3,9 +3,9 @@
 //! (`tool_modes`: Brush, Pencil, Paint Bucket, Gradient, the stamps, History Brush, Healing) they
 //! set that tool's mode within its menu and never the layer's. With a tool that has no blend mode
 //! (Move, the selection tools, the Erasers…) they set every selected layer's mode. With the Color
-//! Replacement tool the ⇧⌥ letters for Normal, Multiply, Hue and Luminosity set the layers' mode too
-//! and its own Mode stays, as measured in the reference application (#11928); its other letters and
-//! ⇧+ / ⇧− do nothing.
+//! Replacement tool the ⇧⌥ letters for Normal, Multiply, Hue and Luminosity set the active layer's
+//! mode too and its own Mode stays, as measured in the reference application (#11928); its other
+//! letters, the letters with several layers selected, and ⇧+ / ⇧− do nothing.
 //! The step list wraps at either end. Each press is one call of an engine command
 //! (`tools.setBrush`, `layer.setProps` with every target layer), so it is one undo step.
 
@@ -152,8 +152,9 @@ enum Target {
     /// nothing, and never reach the layer.
     Nothing,
     Layers,
-    /// The ⇧⌥ letters for these modes set the layers' mode; the other letters and ⇧+ / ⇧− do
-    /// nothing (the Color Replacement tool, #11928: only these letters were measured).
+    /// The ⇧⌥ letters for these modes set the active layer's mode while it is the only one
+    /// selected; the other letters, several selected layers and ⇧+ / ⇧− do nothing (the Color
+    /// Replacement tool, #11928: only these letters on one layer were measured).
     LayerLetters(&'static [BlendMode]),
 }
 
@@ -298,7 +299,9 @@ pub fn pick_mode(app: &mut PhotocraftApp, pick: Pick) {
             }
         }
         Target::LayerLetters(modes) => {
-            if let Some(m) = want.filter(|m| modes.contains(m)) {
+            // Only one selected layer was measured; several keep today's (nothing).
+            let one = app.session.active().is_some_and(|st| st.selected_layers().len() == 1);
+            if let Some(m) = want.filter(|m| one && modes.contains(m)) {
                 set_layers_mode(app, m);
             }
         }

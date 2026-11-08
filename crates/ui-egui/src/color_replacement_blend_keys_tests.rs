@@ -83,3 +83,19 @@ fn letters_outside_the_measured_four_still_do_nothing() {
         assert_eq!((layer_blend(&app), steps(&app)), (BlendMode::Normal, n), "{letter:?}");
     }
 }
+
+#[test]
+fn several_selected_layers_still_do_nothing() {
+    // Not measured: with more than one layer selected the letters keep today's behaviour.
+    let ctx = egui::Context::default();
+    let mut app = app(Tool::ColorReplacement);
+    let first = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("layer.select", json!({"layer": first.0, "mode": "add"})).unwrap();
+    assert_eq!(app.session.active().unwrap().selected_layers().len(), 2);
+    let n = steps(&app);
+    key(&mut app, &ctx, Key::M, SHIFT_ALT);
+    let st = app.session.active().unwrap();
+    let blends: Vec<BlendMode> = st.selected_layers().into_iter().map(|id| st.doc.layer(id).unwrap().blend).collect();
+    assert_eq!((blends, steps(&app)), (vec![BlendMode::Normal; 2], n));
+}
