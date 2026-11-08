@@ -622,7 +622,17 @@ fn lasso(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "needs at least 3 points".into() });
     }
     // The History step is named after the tool: the Polygonal Lasso sends `polygonal` (Photoshop).
-    let step = if b(p, "polygonal", false) { "Polygonal Lasso" } else { "Lasso" };
+    // The Patch and Content-Aware Move tools draw with this command and send their own name as
+    // `historyName`, so the plain Lasso tool keeps "Lasso".
+    let step = if b(p, "polygonal", false) {
+        "Polygonal Lasso"
+    } else {
+        match p.get("historyName") {
+            None | Some(Value::Null) => "Lasso",
+            Some(Value::String(n)) if !n.trim().is_empty() && n.chars().count() <= 64 && !n.chars().any(char::is_control) => n.trim(),
+            Some(_) => return Err(EngineError::BadParams { cmd: "select.lasso".into(), msg: "historyName must be a short text".into() }),
+        }
+    };
     polygon_selection(s, "select.lasso", step, &pts, p)
 }
 
@@ -756,7 +766,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "select.lasso",
             "Lasso",
             [],
-            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false}"##,
+            r##"{"points":[[x,y],…],"mode":"replace|add|subtract|intersect"="replace","antiAlias":bool=true,"feather":px=0,"polygonal":bool=false,"historyName"?:text (1..64 characters, no control characters; the History step name when a tool other than the Lasso draws it, e.g. "Patch Tool"; default "Lasso")}"##,
             has_doc,
             lasso
         ),
