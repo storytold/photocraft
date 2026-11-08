@@ -1,11 +1,13 @@
-//! Content-Aware Move drags and its Transform On Drop box shown with the result: once the pointer
-//! (or the box) rests for a moment, the move is computed as a background job
+//! Content-Aware Move's Transform On Drop box shown with the result: once the box rests for a
+//! moment, the move is computed as a background job
 //! ([`photocraft_engine::retouch_cmds::content_aware_move_preview`]: a smaller sampling window than
 //! the command) and the canvas shows the document with it. A selection too large to solve at once
 //! shows a coarse result first (solved scaled down), then the exact one, computed as a second job.
 //! Any change of the offset, scale or rotation cancels the jobs and starts the wait again, so the
-//! UI never waits for the blend. Releasing (or Enter) runs the exact `paint.contentAwareMove`; the
-//! document is untouched until then. Not available on wasm (no threads).
+//! UI never waits for the blend. During a drag the canvas keeps the document; the moving copy and
+//! the offset readout are painted with the outline (`paint`). Enter, or a release with Transform
+//! On Drop off, runs the exact `paint.contentAwareMove`. The document is untouched until then.
+//! Not available on wasm (no threads).
 
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -72,21 +74,14 @@ fn wanted(app: &mut PhotocraftApp) -> Option<Value> {
     if app.ui.tool != Tool::ContentAwareMove || cfg!(target_arch = "wasm32") {
         return None;
     }
-    if let Some(t) = &app.ui.cam_transform {
-        let place = crate::cam_transform::placement(t)?;
-        if place.offset == [0, 0] && place.is_plain_move() {
-            return None;
-        }
-        return Some(crate::cam_transform::params(app, &place));
-    }
-    let d = app.drag.as_ref().filter(|d| d.tool == Tool::ContentAwareMove)?;
-    let (start, mods) = (d.start, d.modifiers);
-    let end = d.points.last().map_or(start, |p| [p[0], p[1]]);
-    if !crate::retouch_ui::patch_drags_selection(app, start, mods) {
+    // A drag keeps the source and paints a copy (`paint::draw_drag_preview`). The filled result
+    // is only for the Transform On Drop box.
+    let t = app.ui.cam_transform.as_ref()?;
+    let place = crate::cam_transform::placement(t)?;
+    if place.offset == [0, 0] && place.is_plain_move() {
         return None;
     }
-    let off = crate::retouch_ui::patch_offset(app, start, end);
-    (off != [0, 0]).then(|| crate::retouch_ui::content_aware_move_params(app, off.map(i64::from)))
+    Some(crate::cam_transform::params(app, &place))
 }
 
 /// The document to show for the move on document `idx`: with the move applied, once its preview
@@ -220,6 +215,10 @@ pub(crate) fn showing(app: &PhotocraftApp) -> bool {
 }
 
 #[cfg(test)]
+#[path = "cam_drag_preview_tests.rs"]
+mod cam_drag_preview_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::canvas::{ToolEvent, tool_event};
@@ -230,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn the_drag_previews_the_move_after_it_rests_and_never_touches_the_document() {
+    fn the_drag_keeps_the_document_and_release_commits_the_move() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 100, "height": 60})).unwrap();
         app.run("paint.pencil", json!({"points": [[16, 30], [28, 30]], "size": 4, "color": "#0000ff"})).unwrap();
@@ -239,29 +238,22 @@ mod tests {
         let m = egui::Modifiers::NONE;
         let steps = app.session.active().unwrap().history.past_len();
 
-        // Nothing to preview before the patch moves.
         tool_event(&mut app, ToolEvent::Down { x: 22.0, y: 30.0, pressure: 1.0 }, m);
         assert!(step(&mut app, 0.0).is_none() && app.cam_preview.is_none());
         tool_event(&mut app, ToolEvent::Move { x: 72.0, y: 30.0, pressure: 1.0 }, m);
-        // Still moving: the wait starts and nothing is computed or shown yet.
-        assert!(step(&mut app, 1000.0).is_none());
-        assert!(step(&mut app, 1000.0 + DEBOUNCE_MS / 2.0).is_none() && app.cam_preview.as_ref().unwrap().running.is_none());
-        // At rest: the job runs, off this thread, and its result shows once it arrives.
-        let mut now = 1000.0 + DEBOUNCE_MS;
-        assert!(step(&mut app, now).is_none() && app.cam_preview.as_ref().is_some_and(|p| p.running.is_some()), "the preview job starts off this thread");
-        let (preview, key) = wait_for(&mut app, &mut now, 0).expect("a preview once the pointer rested");
-        assert!(key > BASE && showing(&app));
-        assert!(blue(&preview, 72, 30) && !blue(&preview, 22, 30), "the preview shows the move");
+        // Resting no longer swaps in the filled result: the source stays as the document.
+        assert!(step(&mut app, 1000.0).is_none() && app.cam_preview.is_none());
+        assert!(step(&mut app, 1000.0 + DEBOUNCE_MS).is_none() && app.cam_preview.is_none());
         let doc = app.session.active().unwrap().doc.clone();
         assert!(blue(&doc, 22, 30) && !blue(&doc, 72, 30), "the document is untouched");
         assert_eq!(app.session.active().unwrap().history.past_len(), steps);
 
-        // Moving on drops the stale preview at once and cancels what is not shown yet.
-        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 30.0, pressure: 1.0 }, m);
-        assert!(step(&mut app, now + 5.0).is_none() && !showing(&app));
-        // Release commits the exact move; the preview is gone.
-        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 30.0 }, m);
-        assert!(step(&mut app, now + 10.0).is_none() && app.cam_preview.is_none());
+        tool_event(&mut app, ToolEvent::Up { x: 72.0, y: 30.0 }, m);
+        assert!(step(&mut app, 1000.0 + DEBOUNCE_MS + 10.0).is_none() && app.cam_preview.is_none());
+        let doc = app.session.active().unwrap().doc.clone();
+        assert!(blue(&doc, 72, 30) && !blue(&doc, 22, 30), "release still runs the move");
+        assert_eq!(app.session.journal.last().map(|(id, p)| (id.as_str(), p["offset"].clone())), Some(("paint.contentAwareMove", json!([50, 0]))));
+        assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
     }
 
     #[test]
@@ -317,10 +309,13 @@ mod tests {
         app.run("paint.pencil", json!({"points": [[150, 160], [170, 160]], "size": 12, "color": "#0000ff"})).unwrap();
         app.run("select.rect", json!({"x": 10, "y": 10, "width": 300, "height": 300})).unwrap();
         app.ui.tool = Tool::ContentAwareMove;
+        app.ui.tool_options.cam_transform_on_drop = true;
         let m = egui::Modifiers::NONE;
         tool_event(&mut app, ToolEvent::Down { x: 100.0, y: 100.0, pressure: 1.0 }, m);
         tool_event(&mut app, ToolEvent::Move { x: 340.0, y: 100.0, pressure: 1.0 }, m);
-        assert!(step(&mut app, 0.0).is_none());
+        assert!(step(&mut app, 0.0).is_none() && app.cam_preview.is_none(), "a drag shows the document, not the filled result");
+        tool_event(&mut app, ToolEvent::Up { x: 340.0, y: 100.0 }, m);
+        assert!(crate::cam_transform::active(&app), "the box keeps today's result preview");
         let mut now = DEBOUNCE_MS;
         // First the coarse result, while the exact one computes.
         let (coarse, first) = wait_for(&mut app, &mut now, 0).expect("a coarse preview");
@@ -331,12 +326,12 @@ mod tests {
         let (exact, _) = wait_for(&mut app, &mut now, first).expect("the exact preview");
         assert!(app.cam_preview.as_ref().unwrap().running.is_none() && showing(&app));
         assert!(!blue(&app.session.active().unwrap().doc, 400, 160), "the document is untouched");
-        tool_event(&mut app, ToolEvent::Up { x: 340.0, y: 100.0 }, m);
+        crate::cam_transform::commit(&mut app);
         let doc = app.session.active().unwrap().doc.clone();
         let b = doc.bounds();
         assert!(
             exact.layers[0].surface().unwrap().read_region(b) == doc.layers[0].surface().unwrap().read_region(b),
-            "the exact preview is what release makes"
+            "the exact preview is what the commit makes"
         );
     }
 
@@ -347,9 +342,13 @@ mod tests {
         app.run("select.rect", json!({"x": 6, "y": 14, "width": 32, "height": 32})).unwrap();
         app.run("layer.lockLayers", json!({"pixels": true})).unwrap();
         app.ui.tool = Tool::ContentAwareMove;
+        app.ui.tool_options.cam_transform_on_drop = true;
         let m = egui::Modifiers::NONE;
         tool_event(&mut app, ToolEvent::Down { x: 22.0, y: 30.0, pressure: 1.0 }, m);
         tool_event(&mut app, ToolEvent::Move { x: 72.0, y: 30.0, pressure: 1.0 }, m);
+        assert!(step(&mut app, 0.0).is_none() && app.cam_preview.is_none(), "a drag does not start the filled preview");
+        tool_event(&mut app, ToolEvent::Up { x: 72.0, y: 30.0 }, m);
+        assert!(crate::cam_transform::active(&app));
         assert!(step(&mut app, 0.0).is_none());
         let mut now = DEBOUNCE_MS;
         for _ in 0..3000 {
