@@ -127,4 +127,10 @@ fn malformed_blocks_are_left_as_they_are() {
         two[e + 4..e + 8].copy_from_slice(&2u32.to_le_bytes());
     }
     assert!(matches!(exif_with_pixel_size(&two, (1, 1)), Cow::Borrowed(_)));
+    // An Exif IFD pointer with no value or several (its count at 26) points nowhere reliable.
+    for n in [0u32, 2] {
+        let mut odd = src.clone();
+        odd[26..30].copy_from_slice(&n.to_le_bytes());
+        assert!(matches!(exif_with_pixel_size(&odd, (1, 1)), Cow::Borrowed(_)), "pointer count {n}");
+    }
 }

@@ -537,9 +537,14 @@ const TAG_PIXEL_Y: u16 = 40963;
 const TYPE_LONG: u16 = 4;
 
 /// Where the Exif IFD of a TIFF stream starts, from IFD0's pointer (LONG or IFD; in BigTIFF also
-/// LONG8 or IFD8). The first pointer wins.
+/// LONG8 or IFD8). The first pointer wins; one that doesn't hold exactly one value is not followed.
 fn exif_ifd(order: Order, b: &[u8], first: usize, count: usize, entry_bytes: usize, big: bool) -> Option<usize> {
     let e = (0..count).filter_map(|i| first.checked_add(i.checked_mul(entry_bytes)?)).find(|&e| order.u16(b, e) == Some(TAG_EXIF_IFD))?;
+    let count_at = e.checked_add(4)?;
+    let values = if big { order.u64(b, count_at)? } else { u64::from(order.u32(b, count_at)?) };
+    if values != 1 {
+        return None;
+    }
     let ty = order.u16(b, e.checked_add(2)?)?;
     let at = e.checked_add(if big { 12 } else { 8 })?;
     let offset = match ty {
