@@ -1157,7 +1157,7 @@ fn confirm_target(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Val
     }
     // The Artboard tool's custom background for the boards it draws (#11385).
     if target == "artboardBackground" {
-        return crate::artboard_tool::bar::set_custom_background_from_picker(app, color, f.get("color") == f.get("__orig"));
+        return crate::artboard_tool::bar::set_custom_background_from_picker(app, &color, f.get("color") == f.get("__orig"));
     }
     // The Note tool's colour for new notes (#2144).
     if target == "noteColor" {
