@@ -110,7 +110,9 @@ fn angle_field(ui: &mut egui::Ui, b: &mut photocraft_engine::BrushSettings) -> b
     let out_of_range = r.id.with("bg-eraser-angle-out-of-range");
     // The flag lives only while an entry is being typed: drawn without the keyboard, the field
     // drops it, so an entry the tool switch cut off (never committed) can't alert on a later one.
-    if !r.has_focus() && !r.lost_focus() {
+    // The widget's own focus, not `has_focus()`: that is false while the window is in the
+    // background, and switching away mid-entry must keep the alert for the commit.
+    if !ui.memory(|m| m.has_focus(r.id)) && !r.lost_focus() {
         ui.data_mut(|d| d.remove_temp::<bool>(out_of_range));
     }
     if r.changed() && a.is_finite() {

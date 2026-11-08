@@ -97,6 +97,27 @@ fn an_entry_left_by_a_tool_switch_does_not_alert_later() {
 }
 
 #[test]
+fn an_entry_kept_while_the_window_is_in_the_background_still_alerts() {
+    let mut h = bar(Tool::BackgroundEraser);
+    angle_field(&h).expect("the Angle field").click();
+    h.run_steps(1);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.event(egui::Event::Text("400".into()));
+    h.run_steps(1);
+    // Another window takes the focus mid-entry, then this one gets it back.
+    h.input_mut().focused = false;
+    h.event(egui::Event::WindowFocused(false));
+    h.run_steps(3);
+    h.input_mut().focused = true;
+    h.event(egui::Event::WindowFocused(true));
+    h.run_steps(1);
+    h.key_press(egui::Key::Enter);
+    h.run_steps(2);
+    assert_eq!(h.state().session.tools.brush.angle, 180.0);
+    assert_eq!(alerts(&h), vec![crate::eraser_ui::ANGLE_RANGE_MESSAGE.to_string()], "typed before the switch, so it alerts");
+}
+
+#[test]
 fn pressure_for_size_follows_protect_foreground_color_off_by_default() {
     let mut h = bar(Tool::BackgroundEraser);
     assert!(left(&h, "Protect Foreground Color") < left(&h, PRESSURE));
