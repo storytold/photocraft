@@ -117,6 +117,8 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
     // result). `ui.menu.invoke` behaves like a menu click, so it may open the dialog.
     if req.method == "engine.execute" && photocraft_engine::commands::find(id).is_some() {
         return run_waiting(app, wait, |app| {
+            // These bypass `menus::invoke`: a Type box drag in progress applies its box first.
+            crate::type_box_preview::end_drag(app);
             let previous = std::mem::replace(&mut app.programmatic_playback, true);
             let result = app.run(id, params);
             app.programmatic_playback = previous;
@@ -1527,7 +1529,11 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
             Ok(choices) => {
                 let path = str_param(p, "path").map(str::to_string);
-                run_waiting(app, wait_param(p), move |app| app.save_automation_with(path, choices))
+                run_waiting(app, wait_param(p), move |app| {
+                    // Saving bypasses `menus::invoke`: a Type box drag in progress applies its box first.
+                    crate::type_box_preview::end_drag(app);
+                    app.save_automation_with(path, choices)
+                })
             }
             Err(e) => err(e),
         },

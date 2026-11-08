@@ -40,10 +40,11 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
 }
 
 /// Whether command `id` leaves a Type box-handle drag going: only the ones that change what is
-/// on screen and nothing in the document. `UI_COMMANDS` is every command the shell carries out
-/// itself, so it can't tell them apart: it holds `edit.freeTransform` and `file.save`, which
-/// must see the dragged box, and `view.clearSelectedGuides`, which edits the document. So the view
-/// ones are listed one by one; panel and help commands only open or arrange windows.
+/// on screen and nothing else. `UI_COMMANDS` is every command the shell carries out itself, so it
+/// can't tell them apart: it holds `edit.freeTransform` and `file.save`, which must see the dragged
+/// box, `view.clearSelectedGuides`, which edits the document, and `window.nextDocument`, which
+/// switches to another one mid-drag. So the commands that cannot touch either are listed one by
+/// one; everything else applies the box first, which is harmless when no drag is going.
 fn keeps_box_drag(id: &str) -> bool {
     const VIEW: &[&str] = &[
         "view.zoomIn",
@@ -56,7 +57,7 @@ fn keeps_box_drag(id: &str) -> bool {
         "view.darkenInterface",
         "view.lightenInterface",
     ];
-    VIEW.contains(&id) || ((id.starts_with("window.") || id.starts_with("help.")) && super::UI_COMMANDS.iter().any(|c| c.0 == id))
+    VIEW.contains(&id)
 }
 
 /// Run a command id from any source (menu, shortcut, palette, automation).

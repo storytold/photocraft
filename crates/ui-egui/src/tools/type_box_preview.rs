@@ -408,7 +408,11 @@ mod tests {
     use photocraft_doc::text::TextShape;
 
     fn app_with_box() -> (PhotocraftApp, LayerId) {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app_with_box_and(crate::Services::default())
+    }
+
+    fn app_with_box_and(services: crate::Services) -> (PhotocraftApp, LayerId) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
         app.run("file.new", json!({"width": 1600, "height": 900})).unwrap();
         app.sync_views();
         app.ui.extras.rulers = false;
@@ -706,6 +710,73 @@ mod tests {
         end_drag(&mut sync);
         assert_eq!(revision(&sync), rev);
         assert!(sync.ui.text_edit.as_ref().unwrap().resize.is_some(), "a sync drag is left going");
+    }
+
+    /// The control channel's `engine.execute` runs engine commands without `menus::invoke`, and
+    /// `app.save` writes the document directly: both must see the dragged box too.
+    #[test]
+    fn control_commands_mid_drag_see_the_dragged_box() {
+        use crate::control::{ControlRequest, Outcome, handle};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let call = |app: &mut PhotocraftApp, method: &str, params: serde_json::Value| {
+            let (req, _rx) = ControlRequest::new(method, params);
+            match handle(app, &egui::Context::default(), &req) {
+                Outcome::Done(v) => v,
+                _ => panic!("{method}: expected an immediate reply"),
+            }
+        };
+
+        // engine.execute of a command that edits the document.
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 560.0);
+        assert_eq!(height(&session_layer(&app, id)), 180.0, "not applied yet");
+        let r = call(&mut app, "engine.execute", json!({"command": "layer.setProps", "params": {"layer": id.0, "opacity": 0.5}}));
+        assert_eq!(r["ok"], true, "{r}");
+        assert_eq!(height(&session_layer(&app, id)), 260.0, "applied before the command ran, not lost as stale");
+        assert!(app.type_box_preview.is_none());
+
+        // app.save writes the document as it is, which has to hold the dragged box.
+        let saved: Rc<RefCell<Option<Document>>> = Rc::default();
+        let s = saved.clone();
+        let services = crate::Services {
+            export: Some(Box::new(move |d: &Document, _p: &str, _s: &crate::ExportSettings| {
+                *s.borrow_mut() = Some(d.clone());
+                Ok((b"out".to_vec(), Vec::new()))
+            })),
+            automation_write: Some(Box::new(|_path: &str, _b: &[u8]| Ok(()))),
+            ..Default::default()
+        };
+        let (mut app, id) = app_with_box_and(services);
+        background(&mut app);
+        press(&mut app);
+        to(&mut app, 560.0);
+        let r = call(&mut app, "app.save", json!({"path": "a.png"}));
+        assert_eq!(r["ok"], true, "{r}");
+        let doc = saved.borrow();
+        let doc = doc.as_ref().expect("the document was exported");
+        assert_eq!(height(text_of(doc, id).unwrap()), 260.0, "the saved layer has the dragged box");
+        assert!(app.type_box_preview.is_none());
+    }
+
+    /// `window.nextDocument` switches documents: it must not leave a drag going, or the new
+    /// canvas would move the old document's box with its own view's coordinates.
+    #[test]
+    fn switching_documents_mid_drag_ends_the_drag() {
+        let (mut app, id) = app_with_box();
+        background(&mut app);
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
+        app.session.set_active(0);
+        press(&mut app);
+        to(&mut app, 560.0);
+        crate::menus::invoke(&mut app, &ctx, "window.nextDocument", json!({})).unwrap();
+        assert!(app.type_box_preview.is_none(), "the drag ended");
+        assert!(app.ui.text_edit.as_ref().is_none_or(|e| e.resize.is_none() && !e.dragging));
+        let first = &app.session.documents()[0].doc;
+        assert_eq!(height(text_of(first, id).unwrap()), 260.0, "the first document kept the dragged box");
     }
 
     /// `view.clearSelectedGuides` is a view command that edits the document. It must not leave
