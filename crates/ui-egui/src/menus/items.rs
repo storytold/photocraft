@@ -241,7 +241,7 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         item.label = "Release Clipping Mask".into();
         item.enabled = is_enabled(app, &item.id);
     }
-    if let Some(label) = photocraft_engine::actions_edit_cmds::undo_library_label(&app.session)
+    if let Some(label) = crate::actions::library::edit_undo_label(app)
         && let Some(item) = items.iter_mut().find(|item| item.id == "edit.undo")
     {
         item.label = label.into();

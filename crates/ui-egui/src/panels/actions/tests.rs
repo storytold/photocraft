@@ -19,6 +19,13 @@ fn library_dialog_cancel_stale_and_undo_leave_document_history_untouched() {
     crate::dialogs::confirm(&mut app, id).unwrap();
     assert!(app.session.actions.sets.is_empty());
     let ctx = egui::Context::default();
+    assert_eq!(library::edit_undo_label(&app), Some("Undo Clear All Actions"));
+    app.run("layer.new.layer", json!({})).unwrap();
+    assert!(library::edit_undo_label(&app).is_none());
+    crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
+    assert_eq!(app.session.active().unwrap().history.past_len(), history);
+    assert!(app.session.actions.sets.is_empty(), "the newer document edit was undone first");
+    assert_eq!(library::edit_undo_label(&app), Some("Undo Clear All Actions"));
     crate::menus::invoke(&mut app, &ctx, "edit.undo", json!({})).unwrap();
     assert_eq!(app.session.actions.sets, ["Keep", "Newer"]);
     assert_eq!(app.session.active().unwrap().history.past_len(), history);

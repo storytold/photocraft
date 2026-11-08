@@ -16,9 +16,11 @@ mod tests;
 type Shortcuts = BTreeMap<String, String>;
 type Alternates = BTreeMap<String, Vec<String>>;
 
+/// Snapshot of the definitions and shortcut bindings changed by one library edit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LibraryUndo {
     label: &'static str,
+    document_history: Vec<(photocraft_doc::DocId, u64, bool)>,
     list: Vec<Action>,
     sets: Vec<String>,
     rows: Vec<String>,
@@ -97,8 +99,14 @@ pub(crate) fn publish_library(s: &mut Session, list: Vec<Action>, sets: Vec<Stri
         }
         None => (shortcuts.clone(), alternates.clone()),
     };
+    let document_history = s.documents().iter().map(|st| (st.doc.id, st.history.row_ids().max().unwrap_or(0), st.history.is_cleared())).collect();
+    // A document edit after a library command must start a new undo step.
+    for st in &mut s.docs {
+        st.coalesce = None;
+    }
     let undo = LibraryUndo {
         label,
+        document_history,
         list: std::mem::replace(&mut s.actions.list, list),
         sets: std::mem::replace(&mut s.actions.sets, sets),
         rows: std::mem::replace(&mut s.actions.set_rows, rows),
@@ -153,9 +161,17 @@ fn undo_state(s: &Session) -> Result<&LibraryUndo> {
     Ok(undo)
 }
 
+/// Label for Edit Undo when the latest library change precedes no undoable document edit.
 pub fn undo_library_label(s: &Session) -> Option<&'static str> {
-    s.actions.library_undo.as_ref()?;
-    undo_state(s).ok().map(|undo| undo.label)
+    let undo = undo_state(s).ok()?;
+    if let Some(st) = s.active().filter(|st| st.history.can_undo()) {
+        let (_, last_id, was_cleared) = undo.document_history.iter().find(|(id, _, _)| *id == st.doc.id).copied().unwrap_or((st.doc.id, 0, false));
+        let current_id = st.history.row_id(st.history.past_len()).unwrap_or(0);
+        if current_id > last_id || (st.history.is_cleared() && !was_cleared) {
+            return None;
+        }
+    }
+    Some(undo.label)
 }
 
 pub(super) fn undo_enabled(s: &Session) -> std::result::Result<(), String> {

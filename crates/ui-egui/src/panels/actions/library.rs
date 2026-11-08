@@ -237,6 +237,19 @@ pub(crate) fn cancel(app: &mut PhotocraftApp, id: u64) {
     }
 }
 
+/// The library label is shown only when Edit Undo will reach the library.
+pub(crate) fn edit_undo_label(app: &PhotocraftApp) -> Option<&'static str> {
+    if crate::vector_ui::pen_can_undo(app)
+        || crate::transform_tool::is_enabled(app, "edit.undo").is_some()
+        || crate::crop_ui::is_enabled(app, "edit.undo").is_some()
+        || idle(app, "actions.undoLibrary").is_err()
+    {
+        return None;
+    }
+    photocraft_engine::actions_edit_cmds::undo_library_label(&app.session)
+}
+
+/// Route an eligible Edit Undo through normal command authorization.
 pub(crate) fn undo(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.run("actions.undoLibrary", json!({}))
 }

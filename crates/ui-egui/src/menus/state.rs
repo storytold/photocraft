@@ -13,10 +13,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return crate::symmetry_ui::can_transform(app);
     }
     // Draft Pen points can be undone even when the document has no History entries.
-    if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
+    if id == "edit.undo" && crate::vector_ui::pen_can_undo(app) {
         return true;
     }
-    if id == "edit.undo" && photocraft_engine::actions_edit_cmds::undo_library_label(&app.session).is_some() {
+    if id == "edit.undo" && crate::actions::library::edit_undo_label(app).is_some() {
         return true;
     }
     // Photoshop greys these for the Background layer, other layer kinds or single-layer documents.
