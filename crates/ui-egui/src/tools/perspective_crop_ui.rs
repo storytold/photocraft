@@ -198,6 +198,9 @@ fn drag_to(app: &mut PhotocraftApp, p: [f64; 2], mods: egui::Modifiers) {
                 }
             }
             let Some(q) = app.ui.perspective_crop.as_mut() else { return };
+            // Each move starts from the quad at the press, so ⌥ released mid-drag puts the
+            // neighbours back.
+            *q = quad;
             // ⌥ on a rectangle: the neighbours follow, one coordinate each, the opposite corner
             // stays. On any other quad (not measured) the corner moves alone.
             if mods.alt && axis_rect(&quad) {
