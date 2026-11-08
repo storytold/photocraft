@@ -1000,8 +1000,8 @@ pub fn open_view(app: &mut PhotocraftApp, ctx: &Context, tool: Tool, pos: [f32; 
     true
 }
 
-/// A view menu row. Zoom In and Zoom Out step about the right-clicked point, as a Zoom tool click
-/// does; the other rows run their View menu command.
+/// A view menu row. The non-temporary Zoom tool's steps keep the view centre unless clicked-point
+/// centring is enabled. Other view-tool cases retain their pressed-point anchoring.
 fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, command: &str) -> Result<(), String> {
     let i = app.session.active_index().ok_or("no document")?;
     if command == FILL_SCREEN {
@@ -1019,6 +1019,9 @@ fn choose_view(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, co
     }
     let (Some((zoom0, c)), Some(d)) = (before, menu.anchor) else { return Ok(()) };
     let center_on_point = app.session.prefs().tools.zoom_clicked_point_to_center;
+    if menu.tool == Tool::Zoom && app.ui.tool == Tool::Zoom && app.ui.spring.is_none() && crate::hold_keys::held_tool(app, ctx).is_none() && !center_on_point {
+        return Ok(());
+    }
     let Some(v) = app.ui.views.get_mut(i) else { return Ok(()) };
     let d = [d[0] as f32, d[1] as f32];
     // The view scales about the centre, so the point keeps its screen position when its offset
