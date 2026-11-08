@@ -120,3 +120,18 @@ fn recording_and_assignment_infer_only_unambiguous_folder_occurrences() {
     s.execute("actions.assignSet", json!({"action":0,"set":"Exact "})).unwrap();
     assert_eq!(s.actions.list[0].set_slot, Some(0));
 }
+
+/// Imported callers prefer the same physical folder when a target name is repeated.
+#[test]
+fn whole_replace_resolves_unqualified_calls_in_their_own_occurrence() {
+    let mut s = Session::new();
+    let mut archive = set("Repeated", Some(("Child", 0)));
+    let child = Action::new("Child", Vec::new());
+    let parent = Action::new("Parent", vec![("actions.play".into(), json!({"action":"Child"}))]);
+    let (second, _) = crate::atn_cmds::export("Repeated", &[&child, &parent], &[], false).unwrap();
+    archive.extend_from_slice(&second[4..]);
+    s.execute("actions.replace", json!({"confirm":true,"data":photocraft_paint::tile::b64_encode(&archive)})).unwrap();
+    assert_eq!(s.actions.list[0].name, "Child");
+    assert_ne!(s.actions.list[1].name, "Child");
+    assert_eq!(s.actions.list[2].steps[0].1["action"], s.actions.list[1].name.as_str());
+}
