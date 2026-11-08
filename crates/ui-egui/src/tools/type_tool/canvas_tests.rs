@@ -2728,10 +2728,10 @@ fn type_mask_commits_the_glyphs_as_the_selection_in_one_step() {
     assert!(v.height() > 2 * v.width(), "{v:?}");
 }
 
-/// #1055: Escape cancels a Type Mask session whatever "Use Escape to Commit" says: the selection
-/// and the layers stay as they were.
+/// #1055: Cancel throws a Type Mask session away: the selection and the layers stay as they were.
+/// (Escape commits it, as in the reference application: #12070, `mask_escape_tests`.)
 #[test]
-fn type_mask_escape_leaves_the_selection_unchanged() {
+fn type_mask_cancel_leaves_the_selection_unchanged() {
     let mut app = new_app();
     app.run("select.all", json!({})).unwrap();
     let (before, layers) = (selection_bounds(&app), app.session.active().unwrap().doc.layers.len());
@@ -2741,7 +2741,7 @@ fn type_mask_escape_leaves_the_selection_unchanged() {
     click(&mut h, p);
     assert!(h.state().ui.text_edit.as_ref().is_some_and(|ed| ed.mask), "typing a mask");
     super::insert(h.state_mut(), "I");
-    h.key_press(egui::Key::Escape);
+    super::cancel(h.state_mut());
     h.run_steps(2);
     assert!(h.state().ui.text_edit.is_none());
     assert_eq!(selection_bounds(h.state()), before);
