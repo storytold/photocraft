@@ -130,6 +130,9 @@ pub(crate) fn committing(app: &PhotocraftApp) -> Option<JobId> {
 /// A job ended (see [`crate::jobs_ui`]): when it was the commit, the session ends with it. Its
 /// status and errors are reported like any job's.
 pub fn on_job_event(app: &mut PhotocraftApp, e: &JobEvent) {
+    if super::begin::on_prepared(app, e) {
+        return;
+    }
     if committing(app) != Some(e.id) {
         return;
     }

@@ -325,8 +325,8 @@
 	Artboard…	لوح التصميم…
 	Artboard from Group…	لوح تصميم من مجموعة…
 	Artboard from Layers…	لوح تصميم من طبقات…
-	Layer via Copy	طبقة عبر النسخ
-	Layer via Cut	طبقة عبر القص
+	Layer Via Copy	طبقة عبر النسخ
+	Layer Via Cut	طبقة عبر القص
 	Layer From Background…	طبقة من الخلفية…
 	Layer from Background…	طبقة من الخلفية…
 	Background from Layer	خلفية من طبقة
@@ -3527,6 +3527,7 @@ curves	Smooth	تنعيم
 	Grayscale Ramp	شريط التدرج الرمادي
 	Current Colors	الألوان الحالية
 	Make Ramp Web Safe	جعل الشريط آمنًا للويب
+	Scroll All Windows	تمرير جميع النوافذ
 # Art History Brush (#213).
 	Art History Brush	فرشاة السجل الفني
 	Art History Brush Tool	أداة فرشاة السجل الفني
@@ -3601,6 +3602,7 @@ curves	Smooth	تنعيم
 	Pick a different document for each channel.	اختر مستندًا مختلفًا لكل قناة.
 	A picked document is no longer open.	أحد المستندات المختارة لم يعد مفتوحًا.
 	A picked document is no longer a grayscale document of the same size.	أحد المستندات المختارة لم يعد مستندًا بتدرج الرمادي بالحجم نفسه.
+	Netscape Gray	رمادي Netscape
 # Move tool options bar (#11381)
 	Align top edges	محاذاة الحواف العلوية
 	Align vertical centers	محاذاة المراكز الرأسية

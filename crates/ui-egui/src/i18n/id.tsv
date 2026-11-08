@@ -403,8 +403,8 @@
 	Artboard…	Artboard…
 	Artboard from Group…	Artboard dari Grup…
 	Artboard from Layers…	Artboard dari Layer…
-	Layer via Copy	Layer via Salin
-	Layer via Cut	Layer via Potong
+	Layer Via Copy	Layer via Salin
+	Layer Via Cut	Layer via Potong
 	Layer From Background…	Layer dari Background…
 	Layer from Background…	Layer dari Background…
 	Background From Layer	Background dari Layer
@@ -3523,8 +3523,10 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Grayscale Ramp	Gradasi Grayscale
 	Current Colors	Warna Saat Ini
 	Make Ramp Web Safe	Jadikan Gradasi Aman untuk Web
+	Scroll All Windows	Gulir Semua Jendela
 	The path was kept as the Work Path	Path dipertahankan sebagai Work Path
 	The path was discarded	Path dibuang
+# Art History Brush (#213).
 	Art History Brush Tool	Alat Kuas riwayat artistik
 	Tight Short	Rapet pendek
 	Tight Medium	Rapet sedang
@@ -3629,6 +3631,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Pick a different document for each channel.	Pilih dokumen yang berbeda untuk setiap channel.
 	A picked document is no longer open.	Salah satu dokumen yang dipilih sudah tidak terbuka.
 	A picked document is no longer a grayscale document of the same size.	Salah satu dokumen yang dipilih bukan lagi dokumen grayscale dengan ukuran yang sama.
+	Netscape Gray	Abu-abu Netscape
 # Move tool options bar (#11381)
 	Align top edges	Ratakan tepi atas
 	Align vertical centers	Ratakan pusat vertikal
