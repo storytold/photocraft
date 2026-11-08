@@ -340,6 +340,111 @@ fn ellipse_widget_drags_angle_and_roundness() {
     assert_eq!(r, 1.0);
 }
 
+fn check_scatter_header(section: usize) {
+    for kind in theme::ThemeKind::ALL {
+        for both_axes in [false, true] {
+            let mut b = BrushSettings::default();
+            b.scattering.scatter.jitter = 2.137;
+            b.scattering.both_axes = both_axes;
+            b.dual_brush.scatter = 2.137;
+            b.dual_brush.both_axes = both_axes;
+            let mut h = section_harness(section, b.clone());
+            crate::PhotocraftApp::setup_context(&h.ctx, kind);
+            h.run_steps(3);
+            let label = caption_rect(&h, "Scatter");
+            let axes = h.get_by_label("Both Axes").rect();
+            let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(214.0)).unwrap().rect();
+            assert!((label.center().y - axes.center().y).abs() < 2.0, "{kind:?}, section {section}: axes belongs on the Scatter header");
+            assert!((axes.center().y - field.center().y).abs() < 2.0, "{kind:?}, section {section}: axes and percentage share a row");
+            assert!(label.right() < axes.left() && axes.right() < field.left(), "{kind:?}, section {section}: label, checkbox, percentage order");
+            assert_eq!(
+                h.query_all_by_role_and_label(Role::Slider, "Scatter").count(),
+                1,
+                "{kind:?}, section {section}: the slider is named by its caption, like other slider rows"
+            );
+            assert_eq!(h.state(), &b, "rendering retains fractional scatter and other settings");
+        }
+    }
+}
+
+#[test]
+fn scatter_header_scattering_places_axes_between_label_and_percentage_in_all_themes() {
+    check_scatter_header(2);
+}
+
+#[test]
+fn scatter_header_dual_brush_places_axes_between_label_and_percentage_in_all_themes() {
+    check_scatter_header(4);
+}
+
+#[test]
+fn scatter_header_preserves_values_percentage_limits_and_label_scrubbing() {
+    for section in [2, 4] {
+        let mut b = BrushSettings::default();
+        b.scattering.scatter.jitter = 2.137;
+        b.scattering.scatter.control = Control::PenPressure;
+        b.scattering.count = 5;
+        b.dual_brush.scatter = 2.137;
+        b.dual_brush.count = 7;
+        let mut h = section_harness(section, b.clone());
+        h.get_by_label("Both Axes").click();
+        h.run_steps(2);
+        if section == 2 {
+            b.scattering.both_axes = true;
+        } else {
+            b.dual_brush.both_axes = true;
+        }
+        assert_eq!(h.state(), &b, "a toggle does not round scatter or change unrelated fields");
+        let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(214.0)).unwrap();
+        field.click();
+        h.key_press(egui::Key::ArrowUp);
+        h.run_steps(2);
+        if section == 2 {
+            b.scattering.scatter.jitter = 2.15;
+        } else {
+            b.dual_brush.scatter = 2.15;
+        }
+        assert_eq!(h.state(), &b, "percentage edits preserve the other brush block");
+        let label = caption_rect(&h, "Scatter").center();
+        drag(&mut h, label, label + vec2(18.0, 0.0));
+        let amount = if section == 2 { h.state().scattering.scatter.jitter } else { h.state().dual_brush.scatter };
+        assert!(amount > 2.15, "the label still scrubs the percentage across the checkbox");
+        if section == 2 {
+            b.scattering.scatter.jitter = amount;
+        } else {
+            b.dual_brush.scatter = amount;
+        }
+        assert_eq!(h.state(), &b, "scrubbing changes only the scatter amount");
+        let field =
+            h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(f64::from((amount * 100.0).round()))).unwrap();
+        let from = pos2(field.rect().left() - 100.0, field.rect().bottom() + 9.0);
+        let to = pos2(field.rect().right() - 25.0, from.y);
+        drag(&mut h, from, to);
+        let amount = if section == 2 { h.state().scattering.scatter.jitter } else { h.state().dual_brush.scatter };
+        assert!(amount > 5.0, "the existing amount track remains editable");
+        if section == 2 {
+            b.scattering.scatter.jitter = amount;
+        } else {
+            b.dual_brush.scatter = amount;
+        }
+        assert_eq!(h.state(), &b);
+        for (amount, value, key) in [(0.0, 0.0, egui::Key::ArrowDown), (10.0, 1000.0, egui::Key::ArrowUp)] {
+            if section == 2 {
+                b.scattering.scatter.jitter = amount;
+            } else {
+                b.dual_brush.scatter = amount;
+            }
+            *h.state_mut() = b.clone();
+            h.run_steps(2);
+            let field = h.query_all_by_role(Role::SpinButton).find(|node| node.accesskit_node().numeric_value() == Some(value)).unwrap();
+            field.click();
+            h.key_press(key);
+            h.run_steps(2);
+            assert_eq!(h.state(), &b, "the percentage stays within 0..1000");
+        }
+    }
+}
+
 fn tip_geometry_center(h: &Harness<'static, BrushSettings>) -> egui::Pos2 {
     fn centre(shape: &egui::Shape) -> Option<egui::Pos2> {
         match shape {
