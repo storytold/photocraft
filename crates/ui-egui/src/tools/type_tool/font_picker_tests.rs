@@ -41,8 +41,7 @@ fn harness_sized(preview: FontPreview, recents: Vec<String>, size: egui::Vec2) -
     let mut families: Vec<String> = (0..60).map(|i| format!("Family {i:02}")).collect();
     families.push("Zeta Sans".into());
     let state = State { current: "Family 00".into(), families, button: egui::Id::NULL, popup: egui::Id::NULL, preview, recents };
-    // As the app does: the wheel is a gesture over the field or past it (#11353). The plugin, not
-    // a call here, so a test that also sets the app's context up doesn't run it twice a pass.
+    // As the app does: the wheel is a gesture over the field or past it (#11353).
     let mut h = Harness::builder()
         .with_size(size)
         .with_max_steps(SETTLE_STEPS)
@@ -1317,6 +1316,28 @@ fn a_gesture_that_starts_over_the_panel_keeps_scrolling_it_over_the_font_field()
     }
     assert_eq!(h.state().0, "Family 03", "the field passing under the pointer is not stepped");
     assert!(h.state().1 > 12.0, "the panel kept scrolling");
+}
+
+/// #11353: a trackpad gesture that starts over the font field scrolls the panel and leaves the
+/// family alone.
+#[test]
+fn a_trackpad_gesture_that_starts_over_the_font_field_scrolls_the_panel() {
+    let mut h = font_field_in_a_panel();
+    let over = h.query_all_by_role(Role::TextInput).next().unwrap().rect().center();
+    h.hover_at(over);
+    h.run_steps(1);
+    for _ in 0..4 {
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Trackpad,
+            unit: egui::MouseWheelUnit::Point,
+            delta: vec2(0.0, -12.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(1);
+    }
+    assert_eq!(h.state().0, "Family 03", "the family is not stepped");
+    assert!(h.state().1 > 0.0, "the panel scrolled");
 }
 
 /// #11353: a gesture that steps the font field, then wheels on with the pointer off it, is the

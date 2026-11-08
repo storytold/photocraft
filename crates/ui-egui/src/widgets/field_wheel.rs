@@ -9,12 +9,14 @@
 //!   leaves the field is the view's from then on.
 //! - Dropdowns, sliders and the font list that the wheel steps follow the same rule
 //!   ([`hover_notches`]).
+//! - A trackpad (macOS says when it is one; other systems don't) steps only a field with focus:
+//!   over anything else its gesture scrolls the panel, wherever it starts (#11353).
 //! - Each window keeps its own record (a panel floated into a window of its own has input of its
 //!   own), and its own fractions of a notch; [`FieldWheel`] starts every window's pass with
 //!   [`begin_frame`]. The app installs it; a widget drawn without the app's setup installs it the
 //!   first time it asks for the wheel, so it steps there as it always has.
 
-use egui::{Context, Event, Id, MouseWheelUnit, Rect, Ui, Vec2};
+use egui::{Context, Event, Id, MouseWheelSource, MouseWheelUnit, Rect, Ui, Vec2};
 
 /// Wheel events this close together (seconds) are one gesture.
 pub(crate) const GESTURE_GAP: f64 = 0.3;
@@ -56,11 +58,18 @@ fn pass_id(ctx: &Context) -> Id {
 
 /// A wheel event a field takes: plain or Shift, not the view's Alt or Ctrl/Cmd zoom, nor a plain
 /// sideways scroll (a trackpad swipe pans the view; Shift+wheel can arrive sideways). An event
-/// with no delta at all counts: macOS starts a trackpad gesture with one, and it is what lets a
-/// field under the pointer claim the gesture.
+/// with no delta at all counts: a gesture can start with one, and it is what lets a field under
+/// the pointer claim the gesture.
 fn for_field(e: &Event) -> bool {
     matches!(e, Event::MouseWheel { delta, modifiers, .. }
         if (delta.y != 0.0 || delta.x == 0.0 || modifiers.shift) && !modifiers.alt && !modifiers.ctrl && !modifiers.command && !modifiers.mac_cmd)
+}
+
+/// Fingers on a trackpad or the glide they leave, where the system says so (macOS): they scroll
+/// what is under the pointer, and step only a field with focus (#11353). A system that doesn't
+/// say counts as a wheel.
+fn from_fingers(e: &Event) -> bool {
+    matches!(e, Event::MouseWheel { source: MouseWheelSource::Trackpad | MouseWheelSource::Momentum, .. })
 }
 
 /// Before this frame's UI is laid out: hand the wheel to the focused value field, if any, and
@@ -182,15 +191,17 @@ pub fn hover_notches(ui: &Ui, id: Id, rect: Rect, shift_notches: f32) -> f32 {
 }
 
 /// This frame's wheel events that `takes` for control `field` in `rect` without keyboard focus:
-/// those of a gesture that started with the pointer over it, none otherwise.
+/// those of a gesture that started with the pointer over it, none otherwise, and never a
+/// trackpad's.
 fn hovered_events(ui: &Ui, field: Id, rect: Rect, takes: fn(&Event) -> bool) -> Vec<Event> {
     if !ui.is_enabled() {
         return Vec::new();
     }
     let gesture_key = gesture_id(ui.ctx());
     let Some(mut g) = ui.data(|d| d.get_temp::<Gesture>(gesture_key)) else { return Vec::new() };
-    let (events, wheel): (Vec<Event>, bool) =
-        ui.input(|i| (i.events.iter().filter(|e| takes(e)).cloned().collect(), i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. }))));
+    let (events, wheel): (Vec<Event>, bool) = ui.input(|i| {
+        (i.events.iter().filter(|e| takes(e) && !from_fingers(e)).cloned().collect(), i.events.iter().any(|e| matches!(e, Event::MouseWheel { .. })))
+    });
     // Wheel the field doesn't take (a sideways swipe after a zero-delta start), or any wheel
     // with the pointer off the field, hands the rest of the gesture to the view: coming back
     // over the field in the same gesture doesn't step it.
@@ -432,6 +443,77 @@ mod tests {
         assert_eq!(*h.state(), 49.0);
     }
 
+    /// #11353: fingers on a trackpad, and the glide they leave, scroll the panel even when the
+    /// gesture starts over a control without focus (macOS says which input it is). A physical
+    /// wheel still steps it.
+    #[test]
+    fn a_trackpad_gesture_that_starts_over_a_control_scrolls_the_panel() {
+        use egui::{MouseWheelSource as Source, TouchPhase as Phase};
+        let ev =
+            |source, phase, y| egui::Event::MouseWheel { source, unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, y), phase, modifiers: Modifiers::NONE };
+        for role in [Role::ComboBox, Role::Slider] {
+            let mut h = controls_harness();
+            h.hover_at(h.get_by_role(role).rect().center());
+            h.run_steps(1);
+            // As macOS sends it: a start with no movement, then the fingers, then the glide.
+            h.event(ev(Source::Trackpad, Phase::Start, 0.0));
+            h.run_steps(1);
+            for _ in 0..4 {
+                h.event(ev(Source::Trackpad, Phase::Move, -12.0));
+                h.run_steps(1);
+            }
+            h.event(ev(Source::Momentum, Phase::Move, -12.0));
+            h.run_steps(4);
+            assert_eq!((h.state().0, h.state().1), (1, 50.0), "{role:?}: no step");
+            assert!(h.state().2 > 0.0, "{role:?}: the panel scrolled");
+        }
+        let mut h = harness(100.0);
+        h.hover_at(field(&h).center());
+        h.run_steps(1);
+        h.event(ev(Source::Trackpad, Phase::Start, 0.0));
+        h.run_steps(1);
+        for _ in 0..4 {
+            h.event(ev(Source::Trackpad, Phase::Move, -12.0));
+            h.run_steps(1);
+        }
+        h.run_steps(4);
+        assert_eq!(h.state().0, 100.0, "the value field isn't stepped");
+        assert!(h.state().1 > 0.0, "the panel scrolled");
+
+        let mut h = controls_harness();
+        h.hover_at(h.get_by_role(Role::Slider).rect().center());
+        h.run_steps(1);
+        h.event(egui::Event::MouseWheel {
+            source: Source::Wheel,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, -1.0),
+            phase: Phase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
+        assert_eq!(h.state().1, 49.0, "a physical wheel steps it");
+    }
+
+    /// A field with keyboard focus keeps a trackpad's wheel, as it keeps a mouse's.
+    #[test]
+    fn a_focused_field_takes_a_trackpad_gesture() {
+        let mut h = harness(100.0);
+        h.get_by_role(Role::SpinButton).click();
+        h.run_steps(2);
+        let at = field(&h).center();
+        h.hover_at(at);
+        h.run_steps(1);
+        h.event(egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Trackpad,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, 2.0),
+            phase: egui::TouchPhase::Move,
+            modifiers: Modifiers::NONE,
+        });
+        h.run_steps(4);
+        assert_eq!(h.state().0, 102.0);
+    }
+
     /// A gesture that steps a dropdown or slider, then wheels on with the pointer off it, is the
     /// panel's from then on: coming back over the control in the same gesture doesn't step it
     /// again, as for a value field.
@@ -631,10 +713,10 @@ mod tests {
         }
     }
 
-    /// A trackpad gesture that macOS starts with a zero-delta event, then moves a frame later,
-    /// steps the field under the pointer.
+    /// A gesture from a system that doesn't say what drives it, starting with a zero-delta event
+    /// and moving a frame later, steps the field under the pointer.
     #[test]
-    fn a_trackpad_gesture_that_starts_with_no_delta_steps_a_hovered_field() {
+    fn a_gesture_that_starts_with_no_delta_steps_a_hovered_field() {
         let mut h = harness(100.0);
         h.hover_at(field(&h).center());
         h.run_steps(1);
