@@ -2,7 +2,7 @@
 
 use egui::{Key, Rect, pos2};
 use egui_kittest::Harness;
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -193,8 +193,12 @@ fn transform_task_bar_commits_when_done_and_hide_arrive_together() {
     let edits = history(&h);
     click(&mut h, "More options");
 
-    h.get_by_label("Hide bar").click_accesskit();
-    h.get_by_label("Done").click_accesskit();
+    // The harness runs queued clicks in separate frames. Deliver both actions in one input.
+    let events = ["Hide bar", "Done"].map(|label| {
+        let (target_node, target_tree) = h.get_by_label(label).accesskit_node().locate();
+        egui::Event::AccessKitActionRequest(egui::accesskit::ActionRequest { action: egui::accesskit::Action::Click, target_node, target_tree, data: None })
+    });
+    h.input_mut().events.extend(events);
     h.run_steps(4);
 
     assert!(!h.state().ui.panels.context_task_bar);
@@ -225,13 +229,15 @@ fn transform_task_bar_does_not_report_its_rect_as_crop_after_cancel() {
         rotation: view.rotation,
         aspect: app.ui.view.display_aspect(),
     };
-    let _ = ctx.run_ui(input, |ui| {
+    ctx.run_ui(input, |ui| {
         if app.ui.transform.is_some() {
             // Model the main canvas recording its rect before the extra window handles Cancel.
             app.ui.task_bar_shown = Some(prior_rect);
             crate::transform_task_bar::draw(app, ui, &xf);
         }
-    });
+    })
+    .textures_delta
+    .clear();
     assert!(h.state().ui.transform.is_none());
 
     // No UI pass between the Crop request and inspection.
