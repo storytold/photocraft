@@ -752,7 +752,12 @@ fn match_color_source_layer_picker_keeps_references_with_the_source() {
     assert!(!h.state().contains_key("sourceLayer"));
     h.state_mut().insert("sourceLayer".into(), json!(u64::MAX));
     h.run_steps(2);
-    assert!(!h.state().contains_key("sourceLayer"), "stale IDs fall back to Merged");
+    assert_eq!(h.state()["sourceLayer"], json!(u64::MAX), "drawing does not change an unavailable reference");
+    h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Source Layer").click();
+    h.run_steps(2);
+    h.get_by_label("Merged").click();
+    h.run_steps(2);
+    assert!(!h.state().contains_key("sourceLayer"), "the user can explicitly choose Merged");
     h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Source").click();
     h.run_steps(2);
     h.get_by_label("None").click();
@@ -853,6 +858,71 @@ fn match_color_control(app: &mut PhotocraftApp, ctx: &egui::Context, method: &st
     let (request, _) = crate::control::ControlRequest::new(method, params);
     let crate::control::Outcome::Done(reply) = crate::control::handle(app, ctx, &request) else { panic!("{method} should finish immediately") };
     reply
+}
+
+#[test]
+fn match_color_refuses_a_changed_destination_without_closing() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    for _ in 0..2 {
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    }
+    let original = app.session.active().unwrap().active_layer.unwrap();
+    app.run("layer.new.layer", json!({"name": "Other"})).unwrap();
+    let other = app.session.active().unwrap().active_layer.unwrap();
+    app.session.select_layer(original).unwrap();
+    let ctx = egui::Context::default();
+    let id = open(&mut app, MATCH_COLOR).unwrap();
+    let history: Vec<_> = app.session.documents().iter().map(|st| st.history.past_len()).collect();
+    let forged = json!((app.session.documents()[0].doc.id, app.session.documents()[0].active_layer));
+    assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": MATCH_COLOR_DESTINATION, "value": forged}))["ok"], false);
+
+    let refuse = |app: &mut PhotocraftApp, index| {
+        assert!(crate::canvas::ensure_filter_preview(app, index, &ctx).is_none());
+        assert!(crate::dialogs::confirm(app, id).unwrap_err().contains("destination changed"));
+        assert!(app.ui.dialog_mut(id).is_some(), "refusal leaves the dialog open");
+        assert_eq!(app.session.active_index(), Some(index), "refusal does not navigate");
+        assert_eq!(app.session.documents().iter().map(|st| st.history.past_len()).collect::<Vec<_>>(), history);
+    };
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 0}));
+    refuse(&mut app, 0);
+    match_color_control(&mut app, &ctx, "ui.window.open", json!({"document": 1}));
+    app.session.select_layer(other).unwrap();
+    refuse(&mut app, 1);
+
+    app.session.select_layer(original).unwrap();
+    assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": "layer", "value": other}))["ok"], true);
+    refuse(&mut app, 1);
+    assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": "layer", "value": original}))["ok"], true);
+    assert!(crate::dialogs::confirm(&mut app, id).is_ok());
+}
+
+#[test]
+fn match_color_explicit_unavailable_source_layer_is_refused_with_or_without_a_frame() {
+    for render in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        for _ in 0..2 {
+            app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        }
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let id = open(&mut app, MATCH_COLOR).unwrap();
+        let missing = u64::MAX;
+        for (field, value) in [("source", json!(0)), ("sourceLayer", json!(missing))] {
+            assert_eq!(match_color_control(&mut app, &ctx, "ui.dialog.set", json!({"dialog": id, "field": field, "value": value}))["ok"], true);
+        }
+        if render {
+            // Force a source-choice refresh as well as drawing the layer picker.
+            app.session.set_active(0);
+            app.session.execute("layer.new.layer", json!({"name": "New source layer"})).unwrap();
+            app.session.set_active(1);
+            ctx.run_ui(Default::default(), |ui| crate::dialogs::show(&mut app, ui.ctx())).textures_delta.clear();
+            assert_eq!(app.ui.dialog_mut(id).unwrap().fields["sourceLayer"], json!(missing));
+            assert!(crate::canvas::ensure_filter_preview(&mut app, 1, &ctx).is_none());
+        }
+        let expected = app.session.execute(MATCH_COLOR, json!({"source": 0, "sourceLayer": missing})).unwrap_err().to_string();
+        assert_eq!(crate::dialogs::confirm(&mut app, id).unwrap_err(), expected);
+        assert_eq!(app.session.active().unwrap().history.past_len(), 0);
+    }
 }
 
 /// Exercise actual nested command dialogs, rather than mutating the source behind the UI's gates.

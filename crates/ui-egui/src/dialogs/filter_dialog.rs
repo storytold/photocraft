@@ -18,6 +18,9 @@ use crate::theme::Tokens;
 
 mod zoom_center;
 
+const MATCH_COLOR: &str = "image.adjustments.matchColor";
+pub(crate) const MATCH_COLOR_DESTINATION: &str = "__matchColorDestination";
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     Range {
@@ -311,7 +314,7 @@ pub const PREVIEWED: &[&str] = &[
     "image.adjustments.colorLookup",
     "image.adjustments.shadowsHighlights",
     "image.adjustments.replaceColor",
-    "image.adjustments.matchColor",
+    MATCH_COLOR,
     "image.adjustments.hdrToning",
     "image.rotation.arbitrary",
     "image.mode.indexedColor",
@@ -567,17 +570,41 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         let names: Vec<String> = app.session.documents().iter().map(|d| d.doc.name.clone()).collect();
         fields.insert("__docs".into(), json!(names));
     }
-    if command == "image.adjustments.matchColor" {
+    if command == MATCH_COLOR {
+        let destination = app.session.active().map(|st| (st.doc.id, st.active_layer));
+        fields.insert(MATCH_COLOR_DESTINATION.into(), json!(destination));
         refresh_match_color_sources(&app.session, &mut fields);
     }
     let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields);
     Some(id)
 }
 
+/// Match Color preview and OK may only edit the document and layer that opened the dialog.
+pub(crate) fn validate_match_color_destination(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<(), String> {
+    let is_match_color = fields.get("__command").and_then(Value::as_str) == Some(MATCH_COLOR);
+    let destination = fields.get(MATCH_COLOR_DESTINATION);
+    if !is_match_color && destination.is_none() {
+        return Ok(());
+    }
+    let st = app.session.active().ok_or("the Match Color destination is no longer open")?;
+    if !is_match_color
+        || destination != Some(&json!((st.doc.id, st.active_layer)))
+        || st.active_layer.is_some_and(|id| st.doc.layer(id).is_none())
+        || fields.get("layer").is_some_and(|layer| st.active_layer.is_none_or(|id| layer.as_u64() != Some(id.0)))
+    {
+        return Err("the Match Color destination changed while its dialog was open".into());
+    }
+    let params = app.with_mask_target(MATCH_COLOR, params_of(fields));
+    if let Some(reason) = app.session.disabled_reason_with(MATCH_COLOR, &params) {
+        return Err(reason);
+    }
+    Ok(())
+}
+
 /// Keep Match Color's source choices live without reinterpreting a shifted document index.
 /// Rebuild layer lists only when a document changes; a closed source remains visibly unavailable.
 pub(crate) fn refresh_match_color_sources(session: &photocraft_engine::Session, fields: &mut Map<String, Value>) {
-    if fields.get("__command").and_then(Value::as_str) != Some("image.adjustments.matchColor") {
+    if fields.get("__command").and_then(Value::as_str) != Some(MATCH_COLOR) {
         return;
     }
     let documents = session.documents();
@@ -605,12 +632,16 @@ pub(crate) fn refresh_match_color_sources(session: &photocraft_engine::Session, 
         fields.insert("source".into(), json!(index));
     }
     let source = fields.get("source").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
-    if let Some(layer) = fields.get("sourceLayer").and_then(Value::as_u64)
-        && !source
-            .and_then(|i| layers.get(i)?.as_array())
-            .is_some_and(|choices| choices.iter().any(|choice| choice.get("id").and_then(Value::as_u64) == Some(layer)))
-    {
-        fields.remove("sourceLayer");
+    if let Some(layer) = fields.get("sourceLayer").and_then(Value::as_u64) {
+        let contains_layer = |choices: Option<&Value>| {
+            choices.and_then(Value::as_array).is_some_and(|choices| choices.iter().any(|choice| choice.get("id").and_then(Value::as_u64) == Some(layer)))
+        };
+        // A deleted choice can reset to Merged. An explicitly unavailable reference must
+        // survive refresh and reach the engine, which rejects it.
+        let previous = old_index.and_then(|i| fields.get("__sourceLayers")?.as_array()?.get(i));
+        if contains_layer(previous) && !contains_layer(source.and_then(|i| layers.get(i))) {
+            fields.remove("sourceLayer");
+        }
     }
     fields.insert("__docs".into(), json!(names));
     fields.insert("__sourceDocuments".into(), json!(ids));
@@ -919,19 +950,24 @@ fn match_color_layer(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let enabled = layers.is_some();
     let layers: Vec<(u64, String)> =
         layers.into_iter().flatten().filter_map(|layer| Some((layer.get("id")?.as_u64()?, layer.get("name")?.as_str()?.to_owned()))).collect();
-    let mut selected = f.get("sourceLayer").and_then(Value::as_u64).filter(|id| layers.iter().any(|(layer, _)| layer == id));
+    let mut selected = f.get("sourceLayer").and_then(Value::as_u64);
     let mut choices = vec![(None, tl!("Merged"))];
     choices.extend(layers.iter().map(|(id, name)| (Some(*id), name.as_str())));
-    ui.add_enabled_ui(enabled, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Source Layer")).color(Tokens::get(ui.ctx()).text_dim));
-            crate::widgets::dropdown_literal(ui, "match-color-source-layer", tl!("Source Layer"), &mut selected, &choices, 170.0);
-        });
-    });
-    if let Some(id) = selected {
-        f.insert("sourceLayer".into(), json!(id));
-    } else {
-        f.remove("sourceLayer");
+    let changed = ui
+        .add_enabled_ui(enabled, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Source Layer")).color(Tokens::get(ui.ctx()).text_dim));
+                crate::widgets::dropdown_literal(ui, "match-color-source-layer", tl!("Source Layer"), &mut selected, &choices, 170.0)
+            })
+            .inner
+        })
+        .inner;
+    if changed {
+        if let Some(id) = selected {
+            f.insert("sourceLayer".into(), json!(id));
+        } else {
+            f.remove("sourceLayer");
+        }
     }
 }
 
@@ -1201,7 +1237,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut sel, &opts, 170.0);
                 });
                 let selected = sel.parse::<i64>().ok().filter(|i| *i >= 0).unwrap_or(-1);
-                if cmd == "image.adjustments.matchColor" && p.key == "source" && selected != cur {
+                if cmd == MATCH_COLOR && p.key == "source" && selected != cur {
                     f.remove("sourceLayer");
                 }
                 f.insert(p.key, json!(selected));
@@ -1222,7 +1258,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 });
                 f.insert(p.key, json!(vals.iter().map(|v| v.round() as i64).collect::<Vec<_>>()));
             }
-            Kind::Json if cmd == "image.adjustments.matchColor" && p.key == "sourceLayer" => match_color_layer(ui, f),
+            Kind::Json if cmd == MATCH_COLOR && p.key == "sourceLayer" => match_color_layer(ui, f),
             Kind::Json => {}
             Kind::Color(default) => {
                 let set = f.get(&p.key).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex);
@@ -1606,8 +1642,8 @@ pub struct FilterPreviewKey {
 }
 
 impl FilterPreviewKey {
-    /// Everything except the parameters: same dialog, document and source revisions, layer,
-    /// channel target, command, proxy factor and tool colors.
+    /// Same dialog, document and source revisions, layer, channel target, command, proxy factor
+    /// and tool colors. For Match Color, the selected source layer is also part of the target.
     ///
     /// The canvas shows whatever this preview was computed for, so a result whose parameters are
     /// a few frames old still belongs on screen while a slider is moving; matching on everything
@@ -1630,6 +1666,7 @@ impl FilterPreviewKey {
             && self.active == other.active
             && self.target == other.target
             && self.command == other.command
+            && (self.command != MATCH_COLOR || self.params.get("sourceLayer") == other.params.get("sourceLayer"))
             && self.tool_colors == other.tool_colors
     }
 }

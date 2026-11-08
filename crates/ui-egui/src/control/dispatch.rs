@@ -1115,6 +1115,7 @@ fn dialog_set(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         // A continuation belongs to the dialog that paused it, even when another
         // action has a valid token. Replacing it would resume or cancel that action.
         Some(_) if field == crate::actions::RESUME => err("the paused action token is read-only"),
+        Some(_) if field == crate::filter_dialog::MATCH_COLOR_DESTINATION => err("the Match Color destination is read-only"),
         Some(_) if previewed => err("confirm or cancel the color picker first"),
         // A Color Picker's target is fixed when it opens: OK must set the field it previewed in.
         Some(d) if matches!(field, "__colorPicker" | "__dialog" | "__field") && crate::color_picker_ui::owns(&d.fields) => {

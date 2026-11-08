@@ -916,12 +916,11 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     |f| f.contains_key(crate::actions::RESUME),
 ];
 
-/// Whether `key` is a marker that picks a dialog's handler. Automation may change the values of
-/// a dialog's fields, private ones included, but never add a marker: a dialog it opened would
-/// otherwise confirm through another dialog's handler, one its command was never judged for.
+/// Whether `key` is reserved to its dialog. Automation may change private fields but never
+/// add a route marker: that could select a handler its command was never judged for.
 pub fn is_route_marker(key: &str) -> bool {
     let probe = Fields::from_iter([(key.to_string(), Value::Bool(true))]);
-    ROUTES.iter().any(|owns| owns(&probe))
+    key == crate::filter_dialog::MATCH_COLOR_DESTINATION || ROUTES.iter().any(|owns| owns(&probe))
 }
 
 /// The file command a dialog's handler stands for when it reads or writes files itself, outside
@@ -1065,8 +1064,11 @@ pub(crate) fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), 
     if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::guide_layout_ui::owns(&d.fields)) {
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
-    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::equalize_ui::owns(&d.fields)) {
-        crate::equalize_ui::validate(app, &d.fields)?;
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id) {
+        if crate::equalize_ui::owns(&d.fields) {
+            crate::equalize_ui::validate(app, &d.fields)?;
+        }
+        crate::filter_dialog::validate_match_color_destination(app, &d.fields)?;
     }
     // Merge Channels with too few, repeated, closed or changed documents stays open (#11451).
     merge_channels_ui::preflight(app, id)?;
