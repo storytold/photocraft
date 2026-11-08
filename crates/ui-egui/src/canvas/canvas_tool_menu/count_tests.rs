@@ -99,6 +99,13 @@ fn rows_are_enabled_as_the_layers_panel_menu_enables_them() {
     assert!(!entry_enabled(&app, &menu, "layer.smartObjects.convertToLayers"));
     assert!(!entry_enabled(&app, &menu, "select.reselect"));
     assert!(entry_enabled(&app, &menu, "layer.delete") && entry_enabled(&app, &menu, "edit.freeTransform"));
+    // After a selection is made and cleared, Reselect is enabled.
+    app.ui.canvas_tool_menu = None;
+    app.run("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    right_click(&mut app, &ctx, 50.0, 40.0);
+    let menu = app.ui.canvas_tool_menu.clone().unwrap();
+    assert!(entry_enabled(&app, &menu, "select.reselect"), "Reselect after a cleared selection");
 }
 
 #[test]
