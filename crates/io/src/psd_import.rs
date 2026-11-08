@@ -711,7 +711,7 @@ impl Ctx<'_> {
                 crate::linked::embedded_payload_in_blocks(global.iter().map(|(_, key, data)| (key, data.as_slice())), &id).map(|(_, source)| source)
             })
         });
-        LayerContent::Smart(SmartObject {
+        let mut sm = SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
             vector_preview,
@@ -725,7 +725,9 @@ impl Ctx<'_> {
             stack_mode: None,
             perspective,
             placed_size,
-        })
+        };
+        crate::smart_map::pin_puppet_meshes(&mut sm);
+        LayerContent::Smart(sm)
     }
 
     /// Typed vector mask from `vsms`/`vmsk` (non-shape layers). A user mask that Photoshop
@@ -1240,6 +1242,7 @@ fn read_initial_metadata(
     if let Some(scale) = crate::annotations_map::raw_scale(doc) {
         doc.measurement.scale = scale;
     }
+    crate::annotations_map::import_count_resource(doc);
     let _ = layered;
     (damaged, alloc_error)
 }
