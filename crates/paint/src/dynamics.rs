@@ -23,7 +23,7 @@ pub const SMOOTHING_TAU_MS: f64 = 314.0;
 pub const SMOOTHING_TAU_EXP: f64 = 0.864;
 
 /// The fraction of the way to the pointer exponential smoothing moves in one
-/// [`SMOOTHING_STEP_MS`] at `amount` (0..1, above 0).
+/// [`SMOOTHING_STEP_MS`] at `amount`, clamped to 0..1. At 0 (or NaN) it is 1.0: no smoothing.
 pub fn smoothing_pull(amount: f64) -> f64 {
     let tau = SMOOTHING_TAU_MS * amount.clamp(0.0, 1.0).powf(SMOOTHING_TAU_EXP);
     if tau > 0.0 { 1.0 - (-SMOOTHING_STEP_MS / tau).exp() } else { 1.0 }
