@@ -399,9 +399,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             // (⌥-click with the Clone Stamp or Healing Brush only sets the source).
             let sets_source = matches!(tool, Tool::CloneStamp | Tool::Healing) && mods.alt;
             // Painting on or moving a hidden layer is refused at the press, as in Photoshop (#571).
-            if !sets_source && let Some(why) = hidden_target(app, tool) {
-                app.ui.status = why.into();
-                app.ui.status_error = true;
+            if !sets_source && press_refused(app, tool) {
                 return;
             }
             if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
@@ -678,6 +676,23 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         _ => return None,
     };
     photocraft_engine::hidden_target::refusal(&app.session, cmd, &json!({}))
+}
+
+/// The press-time refusals: a hidden target layer (#571), and for the Brush a locked layer or a
+/// group's pixels. The Brush says why in an alert, as in Photoshop (#11898); the other tools say
+/// a hidden target in the status bar. True when the press is refused.
+fn press_refused(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    let hidden = hidden_target(app, tool);
+    if let Some(message) = crate::brush_refusal::alert(app, tool, hidden.is_some()) {
+        crate::brush_refusal::prompt(app, &message);
+        return true;
+    }
+    if let Some(why) = hidden {
+        app.ui.status = why.into();
+        app.ui.status_error = true;
+        return true;
+    }
+    false
 }
 
 /// Is document point `p` inside the active document's selection?
