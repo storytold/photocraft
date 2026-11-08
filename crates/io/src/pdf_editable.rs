@@ -1,16 +1,22 @@
-//! Experimental editable PDF import: a `craft-pdf` device turns painted paths into shape layers.
+//! Experimental editable PDF import: a `craft-pdf` device turns painted paths into shape layers
+//! and embedded-font text into text layers.
 //!
-//! The first step is deliberately narrow: solid fills and strokes become [`ShapeLayer`]s in
-//! document pixels. Text, images, clipping paths, transparency groups, patterns, soft masks and
-//! annotations mark the page unsupported, and the caller falls back to the raster importer for
-//! that page with a warning. Nothing is ever half imported.
+//! Solid fills and strokes become [`ShapeLayer`]s in document pixels; embedded fonts whose glyphs
+//! carry Unicode and a PostScript name become [`photocraft_doc::TextLayer`]s, with the font bytes
+//! registered in the app's shared text engine. A page-sized axis-aligned clip that contains the
+//! artboard is a no-op and is accepted. Images, other clipping paths, transparency groups,
+//! patterns, soft masks, annotations and unsupported text mark the page unsupported, and the
+//! caller falls back to the raster importer for that page with a warning. Nothing is ever half
+//! imported.
 //!
 //! This is the app-owned `Device` route: Hayro's interpreter walks the page and reports each
 //! paint with its real colour and geometry, so shape layers need no page raster underneath. That
 //! is what makes moving or deleting a layer behave, and what avoids the black-path and
 //! doubled-text failures of the old PDFium import.
 
-use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -39,8 +45,10 @@ const MAX_KNOTS: usize = 1_000_000;
 const MAX_CACHE_BYTES: u64 = 256 << 20;
 /// Cap on fill/stroke glyph comparisons so hostile pages cannot make pairing quadratic forever.
 const MAX_PAIR_CHECKS: usize = 1_000_000;
-/// How often the watcher copies the interrupt into craft-pdf's cancellation flag.
-const POLL: Duration = Duration::from_millis(5);
+/// How often the watcher copies the interrupt into craft-pdf's cancellation flag. The Device's
+/// callbacks are only reached per paint, so a page with one long path still needs this; 20 ms
+/// keeps wakeups negligible while staying responsive.
+const POLL: Duration = Duration::from_millis(20);
 /// Largest gap (in em) inside one run before a space is inserted.
 const WORD_GAP: f64 = 0.2;
 /// Largest baseline offset (in em) for glyphs to share one line.
@@ -99,6 +107,7 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
         strokes: Vec::new(),
         fonts: Vec::new(),
         font_keys: HashMap::new(),
+        seen_fonts: HashSet::new(),
         soft_mask: false,
         clips: Vec::new(),
         knots: 0,
@@ -157,15 +166,15 @@ pub fn page(page: &Page<'_>, rect: Rect, ctl: &Interrupt) -> Result<Vec<Layer>, 
 fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interrupt) -> Result<(), EditableError> {
     // Index fills by the exact attributes a stroke must match, so each stroke only compares
     // against candidates at its own paint order/font/text instead of the whole page.
-    let mut index: HashMap<(usize, u128, String), Vec<usize>> = HashMap::new();
+    let mut index: HashMap<(usize, u128, u64), Vec<usize>> = HashMap::new();
     for (at, glyph) in glyphs.iter().enumerate() {
-        index.entry((glyph.order, glyph.font.key, glyph.text.clone())).or_default().push(at);
+        index.entry((glyph.order, glyph.font.key, text_hash(&glyph.text))).or_default().push(at);
     }
     let mut paired = vec![false; glyphs.len()];
     let mut checks = 0usize;
     for stroke in strokes {
         let mut found = None;
-        if let Some(candidates) = index.get(&(stroke.order, stroke.font.key, stroke.text.clone())) {
+        if let Some(candidates) = index.get(&(stroke.order, stroke.font.key, text_hash(&stroke.text))) {
             for &at in candidates {
                 if paired[at] {
                     continue;
@@ -179,7 +188,7 @@ fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interru
                 checks += 1;
                 let glyph = &glyphs[at];
                 let tolerance = 0.01 * glyph.size_px + 0.01;
-                if (glyph.origin.x - stroke.origin.x).abs() <= tolerance && (glyph.origin.y - stroke.origin.y).abs() <= tolerance {
+                if glyph.text == stroke.text && (glyph.origin.x - stroke.origin.x).abs() <= tolerance && (glyph.origin.y - stroke.origin.y).abs() <= tolerance {
                     found = Some(at);
                     break;
                 }
@@ -192,6 +201,13 @@ fn pair_fake_bold(glyphs: &mut [GlyphRun], strokes: Vec<GlyphRun>, ctl: &Interru
         paired[at] = true;
     }
     Ok(())
+}
+
+/// A hash of a glyph string for the fake-bold index; equality is still checked on the string.
+fn text_hash(text: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    text.hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Builds one point-text layer per line and style run, with the layer index it must be inserted
@@ -294,9 +310,12 @@ fn text_layer(text: String, run: &GlyphRun, number: usize, family: &str) -> Laye
 /// the family each font key must use.
 fn register_fonts(fonts: &[(u128, String, String, FontData)]) -> Result<std::collections::HashMap<u128, String>, EditableError> {
     let shared = photocraft_text::shared();
-    let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
     let mut families = std::collections::HashMap::new();
     for (key, postscript, derived, data) in fonts {
+        // Copy before taking the engine lock; parsing still happens under it, but the UI's
+        // layout is not blocked while the bytes are cloned.
+        let bytes = data.as_ref().as_ref().to_vec();
+        let mut engine = shared.lock().unwrap_or_else(|error| error.into_inner());
         // Prefer an installed full family; a subset only holds the glyphs the page uses. The
         // Device has the font program's PostScript name, not the PDF `/BaseFont`; a content-keyed
         // alias keeps two documents' subsets of one name apart for the life of the shared engine,
@@ -308,7 +327,7 @@ fn register_fonts(fonts: &[(u128, String, String, FontData)]) -> Result<std::col
             if engine.has_family(&alias) {
                 alias
             } else {
-                let names = engine.register_font_data_as(data.as_ref().as_ref().to_vec(), &alias);
+                let names = engine.register_font_data_as(bytes, &alias);
                 if names.is_empty() && !engine.has_family(&alias) {
                     return Err(EditableError::Unsupported("a font could not be registered"));
                 }
@@ -398,6 +417,8 @@ struct PathDevice<'a> {
     fonts: Vec<(u128, String, String, FontData)>,
     /// Hayro's cheap font identity → our content hash, so bytes are hashed once per face.
     font_keys: HashMap<u128, u128>,
+    /// Content keys of fonts already in [`Self::fonts`], so glyph callbacks do not scan it.
+    seen_fonts: HashSet<u128>,
     /// Whether a soft mask is active; the first paint under one falls back the page.
     soft_mask: bool,
     /// One entry per clip pushed by the interpreter: `true` for an accepted no-op clip.
@@ -491,7 +512,7 @@ impl PathDevice<'_> {
                 self.unsupported("shape cache budget");
                 return;
             }
-            shape.cache = Some(photocraft_vector::render_shape(&shape, self.fmt, self.clip));
+            shape.cache = Some(photocraft_vector::render_shape(&shape, self.fmt, area));
             self.cached = self.cached.saturating_add(bytes);
         }
         self.layers.push(Layer::new(format!("Path {}", self.layers.len() + 1), LayerContent::Shape(shape)));
@@ -662,7 +683,7 @@ impl<'a> Device<'a> for PathDevice<'_> {
         let identity = outline.font_cache_key();
         let key = *self.font_keys.entry(identity).or_insert_with(|| font_content_key(&data));
         let family = family_from_postscript(&postscript);
-        if !self.fonts.iter().any(|(existing, _, _, _)| *existing == key) {
+        if self.seen_fonts.insert(key) {
             self.fonts.push((key, postscript.clone(), family.clone(), data.data.clone()));
         }
         let font = FontInfo { key, family, postscript, weight, italic };

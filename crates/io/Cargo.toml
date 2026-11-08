@@ -16,8 +16,8 @@ corpus = []
 heif = ["photocraft-codecs/heif"]
 # Test support for synthetic memory injection, estimate charges and verification across crates.
 testgen = []
-# Editable PDF import (experimental): painted paths become shape layers. Text and the other
-# unsupported constructs keep the raster page.
+# Editable PDF import (experimental): painted paths and embedded-font text become editable
+# layers; unsupported constructs keep the raster page.
 pdf-editable = ["dep:kurbo"]
 
 [dependencies]
