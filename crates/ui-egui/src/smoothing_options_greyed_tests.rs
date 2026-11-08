@@ -65,3 +65,14 @@ fn above_zero_they_work_again() {
         assert_ne!(values(&h)[0], before[0], "{tool:?}: Pulled String Mode toggles");
     }
 }
+
+#[test]
+fn a_smoothing_that_shows_as_zero_greys_them_too() {
+    // 0.4 % (from a preset or a script) reads 0 % in the field, so the four follow the field.
+    for tool in [Tool::Brush, Tool::Eraser] {
+        let h = bar(tool, 0.004);
+        for label in OPTIONS {
+            assert!(checkbox(&h, label).accesskit_node().is_disabled(), "{tool:?}: {label} greyed at a displayed 0 %");
+        }
+    }
+}
