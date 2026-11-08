@@ -987,3 +987,50 @@ fn a_working_profile_alias_is_recorded_as_the_working_space() {
     let step = s.active().unwrap().doc.design_timeline.as_ref().unwrap().steps.last().unwrap().clone();
     assert_eq!(step.params["profile"], "rec2020", "{}", step.params);
 }
+
+/// A stroke mirrored across a symmetry path keeps its result: nothing in a prelude restores the
+/// path's axis after the timeline restarts or the path changes.
+#[test]
+fn a_stroke_mirrored_across_a_path_replays_its_result() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("design.stop", json!({})).unwrap();
+    s.execute("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[8, 0], [8, 16]]}]}})).unwrap();
+    s.execute("paint.symmetryFromPath", json!({"name": "work"})).unwrap();
+    s.execute("design.start", json!({})).unwrap();
+    s.execute("paint.pencil", json!({"points": [[2, 3]], "size": 2, "color": "#ff0000"})).unwrap();
+    assert_eq!(steps(&mut s).last().unwrap()["baked"], true);
+    let want = doc(&s);
+    s.execute("paint.symmetryDisable", json!({})).unwrap();
+    s.execute("design.replay", json!({})).unwrap();
+    assert_eq!(doc(&s), want);
+}
+
+/// A step put in at a rolled-back marker doesn't change the colours the step after it ran with.
+#[test]
+fn a_step_inserted_before_another_leaves_it_its_colours() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("tools.setColors", json!({"foreground": RED})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    s.execute("edit.fillForeground", json!({})).unwrap();
+    s.execute("design.rollTo", json!({"at": 2})).unwrap();
+    s.execute("tools.setColors", json!({"foreground": BLUE})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("design.rollTo", json!({"at": null})).unwrap();
+    assert_eq!(state(&mut s, 3), "ok");
+    let fill = s.active().unwrap().doc.layers[1].surface().unwrap().pixel(1, 1);
+    assert_eq!(fill, RED.to_vec(), "the fill after the inserted step is still red");
+}
+
+/// A stroke in a document without a timeline is no tool setting for one that has one.
+#[test]
+fn a_stroke_in_a_document_without_a_timeline_is_no_tool_setting() {
+    let mut s = started();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("file.new", json!({"width": 16, "height": 16})).unwrap();
+    s.execute("paint.pencil", json!({"points": [[4, 4]], "size": 4, "color": "#ff0000"})).unwrap();
+    s.set_active(0);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert!(!last_prelude(&s).contains(&"paint.pencil".to_string()), "{:?}", last_prelude(&s));
+}

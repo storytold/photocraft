@@ -13,6 +13,9 @@ use crate::Session;
 /// A document with a timeline as it was before a command.
 pub(crate) struct Before {
     doc: DocId,
+    /// The document has a timeline. One without is captured only when the command runs in it, to
+    /// tell a stroke (a document edit) from a tool setting.
+    timeline: bool,
     state: Arc<Document>,
     active: Option<LayerId>,
     selected: Vec<LayerId>,
@@ -89,13 +92,18 @@ fn can_go_stale(step: &DesignStep) -> bool {
     step.baked.as_ref().is_some_and(|b| bakes(&step.command, &step.params) || !step.changed.is_empty() || b.selection.is_some())
 }
 
-/// Every document with a timeline, before a command runs (empty when none has one).
+/// Every document with a timeline, and the active document, before a command runs (none when no
+/// document has a timeline).
 pub(crate) fn capture(s: &Session) -> Vec<Before> {
     let active = s.active().map(|st| st.doc.id);
+    if s.docs.iter().all(|st| st.doc.design_timeline.is_none()) {
+        return Vec::new();
+    }
     s.docs
         .iter()
-        .filter(|st| st.doc.design_timeline.is_some())
+        .filter(|st| st.doc.design_timeline.is_some() || active == Some(st.doc.id))
         .map(|st| Before {
+            timeline: st.doc.design_timeline.is_some(),
             was_active: active == Some(st.doc.id),
             doc: st.doc.id,
             state: st.doc.clone(),
@@ -136,18 +144,24 @@ pub(crate) fn job_applying(s: &Session, before: &mut [Before]) {
 /// `force_bake` keeps the result of an edit that can't run again (a file placed from bytes).
 pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, params: &Value, force_bake: bool) {
     // Queries and view-only commands (video frame navigation) aren't steps.
-    if before.is_empty() || id.starts_with("design.") || !crate::commands::find(id).is_some_and(|c| c.journal) {
+    if !tracks(&before) || id.starts_with("design.") || !crate::commands::find(id).is_some_and(|c| c.journal) {
         return;
     }
     let pinned = pin_color_settings(s, id, params);
     let params = pinned.as_ref().unwrap_or(params);
     // Per document: (it took its prelude this many entries long, or it took none).
     let mut took: Vec<(DocId, Option<usize>)> = Vec::new();
+    // It changed a document without a timeline (a stroke there).
+    let mut edited_untracked = false;
     // The document the command ran in: a step it made in another one names it as the source.
     let source = s.active().map(|st| st.doc.name.clone()).unwrap_or_default();
     for b in before {
-        took.push((b.doc, None));
         let Some(st) = s.docs.iter_mut().find(|st| st.doc.id == b.doc) else { continue };
+        if !b.timeline {
+            edited_untracked |= !Arc::ptr_eq(&st.doc, &b.state);
+            continue;
+        }
+        took.push((b.doc, None));
         if Arc::ptr_eq(&st.doc, &b.state) {
             continue;
         }
@@ -160,7 +174,9 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
         // A command run from another document (Save Contents, closing an Edit Contents document)
         // can't run again here: keep what it did. Nor can one reaching outside the document
         // (`replay_gate`).
-        let baked = (force_bake || bakes(id, params) || crate::untrusted::reaches_outside(id, params) || !b.was_active)
+        // A stroke mirrored across a symmetry path keeps its result: no pin restores the path.
+        let path_mirrored = b.symmetry.is_none() && matches!(id, "paint.stroke" | "paint.pencil");
+        let baked = (force_bake || bakes(id, params) || crate::untrusted::reaches_outside(id, params) || !b.was_active || path_mirrored)
             .then(|| Arc::new(photocraft_doc::design::Baked::capture(&b.state, &st.doc, &created, &changed)));
         let entry = DesignStep {
             step,
@@ -185,6 +201,7 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
         let Some(tl) = doc.design_timeline.as_mut() else { continue };
         let tl = Arc::make_mut(tl);
         let at = tl.in_effect();
+        keep_successor_pins(tl, at, &entry);
         tl.steps.insert(at, entry);
         if tl.marker.is_some() {
             tl.marker = Some(at + 1);
@@ -200,7 +217,7 @@ pub(crate) fn record(s: &mut Session, before: Vec<Before>, step: u64, id: &str, 
     }
     // Each document's prelude runs from its own last step: one recorded elsewhere leaves it be.
     // A tool command that changed a document (a stroke) is that document's step, no setting.
-    let tool = PRELUDE.iter().any(|p| id.starts_with(p)) && took.iter().all(|t| t.1.is_none());
+    let tool = PRELUDE.iter().any(|p| id.starts_with(p)) && took.iter().all(|t| t.1.is_none()) && !edited_untracked;
     for (doc, n) in took {
         let pending = s.timeline_prelude.entry(doc).or_default();
         match n {
@@ -236,6 +253,30 @@ fn with_pins(b: &Before, tl: Option<&photocraft_doc::design::DesignTimeline>) ->
         }
     }
     prelude
+}
+
+/// Before `entry` goes in at `at` (a rolled-back marker): give the step after it the colour and
+/// symmetry pins in effect there, where `entry` pins one and it doesn't, so it keeps running
+/// with what it was recorded with rather than `entry`'s.
+fn keep_successor_pins(tl: &mut photocraft_doc::design::DesignTimeline, at: usize, entry: &DesignStep) {
+    let Some(next) = tl.steps.get(at) else { return };
+    let off = Prelude { command: "paint.symmetryDisable".into(), params: serde_json::json!({}) };
+    let mut keep = Vec::new();
+    for (kind, default) in [(&[COLORS][..], None), (SYMMETRY, Some(off))] {
+        let sets = |prelude: &[Prelude]| prelude.iter().any(|p| kind.contains(&p.command.as_str()));
+        if sets(&entry.prelude) && !sets(&next.prelude) {
+            let before = tl.steps.iter().take(at).rev().flat_map(|st| st.prelude.iter().rev()).find(|p| kind.contains(&p.command.as_str()));
+            keep.extend(before.cloned().or(default));
+        }
+    }
+    if let Some(next) = tl.steps.get_mut(at) {
+        next.prelude.splice(0..0, keep);
+    }
+}
+
+/// Whether a capture holds a document with a timeline: the command may be a step.
+pub(crate) fn tracks(before: &[Before]) -> bool {
+    before.iter().any(|b| b.timeline)
 }
 
 /// A mode change's `params` with the Color Settings it ran with filled in: a replay (in a scratch
