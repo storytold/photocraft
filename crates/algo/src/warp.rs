@@ -201,7 +201,7 @@ fn mesh(src: &Surface, src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Syn
             tris.push([a, a + w1 + 1, a + w1]);
         }
     }
-    triangles(src, src_rect, &verts, &tris, interp, ctl, false)
+    triangles(src, src_rect, &verts, &tris, interp, ctl, Draw::default())
 }
 
 /// How far (destination px) a cell's straight edges and middle may stray from the warped surface
@@ -296,6 +296,7 @@ pub fn warp_patches_surface(
     // `warp_tess`).
     let one_patch = cuts_u.iter().chain(cuts_v).all(|&c| c <= 1e-9 || c >= 1.0 - 1e-9);
     let envelope = (facets == Facets::Envelope || one_patch).then(|| crate::warp_tess::envelope_mesh(&at, facets != Facets::Envelope)).flatten();
+    let envelope_cut = envelope.is_some();
     let (verts, tris) = match envelope {
         Some(m) => {
             let verts = m.uv.iter().zip(&m.pos).map(|(p, &d)| (d, [x0 + sw * p[0], y0 + sh * p[1]])).collect();
@@ -307,7 +308,10 @@ pub fn warp_patches_surface(
             cell_triangles(&at, &leaves, [x0, y0, sw, sh])
         }
     };
-    triangles(src, src_rect, &verts, &tris, Interp::Bilinear, &Interrupt::NONE, sampling == Sampling::Single)
+    // The reference application draws an envelope's border half a pixel out (see `Draw::fringe`);
+    // a full mesh's not.
+    let fringe = facets == Facets::Envelope && envelope_cut;
+    triangles(src, src_rect, &verts, &tris, Interp::Bilinear, &Interrupt::NONE, Draw { single: sampling == Sampling::Single, fringe })
 }
 
 /// The sorted, deduplicated cuts of `0..1` from `inner` (values outside or non-finite dropped).
@@ -491,7 +495,7 @@ fn mapped_lengths(src_rect: Rect, f: &(dyn Fn(f64, f64) -> (f64, f64) + Sync)) -
 /// interpolation of its source positions. Later triangles in `tris` draw over earlier ones (the
 /// order is the depth order). Output has `src`'s format with alpha added.
 pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp) -> Surface {
-    triangles(src, src_rect, verts, tris, interp, &Interrupt::NONE, false)
+    triangles(src, src_rect, verts, tris, interp, &Interrupt::NONE, Draw::default())
 }
 
 /// [`warp_triangles`], reporting progress per destination tile to `ctl`. A cancelled `ctl` skips
@@ -500,6 +504,8 @@ pub fn warp_triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2
 const MAX_DST_TILES: u64 = 1 << 20;
 /// Source pixels one destination tile may read densely.
 const MAX_FOOTPRINT_PIXELS: u64 = 1 << 25;
+/// How far (px) past a border edge an envelope's fringe reaches (see `Draw::fringe`).
+const FRINGE: f64 = 0.5;
 /// Coarsest mip level a [`Sampling::Single`] warp samples (a 1024× reduction).
 const MAX_MIP_LEVEL: u32 = 10;
 
@@ -551,7 +557,94 @@ fn mip_levels(px: &[f32], fw: usize, fh: usize, n: usize, levels: u32, steps: Op
     out
 }
 
-fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt, single: bool) -> Surface {
+/// The fringe of [`Draw::fringe`] in tile `t` (`w` px wide): fills the uncovered pixels of `uv` and
+/// `owner` within [`FRINGE`] px of a border edge from the nearest one's triangle, and returns each
+/// pixel's alpha cap (1 elsewhere).
+fn fringe(tris: &[[usize; 3]], verts: &[([f64; 2], [f64; 2])], src_rect: Rect, t: &Rect, w: usize, uv: &mut [[f64; 2]], owner: &mut [u32]) -> Vec<f64> {
+    let mut cover = vec![1.0f64; uv.len()];
+    let (sx0, sy0, sx1, sy1) = (f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1));
+    let on = |a: f64, b: f64, e: f64| (a - e).abs() < 1e-6 && (b - e).abs() < 1e-6;
+    let on_border = |a: [f64; 2], b: [f64; 2]| on(a[0], b[0], sx0) || on(a[0], b[0], sx1) || on(a[1], b[1], sy0) || on(a[1], b[1], sy1);
+    let mut near = vec![(FRINGE, [f64::NAN; 2], 0u32); uv.len()];
+    for (k, tri) in tris.iter().enumerate() {
+        let [(p0, s0), (p1, s1), (p2, s2)] = tri.map(|v| verts[v]);
+        let det = (p1[0] - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (p1[1] - p0[1]);
+        if det.abs() < 1e-12 {
+            continue;
+        }
+        let border: Vec<([f64; 2], [f64; 2])> =
+            [(p0, p1, s0, s1), (p1, p2, s1, s2), (p2, p0, s2, s0)].iter().filter(|e| on_border(e.2, e.3)).map(|e| (e.0, e.1)).collect();
+        if border.is_empty() {
+            continue;
+        }
+        let bx0 = (p0[0].min(p1[0]).min(p2[0]) - 1.0).floor().max(f64::from(t.x0)) as i32;
+        let by0 = (p0[1].min(p1[1]).min(p2[1]) - 1.0).floor().max(f64::from(t.y0)) as i32;
+        let bx1 = (p0[0].max(p1[0]).max(p2[0]) + 1.0).ceil().min(f64::from(t.x1)) as i32;
+        let by1 = (p0[1].max(p1[1]).max(p2[1]) + 1.0).ceil().min(f64::from(t.y1)) as i32;
+        for y in by0..by1 {
+            let py = f64::from(y) + 0.5;
+            for x in bx0..bx1 {
+                let o = (y - t.y0) as usize * w + (x - t.x0) as usize;
+                if !uv.get(o).is_some_and(|q| q[0].is_nan()) {
+                    continue;
+                }
+                let px = f64::from(x) + 0.5;
+                let d = border
+                    .iter()
+                    .map(|&(a, b)| {
+                        let ab = [b[0] - a[0], b[1] - a[1]];
+                        let l = ab[0] * ab[0] + ab[1] * ab[1];
+                        let s = if l > 0.0 { (((px - a[0]) * ab[0] + (py - a[1]) * ab[1]) / l).clamp(0.0, 1.0) } else { 0.0 };
+                        (px - a[0] - s * ab[0]).hypot(py - a[1] - s * ab[1])
+                    })
+                    .fold(f64::INFINITY, f64::min);
+                let Some(slot) = near.get_mut(o) else { continue };
+                if d < slot.0 {
+                    let l1 = ((px - p0[0]) * (p2[1] - p0[1]) - (p2[0] - p0[0]) * (py - p0[1])) / det;
+                    let l2 = ((p1[0] - p0[0]) * (py - p0[1]) - (px - p0[0]) * (p1[1] - p0[1])) / det;
+                    let l0 = 1.0 - l1 - l2;
+                    *slot = (d, [l0 * s0[0] + l1 * s1[0] + l2 * s2[0], l0 * s0[1] + l1 * s1[1] + l2 * s2[1]], k as u32);
+                }
+            }
+        }
+    }
+    for (o, (d, q, k)) in near.into_iter().enumerate() {
+        if !q[0].is_nan()
+            && let (Some(u), Some(ow), Some(c)) = (uv.get_mut(o), owner.get_mut(o), cover.get_mut(o))
+        {
+            *u = q;
+            *ow = k;
+            *c = 0.5 - d;
+        }
+    }
+    cover
+}
+
+/// Scales premultiplied `px` (alpha last) down so its alpha is at most `cap` (none: unchanged).
+fn cap_alpha(px: &mut [f64], cap: Option<f64>) {
+    let (Some(c), Some(&al)) = (cap, px.last()) else { return };
+    if al > c {
+        let k = if al > 0.0 { c.max(0.0) / al } else { 0.0 };
+        for v in px.iter_mut() {
+            *v *= k;
+        }
+    }
+}
+
+/// How [`triangles`] draws a smart object's warp.
+#[derive(Clone, Copy, Debug, Default)]
+struct Draw {
+    /// One sample per pixel (from a mip level where the warp squeezes rows), not a footprint.
+    single: bool,
+    /// Pixels just outside an edge of the mesh that lies on the source's border are drawn too, from
+    /// the nearest such triangle's map carried past the edge, their alpha at most `0.5 − d` for a
+    /// centre `d` px out (and the source's transparent surround lowers it further): the outline
+    /// the reference application's envelope renders show (its full meshes draw no such pixels).
+    fringe: bool,
+}
+
+fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris: &[[usize; 3]], interp: Interp, ctl: &Interrupt, draw: Draw) -> Surface {
+    let single = draw.single;
     let mut fmt = src.format();
     let converted;
     let src = if fmt.alpha {
@@ -598,10 +691,12 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
     }
     for &tri in tris {
         let ps = tri.map(|v| verts[v].0);
-        let bx0 = ps.iter().map(|p| p[0]).fold(f64::MAX, f64::min).floor() as i32;
-        let by0 = ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min).floor() as i32;
-        let bx1 = ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max).ceil() as i32;
-        let by1 = ps.iter().map(|p| p[1]).fold(f64::MIN, f64::max).ceil() as i32;
+        // A fringe reaches past the triangle, into a neighbouring tile.
+        let grow = if draw.fringe { 1.0 } else { 0.0 };
+        let bx0 = (ps.iter().map(|p| p[0]).fold(f64::MAX, f64::min) - grow).floor() as i32;
+        let by0 = (ps.iter().map(|p| p[1]).fold(f64::MAX, f64::min) - grow).floor() as i32;
+        let bx1 = (ps.iter().map(|p| p[0]).fold(f64::MIN, f64::max) + grow).ceil() as i32;
+        let by1 = (ps.iter().map(|p| p[1]).fold(f64::MIN, f64::max) + grow).ceil() as i32;
         let (cx0, cy0) = ((bx0.max(dst.x0) - tx0).div_euclid(ts), (by0.max(dst.y0) - ty0).div_euclid(ts));
         let (cx1, cy1) = ((bx1.min(dst.x1 - 1) - tx0).div_euclid(ts), (by1.min(dst.y1 - 1) - ty0).div_euclid(ts));
         for cy in cy0.max(0)..=cy1 {
@@ -691,11 +786,15 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                 }
             }
         }
+        // The fringe (see `Draw::fringe`): per uncovered pixel, its distance to the nearest border
+        // edge and that triangle's source position carried out to it.
+        let cover = if draw.fringe { fringe(tris, verts, src_rect, t, w, &mut uv, &mut owner) } else { Vec::new() };
         // Source footprint of the covered pixels, including the spread of their subsamples.
         // A mip level's taps reach up to 1.5 texels (of 2^level pixels) from the sample.
         let (mut fx0, mut fy0, mut fx1, mut fy1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
         let mut top_level = 0u32;
-        for (q, j, l) in uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(q, &k)| (q, jac[k as usize].0, lev.get(k as usize).copied().unwrap_or(0))) {
+        for (q, j, l) in uv.iter().zip(&owner).filter(|(q, _)| !q[0].is_nan()).map(|(q, &k)| (q, jac[k as usize].0, lev.get(k as usize).copied().unwrap_or(0)))
+        {
             top_level = top_level.max(l);
             let m = if l > 0 { 1.5 * f64::from(1u32 << l) } else { 0.0 };
             let (ex, ey) = (0.5 * (j[0].abs() + j[2].abs()) + m, 0.5 * (j[1].abs() + j[3].abs()) + m);
@@ -713,7 +812,13 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
         if top_level > 0 && !foot.is_empty() {
             let b = 1i32 << top_level;
             let snap = |v: i32, o: i32| o + (v - o).div_euclid(b) * b;
-            foot = Rect::new(snap(foot.x0, src_rect.x0), snap(foot.y0, src_rect.y0), snap(foot.x1 - 1, src_rect.x0).saturating_add(b), snap(foot.y1 - 1, src_rect.y0).saturating_add(b)).intersect(&src_rect);
+            foot = Rect::new(
+                snap(foot.x0, src_rect.x0),
+                snap(foot.y0, src_rect.y0),
+                snap(foot.x1 - 1, src_rect.x0).saturating_add(b),
+                snap(foot.y1 - 1, src_rect.y0).saturating_add(b),
+            )
+            .intersect(&src_rect);
         }
         // Sparse components far apart in the source can land in one tile: the dense window
         // between them is not read (the tile stays empty). The pixel-area cap is checked first:
@@ -869,6 +974,8 @@ fn triangles(src: &Surface, src_rect: Rect, verts: &[([f64; 2], [f64; 2])], tris
                     *c *= k;
                 }
             }
+            // A fringe pixel's alpha is capped by its distance out.
+            cap_alpha(&mut acc[..n], cover.get(o).copied());
             let al = acc[a].clamp(0.0, 1.0);
             // Float noise (a vertex a hair off the pixel grid) must not leave invisible
             // colour behind in transparent pixels.
@@ -1133,7 +1240,10 @@ mod tests {
     fn a_warp_squeezed_along_rows_samples_a_mip_level() {
         let stripes = |vertical: bool, w: i32, h: i32| {
             let mut src = Surface::new(PixelFormat::RGBA8);
-            let px: Vec<f32> = (0..h).flat_map(|y| (0..w).map(move |x| if (if vertical { x } else { y }) % 2 == 0 { 0.0 } else { 1.0 })).flat_map(|v| [v, v, v, 1.0]).collect();
+            let px: Vec<f32> = (0..h)
+                .flat_map(|y| (0..w).map(move |x| if (if vertical { x } else { y }) % 2 == 0 { 0.0 } else { 1.0 }))
+                .flat_map(|v| [v, v, v, 1.0])
+                .collect();
             src.write_region(Rect::new(0, 0, w, h), &px);
             src
         };
@@ -1181,6 +1291,25 @@ mod tests {
         // Float noise from the moved vertices tips a rare weight (well under 1 % of values) by one
         // 8-bit step; a pyramid on another grid would average other pixels (tenths off).
         assert!(off * 100 < diff.len() && worst < 1.5 / 255.0, "{off} values differ, worst {worst}");
+    }
+
+    /// An envelope moved 0.3 px right ends 0.2 px short of the next pixel's centre: that pixel is
+    /// drawn as fringe, faint (alpha about 0.3), as the reference application draws envelopes; a
+    /// full mesh's border stops at the mesh.
+    #[test]
+    fn an_envelope_draws_a_fringe_past_its_border() {
+        let mut src = Surface::new(PixelFormat::RGBA8);
+        src.fill_rect(Rect::new(0, 0, 16, 16), &[1.0, 1.0, 1.0, 1.0]);
+        let f = |x: f64, y: f64| (x + 0.3, y);
+        let alpha_at = |facets: Facets, x: i32| {
+            let out = warp_patches_surface(&src, Rect::new(0, 0, 16, 16), &f, &[], &[], Sampling::Single, facets);
+            out.read_region(Rect::new(x, 8, x + 1, 9))[3]
+        };
+        let fringe = alpha_at(Facets::Envelope, 16);
+        assert!((0.2..=0.31).contains(&fringe), "envelope fringe alpha {fringe}");
+        assert_eq!(alpha_at(Facets::Mesh, 16), 0.0);
+        assert_eq!(alpha_at(Facets::Envelope, 17), 0.0);
+        assert_eq!(alpha_at(Facets::Envelope, 8), 1.0);
     }
 
     #[test]
