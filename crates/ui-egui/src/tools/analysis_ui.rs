@@ -29,9 +29,13 @@ pub enum Drag {
     Count(usize, usize, [f64; 2]),
     /// Moving note `index`: grab offset from its position.
     Note(usize, [f64; 2]),
-    /// Moving Color Sampler point `index` from where the press landed (a click, not a drag, does
-    /// nothing; dragging off the canvas removes the point).
+    /// Moving Color Sampler point `index`; the second field is where the pointer is now, where its
+    /// marker is drawn (#11729). The release moves the point there (a click on it too); releasing
+    /// off the canvas removes it.
     Sampler(usize, [f64; 2]),
+    /// A new Color Sampler point following the pointer, placed where the drag ends if that is on
+    /// the canvas (#11729).
+    SamplerNew([f64; 2]),
 }
 
 /// View state of the analysis tools and panels.
@@ -230,6 +234,23 @@ fn set_ruler(app: &mut PhotocraftApp, r: Ruler) {
     let _ = app.run("image.analysis.rulerTool", json!({"start": r.start, "end": r.end, "protractor": r.protractor}));
 }
 
+#[cfg(test)]
+#[path = "note_show_on_new_tests.rs"]
+mod note_show_on_new_tests;
+
+/// Create a note at the rounded document position using the Note tool's options.
+/// After `notes.add` succeeds, select the note and open the Notes panel. Enable Show Notes
+/// while leaving the master Extras switch alone.
+pub(crate) fn create_note(app: &mut PhotocraftApp, x: f64, y: f64) -> Result<Value, String> {
+    let a = &app.ui.analysis;
+    let params = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": a.note_color});
+    let result = app.run("notes.add", params)?;
+    app.ui.analysis.note_selected = result["index"].as_u64().map(|v| v as usize);
+    app.ui.analysis.notes = true;
+    app.ui.view.show.notes = true;
+    Ok(result)
+}
+
 /// Pointer input for the Ruler, Count, Note and Color Sampler tools. Returns true when consumed.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> bool {
     let tool = app.active_tool();
@@ -318,12 +339,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                     app.ui.analysis.drag = Some(Drag::Note(i, [x - doc.notes[i].position[0], y - doc.notes[i].position[1]]));
                 }
                 None => {
-                    let a = &app.ui.analysis;
-                    let p = json!({"x": x.round(), "y": y.round(), "author": a.note_author, "color": [a.note_color[0], a.note_color[1], a.note_color[2]]});
-                    if let Ok(r) = app.run("notes.add", p) {
-                        app.ui.analysis.note_selected = r["index"].as_u64().map(|v| v as usize);
-                        app.ui.analysis.notes = true;
-                    }
+                    let _ = create_note(app, x, y);
                 }
             }
         }
@@ -335,6 +351,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
             }
         }
+        // As in Photoshop (#11729): the press only starts a drag and the release decides. A new
+        // point follows the pointer and lands where the drag ends; a press on a point drags it
+        // there (a click on it moves it to the clicked pixel); Escape cancels either drag.
         (Tool::ColorSampler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
             match nearest_sampler(&samplers, p, tol) {
@@ -342,34 +361,28 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 Some(i) if mods.alt => {
                     let _ = app.run("view.colorSamplers.delete", json!({"index": i}));
                 }
-                // A plain click on a point starts a move (committed on release).
                 Some(i) => app.ui.analysis.drag = Some(Drag::Sampler(i, p)),
-                // ⌥-click on empty space does nothing; a plain click inside places a new point.
-                None if mods.alt => {}
-                None if (0.0..f64::from(doc.size.width)).contains(&x) && (0.0..f64::from(doc.size.height)).contains(&y) => {
-                    let r = app.run("view.colorSamplers.add", json!({"x": x, "y": y}));
-                    status_on_err(app, r);
-                }
-                // A click outside the canvas places nothing, as in Photoshop.
-                None => {}
+                // Off a point (⌥ or not, on the pasteboard too) a new point starts following the pointer.
+                None => app.ui.analysis.drag = Some(Drag::SamplerNew(p)),
+            }
+        }
+        (Tool::ColorSampler, ToolEvent::Move { x, y, .. }) => {
+            if let Some(Drag::Sampler(_, at) | Drag::SamplerNew(at)) = &mut app.ui.analysis.drag {
+                *at = [x, y];
             }
         }
         (Tool::ColorSampler, ToolEvent::Up { x, y }) => {
-            if let Some(Drag::Sampler(i, from)) = app.ui.analysis.drag.take() {
-                if dist(from, [x, y]) <= 0.5 {
-                    return true; // a click on a point, not a drag: nothing to do
-                }
-                // Dropped inside the canvas: move it. Dropped outside: remove just that point.
-                let inside = (0.0..f64::from(doc.size.width)).contains(&x) && (0.0..f64::from(doc.size.height)).contains(&y);
-                let r = if inside {
-                    app.run("view.colorSamplers.move", json!({"index": i, "x": x, "y": y}))
-                } else {
-                    app.run("view.colorSamplers.delete", json!({"index": i}))
-                };
-                status_on_err(app, r);
-            }
+            let inside = (0.0..f64::from(doc.size.width)).contains(&x) && (0.0..f64::from(doc.size.height)).contains(&y);
+            let r = match app.ui.analysis.drag.take() {
+                // Released inside the canvas: move it there. Outside: remove just that point.
+                Some(Drag::Sampler(i, _)) if inside => app.run("view.colorSamplers.move", json!({"index": i, "x": x, "y": y})),
+                Some(Drag::Sampler(i, _)) => app.run("view.colorSamplers.delete", json!({"index": i})),
+                // A new point is placed where the drag ends; ending outside the canvas places none.
+                Some(Drag::SamplerNew(_)) if inside => app.run("view.colorSamplers.add", json!({"x": x, "y": y})),
+                _ => return true,
+            };
+            status_on_err(app, r);
         }
-        (Tool::ColorSampler, ToolEvent::Move { .. }) => {}
         _ => {}
     }
     true
@@ -379,6 +392,18 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
 fn nearest_sampler(points: &[[f64; 2]], at: [f64; 2], tol: f64) -> Option<usize> {
     points.iter().enumerate().filter(|(_, q)| dist(**q, at) <= tol).min_by(|a, b| dist(*a.1, at).total_cmp(&dist(*b.1, at))).map(|(i, _)| i)
 }
+
+/// The Color Sampler point under document point `at` on the active document, by the same hit test
+/// a click uses, so the right-click menu acts on the sampler a click would grab.
+pub(crate) fn sampler_at(app: &PhotocraftApp, at: [f64; 2]) -> Option<usize> {
+    if !at.iter().all(|v| v.is_finite()) {
+        return None;
+    }
+    nearest_sampler(&app.session.active()?.color_samplers, at, tolerance(app))
+}
+
+#[cfg(test)]
+mod sampler_menu_tests;
 
 /// Show a command error in the status bar without treating the sample-limit message as a fault.
 fn status_on_err(app: &mut PhotocraftApp, r: Result<Value, String>) {
@@ -466,7 +491,15 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
     }
     // Color Sampler points (#1046): persistent numbered markers, drawn whatever the active tool is.
-    for (i, p) in app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default().iter().enumerate() {
+    // While one is dragged its marker follows the pointer, and a new one shows the next number
+    // there (#11729), unless the limit is reached and the release cannot place it.
+    let mut samplers = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
+    match app.ui.analysis.drag {
+        Some(Drag::Sampler(i, at)) if app.ui.tool == Tool::ColorSampler && i < samplers.len() => samplers[i] = at,
+        Some(Drag::SamplerNew(at)) if app.ui.tool == Tool::ColorSampler && samplers.len() < photocraft_engine::sampler_cmds::MAX_SAMPLERS => samplers.push(at),
+        _ => {}
+    }
+    for (i, p) in samplers.iter().enumerate() {
         let at = xf.to_screen(p[0] as f32, p[1] as f32);
         // A small target reticle, double-stroked so it reads on any pixel.
         for (w, c) in [(3.0, Color32::from_black_alpha(170)), (1.0, Color32::WHITE)] {
@@ -821,11 +854,8 @@ fn notes_panel(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(p) = edit {
         let _ = app.run("notes.set", p);
     }
-    if delete
-        && let Some(i) = sel
-        && app.run("notes.delete", json!({"index": i})).is_ok()
-    {
-        app.ui.analysis.note_selected = (n > 1).then(|| i.min(n - 2));
+    if delete && let Some(i) = sel {
+        ask_delete_note(app, i);
     }
     if close {
         app.ui.analysis.notes = false;
@@ -988,3 +1018,110 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod sampler_drag_tests;
+
+/// Marks the "Delete this note?" alert (#11788).
+const DELETE_NOTE_MARK: &str = "__deleteNote";
+/// Its "Don't show again", kept with the other dialog preferences.
+const DELETE_NOTE_PREF: &str = "notes.delete.confirmation";
+
+/// Delete note `index` of the active document, as the Note tool's ⌫/Delete and the Notes panel's
+/// trash do: after the alert "Delete this note?" ([Yes] [No], "Don't show again"), or at once once
+/// that is ticked. Nothing is selected afterwards.
+pub fn ask_delete_note(app: &mut PhotocraftApp, index: usize) {
+    let skip = app.session.prefs().dialogs.get(DELETE_NOTE_PREF).and_then(|v| v.get("skip")).and_then(Value::as_bool) == Some(true);
+    let Some(doc) = app.session.active().map(|s| s.doc.id.0) else { return };
+    if skip {
+        delete_note(app, index);
+        return;
+    }
+    if app.ui.dialogs.iter().any(|d| owns_delete_note(&d.fields)) {
+        return;
+    }
+    let mut f = Map::new();
+    f.insert(DELETE_NOTE_MARK.into(), json!(true));
+    f.insert("__command".into(), json!("notes.delete"));
+    f.insert("__label".into(), json!(tl!("Delete Note")));
+    f.insert("document".into(), json!(doc));
+    f.insert("index".into(), json!(index));
+    f.insert("skip".into(), json!(false));
+    app.ui.open_dialog(crate::state::DialogKind::Command, f);
+}
+
+fn delete_note(app: &mut PhotocraftApp, index: usize) {
+    match app.run("notes.delete", json!({"index": index})) {
+        Ok(_) => app.ui.analysis.note_selected = None,
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+pub fn owns_delete_note(fields: &Map<String, Value>) -> bool {
+    fields.contains_key(DELETE_NOTE_MARK)
+}
+
+pub fn delete_note_body(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    ui.label(tl!("Delete this note?"));
+    ui.add_space(8.0);
+    let mut skip = fields.get("skip").and_then(Value::as_bool).unwrap_or(false);
+    ui.checkbox(&mut skip, tl!("Don't show again"));
+    fields.insert("skip".into(), json!(skip));
+}
+
+/// Yes: the note goes (one "Delete Note" step), and "Don't show again" is remembered.
+pub fn confirm_delete_note(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
+    let index = fields.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or(tl!("No note to delete"))?;
+    let doc = app.session.active().map(|s| (s.doc.id.0, s.doc.notes.len()));
+    if doc.map(|d| d.0) != fields.get("document").and_then(Value::as_u64) || doc.is_none_or(|d| index >= d.1) {
+        return Err(tl!("The document or its notes changed. Please delete the note again.").into());
+    }
+    let result = app.run("notes.delete", json!({"index": index}))?;
+    app.ui.analysis.note_selected = None;
+    if fields.get("skip").and_then(Value::as_bool) == Some(true) {
+        app.session.edit_prefs(|prefs| {
+            prefs.dialogs.insert(DELETE_NOTE_PREF.into(), json!({"skip": true}));
+        });
+        if let Err(error) = crate::prefs_ui::save_preferences(app) {
+            app.ui.status = crate::i18n::fmt(tl!("Note deleted, but the preference could not be saved: {error}"), &[("error", &error)]);
+            app.ui.status_error = true;
+        }
+    }
+    Ok(result)
+}
+
+/// The Note tool with a note selected: ⌫/Delete asks to delete the note (#11788), never the
+/// layer (Delete Layer) or the pixels (Edit › Clear). Text fields keep the keys.
+pub fn note_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
+    use crate::shortcut_dispatch::Focus;
+    // Escape during a Color Sampler drag cancels it: no new point, or the dragged one stays (#11729).
+    // A tool picked mid-drag gets the release, so the drag is over: drop it and leave Escape alone.
+    if matches!(app.ui.analysis.drag, Some(Drag::Sampler(..) | Drag::SamplerNew(_))) {
+        if app.ui.tool != Tool::ColorSampler {
+            app.ui.analysis.drag = None;
+        } else if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+            app.ui.analysis.drag = None;
+            return true;
+        }
+    }
+    let Some(index) = app.ui.analysis.note_selected else { return false };
+    if app.ui.tool != Tool::Note || app.ui.text_edit.is_some() || matches!(Focus::of(ctx), Focus::Text | Focus::DeletingWidget) {
+        return false;
+    }
+    if app.session.active().is_none_or(|s| index >= s.doc.notes.len()) {
+        return false;
+    }
+    let mods = ctx.input(|i| i.modifiers);
+    if !mods.is_none() || !ctx.input_mut(|i| i.consume_key(mods, egui::Key::Delete) || i.consume_key(mods, egui::Key::Backspace)) {
+        return false;
+    }
+    ask_delete_note(app, index);
+    true
+}
+
+#[cfg(test)]
+#[path = "note_delete_key_tests.rs"]
+mod note_delete_key_tests;
