@@ -314,7 +314,9 @@ fn adjust_preview_case(b: &mut Bench, s: &Session, target: LayerId, name: &str, 
         (build + render, path)
     });
     // Zoomed out (fit to a 1600-pixel-wide view on a 2× display: k = 2 for 36 MP), the canvas
-    // previews on a reduced copy built once per session.
+    // previews on a reduced copy built once per session, unless effects or vector masks make
+    // that proxy inaccurate (the same eligibility check as adjust_preview::gpu_proxy).
+    let k = if photocraft_compose::proxy::proxy_faithful(&base) { k } else { 1 };
     let t = Instant::now();
     let proxy = photocraft_ui_egui::adjust_preview::proxy_base(&base, k);
     println!("  ({name}{sel}: zoomed-out proxy k {k} setup: {:.1} ms)", ms(t));
