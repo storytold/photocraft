@@ -868,6 +868,9 @@ mod transform_reference_point_tests;
 mod transform_relative_position_tests;
 
 #[cfg(test)]
+mod star_tool_tests;
+
+#[cfg(test)]
 mod transform_several_tests;
 
 #[cfg(test)]
