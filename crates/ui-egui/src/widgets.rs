@@ -26,6 +26,7 @@ mod scrub;
 mod slider;
 pub mod swap_arrow;
 pub(super) mod tab_strip;
+pub mod task_bar;
 mod text_field;
 pub mod text_field_menu;
 pub mod tone;
