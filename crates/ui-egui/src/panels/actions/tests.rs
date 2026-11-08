@@ -1945,10 +1945,9 @@ fn check_spelling_done_on_another_document_ends_the_waiting_action() {
     assert!(app.ui.status.contains("document"), "{}", app.ui.status);
 }
 
-/// Check Spelling leaves the Actions panel editable: Done after the waiting action was deleted and
-/// recorded again under the same name ends it there instead of playing the new action's steps.
-#[test]
-fn check_spelling_done_after_the_waiting_action_changed_ends_it() {
+/// Play an action that waits at Check Spelling, apply `edit` to the action list while the dialog is
+/// open, and press Done. Returns the app and the layer names from before Done.
+fn spelling_done_after(edit: impl FnOnce(&mut Vec<Action>)) -> (PhotocraftApp, Vec<String>) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.run("file.new", json!({"width": 300, "height": 100})).unwrap();
     app.run("type.create", json!({"x": 10, "y": 50, "text": "Teh cat"})).unwrap();
@@ -1957,15 +1956,55 @@ fn check_spelling_done_after_the_waiting_action_changed_ends_it() {
     app.session.actions.list.push(a);
     let v = play(&mut app, &json!({"action": "Spell"})).unwrap();
     assert_eq!(v["paused"]["dialog"], crate::type_panels_ui::SPELLING, "{v}");
-    app.session.actions.list.clear();
-    let replacement = Action::new("Spell", vec![("layer.new.layer".into(), json!({"name": "first"})), ("layer.new.layer".into(), json!({"name": "replaced"}))]);
-    app.session.actions.list.push(replacement);
+    let before = layer_names(&app);
+    edit(&mut app.session.actions.list);
     crate::type_panels_ui::close_spelling(&mut app);
-    let names = layer_names(&app);
-    assert!(!names.contains(&"after".to_string()) && !names.contains(&"replaced".to_string()), "{names:?}");
     assert!(app.paused_playbacks.paused.is_empty());
+    (app, before)
+}
+
+/// Check Spelling leaves the Actions panel editable: Done after the waiting action was deleted and
+/// recorded again under the same name ends it there instead of playing the new action's steps.
+#[test]
+fn check_spelling_done_after_the_waiting_action_changed_ends_it() {
+    let (app, before) = spelling_done_after(|list| {
+        list.clear();
+        list.push(Action::new("Spell", vec![("layer.new.layer".into(), json!({"name": "first"})), ("layer.new.layer".into(), json!({"name": "replaced"}))]));
+    });
+    assert_eq!(layer_names(&app), before, "no step of either action ran");
     assert!(app.ui.status_error, "{}", app.ui.status);
     assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
+/// Done after the waiting action was deleted, with nothing recorded in its place, ends it there.
+#[test]
+fn check_spelling_done_after_the_waiting_action_was_deleted_ends_it() {
+    let (app, before) = spelling_done_after(Vec::clear);
+    assert_eq!(layer_names(&app), before, "no step ran");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
+/// Done after a step of the waiting action was edited in place ends it there: neither the old nor
+/// the edited step runs.
+#[test]
+fn check_spelling_done_after_the_waiting_action_was_edited_ends_it() {
+    let (app, before) = spelling_done_after(|list| list[0].steps[1].1 = json!({"name": "edited"}));
+    assert_eq!(layer_names(&app), before, "no step ran");
+    assert!(app.ui.status_error, "{}", app.ui.status);
+    assert!(app.ui.status.contains("paused action changed"), "{}", app.ui.status);
+}
+
+/// Changes to other actions while Check Spelling is open, including one added ahead of the waiting
+/// action, don't stop it: Done plays its remaining step.
+#[test]
+fn check_spelling_done_after_another_action_changed_continues() {
+    let (app, before) = spelling_done_after(|list| {
+        list.insert(0, Action::new("Other", vec![("layer.new.layer".into(), json!({"name": "other"}))]));
+        list[0].steps.push(("layer.new.layer".into(), json!({"name": "other 2"})));
+    });
+    assert_eq!(layer_names(&app), [before, vec!["after".to_string()]].concat(), "{}", app.ui.status);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
 }
 
 fn deny_spelling(id: &str, p: &Value) -> photocraft_engine::Result<()> {
