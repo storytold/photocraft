@@ -32,7 +32,7 @@ fn steps(s: &Session) -> usize {
 fn pixels(s: &Session) -> Vec<f32> {
     let st = s.active().unwrap();
     let surf = st.doc.layers[0].surface().unwrap();
-    (0..64).flat_map(|x| surf.pixel(x, 32).to_vec()).collect()
+    (0..64).flat_map(|y| (0..64).flat_map(move |x| surf.pixel(x, y))).collect()
 }
 
 #[test]
