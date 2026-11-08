@@ -463,6 +463,32 @@ fn camera_raw_tuning_keeps_the_default_look_and_applies_user_gains_after_fitting
     }
 }
 
+/// The open-time dialog's raw source develops exactly as Open does ([`import_raw_tuned`]), fitted
+/// look and white balance included; its binned frame has the preview's size.
+#[test]
+fn a_raw_source_develops_as_open_does() {
+    use photocraft_io::raw::{RawSource, RawTuning, import_raw_tuned};
+    let (w, h) = (480, 320);
+    let cam: Vec<_> = patches(w, h).into_iter().map(|c| c.map(|v| v * 0.6)).collect();
+    let balanced: Vec<_> = cam.iter().map(|c| [c[0] * 2.0, c[1], c[2] * 1.5]).collect();
+    let bytes = nef_uncompressed_with_wb(&cam, w, h, Some(camera_rendering(&balanced, w, h)), Some([2048, 1536]));
+    let source = RawSource::new(&bytes, 4).unwrap();
+    assert!(!source.tone_curve().is_empty(), "the fitted look's curve");
+    assert_eq!(source.tone_curve(), photocraft_io::raw::tone_curve(&bytes).as_slice());
+    for tuning in [RawTuning::default(), RawTuning { exposure: -2.5, temperature: 20.0, shadows: 40.0, highlights: -50.0, ..Default::default() }] {
+        let (open, wb) = import_raw_tuned("camera.nef", &bytes, &tuning).unwrap();
+        let full = source.develop_full(&tuning).unwrap();
+        assert_eq!(full.white_balance, wb);
+        let expected = photocraft_io::document_to_image(&open.document, &mut Vec::new()).unwrap();
+        let actual: Vec<u8> = full.rgb.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        assert_eq!(expected.data(), actual.as_slice(), "{tuning:?}");
+        let proxy = source.develop_proxy(&tuning).unwrap();
+        assert_eq!((proxy.width, proxy.height, proxy.rgb.len()), (w / 4, h / 4, w / 4 * h / 4 * 3));
+    }
+    assert!(source.develop_proxy(&RawTuning { exposure: f32::NAN, ..Default::default() }).is_err());
+    assert!(RawSource::new(b"not a raw", 4).is_err());
+}
+
 #[test]
 fn unusable_previews_keep_the_neutral_fallback() {
     let (w, h) = (480, 320);

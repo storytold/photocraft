@@ -1,6 +1,7 @@
 #[cfg(not(target_arch = "wasm32"))]
 use super::PARALLEL_MIN_PIXELS;
-use super::open::raw_stage;
+use super::convert::raw_proxy;
+use super::open::{after_raw_stage, raw_stage, raw_tuning};
 use super::{CameraRaw, CameraRawDialog, RgbHistogram};
 
 /// Everything one develop of the proxy reads, owned, so it can run off the UI thread.
@@ -8,6 +9,7 @@ pub(super) struct ProxyJob {
     pub(super) proxy: std::sync::Arc<Vec<[f32; 4]>>,
     pub(super) selection: Option<std::sync::Arc<Vec<f32>>>,
     pub(super) raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    pub(super) raw_source: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
     pub(super) params: CameraRaw,
     pub(super) float: bool,
     pub(super) size: (usize, usize),
@@ -35,13 +37,24 @@ impl ProxyJob {
         let (pw, ph) = self.size;
         let mut p = self.params;
         p.pixel_scale = (pw as f32 / self.full_w.max(1) as f32).min(1.0);
-        // The open-time dialog re-tones the proxy for each job; otherwise the GPU reads the
-        // proxy as it is and uploads it once.
-        let retoned = self.raw_curve.as_ref().map(|curve| {
-            let mut px = self.proxy.to_vec();
-            photocraft_io::raw::retone(&mut px, pw, ph, curve, raw_stage(&p));
-            px
-        });
+        // The open-time dialog develops its raw-stage settings from the binned sensor data, as
+        // Open develops them from the whole frame: highlights the default develop clipped keep
+        // their colour at a lower exposure. Without the sensor data it re-tones the proxy.
+        // Otherwise the GPU reads the proxy as it is and uploads it once.
+        let tuning = raw_tuning(&p, Default::default());
+        let developed = self.raw_source.as_ref().filter(|_| tuning != Default::default()).and_then(|raw| raw_proxy(raw, &tuning, pw, ph));
+        let retoned = match developed {
+            Some((px, white_balance)) => {
+                p = after_raw_stage(&p, white_balance);
+                Some(px)
+            }
+            None if self.raw_source.is_some() => None,
+            None => self.raw_curve.as_ref().map(|curve| {
+                let mut px = self.proxy.to_vec();
+                photocraft_io::raw::retone(&mut px, pw, ph, curve, raw_stage(&p));
+                px
+            }),
+        };
         if retoned.is_some() {
             (p.shadows, p.highlights, p.clarity, p.texture, p.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0);
         }

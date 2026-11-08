@@ -81,11 +81,41 @@ pub struct RawTuning {
 /// them as RGB adjustments.
 pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<(ImportResult, bool), IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
+    check_tuning(tuning)?;
+    let sensor = photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)?;
+    // The colour rendering the default open used (a look fitted to the camera's JPEG for files
+    // without colour calibration), so re-developing changes only what the sliders change.
+    let camera_look = default_look(bytes, &sensor);
+    let (opts, wb_applied) = tuned_options(&sensor, camera_look, tuning);
+    let dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
+    let wb = if wb_applied {
+        format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
+    } else {
+        "estimated white balance".into()
+    };
+    let tone = opts.tone;
+    let tone = [("shadows", tone.shadows), ("highlights", tone.highlights), ("clarity", tone.clarity), ("texture", tone.texture), ("dehaze", tone.dehaze)]
+        .iter()
+        .filter(|(_, v)| *v != 0.0)
+        .map(|(k, v)| format!(", {k} {v:+.0}"))
+        .collect::<String>();
+    let summary = format!("developed in Camera Raw (exposure {:+.2} EV{tone}, {wb}, {} demosaic)", tuning.exposure, tuning.demosaic.id());
+    Ok((developed_document(name, bytes, format, dev, &summary)?, wb_applied))
+}
+
+/// Rejects an exposure the develop cannot take.
+fn check_tuning(tuning: &RawTuning) -> Result<(), IoError> {
     let exposure = f64::from(tuning.exposure);
     if !exposure.is_finite() || !(-10.0..=10.0).contains(&exposure) {
         return Err(IoError::Raw(RawError::Malformed(format!("exposure {} EV is out of range", tuning.exposure))));
     }
-    let sensor = photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)?;
+    Ok(())
+}
+
+/// The develop options of `tuning` for `sensor` with the default open's `camera_look`, and
+/// whether Temperature / Tint were applied (the file has an as-shot white balance). What
+/// [`import_raw_tuned`] and the dialog's preview ([`RawSource`]) both develop with.
+fn tuned_options(sensor: &Sensor, camera_look: Option<CameraLook>, tuning: &RawTuning) -> (DevelopOptions, bool) {
     let slider = |v: f32| if v.is_finite() { v.clamp(-100.0, 100.0) } else { 0.0 };
     let tone = photocraft_raw::Tone {
         shadows: slider(tuning.shadows),
@@ -94,9 +124,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         texture: slider(tuning.texture),
         dehaze: slider(tuning.dehaze),
     };
-    // The colour rendering the default open used (a look fitted to the camera's JPEG for files
-    // without colour calibration), so re-developing changes only what the sliders change.
-    let camera_look = default_look(bytes, &sensor);
+    let exposure = f64::from(tuning.exposure);
     let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
     let wb_applied = match sensor.camera_wb {
         Some(m) => {
@@ -106,19 +134,67 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         }
         None => false,
     };
-    let dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
-    let wb = if wb_applied {
-        format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
-    } else {
-        "estimated white balance".into()
-    };
-    let tone = [("shadows", tone.shadows), ("highlights", tone.highlights), ("clarity", tone.clarity), ("texture", tone.texture), ("dehaze", tone.dehaze)]
-        .iter()
-        .filter(|(_, v)| *v != 0.0)
-        .map(|(k, v)| format!(", {k} {v:+.0}"))
-        .collect::<String>();
-    let summary = format!("developed in Camera Raw (exposure {:+.2} EV{tone}, {wb}, {} demosaic)", tuning.exposure, tuning.demosaic.id());
-    Ok((developed_document(name, bytes, format, dev, &summary)?, wb_applied))
+    (opts, wb_applied)
+}
+
+/// A raw file decoded once for the open-time Camera Raw dialog, so its preview develops the
+/// raw-stage settings (Temperature, Tint, Exposure, Shadows, Highlights, Clarity, Texture,
+/// Dehaze) from the sensor data as Open does ([`import_raw_tuned`]), instead of applying them to
+/// pixels the default develop has already clipped. It keeps the sensor data, a copy of it binned
+/// down for the fitted preview ([`photocraft_raw::binned`]) and the default open's colour
+/// rendering.
+pub struct RawSource {
+    full: Sensor,
+    proxy: Sensor,
+    look: Option<CameraLook>,
+    curve: Vec<[f32; 2]>,
+}
+
+/// A develop of a [`RawSource`]: interleaved 16-bit RGB in the default open's colour space (the
+/// document's own encoding), and whether Temperature / Tint were applied at the raw stage.
+pub struct RawPixels {
+    pub width: usize,
+    pub height: usize,
+    pub rgb: Vec<u16>,
+    pub white_balance: bool,
+}
+
+impl RawSource {
+    /// Decodes `bytes` and bins the frame by `factor` for the preview (the factor the dialog
+    /// box-averages the developed document by, so the two have the same size).
+    pub fn new(bytes: &[u8], factor: usize) -> Result<RawSource, IoError> {
+        let full = photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)?;
+        let look = default_look(bytes, &full);
+        let curve = match &look {
+            Some(look) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
+            None => full.tone_curve.clone(),
+        };
+        let proxy = photocraft_raw::binned(&full, factor).map_err(IoError::Raw)?;
+        Ok(RawSource { full, proxy, look, curve })
+    }
+
+    /// The tone curve the file develops with by default, as [`tone_curve`] gives it.
+    pub fn tone_curve(&self) -> &[[f32; 2]] {
+        &self.curve
+    }
+
+    /// The binned frame developed with `tuning` (its demosaic method does not apply: the binned
+    /// frame needs none).
+    pub fn develop_proxy(&self, tuning: &RawTuning) -> Result<RawPixels, IoError> {
+        self.develop(&self.proxy, tuning)
+    }
+
+    /// The whole frame developed with `tuning`, as [`import_raw_tuned`] develops it.
+    pub fn develop_full(&self, tuning: &RawTuning) -> Result<RawPixels, IoError> {
+        self.develop(&self.full, tuning)
+    }
+
+    fn develop(&self, sensor: &Sensor, tuning: &RawTuning) -> Result<RawPixels, IoError> {
+        check_tuning(tuning)?;
+        let (opts, white_balance) = tuned_options(sensor, self.look.clone(), tuning);
+        let dev = photocraft_raw::develop_sensor(sensor, &opts).map_err(IoError::Raw)?;
+        Ok(RawPixels { width: dev.width as usize, height: dev.height as usize, rgb: dev.rgb, white_balance })
+    }
 }
 
 /// The tone curve `bytes` develop with by default: the fitted look's for a file without colour

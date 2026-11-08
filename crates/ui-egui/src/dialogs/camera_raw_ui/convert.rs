@@ -93,15 +93,38 @@ pub(super) fn box_proxy(surf: &photocraft_raster::Surface, area: Rect, w: usize,
     (proxy, pw, ph, k)
 }
 
+/// What the dialog develops: the layer's pixels and, for a raw being opened, its sensor data.
+pub(super) struct Source {
+    pub(super) surf: photocraft_raster::Surface,
+    /// The raw file the open-time dialog develops its raw-stage settings from ([`ProxyJob`](super::ProxyJob)).
+    pub(super) raw: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
+}
+
+impl From<photocraft_raster::Surface> for Source {
+    fn from(surf: photocraft_raster::Surface) -> Self {
+        Source { surf, raw: None }
+    }
+}
+
+/// The preview proxy developed from a raw's binned sensor data with the settings the document
+/// was developed with, as straight RGBA: the same pixels [`box_proxy`] reads from the document,
+/// up to the binning. `None` when it can't be developed or its size is not `pw`×`ph`.
+pub(super) fn raw_proxy(raw: &photocraft_io::raw::RawSource, tuning: &photocraft_io::raw::RawTuning, pw: usize, ph: usize) -> Option<(Vec<[f32; 4]>, bool)> {
+    let dev = raw.develop_proxy(tuning).ok().filter(|d| (d.width, d.height) == (pw, ph))?;
+    let px = dev.rgb.as_chunks::<3>().0.iter().map(|p| [0, 1, 2].map(|c| f32::from(p[c]) / 65535.0)).map(|[r, g, b]| [r, g, b, 1.0]).collect();
+    Some((px, dev.white_balance))
+}
+
 pub(super) fn open_pixels(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
     layer: LayerId,
-    surf: photocraft_raster::Surface,
+    source: Source,
     params: CameraRaw,
     coverage: Coverage,
     target: Target,
 ) -> Result<(), String> {
+    let Source { surf, raw } = source;
     let st = app.session.active().ok_or("no document")?;
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
@@ -110,7 +133,15 @@ pub(super) fn open_pixels(
         params.encoding_gamma = photocraft_engine::lens_cmds::encoding_gamma(&st.doc);
     }
     let (area, w, h) = preview_area(canvas, &surf)?;
-    let (proxy, pw, ph, k) = box_proxy(&surf, area, w, h);
+    // A raw being opened: the proxy is its binned sensor data developed as the document was, so
+    // the preview of a raw-stage setting starts from the same pixels Open develops from.
+    let k = w.max(h).div_ceil(PROXY_SIDE).max(1);
+    let developed = raw.as_ref().and_then(|r| raw_proxy(r, &Default::default(), w.div_ceil(k), h.div_ceil(k)).map(|(px, _)| px));
+    let raw = raw.filter(|_| developed.is_some());
+    let (proxy, pw, ph, k) = match developed {
+        Some(px) => (px, w.div_ceil(k), h.div_ceil(k), k),
+        None => box_proxy(&surf, area, w, h),
+    };
     // Coverage at the centre of each proxy block.
     let sample = |value: &dyn Fn(i32, i32) -> f32| {
         (0..ph)
@@ -189,6 +220,7 @@ pub(super) fn open_pixels(
         render_ms: 0.0,
         raw_open: None,
         raw_curve: None,
+        raw_source: raw,
         pending: None,
         preview_error: None,
         gpu,

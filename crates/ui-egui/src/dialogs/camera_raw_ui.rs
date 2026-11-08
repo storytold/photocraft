@@ -48,6 +48,7 @@ pub use open::{
     without_develop_note,
 };
 use open::{Target, non_defaults};
+pub(crate) use open::{after_raw_stage, raw_tuning};
 use proxy::{ProxyFrame, ProxyJob};
 pub use sidecar::sidecar_path;
 #[cfg(test)]
@@ -102,6 +103,10 @@ pub struct CameraRawDialog {
     /// The open-time dialog's camera tone curve: Shadows / Highlights act on the raw data there,
     /// in linear light before this curve, and the preview undoes it to show the same.
     raw_curve: Option<std::sync::Arc<Vec<[f32; 2]>>>,
+    /// The open-time dialog's raw file, decoded: the preview develops the raw-stage settings
+    /// from its sensor data, as Open does, and [`Self::proxy`] is its binned frame developed with
+    /// the defaults.
+    raw_source: Option<std::sync::Arc<photocraft_io::raw::RawSource>>,
     /// The proxy develop running on a worker ([`Self::request_render`]).
     pending: Option<std::sync::mpsc::Receiver<Result<ProxyFrame, String>>>,
     /// The last worker failure the status bar shows, with the preview revision it failed on.
@@ -200,6 +205,7 @@ impl CameraRawDialog {
             proxy: self.proxy.clone(),
             selection: self.selection.clone(),
             raw_curve: self.raw_curve.clone(),
+            raw_source: self.raw_source.clone(),
             params: self.params.clone(),
             float: self.float,
             size: (self.pw, self.ph),

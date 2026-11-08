@@ -1,6 +1,6 @@
-use super::convert::{apply_raw_conversions, open_pixels, output_sharpening, raw_conversions};
+use super::convert::{Source, apply_raw_conversions, open_pixels, output_sharpening, preview_area, raw_conversions};
 use super::sidecar::{read_sidecar, write_sidecar};
-use super::{CameraRaw, LayerId, PhotocraftApp, Rect, Value, json};
+use super::{CameraRaw, LayerId, PROXY_SIDE, PhotocraftApp, Rect, Value, json};
 
 /// Opens the dialog on the active layer.
 /// Where OK writes: a new filter on the layer, or an existing smart filter (by index).
@@ -90,8 +90,10 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     app.session.set_active(index);
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let canvas = app.session.active().ok_or("no document")?.doc.bounds();
+    let source = Source { raw: raw_source(&raw, canvas, &surf), surf };
     if let Some((params, original)) = kept {
-        open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
+        open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
         if let Some(d) = app.camera_raw.as_mut() {
             d.original = original;
         }
@@ -115,7 +117,7 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
         };
         app.ui.status_error = false;
     }
-    open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
+    open_pixels(app, ctx, layer, source, params, Coverage::None, Target::OpenRaw)?;
     // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Auto.
     if !from_sidecar
         && app.session.prefs().raw_defaults.apply_auto_tone
@@ -128,19 +130,30 @@ pub(super) fn open_raw_with(app: &mut PhotocraftApp, ctx: &egui::Context, raw: R
     Ok(())
 }
 
+/// The raw file of `raw` decoded for the dialog's preview, binned by the factor the preview
+/// reduces the developed `surf` by: then the preview develops the raw-stage settings from the
+/// sensor data, as Open will. `None` when the file can't be read or decoded again (the preview
+/// then adjusts the default develop).
+fn raw_source(raw: &RawOpen, canvas: Rect, surf: &photocraft_raster::Surface) -> Option<std::sync::Arc<photocraft_io::raw::RawSource>> {
+    let (_, w, h) = preview_area(canvas, surf).ok()?;
+    let factor = w.max(h).div_ceil(PROXY_SIDE).max(1);
+    let source = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => photocraft_io::raw::RawSource::new(b, factor),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => photocraft_io::raw::RawSource::new(&std::fs::read(p).ok()?, factor),
+        _ => return None,
+    };
+    source.ok().map(std::sync::Arc::new)
+}
+
 /// Gives the open dialog its raw: the file name, and the camera tone curve it was developed with.
 fn attach_raw(app: &mut PhotocraftApp, raw: RawOpen) {
-    let curve = match (&raw.bytes, &raw.path) {
-        (Some(b), _) => Some(photocraft_io::raw::tone_curve(b)),
-        #[cfg(not(target_arch = "wasm32"))]
-        (None, Some(p)) => std::fs::read(p).ok().map(|b| photocraft_io::raw::tone_curve(&b)),
-        _ => None,
-    };
     if let Some(d) = app.camera_raw.as_mut() {
         d.layer_name = raw.name.clone();
-        // The full-size preview retones the whole frame with it, as Open will.
-        let curve = curve.map(std::sync::Arc::new);
+        // Without the sensor data, the preview retones the developed pixels with it.
+        let curve = d.raw_source.as_ref().map(|s| std::sync::Arc::new(s.tone_curve().to_vec()));
         d.detail.raw_curve = curve.clone();
+        d.detail.raw = d.raw_source.clone().map(|s| (s, raw.developed_with));
         d.raw_curve = curve;
         d.raw_open = Some(raw);
     }
@@ -189,6 +202,33 @@ pub(super) fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
     photocraft_io::raw::Tone { shadows: p.shadows, highlights: p.highlights, clarity: p.clarity, texture: p.texture, dehaze: p.dehaze }
 }
 
+/// Everything `p` develops from the sensor data, with the `demosaic` method.
+pub(crate) fn raw_tuning(p: &CameraRaw, demosaic: photocraft_io::raw::Demosaic) -> photocraft_io::raw::RawTuning {
+    photocraft_io::raw::RawTuning {
+        temperature: p.temperature,
+        tint: p.tint,
+        exposure: p.exposure,
+        demosaic,
+        shadows: p.shadows,
+        highlights: p.highlights,
+        clarity: p.clarity,
+        texture: p.texture,
+        dehaze: p.dehaze,
+    }
+}
+
+/// The settings of `p` left after a develop from the sensor data took its raw-stage ones
+/// ([`raw_tuning`]); Temperature and Tint stay when the develop could not apply them
+/// (`white_balance` false: the file has no as-shot white balance).
+pub(crate) fn after_raw_stage(p: &CameraRaw, white_balance: bool) -> CameraRaw {
+    let mut rest = p.clone();
+    (rest.exposure, rest.shadows, rest.highlights, rest.clarity, rest.texture, rest.dehaze) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+    if white_balance {
+        (rest.temperature, rest.tint) = (0.0, 0.0);
+    }
+    rest
+}
+
 /// Open: re-develop for raw-stage settings, apply the rest, keep the document unmodified.
 ///
 /// Re-developing reads and decodes the whole raw again, so in the desktop app (background jobs
@@ -198,17 +238,7 @@ pub(super) fn raw_stage(p: &CameraRaw) -> photocraft_io::raw::Tone {
 pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: &RawOpen, loaded: Option<&CameraRaw>) -> Result<Value, String> {
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     write_sidecar(app, raw, params, loaded);
-    let tuning = photocraft_io::raw::RawTuning {
-        temperature: params.temperature,
-        tint: params.tint,
-        exposure: params.exposure,
-        demosaic: raw.demosaic,
-        shadows: params.shadows,
-        highlights: params.highlights,
-        clarity: params.clarity,
-        texture: params.texture,
-        dehaze: params.dehaze,
-    };
+    let tuning = raw_tuning(params, raw.demosaic);
     // The open itself: the default settings, developed with the method it was opened with.
     let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.developed_with, ..Default::default() };
     // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
@@ -317,17 +347,7 @@ pub(super) fn finish_redevelop(
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
     crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &without_develop_note(&warnings));
-    let mut rest = params.clone();
-    rest.exposure = 0.0;
-    rest.shadows = 0.0;
-    rest.highlights = 0.0;
-    rest.clarity = 0.0;
-    rest.texture = 0.0;
-    rest.dehaze = 0.0;
-    if v.get("wb").and_then(Value::as_bool) == Some(true) {
-        rest.temperature = 0.0;
-        rest.tint = 0.0;
-    }
+    let rest = after_raw_stage(params, v.get("wb").and_then(Value::as_bool) == Some(true));
     finish_open_raw(app, index, rest, Some(true), raw, defaults)
 }
 
@@ -525,7 +545,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
     }
     photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
-    open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::Selection, Target::NewFilter)
+    open_pixels(app, ctx, layer, surf.into(), CameraRaw::default(), Coverage::Selection, Target::NewFilter)
 }
 
 /// Opens Camera Raw on smart filter `index` of smart layer `layer`, with its stored settings and
@@ -546,5 +566,5 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
         .map_err(|e| e.to_string())?
         .ok_or("the smart object's contents are unavailable (missing linked file?)")?;
     let coverage = sm.filter_mask.clone().filter(|m| m.enabled).map_or(Coverage::None, Coverage::Mask);
-    open_pixels(app, ctx, layer, surf, params, coverage, Target::SmartFilter(index))
+    open_pixels(app, ctx, layer, surf.into(), params, coverage, Target::SmartFilter(index))
 }
