@@ -410,8 +410,8 @@
 	Artboard…	Plan de travail…
 	Artboard from Group…	Plan de travail d'après un groupe…
 	Artboard from Layers…	Plan de travail d'après des calques…
-	Layer via Copy	Calque par copie
-	Layer via Cut	Calque par coupe
+	Layer Via Copy	Calque par copie
+	Layer Via Cut	Calque par coupe
 	Layer From Background…	Calque d'après l'arrière-plan…
 	Layer from Background…	Calque d'après l'arrière-plan…
 	Background From Layer	Arrière-plan d'après le calque
@@ -4333,7 +4333,7 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	The file could not be saved.	Impossible d'enregistrer le fichier.
 	Thickness	Épaisseur
 	This Layer:	Ce calque :
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Cet objet intelligent doit être rastérisé pour continuer. Son contenu ne sera plus modifiable. Rastériser l'objet intelligent ?
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	Cet objet intelligent doit être rastérisé pour continuer. Son contenu ne sera plus modifiable. Rastériser l'objet intelligent ?
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Cet ajustement ({key}) est conservé tel qu'il a été importé et ne peut pas encore être modifié.
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Ce calque de remplissage doit être rastérisé pour continuer. Son contenu de remplissage ne sera plus modifiable. Rastériser le calque ?
 	This layer must be rasterized before proceeding.	Ce calque doit être rastérisé pour continuer.

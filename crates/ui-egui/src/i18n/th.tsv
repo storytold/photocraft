@@ -176,8 +176,8 @@
 	Trap…	กับดัก…
 
 # Layer
-	Layer via Copy	เลเยอร์ผ่านการคัดลอก
-	Layer via Cut	เลเยอร์ผ่านการตัด
+	Layer Via Copy	เลเยอร์ผ่านการคัดลอก
+	Layer Via Cut	เลเยอร์ผ่านการตัด
 	Duplicate Layer…	ทำซ้ำเลเยอร์…
 	Duplicate…	ทำสำเนา…
 	Delete	ลบ
@@ -4472,7 +4472,7 @@ curves	Smooth	เรียบเนียน
 	The file could not be saved.	ไม่สามารถบันทึกไฟล์ได้
 	Thickness	ความหนา
 	This Layer:	เลเยอร์นี้:
-	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	สมาร์ทออบเจ็กต์นี้ต้องได้รับการแรสเตอร์ก่อนดำเนินการต่อ เนื้อหาจะไม่สามารถแก้ไขได้อีกต่อไป แรสเตอร์วัตถุอัจฉริยะหรือไม่
+	This smart object must be rasterized before proceeding. Edit Contents will no longer be available. Rasterize the smart object?	สมาร์ทออบเจ็กต์นี้ต้องได้รับการแรสเตอร์ก่อนดำเนินการต่อ เนื้อหาจะไม่สามารถแก้ไขได้อีกต่อไป แรสเตอร์วัตถุอัจฉริยะหรือไม่
 	This adjustment ({key}) is kept as imported and can't be edited yet.	การปรับเปลี่ยนนี้ ({key}) ถูกเก็บไว้เป็นการนำเข้าและยังไม่สามารถแก้ไขได้
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	เลเยอร์เติมนี้จะต้องถูกแรสเตอร์ก่อนดำเนินการต่อ เนื้อหาที่กรอกจะไม่สามารถแก้ไขได้อีกต่อไป แรสเตอร์เลเยอร์หรือไม่?
 	This layer must be rasterized before proceeding.	เลเยอร์นี้จะต้องถูกแรสเตอร์ก่อนดำเนินการต่อ
